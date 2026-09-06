@@ -587,15 +587,25 @@ async function mtimeOf(p: string): Promise<number | null> {
 }
 
 /**
- * Move a session's `lastAccessed` to now, leaving every other field alone.
+ * Set a session's `lastAccessed` to `stamp`, leaving every other field alone.
  *
  * Exists for one caller: `restoreOpenDocuments`, when reopening a document
- * fails for a reason that is not `ENOENT` — an antivirus lock, an unmounted
- * network drive, a file held by another process. Without this the record is
- * frozen at its old timestamp while every session that DID reopen is autosaved
- * forward, so one transient failure pushes the document outside the restore
- * window permanently and it is never retried. Bumping the stamp says "this was
- * part of the working set even though it would not open", which is true.
+ * fails for a reason that could clear on its own — an antivirus lock, an
+ * unmounted network drive, a file held by another process. Without this the
+ * record is frozen at its old timestamp while every session that DID reopen is
+ * autosaved forward, so one transient failure pushes the document outside the
+ * restore window permanently and it is never retried. Moving the stamp says
+ * "this was part of the working set even though it would not open", which is
+ * true.
+ *
+ * **The caller supplies `stamp`, and passes the window anchor rather than
+ * `Date.now()`.** This document did not open, so it must not become the anchor
+ * the NEXT boot measures every other session against: a restored document
+ * writes no session file until `ensureAutoSave`'s first 60s tick, so a crash
+ * inside that first minute would otherwise leave the failed session holding the
+ * newest stamp on disk and drop the genuinely-restored ones. Taking the value
+ * as a parameter also keeps this function free of a clock the tests would have
+ * to fake.
  *
  * Three things here are load-bearing and none is obvious:
  *
@@ -617,11 +627,14 @@ async function mtimeOf(p: string): Promise<number | null> {
  *    later in the iteration — one bad file silently costing all the tabs after
  *    it, which is far worse than the single-tab loss this is fixing.
  */
-export async function touchSession(filePath: string): Promise<void> {
+export async function touchSession(filePath: string, stamp: number): Promise<void> {
   try {
     const loaded = await loadSessionWithPath(filePath);
     if (loaded === null) return;
-    await atomicWrite(loaded.path, JSON.stringify({ ...loaded.session, lastAccessed: Date.now() }));
+    // Never move a stamp BACKWARDS: `stamp` is the window anchor, and a record
+    // already newer than it is one this call has no business aging.
+    if (loaded.session.lastAccessed >= stamp) return;
+    await atomicWrite(loaded.path, JSON.stringify({ ...loaded.session, lastAccessed: stamp }));
   } catch (err) {
     console.error("[Tandem] Failed to refresh session timestamp for %s:", filePath, err);
   }
@@ -948,7 +961,19 @@ export async function listSessionFilePaths(): Promise<SessionFileEntry[]> {
         results.push({
           file,
           filePath: data.filePath,
-          lastAccessed: data.lastAccessed ?? 0,
+          // Narrowed like the two fields below, and for a sharper reason than
+          // either: `partitionByRestoreWindow` folds this across every session
+          // with `Math.max`, so ONE record holding `{}`, `[1,2]` or `"never"`
+          // makes `newest` NaN — and every `newest - lastAccessed <= WINDOW`
+          // comparison against NaN is false. The whole working set silently
+          // fails to reopen and only `holdsUnsavedWork` records survive: the
+          // exact "one tab back instead of eight" failure the reduce and the
+          // clamp were written to prevent, reached through the operand instead.
+          // `?? 0` alone does not catch it — only `null`/`undefined` are.
+          lastAccessed:
+            typeof data.lastAccessed === "number" && Number.isFinite(data.lastAccessed)
+              ? data.lastAccessed
+              : 0,
           // Strict `=== true`, same don't-trust-a-bare-`JSON.parse` rule as
           // `narrowConflict`: this value comes off disk and decides whether the
           // restored tab is writable, so `"true"`, `1` or `{}` must all restore

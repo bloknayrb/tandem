@@ -192,42 +192,104 @@ describe("restoreOpenDocuments restore window", () => {
     expect(open.has(docIdFromPath(b)), "a real session must survive the skew").toBe(true);
   });
 
-  it("refreshes the timestamp of a session that failed to reopen for a non-ENOENT reason", async () => {
+  /** Run a restore in which `target` fails to open with `code`. */
+  async function restoreWithFailure(target: string, code: string): Promise<void> {
+    const openMod = await import("../../src/server/documents/open.js");
+    const realOpen = openMod.openFromRestore;
+    const spy = vi
+      .spyOn(openMod, "openFromRestore")
+      .mockImplementation(async (args: Parameters<typeof realOpen>[0]) => {
+        if (args.filePath === target) {
+          throw Object.assign(new Error(`${code}: injected`), { code });
+        }
+        return realOpen(args);
+      });
+    try {
+      await restoreOpenDocuments(null);
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  const stampOf = async (filePath: string): Promise<number> =>
+    JSON.parse(await fs.readFile(path.join(SESSION_DIR, `${sessionKey(filePath)}.json`), "utf-8"))
+      .lastAccessed;
+
+  it("refreshes the timestamp of a session that failed to reopen transiently", async () => {
     // Without the refresh this session keeps its old stamp while every session
     // that DID reopen is autosaved forward, so the next boot finds it outside
     // the window and never retries it — a momentary antivirus lock costing the
-    // tab permanently. `EACCES` stands in for that class here.
+    // tab permanently. `EACCES` stands in for that class.
     const locked = await writeDoc("locked.md");
     const mine = await writeDoc("current5.md");
     const stale = NOW - 10 * MINUTES;
     await seedSession(mine, { lastAccessed: NOW });
     await seedSession(locked, { lastAccessed: stale });
 
-    const realOpen = (await import("../../src/server/documents/open.js")).openFromRestore;
-    const spy = vi
-      .spyOn(await import("../../src/server/documents/open.js"), "openFromRestore")
-      .mockImplementation(async (args: Parameters<typeof realOpen>[0]) => {
-        if (args.filePath === locked) {
-          const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
-          err.code = "EACCES";
-          throw err;
-        }
-        return realOpen(args);
-      });
+    await restoreWithFailure(locked, "EACCES");
 
-    try {
-      await restoreOpenDocuments(null);
-    } finally {
-      spy.mockRestore();
-    }
-
-    const record = JSON.parse(
-      await fs.readFile(path.join(SESSION_DIR, `${sessionKey(locked)}.json`), "utf-8"),
-    );
     expect(
-      record.lastAccessed,
+      await stampOf(locked),
       "a transient failure must not freeze the session out of the next window",
     ).toBeGreaterThan(stale);
+  });
+
+  it("does NOT refresh a session whose failure is permanent", async () => {
+    // `FILE_TOO_LARGE` fails identically on every boot. Touching it would
+    // rewrite the session file each startup, and `cleanupSessions` ages records
+    // by MTIME — so the 30-day GC could never reclaim one. That is the immortal
+    // session this whole bound exists to prevent, reached by a second route.
+    const huge = await writeDoc("too-big.md");
+    const mine = await writeDoc("current6.md");
+    const stale = NOW - 10 * MINUTES;
+    await seedSession(mine, { lastAccessed: NOW });
+    await seedSession(huge, { lastAccessed: stale });
+
+    await restoreWithFailure(huge, "FILE_TOO_LARGE");
+
+    expect(await stampOf(huge), "a permanent failure must be allowed to age out").toBe(stale);
+  });
+
+  it("never lets a failed session become the next boot's window anchor", async () => {
+    // A restored document writes no session until `ensureAutoSave`'s first 60s
+    // tick, so if the touch used `Date.now()` a crash inside that first minute
+    // would leave the FAILED session holding the newest stamp on disk — and the
+    // next boot would measure the genuinely-restored ones against it and drop
+    // them. The touch is pinned to the window anchor instead.
+    const locked = await writeDoc("locked2.md");
+    const mine = await writeDoc("current7.md");
+    await seedSession(mine, { lastAccessed: NOW });
+    await seedSession(locked, { lastAccessed: NOW - 10 * MINUTES });
+
+    await restoreWithFailure(locked, "EACCES");
+
+    expect(
+      await stampOf(locked),
+      "the failed session must not out-rank the working set it belongs to",
+    ).toBeLessThanOrEqual(await stampOf(mine));
+  });
+
+  it("survives a session record whose lastAccessed is not a number", async () => {
+    // `Math.max` over one junk value yields NaN, and every
+    // `newest - lastAccessed <= WINDOW` comparison against NaN is false — so a
+    // single malformed record silently closes the entire working set, leaving
+    // only `holdsUnsavedWork` behind. `?? 0` does not catch it: the value is
+    // neither null nor undefined.
+    const junk = await writeDoc("junk-stamp.md");
+    const a = await writeDoc("real-c.md");
+    await seedSession(a, { lastAccessed: NOW });
+    await seedSession(junk, { lastAccessed: NOW });
+    const junkFile = path.join(SESSION_DIR, `${sessionKey(junk)}.json`);
+    const record = JSON.parse(await fs.readFile(junkFile, "utf-8"));
+    record.lastAccessed = {};
+    await fs.writeFile(junkFile, JSON.stringify(record), "utf-8");
+
+    await restoreOpenDocuments(null);
+
+    expect(
+      getOpenDocs().has(docIdFromPath(a)),
+      "one malformed record must not close the whole working set",
+    ).toBe(true);
   });
 
   it("restores a whole working set that is old in absolute terms", async () => {

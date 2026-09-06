@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
@@ -17,7 +18,23 @@ import { configDefaults, defineConfig } from "vitest/config";
  * under this root come from `tests/setup/app-data-isolation.ts`; concurrent
  * runs cannot collide because that suffix is the worker PID.
  */
-const TEST_APP_DATA_ROOT = path.join(os.tmpdir(), "tandem-vitest-appdata");
+const TEST_APP_DATA_ROOT = path.join(
+  os.tmpdir(),
+  // Per-user, because `os.tmpdir()` is `/tmp` — world-writable and shared — on
+  // Linux and macOS. A single fixed name there is both a denial of service and
+  // a redirect: the first user to run the suite creates the root under their
+  // own umask and the next user's `mkdirSync` of `worker-<pid>` fails EACCES
+  // with an error pointing at the setup file rather than the cause; and the
+  // name is predictable enough to pre-create, where `recursive: true` follows
+  // an existing symlink and every session, annotation and backup the suite
+  // writes lands at the link target. The username is a directory component, so
+  // it is hashed rather than interpolated — a username is not guaranteed to be
+  // a legal path segment.
+  `tandem-vitest-appdata-${createHash("sha256")
+    .update(os.userInfo().username)
+    .digest("hex")
+    .slice(0, 12)}`,
+);
 fs.mkdirSync(TEST_APP_DATA_ROOT, { recursive: true });
 
 /**

@@ -1839,7 +1839,36 @@ const RESTORE_WINDOW_MS = 30 * 60_000;
  *   shrink `newest - lastAccessed`, so it can only move sessions INTO the
  *   restore set, never out of it.
  */
+/**
+ * Reopen failures that can clear on their own, and so earn a `touchSession`
+ * keeping the record in the next restore window.
+ *
+ * Everything absent is treated as permanent — notably `UNSUPPORTED_FORMAT` and
+ * `FILE_TOO_LARGE` from `resolveAndValidatePath`, which fail identically on
+ * every boot. The list is deliberately an ALLOWLIST rather than a denylist of
+ * the two known-permanent codes: a new permanent failure mode added to the open
+ * path would otherwise silently join the retried-forever set, and the cost of
+ * omitting a genuinely transient code is one un-restored tab that is still
+ * listed under Recent sessions, while the cost of admitting a permanent one is
+ * a session file that the mtime-based GC can never reclaim.
+ */
+const TRANSIENT_RESTORE_ERRORS = new Set([
+  "EACCES", // antivirus or another process holding the file
+  "EPERM", // same, as Windows spells it
+  "EBUSY", // locked by another handle
+  "EMFILE", // descriptor table exhausted this boot
+  "ENFILE",
+  "EIO", // transport blip on a network mount
+  "ENETDOWN",
+  "ENETUNREACH",
+  "EHOSTDOWN",
+  "EHOSTUNREACH",
+  "ETIMEDOUT",
+  "EAGAIN",
+]);
+
 function partitionByRestoreWindow(sessions: SessionFileEntry[]): {
+  newest: number;
   restore: SessionFileEntry[];
   skip: SessionFileEntry[];
 } {
@@ -1851,7 +1880,7 @@ function partitionByRestoreWindow(sessions: SessionFileEntry[]): {
     const keep = session.holdsUnsavedWork || newest - session.lastAccessed <= RESTORE_WINDOW_MS;
     (keep ? restore : skip).push(session);
   }
-  return { restore, skip };
+  return { newest, restore, skip };
 }
 
 /**
@@ -1862,7 +1891,7 @@ export async function restoreOpenDocuments(previousActiveDocId: string | null): 
   const sessions = await listSessionFilePaths();
   if (sessions.length === 0) return 0;
 
-  const { restore, skip } = partitionByRestoreWindow(sessions);
+  const { newest, restore, skip } = partitionByRestoreWindow(sessions);
 
   for (const skipped of skip) {
     console.error(
@@ -1889,14 +1918,28 @@ export async function restoreOpenDocuments(previousActiveDocId: string | null): 
         });
       } else {
         console.error("[Tandem] Failed to restore %s:", filePath, err);
-        // The failure may be transient — an antivirus lock, a network drive
-        // not mounted yet, a file held by another process. Without this bump
-        // the record keeps its old `lastAccessed` while every session that DID
-        // reopen is autosaved forward, so the next boot finds it outside the
-        // window and never retries it: one momentary lock costs the tab
-        // permanently. `touchSession` never throws — a throw here would escape
-        // the loop and abandon every session after this one.
-        await touchSession(filePath);
+        // Keep the record in the next window, but ONLY for a failure that can
+        // plausibly clear on its own — an antivirus lock, a drive not mounted
+        // yet, a descriptor exhausted. Without this the record keeps its old
+        // `lastAccessed` while every session that DID reopen is autosaved
+        // forward, so the next boot finds it outside the window and never
+        // retries: one momentary lock costs the tab permanently.
+        //
+        // **The allowlist is what keeps this from re-opening the cycle the
+        // window closes.** `resolveAndValidatePath` also throws
+        // `UNSUPPORTED_FORMAT` and `FILE_TOO_LARGE`, which are PERMANENT — a
+        // `.docx` that grew past 50MB fails identically on every boot. Touching
+        // those would rewrite the session file every startup, and
+        // `cleanupSessions` ages records by MTIME, so the 30-day GC could never
+        // reclaim one: restore-then-rewrite, immortal again, by a different
+        // route than restore-then-autosave.
+        //
+        // `newest`, not `Date.now()`: this document did NOT open, so it must
+        // not become the anchor the next boot measures everything else against.
+        // A restored document writes no session until `ensureAutoSave`'s first
+        // 60s tick, so a crash before that tick would leave a failed session
+        // holding the newest stamp on disk and drop the genuinely-restored ones.
+        if (TRANSIENT_RESTORE_ERRORS.has(code ?? "")) await touchSession(filePath, newest);
       }
     }
   }
