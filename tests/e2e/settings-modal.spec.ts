@@ -144,18 +144,13 @@ test("clicks inside the modal do NOT close it", async ({ page }) => {
   await expect(page.locator(MODAL)).toBeVisible();
 });
 
-// Obsolete placeholder: the `Ctrl+Shift+,` binding this test anchored to was
-// removed entirely — the settings-UI refactor consolidated on a single
-// `Ctrl+,` binding (no Shift). That real-keypress path is exercised in
-// settings-and-filters.spec.ts ("Ctrl+, opens the Settings modal"), which
-// doesn't hit the Tiptap-keymap contention this placeholder used to document
-// (`Mod-Shift-,` collided with Tiptap's subscript binding; plain `Comma` with
-// Ctrl held does not). Left as `test.skip` rather than deleted so the history
-// of the gap stays visible.
-test.skip("Ctrl+, opens the SettingsModal (manual path) — superseded, see settings-and-filters.spec.ts", async () => {
-  // Intentionally empty — left as a documentation anchor. Real coverage lives
-  // in settings-and-filters.spec.ts.
-});
+// Historical note, not a test (#1783). The `Ctrl+Shift+,` binding a permanently
+// skipped, empty `test.skip` anchored here was removed entirely — the
+// settings-UI refactor consolidated on a single `Ctrl+,` binding (no Shift).
+// That real-keypress path is exercised in settings-and-filters.spec.ts
+// ("Ctrl+, opens the Settings modal"), which doesn't hit the Tiptap-keymap
+// contention the placeholder used to document (`Mod-Shift-,` collided with
+// Tiptap's subscript binding; plain `Comma` with Ctrl held does not).
 
 // #821 PR review (L99) — coverage for the AI Assistant tab's working-directory
 // states introduced by #803 E5/E7. Both tests route-mock the integrations and

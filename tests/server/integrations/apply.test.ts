@@ -336,11 +336,18 @@ describe("applyConfig — 5MB size guard", () => {
     // 5 MiB - 1 KiB padding so the JSON object header fits without crossing.
     const padding = "x".repeat(5 * 1024 * 1024 - 1024);
     fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {}, _pad: padding }));
-    // Should not throw — boundary case proves the cap isn't off-by-one strict.
+    // Boundary case: the cap isn't off-by-one strict. Not-throwing alone is
+    // satisfied by a silent no-op at the boundary, so read the file back.
+    const url = "http://127.0.0.1:3479/mcp";
     await applyConfig(configPath, {
-      create: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
+      create: { tandem: { type: "http", url } },
       remove: [],
     });
+
+    const written = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+      mcpServers?: Record<string, { url?: string }>;
+    };
+    expect(written.mcpServers?.tandem?.url).toBe(url);
   });
 
   it("rejects a config above the 5 MiB cap", async () => {

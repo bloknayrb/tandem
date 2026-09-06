@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { collectAnnotations } from "../../src/server/mcp/annotations.js";
-import { resetInbox } from "../../src/server/mcp/awareness.js";
+import { processInboxAnnotations, resetInbox } from "../../src/server/mcp/awareness.js";
 import { extractText, populateYDoc } from "../../src/server/mcp/document.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import type { Annotation } from "../../src/shared/types.js";
@@ -124,13 +124,41 @@ describe("tandem_checkInbox logic", () => {
 });
 
 describe("surfacedIds deduplication", () => {
-  // The inbox uses a Set<string> to track which IDs have been returned.
-  // resetInbox() clears it between tests.
+  // The inbox uses a ledger keyed by document + annotation id to track which
+  // records have been returned.
 
-  it("resetInbox clears the set", () => {
-    // This is a basic sanity check that the exported function works.
-    // The actual dedup behavior is tested via the MCP tool integration.
-    resetInbox();
-    // No assertions needed — just verify it doesn't throw
+  it("a surfaced comment does not come back until the ledger is cleared", () => {
+    // The module-private ledger `resetInbox()` clears is unreachable from here,
+    // so this asserts the dedup property the describe claims through the
+    // exported `processInboxAnnotations` with a caller-owned Map instead.
+    //
+    // `type: "comment"` matters: the fixture default is `highlight`, and the
+    // userActions bucket is gated on `author === "user" && type === "comment"`.
+    // `modeState` must be `"tandem"` — `"indeterminate"` is not fail-closed and
+    // `"solo"` hides the record for an unrelated reason.
+    const map = makeDoc("Hello world test").getMap(Y_MAP_ANNOTATIONS);
+    const ann = addAnnotation(map, {
+      author: "user",
+      type: "comment",
+      range: range(0, 5),
+      content: "Why this word?",
+    });
+    const text = extractText(doc);
+    const ledger = new Map<string, number>();
+    const run = () =>
+      processInboxAnnotations(
+        [ann],
+        text,
+        ledger,
+        (anns) => anns,
+        "doc1",
+        "tandem",
+        () => false,
+      );
+
+    expect(run().userActions.map((a) => a.id)).toEqual([ann.id]);
+    expect(run().userActions).toEqual([]);
+    ledger.clear();
+    expect(run().userActions.map((a) => a.id)).toEqual([ann.id]);
   });
 });
