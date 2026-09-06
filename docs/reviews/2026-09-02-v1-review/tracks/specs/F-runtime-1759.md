@@ -46,7 +46,16 @@ the version is logged, never compared.
 - `runReconnect`'s check compares `identity.protocolVersion !== negotiatedProtocolVersion ||
   identity.serverName !== negotiatedServerName`. The thrown message names the *names*
   (`was 2024-11-05/tandem, now 2024-11-05/not-tandem`) — keep the literal
-  `upstream identity changed across re-initialize`, which two specs and the PR body grep for.
+  `upstream identity changed across re-initialize`. Exactly **one** spec greps it today
+  (`tests/cli/mcp-stdio.test.ts:2123`, plus the PR body); spec test 2 below is the second, which is
+  why that literal must not be reworded in the same change that adds the version-adoption line.
+- **`readHandshakeIdentity` has a second interpolation site the rename must follow.** The
+  `negotiatedProtocolVersion === undefined` branch at `:1093-1102` ends with
+  `` refusing to adopt ${identity.protocolVersion}/${identity.serverInfo} `` — it becomes
+  `` ${identity.protocolVersion}/${identity.serverName} ``. `tsc` catches it, so this is a
+  don't-be-surprised note rather than a silent hazard; it is called out because **that same branch
+  is the one #1805's preflight-recovery path lands on**, and #1805 changes its behaviour. Land
+  #1759 first (the implementation order already says so) so #1805 edits the renamed form.
 - Immediately before that check, when the name and protocol match but
   `identity.serverVersion !== negotiatedServerVersion`, write one stderr line —
   `` `[tandem mcp-stdio] upstream version changed across re-initialize (was X, now Y); adopting the upgraded server` `` — and assign `negotiatedServerVersion = identity.serverVersion` so the next
@@ -101,3 +110,18 @@ tests/cli/mcp-stdio.test.ts` green.
 Terminating the stale server-side session on an identity failure (the bridge deliberately never
 sends `terminateSession`); the `SESSION_STABLE_MS` pacing; the ADR-045 LRU policy; #1790's plugin
 version pin.
+
+## Review corrections (round 1)
+
+**Adopted**
+
+- *The `:1093` no-baseline message also interpolates the removed `identity.serverInfo`.* Verified at
+  `src/cli/mcp-stdio.ts:1101`. Added to the Fix bullet list, with the cross-reference to #1805 the
+  finding asked for.
+- *"two specs and the PR body grep for" the fail-closed literal overstates the count.* Verified:
+  `grep -rn "upstream identity changed across re-initialize"` finds exactly one spec,
+  `tests/cli/mcp-stdio.test.ts:2123`. Corrected to one today / two after spec test 2 lands.
+
+**Not adopted**
+
+- None.
