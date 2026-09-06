@@ -42,11 +42,40 @@ import { toFlatOffset } from "../../src/shared/types.js";
 import { timeoutMs } from "../helpers/timing.js";
 
 /**
- * Headroom for the specs that perform a REAL .docx apply, measured at ~21s on a
- * dev machine against the project's 15s default. Duration is not the property
- * any of them asserts — they assert `applied: 1`, a savedAtVersion, a snapshot
- * count — so raising the ceiling makes them slower real gates rather than
- * blunting them. Where duration IS the assertion, see `tests/helpers/timing.ts`.
+ * Headroom for the specs that perform a REAL .docx apply, over the project's
+ * 15s default. Duration is not the property any of them asserts — they assert
+ * `applied: 1`, a savedAtVersion, a snapshot count — so raising the ceiling
+ * makes them slower real gates rather than blunting them. Where duration IS the
+ * assertion, see `tests/helpers/timing.ts`.
+ *
+ * What it measures today (#1672, #1699). Measured 2026-09-06 with a single-file
+ * `vitest run --reporter=verbose` — NOT under full-suite parallelism: the whole
+ * file runs in the low-single-digit-seconds band over 53 specs, and every spec
+ * carrying this ceiling lands in the single-digit-to-low-tens-of-ms band. The
+ * two exceptions are "the watcher reload that completes an apply finally lands
+ * (#1749) — clean doc" and "the watcher reload that completes an apply flags a
+ * conflict on a DIRTY doc (#1749)", both in the sub-second band because they
+ * wait on a real `fs.watch` debounce by design. Bands, not point values:
+ * repeated runs move individual specs about twofold while the bands and the
+ * file total reproduce, so a figure pinned in this comment would be the same
+ * construction that sized — and misdescribed — this ceiling before.
+ *
+ * Which phase a red names. The carrying specs await one `applyChangesCore(...)`
+ * plus cheap `fsp` calls; the two watcher specs additionally wait under their
+ * own `vi.waitFor(…)`, which fails with its own assertion. So a bare
+ * `Test timed out in 60000ms` is the apply, and a `vi.waitFor` failure is the
+ * reload. The greppable literal is vitest's un-underscored 60000 (300000 under
+ * a coverage run), not this file's `60_000`, which also appears below as
+ * unrelated mtime arithmetic.
+ *
+ * What a red is NOT. At this distance from the ceiling it cannot be gradual
+ * growth — it is a hang or a starved machine. Look first for a never-settling
+ * `await` or an unreleased lock in the apply (the `wireFileWatcher` /
+ * `unwatchFile` pairs in the two watcher specs); the machine case has a
+ * precedent in #1672, where a leaked third-party process tree holding 30
+ * abandoned sessions starved the shared worker pool and a suite that had failed
+ * twice went green with no code change. Raising the number is the response to
+ * neither.
  *
  * Via `timeoutMs` rather than a bare literal: an explicit second argument to
  * `it` beats `--testTimeout`, so a coverage run (1.1-1.5x instrumented) would
@@ -1016,10 +1045,10 @@ describe("applyChangesCore — write guards", () => {
     expect(await onDisk()).toEqual(before);
   });
 
-  // EVERY test in this block that expects applyChangesCore to RESOLVE gets
-  // explicit headroom over the project's 15s default -- they are the only ones
-  // here that perform a real .docx apply, measured in isolation at 1977ms and
-  // 463ms against 20-24ms for the refusals, which return before doing any work.
+  // EVERY test in this block that expects applyChangesCore to RESOLVE carries
+  // REAL_APPLY_TIMEOUT_MS -- they are the only ones here that perform a real
+  // .docx apply. How the ceiling was sized, why it is safe, and what a red
+  // names: that constant's comment at the top of this file.
   //
   // "Every" is load-bearing, and getting it wrong is what #1617 was. The first
   // pass at this budgeted the two specs that had been OBSERVED failing rather
@@ -1029,18 +1058,15 @@ describe("applyChangesCore — write guards", () => {
   // load. The rule the file wants is name the SET that does the expensive
   // thing, never the members that happened to trip.
   //
-  // Under the full suite's worker parallelism a 7.6x slowdown crosses the
-  // ceiling, and it did: three of four full-suite runs on one branch failed
-  // here, twice on the same test, including the fastest run of the four with
-  // nothing else on the machine. CI is green throughout, so this is wall-clock
-  // headroom, not a defect.
+  // The full-suite-parallelism slowdown that once sized this is retired by
+  // #1672's evidence -- an unrelated leaked process tree starving the machine
+  // -- and NOT by the at-rest measurement above, which is single-file and so
+  // cannot by itself refute a parallelism claim. CI was green throughout, so
+  // this was wall-clock headroom, not a defect.
   //
-  // Safe because duration is NOT the property under test -- these assert
-  // `applied: 1`. Where duration IS the assertion, raising the ceiling turns a
-  // real gate into a slower real gate that catches nothing; see
-  // `tests/helpers/timing.ts`. Proved honoured rather than ignored: set
-  // REAL_APPLY_TIMEOUT_MS to 1 and every spec carrying it fails naming that
-  // value -- the only observation available here that can come back negative.
+  // Proved honoured rather than ignored: set REAL_APPLY_TIMEOUT_MS to 1 and
+  // every spec carrying it fails naming that value -- the only observation
+  // available here that can come back negative.
 
   it(
     "allows an unsaved-restore conflict over an UNCHANGED disk",
@@ -1271,8 +1297,8 @@ describe("applyChangesCore — the backup sidecar", () => {
   });
 
   // Same headroom, same reason as the write-guards block above: these perform a
-  // real .docx apply, measured at ~21s on a dev machine against a 15s default.
-  // Without it they fail as timeouts rather than as assertions.
+  // real .docx apply, and without it they fail as timeouts rather than as
+  // assertions.
 
   it(
     "keeps an extensionless backupPath absolute instead of resolving it against cwd",
