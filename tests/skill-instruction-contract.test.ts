@@ -251,4 +251,11 @@ describe("shipped Tandem skill instruction contract", () => {
     expect(section).toMatch(/orchestrator/i);
     expect(section).toContain("tandem_checkInbox");
   });
+
+  it("tells Claude not to insert mid-paragraph line breaks (#1737)", () => {
+    const rules = hardRules(readShippedSkill());
+    expect(rules).toMatch(
+      /own soft-wrap handle display[\s\S]{0,80}mid-paragraph|mid-paragraph[\s\S]{0,80}own soft-wrap handle display/i,
+    );
+  });
 });
