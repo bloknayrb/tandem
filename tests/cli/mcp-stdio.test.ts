@@ -119,6 +119,36 @@ async function readOneLine(
   });
 }
 
+/** The awaited subject shared by every spec that waits on a synthesized error. */
+const SYNTHESIZED_32000 = "synthesized -32000 on stdout";
+
+/** Resolve once the child's stdio buffers are complete ("close", not "exit"). */
+function awaitClose(child: ChildProcessWithoutNullStreams): Promise<void> {
+  return new Promise<void>((r) => {
+    child.once("close", () => r());
+  });
+}
+
+/**
+ * The JSON-RPC error replies in `stdout` carrying `code`, optionally narrowed
+ * to one request `id`. Non-JSON lines are noise, not failures — but the parse
+ * lives here rather than inside a caller's `try`, where a throw used to swallow
+ * the assertion that followed it.
+ */
+function errorReplies(stdout: string, code: number, id?: number): string[] {
+  return stdout
+    .split("\n")
+    .filter((l) => l.trim())
+    .filter((l) => {
+      try {
+        const p = JSON.parse(l) as { id?: number; error?: { code?: number } };
+        return p.error?.code === code && (id === undefined || p.id === id);
+      } catch {
+        return false;
+      }
+    });
+}
+
 /**
  * Polls `counter()` until it returns >= `n` or `timeoutMs` elapses.
  * Throws a descriptive error on timeout so CI output names the bottleneck.
@@ -507,37 +537,22 @@ describe("mcp-stdio error synthesis on upstream unavailability", () => {
     // Buffer from spawn: an exited child's paused stream yields nothing to a
     // listener attached afterwards, so the old post-exit collector always
     // read "" and this spec asserted on an empty list (#1674).
-    outputOf(child);
+    const output = outputOf(child);
 
     // Write a notification (no id) — must never produce a -32000 reply.
     const notification = { jsonrpc: "2.0", method: "notifications/initialized" };
     child.stdin.write(`${JSON.stringify(notification)}\n`);
 
-    // Wait for "close" (not "exit") so the stdio buffers are complete.
-    await new Promise<void>((r) => child!.once("close", () => r()));
-
-    const lines = outputOf(child)
-      .stdout()
-      .split("\n")
-      .filter((l) => l.trim());
+    await awaitClose(child);
 
     // Preconditions: the child really terminated and really reached the
     // preflight refusal. Not an exit-code equality — the bridge measurably
     // exits 0 here, because stdio.onclose runs shutdown(0) before
     // deferredShutdown's shutdown(1) can take the latch.
     expect(child.exitCode ?? child.signalCode).not.toBeNull();
-    expect(outputOf(child).stderr()).toMatch(/preflight failed/i);
+    expect(output.stderr()).toMatch(/preflight failed/i);
 
-    // No line may be a -32000 error reply. Filtering outside the try means a
-    // parse failure can no longer swallow the assertion.
-    const synthesized = lines.filter((l) => {
-      try {
-        return (JSON.parse(l) as { error?: { code?: number } }).error?.code === -32000;
-      } catch {
-        return false;
-      }
-    });
-    expect(synthesized).toEqual([]);
+    expect(errorReplies(output.stdout(), -32000)).toEqual([]);
   }, 15_000);
 
   it("synthesizes -32000 for multiple concurrent pending requests on mid-session upstream death", async () => {
@@ -810,7 +825,7 @@ describe("mcp-stdio per-request timeout", () => {
     await waitForPosts(postsReceived, 1);
 
     // Expect -32000 within 500ms timer + processing slack.
-    const line = await readOneLine(child, 3_000, "synthesized -32000 on stdout");
+    const line = await readOneLine(child, 3_000, SYNTHESIZED_32000);
     const parsed = JSON.parse(line) as {
       id: number;
       error?: { code: number; message: string; data?: { detail: string } };
@@ -932,7 +947,7 @@ describe("mcp-stdio per-request timeout", () => {
 
     // Wait for the 300ms timer to fire and produce the -32000. Loose bound
     // (5s) to absorb scheduling jitter under parallel test load.
-    const firstLine = await readOneLine(child, 5_000, "synthesized -32000 on stdout");
+    const firstLine = await readOneLine(child, 5_000, SYNTHESIZED_32000);
     const first = JSON.parse(firstLine) as { id: number; error?: { code: number } };
     expect(first.id).toBe(30);
     expect(first.error?.code).toBe(-32000);
@@ -942,18 +957,8 @@ describe("mcp-stdio per-request timeout", () => {
 
     // Wait 500ms for any spurious second -32000 to arrive.
     await new Promise((r) => setTimeout(r, 500));
-    const allOutput = outputOf(child).stdout();
-    const allLines = allOutput.split("\n").filter((l) => l.trim());
-    const errorCount = allLines.filter((l) => {
-      try {
-        const p = JSON.parse(l) as { id?: number; error?: { code?: number } };
-        return p.id === 30 && p.error?.code === -32000;
-      } catch {
-        return false;
-      }
-    }).length;
     // Exactly one -32000 for id=30 — timer fired first, catch found map empty.
-    expect(errorCount).toBe(1);
+    expect(errorReplies(outputOf(child).stdout(), -32000, 30)).toHaveLength(1);
   }, 20_000);
 
   it("process exits in <3s after half-open timeout fires (no orphan handles)", async () => {
@@ -991,7 +996,7 @@ describe("mcp-stdio per-request timeout", () => {
     await waitForPosts(postsReceived, 1);
 
     // Wait for the -32000 to arrive (timer fired). Loose bound for full-suite load.
-    const line = await readOneLine(child, 5_000, "synthesized -32000 on stdout");
+    const line = await readOneLine(child, 5_000, SYNTHESIZED_32000);
     const parsed = JSON.parse(line) as { id: number; error?: { code: number } };
     expect(parsed.id).toBe(40);
     expect(parsed.error?.code).toBe(-32000);
@@ -1012,18 +1017,19 @@ describe("mcp-stdio per-request timeout", () => {
 });
 
 describe("child output buffering", () => {
-  let child: ChildProcessWithoutNullStreams | undefined;
+  const spawned: ChildProcessWithoutNullStreams[] = [];
 
   // Leaked child handles starve subprocess startup for the rest of the suite
-  // (#724) — the second, independently sufficient cause of #1674's text.
+  // (#724) — the second, independently sufficient cause of #1674's text. Every
+  // spawn is tracked, not just the latest, because one spec spawns three.
   afterEach(() => {
-    child?.kill();
-    child = undefined;
+    for (const c of spawned) c.kill();
+    spawned.length = 0;
   });
 
   function spawnNode(script: string): ChildProcessWithoutNullStreams {
     const c = spawn(process.execPath, ["-e", script], { stdio: ["pipe", "pipe", "pipe"] });
-    child = c;
+    spawned.push(c);
     // Same tick as the spawn: an exited child's stream yields nothing to a
     // listener attached afterwards.
     outputOf(c);
@@ -1032,13 +1038,21 @@ describe("child output buffering", () => {
 
   const STAY_ALIVE = "setInterval(() => {}, 1000);";
 
+  /** The Error a deadline rejected with; a resolved read fails loudly instead. */
+  const rejectionOf = (p: Promise<string>): Promise<Error> =>
+    p.then(
+      (line) => {
+        throw new Error(`expected a rejection, got ${JSON.stringify(line)}`);
+      },
+      (e: Error) => e,
+    );
+
   it("delivers a line emitted before the first readOneLine", async () => {
     const c = spawnNode(`process.stdout.write("first\\n"); ${STAY_ALIVE}`);
     const out = outputOf(c);
-    // Poll for the line rather than sleeping a fixed span (#687).
-    for (let i = 0; i < 200 && !out.stdout().includes("\n"); i++) {
-      await new Promise((r) => setTimeout(r, 25));
-    }
+    // Poll for the line rather than sleeping a fixed span (#687), so the
+    // 1s deadline below measures the reader and not subprocess startup.
+    await waitForCount(() => (out.stdout().includes("\n") ? 1 : 0), 1, 5_000);
     await expect(readOneLine(c, 1_000)).resolves.toBe("first");
   }, 15_000);
 
@@ -1059,32 +1073,24 @@ describe("child output buffering", () => {
     // Arm 1 — exited cleanly, default subject. Await termination first so the
     // 300ms deadline measures the timer, not spawn latency (#687).
     const exited = spawnNode("process.exit(0);");
-    await new Promise<void>((r) => {
-      exited.once("close", () => r());
-    });
+    await awaitClose(exited);
     await expect(readOneLine(exited, 300)).rejects.toThrow(
       /^no stdout within 300ms \(child exited with code 0\)/,
     );
-    exited.kill();
 
     // Arm 2 — signal-killed, so exitCode is null and only signalCode names it.
     const killed = spawnNode(STAY_ALIVE);
     killed.kill("SIGKILL");
-    await new Promise<void>((r) => {
-      killed.once("close", () => r());
-    });
-    const killedErr = await readOneLine(killed, 300).catch((e: Error) => e);
-    expect((killedErr as Error).message).toContain("exited");
-    expect((killedErr as Error).message).toContain("SIGKILL");
+    await awaitClose(killed);
+    const killedErr = await rejectionOf(readOneLine(killed, 300));
+    expect(killedErr.message).toContain("exited");
+    expect(killedErr.message).toContain("SIGKILL");
 
     // Arm 3 — still running, custom subject. No wait: the child must be live.
     const alive = spawnNode(STAY_ALIVE);
-    const aliveErr = await readOneLine(alive, 300, "synthesized -32000 on stdout").catch(
-      (e: Error) => e,
-    );
-    expect((aliveErr as Error).message).toContain("synthesized -32000");
-    expect((aliveErr as Error).message).toContain("still running");
-    alive.kill();
+    const aliveErr = await rejectionOf(readOneLine(alive, 300, SYNTHESIZED_32000));
+    expect(aliveErr.message).toContain("synthesized -32000");
+    expect(aliveErr.message).toContain("still running");
   }, 20_000);
 });
 

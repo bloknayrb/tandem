@@ -1045,11 +1045,10 @@ describe("applyChangesCore — write guards", () => {
     expect(await onDisk()).toEqual(before);
   });
 
-  // EVERY test in this block that expects applyChangesCore to RESOLVE gets
-  // explicit headroom over the project's 15s default -- they are the only ones
-  // here that perform a real .docx apply. How the ceiling was sized, what it
-  // measures today and what a red names: the REAL_APPLY_TIMEOUT_MS comment at
-  // the top of this file.
+  // EVERY test in this block that expects applyChangesCore to RESOLVE carries
+  // REAL_APPLY_TIMEOUT_MS -- they are the only ones here that perform a real
+  // .docx apply. How the ceiling was sized, why it is safe, and what a red
+  // names: that constant's comment at the top of this file.
   //
   // "Every" is load-bearing, and getting it wrong is what #1617 was. The first
   // pass at this budgeted the two specs that had been OBSERVED failing rather
@@ -1065,12 +1064,9 @@ describe("applyChangesCore — write guards", () => {
   // cannot by itself refute a parallelism claim. CI was green throughout, so
   // this was wall-clock headroom, not a defect.
   //
-  // Safe because duration is NOT the property under test -- these assert
-  // `applied: 1`. Where duration IS the assertion, raising the ceiling turns a
-  // real gate into a slower real gate that catches nothing; see
-  // `tests/helpers/timing.ts`. Proved honoured rather than ignored: set
-  // REAL_APPLY_TIMEOUT_MS to 1 and every spec carrying it fails naming that
-  // value -- the only observation available here that can come back negative.
+  // Proved honoured rather than ignored: set REAL_APPLY_TIMEOUT_MS to 1 and
+  // every spec carrying it fails naming that value -- the only observation
+  // available here that can come back negative.
 
   it(
     "allows an unsaved-restore conflict over an UNCHANGED disk",
@@ -1301,9 +1297,8 @@ describe("applyChangesCore — the backup sidecar", () => {
   });
 
   // Same headroom, same reason as the write-guards block above: these perform a
-  // real .docx apply. How the ceiling was sized, what it measures today and
-  // what a red names: the REAL_APPLY_TIMEOUT_MS comment at the top of this
-  // file. Without it they fail as timeouts rather than as assertions.
+  // real .docx apply, and without it they fail as timeouts rather than as
+  // assertions.
 
   it(
     "keeps an extensionless backupPath absolute instead of resolving it against cwd",
