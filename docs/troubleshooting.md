@@ -489,7 +489,7 @@ Notes:
 
 - Backups are taken once per document per server run, and skipped when nothing changed since the newest backup — so the folder stays small.
 - Snapshots older than 30 days are cleaned up automatically at startup, and the whole folder is capped at 500 MB (backups pause with a notification if it fills).
-- `.docx` files get the same pre-overwrite snapshots as text (verbatim byte-identical copies of the ZIP) and are additionally never auto-saved — only explicit saves overwrite them. `tandem_applyChanges` also writes a `.backup.docx` sidecar next to the original, used as a fallback when no snapshot exists yet.
+- `.docx` files get the same pre-overwrite snapshots as text (verbatim byte-identical copies of the ZIP) and are additionally never auto-saved — only explicit saves overwrite them. `tandem_applyChanges` also writes a `.backup.docx` sidecar next to the original; it is listed alongside the snapshots and restored by name like any of them.
 
 ## Reading server logs
 

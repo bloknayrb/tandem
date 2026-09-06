@@ -240,8 +240,13 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   "src/server/mcp/convert.ts": 1,
   "src/server/mcp/document-service.ts": 4,
   "src/server/mcp/document.ts": 1,
-  "src/server/mcp/docx-apply.ts": 4,
-  "src/server/documents/reload-family.ts": 2,
+  // #1768: 4 -> 2. `tandem_restoreBackup`'s private sidecar copy-back (its own
+  // `fs.open` + `atomicWriteBuffer`) is gone; the sidecar now restores through
+  // `restoreDocumentFromBackup`, which is where the O_NOFOLLOW open moved to.
+  "src/server/mcp/docx-apply.ts": 2,
+  // 2 writes (the docx buffer arm and the text arm of one restore triple) plus
+  // the O_NOFOLLOW sidecar READ the idiom list counts conservatively (#1768).
+  "src/server/documents/reload-family.ts": 3,
   "src/server/models/store.ts": 1,
   "src/server/session/manager.ts": 3,
   "src/server/version-check.ts": 1,

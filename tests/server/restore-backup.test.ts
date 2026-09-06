@@ -8,7 +8,9 @@
  *    sidecar fallback when no snapshots exist, error cases)
  */
 
+import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
@@ -58,6 +60,7 @@ import { docHash } from "../../src/server/annotations/doc-hash.js";
 import { openFromDisk } from "../../src/server/documents/open.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { restoreDocumentFromBackup } from "../../src/server/documents/reload-family.js";
+import { acquireReloadGuard, releaseReloadGuard } from "../../src/server/documents/watcher.js";
 import {
   _resetDocBackupGateForTests,
   docBackupSnapshotPath,
@@ -80,6 +83,10 @@ import {
 import { INTERNAL_ORIGIN, RELOAD_ORIGIN, withMcp } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import { makeAnnotation } from "../helpers/ydoc-factory.js";
+
+// `mkfifo` (coreutils) is how a test plants a FIFO — Node has no binding for
+// mknod. POSIX-only, and every test using it is gated on !win32.
+const execFileAsync = promisify(execFile);
 
 const suppressMock = vi.mocked(suppressNextChange);
 const recordSelfWriteMock = vi.mocked(recordSelfWrite);
@@ -415,6 +422,66 @@ describe("restoreDocumentFromBackup", () => {
     ).rejects.toMatchObject({ code: "FILE_NOT_FOUND" });
   });
 
+  // The tool-level tests cover the symlinked sidecar through `tandem_restoreBackup`,
+  // whose own lstat refuses it before the restore path runs. This drives the
+  // restore path DIRECTLY — the same function `POST /api/backups/restore` reaches —
+  // so the O_NOFOLLOW open in `readDocxSidecarBytes` is what does the refusing.
+  it.runIf(process.platform !== "win32")(
+    "refuses a symlinked .docx sidecar on the direct restore path (ELOOP)",
+    async () => {
+      const filePath = path.join(tmpDir, "direct-linked.docx");
+      const sidecarPath = path.join(tmpDir, "direct-linked.backup.docx");
+      const attacker = path.join(tmpDir, "direct-attacker.docx");
+      await fs.writeFile(filePath, "the user's real document");
+      await fs.writeFile(attacker, "attacker-chosen bytes");
+      await fs.symlink(attacker, sidecarPath);
+      addDoc("docx-symlink-direct", {
+        id: "docx-symlink-direct",
+        filePath,
+        format: "docx",
+        readOnly: false,
+        source: "file",
+      });
+      await expect(
+        restoreDocumentFromBackup("docx-symlink-direct", "direct-linked.backup.docx"),
+      ).rejects.toMatchObject({ code: "BACKUP_SYMLINK" });
+      expect(await fs.readFile(filePath, "utf-8")).toBe("the user's real document");
+    },
+  );
+
+  // The other arm of the sidecar open: an errno that is NOT the symlink refusal
+  // must rethrow so the caller maps it — here ENOENT becomes the FILE_NOT_FOUND
+  // the snapshot namespace already reports, rather than a swallowed success.
+  it("reports FILE_NOT_FOUND when the named .docx sidecar does not exist", async () => {
+    const filePath = path.join(tmpDir, "no-sidecar.docx");
+    await fs.writeFile(filePath, "the user's real document");
+    addDoc("docx-no-sidecar-direct", {
+      id: "docx-no-sidecar-direct",
+      filePath,
+      format: "docx",
+      readOnly: false,
+      source: "file",
+    });
+    await expect(
+      restoreDocumentFromBackup("docx-no-sidecar-direct", "no-sidecar.backup.docx"),
+    ).rejects.toMatchObject({ code: "FILE_NOT_FOUND" });
+    expect(await fs.readFile(filePath, "utf-8")).toBe("the user's real document");
+  });
+
+  it("refuses while a reload holds the per-document guard", async () => {
+    const filePath = path.join(tmpDir, "guarded.md");
+    await fs.writeFile(filePath, "content\n");
+    const opened = await openFromDisk(filePath);
+    expect(acquireReloadGuard(opened.documentId)).toBe(true);
+    try {
+      await expect(
+        restoreDocumentFromBackup(opened.documentId, "guarded-20260101-100000-aaaaaaaa.md"),
+      ).rejects.toMatchObject({ code: "RELOAD_IN_PROGRESS" });
+    } finally {
+      releaseReloadGuard(opened.documentId);
+    }
+  });
+
   it("rejects read-only documents", async () => {
     const filePath = path.join(tmpDir, "CHANGELOG.md");
     await fs.writeFile(filePath, "content\n");
@@ -600,6 +667,9 @@ describe("tandem_restoreBackup tool", () => {
     const parsed = parseResult(await restoreTool({}));
     expect(parsed.error).toBe(true);
     expect(parsed.code).toBe("FILE_NOT_FOUND");
+    // The sidecar sentence is .docx-only — a .md document has no sidecar, so
+    // naming one here would send the user looking for a file that cannot exist.
+    expect(parsed.message).not.toContain(".backup.docx");
   });
 
   it("restores a named snapshot for a text document", async () => {
@@ -616,11 +686,27 @@ describe("tandem_restoreBackup tool", () => {
     expect(extractText(getOrCreateDocument(opened.documentId))).toContain("good draft");
   });
 
-  it("keeps the .docx sidecar restore unchanged", async () => {
+  // #1768. The no-`backup` call used to own a second, private restore
+  // implementation for .docx-with-no-snapshots: it copied the sidecar over the
+  // document without consulting readOnly, the reload guard, the pre-overwrite
+  // snapshot or the watcher's self-write filter. It now lists, and only lists.
+  it("lists the .docx sidecar after the snapshots and writes nothing", async () => {
     const filePath = path.join(tmpDir, "report.docx");
-    const backupPath = path.join(tmpDir, "report.backup.docx");
+    const sidecarPath = path.join(tmpDir, "report.backup.docx");
     await fs.writeFile(filePath, "modified docx bytes");
-    await fs.writeFile(backupPath, "original docx bytes");
+    await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
+    const [snapshot] = await listDocBackups(filePath, resolveAppDataDir());
+
+    // The sidecar is deliberately the NEWER file. The list's ordering guarantee
+    // is positional, not mtime-derived: the sidecar's mtime sits on a file in
+    // the user's own document directory and any local process can set it, so a
+    // merge-then-re-sort-by-mtime implementation would let it take index 0 of a
+    // list the response tells an agent to trust. Without this step such an
+    // implementation passes whenever the snapshot happens to be newer.
+    await fs.writeFile(sidecarPath, "original docx bytes");
+    const future = new Date(Date.now() + 60_000);
+    await fs.utimes(sidecarPath, future, future);
+
     addDoc("docx-restore", {
       id: "docx-restore",
       filePath,
@@ -632,8 +718,85 @@ describe("tandem_restoreBackup tool", () => {
 
     const parsed = parseResult(await restoreTool({}));
     expect(parsed.error).toBe(false);
-    expect(parsed.data?.restoredFrom).toBe(backupPath);
-    expect(await fs.readFile(filePath, "utf-8")).toBe("original docx bytes");
+    const names = (parsed.data?.backups as Array<{ name: string }>).map((b) => b.name);
+    expect(names).toEqual([snapshot.name, "report.backup.docx"]);
+    // The append belongs to the tool's response mapping, never to the shared
+    // lister: `listDocBackups` also serves GET /api/backups, which feeds the
+    // palette action that restores backups[0].
+    expect((await listDocBackups(filePath, resolveAppDataDir())).map((b) => b.name)).toEqual([
+      snapshot.name,
+    ]);
+    expect(await fs.readFile(filePath, "utf-8")).toBe("modified docx bytes");
+  });
+
+  it("lists the .docx sidecar when there are no snapshots at all", async () => {
+    const filePath = path.join(tmpDir, "report.docx");
+    const sidecarPath = path.join(tmpDir, "report.backup.docx");
+    await fs.writeFile(filePath, "modified docx bytes");
+    await fs.writeFile(sidecarPath, "original docx bytes");
+    addDoc("docx-restore-only-sidecar", {
+      id: "docx-restore-only-sidecar",
+      filePath,
+      format: "docx",
+      readOnly: false,
+      source: "file",
+    });
+    setActiveDocId("docx-restore-only-sidecar");
+
+    const parsed = parseResult(await restoreTool({}));
+    expect(parsed.error).toBe(false);
+    expect((parsed.data?.backups as Array<{ name: string }>).map((b) => b.name)).toEqual([
+      "report.backup.docx",
+    ]);
+    expect(await fs.readFile(filePath, "utf-8")).toBe("modified docx bytes");
+  });
+
+  // Probe case H5 verbatim: the no-arg call on a READ-ONLY .docx with a sidecar
+  // and no snapshots. It answered "Restored report.docx from backup." and
+  // overwrote a document Tandem had promised not to write to.
+  it("does not restore a read-only .docx from the sidecar on a no-arg call", async () => {
+    const filePath = path.join(tmpDir, "report.docx");
+    const sidecarPath = path.join(tmpDir, "report.backup.docx");
+    await fs.writeFile(filePath, "the read-only document's own bytes");
+    await fs.writeFile(sidecarPath, "sidecar bytes");
+    addDoc("docx-readonly", {
+      id: "docx-readonly",
+      filePath,
+      format: "docx",
+      readOnly: true,
+      source: "file",
+    });
+    setActiveDocId("docx-readonly");
+
+    const parsed = parseResult(await restoreTool({}));
+    expect(parsed.error).toBe(false);
+    expect((parsed.data?.backups as Array<{ name: string }>).map((b) => b.name)).toContain(
+      "report.backup.docx",
+    );
+    expect(
+      await fs.readFile(filePath, "utf-8"),
+      "the no-arg call wrote to a read-only document",
+    ).toBe("the read-only document's own bytes");
+  });
+
+  it("restores the .docx sidecar by name through the guarded reload path", async () => {
+    const filePath = path.join(tmpDir, "report.docx");
+    const sidecarPath = path.join(tmpDir, "report.backup.docx");
+    const original = await buildDocx("sidecar original");
+    await fs.writeFile(filePath, await buildDocx("sidecar ruined"));
+    await fs.writeFile(sidecarPath, original);
+    const opened = await openFromDisk(filePath);
+    setActiveDocId(opened.documentId);
+
+    _resetDocBackupGateForTests();
+    const parsed = parseResult(await restoreTool({ backup: "report.backup.docx" }));
+    expect(parsed.error).toBe(false);
+    expect((await fs.readFile(filePath)).equals(original)).toBe(true);
+    expect(extractText(getOrCreateDocument(opened.documentId))).toContain("sidecar original");
+    // Routed through restoreDocumentFromBackup, not a private copy-back: both
+    // watcher self-write layers fired (#1749).
+    expect(recordSelfWriteMock).toHaveBeenCalled();
+    expect(suppressMock).toHaveBeenCalledWith(filePath);
   });
 
   // The severe half of the symlink pair, and the reason it is severe: the old
@@ -649,13 +812,18 @@ describe("tandem_restoreBackup tool", () => {
   // refusal that still clobbered the document would satisfy a code check. The
   // load-bearing line is that filePath still holds its own bytes.
   it.runIf(process.platform !== "win32")(
-    "refuses to restore through a symlinked .docx sidecar, and leaves the document alone",
+    "never lists or restores through a symlinked .docx sidecar",
     async () => {
       const filePath = path.join(tmpDir, "linked.docx");
       const backupPath = path.join(tmpDir, "linked.backup.docx");
       const attacker = path.join(tmpDir, "attacker-payload.docx");
       await fs.writeFile(filePath, "the user's real document");
       await fs.writeFile(attacker, "attacker-chosen bytes");
+      // One real snapshot, so the list call has something to return: without it
+      // the no-arg call answers FILE_NOT_FOUND, `backups` is undefined, and the
+      // list assertion below reads green whatever went wrong.
+      await snapshotBeforeFirstWrite(filePath, { appDataDir: resolveAppDataDir() });
+      const [snapshot] = await listDocBackups(filePath, resolveAppDataDir());
       await fs.symlink(attacker, backupPath);
 
       addDoc("docx-symlink-restore", {
@@ -667,7 +835,13 @@ describe("tandem_restoreBackup tool", () => {
       });
       setActiveDocId("docx-symlink-restore");
 
-      const parsed = parseResult(await restoreTool({}));
+      const listed = parseResult(await restoreTool({}));
+      expect(listed.error).toBe(false);
+      expect((listed.data?.backups as Array<{ name: string }>).map((b) => b.name)).toEqual([
+        snapshot.name,
+      ]);
+
+      const parsed = parseResult(await restoreTool({ backup: "linked.backup.docx" }));
       expect(parsed.error).toBe(true);
       expect(parsed.code).toBe("INVALID_PATH");
       expect(
@@ -675,6 +849,71 @@ describe("tandem_restoreBackup tool", () => {
         "the document was overwritten through the symlink -- the refusal did not " +
           "happen before the write",
       ).toBe("the user's real document");
+    },
+  );
+
+  // The symlink test above is the shape everyone reaches for; it is not the
+  // whole class. Anything the local attacker can create at the sidecar name is
+  // in scope, and a FIFO is the nasty one: `open(O_RDONLY)` on it is not an
+  // error, it BLOCKS until a writer appears. Without O_NONBLOCK the restore
+  // never returns and parks one libuv threadpool thread; four of them stop
+  // every file operation in the process. A default-timeout failure here is the
+  // regression -- the assertion cannot even run if the open hangs.
+  it.runIf(process.platform !== "win32")(
+    "refuses a FIFO at the .docx sidecar path instead of blocking on it",
+    async () => {
+      const filePath = path.join(tmpDir, "fifo.docx");
+      const backupPath = path.join(tmpDir, "fifo.backup.docx");
+      await fs.writeFile(filePath, "the user's real document");
+      await execFileAsync("mkfifo", [backupPath]);
+
+      addDoc("docx-fifo-restore", {
+        id: "docx-fifo-restore",
+        filePath,
+        format: "docx",
+        readOnly: false,
+        source: "file",
+      });
+      setActiveDocId("docx-fifo-restore");
+
+      const parsed = parseResult(await restoreTool({ backup: "fifo.backup.docx" }));
+      expect(parsed.error).toBe(true);
+      expect(parsed.code).toBe("INVALID_PATH");
+      expect(
+        await fs.readFile(filePath, "utf-8"),
+        "the document was rewritten from a FIFO the user never wrote",
+      ).toBe("the user's real document");
+      // The list twin refuses it too, so the name is never offered as a restorable
+      // entry in the first place.
+      const listed = parseResult(await restoreTool({}));
+      expect(listed.error).toBe(true);
+      expect(listed.code).toBe("FILE_NOT_FOUND");
+    },
+  );
+
+  // Same predicate, the other member: a directory at the sidecar name used to
+  // reach `readFile` and surface as a bare unmapped EISDIR (a 500 / thrown
+  // error), rather than the actionable path refusal it is.
+  it.runIf(process.platform !== "win32")(
+    "refuses a directory at the .docx sidecar path",
+    async () => {
+      const filePath = path.join(tmpDir, "dirbackup.docx");
+      await fs.writeFile(filePath, "the user's real document");
+      await fs.mkdir(path.join(tmpDir, "dirbackup.backup.docx"));
+
+      addDoc("docx-dir-restore", {
+        id: "docx-dir-restore",
+        filePath,
+        format: "docx",
+        readOnly: false,
+        source: "file",
+      });
+      setActiveDocId("docx-dir-restore");
+
+      const parsed = parseResult(await restoreTool({ backup: "dirbackup.backup.docx" }));
+      expect(parsed.error).toBe(true);
+      expect(parsed.code).toBe("INVALID_PATH");
+      expect(await fs.readFile(filePath, "utf-8")).toBe("the user's real document");
     },
   );
 
@@ -692,10 +931,13 @@ describe("tandem_restoreBackup tool", () => {
     expect(missing.error).toBe(true);
     expect(missing.code).toBe("FILE_NOT_FOUND");
 
-    // No snapshots and no sidecar → FILE_NOT_FOUND.
+    // No snapshots and no sidecar → FILE_NOT_FOUND. The message names the
+    // sidecar: that sentence is the whole user-facing discoverability of a
+    // backup namespace Tandem does not manage.
     const noBackup = parseResult(await restoreTool({}));
     expect(noBackup.error).toBe(true);
     expect(noBackup.code).toBe("FILE_NOT_FOUND");
+    expect(noBackup.message).toContain(".backup.docx");
   });
 
   it("rejects list mode for upload-source documents", async () => {
