@@ -56,19 +56,38 @@ backoff already there. No supervisor, no new abstraction, no new constant.
   `Tandem monitor lost its connection and is retrying in the background — tandem_checkInbox still works and is authoritative\n`.
   `process.stdout.write` stays the delivery for that one line and nothing else moves to stdout
   (Critical Rule 3); the `onStdoutError` EPIPE exit is untouched and stays an exit.
-- **Register a stdin-EOF shutdown on both hosts — what makes never-exiting safe here, and the one
-  place #1804 and #1805 are NOT symmetric.** Removing the cap deletes the only self-termination path
-  these two have for the case the fix targets: the monitor's remaining inventory is SIGINT/SIGTERM
-  (`:244-245`) and `onStdoutError` (`:267-269`), and EPIPE fires only on a stdout **write**, which
-  the kept `!everConnected` guard means a never-connected monitor never performs — so a consumer
-  armed while Tandem is down, whose session then ends uncleanly, would have no exit at all and probe
-  `/api/events` at the 30 s cap forever, one orphan per session. `grep -n "stdin" src/monitor/run.ts
-  src/channel/run.ts` returns nothing today; the bridge has no such gap because the counter-measure
-  is already at `src/cli/mcp-stdio.ts:1225-1231` (`process.stdin.once("end", () => { void
-  shutdown(0); })`). **Mirror it verbatim in shape, one line per host, no new abstraction**: in
-  `main()` (`src/monitor/run.ts:182`) via `shutdownMonitor`, and in `runChannel()` beside the
-  `StdioServerTransport` connect (`src/channel/run.ts:203-204`) via its clean-exit path.
-  `src/channel/run.ts` joins the file set for that one line.
+- **Register a stdin-EOF shutdown — verbatim on one host, conditional on the other. This is the one
+  place #1804 and #1805 are NOT symmetric, and the two hosts are not symmetric with each other
+  either.** Removing the cap deletes the only self-termination path these two have for the case the
+  fix targets: the monitor's remaining inventory is SIGINT/SIGTERM (`:244-245`) and `onStdoutError`
+  (`:267-269`), and EPIPE fires only on a stdout **write**, which the kept `!everConnected` guard
+  means a never-connected monitor never performs — so a consumer armed while Tandem is down, whose
+  session then ends uncleanly, would have no exit at all and probe `/api/events` at the 30 s cap
+  forever, one orphan per session. The counter-measure is already at `src/cli/mcp-stdio.ts:1225-1231`
+  (`process.stdin.once("end", () => { void shutdown(0); })`) — but it works there **only because**
+  `await stdio.start()` (`:1223`) runs first and `StdioServerTransport` attaches a stdin `data`
+  listener, putting the stream in flowing mode; the comment at `:1225-1228` says so. An `'end'`
+  listener does not by itself resume a paused stream.
+  - **`src/channel/run.ts` — mirror it verbatim in shape, one line, no new abstraction**, in
+    `runChannel()` beside the `StdioServerTransport` connect (`:203-204`), via its clean-exit path.
+    No `resume()` is needed or wanted here: that transport reads stdin, exactly as in the bridge, so
+    EOF is delivered. `src/channel/run.ts` joins the file set for that one line.
+  - **`src/monitor/run.ts` — the same line alone would be a no-op, and the obvious repair is
+    load-bearing enough to need a measurement before it is written.** Nothing in the monitor reads
+    stdin: `grep -n "stdin\|resume(" src/monitor/run.ts src/monitor/index.ts` returns only the prose
+    comments at `run.ts:26` and `run.ts:133`. (An earlier draft of this bullet said the grep "returns
+    nothing today" — that is wrong for the monitor and true only of `src/channel/run.ts`.) Measured
+    on Node 22: a script whose only stdin interaction is `process.stdin.once("end", …)`, run with
+    stdin at `/dev/null`, **never** fires the handler; adding `process.stdin.resume()` fires it
+    immediately. But `resume()` is fatal the other way — Claude Code spawns monitors via
+    `spawn(cmd, [], { shell: true })` (`docs/architecture.md:499`), and a monitor whose stdin is
+    `/dev/null` or already closed would then exit at startup, killing the push path outright.
+    **Whether the plugin host gives the monitor a piped stdin is UNMEASURED.** So measure it first,
+    then take exactly one branch: **(a) piped** — put `process.stdin.resume()` immediately above
+    `process.stdin.once("end", …)` in `main()` (`src/monitor/run.ts:182`), shutting down via
+    `shutdownMonitor`; or **(b) not piped, or the measurement is not made** — drop the monitor half
+    entirely and delete the "on both hosts" clause from "Done when", rather than shipping a line that
+    cannot fire and claiming a property that does not hold.
 - `src/channel/event-bridge.ts` needs no change — it passes no `onExhaustion` and inherits the loop;
   test 6 proves it. **Say so in the PR body** with the file correction: the wave-table names
   `src/monitor/sse-consumer.ts`, which does not exist; the module is `src/shared/sse-consumer.ts`.
@@ -128,11 +147,18 @@ captured. Test-side discipline only.
 5. `tests/channel/event-bridge.test.ts:551-567` — keep the POST assertion, rename, assert the process
    does not exit. The shim shares the consumer, so this is the second host's proof that one fix
    covered both.
-6. `tests/monitor/shutdown.test.ts` — SIGINT/SIGTERM and EPIPE still exit, plus one added spec: the
-   stdin-EOF handler is registered on **both** hosts. After this change it is the only exit a
-   never-connected monitor has, so nothing else in the suite can catch its absence. A source-text
-   assertion that `src/monitor/run.ts` and `src/channel/run.ts` each contain
-   `process.stdin.once("end"` is enough, matching the source-text pins this track already uses.
+6. `tests/monitor/shutdown.test.ts` — SIGINT/SIGTERM and EPIPE still exit, plus stdin-EOF coverage
+   split the way the Fix bullet is. After this change stdin-EOF is the only exit a never-connected
+   consumer has, so nothing else in the suite can catch its absence — but **a source-text grep cannot
+   tell an inert handler from a working one**: it is equally green on a firing handler, on a
+   registered handler that can never fire, and on the string sitting in a comment. So it is only
+   enough where the host is already known to read stdin.
+   - `src/channel/run.ts` — keep the source-text pin that the file contains
+     `process.stdin.once("end"`, matching the source-text pins this track already uses.
+   - `src/monitor/run.ts`, **under branch (a) only** — a *behavioural* spec: call `main()`, assert
+     `process.stdin.resume` was called (spy), then emit `'end'` on `process.stdin` and assert the
+     mocked `process.exit` fired via `shutdownMonitor`. Under branch (b) there is no monitor spec
+     here, because there is no monitor stdin behaviour to pin.
 
 ## Done when
 
@@ -140,7 +166,8 @@ The consumer retries past `CHANNEL_MAX_RETRIES` without exiting on both hosts; t
 the stdout notice fire once per outage — an outage ending only at `STABLE_CONNECTION_MS` of
 continuous uptime, so a connect-then-die flap reports once — and fire again on the next outage; the
 notice names `tandem_checkInbox`; an unreachable server produces a bounded stderr trail with no `/5`
-denominator; **a never-connected consumer whose stdin closes still exits**, on both hosts;
+denominator; **a never-connected channel shim whose stdin closes still exits** — and the monitor too
+under branch (a) of the stdin-EOF bullet, the only branch that adds a monitor stdin line;
 `docs/architecture.md` and `docs/mcp-tools.md` no longer describe the exit; `npm run typecheck` +
 `npx vitest run tests/monitor tests/channel` + `node scripts/ci/monitor-smoke.mjs` green.
 
@@ -175,3 +202,30 @@ behaviour, and the spec itself could not decide the number — the error POST an
 each firing exactly once across ≥ 8 cycles still pins the suppression. Also removed: the
 `docs/mcp-tools.md:1403` paragraph explaining why a sample string is *not* being changed, and the
 separate items 2/3 split, merged above.
+
+## Review corrections (post-cut)
+
+Two findings, both on the stdin-EOF bullet the scope-cut round added, and both adopted directly.
+
+**The bullet's own safety property did not hold on the monitor, and its only check was green
+anyway.** `process.stdin.once("end", …)` fires in `src/cli/mcp-stdio.ts` only because
+`await stdio.start()` runs first and `StdioServerTransport` attaches a stdin `data` listener, putting
+the stream in flowing mode; `src/channel/run.ts:203-204` does the same for the shim. The monitor
+reads stdin nowhere — verified this round, `grep -n "stdin\|resume(" src/monitor/run.ts
+src/monitor/index.ts` returns only prose comments at `run.ts:26` and `:133` — so an `'end'` listener
+alone never fires (measured on Node 22 with stdin at `/dev/null`) and the fix would have shipped the
+orphan-forever monitor it exists to prevent. The bullet is now split per host: verbatim mirror for
+the channel shim; for the monitor, an explicit UNMEASURED flag on whether the plugin host pipes
+stdin, branch (a) pairing `process.stdin.resume()` with the handler if it does, and branch (b)
+dropping the monitor half outright if it does not. `resume()` is not prescribed unconditionally
+because it is fatal the other way — Claude Code spawns monitors with `spawn(cmd, [], { shell: true })`
+(`docs/architecture.md:499`), and a `/dev/null` or already-closed stdin would make the monitor exit at
+startup, killing the push path.
+
+**Two corrections that came with it.** The bullet claimed `grep -n "stdin" src/monitor/run.ts
+src/channel/run.ts` "returns nothing today"; it returns two prose hits in the monitor, and is
+accurate only for `src/channel/run.ts`. And test item 6's source-text grep is green in all three
+states (working, registered-but-inert, string-in-a-comment), so it now covers only the channel host,
+with the monitor half replaced by a behavioural spec — `main()`, assert the `resume` spy, emit
+`'end'`, assert the mocked exit via `shutdownMonitor` — that exists only under branch (a). The
+"Done when" clause dropped its unconditional "on both hosts" to match.
