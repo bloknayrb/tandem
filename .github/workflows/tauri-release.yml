@@ -879,7 +879,7 @@ jobs:
             const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
               owner, repo, release_id, per_page: 100,
             });
-            const names = new Set(assets.map((a) => a.name));
+            const assetUrls = new Set(assets.map((a) => a.url));
             core.info(`release ${release_id} has ${assets.length} assets`);
 
             const manifest = assets.find((a) => a.name === 'latest.json');
@@ -915,13 +915,16 @@ jobs:
               );
             }
 
-            // Every URL must point at a file actually attached to THIS release.
-            // Catches the split-release case, where a manifest looks complete
-            // but half its artifacts live on a sibling draft.
+            // The updater records GitHub asset API URLs, not browser download
+            // URLs: their final path segment is an asset ID rather than a file
+            // name. Compare against the release's API URLs so this verifies
+            // the intended invariant without rejecting a valid manifest.
+            // This still catches a split release, where a manifest looks
+            // complete but half its artifacts live on a sibling draft.
             const dangling = [];
             for (const [key, p] of Object.entries(json.platforms)) {
-              const file = decodeURIComponent(String(p.url).split('/').pop() ?? '');
-              if (!names.has(file)) dangling.push(`${key} -> ${file}`);
+              const url = String(p.url);
+              if (!assetUrls.has(url)) dangling.push(`${key} -> ${url}`);
               if (!p.signature) dangling.push(`${key} -> missing signature`);
             }
             if (dangling.length) {
