@@ -60,6 +60,7 @@ import { docHash } from "../../src/server/annotations/doc-hash.js";
 import { openFromDisk } from "../../src/server/documents/open.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { restoreDocumentFromBackup } from "../../src/server/documents/reload-family.js";
+import { acquireReloadGuard, releaseReloadGuard } from "../../src/server/documents/watcher.js";
 import {
   _resetDocBackupGateForTests,
   docBackupSnapshotPath,
@@ -419,6 +420,66 @@ describe("restoreDocumentFromBackup", () => {
     await expect(
       restoreDocumentFromBackup(opened.documentId, "doc-20260101-100000-aaaaaaaa.md"),
     ).rejects.toMatchObject({ code: "FILE_NOT_FOUND" });
+  });
+
+  // The tool-level tests cover the symlinked sidecar through `tandem_restoreBackup`,
+  // whose own lstat refuses it before the restore path runs. This drives the
+  // restore path DIRECTLY — the same function `POST /api/backups/restore` reaches —
+  // so the O_NOFOLLOW open in `readDocxSidecarBytes` is what does the refusing.
+  it.runIf(process.platform !== "win32")(
+    "refuses a symlinked .docx sidecar on the direct restore path (ELOOP)",
+    async () => {
+      const filePath = path.join(tmpDir, "direct-linked.docx");
+      const sidecarPath = path.join(tmpDir, "direct-linked.backup.docx");
+      const attacker = path.join(tmpDir, "direct-attacker.docx");
+      await fs.writeFile(filePath, "the user's real document");
+      await fs.writeFile(attacker, "attacker-chosen bytes");
+      await fs.symlink(attacker, sidecarPath);
+      addDoc("docx-symlink-direct", {
+        id: "docx-symlink-direct",
+        filePath,
+        format: "docx",
+        readOnly: false,
+        source: "file",
+      });
+      await expect(
+        restoreDocumentFromBackup("docx-symlink-direct", "direct-linked.backup.docx"),
+      ).rejects.toMatchObject({ code: "BACKUP_SYMLINK" });
+      expect(await fs.readFile(filePath, "utf-8")).toBe("the user's real document");
+    },
+  );
+
+  // The other arm of the sidecar open: an errno that is NOT the symlink refusal
+  // must rethrow so the caller maps it — here ENOENT becomes the FILE_NOT_FOUND
+  // the snapshot namespace already reports, rather than a swallowed success.
+  it("reports FILE_NOT_FOUND when the named .docx sidecar does not exist", async () => {
+    const filePath = path.join(tmpDir, "no-sidecar.docx");
+    await fs.writeFile(filePath, "the user's real document");
+    addDoc("docx-no-sidecar-direct", {
+      id: "docx-no-sidecar-direct",
+      filePath,
+      format: "docx",
+      readOnly: false,
+      source: "file",
+    });
+    await expect(
+      restoreDocumentFromBackup("docx-no-sidecar-direct", "no-sidecar.backup.docx"),
+    ).rejects.toMatchObject({ code: "FILE_NOT_FOUND" });
+    expect(await fs.readFile(filePath, "utf-8")).toBe("the user's real document");
+  });
+
+  it("refuses while a reload holds the per-document guard", async () => {
+    const filePath = path.join(tmpDir, "guarded.md");
+    await fs.writeFile(filePath, "content\n");
+    const opened = await openFromDisk(filePath);
+    expect(acquireReloadGuard(opened.documentId)).toBe(true);
+    try {
+      await expect(
+        restoreDocumentFromBackup(opened.documentId, "guarded-20260101-100000-aaaaaaaa.md"),
+      ).rejects.toMatchObject({ code: "RELOAD_IN_PROGRESS" });
+    } finally {
+      releaseReloadGuard(opened.documentId);
+    }
   });
 
   it("rejects read-only documents", async () => {

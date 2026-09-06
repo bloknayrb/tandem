@@ -231,6 +231,12 @@ const RESTORE_FORMATS = new Set(["md", "txt", "docx"]);
  * `mcp/docx-apply.ts`) can use a plain `lstat` because it only decides whether
  * to *name* the file.
  */
+// Safe FS sink (CodeQL js/path-injection): `backupPath` is never caller-named.
+// It is either the open document's own registry path with a fixed
+// `.backup.docx` suffix (`docxSidecarBackupPath`) or `docBackupSnapshotPath`'s
+// join of the app-data root, the path hash and a `path.basename()`-sanitized
+// snapshot name — CodeQL traces the document path back to `tandem_open` and
+// reports the read here as the same class as the accepted #1654 register entry.
 async function readDocxSidecarBytes(backupPath: string): Promise<Buffer> {
   const refusal = (clause: string, code: string) =>
     Object.assign(
