@@ -67,16 +67,29 @@ the version is logged, never compared.
   measured is a *consequence* of the version comparison: once an upgrade is adopted, there is no
   identity-fail loop to cap. Against a genuinely foreign server a 30 s probe is the price of
   healing when the real server returns. Recorded as an assumption.
-- **`CLAUDE.md:181` becomes false and is corrected in the same PR**, on the same rule #1804 applies
+- **Two tracked docs become false and are corrected in the same PR**, on the same rule #1804 applies
   to `docs/architecture.md` and `docs/mcp-tools.md`: a doc a change falsifies is fixed by that
-  change. It reads "it replays the captured handshake under a private id and **fails closed if
-  `serverInfo`/`protocolVersion` changed**, never exiting on failure". After this fix the compared
-  identity is `serverInfo.name` + `protocolVersion`, and a changed version is deliberately adopted
-  and logged. Rewrite that clause as: **fails closed if the server *name* or `protocolVersion`
-  changed — a version change is adopted and logged (#1759)**. Keep the rest of the sentence,
-  including "never exiting on failure", which #1805 and #1804 make more true rather than less. No
-  test reads this line (`grep` for the phrase returns only `CLAUDE.md` itself), which is exactly why
-  it would otherwise rot.
+  change. Both are present-tense descriptions of shipped behaviour, not dated historical records,
+  and `grep -rn "serverInfo" docs/*.md CLAUDE.md` returns exactly these two lines — so they are the
+  complete carrier set.
+  - **`CLAUDE.md:181`** reads "it replays the captured handshake under a private id and **fails
+    closed if `serverInfo`/`protocolVersion` changed**, never exiting on failure". After this fix
+    the compared identity is `serverInfo.name` + `protocolVersion`, and a changed version is
+    deliberately adopted and logged. Rewrite that clause as: **fails closed if the server *name* or
+    `protocolVersion` changed — a version change is adopted and logged (#1759) — a
+    substituted-upstream sanity check, not an authentication control; a process that can bind the
+    port can report any name**. Keep the rest of the sentence, including "never exiting on failure",
+    which #1805 and #1804 make more true rather than less. The trailing clause is not padding: the
+    module's own doc comment (`src/cli/mcp-stdio.ts:260-267`) already records that the check cannot
+    defend against a process that can bind the loopback port, and an unqualified "fails closed" in
+    the MCP/Server gotcha list is exactly the shape the Security section warns about ("Do not read a
+    gate as a guarantee"). No test reads this line, which is why it would otherwise rot.
+  - **`docs/decisions.md:1611`** — the ADR-045 amendment — says the bridge replays the handshake
+    "verifying `protocolVersion` and `serverInfo` against the original handshake and failing closed
+    on a mismatch". Narrow that clause to: **verifying `protocolVersion` and the server *name*
+    against the original handshake and failing closed on a mismatch — a changed server *version* is
+    adopted and logged (#1759)**. Leave the rest of the amendment intact, including "It never
+    exits", which #1805 makes more true. Nothing pins this sentence either.
 - Rules that bite: **stdout is reserved** (Critical Rule 3) — every line above goes to
   `process.stderr.write`, never `console.log`. No Y.Doc write, no Y.Map key, no `/api` route, no
   MCP tool, so Critical Rules 1, 2 and 9 are not engaged.
@@ -86,11 +99,17 @@ the version is logged, never compared.
 All in `tests/cli/mcp-stdio.test.ts`, reusing `makeSessionServer` / `setServerInfo` /
 `retireSession` / `handshake`.
 
-1. **Version-only change reconnects.** Handshake, `fake.setServerInfo({ name: "fake-tandem",
+1. **Version-only change reconnects, twice.** Handshake, `fake.setServerInfo({ name: "fake-tandem",
    version: "9.9.9" })`, `fake.retireSession()`, send `tools/list` id 2 → exactly one response for
    id 2 and it is **not** an error; stderr contains `upstream version changed across
    re-initialize` and does **not** contain `upstream identity changed`. Kills today's code and any
    fix that only loosens the comparison when both fields move.
+   **Then drive a second cycle in the same process** — `fake.setServerInfo({ name: "fake-tandem",
+   version: "9.9.10" })`, `fake.retireSession()`, `tools/list` id 3 → non-error, and the *second*
+   `upstream version changed` line reads `was 9.9.9, now 9.9.10`. That half is the only thing
+   pinning the `negotiatedServerVersion = identity.serverVersion` reassignment the Fix requires;
+   without it an implementation that logs against the launch-time `0.0.0-test` forever passes every
+   other spec here, and the spec and its tests would disagree about what is contracted.
 2. **Name-only change still fails closed.** Same shape with `{ name: "not-tandem", version:
    "0.0.0-test" }` (version identical) → id 2 answers `-32000`, stderr contains `upstream identity
    changed across re-initialize`, `child.exitCode` is `null`. Kills a fix that drops `serverInfo`
@@ -110,10 +129,16 @@ All in `tests/cli/mcp-stdio.test.ts`, reusing `makeSessionServer` / `setServerIn
 
 ## Done when
 
-A reconnect across a version-only change succeeds and says so; name-only and protocol-only changes
+A reconnect across a version-only change succeeds and says so; a *second* upgrade in the same
+process logs against the adopted value, not the launch-time one; name-only and protocol-only changes
 still fail closed with the unchanged message; no repeated `initialize` after an adopted upgrade;
-`describeServerInfo` has no remaining referents; `CLAUDE.md:181` no longer says the version is
-compared; `npm run typecheck` + `npx vitest run tests/cli/mcp-stdio.test.ts` green.
+`describeServerInfo` has no remaining referents; **neither `CLAUDE.md:181` nor
+`docs/decisions.md:1611` says the version is compared** — `grep -rn "serverInfo" docs/*.md CLAUDE.md`
+returns no line claiming a version comparison; `npm run typecheck` +
+`npx vitest run tests/cli/mcp-stdio.test.ts` green.
+
+**Files touched.** `src/cli/mcp-stdio.ts`, `tests/cli/mcp-stdio.test.ts`, `CLAUDE.md`,
+`docs/decisions.md`.
 
 ## Not in scope
 
@@ -145,6 +170,40 @@ version pin.
   verbatim, and verified that nothing pins the sentence — `grep` for the phrase returns only
   `CLAUDE.md`, so it would rot silently. Adopted: `CLAUDE.md` joins the fix's file set with the
   replacement wording, and "Done when" names it.
+
+**Not adopted**
+
+- None.
+
+## Review corrections (round 3)
+
+**Adopted**
+
+- *#1759 falsifies a second tracked doc — the ADR-045 amendment at `docs/decisions.md:1611` states in
+  the present tense that the bridge verifies `serverInfo` against the original handshake — and that
+  file is not in the spec's file set, so "Done when" overclaims completeness while a live doc keeps
+  telling the next reader that the version is compared.* Verified verbatim at
+  `docs/decisions.md:1611`, and verified that it is the only remaining carrier:
+  `grep -rn "serverInfo" docs/*.md CLAUDE.md` returns exactly `decisions.md:1611` and `CLAUDE.md:181`.
+  Adopted: `docs/decisions.md` joins the fix's file set with the narrowed wording (`protocolVersion`
+  and the server *name*, version adopted and logged), the rest of the amendment — including "It never
+  exits" — left intact, and "Done when" now names both files with a grep-shaped criterion rather than
+  one file.
+- *The replacement `CLAUDE.md` wording risks reading as a security guarantee: the compared identity
+  is forgeable by any process that can bind the loopback port, which is the same process class the
+  check's own doc comment says it cannot defend against.* Verified at `src/cli/mcp-stdio.ts:260-267`,
+  which already records the trade for the `<unknown>` sentinel. Adopted: the rewrite now ends "— a
+  substituted-upstream sanity check, not an authentication control; a process that can bind the port
+  can report any name", keeping the line consistent with the Security section's own "Do not read a
+  gate as a guarantee" rule. Costs one clause.
+- *The Fix requires reassigning `negotiatedServerVersion` after an adopted upgrade, but no specced
+  test observes it, so a second upgrade in one process would log against the launch-time value with
+  every test still green.* Verified: tests 1–5 each drive exactly one version change. Adopted rather
+  than dropping the requirement — test 1 now drives a second `setServerInfo`/`retireSession` cycle
+  and asserts the second stderr line reads `was 9.9.9, now 9.9.10`, and "Done when" names it. The
+  alternative the finding offered (delete the reassignment) was not taken: without it the log line
+  becomes progressively more misleading across a long-lived Claude Desktop session, which is the
+  audience the line exists for.
 
 **Not adopted**
 

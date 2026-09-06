@@ -129,29 +129,49 @@ All in `src/cli/mcp-stdio.ts`. Two changes at the preflight site plus one helper
 **rewritten, not deleted** — each gains the non-exit assertion it could not make before.
 
 1. **Recovers and serves tools, with the full client sequence spelled out.** Spawn against a port
-   with no listener. Write `initialize` (id 1) immediately and assert it is answered `-32000` (the
-   grace-window synthesis — the outcome the fix deliberately keeps, not a defect). After ~2 s start
-   a `makeSessionServer`-style `/health` + `/mcp` server on that port. Assert: `child.exitCode`
-   stays `null` throughout; stderr contains `Tandem server reachable`; then write `tools/list`
-   (id 2) **after** that line and assert it gets a real, non-`-32000` response for id 2, and that
-   stderr contains `deferred handshake completed`. That last pair is what proves the baseline was
-   seeded — without it id 2 answers `-32000` and stderr carries `no handshake baseline`. Kills a fix
-   that logs better text but still exits, one that stops retrying after the first failure, and one
-   that recovers the process without recovering the session.
-2. **Guidance is emitted once and names the restart.** Dead port, wait through ≥3 backoff rounds
-   (`BACKOFF_INITIAL_MS` 1 s, so ~4 s): stderr contains `restart the client` exactly once, and
-   `preflight failed` exactly once. Kills a per-attempt logger (a 30 s-cap ladder writing three
-   lines forever into a log the user is reading to find the one that matters).
+   with no listener. Write `initialize` (id 1) immediately.
+   **The server must not appear until id 1 has actually been answered — anchor on the event, never
+   on a wall clock.** Read id 1's reply (or poll stderr for the synthesized answer) and assert
+   `-32000` (the grace-window synthesis — the outcome the fix deliberately keeps, not a defect);
+   equivalently, wait `PREFLIGHT_GRACE_MS + 1000` from the `preflight failed` line, which the Fix's
+   export bullet makes available. **Only then** start a `makeSessionServer`-style `/health` + `/mcp`
+   server on that port. A "start the server after ~2 s" formulation asserts the opposite of the
+   guard this same spec introduces: the `!httpReady` guard on the `deferredSynthesize` callback
+   exists precisely because `waitForUpstream`'s first probe lands at `BACKOFF_INITIAL_MS` = 1000 —
+   *before* `PREFLIGHT_GRACE_MS` = 1500 — so if the child's `--import tsx` boot happens to consume
+   ~1 s (the suite budgets seconds for it elsewhere: `tests/cli/monitor.test.ts:52-55`,
+   `tests/cli/mcp-stdio.test.ts:1985`), the t≈1 s probe finds the server already up, the guard
+   suppresses the synthesis, the buffered `initialize` drains through `forwardToUpstream`, and id 1
+   gets a real `result`. Boot faster and it gets `-32000`. That is a coin flip on a required `check`
+   job; sequencing on the observed reply removes it entirely.
+   Then assert: `child.exitCode` stays `null` throughout; stderr contains `Tandem server reachable`;
+   then write `tools/list` (id 2) **after** that line and assert it gets a real, non-`-32000`
+   response for id 2, and that stderr contains `deferred handshake completed`. That last pair is
+   what proves the baseline was seeded — without it id 2 answers `-32000` and stderr carries `no
+   handshake baseline`. Kills a fix that logs better text but still exits, one that stops retrying
+   after the first failure, and one that recovers the process without recovering the session.
+2. **Guidance is emitted once and names the restart.** Dead port, wait through ≥3 backoff rounds.
+   `waitForUpstream` sleeps *before* probing and doubles, so the retry probes land at t≈1 s, 3 s and
+   7 s relative to the preflight failure — **wait ~8 s from the `preflight failed` line**, not ~4 s
+   (at 4 s only two retry rounds have happened, and `--import tsx` boot pushes even those later).
+   Then: stderr contains `restart the client` exactly once, and `preflight failed` exactly once.
+   Kills a per-attempt logger (a 30 s-cap ladder writing three lines forever into a log the user is
+   reading to find the one that matters).
 3. **Backoff is capped and does not hot-loop — bounded on both sides.** Count `/health` requests
-   reaching a server that answers 503 over an **8 s** window: **at least 4 and at most 5**. The
-   count **includes the initial preflight probe** — `waitForUpstream` sleeps *before* probing, so
-   the probes land at t≈0 (preflight), 1 s, 3 s and 7 s, and t≈15 s is outside the window. Say that
-   in the spec's comment: a 6 s window with an "at least 3" bound lands exactly on the observed
-   value with zero margin in a real-timer subprocess test, and the arithmetic reads as though the
-   t≈7 s probe were inside it. The upper bound kills a per-tick storm; the lower bound kills the
-   opposite regression — an implementation that logs once and returns without looping makes exactly
-   one request and would pass an upper bound. (`tests/monitor/retry.test.ts:66-68` states the same
-   principle for the monitor.)
+   reaching a server that answers 503: **at least 4 and at most 5**. The count **includes the
+   initial preflight probe** — `waitForUpstream` sleeps *before* probing, so the probes land at
+   t≈0 (preflight), 1 s, 3 s and 7 s, and t≈15 s is outside the window.
+   **Anchor the window on the fake's first `/health` request — the t≈0 preflight probe — not on
+   `spawn()`, and make it 9–10 s.** A spawn-anchored 8 s window puts the 4th probe 1 s inside it on
+   a fast boot and *outside* it on a slow one, and the child is spawned under `--import tsx`, whose
+   boot the suite budgets in seconds elsewhere (`tests/cli/monitor.test.ts:52-55`); the lower bound
+   would then fail for timing rather than for behaviour. Starting the clock at the probe the child
+   itself makes removes boot latency from the arithmetic entirely, and the extra second is margin,
+   not slack — the 5th probe is at t≈15 s, well clear.
+   The upper bound kills a per-tick storm; the lower bound kills the opposite regression — an
+   implementation that logs once and returns without looping makes exactly one request and would
+   pass an upper bound. (`tests/monitor/retry.test.ts:66-68` states the same principle for the
+   monitor.)
 4. **Rewrite `:425-452`** (`"synthesizes -32000 … on preflight failure"`): keep every existing
    assertion — id 99, code `-32000`, message `/not (running|ready)/i` — and then, **after a further
    `await sleep(PREFLIGHT_GRACE_MS + 1000)` so the window straddles the old grace deadline**, assert
@@ -178,12 +198,28 @@ All in `src/cli/mcp-stdio.ts`. Two changes at the preflight site plus one helper
    "seed only when `deferredHandshake` is set" from "always seed", and the only thing standing
    between #1805 and the fail-open #1759's check exists to stop. `grep -rn "no handshake baseline"`
    over `tests/` returns nothing today, so this branch has **zero** test referents and a fix that
-   simply deletes the latch passes every other spec here. Spawn against a **healthy**
-   `makeSessionServer` (preflight succeeds, so `preflightFailed` and `deferredHandshake` are never
-   set), call `fake.retireSession()` before the client's `initialize` POST lands so
-   `captureNegotiated` never runs, then send `tools/list` id 2 and assert it answers `-32000`,
-   stderr contains `no handshake baseline`, and stderr does **not** contain `deferred handshake
-   completed`.
+   simply deletes the latch passes every other spec here.
+   **Reach `negotiatedProtocolVersion === undefined` with `stallInitializes`, never with
+   `retireSession`.** `retireSession` only clears `live` (`tests/cli/mcp-stdio.test.ts:1917-1919`),
+   while the fake's `initialize` branch is unconditional (`:1866-1874` → `answerInitialize` at
+   `:1808-1812`), which **re-mints** a session and answers 200 with `serverInfo`. So
+   `captureNegotiated` (`src/cli/mcp-stdio.ts:740-748`) *does* run, `negotiatedProtocolVersion` is
+   set, and `tools/list` id 2 presents the live session id and gets the 200 `{echo}` at
+   `tests/cli/mcp-stdio.test.ts:1897-1898` — not the `-32000` the spec asks for. As first written
+   this test was unbuildable, not merely wrong, and with it unbuildable a fix that deletes the
+   `deferredHandshake` latch and seeds unconditionally still passes every other spec here.
+   Instead reach the state the way `src/cli/mcp-stdio.ts:1082-1092`'s own comment describes. Spawn
+   against a **healthy** `makeSessionServer` (preflight succeeds, so `preflightFailed` and
+   `deferredHandshake` are never set) with a short `TANDEM_REQUEST_TIMEOUT_MS` — 300–500 ms, the
+   value the suite already uses for this shape. Call `fake.stallInitializes(1)` **before** writing
+   `initialize` id 1: the fake accepts it and never answers (held at `:1866-1874`). `captureHandshake`
+   (`:733-737`) still stores `handshakeInit`, so a later reconnect is not declined, but
+   `captureNegotiated` never runs. id 1 times out to `-32000`. Then write `tools/list` id 2: the SDK
+   transport holds no `Mcp-Session-Id`, so the POST 404s `-32001`, `runReconnect` replays the
+   handshake (the stall budget is spent, so the replay *is* answered) and must **throw**. Assert id 2
+   answers `-32000`, stderr contains `no handshake baseline`, and stderr does **not** contain
+   `deferred handshake completed`. (Adding a `fail404NextInitialize()` knob to the fake is an equally
+   acceptable route to the same state; if you take it, say so in the test's comment.)
 8. **An `initialize` that arrives after the grace window still recovers.** Variant of test 1 for the
    second local-answer sink: dead port, poll stderr for `/preflight failed/i`, wait
    `PREFLIGHT_GRACE_MS + 500` (so `synthesizeBuffered` has already run against an empty buffer),
@@ -193,6 +229,21 @@ All in `src/cli/mcp-stdio.ts`. Two changes at the preflight site plus one helper
    latch being set on that second sink, id 2 answers `-32000` and stderr carries `no handshake
    baseline` — the failure test 1 cannot see because its `initialize` goes through the grace-window
    path.
+9. **A recovery that beats the grace deadline synthesizes nothing** — the spec for the `!httpReady`
+   guard, which round 2 added for a real ordering hazard and which every other test here leaves
+   unexercised (tests 1, 4, 5, 6 and 8 all keep the server down past the deadline, so a fix that
+   omits the guard passes all of them while synthesizing `-32000` for requests it had already
+   forwarded and latching `preflightFailed` on a healthy bridge). Starting the server *before*
+   spawning is not the spec — preflight would simply succeed and the branch never runs. Instead:
+   spawn against a port with **no listener**, write `initialize` id 1 immediately, and bind a
+   `makeSessionServer`-style listener on that port **~300 ms after spawn**, so recovery lands on
+   `waitForUpstream`'s first probe at `BACKOFF_INITIAL_MS` = 1000 — inside `PREFLIGHT_GRACE_MS` =
+   1500. Assert id 1 receives a real `result` (**not** `-32000`), and that stderr contains no line
+   from the immediate-answer path. Then write `tools/list` id 2 and assert a real answer, proving
+   the bridge is not latched. This is the one test whose server timing is deliberately a wall clock
+   — the hazard *is* a race — so keep the 300 ms comfortably under the 1 s probe and state in the
+   comment that a slow `--import tsx` boot makes this test pass vacuously rather than flakily
+   (the server is up before preflight, preflight succeeds, and there is nothing to guard).
 
 ## Done when
 
@@ -295,6 +346,52 @@ the `PREFLIGHT_GRACE_MS` value.
   section never exports.* Verified at `:67` (no `export`). Adopted as a new Fix bullet exporting it,
   matching how `nextBackoffMs` and friends are already test-visible; tests 5, 6 and 8 all rely on it.
   (Three findings made this point; one correction covers all three.)
+
+**Not adopted**
+
+- None.
+
+## Review corrections (round 3)
+
+**Adopted**
+
+- *Test 7 — the only pin on the fail-closed THROW side of the no-baseline branch — cannot construct
+  the state it tests, so it is red as written and the fail-open it exists to stop stays unpinned.*
+  Verified: the fake's `initialize` branch is unconditional (`tests/cli/mcp-stdio.test.ts:1866-1874`
+  → `answerInitialize` at `:1808-1812`, which re-mints `live`), while `retireSession` (`:1917-1919`)
+  only clears `live` — so `captureNegotiated` runs, `negotiatedProtocolVersion` is set, and id 2 gets
+  the 200 `{echo}` at `:1897-1898`. Adopted: test 7 now reaches the no-baseline state with
+  `fake.stallInitializes(1)` plus a short `TANDEM_REQUEST_TIMEOUT_MS` — the original `initialize` is
+  accepted and never answered, so `handshakeInit` is captured but `captureNegotiated` never runs —
+  and the reconnect fires off the 404 for `tools/list` id 2. The `fail404NextInitialize()` knob the
+  finding offered as an alternative is named as acceptable rather than mandated.
+- *Test 1's first assertion races the `!httpReady` guard the same spec introduces, so the test
+  inverts its own expected outcome depending on subprocess boot latency.* Verified: the grace timer
+  fires at `PREFLIGHT_GRACE_MS` = 1500 (`src/cli/mcp-stdio.ts:67`) while `waitForUpstream`'s first
+  probe lands at `BACKOFF_INITIAL_MS` = 1000 (`:109`), and the suite budgets seconds for
+  `--import tsx` boot (`tests/cli/monitor.test.ts:52-55`, `tests/cli/mcp-stdio.test.ts:1985`). A
+  server bound at spawn+2 s after a ~1 s boot is found by the t≈1 s probe, the guard suppresses the
+  synthesis, and id 1 gets a real `result` where the spec asserts `-32000`. Adopted: test 1 now
+  sequences on the observed event — read id 1's `-32000` (or wait `PREFLIGHT_GRACE_MS + 1000` from
+  the `preflight failed` line) **and only then** bring the server up — with the reason stated so the
+  ordering is not "simplified" back to a wall clock.
+- *Test 2's stated arithmetic is wrong: `waitForUpstream` sleeps before probing, so at 4 s only two
+  retry rounds have occurred.* Verified against the same sleep-then-probe shape test 3 already
+  documents. Adopted: corrected to ~8 s from the `preflight failed` line, with the t≈1/3/7 s probe
+  schedule spelled out.
+- *Test 3's bounds have effectively zero lower-side margin and no stated window anchor, reproducing
+  the flakiness the round-2 correction was trying to remove.* Adopted: the window now opens at the
+  fake's **first `/health` request** (the t≈0 preflight probe) rather than at `spawn()`, removing
+  boot latency from the arithmetic entirely, and widens to 9–10 s while keeping "at least 4, at most
+  5".
+- *The `!httpReady` guard on the `deferredSynthesize` callback — added in round 2 for a real
+  ordering hazard — is exercised by no specced test.* Verified: tests 1, 4, 5, 6 and 8 all keep the
+  server down past the grace deadline, so an implementation that omits the guard passes every one of
+  them. Adopted as new test 9 — dead port at spawn, listener bound ~300 ms later so recovery lands
+  on the t≈1 s probe inside the 1.5 s window, asserting id 1 gets a real `result` and no
+  immediate-answer line. The finding's own note that starting the server before spawn is *not* the
+  spec (preflight would just succeed) is carried into the test's text, as is the fact that a slow
+  boot makes this test vacuous rather than flaky.
 
 **Not adopted**
 

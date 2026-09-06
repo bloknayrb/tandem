@@ -97,11 +97,33 @@ backoff that is already there. No supervisor, no new abstraction, no new constan
   `onStdoutError` EPIPE exit is untouched and stays an exit: a monitor that cannot write cannot
   deliver, and the file's comment already explains why that one is a clean shutdown rather than a
   bid for a respawn.
+- **Register a stdin-EOF shutdown on both hosts — this is what makes never-exiting safe here, and
+  it is the one place #1804 and #1805 are NOT symmetric.** Removing the retry cap deletes the only
+  self-termination path these two processes have for the case the fix targets. After the change the
+  monitor's entire exit inventory is SIGINT/SIGTERM (`src/monitor/run.ts:244-245`) and
+  `onStdoutError` (`:267-269`) — and EPIPE fires only on a stdout **write**, which the
+  `if (!everConnected) return;` guard at `:174` (kept, deliberately) means a never-connected monitor
+  never performs. So a monitor or shim armed while Tandem is down, whose Claude Code session then
+  ends uncleanly, would have **no exit at all** and probe `/api/events` at the 30 s cap forever, one
+  orphan per such session. `grep -n "stdin" src/monitor/run.ts src/channel/run.ts` returns nothing
+  today.
+  The bridge does not have this gap, which is why #1805's never-exit needs no companion: the project
+  already wrote the counter-measure at `src/cli/mcp-stdio.ts:1225-1231` — *"The SDK's
+  StdioServerTransport watches stdin for 'data' and 'error' only — it does not call onclose when the
+  plugin host closes stdin (EOF). Register our own one-shot listener"* — `process.stdin.once("end",
+  () => { void shutdown(0); })`. **Mirror that verbatim in shape, one line per host, no new
+  abstraction**: register `process.stdin.once("end", …)` (and `"close"`) in `src/monitor/run.ts`'s
+  `main()`, exiting through the existing `shutdownMonitor` path, and in `src/channel/run.ts`'s
+  `runChannel()` alongside the `StdioServerTransport` connect at `:203-210`, exiting through its
+  clean-exit path. `src/channel/run.ts` therefore **joins this issue's file set**; the "the shim
+  needs no change" note below is scoped to `event-bridge.ts` and the consumer loop, not to the shim
+  process.
 - `src/channel/event-bridge.ts` needs no change — it passes no `onExhaustion` and inherits the loop.
   **Say this in the PR body**, along with the file correction: the wave-table names
   `src/monitor/sse-consumer.ts`, which does not exist; the module is `src/shared/sse-consumer.ts`
   and it has two hosts (`src/monitor/run.ts:193` and `src/channel/event-bridge.ts:19-33`), so the
-  shim inherits the fix with no shim edit — which is what test 6 below proves.
+  shim inherits the *loop* fix with no `event-bridge.ts` edit — which is what test 6 below proves.
+  The shim's own `run.ts` still takes the stdin-EOF line above.
 - **Two tracked docs become false and are corrected in the same PR.** This PR also closes #1794,
   whose entire content is "a doc describes behaviour that does not exist", so leaving these is not
   an option. `docs/architecture.md:530-535` currently enumerates "On exhaustion
@@ -109,10 +131,23 @@ backoff that is already there. No supervisor, no new abstraction, no new constan
   `process.exit(1)`" — all three clauses change. Rewrite as: after `CHANNEL_MAX_RETRIES` consecutive
   failures the consumer reports once to `/api/channel-error`, writes the retrying notice to stdout,
   and keeps retrying at the 30 s cap; it does not exit, and it reports again after a recovery
-  followed by a fresh outage. `docs/mcp-tools.md:1408` reads "The shim gives this best-effort report
-  a 3-second deadline before exiting after retry exhaustion" — drop "before exiting after retry
-  exhaustion", keeping the 3-second deadline, which is unchanged. The sample body at `:1403`
-  (`"Lost connection after 5 retries"`) stays: the code still sends that string.
+  followed by a fresh outage.
+  **`docs/architecture.md:530` — two lines above — needs its rationale restated in the same edit.**
+  It reads "The retry counter resets **only after `STABLE_CONNECTION_MS` (60s) of continuous
+  uptime** — resetting per event would let a server that crashes after each event reconnect forever,
+  never exhausting the cap." After this fix, reconnecting forever *is* the intended behaviour and
+  there is no cap to exhaust, so the stated reason is false even though the rule it justifies is
+  unchanged and now load-bearing for a different property. Keep the stable-uptime rule; restate the
+  reason as "resetting per event would let a connect-then-die flap re-arm the once-per-outage report
+  on every cycle", which is exactly the `onStable` latch clear this spec adopts and what test 1 pins.
+  `docs/mcp-tools.md:1408` reads "The shim gives this best-effort report a 3-second deadline before
+  exiting after retry exhaustion" — drop "before exiting after retry exhaustion", keeping the
+  3-second deadline, which is unchanged. The sample body at `:1403`
+  (`"Lost connection after 5 retries"`) stays **as an illustration**. Do not justify keeping it by
+  claiming the code sends that string: `src/shared/sse-consumer.ts:194` actually sends
+  `` `${opts.logPrefix} lost connection after ${CHANNEL_MAX_RETRIES} retries.` `` — prefixed,
+  lowercase `l`, trailing period — so the sample was never byte-identical and a reviewer must not
+  read the justification as a verified equality.
 - Not engaged: Y.Doc writes, Y.Map keys, `/api` routes (`/api/channel-error` is unchanged and
   already in `NON_LOOPBACK_ALLOWED`), MCP tools, `data-testid`, the shipped skill.
 
@@ -129,6 +164,18 @@ the same everywhere and introduces no test hook in `src/`: **delete the trailing
 `await vi.advanceTimersByTimeAsync(0)` where a microtask flush was being relied on — and **delete
 any `expect(exitSpy).toHaveBeenCalledWith(1)`**. `advanceTimersByTimeAsync` is bounded by its time
 budget, so an unbounded loop scheduling a ≤30 s timer per round still terminates the advance.
+
+**A dangling consumer is harmless to the promise, but NOT to the next spec's counters — isolate
+them.** `everConnected` is module-level (`src/shared/sse-consumer.ts:145`) and `reportedExhaustion`
+joins it; `_resetSseConsumerStateForTests` (`:684`) clears both per test, but
+`tests/monitor/retry.test.ts:36-38` restores real timers and the fetch stub in `afterEach`, so a loop
+parked in a `fetch` when `advanceTimersByTimeAsync` returns resumes **on real timers, against the
+next spec's stub** — adding a second `/api/channel-error` POST or extra connect attempts into that
+spec's totals. Items 1, 5 and 6 all assert exact counts ("POSTed **exactly once**", "**exactly
+once**", "a **second** time"). So, in every spec: **capture the counters the assertions read into
+per-spec locals immediately after the final `advanceTimersByTimeAsync`, before `afterEach` restores
+timers**, and make that spec's stub permanently throwing once captured, so a leaked consumer
+contributes nothing downstream. Test-side discipline only — no hook in `src/`.
 
 Sites, all of which need exactly that change:
 
@@ -164,9 +211,23 @@ that.
    - `process.stdout.write` receives the monitor's notice **exactly once** (the handshake succeeds
      each cycle, so `everConnected` is true and the guard does not suppress it). This pair is what
      discriminates a per-cycle latch clear from a per-outage one; no other specced test does.
+     **Match the notice here with `/retrying in the background/`, NOT `/tandem_checkInbox/`.** This
+     spec's stub delivers one event per cycle and the monitor's per-event stdout line is
+     `Tandem: ${event.type} — call tandem_checkInbox for details` (`src/monitor/run.ts:141-148`), so
+     across ≥ 8 cycles a `/tandem_checkInbox/` matcher counts ≥ 9 writes, not one. Items 2, 3 and 4
+     use `/tandem_checkInbox/` because their stubs never deliver an event; item 1 cannot.
    - stderr: lines matching `/SSE connection failed/` number **exactly `CHANNEL_MAX_RETRIES`** (the
      suppression holds after the report), and **no** emitted line matches `/\/5\b/`. That is the
      "single legible log line" half of Done-when, which nothing pinned before.
+   - **Both suppressed log lines, and the "still retrying" line, are pinned — not just the first.**
+     `src/shared/sse-consumer.ts` writes *two* lines per failure (`:177-181` and `:210-213`), and an
+     implementation that suppresses only the first passes a `/SSE connection failed/`-count
+     assertion while still writing a `Retrying in …` line every 30 s forever. So also assert: lines
+     matching `/Retrying in \d+ms/` number **exactly `CHANNEL_MAX_RETRIES - 1`** (the last failure
+     reports rather than scheduling another announced retry — adjust to `CHANNEL_MAX_RETRIES` if the
+     implementation writes it before the latch is set; the point is a fixed small number, not an
+     unbounded one), and lines matching `/still retrying/` number **exactly 1**. Together with the
+     two above, that is the whole bounded trail Done-when claims.
 2. `tests/monitor/retry.test.ts:83-98` (`"stays silent on stdout when it never connected"`) — the
    never-connected arm. Drop the `await mainPromise` and the exit assertion; assert attempts ≥ 8.
    **Replace the negated string**: it looks for `"Tandem monitor disconnected"`, which the new line
@@ -195,7 +256,14 @@ that.
    CHANNEL_MAX_RETRIES and exits 1"`: keep the POST assertion, rename, and assert the process does
    not exit. The shim shares the consumer, so this is the second host's proof that one fix covered
    both.
-7. `tests/monitor/shutdown.test.ts` untouched: SIGINT/SIGTERM and EPIPE still exit.
+7. `tests/monitor/shutdown.test.ts` — SIGINT/SIGTERM and EPIPE still exit, and **one spec is added
+   there**: the stdin-EOF handler is registered on both hosts. It is the half that makes never-exit
+   safe (see the Fix bullet), and after this change it is the *only* exit a never-connected monitor
+   has, so nothing else in the suite can catch its absence. A listener-count assertion is enough
+   (`process.stdin.listenerCount("end")` non-zero after `main()` / `runChannel()` sets up, or a
+   source-text assertion that both `src/monitor/run.ts` and `src/channel/run.ts` contain
+   `process.stdin.once("end"`), matching the shape of the source-text pins this track already uses.
+   Add the shim host too — `src/channel/run.ts` is now in the file set.
    `tests/monitor/index.test.ts` is **not** untouched — see the sweep above.
 
 ## Done when
@@ -205,10 +273,16 @@ the stdout notice fire **once per outage**, where an outage ends only at `STABLE
 continuous uptime — so a connect-then-die flap reports once, not once per cycle — and fire again on
 the next outage after such a recovery; the monitor's notice names `tandem_checkInbox`; a server that
 is unreachable, or that flaps without ever staying up 60 s, produces a bounded stderr trail
-(`CHANNEL_MAX_RETRIES` failure lines plus one "still retrying" line, then silence), none of them
-carrying a `/5` denominator; `docs/architecture.md` and `docs/mcp-tools.md` no longer describe the
-exit; `npm run typecheck` + `npx vitest run tests/monitor tests/channel` +
+(`CHANNEL_MAX_RETRIES` failure lines, a bounded count of `Retrying in …` lines, and exactly one
+"still retrying" line, then silence — all four counts asserted by item 1), none of them carrying a
+`/5` denominator; **a never-connected consumer whose stdin closes still exits**, on both hosts;
+`docs/architecture.md` (including the `:530` rationale) and `docs/mcp-tools.md` no longer describe
+the exit; `npm run typecheck` + `npx vitest run tests/monitor tests/channel` +
 `node scripts/ci/monitor-smoke.mjs` green.
+
+**Files touched.** `src/shared/sse-consumer.ts`, `src/monitor/run.ts`, `src/channel/run.ts`
+(stdin-EOF only), `docs/architecture.md`, `docs/mcp-tools.md`, and the test files named in the
+sweep plus `tests/monitor/shutdown.test.ts`.
 
 ## Not in scope
 
@@ -320,3 +394,62 @@ this PR is the minimal exit removal, not the frame-skip widening.
   finding's main half removes — the connect-then-die loop would print `restored` every ~30 s
   forever. The line goes where the latch goes, and the spec now states the 60 s delay as the
   deliberate price of a line that is true when it is read.
+
+## Review corrections (round 3)
+
+**Adopted**
+
+- *#1804 deletes the only self-termination path from two processes that have NO parent-death
+  detection, and does so in precisely the scenario it targets: a monitor or shim armed while Tandem
+  is down, whose Claude Code session then ends uncleanly, becomes an immortal orphan probing
+  `/api/events` every 30 s forever, one per such session.* Verified end to end. After the fix the
+  monitor's exit inventory is SIGINT/SIGTERM (`src/monitor/run.ts:244-245`) and `onStdoutError`
+  (`:267-269`); EPIPE fires only on a stdout **write**, and the `if (!everConnected) return;` guard
+  at `:174` — which this spec deliberately keeps — means a never-connected monitor never writes, so
+  it has no exit at all once `while (true)` replaces the capped loop.
+  `grep -n "stdin" src/monitor/run.ts src/channel/run.ts` returns nothing. The asymmetry with #1805
+  is real and was glossed by "solve it the same way in both places": the bridge already carries the
+  counter-measure at `src/cli/mcp-stdio.ts:1225-1231` (`process.stdin.once("end", …)`, with the
+  comment explaining that `StdioServerTransport` does not fire `onclose` on host stdin EOF), and
+  `src/channel/run.ts:203-210` connects a transport with no such handler. Adopted: a new Fix bullet
+  mirroring that line's shape verbatim — one `process.stdin.once("end"/"close", …)` per host,
+  routed through the existing `shutdownMonitor` / clean-exit paths, no new abstraction —
+  `src/channel/run.ts` joins the file set (the "shim needs no change" note is re-scoped to
+  `event-bridge.ts` and the loop), Tests item 7 gains a registration assertion on both hosts in
+  `tests/monitor/shutdown.test.ts`, and "Done when" gains "a never-connected consumer whose stdin
+  closes still exits".
+- *`docs/architecture.md:530`'s rationale is stated in terms of a cap that will no longer terminate
+  anything.* Verified verbatim. Adopted: the stable-uptime rule stays, its reason is restated as
+  "resetting per event would let a connect-then-die flap re-arm the once-per-outage report on every
+  cycle" — which is exactly the `onStable` latch clear this spec adopts and what test 1 pins — and
+  "Done when" now names `:530` alongside `:530-535`.
+- *The claim that a dangling `runEventConsumer` promise is harmless is not established: module-level
+  `reportedExhaustion` / `everConnected` are reset per test, but `afterEach` restores real timers and
+  the stub, so a consumer leaked by an earlier spec resumes against the next spec's stub and can
+  inflate its exact-count assertions.* Verified at `src/shared/sse-consumer.ts:145`, `:684` and
+  `tests/monitor/retry.test.ts:36-38`. Adopted: the Tests preamble now requires capturing each spec's
+  counters into per-spec locals before `afterEach` runs, and making that spec's stub permanently
+  throwing once captured. Test-side only — no hook added to `src/`.
+- *The justification for keeping the `docs/mcp-tools.md:1403` sample body verbatim is inaccurate —
+  the code does not send that string.* Verified: `src/shared/sse-consumer.ts:194` sends
+  `` `${opts.logPrefix} lost connection after ${CHANNEL_MAX_RETRIES} retries.` `` — prefixed,
+  lowercase, trailing period. Adopted: the bullet now keeps the sample **as an illustration** and
+  says explicitly that it was never byte-identical, so a reviewer does not read it as a verified
+  equality.
+- *Item 1's stdout assertion collides with the substring the same spec tells the implementer to match
+  on: the kept connect-then-die stub delivers an event per cycle and the monitor's event line already
+  contains `tandem_checkInbox`.* Verified at `src/monitor/run.ts:141-148` and
+  `tests/monitor/retry.test.ts:38-58` — across ≥ 8 cycles a `/tandem_checkInbox/` matcher counts ≥ 9
+  writes, not one. Adopted: item 1's matcher is named explicitly as `/retrying in the background/`,
+  with a note that items 2–4 may use `/tandem_checkInbox/` only because their stubs deliver no event.
+- *Done-when claims a bounded stderr trail but only the failure-line half is asserted; nothing pins
+  that the second per-failure line (`Retrying in ${delay}ms`, `src/shared/sse-consumer.ts:210-213`)
+  is also suppressed, nor that the "still retrying" line appears once — so an implementation that
+  suppresses only the first line passes item 1 and still floods every 30 s forever.* Verified.
+  Adopted: item 1 gains two assertions — `/Retrying in \d+ms/` bounded to a fixed small count, and
+  `/still retrying/` exactly once — and Done-when's trail sentence is restated to match what is
+  actually asserted.
+
+**Not adopted**
+
+- None.
