@@ -640,7 +640,7 @@ phase("PR review");
 function codeReviewPrompt(round) {
   return `PR review, round ${round}, via the repository's code-review skill.
 ${GROUP}
-In ${WT}: invoke the Skill tool with skill "code-review" and args "--level high" (it reviews the current branch against master). Collect its findings. Return {findings:[{id:"cr-<n>", file, line, summary, failure (concrete inputs → wrong output), severity}]}. Report only what the skill returned; add nothing.`;
+Invoke the Skill tool with skill "code-review" and args "--level high ${BRANCH}". The target MUST be the branch name: the skill forks into the session's main checkout (${REPO}), not into ${WT}, so with no target it reviews whatever branch the main checkout happens to be on (wave 2 caught it reviewing the sweep's own ledger edits). Before returning, run \`cd ${WT} && git diff --name-only origin/master...HEAD\` and DROP any finding whose file is not in that list — it came from the wrong tree. Return {findings:[{id:"cr-<n>", file, line, summary, failure (concrete inputs → wrong output), severity}]}. Report only what the skill returned (minus the dropped ones); add nothing.`;
 }
 function domainReviewPrompt(round, a) {
   return `Code review, round ${round}, from your specialty (${a}). Read-only.
@@ -767,7 +767,7 @@ const post = await run(
   `Post-ship review of PR #${ship.pr} (${ship.prUrl}).
 ${GROUP}
 ${RULES}
-In ${WT}: \`git fetch origin && git status\` (must be clean and at origin/${BRANCH}). Invoke Skill "code-review" with args "--level high". Run each finding past yourself as a skeptic (default: refuted unless the failure scenario reproduces by reading the code path). For every CONFIRMED finding: fix, test, format, commit with the trailers, then push (hook runs; same rules as before). Return {ok, commits:[…], notes:"findings confirmed / refuted, one line each"}.`,
+In ${WT}: \`git fetch origin && git status\` (must be clean and at origin/${BRANCH}). Invoke Skill "code-review" with args "--level high ${BRANCH}" — the branch target is required because the skill forks into the main checkout, not this worktree; discard any finding on a file outside \`git diff --name-only origin/master...HEAD\` in ${WT}. Run each finding past yourself as a skeptic (default: refuted unless the failure scenario reproduces by reading the code path). For every CONFIRMED finding: fix, test, format, commit with the trailers, then push (hook runs; same rules as before). Return {ok, commits:[…], notes:"findings confirmed / refuted, one line each"}.`,
   { label: `post-review:${g.id}`, phase: "Post-ship", model: M.build, effort: "high", schema: S_FIX },
   { commits: [], notes: "" }
 );
