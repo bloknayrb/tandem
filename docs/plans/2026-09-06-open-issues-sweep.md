@@ -293,6 +293,11 @@ at a time on this machine (16 CPUs, 32 GB); `docs/stacked-prs.md` applies for la
   results, never raw caller names (see the #1882 fix); the repo's other idioms are in
   `src/server/mcp/document-service.ts` ("Safe FS sink" comments and the inline separator guard).
 - **Every worktree needs the tauri_build stubs** — the pre-push hook always runs `cargo test`.
+- **A forked skill runs in the main checkout, not the worktree** (found in wave 2). `Skill("code-review")`
+  forks into the session cwd, so `cd <worktree>` in the prompt never reaches it and with no target it
+  reviews whatever branch the main checkout is on — J1's first PR-review round reviewed the sweep
+  ledger's own diff. The script now passes the group branch as the skill's target and drops findings
+  on files outside the branch diff. `Skill("simplify")` loads inline and is unaffected.
 - **PR bodies**: the ship agent sometimes claims a review pass did not run because it could not
   spawn agents itself; the pipeline's PR-review stage did run the repo reviewer. Read the
   "Review" line (rounds) rather than the "For Bryan" prose when in doubt.
@@ -312,7 +317,7 @@ literal in `tests/skill-instruction-contract.test.ts` moves with it). `Hooks arm
 | 1 | G2 test timing | #1672 #1699 #1674 | `fix/test-timing-1674` | #1879 (merged 06804b97) | — | armed | merged | Attempt 1 parked (calibration framework); attempt 2 under the minimality rule shipped: #1674 was a real defect in the stdio test helper (collectors attached after the child had written), fixed; #1672/#1699 did not reproduce — the 36 s came from the leaked process tree noted on #1672 — so the change is the re-dated `REAL_APPLY_TIMEOUT_MS` rationale, both closed on the measurement (Bryan can reopen as watch items). 4 plan-review rounds, 1 PR-review round, post-ship review clean. |
 | 2 | F-runtime | #1759 #1805 #1804 #1794 | `fix/push-paths-runtime-1759` | — | — | — | planned | Launched 2026-09-06 from Bryan's Windows PC (run `wf_ce225c53-e48`, probe ports 4918/4919), concurrently with J1. |
 | 2 | F-config | #1760 #1801 #1802 | — | — | — | — | planned-not-started | Queued behind whichever of F-runtime / J1 finishes first (two groups at a time). |
-| 2 | J1 skill + workflows doc | #1771 #1782 #1820 #1737 (+decision H) | `fix/skill-and-workflows-doc-1771` | — | — | — | planned | Launched 2026-09-06 from Bryan's Windows PC (run `wf_f6b7f1e4-5d1`, probe ports 4928/4929), concurrently with F-runtime. |
+| 2 | J1 skill + workflows doc | #1771 #1782 #1820 #1737 (+decision H) | `fix/skill-and-workflows-doc-1771` | — | — | — | built | Launched 2026-09-06 from Bryan's Windows PC (run `wf_f6b7f1e4-5d1`, probe ports 4928/4929), concurrently with F-runtime. 4 plan-review rounds; build, simplify, verify and probes green; stopped and resumed at PR review after the code-review lens was found reviewing the wrong tree (see Lessons). |
 | 3 | J2 product copy | #1781 #1814 #1815 #1816 #1817 #1818 | — | — | — | — | planned-not-started | |
 | 3 | F-doctor | #1806 #1807 #1811 #1790 | — | — | — | — | planned-not-started | |
 | 3 | C privacy & authority | #1769 #1733 → #1770 #1779 #1803 (+#1619 #1710 folded into #1803) | — | — | — | — | planned-not-started | |
