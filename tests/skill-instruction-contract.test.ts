@@ -206,6 +206,26 @@ describe("shipped Tandem skill instruction contract", () => {
     expect(workflow).toMatch(/solo/i);
   });
 
+  /**
+   * Review finding (annotation-model-reviewer-3): the promoted-import recipe
+   * presented `tandem_getAnnotations({author:"user"})` + `importSource` as a
+   * full read of a Word comment, but every threaded Word reply is stamped
+   * `private: true` at import (docx-comments.ts) and `channelVisibleReplies`
+   * (annotations.ts) strips it permanently — including after promotion — so
+   * a Word thread's follow-ups never reach Claude via this recipe. The
+   * recipe must disclose that, not just note-count `heldFromExport`, which
+   * doesn't count withheld replies either.
+   */
+  it("discloses that Word thread replies never reach Claude, even promoted (annotation-model-reviewer-3)", () => {
+    const workflow = docxWorkflow(readShippedSkill());
+    expect(workflow).toMatch(
+      /repl(?:y|ies)[\s\S]{0,200}never reach Claude|never reach Claude[\s\S]{0,200}repl(?:y|ies)/i,
+    );
+    expect(workflow).toMatch(
+      /promot(?:ed|ion)[\s\S]{0,150}replies|replies[\s\S]{0,150}promot(?:ed|ion)/i,
+    );
+  });
+
   it("closes the four SKILL.md content gaps (#1820)", () => {
     const skill = readShippedSkill();
     const rules = hardRules(skill);

@@ -68,10 +68,37 @@ describe("docs/workflows.md Word-comment import recipe (#1771)", () => {
     expect(section).not.toMatch(/accept\/dismiss both types/i);
   });
 
-  it("says a promoted import no longer takes accept/dismiss", () => {
+  /**
+   * Review finding (cr-3): a prior version of this test used a single regex
+   * with a bare `(not|no longer|instead of)` alternation, which matched the
+   * substring "not" inside the word "note" — so it passed on both the
+   * correct claim and its exact inversion. These two assertions instead
+   * anchor on literal phrases lifted from the corrected sentence, so a
+   * revert of either clause fails the matching assertion directly rather
+   * than passing on an accidental substring.
+   *
+   * Review findings (annotation-model-reviewer-1, -2): the un-reverted
+   * sentence must say (a) an UNPROMOTED import still gets accept/dismiss
+   * and the review queue — `canAccept`/`canDismiss`/`isPendingReviewTarget`
+   * all gate on `author !== "user"`, which an import satisfies before
+   * promotion — and (b) promotion moves it OUT of the review queue and
+   * replaces accept/dismiss with Edit/Remove/Reply, not the other way
+   * around (`author` flips to "user", which both predicates exclude).
+   */
+  it("says accept/dismiss and the review queue apply to an unpromoted import", () => {
     const section = readSection();
-    expect(section).toMatch(
-      /promoted[\s\S]{0,120}(not|no longer|instead of)[\s\S]{0,80}accept\/dismiss|accept\/dismiss[\s\S]{0,120}(promoted|Claude's comments)/i,
-    );
+    expect(section).toContain('an unpromoted import (both have `author !== "user"`)');
+  });
+
+  it("says promotion drops the review queue and switches to Edit/Remove/Reply", () => {
+    const section = readSection();
+    expect(section).toContain("drops out of the review queue");
+    expect(section).toContain("switches from accept/dismiss to Edit/Remove/Reply");
+  });
+
+  it("does not claim promotion adds accept/dismiss or the review queue", () => {
+    const section = readSection();
+    expect(section).not.toMatch(/no accept\/dismiss action/i);
+    expect(section).not.toMatch(/the review queue and Edit\/Remove\/Reply flow/i);
   });
 });

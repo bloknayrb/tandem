@@ -58,4 +58,18 @@ describe("session/config file-name claims (#1782)", () => {
       "`.corrupt.json`",
     );
   });
+
+  /**
+   * Review finding (cr-2): `docs/configuration.md`'s sessions/ row said every
+   * session file is "named by URL-encoded file path" — since #1750,
+   * `sessionKey()` returns `docHash(filePath)` (a fixed 64 hex characters) for
+   * every disk path, and `legacySessionKey()` (URL-encoding) survives only
+   * for `upload://` scratchpads. A user following the old claim to find and
+   * delete a disk-path session file by its encoded path finds nothing.
+   */
+  it("docs/configuration.md says disk-path sessions are hash-named, not URL-encoded", () => {
+    const doc = read("docs/configuration.md");
+    expect(doc).toContain("named by a 64-character hash of the file path");
+    expect(doc).not.toMatch(/one file per opened document, named by url-encoded file path/i);
+  });
 });

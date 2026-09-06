@@ -105,7 +105,7 @@ The contents:
 
 | Path | Purpose |
 |---|---|
-| `sessions/` | One file per opened document, named by URL-encoded file path. Holds the Y.Doc snapshot and ephemeral state. |
+| `sessions/` | One file per opened document, named by a 64-character hash of the file path (URL-encoded path only for `upload://` scratchpads). Holds the Y.Doc snapshot and ephemeral state. |
 | `sessions/__tandem_ctrl__.json` | Cross-document state — chat history, Solo/Tandem mode, multi-doc UI state. |
 | `annotations/` | Durable annotation store. One `.json` file per document. Corrupt files are renamed to `<name>.json.corrupt.<timestamp>` and quarantined instead of deleted. |
 | `auth-token` | Auto-generated auth token, mode `0o600`. |
