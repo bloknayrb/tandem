@@ -102,20 +102,80 @@ describe("coverage policy — the gated set", () => {
     }
   });
 
-  it("names a suite that actually references the module it is the suite for", () => {
+  it("names a suite that actually imports the module it is the suite for", () => {
     // `existsSync` alone is satisfied by any file on disk, so it would accept a
     // suite pointed at something unrelated — and `suite` is the half of this
     // gate that detects DELETED behaviour, so a suite that does not touch the
     // module is the one failure that matters most here.
     //
-    // The check is a text reference rather than an import graph: a suite may
-    // reach a module through a harness or a helper, and demanding a direct
-    // import would push those onto a weaker check instead of a stronger one.
+    // This asserted a text reference (`source.includes(stem)`) and two rows were
+    // green on prose: the projection row matched five `describe(...)` titles, and
+    // the `documents/watcher.ts` row matched `src/server/file-watcher.js` — a
+    // DIFFERENT module — because the stem is a substring of that specifier
+    // (#1784). Resolve-and-compare is what distinguishes those.
     for (const m of policy.modules) {
-      const stem = path.basename(m.path).replace(/\.svelte\.ts$|\.ts$/, "");
-      const source = read(m.suite);
-      expect(source.includes(stem), `${m.suite} never mentions ${stem}`).toBe(true);
+      expect(
+        importsModule(
+          read(m.suite),
+          path.dirname(path.join(ROOT, m.suite)),
+          path.join(ROOT, m.path),
+        ),
+        `${m.suite} never imports ${m.path}`,
+      ).toBe(true);
     }
+  });
+});
+
+/**
+ * Does `suiteSource` statically import the file at `moduleAbs`?
+ *
+ * Only `from "…"` specifiers, which is what keeps this free of any `vi.mock`
+ * handling — a mock call is never of that form. A row that can only reach its
+ * module through a mock (or an alias, none today) gets REPOINTED at a suite that
+ * imports it directly, rather than growing a resolver here.
+ *
+ * Not detected: `import type`, and a suite whose `it`s have all been deleted
+ * while its `import` remains (the residual #1784 stays open for).
+ */
+function importsModule(suiteSource: string, suiteDir: string, moduleAbs: string): boolean {
+  for (const match of suiteSource.matchAll(/from\s*"(\.[^"]*)"/g)) {
+    const resolved = path.resolve(suiteDir, match[1]);
+    if (resolved === moduleAbs) return true;
+    if (resolved.endsWith(".js") && `${resolved.slice(0, -3)}.ts` === moduleAbs) return true;
+    if (`${resolved}.ts` === moduleAbs) return true;
+  }
+  return false;
+}
+
+describe("the suite-imports-module check", () => {
+  const projectionAbs = path.join(ROOT, "src/server/annotations/projection.ts");
+  const eventsDir = path.join(ROOT, "tests/server/events");
+
+  it("a suite that only names the module does not count", () => {
+    expect(importsModule('describe("projection", () => {});', eventsDir, projectionAbs)).toBe(
+      false,
+    );
+  });
+
+  it("a suite that imports the module counts", () => {
+    const source =
+      'import { createdPayload } from "../../../src/server/annotations/projection.js";\ndescribe("projection", () => {});';
+    expect(importsModule(source, eventsDir, projectionAbs)).toBe(true);
+  });
+
+  it("an import of a different module with a matching stem does not count", () => {
+    // The real failing row: `tests/server/file-watcher.test.ts` imports
+    // `src/server/file-watcher.js`, whose specifier CONTAINS the stem `watcher`.
+    // A `/from\s*"[^"]*watcher[^"]*"/` predicate passes both of these; only
+    // resolve-and-compare separates them.
+    const source = 'import { watchFile } from "../../src/server/file-watcher.js";';
+    const serverDir = path.join(ROOT, "tests/server");
+    expect(
+      importsModule(source, serverDir, path.join(ROOT, "src/server/documents/watcher.ts")),
+    ).toBe(false);
+    expect(importsModule(source, serverDir, path.join(ROOT, "src/server/file-watcher.ts"))).toBe(
+      true,
+    );
   });
 });
 
