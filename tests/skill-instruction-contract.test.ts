@@ -15,28 +15,30 @@ function frontmatter(skill: string): string {
   return block ?? "";
 }
 
-function gettingWokenSection(skill: string): string {
-  const section = /^## Getting Woken While Idle\r?\n([\s\S]*?)(?=^## )/m.exec(skill)?.[1];
-  expect(section, "the shipped skill has no idle-wake instructions").toBeDefined();
+function namedSection(skill: string, heading: string): string {
+  const pattern = new RegExp(
+    `^## ${heading.replace(/\./g, "\\.")}\\r?\\n([\\s\\S]*?)(?=^## )`,
+    "m",
+  );
+  const section = pattern.exec(skill)?.[1];
+  expect(section, `the shipped skill has no ${heading} section`).toBeDefined();
   return section ?? "";
+}
+
+function gettingWokenSection(skill: string): string {
+  return namedSection(skill, "Getting Woken While Idle");
 }
 
 function docxWorkflow(skill: string): string {
-  const section = /^## \.docx Review Workflow\r?\n([\s\S]*?)(?=^## )/m.exec(skill)?.[1];
-  expect(section, "the shipped skill has no .docx Review Workflow section").toBeDefined();
-  return section ?? "";
+  return namedSection(skill, ".docx Review Workflow");
 }
 
 function hardRules(skill: string): string {
-  const section = /^## Hard Rules\r?\n([\s\S]*?)(?=^## )/m.exec(skill)?.[1];
-  expect(section, "the shipped skill has no Hard Rules section").toBeDefined();
-  return section ?? "";
+  return namedSection(skill, "Hard Rules");
 }
 
 function annotationGuideSection(skill: string): string {
-  const section = /^## Annotation Guide\r?\n([\s\S]*?)(?=^## )/m.exec(skill)?.[1];
-  expect(section, "the shipped skill has no Annotation Guide section").toBeDefined();
-  return section ?? "";
+  return namedSection(skill, "Annotation Guide");
 }
 
 /**
