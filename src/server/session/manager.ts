@@ -587,6 +587,47 @@ async function mtimeOf(p: string): Promise<number | null> {
 }
 
 /**
+ * Move a session's `lastAccessed` to now, leaving every other field alone.
+ *
+ * Exists for one caller: `restoreOpenDocuments`, when reopening a document
+ * fails for a reason that is not `ENOENT` — an antivirus lock, an unmounted
+ * network drive, a file held by another process. Without this the record is
+ * frozen at its old timestamp while every session that DID reopen is autosaved
+ * forward, so one transient failure pushes the document outside the restore
+ * window permanently and it is never retried. Bumping the stamp says "this was
+ * part of the working set even though it would not open", which is true.
+ *
+ * Three things here are load-bearing and none is obvious:
+ *
+ * 1. **The path comes from `loadSessionWithPath`, never from `sessionPathFor`.**
+ *    Inside the #1750 migration window a document can have a file under BOTH
+ *    the hashed and the `encodeURIComponent` name, and `listSessionFilePaths`
+ *    picks between them by newer MTIME (`dedupeByFilePath`). `loadSessionWithPath`
+ *    applies the same MTIME criterion, so routing through it is what keeps this
+ *    bump on the record the restore list actually read. Re-deriving the path
+ *    would write the new-key file while the legacy file is the live one — the
+ *    bump lands nowhere and the failure this function exists to prevent
+ *    recurs, silently.
+ * 2. **`atomicWrite`, not `fs.writeFile`.** Every other whole-record session
+ *    write in this module is atomic; a torn write here would leave unparseable
+ *    JSON where a recoverable document used to be.
+ * 3. **It never throws.** The only call site is inside the `catch` of
+ *    `restoreOpenDocuments`'s loop, whose sole outer handler is a bare
+ *    `.catch` in `index.ts`. A throw escaping here would abandon every session
+ *    later in the iteration — one bad file silently costing all the tabs after
+ *    it, which is far worse than the single-tab loss this is fixing.
+ */
+export async function touchSession(filePath: string): Promise<void> {
+  try {
+    const loaded = await loadSessionWithPath(filePath);
+    if (loaded === null) return;
+    await atomicWrite(loaded.path, JSON.stringify({ ...loaded.session, lastAccessed: Date.now() }));
+  } catch (err) {
+    console.error("[Tandem] Failed to refresh session timestamp for %s:", filePath, err);
+  }
+}
+
+/**
  * Delete a session file.
  *
  * Unlinks BOTH names unconditionally, ENOENT-tolerant on each (#1750). A
@@ -915,10 +956,16 @@ export async function listSessionFilePaths(): Promise<SessionFileEntry[]> {
           // Absent → false, which is every record written before this field
           // existed, and every writable document today.
           readOnly: data.readOnly === true,
-          // `conflict` is an object when present, so its mere presence is the
-          // signal; `dirty` gets the same strict `=== true` as `readOnly`
-          // above, for the same don't-trust-a-bare-`JSON.parse` reason.
-          holdsUnsavedWork: data.dirty === true || data.conflict != null,
+          // Both halves are narrowed, for the same don't-trust-a-bare-
+          // `JSON.parse` reason as `readOnly` above — and here the cost of
+          // being loose is specific: this flag is the ONE exemption from
+          // `restoreOpenDocuments`'s window, so a record that satisfies it
+          // is reopened and re-autosaved on every boot forever, which is the
+          // immortal-session cycle that bound exists to break. `!= null`
+          // would hand that exemption to `{}`, `0` or `"resolved"`, so
+          // `conflict` goes through `narrowConflict` — the same predicate
+          // `sessionModelIsStale` already uses — and `dirty` gets `=== true`.
+          holdsUnsavedWork: data.dirty === true || narrowConflict(data.conflict) !== undefined,
         });
       } catch (err) {
         // The boot sweep never reaches loadSession for an unparseable file —

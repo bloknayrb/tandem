@@ -8,15 +8,63 @@ import { configDefaults, defineConfig } from "vitest/config";
  * Root of the throwaway app-data tree every test worker writes under.
  *
  * A fixed name rather than `mkdtemp`: this config is evaluated on every vitest
- * invocation (`vitest list` included), and a fresh temp root per invocation
- * would litter `%TEMP%` the way the suite's own `tandem-test-*` fixture dirs
- * already do — there are tens of thousands of those on the machine this was
- * written on. Per-worker subdirectories under this root come from
- * `tests/setup/app-data-isolation.ts`; concurrent runs cannot collide because
- * that suffix is the worker PID.
+ * invocation (`vitest list` included), so a fresh root per invocation would
+ * scatter debris across `%TEMP%` the way the suite's own `tandem-test-*`
+ * fixture dirs already do — there are tens of thousands of those on the machine
+ * this was written on — with no single place to reclaim it from. One fixed
+ * parent is what makes `sweepDeadWorkerDirs` below possible at all; the fixed
+ * name bounds the mess rather than preventing it. Per-worker subdirectories
+ * under this root come from `tests/setup/app-data-isolation.ts`; concurrent
+ * runs cannot collide because that suffix is the worker PID.
  */
 const TEST_APP_DATA_ROOT = path.join(os.tmpdir(), "tandem-vitest-appdata");
 fs.mkdirSync(TEST_APP_DATA_ROOT, { recursive: true });
+
+/**
+ * Drop `worker-<pid>` directories whose process is gone.
+ *
+ * Without this the root grows without bound — every worker of every run leaves
+ * a tree of sessions, annotation records and doc-backups behind — and, worse,
+ * the OS recycles PIDs, so a later run's worker can start on top of an earlier
+ * run's leftovers. That is the same contamination this whole config change
+ * exists to stop, just relocated from real app data into `%TEMP%`.
+ *
+ * **Keyed on process liveness, not on age.** An mtime cutoff cannot tell an
+ * abandoned directory from a live one that is merely idle — a run paused on a
+ * breakpoint, or a slow machine — and deleting a live worker's directory
+ * mid-run turns a disk-bloat problem into spurious failures, which is a worse
+ * trade. `process.kill(pid, 0)` answers the question directly. It errs toward
+ * KEEPING: a recycled PID now belonging to some unrelated process reads as
+ * alive and the directory survives to the next run, which merely leaks.
+ *
+ * Total catch per entry, and around the whole sweep: this runs on every vitest
+ * invocation including `vitest list` and IDE integrations, and nothing here is
+ * worth failing a test run over.
+ */
+function sweepDeadWorkerDirs(root: string): void {
+  try {
+    for (const name of fs.readdirSync(root)) {
+      const pid = /^worker-(\d+)$/.exec(name)?.[1];
+      if (pid === undefined) continue;
+      try {
+        process.kill(Number(pid), 0);
+        continue; // alive — leave it alone
+      } catch (err) {
+        // EPERM means the process exists but is not ours to signal; that is
+        // still "alive", so only ESRCH ("no such process") licenses a delete.
+        if ((err as NodeJS.ErrnoException).code !== "ESRCH") continue;
+      }
+      try {
+        fs.rmSync(path.join(root, name), { recursive: true, force: true });
+      } catch {
+        // A directory another process is still tearing down. Next run gets it.
+      }
+    }
+  } catch {
+    // Unreadable root — the mkdirSync above is the only thing that matters.
+  }
+}
+sweepDeadWorkerDirs(TEST_APP_DATA_ROOT);
 
 export default defineConfig({
   plugins: [svelte({ hot: false })],

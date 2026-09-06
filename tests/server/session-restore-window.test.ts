@@ -1,7 +1,7 @@
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 
 // Same isolation shape as session-restore.test.ts: a unique SESSION_DIR per
@@ -27,7 +27,12 @@ import { removeDoc } from "../../src/server/documents/registry-testing.js";
 import { docIdFromPath } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs, restoreOpenDocuments } from "../../src/server/mcp/document-service.js";
 import { SESSION_DIR } from "../../src/server/platform";
-import { listSessionFilePaths, saveSession, sessionKey } from "../../src/server/session/manager.js";
+import {
+  listSessionFilePaths,
+  saveSession,
+  sessionKey,
+  stopAutoSave,
+} from "../../src/server/session/manager.js";
 
 /**
  * The bound on what startup reopens.
@@ -72,9 +77,24 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // `openFromRestore` -> `openFromDisk` arms `ensureAutoSave()`, a real 60s
+  // `setInterval` that is not `unref`'d and that nothing here disarms. Under
+  // today's default `isolate: true` each file gets its own process, so a leaked
+  // timer dies with it — this is insurance against that default being flipped,
+  // when the timer would otherwise fire during a LATER test file and write to
+  // disk on behalf of a suite that has finished.
+  stopAutoSave();
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   await fs.rm(SESSION_DIR, { recursive: true, force: true });
   await fs.mkdir(SESSION_DIR, { recursive: true });
+});
+
+// Not `afterEach`: the fixture documents are reused across cases and cost
+// nothing to keep for the file's lifetime. Leaving them behind entirely is what
+// produced the tens of thousands of `tandem-test-*` directories this PR's own
+// commit message complains about.
+afterAll(async () => {
+  await fs.rm(docsRoot, { recursive: true, force: true });
 });
 
 describe("restoreOpenDocuments restore window", () => {
@@ -135,6 +155,79 @@ describe("restoreOpenDocuments restore window", () => {
     await restoreOpenDocuments(null);
 
     expect(getOpenDocs().has(docIdFromPath(kept))).toBe(true);
+  });
+
+  it("does NOT exempt an old session whose conflict field is junk", async () => {
+    // The negative twin of the case above, and the one that decides whether the
+    // exemption is a hole. `holdsUnsavedWork` is the single escape from the
+    // window, so a record that satisfies it is reopened and re-autosaved every
+    // boot forever — the immortal-session cycle this bound exists to break. A
+    // bare `!= null` hands that to `{}`, which no shipped writer produces but
+    // any hand-edited or half-written record can.
+    const junk = await writeDoc("junk-conflict.md");
+    const mine = await writeDoc("current4.md");
+    await seedSession(mine, { lastAccessed: NOW });
+    await seedSession(junk, { lastAccessed: NOW - 30 * 24 * 60 * MINUTES, conflict: {} });
+
+    await restoreOpenDocuments(null);
+
+    expect(getOpenDocs().has(docIdFromPath(junk))).toBe(false);
+  });
+
+  it("ignores a future timestamp instead of discarding the working set", async () => {
+    // One skewed clock (NTP correction, a session copied from another machine)
+    // would otherwise put `newest` ahead of real time and push every genuine
+    // session outside the window — the user restarts and gets one tab back.
+    const skewed = await writeDoc("from-the-future.md");
+    const a = await writeDoc("real-a.md");
+    const b = await writeDoc("real-b.md");
+    await seedSession(skewed, { lastAccessed: NOW + 5 * 24 * 60 * MINUTES });
+    await seedSession(a, { lastAccessed: NOW });
+    await seedSession(b, { lastAccessed: NOW - 2 * MINUTES });
+
+    await restoreOpenDocuments(null);
+
+    const open = new Set(getOpenDocs().keys());
+    expect(open.has(docIdFromPath(a)), "a real session must survive the skew").toBe(true);
+    expect(open.has(docIdFromPath(b)), "a real session must survive the skew").toBe(true);
+  });
+
+  it("refreshes the timestamp of a session that failed to reopen for a non-ENOENT reason", async () => {
+    // Without the refresh this session keeps its old stamp while every session
+    // that DID reopen is autosaved forward, so the next boot finds it outside
+    // the window and never retries it — a momentary antivirus lock costing the
+    // tab permanently. `EACCES` stands in for that class here.
+    const locked = await writeDoc("locked.md");
+    const mine = await writeDoc("current5.md");
+    const stale = NOW - 10 * MINUTES;
+    await seedSession(mine, { lastAccessed: NOW });
+    await seedSession(locked, { lastAccessed: stale });
+
+    const realOpen = (await import("../../src/server/documents/open.js")).openFromRestore;
+    const spy = vi
+      .spyOn(await import("../../src/server/documents/open.js"), "openFromRestore")
+      .mockImplementation(async (args: Parameters<typeof realOpen>[0]) => {
+        if (args.filePath === locked) {
+          const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+          err.code = "EACCES";
+          throw err;
+        }
+        return realOpen(args);
+      });
+
+    try {
+      await restoreOpenDocuments(null);
+    } finally {
+      spy.mockRestore();
+    }
+
+    const record = JSON.parse(
+      await fs.readFile(path.join(SESSION_DIR, `${sessionKey(locked)}.json`), "utf-8"),
+    );
+    expect(
+      record.lastAccessed,
+      "a transient failure must not freeze the session out of the next window",
+    ).toBeGreaterThan(stale);
   });
 
   it("restores a whole working set that is old in absolute terms", async () => {

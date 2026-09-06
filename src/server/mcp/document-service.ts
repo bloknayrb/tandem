@@ -66,6 +66,7 @@ import {
   saveCtrlSession,
   saveSession,
   stopAutoSave,
+  touchSession,
 } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 
@@ -1817,16 +1818,40 @@ const RESTORE_WINDOW_MS = 30 * 60_000;
  * filtering belongs to the restore decision, NOT to the enumeration — the
  * listing is shared with `listSessionsMetadata`, and narrowing it there would
  * make a recoverable document look like data loss.
+ *
+ * Returned as ONE partition rather than a predicate called twice. The log line
+ * naming what was skipped and the loop deciding what to reopen must describe
+ * the same split, and `Date.now()` below means a predicate re-evaluated a
+ * moment later can legitimately answer differently.
+ *
+ * `newest` is derived defensively in two ways, because both failure modes end
+ * in the user silently getting one tab back instead of eight:
+ *
+ * - **`reduce`, not `Math.max(...spread)`.** The bug this bound exists to fix
+ *   put 4,469 stray directories in a real app-data store, so the session
+ *   directory is not something to assume stays small. A spread large enough to
+ *   exceed the argument limit throws `RangeError` out of `restoreOpenDocuments`
+ *   and into `index.ts`'s bare `.catch`, which restores nothing at all.
+ * - **Clamped to now.** One record stamped in the future — clock skew, an NTP
+ *   correction, a session copied from another machine — would otherwise put
+ *   `newest` ahead of real time and push every genuine session outside the
+ *   window. The clamp is provably one-directional: lowering `newest` can only
+ *   shrink `newest - lastAccessed`, so it can only move sessions INTO the
+ *   restore set, never out of it.
  */
-function sessionsInRestoreWindow(sessions: SessionFileEntry[]): SessionFileEntry[] {
-  const newest = Math.max(...sessions.map((s) => s.lastAccessed));
-  return sessions.filter((s) => s.holdsUnsavedWork || newest - s.lastAccessed <= RESTORE_WINDOW_MS);
-}
-
-/** The complement of `sessionsInRestoreWindow`, for the log line only. */
-function sessionsOutsideRestoreWindow(sessions: SessionFileEntry[]): SessionFileEntry[] {
-  const keep = new Set(sessionsInRestoreWindow(sessions));
-  return sessions.filter((s) => !keep.has(s));
+function partitionByRestoreWindow(sessions: SessionFileEntry[]): {
+  restore: SessionFileEntry[];
+  skip: SessionFileEntry[];
+} {
+  const newestOnDisk = sessions.reduce((max, s) => Math.max(max, s.lastAccessed), 0);
+  const newest = Math.min(Date.now(), newestOnDisk);
+  const restore: SessionFileEntry[] = [];
+  const skip: SessionFileEntry[] = [];
+  for (const session of sessions) {
+    const keep = session.holdsUnsavedWork || newest - session.lastAccessed <= RESTORE_WINDOW_MS;
+    (keep ? restore : skip).push(session);
+  }
+  return { restore, skip };
 }
 
 /**
@@ -1837,7 +1862,9 @@ export async function restoreOpenDocuments(previousActiveDocId: string | null): 
   const sessions = await listSessionFilePaths();
   if (sessions.length === 0) return 0;
 
-  for (const skipped of sessionsOutsideRestoreWindow(sessions)) {
+  const { restore, skip } = partitionByRestoreWindow(sessions);
+
+  for (const skipped of skip) {
     console.error(
       "[Tandem] Not reopening %s: its session predates the last working set by more than %d minutes. It remains available under Recent sessions.",
       path.basename(skipped.filePath),
@@ -1846,7 +1873,7 @@ export async function restoreOpenDocuments(previousActiveDocId: string | null): 
   }
 
   let restoredCount = 0;
-  for (const { filePath, readOnly } of sessionsInRestoreWindow(sessions)) {
+  for (const { filePath, readOnly } of restore) {
     try {
       // Carry the persisted read-only flag back through: without it every
       // restored document takes `resolveAndValidatePath`'s hardcoded `false`,
@@ -1862,6 +1889,14 @@ export async function restoreOpenDocuments(previousActiveDocId: string | null): 
         });
       } else {
         console.error("[Tandem] Failed to restore %s:", filePath, err);
+        // The failure may be transient — an antivirus lock, a network drive
+        // not mounted yet, a file held by another process. Without this bump
+        // the record keeps its old `lastAccessed` while every session that DID
+        // reopen is autosaved forward, so the next boot finds it outside the
+        // window and never retries it: one momentary lock costs the tab
+        // permanently. `touchSession` never throws — a throw here would escape
+        // the loop and abandon every session after this one.
+        await touchSession(filePath);
       }
     }
   }
