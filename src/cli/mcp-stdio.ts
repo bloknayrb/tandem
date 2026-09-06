@@ -1207,9 +1207,10 @@ export async function runMcpStdio(): Promise<void> {
         // never learned what to expect". With the latch clear it still throws
         // exactly as before.
         if (deferredHandshake && identity.protocolVersion !== undefined) {
-          negotiatedProtocolVersion = identity.protocolVersion;
-          negotiatedServerName = identity.serverName;
-          negotiatedServerVersion = identity.serverVersion;
+          // Through `captureNegotiated`, not by assigning the fields here: it
+          // is the one writer of the baseline, so a field added to it later
+          // cannot be forgotten on this path.
+          captureNegotiated(response);
           deferredHandshake = false;
           process.stderr.write(
             `[tandem mcp-stdio] deferred handshake completed against ${baseUrl}; ` +
