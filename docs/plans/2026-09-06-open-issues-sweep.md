@@ -120,8 +120,8 @@ Script `docs/plans/2026-09-06-open-issues-sweep.workflow.js`, `args = {group: {i
 One group per invocation; stages are plain sequential `await`s (no `pipeline` interleaving, so
 `resumeFromRunId` replays deterministically). Every stage returns `{ok, ...}` and never throws;
 any stage after `review` short-circuits on `parked` or `failed`. Side effects are idempotent:
-`git worktree add … || git -C <wt> checkout <branch>`; ship checks `list_pull_requests
-head=<branch>` before creating; `args.known` lets a resumed run skip.
+`git worktree add … || git -C <wt> checkout <branch>`; ship checks `gh pr list --head <branch>`
+before creating; `args.known` lets a resumed run skip.
 
 ```
 plan → reviewLoop(≤3) → implement → simplify → verify(+fix ≤2) → [e2e] → manualProbes
@@ -164,9 +164,10 @@ Stages:
    (only `closes: true` issues), `## Refs (partial — issue stays open)` (`Refs #N — what landed;
    remaining: …`), problem/solution per issue, commands run, probe output, screenshots for UI,
    assumptions, unresolved findings, the `🤖 Generated with` footer; a regex check that no closing
-   keyword + `#N` appears outside `## Closes`; `enable_pr_auto_merge` (result recorded as data);
-   `subscribe_pr_activity`. Returns `{group, branch, pr, closes[], refs[], unresolved[], bryan[],
-   skillVersion}`.
+   keyword + `#N` appears outside `## Closes`; `gh pr merge --auto --merge` (result recorded as
+   data — the repo refuses while auto-merge is off); no PR-activity subscription exists here, so
+   the main session polls CI (`subscribed: false`). Returns `{group, branch, pr, closes[], refs[],
+   unresolved[], bryan[], skillVersion}`.
 10. **postShipReview** — `code-review` once more on the pushed head; findings → fix → push.
 
 Models/effort: plan + reviewers at the group's tier; L-tier domain reviewer `effort: max`;
@@ -178,8 +179,9 @@ verify/review `high`; simplify/ship `low`. `isolation` unused (worktree managed 
    designated branch. **Before launching any group, refuse it if its planned `filesTouched`
    intersects an unmerged group's** — the wave table was de-collided from the ledgers, but the
    plan stage's real file list is the authority.
-2. CI wakes drive fixes per the PR rules (red → fix → push; `update_pull_request_branch` when
-   stale; reviewer comments addressed). If auto-merge is off, merge via API when green.
+2. Poll CI (`gh pr checks <N>`) and drive fixes per the PR rules (red → fix → push;
+   `gh pr update-branch <N>` when stale; reviewer comments addressed). If auto-merge is off,
+   merge with `gh pr merge <N> --merge` when green.
 3. After merge: fetch master, prune the worktree, confirm `Closes` issues closed, post one comment
    on each `Refs` issue (what landed, what remains), close pinned already-fixed issues, and let a
    completeness critic assert every FIX issue in the wave has a merged PR, a parked note or a
@@ -278,7 +280,12 @@ PR-activity subscription tool here, so the main session polls CI. `Skill("simpli
 the `dev-tools` plugin's `/pr-review-toolkit:review-pr` is available but the script does not call
 it. `args.probePorts = {ws, mcp}` gives each concurrently running group its own scratch pair for
 the probes stage (`run.sh` hardcodes 4918/4919, so a second group gets 4928/4929). Two groups run
-at a time on this machine (16 CPUs, 32 GB); `docs/stacked-prs.md` applies for layered groups.
+at a time on this machine (16 CPUs, 32 GB), **but never two `e2e` groups**: the Playwright harness
+ports are fixed (`scripts/test-ports.ts`) and its boot SIGKILLs whatever holds them, so a second
+E2E run kills the first. `gh` is now a hard requirement of the script (plan, ship and post-ship);
+a resume from a machine without it must install it first — the GitHub MCP fallback is gone.
+`docs/stacked-prs.md` applies for layered groups. The environment-facts table above is the cloud
+container's record and names the MCP tools that session had; the script no longer calls them.
 
 ### Lessons from wave 1 (read before launching wave 2)
 
@@ -298,6 +305,14 @@ at a time on this machine (16 CPUs, 32 GB); `docs/stacked-prs.md` applies for la
   reviews whatever branch the main checkout is on — J1's first PR-review round reviewed the sweep
   ledger's own diff. The script now passes the group branch as the skill's target and drops findings
   on files outside the branch diff. `Skill("simplify")` loads inline and is unaffected.
+- **The verify stage's stdio smoke is not sandboxed by `TANDEM_APP_DATA_DIR`** (found in wave 2).
+  `scripts/ci/stdio-smoke.mjs` boots `dist/server` on the product ports 3478/3479, the server
+  `freePort()`s whatever holds them, and the boot's `refreshExistingSkillIfStale()` writes
+  `~/.claude/skills/tandem/SKILL.md` when the bundled version is higher — J1's verify overwrote the
+  operator's installed skill with unmerged branch text. The script now skips the smoke when a real
+  Tandem is listening, serialises it across groups with a mkdir lock, and points
+  `USERPROFILE`/`HOME` at a scratch dir for the boot. If you ran an older script, check the
+  installed skill's `version:` against `origin/master` and restore it.
 - **PR bodies**: the ship agent sometimes claims a review pass did not run because it could not
   spawn agents itself; the pipeline's PR-review stage did run the repo reviewer. Read the
   "Review" line (rounds) rather than the "For Bryan" prose when in doubt.
@@ -364,6 +379,6 @@ literal in `tests/skill-instruction-contract.test.ts` moves with it). `Hooks arm
 | Baseline `npm run typecheck` / vitest / `cargo test` on master | typecheck green; vitest 627 files / 10,531 tests green (the one red, `platform.test.ts`, was this harness's `TANDEM_APP_DATA_DIR` lacking `tandem` in its path — the prefix is now `mktemp -d /tmp/tandem-sweep-XXXXXX`); `cargo test` 215/216 with one environment failure: `the_http_client_ignores_an_ambient_proxy` was defeated by this container's ambient `no_proxy=127.0.0.1,…`, which reqwest honours. Fixed in this PR — the test now clears `no_proxy`/`NO_PROXY` for its duration and restores them. 216/216 after. |
 | Hook worktree guards | `.claude/hooks/{typecheck-on-edit,svelte-check-on-edit,related-test,format-on-edit}.sh` |
 | `Skill`-in-subagent probe | Workflow subagents (default and `agentType` ones) have the `Skill` tool. `simplify` loads its instructions inline and runs single-pass (subagents have no `Agent` tool for its 4-way fan-out); `code-review` runs as a forked execution and returns findings as text (no `ReportFindings`). The probe's `code-review` call found a real defect in the first draft of the hook guards (backslash normalisation ordering), now fixed. |
-| Worktree + symlinked `node_modules` probe | A worktree under `.claude/worktrees/` with `ln -s` `node_modules`: `npx husky` arms `.husky/_/pre-push`; `tsc`, `svelte-check`, `biome`, `vitest` and `npm run test:e2e` all run. One environment fix was needed for E2E: this container ships Chromium build 1194 under `$PLAYWRIGHT_BROWSERS_PATH` while `@playwright/test@1.58` looks for build 1234 in the newer `chrome-linux64` / `chrome-headless-shell-linux64` layout, so every launch failed. Aliased in place rather than downloaded; the workflow's E2E stage repeats the alias when needed. |
+| Worktree + symlinked `node_modules` probe | A worktree under `.claude/worktrees/` with `ln -s` `node_modules`: `npx husky` arms `.husky/_/pre-push`; `tsc`, `svelte-check`, `biome`, `vitest` and `npm run test:e2e` all run. One environment fix was needed for E2E: this container ships Chromium build 1194 under `$PLAYWRIGHT_BROWSERS_PATH` while `@playwright/test@1.58` looks for build 1234 in the newer `chrome-linux64` / `chrome-headless-shell-linux64` layout, so every launch failed. Aliased in place rather than downloaded; the workflow's E2E stage repeated the alias when needed (removed in wave 2 — the stage now runs `npx playwright install chromium` when a build is missing). |
 | Auto-merge repo setting | asked of Bryan; until enabled the loop merges via API when green |
 | Decisions recorded | `decisions.md` + comments on #1827, #1753, #1754, #1813, #1787, #1788, #1748, #1820 |
