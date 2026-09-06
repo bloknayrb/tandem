@@ -389,8 +389,15 @@ export function docBackupSnapshotPath(
   appDataDir: string,
   name: string,
 ): string | null {
-  if (name !== path.basename(name) || !SNAPSHOT_TAIL_RE.test(name)) return null;
-  return path.join(docBackupsRoot(appDataDir), docHash(filePath), name);
+  // `leaf` — the path.basename() RESULT, not the raw caller name — is what gets
+  // joined. path.basename is CodeQL's recognized js/path-injection taint
+  // terminator; the equality check alone is not a barrier it understands, so
+  // joining `name` left every downstream fs sink on the restore path flagged
+  // (#1882 alerts 207–210). Semantically identical: a name that is not its own
+  // basename is refused here either way.
+  const leaf = path.basename(name);
+  if (leaf !== name || !SNAPSHOT_TAIL_RE.test(leaf)) return null;
+  return path.join(docBackupsRoot(appDataDir), docHash(filePath), leaf);
 }
 
 /**
