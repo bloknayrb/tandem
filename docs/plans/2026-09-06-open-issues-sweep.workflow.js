@@ -48,7 +48,6 @@ export const meta = {
 
 const g = args.group;
 const REPO = args.repo;
-const DATE = args.date;
 const SPECS_DIR = "docs/reviews/2026-09-02-v1-review/tracks/specs";
 const REVIEW_DIR = "docs/reviews/2026-09-02-v1-review";
 const firstIssue = g.order && g.order.length ? g.order[0] : g.issues[0].n;
@@ -58,7 +57,6 @@ const WT = `${REPO}/.claude/worktrees/wt-${g.id.toLowerCase()}`;
 const issueList = g.issues.map((i) => `#${i.n}`).join(" ");
 const closesList = g.issues.filter((i) => i.closes).map((i) => `#${i.n}`);
 const refsList = g.issues.filter((i) => !i.closes).map((i) => `#${i.n}`);
-const specPath = (n) => `${SPECS_DIR}/${g.id}-${n}.md`;
 const trackFile = g.track ? `${REVIEW_DIR}/tracks/${g.track}-*.md` : "(none — non-review issue)";
 
 // ---------------------------------------------------------------------------------------
