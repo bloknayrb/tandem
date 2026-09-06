@@ -32,10 +32,11 @@
  * forwarding means it holds no protocol state: the client's `initialize` and
  * `notifications/initialized` are captured in flight, then replayed against a
  * freshly-constructed transport under a private `__tandem_reinit_<uuid>` id
- * whose response is swallowed rather than forwarded. `serverInfo` and
+ * whose response is swallowed rather than forwarded. The server *name* and
  * `protocolVersion` must match what the original handshake negotiated, or the
  * reconnect fails closed — otherwise a different process that grabbed the port
- * would inherit the client's trust.
+ * would inherit the client's trust. A changed server *version* is a normal
+ * Tandem upgrade: it is adopted and logged, never compared (#1759).
  *
  * Failure is soft: pending requests get their `-32000`, the queue is cleared,
  * and one capped-exponential retry is armed. We do NOT exit — killing a
@@ -214,13 +215,14 @@ export function isSseStreamLostError(err: unknown): boolean {
  */
 export function readHandshakeIdentity(
   msg: JSONRPCMessage,
-): { protocolVersion: string | undefined; serverInfo: string } | undefined {
+): { protocolVersion: string | undefined; serverName: string; serverVersion: string } | undefined {
   const result = (msg as { result?: { protocolVersion?: unknown; serverInfo?: unknown } }).result;
   if (result === undefined) return undefined;
   return {
     protocolVersion:
       typeof result.protocolVersion === "string" ? result.protocolVersion : undefined,
-    serverInfo: describeServerInfo(result.serverInfo),
+    serverName: describeServerName(result.serverInfo),
+    serverVersion: describeServerVersion(result.serverInfo),
   };
 }
 
@@ -254,9 +256,15 @@ export function isReplayId(id: string | number | undefined): boolean {
 }
 
 /**
- * Render `serverInfo` for identity comparison across a reconnect. Any shape
- * that isn't a `{name, version}` object collapses to a sentinel, so a server
- * that omits it cannot accidentally compare equal to one that supplies it.
+ * Render `serverInfo.name` for identity comparison across a reconnect. Any
+ * shape that isn't a `{name: string}` object collapses to a sentinel, so a
+ * server that omits it cannot accidentally compare equal to one that supplies
+ * it.
+ *
+ * The version is deliberately NOT part of this: a normal Tandem upgrade
+ * changes `serverInfo.version` and used to read as "somebody else grabbed the
+ * port", breaking Claude Desktop until the user restarted it (#1759). The
+ * version is logged and adopted, never compared.
  *
  * The sentinel does collide with itself: two *different* servers that both
  * omit `serverInfo` compare equal here, and `protocolVersion` is the only
@@ -266,10 +274,17 @@ export function isReplayId(id: string | number | undefined): boolean {
  * working setup to defend against a scenario that needs an attacker who can
  * already bind the loopback port.
  */
-export function describeServerInfo(info: unknown): string {
-  const i = info as { name?: unknown; version?: unknown } | null | undefined;
-  if (!i || typeof i.name !== "string" || typeof i.version !== "string") return "<unknown>";
-  return `${i.name}@${i.version}`;
+export function describeServerName(info: unknown): string {
+  const i = info as { name?: unknown } | null | undefined;
+  if (!i || typeof i.name !== "string") return "<unknown>";
+  return i.name;
+}
+
+/** Same shape over `serverInfo.version`. Logged on change, never compared. */
+export function describeServerVersion(info: unknown): string {
+  const i = info as { version?: unknown } | null | undefined;
+  if (!i || typeof i.version !== "string") return "<unknown>";
+  return i.version;
 }
 
 /**
@@ -406,7 +421,8 @@ export async function runMcpStdio(): Promise<void> {
   /** The client's `notifications/initialized`, if it ever sent one. */
   let handshakeInitialized: JSONRPCMessage | undefined;
   let negotiatedProtocolVersion: string | undefined;
-  let negotiatedServerInfo: string | undefined;
+  let negotiatedServerName: string | undefined;
+  let negotiatedServerVersion: string | undefined;
   /** Set in the trigger, cleared when the attempt starts. Suppresses duplicate scheduling. */
   let reconnectPending = false;
   /** Set when the attempt begins, cleared in its finally. This is what queueing keys on. */
@@ -743,7 +759,8 @@ export async function runMcpStdio(): Promise<void> {
     const identity = readHandshakeIdentity(msg);
     if (identity?.protocolVersion === undefined) return;
     negotiatedProtocolVersion = identity.protocolVersion;
-    negotiatedServerInfo = identity.serverInfo;
+    negotiatedServerName = identity.serverName;
+    negotiatedServerVersion = identity.serverVersion;
     lastSessionOpenedAt = Date.now();
   }
 
@@ -1088,14 +1105,30 @@ export async function runMcpStdio(): Promise<void> {
       // port" — a wrong and alarming diagnosis for what is really "we never
       // learned what to expect". Still fails closed: adopting whatever
       // answered would be exactly the fail-open this check exists to stop.
-      // (One clause, not two: `captureNegotiated` writes both fields together
-      // or neither, so `negotiatedServerInfo` cannot be set on its own.)
+      // (One clause, not two: `captureNegotiated` writes every field together
+      // or none, so `negotiatedServerName` cannot be set on its own.)
       if (negotiatedProtocolVersion === undefined) {
         throw new Error(
           `no handshake baseline to verify the new upstream against ` +
             `(the original initialize never completed); refusing to adopt ` +
-            `${identity.protocolVersion}/${identity.serverInfo}`,
+            `${identity.protocolVersion}/${identity.serverName}`,
         );
+      }
+      // A normal Tandem upgrade changes the version and nothing else. That is
+      // not an identity change (#1759): adopt it, log it once, and keep the
+      // adopted value so a second upgrade in one long-lived session logs
+      // against the current baseline rather than the launch-time one.
+      if (
+        identity.protocolVersion === negotiatedProtocolVersion &&
+        identity.serverName === negotiatedServerName &&
+        identity.serverVersion !== negotiatedServerVersion
+      ) {
+        process.stderr.write(
+          `[tandem mcp-stdio] upstream version changed across re-initialize ` +
+            `(was ${negotiatedServerVersion}, now ${identity.serverVersion}); ` +
+            `adopting the upgraded server\n`,
+        );
+        negotiatedServerVersion = identity.serverVersion;
       }
       // Fail closed on an identity change. Before this change a substituted
       // upstream could not complete a session at all, because the bridge never
@@ -1103,12 +1136,12 @@ export async function runMcpStdio(): Promise<void> {
       // unless the new server is checked against what the client agreed to.
       if (
         identity.protocolVersion !== negotiatedProtocolVersion ||
-        identity.serverInfo !== negotiatedServerInfo
+        identity.serverName !== negotiatedServerName
       ) {
         throw new Error(
           `upstream identity changed across re-initialize ` +
-            `(was ${negotiatedProtocolVersion}/${negotiatedServerInfo}, ` +
-            `now ${identity.protocolVersion}/${identity.serverInfo})`,
+            `(was ${negotiatedProtocolVersion}/${negotiatedServerName}, ` +
+            `now ${identity.protocolVersion}/${identity.serverName})`,
         );
       }
 

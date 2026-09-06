@@ -5,7 +5,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   carriedSessionNotFound,
-  describeServerInfo,
+  describeServerName,
   getRequestId,
   getResponseId,
   isReplayId,
@@ -1554,15 +1554,16 @@ describe("stale-session helper predicates", () => {
     });
   });
 
-  describe("describeServerInfo", () => {
-    it("renders name@version and collapses anything else to a sentinel", () => {
-      expect(describeServerInfo({ name: "tandem", version: "1.2.3" })).toBe("tandem@1.2.3");
+  describe("describeServerName", () => {
+    it("renders the name alone and collapses anything else to a sentinel", () => {
+      expect(describeServerName({ name: "tandem", version: "1.2.3" })).toBe("tandem");
+      // The version is now irrelevant to identity (#1759), which is the point.
+      expect(describeServerName({ name: "tandem" })).toBe("tandem");
       // A server that omits serverInfo must not compare equal to one that
       // supplies it, so every non-conforming shape collapses to one sentinel.
-      expect(describeServerInfo(undefined)).toBe("<unknown>");
-      expect(describeServerInfo(null)).toBe("<unknown>");
-      expect(describeServerInfo({ name: "tandem" })).toBe("<unknown>");
-      expect(describeServerInfo({ name: 1, version: 2 })).toBe("<unknown>");
+      expect(describeServerName(undefined)).toBe("<unknown>");
+      expect(describeServerName(null)).toBe("<unknown>");
+      expect(describeServerName({ name: 1 })).toBe("<unknown>");
     });
   });
 
@@ -2101,6 +2102,49 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
       .lines()
       .some((m) => m.method === "notifications/tools/list_changed" && m.id === undefined);
     expect(notified).toBe(true);
+  }, 60_000);
+
+  it("adopts a version-only change across a reconnect (#1759)", async () => {
+    const fake = await makeSessionServer();
+    child = spawnBridge(fake.port, { TANDEM_REQUEST_TIMEOUT_MS: "4000" });
+    const io = collect(child);
+    await handshake(child, io, fake);
+
+    // A normal Tandem upgrade: same server, new version. Before #1759 this was
+    // byte-for-byte indistinguishable from a foreign process on the port, so
+    // every request after an upgrade failed until the user restarted Claude
+    // Desktop — which never respawns this bridge.
+    fake.setServerInfo({ name: "fake-tandem", version: "9.9.9" });
+    fake.retireSession();
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+
+    await waitFor(() => responsesFor(io.stdout(), 2).length === 1, "healed request", 30_000);
+    const answers = responsesFor(io.stdout(), 2);
+    expect(answers.length).toBe(1);
+    expect(answers[0]?.error).toBeUndefined();
+    expect(io.stderr()).toContain("upstream version changed across re-initialize");
+    expect(io.stderr()).not.toContain("upstream identity changed");
+    expect(child.exitCode).toBeNull();
+  }, 60_000);
+
+  it("still fails closed when only the server name changes (#1759)", async () => {
+    const fake = await makeSessionServer();
+    child = spawnBridge(fake.port, { TANDEM_REQUEST_TIMEOUT_MS: "4000" });
+    const io = collect(child);
+    await handshake(child, io, fake);
+
+    // Version identical, name different: the fail-open the identity check
+    // exists to stop. Loosening the comparison to "both fields moved" would
+    // let this through.
+    fake.setServerInfo({ name: "not-tandem", version: "0.0.0-test" });
+    fake.retireSession();
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+
+    await waitFor(() => responsesFor(io.stdout(), 2).length === 1, "failure response", 30_000);
+    const answer = responsesFor(io.stdout(), 2)[0];
+    expect((answer?.error as { code?: number })?.code).toBe(-32000);
+    expect(io.stderr()).toContain("upstream identity changed across re-initialize");
+    expect(child.exitCode).toBeNull();
   }, 60_000);
 
   it("fails the reconnect closed when the upstream identity changes", async () => {

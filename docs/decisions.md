@@ -1608,7 +1608,8 @@ Three placement details diverge from this ADR's own sketch above and from #1118'
 >   Code and false for Claude Desktop, where the child lives all day. It now captures the client's
 >   `initialize`/`notifications/initialized` in flight and replays them against a fresh transport
 >   under a private `__tandem_reinit_<uuid>` id whose response is swallowed rather than forwarded,
->   verifying `protocolVersion` and `serverInfo` against the original handshake and failing closed on
+>   verifying `protocolVersion` and the server *name* against the original handshake — a changed
+>   server *version* is adopted and logged (#1759) — and failing closed on
 >   a mismatch — without that check, adding a reconnect would turn a fail-closed into a fail-open for
 >   a process that grabbed the port. Failure is soft: pending requests get their `-32000` and one
 >   capped-exponential retry is armed. It never exits, because killing a Claude Desktop child nothing
