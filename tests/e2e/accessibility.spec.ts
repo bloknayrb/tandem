@@ -1,7 +1,9 @@
+import { readFileSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 import path from "path";
 import { E2E_MCP_PORT } from "../../scripts/test-ports.js";
+import { checkIncompleteBaseline, colorContrastNodeCount } from "./axe-incomplete.js";
 import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
@@ -313,14 +315,37 @@ const SURFACES: Surface[] = [
     //
     // WHAT THIS DOES NOT BUY, stated because the obvious reading is wrong.
     // Adding the note does NOT make this a contrast gate for the user tint.
-    // Measured (#1721): paint the note card `#4a4a4a` — mid-grey behind dark
-    // body text, an unmissable AA failure — and all three themes still report
-    // `violations: []`, so the assertion below does not gate it.
+    // Measured when #1721 was filed: paint the note card `#4a4a4a` — mid-grey
+    // behind dark body text, an unmissable AA failure — and all three themes
+    // still reported `violations: []`, so the assertion below did not gate it.
     //
-    // The structural reason is certain and is the durable half: NOTHING in this
-    // suite reads `results.incomplete`, so whatever axe files there is
-    // unasserted by construction. `color-contrast` is not in `disableRules`, so
-    // the rule does run — this is a bucketing gap, not a disabled rule.
+    // The structural reason is certain and is the durable half: a contrast
+    // failure axe files under `incomplete` is not a violation, and
+    // `color-contrast` is not in `disableRules`, so the rule DOES run — this is
+    // a bucketing gap, not a disabled rule.
+    //
+    // Since #1721 the loop below also pins a per-surface CEILING on
+    // color-contrast `incomplete` nodes (`tests/e2e/axe-incomplete-baseline.json`,
+    // option 3 from the issue). Read what that does and does not buy, because
+    // the obvious reading is again wrong: it makes a JUMP loud — a change that
+    // pushes more nodes into the bucket reds this suite — and it forces a newly
+    // added surface to be measured rather than silently unmeasured. It does NOT
+    // say any individual incomplete node is acceptable, and it is NOT a contrast
+    // gate for the user tint.
+    //
+    // RE-MEASURED 2026-09-06, and the result is not what the paragraph above
+    // predicts — record it as data, not as a resolution. Repainting
+    // `--tandem-author-user-bg` to `#4a4a4a` and running `-g "annotation card"`
+    // on the reserved ports: LIGHT and WARM now FAIL on `violations` (axe 4.13
+    // reports contrast 1.21 and 1.47 against `#4a4a4a`), while DARK stays green
+    // — and in all three themes the color-contrast `incomplete` count stayed at
+    // 4, its baseline. So the new pin did NOT catch this mutation anywhere; the
+    // pre-existing `violations` assertion caught two thirds of it, which the
+    // filed measurement says it did not. Whether that is an axe/Chromium
+    // difference or a change in the tints since is exactly the unestablished
+    // mechanism below. It bounds what option 3 buys: a jump detector, not a
+    // contrast gate — and it does not narrow what options (1) and (2) on #1721
+    // still have to explain.
     //
     // The exact mechanism is NOT established, and an earlier version of this
     // comment asserted one it could not support. That run observed 25
@@ -475,6 +500,15 @@ const SURFACES: Surface[] = [
   },
 ];
 
+/**
+ * The committed per-surface ceiling (#1721). Read once, at module scope, with
+ * `readFileSync` rather than a JSON import — the file's existing style, and no
+ * `resolveJsonModule` dependency.
+ */
+const INCOMPLETE_BASELINE = JSON.parse(
+  readFileSync(new URL("./axe-incomplete-baseline.json", import.meta.url), "utf8"),
+) as Record<string, number>;
+
 // Warm is not a spare theme. It carries its own surface ramp (surface-sunk at
 // 0.920 against light's 0.96) while inheriting :root's de-emphasis ladder and
 // status family wholesale — so it is where the retuned ladder's margins are
@@ -499,7 +533,19 @@ for (const theme of ["light", "dark", "warm"] as const) {
           await setTheme(page, theme);
           await settle(page);
           const results = await scan(page);
+          // ONE binding, read by both the log and the assertion. Two independent
+          // expressions is how a one-word slip to `…(results.violations)` ships a
+          // permanently-green gate: violations is asserted empty on the next
+          // line, so every key would seed as 0 and `observed <= baseline` would
+          // always hold. With one binding, a mis-wired gate can only produce an
+          // all-zero committed baseline — visible in the file, not hidden in a
+          // passing run. The log is deliberately permanent and ungated so a
+          // re-seed can read CI's numbers without a code change.
+          const key = `${theme} / ${surface.name}`;
+          const incompleteNodes = colorContrastNodeCount(results.incomplete);
+          console.log(`axe color-contrast incomplete — ${key} = ${incompleteNodes}`);
           expect(results.violations).toEqual([]);
+          expect(checkIncompleteBaseline(key, incompleteNodes, INCOMPLETE_BASELINE)).toBeNull();
         } finally {
           // In `finally` so a failing scan still cleans up — otherwise the first red
           // surface poisons every later one and the real failure gets buried in noise.
