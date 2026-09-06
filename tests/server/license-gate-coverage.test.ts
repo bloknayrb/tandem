@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allMcpSource, registeredToolNames } from "../helpers/mcp-source.js";
+import { allMcpSource, registeredToolNames, wrappedToolNames } from "../helpers/mcp-source.js";
 
 /**
  * Surface-B registration-coverage gate (#1116, ADR-040, spec §8/§155).
@@ -124,19 +124,27 @@ describe("Surface B gated-tool registration coverage", () => {
   // future mutator forgotten in the list would ship ungated AND green — exactly
   // the fail-open class the suite claims to prevent.
   //
-  // Derived from the REGISTRATION shape, not from the wrappers (#1784). A
-  // wrapper-derived set cannot see `server.tool("tandem_zzz", …)` with no wrapper
-  // at all: such a tool is in neither set, `unclassified` stays empty, and the
-  // suite is green while the tool ships ungated.
+  // The discovered set is the UNION of two derivations, because each is blind to
+  // a shape the other sees and this net has to fail CLOSED on both (#1784):
+  //   - REGISTRATION (`server.tool("tandem_…"`): sees a tool with no wrapper at
+  //     all, which a wrapper-derived set reads as "not a tool" and lets ship
+  //     ungated and green.
+  //   - WRAPPER (`gatedTool("tandem_…"` / `withErrorBoundary("tandem_…"`):
+  //     receiver-agnostic, so it sees `mcp.tool("tandem_…", …, withErrorBoundary(…))`
+  //     — a registration on any receiver not named `server`, which the
+  //     registration regex is anchored against.
+  // Today the two sets are identical (all 33 names), so the union costs nothing
+  // and closes both shapes; "no-op on current source" is not a bound on a drift
+  // guard whose whole subject is future source.
   //
-  // Two bounds on how wide a green run reads. The scan root is `src/server/mcp/**`
-  // only, so a registration outside it is unseen; and the derivation keys on a
-  // string-literal `"tandem_…"` name at the registration call, so a tool whose
-  // name is a `const` there is unseen too (measured absent — all 33 carry
-  // literals). The review inventory in `docs/licensing-explained.md`, not this
-  // regex, is what covers those shapes.
+  // Two bounds remain on how wide a green run reads. The scan root is
+  // `src/server/mcp/**` only, so a registration outside it is unseen; and both
+  // derivations key on a string-literal `"tandem_…"` name, so a tool whose name
+  // is a `const` at both its registration and its wrapper is unseen too
+  // (measured absent — all 33 carry literals). The review inventory in
+  // `docs/licensing-explained.md`, not these regexes, is what covers those shapes.
   it("every registered tandem_* tool is classified as GATED or UNGATED", () => {
-    const registered = registeredToolNames(SRC);
+    const registered = new Set([...registeredToolNames(SRC), ...wrappedToolNames(SRC)]);
     const classified = new Set(TOOL_GATES.map((r) => r.name));
     const unclassified = [...registered].filter((n) => !classified.has(n));
     const stale = [...classified].filter((n) => !registered.has(n));
@@ -147,13 +155,21 @@ describe("Surface B gated-tool registration coverage", () => {
     expect(stale, `classified but no longer registered (stale list entry): ${stale}`).toEqual([]);
   });
 
-  // Synthetic negative for the derivation the check above depends on. It calls
-  // the same helper — re-spelling the pattern here would be a tautology that
-  // passes while the check above stayed wrapper-derived.
+  // Synthetic negatives for the two derivations the check above depends on. They
+  // call the same helpers — re-spelling the patterns here would be a tautology
+  // that passes while the check itself stayed half-blind.
   it("the derivation sees a registration with no wrapper", () => {
     const names = registeredToolNames(
       'server.tool("tandem_zzz", {}, async () => {});\nserver.registerTool("tandem_yyy", {}, h);',
     );
     expect([...names].sort()).toEqual(["tandem_yyy", "tandem_zzz"]);
+  });
+
+  it("the derivation sees a wrapped registration on a non-`server` receiver", () => {
+    const src = 'mcp.tool("tandem_zzz", {}, withErrorBoundary("tandem_zzz", handler));';
+    expect([...registeredToolNames(src)], "registration regex is receiver-anchored").toEqual([]);
+    expect([...new Set([...registeredToolNames(src), ...wrappedToolNames(src)])]).toEqual([
+      "tandem_zzz",
+    ]);
   });
 });

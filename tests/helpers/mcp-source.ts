@@ -42,3 +42,23 @@ export function registeredToolNames(src: string): Set<string> {
     [...src.matchAll(/server\.(?:tool|registerTool)\(\s*"(tandem_\w+)"/g)].map((m) => m[1]),
   );
 }
+
+/**
+ * Every `tandem_*` name that appears at a WRAPPER call — `gatedTool("…")` or
+ * `withErrorBoundary("…")`.
+ *
+ * The companion to `registeredToolNames`, and neither subsumes the other. The
+ * registration form is receiver-anchored (`server.tool(`), so a tool registered
+ * on a differently-named receiver — `mcp.tool("tandem_foo", …)` — is invisible
+ * to it; the wrapper form is receiver-agnostic but blind to a registration with
+ * no wrapper at all. A completeness net that has to fail CLOSED on an unknown
+ * tool takes the union of the two.
+ *
+ * `gatedTool`'s own internal `withErrorBoundary(toolName` passes a variable, not
+ * a string literal, so it is not matched here.
+ */
+export function wrappedToolNames(src: string): Set<string> {
+  return new Set(
+    [...src.matchAll(/(?:gatedTool|withErrorBoundary)\(\s*"(tandem_\w+)"/g)].map((m) => m[1]),
+  );
+}

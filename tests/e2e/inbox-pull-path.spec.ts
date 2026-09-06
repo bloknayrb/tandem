@@ -79,18 +79,45 @@ test.beforeEach(async () => {
   tmpDir = createFixtureDir("sample.md");
 });
 
+/**
+ * One best-effort teardown step. Each is independent, so a failure in the first
+ * must not skip the rest — and none of them may mask the restore verdict below,
+ * which is the one thing this hook is allowed to fail on.
+ */
+async function teardownStep(what: string, fn: () => unknown): Promise<void> {
+  try {
+    await fn();
+  } catch (e) {
+    console.warn(`inbox-pull-path teardown: ${what} failed — ${e}`);
+  }
+}
+
 test.afterEach(async ({ page }) => {
   // Mode is global for the whole run, so a spec that leaves it on Solo poisons
   // every later one. Restore even when the test failed mid-way, and ASSERT the
   // restore — a silent repair failure is how the next spec inherits Solo.
-  const tandemBtn = page.locator("[data-testid='mode-tandem-btn']");
-  if ((await tandemBtn.count()) > 0 && (await mode()) !== "tandem") {
-    await tandemBtn.click();
-    await expect.poll(mode, { timeout: 10_000 }).toBe("tandem");
+  //
+  // The assertion is CAPTURED, not thrown here: `mode()` throws on an error
+  // envelope and the poll throws on a flip that never lands, and throwing at
+  // that point would skip the three cleanup calls below — leaking an open
+  // document and an unclosed MCP session into every later spec on a
+  // `workers: 1` backend that holds one MCP session at a time. That turns one
+  // mode-ordering failure into a cascade whose cause is invisible. Clean up
+  // first, then re-throw so the restore still fails the hook.
+  let restoreError: unknown;
+  try {
+    const tandemBtn = page.locator("[data-testid='mode-tandem-btn']");
+    if ((await tandemBtn.count()) > 0 && (await mode()) !== "tandem") {
+      await tandemBtn.click();
+      await expect.poll(mode, { timeout: 10_000 }).toBe("tandem");
+    }
+  } catch (e) {
+    restoreError = e;
   }
-  await cleanupAllOpenDocuments(mcp);
-  await mcp.close();
-  cleanupFixtureDir(tmpDir);
+  await teardownStep("closing open documents", () => cleanupAllOpenDocuments(mcp));
+  await teardownStep("closing the MCP session", () => mcp.close());
+  await teardownStep("removing the fixture dir", () => cleanupFixtureDir(tmpDir));
+  if (restoreError) throw restoreError;
 });
 
 test("a user comment typed in the popup reaches tandem_checkInbox once", async ({ page }) => {

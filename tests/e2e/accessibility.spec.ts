@@ -501,9 +501,22 @@ const SURFACES: Surface[] = [
  * Read once with `readFileSync` rather than a JSON import — the file's existing
  * style, and no `resolveJsonModule` dependency.
  */
-const INCOMPLETE_BASELINE = JSON.parse(
+const BASELINE_FILE = JSON.parse(
   readFileSync(new URL("./axe-incomplete-baseline.json", import.meta.url), "utf8"),
-) as Record<string, number>;
+) as Record<string, unknown>;
+const INCOMPLETE_BASELINE = BASELINE_FILE as Record<string, number>;
+
+/**
+ * The browser the committed numbers were measured on, carried into the failure
+ * message. The ceiling has no headroom (see the file's own `$comment`: padding a
+ * number nobody explained is the failure mode it forbids), so the cost of a red
+ * is a triage question — environment or UI — and it is asked under merge
+ * pressure on a REQUIRED check. Naming both browsers in the message is what
+ * makes "rule the environment out first" a one-read answer rather than an
+ * investigation nobody has time for.
+ */
+const SEEDED_BROWSER =
+  typeof BASELINE_FILE.$browser === "string" ? BASELINE_FILE.$browser : "unrecorded";
 
 // Warm is not a spare theme. It carries its own surface ramp (surface-sunk at
 // 0.920 against light's 0.96) while inheriting :root's de-emphasis ladder and
@@ -539,7 +552,14 @@ for (const theme of ["light", "dark", "warm"] as const) {
           const incompleteNodes = colorContrastNodeCount(results.incomplete);
           console.log(`axe color-contrast incomplete — ${key} = ${incompleteNodes}`);
           expect(results.violations).toEqual([]);
-          expect(checkIncompleteBaseline(key, incompleteNodes, INCOMPLETE_BASELINE)).toBeNull();
+          expect(
+            checkIncompleteBaseline(
+              key,
+              incompleteNodes,
+              INCOMPLETE_BASELINE,
+              `Seeded on ${SEEDED_BROWSER}; this run: Chromium ${page.context().browser()?.version() ?? "unknown"}. Rule a browser/font difference out before touching the number.`,
+            ),
+          ).toBeNull();
         } finally {
           // In `finally` so a failing scan still cleans up — otherwise the first red
           // surface poisons every later one and the real failure gets buried in noise.

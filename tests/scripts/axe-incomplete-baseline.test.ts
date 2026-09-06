@@ -25,6 +25,19 @@ describe("checkIncompleteBaseline", () => {
     expect(checkIncompleteBaseline("dark / annotation card", 0, baseline)).toBeNull();
   });
 
+  it("appends the caller's context to a failure without changing the verdict", () => {
+    // The context carries "seeded on browser X, running on Y" into the message so
+    // a red on the required `check` job is triaged before the number is raised.
+    // A context argument that could flip a verdict would be a second gate hiding
+    // inside a message, so both halves are asserted: it shows up on a red, and it
+    // cannot turn a green into a red.
+    const msg = checkIncompleteBaseline("dark / annotation card", 5, baseline, "Seeded on X.");
+    expect(msg).toContain("Seeded on X.");
+    expect(
+      checkIncompleteBaseline("dark / annotation card", 4, baseline, "Seeded on X."),
+    ).toBeNull();
+  });
+
   it("fails closed on a key with no baseline row", () => {
     // Observed is 0 deliberately: this kills `baseline[key] ?? 0` alongside
     // `?? Infinity` and an early `if (baseline[key] === undefined) return null`.
