@@ -23,7 +23,6 @@ const pendingPermissions = new Map<
     requestId: string;
     toolName: string;
     description: string;
-    inputPreview: string;
     createdAt: number;
   }
 >();
@@ -114,14 +113,13 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     res.json({ sent: true, messageId: id });
   });
 
-  // Channel permission relay: shim forwards Claude Code's tool approval prompts
-  // Pending requests stored for browser polling (SSE push to browser is a follow-up)
+  // Channel permission relay: the shim forwards Claude Code's tool approval
+  // prompt and the entry is held for PERMISSION_TTL_MS. There is no return leg
+  // — see docs/architecture.md and ADR-047 §3. The shim's approval-prompt
+  // payload is not stored.
   app.options(API_CHANNEL_PERMISSION, apiMiddleware);
   app.post(API_CHANNEL_PERMISSION, apiMiddleware, (req: Request, res: Response) => {
-    const { requestId, toolName, description, inputPreview } = (req.body ?? {}) as Record<
-      string,
-      unknown
-    >;
+    const { requestId, toolName, description } = (req.body ?? {}) as Record<string, unknown>;
     if (typeof requestId !== "string" || typeof toolName !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "requestId and toolName required" });
       return;
@@ -130,10 +128,9 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
       requestId,
       toolName,
       description: (description as string) ?? "",
-      inputPreview: (inputPreview as string) ?? "",
       createdAt: Date.now(),
     });
-    console.error(`[Channel] Permission request: ${toolName} — ${description} (id: ${requestId})`);
+    console.error(`[Channel] Permission request: ${toolName} (id: ${requestId})`);
     res.json({ ok: true });
   });
 
@@ -156,7 +153,9 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
       return;
     }
     pendingPermissions.delete(requestId);
-    // Store verdict for the channel shim to poll (or push via SSE in follow-up)
+    // Deletion is the only effect: no return leg — see docs/architecture.md and
+    // ADR-047 §3. The verdict is echoed to the browser that submitted it and
+    // never reaches Claude Code.
     console.error(`[Channel] Permission verdict: ${requestId} → ${approved ? "allow" : "deny"}`);
     res.json({ ok: true, requestId, behavior: approved ? "allow" : "deny" });
   });

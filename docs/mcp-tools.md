@@ -1407,9 +1407,15 @@ Channel shim reports connection errors.
 
 The shim gives this best-effort report a 3-second deadline.
 
-### POST /api/channel-permission
+### Channel permission relay (experimental — no return leg)
 
-Channel shim forwards Claude Code's tool approval prompt for editor-side permission UI.
+**These three routes accept and store a permission request, and nothing more (#1794).** The shim forwards Claude Code's tool approval prompt, the server holds it for 30 seconds, and then it expires: **nothing displays it and no verdict ever reaches Claude Code.** The editor has no permission UI (nothing in `src/client/` reads `pendingPermissions`); the shim registers `permission_request` as an MCP *notification*, which cannot be answered; and the verdict route only deletes the pending entry and echoes the verdict back to the browser that submitted it. See [docs/architecture.md](architecture.md) and ADR-047 §3. The request/response shapes below are accurate about the wire.
+
+**One asymmetry worth stating.** `description` — the tool-level summary line, "Run npm test" — is still stored and served; `inputPreview`, which carries file bodies and command lines, is not. The server discards it on arrival. On `description` alone this moves exposure the *wrong* way: the stderr line that only the machine owner reads no longer carries it, while the served copy any local process can read (`authMiddleware` bypasses on loopback) still does. That is defensible for a summary line, and it is **not** a claim that prompt content is no longer exposed — see the register entry for #1884.
+
+#### POST /api/channel-permission
+
+The shim forwards Claude Code's tool approval prompt. `inputPreview` is still sent by the shim and is **discarded by the server** — it is neither stored, served nor logged.
 
 **Request:**
 ```json
@@ -1418,11 +1424,11 @@ Channel shim forwards Claude Code's tool approval prompt for editor-side permiss
 
 **Response:** `{ "ok": true }`
 
-The permission relay has a 5-second deadline; failures are logged because the browser may not see the approval prompt.
+The permission relay has a 5-second deadline; failures are logged, and the request is then dropped.
 
-### GET /api/channel-permission
+#### GET /api/channel-permission
 
-Poll pending permission requests (for editor UI).
+Returns the pending requests. **No client polls this.**
 
 **Response:**
 ```json
@@ -1431,9 +1437,9 @@ Poll pending permission requests (for editor UI).
 
 Stale requests (>30s) are evicted automatically.
 
-### POST /api/channel-permission-verdict
+#### POST /api/channel-permission-verdict
 
-Browser submits allow/deny verdict for a permission request.
+Deletes the pending entry and echoes the verdict to its own caller. **The verdict goes nowhere else** — there is no store, no poll route and no SSE carrying it back to the shim.
 
 **Request:**
 ```json

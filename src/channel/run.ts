@@ -178,7 +178,7 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
       );
       if (!res.ok) {
         console.error(
-          `[Channel] Permission relay got HTTP ${res.status} — browser may not see prompt`,
+          `[Channel] Permission relay POST failed (HTTP ${res.status}); the request is dropped — there is no browser-side permission UI`,
         );
       }
     } catch (err) {
