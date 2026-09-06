@@ -221,9 +221,9 @@ literal in `tests/skill-instruction-contract.test.ts` moves with it). `Hooks arm
 
 | Wave | Group | Issues | Branch | PR | Skill ver | Hooks armed | State | Notes |
 |---|---|---|---|---|---|---|---|---|
-| 1 | K1 test gates | #1783 #1784 #1721 (count-pin only) | — | — | — | — | planned-not-started | |
+| 1 | K1 test gates | #1783 #1784 #1721 (count-pin only) | `fix/test-gates-1784` | — | — | — | planned (attempt 2) | Attempt 1 parked after 3 rounds + one hand revise: same over-engineering pattern (AST scanner promoted to CI, wrapper-delta module, balanced-paren mock resolver). Relaunched minimal; prior corrections kept as lessons. |
 | 1 | A-rest | #1768 #1797 | — | — | — | — | planned-not-started | |
-| 1 | G2 test timing | #1672 #1699 #1674 | — | — | — | — | planned-not-started | |
+| 1 | G2 test timing | #1672 #1699 #1674 | `fix/test-timing-1672` | — | — | — | planned (attempt 2) | Attempt 1 parked after 3 review rounds: the plan grew a load-calibration framework + sweep test + drift guards; refuters found 13 blocking defects in that machinery. Relaunched with the planner minimality rule and the facts attempt 1 measured (readOneLine loses pre-call output; applyChangesCore is ms-scale, the 36 s came from a leaked process tree). |
 | 2 | F-runtime | #1759 #1805 #1804 #1794 | — | — | — | — | planned-not-started | |
 | 2 | F-config | #1760 #1801 #1802 | — | — | — | — | planned-not-started | |
 | 2 | J1 skill + workflows doc | #1771 #1782 #1820 #1737 (+decision H) | — | — | — | — | planned-not-started | |
