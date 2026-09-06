@@ -191,7 +191,21 @@ prevents them drifting.
    installers + 4 `.sig`, 2 `.app.tar.gz` + 2 `.sig`, 2 dmg, deb/rpm/AppImage
    + sigs).
    Publishing is the npm trigger: `.github/workflows/publish.yml` fires on
-   `release: [published]` and runs `npm publish --provenance`. If macOS
+   `release: [published]` and runs `npm publish --provenance`. It authenticates
+   with **npm Trusted Publishing (OIDC), not a secret** — there is no
+   `NPM_TOKEN` any more; the granular token it replaced lapsed at 90 days and
+   took v0.25.0's publish down after the GitHub release was already public.
+   Three things that gate it live on npmjs.com and are validated only at publish
+   time — repo + workflow filename, the `npm` environment name, and the
+   `npm publish` allowed action (configs created after 2026-09-03 default to
+   `npm stage publish` only). All three fail as an auth-shaped error; the
+   workflow header enumerates them.
+
+   **A failed npm publish cannot be fixed by re-running it.** A `release` event
+   runs the workflow file *from the tag*, so the retry re-executes whatever
+   `publish.yml` the tag carries. Use the `workflow_dispatch` on `publish.yml`
+   from master instead, passing the tag — it resolves the tag to its commit,
+   requires a published release for it, and publishes that tree. If macOS
    notarization 403s on "agreement missing/expired," that is an Apple
    legal-agreement lapse only the Account Holder (Bryan) can clear at
    developer.apple.com / App Store Connect — re-run the failed jobs after he
