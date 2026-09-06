@@ -57,8 +57,11 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // wake instructions, then move the number. Last moved to 15 by the J1 group (#1771, #1820,
   // #1737): the dead Word-comment recipe fix, four SKILL.md content gaps (stale Hard Rule 4,
   // the missing tandem_annotationReply/Edit-Write/sub-agent-inbox rules), and the
-  // mid-paragraph line-break rule. None of these three touches the wake section, and the
-  // wake assertions below were re-read against the bumped file.
+  // mid-paragraph line-break rule. The sub-agent-inbox rule (Hard Rule 7) DOES reach into this
+  // section — the wake section's own review fix scoped arming and the post-wake poll to the
+  // orchestrator, and the "Wakes are best-effort" bullet carries the same qualifier — so the
+  // orchestrator-only assertion below is part of the wake contract, not an extra. Every wake
+  // assertion here was re-read against the bumped file.
   expect(skill).toMatch(/^version:\s*15$/m);
   expect(wake).toMatch(/hand-started session/i);
   expect(wake).toMatch(/first successful read-mode `tandem_status`/i);
@@ -66,6 +69,10 @@ function expectPerSessionAutoArmContract(skill: string): void {
   expect(wake).toContain(
     "Monitor({ ws: { url: <wakeUrl from tandem_status> }, persistent: true })",
   );
+  // Hard Rule 7 forbids a sub-agent the poll a wake exists to trigger, so arming has to be
+  // scoped too — an unqualified "arm one watch" here is read by the sub-agent that also loads
+  // this skill, and its first wake drives the poll that empties the orchestrator's inbox.
+  expect(wake).toMatch(/only the orchestrator arms a watch/i);
   expect(wake).toMatch(/Arm it at most once per session/i);
   expect(wake).toMatch(/Do not use Tandem's process-global subscriber count/i);
   expect(wake).not.toMatch(/only if Tandem's tool output has told you nothing is subscribed/i);
