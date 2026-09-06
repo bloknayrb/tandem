@@ -245,8 +245,10 @@ log(`Group ${g.id}: ${issueList} → ${BRANCH}`);
 // Resume switch: a parked group whose specs were fixed by hand re-enters at Build.
 // known.specs lists the spec paths (repo-relative); known.filesTouched the planned files.
 const resumeAtBuild = !!(g.known && g.known.skipPlanAndReview);
+// known.skipPlan alone keeps the existing specs but still runs the review loop.
+const skipPlan = resumeAtBuild || !!(g.known && g.known.skipPlan);
 
-const plan = resumeAtBuild
+const plan = skipPlan
   ? { ok: true, specs: (g.known.specs || []).map((path) => ({ issue: 0, path })), filesTouched: g.known.filesTouched || [], risks: [], assumptions: g.known.assumptions || [], bryan: [] }
   : await run(
   "plan",
