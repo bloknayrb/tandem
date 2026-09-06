@@ -21,6 +21,12 @@ function gettingWokenSection(skill: string): string {
   return section ?? "";
 }
 
+function docxWorkflow(skill: string): string {
+  const section = /^## \.docx Review Workflow\r?\n([\s\S]*?)(?=^## )/m.exec(skill)?.[1];
+  expect(section, "the shipped skill has no .docx Review Workflow section").toBeDefined();
+  return section ?? "";
+}
+
 /**
  * Instruction guard: this tests the behavior Claude is told to perform. It is
  * intentionally lexical because SKILL.md is the public interface delivered to
@@ -34,13 +40,12 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // bump ships to nobody. Pinning the current number forces a deliberate look here whenever
   // the version moves — including for an unrelated edit, which is the cost of the guard, not
   // a bug in it. When you land here: confirm the assertions below still describe the shipped
-  // wake instructions, then move the number. Last moved to 14 by the MERGE of two independent
-  // bumps that both landed on 13: the widened INVALID_RANGE recovery text (#1752) and the
-  // `.html` read-only tier (#1798). Neither touches this section, and the wake assertions
-  // below were re-read against the merged file. The merge is why it is 14 and not 13 — the
-  // installed copy refreshes only when the bundled version is strictly NEWER, so a user
-  // holding either side's 13 would never receive the other side's changes.
-  expect(skill).toMatch(/^version:\s*14$/m);
+  // wake instructions, then move the number. Last moved to 15 by the J1 group (#1771, #1820,
+  // #1737): the dead Word-comment recipe fix, four SKILL.md content gaps (stale Hard Rule 4,
+  // the missing tandem_annotationReply/Edit-Write/sub-agent-inbox rules), and the
+  // mid-paragraph line-break rule. None of these three touches the wake section, and the
+  // wake assertions below were re-read against the bumped file.
+  expect(skill).toMatch(/^version:\s*15$/m);
   expect(wake).toMatch(/hand-started session/i);
   expect(wake).toMatch(/first successful read-mode `tandem_status`/i);
   expect(wake).toMatch(/read `wakeUrl`/i);
@@ -154,5 +159,29 @@ describe("shipped Tandem skill instruction contract", () => {
   it("does not narrow automatic plugin/watch overlap to double-installed sessions", () => {
     const troubleshooting = readRepoText("docs/troubleshooting.md");
     expect(troubleshooting).toMatch(/plugin-only or double-installed session/i);
+  });
+
+  it("names the real two-step Word-comment recipe instead of the dead author:import filter (#1771)", () => {
+    const workflow = docxWorkflow(readShippedSkill());
+
+    // The dead framing this issue names: the recipe must not tell Claude to "read and act
+    // on" an author:"import" result, since an un-promoted import never survives the
+    // note-type filter. The literal call stays as the notesExcluded probe — this is not an
+    // absence check on the call itself.
+    expect(workflow).not.toMatch(/read and act on/i);
+
+    // The one real signal (notesExcluded) plus the actual promoted-state discriminator
+    // (importSource) must both be present.
+    expect(workflow).toContain("notesExcluded");
+    expect(workflow).toContain("importSource");
+
+    // promotedFrom is stamped on every promoted note, including the user's own personal
+    // notes — the recipe must say it is not a reliable import marker.
+    expect(workflow).toMatch(
+      /promotedFrom[\s\S]{0,200}(?:not|never)[\s\S]{0,60}(?:reliable|discriminat)/i,
+    );
+
+    // Solo mode holds the promotion like any other user comment.
+    expect(workflow).toMatch(/solo/i);
   });
 });

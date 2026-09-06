@@ -305,15 +305,26 @@ Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\contract-review.docx" })
 → { documentId: "contract-review-x1y2z3", readOnly: false, format: "docx", ... }
 ```
 
-The .docx opens editable — edits are held in the session and written back to the original only on an explicit save, and auto-save skips `.docx` entirely. Word comments (`<w:comment>` elements) are automatically extracted and imported as Tandem annotations with `author: "import"`. Bryan sees them in the SidePanel alongside any new annotations Claude adds.
+The .docx opens editable — edits are held in the session and written back to the original only on an explicit save, and auto-save skips `.docx` entirely. Word comments (`<w:comment>` elements) are automatically extracted and imported as Tandem annotations with `author: "import"`, landing as private notes (invisible to Claude, ADR-027) until Bryan batch-promotes them from the SidePanel.
 
 ```
 Claude: tandem_getAnnotations({ author: "import" })
+→ { annotations: [], count: 0, notesExcluded: 2 }
+```
+
+The empty `annotations` array here is expected, not a bug — the two imports are private notes until promoted. `notesExcluded` is the probe: it reports how many Word comments are awaiting promotion.
+
+Bryan promotes both from the SidePanel. Claude picks them up on its next `tandem_checkInbox` poll, then reads the promoted comments:
+
+```
+Claude: tandem_getAnnotations({ author: "user" })
 → { annotations: [
-    { id: "ann_...", author: "import", type: "comment", content: "Please verify this figure", range: { from: 120, to: 135 } },
-    { id: "ann_...", author: "import", type: "comment", content: "Legal needs to review this clause", range: { from: 890, to: 920 } }
+    { id: "ann_...", author: "user", type: "comment", content: "Please verify this figure", range: { from: 120, to: 135 }, importSource: { author: "Legal Reviewer", file: "contract-review.docx" }, promotedFrom: "note" },
+    { id: "ann_...", author: "user", type: "comment", content: "Legal needs to review this clause", range: { from: 890, to: 920 }, importSource: { author: "Legal Reviewer", file: "contract-review.docx" }, promotedFrom: "note" }
   ], count: 2 }
 ```
+
+`importSource` is what identifies these as promoted Word comments — `promotedFrom: "note"` is also present, but it's stamped on every promoted note (including one Bryan sends to Claude personally), so it's not a reliable import marker on its own.
 
 Claude reads the imported comments and acts on them:
 

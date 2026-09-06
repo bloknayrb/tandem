@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 14
+version: 15
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -107,7 +107,9 @@ If `ws` is unavailable, the equivalent stream is `GET /api/events?filter=wake` o
 ## .docx Review Workflow
 
 1. `tandem_open` — opens editable, like any other document
-2. `tandem_getAnnotations({ author: "import" })` — check for imported Word comments; read and act on them
+2. Imported Word comments land as private notes (invisible to Claude, ADR-027) until the user batch-promotes them from the SidePanel:
+   - `tandem_getAnnotations({ author: "import" })` — expect the `annotations` array to be empty: imports live as private notes until the user promotes them, so they don't survive the note-type filter. **If anything does appear there, it is a real imported comment — act on it.** `notesExcluded` in the response is the "N Word comments awaiting promotion" probe — **the field is absent, not zero, when nothing is awaiting promotion.**
+   - Once promoted, they arrive via `tandem_checkInbox`, and a catch-up read is `tandem_getAnnotations({ author: "user" })` filtered client-side on a populated `importSource` field, which carries the original reviewer's name and file. `promotedFrom: "note"` is also present on these records but is NOT a reliable import marker — it's stamped on every promoted note, including one the user sent to Claude personally with no `importSource` at all. In Solo mode, the promotion is held like any other user comment and arrives on the first poll after the user switches back to Tandem — see Collaboration Mode.
 3. Annotate with findings (comment, comment with suggestedText)
 4. `tandem_exportAnnotations` — generate a review summary the user can share
 
