@@ -1,6 +1,5 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { allMcpSource, registeredToolNames } from "../helpers/mcp-source.js";
 
 /**
  * Surface-B registration-coverage gate (#1116, ADR-040, spec §8/§155).
@@ -21,44 +20,11 @@ import { describe, expect, it } from "vitest";
  * name being on separate lines (e.g. `tandem_edit`).
  */
 
-const MCP_DIR = join(import.meta.dirname, "..", "..", "src", "server", "mcp");
-
-/** Concatenate every MCP source file so a tool is found regardless of its home. */
-function allMcpSource(): string {
-  const parts: string[] = [];
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".d.ts")) {
-        parts.push(readFileSync(full, "utf-8"));
-      }
-    }
-  };
-  walk(MCP_DIR);
-  return parts.join("\n");
-}
-
 const SRC = allMcpSource();
 
 /** `\s*` so `gatedTool(\n  "tandem_edit"` matches as well as one-line forms. */
 const gatedWith = (name: string): RegExp => new RegExp(`gatedTool\\(\\s*"${name}"`);
 const boundaryWith = (name: string): RegExp => new RegExp(`withErrorBoundary\\(\\s*"${name}"`);
-
-/**
- * Registration-shape derivation, shared by the completeness check and its
- * synthetic negative (#1784). Verbatim the regex `tests/docs/tool-count-drift.test.ts`
- * already uses, so the two name-at-registration derivations cannot desynchronise.
- *
- * ONE binding, used by both call sites: a test that re-spells the pattern is
- * worthless — it passes against its own copy while the completeness check stays
- * on the wrapper-derived form, which is the defect #1784 names.
- */
-const REGISTRATION_RE = /server\.(?:tool|registerTool)\(\s*"(tandem_\w+)"/g;
-
-function registeredToolNames(src: string): Set<string> {
-  return new Set([...src.matchAll(REGISTRATION_RE)].map((m) => m[1]));
-}
 
 type ToolGate = { name: string; gate: "gated" | "ungated"; why: string };
 

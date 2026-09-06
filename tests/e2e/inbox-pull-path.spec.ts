@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import path from "path";
+import type { ToolResponse } from "../../src/shared/types.js";
 import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
@@ -33,22 +34,26 @@ import {
 let mcp: McpTestClient;
 let tmpDir: string;
 
-type InboxData = { mode: string; userActions: Array<{ content?: string }> };
+type InboxData = { userActions: Array<{ content?: string }> };
 type StatusData = { mode: string };
 type AnnotationsData = { annotations: Array<{ content?: string }> };
 
-const inbox = async (): Promise<InboxData> => {
-  const res = (await mcp.callTool("tandem_checkInbox")) as { error: false; data: InboxData };
+/**
+ * The success payload of an MCP call. `McpTestClient.callTool` throws on an
+ * SDK-level error and returns the parsed envelope otherwise, so the narrow here
+ * is the same one `cleanupAllOpenDocuments` uses — a server-side `{ error: true }`
+ * fails the cast and the test says so, rather than reading `undefined`.
+ */
+async function callData<T>(name: string): Promise<T> {
+  const res = (await mcp.callTool(name)) as ToolResponse<T>;
+  if (res.error !== false) throw new Error(`${name} returned an error envelope`);
   return res.data;
-};
+}
 
-const mode = async (): Promise<string> => {
-  const res = (await mcp.callTool("tandem_status")) as { error: false; data: StatusData };
-  return res.data.mode;
-};
+const mode = async (): Promise<string> => (await callData<StatusData>("tandem_status")).mode;
 
 const inboxContains = async (text: string): Promise<boolean> =>
-  (await inbox()).userActions.some((a) => a.content === text);
+  (await callData<InboxData>("tandem_checkInbox")).userActions.some((a) => a.content === text);
 
 /** Type a user comment through the real popup, exactly as a user would. */
 async function annotate(page: Page, text: string): Promise<void> {
@@ -126,13 +131,10 @@ test("Solo holds a user comment on the pull path, and the flip releases it", asy
   // does not poison the very dedup state the release step depends on.
   await expect
     .poll(
-      async () => {
-        const res = (await mcp.callTool("tandem_getAnnotations")) as {
-          error: false;
-          data: AnnotationsData;
-        };
-        return res.data.annotations.some((a) => a.content === marker);
-      },
+      async () =>
+        (await callData<AnnotationsData>("tandem_getAnnotations")).annotations.some(
+          (a) => a.content === marker,
+        ),
       { timeout: 15_000, message: "the comment never reached the server at all" },
     )
     .toBe(true);

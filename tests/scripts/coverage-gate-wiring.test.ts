@@ -139,10 +139,12 @@ describe("coverage policy — the gated set", () => {
  */
 function importsModule(suiteSource: string, suiteDir: string, moduleAbs: string): boolean {
   for (const match of suiteSource.matchAll(/from\s*"(\.[^"]*)"/g)) {
+    // A specifier resolves to the module if it names it outright, or names it
+    // through the ESM `.js` extension the source tree writes, or omits the
+    // extension entirely.
     const resolved = path.resolve(suiteDir, match[1]);
-    if (resolved === moduleAbs) return true;
-    if (resolved.endsWith(".js") && `${resolved.slice(0, -3)}.ts` === moduleAbs) return true;
-    if (`${resolved}.ts` === moduleAbs) return true;
+    const withTs = `${resolved.replace(/\.js$/, "")}.ts`;
+    if (resolved === moduleAbs || withTs === moduleAbs) return true;
   }
   return false;
 }
