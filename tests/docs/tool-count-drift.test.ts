@@ -1,6 +1,7 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { allMcpSource, registeredToolNames } from "../helpers/mcp-source.js";
 
 /**
  * Tool-count drift guard.
@@ -25,24 +26,6 @@ import { describe, expect, it } from "vitest";
  */
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
-const MCP_DIR = join(REPO_ROOT, "src", "server", "mcp");
-
-/** Concatenate every MCP source file so a tool is found regardless of its home. */
-function allMcpSource(): string {
-  const parts: string[] = [];
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".d.ts")) {
-        parts.push(readFileSync(full, "utf-8"));
-      }
-    }
-  };
-  walk(MCP_DIR);
-  return parts.join("\n");
-}
-
 const SRC = allMcpSource();
 
 const read = (relative: string): string => readFileSync(join(REPO_ROOT, relative), "utf-8");
@@ -55,21 +38,14 @@ const read = (relative: string): string => readFileSync(join(REPO_ROOT, relative
  */
 const DEPRECATED_STUBS = ["tandem_highlight", "tandem_suggest", "tandem_flag"];
 
-/**
- * `\s*` so a registration whose name sits on the following line is still matched. A Set
- * rather than a match count, so a duplicate registration can't inflate the total.
- */
-function registeredToolNames(): Set<string> {
-  return new Set(
-    [...SRC.matchAll(/server\.(?:tool|registerTool)\(\s*"(tandem_\w+)"/g)].map((m) => m[1]),
-  );
-}
+const REGISTERED = registeredToolNames(SRC);
+const TOTAL = REGISTERED.size;
+const ACTIVE = TOTAL - DEPRECATED_STUBS.length;
 
 describe("MCP tool count stated in docs", () => {
   it("every named deprecated stub is registered and still returns DEPRECATED", () => {
-    const registered = registeredToolNames();
     for (const name of DEPRECATED_STUBS) {
-      expect(registered, `${name} is no longer registered`).toContain(name);
+      expect(REGISTERED, `${name} is no longer registered`).toContain(name);
       // The stub body calls notifyDeprecatedTool with its own name; if it were un-stubbed
       // that call would go, and the active count below would be wrong by one.
       expect(SRC, `${name} no longer looks like a deprecated stub`).toContain(
@@ -79,21 +55,17 @@ describe("MCP tool count stated in docs", () => {
   });
 
   it("docs/mcp-tools.md states the counts that source actually registers", () => {
-    const total = registeredToolNames().size;
-    const active = total - DEPRECATED_STUBS.length;
     expect(read("docs/mcp-tools.md")).toContain(
-      `Tandem exposes ${total} tools via MCP HTTP (${active} active, ${DEPRECATED_STUBS.length} deprecated stubs`,
+      `Tandem exposes ${TOTAL} tools via MCP HTTP (${ACTIVE} active, ${DEPRECATED_STUBS.length} deprecated stubs`,
     );
   });
 
   it("CLAUDE.md mirrors the same counts", () => {
-    const total = registeredToolNames().size;
-    const active = total - DEPRECATED_STUBS.length;
     const claudeMd = read("CLAUDE.md");
     expect(claudeMd).toContain(
-      `All ${total} MCP tools (${active} active, ${DEPRECATED_STUBS.length} deprecated stubs)`,
+      `All ${TOTAL} MCP tools (${ACTIVE} active, ${DEPRECATED_STUBS.length} deprecated stubs)`,
     );
-    expect(claudeMd).toContain(`${active} active MCP tools`);
+    expect(claudeMd).toContain(`${ACTIVE} active MCP tools`);
   });
 });
 

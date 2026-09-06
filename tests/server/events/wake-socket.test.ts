@@ -282,12 +282,27 @@ describe("the wake socket end to end", () => {
   });
 
   it("closes a socket that sends data on a push-only channel", async () => {
+    // The body asserted nothing beyond the await. `expect(ws.readyState).toBe(
+    // ws.CLOSED)` would be no better — a tautology once the close event has
+    // fired. What distinguishes an abrupt server-side kill from a polite
+    // shutdown is the CODE: the handler calls `ws.terminate()`, so no close
+    // frame is exchanged and node's `ws` reports 1006 (measured against the
+    // real server; a graceful `ws.close()` would report 1000).
+    // A bare `getSubscriberCount()` snapshot is NOT a sound baseline here: the
+    // server unregisters on its own socket's close, which can still be in
+    // flight from the previous test when this one starts (measured: 1, settling
+    // to 0 mid-test). Settle to a clean zero instead, then read absolute counts.
+    await settlesTo(getSubscriberCount, 0, "baseline is clean");
     const ws = open("/api/wake");
     await opened(ws);
+    await settlesTo(getSubscriberCount, 1, "slot taken");
 
-    const closed = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    const closed = new Promise<number>((resolve) => ws.once("close", (code) => resolve(code)));
     ws.send("hello?");
-    await closed;
+    expect(await closed).toBe(1006);
+    // And the kill releases the slot — a terminate that leaked one would make
+    // `subscribers === 0` permanently unreachable for the rest of the run.
+    await settlesTo(getSubscriberCount, 0, "slot released");
   });
 
   it("counts as an EXTERNAL subscriber, and releases the slot on close", async () => {
