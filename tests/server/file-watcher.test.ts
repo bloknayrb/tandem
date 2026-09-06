@@ -273,9 +273,24 @@ describe("suppressNextChange", () => {
     expect(onChanged).toHaveBeenCalledTimes(1);
   });
 
-  it("is a no-op for unwatched paths", () => {
-    // Should not throw
+  it("is a no-op for unwatched paths", async () => {
+    // Not-throwing alone is green whether the counter is path-keyed or global.
+    // Suppress an UNWATCHED path, then fire a real change on a watched one: the
+    // callback must still fire, which is what "no-op" has to mean here.
+    const watcher = createMockWatcher();
+    mockWatch.mockImplementation((_path: string, cb: (eventType: string) => void) => {
+      watcher.changeHandler = cb;
+      return watcher;
+    });
+
+    const onChanged = vi.fn().mockResolvedValue(undefined);
+    watchFile("/tmp/test.md", onChanged);
+
     suppressNextChange("/tmp/nonexistent.md");
+
+    watcher.changeHandler!("change");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(onChanged).toHaveBeenCalledTimes(1);
   });
 
   it("swallows multiple events when suppress is called multiple times", async () => {

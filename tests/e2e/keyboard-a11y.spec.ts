@@ -263,13 +263,14 @@ test("the rail's panel switcher exposes which panel is selected", async ({ page 
   const annotations = page.locator("[data-testid='annotations-tab']");
   const chat = page.locator("[data-testid='chat-tab']");
 
-  // Three-panel layout renders both panels side by side with static headers and
-  // no tab buttons at all (see `switchToAnnotationsTab` in helpers.ts). Skip
-  // rather than fail, so a layout-mode default change does not read as an a11y
-  // regression.
-  if ((await annotations.count()) === 0) {
-    test.skip(true, "tabbed rail layout is not active; there is no switcher to assert on");
-  }
+  // This carried a layout-mode `test.skip` guard for the three-panel layout,
+  // which renders both panels side by side with no tab buttons (see
+  // `switchToAnnotationsTab` in helpers.ts). MEASURED 2026-09-06 with `-g "panel
+  // switcher"` on the reserved ports: the test reported `passed`, not `skipped`,
+  // so the guard never fired — dead weight of the #1529 shape, where a runtime
+  // skip nothing exercises reads exactly like a pass. Asserting the count makes
+  // a layout-default change fail loudly instead of going quietly green.
+  await expect(annotations).toHaveCount(1);
 
   await expect(annotations).toBeVisible({ timeout: 5_000 });
   await expect(chat).toBeVisible({ timeout: 5_000 });
