@@ -3391,6 +3391,18 @@ mod shutdown_guard_tests {
         // subprocess is the only true fix and is out of proportion here.
         let previous = std::env::var("http_proxy").ok();
         std::env::set_var("http_proxy", format!("http://{dead_proxy}"));
+        // An ambient `no_proxy` listing loopback (a sandboxed CI runner or a
+        // proxied dev container exports one) exempts 127.0.0.1 from the dead
+        // proxy, so the control arm reaches the stub and the test fails for a
+        // reason that is the environment's, not the client's. Clear both
+        // spellings for the duration; restored below with `http_proxy`.
+        let previous_no_proxy = [
+            ("no_proxy", std::env::var("no_proxy").ok()),
+            ("NO_PROXY", std::env::var("NO_PROXY").ok()),
+        ];
+        for (key, _) in &previous_no_proxy {
+            std::env::remove_var(key);
+        }
 
         // Control: the same builder WITHOUT `.no_proxy()` must be diverted.
         let proxied = reqwest::Client::builder()
@@ -3412,6 +3424,12 @@ mod shutdown_guard_tests {
         match previous {
             Some(v) => std::env::set_var("http_proxy", v),
             None => std::env::remove_var("http_proxy"),
+        }
+        for (key, value) in previous_no_proxy {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
         }
 
         assert!(

@@ -7,7 +7,8 @@
 
 This folder is the evidence snapshot and the fix plan. **The issue tracker is the live status**;
 nothing here is updated when an issue closes, except the optional status column in
-[issues.md](issues.md). A session that starts fix work reads this folder first and the issues
+[issues.md](issues.md). Since 2026-09-06 the per-group fix status lives in the sweep ledger,
+[docs/plans/2026-09-06-open-issues-sweep.md](../../plans/2026-09-06-open-issues-sweep.md). A session that starts fix work reads this folder first and the issues
 second — the issues carry the mechanism and suggested fix per finding, the folder carries what
 connects them.
 

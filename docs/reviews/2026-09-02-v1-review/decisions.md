@@ -16,6 +16,23 @@ the issue each item names; this file is the snapshot at 2026-09-02.
 Also agreed: fix work waits until the review is complete (it is); the repo rules "never
 abbreviate steps" and "fix rather than file" were deferred for the review only.
 
+## Taken (Bryan, 2026-09-06)
+
+Answered in the session that planned the open-issues sweep
+([docs/plans/2026-09-06-open-issues-sweep.md](../../plans/2026-09-06-open-issues-sweep.md)).
+The "Open" section below is kept as the 2026-09-02 snapshot of the questions.
+
+| # | Decision | Recorded in | Unblocks |
+|---|---|---|---|
+| A | Obsidian vaults are **out of scope** for v1. The README says so; Tandem warns once when it opens a file containing `[[`. The escape-stripping half of #1753 is still fixed. | #1753 | Track D |
+| B | `tandem_applyChanges` ships **marked experimental** (tool description and shipped skill). The cheap walker fixes (`w:tab`, `w:br`, `w:sym`) land now; the anchor-shift work stays on #1754, which remains open with a comment listing what landed. | #1754 | Track D |
+| C | Force-open and source-view commit **clear only the in-memory map**; the next open re-anchors from `textSnapshot`. The on-disk envelope is not unlinked. | #1813 | Track D |
+| D | The desktop **refuses to share its app-data directory with an older server** (a version stamp in the directory); the `TANDEM_DATA_DIR` / `TANDEM_APP_DATA_DIR` mismatch is fixed regardless. | #1787 | Track E tail, track H tail |
+| E | **Unknown.** README unchanged; the Cowork VM reachability check joins the smoke lines. | smoke-lines.md | — |
+| F | Restricted mode is **symmetric read-only**: `tandem_resolveAnnotation` and the other annotation mutators move from `UNGATED` to `GATED` (both halves: `tests/server/license-gate-coverage.test.ts` and the enumerated list in `docs/licensing-explained.md`), and `POST /api/mode/release` joins the `/api` list. Behind the dark flag; byte-identical while dark. | #1788 | Track H |
+| G | The release skill **refuses a tag containing `-`** unless it is published as a prerelease; `tauri-release.yml` marks such tags prerelease. | #1748 | Track I |
+| H | **Document orchestrator-only polling**: the shipped skill forbids sub-agents from calling `tandem_checkInbox` (skill version bump); no per-session ledger keying. | #1820 | Track J |
+
 ## Open
 
 Each entry has enough context to answer without reading code.
