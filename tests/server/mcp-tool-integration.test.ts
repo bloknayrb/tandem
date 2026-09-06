@@ -470,18 +470,23 @@ describe("MCP tool integration — annotation tools", () => {
   });
 
   it("tandem_comment rejects invalid arguments (missing required field)", async () => {
-    setupDoc("mcp-ann-2", "Hello world");
+    const ydoc = setupDoc("mcp-ann-2", "Hello world");
+    const map = ydoc.getMap<Annotation>(Y_MAP_ANNOTATIONS);
 
-    // Missing 'text' field — Zod validation should reject
-    try {
-      await client.callTool({
-        name: "tandem_comment",
-        arguments: { from: 0, to: 5 },
-      });
-      // If no error thrown, check the response
-    } catch {
-      // Expected — SDK may throw on validation failure
-    }
+    // Missing 'text'. The SDK does not throw on a schema failure — it returns an
+    // error envelope — so the old try/empty-catch body was green whether the tool
+    // rejected the call or accepted it.
+    const result = (await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 0, to: 5 },
+    })) as { isError?: boolean; content: { type: string; text: string }[] };
+
+    expect(result.isError).toBe(true);
+    // Loose on the CODE only: matching Zod's wording pins a dependency's prose,
+    // and matching `/text/` is satisfied by the envelope's own `type: "text"`.
+    expect(result.content[0].text).toMatch(/-32602/);
+    // And the other half — a rejection that still wrote is not a rejection.
+    expect(map.size).toBe(0);
   });
 
   // The no-args variants verify that deprecated stubs accept calls missing the

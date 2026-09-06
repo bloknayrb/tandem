@@ -314,6 +314,8 @@ const LENS_DOMAIN = `Your own agent specialty (coordinate systems / annotation l
 
 let round = 0;
 let blocking = [];
+// Lenses that returned `run`'s fallback in the last round — i.e. never reviewed.
+let deadLenses = [];
 while (!resumeAtBuild && round < 3) {
   round += 1;
   result.reviewRounds = round;
@@ -327,10 +329,31 @@ while (!resumeAtBuild && round < 3) {
   reviewers.push(() => run("review", refuterPrompt(LENS_RULES), { label: `refute:rules:r${round}`, phase: "Review", model: M.review, effort: "high", schema: S_FINDINGS }, { blocking: [], nonBlocking: [] }));
   reviewers.push(() => run("review", refuterPrompt(LENS_TESTS), { label: `refute:tests:r${round}`, phase: "Review", model: M.review, effort: "high", schema: S_FINDINGS }, { blocking: [], nonBlocking: [] }));
   const found = (await parallel(reviewers)).filter(Boolean);
-  blocking = found.flatMap((f) => f.blocking || []);
-  const nonBlocking = found.flatMap((f) => f.nonBlocking || []);
-  log(`review round ${round}: ${blocking.length} blocking, ${nonBlocking.length} non-blocking`);
-  if (blocking.length === 0 && nonBlocking.length === 0) break;
+  // A dead agent reaches here as the FALLBACK — `{blocking:[], nonBlocking:[], ok:false}` —
+  // an empty finding list it never produced. Nothing read `ok`, so a lens that
+  // died was indistinguishable from a lens that found the plan clean, and a
+  // round in which every lens died broke the loop and shipped an UNREVIEWED
+  // plan. Silence from a lens is not a verdict: count the dead separately and
+  // never let their emptiness be the thing that ends the loop.
+  deadLenses = found.filter((f) => f.ok === false).map((f) => f.error || "unknown error");
+  const live = found.filter((f) => f.ok !== false);
+  blocking = live.flatMap((f) => f.blocking || []);
+  const nonBlocking = live.flatMap((f) => f.nonBlocking || []);
+  log(`review round ${round}: ${blocking.length} blocking, ${nonBlocking.length} non-blocking, ${deadLenses.length}/${found.length || reviewers.length} lenses dead`);
+  if (live.length === 0) {
+    result.parked = true;
+    result.stage = "review";
+    result.parkReason = `no refuter completed in round ${round}: ${deadLenses.join(" | ") || "no reviewer returned"}`;
+    log(`parked: ${result.parkReason}`);
+    return result;
+  }
+  if (blocking.length === 0 && nonBlocking.length === 0) {
+    if (deadLenses.length === 0) break;
+    // Nothing to revise, but a lens never spoke — re-run the round rather than
+    // read partial silence as a clean plan.
+    log(`round ${round}: no findings, but ${deadLenses.length} lens(es) died — re-running`);
+    continue;
+  }
 
   const revise = await run(
     "revise",
@@ -353,7 +376,7 @@ Rewrite the affected sections of the specs in place (do not leave the old text),
     result.error = revise.error;
     return result;
   }
-  if (blocking.length === 0) break;
+  if (blocking.length === 0 && deadLenses.length === 0) break;
 }
 // Scope-cut round: three rounds of findings usually means the plan grew machinery the
 // issue never asked for. Cut to the minimal fix once, re-refute once, then park.
@@ -398,10 +421,14 @@ Return {ok, adopted:[…], notAdopted:[…]}.`,
     }
   }
 }
-if (blocking.length > 0) {
+if (blocking.length > 0 || deadLenses.length > 0) {
   result.parked = true;
   result.stage = "review";
-  result.parkReason = `still blocking after ${round} rounds: ${blocking.map((b) => b.claim).join(" | ")}`;
+  const reasons = [
+    blocking.length ? `still blocking after ${round} rounds: ${blocking.map((b) => b.claim).join(" | ")}` : null,
+    deadLenses.length ? `lenses never reviewed after ${round} rounds: ${deadLenses.join(" | ")}` : null,
+  ].filter(Boolean);
+  result.parkReason = reasons.join("; ");
   log(`parked: ${result.parkReason}`);
   return result;
 }
@@ -634,12 +661,28 @@ while (prRound < 3) {
 Finding: ${JSON.stringify(f)}
 Return {refuted, reason}.`,
         { label: `skeptic:${f.id}`, phase: "PR review", model: M.review, effort: "high", schema: S_VERDICT },
-        { refuted: true, reason: "skeptic unavailable" }
+        { refuted: false, reason: "skeptic unavailable — no verdict" }
       )
     )
   );
-  confirmed = raw.filter((f, i) => verdicts[i] && verdicts[i].refuted === false);
-  log(`PR review round ${prRound}: ${confirmed.length} confirmed`);
+  // An absent verdict is not a refutation. The old fallback said `refuted: true`,
+  // so a skeptic that died dropped a real finding silently — nothing read the
+  // "skeptic unavailable" reason and nothing logged the drop. Fail toward
+  // KEEPING the finding, and mark it so the fix agent knows it was never
+  // verified rather than treating it as confirmed.
+  const unverified = [];
+  confirmed = raw
+    .map((f, i) => {
+      const v = verdicts[i];
+      if (!v || v.ok === false || typeof v.refuted !== "boolean") {
+        unverified.push(`${f.id}: ${(v && v.reason) || "skeptic unavailable"}`);
+        return { ...f, skepticVerdict: "UNVERIFIED — the skeptic never returned; confirm the failure scenario yourself before changing anything, and say so if it does not reproduce" };
+      }
+      return v.refuted === false ? f : null;
+    })
+    .filter(Boolean);
+  result.skepticUnavailable = (result.skepticUnavailable || []).concat(unverified);
+  log(`PR review round ${prRound}: ${confirmed.length} confirmed (${unverified.length} unverified — skeptic died: ${unverified.join(" | ") || "none"})`);
   if (confirmed.length === 0) break;
   const fix = await run(
     "fix",

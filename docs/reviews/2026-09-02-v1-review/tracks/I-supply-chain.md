@@ -59,6 +59,11 @@ reading rather than a formality.
   secret-bearing set is also **three, not two**: `publish.yml` holds `NPM_TOKEN` *and*
   `id-token: write`, so a moved `setup-node` tag there mints a provenance-attested malicious npm
   package.
+  *Appended 2026-09-06:* `publish.yml` no longer holds `NPM_TOKEN` — that token expired and the
+  workflow moved to npm Trusted Publishing (OIDC), closing #1748 item 3. **The pin argument is
+  unchanged in force**: the job still carries `id-token: write`, and under trusted publishing that
+  token now authenticates the publish as well as signing provenance, so a moved `setup-node` tag
+  there still mints a malicious package. One fewer credential to steal, the same reason to pin.
 - **The sidecar says 22.23.2 and the drift check is green** — met, plus two things #1747 did not
   ask for. The expected archive hashes are now committed (the fetched `SHASUMS256.txt` comes from
   the same host and CDN as the tarball, so it detects transport corruption and nothing else), and
