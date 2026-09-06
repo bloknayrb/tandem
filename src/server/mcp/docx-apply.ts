@@ -601,9 +601,12 @@ export function registerApplyTools(server: McpServer): void {
         const e = err as Error & { code?: string };
         if (e.code === "NO_DOCUMENT") return noDocumentError();
         if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
-        // A symlinked sidecar is a path refusal the caller can act on, not a
-        // format problem — same distinction tandem_applyChanges draws above.
-        if (e.code === "BACKUP_SYMLINK") return mcpError("INVALID_PATH", e.message);
+        // A symlinked sidecar — or a FIFO / directory wearing the sidecar's name
+        // — is a path refusal the caller can act on, not a format problem, the
+        // same distinction tandem_applyChanges draws above.
+        if (e.code === "BACKUP_SYMLINK" || e.code === "BACKUP_NOT_A_FILE") {
+          return mcpError("INVALID_PATH", e.message);
+        }
         if (e.code === "INVALID_PATH" || e.code === "UNSUPPORTED_FORMAT") {
           return mcpError("FORMAT_ERROR", e.message);
         }

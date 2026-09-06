@@ -8,7 +8,9 @@
  *    sidecar fallback when no snapshots exist, error cases)
  */
 
+import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
@@ -80,6 +82,10 @@ import {
 import { INTERNAL_ORIGIN, RELOAD_ORIGIN, withMcp } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import { makeAnnotation } from "../helpers/ydoc-factory.js";
+
+// `mkfifo` (coreutils) is how a test plants a FIFO — Node has no binding for
+// mknod. POSIX-only, and every test using it is gated on !win32.
+const execFileAsync = promisify(execFile);
 
 const suppressMock = vi.mocked(suppressNextChange);
 const recordSelfWriteMock = vi.mocked(recordSelfWrite);
@@ -782,6 +788,71 @@ describe("tandem_restoreBackup tool", () => {
         "the document was overwritten through the symlink -- the refusal did not " +
           "happen before the write",
       ).toBe("the user's real document");
+    },
+  );
+
+  // The symlink test above is the shape everyone reaches for; it is not the
+  // whole class. Anything the local attacker can create at the sidecar name is
+  // in scope, and a FIFO is the nasty one: `open(O_RDONLY)` on it is not an
+  // error, it BLOCKS until a writer appears. Without O_NONBLOCK the restore
+  // never returns and parks one libuv threadpool thread; four of them stop
+  // every file operation in the process. A default-timeout failure here is the
+  // regression -- the assertion cannot even run if the open hangs.
+  it.runIf(process.platform !== "win32")(
+    "refuses a FIFO at the .docx sidecar path instead of blocking on it",
+    async () => {
+      const filePath = path.join(tmpDir, "fifo.docx");
+      const backupPath = path.join(tmpDir, "fifo.backup.docx");
+      await fs.writeFile(filePath, "the user's real document");
+      await execFileAsync("mkfifo", [backupPath]);
+
+      addDoc("docx-fifo-restore", {
+        id: "docx-fifo-restore",
+        filePath,
+        format: "docx",
+        readOnly: false,
+        source: "file",
+      });
+      setActiveDocId("docx-fifo-restore");
+
+      const parsed = parseResult(await restoreTool({ backup: "fifo.backup.docx" }));
+      expect(parsed.error).toBe(true);
+      expect(parsed.code).toBe("INVALID_PATH");
+      expect(
+        await fs.readFile(filePath, "utf-8"),
+        "the document was rewritten from a FIFO the user never wrote",
+      ).toBe("the user's real document");
+      // The list twin refuses it too, so the name is never offered as a restorable
+      // entry in the first place.
+      const listed = parseResult(await restoreTool({}));
+      expect(listed.error).toBe(true);
+      expect(listed.code).toBe("FILE_NOT_FOUND");
+    },
+  );
+
+  // Same predicate, the other member: a directory at the sidecar name used to
+  // reach `readFile` and surface as a bare unmapped EISDIR (a 500 / thrown
+  // error), rather than the actionable path refusal it is.
+  it.runIf(process.platform !== "win32")(
+    "refuses a directory at the .docx sidecar path",
+    async () => {
+      const filePath = path.join(tmpDir, "dirbackup.docx");
+      await fs.writeFile(filePath, "the user's real document");
+      await fs.mkdir(path.join(tmpDir, "dirbackup.backup.docx"));
+
+      addDoc("docx-dir-restore", {
+        id: "docx-dir-restore",
+        filePath,
+        format: "docx",
+        readOnly: false,
+        source: "file",
+      });
+      setActiveDocId("docx-dir-restore");
+
+      const parsed = parseResult(await restoreTool({ backup: "dirbackup.backup.docx" }));
+      expect(parsed.error).toBe(true);
+      expect(parsed.code).toBe("INVALID_PATH");
+      expect(await fs.readFile(filePath, "utf-8")).toBe("the user's real document");
     },
   );
 

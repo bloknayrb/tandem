@@ -193,7 +193,8 @@ export async function reloadDocumentFromMarkdown(id: string, markdown: string): 
 const RESTORE_FORMATS = new Set(["md", "txt", "docx"]);
 
 /**
- * Read the `{name}.backup.docx` sidecar, refusing a symlink.
+ * Read the `{name}.backup.docx` sidecar, refusing anything that is not a plain
+ * regular file Tandem could have written.
  *
  * Open the sidecar WITHOUT following symlinks, and read from that handle. The
  * check and the read are then the same syscall, which is what makes this safe
@@ -211,16 +212,33 @@ const RESTORE_FORMATS = new Set(["md", "txt", "docx"]);
  * An `lstat`-then-`copyFile` pair fixes the steady state and leaves the race: a
  * link planted between the two is still followed. Opening with O_NOFOLLOW
  * closes that, because there is no window between deciding and reading.
+ *
+ * **A symlink is not the only thing that can sit at that path, and refusing
+ * only symlinks is not enough.** The sidecar name is beside the user's
+ * document, so the same local process that can plant a link there can plant a
+ * FIFO — and `open(O_RDONLY)` on a FIFO *blocks until a writer appears*, which
+ * is not an error and never returns. Each such call parks one libuv threadpool
+ * thread; four park the whole pool and every other file operation in the
+ * process stops. So the open carries **O_NONBLOCK** (a no-op for regular
+ * files, and what makes a FIFO open return immediately instead of hanging) and
+ * the handle is **fstat**ed for `isFile()` before a byte is read. That check
+ * covers a directory (which would otherwise surface as a bare unmapped EISDIR
+ * from the read) and every device node in one predicate.
+ *
+ * `fstat` on the OPEN HANDLE, never a second `stat` of the path: the handle is
+ * the thing about to be read, so there is no window for a swap between the
+ * verdict and the read. The sibling LIST path (`docxSidecarEntry` in
+ * `mcp/docx-apply.ts`) can use a plain `lstat` because it only decides whether
+ * to *name* the file.
  */
 async function readDocxSidecarBytes(backupPath: string): Promise<Buffer> {
-  const symlinkRefusal = () =>
+  const refusal = (clause: string, code: string) =>
     Object.assign(
-      new Error(
-        `${path.basename(backupPath)} is a symbolic link, not a backup Tandem wrote. ` +
-          "Refusing to restore through it.",
-      ),
-      { code: "BACKUP_SYMLINK" },
+      new Error(`${path.basename(backupPath)} ${clause} Refusing to restore through it.`),
+      { code },
     );
+  const symlinkRefusal = () =>
+    refusal("is a symbolic link, not a backup Tandem wrote.", "BACKUP_SYMLINK");
   // O_NOFOLLOW is POSIX-only; on Windows the constant is undefined and `open`
   // has no equivalent flag, so there the leaf check falls back to `lstat` below
   // and the race remains. Creating a symlink on Windows needs a privilege that
@@ -228,9 +246,13 @@ async function readDocxSidecarBytes(backupPath: string): Promise<Buffer> {
   // asymmetry rather than a silent gap — but it IS an asymmetry, so it is
   // written down.
   const noFollow = fs.constants.O_NOFOLLOW ?? 0;
+  // O_NONBLOCK is what keeps a planted FIFO from parking this call — and the
+  // libuv thread running it — forever. It is defined on POSIX only and has no
+  // effect on a regular file, so it costs nothing on the healthy path.
+  const nonBlock = fs.constants.O_NONBLOCK ?? 0;
   let handle: Awaited<ReturnType<typeof fs.open>>;
   try {
-    handle = await fs.open(backupPath, fs.constants.O_RDONLY | noFollow);
+    handle = await fs.open(backupPath, fs.constants.O_RDONLY | noFollow | nonBlock);
   } catch (err) {
     // O_NOFOLLOW turns "it is a symlink" into ELOOP at open time. That is the
     // refusal, not an error — report it as one the caller can act on rather
@@ -240,6 +262,13 @@ async function readDocxSidecarBytes(backupPath: string): Promise<Buffer> {
   }
   try {
     if (noFollow === 0 && (await fs.lstat(backupPath)).isSymbolicLink()) throw symlinkRefusal();
+    if (!(await handle.stat()).isFile()) {
+      throw refusal(
+        "is not a regular file — Tandem's sidecar is a plain file, and a FIFO or " +
+          "directory at that path is not one it wrote.",
+        "BACKUP_NOT_A_FILE",
+      );
+    }
     return await handle.readFile();
   } finally {
     await handle.close();
@@ -280,6 +309,7 @@ export interface RestoreBackupResult {
  *  - RELOAD_IN_PROGRESS  — a concurrent reload holds the per-doc guard
  *  - FILE_NOT_FOUND      — `backupName` is not an existing snapshot for this doc
  *  - BACKUP_SYMLINK      — the resolved .docx sidecar is a symbolic link
+ *  - BACKUP_NOT_A_FILE   — it is a FIFO, directory or other non-regular file
  */
 export async function restoreDocumentFromBackup(
   id: string,

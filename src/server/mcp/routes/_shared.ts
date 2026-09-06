@@ -137,8 +137,10 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
     case "INVALID_PATH":
     // A symlink at the backup destination is a bad caller-supplied path, not a
     // server fault — 500 would read as "Tandem broke" for something the caller
-    // can fix by passing a different `backupPath`.
+    // can fix by passing a different `backupPath`. `BACKUP_NOT_A_FILE` is the
+    // same verdict for a FIFO / directory / device node at the sidecar path.
     case "BACKUP_SYMLINK":
+    case "BACKUP_NOT_A_FILE":
     case "UNSUPPORTED_FORMAT":
     case "NO_SUGGESTIONS":
     case "INVALID_ARGUMENT":
@@ -213,6 +215,7 @@ export function errorCodeToLabel(code: string): string {
       return "NO_DOCUMENT";
     case "INVALID_PATH":
     case "BACKUP_SYMLINK":
+    case "BACKUP_NOT_A_FILE":
       return "INVALID_PATH";
     // Convert's permission classification (#1796): EACCES/EPERM from `realpath`,
     // the `fs.access` probe or the write, as opposed to the raw errno case below.
