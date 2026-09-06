@@ -262,7 +262,7 @@ STEP 0 — worktree (idempotent). Run, from ${REPO}:
   git worktree add ${WT} -b ${BRANCH} origin/master  ||  (git -C ${WT} checkout ${BRANCH} && git -C ${WT} merge --ff-only origin/master || true)
   ln -sfn ${REPO}/node_modules ${WT}/node_modules
   cd ${WT} && npx husky && test -x .husky/_/pre-push && echo HOOKS_ARMED
-${g.rust ? `  Rust group: recreate the tauri_build stubs inside the worktree exactly as ${REPO}/CONTRIBUTING.md "Testing" describes (src-tauri/binaries/{node-sidecar,tandem-reaper}-<triple>{,.exe} and dist/{channel,server,client,stdio-bridge}). Every cargo command must export CARGO_TARGET_DIR=${REPO}/src-tauri/target.` : ""}
+  EVERY worktree (not only Rust groups — the pre-push hook always runs cargo test): recreate the tauri_build stubs inside the worktree exactly as ${REPO}/CONTRIBUTING.md "Testing" describes: TRIPLE=$(rustc -vV | sed -n 's/host: //p'); mkdir -p src-tauri/binaries dist/{channel,server,client,stdio-bridge}; touch src-tauri/binaries/{node-sidecar,tandem-reaper}-$TRIPLE{,.exe}. Every cargo command anywhere in this pipeline must export CARGO_TARGET_DIR=${REPO}/src-tauri/target (one warm target shared by all worktrees).
 
 STEP 1 — read. Read ${REPO}/CLAUDE.md. Read every issue in this group (body AND comments) via GitHub. Read the track file(s) and, for each issue, the rows that cite it in ${REVIEW_DIR}/areas/*.md, the experiments named for it in ${REVIEW_DIR}/experiments/README.md, and ${REVIEW_DIR}/refuted.md. Read the decisions table in ${args.sweepDoc} (decisions A–H are TAKEN; apply them). Read ${SPECS_DIR}/A8-1796.md as the format precedent. Then read the cited source lines (search for the symbol — line numbers have drifted since 3fb6408).
 
@@ -434,6 +434,18 @@ if (!build.ok) {
 }
 result.commits = build.commits;
 result.filesTouched = Array.from(new Set([...(result.filesTouched || []), ...(build.filesTouched || [])]));
+
+// Checkpoint push: a container restart between here and ship must not lose the build.
+// The pre-push hook runs (full gate); a red hook here is reported, not fixed — the verify
+// stage owns that — so the checkpoint is best-effort and never blocks the pipeline.
+const checkpoint = await run(
+  "checkpoint",
+  `Checkpoint push. In ${WT}: \`test -x .husky/_/pre-push || npx husky\`; then \`CARGO_TARGET_DIR=${REPO}/src-tauri/target TANDEM_APP_DATA_DIR=$(mktemp -d /tmp/tandem-sweep-XXXXXX) git push -u origin ${BRANCH}\`. If the hook fails, do NOT fix anything and never bypass it: return ok:false with the failing stage's last 20 lines in notes. Return {ok, commits:[], notes}.`,
+  { label: `checkpoint:${g.id}`, phase: "Build", model: "sonnet", effort: "low", schema: S_FIX },
+  { commits: [], notes: "" }
+);
+result.checkpointPushed = !!checkpoint.ok;
+log(`checkpoint push: ${checkpoint.ok ? "pushed" : "not pushed — " + (checkpoint.notes || checkpoint.error || "").slice(0, 200)}`);
 result.skillVersion = build.skillVersion;
 result.bryan.push(...(build.bryan || []));
 result.buildNotes = build.notes;
