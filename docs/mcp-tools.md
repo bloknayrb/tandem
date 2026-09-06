@@ -841,7 +841,7 @@ tandem_applyChanges({ author: "Claude Review" })
 
 Restore a document from a backup. Tandem copies a document's on-disk bytes to `{APP_DATA}/doc-backups/` before its first overwrite each server run (`.md`/`.txt` verbatim text, `.docx` verbatim binary — byte-identical), up to 3 snapshots per document. Call without `backup` to list the available snapshots (newest first), then call again with `backup` set to a snapshot name to restore it.
 
-- **`.docx` sidecar** — the list also includes the `{name}.backup.docx` sidecar written by `tandem_applyChanges`, listed last (after the snapshots, and never re-sorted among them); restore it by name like any snapshot. Calling without `backup` never restores anything, on any format.
+- **`.docx` sidecar** — the list also includes the `{name}.backup.docx` sidecar written by `tandem_applyChanges`, listed last (after the snapshots, and never re-sorted among them); restore it by name like any snapshot. When a sidecar is listed, `message` gains the sentence "The {name}.backup.docx sidecar is listed last and is not a Tandem-managed snapshot." — it is omitted when there is none, so a `.md`/`.txt` list never names a file that cannot exist. Calling without `backup` never restores anything, on any format.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -855,7 +855,7 @@ Restore a document from a backup. Tandem copies a document's on-disk bytes to `{
   "backups": [
     { "name": "thesis-20260609-141500-ab12cd34.md", "timestamp": "2026-06-09T14:15:00.000Z", "size": 18234 }
   ],
-  "message": "Snapshots listed newest first; the {name}.backup.docx sidecar is listed last and is not a Tandem-managed snapshot. Call tandem_restoreBackup again with `backup` set to one of these names to restore it."
+  "message": "Snapshots listed newest first. Call tandem_restoreBackup again with `backup` set to one of these names to restore it."
 }
 ```
 

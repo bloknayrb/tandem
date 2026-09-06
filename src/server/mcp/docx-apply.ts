@@ -17,6 +17,7 @@ import {
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { restoreDocumentFromBackup } from "../documents/reload-family.js";
 import {
+  type DocBackupSnapshot,
   docxSidecarBackupPath,
   listDocBackups,
   snapshotBeforeFirstWrite,
@@ -437,6 +438,34 @@ export async function applyChangesCore(
   return output;
 }
 
+/**
+ * The `{name}.backup.docx` sidecar as a listable backup entry, or null when the
+ * document is not a .docx or has no sidecar beside it.
+ *
+ * Lives HERE, in the tool's own response mapping, and never inside
+ * `listDocBackups` — that function also serves GET /api/backups, which feeds
+ * the palette action that restores `backups[0]`.
+ *
+ * `lstat` + `isFile()` only: a symlinked sidecar is not listed. The named
+ * restore refuses it too, at the open syscall.
+ */
+async function docxSidecarEntry(filePath: string): Promise<DocBackupSnapshot | null> {
+  const sidecar = docxSidecarBackupPath(filePath);
+  if (!sidecar) return null;
+  try {
+    const st = await fs.lstat(sidecar);
+    if (!st.isFile()) return null;
+    return {
+      name: path.basename(sidecar),
+      timestamp: new Date(st.mtimeMs).toISOString(),
+      size: st.size,
+    };
+  } catch {
+    // No sidecar is the normal case, not an error.
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // MCP tool registration
 // ---------------------------------------------------------------------------
@@ -535,35 +564,13 @@ export function registerApplyTools(server: McpServer): void {
             );
           }
           const backups = await listDocBackups(filePath, resolveAppDataDir());
-          // Append the sidecar HERE, in the tool's own response mapping, and
-          // never inside `listDocBackups` — that function also serves
-          // GET /api/backups, which feeds the palette action that restores
-          // `backups[0]`.
-          //
-          // Append it LAST, after the mtime-sorted snapshots, and do NOT
-          // re-sort the merged array. The sidecar's timestamp is an mtime on a
-          // file in the user's own document directory, settable by any local
-          // process; a re-sort would let it take index 0 of a list this
+          // Append the sidecar LAST, after the mtime-sorted snapshots, and do
+          // NOT re-sort the merged array. The sidecar's timestamp is an mtime
+          // on a file in the user's own document directory, settable by any
+          // local process; a re-sort would let it take index 0 of a list this
           // response tells an agent to trust.
-          if (docState.format === "docx") {
-            const sidecar = docxSidecarBackupPath(filePath);
-            if (sidecar) {
-              try {
-                const st = await fs.lstat(sidecar);
-                // isFile() only: a symlinked sidecar is not listed. The named
-                // restore refuses it too, at the open syscall.
-                if (st.isFile()) {
-                  backups.push({
-                    name: path.basename(sidecar),
-                    timestamp: new Date(st.mtimeMs).toISOString(),
-                    size: st.size,
-                  });
-                }
-              } catch {
-                // No sidecar is the normal case, not an error.
-              }
-            }
-          }
+          const sidecar = await docxSidecarEntry(filePath);
+          if (sidecar) backups.push(sidecar);
           if (backups.length === 0) {
             return mcpError(
               "FILE_NOT_FOUND",
@@ -579,9 +586,13 @@ export function registerApplyTools(server: McpServer): void {
             filePath,
             backups,
             message:
-              "Snapshots listed newest first; the {name}.backup.docx sidecar is listed last " +
-              "and is not a Tandem-managed snapshot. Call tandem_restoreBackup again with " +
-              "`backup` set to one of these names to restore it.",
+              "Snapshots listed newest first." +
+              (sidecar
+                ? " The {name}.backup.docx sidecar is listed last and is not a Tandem-managed" +
+                  " snapshot."
+                : "") +
+              " Call tandem_restoreBackup again with `backup` set to one of these names to" +
+              " restore it.",
           });
         }
         const result = await restoreDocumentFromBackup(docState.id, path.basename(args.backup));
