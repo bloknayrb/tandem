@@ -261,6 +261,8 @@ Opus: tandem_getAnnotations({ author: "claude", status: "pending" })
 // Sees all annotations from all agents
 ```
 
+Only Opus (the orchestrator) polls `tandem_checkInbox` in this workflow — the surfaced-item ledger is process-global, and the same poll marks chat messages read, so a sub-agent's poll would durably drop Opus's own view of both.
+
 ## Reviewing Annotations from the Keyboard
 
 **Setup:** Your AI has finished and left 15+ annotations. Bryan wants to process them efficiently.

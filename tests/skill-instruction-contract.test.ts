@@ -27,6 +27,18 @@ function docxWorkflow(skill: string): string {
   return section ?? "";
 }
 
+function hardRules(skill: string): string {
+  const section = /^## Hard Rules\r?\n([\s\S]*?)(?=^## )/m.exec(skill)?.[1];
+  expect(section, "the shipped skill has no Hard Rules section").toBeDefined();
+  return section ?? "";
+}
+
+function annotationGuideSection(skill: string): string {
+  const section = /^## Annotation Guide\r?\n([\s\S]*?)(?=^## )/m.exec(skill)?.[1];
+  expect(section, "the shipped skill has no Annotation Guide section").toBeDefined();
+  return section ?? "";
+}
+
 /**
  * Instruction guard: this tests the behavior Claude is told to perform. It is
  * intentionally lexical because SKILL.md is the public interface delivered to
@@ -183,5 +195,60 @@ describe("shipped Tandem skill instruction contract", () => {
 
     // Solo mode holds the promotion like any other user comment.
     expect(workflow).toMatch(/solo/i);
+  });
+
+  it("closes the four SKILL.md content gaps (#1820)", () => {
+    const skill = readShippedSkill();
+    const rules = hardRules(skill);
+    const annotationGuide = annotationGuideSection(skill);
+    const workflow = docxWorkflow(skill);
+
+    // Rule 4: format-conditional newline handling, not the stale unconditional claim.
+    expect(rules).toContain("tandem_appendContent");
+    expect(rules).toContain("tandem_editList");
+    expect(rules).not.toMatch(
+      /\.html?\b[\s\S]{0,80}INVALID_ARGUMENT|INVALID_ARGUMENT[\s\S]{0,80}\.html?\b/i,
+    );
+    expect(rules).toMatch(
+      /(?:plaintext|`\.txt`)[\s\S]{0,250}INVALID_ARGUMENT|INVALID_ARGUMENT[\s\S]{0,250}(?:plaintext|`\.txt`)/i,
+    );
+    expect(rules).not.toContain("Newlines become literal characters.");
+
+    // New Hard Rule: sub-agents must not poll the inbox (decision H).
+    expect(rules).toMatch(
+      /sub-agent[\s\S]{0,300}(?:must not|never)[\s\S]{0,150}tandem_checkInbox/i,
+    );
+
+    // New Hard Rule: no Edit/Write on a Tandem-open file.
+    expect(rules).toContain("`Edit`");
+    expect(rules).toContain("`Write`");
+    expect(rules).toContain("EXTERNAL_CONFLICT");
+    expect(rules).toMatch(
+      /force: true[\s\S]{0,250}(?:ask the user|the user resolves)|(?:ask the user|the user resolves)[\s\S]{0,250}force: true/i,
+    );
+
+    // Rule 2 addendum: textSnapshotTruncated.
+    expect(rules).toContain("textSnapshotTruncated");
+
+    // Annotation Guide: tandem_annotationReply named as the idempotency-checked reply tool.
+    expect(annotationGuide).toMatch(
+      /tandem_annotationReply[\s\S]{0,250}idempotent|idempotent[\s\S]{0,250}tandem_annotationReply/i,
+    );
+
+    // Error Recovery: both new codes present.
+    expect(skill).toContain("EXTERNAL_CONFLICT");
+    expect(skill).toContain("NO_DOCUMENT");
+
+    // .docx Review Workflow: heldFromExport noted on the export step.
+    expect(workflow).toContain("heldFromExport");
+  });
+
+  it("docs/workflows.md's Multi-Model Workflow names orchestrator-only polling (#1820)", () => {
+    const doc = readRepoText("docs/workflows.md");
+    const section = /^## Multi-Model Workflow\r?\n([\s\S]*?)(?=^## )/m.exec(doc)?.[1];
+    expect(section, "docs/workflows.md has no Multi-Model Workflow section").toBeDefined();
+
+    expect(section).toMatch(/orchestrator/i);
+    expect(section).toContain("tandem_checkInbox");
   });
 });
