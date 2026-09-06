@@ -527,12 +527,14 @@ The mode cache (`getCachedMode()` warm-up + `getModeSync()` / `refreshMode()` ho
 
 ### Retry Semantics
 
-Reconnect uses exponential backoff: 2s / 4s / 8s / 16s / 30s (cap). The retry counter resets **only after `STABLE_CONNECTION_MS` (60s) of continuous uptime** — resetting per event would let a server that crashes after each event reconnect forever, never exhausting the cap.
+Reconnect uses exponential backoff: 2s / 4s / 8s / 16s / 30s (cap). The retry counter resets **only after `STABLE_CONNECTION_MS` (60s) of continuous uptime** — resetting per event would let a connect-then-die flap re-arm the once-per-outage report on every cycle, and each stdout write is a model turn.
 
-On exhaustion (`CHANNEL_MAX_RETRIES`), the monitor:
+**The consumer never exits and never stops retrying (#1804).** Neither host is respawned — the plugin monitor and the channel shim are each launched once per Claude Code session — so a process that gave up killed the push path for the rest of that session. After `CHANNEL_MAX_RETRIES` consecutive failures the consumer reports **once per outage**:
 1. POSTs `/api/channel-error` with `MONITOR_CONNECT_FAILED`.
-2. Writes a user-facing line to stdout: "Tandem monitor disconnected — restart Tandem to restore real-time events."
-3. Calls `process.exit(1)`.
+2. Writes one user-facing line to stdout: "Tandem monitor lost its connection and is retrying in the background — tandem_checkInbox still works and is authoritative."
+3. Keeps retrying at the 30s cap, with the per-failure stderr lines suppressed until the connection is restored.
+
+A later outage, after a recovery that survived `STABLE_CONNECTION_MS`, reports again.
 
 ### Awareness Lifecycle
 

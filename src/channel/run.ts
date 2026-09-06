@@ -204,6 +204,16 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
   await mcp.connect(transport);
   console.error("[Channel] Connected to Claude Code via stdio");
 
+  // Removing the retry cap (#1804) deleted this shim's only self-termination
+  // path for the case that fix targets, so a shim armed while Tandem is down
+  // whose session then ends uncleanly would probe forever — one orphan per
+  // session. Mirrors `src/cli/mcp-stdio.ts`, and works for the same reason:
+  // the connect above put stdin in flowing mode, so EOF is delivered. No
+  // `resume()` is needed or wanted.
+  process.stdin.once("end", () => {
+    process.exit(0);
+  });
+
   startEventBridge(mcp, tandemUrl).catch((err) => {
     console.error("[Channel] Event bridge failed unexpectedly:", err);
     process.exit(1);

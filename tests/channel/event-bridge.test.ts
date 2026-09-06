@@ -98,7 +98,7 @@ describe("event-bridge: per-event MCP notification delivery", () => {
 
   it("posts an MCP notification for each parsed event with formatted content + meta", async () => {
     const start = await loadStartEventBridge();
-    const promise = start(h.mcp as unknown as Server, URL).catch(() => {});
+    void start(h.mcp as unknown as Server, URL).catch(() => {});
 
     stream.push(
       sseFrame(
@@ -114,7 +114,7 @@ describe("event-bridge: per-event MCP notification delivery", () => {
     await vi.advanceTimersByTimeAsync(10);
     stream.end();
     await vi.advanceTimersByTimeAsync(200_000);
-    await promise;
+    await vi.advanceTimersByTimeAsync(0);
 
     const notif = h.mcp.notification.mock.calls[0]?.[0];
     expect(notif).toBeDefined();
@@ -126,7 +126,7 @@ describe("event-bridge: per-event MCP notification delivery", () => {
 
   it("includes document_id in meta when present on the event", async () => {
     const start = await loadStartEventBridge();
-    const promise = start(h.mcp as unknown as Server, URL).catch(() => {});
+    void start(h.mcp as unknown as Server, URL).catch(() => {});
 
     stream.push(
       sseFrame(
@@ -143,7 +143,7 @@ describe("event-bridge: per-event MCP notification delivery", () => {
     await vi.advanceTimersByTimeAsync(10);
     stream.end();
     await vi.advanceTimersByTimeAsync(200_000);
-    await promise;
+    await vi.advanceTimersByTimeAsync(0);
 
     const notif = h.mcp.notification.mock.calls[0]?.[0];
     expect(notif.params.meta.document_id).toBe("doc-abc");
@@ -167,7 +167,7 @@ describe("event-bridge: solo-mode suppression", () => {
 
   it("suppresses non-chat events when mode is solo", async () => {
     const start = await loadStartEventBridge();
-    const promise = start(h.mcp as unknown as Server, URL).catch(() => {});
+    void start(h.mcp as unknown as Server, URL).catch(() => {});
 
     stream.push(
       sseFrame(
@@ -183,7 +183,7 @@ describe("event-bridge: solo-mode suppression", () => {
     await vi.advanceTimersByTimeAsync(10);
     stream.end();
     await vi.advanceTimersByTimeAsync(200_000);
-    await promise;
+    await vi.advanceTimersByTimeAsync(0);
 
     const channelNotifs = h.mcp.notification.mock.calls.filter(
       (c) => c[0]?.method === "notifications/claude/channel",
@@ -193,7 +193,7 @@ describe("event-bridge: solo-mode suppression", () => {
 
   it("ALWAYS delivers chat:message regardless of mode", async () => {
     const start = await loadStartEventBridge();
-    const promise = start(h.mcp as unknown as Server, URL).catch(() => {});
+    void start(h.mcp as unknown as Server, URL).catch(() => {});
 
     stream.push(
       sseFrame(
@@ -209,7 +209,7 @@ describe("event-bridge: solo-mode suppression", () => {
     await vi.advanceTimersByTimeAsync(10);
     stream.end();
     await vi.advanceTimersByTimeAsync(200_000);
-    await promise;
+    await vi.advanceTimersByTimeAsync(0);
 
     const channelNotifs = h.mcp.notification.mock.calls.filter(
       (c) => c[0]?.method === "notifications/claude/channel",
@@ -259,7 +259,7 @@ describe("event-bridge: mode is stale-preserving across /api/mode failure", () =
 
   it("still delivers non-chat events after /api/mode starts failing (mode stays 'tandem', NOT flipped to solo)", async () => {
     const start = await loadStartEventBridge();
-    const promise = start(h.mcp as unknown as Server, URL).catch(() => {});
+    void start(h.mcp as unknown as Server, URL).catch(() => {});
 
     // Startup warm-up observed "tandem". Now make /api/mode fail.
     modeShouldFail = true;
@@ -280,7 +280,7 @@ describe("event-bridge: mode is stale-preserving across /api/mode failure", () =
     await vi.advanceTimersByTimeAsync(50);
     stream.end();
     await vi.advanceTimersByTimeAsync(200_000);
-    await promise;
+    await vi.advanceTimersByTimeAsync(0);
 
     // The non-chat event was delivered — mode was NOT flipped to "solo".
     const channelNotifs = h.mcp.notification.mock.calls.filter(
@@ -335,7 +335,7 @@ describe("event-bridge: SSE resume + eventId advance", () => {
     });
 
     const start = await loadStartEventBridge();
-    const promise = start(h.mcp as unknown as Server, URL).catch(() => {});
+    void start(h.mcp as unknown as Server, URL).catch(() => {});
 
     stream1.push(
       sseFrame(
@@ -353,7 +353,7 @@ describe("event-bridge: SSE resume + eventId advance", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     stream2.end();
     await vi.advanceTimersByTimeAsync(200_000);
-    await promise;
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(headersSeen.length).toBeGreaterThanOrEqual(2);
     expect(headersSeen[0]!["last-event-id"]).toBeUndefined();
@@ -376,7 +376,7 @@ describe("event-bridge: SSE resume + eventId advance", () => {
     h.mcp.notification.mockRejectedValueOnce(new Error("transport broken"));
 
     const start = await loadStartEventBridge();
-    const promise = start(h.mcp as unknown as Server, URL).catch(() => {});
+    void start(h.mcp as unknown as Server, URL).catch(() => {});
 
     stream.push(
       sseFrame(
@@ -390,7 +390,7 @@ describe("event-bridge: SSE resume + eventId advance", () => {
       ),
     );
     await vi.advanceTimersByTimeAsync(200_000);
-    await promise;
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(headersSeen.length).toBeGreaterThanOrEqual(2);
     expect(headersSeen[1]!["last-event-id"]).not.toBe("evt_dropped");
@@ -413,7 +413,7 @@ describe("event-bridge: awareness debounce + auto-clear", () => {
 
   it("debounces awareness: a burst of events yields a single active=true POST", async () => {
     const start = await loadStartEventBridge();
-    const promise = start(h.mcp as unknown as Server, URL).catch(() => {});
+    void start(h.mcp as unknown as Server, URL).catch(() => {});
 
     for (let i = 0; i < 3; i++) {
       stream.push(
@@ -438,12 +438,12 @@ describe("event-bridge: awareness debounce + auto-clear", () => {
 
     stream.end();
     await vi.advanceTimersByTimeAsync(200_000);
-    await promise;
+    await vi.advanceTimersByTimeAsync(0);
   });
 
   it("auto-clears awareness after the clear timer (idle/active=false)", async () => {
     const start = await loadStartEventBridge();
-    const promise = start(h.mcp as unknown as Server, URL).catch(() => {});
+    void start(h.mcp as unknown as Server, URL).catch(() => {});
 
     stream.push(
       sseFrame(
@@ -467,7 +467,7 @@ describe("event-bridge: awareness debounce + auto-clear", () => {
 
     stream.end();
     await vi.advanceTimersByTimeAsync(200_000);
-    await promise;
+    await vi.advanceTimersByTimeAsync(0);
   });
 });
 
@@ -508,7 +508,7 @@ describe("event-bridge: retry counter resets after stable uptime", () => {
     });
 
     const start = await loadStartEventBridge();
-    const promise = start(h.mcp as unknown as Server, URL).catch(() => {});
+    void start(h.mcp as unknown as Server, URL).catch(() => {});
 
     // Drive past attempts 1+2 (backoffs 2s+4s) so attempt 3 is active.
     await vi.advanceTimersByTimeAsync(10_000);
@@ -533,7 +533,7 @@ describe("event-bridge: retry counter resets after stable uptime", () => {
     stream4.end();
     // Drain remaining retries so the loop exits via the MAX branch.
     await vi.advanceTimersByTimeAsync(300_000);
-    await promise;
+    await vi.advanceTimersByTimeAsync(0);
   });
 });
 
@@ -548,7 +548,10 @@ describe("event-bridge: retry exhaustion -> CHANNEL_CONNECT_FAILED", () => {
     teardownHarness(h);
   });
 
-  it("POSTs CHANNEL_CONNECT_FAILED after exhausting CHANNEL_MAX_RETRIES and exits 1", async () => {
+  it("POSTs CHANNEL_CONNECT_FAILED after CHANNEL_MAX_RETRIES and keeps retrying", async () => {
+    // The shim shares the consumer with the plugin monitor, so this is the
+    // second host's proof that one fix covered both — `src/channel/
+    // event-bridge.ts` needed no change of its own.
     let attempts = 0;
     h.stub.on("/api/events", () => {
       attempts++;
@@ -556,13 +559,14 @@ describe("event-bridge: retry exhaustion -> CHANNEL_CONNECT_FAILED", () => {
     });
 
     const start = await loadStartEventBridge();
-    const promise = start(h.mcp as unknown as Server, URL).catch(() => {});
+    void start(h.mcp as unknown as Server, URL).catch(() => {});
     await vi.advanceTimersByTimeAsync(300_000);
-    await promise;
+    await vi.advanceTimersByTimeAsync(0);
 
-    expect(attempts).toBeGreaterThanOrEqual(CHANNEL_MAX_RETRIES);
-    expect(h.errorReports.length).toBeGreaterThanOrEqual(1);
+    const observed = attempts;
+    expect(observed).toBeGreaterThanOrEqual(CHANNEL_MAX_RETRIES);
+    expect(h.errorReports.length).toBe(1);
     expect(h.errorReports[0]!.error).toBe("CHANNEL_CONNECT_FAILED");
-    expect(h.exitSpy).toHaveBeenCalledWith(1);
+    expect(h.exitSpy).not.toHaveBeenCalled();
   });
 });

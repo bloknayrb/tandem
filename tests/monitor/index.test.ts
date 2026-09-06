@@ -485,7 +485,7 @@ describe("monitor: retry exhaustion -> MONITOR_CONNECT_FAILED + stdout notice", 
   // nothing was lost, any `tandem_*` call reports the real problem far better,
   // and a monitor that exits is never respawned (spike F9), so this line would
   // outlive its own truth. See the long note in `src/monitor/run.ts`.
-  it("reports MONITOR_CONNECT_FAILED and exits 1 but stays SILENT when it never connected", async () => {
+  it("reports MONITOR_CONNECT_FAILED but stays SILENT when it never connected", async () => {
     let attempts = 0;
     stub.on("/api/events", () => {
       attempts++;
@@ -493,17 +493,22 @@ describe("monitor: retry exhaustion -> MONITOR_CONNECT_FAILED + stdout notice", 
     });
 
     const { main } = await import("../../src/monitor/index.js");
-    const mainPromise = main().catch(() => {});
+    void main().catch(() => {});
     await vi.advanceTimersByTimeAsync(200_000);
-    await mainPromise;
+    await vi.advanceTimersByTimeAsync(0);
 
-    expect(attempts).toBeGreaterThanOrEqual(CHANNEL_MAX_RETRIES);
+    // Captured before asserting: the loop never settles now.
+    const observed = attempts;
+    const stdoutWrites = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+    expect(observed).toBeGreaterThanOrEqual(CHANNEL_MAX_RETRIES);
     expect(errorReports.length).toBeGreaterThanOrEqual(1);
     expect(errorReports[0]!.error).toBe("MONITOR_CONNECT_FAILED");
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(exitSpy).not.toHaveBeenCalled();
 
-    const stdoutWrites = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
-    expect(stdoutWrites).not.toMatch(/disconnected/i);
+    // Matched on the current notice's phrases: the retired "disconnected"
+    // wording would go vacuous and leave the guard pinned by nothing.
+    expect(stdoutWrites).not.toMatch(/retrying in the background/);
+    expect(stdoutWrites).not.toMatch(/tandem_checkInbox/);
   });
 
   // The case the notice exists for, and the guard against "fixed" becoming
@@ -519,15 +524,20 @@ describe("monitor: retry exhaustion -> MONITOR_CONNECT_FAILED + stdout notice", 
     });
 
     const { main } = await import("../../src/monitor/index.js");
-    const mainPromise = main().catch(() => {});
+    void main().catch(() => {});
     await vi.advanceTimersByTimeAsync(100);
     live.error(new Error("connection reset"));
     await vi.advanceTimersByTimeAsync(200_000);
-    await mainPromise;
+    await vi.advanceTimersByTimeAsync(0);
 
-    expect(attempts).toBeGreaterThan(1);
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    const observed = attempts;
     const stdoutWrites = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
-    expect(stdoutWrites).toMatch(/disconnected/i);
+    expect(observed).toBeGreaterThan(1);
+    expect(exitSpy).not.toHaveBeenCalled();
+    // Kills a fix that changes the loop but leaves the misleading remedy text:
+    // the notice must name the pull path, not a restart of the wrong process.
+    expect(stdoutWrites).toMatch(/retrying in the background/);
+    expect(stdoutWrites).toMatch(/tandem_checkInbox/);
+    expect(stdoutWrites.match(/retrying in the background/g)).toHaveLength(1);
   });
 });

@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ControllableStream,
@@ -164,5 +165,25 @@ describe("graceful shutdown", () => {
 
     await expect(mod.shutdownMonitor("SIGINT")).rejects.toThrow("exit:0");
     exitSpy.mockRestore();
+  });
+});
+
+describe("channel shim stdin-EOF shutdown (#1804)", () => {
+  it("registers a stdin 'end' listener beside the stdio connect", async () => {
+    // Removing the retry cap deleted the shim's only self-termination path for
+    // the case #1804 targets, so a shim armed while Tandem is down whose
+    // session then ends uncleanly would probe forever.
+    //
+    // A source-text pin, deliberately: driving `runChannel()` here would need
+    // a live MCP transport, and the pin's known weakness — it cannot tell a
+    // firing handler from an inert one — does not bite on this host, where
+    // `StdioServerTransport` puts stdin in flowing mode before the listener is
+    // registered. The monitor gets no such line, because nothing there reads
+    // stdin and an `'end'` listener alone never fires.
+    const src = await readFile(
+      new URL("../../src/channel/run.ts", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
+      "utf8",
+    );
+    expect(src).toContain('process.stdin.once("end"');
   });
 });

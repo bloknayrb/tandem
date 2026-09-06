@@ -145,14 +145,30 @@ let _modeRefreshInFlight: Promise<void> | null = null;
 /** True once an SSE handshake has succeeded this run. See `onExhaustion`. */
 let everConnected = false;
 
+/**
+ * Set when this outage has already been reported, cleared only by
+ * `STABLE_CONNECTION_MS` of continuous uptime.
+ *
+ * The consumer retries forever (#1804) — neither host is ever respawned, so a
+ * process that gives up kills the push path for the whole session — and this
+ * latch is what keeps that from becoming a report and two stderr lines every
+ * 30 s until the session ends.
+ */
+let reportedExhaustion = false;
+
 // --- Public entry point ---
 
 /**
  * Drive the SSE consumer: connect, parse frames, deliver events via
  * `onEvent`, debounce awareness POSTs, and reconnect with exponential
- * backoff on failure. Reports `opts.errorCode` to `/api/channel-error` and
- * calls `process.exit(1)` after `CHANNEL_MAX_RETRIES` consecutive
- * failures.
+ * backoff on failure. **It never exits and never stops retrying.**
+ *
+ * After `CHANNEL_MAX_RETRIES` consecutive failures it reports `opts.errorCode`
+ * to `/api/channel-error` and calls `opts.onExhaustion` — once per outage —
+ * and keeps going at the capped backoff. Both hosts (the plugin monitor and
+ * the channel shim) are launched once per Claude Code session and are never
+ * respawned, so exiting here permanently killed the push path for that session
+ * and the remedy printed with it named the wrong process (#1804).
  */
 export async function runEventConsumer(opts: EventConsumerOptions): Promise<void> {
   // Warm the mode cache before the first event so we don't default-suppress
@@ -164,7 +180,7 @@ export async function runEventConsumer(opts: EventConsumerOptions): Promise<void
   let retries = 0;
   let lastEventId: string | undefined;
 
-  while (retries < CHANNEL_MAX_RETRIES) {
+  while (true) {
     try {
       await connectAndStreamOnce(opts, lastEventId, {
         onEventId: (id) => {
@@ -172,17 +188,34 @@ export async function runEventConsumer(opts: EventConsumerOptions): Promise<void
         },
         onStable: () => {
           retries = 0;
+          // Clearing here, and NOT on the `everConnected` handshake line: that
+          // one runs on every connect, so a connect-then-die flap would re-arm
+          // the report and the host's stdout notice on every cycle — and on CC
+          // 2.1.226 each stdout write is a model turn. The cost is a
+          // "restored" line up to STABLE_CONNECTION_MS late.
+          if (reportedExhaustion) {
+            reportedExhaustion = false;
+            console.error(`${opts.logPrefix} SSE connection restored`);
+          }
         },
       });
     } catch (err) {
       retries++;
-      console.error(
-        `${opts.logPrefix} SSE connection failed (${retries}/${CHANNEL_MAX_RETRIES}):`,
-        err instanceof Error ? err.message : err,
-      );
+      if (!reportedExhaustion) {
+        console.error(
+          `${opts.logPrefix} SSE connection failed (attempt ${retries}):`,
+          err instanceof Error ? err.message : err,
+        );
+      }
 
-      if (retries >= CHANNEL_MAX_RETRIES) {
-        console.error(`${opts.logPrefix} SSE connection exhausted, reporting error and exiting`);
+      // `>=` rather than `===`, with the latch doing the once-per-outage work:
+      // a later edit that breaks the latch/`retries` coupling then over-reports
+      // rather than going permanently silent.
+      if (retries >= CHANNEL_MAX_RETRIES && !reportedExhaustion) {
+        reportedExhaustion = true;
+        console.error(
+          `${opts.logPrefix} SSE connection lost after ${CHANNEL_MAX_RETRIES} retries; still retrying`,
+        );
         try {
           await fetchWithTimeout(
             `${opts.tandemUrl}${API_CHANNEL_ERROR}`,
@@ -203,24 +236,16 @@ export async function runEventConsumer(opts: EventConsumerOptions): Promise<void
           );
         }
         opts.onExhaustion?.({ everConnected });
-        process.exit(1);
       }
 
       // Exponential backoff: 2s, 4s, 8s, 16s, 30s (capped).
       const delay = Math.min(CHANNEL_RETRY_DELAY_MS * 2 ** (retries - 1), RETRY_MAX_DELAY_MS);
-      console.error(
-        `${opts.logPrefix} Retrying in ${delay}ms (attempt ${retries}/${CHANNEL_MAX_RETRIES})...`,
-      );
+      if (!reportedExhaustion) {
+        console.error(`${opts.logPrefix} Retrying in ${delay}ms (attempt ${retries})...`);
+      }
       await new Promise((r) => setTimeout(r, delay));
     }
   }
-  // Defensive: under normal exhaustion the catch above calls process.exit(1)
-  // before we return here. Survives any future refactor that removes the
-  // exit or makes it non-terminating (e.g. test shim).
-  console.error(
-    `${opts.logPrefix} Retry loop exited unexpectedly (retries=${retries}/${CHANNEL_MAX_RETRIES})`,
-  );
-  process.exit(1);
 }
 
 export interface StreamCallbacks {
@@ -691,6 +716,7 @@ export function _resetSseConsumerStateForTests(): void {
   shutdownTimers.lastDocumentId = null;
   outstandingAwareness.clear();
   everConnected = false;
+  reportedExhaustion = false;
 }
 
 /** Testing-only — seeds the lastDocumentId that shutdown reads. */

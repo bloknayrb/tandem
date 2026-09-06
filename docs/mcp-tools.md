@@ -1405,7 +1405,7 @@ Channel shim reports connection errors.
 
 **Response:** `{ "ok": true }`
 
-The shim gives this best-effort report a 3-second deadline before exiting after retry exhaustion.
+The shim gives this best-effort report a 3-second deadline.
 
 ### POST /api/channel-permission
 

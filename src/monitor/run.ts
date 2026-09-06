@@ -164,16 +164,17 @@ function buildOptions(): EventConsumerOptions {
       //
       // Silence is still right, for reasons that never depended on the
       // population:
-      //   - Nothing was lost. The line says "restore real-time events", which
+      //   - Nothing was lost. The line says the connection was "lost", which
       //     presupposes events were flowing; none ever were.
       //   - The model finds out far better by calling any `tandem_*` tool,
       //     which fails with a real error naming the real problem.
-      //   - A monitor that exits is never respawned (spike F9), so this line
-      //     would be the last thing this process ever says — a claim that
-      //     stays in context after it stops being true.
       if (!everConnected) return;
+      // Named the wrong process before #1804: the consumer used to exit here,
+      // and a monitor that exits is never respawned (spike F9), so "restart
+      // Tandem" could not restore anything. It now keeps retrying, and pull is
+      // the authority in the meantime.
       process.stdout.write(
-        "Tandem monitor disconnected — restart Tandem to restore real-time events\n",
+        "Tandem monitor lost its connection and is retrying in the background — tandem_checkInbox still works and is authoritative\n",
       );
     },
   };
