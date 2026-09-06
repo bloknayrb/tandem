@@ -269,6 +269,20 @@ export async function saveDocumentToDisk(
   // user input through Map.get(id) to docState.filePath FS sinks
   // (js/path-injection). Valid IDs are 64-char hex / upload_* — no separators,
   // so this is a no-op at runtime.
+  //
+  // Everything after this lookup uses `safeDocId`, never the raw `docId`
+  // (#1797). The split was destructive here, not merely inconsistent:
+  // `POST /api/save` type-checks `documentId` and passes it straight through,
+  // so `"dir/<realId>"` RESOLVED to the real document and its real filePath
+  // while `getOrCreateDocument(docId)` minted a brand-new EMPTY Y.Doc for the
+  // unknown room name — which the adapter then serialized over the user's
+  // file. The external-modification guard could not stop it, because it read
+  // `Y_MAP_SAVED_AT_VERSION` off that same fresh doc and found nothing; the
+  // lock was bypassed the same way, so two prefixed saves could write one file
+  // at once. `saveDocumentAsToDisk` and `renameDocument` deliberately keep the
+  // raw id: they do `openDocs.get(docId)` and compute no safe id at all, so
+  // they are internally consistent and fail closed, and a basename there would
+  // WIDEN what they accept.
   const safeDocId = path.basename(docId);
   const docState = openDocs.get(safeDocId);
   if (!docState) {
@@ -337,7 +351,7 @@ export async function saveDocumentToDisk(
   }
 
   // Per-document lock
-  if (savingDocs.has(docId)) {
+  if (savingDocs.has(safeDocId)) {
     return {
       status: "skipped",
       reason: "Save already in progress",
@@ -345,7 +359,7 @@ export async function saveDocumentToDisk(
     };
   }
 
-  savingDocs.add(docId);
+  savingDocs.add(safeDocId);
   try {
     // An unresolved external conflict blocks every writer whose disk copy has
     // actually diverged, whatever the mtime heuristic below concludes (#1238).
@@ -372,7 +386,7 @@ export async function saveDocumentToDisk(
     // fresh object on every call (even for an unchanged raw value, via its
     // Date.now() fallback for a malformed `detectedAt`), so comparing two
     // narrowed reads would spuriously look like a change on every call.
-    const conflictMetaBeforeSave = getOrCreateDocument(docId).getMap(Y_MAP_DOCUMENT_META);
+    const conflictMetaBeforeSave = getOrCreateDocument(safeDocId).getMap(Y_MAP_DOCUMENT_META);
     const rawConflictBeforeSave = conflictMetaBeforeSave.get(Y_MAP_EXTERNAL_CONFLICT);
     const pendingConflict = narrowConflict(rawConflictBeforeSave);
     if (pendingConflict && (source === "auto-save" || pendingConflict.diskChanged)) {
@@ -398,7 +412,7 @@ export async function saveDocumentToDisk(
       // Compare to the session's mtime — if the file changed externally, skip
       // We use a 1-second tolerance because fs.watch debounce + atomic rename
       // can cause minor mtime drift
-      const meta = getOrCreateDocument(docId).getMap(Y_MAP_DOCUMENT_META);
+      const meta = getOrCreateDocument(safeDocId).getMap(Y_MAP_DOCUMENT_META);
       const lastSavedAt = meta.get(Y_MAP_SAVED_AT_VERSION) as number | undefined;
       // If the file is newer than our last save, someone else modified it
       if (lastSavedAt && stat.mtimeMs > lastSavedAt + 1000) {
@@ -425,11 +439,11 @@ export async function saveDocumentToDisk(
       };
     }
 
-    const doc = getOrCreateDocument(docId);
+    const doc = getOrCreateDocument(safeDocId);
     // Snapshot the dirty version BEFORE the async write so a content edit that
     // lands DURING the write isn't lost — markCleanIfUnchanged only clears the
     // flag if no newer edit arrived (#851).
-    const dirtySnapshot = snapshotDirtyVersion(docId);
+    const dirtySnapshot = snapshotDirtyVersion(safeDocId);
 
     let fidelityWarnings: string[] | undefined;
     let integrityWarnings: string[] | undefined;
@@ -475,7 +489,7 @@ export async function saveDocumentToDisk(
       // byte copy) and never throws — a snapshot failure must not block the save.
       await snapshotBeforeFirstWrite(docState.filePath, {
         appDataDir: resolveAppDataDir(),
-        documentId: docId,
+        documentId: safeDocId,
       });
       // Post-write verification (#1123 Phase 0e): re-import the produced bytes
       // and confirm they round-trip the live doc's CONTENT before overwriting.
@@ -518,7 +532,7 @@ export async function saveDocumentToDisk(
       // per run). Never throws; a snapshot failure must not block the save.
       await snapshotBeforeFirstWrite(docState.filePath, {
         appDataDir: resolveAppDataDir(),
-        documentId: docId,
+        documentId: safeDocId,
       });
       // Inner try/finally per branch — see the binary arm above for why. One
       // `try` around the whole `if` would not do: the re-arm has to sit
@@ -565,7 +579,7 @@ export async function saveDocumentToDisk(
         } satisfies FidelityReport);
       }
     });
-    markCleanIfUnchanged(docId, dirtySnapshot);
+    markCleanIfUnchanged(safeDocId, dirtySnapshot);
 
     // Session write LAST, and in its own try/catch (#1750). The
     // `SAVED_AT_VERSION` stamp above is a claim about the disk, and the disk
@@ -585,7 +599,7 @@ export async function saveDocumentToDisk(
     const carriedConflict = readPendingConflict(doc);
     try {
       await saveSession(docState.filePath, docState.format, doc, {
-        dirty: snapshotDirtyVersion(docId) !== dirtySnapshot,
+        dirty: snapshotDirtyVersion(safeDocId) !== dirtySnapshot,
         conflict: carriedConflict,
       });
     } catch (err) {
@@ -641,8 +655,8 @@ export async function saveDocumentToDisk(
           ? `Saved ${path.basename(docState.filePath)}, but Tandem could not record its recovery state. An unresolved external-edit conflict on this file will be lost if Tandem restarts before you resolve it.`
           : `Saved ${path.basename(docState.filePath)}, but Tandem could not record its recovery state; unsaved-work tracking for this file will not survive a restart.`,
         errorCode: (err as NodeJS.ErrnoException).code ?? "UNKNOWN",
-        documentId: docId,
-        dedupKey: `session-save-failed:${docId}`,
+        documentId: safeDocId,
+        dedupKey: `session-save-failed:${safeDocId}`,
         timestamp: Date.now(),
       });
     }
@@ -658,13 +672,13 @@ export async function saveDocumentToDisk(
       message: `Save failed for ${path.basename(docState.filePath)}: ${msg}`,
       toolName: source,
       errorCode: errCode,
-      documentId: docId,
-      dedupKey: `${source}:${docId}`,
+      documentId: safeDocId,
+      dedupKey: `${source}:${safeDocId}`,
       timestamp: Date.now(),
     });
     return { status: "error", reason: msg, errorCode: (err as NodeJS.ErrnoException).code };
   } finally {
-    savingDocs.delete(docId);
+    savingDocs.delete(safeDocId);
   }
 }
 
@@ -1552,6 +1566,15 @@ export async function closeDocumentById(
   // user input through Map.get(id) to docState.filePath FS sinks
   // (js/path-injection). Valid IDs are 64-char hex — no separators, so this
   // is a no-op at runtime.
+  //
+  // ONE resolved id for the lookup and for every teardown step below (#1797).
+  // `clearFileSyncContext`, `savingDocs.delete`, `clearDirtyState` and
+  // `closeDocument` used to take the RAW `id`, while the steps keyed off
+  // `docState.filePath` ran regardless — so `POST /api/close
+  // {"documentId":"x/<realId>"}` (the route passes its body value through
+  // unnormalised) unwatched the file, closed the durable annotation store and
+  // deleted the session while leaving the document registered, open in every
+  // tab, and still holding its save lock. It returned success: true.
   const safeId = path.basename(id);
   const docState = openDocs.get(safeId);
   if (!docState) {
@@ -1616,18 +1639,18 @@ export async function closeDocumentById(
   } catch (err) {
     console.error("[Tandem] closeDocumentById: closeStore failed for %s:", safeId, err);
   }
-  clearFileSyncContext(id);
+  clearFileSyncContext(safeId);
 
   // Clear save lock to prevent a close-reopen race where the old lock blocks new saves
-  savingDocs.delete(id);
+  savingDocs.delete(safeId);
 
   // Drop dirty-tracking state + detach its body observer (#851).
-  clearDirtyState(id);
+  clearDirtyState(safeId);
 
   // The registry's slice of the close: untrack, reassign the active id when the
   // closed doc held it, publish once. The store flush, file-sync context and
   // dirty teardown above stay here — their ordering is load-bearing.
-  closeDocument(id);
+  closeDocument(safeId);
 
   // Delete the session file so this document doesn't reopen on restart —
   // unless the block above just wrote it as the surviving copy of unpersisted
