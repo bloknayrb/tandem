@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-09-05
+
 ### Added
 
 - **A Paragraph command in the slash menu, to undo block formatting.** Every other slash command turns plain text into something; there was no way back. Typing `/p` now resets the current block to ordinary body text, lifting it out of a list or a quote in one step — previously you had to toggle off whichever formatting you had applied, and if you had forgotten which it was, hunt for it. It sits first in the menu, which also changes what pressing `Enter` on the unfiltered menu does: it used to insert a Heading 1 you had not asked for, and now does nothing.
@@ -30,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Annotation files left behind by a newer Tandem are now reported.** When a build finds an annotation file written by a later version than itself, it sets that file aside untouched rather than risk mangling it. That is the right behaviour, and it was invisible: the file matched neither of doctor's two filters, so someone who had gone back to an older Tandem got no signal at all that a document's annotations were sitting on disk unread. Doctor now names them, and says that updating brings them back.
 
 - **Accepting a suggestion that came from a Word comment now marks that comment resolved in the `.docx`.** When you open a `.docx`, its reviewer comments come in as personal notes; send one to Claude, take Claude's suggested wording, accept it, and `tandem_applyChanges` writes the edit back as a tracked change. It was supposed to tick the original Word comment off as done in the same pass, and never did — not for some comments, for all of them. Tandem was working out which Word comment a suggestion came from by reading its own internal id, in a shape those ids stopped using four months ago, twelve days after the resolving step was written, so the answer was always "no comment" and the resolving step quietly did nothing. Reopening the file in Word showed every comment still outstanding, including the ones you had just addressed. Tandem now reads the original comment number off the note itself, which is where it has been stored all along.
+
+- **Recover a document when its saved session state is damaged (#1864).** A corrupt Yjs session snapshot could make a document fail to open every time. Tandem now quarantines the bad state, clears partial in-memory recovery safely, and opens the document from disk instead.
+
+- **Complete the Tiptap v3 editor migration (#1865).** Update editor extensions, links, table attributes, and scroll restoration so established editing and collaboration workflows continue to work on the current editor foundation.
 
 ### Security
 
