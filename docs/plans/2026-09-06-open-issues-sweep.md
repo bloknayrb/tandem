@@ -256,23 +256,29 @@ Build; `known.branch` / `known.pr` let a resumed run reuse what exists. After a 
 or crash, `Workflow({scriptPath, args: <identical>, resumeFromRunId})` replays every finished
 stage from the journal and re-runs only the one in flight — this worked across a real restart.
 
-### Windows notes (the script's bash-isms)
+### Windows notes (measured 2026-09-06 on Bryan's PC, wave 2)
 
-Claude Code's Bash tool runs under git-bash on Windows, so most of the script's commands work as
-written. Three do not: `ln -sfn <repo>/node_modules <wt>/node_modules` (use `mklink /J` from a
-cmd shell, or simply `npm ci` inside the worktree — slower but exact); `mktemp -d
-/tmp/tandem-sweep-XXXXXX` (any temp dir whose path contains `tandem` — `tests/server/platform.test.ts`
-asserts the app-data path does); `test -x .husky/_/pre-push` (use `test -f`). `CARGO_TARGET_DIR`
-must be an absolute Windows path. `cargo test` runs natively (no GTK). Read CLAUDE.md's Windows
-gotchas (CRLF, the `#!/usr/bin/env sh` shebang) before the first push.
+Claude Code's Bash tool runs under git-bash on Windows, and two of the three bash-isms the cloud
+session flagged turned out to work as written: `mktemp -d /tmp/tandem-sweep-XXXXXX` yields a path
+MSYS rewrites to `C:/Users/…/AppData/Local/Temp/tandem-sweep-…` before Node sees it (the path
+contains `tandem`, which `tests/server/platform.test.ts` requires), and `test -x .husky/_/pre-push`
+is true. The one that does not is `ln -sfn` for a directory: the script now takes `args.windows:
+true` and links `node_modules` with a PowerShell `New-Item -ItemType Junction` instead
+(`cmd /c mklink /J` from git-bash fails). `CARGO_TARGET_DIR=<repo>/src-tauri/target` with
+forward slashes is accepted by cargo. `cargo test` runs natively (no GTK). Read CLAUDE.md's
+Windows gotchas (CRLF, the `#!/usr/bin/env sh` shebang) before the first push.
 
-### Stand-ins that become real on a machine with the `dev-tools` plugin
+### GitHub access and the stand-ins (wave 2 onward)
 
-The script calls `Skill("simplify")` and `Skill("code-review", "--level high")` because the cloud
-session had no plugins. With `dev-tools@claudestuff-marketplace` installed, `/simplify` runs its
-full four-angle fan-out and `/pr-review-toolkit:review-pr` exists; either keep the script as is
-(the in-session skills are the same review, single-pass) or edit the two prompts to name the
-plugin commands. `gh` also becomes available, so `docs/stacked-prs.md` applies for layered groups.
+The script now uses `gh` for every GitHub step (issues with `--json …,comments` so comment
+authors are visible; `gh pr create --body-file`, never a heredoc body — git-bash heredocs eat
+backslashes; `gh pr merge --auto --merge`, whose refusal is recorded as data). There is no
+PR-activity subscription tool here, so the main session polls CI. `Skill("simplify")` and
+`Skill("code-review", "--level high")` are the in-session skills, single-pass inside a subagent;
+the `dev-tools` plugin's `/pr-review-toolkit:review-pr` is available but the script does not call
+it. `args.probePorts = {ws, mcp}` gives each concurrently running group its own scratch pair for
+the probes stage (`run.sh` hardcodes 4918/4919, so a second group gets 4928/4929). Two groups run
+at a time on this machine (16 CPUs, 32 GB); `docs/stacked-prs.md` applies for layered groups.
 
 ### Lessons from wave 1 (read before launching wave 2)
 
@@ -304,9 +310,9 @@ literal in `tests/skill-instruction-contract.test.ts` moves with it). `Hooks arm
 | 1 | K1 test gates | #1783 #1784 #1721 (count-pin only) | `fix/test-gates-1784` | #1881 (merged a07b72d2) | — | armed | merged | Attempt 1 parked (framework growth); attempt 2 minimal: #1784 gated set derived from registrations + TOOL_GATES data list (resolveAnnotation left ungated for H), coverage-gate wiring requires a real import; #1783 vacuous bodies asserted, dead skip deleted, two inbox-pull-path E2Es, hook-script vitest runner; #1721 Refs only — axe color-contrast incomplete counts pinned per surface (CI held the baseline). Residual of #1784 (hollowed suites) tracked in #1825. 4 plan-review rounds, 2 PR-review rounds, post-ship clean. |
 | 1 | A-rest | #1768 #1797 | `fix/restore-and-close-ids-1768` | #1882 (merged 454e0ef2) | — | armed | merged | #1768: no-arg `tandem_restoreBackup` now lists the `.backup.docx` sidecar (last, labelled non-managed) and never restores; restore-by-name routes through `restoreDocumentFromBackup` (readOnly, reload guard, self-write triple); symlinked sidecar → `INVALID_PATH`. #1797: `closeDocumentById` resolves the id once via `path.basename` and uses it for every step; same shape on the save path. Post-CI follow-ups: CodeQL alerts 207–210 — snapshot half fixed by joining the `basename()` result; the sidecar half is the document-path-derived class in the accepted `docs/security.md` register entry and is Bryan's to triage; `reload-family.ts` coverage floor cleared with three direct specs. Two open questions for Bryan in the PR body (`POST /api/backups/restore` can now restore the sidecar by name; the `lstat`-vs-`O_NOFOLLOW` drift in the security.md bullet). 4 plan-review rounds, 2 PR-review rounds. |
 | 1 | G2 test timing | #1672 #1699 #1674 | `fix/test-timing-1674` | #1879 (merged 06804b97) | — | armed | merged | Attempt 1 parked (calibration framework); attempt 2 under the minimality rule shipped: #1674 was a real defect in the stdio test helper (collectors attached after the child had written), fixed; #1672/#1699 did not reproduce — the 36 s came from the leaked process tree noted on #1672 — so the change is the re-dated `REAL_APPLY_TIMEOUT_MS` rationale, both closed on the measurement (Bryan can reopen as watch items). 4 plan-review rounds, 1 PR-review round, post-ship review clean. |
-| 2 | F-runtime | #1759 #1805 #1804 #1794 | — | — | — | — | planned-not-started | |
-| 2 | F-config | #1760 #1801 #1802 | — | — | — | — | planned-not-started | |
-| 2 | J1 skill + workflows doc | #1771 #1782 #1820 #1737 (+decision H) | — | — | — | — | planned-not-started | |
+| 2 | F-runtime | #1759 #1805 #1804 #1794 | `fix/push-paths-runtime-1759` | — | — | — | planned | Launched 2026-09-06 from Bryan's Windows PC (run `wf_ce225c53-e48`, probe ports 4918/4919), concurrently with J1. |
+| 2 | F-config | #1760 #1801 #1802 | — | — | — | — | planned-not-started | Queued behind whichever of F-runtime / J1 finishes first (two groups at a time). |
+| 2 | J1 skill + workflows doc | #1771 #1782 #1820 #1737 (+decision H) | `fix/skill-and-workflows-doc-1771` | — | — | — | planned | Launched 2026-09-06 from Bryan's Windows PC (run `wf_f6b7f1e4-5d1`, probe ports 4928/4929), concurrently with F-runtime. |
 | 3 | J2 product copy | #1781 #1814 #1815 #1816 #1817 #1818 | — | — | — | — | planned-not-started | |
 | 3 | F-doctor | #1806 #1807 #1811 #1790 | — | — | — | — | planned-not-started | |
 | 3 | C privacy & authority | #1769 #1733 → #1770 #1779 #1803 (+#1619 #1710 folded into #1803) | — | — | — | — | planned-not-started | |
