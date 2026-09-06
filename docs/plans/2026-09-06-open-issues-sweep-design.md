@@ -1,16 +1,23 @@
-# Open-issues sweep — 2026-09-06
+<!-- Design record of the open-issues sweep, copied verbatim from the session plan file on
+2026-09-06 (the plan file itself lives in the gitignored ~/.claude/plans/). The live status is the
+ledger in 2026-09-06-open-issues-sweep.md; this file is the "why" and is not updated. -->
 
-**What this is.** The tracked home for the orchestrated sweep of every open issue: the decisions
-Bryan took on 2026-09-06, the wave/PR-group table, the per-stage workflow contract, and the
-**ledger** (the authoritative status of each group, updated after every wave). A new session
-resumes from the ledger. The v1-review folder (`docs/reviews/2026-09-02-v1-review/`) holds the
-evidence and per-track detail; each track's `## Status` points here.
+# Plan: orchestrated sweep of every open issue in bloknayrb/tandem
 
-**How it runs.** One `Workflow` invocation per group with
-`docs/plans/2026-09-06-open-issues-sweep.workflow.js` (`scriptPath`), args from the group's row.
-Stages: plan → adversarial review loop → implement (worktree under `.claude/worktrees/`) →
-simplify → verify → e2e → manual probes → PR-review loop → ship → post-ship review. Specs land in
-`docs/reviews/2026-09-02-v1-review/tracks/specs/`.
+## Context
+
+195 issues are open. 84 (#1744–#1827, label `v1-review`) already carry a fix plan in
+`docs/reviews/2026-09-02-v1-review/` — eleven tracks A–K with per-area `file:line` ledgers, repro
+scripts, model tiers and reviewer agents. Track A is landed except #1768/#1797 and track I except
+#1748 (PRs #1833, #1847–#1870). The other ~110 were triaged this session: 55 are concrete fixes,
+~30 need a decision, the rest are dated gates, hardware/upstream-blocked, or feature-sized.
+
+Bryan asked for a small-to-medium `/workflow` that picks sub-agent models by complexity, groups
+issues and PRs logically, adversarially reviews and revises every plan before code, runs
+`/simplify` and a PR review on every PR and fixes every finding before merge. He answered the
+up-front questions and the eight #1827 decisions (below) and chose **full scope, wave by wave,
+resumable across sessions**. This plan was itself refuted by three reviewers; corrections are
+recorded at the end.
 
 ## Decisions taken in this session (recorded in wave 0)
 
@@ -45,6 +52,13 @@ simplify → verify → e2e → manual probes → PR-review loop → ship → po
 | Spec precedent `tracks/specs/A8-1796.md` (Problem / Fix / Tests / Done when / Review corrections / Not in scope) | Plan stage writes that shape, committed. |
 | `tests/skill-instruction-contract.test.ts:43` pins `version: 14` | Every skill-editing group (J1, C, Gc2a via #1776, D2) bumps to the next integer after `origin/master` at rebase time and updates that literal in the same commit; the ledger tracks the current number. |
 | `.husky/pre-push` runs the full suite + cargo on every push | Verify runs only touched suites; the hook is the one full run per push; pushes are gated behind the JS mutex. `TANDEM_APP_DATA_DIR=$(mktemp -d)` prefixes every vitest/hook run. |
+
+## Artefacts (designated branch, one PR, wave 0)
+
+- `docs/plans/2026-09-06-open-issues-sweep.md` — decisions table, wave table, model tiers, and the **ledger**: group | issues | branch | PR | skill-version | hooks-armed | state (`planned` → `reviewed` → `built` → `pr-open` → `green` → `merged` | `parked`) | notes. The authoritative status home; each track file's `## Status` and the review README get one line pointing here.
+- `docs/plans/2026-09-06-open-issues-sweep.workflow.js` — the reusable workflow script.
+- `.claude/hooks/{typecheck-on-edit,svelte-check-on-edit,related-test,format-on-edit}.sh` — worktree path guard.
+- `docs/reviews/2026-09-02-v1-review/decisions.md` — new sub-heading "Taken (Bryan, 2026-09-06)" with A–H; the same text posted once on #1827 and once on each named issue (#1753, #1754, #1813, #1787, #1788, #1748, #1820), each comment ending with the Claude Code attribution footer.
 
 ## Scope buckets
 
@@ -211,148 +225,75 @@ verify/review `high`; simplify/ship `low`. `isolation` unused (worktree managed 
 - Final: an artifact report over all 195 issues (merged PR / parked / decision pending / dated
   gate / blocked / feature) with the dated gates nearest their deadlines.
 
-## Resuming on another machine
+## Recovery after the 2026-09-06 container restart (wave 1 in flight)
 
-The sweep ran its first wave from a cloud container; everything it needs to continue is in this
-file, the workflow script beside it, and the specs under
-`docs/reviews/2026-09-02-v1-review/tracks/specs/`. Design rationale:
-[2026-09-06-open-issues-sweep-design.md](2026-09-06-open-issues-sweep-design.md).
+**What happened.** Wave 0 is merged (#1877). Wave 1's three groups were running when the
+container restarted; every background workflow died. Disk survived: the three worktrees with
+their commits, `node_modules`, apt deps, the shared cargo target, the Playwright alias, and the
+three workflow journals. Bryan's standing instruction is "keep going, ping me when wave 1 PRs
+are up".
 
-### One-time setup
+**State per group (verified read-only):**
 
-1. `npm ci` (arms husky). Rust toolchain; on Debian/Ubuntu the CI apt recipe
-   (`libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libxdo-dev`); Python 3.10+.
-   `npx playwright install chromium` (the cloud container could not download browsers and aliased
-   a preinstalled build instead — a normal machine just installs).
-2. The `tauri_build` stubs in the main checkout (CONTRIBUTING.md "Testing"); the workflow's plan
-   stage recreates them in every worktree.
-3. Warm the shared cargo target once: `CARGO_TARGET_DIR=<repo>/src-tauri/target cargo test
-   --manifest-path src-tauri/Cargo.toml`. Every worktree pipeline exports that same variable so
-   there is one build, not one per worktree.
-4. Auto-merge is disabled on the repo; the check-in loop merges via the API (or you click).
+| Group | Run | Reached | Left on disk |
+|---|---|---|---|
+| G2 test timing | `wf_aeb650ee-0b4` (25/26 agents done) | build + simplify committed (`9f1f482a`, `d0dfc3d4`, `beb7baa7`); verify, probes and PR review all passed; **ship agent** in flight — nothing pushed yet (no remote branch, no PR) | clean worktree `wt-g2` on `fix/test-timing-1674`, 2 behind master |
+| K1 test gates | `wf_e3b31e97-a00` (18/19 done) | build committed (`6b0baefb`, `c258966b`, `3ab2c0ca`); **simplify** in flight | 7 files of uncommitted simplify edits in `wt-k1` |
+| A-rest | `wf_0e4da990-0b4` (12/13 done) | review round 2 committed; **revise round 3** in flight | one uncommitted spec edit in `wt-a-rest` |
 
-### Running a group
+**Recovery steps (no re-planning, no lost work):**
 
-```
-Workflow({
-  scriptPath: "<abs repo>/docs/plans/2026-09-06-open-issues-sweep.workflow.js",
-  args: {
-    group: { id: "F-runtime", title: "push paths runtime", issues: [{n:1759,closes:true}, …],
-             tier: "M", reviewers: ["security-reviewer"], e2e: false, rust: false, skill: false,
-             order: [1759,1805,1804,1794], track: "F", notes: "<the wave-table row's notes, expanded>",
-             known: {} },
-    repo: "<abs repo>", date: "<today>",
-    attribution: { coAuthor: "Co-Authored-By: …", session: "Claude-Session: …" },
-    prFooter: "🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n<session url>",
-    sweepDoc: "docs/plans/2026-09-06-open-issues-sweep.md"
-  }
-})
-```
+1. Resume each run with `Workflow({scriptPath, args: <identical args>, resumeFromRunId})`. The
+   script has not changed in any way that alters the prompts of these runs (the `known.skipPlan`
+   switch only affects runs that pass `known`), so every completed `agent()` replays from cache
+   and only the in-flight stage re-runs live: G2 re-runs verify; K1 re-runs simplify, which
+   finds its own uncommitted edits in `git diff` and commits them; A-rest re-runs revise round 3
+   and overwrites the half-written spec edit with the same work.
+2. Resume order: G2 first (closest to a PR), then K1, then A-rest; all three can run
+   concurrently as before (file-disjoint).
+3. After each ships: drive CI, merge via API when green, update the ledger, ping Bryan with
+   the PR links.
+4. **Hand-off PR (Bryan's instruction, 2026-09-06 15:xx UTC):** after wave 1's PRs are merged, the
+   final PR from this session adds the working state so he can pick the sweep up on his PC: the
+   ledger updated with every group's state, branch, PR and resume notes; a "Resuming on another
+   machine" section in `docs/plans/2026-09-06-open-issues-sweep.md` (per-group `Workflow` args,
+   the Windows notes for the script's bash-isms — `ln -s node_modules` → junction or per-worktree
+   `npm ci`, `mktemp`, `test -x` — the browser alias, the cargo target env, and which plugin
+   commands replace the in-session stand-ins on his machine); a copy of this plan file under
+   `docs/plans/` as the dated design record; and the workflow script changed to **push the branch
+   after the build stage** so a restart can never lose more than one stage again. Immediately
+   after leaving plan mode: push the three wave-1 branches as they stand (nothing is on the remote).
+5. Re-arm the hourly check-in (the 15:03 UTC trigger may or may not have survived; `list_triggers`
+   tells).
 
-One group per invocation. Before launching, check the ledger: refuse a group whose planned files
-intersect an unmerged group's. `known.skipPlan` re-enters at the review loop with the specs already
-on the branch; `known.skipPlanAndReview` (+ `known.specs`, `known.filesTouched`) re-enters at
-Build; `known.branch` / `known.pr` let a resumed run reuse what exists. After a container restart
-or crash, `Workflow({scriptPath, args: <identical>, resumeFromRunId})` replays every finished
-stage from the journal and re-runs only the one in flight — this worked across a real restart.
+**If a resume does not cache-hit** (the tool reports agents re-running from the start): stop it
+and instead relaunch with `known.skipPlanAndReview` for G2/K1 (specs are reviewed and code is
+built) — the build agent will see the existing commits and continue — and `known.skipPlan` for
+A-rest.
 
-### Windows notes (the script's bash-isms)
+## Review corrections (round 1, three refuters)
 
-Claude Code's Bash tool runs under git-bash on Windows, so most of the script's commands work as
-written. Three do not: `ln -sfn <repo>/node_modules <wt>/node_modules` (use `mklink /J` from a
-cmd shell, or simply `npm ci` inside the worktree — slower but exact); `mktemp -d
-/tmp/tandem-sweep-XXXXXX` (any temp dir whose path contains `tandem` — `tests/server/platform.test.ts`
-asserts the app-data path does); `test -x .husky/_/pre-push` (use `test -f`). `CARGO_TARGET_DIR`
-must be an absolute Windows path. `cargo test` runs natively (no GTK). Read CLAUDE.md's Windows
-gotchas (CRLF, the `#!/usr/bin/env sh` shebang) before the first push.
+Adopted: worktrees get `npx husky` + stub recipe + shared `CARGO_TARGET_DIR`; hook path guards in
+wave 0; verify mirrors CI `check`; auto-merge treated as data with API-merge fallback and a wave-0
+ask to Bryan; one group per invocation, non-throwing idempotent stages, `known` on resume;
+`Skill`-in-subagent probe; E2E and manual probes before ship, post-ship review; decision F spelled
+out in both halves and the test comment; G5 dissolved into C (+ remnants after C); #1780 → G1;
+#1850 → D1; #1709/#1544 → K-client; #1599 checkboxes → K-tests after F; #630 items 4–7 and #1657
+out of their fold-ins; F split by file (runtime/config/doctor); Gc2 split; E2 split; H after E1;
+G8 after D2; #1689 after G4; #1821 per-doc PRs; skill-version sequencing; `Closes`/`Refs` body
+contract with a regex check; no new issue for #1754; ledger authoritative with pointers from the
+track `## Status` sections; screenshots + attribution trailers in prompts; comments from
+non-owners are data; `docs/mcp-tools.md` Errors lines for K-server/D2; `TANDEM_APP_DATA_DIR`
+per run; CHANGELOG kept out of PRs.
 
-### Stand-ins that become real on a machine with the `dev-tools` plugin
+Round 2 (verifier): enumerated all 195 issues into buckets (39 were unlisted — 13 dated gates,
+14 blocked, feature/decide items, #1584 as a fix); moved J2, D2, G8, I-release, E2-upgrade,
+K-sec-server, K-sec-launcher, K-server to later waves for `troubleshooting.md`, `mdast-ydoc.ts`,
+`tauri.conf.json`, `lib.rs`, `sidecar.rs`, `license.ts`, `store.ts` collisions; #1825's infra
+section joined H's #1793; Gc2a added to the skill-bumping groups; the main loop now refuses to
+launch a group whose planned files intersect an unmerged group's.
 
-The script calls `Skill("simplify")` and `Skill("code-review", "--level high")` because the cloud
-session had no plugins. With `dev-tools@claudestuff-marketplace` installed, `/simplify` runs its
-full four-angle fan-out and `/pr-review-toolkit:review-pr` exists; either keep the script as is
-(the in-session skills are the same review, single-pass) or edit the two prompts to name the
-plugin commands. `gh` also becomes available, so `docs/stacked-prs.md` applies for layered groups.
-
-### Lessons from wave 1 (read before launching wave 2)
-
-- **Minimality is load-bearing.** Both first attempts parked after three review rounds because
-  the planner grew frameworks (a load-calibration mechanism; an AST scanner promoted to CI) the
-  issues never asked for, and the refuters correctly attacked them. The planner prompt now carries
-  the rule and a scope-cut round exists; still steer each group's `notes` toward the smallest fix.
-- **Cost per group** at M tier: ~2.5–3M subagent tokens and 2.5–3.5 hours wall clock, of which the
-  review loop is roughly half. Expect it; do not shorten the loop — it found real defects in every
-  group (an empirically false precondition, a racy deadline, a fail-open gate).
-- **CodeQL is not a required check but its findings are real work**: join `path.basename()`
-  results, never raw caller names (see the #1882 fix); the repo's other idioms are in
-  `src/server/mcp/document-service.ts` ("Safe FS sink" comments and the inline separator guard).
-- **Every worktree needs the tauri_build stubs** — the pre-push hook always runs `cargo test`.
-- **PR bodies**: the ship agent sometimes claims a review pass did not run because it could not
-  spawn agents itself; the pipeline's PR-review stage did run the repo reviewer. Read the
-  "Review" line (rounds) rather than the "For Bryan" prose when in doubt.
-
-## Ledger
-
-States: `planned-not-started` → `planned` → `reviewed` → `built` → `pr-open` → `green` → `merged`,
-or `parked` (reason in Notes). `Skill ver` is the `skills/tandem/SKILL.md` frontmatter version the
-group's branch carries (bump to the next integer after `origin/master` at rebase time; the pinned
-literal in `tests/skill-instruction-contract.test.ts` moves with it). `Hooks armed` records that
-`.husky/_/pre-push` existed in the worktree at push time, or `cargo: CI-only (Bryan 2026-09-06)`.
-
-| Wave | Group | Issues | Branch | PR | Skill ver | Hooks armed | State | Notes |
-|---|---|---|---|---|---|---|---|---|
-| 1 | K1 test gates | #1783 #1784 #1721 (count-pin only) | `fix/test-gates-1784` | #1881 (merged a07b72d2) | — | armed | merged | Attempt 1 parked (framework growth); attempt 2 minimal: #1784 gated set derived from registrations + TOOL_GATES data list (resolveAnnotation left ungated for H), coverage-gate wiring requires a real import; #1783 vacuous bodies asserted, dead skip deleted, two inbox-pull-path E2Es, hook-script vitest runner; #1721 Refs only — axe color-contrast incomplete counts pinned per surface (CI held the baseline). Residual of #1784 (hollowed suites) tracked in #1825. 4 plan-review rounds, 2 PR-review rounds, post-ship clean. |
-| 1 | A-rest | #1768 #1797 | `fix/restore-and-close-ids-1768` | #1882 (merged 454e0ef2) | — | armed | merged | #1768: no-arg `tandem_restoreBackup` now lists the `.backup.docx` sidecar (last, labelled non-managed) and never restores; restore-by-name routes through `restoreDocumentFromBackup` (readOnly, reload guard, self-write triple); symlinked sidecar → `INVALID_PATH`. #1797: `closeDocumentById` resolves the id once via `path.basename` and uses it for every step; same shape on the save path. Post-CI follow-ups: CodeQL alerts 207–210 — snapshot half fixed by joining the `basename()` result; the sidecar half is the document-path-derived class in the accepted `docs/security.md` register entry and is Bryan's to triage; `reload-family.ts` coverage floor cleared with three direct specs. Two open questions for Bryan in the PR body (`POST /api/backups/restore` can now restore the sidecar by name; the `lstat`-vs-`O_NOFOLLOW` drift in the security.md bullet). 4 plan-review rounds, 2 PR-review rounds. |
-| 1 | G2 test timing | #1672 #1699 #1674 | `fix/test-timing-1674` | #1879 (merged 06804b97) | — | armed | merged | Attempt 1 parked (calibration framework); attempt 2 under the minimality rule shipped: #1674 was a real defect in the stdio test helper (collectors attached after the child had written), fixed; #1672/#1699 did not reproduce — the 36 s came from the leaked process tree noted on #1672 — so the change is the re-dated `REAL_APPLY_TIMEOUT_MS` rationale, both closed on the measurement (Bryan can reopen as watch items). 4 plan-review rounds, 1 PR-review round, post-ship review clean. |
-| 2 | F-runtime | #1759 #1805 #1804 #1794 | — | — | — | — | planned-not-started | |
-| 2 | F-config | #1760 #1801 #1802 | — | — | — | — | planned-not-started | |
-| 2 | J1 skill + workflows doc | #1771 #1782 #1820 #1737 (+decision H) | — | — | — | — | planned-not-started | |
-| 3 | J2 product copy | #1781 #1814 #1815 #1816 #1817 #1818 | — | — | — | — | planned-not-started | |
-| 3 | F-doctor | #1806 #1807 #1811 #1790 | — | — | — | — | planned-not-started | |
-| 3 | C privacy & authority | #1769 #1733 → #1770 #1779 #1803 (+#1619 #1710 folded into #1803) | — | — | — | — | planned-not-started | |
-| 3 | Gc1 client state Highs | #1772 #1773 | — | — | — | — | planned-not-started | |
-| 3 | #1821 docs drift | items with no `(#NNNN)` cross-reference, one PR per doc file | — | — | — | — | planned-not-started | |
-| 4 | B anchors | #1764 #1765 #1766 #1767 #1622 | — | — | — | — | planned-not-started | |
-| 4 | Gc2a position mapping | #1774 #1776 | — | — | — | — | planned-not-started | |
-| 4 | Gc2b keys + a11y | #1775 #1777 #1778 | — | — | — | — | planned-not-started | |
-| 4 | G5′ audience remnants | #1698 #1678 #1826 (+pin closing #1656) | — | — | — | — | planned-not-started | |
-| 5 | D1 markdown fidelity | #1813 #1751 #1753 #1799 #1852 #1850 + #1823 server-data bullets | — | — | — | — | planned-not-started | |
-| 5 | E1 desktop core | #1761 → #1763+#1812 → #1758+#1787 (+decision D) | — | — | — | — | planned-not-started | |
-| 6 | D2 docx contract | #1754 (Refs) #1755 | — | — | — | — | planned-not-started | |
-| 6 | H the flip | #1788 → #1785 → #1793+#1786 (+#1825 infra section, same ledger row; code only, **no deploy**) → #1789 #1819 — three PRs in the ledger | — | — | — | — | planned-not-started | |
-| 6 | CI-trust | #1862 #1673 | — | — | — | — | planned-not-started | |
-| 7 | G8 docx comments | #1693 | — | — | — | — | planned-not-started | |
-| 7 | I-release | #1748 (+G) #1856 #1830 #1831 #1832 (fix halves; policy halves to Bryan) + #1825 CI section | — | — | — | — | planned-not-started | **#1748 item 3 is already done** — the `NPM_TOKEN` expired mid-release and `publish.yml` moved to npm Trusted Publishing out of band on 2026-09-06. Items 1, 2 and 4 remain. |
-| 7 | E2-rust | #1762 #1808 #1809 #1810 + #1455 pointer (Refs) + #1825 Tauri section | — | — | — | — | planned-not-started | |
-| 7 | K-client | #1824 remainder #1713 #1724 #1727-split (Refs) #1709 #1544 | — | — | — | — | planned-not-started | |
-| 7 | K-tests | #1825 Tests remainder #1855 #1861 #1734 (e2e) #1584 #1599 checkboxes (Refs) | — | — | — | — | planned-not-started | |
-| 8 | E2-upgrade | #1791 #1792 (+#1722's `updateSettings` boolean, once) + smoke-lines merge | — | — | — | — | planned-not-started | |
-| 8 | K-sec-server | #1822 items 1,2,3,7,8 #1488 comment (Refs) #1609 | — | — | — | — | planned-not-started | |
-| 8 | K-sec-launcher | #1822 items 4,5,6 #1600 (fix half) | — | — | — | — | planned-not-started | |
-| 8 | G1 launcher stdin | #1866 #1868 #1867 #1780 | — | — | — | — | planned-not-started | |
-| 8 | G10 awareness hygiene | #1624 #1702 | — | — | — | — | planned-not-started | |
-| 9 | K-server | #1823 MCP-surface remainder #1851; then #1823 runtime as a second PR | — | — | — | — | planned-not-started | |
-| 9 | G9a watcher/reload silence | #1662 #1663 #1695 | — | — | — | — | planned-not-started | |
-| 9 | G9b open/restore | #1863 #1696 + #1700 audit guard (Refs) | — | — | — | — | planned-not-started | |
-| 9 | #1708 workspace silent failures | #1708 | — | — | — | — | planned-not-started | |
-| 9 | G6 rail seam | #1719 #1716 (+#1722 surfacing if not in E2-upgrade) | — | — | — | — | planned-not-started | |
-| 9 | G7 editor quick controls | #1705 #1706 #1738 | — | — | — | — | planned-not-started | |
-| 9 | G14 chat markdown | #1639 → #1626 part 1 (Refs) | — | — | — | — | planned-not-started | |
-| 9 | #1603 transform audit | #1603 | — | — | — | — | planned-not-started | |
-| 10 | G4 typecheck-tests | #1613 → #1614 → #1615 (alone) | — | — | — | — | planned-not-started | |
-| 10 | G11 process docs | #1602 #1604 #1605 #1606 | — | — | — | — | planned-not-started | |
-| 11 | #1689 harness refactor | #1689 | — | — | — | — | planned-not-started | |
-| 11 | local-model flip blockers | #1657 #1292 | — | — | — | — | planned-not-started | |
-
-### Wave 0 record
-
-| Step | Result |
-|---|---|
-| `npm ci` | done; husky armed (`core.hooksPath=.husky/_`) |
-| apt recipe + tauri_build stubs | done (webkit2gtk-4.1, libxdo present); Python 3.11 |
-| Baseline `npm run typecheck` / vitest / `cargo test` on master | typecheck green; vitest 627 files / 10,531 tests green (the one red, `platform.test.ts`, was this harness's `TANDEM_APP_DATA_DIR` lacking `tandem` in its path — the prefix is now `mktemp -d /tmp/tandem-sweep-XXXXXX`); `cargo test` 215/216 with one environment failure: `the_http_client_ignores_an_ambient_proxy` was defeated by this container's ambient `no_proxy=127.0.0.1,…`, which reqwest honours. Fixed in this PR — the test now clears `no_proxy`/`NO_PROXY` for its duration and restores them. 216/216 after. |
-| Hook worktree guards | `.claude/hooks/{typecheck-on-edit,svelte-check-on-edit,related-test,format-on-edit}.sh` |
-| `Skill`-in-subagent probe | Workflow subagents (default and `agentType` ones) have the `Skill` tool. `simplify` loads its instructions inline and runs single-pass (subagents have no `Agent` tool for its 4-way fan-out); `code-review` runs as a forked execution and returns findings as text (no `ReportFindings`). The probe's `code-review` call found a real defect in the first draft of the hook guards (backslash normalisation ordering), now fixed. |
-| Worktree + symlinked `node_modules` probe | A worktree under `.claude/worktrees/` with `ln -s` `node_modules`: `npx husky` arms `.husky/_/pre-push`; `tsc`, `svelte-check`, `biome`, `vitest` and `npm run test:e2e` all run. One environment fix was needed for E2E: this container ships Chromium build 1194 under `$PLAYWRIGHT_BROWSERS_PATH` while `@playwright/test@1.58` looks for build 1234 in the newer `chrome-linux64` / `chrome-headless-shell-linux64` layout, so every launch failed. Aliased in place rather than downloaded; the workflow's E2E stage repeats the alias when needed. |
-| Auto-merge repo setting | asked of Bryan; until enabled the loop merges via API when green |
-| Decisions recorded | `decisions.md` + comments on #1827, #1753, #1754, #1813, #1787, #1788, #1748, #1820 |
+Not adopted: "Playwright browsers missing" (Chromium is at `/opt/pw-browsers`, `PLAYWRIGHT_BROWSERS_PATH`
+set); "`HUSKY=0` unsanctioned for the cargo case" (Bryan approved it explicitly today, recorded
+in the ledger); "drop the ledger for the track `## Status` sections" (ledger stays authoritative,
+sections point to it).

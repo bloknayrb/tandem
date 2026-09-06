@@ -242,7 +242,15 @@ const result = {
 phase("Plan");
 log(`Group ${g.id}: ${issueList} → ${BRANCH}`);
 
-const plan = await run(
+// Resume switch: a parked group whose specs were fixed by hand re-enters at Build.
+// known.specs lists the spec paths (repo-relative); known.filesTouched the planned files.
+const resumeAtBuild = !!(g.known && g.known.skipPlanAndReview);
+// known.skipPlan alone keeps the existing specs but still runs the review loop.
+const skipPlan = resumeAtBuild || !!(g.known && g.known.skipPlan);
+
+const plan = skipPlan
+  ? { ok: true, specs: (g.known.specs || []).map((path) => ({ issue: 0, path })), filesTouched: g.known.filesTouched || [], risks: [], assumptions: g.known.assumptions || [], bryan: [] }
+  : await run(
   "plan",
   `You are the planning agent for one PR group in the open-issues sweep of ${REPO}.
 ${GROUP}
@@ -254,9 +262,11 @@ STEP 0 — worktree (idempotent). Run, from ${REPO}:
   git worktree add ${WT} -b ${BRANCH} origin/master  ||  (git -C ${WT} checkout ${BRANCH} && git -C ${WT} merge --ff-only origin/master || true)
   ln -sfn ${REPO}/node_modules ${WT}/node_modules
   cd ${WT} && npx husky && test -x .husky/_/pre-push && echo HOOKS_ARMED
-${g.rust ? `  Rust group: recreate the tauri_build stubs inside the worktree exactly as ${REPO}/CONTRIBUTING.md "Testing" describes (src-tauri/binaries/{node-sidecar,tandem-reaper}-<triple>{,.exe} and dist/{channel,server,client,stdio-bridge}). Every cargo command must export CARGO_TARGET_DIR=${REPO}/src-tauri/target.` : ""}
+  EVERY worktree (not only Rust groups — the pre-push hook always runs cargo test): recreate the tauri_build stubs inside the worktree exactly as ${REPO}/CONTRIBUTING.md "Testing" describes: TRIPLE=$(rustc -vV | sed -n 's/host: //p'); mkdir -p src-tauri/binaries dist/{channel,server,client,stdio-bridge}; touch src-tauri/binaries/{node-sidecar,tandem-reaper}-$TRIPLE{,.exe}. Every cargo command anywhere in this pipeline must export CARGO_TARGET_DIR=${REPO}/src-tauri/target (one warm target shared by all worktrees).
 
 STEP 1 — read. Read ${REPO}/CLAUDE.md. Read every issue in this group (body AND comments) via GitHub. Read the track file(s) and, for each issue, the rows that cite it in ${REVIEW_DIR}/areas/*.md, the experiments named for it in ${REVIEW_DIR}/experiments/README.md, and ${REVIEW_DIR}/refuted.md. Read the decisions table in ${args.sweepDoc} (decisions A–H are TAKEN; apply them). Read ${SPECS_DIR}/A8-1796.md as the format precedent. Then read the cited source lines (search for the symbol — line numbers have drifted since 3fb6408).
+
+MINIMALITY RULE (load-bearing — two groups were parked for violating it): the fix is the SMALLEST change that makes the issue's failure impossible or legible, in the files the issue names. Do not introduce calibration mechanisms, new scanners, drift guards, sweep tests, frozen lists, deadlines, or new CI gates unless the issue body itself asks for one; if a measurement refutes the issue's premise, say so in the spec and propose the smallest change that still closes the gap the issue describes (or recommend closing the issue with the measurement, listed under \`bryan\`). A spec longer than ~120 lines is a signal you are building a framework — cut it. Every extra mechanism is attack surface for the reviewers and cost for the maintainer.
 
 STEP 2 — write one spec per issue at ${WT}/${SPECS_DIR}/${g.id}-<issue>.md in exactly the A8-1796 shape: title line; a first paragraph naming the branch (${BRANCH}), whether the PR closes or only references the issue (see the closes/refs lists above), the ledger row and the probe; then "## Problem", "## Fix" (file-and-symbol precise, with the model/precedent named, and every rule from CLAUDE.md that bites called out inline), "## Tests" (discriminating tests — say what wrong implementation each one kills; convert the named experiment into a vitest spec under tests/), "## Done when", "## Not in scope". Where the issue leaves a design choice open, decide it, state the assumption, and list it in \`assumptions\`. Anything only a human can do (hardware smoke, a policy call, a deploy) goes in \`bryan\`, not in the spec's fix.
 
@@ -306,7 +316,7 @@ let round = 0;
 let blocking = [];
 // Lenses that returned `run`'s fallback in the last round — i.e. never reviewed.
 let deadLenses = [];
-while (round < 3) {
+while (!resumeAtBuild && round < 3) {
   round += 1;
   result.reviewRounds = round;
   const reviewers = [];
@@ -368,6 +378,49 @@ Rewrite the affected sections of the specs in place (do not leave the old text),
   }
   if (blocking.length === 0 && deadLenses.length === 0) break;
 }
+// Scope-cut round: three rounds of findings usually means the plan grew machinery the
+// issue never asked for. Cut to the minimal fix once, re-refute once, then park.
+if (blocking.length > 0) {
+  const cut = await run(
+    "scope-cut",
+    `You are the planning agent. Three adversarial rounds still leave blocking findings on the specs below, which means the plan has grown beyond the issues. CUT IT TO THE MINIMAL FIX.
+${GROUP}
+${RULES}
+Specs:
+  ${specPaths}
+Remaining blocking findings:
+${JSON.stringify(blocking, null, 2)}
+Rewrite each spec so that: it changes only the files the issue names (plus a test for the fix); every mechanism a finding targets that the issue did not ask for (calibration, scanners, drift guards, sweep tests, frozen lists, new gates) is REMOVED, not repaired; each finding is either made moot by the removal or fixed directly; the spec is under ~120 lines. Where the issue's premise is refuted by measurement, say so and propose the smallest change that still closes the gap it describes, or recommend closing the issue with the evidence (list under bryan). Append "## Review corrections (scope cut)" listing what was removed and why. Commit as \`docs(specs): ${g.id} scope cut\` with the trailers. Return {ok, adopted:[…], notAdopted:[…]}.`,
+    { label: "scope-cut", phase: "Review", model: M.plan, effort: "high", schema: S_REVISE },
+    { adopted: [], notAdopted: [] }
+  );
+  if (cut.ok) {
+    round += 1;
+    result.reviewRounds = round;
+    const again = (await parallel([
+      () => run("review", refuterPrompt(LENS_RULES), { label: `refute:rules:cut`, phase: "Review", model: M.review, effort: "high", schema: S_FINDINGS }, { blocking: [], nonBlocking: [] }),
+      () => run("review", refuterPrompt(LENS_TESTS), { label: `refute:tests:cut`, phase: "Review", model: M.review, effort: "high", schema: S_FINDINGS }, { blocking: [], nonBlocking: [] }),
+    ])).filter(Boolean);
+    blocking = again.flatMap((f) => f.blocking || []);
+    log(`scope-cut round: ${blocking.length} blocking`);
+    if (blocking.length > 0) {
+      const fixup = await run(
+        "revise",
+        `You are the planning agent. After the scope cut these findings remain; adopt each directly (the fix is given) without adding machinery, append "## Review corrections (post-cut)", commit as \`docs(specs): ${g.id} post-cut fixes\` with the trailers.
+${GROUP}
+${RULES}
+Specs:
+  ${specPaths}
+Findings:
+${JSON.stringify(blocking, null, 2)}
+Return {ok, adopted:[…], notAdopted:[…]}.`,
+        { label: "revise:post-cut", phase: "Review", model: M.plan, effort: "high", schema: S_REVISE },
+        { adopted: [], notAdopted: [] }
+      );
+      if (fixup.ok && fixup.notAdopted.length === 0) blocking = [];
+    }
+  }
+}
 if (blocking.length > 0 || deadLenses.length > 0) {
   result.parked = true;
   result.stage = "review";
@@ -408,6 +461,18 @@ if (!build.ok) {
 }
 result.commits = build.commits;
 result.filesTouched = Array.from(new Set([...(result.filesTouched || []), ...(build.filesTouched || [])]));
+
+// Checkpoint push: a container restart between here and ship must not lose the build.
+// The pre-push hook runs (full gate); a red hook here is reported, not fixed — the verify
+// stage owns that — so the checkpoint is best-effort and never blocks the pipeline.
+const checkpoint = await run(
+  "checkpoint",
+  `Checkpoint push. In ${WT}: \`test -x .husky/_/pre-push || npx husky\`; then \`CARGO_TARGET_DIR=${REPO}/src-tauri/target TANDEM_APP_DATA_DIR=$(mktemp -d /tmp/tandem-sweep-XXXXXX) git push -u origin ${BRANCH}\`. If the hook fails, do NOT fix anything and never bypass it: return ok:false with the failing stage's last 20 lines in notes. Return {ok, commits:[], notes}.`,
+  { label: `checkpoint:${g.id}`, phase: "Build", model: "sonnet", effort: "low", schema: S_FIX },
+  { commits: [], notes: "" }
+);
+result.checkpointPushed = !!checkpoint.ok;
+log(`checkpoint push: ${checkpoint.ok ? "pushed" : "not pushed — " + (checkpoint.notes || checkpoint.error || "").slice(0, 200)}`);
 result.skillVersion = build.skillVersion;
 result.bryan.push(...(build.bryan || []));
 result.buildNotes = build.notes;
