@@ -150,13 +150,20 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
     throw new Error(`Unknown tool: ${req.params.name}`);
   });
 
+  // Claude Code also sends `input_preview` — the approval prompt's payload: file
+  // bodies for a `Write`, the command line for a `Bash`. It is deliberately
+  // absent here, so the parse below strips it and nothing downstream can reach
+  // it (#1884). The POST it used to ride on is a `NON_LOOPBACK_ALLOWED` route,
+  // so under Cowork the whole body crosses the LAN in plaintext — and the
+  // server discarded the field on arrival anyway (#1794). `description` is the
+  // tool-level summary line and still travels; that asymmetry is stated in
+  // docs/mcp-tools.md and the #1884 register entry.
   const PermissionRequestSchema = z.object({
     method: z.literal("notifications/claude/channel/permission_request"),
     params: z.object({
       request_id: z.string(),
       tool_name: z.string(),
       description: z.string(),
-      input_preview: z.string(),
     }),
   });
 
@@ -171,7 +178,6 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
             requestId: params.request_id,
             toolName: params.tool_name,
             description: params.description,
-            inputPreview: params.input_preview,
           }),
         },
         CHANNEL_PERMISSION_FETCH_TIMEOUT_MS,

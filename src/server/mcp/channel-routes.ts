@@ -134,9 +134,13 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
   });
 
   // Channel permission relay: the shim forwards Claude Code's tool approval
-  // prompt and the entry is held for PERMISSION_TTL_MS. There is no return leg
-  // — see docs/architecture.md and ADR-047 §3. The shim's approval-prompt
-  // payload is not stored.
+  // prompt. There is no return leg — see docs/architecture.md and ADR-047 §3.
+  // The prompt's `input_preview` (file bodies, command lines) is discarded on
+  // arrival — the shim no longer sends it either (#1884) — while `description`,
+  // the tool-level summary line, IS stored and served by the GET below. It
+  // stays resident until a later request's sweep evicts it: `PERMISSION_TTL_MS`
+  // is the age at which a sweep evicts, not a residency bound, because nothing
+  // sweeps on a timer (see `sweepStalePermissions`).
   app.options(API_CHANNEL_PERMISSION, apiMiddleware);
   app.post(API_CHANNEL_PERMISSION, apiMiddleware, (req: Request, res: Response) => {
     const { requestId, toolName, description } = (req.body ?? {}) as Record<string, unknown>;

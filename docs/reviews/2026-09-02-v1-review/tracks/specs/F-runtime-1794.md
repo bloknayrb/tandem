@@ -156,6 +156,25 @@ against a register bullet opening. Fixed by the two register edits above, made t
 stays green, and by citing #1884/#1885 rather than "listed for Bryan". Two findings made this point;
 one correction covers both.
 
+## Review corrections (second pass, post-PR)
+
+**The POST-side sweep shipped after all — the "Removed" paragraph below records the scope cut, not
+the branch.** The post-cut review round found that with no client polling the GET, nothing ever ran
+the sweep, so every forwarded `description` stayed resident for the life of the server process;
+`sweepStalePermissions()` now runs from both routes, with the POST as the load-bearing one, pinned by
+`evicts stale entries on the POST, not only on the GET nothing polls`. `docs/mcp-tools.md` and the
+#1884 register entry describe that state. The route comment had lagged both — it said the entry
+"is held for `PERMISSION_TTL_MS`" and that the prompt payload "is not stored", while `description`
+IS stored and served and residency is bounded only by the next request's sweep; it now says so.
+
+**The shim stops sending `input_preview`.** The first pass left the shim transmitting it ("the
+server now discards it") and filed the LAN crossing under #1884. That was the half within reach:
+`src/channel/run.ts`'s `PermissionRequestSchema` no longer declares the field, so the SDK's parse
+strips it and the POST body carries `requestId`, `toolName` and `description` only — pinned by
+`tests/channel/permission-forward.test.ts`, which drives the real handler through the registered
+schema. #1884 stays open for the served `description`; its register entry, `CLAUDE.md`'s clause,
+`docs/mcp-tools.md` and `docs/architecture.md` were re-corrected to say what still crosses.
+
 **Removed — and one finding is moot as a result.** The `sweepStale()` hoist and its behavioural spec
 (POST `req_A`, roll the clock past `PERMISSION_TTL_MS`, POST `req_B`, roll back, `GET`, assert
 `["req_B"]`), plus the clause counting `sweepStale(` occurrences: bounding `pendingPermissions` across
