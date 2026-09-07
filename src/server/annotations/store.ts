@@ -430,8 +430,10 @@ function notifyFailure(
 
   // Mirror the RAW error (path + code intact) to stderr for power users
   // debugging without the UI — the scrub above only affects what reaches
-  // the client-facing notification.
-  console.error(`[ANNOTATION-STORE] ${message}`, err);
+  // the client-facing notification. `message` carries the user-named file
+  // basename, so it goes in as a `%s` argument, never as the format string
+  // itself (CodeQL js/tainted-format-string; same shape as document-service).
+  console.error("[ANNOTATION-STORE] %s", message, err);
 }
 
 /**
