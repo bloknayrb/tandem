@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -304,6 +305,32 @@ describe("shipped Tandem skill instruction contract", () => {
 
     expect(section).toMatch(/orchestrator/i);
     expect(section).toContain("tandem_checkInbox");
+  });
+
+  // #1790 item 3. Until now this file pinned the frontmatter `version:` NUMBER only, so a
+  // content-only edit at an unchanged version was invisible — the miss that made v0.20.0 and
+  // v0.20.1 never reach upgraders, since the refresh gate is version-keyed.
+  //
+  // The hash covers the text AFTER the frontmatter's closing `---`, with CRLF normalised
+  // first (this repo's CRLF-staleness hazard must not red the suite). Excluding the
+  // frontmatter is deliberate: a version bump alone does not churn the hash, so the loud case
+  // is exactly "body changed, version did not".
+  //
+  // HONEST LIMIT: this forces a deliberate edit at the spot that says what to do. It cannot
+  // prove the bump happened.
+  it("reds on a body-only skill edit, not just a version change (#1790)", () => {
+    const skill = readShippedSkill().replace(/\r\n/g, "\n");
+    const frontmatterBlock = /^---\n[\s\S]*?\n---\n/.exec(skill)?.[0];
+    expect(frontmatterBlock, "the shipped skill has no frontmatter").toBeDefined();
+    const body = skill.slice((frontmatterBlock ?? "").length);
+    const bodyHash = createHash("sha256").update(body, "utf8").digest("hex").slice(0, 12);
+
+    expect(
+      { version: /^version:\s*(\d+)\s*$/m.exec(skill)?.[1], bodyHash },
+      "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
+        "literals here in the same commit — the installed copy only refreshes when the " +
+        "bundled version is newer, so a body edit at an unchanged version never ships.",
+    ).toEqual({ version: "15", bodyHash: "cfd1176de0cf" });
   });
 
   it("tells Claude not to insert mid-paragraph line breaks (#1737)", () => {

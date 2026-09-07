@@ -2061,14 +2061,55 @@ async function maybeBackupExistingConfig(
  * `homeOverride` is supported for tests only — the apply HTTP handler
  * MUST NOT thread this from the request body. Same symlink/realpath
  * hardening as `applyConfig`.
+ *
+ * **It compares before writing (#1790).** An OLDER npm `tandem setup --apply`
+ * — which doctor prescribes for several conditions — used to silently downgrade
+ * a newer installed skill.
  */
-export async function installSkill(opts: { homeOverride?: string } = {}): Promise<void> {
+export async function installSkill(
+  opts: { homeOverride?: string } = {},
+): Promise<SkillInstallResult> {
   const home = opts.homeOverride ?? homedir();
   const skillPath = join(home, ".claude", "skills", "tandem", "SKILL.md");
   assertPathSafe(skillPath, { allowedRoots: opts.homeOverride ? [opts.homeOverride] : undefined });
   await mkdir(dirname(skillPath), { recursive: true });
+
+  // Strictly `>`, not the refresher's `>=`. That belongs to the silent
+  // background path; this is the authoritative, consent-bearing installer, and
+  // equal is what almost every run is — `>=` would tell a current user that v15
+  // is newer than v15, and would remove today's repair path for a hand-mangled
+  // SKILL.md that still carries the current version.
+  //
+  // ENOENT falls through to the write: this is the CREATE path, the one thing
+  // it must not inherit from the refresher. Any other read error also falls
+  // through, preserving today's behaviour. An unstamped bundle
+  // (`BUNDLED_SKILL_VERSION === 0`) cannot be compared, so it writes.
+  if (BUNDLED_SKILL_VERSION !== 0) {
+    try {
+      const current = await readFile(skillPath, "utf8");
+      const onDiskVersion = readSkillVersion(current);
+      if (onDiskVersion > BUNDLED_SKILL_VERSION) {
+        return { written: false, onDiskVersion, bundledVersion: BUNDLED_SKILL_VERSION };
+      }
+    } catch {
+      // Fall through to the write.
+    }
+  }
+
   await atomicWrite(SKILL_CONTENT, skillPath);
+  return { written: true };
 }
+
+/**
+ * What {@link installSkill} did. The `written: false` arm exists so the caller
+ * can say why nothing changed — it is the return half of the injected
+ * `installSkill` seam in `IntegrationsRoutesDeps`, so do not widen it to
+ * `Promise<unknown>` to silence a retype: that erases the contract keeping the
+ * real `~/.claude/skills/tandem/SKILL.md` out of the suite (#1894).
+ */
+export type SkillInstallResult =
+  | { written: true }
+  | { written: false; onDiskVersion: number; bundledVersion: number };
 
 /** Parse the integer `version:` from a skill front-matter block. Returns 0
  * if the file doesn't exist, has no version, or fails to parse — older
@@ -2096,6 +2137,32 @@ export function getSkillRefreshError(): SkillRefreshError | null {
 export function _resetSkillRefreshErrorForTests(): void {
   if (process.env.VITEST !== "true") return;
   lastSkillRefreshError = null;
+}
+
+/**
+ * Record what the wizard's {@link installSkill} did on the same channel the
+ * refresher uses, so `GET /api/launcher/status` can say it. The apply route
+ * answers 200 with every integration `applied` either way — a declined skill
+ * is not a failed integration — but without this the decline (#1790) was
+ * visible nowhere: only the refresher set `lastSkillRefreshError`, and the
+ * route discarded the result. A write clears the record for the same reason
+ * the refresher's does: the file was just brought to the bundled version.
+ */
+export function recordSkillInstallOutcome(result: SkillInstallResult): void {
+  if (result.written) {
+    lastSkillRefreshError = null;
+    return;
+  }
+  // Same wording and the same delete-the-file remedy as `tandem setup --apply`
+  // prints: no Tandem version moves a `version: 999` file, so "upgrade Tandem"
+  // would be a dead-end fix line.
+  lastSkillRefreshError = {
+    code: "newer-on-disk",
+    message:
+      `kept the installed skill (v${result.onDiskVersion} on disk is newer than this ` +
+      `install's v${result.bundledVersion}) — delete ~/.claude/skills/tandem/SKILL.md and ` +
+      "re-run to replace it",
+  };
 }
 
 /**

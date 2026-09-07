@@ -38,7 +38,9 @@
  * - Resolves `tokenSecretRef` via `deps.keychain.getSecret(ref)` per entry.
  * - Calls `applyConfig` with explicit `{ create, remove }` ops built from
  *   the user's confirmation diff (passed via the wizard's persist call).
- * - Calls `installSkill()` exactly once after the per-integration loop.
+ * - Calls `installSkill()` exactly once after the per-integration loop, and
+ *   records a declined install (#1790, newer skill on disk) on the
+ *   skill-refresh error channel — the response shape does not carry it.
  * - Response never echoes entries / headers / tokens.
  */
 
@@ -96,6 +98,7 @@ import {
   type McpEntry,
   PathRejectedError,
   type RemovableEntry,
+  recordSkillInstallOutcome,
   shouldRegisterChannelShim,
 } from "./apply.js";
 import {
@@ -1005,7 +1008,18 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
       // Skill install runs once if anything applied (per-user side effect).
       if (anyApplied) {
         try {
-          await (deps.installSkill ?? installSkill)();
+          const skill = await (deps.installSkill ?? installSkill)();
+          // A decline (#1790: a NEWER skill is on disk) is not a failed
+          // integration, so the response shape stays as it is — but it must
+          // not vanish either. It rides the refresher's error channel, which
+          // `GET /api/launcher/status` already surfaces and the client already
+          // renders; before this, only the refresher ever set it.
+          recordSkillInstallOutcome(skill);
+          if (!skill.written) {
+            console.error(
+              `[Tandem] apply: kept the installed skill (v${skill.onDiskVersion} on disk is newer than this install's v${skill.bundledVersion})`,
+            );
+          }
         } catch (err) {
           // Non-fatal; log only.
           console.error("[Tandem] apply: skill install failed:", err);
