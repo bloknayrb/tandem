@@ -38,7 +38,10 @@ import {
   installSkill,
   resolveChannelShimIntent,
 } from "../../src/server/integrations/apply.js";
-import { ERROR_CODE_CONFIG_MALFORMED } from "../../src/shared/integrations/contract.js";
+import {
+  ERROR_CODE_CONFIG_MALFORMED,
+  ERROR_CODE_CONFIG_TOO_LARGE,
+} from "../../src/shared/integrations/contract.js";
 
 const CLAUDE_CODE: DetectedTarget = {
   label: "Claude Code",
@@ -151,6 +154,35 @@ describe("runSetup({ apply: true }) orchestration", () => {
     const out = stderr();
     expect(out).toContain("Setup failed");
     expect(out).toContain("refused to rewrite");
+    expect(out).not.toContain("Check file permissions");
+  });
+
+  it("does not prescribe a JSON fix when the refusal was CONFIG_TOO_LARGE", async () => {
+    // Round-2 review of #1801/#1802. `ConfigRefusalError` covers two conditions
+    // with nothing in common but the decision to leave the file alone, and a
+    // count-only branch printed the malformed remedy for both: the user whose
+    // `~/.claude.json` outgrew the cap — the routinely-multi-megabyte
+    // population #1801 exists for — was told to fix JSON that parses perfectly
+    // and to restore a backup they have no reason to have, then to re-run the
+    // identical command. The wizard already branches on `err.reason`.
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockRejectedValue(
+      new ConfigRefusalError(
+        ERROR_CODE_CONFIG_TOO_LARGE,
+        "/home/u/.claude.json is 20000000 bytes; refusing to read (cap: 16777216).",
+      ),
+    );
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await expect(runSetup({ apply: true })).rejects.toThrow("process.exit called");
+
+    const out = stderr();
+    expect(out).toContain("refused to rewrite");
+    expect(out).toContain("larger than Tandem will rewrite safely");
+    expect(out).not.toContain("Fix the JSON");
+    expect(out).not.toContain("restore the file from a backup");
     expect(out).not.toContain("Check file permissions");
   });
 

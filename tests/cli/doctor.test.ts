@@ -1982,6 +1982,34 @@ describe("desktop-mcp-config remedies reach both branches", () => {
     // this file holds `env.TANDEM_AUTH_TOKEN`.
     expect(warn?.message).not.toContain("not json");
   });
+
+  it("treats an EMPTY desktop config as unregistered, not as unreadable", async () => {
+    // Round-2 review of #1802: `applyConfig` starts fresh on a zero-byte file,
+    // so "Tandem will not rewrite a config it could not read" is false of it
+    // and drops the one command that fixes it.
+    const configPath = claudeDesktopConfigPath({ homeOverride: home });
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, "");
+
+    const warn = await desktopResult();
+    expect(warn?.message).toContain("not registered");
+    expect(warn?.fix).toContain("Restart Claude Desktop");
+    expect(warn?.fix).not.toContain("will not rewrite");
+  });
+
+  it("does not report a BOM-prefixed but valid desktop config as unreadable", async () => {
+    const configPath = claudeDesktopConfigPath({ homeOverride: home });
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(
+      configPath,
+      `﻿${JSON.stringify({ mcpServers: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } } })}`,
+    );
+
+    const report = await runDoctor({ homeOverride: home });
+    const entry = report.results.find((x) => x.check === "desktop-mcp-config");
+    expect(entry?.status).toBe("pass");
+    expect(entry?.message).toContain("tandem registered");
+  });
 });
 
 // Three wiring gaps found in review: `checkUserMcpConfig` (~/.claude.json),
@@ -2026,6 +2054,37 @@ describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
     // And `setup --apply` routes to that same refusal, so prescribing it here
     // would be a dead-end fix line for the condition being reported.
     expect(warn?.fix).not.toMatch(/setup --apply/);
+  });
+
+  it("prescribes setup --apply for an EMPTY ~/.claude.json", async () => {
+    // Round-2 review of #1802. `readClaudeConfig` had no emptiness screen, so a
+    // crash-truncated (zero-byte) config landed on the malformed arm and was
+    // told "Tandem will not rewrite a config it cannot parse" — while
+    // `applyConfig` starts fresh on exactly this input, i.e. `setup --apply`
+    // resolves it outright. The user was sent to hand-edit a file with no
+    // content in it.
+    writeFileSync(claudeCodeConfigPath({ homeOverride: home }), "");
+
+    const warn = await userMcpResult();
+    expect(warn?.message).toContain("empty");
+    expect(warn?.fix).toMatch(/setup --apply|wizard/);
+    expect(warn?.fix).not.toContain("will not rewrite");
+    // Not folded into the absent branch: the file is right there.
+    expect(warn?.message).not.toContain("not found");
+  });
+
+  it("does not report a BOM-prefixed but valid ~/.claude.json as broken", async () => {
+    // The other side of the same screen. `applyConfig` strips U+FEFF and
+    // rewrites this file happily, so any refusal wording about it is false.
+    writeFileSync(
+      claudeCodeConfigPath({ homeOverride: home }),
+      `﻿${JSON.stringify({ mcpServers: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } } })}`,
+    );
+
+    const report = await runDoctor();
+    const entry = report.results.find((x) => x.check === "user-mcp-config");
+    expect(entry?.status).toBe("pass");
+    expect(entry?.message).toContain("tandem registered");
   });
 
   it("still names a fallback when ~/.claude.json does not exist at all", async () => {

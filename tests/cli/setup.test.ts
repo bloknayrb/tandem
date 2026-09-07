@@ -662,7 +662,12 @@ describe("applyConfigWithToken — rotation preserves, it does not re-derive", (
       homeOverride: home,
     });
 
-    expect(result.staleTokenTargets).toEqual([expect.stringContaining("Claude Desktop")]);
+    // The KIND rides along with the label, and it is load-bearing: the caller's
+    // remedy is a removal command, and an untargeted `--without-channel-shim`
+    // removes the shim from every detected kind.
+    expect(result.staleTokenTargets).toEqual([
+      { label: expect.stringContaining("Claude Desktop"), kind: "claude-desktop" },
+    ]);
     // It is a WARNING about a counted target, not an error and not a skip.
     expect(result.errors).toEqual([]);
     expect(result.updated).toBeGreaterThanOrEqual(2);

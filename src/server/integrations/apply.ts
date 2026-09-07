@@ -2334,13 +2334,25 @@ export async function resolveChannelShimIntent(
  * did get the new token — so crediting it silently would let `tandem
  * rotate-token`, the documented remedy for a leaked token, print "Updated 1
  * config file(s)" while a superseded bearer token stays on disk and the shim
- * 401s with nothing said. Every preserved-but-not-rewritten target's label
- * lands in `staleTokenTargets` so the caller can name it.
+ * 401s with nothing said. Every preserved-but-not-rewritten target lands in
+ * `staleTokenTargets` so the caller can name it.
+ *
+ * **The `kind` rides along with the label, and it is load-bearing rather than
+ * informational.** The remedy the caller prints for a stale entry is a removal
+ * command, and `resolveChannelShimIntent` reads `--without-channel-shim` as
+ * "remove, on every detected kind" — so an untargeted remedy for a Claude
+ * Desktop entry also deletes a Claude Code shim the user deliberately opted
+ * into, which is the implicit-deletion class #1760 exists to eliminate. The
+ * caller needs the `--target=` value, not a display label.
  */
 export async function applyConfigWithToken(
   token: string | null,
   opts: { force?: boolean; withChannelShim?: boolean; homeOverride?: string } = {},
-): Promise<{ updated: number; errors: string[]; staleTokenTargets: string[] }> {
+): Promise<{
+  updated: number;
+  errors: string[];
+  staleTokenTargets: { label: string; kind: TargetKind }[];
+}> {
   // `homeOverride` exists for tests only, and it earns its keep: the
   // preserve-vs-re-derive distinction below is a property of the WIRING, not of
   // either helper, so nothing short of driving the real function against a real
@@ -2349,7 +2361,7 @@ export async function applyConfigWithToken(
 
   let updated = 0;
   const errors: string[] = [];
-  const staleTokenTargets: string[] = [];
+  const staleTokenTargets: { label: string; kind: TargetKind }[] = [];
   for (const t of targets) {
     try {
       const preserveShim = await resolveChannelShimIntent(
@@ -2370,7 +2382,9 @@ export async function applyConfigWithToken(
       // `env.TANDEM_AUTH_TOKEN` it already had, which after a rotation is the
       // superseded one. Nothing later heals it — the boot sweep's
       // `repairEntryInPlace` rewrites `command`/`args` and never `env`.
-      if (preserveShim && !writeShim && token !== null) staleTokenTargets.push(t.label);
+      if (preserveShim && !writeShim && token !== null) {
+        staleTokenTargets.push({ label: t.label, kind: t.kind });
+      }
     } catch (err) {
       errors.push(`${t.label}: ${err instanceof Error ? err.message : String(err)}`);
     }

@@ -17,7 +17,11 @@ import {
   validateChannelShimPrereq,
 } from "../server/integrations/apply.js";
 import { CLAUDE_PLUGIN_INSTALL_COMMANDS } from "../shared/constants.js";
-import { targetPushSupport } from "../shared/integrations/contract.js";
+import {
+  ERROR_CODE_CONFIG_MALFORMED,
+  ERROR_CODE_CONFIG_TOO_LARGE,
+  targetPushSupport,
+} from "../shared/integrations/contract.js";
 
 /**
  * Parse repeatable `--target=<kind>` CLI args into valid target kinds plus the
@@ -117,7 +121,7 @@ async function applySetup(opts: SetupOptions): Promise<void> {
     targets = targets.filter((t) => wanted.has(t.kind));
   }
 
-  let outcome: WriteOutcome = { failures: 0, refusals: 0, shimRegisteredFor: [] };
+  let outcome: WriteOutcome = { failures: 0, refusals: [], shimRegisteredFor: [] };
   if (targets.length === 0) {
     // `detectTargets` returns an empty list for two very different reasons, and
     // the generic hint is actively wrong for one of them: when the home
@@ -153,10 +157,8 @@ async function applySetup(opts: SetupOptions): Promise<void> {
       // user goes and checks permissions that were fine all along. `doctor` and
       // the wizard both name the real remedy; this was the third surface.
       console.error(
-        outcome.refusals === outcome.failures
-          ? "\nSetup failed — Tandem refused to rewrite the config file(s) above and left them\n" +
-              "exactly as found. Fix the JSON, or restore the file from a backup, then re-run:\n" +
-              "  tandem setup --apply"
+        outcome.refusals.length === outcome.failures
+          ? refusalSummary(outcome.refusals)
           : "\nSetup failed — could not write any configuration. Check file permissions.",
       );
     } else if (outcome.failures > 0) {
@@ -192,13 +194,54 @@ async function applySetup(opts: SetupOptions): Promise<void> {
   }
 }
 
+/**
+ * The all-failed summary for a run where every failure was a refusal.
+ *
+ * Branches on the REASON, not merely on the count. `ConfigRefusalError` covers
+ * two conditions with nothing in common but the decision to leave the file
+ * alone, and a count-only branch printed the malformed remedy for both: a user
+ * whose `~/.claude.json` has outgrown the cap — the routinely-multi-megabyte
+ * population #1801 exists for — was told to fix JSON that parses perfectly and
+ * to restore a backup they have no reason to have, then to re-run the identical
+ * command. The wizard already branches on `err.reason`
+ * (`IntegrationWizardModal#resultErrorText`); this is the CLI half of the same
+ * fact.
+ */
+function refusalSummary(reasons: readonly ConfigRefusalError["reason"][]): string {
+  const lead =
+    "\nSetup failed — Tandem refused to rewrite the config file(s) above and left them\n" +
+    "exactly as found.";
+  const kinds = new Set(reasons);
+  if (kinds.size === 1 && kinds.has(ERROR_CODE_CONFIG_TOO_LARGE)) {
+    // No "fix the JSON" and no backup: nothing is broken. The per-target line
+    // above already printed the size and the cap, so this only has to say what
+    // to do about it — and honestly, which means naming the hand-registration
+    // route rather than implying the file can simply be shrunk.
+    return (
+      `${lead} The file is larger than Tandem will rewrite safely — it is not\n` +
+      "corrupt. Register Tandem by hand in that file, or reduce its size, then re-run:\n" +
+      "  tandem setup --apply"
+    );
+  }
+  if (kinds.size === 1 && kinds.has(ERROR_CODE_CONFIG_MALFORMED)) {
+    return (
+      `${lead} Fix the JSON, or restore the file from a backup, then re-run:\n` +
+      "  tandem setup --apply"
+    );
+  }
+  // Mixed reasons across several targets: no single remedy is true of all of
+  // them, so point at the per-target lines rather than guessing.
+  return `${lead} Each line above says what its file needs.`;
+}
+
 interface WriteOutcome {
   failures: number;
-  /** How many of those failures were a `ConfigRefusalError` — Tandem declining
-   *  to rewrite a malformed or oversize config — rather than an I/O error. The
-   *  summary branches on it so a refusal never sends the user to check
-   *  permissions on a file whose permissions are fine. */
-  refusals: number;
+  /** The `reason` of each failure that was a `ConfigRefusalError` — Tandem
+   *  declining to rewrite a malformed or oversize config — rather than an I/O
+   *  error. The summary branches on the reasons, so a refusal never sends the
+   *  user to check permissions on a file whose permissions are fine, nor to fix
+   *  JSON in a file that parses. */
+  refusals: ConfigRefusalError["reason"][];
   /** Targets that actually got a channel-shim entry written. `printPushStatus`
    *  reports off THIS, not off a file-existence check — `shouldRegisterChannelShim`
    *  returns false for every Claude Desktop target, so a run that registered no
@@ -208,7 +251,7 @@ interface WriteOutcome {
 
 async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Promise<WriteOutcome> {
   let failures = 0;
-  let refusals = 0;
+  const refusals: ConfigRefusalError["reason"][] = [];
   const shimRegisteredFor: string[] = [];
   for (const t of targets) {
     try {
@@ -255,7 +298,7 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
       if (writeShim) shimRegisteredFor.push(t.label);
     } catch (err) {
       failures++;
-      if (err instanceof ConfigRefusalError) refusals++;
+      if (err instanceof ConfigRefusalError) refusals.push(err.reason);
       console.error(
         `  \x1b[31m✗\x1b[0m ${t.label}: ${err instanceof Error ? err.message : String(err)}`,
       );

@@ -550,6 +550,12 @@ type ClaudeConfigRead =
   | { kind: "absent" }
   /** The open or read failed — EACCES, EISDIR, ELOOP. Nothing is known about the contents. */
   | { kind: "unreadable" }
+  /**
+   * Read fine, but it holds nothing: zero bytes, whitespace only, or a lone
+   * BOM. Split out from `malformed` because `applyConfig` starts FRESH on this
+   * input rather than refusing it (#1802), so the two must not share a remedy.
+   */
+  | { kind: "empty" }
   /** Read fine, but it is not a JSON object: a parse error, or a literal `null`/array/scalar. */
   | { kind: "malformed" }
   | { kind: "ok"; value: Record<string, unknown> };
@@ -606,9 +612,23 @@ export function readClaudeConfig(path: string): ClaudeConfigRead {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return { kind: "absent" };
     return { kind: "unreadable" };
   }
+  // Strip a leading BOM and screen for emptiness BEFORE parsing, matching
+  // `applyConfig` and `readConfigForMutation` byte for byte. Without this pair
+  // `malformed` was WIDER than the refusal whose remedy it now prescribes: a
+  // BOM-prefixed but perfectly valid config parses fine for `applyConfig`
+  // (which strips U+FEFF), and a zero-byte one makes it start fresh — yet both
+  // were reported here as "not valid JSON … Tandem will not rewrite a config it
+  // cannot parse", a statement false of both, naming no working command. A
+  // crash-truncated `~/.claude.json` is the concrete case: `setup --apply`
+  // fixes it outright, and the old wording sent the user to hand-edit a file
+  // with no content in it.
+  const body = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+  // `/\S/.test`, not `trim() !== ""`: same predicate, no trimmed copy of a file
+  // `applyConfig` permits to reach 16 MiB.
+  if (!/\S/.test(body)) return { kind: "empty" };
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(body);
   } catch {
     return { kind: "malformed" };
   }
@@ -1127,6 +1147,16 @@ function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability): void {
     return;
   }
 
+  if (read.kind === "empty") {
+    // An empty (or BOM-only) `~/.claude.json` is the one shape the refusal
+    // wording below is false about: `applyConfig` starts fresh on it, so
+    // `setup --apply` really does resolve this in one command. Reported rather
+    // than folded into `absent` because the file does exist — "not found"
+    // sends the user looking for something that is right there.
+    r.warn("~/.claude.json is empty", setupApplyRemedy(cliAvailable()));
+    return;
+  }
+
   if (read.kind === "unreadable" || read.kind === "malformed") {
     // Two outcomes, one branch, but two statements — the earlier single
     // "is malformed JSON" asserted a fact that is false for the commoner of
@@ -1146,7 +1176,10 @@ function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability): void {
     // fallback lands there too — so prescribing either is a dead-end fix line
     // for the condition being reported. It used to promise "Tandem backs the
     // file up before rewriting it", which is now false in both halves: there
-    // is no backup and there is no rewrite.
+    // is no backup and there is no rewrite. That claim is only true because
+    // `readClaudeConfig` screens the BOM and the empty file out of this arm
+    // first — both are inputs `applyConfig` accepts, and while they landed here
+    // the sentence below asserted a falsehood about them.
     r.warn(
       read.kind === "malformed"
         ? "~/.claude.json is not valid JSON"
@@ -1505,6 +1538,18 @@ function checkDesktopMcpConfig(
   // to be in a `try` regardless, so a separate stat would be a second syscall
   // answering a question this one already answers — plus a TOCTOU window.
   if (read.kind === "absent") return;
+  // An empty (or BOM-only) file is not a config Tandem refuses — `applyConfig`
+  // starts fresh on it — so it is the *unregistered* case, not the unreadable
+  // one, and it gets the remedy that actually works. Reported rather than
+  // silently returned like `absent`: the file exists, so Claude Desktop is
+  // installed and the missing entry is worth naming.
+  if (read.kind === "empty") {
+    r.warn(
+      "tandem not registered in the Claude Desktop config",
+      withSuffix(setupApplyRemedy(cliAvailable()), DESKTOP_RESTART_NOTE),
+    );
+    return;
+  }
   // Unlike the Claude Code sibling, one branch covers both: "could not be read
   // as JSON" is true whether the open failed or the parse did, so there is no
   // false assertion to split apart.
@@ -1521,7 +1566,10 @@ function checkDesktopMcpConfig(
     // The sentence must stay true of BOTH kinds this branch merges: an EACCES
     // file was never parsed and is probably perfectly valid JSON, so it must
     // not prescribe a JSON fix — and the branch must not be split to allow one,
-    // for the reason stated above it.
+    // for the reason stated above it. What DID have to move out of the branch
+    // is the BOM-prefixed-but-valid file: `applyConfig` strips U+FEFF and
+    // rewrites it happily, so reporting it as unreadable-and-refused was a
+    // flat falsehood. `readClaudeConfig` strips it before parsing now.
     r.warn(
       "Claude Desktop config could not be read as JSON",
       withSuffix(

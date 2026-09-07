@@ -251,9 +251,11 @@ describe("rotateToken CLI", () => {
     // rotation — while the target is still counted in `updated`. Rotation is
     // what a user runs after a leak, so the superseded credential has to be
     // named rather than folded into "Updated 2 config file(s)".
-    _applyConfigSpy
-      .mockReset()
-      .mockResolvedValue({ updated: 2, errors: [], staleTokenTargets: ["Claude Desktop"] });
+    _applyConfigSpy.mockReset().mockResolvedValue({
+      updated: 2,
+      errors: [],
+      staleTokenTargets: [{ label: "Claude Desktop", kind: "claude-desktop" }],
+    });
     const stderrCalls: unknown[][] = [];
     const stderrSpy = vi
       .spyOn(console, "error")
@@ -265,6 +267,13 @@ describe("rotateToken CLI", () => {
     const messages = stderrCalls.flat().join("\n");
     expect(messages).toContain("Claude Desktop");
     expect(messages).toContain("still holds the OLD token");
+    // The removal remedy is TARGETED. `--without-channel-shim` on its own means
+    // "remove, on every detected kind", so the untargeted form would delete a
+    // Claude Code shim the user had deliberately opted into — the
+    // implicit-deletion class #1760 exists to eliminate, re-created by the
+    // fix-it line for a different target.
+    expect(messages).toContain("--target=claude-desktop --without-channel-shim");
+    expect(messages).not.toMatch(/setup --apply --without-channel-shim/);
     stderrSpy.mockRestore();
   });
 

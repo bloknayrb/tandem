@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { promises as fsPromises } from "node:fs";
 import path from "node:path";
-import { applyConfigWithToken } from "../server/integrations/apply.js";
+import { applyConfigWithToken, type TargetKind } from "../server/integrations/apply.js";
 import { API_ROTATE_TOKEN } from "../shared/api-paths.js";
 import { getTokenFilePath, readTokenFromFile } from "../shared/auth/token-file.js";
 import { resolveAuthTokenCandidate, resolveTandemUrl } from "../shared/cli-runtime.js";
@@ -148,7 +148,7 @@ export async function rotateToken(): Promise<void> {
 
   let updatedCount = 0;
   let configErrors: string[] = [];
-  let staleTokenTargets: string[] = [];
+  let staleTokenTargets: { label: string; kind: TargetKind }[] = [];
   try {
     const result = await applyConfigWithToken(newToken);
     updatedCount = result.updated;
@@ -201,12 +201,19 @@ export async function rotateToken(): Promise<void> {
   // scrubbed the superseded credential as a side effect. Crediting the target
   // as "Updated" and saying nothing is the failure mode this line exists to
   // prevent: rotation is what a user runs after a LEAK.
-  for (const label of staleTokenTargets) {
+  //
+  // The remedy carries `--target=<kind>`, and the flag is not decoration:
+  // `--without-channel-shim` alone means "remove, on every detected kind"
+  // (`resolveChannelShimIntent`), so the untargeted form would also delete a
+  // Claude Code shim the user had opted into with `--with-channel-shim` — the
+  // implicit-deletion class #1760 was filed to eliminate, re-created by the
+  // fix-it line for a different target.
+  for (const { label, kind } of staleTokenTargets) {
     console.error(
       `  Warning: ${label} has a tandem-channel entry Tandem does not rewrite, so it\n` +
         "  still holds the OLD token and will be rejected. Update its\n" +
         "  env.TANDEM_AUTH_TOKEN by hand, or drop the entry with:\n" +
-        "    tandem setup --apply --without-channel-shim",
+        `    tandem setup --apply --target=${kind} --without-channel-shim`,
     );
   }
 
