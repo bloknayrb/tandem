@@ -62,7 +62,8 @@ false in the safe direction and this fix makes false in the current wording.
   route still echoes nothing about the skill.
 
 - **`src/cli/setup.ts:178-183`** keeps `✓ ~/.claude/skills/tandem/SKILL.md` on a write and
-  otherwise prints, reading the result defensively (`result?.written === false`): *`⚠ kept the
+  otherwise prints (`if (!result.written)` — the result is non-nullable, so the optional chain the
+  first draft carried was dead weight and `/simplify` removed it): *`⚠ kept the
   installed skill (v<n> on disk is newer than this install's v<m>) — delete
   ~/.claude/skills/tandem/SKILL.md and re-run to replace it`*. **The remedy names deleting the
   file, never "upgrade Tandem to move it"** — no Tandem version moves a `version: 999` file, so

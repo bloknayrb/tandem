@@ -32,19 +32,31 @@ and no shared evaluator is introduced** (see the scope cut).
   1. A non-empty string `command` → `null`. A stdio entry in `~/.claude.json` is a hand-edit or a
      plugin-managed shape, and `reportEntryCommand` (`:1213`) already owns it — warning
      "unexpected config" there is a regression dressed as a fix.
-  2. `type !== "http"`, or `url` missing / not parseable by `new URL()`, or the parsed pathname not
-     containing `/mcp` → message `` `~/.claude.json tandem: unexpected config — type=${type},
-     pathHasMcp=${bool}` `` (or `url=(unparsable)`), `fix` = `setupApplyRemedy(cliAvailable())`.
+  2. `type !== "http"`, or `url` missing / not parseable by `new URL()`, or **the parsed protocol
+     is not `http:`**, or the parsed pathname not containing `/mcp` → message
+     `` `~/.claude.json tandem: unexpected config — type=${type}, scheme=${scheme},
+     pathHasMcp=${bool}` ``, `fix` = `setupApplyRemedy(cliAvailable())`. On an unparsable url both
+     `scheme` and `pathHasMcp` render `(unparsable)`.
      **`pathHasMcp` is computed, not the constant `false`** — this arm also fires on a bad `type`
      with a perfectly good `/mcp` path (test 1), where a hardcoded `false` would be a false
-     statement in doctor output.
-  3. `parsedUrl.port !== String(mcpPort)` → message naming the observed port (or `(none)` when the
+     statement in doctor output. **`scheme` is named for the same reason**: `https://127.0.0.1:3479/mcp`
+     clears type, path, host and port while Claude Code's TLS handshake fails, and without the
+     scheme the warn reads `type=http, pathHasMcp=true` and names nothing actionable. Both `type`
+     and `scheme` go through `describeClampedValue` — see the redaction bullet below.
+  3. **The hostname is not one of `127.0.0.1` / `localhost` / `[::1]`** → message naming the
+     SHAPE (`url names a non-loopback host`), never the hostname, `fix` = a hand-edit pointing at
+     `127.0.0.1:<mcpPort>`. Host BEFORE port: a remote host on the *right* port is the one shape
+     this check must never certify, and reporting the port there names the wrong field.
+     `TAURI_HOSTNAME` is deliberately NOT in the set — this arm decides REACHABILITY, and the SDK's
+     `localhostHostValidation()` 403s every `/mcp` request carrying `Host: tauri.localhost` on a
+     default loopback bind.
+  4. `parsedUrl.port !== String(mcpPort)` → message naming the observed port (or `(none)` when the
      URL carries none) and `mcpPort`, `fix`: *edit the `url` in `~/.claude.json` to port `<mcpPort>`,
      or unset `TANDEM_MCP_PORT` and restart Tandem*. **Compare the string form and treat a
      port-less URL as a mismatch** — the entry must name Tandem's MCP port explicitly; that is what
      kills the `URL.port`-is-a-string bug (`"3479" !== 3479` is always true) without a
      `defaultPortForProtocol` helper.
-  4. Otherwise `null`.
+  5. Otherwise `null`.
 - **The port warn must never emit `setupApplyRemedy`.** `MCP_URL` is hardcoded, so `setup --apply`
   re-writes 3479 and the warn re-fires forever — the dead-end-remedy defect this file has already
   been corrected for twice (`src/cli/doctor.ts:1163-1190`, and the doctrine by name at
@@ -56,7 +68,14 @@ and no shared evaluator is introduced** (see the scope cut).
   prefills a public issue body. The only scrubber downstream, `redactUserPaths`
   (`diagnostics.ts:83-115`), collapses paths and knows nothing about URL userinfo or a query token
   — and `r.warn` forwards `data` verbatim, so `r.warn(msg, fix, { url })` would satisfy every
-  message-only assertion and still ship the credential. `type` stays verbatim (enum-shaped).
+  message-only assertion and still ship the credential. **`type` is NOT echoed verbatim**: arm 2
+  fires precisely when the value is not enum-shaped, so `describeClampedValue` renders anything
+  outside `/^[A-Za-z0-9_-]{1,32}$/` as `(unexpected)` — a `\r\x1b[2K` value repaints doctor's own
+  warn line as a pass, a bare `\n` forges a second result line, and the value is length-unbounded
+  on the way to the Report-a-bug prefill. The scheme takes the same renderer: it comes off a
+  *parsed* `URL` so control bytes are impossible, but one renderer keeps the two fields from
+  drifting apart on the rule that governs both. The scheme is the only part of the url that is
+  ever named, and it can carry no secret — it is neither host, userinfo, path nor query.
 - `warn`, never `fail` — parity with the twin; `tandem doctor` must not start exiting 1 on a
   machine whose tools arrive via the plugin.
 
@@ -109,11 +128,12 @@ Windows.
 
 ## Done when
 
-A wrong `type`, a URL without `/mcp`, and a port that disagrees with the probed MCP port each warn
-at the user level; no `user-mcp-config` outcome — warn or pass, in `message`, `fix` or `data` —
-echoes the raw `url` or any part of its path; the port warn's `fix` does not name `setup --apply`;
-a stdio entry still passes and is left to `reportEntryCommand`; a healthy HTTP entry passes;
-typecheck + the CLI suite green.
+A wrong `type`, a non-`http:` scheme, a URL without `/mcp`, a non-loopback host, and a port that
+disagrees with the probed MCP port each warn at the user level; no `user-mcp-config` outcome —
+warn or pass, in `message`, `fix` or `data` — echoes the raw `url`, its hostname or any part of
+its path; a non-enum-shaped `type` renders `(unexpected)` rather than reaching the output; the
+port and host warns' `fix` does not name `setup --apply`; a stdio entry still passes and is left
+to `reportEntryCommand`; a healthy HTTP entry passes; typecheck + the CLI suite green.
 
 ## Not in scope
 
@@ -166,9 +186,33 @@ credential, and the check reaches a prefilled public issue body).
 ## Review corrections (post-cut)
 
 - **Spec 8 (port-less URL) added.** The seven specs left after the scope cut all carried an
-  explicit port, so arm 3's stated requirement — treat a missing `URL.port` as a mismatch and
-  report `(none)` — was pinned by nothing, and the natural `if (parsedUrl.port && …)` spelling
+  explicit port, so the port arm's stated requirement — treat a missing `URL.port` as a mismatch
+  and report `(none)` — was pinned by nothing, and the natural `if (parsedUrl.port && …)` spelling
   passed all of them while leaving `http://127.0.0.1/mcp` (port 80) green. This is **not** the
   port-less-`https` spec the cut removed: that one existed to exercise `defaultPortForProtocol`,
   which is still gone. This one exercises the `(none)` branch the cut's own replacement design
   introduced.
+
+## Review corrections (rounds 2–3, implementation)
+
+Three review rounds against the implementation changed `validateUserTandemEntry`'s behaviour, and
+the sections above are written to match what shipped. Recorded here rather than left implicit,
+because each one was a *pass on a config Claude Code cannot use* — the defect #1807 names — and
+the Tauri entry below was introduced by a well-meant arm added to prevent exactly that.
+
+- **The non-loopback host arm (new arm 3).** A `http://attacker.example:3479/mcp` entry cleared
+  every other arm, so doctor certified green the one shape where Claude Code would send
+  `tandem_getTextContent` output and `tandem_edit` payloads to somebody else's machine.
+- **`TAURI_HOSTNAME` removed from the loopback set.** It was added on the grounds that the desktop
+  WebView's own origin is that name. `server.ts` passes `allowedHosts` — the only list
+  `tauri.localhost` is on — solely when a LAN IP resolved; on a default loopback bind the SDK
+  installs `localhostHostValidation()`, whose allowlist is exactly `localhost` / `127.0.0.1` /
+  `[::1]`, and every `/mcp` request carrying `Host: tauri.localhost` is answered `403 Invalid
+  Host`. The WebView origin is a CORS/Origin concern, not an MCP url host.
+- **The scheme half of arm 2, and `scheme=` in its message.** Tandem's MCP server is plaintext
+  HTTP on loopback, so `https://127.0.0.1:3479/mcp` passed type, path, host and port while the TLS
+  handshake failed and no `tandem_*` tool ever appeared.
+- **`describeClampedValue` for `type` and `scheme`.** The spec's original "`type` stays verbatim
+  (enum-shaped)" was false on the one branch that prints it: arm 2 fires precisely when the value
+  is *not* enum-shaped, and `~/.claude.json` is arbitrary JSON from disk that reaches
+  `/api/diagnostics` and the public Report-a-bug prefill unbounded in length.
