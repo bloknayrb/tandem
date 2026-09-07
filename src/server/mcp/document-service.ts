@@ -864,9 +864,17 @@ export async function saveDocumentAsToDisk(
   try {
     assertPathSafe(resolved, { allowedRoots: [path.parse(resolved).root] });
   } catch (err) {
+    // cr-6 (#1816 follow-up): `assertPathSafe`'s thrown message embeds the
+    // absolute path it rejected ("Refusing to operate on symlinked path:
+    // <abs>"). This used to reach the toast verbatim — `targetPath` is the
+    // caller's own Save-As selection, but the message is still an absolute
+    // path in a headline, the exact shape #1816 scrubbed everywhere else.
+    // Mirrors `renameDocument`'s identical `assertPathSafe` catch: log the
+    // raw error, return the same generic PATH_REJECTED wording.
+    console.error("[Save As] assertPathSafe rejected", resolved, err);
     return {
       status: "error",
-      reason: err instanceof Error ? err.message : String(err),
+      reason: "The destination path was rejected.",
       errorCode: "PATH_REJECTED",
     };
   }

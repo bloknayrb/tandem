@@ -317,9 +317,16 @@ async function runTauriSaveAs(
       }),
     });
     if (!res.ok) {
-      // #1816: `sendApiError` already scrubs `message` to plain language and
-      // puts the structured code in `error` — append it as a details suffix,
-      // matching `triggerSave`'s `(${errorCode})` pattern.
+      // cr-6 (#1816 follow-up): this branch is `routes/save.ts`'s Save-As
+      // error path, which hand-builds `{ error, message }` directly and
+      // never runs through `sendApiError` (that scrub only applies to a
+      // *thrown* exception, caught separately). It reads safely regardless:
+      // `saveDocumentAsToDisk`'s own producers are themselves scrubbed at
+      // the source (generic `reason` text, raw error logged server-side —
+      // see its `assertPathSafe` catch), so `body.message` is already plain
+      // language here, not because this call passed through `sendApiError`.
+      // `body.error` is the structured code — append it as a details
+      // suffix, matching `triggerSave`'s `(${errorCode})` pattern.
       const body = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
       notify(
         "error",

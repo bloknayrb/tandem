@@ -1216,6 +1216,11 @@ describe("saveDocumentAsToDisk", () => {
         expect(result.status).toBe("error");
         expect(result.errorCode).toBe("PATH_REJECTED");
         expect(atomicWrite).not.toHaveBeenCalled();
+        // cr-6 (#1816 follow-up): `assertPathSafe`'s thrown message embeds
+        // the rejected absolute path — it must not reach the caller raw.
+        expect(result.reason).not.toContain(linkDir);
+        expect(result.reason).not.toContain(baseDir);
+        expect(result.reason).toBe("The destination path was rejected.");
       } finally {
         await fsReal.rm(baseDir, { recursive: true, force: true }).catch(() => {});
       }
