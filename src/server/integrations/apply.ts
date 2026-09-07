@@ -2229,9 +2229,19 @@ export { CHANNEL_DIST, PACKAGE_ROOT };
  *
  * Answers "what is registered", which is a different question from
  * `shouldRegisterChannelShim`'s "what should a fresh setup register" — see the
- * note on `applyConfigWithToken`. Unreadable, absent, oversized and malformed
- * configs all answer `false`: there is nothing to preserve in any of them,
- * because `applyConfig` refuses the file before any op is applied.
+ * note on `applyConfigWithToken`. Absent, oversized and malformed configs
+ * answer `false`: there is nothing to preserve in any of them, because
+ * `applyConfig` refuses the file before any op is applied.
+ *
+ * An UNREADABLE config is the one input that does NOT answer `false` — it
+ * THROWS. `readConfigForMutation` rethrows every non-ENOENT read error, so an
+ * EACCES/EBUSY/EPERM propagates out of here to the caller's per-target `try`.
+ * That is load-bearing, not incidental: `false` means REMOVE (see
+ * `resolveChannelShimIntent`), so collapsing "I could not read it" into "there
+ * is nothing there" turns a transient antivirus lock on `~/.claude.json` into a
+ * silent deletion of the user's entry. Never wrap this call in a
+ * `.catch(() => false)`, and never drop the surrounding per-target `try` as
+ * redundant.
  */
 async function targetHasChannelEntry(configPath: string): Promise<boolean> {
   const read = await readConfigForMutation(configPath);
@@ -2254,9 +2264,14 @@ async function targetHasChannelEntry(configPath: string): Promise<boolean> {
  *     is preserved, none is conjured (#1299), and none is deleted. A `none`
  *     kind is never a licence to remove — nothing on disk distinguishes a
  *     legacy artifact from a deliberate opt-in.
- *  2. **Explicit `false`** → remove, on every kind. This is the ONLY removal
- *     path, and `tandem setup --apply --without-channel-shim` is the only way
- *     to reach it.
+ *  2. **Explicit `false`** → remove, on every kind. This is the only removal
+ *     path *through this resolver*, and `tandem setup --apply
+ *     --without-channel-shim` is the only way to reach it. It is not the only
+ *     way the entry can leave a config: `tandem --uninstall-scrub` deletes it
+ *     via `removeConfigEntries` along with every other Tandem key, and the
+ *     wizard's apply route deletes it when the user confirms a diff that lists
+ *     it. Both are explicit user acts elsewhere; what #1760 fixed is that no
+ *     *implicit* path removes it any more.
  *  3. **No flag** → preserve what is registered, on every kind. A read failure
  *     THROWS rather than answering `false`: "I could not tell" and "there is
  *     nothing there" must not collapse, or a transient `EBUSY` from an
@@ -2313,11 +2328,19 @@ export async function resolveChannelShimIntent(
  * preserved `none`-kind entry is never refreshed, so it keeps a rotated-away
  * `TANDEM_AUTH_TOKEN` where today it is deleted — the price of not destroying a
  * hand-registered entry.
+ *
+ * That consequence is REPORTED, not merely documented (security review of
+ * #1760). Such a target still counts as `updated` — its `tandem` entry really
+ * did get the new token — so crediting it silently would let `tandem
+ * rotate-token`, the documented remedy for a leaked token, print "Updated 1
+ * config file(s)" while a superseded bearer token stays on disk and the shim
+ * 401s with nothing said. Every preserved-but-not-rewritten target's label
+ * lands in `staleTokenTargets` so the caller can name it.
  */
 export async function applyConfigWithToken(
   token: string | null,
   opts: { force?: boolean; withChannelShim?: boolean; homeOverride?: string } = {},
-): Promise<{ updated: number; errors: string[] }> {
+): Promise<{ updated: number; errors: string[]; staleTokenTargets: string[] }> {
   // `homeOverride` exists for tests only, and it earns its keep: the
   // preserve-vs-re-derive distinction below is a property of the WIRING, not of
   // either helper, so nothing short of driving the real function against a real
@@ -2326,6 +2349,7 @@ export async function applyConfigWithToken(
 
   let updated = 0;
   const errors: string[] = [];
+  const staleTokenTargets: string[] = [];
   for (const t of targets) {
     try {
       const preserveShim = await resolveChannelShimIntent(
@@ -2341,9 +2365,15 @@ export async function applyConfigWithToken(
       });
       await applyConfig(t.configPath, applyOpsForCli(entries, { withChannelShim: preserveShim }));
       updated++;
+      // Recorded only AFTER the write lands, and only when a token was being
+      // written: a preserved entry we never re-derived keeps whatever
+      // `env.TANDEM_AUTH_TOKEN` it already had, which after a rotation is the
+      // superseded one. Nothing later heals it — the boot sweep's
+      // `repairEntryInPlace` rewrites `command`/`args` and never `env`.
+      if (preserveShim && !writeShim && token !== null) staleTokenTargets.push(t.label);
     } catch (err) {
       errors.push(`${t.label}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  return { updated, errors };
+  return { updated, errors, staleTokenTargets };
 }

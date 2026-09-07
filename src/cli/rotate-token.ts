@@ -148,10 +148,12 @@ export async function rotateToken(): Promise<void> {
 
   let updatedCount = 0;
   let configErrors: string[] = [];
+  let staleTokenTargets: string[] = [];
   try {
     const result = await applyConfigWithToken(newToken);
     updatedCount = result.updated;
     configErrors = result.errors;
+    staleTokenTargets = result.staleTokenTargets;
   } catch (err) {
     console.error(
       `[tandem] Warning: failed to update MCP configs: ${err instanceof Error ? err.message : String(err)}`,
@@ -189,6 +191,23 @@ export async function rotateToken(): Promise<void> {
 
   for (const e of configErrors) {
     console.error(`  Warning: could not update config — ${e}`);
+  }
+
+  // A target counted in `updatedCount` can still be holding the OLD token: on a
+  // kind with no push transport (Claude Desktop) #1760 preserves an existing
+  // `tandem-channel` entry rather than deleting it, and preserving means NOT
+  // re-deriving its body — so its `env.TANDEM_AUTH_TOKEN` is untouched and the
+  // shim will 401 from here on. Before #1760 the entry was deleted, which
+  // scrubbed the superseded credential as a side effect. Crediting the target
+  // as "Updated" and saying nothing is the failure mode this line exists to
+  // prevent: rotation is what a user runs after a LEAK.
+  for (const label of staleTokenTargets) {
+    console.error(
+      `  Warning: ${label} has a tandem-channel entry Tandem does not rewrite, so it\n` +
+        "  still holds the OLD token and will be rejected. Update its\n" +
+        "  env.TANDEM_AUTH_TOKEN by hand, or drop the entry with:\n" +
+        "    tandem setup --apply --without-channel-shim",
+    );
   }
 
   if (graceWindowActive) {

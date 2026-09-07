@@ -639,6 +639,50 @@ describe("applyConfigWithToken — rotation preserves, it does not re-derive", (
     expect(readDesktopShim()).toEqual(handRolled);
   });
 
+  it("names a preserved no-push shim as still holding the old token", async () => {
+    // Security review of #1760. Preserving a no-push entry means NOT re-deriving
+    // its body, so its `env.TANDEM_AUTH_TOKEN` survives a rotation — and the
+    // target is still counted in `updated`, because its `tandem` entry really
+    // did get the new token. Crediting it silently would let `tandem
+    // rotate-token`, the remedy for a LEAKED token, print "Updated 2 config
+    // file(s)" while a superseded bearer token sits on disk and the shim 401s.
+    const desktopPath = desktopConfigUnder(home);
+    mkdirSync(dirname(desktopPath), { recursive: true });
+    writeFileSync(
+      desktopPath,
+      JSON.stringify({
+        mcpServers: {
+          "tandem-channel": { command: "/opt/custom/node", env: { TANDEM_AUTH_TOKEN: "old" } },
+        },
+      }),
+    );
+    writeConfig({ tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } });
+
+    const result = await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", {
+      homeOverride: home,
+    });
+
+    expect(result.staleTokenTargets).toEqual([expect.stringContaining("Claude Desktop")]);
+    // It is a WARNING about a counted target, not an error and not a skip.
+    expect(result.errors).toEqual([]);
+    expect(result.updated).toBeGreaterThanOrEqual(2);
+  });
+
+  it("reports no stale-token target when nothing was preserved", async () => {
+    // The other direction, so the list cannot be implemented as "every no-push
+    // target": a desktop config with no shim has nothing holding an old token.
+    const desktopPath = desktopConfigUnder(home);
+    mkdirSync(dirname(desktopPath), { recursive: true });
+    writeFileSync(desktopPath, JSON.stringify({ mcpServers: {} }));
+    writeConfig({ tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } });
+
+    const result = await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", {
+      homeOverride: home,
+    });
+
+    expect(result.staleTokenTargets).toEqual([]);
+  });
+
   it("does not conjure a shim onto a no-push target that lacks one", async () => {
     // The original invariant #1299 bought, kept as its own spec: preserving is
     // not the same as creating, and a `none` kind never gets a new entry.

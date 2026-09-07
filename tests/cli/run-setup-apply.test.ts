@@ -32,11 +32,13 @@ vi.mock("../../src/server/integrations/apply.js", async (importActual) => {
 import { runSetup } from "../../src/cli/setup.js";
 import {
   applyConfig,
+  ConfigRefusalError,
   type DetectedTarget,
   detectTargets,
   installSkill,
   resolveChannelShimIntent,
 } from "../../src/server/integrations/apply.js";
+import { ERROR_CODE_CONFIG_MALFORMED } from "../../src/shared/integrations/contract.js";
 
 const CLAUDE_CODE: DetectedTarget = {
   label: "Claude Code",
@@ -124,6 +126,46 @@ describe("runSetup({ apply: true }) orchestration", () => {
     expect(installSkill).toHaveBeenCalledTimes(1);
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(stderr()).toContain("Setup failed");
+  });
+
+  it("does not tell the user to check permissions when the config was REFUSED", async () => {
+    // #1802 made a malformed/oversize config throw `ConfigRefusalError` out of
+    // `applyConfig` rather than replacing the file. That lands in the same
+    // all-failed branch as an EACCES, whose remedy — "Check file permissions" —
+    // is a dead end for a file whose permissions are fine. `doctor` and the
+    // wizard both name the real remedy; this is the third surface.
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockRejectedValue(
+      new ConfigRefusalError(
+        ERROR_CODE_CONFIG_MALFORMED,
+        "/home/u/.claude.json is not valid JSON — refusing to rewrite it",
+      ),
+    );
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await expect(runSetup({ apply: true })).rejects.toThrow("process.exit called");
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const out = stderr();
+    expect(out).toContain("Setup failed");
+    expect(out).toContain("refused to rewrite");
+    expect(out).not.toContain("Check file permissions");
+  });
+
+  it("still says check permissions when the failure was an I/O error", async () => {
+    // The other direction: the refusal wording must not swallow the case it was
+    // carved out of.
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockRejectedValue(new Error("EACCES"));
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await expect(runSetup({ apply: true })).rejects.toThrow("process.exit called");
+
+    expect(stderr()).toContain("Check file permissions");
   });
 
   it("partial failure (some targets succeed, some fail) does not exit", async () => {

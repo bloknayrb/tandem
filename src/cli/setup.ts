@@ -6,6 +6,7 @@ import {
   applyOpsForCli,
   buildMcpEntries,
   CHANNEL_DIST,
+  ConfigRefusalError,
   type DetectedTarget,
   detectionRefusal,
   detectTargets,
@@ -116,7 +117,7 @@ async function applySetup(opts: SetupOptions): Promise<void> {
     targets = targets.filter((t) => wanted.has(t.kind));
   }
 
-  let outcome: WriteOutcome = { failures: 0, shimRegisteredFor: [] };
+  let outcome: WriteOutcome = { failures: 0, refusals: 0, shimRegisteredFor: [] };
   if (targets.length === 0) {
     // `detectTargets` returns an empty list for two very different reasons, and
     // the generic hint is actively wrong for one of them: when the home
@@ -146,7 +147,18 @@ async function applySetup(opts: SetupOptions): Promise<void> {
     outcome = await writeTargets(targets, opts);
 
     if (outcome.failures === targets.length) {
-      console.error("\nSetup failed — could not write any configuration. Check file permissions.");
+      // "Check file permissions" is a dead end when the file was REFUSED rather
+      // than unwritable (#1802): a malformed or oversize `~/.claude.json`
+      // throws `ConfigRefusalError` out of `applyConfig`, lands here, and the
+      // user goes and checks permissions that were fine all along. `doctor` and
+      // the wizard both name the real remedy; this was the third surface.
+      console.error(
+        outcome.refusals === outcome.failures
+          ? "\nSetup failed — Tandem refused to rewrite the config file(s) above and left them\n" +
+              "exactly as found. Fix the JSON, or restore the file from a backup, then re-run:\n" +
+              "  tandem setup --apply"
+          : "\nSetup failed — could not write any configuration. Check file permissions.",
+      );
     } else if (outcome.failures > 0) {
       console.error(
         `\nSetup partially complete (${outcome.failures} target(s) failed). Start Tandem with: tandem`,
@@ -182,6 +194,11 @@ async function applySetup(opts: SetupOptions): Promise<void> {
 
 interface WriteOutcome {
   failures: number;
+  /** How many of those failures were a `ConfigRefusalError` — Tandem declining
+   *  to rewrite a malformed or oversize config — rather than an I/O error. The
+   *  summary branches on it so a refusal never sends the user to check
+   *  permissions on a file whose permissions are fine. */
+  refusals: number;
   /** Targets that actually got a channel-shim entry written. `printPushStatus`
    *  reports off THIS, not off a file-existence check — `shouldRegisterChannelShim`
    *  returns false for every Claude Desktop target, so a run that registered no
@@ -191,6 +208,7 @@ interface WriteOutcome {
 
 async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Promise<WriteOutcome> {
   let failures = 0;
+  let refusals = 0;
   const shimRegisteredFor: string[] = [];
   for (const t of targets) {
     try {
@@ -209,7 +227,10 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
       // turns into an explicit REMOVE: a user who had opted in with
       // `--with-channel-shim` lost it the next time doctor sent them here.
       // Absent a flag, preserve; `--with-channel-shim` turns it on and
-      // `--without-channel-shim` is the one path that removes it (#1760).
+      // `--without-channel-shim` is the one `tandem setup` flag that removes it
+      // (#1760). `--uninstall-scrub` and a confirmed wizard diff remove it too,
+      // by their own explicit routes — what #1760 fixed is that no IMPLICIT
+      // path removes it any more.
       //
       // `preserveShim` answers "should the entry exist"; `writeShim` answers
       // "may we derive its body". They differ on a `targetPushSupport ===
@@ -234,12 +255,13 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
       if (writeShim) shimRegisteredFor.push(t.label);
     } catch (err) {
       failures++;
+      if (err instanceof ConfigRefusalError) refusals++;
       console.error(
         `  \x1b[31m✗\x1b[0m ${t.label}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
-  return { failures, shimRegisteredFor };
+  return { failures, refusals, shimRegisteredFor };
 }
 
 /**

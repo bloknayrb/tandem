@@ -137,8 +137,10 @@ try {
     // is data loss: `resolveChannelShimIntent` treats absent as "preserve what
     // is there" and `false` as "remove it", so collapsing the two would make
     // `tandem setup --apply` delete a deliberate opt-in. `--without-channel-shim`
-    // is the only removal path (#1760); refuse both flags at once before any
-    // write rather than guessing which one the user meant.
+    // is the only `tandem setup` flag that removes it (#1760) — `--uninstall-scrub`
+    // and a confirmed wizard diff still remove it by their own explicit routes;
+    // refuse both flags at once before any write rather than guessing which one
+    // the user meant.
     const shim = parseChannelShimArgs(args);
     if (shim.conflict) {
       console.error(

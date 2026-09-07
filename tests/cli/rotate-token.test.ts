@@ -20,7 +20,9 @@ const _writeFileSpy = vi.fn().mockResolvedValue(undefined);
 const _renameSpy = vi.fn().mockResolvedValue(undefined);
 const _readTokenSpy = vi.fn().mockResolvedValue("oldtoken_oldtoken_oldtoken_oldtoken");
 const _getTokenPathSpy = vi.fn().mockReturnValue("/tmp/tandem/token");
-const _applyConfigSpy = vi.fn().mockResolvedValue({ updated: 2, errors: [] });
+const _applyConfigSpy = vi
+  .fn()
+  .mockResolvedValue({ updated: 2, errors: [], staleTokenTargets: [] });
 
 // ── Module mocks ─────────────────────────────────────────────────────────────
 
@@ -176,7 +178,9 @@ describe("rotateToken CLI", () => {
     _renameSpy.mockReset().mockResolvedValue(undefined);
     _readTokenSpy.mockReset().mockResolvedValue(OLD_TOKEN);
     _getTokenPathSpy.mockReset().mockReturnValue("/tmp/tandem/token");
-    _applyConfigSpy.mockReset().mockResolvedValue({ updated: 2, errors: [] });
+    _applyConfigSpy
+      .mockReset()
+      .mockResolvedValue({ updated: 2, errors: [], staleTokenTargets: [] });
 
     // Mock global fetch
     fetchMock = vi.fn().mockResolvedValue({
@@ -239,6 +243,44 @@ describe("rotateToken CLI", () => {
     expect(passedToken).not.toBe(OLD_TOKEN);
     expect(typeof passedToken).toBe("string");
     expect(passedToken.length).toBeGreaterThanOrEqual(32);
+  });
+
+  it("names a preserved shim that still holds the old token", async () => {
+    // Security review of #1760. A no-push target whose `tandem-channel` entry is
+    // PRESERVED is not re-derived, so its `env.TANDEM_AUTH_TOKEN` survives the
+    // rotation — while the target is still counted in `updated`. Rotation is
+    // what a user runs after a leak, so the superseded credential has to be
+    // named rather than folded into "Updated 2 config file(s)".
+    _applyConfigSpy
+      .mockReset()
+      .mockResolvedValue({ updated: 2, errors: [], staleTokenTargets: ["Claude Desktop"] });
+    const stderrCalls: unknown[][] = [];
+    const stderrSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation((...args) => stderrCalls.push(args));
+
+    const { rotateToken } = await import("../../src/cli/rotate-token.js");
+    await rotateToken();
+
+    const messages = stderrCalls.flat().join("\n");
+    expect(messages).toContain("Claude Desktop");
+    expect(messages).toContain("still holds the OLD token");
+    stderrSpy.mockRestore();
+  });
+
+  it("says nothing about stale tokens when no entry was preserved", async () => {
+    // The default mock returns an empty list; the warning must not be
+    // unconditional or it fires on every clean rotation.
+    const stderrCalls: unknown[][] = [];
+    const stderrSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation((...args) => stderrCalls.push(args));
+
+    const { rotateToken } = await import("../../src/cli/rotate-token.js");
+    await rotateToken();
+
+    expect(stderrCalls.flat().join("\n")).not.toContain("still holds the OLD token");
+    stderrSpy.mockRestore();
   });
 
   it("warns and continues when server is not reachable", async () => {
