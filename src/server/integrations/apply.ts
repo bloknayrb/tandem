@@ -11,16 +11,16 @@
  * - MSIX detection is anchored to `/^Claude_[A-Za-z0-9]+$/` and the
  *   `%LOCALAPPDATA%` realpath must resolve under home (defeats an
  *   attacker who controls env).
- * - Malformed JSON backups land in `${appDataDir}/.broken-backups/` at
- *   `0o600` rather than next to `~/.claude.json` (which may inherit
- *   world-readable perms and would leak co-tenant API keys).
+ * - Malformed JSON is never rewritten: both `applyConfig` and
+ *   `readConfigForMutation` refuse the file and leave it as found (#1802).
+ *   Refusal messages carry no parse detail — V8 `SyntaxError` text embeds a
+ *   source snippet and this file holds bearer tokens.
  */
 
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   existsSync,
-  constants as fsConstants,
   lstatSync,
   mkdirSync,
   readdirSync,
@@ -32,7 +32,6 @@ import {
   chmod,
   copyFile,
   mkdir,
-  open,
   readFile,
   rename,
   stat,
@@ -40,7 +39,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SKILL_CONTENT } from "../../cli/skill-content.js";
@@ -50,7 +49,11 @@ import {
   claudeCodeConfigPath,
   claudeDesktopConfigPath,
 } from "../../shared/integrations/client-config-paths.js";
-import { targetPushSupport } from "../../shared/integrations/contract.js";
+import {
+  ERROR_CODE_CONFIG_MALFORMED,
+  ERROR_CODE_CONFIG_TOO_LARGE,
+  targetPushSupport,
+} from "../../shared/integrations/contract.js";
 import { isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
 import {
   buildNpxStdioArgs,
@@ -214,13 +217,28 @@ export function resolveCliVersion(): string {
 const CLI_VERSION = resolveCliVersion();
 
 /**
- * Refuse to read a config larger than 5 MiB. The realistic `.claude.json` is
- * single-digit kilobytes; anything beyond that is either accidental corruption
- * (log files dropped in) or a deliberate DoS aimed at making the wizard's
- * read-parse-rewrite path exhaust memory. The cap is generous enough that no
- * legitimate user hits it.
+ * Refuse to read a config larger than 16 MiB (#1801).
+ *
+ * The bound exists because both readers parse SYNCHRONOUSLY into memory:
+ * `applyConfig` blocks the server's event loop on the wizard's apply route, and
+ * `readConfigForMutation`'s `JSON.parse` runs on the pre-launcher startup
+ * sweep. So the cap is a bound on parse cost and peak heap, not a
+ * plausibility check on the file.
+ *
+ * **16 MiB is a judgment with essentially no measured input, and that is worth
+ * knowing before anyone tunes it.** The only measurement taken is one real
+ * `~/.claude.json` on the development machine, at 121,720 bytes; the sweep's
+ * own comment calls the file "routinely multi-megabyte", which is unverified in
+ * both directions. The previous docblock claimed "single-digit kilobytes" and
+ * "no legitimate user hits it" — both are what #1801 refutes, since Claude Code
+ * accumulates per-project history here. The durable half of that fix is the
+ * legible refusal (`ConfigRefusalError` → `CONFIG_TOO_LARGE` → a wizard message
+ * that says what happened), not the number.
+ *
+ * Exported so tests derive their boundaries from the constant rather than
+ * restating it.
  */
-const MAX_CONFIG_BYTES = 5 * 1024 * 1024;
+export const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
 
 export interface McpEntry {
   type?: "http";
@@ -278,6 +296,30 @@ export function applyOpsForCli(create: McpEntries, opts: { withChannelShim: bool
     create,
     remove: opts.withChannelShim ? [] : ["tandem-channel"],
   };
+}
+
+/**
+ * Error thrown when a client config is refused rather than rewritten (#1801,
+ * #1802).
+ *
+ * Modelled on the sibling {@link PathRejectedError}, and the field is `reason`
+ * rather than `code` on purpose: `applyConfig` branches on Node's `err.code`
+ * twice inside the same try/catch, so a `code` here would be read as an errno.
+ * The `reason` IS an `ApplyItemErrorCode` — typed off the contract constants so
+ * the apply route forwards it directly rather than re-deriving it through a
+ * ternary that could drift — and it is what turns a generic "couldn't write the
+ * settings file" into a sentence the user can act on. `message` is for the CLI
+ * printers, which emit it verbatim — it may name the path and the size, but
+ * never any parse detail.
+ */
+export class ConfigRefusalError extends Error {
+  override readonly name = "ConfigRefusalError";
+  constructor(
+    readonly reason: typeof ERROR_CODE_CONFIG_TOO_LARGE | typeof ERROR_CODE_CONFIG_MALFORMED,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 /** Error thrown when a target path fails realpath/symlink validation. */
@@ -995,9 +1037,11 @@ async function unlinkOrLeak(path: string, originalErr: unknown): Promise<void> {
  *
  * **Security gates (run before any read or write):**
  * - `assertPathSafe(configPath)` — symlink / outside-home rejection.
- * - Malformed JSON is backed up under Tandem's data dir with mode `0o600`
- *   (avoids leaking other vendors' API keys via a world-readable
- *   `~/.claude.json.broken-<ts>` sibling).
+ * - A config over `MAX_CONFIG_BYTES` is refused unread
+ *   (`ConfigRefusalError`, `CONFIG_TOO_LARGE`).
+ * - Malformed JSON is REFUSED, not replaced (`CONFIG_MALFORMED`) — the file is
+ *   left exactly as found. An empty file (or one holding only a BOM) is the
+ *   one non-ENOENT input that still starts fresh.
  *
  * `applyConfig` writes both `ops.create` entries (merging into the existing
  * `mcpServers` object) and removes any key listed in `ops.remove`. Removal
@@ -1013,7 +1057,8 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
   try {
     const { size } = statSync(configPath);
     if (size > MAX_CONFIG_BYTES) {
-      throw new Error(
+      throw new ConfigRefusalError(
+        ERROR_CODE_CONFIG_TOO_LARGE,
         `${configPath} is ${size} bytes; refusing to read (cap: ${MAX_CONFIG_BYTES}).`,
       );
     }
@@ -1021,128 +1066,100 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
 
-  // Read existing config or start fresh — no existsSync guard needed.
-  // ENOENT and malformed JSON start fresh; other errors (permissions, disk) propagate.
+  // Read existing config or start fresh, with the decision made explicitly
+  // rather than fallen into (#1802). Three outcomes:
+  //
+  //   - ENOENT → start fresh. This is the fresh-install path and the only one
+  //     that legitimately creates the file. Every other I/O error (EACCES,
+  //     EISDIR, disk) still propagates.
+  //   - empty after the BOM strip → start fresh, with no backup. Nothing is
+  //     lost, and backing a zero-byte file up preserves nothing anyway.
+  //   - anything else that will not parse → REFUSE. `applyConfig` used to copy
+  //     the file into `.broken-backups/` and then write a Tandem-ONLY config
+  //     over it, reporting success — so a `~/.claude.json` that happened to be
+  //     half-written (Claude Code's atomicity here is unknown; tmp.PID files
+  //     have been seen in the wild) lost its project list, OAuth account,
+  //     onboarding state and per-project allow-lists on the next wizard apply
+  //     or boot sweep. `readConfigForMutation` already refuses the identical
+  //     input, so the two reads now agree, and the shape gates just below have
+  //     always refused rather than replaced.
+  //
+  // The zero-byte case leaves a real, untracked truncation window: a
+  // non-atomic external writer doing `open(path, "w")` passes through zero
+  // bytes and Tandem will write over it reporting success. Today's behaviour
+  // is no better, so this is a residual rather than a regression.
   let existing: { mcpServers?: Record<string, McpEntry> } = {};
+  let raw: string | null = null;
   try {
+    raw = readFileSync(configPath, "utf-8");
+  } catch (err) {
+    // File doesn't exist yet — start fresh. Permission errors, disk errors,
+    // etc. should not be silently swallowed.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+
+  if (raw !== null) {
     // Strip a leading UTF-8 BOM (`﻿`) before JSON.parse. Some editors
     // (legacy Windows tooling, certain VS Code configs) write `.claude.json`
-    // with a BOM; without this strip, `JSON.parse` throws `SyntaxError`
-    // and the file would be pushed into `.broken-backups/` as if it were
-    // malformed. The BOM is encoded as the literal three bytes
-    // `EF BB BF` which Node's "utf-8" decoder surfaces as a leading
-    // U+FEFF code point.
-    let raw = readFileSync(configPath, "utf-8");
+    // with a BOM; without this strip, `JSON.parse` throws `SyntaxError` and a
+    // perfectly good file would be refused as malformed. The BOM is encoded as
+    // the literal three bytes `EF BB BF` which Node's "utf-8" decoder surfaces
+    // as a leading U+FEFF code point. The emptiness test runs AFTER the strip,
+    // so a BOM-only file starts fresh rather than being refused.
     if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
-    const parsed: unknown = JSON.parse(raw);
 
-    // Shape gate: the rewrite path spreads `existing.mcpServers` and
-    // `existing` itself into the new config. If either is the wrong
-    // shape, the spread produces a corrupted output (string-spread
-    // yields `{0:'a',1:'b',...}`, array-spread yields numeric keys,
-    // null-spread throws). Reject up-front so a legitimate-looking
-    // config-shape mismatch never silently corrupts the user's file.
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error(`${configPath} root is not a JSON object — refusing to rewrite`);
-    }
-    const maybeServers = (parsed as Record<string, unknown>).mcpServers;
-    if (
-      maybeServers !== undefined &&
-      (maybeServers === null || typeof maybeServers !== "object" || Array.isArray(maybeServers))
-    ) {
-      throw new Error(`${configPath} mcpServers is not an object — refusing to rewrite`);
-    }
-    existing = parsed as { mcpServers?: Record<string, McpEntry> };
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
-      // File doesn't exist yet — start fresh
-    } else if (err instanceof SyntaxError) {
-      // Don't silently wipe the user's other mcpServers. Copy the malformed
-      // file under Tandem's data dir (NOT next to ~/.claude.json — that
-      // location may inherit world-readable perms and leak co-tenant API
-      // keys via the backup). Mode 0o600 hardens against the same.
-      const brokenBackupDir = join(resolveAppDataDir(), ".broken-backups");
-      // Validate against default roots [homedir(), tmpdir()] rather than
-      // scoping to resolveAppDataDir() — the latter is tautological, and
-      // an XDG_DATA_HOME-poisoning attacker can otherwise redirect the
-      // backup target outside the home tree.
-      assertPathSafe(brokenBackupDir);
-      // mode: 0o700 on dir creation — the file mode is 0o600, but a
-      // world-readable parent dir lists sibling filenames (older backups
-      // carry other vendors' keys). Mode applies only when the dir is
-      // newly created; existing dirs retain their mode.
-      mkdirSync(brokenBackupDir, { recursive: true, mode: 0o700 });
-      // randomUUID() in the path defeats path prediction by an attacker
-      // who might pre-create a file at the predicted location and have
-      // our mode-at-open inherit world-readable bits. `wx` (exclusive
-      // create) below is the second layer.
-      const backupPath = join(
-        brokenBackupDir,
-        `${basename(configPath)}.broken-${Date.now()}-${randomUUID()}`,
-      );
+    // `/\S/.test`, not `raw.trim() !== ""`: identical predicate (JS `\s` is the
+    // same code-point set `String.prototype.trim` strips) without allocating a
+    // trimmed copy of a file that `MAX_CONFIG_BYTES` now permits to be 16 MiB.
+    if (/\S/.test(raw)) {
+      let parsed: unknown;
       try {
-        if (process.platform === "win32") {
-          // Windows ignores the POSIX `mode` arg on mkdir, so harden the
-          // dir with an explicit DACL BEFORE writing the backup file.
-          // Mirrors the ordering invariant in
-          // `storage.ts#backupBrokenFile`: dir-level ACL closes the
-          // TOCTOU window that a per-file ACL would otherwise open
-          // between copyFile and the ACL set. Fail loud — orphaning a
-          // half-hardened dir is worse than aborting the backup
-          // outright. The inner `catch (copyErr)` below surfaces a
-          // named error and refuses to overwrite the malformed config.
-          try {
-            await setRestrictiveAcl(brokenBackupDir);
-          } catch (aclErr) {
-            throw new Error(
-              `failed to apply restrictive ACL to broken-backups dir ${brokenBackupDir}: ${
-                aclErr instanceof Error ? aclErr.message : String(aclErr)
-              }`,
-              { cause: aclErr },
-            );
-          }
-          // Windows doesn't honor POSIX modes — fall back to plain copy.
-          // The randomUUID-suffixed path makes collisions effectively
-          // impossible. COPYFILE_EXCL refuses to overwrite an existing
-          // target, defeating any predictable-path symlink/pre-create
-          // attack the UUID suffix might still leave reachable. NOTE:
-          // `setRestrictiveAcl` (acl-win.ts) calls `icacls /grant:r
-          // *<SID>:F` without (OI)(CI) inheritance flags, so the new
-          // file does NOT inherit the parent dir's SID-only ACE.
-          // Instead it receives the DACL synthesized from the process
-          // token's default (typically user + SYSTEM + Administrators),
-          // which is narrow enough to prevent cross-tenant leak in
-          // standard contexts. If broader access is observed, the dir
-          // ACE should be made inheritable in acl-win.ts (this would
-          // also benefit storage.ts which uses the same helper).
-          await copyFile(configPath, backupPath, fsConstants.COPYFILE_EXCL);
-        } else {
-          // Open with mode 0o600 + `wx` so the file is created exclusively
-          // at the right mode (no copyFile + chmodSync race window where
-          // the backup was briefly 0o644 with another vendor's API keys
-          // inside).
-          const data = await readFile(configPath);
-          const fd = await open(backupPath, "wx", 0o600);
-          try {
-            await fd.write(data);
-          } finally {
-            await fd.close();
-          }
-        }
-        console.error(
-          `  Warning: ${configPath} contains malformed JSON — backed up to ${backupPath}, replacing with fresh config`,
+        parsed = JSON.parse(raw);
+      } catch {
+        // No parse detail in the message: V8 `SyntaxError` text embeds a
+        // snippet of the source, and this file holds bearer tokens. Same rule
+        // `readConfigForMutation` states.
+        throw new ConfigRefusalError(
+          ERROR_CODE_CONFIG_MALFORMED,
+          `${configPath} is not valid JSON — refusing to rewrite it`,
         );
-      } catch (copyErr) {
-        console.error(
-          `  Warning: ${configPath} contains malformed JSON and backup failed (${
-            copyErr instanceof Error ? copyErr.message : copyErr
-          }) — refusing to overwrite. Fix the JSON manually and rerun 'tandem setup'.`,
-        );
-        throw copyErr;
       }
-    } else {
-      throw err; // Permission errors, disk errors, etc. should not be silently swallowed
+
+      // Shape gate: the rewrite path spreads `existing.mcpServers` and
+      // `existing` itself into the new config. If either is the wrong
+      // shape, the spread produces a corrupted output (string-spread
+      // yields `{0:'a',1:'b',...}`, array-spread yields numeric keys,
+      // null-spread throws). Reject up-front so a legitimate-looking
+      // config-shape mismatch never silently corrupts the user's file.
+      //
+      // `ConfigRefusalError`, not a bare `Error`, and the difference is the
+      // whole point of #1802: a `[]`/`"x"`/`3` root parses fine, so nothing
+      // above raises, and a bare throw reaches the two callers as an
+      // unclassified failure — the wizard renders `WRITE_FAILED` ("check it
+      // isn't open in another program", of a file nobody has open) and the CLI
+      // prints "Check file permissions" for permissions that were never the
+      // problem. Both are the dead-end remedies this issue exists to remove,
+      // and the decision here is identical to the parse refusal above: leave
+      // the file exactly as found. `CONFIG_MALFORMED` covers both because both
+      // mean "this file is not a config Tandem can rewrite"; the reason is a
+      // remedy class, not a parser verdict.
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new ConfigRefusalError(
+          ERROR_CODE_CONFIG_MALFORMED,
+          `${configPath} root is not a JSON object — refusing to rewrite`,
+        );
+      }
+      const maybeServers = (parsed as Record<string, unknown>).mcpServers;
+      if (
+        maybeServers !== undefined &&
+        (maybeServers === null || typeof maybeServers !== "object" || Array.isArray(maybeServers))
+      ) {
+        throw new ConfigRefusalError(
+          ERROR_CODE_CONFIG_MALFORMED,
+          `${configPath} mcpServers is not an object — refusing to rewrite`,
+        );
+      }
+      existing = parsed as { mcpServers?: Record<string, McpEntry> };
     }
   }
 
@@ -1202,7 +1219,7 @@ export type RemoveEntriesResult =
  *  every such caller reports the same fixed reason strings. */
 export type ConfigReadRefusal =
   | { status: "missing" }
-  | { status: "skipped"; reason: "malformed-json" | "not-an-object" | "oversize" };
+  | { status: "skipped"; reason: "malformed-json" | "not-an-object" | "oversize" | "empty" };
 
 export type ConfigReadResult =
   | ConfigReadRefusal
@@ -1226,6 +1243,10 @@ export type ConfigReadResult =
  * - **Never replace malformed JSON.** Refuse and leave it exactly as found.
  * - **Cap the read** at `MAX_CONFIG_BYTES` before touching the contents.
  * - **Strip a BOM**, which `JSON.parse` will not tolerate.
+ * - **Screen emptiness after the BOM strip**, so a crash-truncated config is
+ *   reported as `empty` rather than as malformed JSON. `applyConfig` and
+ *   `readClaudeConfig` make the same distinction; the reasons a user is shown
+ *   for one file must not differ by which surface found it.
  * - **Leak no parse detail.** V8 `SyntaxError` messages embed a snippet of the
  *   source, so reasons are fixed strings and never carry the error.
  *
@@ -1253,6 +1274,17 @@ export async function readConfigForMutation(configPath: string): Promise<ConfigR
     throw err;
   }
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+
+  // Emptiness is its own reason, screened after the BOM strip exactly as
+  // `applyConfig` and `readClaudeConfig` do. Without it `JSON.parse("")` threw
+  // and a crash-truncated config was reported as `malformed-json` — the boot
+  // sweep logged "Left Claude Code untouched (malformed-json)" for the same
+  // file `tandem doctor` calls empty and `setup --apply` fixes outright, so the
+  // two surfaces named different conditions and only one of them prescribed a
+  // working remedy. The decision here is unchanged (touch nothing: there is no
+  // `mcpServers` to repair, and this reader NEVER creates); only the reason the
+  // user is shown is.
+  if (!/\S/.test(raw)) return { status: "skipped", reason: "empty" };
 
   let parsed: unknown;
   try {
@@ -1283,8 +1315,6 @@ export async function readConfigForMutation(configPath: string): Promise<ConfigR
  * size cap, BOM strip) and the same `atomicWrite` 0o600/ACL hardening, but
  * with scrub semantics `applyConfig` deliberately does NOT have:
  * - never creates the file (`applyConfig` starts fresh on ENOENT);
- * - never replaces malformed JSON (`applyConfig` backs it up and rewrites —
- *   on an uninstall path that would wipe the user's whole config);
  * - never rewrites when nothing matched (no churn of a file other vendors'
  *   tokens live in).
  *
@@ -1989,8 +2019,13 @@ async function maybeBackupExistingConfig(
   if (!shouldBackup(existingTandem, ops.create.tandem)) return undefined;
 
   const dir = backupDir(resolveAppDataDir());
-  // assertPathSafe defeats XDG_DATA_HOME poisoning — same hardening as
-  // the broken-JSON backup path above.
+  // assertPathSafe defeats app-data-dir poisoning: `resolveAppDataDir()` is
+  // env-derived (`TANDEM_APP_DATA_DIR`, else `env-paths`, which reads
+  // `XDG_DATA_HOME` on Linux), so a hostile value would otherwise choose the
+  // directory this writes a COPY OF THE USER'S CONFIG into — bearer tokens and
+  // all. (This comment used to cite the broken-JSON backup path as the matching
+  // precedent; that path was deleted with #1802's refusal, so this is now the
+  // only backup writer in the file.)
   assertPathSafe(dir);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
 
@@ -2232,13 +2267,69 @@ export { CHANNEL_DIST, PACKAGE_ROOT };
  *
  * Answers "what is registered", which is a different question from
  * `shouldRegisterChannelShim`'s "what should a fresh setup register" — see the
- * note on `applyConfigWithToken`. Unreadable, absent, oversized and malformed
- * configs all answer `false`: there is nothing to preserve in any of them, and
- * `applyConfig` will start that file fresh anyway.
+ * note on `applyConfigWithToken`. Absent, oversized and malformed configs
+ * answer `false`: there is nothing to preserve in any of them, because
+ * `applyConfig` refuses the file before any op is applied.
+ *
+ * An UNREADABLE config is the one input that does NOT answer `false` — it
+ * THROWS. `readConfigForMutation` rethrows every non-ENOENT read error, so an
+ * EACCES/EBUSY/EPERM propagates out of here to the caller's per-target `try`.
+ * That is load-bearing, not incidental: `false` means REMOVE (see
+ * `resolveChannelShimIntent`), so collapsing "I could not read it" into "there
+ * is nothing there" turns a transient antivirus lock on `~/.claude.json` into a
+ * silent deletion of the user's entry. Never wrap this call in a
+ * `.catch(() => false)`, and never drop the surrounding per-target `try` as
+ * redundant.
  */
 async function targetHasChannelEntry(configPath: string): Promise<boolean> {
   const read = await readConfigForMutation(configPath);
   return read.status === "ok" && "tandem-channel" in read.servers;
+}
+
+/**
+ * Does the preserved `tandem-channel` entry hold a token this rotation has
+ * superseded?
+ *
+ * The gate on `applyConfigWithToken`'s stale-token warning, and it exists
+ * because the warning makes a factual claim and prints a DESTRUCTIVE remedy
+ * (security review of #1760, round 3). The old gate was `preserveShim &&
+ * !writeShim && token !== null` — structural only, never looking inside the
+ * entry — so a hand-registered shim pointing at the user's own script, with no
+ * `env.TANDEM_AUTH_TOKEN` at all, was told it "still holds the OLD token and
+ * will be rejected" (false of it) and offered `setup --apply --target=...
+ * --without-channel-shim`, which DELETES it. That is the implicit-deletion
+ * outcome #1760 was filed to eliminate, re-entering through the fix-it line
+ * rather than through the resolver.
+ *
+ * Two conditions, both necessary: the entry carries a string
+ * `env.TANDEM_AUTH_TOKEN`, and that string is not the token just written. The
+ * second costs nothing and rules out the entry that is already current.
+ *
+ * An unreadable config answers `true`, opposite to {@link
+ * targetHasChannelEntry}'s throw, because the consequences are opposite: there,
+ * "I could not tell" collapsing to `false` DELETES an entry; here it would
+ * SUPPRESS the warning that a superseded bearer token is sitting on disk, after
+ * a command the user runs in response to a leak. The write for this target has
+ * already landed by the time this runs, so throwing would also report a target
+ * that really was updated as an error.
+ */
+async function channelEntryHoldsSupersededToken(
+  configPath: string,
+  newToken: string,
+): Promise<boolean> {
+  let read: ConfigReadResult;
+  try {
+    read = await readConfigForMutation(configPath);
+  } catch {
+    return true;
+  }
+  if (read.status !== "ok") return false;
+  const entry = read.servers["tandem-channel"];
+  if (entry === null || typeof entry !== "object") return false;
+  const env = (entry as { env?: unknown }).env;
+  if (env === null || typeof env !== "object") return false;
+  const stored = (env as Record<string, unknown>).TANDEM_AUTH_TOKEN;
+  return typeof stored === "string" && stored !== newToken;
 }
 
 /**
@@ -2249,28 +2340,44 @@ async function targetHasChannelEntry(configPath: string): Promise<boolean> {
  * pass `undefined` when the user gave no flag, and `applyOpsForCli` turns a
  * `false` into an explicit REMOVE — so "no opinion" silently meant "delete it".
  *
- * Three-way, in priority order:
+ * Three-way, in priority order (#1760):
  *
- *  1. **No push transport for this kind** (today `claude-desktop`, the Cowork
- *     stdio path) → `false`, ahead of everything, because no flag conjures a
- *     transport that does not exist (#1299). Entries there were written by
- *     Tandem during the default-on era and provably cannot deliver, so removing
- *     them is the intended cleanup rather than a surprise.
- *  2. **An explicit override** → honoured. `false` is a request to remove.
- *  3. **Otherwise, preserve what is registered.** A read failure THROWS rather
- *     than answering `false`: "I could not tell" and "there is nothing there"
- *     must not collapse, or a transient `EBUSY` from an antivirus scanner
- *     becomes a deletion. Both callers run this inside their per-target `try`,
- *     so a throw records an error and skips that target — which is the honest
- *     outcome for a config you could not read.
+ *  1. **Explicit `true`** → register, EXCEPT on a kind with no push transport
+ *     (today `claude-desktop`, the Cowork stdio path), where `targetPushSupport
+ *     === "none"` is a ceiling on CREATION only: an entry that is already there
+ *     is preserved, none is conjured (#1299), and none is deleted. A `none`
+ *     kind is never a licence to remove — nothing on disk distinguishes a
+ *     legacy artifact from a deliberate opt-in.
+ *  2. **Explicit `false`** → remove, on every kind. This is the only removal
+ *     path *through this resolver*, and `tandem setup --apply
+ *     --without-channel-shim` is the only way to reach it. It is not the only
+ *     way the entry can leave a config: `tandem --uninstall-scrub` deletes it
+ *     via `removeConfigEntries` along with every other Tandem key, and the
+ *     wizard's apply route deletes it when the user confirms a diff that lists
+ *     it. Both are explicit user acts elsewhere; what #1760 fixed is that no
+ *     *implicit* path removes it any more.
+ *  3. **No flag** → preserve what is registered, on every kind. A read failure
+ *     THROWS rather than answering `false`: "I could not tell" and "there is
+ *     nothing there" must not collapse, or a transient `EBUSY` from an
+ *     antivirus scanner becomes a deletion. Both callers run this inside their
+ *     per-target `try`, so a throw records an error and skips that target —
+ *     which is the honest outcome for a config you could not read.
+ *
+ * The answer is "should this entry EXIST after the write". Whether its body may
+ * be re-derived is a second question, and both callers gate that separately on
+ * `targetPushSupport` so a preserved hand-registered entry is never rewritten.
  */
 export async function resolveChannelShimIntent(
   targetKind: TargetKind,
   configPath: string,
   override: boolean | undefined,
 ): Promise<boolean> {
-  if (targetPushSupport(targetKind) === "none") return false;
-  if (override !== undefined) return override;
+  if (override === true) {
+    return targetPushSupport(targetKind) === "none"
+      ? await targetHasChannelEntry(configPath)
+      : true;
+  }
+  if (override === false) return false;
   return await targetHasChannelEntry(configPath);
 }
 
@@ -2296,11 +2403,44 @@ export async function resolveChannelShimIntent(
  * silently delete a shim the user had deliberately opted into. `tandem setup`
  * always passes the flag explicitly and is unaffected; rotation is the caller
  * that omits it.
+ *
+ * **Preserve and write are separate (#1760).** On a `targetPushSupport ===
+ * "none"` kind the resolver can now answer `true` for an entry that is already
+ * there, but `buildMcpEntries` is not target-gated, so re-deriving it would
+ * overwrite a hand-registered `command`/`args` with Tandem's own. `writeShim`
+ * is the narrower flag and gates only the derivation. Deliberate consequence: a
+ * preserved `none`-kind entry is never refreshed, so it keeps a rotated-away
+ * `TANDEM_AUTH_TOKEN` where today it is deleted — the price of not destroying a
+ * hand-registered entry.
+ *
+ * That consequence is REPORTED, not merely documented (security review of
+ * #1760). Such a target still counts as `updated` — its `tandem` entry really
+ * did get the new token — so crediting it silently would let `tandem
+ * rotate-token`, the documented remedy for a leaked token, print "Updated 1
+ * config file(s)" while a superseded bearer token stays on disk and the shim
+ * 401s with nothing said. A preserved-but-not-rewritten target lands in
+ * `staleTokenTargets` so the caller can name it — but only when its entry
+ * actually carries a superseded `env.TANDEM_AUTH_TOKEN`
+ * (`channelEntryHoldsSupersededToken`), because the caller's remedy deletes the
+ * entry and a hand-registered one holding no Tandem token has nothing stale
+ * about it.
+ *
+ * **The `kind` rides along with the label, and it is load-bearing rather than
+ * informational.** The remedy the caller prints for a stale entry is a removal
+ * command, and `resolveChannelShimIntent` reads `--without-channel-shim` as
+ * "remove, on every detected kind" — so an untargeted remedy for a Claude
+ * Desktop entry also deletes a Claude Code shim the user deliberately opted
+ * into, which is the implicit-deletion class #1760 exists to eliminate. The
+ * caller needs the `--target=` value, not a display label.
  */
 export async function applyConfigWithToken(
   token: string | null,
   opts: { force?: boolean; withChannelShim?: boolean; homeOverride?: string } = {},
-): Promise<{ updated: number; errors: string[] }> {
+): Promise<{
+  updated: number;
+  errors: string[];
+  staleTokenTargets: { label: string; kind: TargetKind }[];
+}> {
   // `homeOverride` exists for tests only, and it earns its keep: the
   // preserve-vs-re-derive distinction below is a property of the WIRING, not of
   // either helper, so nothing short of driving the real function against a real
@@ -2309,23 +2449,45 @@ export async function applyConfigWithToken(
 
   let updated = 0;
   const errors: string[] = [];
+  const staleTokenTargets: { label: string; kind: TargetKind }[] = [];
   for (const t of targets) {
     try {
-      const withChannelShim = await resolveChannelShimIntent(
+      const preserveShim = await resolveChannelShimIntent(
         t.kind,
         t.configPath,
         opts.withChannelShim,
       );
+      const writeShim = preserveShim && targetPushSupport(t.kind) !== "none";
       const entries = buildMcpEntries(CHANNEL_DIST, {
-        withChannelShim,
+        withChannelShim: writeShim,
         token: token ?? undefined,
         targetKind: t.kind,
       });
-      await applyConfig(t.configPath, applyOpsForCli(entries, { withChannelShim }));
+      await applyConfig(t.configPath, applyOpsForCli(entries, { withChannelShim: preserveShim }));
       updated++;
+      // Recorded only AFTER the write lands, and only when a token was being
+      // written: a preserved entry we never re-derived keeps whatever
+      // `env.TANDEM_AUTH_TOKEN` it already had, which after a rotation is the
+      // superseded one. Nothing later heals it — the boot sweep's
+      // `repairEntryInPlace` rewrites `command`/`args` and never `env`.
+      //
+      // The structural conditions are necessary, not sufficient: the caller's
+      // warning asserts the entry "still holds the OLD token" and prints a
+      // removal command, so the entry BODY decides
+      // (`channelEntryHoldsSupersededToken`) — a hand-registered shim with no
+      // `env.TANDEM_AUTH_TOKEN` is exactly what #1760 preserved, and must not
+      // be sent to a remedy that deletes it.
+      if (
+        preserveShim &&
+        !writeShim &&
+        token !== null &&
+        (await channelEntryHoldsSupersededToken(t.configPath, token))
+      ) {
+        staleTokenTargets.push({ label: t.label, kind: t.kind });
+      }
     } catch (err) {
       errors.push(`${t.label}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  return { updated, errors };
+  return { updated, errors, staleTokenTargets };
 }

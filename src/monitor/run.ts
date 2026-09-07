@@ -46,9 +46,10 @@
  * All retry / SSE-frame / awareness / mode-cache logic lives in the shared
  * `src/shared/sse-consumer.ts` module (extracted in #282). This file is the
  * thin stdout-aware adapter that owns the delivery callback, the EPIPE
- * handler, and the SIGINT/SIGTERM shutdown drain.
+ * handler, the stdin-EOF exit, and the SIGINT/SIGTERM shutdown drain.
  */
 
+import { Socket } from "node:net";
 import { resolveTandemUrl } from "../shared/cli-runtime.js";
 import { isWakeWorthy } from "../shared/events/wake-scope.js";
 import {
@@ -164,16 +165,17 @@ function buildOptions(): EventConsumerOptions {
       //
       // Silence is still right, for reasons that never depended on the
       // population:
-      //   - Nothing was lost. The line says "restore real-time events", which
+      //   - Nothing was lost. The line says the connection was "lost", which
       //     presupposes events were flowing; none ever were.
       //   - The model finds out far better by calling any `tandem_*` tool,
       //     which fails with a real error naming the real problem.
-      //   - A monitor that exits is never respawned (spike F9), so this line
-      //     would be the last thing this process ever says — a claim that
-      //     stays in context after it stops being true.
       if (!everConnected) return;
+      // Named the wrong process before #1804: the consumer used to exit here,
+      // and a monitor that exits is never respawned (spike F9), so "restart
+      // Tandem" could not restore anything. It now keeps retrying, and pull is
+      // the authority in the meantime.
       process.stdout.write(
-        "Tandem monitor disconnected — restart Tandem to restore real-time events\n",
+        "Tandem monitor lost its connection and is retrying in the background — tandem_checkInbox still works and is authoritative\n",
       );
     },
   };
@@ -182,6 +184,7 @@ function buildOptions(): EventConsumerOptions {
 export async function main(): Promise<void> {
   installShutdownHandlers();
   installStdoutErrorHandler();
+  installStdinEndHandler();
   console.error(`${LOG_PREFIX} Tandem monitor starting (server: ${TANDEM_URL})`);
 
   // Warm the mode cache before the first event so we don't default-suppress
@@ -274,6 +277,89 @@ function installStdoutErrorHandler(): void {
   process.stdout.on("error", onStdoutError);
 }
 
+/**
+ * How long after arming an EOF is read as "stdin was never a liveness channel"
+ * rather than "the host exited". Nothing arrives on our stdin, so a real host
+ * exit cannot plausibly land inside the first seconds of the process; an EOF
+ * that does is the null-device / already-closed / closed-at-spawn shape.
+ */
+const STDIN_LIVENESS_GRACE_MS = 5_000;
+
+/** Set by `armStdinEndExit`; read by `onStdinEnd` to age the EOF. */
+let stdinArmedAt = 0;
+
+/**
+ * Exit when the host closes our stdin — the monitor's replacement for the
+ * self-termination path #1804 removed.
+ *
+ * Before #1804 the consumer exited after `CHANNEL_MAX_RETRIES`; that was the
+ * only way a NEVER-CONNECTED run ever ended. `onStdoutError`'s EPIPE exit
+ * cannot cover it, because a monitor with no stream never writes to stdout, so
+ * no EPIPE is ever raised. Without this, "Tandem is down and the host dies
+ * without signalling" leaves one orphan per session probing `/api/events` at
+ * the 30s backoff cap forever. `src/channel/run.ts` closed the same hole the
+ * same way; this is that line plus the two things the monitor needs and the
+ * shim does not:
+ *
+ *  - `resume()`. The shim's `StdioServerTransport` puts stdin in flowing mode
+ *    before its listener is registered. Nothing here reads stdin, and an
+ *    `'end'` listener on a paused stream never fires.
+ *  - **An aged EOF, not a bare one.** The `Socket` guard alone is not enough,
+ *    and reading it as enough is the trap: it rejects only the null-device
+ *    shape (an `fs.ReadStream`), while a pipe the host closes right after spawn
+ *    — and an inherited stdin already at EOF under `spawn(cmd, [], { shell:
+ *    true })` — is a `net.Socket`, so `resume()` delivers `'end'` immediately
+ *    and a bare handler would `exit(0)` at STARTUP, killing the push path in
+ *    every session with no diagnosis. **Whether the plugin host gives us a
+ *    piped stdin held open for the session is still UNMEASURED**
+ *    (F-runtime-1804.md), so this discriminates by age instead of assuming an
+ *    answer: an EOF inside `STDIN_LIVENESS_GRACE_MS` is discounted and logged,
+ *    and the monitor stays up. The ambiguous case therefore fails toward
+ *    keeping the push path, which is the direction that cannot be silent —
+ *    a killed monitor looks exactly like a quiet one.
+ *
+ * What this does NOT cover, deliberately stated rather than implied: when the
+ * channel is absent (non-socket stdin) or its EOF is discounted, the monitor
+ * has no host-exit detection at all and a session that ends uncleanly leaves it
+ * retrying at the 30s cap. Both cases log one stderr line. Pull
+ * (`tandem_checkInbox`) stays authoritative either way.
+ *
+ * Exit code 0: this is a clean shutdown, not a failure, and (as with
+ * `onStdoutError`) nothing respawns us either way.
+ */
+function armStdinEndExit(stdin: NodeJS.ReadableStream): boolean {
+  if (!(stdin instanceof Socket)) return false;
+  stdinArmedAt = Date.now();
+  stdin.once("end", onStdinEnd);
+  stdin.resume();
+  return true;
+}
+
+function onStdinEnd(): void {
+  const ageMs = Date.now() - stdinArmedAt;
+  if (ageMs < STDIN_LIVENESS_GRACE_MS) {
+    console.error(
+      `${LOG_PREFIX} stdin reached EOF ${ageMs}ms after start — reading that as "no stdin ` +
+        `liveness channel", not a host exit; staying up with no host-exit detection`,
+    );
+    return;
+  }
+  console.error(`${LOG_PREFIX} stdin closed (host exited) — shutting down`);
+  process.exit(0);
+}
+
+function installStdinEndHandler(): void {
+  if (IS_VITEST) return;
+  // The boolean is the diagnosis, so log it rather than dropping it: a decline
+  // means this run has no host-exit detection, and that is invisible otherwise.
+  if (!armStdinEndExit(process.stdin)) {
+    console.error(
+      `${LOG_PREFIX} stdin is not a pipe, socket or TTY — no host-exit detection this run; ` +
+        `tandem_checkInbox remains authoritative`,
+    );
+  }
+}
+
 // --- Mode cache re-exports (preserve existing public surface) ---
 
 /**
@@ -300,6 +386,7 @@ export function getModeSync(): TandemMode {
  */
 export function _resetMonitorStateForTests(): void {
   _resetSseConsumerStateForTests();
+  stdinArmedAt = 0;
   process.removeAllListeners("SIGINT");
   process.removeAllListeners("SIGTERM");
 }
@@ -311,4 +398,7 @@ export function _resetMonitorStateForTests(): void {
  */
 export const _monitorTestExports = {
   onStdoutError,
+  armStdinEndExit,
+  onStdinEnd,
+  STDIN_LIVENESS_GRACE_MS,
 };

@@ -464,6 +464,30 @@ describe("readClaudeConfig screens the path it is handed", () => {
   });
 
   it.each([
+    ["zero bytes", ""],
+    ["whitespace only", "  \n\t\n"],
+    ["a lone BOM", "﻿"],
+  ])("reports %s as empty, not as malformed", (_label, body) => {
+    // `malformed` now carries a remedy that says Tandem will NOT rewrite the
+    // file, and that is false of these three: `applyConfig` starts fresh on
+    // them, so `tandem setup --apply` fixes a crash-truncated `~/.claude.json`
+    // in one command. While they landed on `malformed`, doctor asserted the
+    // opposite and named no working command at all.
+    const file = join(dataDir, "empty.json");
+    writeFileSync(file, body, "utf-8");
+    expect(readClaudeConfig(file)).toEqual({ kind: "empty" });
+  });
+
+  it("strips a BOM rather than reporting a valid config as malformed", () => {
+    // The other half of the same mismatch: `applyConfig` strips U+FEFF and
+    // rewrites this file happily, so reporting it as unparseable-and-refused
+    // was a flat falsehood about a config with nothing wrong with it.
+    const file = join(dataDir, "bom.json");
+    writeFileSync(file, `﻿${JSON.stringify({ mcpServers: {} })}`, "utf-8");
+    expect(readClaudeConfig(file)).toEqual({ kind: "ok", value: { mcpServers: {} } });
+  });
+
+  it.each([
     [NULL_BODY],
     [ARRAY_BODY],
     [NUMBER_BODY],

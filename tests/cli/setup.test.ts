@@ -1,12 +1,4 @@
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +11,7 @@ import {
   applyConfigWithToken,
   applyOpsForCli,
   buildMcpEntries,
+  ConfigRefusalError,
   detectTargets,
   installSkill,
   resolveCliVersion,
@@ -467,24 +460,33 @@ describe("applyConfig", () => {
     expect(written.mcpServers["tandem-channel"].args).toEqual(["/fake/channel/index.js"]);
   });
 
-  it("overwrites malformed JSON with fresh config", async () => {
+  it("refuses to overwrite malformed JSON", async () => {
+    // Inverted from "overwrites malformed JSON with fresh config" (#1802). The
+    // old assertion — `Object.keys(written)` being exactly `["mcpServers"]` —
+    // was the defect stated as a contract: everything else Claude Code keeps
+    // in that file (project list, OAuth account, onboarding state, per-project
+    // allow-lists) had just been dropped, and `applyConfig` returned success.
     const configPath = join(tmpDir, ".claude.json");
-    writeFileSync(configPath, "{ this is not json }}}");
+    const badContent = "{ this is not json }}}";
+    writeFileSync(configPath, badContent);
     const entries = buildMcpEntries("/fake/channel/index.js");
-    const prevAppData = process.env.TANDEM_APP_DATA_DIR;
-    process.env.TANDEM_APP_DATA_DIR = tmpDir;
-    try {
-      await applyConfig(configPath, applyOpsForCli(entries, { withChannelShim: false }));
-    } finally {
-      if (prevAppData === undefined) delete process.env.TANDEM_APP_DATA_DIR;
-      else process.env.TANDEM_APP_DATA_DIR = prevAppData;
-    }
-    const written = JSON.parse(readFileSync(configPath, "utf-8"));
-    expect(written.mcpServers.tandem).toBeDefined();
-    expect(Object.keys(written)).toEqual(["mcpServers"]);
+
+    const err = await applyConfig(
+      configPath,
+      applyOpsForCli(entries, { withChannelShim: false }),
+    ).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ConfigRefusalError);
+    expect((err as ConfigRefusalError).reason).toBe("CONFIG_MALFORMED");
+    expect(readFileSync(configPath, "utf-8")).toBe(badContent);
   });
 
-  it("backs up malformed .claude.json before overwriting", async () => {
+  it("creates no .broken-backups dir when it refuses", async () => {
+    // Converted from "backs up malformed .claude.json before overwriting".
+    // The `TANDEM_APP_DATA_DIR` plumbing is load-bearing and is kept for that
+    // reason: without it `resolveAppDataDir()` points at the real app-data
+    // dir, `join(tmpDir, ".broken-backups")` could never exist, and this
+    // negative would pass vacuously — against today's code too.
     const configPath = join(tmpDir, ".claude.json");
     const badContent = "{ malformed }";
     writeFileSync(configPath, badContent);
@@ -492,19 +494,16 @@ describe("applyConfig", () => {
     const prevAppData = process.env.TANDEM_APP_DATA_DIR;
     process.env.TANDEM_APP_DATA_DIR = tmpDir;
     try {
-      await applyConfig(configPath, applyOpsForCli(entries, { withChannelShim: false }));
+      await expect(
+        applyConfig(configPath, applyOpsForCli(entries, { withChannelShim: false })),
+      ).rejects.toBeInstanceOf(ConfigRefusalError);
     } finally {
       if (prevAppData === undefined) delete process.env.TANDEM_APP_DATA_DIR;
       else process.env.TANDEM_APP_DATA_DIR = prevAppData;
     }
 
-    // 3c-ii-b moved the backup under the Tandem data-dir (with 0o600 on
-    // POSIX) so we don't leak the malformed file's contents through a
-    // world-readable sibling of ~/.claude.json.
-    const backupDir = join(tmpDir, ".broken-backups");
-    const backups = readdirSync(backupDir).filter((n) => n.startsWith(".claude.json.broken-"));
-    expect(backups.length).toBe(1);
-    expect(readFileSync(join(backupDir, backups[0]!), "utf-8")).toBe(badContent);
+    expect(existsSync(join(tmpDir, ".broken-backups"))).toBe(false);
+    expect(readFileSync(configPath, "utf-8")).toBe(badContent);
   });
 
   it("propagates permission errors instead of silently swallowing", async () => {
@@ -598,24 +597,170 @@ describe("applyConfigWithToken — rotation preserves, it does not re-derive", (
     expect(readServers()["tandem-channel"]).toBeUndefined();
   });
 
-  it("does not conjure a shim into a config that lacks one, on any target kind", async () => {
-    // Pins the push-support branch of the resolver against a FIXTURE rather
-    // than against whatever Claude Desktop config the developer happens to
-    // have — which is how the branch went unexercised while the suite was
-    // quietly writing to the real one.
+  it("preserves a hand-registered shim on a no-push target", async () => {
+    // Inverted from "does not conjure a shim into a config that lacks one, on
+    // any target kind" (#1760): that title never matched its fixture, which
+    // HELD a `tandem-channel` entry, so what it actually pinned was the
+    // deletion this issue removes. A `targetPushSupport` of `none` is a ceiling
+    // on CREATION, never a licence to remove — nothing on disk distinguishes a
+    // legacy artifact from a deliberate opt-in.
+    //
+    // The body is distinctive on purpose: `buildMcpEntries` is not
+    // target-gated, so a `writeShim` that collapsed back into `preserveShim`
+    // would re-derive this entry from `resolveNodeBinary()` + `CHANNEL_DIST`
+    // and pass a mere `toBeDefined()`. Scoped to the one key, because
+    // `mcpServers.tandem` is legitimately rewritten on every run.
+    const handRolled = {
+      command: "/opt/custom/node",
+      args: ["/hand/rolled/shim.js"],
+      env: { X: "1" },
+    };
+    const desktopPath = desktopConfigUnder(home);
+    mkdirSync(dirname(desktopPath), { recursive: true });
+    const readDesktopShim = () =>
+      (
+        JSON.parse(readFileSync(desktopPath, "utf-8")) as {
+          mcpServers: Record<string, unknown>;
+        }
+      ).mcpServers["tandem-channel"];
+
+    writeFileSync(desktopPath, JSON.stringify({ mcpServers: { "tandem-channel": handRolled } }));
+    writeConfig({ tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } });
+
+    await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", { homeOverride: home });
+    expect(readDesktopShim()).toEqual(handRolled);
+
+    // And an explicit `--with-channel-shim` does not turn preserve into
+    // re-derive either.
+    await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", {
+      homeOverride: home,
+      withChannelShim: true,
+    });
+    expect(readDesktopShim()).toEqual(handRolled);
+  });
+
+  it("names a preserved no-push shim as still holding the old token", async () => {
+    // Security review of #1760. Preserving a no-push entry means NOT re-deriving
+    // its body, so its `env.TANDEM_AUTH_TOKEN` survives a rotation — and the
+    // target is still counted in `updated`, because its `tandem` entry really
+    // did get the new token. Crediting it silently would let `tandem
+    // rotate-token`, the remedy for a LEAKED token, print "Updated 2 config
+    // file(s)" while a superseded bearer token sits on disk and the shim 401s.
     const desktopPath = desktopConfigUnder(home);
     mkdirSync(dirname(desktopPath), { recursive: true });
     writeFileSync(
       desktopPath,
-      JSON.stringify({ mcpServers: { "tandem-channel": { command: "node" } } }),
+      JSON.stringify({
+        mcpServers: {
+          "tandem-channel": { command: "/opt/custom/node", env: { TANDEM_AUTH_TOKEN: "old" } },
+        },
+      }),
     );
+    writeConfig({ tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } });
+
+    const result = await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", {
+      homeOverride: home,
+    });
+
+    // The KIND rides along with the label, and it is load-bearing: the caller's
+    // remedy is a removal command, and an untargeted `--without-channel-shim`
+    // removes the shim from every detected kind.
+    expect(result.staleTokenTargets).toEqual([
+      { label: expect.stringContaining("Claude Desktop"), kind: "claude-desktop" },
+    ]);
+    // It is a WARNING about a counted target, not an error and not a skip.
+    expect(result.errors).toEqual([]);
+    expect(result.updated).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not call a hand-registered shim with no Tandem token stale", async () => {
+    // Security review of #1760, round 3. The gate was structural — `preserveShim
+    // && !writeShim && token !== null`, never looking inside the entry — so the
+    // hand-registered shim this issue exists to PROTECT was told it "still holds
+    // the OLD token and will be rejected" (false: it carries no
+    // `env.TANDEM_AUTH_TOKEN` at all) and offered `setup --apply --target=...
+    // --without-channel-shim`, which deletes it. A user following the printed
+    // remedy destroyed the very entry #1760 stopped Tandem from deleting.
+    const desktopPath = desktopConfigUnder(home);
+    mkdirSync(dirname(desktopPath), { recursive: true });
+    writeFileSync(
+      desktopPath,
+      JSON.stringify({
+        mcpServers: {
+          "tandem-channel": {
+            command: "/opt/custom/node",
+            args: ["/hand/rolled/shim.js"],
+            env: { X: "1" },
+          },
+        },
+      }),
+    );
+    writeConfig({ tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } });
+
+    const result = await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", {
+      homeOverride: home,
+    });
+
+    expect(result.staleTokenTargets).toEqual([]);
+    // Still preserved, and still not an error — the entry is fine as it is.
+    expect(result.errors).toEqual([]);
+    const after = JSON.parse(readFileSync(desktopPath, "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(after.mcpServers["tandem-channel"]).toEqual({
+      command: "/opt/custom/node",
+      args: ["/hand/rolled/shim.js"],
+      env: { X: "1" },
+    });
+  });
+
+  it("does not call a preserved entry stale when it already holds the new token", async () => {
+    // The second half of the same gate: the claim is "it still holds the OLD
+    // token", so an entry already carrying the token just written has nothing
+    // to warn about.
+    const token = "abcdefghijklmnopqrstuvwxyz012345";
+    const desktopPath = desktopConfigUnder(home);
+    mkdirSync(dirname(desktopPath), { recursive: true });
+    writeFileSync(
+      desktopPath,
+      JSON.stringify({
+        mcpServers: {
+          "tandem-channel": { command: "/opt/custom/node", env: { TANDEM_AUTH_TOKEN: token } },
+        },
+      }),
+    );
+    writeConfig({ tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } });
+
+    const result = await applyConfigWithToken(token, { homeOverride: home });
+
+    expect(result.staleTokenTargets).toEqual([]);
+  });
+
+  it("reports no stale-token target when nothing was preserved", async () => {
+    // The other direction, so the list cannot be implemented as "every no-push
+    // target": a desktop config with no shim has nothing holding an old token.
+    const desktopPath = desktopConfigUnder(home);
+    mkdirSync(dirname(desktopPath), { recursive: true });
+    writeFileSync(desktopPath, JSON.stringify({ mcpServers: {} }));
+    writeConfig({ tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } });
+
+    const result = await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", {
+      homeOverride: home,
+    });
+
+    expect(result.staleTokenTargets).toEqual([]);
+  });
+
+  it("does not conjure a shim onto a no-push target that lacks one", async () => {
+    // The original invariant #1299 bought, kept as its own spec: preserving is
+    // not the same as creating, and a `none` kind never gets a new entry.
+    const desktopPath = desktopConfigUnder(home);
+    mkdirSync(dirname(desktopPath), { recursive: true });
+    writeFileSync(desktopPath, JSON.stringify({ mcpServers: {} }));
     writeConfig({ tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } });
 
     await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", { homeOverride: home });
 
-    // Claude Desktop has no push transport at all, so a shim there is removed
-    // regardless of what the file said (#1299) — and, crucially, the write
-    // landed inside the temp home rather than on the real config.
     const desktop = JSON.parse(readFileSync(desktopPath, "utf-8")) as {
       mcpServers: Record<string, unknown>;
     };

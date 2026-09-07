@@ -444,11 +444,11 @@ A link Tandem will not treat as safe also no longer *looks* clickable: it stays 
 
 If Tandem is your registered handler and you open a file it can't accept — an unsupported type, a path that no longer exists, or a folder — it now tells you so. Older builds sat on the welcome document with no message and recorded the reason only in the log.
 
-Tandem opens `.md`, `.txt`, `.docx`, `.html` and `.htm`. Both routes a file can arrive by — the command line on Windows and Linux, an Apple Event on macOS — now run the same checks, so a file accepted one way is no longer silently dropped the other. If the refusal happens before the window exists, the message is held and shown once the window is ready.
+Tandem opens `.md`, `.markdown`, `.txt`, `.docx`, `.html` and `.htm`. Both routes a file can arrive by — the command line on Windows and Linux, an Apple Event on macOS — now run the same checks, so a file accepted one way is no longer silently dropped the other. If the refusal happens before the window exists, the message is held and shown once the window is ready.
 
 ## Reset session state
 
-Sessions live in `{APP_DATA_DIR}/sessions/`, with one file per opened document plus a `CTRL_ROOM.json` for cross-document state (chat history, Solo/Tandem mode). To find the directory per OS:
+Sessions live in `{APP_DATA_DIR}/sessions/`, with one file per opened document plus a `__tandem_ctrl__.json` for cross-document state (chat history, Solo/Tandem mode). To find the directory per OS:
 
 | OS | Path |
 |---|---|
@@ -462,9 +462,9 @@ To reset all session state cleanly:
 2. Delete the `sessions/` directory.
 3. Restart Tandem.
 
-To reset only chat history without losing per-document state, delete just `CTRL_ROOM.json`.
+To reset only chat history without losing per-document state, delete just `__tandem_ctrl__.json`.
 
-Durable annotations live in a separate `annotations/` directory alongside `sessions/`. Corrupted annotation files are quarantined automatically (renamed to `.corrupt.json`) instead of being deleted, so you can recover them by hand if needed.
+Durable annotations live in a separate `annotations/` directory alongside `sessions/`. Corrupted annotation files are quarantined automatically (renamed to `<name>.json.corrupt.<timestamp>`) instead of being deleted, so you can recover them by hand if needed.
 
 ## A document will not open / a tab did not come back
 

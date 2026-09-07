@@ -88,6 +88,7 @@ import {
   applyConfig,
   buildMcpEntries,
   CHANNEL_DIST,
+  ConfigRefusalError,
   detectClaudeCli,
   detectTargets,
   installSkill,
@@ -953,6 +954,27 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
                 ERROR_CODE_PATH_REJECTED,
                 "Refused to operate on a symlinked, network, or out-of-tree config path",
               ),
+            );
+            continue;
+          }
+          if (err instanceof ConfigRefusalError) {
+            // The config was refused, not written — the user's file is exactly
+            // as it was. `err.message` names the path and, for the size
+            // refusal, the byte count, so it stays server-side: this route is
+            // browser-reachable and `ApplyItemResult.message` is the leak-safe
+            // field. The `reason` is the whole payload the wizard needs (#1801,
+            // #1802) — without it every refusal renders as "couldn't write the
+            // settings file — check it isn't open in another program", which is
+            // both wrong and unactionable. It is already an
+            // `ApplyItemErrorCode`, so it forwards directly; the user-facing
+            // sentence is the wizard's `resultErrorText` to own, and the terse
+            // message here matches every sibling `errorResult` above.
+            console.error(
+              `[Tandem] apply: ${entry.id} → ${target.configPath} refused (${err.reason}):`,
+              err.message,
+            );
+            results.push(
+              errorResult(entry.id, err.reason, "Refused to rewrite the config — see server logs"),
             );
             continue;
           }

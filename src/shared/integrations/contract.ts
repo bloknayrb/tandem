@@ -243,6 +243,13 @@ export const ERROR_CODE_SECRET_MISSING = "SECRET_MISSING";
 export const ERROR_CODE_OTHER_MCP_NOT_APPLICABLE = "OTHER_MCP_NOT_APPLICABLE";
 export const ERROR_CODE_PATH_REJECTED = "PATH_REJECTED";
 export const ERROR_CODE_WRITE_FAILED = "WRITE_FAILED";
+/** The config exceeded `MAX_CONFIG_BYTES` and was left untouched (#1801). */
+export const ERROR_CODE_CONFIG_TOO_LARGE = "CONFIG_TOO_LARGE";
+/** The config was not a JSON object Tandem can rewrite — it did not parse, or
+ *  it parsed to a non-object root / non-object `mcpServers` — and was left
+ *  untouched (#1802). One code for both because the remedy is the same: fix or
+ *  restore the file. */
+export const ERROR_CODE_CONFIG_MALFORMED = "CONFIG_MALFORMED";
 
 /** Specific failure codes the wizard can branch on. */
 export type ApplyItemErrorCode =
@@ -250,7 +257,9 @@ export type ApplyItemErrorCode =
   | typeof ERROR_CODE_SECRET_MISSING
   | typeof ERROR_CODE_OTHER_MCP_NOT_APPLICABLE
   | typeof ERROR_CODE_PATH_REJECTED
-  | typeof ERROR_CODE_WRITE_FAILED;
+  | typeof ERROR_CODE_WRITE_FAILED
+  | typeof ERROR_CODE_CONFIG_TOO_LARGE
+  | typeof ERROR_CODE_CONFIG_MALFORMED;
 
 export interface ApplyItemResult {
   id: string;

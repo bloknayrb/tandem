@@ -136,15 +136,19 @@ const WRITER_SITES: Record<
   { sites: number; disposition: "covered" | "out-of-scope"; why: string }
 > = {
   "src/server/integrations/apply.ts": {
-    sites: 10,
+    sites: 9,
     disposition: "covered",
     why:
-      "Six `atomicWrite` calls, plus the helper's own tmp `writeFile`, `rename` " +
-      "and two-call EXDEV `copyFile` fallback. Four of the six write the Claude " +
-      "config (applyConfig, removeConfigEntries, refreshMcpEntryBinary, " +
-      "refreshAllMcpEntryBinaries); two write ~/.claude/skills/tandem/SKILL.md " +
-      "(installSkill, refreshExistingSkillIfStale), harmless today only because " +
-      "both write identical content.",
+      "Six `atomicWrite` calls, plus the helper's own tmp `writeFile`, its " +
+      "`rename`, and the single `copyFile` of its EXDEV fallback. Four of the " +
+      "six write the Claude config (applyConfig, removeConfigEntries, " +
+      "refreshMcpEntryBinary, refreshAllMcpEntryBinaries); two write " +
+      "~/.claude/skills/tandem/SKILL.md (installSkill, " +
+      "refreshExistingSkillIfStale), harmless today only because both write " +
+      "identical content. Was 10 until #1802 deleted the malformed-JSON " +
+      "`.broken-backups` copy — the site the old `why` never named, having " +
+      "reached its total by counting the EXDEV fallback as two `copyFile` " +
+      "calls when it is one.",
   },
   "src/server/integrations/install-claude-cli.ts": {
     sites: 2,
@@ -231,7 +235,7 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   "src/server/auth/token-store.ts": 3,
   "src/server/file-io/doc-backup.ts": 2,
   "src/server/file-io/index.ts": 3,
-  "src/server/integrations/apply.ts": 10,
+  "src/server/integrations/apply.ts": 9,
   "src/server/integrations/install-claude-cli.ts": 2,
   "src/server/integrations/storage.ts": 8,
   "src/server/launcher/supervisor.ts": 1,

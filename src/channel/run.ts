@@ -150,13 +150,20 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
     throw new Error(`Unknown tool: ${req.params.name}`);
   });
 
+  // Claude Code also sends `input_preview` — the approval prompt's payload: file
+  // bodies for a `Write`, the command line for a `Bash`. It is deliberately
+  // absent here, so the parse below strips it and nothing downstream can reach
+  // it (#1884). The POST it used to ride on is a `NON_LOOPBACK_ALLOWED` route,
+  // so under Cowork the whole body crosses the LAN in plaintext — and the
+  // server discarded the field on arrival anyway (#1794). `description` is the
+  // tool-level summary line and still travels; that asymmetry is stated in
+  // docs/mcp-tools.md and the #1884 register entry.
   const PermissionRequestSchema = z.object({
     method: z.literal("notifications/claude/channel/permission_request"),
     params: z.object({
       request_id: z.string(),
       tool_name: z.string(),
       description: z.string(),
-      input_preview: z.string(),
     }),
   });
 
@@ -171,14 +178,13 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
             requestId: params.request_id,
             toolName: params.tool_name,
             description: params.description,
-            inputPreview: params.input_preview,
           }),
         },
         CHANNEL_PERMISSION_FETCH_TIMEOUT_MS,
       );
       if (!res.ok) {
         console.error(
-          `[Channel] Permission relay got HTTP ${res.status} — browser may not see prompt`,
+          `[Channel] Permission relay POST failed (HTTP ${res.status}); the request is dropped — there is no browser-side permission UI`,
         );
       }
     } catch (err) {
@@ -203,6 +209,16 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
   const transport = new StdioServerTransport();
   await mcp.connect(transport);
   console.error("[Channel] Connected to Claude Code via stdio");
+
+  // Removing the retry cap (#1804) deleted this shim's only self-termination
+  // path for the case that fix targets, so a shim armed while Tandem is down
+  // whose session then ends uncleanly would probe forever — one orphan per
+  // session. Mirrors `src/cli/mcp-stdio.ts`, and works for the same reason:
+  // the connect above put stdin in flowing mode, so EOF is delivered. No
+  // `resume()` is needed or wanted.
+  process.stdin.once("end", () => {
+    process.exit(0);
+  });
 
   startEventBridge(mcp, tandemUrl).catch((err) => {
     console.error("[Channel] Event bridge failed unexpectedly:", err);

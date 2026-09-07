@@ -480,7 +480,7 @@ The shim coexists with the HTTP MCP server — Claude Code connects to both simu
 
 When Claude Code asks for tool approval, it sends `notifications/claude/channel/permission_request` to the shim. The shim forwards the request to `POST /api/channel-permission` on the Tandem server.
 
-**The return leg does not exist — this relay is a stub, not a working feature.** Nothing in `src/client/` reads `pendingPermissions`, so no prompt is ever displayed; `permission_request` is registered as an MCP *notification* handler, and notifications cannot be answered; and `POST /api/channel-permission-verdict` deletes the pending entry and logs the verdict, which therefore never reaches Claude Code. The code says as much in place (*"SSE push to browser is a follow-up"*) — the capability was declared ahead of an implementation that never landed. It is described as shipped API in `docs/mcp-tools.md`, which is wrong and tracked for correction. This matters beyond the feature itself: it was rationale (1) for keeping the channel canonical, and [ADR-047](decisions.md#adr-047-claude-code-push-transport-activation) §3 voids it on these grounds.
+**The return leg does not exist — this relay is a stub, not a working feature.** Nothing in `src/client/` reads `pendingPermissions`, so no prompt is ever displayed; `permission_request` is registered as an MCP *notification* handler, and notifications cannot be answered; and `POST /api/channel-permission-verdict` deletes the pending entry and logs the verdict, which therefore never reaches Claude Code. The capability was declared ahead of an implementation that never landed. `docs/mcp-tools.md` used to describe it as shipped API; #1794 corrected that, and the approval prompt's `input_preview` payload is neither sent by the shim nor stored, served or logged by the server (the served `description` summary line is what #1884 still tracks). This matters beyond the feature itself: it was rationale (1) for keeping the channel canonical, and [ADR-047](decisions.md#adr-047-claude-code-push-transport-activation) §3 voids it on these grounds.
 
 ## Plugin Monitor
 
@@ -527,12 +527,14 @@ The mode cache (`getCachedMode()` warm-up + `getModeSync()` / `refreshMode()` ho
 
 ### Retry Semantics
 
-Reconnect uses exponential backoff: 2s / 4s / 8s / 16s / 30s (cap). The retry counter resets **only after `STABLE_CONNECTION_MS` (60s) of continuous uptime** — resetting per event would let a server that crashes after each event reconnect forever, never exhausting the cap.
+Reconnect uses exponential backoff: 2s / 4s / 8s / 16s / 30s (cap). The retry counter resets **only after `STABLE_CONNECTION_MS` (60s) of continuous uptime** — resetting per event would let a connect-then-die flap re-arm the once-per-outage report on every cycle, and each stdout write is a model turn.
 
-On exhaustion (`CHANNEL_MAX_RETRIES`), the monitor:
+**The consumer never exits and never stops retrying (#1804).** Neither host is respawned — the plugin monitor and the channel shim are each launched once per Claude Code session — so a process that gave up killed the push path for the rest of that session. After `CHANNEL_MAX_RETRIES` consecutive failures the consumer reports **once per outage**:
 1. POSTs `/api/channel-error` with `MONITOR_CONNECT_FAILED`.
-2. Writes a user-facing line to stdout: "Tandem monitor disconnected — restart Tandem to restore real-time events."
-3. Calls `process.exit(1)`.
+2. Writes one user-facing line to stdout: "Tandem monitor lost its connection and is retrying in the background — tandem_checkInbox still works and is authoritative."
+3. Keeps retrying at the 30s cap, with the per-failure stderr lines suppressed until the connection is restored.
+
+A later outage, after a recovery that survived `STABLE_CONNECTION_MS`, reports again.
 
 ### Awareness Lifecycle
 
@@ -574,7 +576,7 @@ Two independent reasons the shim is not registered unless asked for:
 
 So: on a Claude Desktop target only the HTTP `tandem` MCP entry is written, and on Claude Code the shim is written **only** on explicit request — `tandem setup --apply --with-channel-shim`. `shouldRegisterChannelShim` is the single source of truth, and there is deliberately **no wizard checkbox**: the wizard's apply route calls it with no override, so the CLI flag is the only opt-in. (Three places claimed a checkbox until 2026-08-09.) The wizard does not *remove* an existing shim either — its `remove` list comes from the user's confirmed diff — so an entry you opted into survives a wizard apply.
 
-**Existing installs keep their entry, deliberately.** This changes the default for setups run from here on; it does not reach back. A boot-time prune was written and then dropped, and the reason is worth keeping: an entry written by the old default is **byte-identical** to one written by `--with-channel-shim`, because the same code produced both. Nothing on disk distinguishes a legacy artifact from a deliberate opt-in, so a prune cannot delete the first without sometimes deleting the second — and for a hand-launched interactive session the shim plus `--dangerously-load-development-channels` is still the only channel mechanism that exists. Silently removing that from a user who is relying on it is a worse failure than leaving an inert consumer attached for the users who are not. Re-running `tandem setup --apply` without the flag removes the entry, and that is the honest way to get it gone.
+**Existing installs keep their entry, deliberately.** This changes the default for setups run from here on; it does not reach back. A boot-time prune was written and then dropped, and the reason is worth keeping: an entry written by the old default is **byte-identical** to one written by `--with-channel-shim`, because the same code produced both. Nothing on disk distinguishes a legacy artifact from a deliberate opt-in, so a prune cannot delete the first without sometimes deleting the second — and for a hand-launched interactive session the shim plus `--dangerously-load-development-channels` is still the only channel mechanism that exists. Silently removing that from a user who is relying on it is a worse failure than leaving an inert consumer attached for the users who are not. Running `tandem setup --apply --without-channel-shim` removes the entry, and that is the honest way to get it gone. Absent that flag, every `tandem setup` and `tandem rotate-token` path preserves what is registered, on every target kind (#1760): a `targetPushSupport` of `none` is a ceiling on creation, never a licence to remove. Two other routes still delete it, and both are explicit user acts elsewhere — `tandem --uninstall-scrub` (which removes every Tandem entry) and confirming a wizard diff that lists it. What #1760 removed is the *implicit* deletion, not every deletion.
 
 The two paths that actually deliver are unaffected: launcher-spawned sessions are woken by the supervisor writing to the child's stdin (#1266), and hand-launched sessions can arm their own watch ([ADR-049](decisions.md#adr-049-the-self-armed-wake--ws-transport-no-arbitration-payload-free-frames)).
 
@@ -826,7 +828,7 @@ The sidecar child handle is stored in `SidecarState` (a `Mutex<Option<CommandChi
 
 Silent auto-configuration on startup was removed in #477 PR 3c-ii-c (ADR-038 §2b). The Rust core no longer POSTs to a setup endpoint on launch; instead it injects the resolved channel-shim path into the sidecar as `TANDEM_CHANNEL_DIST` so the channel shim still registers correctly on the desktop bundle.
 
-First-run setup is driven by the in-app integration wizard, which auto-opens when `integrations.json` is empty (transport-agnostic — covers both the desktop bundle and the npm-browser path). The wizard persists intent via `POST /api/integrations` and applies it via `POST /api/integrations/apply`. The CLI equivalent is `tandem setup --apply` (non-interactive; honors `--force`, `--target=<kind>`, `--with-channel-shim`).
+First-run setup is driven by the in-app integration wizard, which auto-opens when `integrations.json` is empty (transport-agnostic — covers both the desktop bundle and the npm-browser path). The wizard persists intent via `POST /api/integrations` and applies it via `POST /api/integrations/apply`. The CLI equivalent is `tandem setup --apply` (non-interactive; honors `--force`, `--target=<kind>`, `--with-channel-shim`, `--without-channel-shim`).
 
 If no Claude installation is detected, the wizard's connect step surfaces a "We couldn't find Claude on this computer" empty state with an **Install Claude Code** action (#1084, replacing the former native dialog and the earlier download-link nudge). The tray "Setup AI Assistant" item focuses the window and re-opens the wizard.
 
@@ -1057,7 +1059,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 ### CLI (`src/cli/`)
 
 - `index.ts` -- CLI entrypoint for the `tandem` global command. Dispatches `setup`, `doctor`, `rotate-token`, `activate`, `license`, `mcp-stdio`, `channel`, `monitor`, `--uninstall-scrub`, `--help`, `--version`, and bare/`start`. Top-level error handler with reinstall guidance. See [docs/cli.md](cli.md) for the user-facing reference.
-- `setup.ts` -- `tandem setup` command. Bare invocation prints wizard-driven guidance; `tandem setup --apply [--force] [--target=<kind>] [--with-channel-shim]` writes MCP config non-interactively. The config-writing helpers (`buildMcpEntries`, `detectTargets`, `applyConfig`, `applyConfigWithToken`, `installSkill`) live in `src/server/integrations/apply.ts` (#477 PR 3c-ii-a).
+- `setup.ts` -- `tandem setup` command. Bare invocation prints wizard-driven guidance; `tandem setup --apply [--force] [--target=<kind>] [--with-channel-shim] [--without-channel-shim]` writes MCP config non-interactively. The config-writing helpers (`buildMcpEntries`, `detectTargets`, `applyConfig`, `applyConfigWithToken`, `installSkill`) live in `src/server/integrations/apply.ts` (#477 PR 3c-ii-a).
 - `start.ts` -- `tandem start` (default command). Spawns `node dist/server/index.js` with the user environment, forwards signals, pre-validates server entry point exists.
 - `doctor.ts` -- The `tandem doctor` check collector, bundled into `dist/cli` rather than spawned: `scripts/` is not shipped in the npm package. Shared with `GET /api/diagnostics` and the `tandem_diagnostics` MCP tool.
 - `license.ts` -- `tandem activate` and `tandem license`.

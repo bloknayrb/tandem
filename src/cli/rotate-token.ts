@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { promises as fsPromises } from "node:fs";
 import path from "node:path";
-import { applyConfigWithToken } from "../server/integrations/apply.js";
+import { applyConfigWithToken, type TargetKind } from "../server/integrations/apply.js";
 import { API_ROTATE_TOKEN } from "../shared/api-paths.js";
 import { getTokenFilePath, readTokenFromFile } from "../shared/auth/token-file.js";
 import { resolveAuthTokenCandidate, resolveTandemUrl } from "../shared/cli-runtime.js";
@@ -148,10 +148,12 @@ export async function rotateToken(): Promise<void> {
 
   let updatedCount = 0;
   let configErrors: string[] = [];
+  let staleTokenTargets: { label: string; kind: TargetKind }[] = [];
   try {
     const result = await applyConfigWithToken(newToken);
     updatedCount = result.updated;
     configErrors = result.errors;
+    staleTokenTargets = result.staleTokenTargets;
   } catch (err) {
     console.error(
       `[tandem] Warning: failed to update MCP configs: ${err instanceof Error ? err.message : String(err)}`,
@@ -183,12 +185,47 @@ export async function rotateToken(): Promise<void> {
   if (updatedCount === 0 && configErrors.length === 0) {
     console.error(
       "  Warning: no config file was updated, so every client still holds the OLD\n" +
-        "  token and will be rejected. Re-point them with: tandem setup --apply",
+        "  token, which the server now accepts only from loopback. Re-point them\n" +
+        "  with: tandem setup --apply",
     );
   }
 
   for (const e of configErrors) {
     console.error(`  Warning: could not update config — ${e}`);
+  }
+
+  // A target counted in `updatedCount` can still be holding the OLD token: on a
+  // kind with no push transport (Claude Desktop) #1760 preserves an existing
+  // `tandem-channel` entry rather than deleting it, and preserving means NOT
+  // re-deriving its body — so its `env.TANDEM_AUTH_TOKEN` is untouched. The
+  // auth middleware exempts loopback, so a default `TANDEM_URL` keeps working
+  // and only an off-loopback shim (Cowork/LAN) 401s — which is why the sentence
+  // names the superseded credential rather than promising a breakage, and why
+  // the hand-edit remedy comes first. Before #1760 the entry was deleted, which
+  // scrubbed the superseded credential as a side effect. Crediting the target
+  // as "Updated" and saying nothing is the failure mode this line exists to
+  // prevent: rotation is what a user runs after a LEAK.
+  //
+  // The list is body-gated upstream (`channelEntryHoldsSupersededToken`): a
+  // target only appears here when its preserved entry really does carry an
+  // `env.TANDEM_AUTH_TOKEN` other than the one just written. That is what makes
+  // the sentence below a fact rather than an inference from the target's kind —
+  // and it is why the removal remedy is safe to print, since the hand-registered
+  // entry with no Tandem token in it never reaches this loop.
+  //
+  // The remedy carries `--target=<kind>`, and the flag is not decoration:
+  // `--without-channel-shim` alone means "remove, on every detected kind"
+  // (`resolveChannelShimIntent`), so the untargeted form would also delete a
+  // Claude Code shim the user had opted into with `--with-channel-shim` — the
+  // implicit-deletion class #1760 was filed to eliminate, re-created by the
+  // fix-it line for a different target.
+  for (const { label, kind } of staleTokenTargets) {
+    console.error(
+      `  Warning: ${label} has a tandem-channel entry Tandem does not rewrite, so it\n` +
+        "  still holds the OLD token, which the server now accepts only from\n" +
+        "  loopback. Update its env.TANDEM_AUTH_TOKEN by hand, or drop the entry with:\n" +
+        `    tandem setup --apply --target=${kind} --without-channel-shim`,
+    );
   }
 
   if (graceWindowActive) {
