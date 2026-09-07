@@ -261,6 +261,18 @@ describe("App.svelte action-executor composition contract", () => {
     expect(source).not.toContain("wireActionDeps");
   });
 
+  // #1818: this toast used to disagree with every other surface's "Restart
+  // server" naming, and dangled a "— see logs" clause with no way to reach the
+  // logs from the toast. A plain raw-source check is enough here — there is no
+  // call-shape assertion that would need `prepare()`, and using it would be
+  // actively wrong: `prepare()` blanks the CONTENTS of quoted strings, so a
+  // `not.toMatch` run through it would pass against unfixed text too.
+  it("names the restart failure toast consistently with every other surface (#1818)", () => {
+    expect(source).toContain("Tandem server failed to restart.");
+    expect(source).not.toContain("Sidecar failed to restart");
+    expect(source).not.toContain("see logs");
+  });
+
   it("does not tear down the builtin REGISTRATION on unmount", () => {
     // Registration is module-scoped and runs once per page load. An
     // onDestroy-driven registry teardown would empty the palette of all its
