@@ -6,10 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyConfig,
   assertPathSafe,
+  ConfigRefusalError,
+  MAX_CONFIG_BYTES,
   type McpEntry,
   MSIX_PACKAGE_PATTERN,
   PathRejectedError,
   resolveChannelDist,
+  resolveChannelShimIntent,
   resolveStdioBridgeDist,
 } from "../../../src/server/integrations/apply.js";
 
@@ -251,70 +254,90 @@ describe("applyConfig — explicit removals", () => {
   });
 });
 
-describe("applyConfig — malformed-JSON backup", () => {
+describe("resolveChannelShimIntent (#1760)", () => {
+  // Drives the REAL resolver against a scratch config file. The three arms
+  // differ only in which of (kind, override, on-disk entry) they read, so a
+  // mocked read cannot tell the fix from the bug it replaces.
   let tmpDir: string;
-  let appDataDir: string;
   let configPath: string;
-  let prevAppDataDir: string | undefined;
+
+  const writeShimPresent = () =>
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ mcpServers: { "tandem-channel": { command: "node" } } }),
+    );
+  const writeShimAbsent = () => fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {} }));
 
   beforeEach(async () => {
-    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-apply-broken-"));
-    appDataDir = path.join(tmpDir, "app-data");
-    fs.mkdirSync(appDataDir);
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-shim-intent-"));
     configPath = path.join(tmpDir, ".claude.json");
-    prevAppDataDir = process.env.TANDEM_APP_DATA_DIR;
-    process.env.TANDEM_APP_DATA_DIR = appDataDir;
   });
 
   afterEach(async () => {
-    if (prevAppDataDir === undefined) delete process.env.TANDEM_APP_DATA_DIR;
-    else process.env.TANDEM_APP_DATA_DIR = prevAppDataDir;
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it.skipIf(!POSIX_ONLY)("writes the backup with mode 0o600 inside a 0o700 dir", async () => {
-    fs.writeFileSync(configPath, "{ this is not json");
-    await applyConfig(configPath, {
-      create: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
-      remove: [],
-    });
-    const backupDir = path.join(appDataDir, ".broken-backups");
-    // Dir is created with 0o700 — defeats sibling-listing on multi-user
-    // POSIX (older backups can carry other vendors' API keys).
-    const dirStat = fs.statSync(backupDir);
-    expect(dirStat.mode & 0o777).toBe(0o700);
-    const entries = fs.readdirSync(backupDir);
-    expect(entries.length).toBeGreaterThan(0);
-    const backupFile = path.join(backupDir, entries[0]);
-    // File mode 0o600 + `wx` exclusive open closes the read-bits race
-    // (copyFile + chmodSync had a 0o644 window inside which another
-    // local user could read the API-key-bearing backup).
-    const stat = fs.statSync(backupFile);
-    expect(stat.mode & 0o777).toBe(0o600);
+  it("preserves a hand-registered entry on a no-push kind with no override", async () => {
+    // The headline. Today's resolver answers `false` here, and `applyOpsForCli`
+    // turns that into an explicit REMOVE — so every `tandem setup --apply` and
+    // every `tandem rotate-token` deleted a Claude Desktop entry the user had
+    // registered by hand.
+    writeShimPresent();
+    await expect(resolveChannelShimIntent("claude-desktop", configPath, undefined)).resolves.toBe(
+      true,
+    );
   });
 
-  it("rejects backup when resolveAppDataDir resolves to a path outside allowed roots", async () => {
-    // Point TANDEM_APP_DATA_DIR at a directory completely outside both
-    // homedir() and tmpdir(). The backup path's `assertPathSafe` should
-    // refuse it before mkdirSync runs.
-    //
-    // The simplest "outside both" location is `/`. assertPathSafe refuses
-    // anything that doesn't resolve under homedir/tmpdir; `/` itself does
-    // not satisfy either.
-    const sentinel = "/__tandem-outside-roots__";
-    process.env.TANDEM_APP_DATA_DIR = sentinel;
-    fs.writeFileSync(configPath, "{ this is not json");
+  it("on a no-push kind, an explicit true preserves but never conjures", async () => {
+    writeShimPresent();
+    await expect(resolveChannelShimIntent("claude-desktop", configPath, true)).resolves.toBe(true);
 
-    await expect(
-      applyConfig(configPath, {
-        create: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
-        remove: [],
-      }),
-    ).rejects.toBeInstanceOf(PathRejectedError);
+    writeShimAbsent();
+    // `targetPushSupport === "none"` stays a ceiling on CREATION (#1299): the
+    // kind cannot deliver, so no flag invents an entry for it.
+    await expect(resolveChannelShimIntent("claude-desktop", configPath, true)).resolves.toBe(false);
+  });
+
+  it("honours an explicit false on every kind — the one removal path", async () => {
+    writeShimPresent();
+    await expect(resolveChannelShimIntent("claude-desktop", configPath, false)).resolves.toBe(
+      false,
+    );
+    await expect(resolveChannelShimIntent("claude-code", configPath, false)).resolves.toBe(false);
+  });
+
+  it("with no override on a push-capable kind, mirrors what is registered", async () => {
+    writeShimPresent();
+    await expect(resolveChannelShimIntent("claude-code", configPath, undefined)).resolves.toBe(
+      true,
+    );
+
+    writeShimAbsent();
+    await expect(resolveChannelShimIntent("claude-code", configPath, undefined)).resolves.toBe(
+      false,
+    );
+
+    fs.rmSync(configPath);
+    await expect(resolveChannelShimIntent("claude-code", configPath, undefined)).resolves.toBe(
+      false,
+    );
+  });
+
+  it("creates on a push-capable kind when the override is true", async () => {
+    // The case that separates the three-arm resolver from the lazy two-arm
+    // collapse (`if (override === false) return false; return
+    // targetHasChannelEntry(...)`), which answers identically on every case
+    // above yet never creates a shim on a fresh config — silently killing the
+    // only documented opt-in there is.
+    writeShimAbsent();
+    await expect(resolveChannelShimIntent("claude-code", configPath, true)).resolves.toBe(true);
+
+    writeShimPresent();
+    await expect(resolveChannelShimIntent("claude-code", configPath, true)).resolves.toBe(true);
   });
 });
 
-describe("applyConfig — 5MB size guard", () => {
+describe("applyConfig — config size guard", () => {
   let tmpDir: string;
   let configPath: string;
   let savedAppData: string | undefined;
@@ -332,34 +355,76 @@ describe("applyConfig — 5MB size guard", () => {
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("accepts a config just under the 5 MiB cap", async () => {
-    // 5 MiB - 1 KiB padding so the JSON object header fits without crossing.
-    const padding = "x".repeat(5 * 1024 * 1024 - 1024);
-    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {}, _pad: padding }));
-    // Boundary case: the cap isn't off-by-one strict. Not-throwing alone is
-    // satisfied by a silent no-op at the boundary, so read the file back.
+  it("accepts a config under the cap", async () => {
+    // A modest payload on purpose: a `"x".repeat(MAX_CONFIG_BYTES - 1024)`
+    // fixture would materialise and re-serialise ~16 MiB on every run of the
+    // suite to prove nothing the 6 MiB case below does not.
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {}, _pad: "x".repeat(4096) }));
     const url = "http://127.0.0.1:3479/mcp";
     await applyConfig(configPath, {
       create: { tandem: { type: "http", url } },
       remove: [],
     });
 
+    // Not-throwing alone is satisfied by a silent no-op, so read it back.
     const written = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
       mcpServers?: Record<string, { url?: string }>;
     };
     expect(written.mcpServers?.tandem?.url).toBe(url);
   });
 
-  it("rejects a config above the 5 MiB cap", async () => {
-    // 5 MiB + 1 byte of padding.
-    const padding = "x".repeat(5 * 1024 * 1024 + 1);
-    fs.writeFileSync(configPath, JSON.stringify({ _pad: padding }));
-    await expect(
-      applyConfig(configPath, {
-        create: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
-        remove: [],
-      }),
-    ).rejects.toThrow(/refusing to read/);
+  it("rejects a config above the cap", async () => {
+    // Sparse: `truncateSync` past the cap costs no memory and no time, where a
+    // real 16 MiB string would cost both.
+    fs.writeFileSync(configPath, "");
+    fs.truncateSync(configPath, MAX_CONFIG_BYTES + 1);
+    const before = fs.statSync(configPath);
+
+    const err = await applyConfig(configPath, {
+      create: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
+      remove: [],
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ConfigRefusalError);
+    expect((err as ConfigRefusalError).reason).toBe("CONFIG_TOO_LARGE");
+    // Both CLI printers emit `err.message` and nothing else pins that text.
+    expect((err as Error).message).toMatch(/refusing to read/);
+    // Nothing was written. Compared by size + mtime rather than by bytes: the
+    // file is 16 MiB of holes and reading it back would defeat the point of
+    // building it sparsely.
+    const after = fs.statSync(configPath);
+    expect(after.size).toBe(before.size);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+  });
+
+  it("applies to a 6 MiB config, which the old 5 MiB cap refused (#1801)", async () => {
+    // The discriminating case: red on the old cap, green only because it moved.
+    // `~/.claude.json` accumulates per-project history and is routinely far
+    // larger than the "single-digit kilobytes" the old docblock assumed.
+    const padding = "x".repeat(6 * 1024 * 1024);
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ mcpServers: { other: { command: "other-mcp" } }, _pad: padding }),
+    );
+    const url = "http://127.0.0.1:3479/mcp";
+
+    await applyConfig(configPath, {
+      create: { tandem: { type: "http", url } },
+      remove: [],
+    });
+
+    const written = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+      mcpServers?: Record<string, { url?: string; command?: string }>;
+    };
+    expect(written.mcpServers?.tandem?.url).toBe(url);
+    // Another vendor's entry survives the rewrite.
+    expect(written.mcpServers?.other?.command).toBe("other-mcp");
+  });
+
+  it("keeps the cap at or above 16 MiB", async () => {
+    // A floor, not a restatement: the refusal is legible now, so a later
+    // tidy-up "restoring" a tighter cap would re-break real configs quietly.
+    expect(MAX_CONFIG_BYTES).toBeGreaterThanOrEqual(16 * 1024 * 1024);
   });
 });
 

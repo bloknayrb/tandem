@@ -510,6 +510,19 @@ function resultErrorText(result: ApplyItemResult): string {
       return "This assistant's settings file couldn't be found anymore — it may have moved.";
     case "PATH_REJECTED":
       return "The settings file is in an unexpected location, so Tandem left it alone for safety.";
+    case "CONFIG_TOO_LARGE":
+      // Deliberately no `tandem doctor` pointer: doctor has no size check, so
+      // it would report this file as `ok` and send the user in a circle.
+      return "Your Claude settings file is too large for Tandem to rewrite safely, so Tandem left it alone.";
+    case "CONFIG_MALFORMED":
+      // No backup path to offer: since #1802 Tandem refuses rather than
+      // copying-then-replacing, so the original file IS the recovery target.
+      //
+      // "usable JSON", not "valid JSON": the same code also covers a file that
+      // parses fine and holds an array, a string or `null` where the object
+      // should be, and calling that invalid JSON sends the user looking for a
+      // syntax error there is none of.
+      return "Your Claude settings file isn't usable — it must be a JSON object. Tandem left it untouched, so fix or restore the file, then try again.";
     case "OTHER_MCP_NOT_APPLICABLE":
       return "Tandem can't auto-configure this app — connect it manually from that app's settings.";
     default:

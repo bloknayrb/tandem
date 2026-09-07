@@ -32,15 +32,28 @@ vi.mock("../../src/server/integrations/apply.js", async (importActual) => {
 import { runSetup } from "../../src/cli/setup.js";
 import {
   applyConfig,
+  ConfigRefusalError,
   type DetectedTarget,
   detectTargets,
   installSkill,
   resolveChannelShimIntent,
 } from "../../src/server/integrations/apply.js";
+import {
+  ERROR_CODE_CONFIG_MALFORMED,
+  ERROR_CODE_CONFIG_TOO_LARGE,
+} from "../../src/shared/integrations/contract.js";
 
 const CLAUDE_CODE: DetectedTarget = {
   label: "Claude Code",
   configPath: "/home/u/.claude.json",
+  kind: "claude-code",
+};
+// A second push-capable target. `writeTargets` gates the push-status credit on
+// `targetPushSupport`, so a spec about write ORDERING needs two targets the
+// gate lets through — otherwise it passes for the wrong reason.
+const CLAUDE_CODE_PROJECT: DetectedTarget = {
+  label: "Claude Code (project)",
+  configPath: "/home/u/proj/.mcp.json",
   kind: "claude-code",
 };
 const CLAUDE_DESKTOP: DetectedTarget = {
@@ -83,6 +96,25 @@ describe("runSetup({ apply: true }) orchestration", () => {
     expect(out).toContain("Setup complete");
   });
 
+  it("passes an explicit false through to the resolver (--without-channel-shim)", async () => {
+    // `undefined` and `false` mean opposite things to `resolveChannelShimIntent`
+    // — preserve vs remove (#1760) — so the option has to arrive intact rather
+    // than being coerced anywhere on the way down.
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockResolvedValue(undefined);
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await runSetup({ apply: true, withChannelShim: false });
+
+    expect(resolveChannelShimIntent).toHaveBeenCalledWith(
+      "claude-code",
+      CLAUDE_CODE.configPath,
+      false,
+    );
+  });
+
   it("exits 1 when every target write fails (after installing the skill)", async () => {
     vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
     vi.mocked(applyConfig).mockRejectedValue(new Error("EACCES"));
@@ -97,6 +129,78 @@ describe("runSetup({ apply: true }) orchestration", () => {
     expect(installSkill).toHaveBeenCalledTimes(1);
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(stderr()).toContain("Setup failed");
+  });
+
+  it("does not tell the user to check permissions when the config was REFUSED", async () => {
+    // #1802 made a malformed/oversize config throw `ConfigRefusalError` out of
+    // `applyConfig` rather than replacing the file. That lands in the same
+    // all-failed branch as an EACCES, whose remedy — "Check file permissions" —
+    // is a dead end for a file whose permissions are fine. `doctor` and the
+    // wizard both name the real remedy; this is the third surface.
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockRejectedValue(
+      new ConfigRefusalError(
+        ERROR_CODE_CONFIG_MALFORMED,
+        "/home/u/.claude.json is not valid JSON — refusing to rewrite it",
+      ),
+    );
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await expect(runSetup({ apply: true })).rejects.toThrow("process.exit called");
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const out = stderr();
+    expect(out).toContain("Setup failed");
+    expect(out).toContain("refused to rewrite");
+    expect(out).not.toContain("Check file permissions");
+  });
+
+  it("does not prescribe a JSON fix when the refusal was CONFIG_TOO_LARGE", async () => {
+    // Round-2 review of #1801/#1802. `ConfigRefusalError` covers two conditions
+    // with nothing in common but the decision to leave the file alone, and a
+    // count-only branch printed the malformed remedy for both: the user whose
+    // `~/.claude.json` outgrew the cap — the routinely-multi-megabyte
+    // population #1801 exists for — was told to fix JSON that parses perfectly
+    // and to restore a backup they have no reason to have, then to re-run the
+    // identical command. The wizard already branches on `err.reason`.
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockRejectedValue(
+      new ConfigRefusalError(
+        ERROR_CODE_CONFIG_TOO_LARGE,
+        "/home/u/.claude.json is 20000000 bytes; refusing to read (cap: 16777216).",
+      ),
+    );
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await expect(runSetup({ apply: true })).rejects.toThrow("process.exit called");
+
+    const out = stderr();
+    expect(out).toContain("refused to rewrite");
+    expect(out).toContain("larger than Tandem will rewrite safely");
+    // The malformed remedy's own words — "Fix the JSON" no longer appears in
+    // either branch, so asserting its absence would pass whatever the summary
+    // said.
+    expect(out).not.toContain("must be a JSON object");
+    expect(out).not.toContain("restore the file from a");
+    expect(out).not.toContain("Check file permissions");
+  });
+
+  it("still says check permissions when the failure was an I/O error", async () => {
+    // The other direction: the refusal wording must not swallow the case it was
+    // carved out of.
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockRejectedValue(new Error("EACCES"));
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await expect(runSetup({ apply: true })).rejects.toThrow("process.exit called");
+
+    expect(stderr()).toContain("Check file permissions");
   });
 
   it("partial failure (some targets succeed, some fail) does not exit", async () => {
@@ -206,8 +310,13 @@ describe("runSetup({ apply: true }) orchestration", () => {
       //
       // Two targets, both eligible, one write failing — a single failing target
       // would take the all-failed exit path and never reach the report at all.
+      //
+      // BOTH must be push-capable (#1760). With Claude Desktop as the second
+      // target the `writeShim` gate excludes it before the write outcome is
+      // known, so the spec would pass without ever exercising the ordering it
+      // exists for.
       vi.mocked(resolveChannelShimIntent).mockResolvedValue(true);
-      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_DESKTOP]);
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_CODE_PROJECT]);
       vi.mocked(applyConfig)
         .mockResolvedValueOnce(undefined)
         .mockRejectedValueOnce(new Error("EACCES"));
@@ -215,8 +324,30 @@ describe("runSetup({ apply: true }) orchestration", () => {
 
       await runSetup({ apply: true });
 
-      // Scope to the status line — "Claude Desktop" legitimately appears
+      // Scope to the status line — the failing label legitimately appears
       // elsewhere in the output (the "Found:" list, and its own ✗ failure line).
+      const line = plain()
+        .split("\n")
+        .find((l: string) => l.includes("Registered for:"));
+      expect(line).toBeDefined();
+      expect(line).toContain("Claude Code");
+      expect(line).not.toContain("Claude Code (project)");
+    });
+
+    it("does not credit a no-push target whose entry was merely preserved", async () => {
+      // The gate the re-point above vacates. `resolveChannelShimIntent` now
+      // answers `true` for a Claude Desktop config that already holds a
+      // hand-registered entry, but nothing was written there and the kind
+      // cannot deliver — so crediting it re-arms #1299's false "Registered for:
+      // Claude Desktop". `shimRegisteredFor.push` is gated on `writeShim`, not
+      // on `preserveShim`, and this is the only spec that can see it.
+      vi.mocked(resolveChannelShimIntent).mockResolvedValue(true);
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_DESKTOP]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      noExit();
+
+      await runSetup({ apply: true });
+
       const line = plain()
         .split("\n")
         .find((l: string) => l.includes("Registered for:"));

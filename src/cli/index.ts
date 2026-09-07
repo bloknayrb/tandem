@@ -57,6 +57,8 @@ Usage:
                                     Restrict --apply to specific client(s)
   tandem setup --apply --with-channel-shim
                                     Also register the stdio channel shim (legacy opt-in)
+  tandem setup --apply --without-channel-shim
+                                    Remove the stdio channel shim registration
   tandem doctor                     Diagnose setup issues (Node version, MCP config,
                                     ports, server health, push path, annotation
                                     store)
@@ -111,7 +113,7 @@ try {
     const exitCode = await runUninstallScrub();
     process.exit(exitCode);
   } else if (args[0] === "setup") {
-    const { runSetup, parseTargetArgs } = await import("./setup.js");
+    const { runSetup, parseTargetArgs, parseChannelShimArgs } = await import("./setup.js");
     // `--target=claude-code` / `--target=claude-desktop`, repeatable. Warn on
     // unrecognized values so a typo doesn't silently become a confusing "No
     // matching installations" downstream.
@@ -131,17 +133,25 @@ try {
       );
       process.exit(1);
     }
+    // `undefined` when neither flag is given, NOT `false`, and the distinction
+    // is data loss: `resolveChannelShimIntent` treats absent as "preserve what
+    // is there" and `false` as "remove it", so collapsing the two would make
+    // `tandem setup --apply` delete a deliberate opt-in. `--without-channel-shim`
+    // is the only `tandem setup` flag that removes it (#1760) — `--uninstall-scrub`
+    // and a confirmed wizard diff still remove it by their own explicit routes;
+    // refuse both flags at once before any write rather than guessing which one
+    // the user meant.
+    const shim = parseChannelShimArgs(args);
+    if (shim.conflict) {
+      console.error(
+        "[tandem] --with-channel-shim and --without-channel-shim are mutually exclusive. Aborting.",
+      );
+      process.exit(1);
+    }
     await runSetup({
       apply: args.includes("--apply"),
       force: args.includes("--force"),
-      // `undefined` when the flag is absent, NOT `false`, and the distinction
-      // still matters after Track E made the shim opt-in. `setup` now writes no
-      // shim either way, but `applyConfigWithToken` reads the same option and
-      // treats absent as "preserve what is there" and `false` as "remove it" —
-      // so collapsing the two would make `tandem rotate-token` delete a
-      // deliberate opt-in. There is no `--no-channel-shim`; absent means "no
-      // opinion".
-      withChannelShim: args.includes("--with-channel-shim") || undefined,
+      withChannelShim: shim.intent,
       targets,
     });
   } else if (args[0] === "mcp-stdio") {

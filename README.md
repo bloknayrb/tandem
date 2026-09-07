@@ -227,7 +227,7 @@ tandem setup --apply --with-channel-shim                   # once
 claude --dangerously-load-development-channels server:tandem-channel   # every session
 ```
 
-The flag is Claude Code's marker for unstable APIs. It works only in an interactive session, and it's required rather than optional: `tandem-channel` is a plain MCP server, and Claude Code's channel allowlist covers only plugins, so there's no list Tandem could join that would remove the need for it. If you already have it configured, your configuration is untouched and keeps working; the change is to what a *new* setup writes. To remove it, re-run `tandem setup --apply` without the flag.
+The flag is Claude Code's marker for unstable APIs. It works only in an interactive session, and it's required rather than optional: `tandem-channel` is a plain MCP server, and Claude Code's channel allowlist covers only plugins, so there's no list Tandem could join that would remove the need for it. If you already have it configured, your configuration is untouched and keeps working; the change is to what a *new* setup writes. To remove it, run `tandem setup --apply --without-channel-shim`.
 
 Choose one setup route where possible. A plugin-backed session may still start its packaged monitor and built-in watch automatically. Wakes carry no message content, the inbox de-duplicates what Claude reads, and host rate limiting can hide the overlap. If wakes visibly double, ask Claude to stop its built-in watch with `TaskStop`.
 
