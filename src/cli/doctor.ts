@@ -35,7 +35,7 @@ import {
   isRecordedPathGone,
   probeNodeBinary,
 } from "../server/integrations/node-binary.js";
-import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT, TAURI_HOSTNAME } from "../shared/constants.js";
+import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../shared/constants.js";
 import { isAppTranslocatedPath } from "../shared/integrations/app-translocation.js";
 import {
   claudeCodeConfigPath,
@@ -1116,15 +1116,44 @@ const HOME_CLAUDE_JSON = `~/.${"claude"}.json`;
  * path. `~/.claude.json` carries bearer tokens, `user-mcp-config` survives the
  * `/api/diagnostics` filter, and the Report-a-bug link prefills a PUBLIC issue
  * body — while `redactUserPaths`, the only scrubber downstream, knows nothing
- * about URL userinfo or a query token. `type` stays verbatim (enum-shaped).
+ * about URL userinfo or a query token. `type` goes through
+ * {@link describeEntryType} for the same reason.
  */
 /**
  * Hostnames a `tandem` MCP url may name. The server binds `127.0.0.1`, so
  * anything else is either unreachable or somebody else's machine.
- * `TAURI_HOSTNAME` is here because the desktop WebView's own origin is that
- * name — a config carrying it is odd but not an exfiltration shape.
+ *
+ * `TAURI_HOSTNAME` is deliberately NOT here (round-2 review). It was, on the
+ * grounds that the desktop WebView's own origin is that name — but this arm
+ * decides REACHABILITY, not only exfiltration shape, and the two do not agree.
+ * `server.ts` passes `allowedHosts` (the only list `tauri.localhost` is on)
+ * solely when a LAN IP resolved; on a default loopback bind it is `undefined`,
+ * so the SDK installs `localhostHostValidation()`, whose allowlist is exactly
+ * `localhost` / `127.0.0.1` / `[::1]`. Every `/mcp` request carrying
+ * `Host: tauri.localhost` is answered `403 Invalid Host`. Certifying that url
+ * green is #1807's own defect — a pass in the file Claude Code consults while
+ * Claude Code cannot connect — reintroduced by the arm added to prevent it.
+ * The WebView origin is a CORS/Origin concern; it is not an MCP url host.
  */
-const LOOPBACK_MCP_HOSTNAMES = new Set(["127.0.0.1", "[::1]", "localhost", TAURI_HOSTNAME]);
+const LOOPBACK_MCP_HOSTNAMES = new Set(["127.0.0.1", "[::1]", "localhost"]);
+
+/**
+ * Render an entry's `type` for the warn message.
+ *
+ * The warn arm below fires precisely when `type !== "http"`, i.e. precisely
+ * when the value is NOT enum-shaped, so "it's an enum, print it verbatim" is
+ * false on the one branch that prints it. `~/.claude.json` is arbitrary JSON
+ * from disk: a `\r`/`\x1b[2K` value repaints doctor's own warn line as a pass,
+ * a bare `\n` forges a second result line, and the value reaches
+ * `/api/diagnostics` and from there the Report-a-bug prefill unbounded in
+ * length. So clamp it the way {@link detectEnabledTandemPluginKey} clamps the
+ * plugin key, and report `(unexpected)` rather than echoing — the port arm
+ * already prefers `(none)` over a raw value for the same reason.
+ */
+function describeEntryType(type: unknown): string {
+  if (type === undefined) return "(none)";
+  return typeof type === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(type) ? type : "(unexpected)";
+}
 
 function validateUserTandemEntry(
   entry: unknown,
@@ -1153,7 +1182,7 @@ function validateUserTandemEntry(
     // false statement in doctor's own output.
     const pathHasMcp = parsed === null ? "(unparsable)" : String(parsed.pathname.includes("/mcp"));
     return {
-      message: `${HOME_CLAUDE_JSON} tandem: unexpected config — type=${String(e.type)}, pathHasMcp=${pathHasMcp}`,
+      message: `${HOME_CLAUDE_JSON} tandem: unexpected config — type=${describeEntryType(e.type)}, pathHasMcp=${pathHasMcp}`,
       fix: setupApplyRemedy(cliAvailable()),
     };
   }

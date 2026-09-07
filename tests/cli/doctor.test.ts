@@ -2226,6 +2226,33 @@ describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
       expect(warn?.message).toContain("pathHasMcp=true");
     });
 
+    // Round-2 review. This arm fires precisely when `type` is NOT enum-shaped,
+    // so echoing it verbatim was echoing arbitrary JSON text from disk into a
+    // terminal, into `/api/diagnostics`, and from there into a PUBLIC
+    // Report-a-bug prefill. `\r\x1b[2K` repaints doctor's own warn as a pass;
+    // a bare `\n` forges a second result line.
+    it("clamps a control-byte type instead of echoing it", async () => {
+      const hostile = "\u001b[2K\r  \u001b[32m ok \u001b[0m tandem registered in ~/.claude.json\nx";
+      writeEntry({ type: hostile, url: "http://127.0.0.1:3479/mcp" });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain("type=(unexpected)");
+      expect(warn?.message).not.toContain(String.fromCharCode(27));
+      expect(warn?.message).not.toContain("\n");
+      // And nothing repainted itself as the pass line.
+      expect(
+        (await userMcpAll()).some((x) => x.message === "tandem registered in ~/.claude.json"),
+      ).toBe(false);
+    });
+
+    it("reports a missing type as (none), not the string undefined", async () => {
+      writeEntry({ url: "http://127.0.0.1:3479/mcp" });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain("type=(none)");
+      expect(warn?.message).not.toContain("undefined");
+    });
+
     it("warns on a url with no /mcp path, without echoing the url", async () => {
       writeEntry({ type: "http", url: "http://127.0.0.1:3479/" });
 
@@ -2262,6 +2289,21 @@ describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
       // `setup --apply` (it rewrites the DEFAULT port).
       expect(JSON.stringify(await userMcpAll())).not.toContain(new URL(url).hostname);
       expect(warn?.fix).not.toMatch(/setup --apply/);
+    });
+
+    // Round-2 review. `tauri.localhost` was in the loopback host set on the
+    // grounds that the desktop WebView's origin is that name — but this arm
+    // decides reachability. `server.ts` allowlists that host only when a LAN
+    // IP resolved; on a default loopback bind the SDK's own
+    // `localhostHostValidation()` answers every `/mcp` request carrying
+    // `Host: tauri.localhost` with 403. Certifying it green is exactly the
+    // #1807 defect the arm exists to prevent.
+    it("warns on the Tauri WebView hostname, which the MCP server 403s", async () => {
+      writeEntry({ type: "http", url: "http://tauri.localhost:3479/mcp" });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain("non-loopback host");
+      expect(JSON.stringify(await userMcpAll())).not.toContain("tauri.localhost");
     });
 
     it.each([
