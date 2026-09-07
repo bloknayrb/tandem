@@ -410,16 +410,20 @@ export function registerAnnotationTools(server: McpServer): void {
         if (type) results = results.filter((a) => a.type === type);
         if (status) results = results.filter((a) => a.status === status);
 
-        // User notes are always excluded — they are private (ADR-027).
-        const notesExcluded = results.filter((a) => a.type === "note").length;
-        results = results.filter((a) => a.type !== "note");
-
-        // #1619/#1710: and so is every record whose stored `audience` is not
-        // outbound — user highlights included, which ADR-027 has always said are
-        // not sent to Claude. Same predicate the channel uses. Disclosed rather
-        // than silent, following the `notesExcluded` precedent.
-        const privateExcluded = results.filter((a) => !isClaudeFacing(a)).length;
-        results = results.filter(isClaudeFacing);
+        // User notes are always excluded — they are private (ADR-027) — and so
+        // is every record whose stored `audience` is not outbound (#1619/#1710),
+        // user highlights included. `isClaudeFacing` is that whole conjunction,
+        // the same predicate the channel uses, so the two disclosure counters
+        // are just the two halves of what it rejects. Disclosed rather than
+        // silent, following the `notesExcluded` precedent.
+        let notesExcluded = 0;
+        let privateExcluded = 0;
+        results = results.filter((a) => {
+          if (isClaudeFacing(a)) return true;
+          if (a.type === "note") notesExcluded++;
+          else privateExcluded++;
+          return false;
+        });
 
         // WS-A2: in Solo, hide the user's own annotations (and, below, their
         // replies) — this pull surface is one of the four the hold spans.
@@ -665,11 +669,15 @@ export function registerAnnotationTools(server: McpServer): void {
         const annotations = store.listAnnotationsRefreshed();
         // #1619/#1710: notes AND every record whose stored `audience` is not
         // outbound are user-private (ADR-027) — excluded from exports, with the
-        // same predicate the channel and `tandem_getAnnotations` use.
-        const notesFiltered = annotations.filter(isClaudeFacing);
-        const privateExcluded = annotations.filter(
-          (a) => a.type !== "note" && !isClaudeFacing(a),
-        ).length;
+        // same predicate the channel and `tandem_getAnnotations` use. Notes are
+        // not counted: this export has never disclosed a note count, and
+        // `privateExcluded` names the #1619 half alone.
+        let privateExcluded = 0;
+        const claudeFacing = annotations.filter((a) => {
+          if (isClaudeFacing(a)) return true;
+          if (a.type !== "note") privateExcluded++;
+          return false;
+        });
 
         // WS-A2: the Solo hold applies here too. This was previously exempt, on a
         // documented rationale ("an export is an explicit give-Claude-everything
@@ -680,18 +688,35 @@ export function registerAnnotationTools(server: McpServer): void {
         // the user. Meanwhile the editor was showing an amber Held pill asserting
         // those very items were being withheld.
         const modeState = readModeState();
-        const exportable = notesFiltered.filter((a) => !hideFromAI(a, modeState));
+        const exportable = claudeFacing.filter((a) => !hideFromAI(a, modeState));
         // Two SEPARATE floors, both disclosed below. `heldFromExport` counts
         // what the Solo hold withheld out of the already-Claude-facing base;
         // `privateExcluded` counts what ADR-027 withheld before it. Filtering
         // either silently would trade a privacy bug for an honesty bug.
-        const heldFromExport = notesFiltered.length - exportable.length;
+        //
+        // Disclose what BOTH floors withheld. Without this the export ASSERTS a
+        // completeness it does not have — on a document whose annotations are
+        // all user comments, `exportable` is empty and the markdown arm returns
+        // "No annotations found", which is a false statement rather than a
+        // partial one. Mirrors the `notesExcluded` precedent on
+        // tandem_getAnnotations.
+        //
+        // The counts are not themselves a WS-A2 leak: checkInbox already reports
+        // `mode: "solo"`, so the existence of a hold is known. This adds
+        // cardinality, not content — and it is what makes the artifact honest.
+        // One object, spread at all three exits (the sidecar JSON and the two
+        // returns), so an exit cannot silently drop a floor.
+        const heldFromExport = claudeFacing.length - exportable.length;
+        const heldDisclosure = {
+          ...(heldFromExport > 0 ? { heldFromExport } : {}),
+          ...(privateExcluded > 0 ? { privateExcluded } : {}),
+        };
         const { filePath } = store;
 
         // Build the enriched JSON list up-front. It is derived from the already
-        // note-filtered `exportable` and is the ONLY annotation collection
-        // serialized to disk, so user-private notes (ADR-027) can never leak
-        // into the sidecar.
+        // Claude-facing-filtered `exportable` and is the ONLY annotation
+        // collection serialized to disk, so user-private notes and private
+        // comments (ADR-027) can never leak into the sidecar.
         const fullText = store.getText();
         const enriched = exportable.map((ann) => ({
           ...ann,
@@ -864,8 +889,7 @@ export function registerAnnotationTools(server: McpServer): void {
                 {
                   annotations: enriched,
                   count: enriched.length,
-                  ...(heldFromExport > 0 ? { heldFromExport } : {}),
-                  ...(privateExcluded > 0 ? { privateExcluded } : {}),
+                  ...heldDisclosure,
                 },
                 null,
                 2,
@@ -874,20 +898,6 @@ export function registerAnnotationTools(server: McpServer): void {
           await atomicWrite(sidecarPath, contents);
           writtenPath = sidecarPath;
         }
-
-        // Disclose what the Solo hold withheld. Without this the export ASSERTS a
-        // completeness it does not have — on a document whose annotations are all
-        // user comments, `exportable` is empty and the markdown arm returns
-        // "No annotations found", which is a false statement rather than a partial
-        // one. Mirrors the `notesExcluded` precedent on tandem_getAnnotations.
-        //
-        // The count is not itself a WS-A2 leak: checkInbox already reports
-        // `mode: "solo"`, so the existence of a hold is known. This adds
-        // cardinality, not content — and it is what makes the artifact honest.
-        const heldDisclosure = {
-          ...(heldFromExport > 0 ? { heldFromExport } : {}),
-          ...(privateExcluded > 0 ? { privateExcluded } : {}),
-        };
 
         if (isJson) {
           return mcpSuccess({

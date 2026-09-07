@@ -49,11 +49,8 @@ export async function triggerSoloRelease(attempt = 0): Promise<void> {
     if (res.status === 409) {
       // Read the body defensively: a 409 from anything but this route (a proxy,
       // say) carries no `error` field and must not be retried as one.
-      const refusedForMode = await res
-        .json()
-        .then((body: unknown) => (body as { error?: unknown } | null)?.error === "MODE_NOT_TANDEM")
-        .catch(() => false);
-      if (refusedForMode) {
+      const body: unknown = await res.json().catch(() => null);
+      if ((body as { error?: unknown } | null)?.error === "MODE_NOT_TANDEM") {
         if (attempt === 0) {
           await new Promise((resolve) => setTimeout(resolve, RELEASE_RETRY_MS));
           return triggerSoloRelease(1);

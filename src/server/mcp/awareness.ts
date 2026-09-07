@@ -96,7 +96,10 @@ function ledgerKey(documentId: string, itemId: string): string {
  * repeats. Claude's last report equals the final state, which is the property
  * that matters.
  */
-function inboxLedgerKey(documentId: string, ann: Pick<Annotation, "id" | "author" | "status">) {
+function inboxLedgerKey(
+  documentId: string,
+  ann: Pick<Annotation, "id" | "author" | "status">,
+): string {
   const base = ledgerKey(documentId, ann.id);
   return ann.author === "claude" ? `${base}#${ann.status}` : base;
 }
