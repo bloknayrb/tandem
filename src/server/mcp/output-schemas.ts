@@ -201,6 +201,12 @@ export const getAnnotationsOutputShape = {
     .number()
     .optional()
     .describe("How many user-private notes were filtered out (ADR-027); omitted when zero"),
+  privateExcluded: z
+    .number()
+    .optional()
+    .describe(
+      "How many non-note records were filtered out because their stored audience is not outbound — user highlights included (ADR-027, #1619/#1710); omitted when zero",
+    ),
 };
 
 // ---------------------------------------------------------------------------

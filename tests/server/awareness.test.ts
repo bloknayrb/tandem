@@ -134,12 +134,15 @@ describe("surfacedIds deduplication", () => {
     //
     // `type: "comment"` matters: the fixture default is `highlight`, and the
     // userActions bucket is gated on `author === "user" && type === "comment"`.
-    // `modeState` must be `"tandem"` — `"indeterminate"` is not fail-closed and
-    // `"solo"` hides the record for an unrelated reason.
+    // `audience: "outbound"` matters since #1619, for the same reason — the
+    // bucket now also requires `isClaudeFacing`, and this factory sets no
+    // default audience. `modeState` must be `"tandem"` — `"indeterminate"` is
+    // not fail-closed and `"solo"` hides the record for an unrelated reason.
     const map = makeDoc("Hello world test").getMap(Y_MAP_ANNOTATIONS);
     const ann = addAnnotation(map, {
       author: "user",
       type: "comment",
+      audience: "outbound",
       range: range(0, 5),
       content: "Why this word?",
     });

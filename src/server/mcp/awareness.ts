@@ -10,6 +10,7 @@ import type {
   ChatMessage,
 } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
+import { isClaudeFacing } from "../annotations/projection.js";
 import { isStoreReadOnly } from "../annotations/store.js";
 import { clearStreamStaleness, noteStreamSidecar } from "../chat-stream-staleness.js";
 import { recordInboxPoll, resolveDeliveryRound } from "../events/delivery-state.js";
@@ -621,7 +622,12 @@ function processUnsurfacedInboxAnnotations(
     if (hideFromAI(ann, modeState)) continue;
 
     const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
-    if (ann.author === "user" && ann.type === "comment") {
+    // #1619: `isClaudeFacing` is the audience half — a stored
+    // `{comment, audience: "private"}` record is withheld from the channel and
+    // must be withheld here too, and a user HIGHLIGHT (always private per
+    // ADR-027) never enters either bucket. Before any `surfaced.set`, for the
+    // same reason the Solo hold is.
+    if (ann.author === "user" && ann.type === "comment" && isClaudeFacing(ann)) {
       const lastSurfacedEditedAt = surfaced.get(ledgerKey(documentId, ann.id));
       const alreadySurfaced = lastSurfacedEditedAt !== undefined;
       const edited = alreadySurfaced && (ann.editedAt ?? 0) > lastSurfacedEditedAt;
@@ -643,7 +649,7 @@ function processUnsurfacedInboxAnnotations(
         ...(wasChannelEmitted(channelKey) ? { alreadyPushed: true } : {}),
       });
       surfaced.set(ledgerKey(documentId, ann.id), ann.editedAt ?? 0);
-    } else if (ann.author === "claude" && ann.type !== "note" && ann.status !== "pending") {
+    } else if (ann.author === "claude" && isClaudeFacing(ann) && ann.status !== "pending") {
       userResponses.push({ ...ann, textSnippet: snippet });
       surfaced.set(ledgerKey(documentId, ann.id), ann.editedAt ?? 0);
     }

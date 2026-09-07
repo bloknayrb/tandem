@@ -740,10 +740,18 @@ describe("MCP tool integration — annotation tools", () => {
 
     // Seed two imported Word comments — post-#482 these are author=import,
     // type=comment (Claude-visible like any other comment).
+    //
+    // `audience: "outbound"` is explicit since #1619, and it is not decoration:
+    // `sanitizeAnnotation` derives `private` for an `author: "import"` record
+    // with no stored audience (W8/#756 — an untriaged Word comment is a private
+    // note until the user promotes it), and every Claude-facing read now honours
+    // that field as the channel always has. The PROMOTED shape carries
+    // `outbound`, which is the record this spec is about.
     const imported1: Annotation = {
       id: "imp_1",
       author: "import",
       type: "comment",
+      audience: "outbound",
       range: range(6, 11),
       content: "[Reviewer] Reword this",
       status: "pending",
@@ -754,6 +762,7 @@ describe("MCP tool integration — annotation tools", () => {
       id: "imp_2",
       author: "import",
       type: "comment",
+      audience: "outbound",
       range: range(12, 16),
       content: "[Reviewer] Check fact",
       status: "pending",

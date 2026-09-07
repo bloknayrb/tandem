@@ -21,6 +21,7 @@ import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { describeReplyWriteRefusal } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
+import { isClaudeFacing } from "../annotations/projection.js";
 import { atomicWrite } from "../file-io/index.js";
 import { hideFromAI, readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
@@ -61,7 +62,11 @@ export function channelVisibleReplies(
   annotation: Annotation,
   loadReplies: (annotationId: string) => AnnotationReply[],
 ): AnnotationReply[] {
-  if (annotation.type !== "comment") return [];
+  // #1619: the audience half, not just the type half. A stored
+  // `{comment, audience: "private"}` parent is withheld from the channel and
+  // must be withheld here too — this is the single reply gate every Claude
+  // egress routes through, so `collectInboxUserReplies` inherits it.
+  if (annotation.type !== "comment" || !isClaudeFacing(annotation)) return [];
   return loadReplies(annotation.id).filter((r) => r.private !== true);
 }
 
@@ -409,6 +414,13 @@ export function registerAnnotationTools(server: McpServer): void {
         const notesExcluded = results.filter((a) => a.type === "note").length;
         results = results.filter((a) => a.type !== "note");
 
+        // #1619/#1710: and so is every record whose stored `audience` is not
+        // outbound — user highlights included, which ADR-027 has always said are
+        // not sent to Claude. Same predicate the channel uses. Disclosed rather
+        // than silent, following the `notesExcluded` precedent.
+        const privateExcluded = results.filter((a) => !isClaudeFacing(a)).length;
+        results = results.filter(isClaudeFacing);
+
         // WS-A2: in Solo, hide the user's own annotations (and, below, their
         // replies) — this pull surface is one of the four the hold spans.
         // Server-authoritative live read; released implicitly once mode reads
@@ -433,6 +445,7 @@ export function registerAnnotationTools(server: McpServer): void {
           annotations: annotationsWithReplies,
           count: annotationsWithReplies.length,
           ...(notesExcluded > 0 ? { notesExcluded } : {}),
+          ...(privateExcluded > 0 ? { privateExcluded } : {}),
         });
       }),
     ),
@@ -629,8 +642,13 @@ export function registerAnnotationTools(server: McpServer): void {
         if (!store) return noDocumentError();
 
         const annotations = store.listAnnotationsRefreshed();
-        // Notes are user-private (ADR-027) — exclude from exports.
-        const notesFiltered = annotations.filter((a) => a.type !== "note");
+        // #1619/#1710: notes AND every record whose stored `audience` is not
+        // outbound are user-private (ADR-027) — excluded from exports, with the
+        // same predicate the channel and `tandem_getAnnotations` use.
+        const notesFiltered = annotations.filter(isClaudeFacing);
+        const privateExcluded = annotations.filter(
+          (a) => a.type !== "note" && !isClaudeFacing(a),
+        ).length;
 
         // WS-A2: the Solo hold applies here too. This was previously exempt, on a
         // documented rationale ("an export is an explicit give-Claude-everything
@@ -642,8 +660,10 @@ export function registerAnnotationTools(server: McpServer): void {
         // those very items were being withheld.
         const modeState = readModeState();
         const exportable = notesFiltered.filter((a) => !hideFromAI(a, modeState));
-        // Disclosed below. Filtering silently would trade a privacy bug for an
-        // honesty bug — see `heldFromExport` in the return payloads.
+        // Two SEPARATE floors, both disclosed below. `heldFromExport` counts
+        // what the Solo hold withheld out of the already-Claude-facing base;
+        // `privateExcluded` counts what ADR-027 withheld before it. Filtering
+        // either silently would trade a privacy bug for an honesty bug.
         const heldFromExport = notesFiltered.length - exportable.length;
         const { filePath } = store;
 
@@ -824,6 +844,7 @@ export function registerAnnotationTools(server: McpServer): void {
                   annotations: enriched,
                   count: enriched.length,
                   ...(heldFromExport > 0 ? { heldFromExport } : {}),
+                  ...(privateExcluded > 0 ? { privateExcluded } : {}),
                 },
                 null,
                 2,
@@ -842,7 +863,10 @@ export function registerAnnotationTools(server: McpServer): void {
         // The count is not itself a WS-A2 leak: checkInbox already reports
         // `mode: "solo"`, so the existence of a hold is known. This adds
         // cardinality, not content — and it is what makes the artifact honest.
-        const heldDisclosure = heldFromExport > 0 ? { heldFromExport } : {};
+        const heldDisclosure = {
+          ...(heldFromExport > 0 ? { heldFromExport } : {}),
+          ...(privateExcluded > 0 ? { privateExcluded } : {}),
+        };
 
         if (isJson) {
           return mcpSuccess({

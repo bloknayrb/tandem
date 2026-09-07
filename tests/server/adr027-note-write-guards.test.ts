@@ -185,8 +185,20 @@ describe("checkInbox does not choke on a legacy note", () => {
     // `tandem_checkInbox` call rather than being filtered, and the error named
     // a schema rather than the annotation. The discriminating fixture is a
     // legacy `flag`, because that is the only way the record arises.
-    seed("legacy", { type: "flag", author: "claude", status: "accepted" });
-    seed("real", { type: "comment", author: "claude", status: "accepted" });
+    // BOTH seeds are outbound, not only `real`. `seedRawAnnotation` defaults to
+    // `audience: "private"`, and after #1619 the audience half alone would
+    // exclude `legacy` — which would leave this row green even if the
+    // `type !== "note"` half were dropped, re-opening the availability bug this
+    // spec exists for. With both outbound, the type half is the only thing
+    // excluding `legacy`. It is Claude-authored, so sanitize's user-scoped
+    // demotion cannot apply.
+    seed("legacy", { type: "flag", author: "claude", audience: "outbound", status: "accepted" });
+    seed("real", {
+      type: "comment",
+      author: "claude",
+      audience: "outbound",
+      status: "accepted",
+    });
 
     const inbox = [
       { ...(map.get("legacy") as Annotation), type: "note" },
