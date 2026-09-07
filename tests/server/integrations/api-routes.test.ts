@@ -17,6 +17,7 @@ import {
   type IntegrationsRoutesDeps,
   registerIntegrationsRoutes,
 } from "../../../src/server/integrations/api-routes.js";
+import { MAX_CONFIG_BYTES } from "../../../src/server/integrations/apply.js";
 import type { ExistingMcpInstall } from "../../../src/server/integrations/existing-config.js";
 import {
   ClaudeInstallError,
@@ -40,6 +41,7 @@ import {
 import {
   ERROR_CODE_APPLY_IN_PROGRESS,
   ERROR_CODE_BAD_ORIGIN,
+  ERROR_CODE_CONFIG_TOO_LARGE,
   ERROR_CODE_INSTALL_FAILED,
   ERROR_CODE_INSTALL_IN_PROGRESS,
   ERROR_CODE_INVALID_APPLY_REQUEST,
@@ -1287,6 +1289,56 @@ describe("integrations API routes", () => {
         // The static message must not contain "realpath=" or the outside path.
         expect(body.results[0]?.message).not.toMatch(/realpath=/);
         expect(body.results[0]?.message).not.toContain(outside);
+      });
+
+      it("an oversize config returns CONFIG_TOO_LARGE, not WRITE_FAILED (#1801)", async () => {
+        // `applyConfig` is a direct import, not a member of
+        // `IntegrationsRoutesDeps`, so there is no seam to stub: the fixture
+        // has to be a genuinely over-cap file. Built sparsely — `truncateSync`
+        // past the cap costs neither memory nor time.
+        const bigConfig = path.join(tmpDir, "big.claude.json");
+        fs.writeFileSync(bigConfig, "");
+        fs.truncateSync(bigConfig, MAX_CONFIG_BYTES + 1);
+        await deps.store.write({
+          schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+          integrations: [
+            {
+              kind: "claude-code",
+              id: "cc-1",
+              label: "Claude Code",
+              configPath: bigConfig,
+              transport: "http",
+              url: "http://127.0.0.1:3479",
+            },
+          ],
+        });
+        const app = makeApp({
+          ...deps,
+          detectTargets: () => [
+            { label: "Claude Code", configPath: bigConfig, kind: "claude-code" },
+          ],
+        });
+        const nonce = await freshNonce(app);
+        const res = await request(
+          app,
+          "POST",
+          API_INTEGRATIONS_APPLY,
+          { ids: ["cc-1"], confirmationNonce: nonce },
+          TAURI_ORIGIN,
+        );
+
+        expect(res.status).toBe(200);
+        const body = res.body as {
+          results: Array<{ status: string; code?: string; message?: string }>;
+        };
+        expect(body.results[0]?.status).toBe("error");
+        // The whole point: WRITE_FAILED renders as "check it isn't open in
+        // another program", which is wrong and unactionable here.
+        expect(body.results[0]?.code).toBe(ERROR_CODE_CONFIG_TOO_LARGE);
+        // `err.message` names both the path and the byte count; this route is
+        // browser-reachable, so neither may cross.
+        expect(body.results[0]?.message).not.toContain(bigConfig);
+        expect(body.results[0]?.message).not.toMatch(/[0-9]{4,}/);
       });
 
       it("SECRET_MISSING message does not echo the tokenSecretRef value", async () => {

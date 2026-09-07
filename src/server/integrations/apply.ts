@@ -214,13 +214,28 @@ export function resolveCliVersion(): string {
 const CLI_VERSION = resolveCliVersion();
 
 /**
- * Refuse to read a config larger than 5 MiB. The realistic `.claude.json` is
- * single-digit kilobytes; anything beyond that is either accidental corruption
- * (log files dropped in) or a deliberate DoS aimed at making the wizard's
- * read-parse-rewrite path exhaust memory. The cap is generous enough that no
- * legitimate user hits it.
+ * Refuse to read a config larger than 16 MiB (#1801).
+ *
+ * The bound exists because both readers parse SYNCHRONOUSLY into memory:
+ * `applyConfig` blocks the server's event loop on the wizard's apply route, and
+ * `readConfigForMutation`'s `JSON.parse` runs on the pre-launcher startup
+ * sweep. So the cap is a bound on parse cost and peak heap, not a
+ * plausibility check on the file.
+ *
+ * **16 MiB is a judgment with essentially no measured input, and that is worth
+ * knowing before anyone tunes it.** The only measurement taken is one real
+ * `~/.claude.json` on the development machine, at 121,720 bytes; the sweep's
+ * own comment calls the file "routinely multi-megabyte", which is unverified in
+ * both directions. The previous docblock claimed "single-digit kilobytes" and
+ * "no legitimate user hits it" — both are what #1801 refutes, since Claude Code
+ * accumulates per-project history here. The durable half of that fix is the
+ * legible refusal (`ConfigRefusalError` → `CONFIG_TOO_LARGE` → a wizard message
+ * that says what happened), not the number.
+ *
+ * Exported so tests derive their boundaries from the constant rather than
+ * restating it.
  */
-const MAX_CONFIG_BYTES = 5 * 1024 * 1024;
+export const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
 
 export interface McpEntry {
   type?: "http";
@@ -278,6 +293,28 @@ export function applyOpsForCli(create: McpEntries, opts: { withChannelShim: bool
     create,
     remove: opts.withChannelShim ? [] : ["tandem-channel"],
   };
+}
+
+/**
+ * Error thrown when a client config is refused rather than rewritten (#1801,
+ * #1802).
+ *
+ * Modelled on the sibling {@link PathRejectedError}, and the field is `reason`
+ * rather than `code` on purpose: `applyConfig` branches on Node's `err.code`
+ * twice inside the same try/catch, so a `code` here would be read as an errno.
+ * The `reason` is carried to the wizard as an `ApplyItemErrorCode`, which is
+ * what turns a generic "couldn't write the settings file" into a sentence the
+ * user can act on. `message` is for the CLI printers, which emit it verbatim —
+ * it may name the path and the size, but never any parse detail.
+ */
+export class ConfigRefusalError extends Error {
+  override readonly name = "ConfigRefusalError";
+  constructor(
+    readonly reason: "CONFIG_TOO_LARGE" | "CONFIG_MALFORMED",
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 /** Error thrown when a target path fails realpath/symlink validation. */
@@ -1013,7 +1050,8 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
   try {
     const { size } = statSync(configPath);
     if (size > MAX_CONFIG_BYTES) {
-      throw new Error(
+      throw new ConfigRefusalError(
+        "CONFIG_TOO_LARGE",
         `${configPath} is ${size} bytes; refusing to read (cap: ${MAX_CONFIG_BYTES}).`,
       );
     }

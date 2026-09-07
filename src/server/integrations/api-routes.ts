@@ -58,6 +58,8 @@ import {
   type ClaudeCliStatusResponse,
   ERROR_CODE_APPLY_IN_PROGRESS,
   ERROR_CODE_BAD_ORIGIN,
+  ERROR_CODE_CONFIG_MALFORMED,
+  ERROR_CODE_CONFIG_TOO_LARGE,
   ERROR_CODE_INSTALL_FAILED,
   ERROR_CODE_INSTALL_IN_PROGRESS,
   ERROR_CODE_INVALID_APPLY_REQUEST,
@@ -88,6 +90,7 @@ import {
   applyConfig,
   buildMcpEntries,
   CHANNEL_DIST,
+  ConfigRefusalError,
   detectClaudeCli,
   detectTargets,
   installSkill,
@@ -952,6 +955,32 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
                 entry.id,
                 ERROR_CODE_PATH_REJECTED,
                 "Refused to operate on a symlinked, network, or out-of-tree config path",
+              ),
+            );
+            continue;
+          }
+          if (err instanceof ConfigRefusalError) {
+            // The config was refused, not written — the user's file is exactly
+            // as it was. `err.message` names the path and, for the size
+            // refusal, the byte count, so it stays server-side: this route is
+            // browser-reachable and `ApplyItemResult.message` is the leak-safe
+            // field. The `reason` is the whole payload the wizard needs (#1801,
+            // #1802) — without it every refusal renders as "couldn't write the
+            // settings file — check it isn't open in another program", which is
+            // both wrong and unactionable.
+            console.error(
+              `[Tandem] apply: ${entry.id} → ${target.configPath} refused (${err.reason}):`,
+              err.message,
+            );
+            results.push(
+              errorResult(
+                entry.id,
+                err.reason === "CONFIG_TOO_LARGE"
+                  ? ERROR_CODE_CONFIG_TOO_LARGE
+                  : ERROR_CODE_CONFIG_MALFORMED,
+                err.reason === "CONFIG_TOO_LARGE"
+                  ? "Your Claude settings file is too large for Tandem to rewrite safely, so Tandem left it alone."
+                  : "Your Claude settings file isn't valid JSON, so Tandem left it alone.",
               ),
             );
             continue;

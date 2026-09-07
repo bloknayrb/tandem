@@ -248,6 +248,23 @@ describe("IntegrationWizardModal — per-target push support (#1299)", () => {
     expect(q(container, "integration-wizard-plugin")).toBeNull();
   });
 
+  it("names an over-cap config by its reason rather than falling back (#1801)", async () => {
+    // `resultErrorText`'s `default` arm falls back to `result.message`, and the
+    // server's static message happens to read fine — so a MISSING `case` is
+    // invisible unless the assertion is on the client-side sentence. This is
+    // the row that used to render as "check it isn't open in another program",
+    // which is both wrong and unactionable for a file Tandem deliberately
+    // declined to touch.
+    const { container } = mountDone(
+      [pickedDesktop()],
+      [{ id: "claude-desktop-1", status: "error", code: "CONFIG_TOO_LARGE" }],
+    );
+    await tick();
+    const text = container.textContent ?? "";
+    expect(text).toContain("too large for Tandem to rewrite safely");
+    expect(text).not.toContain("open in another program");
+  });
+
   it("says nothing on a row that did not apply", async () => {
     // An error row is about the write failing; leading with a delivery caveat
     // would bury the actionable problem under one the user cannot act on yet.
