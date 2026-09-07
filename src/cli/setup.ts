@@ -121,6 +121,29 @@ async function applySetup(opts: SetupOptions): Promise<void> {
     targets = targets.filter((t) => wanted.has(t.kind));
   }
 
+  // #1811 — the command that CREATES the duplication was the one surface that
+  // never mentioned it. Gated on a `claude-code` target because the plugin is a
+  // Claude Code plugin: `--target=claude-desktop` writes no Claude Code entry
+  // and duplicates nothing, so the notice there would be a false statement
+  // prescribing the uninstall of a working plugin. Dynamic import, mirroring
+  // `src/cli/index.ts`, so other `tandem setup` paths do not pay for doctor's
+  // dependency graph.
+  //
+  // The write still happens: `--apply` is the scriptable path whose contract is
+  // "write the config", and silently skipping would strand a user who later
+  // disables the plugin with no output saying why.
+  if (targets.some((t) => t.kind === "claude-code")) {
+    const pluginKey = (await import("./doctor.js")).detectEnabledTandemPluginKey();
+    if (pluginKey !== null) {
+      console.error(
+        `\n  \x1b[33m⚠\x1b[0m The Tandem plugin (${pluginKey}) is installed and already provides ` +
+          "the tandem_* tools.\n" +
+          "    Writing this config too makes every tool appear twice — keep one:\n" +
+          `    claude plugin uninstall ${pluginKey}`,
+      );
+    }
+  }
+
   let outcome: WriteOutcome = { failures: 0, refusals: [], shimRegisteredFor: [] };
   if (targets.length === 0) {
     // `detectTargets` returns an empty list for two very different reasons, and

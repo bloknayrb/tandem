@@ -30,6 +30,7 @@ const SCAN_CAP_TIMEOUT_MS = timeoutMs(90_000, 300_000);
 
 import {
   CWD_DEPENDENT_CHECKS,
+  detectEnabledTandemPluginKey,
   evaluateAbsentChannelEntry,
   evaluateAppTranslocation,
   evaluateClaudeCli,
@@ -41,6 +42,7 @@ import {
   evaluateSpawnedEntryCommand,
   evaluateStaleGlobal,
   evaluateTandemPlugin,
+  findEnabledTandemPluginKey,
   globalTandemEditorVersion,
   isNodeVersionSupported,
   isTandemEditorRepo,
@@ -1735,6 +1737,90 @@ describe("evaluateTandemPlugin", () => {
       expect(outcome.fix).toContain("claude plugin uninstall tandem@some-local-marketplace");
       expect(outcome.fix).not.toContain("tandem@tandem-editor");
     }
+  });
+
+  it("still names the uninstall remedy on the duplication warn (#1811)", () => {
+    // #1811's first half claims doctor documents the double toolset with no
+    // remedy. It does not: this warn has named `claude plugin uninstall <key>`
+    // since before the review baseline. Pinned because #1811 substitutes the
+    // finder line this outcome is derived from.
+    const out = evaluateTandemPlugin({
+      enabledPlugins: { "tandem@tandem-editor": true },
+      wizardTandemEntry: true,
+    });
+    const warn = out.find((o) => o.status === "warn");
+    expect(warn?.message).toContain("twice");
+    expect(warn?.fix).toContain("claude plugin uninstall tandem@tandem-editor");
+  });
+});
+
+/** A raw ESC, built rather than typed — an escape byte in source is invisible. */
+const ESC = String.fromCharCode(27);
+
+describe("findEnabledTandemPluginKey (#1811)", () => {
+  it.each([
+    ["an enabled plugin", { "tandem@tandem-editor": true }, "tandem@tandem-editor"],
+    // A truthiness check would report a deliberately disabled plugin as installed.
+    ["a disabled plugin", { "tandem@x": false }, null],
+    ["someone else's plugin", { "other@y": true }, null],
+    ["an empty registry", {}, null],
+    ["no registry at all", null, null],
+    // A hardcoded suffix would miss the local-marketplace path
+    // `docs/spikes/plugin-delivery.md` recommends.
+    ["a local marketplace", { "tandem@local-marketplace": true }, "tandem@local-marketplace"],
+  ])("returns %s", (_label, plugins, expected) => {
+    expect(findEnabledTandemPluginKey(plugins)).toBe(expected);
+  });
+
+  it.each([
+    ["a newline suffix", "tandem@bad\nname"],
+    ["an ANSI suffix", `tandem@${ESC}[31mred`],
+  ])("is UNCLAMPED and still returns %s", (_label, key) => {
+    // The clamp deliberately does NOT live here: `evaluateTandemPlugin` returns
+    // [] on an undefined key, so rejecting a suffix here would silence doctor's
+    // report of a plugin that is genuinely installed — a regression, not a
+    // hardening.
+    expect(findEnabledTandemPluginKey({ [key]: true })).toBe(key);
+  });
+});
+
+describe("detectEnabledTandemPluginKey (#1811)", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "tandem-doctor-plugin-"));
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const writeSettings = (enabledPlugins: Record<string, unknown>) => {
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ enabledPlugins }));
+  };
+
+  it("returns the key from ~/.claude/settings.json", () => {
+    writeSettings({ "tandem@tandem-editor": true });
+    expect(detectEnabledTandemPluginKey()).toBe("tandem@tandem-editor");
+  });
+
+  it("returns null when there is no settings file", () => {
+    expect(detectEnabledTandemPluginKey()).toBeNull();
+  });
+
+  it.each([
+    ["a newline suffix", "tandem@bad\nname"],
+    ["an ANSI suffix", `tandem@${ESC}[31mred`],
+  ])("clamps the key shape and rejects %s", (_label, key) => {
+    // This is the only place the clamp is asserted. It reds both a missing
+    // clamp and a clamp pushed down into the shared finder — `setup --apply`
+    // prints this key into a copy-paste `claude plugin uninstall <key>`.
+    writeSettings({ [key]: true });
+    expect(detectEnabledTandemPluginKey()).toBeNull();
   });
 });
 

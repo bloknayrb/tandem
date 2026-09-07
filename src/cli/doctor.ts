@@ -1986,6 +1986,63 @@ export interface TandemPluginInput {
   wizardTandemEntry: boolean;
 }
 
+/**
+ * The enabled `tandem@<marketplace>` key in `enabledPlugins`, or `null`.
+ *
+ * `value === true`, not truthiness: `false` is a real and common value — a
+ * plugin the user deliberately disabled — and a truthiness check would report
+ * it as installed. Any marketplace suffix matches on purpose
+ * (`docs/spikes/plugin-delivery.md` recommends a local one), so a hardcoded
+ * `tandem@tandem-editor` in a remedy would hand those users a command that
+ * errors.
+ *
+ * Returns the RAW key, unclamped. The key-shape clamp lives in
+ * {@link detectEnabledTandemPluginKey}, not here: `evaluateTandemPlugin`
+ * short-circuits both of its outcomes on an undefined key, so clamping here
+ * would make doctor stop reporting a plugin that is genuinely installed —
+ * a regression, not a hardening.
+ */
+export function findEnabledTandemPluginKey(
+  enabledPlugins: Record<string, unknown> | null,
+): string | null {
+  if (enabledPlugins === null) return null;
+  return (
+    Object.entries(enabledPlugins).find(
+      ([key, value]) => key.startsWith("tandem@") && value === true,
+    )?.[0] ?? null
+  );
+}
+
+/**
+ * Read `~/.claude/settings.json` and report the enabled Tandem plugin key, for
+ * the one surface that has to decide before doctor runs: `tandem setup --apply`
+ * warns that writing its own MCP entry loads the `tandem_*` toolset twice
+ * (#1811).
+ *
+ * Reuses `checkTandemPlugin`'s home spelling and its screened reader, so this
+ * adds no new reader, no second UNC screen (#1417) and no new home chain.
+ * Absence is never evidence, and this must never make `setup --apply` fail.
+ *
+ * **The key shape is clamped here**, because this fix is what newly prints the
+ * key into a terminal inside a copy-paste `claude plugin uninstall <key>`, and
+ * a newline or ANSI escape in arbitrary JSON-key text would render as something
+ * other than what it is. Suppressing the new notice for such a key costs
+ * nothing; suppressing doctor's existing report of an installed plugin would
+ * not.
+ */
+export function detectEnabledTandemPluginKey(): string | null {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  if (!home || homeIsUnsafe(home)) return null;
+
+  const read = readClaudeConfig(join(home, ".claude", "settings.json"));
+  if (read.kind !== "ok") return null;
+
+  const key = findEnabledTandemPluginKey(
+    (read.value as { enabledPlugins?: Record<string, unknown> }).enabledPlugins ?? {},
+  );
+  return key !== null && /^tandem@[A-Za-z0-9._-]+$/.test(key) ? key : null;
+}
+
 export function evaluateTandemPlugin(input: TandemPluginInput): EvalOutcome[] {
   if (input.enabledPlugins === null) return [];
   // `false` is a real and common value — a plugin the user deliberately
@@ -1996,9 +2053,7 @@ export function evaluateTandemPlugin(input: TandemPluginInput): EvalOutcome[] {
   // recommends a local marketplace for the no-git path — so a hardcoded
   // `tandem@tandem-editor` in the remedy hands those users a command that
   // errors. The uninstall string has to name the plugin we actually found.
-  const installedKey = Object.entries(input.enabledPlugins).find(
-    ([key, value]) => key.startsWith("tandem@") && value === true,
-  )?.[0];
+  const installedKey = findEnabledTandemPluginKey(input.enabledPlugins) ?? undefined;
   if (installedKey === undefined) return [];
 
   const out: EvalOutcome[] = [
