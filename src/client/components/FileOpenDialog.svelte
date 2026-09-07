@@ -41,6 +41,15 @@ let sessionsLoading = $state(false);
 let sessionsLoaded = $state(false);
 let sessionsError = $state<string | null>(null);
 
+// #1773: deleting a saved session is irreversible — it discards the persisted
+// Y.Doc state, the sourceFileMtime and the annotations the row advertises — so
+// both delete affordances arm first and act on a second, explicit click. Two
+// separate cells, never one shared flag: the BulkActions lesson (SidePanel.svelte
+// "a third value on one flag renders the wrong row's wording against the wrong
+// action"). `pendingDeletePath` also means at most one row is ever armed.
+let pendingDeletePath = $state<string | null>(null);
+let clearAllArmed = $state(false);
+
 async function loadSessions() {
   sessionsLoading = true;
   sessionsError = null;
@@ -56,6 +65,9 @@ async function loadSessions() {
 
 function toggleSessions() {
   sessionsExpanded = !sessionsExpanded;
+  // Collapsing disarms, so re-expanding never re-mounts into a confirm state.
+  pendingDeletePath = null;
+  clearAllArmed = false;
   if (sessionsExpanded && !sessionsLoaded && !sessionsLoading) {
     void loadSessions();
   }
@@ -323,15 +335,50 @@ function handleBrowse() {
             No saved sessions.
           </p>
         {:else}
-          <div style="display: flex; justify-content: flex-end; margin: 6px 0;">
-            <button
-              data-testid="sessions-clear-all"
-              onclick={clearSessions}
-              type="button"
-              style="background: none; border: none; color: var(--tandem-fg-subtle); font-size: 11px; cursor: pointer; padding: 0; text-decoration: underline;"
-            >
-              Clear all
-            </button>
+          <div
+            style="display: flex; justify-content: flex-end; align-items: center; gap: 6px; margin: 6px 0;"
+          >
+            {#if clearAllArmed}
+              <!-- #1773: Clear all keeps its OWN confirm rather than sharing the
+                   row-level flag — one flag carrying a third value renders the
+                   wrong wording against the wrong action. -->
+              <span style="font-size: 11px; color: var(--tandem-fg);">
+                Clear all {sessions.length} saved sessions?
+              </span>
+              <button
+                type="button"
+                data-testid="sessions-clear-all-confirm"
+                onclick={() => {
+                  clearAllArmed = false;
+                  void clearSessions();
+                }}
+                style="background: var(--tandem-error-bg); border: none; color: var(--tandem-error-fg-strong); font-size: 11px; font-weight: 600; cursor: pointer; padding: 2px 8px; border-radius: var(--tandem-r-1); line-height: 1.4;"
+              >
+                Clear all
+              </button>
+              <button
+                type="button"
+                data-testid="sessions-clear-all-cancel"
+                onclick={() => {
+                  clearAllArmed = false;
+                }}
+                style="background: none; border: none; color: var(--tandem-fg-subtle); font-size: 11px; cursor: pointer; padding: 2px 8px; border-radius: var(--tandem-r-1); line-height: 1.4;"
+              >
+                Cancel
+              </button>
+            {:else}
+              <button
+                data-testid="sessions-clear-all"
+                onclick={() => {
+                  clearAllArmed = true;
+                  pendingDeletePath = null;
+                }}
+                type="button"
+                style="background: none; border: none; color: var(--tandem-fg-subtle); font-size: 11px; cursor: pointer; padding: 0; text-decoration: underline;"
+              >
+                Clear all…
+              </button>
+            {/if}
           </div>
           <div
             class="tandem-scroll-fade-y"
@@ -366,15 +413,49 @@ function handleBrowse() {
                       : "s"}
                   </span>
                 </button>
-                <button
-                  type="button"
-                  data-testid="session-delete"
-                  onclick={() => deleteSession(session.filePath)}
-                  aria-label={`Delete session for ${filename}`}
-                  style="background: none; border: none; color: var(--tandem-fg-subtle); font-size: 14px; cursor: pointer; padding: 4px; line-height: 1;"
-                >
-                  ×
-                </button>
+                {#if pendingDeletePath === session.filePath}
+                  <!-- #1773: the row's × swaps whole for this confirm pair, the
+                       BulkActions shape. No bind:this / focus effect: the rows
+                       live in a keyed {#each}, so one shared bound ref is nulled
+                       by the other row's teardown. No aria-expanded either — the
+                       arm button leaves the DOM at the moment it would go true. -->
+                  <button
+                    type="button"
+                    data-testid="session-delete-confirm"
+                    onclick={() => {
+                      pendingDeletePath = null;
+                      void deleteSession(session.filePath);
+                    }}
+                    aria-label={`Confirm delete session for ${filename}`}
+                    style="background: var(--tandem-error-bg); border: none; color: var(--tandem-error-fg-strong); font-size: 11px; font-weight: 600; cursor: pointer; padding: 2px 8px; border-radius: var(--tandem-r-1); line-height: 1.4;"
+                  >
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="session-delete-cancel"
+                    onclick={() => {
+                      pendingDeletePath = null;
+                    }}
+                    aria-label={`Cancel deleting session for ${filename}`}
+                    style="background: none; border: none; color: var(--tandem-fg-subtle); font-size: 11px; cursor: pointer; padding: 2px 8px; border-radius: var(--tandem-r-1); line-height: 1.4;"
+                  >
+                    Cancel
+                  </button>
+                {:else}
+                  <button
+                    type="button"
+                    data-testid="session-delete"
+                    onclick={() => {
+                      pendingDeletePath = session.filePath;
+                      clearAllArmed = false;
+                    }}
+                    aria-label={`Delete session for ${filename}…`}
+                    style="background: none; border: none; color: var(--tandem-fg-subtle); font-size: 14px; cursor: pointer; padding: 4px; line-height: 1;"
+                  >
+                    ×
+                  </button>
+                {/if}
               </div>
             {/each}
           </div>
