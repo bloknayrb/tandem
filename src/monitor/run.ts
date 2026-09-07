@@ -46,9 +46,10 @@
  * All retry / SSE-frame / awareness / mode-cache logic lives in the shared
  * `src/shared/sse-consumer.ts` module (extracted in #282). This file is the
  * thin stdout-aware adapter that owns the delivery callback, the EPIPE
- * handler, and the SIGINT/SIGTERM shutdown drain.
+ * handler, the stdin-EOF exit, and the SIGINT/SIGTERM shutdown drain.
  */
 
+import { Socket } from "node:net";
 import { resolveTandemUrl } from "../shared/cli-runtime.js";
 import { isWakeWorthy } from "../shared/events/wake-scope.js";
 import {
@@ -183,6 +184,7 @@ function buildOptions(): EventConsumerOptions {
 export async function main(): Promise<void> {
   installShutdownHandlers();
   installStdoutErrorHandler();
+  installStdinEndHandler();
   console.error(`${LOG_PREFIX} Tandem monitor starting (server: ${TANDEM_URL})`);
 
   // Warm the mode cache before the first event so we don't default-suppress
@@ -275,6 +277,49 @@ function installStdoutErrorHandler(): void {
   process.stdout.on("error", onStdoutError);
 }
 
+/**
+ * Exit when the host closes our stdin — the monitor's replacement for the
+ * self-termination path #1804 removed.
+ *
+ * Before #1804 the consumer exited after `CHANNEL_MAX_RETRIES`; that was the
+ * only way a NEVER-CONNECTED run ever ended. `onStdoutError`'s EPIPE exit
+ * cannot cover it, because a monitor with no stream never writes to stdout, so
+ * no EPIPE is ever raised. Without this, "Tandem is down and the host dies
+ * without signalling" leaves one orphan per session probing `/api/events` at
+ * the 30s backoff cap forever. `src/channel/run.ts` closed the same hole the
+ * same way; this is that line plus the two things the monitor needs and the
+ * shim does not:
+ *
+ *  - `resume()`. The shim's `StdioServerTransport` puts stdin in flowing mode
+ *    before its listener is registered. Nothing here reads stdin, and an
+ *    `'end'` listener on a paused stream never fires.
+ *  - The `Socket` guard. A host that spawns us with stdin ignored hands us the
+ *    null device, which Node exposes as an `fs.ReadStream` at immediate EOF —
+ *    arming there would kill the monitor at STARTUP rather than at host exit.
+ *    Pipes, sockets and TTYs are all `net.Socket` (`tty.ReadStream` extends
+ *    it), and those are exactly the stdins whose EOF means the other end went
+ *    away. A hand-run `tandem monitor` therefore also exits on Ctrl-D.
+ *
+ * Exit code 0: this is a clean shutdown, not a failure, and (as with
+ * `onStdoutError`) nothing respawns us either way.
+ */
+function armStdinEndExit(stdin: NodeJS.ReadableStream): boolean {
+  if (!(stdin instanceof Socket)) return false;
+  stdin.once("end", onStdinEnd);
+  stdin.resume();
+  return true;
+}
+
+function onStdinEnd(): void {
+  console.error(`${LOG_PREFIX} stdin closed (host exited) — shutting down`);
+  process.exit(0);
+}
+
+function installStdinEndHandler(): void {
+  if (IS_VITEST) return;
+  armStdinEndExit(process.stdin);
+}
+
 // --- Mode cache re-exports (preserve existing public surface) ---
 
 /**
@@ -312,4 +357,6 @@ export function _resetMonitorStateForTests(): void {
  */
 export const _monitorTestExports = {
   onStdoutError,
+  armStdinEndExit,
+  onStdinEnd,
 };

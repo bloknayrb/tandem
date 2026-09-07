@@ -103,15 +103,23 @@ export interface EventConsumerOptions {
    */
   onEvent: (event: TandemEvent, eventId: string | undefined) => Promise<void> | void;
   /**
-   * Optional hook called after the retry-exhaustion error POST returns but
-   * before `process.exit(1)`. The monitor uses it to write the visible
-   * "disconnected" notice to stdout. Default is a noop.
+   * Optional hook called after the retry-exhaustion error POST returns —
+   * once per outage, not once per failed attempt. The monitor uses it to
+   * write its visible stdout notice. Default is a noop.
+   *
+   * **Nothing exits here.** This used to run immediately before
+   * `process.exit(1)`; since #1804 the loop keeps reconnecting at the
+   * `RETRY_MAX_DELAY_MS` cap indefinitely, because neither of this module's
+   * two hosts respawns the process it killed — exiting turned a temporary
+   * outage into a push path gone for the rest of the session. A consumer
+   * wired here must not assume the process is about to terminate; the
+   * `reportedExhaustion` latch, cleared on the next stable connection, is
+   * what keeps this to one call per outage.
    *
    * `everConnected` distinguishes "we had a stream and lost it" from "Tandem
-   * was never running". The monitor is spawned by the plugin host in EVERY
-   * Claude Code session, so without this a user who has the plugin installed
-   * pays a "restart Tandem" notice in unrelated work whenever Tandem simply
-   * isn't running — which is most of the time.
+   * was never running". The monitor stays silent in the second case — a
+   * never-connected run lost nothing, and any `tandem_*` tool call reports
+   * the real problem better; see the long note at its `onExhaustion`.
    */
   onExhaustion?: (info: { everConnected: boolean }) => void;
 }

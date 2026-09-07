@@ -28,6 +28,26 @@ const pendingPermissions = new Map<
 >();
 const PERMISSION_TTL_MS = 30_000; // Stale after 30s (terminal answer already won)
 
+/**
+ * Evict pending entries older than the TTL.
+ *
+ * Called from BOTH channel-permission routes, and the POST is the load-bearing
+ * one. The sweep used to live only inside the GET, which reads well until you
+ * pair it with #1794's own finding that NO client polls that route: with no
+ * reader and no timer, nothing ever ran it, so every request an armed shim
+ * forwarded stayed resident — with its `description` — for the life of the
+ * server process, and the map grew without bound. The POST is the only thing
+ * that grows the map, so sweeping there is what makes "held for 30 seconds"
+ * true. Nothing sweeps on a timer, deliberately: an idle server has nothing to
+ * sweep, and a timer would be a second thing to reason about at shutdown.
+ */
+function sweepStalePermissions(): void {
+  const now = Date.now();
+  for (const [id, perm] of pendingPermissions) {
+    if (now - perm.createdAt > PERMISSION_TTL_MS) pendingPermissions.delete(id);
+  }
+}
+
 /** Register channel-related routes (/api/events, /api/channel-*, /api/chat) on the Express app. */
 export function registerChannelRoutes(app: Express, apiMiddleware: Handler): void {
   // SSE event stream for channel shim
@@ -124,6 +144,9 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
       res.status(400).json({ error: "BAD_REQUEST", message: "requestId and toolName required" });
       return;
     }
+    // Before the insert, so the map holds one TTL window rather than the whole
+    // session — see `sweepStalePermissions`.
+    sweepStalePermissions();
     pendingPermissions.set(requestId, {
       requestId,
       toolName,
@@ -136,11 +159,7 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
 
   // Browser polls for pending permission requests
   app.get(API_CHANNEL_PERMISSION, apiMiddleware, (_req: Request, res: Response) => {
-    // Evict stale requests before returning
-    const now = Date.now();
-    for (const [id, perm] of pendingPermissions) {
-      if (now - perm.createdAt > PERMISSION_TTL_MS) pendingPermissions.delete(id);
-    }
+    sweepStalePermissions();
     res.json({ pending: Array.from(pendingPermissions.values()) });
   });
 

@@ -1,4 +1,6 @@
 import { readFile } from "node:fs/promises";
+import { Socket } from "node:net";
+import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ControllableStream,
@@ -178,12 +180,50 @@ describe("channel shim stdin-EOF shutdown (#1804)", () => {
     // a live MCP transport, and the pin's known weakness — it cannot tell a
     // firing handler from an inert one — does not bite on this host, where
     // `StdioServerTransport` puts stdin in flowing mode before the listener is
-    // registered. The monitor gets no such line, because nothing there reads
-    // stdin and an `'end'` listener alone never fires.
+    // registered. The monitor needed its own `resume()` for that reason; its
+    // arming is driven for real in the describe below.
     const src = await readFile(
       new URL("../../src/channel/run.ts", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
       "utf8",
     );
     expect(src).toContain('process.stdin.once("end"');
+  });
+});
+
+describe("monitor stdin-EOF shutdown", () => {
+  it("arms on a socket-like stdin, resumes it, and exits 0 on EOF", async () => {
+    const { _monitorTestExports } = await import("../../src/monitor/index.js");
+    // A real `net.Socket` — a piped stdin is one, and `tty.ReadStream`
+    // extends it, so this is exactly what the guard admits.
+    const readable = new Socket();
+    const resumeSpy = vi.spyOn(readable, "resume");
+
+    expect(_monitorTestExports.armStdinEndExit(readable)).toBe(true);
+    // Without this the `'end'` listener never fires — nothing in the monitor
+    // reads stdin, so the stream stays paused.
+    expect(resumeSpy).toHaveBeenCalled();
+    // Identity, not count: `net.Socket` registers an internal `'end'`
+    // listener of its own the moment it is resumed.
+    expect(readable.listeners("end")).toContain(_monitorTestExports.onStdinEnd);
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit:${code ?? 0}`);
+    }) as never);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() => readable.emit("end")).toThrow("exit:0");
+    exitSpy.mockRestore();
+  });
+
+  it("does NOT arm on a non-socket stdin (the null device would EOF at startup)", async () => {
+    const { _monitorTestExports } = await import("../../src/monitor/index.js");
+    // `fs.ReadStream` is what Node hands a process spawned with stdin ignored,
+    // and it reaches EOF immediately. Arming there would kill the monitor at
+    // startup instead of at host exit.
+    const nullish = new Readable({ read() {} });
+    const resumeSpy = vi.spyOn(nullish, "resume");
+
+    expect(_monitorTestExports.armStdinEndExit(nullish)).toBe(false);
+    expect(resumeSpy).not.toHaveBeenCalled();
+    expect(nullish.listenerCount("end")).toBe(0);
   });
 });

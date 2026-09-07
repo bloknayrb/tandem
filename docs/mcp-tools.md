@@ -1409,7 +1409,7 @@ The shim gives this best-effort report a 3-second deadline.
 
 ### Channel permission relay (experimental — no return leg)
 
-**These three routes accept and store a permission request, and nothing more (#1794).** The shim forwards Claude Code's tool approval prompt, the server holds it for 30 seconds, and then it expires: **nothing displays it and no verdict ever reaches Claude Code.** The editor has no permission UI (nothing in `src/client/` reads `pendingPermissions`); the shim registers `permission_request` as an MCP *notification*, which cannot be answered; and the verdict route only deletes the pending entry and echoes the verdict back to the browser that submitted it. See [docs/architecture.md](architecture.md) and ADR-047 §3. The request/response shapes below are accurate about the wire.
+**These three routes accept and store a permission request, and nothing more (#1794).** The shim forwards Claude Code's tool approval prompt, the server holds it, and the next permission request sweeps out anything older than 30 seconds: **nothing displays it and no verdict ever reaches Claude Code.** The editor has no permission UI (nothing in `src/client/` reads `pendingPermissions`); the shim registers `permission_request` as an MCP *notification*, which cannot be answered; and the verdict route only deletes the pending entry and echoes the verdict back to the browser that submitted it. See [docs/architecture.md](architecture.md) and ADR-047 §3. The request/response shapes below are accurate about the wire.
 
 **One asymmetry worth stating.** `description` — the tool-level summary line, "Run npm test" — is still stored and served; `inputPreview`, which carries file bodies and command lines, is not. The server discards it on arrival. On `description` alone this moves exposure the *wrong* way: the stderr line that only the machine owner reads no longer carries it, while the served copy any local process can read (`authMiddleware` bypasses on loopback) still does. That is defensible for a summary line, and it is **not** a claim that prompt content is no longer exposed — see the register entry for #1884.
 
@@ -1435,7 +1435,7 @@ Returns the pending requests. **No client polls this.**
 { "pending": [{ "requestId": "req_1", "toolName": "tandem_edit", "description": "...", "createdAt": 1710936000000 }] }
 ```
 
-Stale requests (>30s) are evicted automatically.
+Stale requests (>30s) are evicted whenever either channel-permission route runs — **the POST sweeps before it inserts**, and that is the half that bounds the map, because (per the paragraph above) nothing polls this GET. Nothing sweeps on a timer, so the last requests of a session stay resident until the next one arrives. Pinned by `tests/server/channel-permission-relay.test.ts`.
 
 #### POST /api/channel-permission-verdict
 

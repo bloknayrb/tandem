@@ -15,9 +15,10 @@
  * file bodies for a `Write`, the command line for a `Bash`. See #1884.
  *
  * `pendingPermissions` is module-level with no reset export, so every spec here
- * shares one map. Each uses the same `requestId` and opens by advancing past
- * `PERMISSION_TTL_MS` and issuing one draining `GET`, so none depends on
- * another's ordering.
+ * shares one map. Each opens by pushing a MONOTONIC fake clock past
+ * `PERMISSION_TTL_MS` and issuing one draining `GET`, and `beforeEach` asserts
+ * the map came back empty — so none depends on another's ordering, and a drain
+ * that stops draining fails loudly instead of leaving the claim false.
  */
 
 import { readFileSync } from "node:fs";
@@ -27,6 +28,17 @@ import { registerChannelRoutes } from "../../src/server/mcp/channel-routes.js";
 
 const REQUEST_ID = "req_relay_spec";
 const PERMISSION_TTL_MS = 30_000;
+
+/**
+ * Fake-clock base, carried ACROSS specs. `vi.useFakeTimers()` re-seeds
+ * `Date.now()` to the real current time on every install, so a per-spec
+ * `advanceTimersByTime(PERMISSION_TTL_MS)` computes a leftover entry's age as
+ * a few milliseconds — the drain then evicts nothing and the independence
+ * claim above is false. Advancing our own base is what actually ages the
+ * leftovers. `afterEach` folds in any time a spec added so the base never
+ * moves backwards.
+ */
+let clock = Date.now();
 
 type Handler = (req: unknown, res: unknown, next?: unknown) => void;
 
@@ -91,12 +103,14 @@ beforeEach(() => {
 
   // Drain whatever a previous spec left behind: the GET evicts every entry
   // older than the TTL, and the map is module-level with no reset export.
+  clock += PERMISSION_TTL_MS + 1;
   vi.useFakeTimers();
-  vi.advanceTimersByTime(PERMISSION_TTL_MS + 1);
-  call("GET /api/channel-permission", undefined);
+  vi.setSystemTime(clock);
+  expect(call("GET /api/channel-permission", undefined)._body).toEqual({ pending: [] });
 });
 
 afterEach(() => {
+  clock = Math.max(clock, Date.now());
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -153,6 +167,38 @@ describe("channel permission relay (#1794)", () => {
     // turns on. Nothing carries this back to the shim or to Claude Code.
     expect(verdict._body).toEqual({ ok: true, requestId: REQUEST_ID, behavior: "allow" });
     expect(call("GET /api/channel-permission", undefined)._body).toEqual({ pending: [] });
+  });
+
+  it("evicts stale entries on the POST, not only on the GET nothing polls", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const base = Date.now();
+    call("POST /api/channel-permission", {
+      requestId: "req_relay_spec_stale",
+      toolName: "Bash",
+      description: "Run npm test",
+    });
+
+    // A second request arrives after the first has aged out. Nothing polls the
+    // GET, so if the POST does not sweep, the stale entry (and its
+    // `description`) stays resident for the life of the process — the exposure
+    // bound docs/mcp-tools.md states and the #1884 register entry leans on.
+    vi.setSystemTime(base + PERMISSION_TTL_MS + 1);
+    call("POST /api/channel-permission", {
+      requestId: REQUEST_ID,
+      toolName: "Write",
+      description: "Write a file",
+    });
+
+    // Read back at a moment when the GET's OWN sweep would spare the stale
+    // entry — that is the only way to attribute the eviction to the POST.
+    vi.setSystemTime(base + 1);
+    const listed = call("GET /api/channel-permission", undefined)._body as {
+      pending: Array<{ requestId: string }>;
+    };
+    expect(listed.pending.map((p) => p.requestId)).toEqual([REQUEST_ID]);
+
+    // Leave the clock ahead of both entries so the next spec's drain works.
+    vi.setSystemTime(base + PERMISSION_TTL_MS + 1);
   });
 
   it("does not mention inputPreview anywhere in channel-routes.ts", () => {
