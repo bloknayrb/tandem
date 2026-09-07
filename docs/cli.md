@@ -16,7 +16,7 @@ The server stays attached to the terminal. Press `Ctrl+C` to stop.
 
 ### `tandem setup`
 
-Bare `tandem setup` prints setup guidance and points at the in-app integration wizard (the recommended path). `tandem setup --apply` writes Tandem's MCP entries to the integrations it detects (Claude Code and Claude Desktop) non-interactively, and installs the Claude Code skill at `~/.claude/skills/tandem/SKILL.md` (idempotent — refreshed on every run).
+Bare `tandem setup` prints setup guidance and points at the in-app integration wizard (the recommended path). `tandem setup --apply` writes Tandem's MCP entries to the integrations it detects (Claude Code and Claude Desktop) non-interactively, and installs the Claude Code skill at `~/.claude/skills/tandem/SKILL.md` (installed if absent, and re-written unless the installed copy is stamped with a newer version).
 
 ```bash
 tandem setup            # guidance only

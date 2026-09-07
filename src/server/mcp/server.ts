@@ -5,6 +5,7 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { randomUUID } from "crypto";
 import type { Server } from "http";
@@ -399,10 +400,28 @@ export function getPinnedMcpSessionCount(): number {
   return (sessions?.list() ?? []).filter((entry) => entry.openStreams > 0).length;
 }
 
-/** Start the MCP server on stdio (legacy, used as fallback via TANDEM_TRANSPORT=stdio). */
-export async function startMcpServerStdio(): Promise<void> {
-  const server = createMcpServer({ version: APP_VERSION, transport: "stdio" });
-  const transport = new StdioServerTransport();
+/**
+ * Start the MCP server on stdio (legacy, used as fallback via TANDEM_TRANSPORT=stdio).
+ *
+ * `ports` are the live `TANDEM_PORT` / `TANDEM_MCP_PORT` values `index.ts`
+ * resolves once — the same ones the HTTP path threads into its diagnostics
+ * deps. Without them `tandem_diagnostics` in stdio mode probed the DEFAULT
+ * ports on a moved install, reported them not listening and prescribed a
+ * second instance (#1806's server-side twin). Nothing here re-parses env.
+ *
+ * `transport` is a test seam: an `InMemoryTransport` in place of the process
+ * stdio, so a test can call `tandem_diagnostics` and see what was threaded.
+ */
+export async function startMcpServerStdio(
+  ports: { wsPort: number; mcpPort: number },
+  transport: Transport = new StdioServerTransport(),
+): Promise<void> {
+  const server = createMcpServer({
+    version: APP_VERSION,
+    transport: "stdio",
+    wsPort: ports.wsPort,
+    mcpPort: ports.mcpPort,
+  });
   await server.connect(transport);
 }
 

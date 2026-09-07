@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // `runSetup({ apply: true })` orchestrates the non-interactive write path
@@ -64,19 +67,36 @@ const CLAUDE_DESKTOP: DetectedTarget = {
 
 describe("runSetup({ apply: true }) orchestration", () => {
   let errSpy: ReturnType<typeof vi.spyOn>;
+  let home: string;
   const stderr = () => errSpy.mock.calls.map((c: unknown[]) => String(c[0] ?? "")).join("\n");
 
   beforeEach(() => {
+    // REQUIRED, not optional (#1811): this file mocks only apply.js, so
+    // `detectEnabledTandemPluginKey` would otherwise read the operator's real
+    // ~/.claude/settings.json in every --apply spec here and the negative spec
+    // would pass or fail by machine. Both env vars — `homedir()` reads
+    // USERPROFILE on Windows.
+    home = mkdtempSync(join(tmpdir(), "tandem-setup-apply-"));
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
     errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(detectTargets).mockReset();
     vi.mocked(applyConfig).mockReset();
-    vi.mocked(installSkill).mockReset().mockResolvedValue(undefined);
+    vi.mocked(installSkill).mockReset().mockResolvedValue({ written: true });
     vi.mocked(resolveChannelShimIntent).mockReset().mockResolvedValue(false);
   });
   afterEach(() => {
     errSpy.mockRestore();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    rmSync(home, { recursive: true, force: true });
   });
+
+  /** Write `~/.claude/settings.json` into the scratch home. */
+  const writeEnabledPlugins = (enabledPlugins: Record<string, unknown>) => {
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ enabledPlugins }));
+  };
 
   it("writes config for a detected target and reports success (no exit)", async () => {
     vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
@@ -250,6 +270,79 @@ describe("runSetup({ apply: true }) orchestration", () => {
 
     expect(applyConfig).toHaveBeenCalledTimes(1);
     expect(applyConfig).toHaveBeenCalledWith(CLAUDE_CODE.configPath, expect.anything());
+  });
+
+  it("prints the kept-skill line when installSkill declined to downgrade (#1790)", async () => {
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockResolvedValue(undefined);
+    vi.mocked(installSkill).mockResolvedValue({
+      written: false,
+      onDiskVersion: 999,
+      bundledVersion: 15,
+    });
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await runSetup({ apply: true });
+
+    const out = stderr();
+    // Kills a caller that dereferences the result unguarded, and pins the
+    // remedy: DELETE the file. No Tandem version moves a `version: 999` file,
+    // so "upgrade Tandem" would be a dead-end fix line.
+    expect(out).toContain("kept the installed skill");
+    expect(out).toContain("v999");
+    expect(out).toContain("delete ~/.claude/skills/tandem/SKILL.md");
+    expect(out).not.toContain("✓ ~/.claude/skills/tandem/SKILL.md");
+  });
+
+  // #1811 — `setup --apply` is the command that CREATES the duplicated
+  // tandem_* toolset, and it was the one surface that never mentioned it.
+  describe("plugin duplication notice", () => {
+    const noExit = () =>
+      vi.spyOn(process, "exit").mockImplementation((() => {
+        throw new Error("process.exit called");
+      }) as never);
+
+    it("warns when the plugin is installed, and still writes the config", async () => {
+      writeEnabledPlugins({ "tandem@tandem-editor": true });
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      noExit();
+
+      await runSetup({ apply: true });
+
+      expect(stderr()).toContain("plugin uninstall tandem@tandem-editor");
+      // The discriminating half: warn, do not skip. `--apply`'s contract is
+      // "write the config", and skipping would strand a user who later
+      // disables the plugin with no output saying why.
+      expect(applyConfig).toHaveBeenCalledTimes(1);
+    });
+
+    it("says nothing when no settings file exists", async () => {
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      noExit();
+
+      await runSetup({ apply: true });
+
+      expect(stderr()).not.toContain("plugin uninstall");
+    });
+
+    it("says nothing on a Claude Desktop-only run", async () => {
+      // The plugin is a Claude Code plugin: a desktop-only --apply writes no
+      // Claude Code entry and duplicates nothing, so the notice there would be
+      // a false statement prescribing the uninstall of a working plugin.
+      writeEnabledPlugins({ "tandem@tandem-editor": true });
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_DESKTOP]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      noExit();
+
+      await runSetup({ apply: true, targets: ["claude-desktop"] });
+
+      expect(stderr()).not.toContain("plugin uninstall");
+      expect(applyConfig).toHaveBeenCalledTimes(1);
+    });
   });
 
   /**
