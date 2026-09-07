@@ -115,7 +115,13 @@ export type LauncherErrorCode =
  * has no other signal that the skill is stale, so `/status` surfaces this
  * for the palette/settings UI to convert into a notification. */
 export interface SkillRefreshError {
-  code: "write-failed" | "read-failed" | "path-rejected" | "timed-out";
+  /**
+   * `newer-on-disk` is the wizard's, not the refresher's: `installSkill()`
+   * declined to downgrade a newer installed skill (#1790), and without this
+   * record `POST /api/integrations/apply` answered 200 with every integration
+   * `applied` while nothing anywhere said the skill was left alone.
+   */
+  code: "write-failed" | "read-failed" | "path-rejected" | "timed-out" | "newer-on-disk";
   message: string;
 }
 

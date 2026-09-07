@@ -2140,6 +2140,32 @@ export function _resetSkillRefreshErrorForTests(): void {
 }
 
 /**
+ * Record what the wizard's {@link installSkill} did on the same channel the
+ * refresher uses, so `GET /api/launcher/status` can say it. The apply route
+ * answers 200 with every integration `applied` either way — a declined skill
+ * is not a failed integration — but without this the decline (#1790) was
+ * visible nowhere: only the refresher set `lastSkillRefreshError`, and the
+ * route discarded the result. A write clears the record for the same reason
+ * the refresher's does: the file was just brought to the bundled version.
+ */
+export function recordSkillInstallOutcome(result: SkillInstallResult): void {
+  if (result.written) {
+    lastSkillRefreshError = null;
+    return;
+  }
+  // Same wording and the same delete-the-file remedy as `tandem setup --apply`
+  // prints: no Tandem version moves a `version: 999` file, so "upgrade Tandem"
+  // would be a dead-end fix line.
+  lastSkillRefreshError = {
+    code: "newer-on-disk",
+    message:
+      `kept the installed skill (v${result.onDiskVersion} on disk is newer than this ` +
+      `install's v${result.bundledVersion}) — delete ~/.claude/skills/tandem/SKILL.md and ` +
+      "re-run to replace it",
+  };
+}
+
+/**
  * Idempotently refresh an existing setup-managed skill.
  *
  * Compares the bundled `version:` against the on-disk file. Writes only

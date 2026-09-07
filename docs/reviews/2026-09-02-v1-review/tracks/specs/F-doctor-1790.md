@@ -171,3 +171,18 @@ single-`atomicWrite` constraint; the two named mock sites; the two deliberately-
 references; the `bodyHash` spec — issue item 3 — carrying the outstanding finding's fix in full
 (literal is 15, not the sweep doc's stale 14; this group is not file-disjoint from C, lands first,
 and C updates both literals together).
+
+## Review corrections (post-ship)
+
+- **The wizard route no longer discards the result.** `installSkill()` returned `{ written: false,
+  … }` and `POST /api/integrations/apply` answered 200 with every integration `applied` while
+  nothing anywhere said the skill was left alone — `getSkillRefreshError()` stayed `null` because
+  only the refresher set it. The route now passes the result to `recordSkillInstallOutcome`
+  (`apply.ts`, beside `getSkillRefreshError`), which records `{ code: "newer-on-disk" }` with the
+  same wording and delete-the-file remedy `setup --apply` prints, and clears the record on a write;
+  the route also logs one `console.error` line. **The response shape and the client are
+  unchanged** — a declined skill is not a failed integration, and the client already renders
+  `status.skillRefresh`. Two specs in `tests/server/integrations/api-routes.test.ts` pin it through
+  the existing `installSkill` seam. This is narrower than the `console.error` trace the scope cut
+  removed: that one sat inside `installSkill` and fired on the CLI path too, where `setup --apply`
+  already prints the skip.
