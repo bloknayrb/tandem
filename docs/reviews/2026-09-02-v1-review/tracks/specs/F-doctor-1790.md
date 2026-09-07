@@ -76,6 +76,16 @@ makes false in the safe direction and this fix makes false in the current wordin
   loaded into every user session. Note the overload in the code comment so it is not read as a
   detection-only flag.
 
+  **And say what the overload costs: `--force` already means something else here.**
+  `src/cli/setup.ts:116` passes it to `detectTargets({ force: opts.force })`, whose existing
+  meaning is about refused *write targets*, so a user passing `--force` for target reasons would
+  silently downgrade a strictly-newer `SKILL.md` and see only the plain `✓` line. So the
+  comparison runs **before** the force check, not instead of it, and the result carries what it
+  overrode: `{ written: true; overwroteNewer?: true; onDiskVersion; bundledVersion }`. `setup.ts`
+  prints one line for that case — *`⚠ overwrote the installed skill (v<n>) with this install's
+  v<m> because --force was passed`* — so the downgrade is never invisible. Read the file
+  unconditionally; the early return is what `force` skips.
+
 - **`src/server/integrations/api-routes.ts` deliberately passes no `force`.** Line 1008 stays
   `await (deps.installSkill ?? installSkill)()`, so the wizard defaults to `force: false` — same
   doctrine as the absent request-body `homeOverride` (`apply.ts:2060-2064`, `api-routes.ts:151-159`):
@@ -84,8 +94,12 @@ makes false in the safe direction and this fix makes false in the current wordin
   the documented way. The response keeps echoing nothing about the skill, and the seam type stays
   `typeof installSkill`.
 
-- **`installSkill` itself logs the skip, so the surface that cannot repair it still leaves a
-  trace.** On the `newer-on-disk` return, one `console.error` naming both versions and the
+- **`installSkill` itself logs the skip, so the surface that cannot repair it leaves a trace in
+  the log rather than returning silently.** Be precise about who reads it: the wizard path runs
+  inside the sidecar (`src/server/integrations/api-routes.ts:1008`), so this line lands in the
+  sidecar log, which a desktop user will not see. It makes the skip diagnosable after the fact; it
+  does not notify that population, and the PR body must say so rather than claiming coverage.
+  On the `newer-on-disk` return, one `console.error` naming both versions and the
   version-independent remedy — *delete `~/.claude/skills/tandem/SKILL.md` and re-run*. Without it
   the skip is invisible to the wizard route (which echoes nothing) and to the desktop population,
   which is precisely the one that cannot run the CLI remedy: `cliAvailable`'s own rationale
@@ -97,10 +111,15 @@ makes false in the safe direction and this fix makes false in the current wordin
   `⚠` below, which is the half that can name `--force` because the leaf does not know its caller);
   that duplication is the accepted cost of the wizard path getting a trace at all.
 
-- **Return `SkillInstallResult`**: `{ written: true } | { written: false; reason: "newer-on-disk";
-  onDiskVersion: number; bundledVersion: number }` (was `Promise<void>`), so the silent no-op is
-  reportable. `src/cli/setup.ts:178-183` prints `✓ ~/.claude/skills/tandem/SKILL.md` on a write and,
-  otherwise:
+- **Return `SkillInstallResult`**: `{ written: true; overwroteNewer?: true; onDiskVersion?: number;
+  bundledVersion?: number } | { written: false; reason: "newer-on-disk"; onDiskVersion: number;
+  bundledVersion: number }` (was `Promise<void>`), so the silent no-op is reportable.
+  **`SkillInstallResult` is exported as a TYPE from `apply.ts`** — it is the return half of the
+  #1894 seam's contract (`installSkill?: typeof installSkill;`, `src/server/integrations/api-routes.ts:159`)
+  and the retyped spy below annotates with it. The prohibition further down covers **runtime**
+  symbols only: `readSkillVersion` and `BUNDLED_SKILL_VERSION` stay module-private.
+  `src/cli/setup.ts:178-183` prints `✓ ~/.claude/skills/tandem/SKILL.md` on a plain write, the
+  `overwroteNewer` line above when `--force` overrode a newer stamp, and otherwise:
 
   > `⚠ kept the installed skill (v<n> on disk is newer than this install's v<m>) — re-run with
   > --force to overwrite it, or delete ~/.claude/skills/tandem/SKILL.md and re-run`
@@ -141,8 +160,21 @@ makes false in the safe direction and this fix makes false in the current wordin
     comparison never fires there. No edit.
 
 - **`tests/skill-instruction-contract.test.ts`**: one new spec pinning a single object literal
-  `{ version: <the number already pinned in this file>, bodyHash: "<sha256 of the body, first 12
-  hex>" }` — `createHash("sha256")` over the text **after** the closing `---` of the frontmatter,
+  `{ version: 15, bodyHash: "<sha256 of the body, first 12 hex>" }` — **15** is the number this
+  file already pins at `tests/skill-instruction-contract.test.ts:80`
+  (`expect(skill).toMatch(/^version:\s*15$/m)`), matching `skills/tandem/SKILL.md:3`. (The sweep
+  doc's environment table still records 14; J1 landed the bump. Read the file, not the table.)
+
+  **This makes the group NOT file-disjoint from group C, and that must be handled before landing.**
+  The new `{version, bodyHash}` literal shares `tests/skill-instruction-contract.test.ts` with every
+  skill-bumping group, and the wave-3 table puts F-doctor and C in the same wave on the stated
+  precondition that groups in one wave are file-disjoint
+  (`docs/plans/2026-09-06-open-issues-sweep.md:67`, and C's row carries a "skill bump"). So:
+  **F-doctor lands before C**, and C's spec and ledger row are told to update the `bodyHash`
+  literal alongside the `version` literal in the same commit. Without that instruction C's skill
+  bump hands the suite a red hash with nothing explaining it.
+
+  The hash is `createHash("sha256")` over the text **after** the closing `---` of the frontmatter,
   with `\r\n` normalised to `\n` first (this repo has a documented CRLF-staleness hazard; a
   checkout artefact must not red the suite). Excluding the frontmatter is deliberate: a version
   bump alone then does not churn the hash, so the loud case is precisely "body changed, version
@@ -169,7 +201,11 @@ makes false in the safe direction and this fix makes false in the current wordin
 1. On-disk `version: 999` → the file is **byte-identical** afterwards and the result is
    `{ written: false, reason: "newer-on-disk" }`. The single spec that kills the bare
    `atomicWrite`; assert the bytes, not just the return value, so a fix that computes the verdict
-   and writes anyway still fails.
+   and writes anyway still fails. **Plus the stderr trace:**
+   `const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})`, and the captured text
+   names both version numbers and `~/.claude/skills/tandem/SKILL.md`. Nothing else asserts
+   `installSkill`'s own log, so without this the trace can be dropped in review or by `/simplify`
+   with the suite green — which is the silent-skip condition the Fix added it to close.
 2. On-disk `version: 1` → overwritten with `SKILL_CONTENT`, `{ written: true }`.
 3. **On-disk equal to `BUNDLED_SKILL_VERSION` → IS rewritten**, `{ written: true }` — the `>`,
    not `>=`, boundary. Write a mangled body carrying the current `version:` line and assert the
@@ -183,8 +219,11 @@ makes false in the safe direction and this fix makes false in the current wordin
    `readSkillVersion` the precedent already uses (`tests/server/integrations/refresh-skill.test.ts:69`)
    and run it over `SKILL_CONTENT`, which *is* exported (`src/cli/skill-content.ts:20`). The
    mangled body is then `` `---\nversion: ${n}\n---\nmangled\n` `` for that `n`.
-4. On-disk `version: 999` **with `{ force: true }`** → overwritten, `{ written: true }`. Kills a
-   comparison with no escape hatch, which would make a tampered stamp permanently un-repairable.
+4. On-disk `version: 999` **with `{ force: true }`** → overwritten, and the result is
+   `{ written: true, overwroteNewer: true, onDiskVersion: 999, bundledVersion: <n> }`. Kills a
+   comparison with no escape hatch (which would make a tampered stamp permanently un-repairable)
+   **and** kills a `force` that short-circuits the read, which is what would make the `--force`
+   overload silently downgrade a newer skill for a user who passed the flag for target reasons.
 5. No file → written (kills copying the refresher's ENOENT early-return into the create path).
 6. The existing "overwrites existing file on re-run" spec (`"old content"`, no frontmatter →
    version 0) must stay green — an unversioned file is still upgraded.
@@ -193,7 +232,10 @@ makes false in the safe direction and this fix makes false in the current wordin
    the kept-skill line (kills a caller that dereferences the result unguarded), and assert that
    line names `--force` rather than "upgrade". Add a spec that `runSetup({ apply: true, force:
    true })` calls the `installSkill` mock with `{ force: true }` — the only thing that pins the
-   flag is actually threaded.
+   flag is actually threaded. **And a spec where the mock resolves
+   `{ written: true, overwroteNewer: true, onDiskVersion: 999, bundledVersion: 15 }` → setup prints
+   the overwrote-newer line naming both numbers**, which is what keeps a `--force` passed for
+   target reasons from silently downgrading the skill behind a plain `✓`.
 8. `tests/server/integrations/api-routes.test.ts`: the retyped spy, per the Fix. No behaviour
    change asserted — the route still echoes nothing about the skill.
 9. `tests/skill-instruction-contract.test.ts`: the hash spec itself. Mutation check for the PR
@@ -203,9 +245,12 @@ makes false in the safe direction and this fix makes false in the current wordin
 ## Done when
 
 An older `setup --apply` cannot downgrade a newer installed skill and says so with a remedy that
-works; **a skip leaves a stderr trace from `installSkill` itself, so the wizard/desktop path is
-not silent**; a re-run at the same version still rewrites the file; `--force` overwrites a newer
-stamp; one `atomicWrite` site remains in `installSkill` and
+works; **a skip leaves a trace in the server log rather than returning silently** — the honest
+limit, which the PR body must also carry: the wizard path runs inside the sidecar
+(`src/server/integrations/api-routes.ts:1008`), so that `console.error` reaches the sidecar log,
+not the desktop user, and the route still echoes nothing about the skill; a re-run at the same
+version still rewrites the file; `--force` overwrites a newer stamp **and says which version it
+overwrote**; one `atomicWrite` site remains in `installSkill` and
 `tests/server/document-write-rearm.test.ts`'s census row is untouched; a body-only skill edit reds
 `skill-instruction-contract`; item 2's measurement is in the PR body with its citations;
 `npm run typecheck:tests` green (the return-type change touches two mock sites); typecheck + the
@@ -283,6 +328,43 @@ to `refreshExistingSkillIfStale`. A `force` parameter on the apply HTTP route. #
   `SKILL_CONTENT` (`src/cli/skill-content.ts:20`) with a local `readSkillVersion` copy, as
   `tests/server/integrations/refresh-skill.test.ts:69` already does, and explicitly forbids
   exporting new symbols from `apply.ts` for it.
+
+**Not adopted**
+
+- None.
+
+## Review corrections (round 3)
+
+**Adopted**
+
+- **BLOCKING** *The `bodyHash` spec lands in `tests/skill-instruction-contract.test.ts` — the file
+  group C must also edit in the same wave — and the version literal it derives from is already 15,
+  not the 14 the sweep doc records.* The Fix now names the concrete value (15, at
+  `tests/skill-instruction-contract.test.ts:80`, matching `skills/tandem/SKILL.md:3`), notes that
+  the sweep doc's environment table is stale because J1 landed the bump, and states plainly that
+  this group is **not** file-disjoint from C against
+  `docs/plans/2026-09-06-open-issues-sweep.md:67`: F-doctor lands before C, and C's spec and ledger
+  row must be told to update the `bodyHash` literal alongside the `version` literal in the same
+  commit.
+- *`--force` can silently downgrade a strictly-newer installed skill: the flag is already parsed
+  for `detectTargets` (target-refusal semantics, `src/cli/setup.ts:116`), so a user passing it for
+  that reason gets the plain `✓` with no sign a newer `SKILL.md` was overwritten.* The comparison
+  now runs **before** the force check; the result carries
+  `{ written: true, overwroteNewer: true, onDiskVersion, bundledVersion }`; `setup.ts` prints a
+  line naming both versions; test 4 asserts the fields and test 7 gains the printed-line spec.
+- *Done-when claimed the stderr trace makes "the wizard/desktop path not silent", which overstates
+  what the desktop population sees — the wizard route runs in the sidecar and its stderr goes to
+  the sidecar log.* Both the Fix bullet and Done-when are reworded to the checkable property (a
+  skip leaves a trace in the server log rather than returning silently), with the honest limit
+  stated and required in the PR body.
+- *The spec forbids exporting new symbols from `apply.ts` for a test while its own retype requires
+  the `SkillInstallResult` type in `tests/server/integrations/api-routes.test.ts`.* The return-type
+  bullet now says `SkillInstallResult` is exported as a **type** (it is the return half of the
+  #1894 seam contract) and scopes the prohibition to runtime symbols — `readSkillVersion` and
+  `BUNDLED_SKILL_VERSION`.
+- *Done-when requires a stderr trace on the skip and no spec asserted it, so it could be dropped
+  in review or by `/simplify` with the suite green.* Test 1 now spies `console.error` and asserts
+  the captured text names both version numbers and `~/.claude/skills/tandem/SKILL.md`.
 
 **Not adopted**
 

@@ -127,8 +127,16 @@ port from a `listen(0)` handle, never a literal.
 
 `TANDEM_PORT=<n> tandem doctor` and `TANDEM_MCP_PORT=<n> npm run doctor` probe `<n>` and say so;
 the three specs above are green; **`runDoctor` gains no read of `TANDEM_PORT`/`TANDEM_MCP_PORT` —
-the resolution site stays in `runDoctorCli`** (`grep -n 'TANDEM_PORT\|TANDEM_MCP_PORT'
-src/cli/doctor.ts` returns only `resolveDoctorPortsFromEnv`); typecheck + the CLI suite green.
+the resolution site stays in `runDoctorCli`**; typecheck + the CLI suite green.
+
+**The criterion is scoped to the READ, not the token**:
+`grep -n 'process\.env\.TANDEM_PORT\|process\.env\.TANDEM_MCP_PORT' src/cli/doctor.ts` returns
+only the two lines inside `resolveDoctorPortsFromEnv`. A bare-token grep is already false at HEAD
+— `src/cli/doctor.ts:2873` is the `RunDoctorOptions` docblock ("the `/api/diagnostics` route on a
+`TANDEM_PORT`-overridden server") — and #1807 lands two more mentions on this same branch, inside
+arm 4's user-facing `portFix` strings ("or unset `TANDEM_MCP_PORT` and restart Tandem"). A
+criterion that reads red on correct code invites a reviewer to delete the env-var name from a
+remedy that needs it.
 
 **Not** "`runDoctor` reads no environment": it already reads `HOME`, `USERPROFILE` and
 `TANDEM_APP_DATA_DIR`, and its `homeOverride` docblock (`src/cli/doctor.ts:2860-2862`) says
@@ -190,6 +198,21 @@ fallback is silent, and the probed port is printed — see `assumptions`); `TAND
   `TANDEM_PORT`/`TANDEM_MCP_PORT`, the resolution site stays in `runDoctorCli` — plus a paragraph
   naming what the header contract actually says. The same false claim in "Not changed, on
   purpose" is corrected in place.
+
+**Not adopted**
+
+- None.
+
+## Review corrections (round 3)
+
+**Adopted**
+
+- *The Done-when grep criterion is already false at HEAD, and #1807 falsifies it a second time on
+  this branch* (raised twice). The criterion is now scoped to the read —
+  `grep -n 'process\.env\.TANDEM_PORT\|process\.env\.TANDEM_MCP_PORT' src/cli/doctor.ts` returns
+  only the two lines inside `resolveDoctorPortsFromEnv` — with both falsifying sites named
+  (`src/cli/doctor.ts:2873`'s docblock, and #1807's arm-4 `portFix` strings), so a reviewer does
+  not "fix" a red criterion by deleting the env-var name from a user-facing remedy.
 
 **Not adopted**
 

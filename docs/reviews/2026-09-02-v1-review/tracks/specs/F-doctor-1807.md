@@ -69,12 +69,24 @@ nothing says so. **That also settles what arm 4's remedy may say; see below.**
 
 - **The message is redacted at the user level and verbatim at the project level, and the two
   deliberately differ.** `opts.redactUrl` is what splits them:
-  - **`.mcp.json` (`redactUrl: false`)** keeps today's wording byte-for-byte:
+  - **`.mcp.json` (`redactUrl: false`)** keeps today's wording byte-for-byte **for arm 3 only**:
     `` `${label} tandem: unexpected config — type=${type}, url=${url}` ``.
+  - **Arm 4's message never interpolates `url`, at EITHER level.** The two port numbers are the
+    whole finding, and arm 4 fires only on urls that already passed the shape checks — a
+    `type: "http"`, `/mcp`-terminated url naming a non-default port is exactly the hosted or remote
+    endpoint most likely to carry a credential, so widening today's verbatim project-level echo
+    onto that population is a new exposure rather than preserved wording. The exposure would be
+    bounded (`mcp-json` is in `CWD_DEPENDENT_CHECKS`, `src/cli/doctor.ts:455-461`, and
+    `filterDevRepoChecks` strips it from `/api/diagnostics` and `tandem_diagnostics`,
+    `src/server/mcp/routes/diagnostics.ts:39,57`), which is why it is a message rule rather than a
+    second `redactUrl` level — but "bounded to the CLI terminal" is not a reason to print it.
   - **`~/.claude.json` (`redactUrl: true`)** never interpolates the raw `url`, **and never
     interpolates the pathname either**:
-    - Arm 3 prints `type=<observed>` plus `pathHasMcp=false` (or, for a URL `new URL()` rejects,
-      the literal `url=(unparsable)`). **Not `path=<value>`.** A path segment is a standard
+    - Arm 3 prints `type=<observed>` plus `pathHasMcp=<computed boolean>` (or, for a URL
+      `new URL()` rejects, the literal `url=(unparsable)`). **The boolean is computed, not the
+      constant `false`**: arm 3 also fires on `type !== "http"` with a perfectly good `/mcp`
+      pathname (test 1 is exactly that entry), where a hardcoded `pathHasMcp=false` would be a
+      false statement in doctor output. **Not `path=<value>`.** A path segment is a standard
       credential carrier for exactly this population — hosted MCP endpoints commonly embed the
       key as `https://host/v1/<token>/mcp` — and `pathHasMcp=false` names the finding, which the
       value does not add to. The `fix` string is what tells the user what to do.
@@ -169,34 +181,55 @@ on Windows too and spec 10 — which runs the whole doctor through `runDoctorCli
 HOME via `mkdtempSync`, `vi.unstubAllEnvs()` in `afterEach` — **never the real HOME**:
 
 1. `{ tandem: { type: "stdio", url: "http://127.0.0.1:3479/mcp" } }` → `user-mcp-config` warn whose
-   message contains `type=stdio`. Kills "validate url only".
+   message contains `type=stdio` **and `pathHasMcp=true`**. Kills "validate url only", and pins
+   `pathHasMcp` as computed rather than a constant — this entry's pathname does contain `/mcp`.
 2. `{ tandem: { type: "http", url: "http://127.0.0.1:3479/" } }` → warn naming `pathHasMcp=false`,
    and the message must **not** contain the raw `http://127.0.0.1:3479/` (nor a `path=` value).
    Kills "validate type only", and pins the redaction's shape-not-value rule for arm 3.
 3. `{ tandem: { type: "http", url: "http://127.0.0.1:9999/mcp" } }` → warn naming **9999 and
    3479**. Kills a validator that accepts any `/mcp` URL — the issue's headline case. Plus
    `expect(warn?.fix).not.toMatch(/setup --apply/)`, mirroring `tests/cli/doctor.test.ts:2057`:
-   the dead-end remedy is the half that ships silently.
-4. **Redaction, discriminating cases — asserted over the WHOLE outcome, not `message`.** Two
-   entries, each `→` a warn that names 9999 and whose `JSON.stringify(warn)` contains **none** of
-   the credential strings. `JSON.stringify`, not `warn?.message`: it covers `message`, `fix` and
-   the `data` bag in one non-sniffable check, and `data` is the channel a message-only assertion
-   misses entirely (see the redaction bullet).
+   the dead-end remedy is the half that ships silently. **And
+   `expect(warn?.fix).toMatch(/#\d{3,}/)`** — `portFix`'s wording ends in the `MCP_URL` issue
+   number, which is filed during this PR (see Not in scope). Nothing else would catch a literal
+   `(#<MCP_URL issue>)` placeholder shipping in a user-facing remedy.
+4. **Redaction, discriminating cases — asserted over EVERY `user-mcp-config` outcome, not one
+   found result and not `message`.** Two entries, each `→` a warn that names 9999, with the
+   absence asserted over
+   `JSON.stringify(report.results.filter((x) => x.check === "user-mcp-config"))`.
+   `JSON.stringify`, not `warn?.message`: it covers `message`, `fix` and the `data` bag in one
+   non-sniffable check, and `data` is the channel a message-only assertion misses entirely (see the
+   redaction bullet). **The filter, not a single `find`:** `checkUserMcpConfig` emits several
+   results under that check name (`src/cli/doctor.ts:1206-1230` — the tandem outcome, then
+   `reportEntryCommand`, then the two channel outcomes), so a leak in a sibling outcome is
+   invisible to a one-result assertion.
    - `{ type: "http", url: "http://tok:s3cret@example.invalid:9999/mcp?key=abc" }` → contains
      neither `s3cret` nor `key=abc` nor the raw url. Kills a copy of the twin's verbatim `url=`
      interpolation at the level that reaches a prefilled public issue body.
    - `{ type: "http", url: "http://example.invalid:9999/mcp/s3cret" }` → contains neither
      `s3cret` nor the raw url. Kills arm 4 printing `path=`, which is a live token carrier
      precisely because arm 4 requires `/mcp` in the pathname.
-5. `{ tandem: { command: "/abs/node", args: [...] } }` → **no** `unexpected config` warn from the
-   new validator. Kills arm 2 being dropped at the user level.
+5. `{ tandem: { command: "/abs/node", args: [...] } }` → **assert the POSITIVE, wording-independent
+   outcome**: the `user-mcp-config` results **contain a pass whose message is
+   `tandem registered in ~/.claude.json`** (`src/cli/doctor.ts:1209`), and `reportEntryCommand`'s
+   own outcome for the stdio entry still appears. That pass is reachable only when the evaluator
+   returns `null` for a `command` entry, so it reds if arm 2 is made unconditional — and it also
+   reds on an implementation that returns `null` **and emits nothing at all**, which today's
+   `recordEvaluation` (`src/cli/doctor.ts:411-413`, silent on `null`) makes easy to ship. A bare
+   "no `unexpected config` warn" assertion catches neither: the Fix pins that substring only for
+   the **project**-level message (`redactUrl: false`), so the user-level warn is free to be worded
+   differently and pass vacuously with arm 2 dropped. Keep
+   `expect(JSON.stringify(userResults)).not.toContain("unexpected config")` as a secondary
+   assertion only.
 6. **The healthy entry passes AND says nothing about the url.** Use a healthy-*shaped* entry that
    carries a credential payload: `{ type: "http", url: "http://tok:s3cret@127.0.0.1:3479/mcp?key=abc" }`
-   → a `user-mcp-config` **pass** whose `JSON.stringify` contains neither `s3cret` nor `key=abc`
-   nor the raw url — the pass message stays the existing `tandem registered in ~/.claude.json`.
-   Asserting only `status === "pass"` is non-discriminating on exactly the property this arm
-   exists to establish. Keep a plain `…:3479/mcp` pass assertion too, so a future over-eager arm
-   reds every working install.
+   → a `user-mcp-config` **pass** whose message is the existing `tandem registered in
+   ~/.claude.json`, with the absence asserted over
+   `JSON.stringify(report.results.filter((x) => x.check === "user-mcp-config"))` — neither
+   `s3cret` nor `key=abc` nor the raw url, in **any** outcome under that check name (same
+   sibling-outcome reason as spec 4). Asserting only `status === "pass"` is non-discriminating on
+   exactly the property this arm exists to establish. Keep a plain `…:3479/mcp` pass assertion too,
+   so a future over-eager arm reds every working install.
 7. Port-less `https`: `{ tandem: { type: "http", url: "https://example.invalid/mcp" } }` warns
    naming **443**, not 80. Kills the hardcoded `|| "80"` default.
 8. Project-level twin, in the `checkMcpJson` describe. Two entries, and which one gets which
@@ -206,10 +239,12 @@ HOME via `mkdtempSync`, `vi.unstubAllEnvs()` in `afterEach` — **never the real
      **gains `brokenFileFix()`**. Rewriting the entry genuinely fixes this one.
    - **Arm 4** (the same wrong-port entry) → warn whose `fix` is the project-level `portFix`,
      naming editing `.mcp.json`'s `url`, plus
-     `expect(warn?.fix).not.toMatch(/setup --apply/)` — the assertion spec 3 already carries at
-     the user level. `brokenFileFix()` ends in `setupApplyRemedy(cliAvailable())`
-     (`src/cli/doctor.ts:986-988`), so pinning it here would ship and lock in the dead-end remedy
-     the Fix section forbids.
+     `expect(warn?.fix).not.toMatch(/setup --apply/)` and `expect(warn?.fix).toMatch(/#\d{3,}/)` —
+     both assertions spec 3 already carries at the user level. `brokenFileFix()` ends in
+     `setupApplyRemedy(cliAvailable())` (`src/cli/doctor.ts:986-988`), so pinning it here would
+     ship and lock in the dead-end remedy the Fix section forbids. **And
+     `expect(warn?.message).not.toContain(url)`** — arm 4's message names the two ports and never
+     the url, at this level too (see the redaction bullet).
 9. **Project-level `command` entry** — the arm-2 regression guard. A `.mcp.json` whose `tandem`
    entry is `{ command: "/abs/node", args: [] }` still produces an `mcp-json` **warn** and must
    NOT produce a `pass` containing `undefined`. Without `commandArmOwnedByCaller` this spec is
@@ -341,6 +376,43 @@ issue covers it. File one rather than commenting on an unrelated one.
   now requires `vi.stubEnv("USERPROFILE", home)` in that describe's `beforeEach` in the same
   commit (`tests/cli/doctor.test.ts:2026-2031` stubs `HOME` alone today), and spec 10 refers to it
   rather than restating a separate rule.
+
+**Not adopted**
+
+- None.
+
+## Review corrections (round 3)
+
+**Adopted**
+
+- **BLOCKING** *Spec 5 — the only guard on `commandArmOwnedByCaller` at the user level — asserted
+  the absence of a substring the Fix pins only for the PROJECT-level message, so it passes
+  vacuously with arm 2 dropped.* It now asserts the positive, wording-independent outcome: the
+  `user-mcp-config` results contain the pass whose message is `tandem registered in
+  ~/.claude.json` (`src/cli/doctor.ts:1209`), reachable only when the evaluator returns `null` for
+  a `command` entry, plus `reportEntryCommand`'s outcome. The `unexpected config` negative is
+  demoted to a secondary assertion.
+- *Spec 5 also did not pin that today's `pass` survives, so an implementation returning `null` and
+  emitting nothing passed every spec while deleting the outcome* (`recordEvaluation` is silent on
+  `null`, `src/cli/doctor.ts:411-413`). Covered by the same rewrite — the pass and
+  `reportEntryCommand`'s outcome are both required.
+- *Arm 4's project-level message was free to interpolate the raw `url`, widening the verbatim echo
+  onto exactly the population whose url is most likely to carry a credential.* The redaction bullet
+  now scopes the byte-for-byte project wording to **arm 3** and states that arm 4 never
+  interpolates `url` at either level, with the bounded-exposure note (`CWD_DEPENDENT_CHECKS` /
+  `filterDevRepoChecks`) as context rather than justification. Spec 8's arm-4 case gains
+  `expect(warn?.message).not.toContain(url)`.
+- *Arm 3's user-level message was specified as a fixed `pathHasMcp=false`, but arm 3 also fires on
+  `type !== "http"` with a good `/mcp` pathname — test 1 is exactly that entry, so the literal
+  would be a false statement in doctor output.* The field is now `pathHasMcp=<computed boolean>`,
+  and spec 1 asserts `pathHasMcp=true` alongside `type=stdio`.
+- *The `(#<MCP_URL issue>)` placeholder can ship in a user-facing remedy with nothing asserting the
+  substitution happened* (raised twice). Specs 3 and 8's arm-4 case gain
+  `expect(warn?.fix).toMatch(/#\d{3,}/)`, which reds while the placeholder is unresolved.
+- *The redaction Done-when covers every `user-mcp-config` outcome while specs 4 and 6 stringified a
+  single found result — `checkUserMcpConfig` emits several under that name
+  (`src/cli/doctor.ts:1206-1230`), so a sibling leak is invisible.* Both specs now assert over
+  `JSON.stringify(report.results.filter((x) => x.check === "user-mcp-config"))`.
 
 **Not adopted**
 

@@ -24,16 +24,30 @@ never mentions it. That is the fix here, and it is the shape the track file reco
 
 ## Fix
 
-- **New shared leaf `src/shared/integrations/tandem-plugin.ts`** (~35 lines), sibling of the
-  existing `client-config-paths.ts` — whose own doctrine comment ("Path from the shared leaf, so
-  doctor inspects the file `detectTargets` writes rather than a second hand-maintained copy of the
-  same rule") is the precedent for putting the predicate in one place instead of duplicating it:
+- **New shared leaf `src/shared/integrations/tandem-plugin.ts`** (~35 lines), placed as a sibling
+  of the existing `client-config-paths.ts`. **It is not an application of that file's
+  "one hand-maintained copy of the path rule" doctrine, and must not cite it** — the leaf derives
+  `<home>/.claude/settings.json` itself, and `checkTandemPlugin` keeps deriving the same path
+  independently (`src/cli/doctor.ts:1996`), with a third literal in
+  `tests/cli/doctor-path-safety.test.ts:127,261`. What this leaf de-duplicates is the **predicate**,
+  not the path; claiming the path doctrine would assert a consolidation the spec is not
+  performing. (Adding `claudeCodeSettingsPath()` to `client-config-paths.ts` and repointing both
+  callers is the real fix for the path copies — deliberately out of scope here, see Not in scope.)
   - `findEnabledTandemPluginKey(enabledPlugins: Record<string, unknown> | null | undefined): string | null`
     — pure; the predicate lifted verbatim from `evaluateTandemPlugin`:
     `key.startsWith("tandem@") && value === true`. **Test the value, not truthiness** — `false` is
     a deliberately disabled plugin — and match any marketplace suffix, because
     `docs/spikes/plugin-delivery.md` recommends a local one and a hardcoded
     `tandem@tandem-editor` in a remedy hands those users a command that errors.
+
+    **The key is also shape-clamped: return it only when it matches
+    `/^tandem@[A-Za-z0-9._-]+$/`, otherwise `null`.** The key is arbitrary JSON-key text read out
+    of `~/.claude/settings.json` and this spec interpolates it into a copy-paste-ready
+    `claude plugin uninstall <key>` printed to the operator's terminal, so a key carrying a newline
+    or an ANSI escape would render as something other than what it is. Doctor already interpolates
+    unclamped (`src/cli/doctor.ts:1944`) — so this narrows a pre-existing surface rather than
+    adding a class, and the clamp satisfies the any-marketplace-suffix requirement above by
+    construction.
   - `detectEnabledTandemPlugin(opts: { homeOverride?: string } = {}): string | null`.
 
     **Home resolution is pinned, because the production call site passes no argument and the
@@ -44,18 +58,27 @@ never mentions it. That is the fix here, and it is the shape the track file reco
     if (!home) return null;
     ```
 
-    **`||` and the explicit empty-home return, not `??`** — the two cited sites are
-    `const home = process.env.HOME || process.env.USERPROFILE || "";` followed by `if (!home)
-    return;` (`checkTandemPlugin`, `src/cli/doctor.ts:1972-1973`; `checkUserMcpConfig` at `:1106`
-    passes `home || undefined` so `claudeCodeConfigPath` falls back to `homedir()`). `""` is not
-    nullish, so under `??` an empty `HOME` *wins* the chain, and the UNC screen below cannot catch
-    it: `homeIsUnsafe` is `home !== "" && rejectUnsafeWindowsPrefix(home) !== null`
-    (`src/cli/doctor.ts:681-683`), false for `""` **by construction** — which is exactly why
-    doctor pairs it with `if (!home) return`. The consequence is not abstract:
-    `join("", ".claude", "settings.json")` is **cwd-relative**, so `tandem setup --apply` run
-    inside any checkout would read *that repo's* `.claude/settings.json` — a file that exists in
-    this repo — and interpolate one of its JSON keys into the
-    `claude plugin uninstall <key>` command printed to the operator.
+    **`if (!home) return null;` is the control here — not the choice of `||` over `??`.** Keep
+    the two separate, because conflating them produced a spec that could not be written:
+
+    - **The guard is what closes the cwd-relative read.** `join("", ".claude", "settings.json")`
+      is **cwd-relative**, so a leaf without that line, run inside any checkout, would read *that
+      repo's* `.claude/settings.json` — a file that exists in this repo — and interpolate one of
+      its JSON keys into the `claude plugin uninstall <key>` command printed to the operator. The
+      UNC screen cannot cover it: `homeIsUnsafe` is
+      `home !== "" && rejectUnsafeWindowsPrefix(home) !== null` (`src/cli/doctor.ts:681-683`),
+      false for `""` **by construction** — which is exactly why doctor pairs it with
+      `if (!home) return`. This is true under `||` and under `??` alike; the guard, not the
+      operator, is the security control.
+    - **`||` is chosen for parity, not for safety.** Both cited sites spell it that way:
+      `const home = process.env.HOME || process.env.USERPROFILE || "";` followed by `if (!home)
+      return;` (`checkTandemPlugin`, `src/cli/doctor.ts:1972-1973`; `checkUserMcpConfig` at
+      `:1106` passes `home || undefined` so `claudeCodeConfigPath` falls back to `homedir()`).
+      What the operator actually decides is the *empty-string* case: `""` is not nullish, so under
+      `??` an empty `HOME` stops the chain and the guard returns `null`, while under `||` the chain
+      falls through to `USERPROFILE` and then `homedir()` and the leaf still answers. A machine
+      exporting `HOME=""` is one where `homedir()` has the right answer, so `??` would make the
+      leaf silently decline to look. That is a behaviour difference, not a hole.
 
     `apply.ts`'s siblings (`:754`, `:2066`, `:2127`) use `opts.homeOverride ?? homedir()`, and
     `homedir()` reads `USERPROFILE` on Windows and ignores `HOME` — so a test that stubs `HOME`
@@ -140,23 +163,46 @@ still made) is tested with the module mocked, so no real filesystem read happens
   - `findEnabledTandemPluginKey` returns the key for `{"tandem@tandem-editor": true}`; `null` for
     `{"tandem@x": false}` (kills a truthiness check); `null` for `{"other@y": true}`; `null` for
     `null`/`undefined`/`{}`; returns the key for a non-default marketplace
-    `{"tandem@local-marketplace": true}` (kills a hardcoded suffix).
+    `{"tandem@local-marketplace": true}` (kills a hardcoded suffix); **`null` for a key whose
+    suffix carries a newline or an ANSI escape** (`"tandem@x\ny"`, `"tandem@[31mx"`) — the
+    shape clamp, which is what keeps an arbitrary settings-file key out of a copy-paste-ready
+    shell command.
   - `detectEnabledTandemPlugin({ homeOverride })` against a temp home: absent file → `null`;
     malformed JSON → `null` (no throw); `enabledPlugins` present → the key.
   - **Home resolution**, with no `homeOverride`: stub `HOME` to a temp dir carrying the settings
     file → the key; then unstub `HOME`, stub `USERPROFILE` to it → the key. Both stubs, because
     only one of them survives on each platform. `vi.unstubAllEnvs()` in `afterEach`.
-  - **Empty home** — the `||`-vs-`??` guard. With **no** `homeOverride` and both `HOME` and
-    `USERPROFILE` stubbed to `""`, `detectEnabledTandemPlugin()` returns `null` and the
-    `readFileSync` mock is `not.toHaveBeenCalled()`. Under `??` this reds: `""` wins the chain,
-    `homeIsUnsafe("")` is false by its own `home !== ""` clause, and the leaf reads a cwd-relative
-    `.claude/settings.json`. (`homedir()` must be mocked or the stubs must survive it — assert the
-    syscall, which is true either way.)
-  - **Derived-path screen** — the second UNC screen. `detectEnabledTandemPlugin({ homeOverride:
-    "\\" })` (a single backslash, the measured POSIX case at `src/cli/doctor.ts:654-684`): it
-    passes the raw screen and derives an unsafe path, so `readFileSync` must still be
-    `not.toHaveBeenCalled()`. This is the only spec that reds if the derived-path screen is
-    dropped in favour of the non-existent "backstop".
+  - **`homedir()` must be mocked in this file, not merely out-stubbed.** Mock `node:os`'s
+    `homedir` with the same `vi.hoisted` + `vi.mock` technique mandated for `node:fs` below.
+    `homedir()` reads `USERPROFILE` on Windows and **ignores an empty one**, so any spec that
+    empties the env vars falls through to the operator's real profile and issues a real read of
+    `~/.claude/settings.json` — breaking this group's standing rule with the spec that exists to
+    enforce it.
+  - **`||`-chain fall-through** — the spec that discriminates the operator. Mock `homedir()` to a
+    scratch temp dir carrying the settings file, stub **both** `HOME` and `USERPROFILE` to `""`,
+    call `detectEnabledTandemPlugin()` with no options, and assert the **positive**: `readFileSync`
+    was called with `join(scratchHome, ".claude", "settings.json")`, and never with a cwd-relative
+    `.claude/settings.json`. This is what reds under `??`, which stops the chain at `""` and
+    returns before making any call at all.
+  - **Empty home** — pins the `if (!home) return null;` guard, **not** the `||`/`??` spelling.
+    Mock `homedir()` to `""`, stub `HOME` and `USERPROFILE` to `""`, call with no options: returns
+    `null` and the `readFileSync` mock is `not.toHaveBeenCalled()`. Deleting the guard line reds
+    it, because `join("", ".claude", "settings.json")` is cwd-relative and `homeIsUnsafe`'s
+    `home !== ""` clause cannot screen it. Both operators pass this one — that is the point of
+    splitting it from the spec above.
+  - **Derived-path screen** — the second UNC screen, and **it is POSIX-only: gate it
+    `it.runIf(process.platform !== "win32")`.** `detectEnabledTandemPlugin({ homeOverride: "\\" })`
+    (a single backslash, the measured POSIX case at `src/cli/doctor.ts:654-684`) passes the raw
+    screen; on posix `path.posix.join` derives `\/.claude/settings.json`, whose normalised head is
+    `\\` and which `rejectUnsafeWindowsPrefix` rejects, so `readFileSync` must be
+    `not.toHaveBeenCalled()`. On win32 `path.win32.join` yields `\.claude\settings.json` — a
+    **single** leading separator, which `src/shared/windows-path-safety.ts:62-84` accepts — so
+    ungated the spec reds against correct code on the machine this wave runs on. Copy the
+    precedent's one-line reason: `tests/cli/doctor-path-safety.test.ts:643-664` gates the identical
+    lone-backslash input the same way, noting that its evidence is CI's ubuntu job, not a local
+    green. Gated, this is still the only spec that reds if the derived-path screen is dropped in
+    favour of the non-existent "backstop"; leave the two `NETWORK_PATHS` tables below **ungated** —
+    the raw screen catches every row on both platforms.
   - **UNC table, twice — once per input path, because production takes the one the round-1 spec
     did not drive.** `applySetup` calls `detectEnabledTandemPlugin()` with **no argument**, so its
     real input is `process.env.HOME || USERPROFILE || homedir()`. A screen written as
@@ -180,6 +226,25 @@ still made) is tested with the module mocked, so no real filesystem read happens
     configurable, so `vi.spyOn` **throws**. The technique and this exact rationale are documented
     at `tests/cli/doctor-path-safety.test.ts:22-25` (same as
     `tests/server/unc-guard-ordering.test.ts`); copy it.
+
+    **But do not copy that file's `readFileSync` mock body, which delegates straight to the real
+    implementation** (`_readFileSyncSpy.mockImplementation(actual.readFileSync as never)`,
+    `tests/cli/doctor-path-safety.test.ts:52-56`). A red/TDD run of the eleven `NETWORK_PATHS`
+    rows above would then perform, on Windows, the SMB handshake #1417 exists to prevent — the
+    incident that same file records at `:64-77` ("this suite issued a REAL `statSync` against a
+    `\attacker\share\...` path … the Responder NTLM-relay vector … fired from a developer's
+    machine on every pre-push run"). **The leaf suite's mock refuses hostile prefixes itself**,
+    mirroring the containment stub at `:64-83`:
+
+    ```
+    if (typeof p === "string" && rejectUnsafeWindowsPrefix(p) !== null) {
+      throw Object.assign(new Error("ENOENT (test stub: refused before syscall)"), { code: "ENOENT" });
+    }
+    ```
+
+    before delegating to `actual.readFileSync`. It asserts nothing — the specs assert on the spy's
+    call record, which the throw does not disturb — so it cannot mask a genuine failure, and a
+    failing run cannot make the syscall the spec exists to forbid.
 - `tests/cli/run-setup-apply.test.ts` — **this file, not `setup.test.ts`.** Add
   `vi.mock("../../src/shared/integrations/tandem-plugin.js", …)` alongside the existing
   `apply.js` mock (`:13-30`), stubbing `detectEnabledTandemPlugin`. That file mocks only
@@ -209,17 +274,36 @@ still made) is tested with the module mocked, so no real filesystem read happens
 ## Done when
 
 `setup --apply` on a machine with the plugin installed says so and names the remedy before it
-writes; the predicate exists once; the leaf refuses every `NETWORK_PATHS` spelling before any
+writes; the leaf refuses every `NETWORK_PATHS` spelling before any
 syscall **through both input paths — `homeOverride` and the env chain production actually
 takes**; an empty `HOME` returns `null` rather than reading a cwd-relative `.claude/settings.json`;
-no test reads a real home; doctor's existing duplication warn is pinned; typecheck + the CLI and
-shared suites green. The PR body records the refutation with the `git show` citation.
+no test reads a real home; the key clamp rejects a newline/ANSI suffix; doctor's existing
+duplication warn is pinned; typecheck + the CLI and shared suites green. The PR body records the
+refutation with the `git show` citation.
+
+**"The predicate exists once" is deliberately NOT a done-when.** No listed spec would red if the
+implementation added the leaf and left `evaluateTandemPlugin`'s inline
+`Object.entries(...).find(...)` in place: the duplication-warn pin at the end of Tests asserts
+behaviour that is identical either way. Making it checkable means a source-read assertion in the
+shape of `tests/cli/doctor-path-safety.test.ts:694-717` (`src/cli/doctor.ts` contains no
+`startsWith("tandem@")` outside the shared leaf), and this wave's minimal-fix bar does not buy new
+scanning machinery for a one-line substitution. The substitution stays in the Fix as a
+review-verified change; claiming it as a done-when nothing checks is the #1529 shape.
 
 ## Not in scope
 
 A doctor `--fix` flag (a new CLI surface; not in the taken shape). README / wizard copy (docs
 drift is #1821 / the J2 group). Making `setup --apply` skip the MCP write. Anything about the
 plugin's own npx pin — that is #1790.
+
+**Consolidating the `<home>/.claude/settings.json` path derivation.** Three copies exist after
+this change (the leaf, `src/cli/doctor.ts:1996`, and the `SETTINGS_LEAF` literal at
+`tests/cli/doctor-path-safety.test.ts:127,261`). The right fix is
+`claudeCodeSettingsPath(opts: ClientConfigPathOptions)` in
+`src/shared/integrations/client-config-paths.ts` with both callers repointed — a refactor of a
+UNC-screened doctor path, which exceeds this group's minimal-fix bar and would land untested
+inside a `setup --apply` PR. This spec de-duplicates the **predicate** only and says so in the Fix
+rather than borrowing that file's doctrine.
 
 ## Files touched
 
@@ -297,6 +381,52 @@ plugin's own npx pin — that is #1790.
 - *The spec prescribes `vi.spyOn(fs, "readFileSync")`, which this repo has measured as broken on
   an ESM builtin namespace.* Reworded to `vi.hoisted` + `vi.mock("node:fs", …)`, citing the
   documented rationale at `tests/cli/doctor-path-safety.test.ts:22-25`.
+
+**Not adopted**
+
+- None.
+
+## Review corrections (round 3)
+
+**Adopted**
+
+- **BLOCKING** *The "Empty home" spec was self-contradictory and non-discriminating: under the
+  `||` chain the same spec mandates, `""` does not win — `homedir()` does, the guard never fires,
+  and `readFileSync` IS called on the operator's real `~/.claude/settings.json`; mocking
+  `homedir()` to `""` instead makes both spellings pass identically* (raised twice). It is now two
+  specs. A `||`-chain fall-through spec mocks `homedir()` to a scratch temp dir, empties both env
+  vars and asserts the **positive** call on `join(scratchHome, ".claude", "settings.json")` — which
+  reds under `??`, since `??` stops at `""` and returns before any call. A separate empty-home spec
+  mocks `homedir()` to `""` and pins `if (!home) return null;` alone. A new bullet requires
+  `homedir()` to be mocked in this file at all, because it ignores an empty `USERPROFILE` and would
+  otherwise route every emptied-env spec at the operator's real profile. The Fix's rationale is
+  rewritten: the guard, not the operator, is the security control; `||` is chosen for parity with
+  `src/cli/doctor.ts:1972-1973`, and the empty-string case is a behaviour difference, not a hole.
+- **BLOCKING** *The derived-path UNC spec is POSIX-only and was ungated, so it reds against correct
+  code on this wave's Windows machine — and the likely "repair" deletes the only spec pinning that
+  screen* (raised twice). It is now `it.runIf(process.platform !== "win32")`, with the measurement
+  in the spec (`path.win32.join("\\", ".claude", "settings.json")` → `\.claude\settings.json`, a
+  single separator that `src/shared/windows-path-safety.ts:62-84` accepts) and the precedent's
+  one-line reason copied from `tests/cli/doctor-path-safety.test.ts:643-664` — its evidence is CI's
+  ubuntu job, not a local green. The two `NETWORK_PATHS` tables stay ungated.
+- **BLOCKING** *The prescribed `node:fs` mock delegates to the real `readFileSync`, so a red/TDD
+  run of the eleven UNC rows performs the SMB handshake #1417 exists to prevent.* The Tests section
+  now requires the leaf suite's mock to refuse hostile prefixes itself before delegating, with the
+  `rejectUnsafeWindowsPrefix` throw spelled out, mirroring the containment stub at
+  `tests/cli/doctor-path-safety.test.ts:64-83` and citing the incident recorded at `:64-77`.
+- *The leaf cites `client-config-paths.ts`'s "not a second hand-maintained copy" doctrine while
+  hand-rolling `<home>/.claude/settings.json`, leaving that rule in three copies.* The citation is
+  removed: the Fix now states the leaf de-duplicates the **predicate**, not the path, names all
+  three path copies, and Not-in-scope records `claudeCodeSettingsPath()` as the real fix with why it
+  is out of bounds for this group.
+- *An untrusted `enabledPlugins` key is interpolated into a shell command printed to the terminal
+  with no shape clamp.* `findEnabledTandemPluginKey` now returns the key only when it also matches
+  `/^tandem@[A-Za-z0-9._-]+$/`, with a leaf spec for newline/ANSI suffixes and a note that this
+  narrows the pre-existing surface at `src/cli/doctor.ts:1944` rather than adding a class.
+- *Done-when claims "the predicate exists once", and no listed spec would red if doctor kept its
+  inline copy.* The claim is dropped, with a paragraph saying what would make it checkable (a
+  source-read assertion in the shape of `doctor-path-safety.test.ts:694-717`) and why this wave's
+  minimal-fix bar does not buy it — leaving an unchecked done-when is the #1529 shape.
 
 **Not adopted**
 
