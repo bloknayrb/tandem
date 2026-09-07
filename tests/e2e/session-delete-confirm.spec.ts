@@ -43,19 +43,31 @@ test.afterEach(async () => {
   cleanupFixtureDir(tmpDir);
 });
 
-/** Route-stub the sessions list and count calls to one mutating route. */
+/**
+ * Route-stub the sessions list and TIMESTAMP every call to one mutating route.
+ *
+ * Timestamps rather than a bare counter, because "0 calls right after arming"
+ * is not a testable claim: `expect.poll` returns on its first passing sample,
+ * so a counter that starts at 0 satisfies it instantly and supplies no settle
+ * time at all — a request dispatched a moment later is never observed. What IS
+ * deterministic is ordering: wait for the ONE call the confirm click must
+ * produce, then assert it post-dates that click. On an arm-also-fires build the
+ * observed call is the arm's, whose timestamp precedes the click, and the
+ * assertion fails whether or not the confirm's own request has landed yet.
+ * Same process, so `Date.now()` here and in the test body share one clock.
+ */
 async function stubSessions(
   page: import("@playwright/test").Page,
   mutatingRoute: string,
-): Promise<() => number> {
-  let calls = 0;
+): Promise<() => number[]> {
+  const calls: number[] = [];
   // The two patterns are disjoint by construction: a Playwright URL glob must
   // match the whole URL, and "**/api/sessions" has nothing to match the POSTs'
   // trailing "/delete" or "/clear" against. Registration order is therefore not
   // load-bearing here — unlike the component test, where the stub branches on
   // `includes()` and the prefix genuinely does overlap.
   await page.route(mutatingRoute, async (route) => {
-    calls += 1;
+    calls.push(Date.now());
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -70,6 +82,16 @@ async function stubSessions(
     });
   });
   return () => calls;
+}
+
+/**
+ * Assert the one observed request post-dates the confirm click, i.e. the ARM
+ * click fired nothing. See the stubSessions doc comment for why this is the
+ * discriminator and a "still 0 calls" read is not.
+ */
+function expectFiredOnlyOnConfirm(calls: number[], confirmClickAt: number) {
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toBeGreaterThanOrEqual(confirmClickAt);
 }
 
 /** Open the document, show the dialog and expand the saved-sessions list. */
@@ -94,13 +116,14 @@ test("the per-session × arms a confirm instead of deleting (#1773)", async ({ p
   await firstRow.getByTestId("session-delete").click();
   await expect(firstRow.getByTestId("session-delete-confirm")).toBeVisible({ timeout: 2_000 });
 
-  // expect.poll, not a bare read: the counter lives in the Node-side route
-  // handler, so a read taken right after toBeVisible() can be sampled before an
-  // arm-and-ALSO-fire request has arrived.
-  await expect.poll(deleteCalls, { timeout: 1_000 }).toBe(0);
+  // The row is still there, so the arm did not delete it through the UI. The
+  // "no request fired" half is the ordering assertion below, not a read here.
+  await expect(page.getByTestId("session-row")).toHaveCount(2);
 
+  const confirmClickAt = Date.now();
   await firstRow.getByTestId("session-delete-confirm").click();
-  await expect.poll(deleteCalls, { timeout: 5_000 }).toBe(1);
+  await expect.poll(() => deleteCalls().length, { timeout: 5_000 }).toBe(1);
+  expectFiredOnlyOnConfirm(deleteCalls(), confirmClickAt);
   await expect(page.getByTestId("session-row")).toHaveCount(1);
 });
 
@@ -110,10 +133,11 @@ test("Clear all arms its own confirm instead of clearing (#1773)", async ({ page
 
   await page.getByTestId("sessions-clear-all").click();
   await expect(page.getByTestId("sessions-clear-all-confirm")).toBeVisible({ timeout: 2_000 });
-  await expect.poll(clearCalls, { timeout: 1_000 }).toBe(0);
   await expect(page.getByTestId("session-row")).toHaveCount(2);
 
+  const confirmClickAt = Date.now();
   await page.getByTestId("sessions-clear-all-confirm").click();
-  await expect.poll(clearCalls, { timeout: 5_000 }).toBe(1);
+  await expect.poll(() => clearCalls().length, { timeout: 5_000 }).toBe(1);
+  expectFiredOnlyOnConfirm(clearCalls(), confirmClickAt);
   await expect(page.getByTestId("sessions-empty")).toBeVisible({ timeout: 5_000 });
 });

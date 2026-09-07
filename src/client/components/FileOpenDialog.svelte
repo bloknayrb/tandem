@@ -50,6 +50,52 @@ let sessionsError = $state<string | null>(null);
 let pendingDeletePath = $state<string | null>(null);
 let clearAllArmed = $state(false);
 
+// Every arm/disarm swaps the button that currently has focus out of the DOM, so
+// without focus management the browser drops focus to <body> — which is OUTSIDE
+// the role="dialog" div that owns the Escape handler. The armed confirm would
+// then be uncancellable by keyboard and Escape would stop closing the dialog,
+// in exactly the state this two-step confirm creates. The dialog is not
+// focus-trapped (#1778), so Tab from <body> can walk into browser chrome.
+//
+// Attachments, not `bind:this` + $effect: each node gets its OWN callback, so
+// there is no shared bound ref for another row's teardown to null out — the
+// hazard SidePanel.svelte:193-198 documents for keyed {#each} rows.
+let sessionsToggleEl: HTMLButtonElement | undefined = $state();
+
+/** Focus a node the moment it mounts. Only used where mounting IS the arm. */
+function focusOnMount(node: HTMLElement) {
+  node.focus();
+}
+
+// Disarming has to be gated on intent: the rest-state buttons also mount when
+// the list first renders, and focusing one there would steal focus from the
+// autofocused Browse button. A plain `let` on purpose — this is read inside an
+// attachment, and a $state cell read-and-written in the same reaction is the
+// self-invalidating shape.
+let refocusOnDisarm: string | null = null;
+
+// Row keys are file paths, so Clear all needs one that cannot collide with a
+// real one. NUL is not legal in a path on any platform Tandem runs on.
+const CLEAR_ALL_FOCUS_KEY = "\0clear-all";
+
+/** Focus this node only if it is the arm button whose confirm was just cancelled. */
+function focusIfDisarmed(key: string) {
+  return (node: HTMLElement) => {
+    if (refocusOnDisarm !== key) return;
+    refocusOnDisarm = null;
+    node.focus();
+  };
+}
+
+/**
+ * Park focus on the sessions toggle after a CONFIRMED action. The confirm button
+ * is gone either way — the row (or the whole list) unmounted on success, and it
+ * swapped back to the arm button on failure — so there is no node to return to.
+ */
+function parkFocusAfterConfirm() {
+  sessionsToggleEl?.focus();
+}
+
 // Both confirms render the same destructive/cancel button pair, so the recipe
 // lives once here and is interpolated — the `smallBtnBase` shape from
 // BulkActions.svelte, which is also the component this confirm mirrors. A
@@ -319,6 +365,7 @@ function handleBrowse() {
       <button
         type="button"
         data-testid="sessions-toggle"
+        bind:this={sessionsToggleEl}
         onclick={toggleSessions}
         aria-expanded={sessionsExpanded}
         style="width: 100%; background: none; border: none; padding: 0; cursor: pointer; display: flex; justify-content: space-between; align-items: center; color: var(--tandem-fg-subtle);"
@@ -353,14 +400,16 @@ function handleBrowse() {
                    row-level flag — one flag carrying a third value renders the
                    wrong wording against the wrong action. -->
               <span style="font-size: 11px; color: var(--tandem-fg);">
-                Clear all {sessions.length} saved sessions?
+                Clear all {sessions.length} saved session{sessions.length === 1 ? "" : "s"}?
               </span>
               <button
                 type="button"
                 data-testid="sessions-clear-all-confirm"
-                onclick={() => {
+                {@attach focusOnMount}
+                onclick={async () => {
                   clearAllArmed = false;
-                  void clearSessions();
+                  await clearSessions();
+                  parkFocusAfterConfirm();
                 }}
                 style={destructiveBtnStyle}
               >
@@ -371,6 +420,7 @@ function handleBrowse() {
                 data-testid="sessions-clear-all-cancel"
                 onclick={() => {
                   clearAllArmed = false;
+                  refocusOnDisarm = CLEAR_ALL_FOCUS_KEY;
                 }}
                 style={cancelBtnStyle}
               >
@@ -379,6 +429,7 @@ function handleBrowse() {
             {:else}
               <button
                 data-testid="sessions-clear-all"
+                {@attach focusIfDisarmed(CLEAR_ALL_FOCUS_KEY)}
                 onclick={() => {
                   clearAllArmed = true;
                   pendingDeletePath = null;
@@ -425,16 +476,19 @@ function handleBrowse() {
                 </button>
                 {#if pendingDeletePath === session.filePath}
                   <!-- #1773: the row's × swaps whole for this confirm pair, the
-                       BulkActions shape. No bind:this / focus effect: the rows
-                       live in a keyed {#each}, so one shared bound ref is nulled
-                       by the other row's teardown. No aria-expanded either — the
-                       arm button leaves the DOM at the moment it would go true. -->
+                       BulkActions shape. Focus moves by ATTACHMENT rather than a
+                       bind:this + $effect: the rows live in a keyed {#each}, so
+                       one shared bound ref would be nulled by the other row's
+                       teardown. No aria-expanded either — the arm button leaves
+                       the DOM at the moment it would go true. -->
                   <button
                     type="button"
                     data-testid="session-delete-confirm"
-                    onclick={() => {
+                    {@attach focusOnMount}
+                    onclick={async () => {
                       pendingDeletePath = null;
-                      void deleteSession(session.filePath);
+                      await deleteSession(session.filePath);
+                      parkFocusAfterConfirm();
                     }}
                     aria-label={`Confirm delete session for ${filename}`}
                     style={destructiveBtnStyle}
@@ -446,6 +500,7 @@ function handleBrowse() {
                     data-testid="session-delete-cancel"
                     onclick={() => {
                       pendingDeletePath = null;
+                      refocusOnDisarm = session.filePath;
                     }}
                     aria-label={`Cancel deleting session for ${filename}`}
                     style={cancelBtnStyle}
@@ -456,6 +511,7 @@ function handleBrowse() {
                   <button
                     type="button"
                     data-testid="session-delete"
+                    {@attach focusIfDisarmed(session.filePath)}
                     onclick={() => {
                       pendingDeletePath = session.filePath;
                       clearAllArmed = false;

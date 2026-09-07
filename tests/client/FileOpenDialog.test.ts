@@ -313,6 +313,89 @@ describe("FileOpenDialog unified (#378)", () => {
       expect(getAllByTestId("session-delete")).toHaveLength(2);
     });
 
+    // #1773 review — focus. Each arm/disarm swaps the focused button out of the
+    // DOM, and the dialog is not focus-trapped (#1778): without an explicit
+    // move, focus lands on <body>, which is OUTSIDE the role="dialog" div that
+    // owns the Escape handler. The armed confirm is then uncancellable by
+    // keyboard and Escape stops closing the dialog. `document.body` is the
+    // discriminating value in every case below — it is exactly what the browser
+    // falls back to when the focused node is removed.
+    it("(g) arming a row focuses its confirm; cancelling returns focus to that row's ×", async () => {
+      const { getAllByTestId, getByTestId } = await renderExpanded();
+
+      // The rest-state buttons must NOT grab focus when the list first renders —
+      // that would steal it from the autofocused Browse button.
+      expect(getAllByTestId("session-delete")).not.toContain(document.activeElement);
+
+      await fireEvent.click(getAllByTestId("session-delete")[0]);
+      await tick();
+      expect(document.activeElement).toBe(getByTestId("session-delete-confirm"));
+
+      await fireEvent.click(getByTestId("session-delete-cancel"));
+      await tick();
+      // Row 0's ×, specifically — not merely "something focused". The other
+      // row's × is the value a shared-ref implementation would land on.
+      const rows = getAllByTestId("session-row");
+      expect(rows[0].contains(document.activeElement)).toBe(true);
+      expect(document.activeElement).toBe(getAllByTestId("session-delete")[0]);
+    });
+
+    it("(g2) confirming a delete parks focus on the sessions toggle, not <body>", async () => {
+      const { getAllByTestId, getByTestId } = await renderExpanded();
+      await fireEvent.click(getAllByTestId("session-delete")[0]);
+      await tick();
+      await fireEvent.click(getByTestId("session-delete-confirm"));
+      await tick();
+      await new Promise((r) => setTimeout(r, 0));
+      await tick();
+
+      // The confirm button is gone with its row, so there is nothing to return
+      // to; the toggle is the nearest control still inside the dialog.
+      expect(document.activeElement).toBe(getByTestId("sessions-toggle"));
+    });
+
+    it("(h) arming Clear all focuses its confirm; cancelling returns focus to Clear all", async () => {
+      const { getByTestId } = await renderExpanded();
+      expect(document.activeElement).not.toBe(getByTestId("sessions-clear-all"));
+
+      await fireEvent.click(getByTestId("sessions-clear-all"));
+      await tick();
+      expect(document.activeElement).toBe(getByTestId("sessions-clear-all-confirm"));
+
+      await fireEvent.click(getByTestId("sessions-clear-all-cancel"));
+      await tick();
+      expect(document.activeElement).toBe(getByTestId("sessions-clear-all"));
+    });
+
+    it("(i) the Clear all confirm pluralizes its count", async () => {
+      const { getByTestId } = await renderExpanded();
+      await fireEvent.click(getByTestId("sessions-clear-all"));
+      await tick();
+      expect(getByTestId("sessions-clear-all-confirm").parentElement?.textContent).toContain(
+        "Clear all 2 saved sessions?",
+      );
+    });
+
+    it("(i2) …and reads singular with exactly one saved session", async () => {
+      fetchMock.mockImplementation(async (url: unknown, init?: { method?: string }) => {
+        const href = String(url);
+        if (href.includes(API_SESSIONS_DELETE) || href.includes(API_SESSIONS_CLEAR)) {
+          return { ok: true, json: async () => ({ data: {} }) };
+        }
+        if (href.includes(API_SESSIONS) && init?.method !== "POST") {
+          return { ok: true, json: async () => ({ data: { sessions: [ROWS[0]] } }) };
+        }
+        return { ok: true, json: async () => ({}) };
+      });
+
+      const { getByTestId } = await renderExpanded();
+      await fireEvent.click(getByTestId("sessions-clear-all"));
+      await tick();
+      const text = getByTestId("sessions-clear-all-confirm").parentElement?.textContent ?? "";
+      expect(text).toContain("Clear all 1 saved session?");
+      expect(text).not.toContain("saved sessions?");
+    });
+
     it("(f) collapsing the list disarms", async () => {
       const { getAllByTestId, getByTestId, queryByTestId } = await renderExpanded();
       await fireEvent.click(getAllByTestId("session-delete")[0]);
