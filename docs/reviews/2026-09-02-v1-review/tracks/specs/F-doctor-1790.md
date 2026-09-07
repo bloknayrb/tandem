@@ -84,6 +84,19 @@ makes false in the safe direction and this fix makes false in the current wordin
   the documented way. The response keeps echoing nothing about the skill, and the seam type stays
   `typeof installSkill`.
 
+- **`installSkill` itself logs the skip, so the surface that cannot repair it still leaves a
+  trace.** On the `newer-on-disk` return, one `console.error` naming both versions and the
+  version-independent remedy — *delete `~/.claude/skills/tandem/SKILL.md` and re-run*. Without it
+  the skip is invisible to the wizard route (which echoes nothing) and to the desktop population,
+  which is precisely the one that cannot run the CLI remedy: `cliAvailable`'s own rationale
+  (`src/cli/doctor.ts:~1250-1275`) records that the Tauri bundle ships no `dist/cli` and puts
+  nothing on PATH. `refreshExistingSkillIfStale` already records its outcome
+  (`lastSkillRefreshError` / `getSkillRefreshError()`), so this would otherwise be the only silent
+  skip in the pair. **No new route field, no seam-type change** — `console.error` goes to stderr,
+  which Critical Rule 3 requires anyway. The CLI then prints two lines (this one, plus setup.ts's
+  `⚠` below, which is the half that can name `--force` because the leaf does not know its caller);
+  that duplication is the accepted cost of the wizard path getting a trace at all.
+
 - **Return `SkillInstallResult`**: `{ written: true } | { written: false; reason: "newer-on-disk";
   onDiskVersion: number; bundledVersion: number }` (was `Promise<void>`), so the silent no-op is
   reportable. `src/cli/setup.ts:178-183` prints `✓ ~/.claude/skills/tandem/SKILL.md` on a write and,
@@ -102,7 +115,10 @@ makes false in the safe direction and this fix makes false in the current wordin
 - **Both `installSkill` mock sites move in the same commit, because the return-type change is a
   `typecheck:tests` failure — a step inside the required `check` job, not a runtime one:**
   - `tests/cli/run-setup-apply.test.ts:13-30` — the `vi.fn()` in the `apply.js` mock factory,
-    plus a spec whose mock resolves `{ written: false, … }`.
+    plus a spec whose mock resolves `{ written: false, … }`. **And `:73`, the per-test default in
+    the same file's `beforeEach`:** `vi.mocked(installSkill).mockReset().mockResolvedValue(undefined)`
+    — `undefined` is what every existing spec gets, and it is the value the retype rejects. It
+    becomes `mockResolvedValue({ written: true })`.
   - `tests/server/integrations/api-routes.test.ts:163` — the annotation
     `let installSkillSpy: ReturnType<typeof vi.fn<() => Promise<void>>>` — and `:168`, the
     `vi.fn(async () => {})` assigned into `deps.installSkill` at `:170`. Both become
@@ -110,6 +126,19 @@ makes false in the safe direction and this fix makes false in the current wordin
     **Do NOT widen the seam type at `api-routes.ts:159` to `() => Promise<unknown>` to silence
     this** — that erases the #1894 seam's type contract, which is the thing keeping the real
     `~/.claude/skills/tandem/SKILL.md` out of the suite.
+
+- **Two further `installSkill` references stay unchanged, and the spec says why so neither is
+  "tidied":**
+  - `tests/server/document-write-rearm.test.ts:225-231` is a census row
+    (`{ file: "server/integrations/apply.ts", key: "installSkill", count: 1, rearm: "n/a" }`)
+    asserted **by exact equality** at `:404`, and CLAUDE.md's file-watcher rule points at it. It
+    stays exactly as written: exactly one `atomicWrite` survives in `installSkill`, and the new
+    early return adds no write, so `count: 1` / `rearm: "n/a"` remain true. Adding a second write
+    site would red this *and* widen #1599's bound.
+  - `tests/server/integrations/refresh-skill.test.ts:104` calls `await installSkill({ homeOverride })`
+    as **setup** for the `>=`-preservation spec this Fix cites at `refresh-skill.test.ts:102-113`.
+    It still writes, because no file exists at that point (the ENOENT → create path), so the new
+    comparison never fires there. No edit.
 
 - **`tests/skill-instruction-contract.test.ts`**: one new spec pinning a single object literal
   `{ version: <the number already pinned in this file>, bodyHash: "<sha256 of the body, first 12
@@ -146,6 +175,14 @@ makes false in the safe direction and this fix makes false in the current wordin
    not `>=`, boundary. Write a mangled body carrying the current `version:` line and assert the
    file comes back as `SKILL_CONTENT`: this is the idempotent-repair case that `>=` would break,
    and it is the boundary a "consistency" refactor toward the refresher's `>=` would flip.
+
+   **Derive "the current `version:` line" from `SKILL_CONTENT`, not from `BUNDLED_SKILL_VERSION`.**
+   Neither `readSkillVersion` (`src/server/integrations/apply.ts:2076`) nor
+   `BUNDLED_SKILL_VERSION` (`:2083`) is exported, and `tests/cli/setup.test.ts` has no route to
+   either — **do not export new symbols from `apply.ts` for a test.** Copy the four-line local
+   `readSkillVersion` the precedent already uses (`tests/server/integrations/refresh-skill.test.ts:69`)
+   and run it over `SKILL_CONTENT`, which *is* exported (`src/cli/skill-content.ts:20`). The
+   mangled body is then `` `---\nversion: ${n}\n---\nmangled\n` `` for that `n`.
 4. On-disk `version: 999` **with `{ force: true }`** → overwritten, `{ written: true }`. Kills a
    comparison with no escape hatch, which would make a tampered stamp permanently un-repairable.
 5. No file → written (kills copying the refresher's ENOENT early-return into the create path).
@@ -166,8 +203,10 @@ makes false in the safe direction and this fix makes false in the current wordin
 ## Done when
 
 An older `setup --apply` cannot downgrade a newer installed skill and says so with a remedy that
-works; a re-run at the same version still rewrites the file; `--force` overwrites a newer stamp;
-one `atomicWrite` site remains in `installSkill`; a body-only skill edit reds
+works; **a skip leaves a stderr trace from `installSkill` itself, so the wizard/desktop path is
+not silent**; a re-run at the same version still rewrites the file; `--force` overwrites a newer
+stamp; one `atomicWrite` site remains in `installSkill` and
+`tests/server/document-write-rearm.test.ts`'s census row is untouched; a body-only skill edit reds
 `skill-instruction-contract`; item 2's measurement is in the PR body with its citations;
 `npm run typecheck:tests` green (the return-type change touches two mock sites); typecheck + the
 CLI, plugin and root suites green.
@@ -217,3 +256,34 @@ to `refreshExistingSkillIfStale`. A `force` parameter on the apply HTTP route. #
   prose line exceeds this wave's minimal-fix bar (a spec over ~120 lines is the stated smell). The
   doc edit stays in the Fix as an uncheckable but reviewed change; if `docs/cli.md` later earns a
   claims suite, this line is the first thing to put in it.
+
+## Review corrections (round 2)
+
+**Adopted**
+
+- *The downgrade guard is silent on the surface that cannot repair it — the wizard route echoes
+  nothing and the desktop population has no CLI to run `--force` against.* `installSkill` now
+  emits one `console.error` on the `newer-on-disk` return, naming both versions and the
+  version-independent remedy (delete the file and re-run). No new route field, no seam-type
+  change. `refreshExistingSkillIfStale` already records its outcome via `getSkillRefreshError()`,
+  so this closes the only remaining silent skip; `cliAvailable`'s rationale
+  (`src/cli/doctor.ts:~1250-1275`) is cited for why the desktop path needed it.
+- *The "both mock sites" enumeration misses the per-test default in the same file.*
+  `tests/cli/run-setup-apply.test.ts:73` —
+  `vi.mocked(installSkill).mockReset().mockResolvedValue(undefined)` — is now named in the Fix as
+  the value the retype rejects, becoming `mockResolvedValue({ written: true })`.
+- *Two further `installSkill` references were unnamed, one of them an exact-equality census the
+  CLAUDE.md file-watcher rule points at.* Both are now listed as **unchanged, and why**:
+  `tests/server/document-write-rearm.test.ts:225-231` stays `count: 1, rearm: "n/a"` because
+  exactly one `atomicWrite` survives (asserted by exact equality at `:404`), and
+  `tests/server/integrations/refresh-skill.test.ts:104` still writes because no file exists at
+  that point. Added to Done when.
+- *Test 3 needs `BUNDLED_SKILL_VERSION`, which is module-private with no route from
+  `tests/cli/setup.test.ts`.* Test 3 now derives the number in the test from the exported
+  `SKILL_CONTENT` (`src/cli/skill-content.ts:20`) with a local `readSkillVersion` copy, as
+  `tests/server/integrations/refresh-skill.test.ts:69` already does, and explicitly forbids
+  exporting new symbols from `apply.ts` for it.
+
+**Not adopted**
+
+- None.

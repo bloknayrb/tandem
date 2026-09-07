@@ -49,18 +49,46 @@ nothing says so. **That also settles what arm 4's remedy may say; see below.**
      - **`Number(...)`, not a bare `.port`.** `URL.port` is a *string*; `"3479" !== 3479` is
        always true, so a literal comparison would warn on every healthy install (TS2367 catches
        it, but spell it correctly in the spec so it is not rediscovered).
-     - **The port-less default comes from the protocol, not a hardcoded `"80"`.**
-       `defaultPortForProtocol` returns 443 for `https:` and 80 otherwise; a port-less
-       `https://…/mcp` entry must not be reported as "points at port 80".
-  5. Otherwise `pass` with the existing text.
+     - **The port-less default comes from the protocol, not a hardcoded `"80"`.** Add a
+       module-private `defaultPortForProtocol(protocol: string): number` to `src/cli/doctor.ts`
+       — **it does not exist today** (`grep -rn defaultPortForProtocol src/` is empty); this spec
+       introduces it. It returns 443 for `https:` and 80 otherwise; a port-less `https://…/mcp`
+       entry must not be reported as "points at port 80".
+  5. Otherwise `pass` — **with a per-level message, not one shared string.** "The existing text"
+     differs at each level and there is no pass-message seam in `opts`, so spell both out or the
+     single natural implementation (`` `${label} tandem → ${url}` ``, the project wording at
+     `src/cli/doctor.ts:1045`) silently opens a *new* credential path through the pass arm:
+     - **`.mcp.json` (`redactUrl: false`)**: `` `${label} tandem → ${url}` ``, unchanged.
+     - **`~/.claude.json` (`redactUrl: true`)**: the byte-for-byte existing string
+       `tandem registered in ~/.claude.json` (`src/cli/doctor.ts:1209`). **It never interpolates
+       `url`, and it must not start.** Arms 3 and 4 do not fire on a healthy-*shaped* URL, so
+       `http://tok:s3cret@127.0.0.1:3479/mcp?key=abc` reaches the pass arm — same
+       `type`/`/mcp`/port as a clean install, and the credential is in the parts nothing looks
+       at. A pass arm that echoed `url` would put it on the wire for every such user, with
+       nothing warning them.
 
 - **The message is redacted at the user level and verbatim at the project level, and the two
   deliberately differ.** `opts.redactUrl` is what splits them:
   - **`.mcp.json` (`redactUrl: false`)** keeps today's wording byte-for-byte:
     `` `${label} tandem: unexpected config — type=${type}, url=${url}` ``.
-  - **`~/.claude.json` (`redactUrl: true`)** never interpolates the raw `url`. It prints
-    `type=<observed>` plus the parsed `port=` and `path=` (and, for a URL `new URL()` rejects,
-    the literal `url=(unparsable)` — the value itself is not echoed).
+  - **`~/.claude.json` (`redactUrl: true`)** never interpolates the raw `url`, **and never
+    interpolates the pathname either**:
+    - Arm 3 prints `type=<observed>` plus `pathHasMcp=false` (or, for a URL `new URL()` rejects,
+      the literal `url=(unparsable)`). **Not `path=<value>`.** A path segment is a standard
+      credential carrier for exactly this population — hosted MCP endpoints commonly embed the
+      key as `https://host/v1/<token>/mcp` — and `pathHasMcp=false` names the finding, which the
+      value does not add to. The `fix` string is what tells the user what to do.
+    - Arm 4 prints `type=` and the two port numbers only. **No path at all**: arm 4 fires only
+      when the pathname already contains `/mcp`, so the path is not the finding there — while
+      `/mcp/<secret>` satisfies that condition and would be printed verbatim.
+  - **Redaction covers the whole outcome, not just `message`.** At `redactUrl: true` the
+    outcome's `data` bag carries no `url` and no copy of the raw entry either.
+    `recordEvaluation` forwards `result.data` straight into `r.warn`
+    (`src/cli/doctor.ts:411-422`), and `redactUserPaths` "walks the WHOLE report" precisely
+    because "the per-check `data` bag is free-form and several checks put the raw directory in
+    it" (`diagnostics.ts:100-107`) — it collapses paths, and knows nothing about URL userinfo or
+    a query token. So `r.warn(msg, fix, { url })` would satisfy every message-only assertion and
+    still ship the credential.
 
   This is not symmetry for its own sake. The `.mcp.json` twin can echo safely only because
   `mcp-json` **is stripped from field reports**: it is in `CWD_DEPENDENT_CHECKS`
@@ -77,20 +105,45 @@ nothing says so. **That also settles what arm 4's remedy may say; see below.**
   whose `tandem` URL can carry userinfo or a query token. `type` stays verbatim in both: it is a
   short enum-shaped field, not a credential carrier.
 
-- **Arm 4 carries its own remedy and must never emit `setupApplyRemedy`.** `MCP_URL` is hardcoded
-  to `DEFAULT_MCP_PORT` (`apply.ts:186`, `:511`), so on a `TANDEM_MCP_PORT=4918` install
-  `tandem setup --apply` **re-writes 3479** and the warn re-fires unchanged, forever. That is the
-  dead-end-remedy defect this file has already been corrected for twice — `src/cli/doctor.ts:1163-1190`
-  (the #1802 malformed arm, which "carries NO `setupApplyRemedy`… prescribing either is a dead-end
-  fix line") and `:1345-1360` (the doctrine by name, #1404: *a remedy that cannot work is worse
-  than no remedy*). So `portFix` names the two things that actually work, and says what
-  `setup --apply` would do:
+- **Arm 4 carries its own remedy and must never emit `setupApplyRemedy` — at EITHER level.**
+  `MCP_URL` is hardcoded to `DEFAULT_MCP_PORT` (`apply.ts:186`, `:511`), so on a
+  `TANDEM_MCP_PORT=4918` install `tandem setup --apply` **re-writes 3479** and the warn re-fires
+  unchanged, forever. That is the dead-end-remedy defect this file has already been corrected for
+  twice — `src/cli/doctor.ts:1163-1190` (the #1802 malformed arm, which "carries NO
+  `setupApplyRemedy`… prescribing either is a dead-end fix line") and `:1345-1360` (the doctrine
+  by name, #1404: *a remedy that cannot work is worse than no remedy*).
 
-  > Edit the `url` in ~/.claude.json to port `<mcpPort>`, or unset `TANDEM_MCP_PORT` and restart
-  > Tandem. `tandem setup --apply` writes the default port and will not fix this.
+  **So `portFix` is supplied at BOTH call sites, and is never `brokenFileFix()`.**
+  `brokenFileFix` ends in `setupApplyRemedy(cliAvailable())` (`src/cli/doctor.ts:986-988`, already
+  asserted to match `/tandem setup --apply|AI Assistant/` at `tests/cli/doctor.test.ts:2168-2170`),
+  and its other half — "delete it and rely on Tandem's global registration" — falls back to
+  `~/.claude.json`, which names 3479 too. Both branches re-fire the same warn forever. Doctor
+  already says in-product that a project-local `.mcp.json` is "not managed by … `tandem setup
+  --apply`" (`:1077-1081`), so the remedy is doubly dead there.
 
-  `brokenFix` (arm 3) keeps `setupApplyRemedy(cliAvailable())` at the user level — for a wrong
-  `type` or a `/mcp`-less URL, rewriting the entry genuinely resolves it.
+  - **`~/.claude.json`** (`portFix`):
+
+    > Edit the `url` in ~/.claude.json to port `<mcpPort>`, or unset `TANDEM_MCP_PORT` and restart
+    > Tandem. `tandem setup --apply` writes the default port and will not fix this. (#<MCP_URL issue>)
+
+  - **`.mcp.json`** (`portFix`): names the file the user must edit, since it is theirs:
+
+    > Edit the `url` in .mcp.json to port `<mcpPort>`, or unset `TANDEM_MCP_PORT` and restart
+    > Tandem — this project-local file is not managed by `tandem setup --apply`.
+    > (#<MCP_URL issue>)
+
+  `brokenFix` (arm 3) is the one that keeps a rewrite remedy: `setupApplyRemedy(cliAvailable())` at
+  the user level, `brokenFileFix()` at the project level. For a wrong `type` or a `/mcp`-less URL,
+  rewriting the entry genuinely resolves it.
+
+- **The arm-4 warn is unclearable for a deliberately moved install, and that is a chosen cost.**
+  Because `MCP_URL` is hardcoded, no Tandem-written config can satisfy arm 4 on a
+  `TANDEM_MCP_PORT` install — the only ways out are hand-editing the file or abandoning the port
+  move, and the warn persists until the tracked `MCP_URL` issue lands. That is the same
+  unclearable-warning shape `src/cli/doctor.ts:1938` warns against, so it is stated here as a
+  trade rather than left to be discovered: a *correct* warning naming a real misconfiguration
+  beats a green check on a config Claude Code cannot use. Arm 4's `fix` cites the issue number, so
+  the user sees the same reasoning.
 
 - `warn`, never `fail`, in every arm — parity with the twin, and `tandem doctor` must not start
   exiting 1 on a machine whose tools arrive via the plugin. (Assumption; see `assumptions`.)
@@ -109,47 +162,72 @@ skill edit.
 ## Tests
 
 `tests/cli/doctor.test.ts`, extending the existing `checkUserMcpConfig wiring (~/.claude.json)`
-describe (scratch HOME via `mkdtempSync` + `vi.stubEnv("HOME", …)` — **never the real HOME**):
+describe. Its `beforeEach` stubs `HOME` only today (`tests/cli/doctor.test.ts:2026-2031`); **it
+gains `vi.stubEnv("USERPROFILE", home)` in the same commit**, so specs 1–9 are machine-independent
+on Windows too and spec 10 — which runs the whole doctor through `runDoctorCli` and so reaches
+`checkTandemPlugin`'s `homedir()`-adjacent reads — does not need a describe of its own. Scratch
+HOME via `mkdtempSync`, `vi.unstubAllEnvs()` in `afterEach` — **never the real HOME**:
 
 1. `{ tandem: { type: "stdio", url: "http://127.0.0.1:3479/mcp" } }` → `user-mcp-config` warn whose
    message contains `type=stdio`. Kills "validate url only".
-2. `{ tandem: { type: "http", url: "http://127.0.0.1:3479/" } }` → warn naming `path=/`, and the
-   message must **not** contain the raw `http://127.0.0.1:3479/`. Kills "validate type only", and
-   pins the redaction.
+2. `{ tandem: { type: "http", url: "http://127.0.0.1:3479/" } }` → warn naming `pathHasMcp=false`,
+   and the message must **not** contain the raw `http://127.0.0.1:3479/` (nor a `path=` value).
+   Kills "validate type only", and pins the redaction's shape-not-value rule for arm 3.
 3. `{ tandem: { type: "http", url: "http://127.0.0.1:9999/mcp" } }` → warn naming **9999 and
    3479**. Kills a validator that accepts any `/mcp` URL — the issue's headline case. Plus
    `expect(warn?.fix).not.toMatch(/setup --apply/)`, mirroring `tests/cli/doctor.test.ts:2057`:
    the dead-end remedy is the half that ships silently.
-4. **Redaction, discriminating case.** `{ tandem: { type: "http", url:
-   "http://tok:s3cret@example.invalid:9999/mcp?key=abc" } }` → warn that names 9999, and whose
-   `message` contains **neither** `s3cret` **nor** `key=abc`. Kills a copy of the twin's verbatim
-   `url=` interpolation at the level that reaches a prefilled public issue body.
+4. **Redaction, discriminating cases — asserted over the WHOLE outcome, not `message`.** Two
+   entries, each `→` a warn that names 9999 and whose `JSON.stringify(warn)` contains **none** of
+   the credential strings. `JSON.stringify`, not `warn?.message`: it covers `message`, `fix` and
+   the `data` bag in one non-sniffable check, and `data` is the channel a message-only assertion
+   misses entirely (see the redaction bullet).
+   - `{ type: "http", url: "http://tok:s3cret@example.invalid:9999/mcp?key=abc" }` → contains
+     neither `s3cret` nor `key=abc` nor the raw url. Kills a copy of the twin's verbatim `url=`
+     interpolation at the level that reaches a prefilled public issue body.
+   - `{ type: "http", url: "http://example.invalid:9999/mcp/s3cret" }` → contains neither
+     `s3cret` nor the raw url. Kills arm 4 printing `path=`, which is a live token carrier
+     precisely because arm 4 requires `/mcp` in the pathname.
 5. `{ tandem: { command: "/abs/node", args: [...] } }` → **no** `unexpected config` warn from the
    new validator. Kills arm 2 being dropped at the user level.
-6. The healthy entry (`type: "http"`, `…:3479/mcp`) still `pass`es — the existing BOM spec already
-   asserts this; add an explicit one so a future over-eager arm reds every working install.
+6. **The healthy entry passes AND says nothing about the url.** Use a healthy-*shaped* entry that
+   carries a credential payload: `{ type: "http", url: "http://tok:s3cret@127.0.0.1:3479/mcp?key=abc" }`
+   → a `user-mcp-config` **pass** whose `JSON.stringify` contains neither `s3cret` nor `key=abc`
+   nor the raw url — the pass message stays the existing `tandem registered in ~/.claude.json`.
+   Asserting only `status === "pass"` is non-discriminating on exactly the property this arm
+   exists to establish. Keep a plain `…:3479/mcp` pass assertion too, so a future over-eager arm
+   reds every working install.
 7. Port-less `https`: `{ tandem: { type: "http", url: "https://example.invalid/mcp" } }` warns
    naming **443**, not 80. Kills the hardcoded `|| "80"` default.
-8. Project-level twin, in the `checkMcpJson` describe: the same wrong-port entry in a temp cwd's
-   `.mcp.json` warns too, and its `fix` **gains** `brokenFileFix()` — the project arm carries no
-   `fix` at all today (`src/cli/doctor.ts:1042-1043` passes one argument), so this pins new
-   behaviour rather than preserving old.
+8. Project-level twin, in the `checkMcpJson` describe. Two entries, and which one gets which
+   remedy is the point — the project arm carries no `fix` at all today
+   (`src/cli/doctor.ts:1042-1043` passes one argument), so both pin new behaviour:
+   - **Arm 3** (wrong `type`, or a `/mcp`-less URL) in a temp cwd's `.mcp.json` → warn whose `fix`
+     **gains `brokenFileFix()`**. Rewriting the entry genuinely fixes this one.
+   - **Arm 4** (the same wrong-port entry) → warn whose `fix` is the project-level `portFix`,
+     naming editing `.mcp.json`'s `url`, plus
+     `expect(warn?.fix).not.toMatch(/setup --apply/)` — the assertion spec 3 already carries at
+     the user level. `brokenFileFix()` ends in `setupApplyRemedy(cliAvailable())`
+     (`src/cli/doctor.ts:986-988`), so pinning it here would ship and lock in the dead-end remedy
+     the Fix section forbids.
 9. **Project-level `command` entry** — the arm-2 regression guard. A `.mcp.json` whose `tandem`
    entry is `{ command: "/abs/node", args: [] }` still produces an `mcp-json` **warn** and must
    NOT produce a `pass` containing `undefined`. Without `commandArmOwnedByCaller` this spec is
    the one that reds.
 10. Port mismatch under `TANDEM_MCP_PORT`: with #1806 wired, `vi.stubEnv("TANDEM_MCP_PORT", "4918")`
     + a `…:3479/mcp` entry + `runDoctorCli({ json: true })` → the warn names 4918. This is the only
-    spec that proves the threading reaches the CLI rather than only `runDoctor(opts)`. Same
-    scratch-home rule as #1806's wiring describe: stub **both** `HOME` and `USERPROFILE`.
+    spec that proves the threading reaches the CLI rather than only `runDoctor(opts)`. It relies
+    on the `USERPROFILE` stub added to this describe's `beforeEach` above — the same both-variables
+    rule as #1806's wiring describe, for the same reason (this spec runs the whole doctor).
 
 ## Done when
 
 A wrong `type`, a URL without `/mcp`, and a port that disagrees with the probed MCP port each warn
-with the observed value at **both** levels; the user-level message never echoes the raw `url`
-while the project-level one still does; the port warn's `fix` does not name `setup --apply`; a
-stdio entry warns at the project level and is left to `reportEntryCommand` at the user level; a
-healthy HTTP entry passes; typecheck + the CLI suite green.
+with the observed value at **both** levels; **no `user-mcp-config` outcome — warn or pass, in
+`message`, `fix` or `data` — echoes the raw `url` or any part of its path**, while the
+project-level one still does; the port warn's `fix` does not name `setup --apply` at **either**
+level; a stdio entry warns at the project level and is left to `reportEntryCommand` at the user
+level; a healthy HTTP entry passes; typecheck + the CLI suite green.
 
 ## Not in scope
 
@@ -164,7 +242,17 @@ mention.** It is deliberately not bundled: `MCP_URL` also feeds the desktop stdi
 decision, not a mechanical two-line fix. So it exceeds "bundle small tangential fixes in". **The
 PR must file an issue for it and cite that number here before merging**; a note living only in a
 PR body surfaces in no `gh issue list`, which is the failure mode CLAUDE.md's dated-gates rule
-names. Arm 4's remedy is what keeps the user unblocked in the meantime.
+names. Arm 4's remedy — and its `fix` string — cite that number, which is what keeps the user
+unblocked in the meantime.
+
+**Naming the rule this departs from**, so a reviewer does not read the new issue as an untracked
+deferral: CLAUDE.md's Development Workflow says "if you find something broken while working, fix
+it rather than filing it", and this sweep's own Decision B for #1827 chose "**No new issue** —
+#1754 stays open with a comment" (`docs/plans/2026-09-06-open-issues-sweep.md:24`). The departure
+is deliberate and narrow: choosing *which* environment `MCP_URL` should read — the setup shell's
+or the server's — is a design call with three consumers (the MCP entry, the desktop stdio entry's
+`TANDEM_URL` at `apply.ts:502`, and the shim's at `:518`), not a mechanical fix, and no existing
+issue covers it. File one rather than commenting on an unrelated one.
 
 ## Files touched
 
@@ -209,3 +297,51 @@ names. Arm 4's remedy is what keeps the user unblocked in the meantime.
   environment is not necessarily the server's — so choosing what it should read is a design call
   that would land untested inside a doctor-only PR, against this wave's minimal-fix lesson. The
   tracked-issue requirement above is taken instead.
+
+## Review corrections (round 2)
+
+**Adopted**
+
+- **BLOCKING** *The shared evaluator leaks the raw `~/.claude.json` `url` through its PASS arm.*
+  "Otherwise `pass` with the existing text" had no per-level seam, so the natural implementation
+  is the project wording `` `${label} tandem → ${url}` `` (`src/cli/doctor.ts:1045`) — and arms 3
+  and 4 do not fire on a healthy-shaped URL, so `http://tok:s3cret@127.0.0.1:3479/mcp?key=abc`
+  reaches it. Arm 5 now spells both messages out: the user level stays the byte-for-byte existing
+  `tandem registered in ~/.claude.json` (`:1209`) and never interpolates `url`. Spec 6 is
+  repointed onto a healthy-shaped entry carrying a credential payload and asserts the absence,
+  not just the status.
+- **BLOCKING** *Redaction was asserted only against `message`, while the per-check `data` bag
+  reaches `/api/diagnostics` and the prefilled issue body unscrubbed for credentials.*
+  `recordEvaluation` forwards `result.data` into `r.warn` (`src/cli/doctor.ts:411-422`) and
+  `redactUserPaths` collapses paths only (`diagnostics.ts:83-115`, and `:100-107` says it walks
+  the whole report *because* `data` is free-form). The redaction bullet now covers the whole
+  outcome — no `url` and no raw entry in `data` — and specs 4 and 6 assert over
+  `JSON.stringify(warn)` / `JSON.stringify(pass)` rather than `?.message`.
+- **BLOCKING** *Arm 4's `path=` prints a credential-carrying path component: `/mcp/<secret>`
+  satisfies the "pathname contains `/mcp`" condition the arm fires under.* The user-level message
+  now prints **no path value at all**: arm 4 is `type=` plus the two port numbers, and arm 3 is
+  `type=` plus `pathHasMcp=false`. Spec 2 is repointed onto `pathHasMcp=false`; spec 4 gains a
+  `http://example.invalid:9999/mcp/s3cret` case.
+- **BLOCKING** *The spec contradicted itself on the port-mismatch remedy — spec 8 pinned
+  `brokenFileFix()`, which ends in `setupApplyRemedy(cliAvailable())`
+  (`src/cli/doctor.ts:986-988`), for the one arm the Fix forbids it in* (raised twice). The Fix
+  now states `portFix` is supplied at **both** call sites and is never `brokenFileFix()`, gives
+  the project-level wording (edit `.mcp.json`'s `url`, which doctor already says at `:1077-1081`
+  that `setup --apply` does not manage), and spec 8 is split: arm 3 gains `brokenFileFix()`, arm 4
+  gets `portFix` plus `expect(warn?.fix).not.toMatch(/setup --apply/)`.
+- *`defaultPortForProtocol` was described as though it exists.* `grep -rn defaultPortForProtocol
+  src/` is empty; the Fix now marks it as a new module-private helper in `src/cli/doctor.ts`.
+- *The arm-4 warn is unclearable for a deliberately moved install — the same shape the spec cites
+  doctrine against.* Added as an explicit stated trade in the Fix, with the reason it is still the
+  right call, and arm 4's `fix` now cites the `MCP_URL` issue number so the user sees it too.
+- *Requiring a new issue for `MCP_URL` departs from the two-person fix-rather-than-file rule and
+  from this sweep's own Decision-B precedent, without saying so.* Not-in-scope now names both
+  rules and why this one is a design call with three consumers rather than a mechanical fix.
+- *Specs 1–9 extend a `HOME`-only describe while spec 10 needs both variables.* The Tests preamble
+  now requires `vi.stubEnv("USERPROFILE", home)` in that describe's `beforeEach` in the same
+  commit (`tests/cli/doctor.test.ts:2026-2031` stubs `HOME` alone today), and spec 10 refers to it
+  rather than restating a separate rule.
+
+**Not adopted**
+
+- None.
