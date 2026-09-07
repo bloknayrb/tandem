@@ -82,7 +82,7 @@ describe("runSetup({ apply: true }) orchestration", () => {
     errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(detectTargets).mockReset();
     vi.mocked(applyConfig).mockReset();
-    vi.mocked(installSkill).mockReset().mockResolvedValue(undefined);
+    vi.mocked(installSkill).mockReset().mockResolvedValue({ written: true });
     vi.mocked(resolveChannelShimIntent).mockReset().mockResolvedValue(false);
   });
   afterEach(() => {
@@ -270,6 +270,30 @@ describe("runSetup({ apply: true }) orchestration", () => {
 
     expect(applyConfig).toHaveBeenCalledTimes(1);
     expect(applyConfig).toHaveBeenCalledWith(CLAUDE_CODE.configPath, expect.anything());
+  });
+
+  it("prints the kept-skill line when installSkill declined to downgrade (#1790)", async () => {
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockResolvedValue(undefined);
+    vi.mocked(installSkill).mockResolvedValue({
+      written: false,
+      onDiskVersion: 999,
+      bundledVersion: 15,
+    });
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await runSetup({ apply: true });
+
+    const out = stderr();
+    // Kills a caller that dereferences the result unguarded, and pins the
+    // remedy: DELETE the file. No Tandem version moves a `version: 999` file,
+    // so "upgrade Tandem" would be a dead-end fix line.
+    expect(out).toContain("kept the installed skill");
+    expect(out).toContain("v999");
+    expect(out).toContain("delete ~/.claude/skills/tandem/SKILL.md");
+    expect(out).not.toContain("✓ ~/.claude/skills/tandem/SKILL.md");
   });
 
   // #1811 — `setup --apply` is the command that CREATES the duplicated

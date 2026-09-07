@@ -198,8 +198,19 @@ async function applySetup(opts: SetupOptions): Promise<void> {
   // invocation (contrarian review S5), even when no targets were written.
   console.error("\nInstalling Claude Code skill...");
   try {
-    await installSkill();
-    console.error("  \x1b[32m✓\x1b[0m ~/.claude/skills/tandem/SKILL.md");
+    const result = await installSkill();
+    if (result?.written === false) {
+      // The remedy names DELETING the file, never "upgrade Tandem to move it":
+      // no Tandem version moves a `version: 999` file, so that would be a
+      // dead-end fix line.
+      console.error(
+        `  \x1b[33m⚠\x1b[0m kept the installed skill (v${result.onDiskVersion} on disk is newer ` +
+          `than this install's v${result.bundledVersion}) — delete ` +
+          "~/.claude/skills/tandem/SKILL.md and re-run to replace it",
+      );
+    } else {
+      console.error("  \x1b[32m✓\x1b[0m ~/.claude/skills/tandem/SKILL.md");
+    }
   } catch (err) {
     console.error(
       `  \x1b[33m⚠\x1b[0m Could not install skill: ${err instanceof Error ? err.message : String(err)}`,

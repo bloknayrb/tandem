@@ -17,7 +17,10 @@ import {
   type IntegrationsRoutesDeps,
   registerIntegrationsRoutes,
 } from "../../../src/server/integrations/api-routes.js";
-import { MAX_CONFIG_BYTES } from "../../../src/server/integrations/apply.js";
+import {
+  MAX_CONFIG_BYTES,
+  type SkillInstallResult,
+} from "../../../src/server/integrations/apply.js";
 import type { ExistingMcpInstall } from "../../../src/server/integrations/existing-config.js";
 import {
   ClaudeInstallError,
@@ -160,12 +163,12 @@ describe("integrations API routes", () => {
   // route deliberately accepts no `homeOverride`, so every app built from
   // `deps` gets this spy. Without it the apply tests below rewrote the
   // operator's `~/.claude/skills/tandem/SKILL.md` on every run.
-  let installSkillSpy: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  let installSkillSpy: ReturnType<typeof vi.fn<() => Promise<SkillInstallResult>>>;
 
   beforeEach(async () => {
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-int-api-"));
     backend = memoryBackend();
-    installSkillSpy = vi.fn(async () => {});
+    installSkillSpy = vi.fn(async (): Promise<SkillInstallResult> => ({ written: true }));
     deps = {
       installSkill: installSkillSpy,
       store: createIntegrationsStore(tmpDir),
