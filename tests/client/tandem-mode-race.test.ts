@@ -288,9 +288,9 @@ describe("#1621 reading the key back", () => {
 
   it("stays silent when the server echoes this client's own Solo release", async () => {
     // The product's most common remote-mode write, and it must NOT be reported.
-    // `setTandemMode` fires `triggerSoloRelease` on Solo→Tandem, and
-    // `/api/mode/release` answers by writing "tandem" into the ctrl doc — a
-    // NON-LOCAL transaction that lands right back in this observer. It is silent
+    // `setTandemMode` fires `triggerSoloRelease` on Solo→Tandem; the server (or
+    // another window) then echoes "tandem" back into the ctrl doc — a NON-LOCAL
+    // transaction that lands right back in this observer. It is silent
     // only because the broadcast effect refreshes `lastBroadcast` on every
     // toggle; a one-character `lastBroadcast ??= mode` freezes it at the mount
     // value and files a disagreement against the server echoing the user's own
@@ -308,6 +308,40 @@ describe("#1621 reading the key back", () => {
 
     landRemoteWrite(client, "tandem");
     await waitFor(() => expect(modeOf(client)).toBe("tandem"));
+    expect(distinctModeWarnings()).toEqual([]);
+  });
+
+  it("issues the release POST only AFTER the mode broadcast has written the key (#1769)", async () => {
+    // The success ordering the now-conditional route depends on. `setTandemMode`
+    // used to fire the POST in its own synchronous frame while the broadcast
+    // `$effect` flushed on a microtask, so the request could reach the server
+    // before the client's own CRDT write — which, against a route that VERIFIES
+    // rather than writes, is a 409. `setTandemMode` therefore defers past
+    // `tick()`. Red on master: the stub records the pre-write value.
+    //
+    // Without this row every other named spec passes with a DOUBLY refused
+    // release, and a doubly refused release leaves `heldInSolo` markers on disk
+    // (the route is their only clearer) — so after any restart that loses the
+    // ctrl session, `hideFromAI` withholds those records indefinitely with one
+    // log literal as the only trace.
+    localStorage.setItem(TANDEM_MODE_KEY, "solo");
+    const client = new Y.Doc();
+    const roomAtPost: unknown[] = [];
+    fetchSpy.mockImplementation(async () => {
+      roomAtPost.push(modeOf(client));
+      return new Response("{}", { status: 200 });
+    });
+
+    const view = render<typeof TandemModeHarness>(TandemModeHarness, {
+      props: { doc: client, synced: true },
+    });
+    await waitFor(() => expect(modeOf(client)).toBe("solo"));
+
+    view.component.setMode("solo");
+    view.component.setMode("tandem");
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+
+    expect(roomAtPost).toEqual(["tandem"]);
     expect(distinctModeWarnings()).toEqual([]);
   });
 
