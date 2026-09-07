@@ -15,10 +15,45 @@ function frontmatter(skill: string): string {
   return block ?? "";
 }
 
-function gettingWokenSection(skill: string): string {
-  const section = /^## Getting Woken While Idle\r?\n([\s\S]*?)(?=^## )/m.exec(skill)?.[1];
-  expect(section, "the shipped skill has no idle-wake instructions").toBeDefined();
+function namedSection(skill: string, heading: string): string {
+  const pattern = new RegExp(
+    `^## ${heading.replace(/\./g, "\\.")}\\r?\\n([\\s\\S]*?)(?=^## )`,
+    "m",
+  );
+  const section = pattern.exec(skill)?.[1];
+  expect(section, `the shipped skill has no ${heading} section`).toBeDefined();
   return section ?? "";
+}
+
+function gettingWokenSection(skill: string): string {
+  return namedSection(skill, "Getting Woken While Idle");
+}
+
+function docxWorkflow(skill: string): string {
+  return namedSection(skill, ".docx Review Workflow");
+}
+
+function hardRules(skill: string): string {
+  return namedSection(skill, "Hard Rules");
+}
+
+function annotationGuideSection(skill: string): string {
+  return namedSection(skill, "Annotation Guide");
+}
+
+/**
+ * Extracts one numbered Hard Rule item's own text, up to (not including) the next
+ * numbered item. Scoping to the literal `N. ` / `N+1. ` markers — rather than matching
+ * loose keywords anywhere in the whole Hard Rules section — is what makes an assertion
+ * here fail when rule N is deleted: a sibling rule that happens to share vocabulary
+ * (e.g. `INVALID_ARGUMENT`, `tandem_appendContent`) can no longer stand in for it.
+ */
+function hardRuleItem(skill: string, n: number): string {
+  const rules = hardRules(skill);
+  const pattern = new RegExp(`^${n}\\. ([\\s\\S]*?)(?=^${n + 1}\\. |$(?![\\s\\S]))`, "m");
+  const item = pattern.exec(rules)?.[1];
+  expect(item, `Hard Rule ${n} not found in the shipped skill`).toBeDefined();
+  return item ?? "";
 }
 
 /**
@@ -34,19 +69,25 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // bump ships to nobody. Pinning the current number forces a deliberate look here whenever
   // the version moves — including for an unrelated edit, which is the cost of the guard, not
   // a bug in it. When you land here: confirm the assertions below still describe the shipped
-  // wake instructions, then move the number. Last moved to 14 by the MERGE of two independent
-  // bumps that both landed on 13: the widened INVALID_RANGE recovery text (#1752) and the
-  // `.html` read-only tier (#1798). Neither touches this section, and the wake assertions
-  // below were re-read against the merged file. The merge is why it is 14 and not 13 — the
-  // installed copy refreshes only when the bundled version is strictly NEWER, so a user
-  // holding either side's 13 would never receive the other side's changes.
-  expect(skill).toMatch(/^version:\s*14$/m);
+  // wake instructions, then move the number. Last moved to 15 by the J1 group (#1771, #1820,
+  // #1737): the dead Word-comment recipe fix, four SKILL.md content gaps (stale Hard Rule 4,
+  // the missing tandem_annotationReply/Edit-Write/sub-agent-inbox rules), and the
+  // mid-paragraph line-break rule. The sub-agent-inbox rule (Hard Rule 7) DOES reach into this
+  // section — the wake section's own review fix scoped arming and the post-wake poll to the
+  // orchestrator, and the "Wakes are best-effort" bullet carries the same qualifier — so the
+  // orchestrator-only assertion below is part of the wake contract, not an extra. Every wake
+  // assertion here was re-read against the bumped file.
+  expect(skill).toMatch(/^version:\s*15$/m);
   expect(wake).toMatch(/hand-started session/i);
   expect(wake).toMatch(/first successful read-mode `tandem_status`/i);
   expect(wake).toMatch(/read `wakeUrl`/i);
   expect(wake).toContain(
     "Monitor({ ws: { url: <wakeUrl from tandem_status> }, persistent: true })",
   );
+  // Hard Rule 7 forbids a sub-agent the poll a wake exists to trigger, so arming has to be
+  // scoped too — an unqualified "arm one watch" here is read by the sub-agent that also loads
+  // this skill, and its first wake drives the poll that empties the orchestrator's inbox.
+  expect(wake).toMatch(/only the orchestrator arms a watch/i);
   expect(wake).toMatch(/Arm it at most once per session/i);
   expect(wake).toMatch(/Do not use Tandem's process-global subscriber count/i);
   expect(wake).not.toMatch(/only if Tandem's tool output has told you nothing is subscribed/i);
@@ -154,5 +195,121 @@ describe("shipped Tandem skill instruction contract", () => {
   it("does not narrow automatic plugin/watch overlap to double-installed sessions", () => {
     const troubleshooting = readRepoText("docs/troubleshooting.md");
     expect(troubleshooting).toMatch(/plugin-only or double-installed session/i);
+  });
+
+  it("names the real two-step Word-comment recipe instead of the dead author:import filter (#1771)", () => {
+    const workflow = docxWorkflow(readShippedSkill());
+
+    // The dead framing this issue names: the recipe must not tell Claude to "read and act
+    // on" an author:"import" result, since an un-promoted import never survives the
+    // note-type filter. The literal call stays as the notesExcluded probe — this is not an
+    // absence check on the call itself.
+    expect(workflow).not.toMatch(/read and act on/i);
+
+    // The one real signal (notesExcluded) plus the actual promoted-state discriminator
+    // (importSource) must both be present.
+    expect(workflow).toContain("notesExcluded");
+    expect(workflow).toContain("importSource");
+
+    // promotedFrom is stamped on every promoted note, including the user's own personal
+    // notes — the recipe must say it is not a reliable import marker. `\b` word-boundaries
+    // on "not"/"never" are load-bearing: a bare substring match is satisfied by the word
+    // "note" itself (promotedFrom's own value), which is exactly the inverted claim this
+    // guards against.
+    expect(workflow).toMatch(
+      /promotedFrom[\s\S]{0,200}\b(?:not|never)\b[\s\S]{0,60}(?:reliable|discriminat)/i,
+    );
+
+    // Solo mode holds the promotion like any other user comment. Anchored on the actual
+    // disclosure sentence, not a bare /solo/i scan — the workflow's export step separately
+    // mentions "withheld Solo-held annotations", which would satisfy a loose match even
+    // with this sentence deleted.
+    expect(workflow).toMatch(/the promotion is held like any other user comment/i);
+  });
+
+  /**
+   * Review finding (annotation-model-reviewer-3): the promoted-import recipe
+   * presented `tandem_getAnnotations({author:"user"})` + `importSource` as a
+   * full read of a Word comment, but every threaded Word reply is stamped
+   * `private: true` at import (docx-comments.ts) and `channelVisibleReplies`
+   * (annotations.ts) strips it permanently — including after promotion — so
+   * a Word thread's follow-ups never reach Claude via this recipe. The
+   * recipe must disclose that, not just note-count `heldFromExport`, which
+   * doesn't count withheld replies either.
+   */
+  it("discloses that Word thread replies never reach Claude, even promoted (annotation-model-reviewer-3)", () => {
+    const workflow = docxWorkflow(readShippedSkill());
+    expect(workflow).toMatch(
+      /repl(?:y|ies)[\s\S]{0,200}never reach Claude|never reach Claude[\s\S]{0,200}repl(?:y|ies)/i,
+    );
+    expect(workflow).toMatch(
+      /promot(?:ed|ion)[\s\S]{0,150}replies|replies[\s\S]{0,150}promot(?:ed|ion)/i,
+    );
+  });
+
+  it("closes the four SKILL.md content gaps (#1820)", () => {
+    const skill = readShippedSkill();
+    const rules = hardRules(skill);
+    const annotationGuide = annotationGuideSection(skill);
+    const workflow = docxWorkflow(skill);
+
+    // Rule 4: format-conditional newline handling, not the stale unconditional claim.
+    // Scoped to Rule 4's own text (not the whole Hard Rules block) — Rule 5, added in the
+    // same change, independently mentions `tandem_appendContent` and `INVALID_ARGUMENT`,
+    // so a block-wide scan would keep passing even with Rule 4 deleted outright.
+    const rule4 = hardRuleItem(skill, 4);
+    expect(rule4).toContain("tandem_appendContent");
+    expect(rule4).toContain("tandem_editList");
+    expect(rule4).not.toMatch(
+      /\.html?\b[\s\S]{0,80}INVALID_ARGUMENT|INVALID_ARGUMENT[\s\S]{0,80}\.html?\b/i,
+    );
+    expect(rule4).toMatch(
+      /(?:plaintext|`\.txt`)[\s\S]{0,250}INVALID_ARGUMENT|INVALID_ARGUMENT[\s\S]{0,250}(?:plaintext|`\.txt`)/i,
+    );
+    expect(rule4).not.toContain("Newlines become literal characters.");
+
+    // New Hard Rule: sub-agents must not poll the inbox (decision H).
+    expect(rules).toMatch(
+      /sub-agent[\s\S]{0,300}(?:must not|never)[\s\S]{0,150}tandem_checkInbox/i,
+    );
+
+    // New Hard Rule: no Edit/Write on a Tandem-open file.
+    expect(rules).toContain("`Edit`");
+    expect(rules).toContain("`Write`");
+    expect(rules).toContain("EXTERNAL_CONFLICT");
+    expect(rules).toMatch(
+      /force: true[\s\S]{0,250}(?:ask the user|the user resolves)|(?:ask the user|the user resolves)[\s\S]{0,250}force: true/i,
+    );
+
+    // Rule 2 addendum: textSnapshotTruncated.
+    expect(rules).toContain("textSnapshotTruncated");
+
+    // Annotation Guide: tandem_annotationReply named as the idempotency-checked reply tool.
+    expect(annotationGuide).toMatch(
+      /tandem_annotationReply[\s\S]{0,250}idempotent|idempotent[\s\S]{0,250}tandem_annotationReply/i,
+    );
+
+    // Error Recovery: both new codes present.
+    expect(skill).toContain("EXTERNAL_CONFLICT");
+    expect(skill).toContain("NO_DOCUMENT");
+
+    // .docx Review Workflow: heldFromExport noted on the export step.
+    expect(workflow).toContain("heldFromExport");
+  });
+
+  it("docs/workflows.md's Multi-Model Workflow names orchestrator-only polling (#1820)", () => {
+    const doc = readRepoText("docs/workflows.md");
+    const section = /^## Multi-Model Workflow\r?\n([\s\S]*?)(?=^## )/m.exec(doc)?.[1];
+    expect(section, "docs/workflows.md has no Multi-Model Workflow section").toBeDefined();
+
+    expect(section).toMatch(/orchestrator/i);
+    expect(section).toContain("tandem_checkInbox");
+  });
+
+  it("tells Claude not to insert mid-paragraph line breaks (#1737)", () => {
+    const rules = hardRules(readShippedSkill());
+    expect(rules).toMatch(
+      /own soft-wrap handle display[\s\S]{0,80}mid-paragraph|mid-paragraph[\s\S]{0,80}own soft-wrap handle display/i,
+    );
   });
 });

@@ -105,9 +105,9 @@ The contents:
 
 | Path | Purpose |
 |---|---|
-| `sessions/` | One file per opened document, named by URL-encoded file path. Holds the Y.Doc snapshot and ephemeral state. |
-| `sessions/CTRL_ROOM.json` | Cross-document state — chat history, Solo/Tandem mode, multi-doc UI state. |
-| `annotations/` | Durable annotation store. One `.json` file per document. Corrupt files are renamed to `.corrupt.json` and quarantined instead of deleted. |
+| `sessions/` | One file per opened document, named by a 64-character hash of the file path (URL-encoded path only for `upload://` scratchpads). Holds the Y.Doc snapshot and ephemeral state. |
+| `sessions/__tandem_ctrl__.json` | Cross-document state — chat history, Solo/Tandem mode, multi-doc UI state. |
+| `annotations/` | Durable annotation store. One `.json` file per document. Corrupt files are renamed to `<name>.json.corrupt.<timestamp>` and quarantined instead of deleted. |
 | `auth-token` | Auto-generated auth token, mode `0o600`. |
 | `annotations/store.lock` | PID file for the annotation writer, used for cross-process safety. Lives inside `annotations/`, not at the app-data root. |
 | `last-seen-version` | Tracks the last Tandem version to launch — drives the CHANGELOG auto-open on upgrade. |
