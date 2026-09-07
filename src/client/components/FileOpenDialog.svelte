@@ -50,6 +50,16 @@ let sessionsError = $state<string | null>(null);
 let pendingDeletePath = $state<string | null>(null);
 let clearAllArmed = $state(false);
 
+// Both confirms render the same destructive/cancel button pair, so the recipe
+// lives once here and is interpolated — the `smallBtnBase` shape from
+// BulkActions.svelte, which is also the component this confirm mirrors. A
+// shared CSS class cannot cross the component boundary (Svelte scopes styles),
+// and this file styles inline everywhere else.
+const confirmBtnBase =
+  "border: none; font-size: 11px; cursor: pointer; padding: 2px 8px; border-radius: var(--tandem-r-1); line-height: 1.4;";
+const destructiveBtnStyle = `${confirmBtnBase} background: var(--tandem-error-bg); color: var(--tandem-error-fg-strong); font-weight: 600;`;
+const cancelBtnStyle = `${confirmBtnBase} background: none; color: var(--tandem-fg-subtle);`;
+
 async function loadSessions() {
   sessionsLoading = true;
   sessionsError = null;
@@ -352,7 +362,7 @@ function handleBrowse() {
                   clearAllArmed = false;
                   void clearSessions();
                 }}
-                style="background: var(--tandem-error-bg); border: none; color: var(--tandem-error-fg-strong); font-size: 11px; font-weight: 600; cursor: pointer; padding: 2px 8px; border-radius: var(--tandem-r-1); line-height: 1.4;"
+                style={destructiveBtnStyle}
               >
                 Clear all
               </button>
@@ -362,7 +372,7 @@ function handleBrowse() {
                 onclick={() => {
                   clearAllArmed = false;
                 }}
-                style="background: none; border: none; color: var(--tandem-fg-subtle); font-size: 11px; cursor: pointer; padding: 2px 8px; border-radius: var(--tandem-r-1); line-height: 1.4;"
+                style={cancelBtnStyle}
               >
                 Cancel
               </button>
@@ -427,7 +437,7 @@ function handleBrowse() {
                       void deleteSession(session.filePath);
                     }}
                     aria-label={`Confirm delete session for ${filename}`}
-                    style="background: var(--tandem-error-bg); border: none; color: var(--tandem-error-fg-strong); font-size: 11px; font-weight: 600; cursor: pointer; padding: 2px 8px; border-radius: var(--tandem-r-1); line-height: 1.4;"
+                    style={destructiveBtnStyle}
                   >
                     Delete
                   </button>
@@ -438,7 +448,7 @@ function handleBrowse() {
                       pendingDeletePath = null;
                     }}
                     aria-label={`Cancel deleting session for ${filename}`}
-                    style="background: none; border: none; color: var(--tandem-fg-subtle); font-size: 11px; cursor: pointer; padding: 2px 8px; border-radius: var(--tandem-r-1); line-height: 1.4;"
+                    style={cancelBtnStyle}
                   >
                     Cancel
                   </button>
