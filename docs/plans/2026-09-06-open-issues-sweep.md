@@ -313,11 +313,15 @@ container's record and names the MCP tools that session had; the script no longe
 - **The verify stage's stdio smoke is not sandboxed by `TANDEM_APP_DATA_DIR`** (found in wave 2).
   `scripts/ci/stdio-smoke.mjs` boots `dist/server` on the product ports 3478/3479, the server
   `freePort()`s whatever holds them, and the boot's `refreshExistingSkillIfStale()` writes
-  `~/.claude/skills/tandem/SKILL.md` when the bundled version is higher — J1's verify overwrote the
-  operator's installed skill with unmerged branch text. The script now skips the smoke when a real
-  Tandem is listening, serialises it across groups with a mkdir lock, and points
-  `USERPROFILE`/`HOME` at a scratch dir for the boot. If you ran an older script, check the
-  installed skill's `version:` against `origin/master` and restore it.
+  `~/.claude/skills/tandem/SKILL.md` when the bundled version is higher. The script now skips the
+  smoke when a real Tandem is listening, serialises it across groups with a mkdir lock, and points
+  `USERPROFILE`/`HOME` at a scratch dir for the boot. **Correction (2026-09-07):** the smoke was
+  NOT what overwrote J1's installed skill — that was `tests/server/integrations/api-routes.test.ts`
+  driving the real apply route, whose `installSkill()` wrote the checkout's bundled skill over the
+  real home on every `npm test` and every pre-push hook (it downgraded a v15 install to v14 three
+  more times that night, once per push). Fixed by #1894 (an injected `installSkill` seam in the
+  route deps, spy by default in the suite). The smoke sandboxing stays. If you ran an older
+  checkout, check the installed skill's `version:` against `origin/master` and restore it.
 - **A workflow agent can wedge on one tool call, and nothing times it out** (found in wave 2).
   F-runtime's post-ship agent issued `npm run typecheck` in the worktree and never got a result;
   the workflow sat for three hours looking "in progress". The tell is the run's `journal.jsonl`
