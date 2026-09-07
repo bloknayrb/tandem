@@ -1,12 +1,4 @@
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +11,7 @@ import {
   applyConfigWithToken,
   applyOpsForCli,
   buildMcpEntries,
+  ConfigRefusalError,
   detectTargets,
   installSkill,
   resolveCliVersion,
@@ -467,24 +460,33 @@ describe("applyConfig", () => {
     expect(written.mcpServers["tandem-channel"].args).toEqual(["/fake/channel/index.js"]);
   });
 
-  it("overwrites malformed JSON with fresh config", async () => {
+  it("refuses to overwrite malformed JSON", async () => {
+    // Inverted from "overwrites malformed JSON with fresh config" (#1802). The
+    // old assertion — `Object.keys(written)` being exactly `["mcpServers"]` —
+    // was the defect stated as a contract: everything else Claude Code keeps
+    // in that file (project list, OAuth account, onboarding state, per-project
+    // allow-lists) had just been dropped, and `applyConfig` returned success.
     const configPath = join(tmpDir, ".claude.json");
-    writeFileSync(configPath, "{ this is not json }}}");
+    const badContent = "{ this is not json }}}";
+    writeFileSync(configPath, badContent);
     const entries = buildMcpEntries("/fake/channel/index.js");
-    const prevAppData = process.env.TANDEM_APP_DATA_DIR;
-    process.env.TANDEM_APP_DATA_DIR = tmpDir;
-    try {
-      await applyConfig(configPath, applyOpsForCli(entries, { withChannelShim: false }));
-    } finally {
-      if (prevAppData === undefined) delete process.env.TANDEM_APP_DATA_DIR;
-      else process.env.TANDEM_APP_DATA_DIR = prevAppData;
-    }
-    const written = JSON.parse(readFileSync(configPath, "utf-8"));
-    expect(written.mcpServers.tandem).toBeDefined();
-    expect(Object.keys(written)).toEqual(["mcpServers"]);
+
+    const err = await applyConfig(
+      configPath,
+      applyOpsForCli(entries, { withChannelShim: false }),
+    ).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ConfigRefusalError);
+    expect((err as ConfigRefusalError).reason).toBe("CONFIG_MALFORMED");
+    expect(readFileSync(configPath, "utf-8")).toBe(badContent);
   });
 
-  it("backs up malformed .claude.json before overwriting", async () => {
+  it("creates no .broken-backups dir when it refuses", async () => {
+    // Converted from "backs up malformed .claude.json before overwriting".
+    // The `TANDEM_APP_DATA_DIR` plumbing is load-bearing and is kept for that
+    // reason: without it `resolveAppDataDir()` points at the real app-data
+    // dir, `join(tmpDir, ".broken-backups")` could never exist, and this
+    // negative would pass vacuously — against today's code too.
     const configPath = join(tmpDir, ".claude.json");
     const badContent = "{ malformed }";
     writeFileSync(configPath, badContent);
@@ -492,19 +494,16 @@ describe("applyConfig", () => {
     const prevAppData = process.env.TANDEM_APP_DATA_DIR;
     process.env.TANDEM_APP_DATA_DIR = tmpDir;
     try {
-      await applyConfig(configPath, applyOpsForCli(entries, { withChannelShim: false }));
+      await expect(
+        applyConfig(configPath, applyOpsForCli(entries, { withChannelShim: false })),
+      ).rejects.toBeInstanceOf(ConfigRefusalError);
     } finally {
       if (prevAppData === undefined) delete process.env.TANDEM_APP_DATA_DIR;
       else process.env.TANDEM_APP_DATA_DIR = prevAppData;
     }
 
-    // 3c-ii-b moved the backup under the Tandem data-dir (with 0o600 on
-    // POSIX) so we don't leak the malformed file's contents through a
-    // world-readable sibling of ~/.claude.json.
-    const backupDir = join(tmpDir, ".broken-backups");
-    const backups = readdirSync(backupDir).filter((n) => n.startsWith(".claude.json.broken-"));
-    expect(backups.length).toBe(1);
-    expect(readFileSync(join(backupDir, backups[0]!), "utf-8")).toBe(badContent);
+    expect(existsSync(join(tmpDir, ".broken-backups"))).toBe(false);
+    expect(readFileSync(configPath, "utf-8")).toBe(badContent);
   });
 
   it("propagates permission errors instead of silently swallowing", async () => {

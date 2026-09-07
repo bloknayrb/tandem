@@ -254,69 +254,6 @@ describe("applyConfig — explicit removals", () => {
   });
 });
 
-describe("applyConfig — malformed-JSON backup", () => {
-  let tmpDir: string;
-  let appDataDir: string;
-  let configPath: string;
-  let prevAppDataDir: string | undefined;
-
-  beforeEach(async () => {
-    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-apply-broken-"));
-    appDataDir = path.join(tmpDir, "app-data");
-    fs.mkdirSync(appDataDir);
-    configPath = path.join(tmpDir, ".claude.json");
-    prevAppDataDir = process.env.TANDEM_APP_DATA_DIR;
-    process.env.TANDEM_APP_DATA_DIR = appDataDir;
-  });
-
-  afterEach(async () => {
-    if (prevAppDataDir === undefined) delete process.env.TANDEM_APP_DATA_DIR;
-    else process.env.TANDEM_APP_DATA_DIR = prevAppDataDir;
-    await fs.promises.rm(tmpDir, { recursive: true, force: true });
-  });
-
-  it.skipIf(!POSIX_ONLY)("writes the backup with mode 0o600 inside a 0o700 dir", async () => {
-    fs.writeFileSync(configPath, "{ this is not json");
-    await applyConfig(configPath, {
-      create: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
-      remove: [],
-    });
-    const backupDir = path.join(appDataDir, ".broken-backups");
-    // Dir is created with 0o700 — defeats sibling-listing on multi-user
-    // POSIX (older backups can carry other vendors' API keys).
-    const dirStat = fs.statSync(backupDir);
-    expect(dirStat.mode & 0o777).toBe(0o700);
-    const entries = fs.readdirSync(backupDir);
-    expect(entries.length).toBeGreaterThan(0);
-    const backupFile = path.join(backupDir, entries[0]);
-    // File mode 0o600 + `wx` exclusive open closes the read-bits race
-    // (copyFile + chmodSync had a 0o644 window inside which another
-    // local user could read the API-key-bearing backup).
-    const stat = fs.statSync(backupFile);
-    expect(stat.mode & 0o777).toBe(0o600);
-  });
-
-  it("rejects backup when resolveAppDataDir resolves to a path outside allowed roots", async () => {
-    // Point TANDEM_APP_DATA_DIR at a directory completely outside both
-    // homedir() and tmpdir(). The backup path's `assertPathSafe` should
-    // refuse it before mkdirSync runs.
-    //
-    // The simplest "outside both" location is `/`. assertPathSafe refuses
-    // anything that doesn't resolve under homedir/tmpdir; `/` itself does
-    // not satisfy either.
-    const sentinel = "/__tandem-outside-roots__";
-    process.env.TANDEM_APP_DATA_DIR = sentinel;
-    fs.writeFileSync(configPath, "{ this is not json");
-
-    await expect(
-      applyConfig(configPath, {
-        create: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
-        remove: [],
-      }),
-    ).rejects.toBeInstanceOf(PathRejectedError);
-  });
-});
-
 describe("resolveChannelShimIntent (#1760)", () => {
   // Drives the REAL resolver against a scratch config file. The three arms
   // differ only in which of (kind, override, on-disk entry) they read, so a

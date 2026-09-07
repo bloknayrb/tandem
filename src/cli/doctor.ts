@@ -1140,21 +1140,19 @@ function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability): void {
     // check survives the /api/diagnostics filter, so its message reaches the
     // Copy Diagnostics clipboard — destined for public issues.
     //
-    // `withSuffix`, not raw concatenation: the old `${remedy} — that rewrites
-    // it` phrasing produces a dangling clause after `setupApplyRemedy(false)`'s
-    // closed parenthetical (`"...not the desktop app.)"`) — the exact bug
-    // `checkDesktopMcpConfig`'s sibling branch was fixed for. One `withSuffix`
-    // hop here, not the sibling's two: `DESKTOP_RESTART_NOTE` doesn't apply to
-    // Claude Code's config, only to Claude Desktop's.
+    // The malformed arm carries NO `setupApplyRemedy` and no `withSuffix` hop
+    // (#1802). `setup --apply` routes to the same `applyConfig` that now
+    // refuses this exact input — and `setupApplyRemedy(false)`'s wizard
+    // fallback lands there too — so prescribing either is a dead-end fix line
+    // for the condition being reported. It used to promise "Tandem backs the
+    // file up before rewriting it", which is now false in both halves: there
+    // is no backup and there is no rewrite.
     r.warn(
       read.kind === "malformed"
         ? "~/.claude.json is not valid JSON"
         : "~/.claude.json could not be read",
       read.kind === "malformed"
-        ? withSuffix(
-            setupApplyRemedy(cliAvailable()),
-            "Tandem backs the file up before rewriting it.",
-          )
+        ? "Fix the JSON, or restore the file from a backup, then re-run doctor — Tandem will not rewrite a config it cannot parse."
         : "Check the file's permissions and that it is a regular file, then re-run doctor.",
     );
     return;
@@ -1514,20 +1512,20 @@ function checkDesktopMcpConfig(
     // No parse detail, same rule as `~/.claude.json`: V8 SyntaxErrors embed a
     // snippet of the source, and this file holds `env.TANDEM_AUTH_TOKEN`. This
     // message reaches the Copy Diagnostics clipboard and public issues.
-    // Two `withSuffix` hops rather than one interpolation: the remedy this
-    // wraps ends differently in each branch (`…store lock)` vs `…desktop app.)`),
-    // and the old `${remedy} — that rewrites it, and …` phrasing was written
-    // when only the CLI branch existed. Against the wizard text it rendered a
-    // dangling clause after a parenthetical, restating what that sentence had
-    // just said. The backup fact is the only genuinely additive part, so it is
-    // now its own sentence.
+    // Like the `~/.claude.json` sibling, this drops `setupApplyRemedy`: that
+    // command reaches the same `applyConfig`, which now refuses a config it
+    // cannot parse (#1802), and the old "Tandem backs the file up before
+    // rewriting it" is false in both halves. ONE `withSuffix` hop over the new
+    // sentence, not two over a remedy base.
+    //
+    // The sentence must stay true of BOTH kinds this branch merges: an EACCES
+    // file was never parsed and is probably perfectly valid JSON, so it must
+    // not prescribe a JSON fix — and the branch must not be split to allow one,
+    // for the reason stated above it.
     r.warn(
       "Claude Desktop config could not be read as JSON",
       withSuffix(
-        withSuffix(
-          setupApplyRemedy(cliAvailable()),
-          "Tandem backs the file up before rewriting it.",
-        ),
+        "Tandem will not rewrite a config it could not read. Check the file's permissions and that it is valid JSON, then re-run doctor.",
         DESKTOP_RESTART_NOTE,
       ),
     );

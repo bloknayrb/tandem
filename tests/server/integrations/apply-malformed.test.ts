@@ -12,8 +12,8 @@
  *  - Path / IO: UNC paths (Windows), hardlink, symlink-to-self
  *    (POSIX). These exercise `assertPathSafe`.
  *  - Encoding: UTF-8 BOM-prefixed JSON. Production code strips the BOM
- *    before JSON.parse so a legitimate user file isn't pushed into
- *    `.broken-backups/`.
+ *    before JSON.parse so a legitimate user file isn't refused as
+ *    malformed.
  *  - Concurrency: two `applyConfig` calls racing the same path. The
  *    atomic rename guarantees the final file is one of the two writes,
  *    never a half-merged blob.
@@ -28,7 +28,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { applyConfig } from "../../../src/server/integrations/apply.js";
+import { applyConfig, ConfigRefusalError } from "../../../src/server/integrations/apply.js";
 
 const DEFAULT_OPS = {
   create: { tandem: { type: "http" as const, url: "http://127.0.0.1:3479/mcp" } },
@@ -98,48 +98,61 @@ describe("applyConfig — malformed-input matrix (#645)", () => {
     }
   });
 
-  describe("shape: empty file", () => {
-    it("zero-byte config: pushed to .broken-backups and fresh config written", async () => {
-      // `JSON.parse("")` throws SyntaxError → malformed-JSON-backup path.
-      // The user's empty file is preserved (under .broken-backups/) and
-      // the destination gets a fresh config — start-fresh is the right
-      // semantic when there's nothing to preserve in the first place.
-      fs.writeFileSync(configPath, "");
-      await applyConfig(configPath, DEFAULT_OPS);
-      const after = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      expect(after.mcpServers.tandem.url).toBe("http://127.0.0.1:3479/mcp");
-      // The empty original landed in the broken-backups dir.
-      const brokenDir = path.join(tmpDir, ".broken-backups");
-      expect(fs.existsSync(brokenDir)).toBe(true);
-      const brokenFiles = fs.readdirSync(brokenDir);
-      expect(brokenFiles.length).toBe(1);
-    });
+  describe("shape: nothing to preserve still starts fresh", () => {
+    // The one non-ENOENT input that legitimately creates a config. Kills a
+    // blanket refusal, which would break the fresh-install path for anyone
+    // whose `~/.claude.json` exists but is empty.
+    const EMPTY_INPUTS: Array<{ name: string; content: string }> = [
+      { name: "zero-byte", content: "" },
+      { name: "newline-only", content: "\n" },
+      { name: "bom-only", content: "\ufeff" },
+    ];
+
+    for (const { name, content } of EMPTY_INPUTS) {
+      it(`${name} config: fresh config written, no backup taken`, async () => {
+        // `raw.trim() === ""` is checked AFTER the BOM strip, which is what
+        // keeps the bom-only case out of the refusal.
+        fs.writeFileSync(configPath, content);
+        await applyConfig(configPath, DEFAULT_OPS);
+        const after = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+        expect(after.mcpServers.tandem.url).toBe("http://127.0.0.1:3479/mcp");
+        // Nothing was preserved because there was nothing to preserve —
+        // backing up a zero-byte file preserved nothing anyway.
+        expect(fs.existsSync(path.join(tmpDir, ".broken-backups"))).toBe(false);
+      });
+    }
   });
 
   describe("shape: parse-fail (genuine malformed JSON)", () => {
-    it("incomplete object: backed up + fresh config written", async () => {
+    it("incomplete object: refused, original untouched (#1802)", async () => {
+      // This used to copy the file into `.broken-backups/` and write a
+      // Tandem-ONLY config over it, reporting success — so a half-written
+      // `~/.claude.json` cost the user their project list, OAuth account,
+      // onboarding state and per-project allow-lists. `readConfigForMutation`
+      // has always refused the identical input; now the two agree.
       const malformed = '{"mcpServers":{';
       fs.writeFileSync(configPath, malformed);
-      await applyConfig(configPath, DEFAULT_OPS);
-      const after = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      expect(after.mcpServers.tandem).toBeDefined();
-      // Original survives in .broken-backups, byte-exact.
-      const brokenDir = path.join(tmpDir, ".broken-backups");
-      const brokenFiles = fs.readdirSync(brokenDir);
-      expect(brokenFiles.length).toBe(1);
-      const backupBytes = fs.readFileSync(path.join(brokenDir, brokenFiles[0]), "utf-8");
-      expect(backupBytes).toBe(malformed);
+
+      const err = await applyConfig(configPath, DEFAULT_OPS).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ConfigRefusalError);
+      expect((err as ConfigRefusalError).reason).toBe("CONFIG_MALFORMED");
+      // No parse detail: V8 SyntaxError text embeds a source snippet and this
+      // file holds bearer tokens.
+      expect((err as Error).message).not.toContain("position");
+      assertOriginalIntact(malformed);
+      // Not a half-fix that backs up and THEN refuses: there is no copy at all.
+      expect(fs.existsSync(path.join(tmpDir, ".broken-backups"))).toBe(false);
     });
   });
 
   describe("encoding: UTF-8 BOM", () => {
     const BOM = "﻿";
 
-    it("bom-prefixed valid JSON: NOT pushed to broken-backups", async () => {
+    it("bom-prefixed valid JSON: NOT refused as malformed", async () => {
       // The leading U+FEFF is the UTF-8 BOM. Without the strip,
-      // `JSON.parse` throws and the file lands in .broken-backups —
-      // wrong outcome for a perfectly-valid (if unusually-encoded)
-      // user file.
+      // `JSON.parse` throws and a perfectly-valid (if unusually-encoded)
+      // user file would be refused.
       const bomPrefixedContent =
         BOM + JSON.stringify({ mcpServers: { other: { command: "node" } } });
       fs.writeFileSync(configPath, bomPrefixedContent);
@@ -152,21 +165,23 @@ describe("applyConfig — malformed-input matrix (#645)", () => {
       expect(fs.existsSync(path.join(tmpDir, ".broken-backups"))).toBe(false);
     });
 
-    it("bom-prefixed malformed JSON: still routes to broken-backups", async () => {
+    it("bom-prefixed malformed JSON: refused, original untouched", async () => {
       // Pins the strip-then-parse order: BOM is removed first, then
-      // `JSON.parse` runs against the remainder. A malformed remainder
-      // throws `SyntaxError` and the file lands in .broken-backups
-      // (same path as non-BOM malformed JSON).
+      // `JSON.parse` runs against the remainder. A malformed remainder is
+      // refused, the same as non-BOM malformed JSON — and, crucially, is NOT
+      // caught by the emptiness test that a bom-only file falls into.
       const content = BOM + '{"mcpServers":{';
       fs.writeFileSync(configPath, content);
-      await applyConfig(configPath, DEFAULT_OPS);
-      const brokenDir = path.join(tmpDir, ".broken-backups");
-      expect(fs.existsSync(brokenDir)).toBe(true);
-      const brokenFiles = fs.readdirSync(brokenDir);
-      expect(brokenFiles.length).toBe(1);
+
+      const err = await applyConfig(configPath, DEFAULT_OPS).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ConfigRefusalError);
+      expect((err as ConfigRefusalError).reason).toBe("CONFIG_MALFORMED");
+      assertOriginalIntact(content);
+      expect(fs.existsSync(path.join(tmpDir, ".broken-backups"))).toBe(false);
     });
 
-    it("bom-prefixed non-object root: routes to shape-gate bail (NOT broken-backups)", async () => {
+    it("bom-prefixed non-object root: routes to the shape gate, not the parse refusal", async () => {
       // Strip-then-validate: after BOM removal the content is a valid
       // JSON array; the shape gate rejects it with the expected error
       // message AND the original bytes survive (no malformed-backup,

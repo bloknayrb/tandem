@@ -248,20 +248,26 @@ describe("IntegrationWizardModal — per-target push support (#1299)", () => {
     expect(q(container, "integration-wizard-plugin")).toBeNull();
   });
 
-  it("names an over-cap config by its reason rather than falling back (#1801)", async () => {
+  it("names a refused config by its reason rather than falling back (#1801, #1802)", async () => {
     // `resultErrorText`'s `default` arm falls back to `result.message`, and the
     // server's static message happens to read fine — so a MISSING `case` is
-    // invisible unless the assertion is on the client-side sentence. This is
-    // the row that used to render as "check it isn't open in another program",
-    // which is both wrong and unactionable for a file Tandem deliberately
-    // declined to touch.
+    // invisible unless the assertion is on the client-side sentence. These two
+    // are the rows that used to render as "check it isn't open in another
+    // program", which is both wrong and unactionable for a file Tandem
+    // deliberately declined to touch.
     const { container } = mountDone(
-      [pickedDesktop()],
-      [{ id: "claude-desktop-1", status: "error", code: "CONFIG_TOO_LARGE" }],
+      [pickedDesktop(), pickedCode()],
+      [
+        { id: "claude-desktop-1", status: "error", code: "CONFIG_TOO_LARGE" },
+        { id: "claude-code-1", status: "error", code: "CONFIG_MALFORMED" },
+      ],
     );
     await tick();
     const text = container.textContent ?? "";
     expect(text).toContain("too large for Tandem to rewrite safely");
+    // #1802's half: there is no backup to point at any more, so the sentence
+    // has to say the original file IS the recovery target.
+    expect(text).toContain("left it untouched");
     expect(text).not.toContain("open in another program");
   });
 

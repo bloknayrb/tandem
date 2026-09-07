@@ -2019,7 +2019,13 @@ describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
     // renders "...not the desktop app.) — that rewrites it", a dangling
     // clause after an already-finished sentence.
     expect(warn?.fix).not.toContain("..");
-    expect(warn?.fix).toContain("Tandem backs the file up before rewriting it.");
+    // Since #1802 `applyConfig` refuses this exact input rather than backing
+    // it up and rewriting, so the old promise is false in both halves.
+    expect(warn?.fix).not.toContain("backs the file up");
+    expect(warn?.fix).toContain("Tandem will not rewrite a config it cannot parse.");
+    // And `setup --apply` routes to that same refusal, so prescribing it here
+    // would be a dead-end fix line for the condition being reported.
+    expect(warn?.fix).not.toMatch(/setup --apply/);
   });
 
   it("still names a fallback when ~/.claude.json does not exist at all", async () => {

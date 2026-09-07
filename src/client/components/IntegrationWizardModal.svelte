@@ -514,6 +514,10 @@ function resultErrorText(result: ApplyItemResult): string {
       // Deliberately no `tandem doctor` pointer: doctor has no size check, so
       // it would report this file as `ok` and send the user in a circle.
       return "Your Claude settings file is too large for Tandem to rewrite safely, so Tandem left it alone.";
+    case "CONFIG_MALFORMED":
+      // No backup path to offer: since #1802 Tandem refuses rather than
+      // copying-then-replacing, so the original file IS the recovery target.
+      return "Your Claude settings file isn't valid JSON. Tandem left it untouched — fix or restore the file, then try again.";
     case "OTHER_MCP_NOT_APPLICABLE":
       return "Tandem can't auto-configure this app — connect it manually from that app's settings.";
     default:

@@ -11,16 +11,16 @@
  * - MSIX detection is anchored to `/^Claude_[A-Za-z0-9]+$/` and the
  *   `%LOCALAPPDATA%` realpath must resolve under home (defeats an
  *   attacker who controls env).
- * - Malformed JSON backups land in `${appDataDir}/.broken-backups/` at
- *   `0o600` rather than next to `~/.claude.json` (which may inherit
- *   world-readable perms and would leak co-tenant API keys).
+ * - Malformed JSON is never rewritten: both `applyConfig` and
+ *   `readConfigForMutation` refuse the file and leave it as found (#1802).
+ *   Refusal messages carry no parse detail — V8 `SyntaxError` text embeds a
+ *   source snippet and this file holds bearer tokens.
  */
 
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   existsSync,
-  constants as fsConstants,
   lstatSync,
   mkdirSync,
   readdirSync,
@@ -32,7 +32,6 @@ import {
   chmod,
   copyFile,
   mkdir,
-  open,
   readFile,
   rename,
   stat,
@@ -40,7 +39,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SKILL_CONTENT } from "../../cli/skill-content.js";
@@ -1032,9 +1031,11 @@ async function unlinkOrLeak(path: string, originalErr: unknown): Promise<void> {
  *
  * **Security gates (run before any read or write):**
  * - `assertPathSafe(configPath)` — symlink / outside-home rejection.
- * - Malformed JSON is backed up under Tandem's data dir with mode `0o600`
- *   (avoids leaking other vendors' API keys via a world-readable
- *   `~/.claude.json.broken-<ts>` sibling).
+ * - A config over `MAX_CONFIG_BYTES` is refused unread
+ *   (`ConfigRefusalError`, `CONFIG_TOO_LARGE`).
+ * - Malformed JSON is REFUSED, not replaced (`CONFIG_MALFORMED`) — the file is
+ *   left exactly as found. An empty file (or one holding only a BOM) is the
+ *   one non-ENOENT input that still starts fresh.
  *
  * `applyConfig` writes both `ops.create` entries (merging into the existing
  * `mcpServers` object) and removes any key listed in `ops.remove`. Removal
@@ -1059,128 +1060,79 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
 
-  // Read existing config or start fresh — no existsSync guard needed.
-  // ENOENT and malformed JSON start fresh; other errors (permissions, disk) propagate.
+  // Read existing config or start fresh, with the decision made explicitly
+  // rather than fallen into (#1802). Three outcomes:
+  //
+  //   - ENOENT → start fresh. This is the fresh-install path and the only one
+  //     that legitimately creates the file. Every other I/O error (EACCES,
+  //     EISDIR, disk) still propagates.
+  //   - empty after the BOM strip → start fresh, with no backup. Nothing is
+  //     lost, and backing a zero-byte file up preserves nothing anyway.
+  //   - anything else that will not parse → REFUSE. `applyConfig` used to copy
+  //     the file into `.broken-backups/` and then write a Tandem-ONLY config
+  //     over it, reporting success — so a `~/.claude.json` that happened to be
+  //     half-written (Claude Code's atomicity here is unknown; tmp.PID files
+  //     have been seen in the wild) lost its project list, OAuth account,
+  //     onboarding state and per-project allow-lists on the next wizard apply
+  //     or boot sweep. `readConfigForMutation` already refuses the identical
+  //     input, so the two reads now agree, and the shape gates just below have
+  //     always refused rather than replaced.
+  //
+  // The zero-byte case leaves a real, untracked truncation window: a
+  // non-atomic external writer doing `open(path, "w")` passes through zero
+  // bytes and Tandem will write over it reporting success. Today's behaviour
+  // is no better, so this is a residual rather than a regression.
   let existing: { mcpServers?: Record<string, McpEntry> } = {};
+  let raw: string | null = null;
   try {
+    raw = readFileSync(configPath, "utf-8");
+  } catch (err) {
+    // File doesn't exist yet — start fresh. Permission errors, disk errors,
+    // etc. should not be silently swallowed.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+
+  if (raw !== null) {
     // Strip a leading UTF-8 BOM (`﻿`) before JSON.parse. Some editors
     // (legacy Windows tooling, certain VS Code configs) write `.claude.json`
-    // with a BOM; without this strip, `JSON.parse` throws `SyntaxError`
-    // and the file would be pushed into `.broken-backups/` as if it were
-    // malformed. The BOM is encoded as the literal three bytes
-    // `EF BB BF` which Node's "utf-8" decoder surfaces as a leading
-    // U+FEFF code point.
-    let raw = readFileSync(configPath, "utf-8");
+    // with a BOM; without this strip, `JSON.parse` throws `SyntaxError` and a
+    // perfectly good file would be refused as malformed. The BOM is encoded as
+    // the literal three bytes `EF BB BF` which Node's "utf-8" decoder surfaces
+    // as a leading U+FEFF code point. The emptiness test runs AFTER the strip,
+    // so a BOM-only file starts fresh rather than being refused.
     if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
-    const parsed: unknown = JSON.parse(raw);
 
-    // Shape gate: the rewrite path spreads `existing.mcpServers` and
-    // `existing` itself into the new config. If either is the wrong
-    // shape, the spread produces a corrupted output (string-spread
-    // yields `{0:'a',1:'b',...}`, array-spread yields numeric keys,
-    // null-spread throws). Reject up-front so a legitimate-looking
-    // config-shape mismatch never silently corrupts the user's file.
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error(`${configPath} root is not a JSON object — refusing to rewrite`);
-    }
-    const maybeServers = (parsed as Record<string, unknown>).mcpServers;
-    if (
-      maybeServers !== undefined &&
-      (maybeServers === null || typeof maybeServers !== "object" || Array.isArray(maybeServers))
-    ) {
-      throw new Error(`${configPath} mcpServers is not an object — refusing to rewrite`);
-    }
-    existing = parsed as { mcpServers?: Record<string, McpEntry> };
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
-      // File doesn't exist yet — start fresh
-    } else if (err instanceof SyntaxError) {
-      // Don't silently wipe the user's other mcpServers. Copy the malformed
-      // file under Tandem's data dir (NOT next to ~/.claude.json — that
-      // location may inherit world-readable perms and leak co-tenant API
-      // keys via the backup). Mode 0o600 hardens against the same.
-      const brokenBackupDir = join(resolveAppDataDir(), ".broken-backups");
-      // Validate against default roots [homedir(), tmpdir()] rather than
-      // scoping to resolveAppDataDir() — the latter is tautological, and
-      // an XDG_DATA_HOME-poisoning attacker can otherwise redirect the
-      // backup target outside the home tree.
-      assertPathSafe(brokenBackupDir);
-      // mode: 0o700 on dir creation — the file mode is 0o600, but a
-      // world-readable parent dir lists sibling filenames (older backups
-      // carry other vendors' keys). Mode applies only when the dir is
-      // newly created; existing dirs retain their mode.
-      mkdirSync(brokenBackupDir, { recursive: true, mode: 0o700 });
-      // randomUUID() in the path defeats path prediction by an attacker
-      // who might pre-create a file at the predicted location and have
-      // our mode-at-open inherit world-readable bits. `wx` (exclusive
-      // create) below is the second layer.
-      const backupPath = join(
-        brokenBackupDir,
-        `${basename(configPath)}.broken-${Date.now()}-${randomUUID()}`,
-      );
+    if (raw.trim() !== "") {
+      let parsed: unknown;
       try {
-        if (process.platform === "win32") {
-          // Windows ignores the POSIX `mode` arg on mkdir, so harden the
-          // dir with an explicit DACL BEFORE writing the backup file.
-          // Mirrors the ordering invariant in
-          // `storage.ts#backupBrokenFile`: dir-level ACL closes the
-          // TOCTOU window that a per-file ACL would otherwise open
-          // between copyFile and the ACL set. Fail loud — orphaning a
-          // half-hardened dir is worse than aborting the backup
-          // outright. The inner `catch (copyErr)` below surfaces a
-          // named error and refuses to overwrite the malformed config.
-          try {
-            await setRestrictiveAcl(brokenBackupDir);
-          } catch (aclErr) {
-            throw new Error(
-              `failed to apply restrictive ACL to broken-backups dir ${brokenBackupDir}: ${
-                aclErr instanceof Error ? aclErr.message : String(aclErr)
-              }`,
-              { cause: aclErr },
-            );
-          }
-          // Windows doesn't honor POSIX modes — fall back to plain copy.
-          // The randomUUID-suffixed path makes collisions effectively
-          // impossible. COPYFILE_EXCL refuses to overwrite an existing
-          // target, defeating any predictable-path symlink/pre-create
-          // attack the UUID suffix might still leave reachable. NOTE:
-          // `setRestrictiveAcl` (acl-win.ts) calls `icacls /grant:r
-          // *<SID>:F` without (OI)(CI) inheritance flags, so the new
-          // file does NOT inherit the parent dir's SID-only ACE.
-          // Instead it receives the DACL synthesized from the process
-          // token's default (typically user + SYSTEM + Administrators),
-          // which is narrow enough to prevent cross-tenant leak in
-          // standard contexts. If broader access is observed, the dir
-          // ACE should be made inheritable in acl-win.ts (this would
-          // also benefit storage.ts which uses the same helper).
-          await copyFile(configPath, backupPath, fsConstants.COPYFILE_EXCL);
-        } else {
-          // Open with mode 0o600 + `wx` so the file is created exclusively
-          // at the right mode (no copyFile + chmodSync race window where
-          // the backup was briefly 0o644 with another vendor's API keys
-          // inside).
-          const data = await readFile(configPath);
-          const fd = await open(backupPath, "wx", 0o600);
-          try {
-            await fd.write(data);
-          } finally {
-            await fd.close();
-          }
-        }
-        console.error(
-          `  Warning: ${configPath} contains malformed JSON — backed up to ${backupPath}, replacing with fresh config`,
+        parsed = JSON.parse(raw);
+      } catch {
+        // No parse detail in the message: V8 `SyntaxError` text embeds a
+        // snippet of the source, and this file holds bearer tokens. Same rule
+        // `readConfigForMutation` states.
+        throw new ConfigRefusalError(
+          "CONFIG_MALFORMED",
+          `${configPath} is not valid JSON — refusing to rewrite it`,
         );
-      } catch (copyErr) {
-        console.error(
-          `  Warning: ${configPath} contains malformed JSON and backup failed (${
-            copyErr instanceof Error ? copyErr.message : copyErr
-          }) — refusing to overwrite. Fix the JSON manually and rerun 'tandem setup'.`,
-        );
-        throw copyErr;
       }
-    } else {
-      throw err; // Permission errors, disk errors, etc. should not be silently swallowed
+
+      // Shape gate: the rewrite path spreads `existing.mcpServers` and
+      // `existing` itself into the new config. If either is the wrong
+      // shape, the spread produces a corrupted output (string-spread
+      // yields `{0:'a',1:'b',...}`, array-spread yields numeric keys,
+      // null-spread throws). Reject up-front so a legitimate-looking
+      // config-shape mismatch never silently corrupts the user's file.
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error(`${configPath} root is not a JSON object — refusing to rewrite`);
+      }
+      const maybeServers = (parsed as Record<string, unknown>).mcpServers;
+      if (
+        maybeServers !== undefined &&
+        (maybeServers === null || typeof maybeServers !== "object" || Array.isArray(maybeServers))
+      ) {
+        throw new Error(`${configPath} mcpServers is not an object — refusing to rewrite`);
+      }
+      existing = parsed as { mcpServers?: Record<string, McpEntry> };
     }
   }
 
@@ -1321,8 +1273,6 @@ export async function readConfigForMutation(configPath: string): Promise<ConfigR
  * size cap, BOM strip) and the same `atomicWrite` 0o600/ACL hardening, but
  * with scrub semantics `applyConfig` deliberately does NOT have:
  * - never creates the file (`applyConfig` starts fresh on ENOENT);
- * - never replaces malformed JSON (`applyConfig` backs it up and rewrites —
- *   on an uninstall path that would wipe the user's whole config);
  * - never rewrites when nothing matched (no churn of a file other vendors'
  *   tokens live in).
  *
