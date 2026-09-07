@@ -181,8 +181,11 @@ describe("runSetup({ apply: true }) orchestration", () => {
     const out = stderr();
     expect(out).toContain("refused to rewrite");
     expect(out).toContain("larger than Tandem will rewrite safely");
-    expect(out).not.toContain("Fix the JSON");
-    expect(out).not.toContain("restore the file from a backup");
+    // The malformed remedy's own words — "Fix the JSON" no longer appears in
+    // either branch, so asserting its absence would pass whatever the summary
+    // said.
+    expect(out).not.toContain("must be a JSON object");
+    expect(out).not.toContain("restore the file from a");
     expect(out).not.toContain("Check file permissions");
   });
 

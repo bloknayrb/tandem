@@ -202,6 +202,13 @@ export async function rotateToken(): Promise<void> {
   // as "Updated" and saying nothing is the failure mode this line exists to
   // prevent: rotation is what a user runs after a LEAK.
   //
+  // The list is body-gated upstream (`channelEntryHoldsSupersededToken`): a
+  // target only appears here when its preserved entry really does carry an
+  // `env.TANDEM_AUTH_TOKEN` other than the one just written. That is what makes
+  // the sentence below a fact rather than an inference from the target's kind —
+  // and it is why the removal remedy is safe to print, since the hand-registered
+  // entry with no Tandem token in it never reaches this loop.
+  //
   // The remedy carries `--target=<kind>`, and the flag is not decoration:
   // `--without-channel-shim` alone means "remove, on every detected kind"
   // (`resolveChannelShimIntent`), so the untargeted form would also delete a

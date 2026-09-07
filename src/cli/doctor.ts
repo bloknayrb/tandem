@@ -612,8 +612,13 @@ export function readClaudeConfig(path: string): ClaudeConfigRead {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return { kind: "absent" };
     return { kind: "unreadable" };
   }
-  // Strip a leading BOM and screen for emptiness BEFORE parsing, matching
-  // `applyConfig` and `readConfigForMutation` byte for byte. Without this pair
+  // Strip a leading BOM and screen for emptiness BEFORE parsing — the same pair
+  // `applyConfig` and `readConfigForMutation` run, in the same order. (Round-3
+  // review: this claimed the match already, and `readConfigForMutation` had no
+  // emptiness screen at all, so a zero-byte config was `empty` here and
+  // `malformed-json` in the boot sweep's log. It has one now; keep the three in
+  // step, because the reason a user is shown must not depend on which surface
+  // found the file.) Without this pair
   // `malformed` was WIDER than the refusal whose remedy it now prescribes: a
   // BOM-prefixed but perfectly valid config parses fine for `applyConfig`
   // (which strips U+FEFF), and a zero-byte one makes it start fresh — yet both
@@ -1180,12 +1185,18 @@ function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability): void {
     // `readClaudeConfig` screens the BOM and the empty file out of this arm
     // first — both are inputs `applyConfig` accepts, and while they landed here
     // the sentence below asserted a falsehood about them.
+    // "not a usable JSON object", not "not valid JSON": `readClaudeConfig`
+    // routes BOTH a parse failure and a parseable non-object root (`[]`, `"x"`,
+    // `3`, `null`) into `malformed`, and the second file has nothing wrong with
+    // its JSON at all. Naming a syntax error there sends the user hunting for
+    // one — the same mismatch `applyConfig`'s shape gate had, where the refusal
+    // reached the CLI and the wizard as a bare write failure.
     r.warn(
       read.kind === "malformed"
-        ? "~/.claude.json is not valid JSON"
+        ? "~/.claude.json is not a usable JSON object"
         : "~/.claude.json could not be read",
       read.kind === "malformed"
-        ? "Fix the JSON, or restore the file from a backup, then re-run doctor — Tandem will not rewrite a config it cannot parse."
+        ? "It must be a JSON object — fix it, or restore the file from a backup, then re-run doctor. Tandem will not rewrite a config it cannot read as one."
         : "Check the file's permissions and that it is a regular file, then re-run doctor.",
     );
     return;

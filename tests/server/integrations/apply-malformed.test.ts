@@ -68,11 +68,19 @@ describe("applyConfig — malformed-input matrix (#645)", () => {
     ];
 
     for (const { name, content } of NON_OBJECT_ROOTS) {
-      it(`${name}: throws and leaves original intact`, async () => {
+      it(`${name}: refuses as CONFIG_MALFORMED and leaves original intact`, async () => {
         fs.writeFileSync(configPath, content);
-        await expect(applyConfig(configPath, DEFAULT_OPS)).rejects.toThrow(
-          /root is not a JSON object/,
-        );
+
+        const err = await applyConfig(configPath, DEFAULT_OPS).catch((e: unknown) => e);
+
+        expect((err as Error).message).toMatch(/root is not a JSON object/);
+        // Round-3 review: a bare `Error` here reached the CLI as "Check file
+        // permissions" and the wizard as "check it isn't open in another
+        // program" — both dead ends for a file that parses fine, is not open
+        // anywhere, and was deliberately left alone. The classification IS the
+        // fix for #1802; the throw alone was never enough.
+        expect(err).toBeInstanceOf(ConfigRefusalError);
+        expect((err as ConfigRefusalError).reason).toBe("CONFIG_MALFORMED");
         assertOriginalIntact(content);
       });
     }
@@ -87,12 +95,15 @@ describe("applyConfig — malformed-input matrix (#645)", () => {
     ];
 
     for (const { name, servers } of NON_OBJECT_SERVERS) {
-      it(`${name}: throws and leaves original intact`, async () => {
+      it(`${name}: refuses as CONFIG_MALFORMED and leaves original intact`, async () => {
         const content = JSON.stringify({ mcpServers: servers });
         fs.writeFileSync(configPath, content);
-        await expect(applyConfig(configPath, DEFAULT_OPS)).rejects.toThrow(
-          /mcpServers is not an object/,
-        );
+
+        const err = await applyConfig(configPath, DEFAULT_OPS).catch((e: unknown) => e);
+
+        expect((err as Error).message).toMatch(/mcpServers is not an object/);
+        expect(err).toBeInstanceOf(ConfigRefusalError);
+        expect((err as ConfigRefusalError).reason).toBe("CONFIG_MALFORMED");
         assertOriginalIntact(content);
       });
     }
@@ -188,9 +199,11 @@ describe("applyConfig — malformed-input matrix (#645)", () => {
       // no rewrite).
       const content = BOM + "[]";
       fs.writeFileSync(configPath, content);
-      await expect(applyConfig(configPath, DEFAULT_OPS)).rejects.toThrow(
-        /root is not a JSON object/,
-      );
+
+      const err = await applyConfig(configPath, DEFAULT_OPS).catch((e: unknown) => e);
+
+      expect((err as Error).message).toMatch(/root is not a JSON object/);
+      expect((err as ConfigRefusalError).reason).toBe("CONFIG_MALFORMED");
       assertOriginalIntact(content);
       expect(fs.existsSync(path.join(tmpDir, ".broken-backups"))).toBe(false);
     });

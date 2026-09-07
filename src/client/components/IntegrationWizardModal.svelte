@@ -517,7 +517,12 @@ function resultErrorText(result: ApplyItemResult): string {
     case "CONFIG_MALFORMED":
       // No backup path to offer: since #1802 Tandem refuses rather than
       // copying-then-replacing, so the original file IS the recovery target.
-      return "Your Claude settings file isn't valid JSON. Tandem left it untouched — fix or restore the file, then try again.";
+      //
+      // "usable JSON", not "valid JSON": the same code also covers a file that
+      // parses fine and holds an array, a string or `null` where the object
+      // should be, and calling that invalid JSON sends the user looking for a
+      // syntax error there is none of.
+      return "Your Claude settings file isn't usable — it must be a JSON object. Tandem left it untouched, so fix or restore the file, then try again.";
     case "OTHER_MCP_NOT_APPLICABLE":
       return "Tandem can't auto-configure this app — connect it manually from that app's settings.";
     default:

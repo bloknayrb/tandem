@@ -2050,9 +2050,24 @@ describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
     // Since #1802 `applyConfig` refuses this exact input rather than backing
     // it up and rewriting, so the old promise is false in both halves.
     expect(warn?.fix).not.toContain("backs the file up");
-    expect(warn?.fix).toContain("Tandem will not rewrite a config it cannot parse.");
+    expect(warn?.fix).toContain("Tandem will not rewrite a config it cannot read as one.");
     // And `setup --apply` routes to that same refusal, so prescribing it here
     // would be a dead-end fix line for the condition being reported.
+    expect(warn?.fix).not.toMatch(/setup --apply/);
+  });
+
+  it("does not call a parseable non-object ~/.claude.json invalid JSON", async () => {
+    // Round-3 review. `readClaudeConfig` routes a non-object root into the same
+    // `malformed` arm as a syntax error, and the arm asserted "is not valid
+    // JSON" about a file whose JSON is perfectly valid — sending the user to
+    // hunt a syntax error that is not there. `applyConfig`'s shape gate refuses
+    // this same input, so the refusal is right; only the sentence was wrong.
+    writeFileSync(claudeCodeConfigPath({ homeOverride: home }), "[]");
+
+    const warn = await userMcpResult();
+    expect(warn?.message).not.toContain("not valid JSON");
+    expect(warn?.message).toContain("JSON object");
+    // Still a refusal, so still no dead-end remedy.
     expect(warn?.fix).not.toMatch(/setup --apply/);
   });
 

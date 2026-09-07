@@ -1131,15 +1131,33 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
       // yields `{0:'a',1:'b',...}`, array-spread yields numeric keys,
       // null-spread throws). Reject up-front so a legitimate-looking
       // config-shape mismatch never silently corrupts the user's file.
+      //
+      // `ConfigRefusalError`, not a bare `Error`, and the difference is the
+      // whole point of #1802: a `[]`/`"x"`/`3` root parses fine, so nothing
+      // above raises, and a bare throw reaches the two callers as an
+      // unclassified failure — the wizard renders `WRITE_FAILED` ("check it
+      // isn't open in another program", of a file nobody has open) and the CLI
+      // prints "Check file permissions" for permissions that were never the
+      // problem. Both are the dead-end remedies this issue exists to remove,
+      // and the decision here is identical to the parse refusal above: leave
+      // the file exactly as found. `CONFIG_MALFORMED` covers both because both
+      // mean "this file is not a config Tandem can rewrite"; the reason is a
+      // remedy class, not a parser verdict.
       if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error(`${configPath} root is not a JSON object — refusing to rewrite`);
+        throw new ConfigRefusalError(
+          ERROR_CODE_CONFIG_MALFORMED,
+          `${configPath} root is not a JSON object — refusing to rewrite`,
+        );
       }
       const maybeServers = (parsed as Record<string, unknown>).mcpServers;
       if (
         maybeServers !== undefined &&
         (maybeServers === null || typeof maybeServers !== "object" || Array.isArray(maybeServers))
       ) {
-        throw new Error(`${configPath} mcpServers is not an object — refusing to rewrite`);
+        throw new ConfigRefusalError(
+          ERROR_CODE_CONFIG_MALFORMED,
+          `${configPath} mcpServers is not an object — refusing to rewrite`,
+        );
       }
       existing = parsed as { mcpServers?: Record<string, McpEntry> };
     }
@@ -1201,7 +1219,7 @@ export type RemoveEntriesResult =
  *  every such caller reports the same fixed reason strings. */
 export type ConfigReadRefusal =
   | { status: "missing" }
-  | { status: "skipped"; reason: "malformed-json" | "not-an-object" | "oversize" };
+  | { status: "skipped"; reason: "malformed-json" | "not-an-object" | "oversize" | "empty" };
 
 export type ConfigReadResult =
   | ConfigReadRefusal
@@ -1225,6 +1243,10 @@ export type ConfigReadResult =
  * - **Never replace malformed JSON.** Refuse and leave it exactly as found.
  * - **Cap the read** at `MAX_CONFIG_BYTES` before touching the contents.
  * - **Strip a BOM**, which `JSON.parse` will not tolerate.
+ * - **Screen emptiness after the BOM strip**, so a crash-truncated config is
+ *   reported as `empty` rather than as malformed JSON. `applyConfig` and
+ *   `readClaudeConfig` make the same distinction; the reasons a user is shown
+ *   for one file must not differ by which surface found it.
  * - **Leak no parse detail.** V8 `SyntaxError` messages embed a snippet of the
  *   source, so reasons are fixed strings and never carry the error.
  *
@@ -1252,6 +1274,17 @@ export async function readConfigForMutation(configPath: string): Promise<ConfigR
     throw err;
   }
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+
+  // Emptiness is its own reason, screened after the BOM strip exactly as
+  // `applyConfig` and `readClaudeConfig` do. Without it `JSON.parse("")` threw
+  // and a crash-truncated config was reported as `malformed-json` — the boot
+  // sweep logged "Left Claude Code untouched (malformed-json)" for the same
+  // file `tandem doctor` calls empty and `setup --apply` fixes outright, so the
+  // two surfaces named different conditions and only one of them prescribed a
+  // working remedy. The decision here is unchanged (touch nothing: there is no
+  // `mcpServers` to repair, and this reader NEVER creates); only the reason the
+  // user is shown is.
+  if (!/\S/.test(raw)) return { status: "skipped", reason: "empty" };
 
   let parsed: unknown;
   try {
@@ -1986,8 +2019,13 @@ async function maybeBackupExistingConfig(
   if (!shouldBackup(existingTandem, ops.create.tandem)) return undefined;
 
   const dir = backupDir(resolveAppDataDir());
-  // assertPathSafe defeats XDG_DATA_HOME poisoning — same hardening as
-  // the broken-JSON backup path above.
+  // assertPathSafe defeats app-data-dir poisoning: `resolveAppDataDir()` is
+  // env-derived (`TANDEM_APP_DATA_DIR`, else `env-paths`, which reads
+  // `XDG_DATA_HOME` on Linux), so a hostile value would otherwise choose the
+  // directory this writes a COPY OF THE USER'S CONFIG into — bearer tokens and
+  // all. (This comment used to cite the broken-JSON backup path as the matching
+  // precedent; that path was deleted with #1802's refusal, so this is now the
+  // only backup writer in the file.)
   assertPathSafe(dir);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
 
@@ -2249,6 +2287,52 @@ async function targetHasChannelEntry(configPath: string): Promise<boolean> {
 }
 
 /**
+ * Does the preserved `tandem-channel` entry hold a token this rotation has
+ * superseded?
+ *
+ * The gate on `applyConfigWithToken`'s stale-token warning, and it exists
+ * because the warning makes a factual claim and prints a DESTRUCTIVE remedy
+ * (security review of #1760, round 3). The old gate was `preserveShim &&
+ * !writeShim && token !== null` — structural only, never looking inside the
+ * entry — so a hand-registered shim pointing at the user's own script, with no
+ * `env.TANDEM_AUTH_TOKEN` at all, was told it "still holds the OLD token and
+ * will be rejected" (false of it) and offered `setup --apply --target=...
+ * --without-channel-shim`, which DELETES it. That is the implicit-deletion
+ * outcome #1760 was filed to eliminate, re-entering through the fix-it line
+ * rather than through the resolver.
+ *
+ * Two conditions, both necessary: the entry carries a string
+ * `env.TANDEM_AUTH_TOKEN`, and that string is not the token just written. The
+ * second costs nothing and rules out the entry that is already current.
+ *
+ * An unreadable config answers `true`, opposite to {@link
+ * targetHasChannelEntry}'s throw, because the consequences are opposite: there,
+ * "I could not tell" collapsing to `false` DELETES an entry; here it would
+ * SUPPRESS the warning that a superseded bearer token is sitting on disk, after
+ * a command the user runs in response to a leak. The write for this target has
+ * already landed by the time this runs, so throwing would also report a target
+ * that really was updated as an error.
+ */
+async function channelEntryHoldsSupersededToken(
+  configPath: string,
+  newToken: string,
+): Promise<boolean> {
+  let read: ConfigReadResult;
+  try {
+    read = await readConfigForMutation(configPath);
+  } catch {
+    return true;
+  }
+  if (read.status !== "ok") return false;
+  const entry = read.servers["tandem-channel"];
+  if (entry === null || typeof entry !== "object") return false;
+  const env = (entry as { env?: unknown }).env;
+  if (env === null || typeof env !== "object") return false;
+  const stored = (env as Record<string, unknown>).TANDEM_AUTH_TOKEN;
+  return typeof stored === "string" && stored !== newToken;
+}
+
+/**
  * Should this target carry a `tandem-channel` entry after this write?
  *
  * The single resolver for a question two loops used to answer separately, and
@@ -2334,8 +2418,12 @@ export async function resolveChannelShimIntent(
  * did get the new token — so crediting it silently would let `tandem
  * rotate-token`, the documented remedy for a leaked token, print "Updated 1
  * config file(s)" while a superseded bearer token stays on disk and the shim
- * 401s with nothing said. Every preserved-but-not-rewritten target lands in
- * `staleTokenTargets` so the caller can name it.
+ * 401s with nothing said. A preserved-but-not-rewritten target lands in
+ * `staleTokenTargets` so the caller can name it — but only when its entry
+ * actually carries a superseded `env.TANDEM_AUTH_TOKEN`
+ * (`channelEntryHoldsSupersededToken`), because the caller's remedy deletes the
+ * entry and a hand-registered one holding no Tandem token has nothing stale
+ * about it.
  *
  * **The `kind` rides along with the label, and it is load-bearing rather than
  * informational.** The remedy the caller prints for a stale entry is a removal
@@ -2382,7 +2470,19 @@ export async function applyConfigWithToken(
       // `env.TANDEM_AUTH_TOKEN` it already had, which after a rotation is the
       // superseded one. Nothing later heals it — the boot sweep's
       // `repairEntryInPlace` rewrites `command`/`args` and never `env`.
-      if (preserveShim && !writeShim && token !== null) {
+      //
+      // The structural conditions are necessary, not sufficient: the caller's
+      // warning asserts the entry "still holds the OLD token" and prints a
+      // removal command, so the entry BODY decides
+      // (`channelEntryHoldsSupersededToken`) — a hand-registered shim with no
+      // `env.TANDEM_AUTH_TOKEN` is exactly what #1760 preserved, and must not
+      // be sent to a remedy that deletes it.
+      if (
+        preserveShim &&
+        !writeShim &&
+        token !== null &&
+        (await channelEntryHoldsSupersededToken(t.configPath, token))
+      ) {
         staleTokenTargets.push({ label: t.label, kind: t.kind });
       }
     } catch (err) {

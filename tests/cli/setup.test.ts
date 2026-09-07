@@ -673,6 +673,69 @@ describe("applyConfigWithToken — rotation preserves, it does not re-derive", (
     expect(result.updated).toBeGreaterThanOrEqual(2);
   });
 
+  it("does not call a hand-registered shim with no Tandem token stale", async () => {
+    // Security review of #1760, round 3. The gate was structural — `preserveShim
+    // && !writeShim && token !== null`, never looking inside the entry — so the
+    // hand-registered shim this issue exists to PROTECT was told it "still holds
+    // the OLD token and will be rejected" (false: it carries no
+    // `env.TANDEM_AUTH_TOKEN` at all) and offered `setup --apply --target=...
+    // --without-channel-shim`, which deletes it. A user following the printed
+    // remedy destroyed the very entry #1760 stopped Tandem from deleting.
+    const desktopPath = desktopConfigUnder(home);
+    mkdirSync(dirname(desktopPath), { recursive: true });
+    writeFileSync(
+      desktopPath,
+      JSON.stringify({
+        mcpServers: {
+          "tandem-channel": {
+            command: "/opt/custom/node",
+            args: ["/hand/rolled/shim.js"],
+            env: { X: "1" },
+          },
+        },
+      }),
+    );
+    writeConfig({ tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } });
+
+    const result = await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", {
+      homeOverride: home,
+    });
+
+    expect(result.staleTokenTargets).toEqual([]);
+    // Still preserved, and still not an error — the entry is fine as it is.
+    expect(result.errors).toEqual([]);
+    const after = JSON.parse(readFileSync(desktopPath, "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(after.mcpServers["tandem-channel"]).toEqual({
+      command: "/opt/custom/node",
+      args: ["/hand/rolled/shim.js"],
+      env: { X: "1" },
+    });
+  });
+
+  it("does not call a preserved entry stale when it already holds the new token", async () => {
+    // The second half of the same gate: the claim is "it still holds the OLD
+    // token", so an entry already carrying the token just written has nothing
+    // to warn about.
+    const token = "abcdefghijklmnopqrstuvwxyz012345";
+    const desktopPath = desktopConfigUnder(home);
+    mkdirSync(dirname(desktopPath), { recursive: true });
+    writeFileSync(
+      desktopPath,
+      JSON.stringify({
+        mcpServers: {
+          "tandem-channel": { command: "/opt/custom/node", env: { TANDEM_AUTH_TOKEN: token } },
+        },
+      }),
+    );
+    writeConfig({ tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } });
+
+    const result = await applyConfigWithToken(token, { homeOverride: home });
+
+    expect(result.staleTokenTargets).toEqual([]);
+  });
+
   it("reports no stale-token target when nothing was preserved", async () => {
     // The other direction, so the list cannot be implemented as "every no-push
     // target": a desktop config with no shim has nothing holding an old token.

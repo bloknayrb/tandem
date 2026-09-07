@@ -224,8 +224,14 @@ function refusalSummary(reasons: readonly ConfigRefusalError["reason"][]): strin
     );
   }
   if (kinds.size === 1 && kinds.has(ERROR_CODE_CONFIG_MALFORMED)) {
+    // "must be a JSON object" rather than "fix the JSON": the same reason
+    // covers a file that parses perfectly and is an array, a string or `null`
+    // at its root, and telling that user to fix their JSON describes nothing
+    // wrong with it. The per-target line above already said which of the two
+    // it was.
     return (
-      `${lead} Fix the JSON, or restore the file from a backup, then re-run:\n` +
+      `${lead} It must be a JSON object — fix it, or restore the file from a\n` +
+      "backup, then re-run:\n" +
       "  tandem setup --apply"
     );
   }
