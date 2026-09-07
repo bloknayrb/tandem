@@ -35,3 +35,43 @@ export function relativeTime(timestamp: number, now: number = Date.now()): strin
   if (h < 24) return `${h}h`;
   return `${Math.floor(h / 24)}d`;
 }
+
+/**
+ * Renders a `"save-error"` notification's `message` with its structured
+ * `errorCode` folded back in as a `" (CODE)"` detail suffix, mirroring
+ * `errorCodeSuffix` in `actions/builtin.svelte.ts` for the client-triggered
+ * save paths.
+ *
+ * `document-service.ts`'s save/save-as/rename catches (#1816) deliberately
+ * keep the pushed `message` itself errno-free — it can reach a desktop user
+ * with no HTTP body to carry a details line (an MCP-tool-triggered save has
+ * none), so the raw fs error text and any absolute path never enter it — and
+ * park the one safe technical detail on `errorCode` instead. Nothing read
+ * that field back out, so an MCP-triggered save failure toasted only the
+ * generic sentence with no reason or errno at all. This is the read side:
+ * a render-time suffix, not a change to the stored `message`, so it leaves
+ * the #1816 "message carries no raw errno" test coverage intact.
+ *
+ * Scoped to `"save-error"` — other notification types stash a semantic
+ * sentinel in `errorCode` (`SIDECAR_RESTART_FAILED`, `LINK_NOT_OPENABLE`,
+ * …) that a raw parenthetical would only make noisier, not more useful.
+ * `"UNKNOWN"` (document-service.ts's fallback when the underlying error
+ * carried no `code`) is equally uninformative and is also suppressed.
+ *
+ * `"VERIFY_BLOCKED"` (`SaveVerificationError`, document-service.ts) gets the
+ * same exemption for a different reason: its `message` is built by
+ * `blockReasonMessage` specifically to be a complete, content-free sentence —
+ * including the #1123-0e "your original file was left unchanged"
+ * reassurance — so a jargon code tacked onto the end would undercut the
+ * reassurance rather than add a diagnostic detail.
+ */
+const SAVE_ERROR_CODE_SUFFIX_EXEMPT = new Set(["UNKNOWN", "VERIFY_BLOCKED"]);
+
+export function formatActivityMessage(
+  item: Pick<TandemNotification, "type" | "message" | "errorCode">,
+): string {
+  if (item.type !== "save-error") return item.message;
+  const code = item.errorCode;
+  if (!code || SAVE_ERROR_CODE_SUFFIX_EXEMPT.has(code)) return item.message;
+  return `${item.message} (${code})`;
+}

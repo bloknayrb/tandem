@@ -25,7 +25,9 @@ import { cleanup, render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { AppInfoState } from "../../src/client/hooks/useAppInfo.svelte";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
+import type { AppInfoData } from "../../src/client/types.js";
 import { autostartStatusCell } from "../helpers/autostart-status-cell.svelte";
 
 let toggleError: string | null = null;
@@ -56,8 +58,14 @@ vi.mock("../../src/client/cowork/cowork-helpers.js", async (importOriginal) => (
   isTauriRuntime: () => true,
 }));
 
+// Mutable, defaulting to `{ info: null, loading: false }` — the #1818 port-hint
+// test needs `info.transport === "http"` (the Loopback Port row, hint
+// included, only renders inside `{#if isHttp}`) to give the hint's absence a
+// positive control, which a fixed `info: null` mock cannot express.
+let appInfoCell: AppInfoState = { info: null, loading: false };
+
 vi.mock("../../src/client/hooks/useAppInfo.svelte.js", () => ({
-  createAppInfo: () => ({ info: null, loading: false, error: null }),
+  createAppInfo: () => appInfoCell,
 }));
 
 import NetworkSettings from "../../src/client/components/NetworkSettings.svelte";
@@ -103,6 +111,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  appInfoCell = { info: null, loading: false };
 });
 
 describe("NetworkSettings — start-at-login toggle", () => {
@@ -183,5 +192,45 @@ describe("NetworkSettings — start-at-login toggle", () => {
     // a commit that succeeded.
     await tick();
     expect(box.checked).toBe(true);
+  });
+});
+
+/**
+ * #1818 — three names for one restart action, plus a hint pointing at a
+ * `tandem start --port` flag that does not exist (`runStart()` takes no
+ * arguments). Every doc that tells a user where to find this button already
+ * calls it "Restart server"; the button itself was the one outlier.
+ */
+describe("NetworkSettings — restart button + port hint (#1818)", () => {
+  it('labels the restart button "Restart server"', () => {
+    const { container } = mount();
+    const btn = container.querySelector<HTMLButtonElement>(
+      "[data-testid='network-restart-sidecar']",
+    );
+    expect(btn?.textContent?.trim()).toBe("Restart server");
+  });
+
+  it("drops the dead tandem start --port hint, with a positive control on the row it lives in", () => {
+    // Positive control FIRST: the Loopback Port row (hint included) lives
+    // inside `{#if isHttp}`, which is false whenever `info` is `null` — the
+    // module-scope default this suite otherwise uses. Without forcing
+    // `transport: "http"` here, `not.toContain("tandem start --port")` would
+    // pass against the unfixed component too, since the whole row would be
+    // absent.
+    appInfoCell = {
+      info: {
+        version: "0.0.0-test",
+        toolCount: null,
+        mcpSdkVersion: "0.0.0",
+        transport: "http",
+        bindPort: 3479,
+      } as AppInfoData,
+      loading: false,
+    };
+    const { container } = mount();
+
+    expect(container.textContent).toContain("Loopback Port");
+    expect(container.textContent).toContain("3479");
+    expect(container.textContent).not.toContain("tandem start --port");
   });
 });

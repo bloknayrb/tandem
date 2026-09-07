@@ -136,9 +136,40 @@ vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
   }),
 }));
 
+// #1817: tri-state override so a test can force either `isTauriRuntime()` arm
+// without disturbing `:509`/`:531` below, which set `coworkStub.status` and
+// then click `data-testid="integration-wizard-cowork-setup"` — gated on
+// `isTauriRuntime()` alone — and would break under an independent cell
+// defaulting to `false`. `afterEach` resets this to `null` so those two keep
+// their `coworkStub.status`-derived behavior.
+let tauriOverride: boolean | null = null;
 vi.mock("../../src/client/cowork/cowork-helpers", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/client/cowork/cowork-helpers")>();
-  return { ...actual, isTauriRuntime: () => coworkStub.status !== null };
+  return {
+    ...actual,
+    isTauriRuntime: () => tauriOverride ?? coworkStub.status !== null,
+  };
+});
+
+// #1817's Tauri-true case reaches `wizard.step === "done"` (`mountPushMode`
+// already puts the wizard there), so `useAutostart.svelte`'s real `$effect`
+// runs unmocked once `isTauriRuntime()` is forced true — mirrors
+// `tests/client/network-settings-autostart.test.ts:41-52`. Spread `actual` so
+// the wizard's other three imports from this module (`autostartWizardDefault`,
+// `readAutostartDecided`, `writeAutostartDecided`) stay real; only
+// `createAutostart`'s live status/toggle are stubbed.
+vi.mock("../../src/client/hooks/useAutostart.svelte.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../src/client/hooks/useAutostart.svelte.js")>();
+  return {
+    ...actual,
+    createAutostart: () => ({
+      status: null,
+      loading: false,
+      error: null,
+      toggle: vi.fn(async (_next: boolean) => {}),
+    }),
+  };
 });
 
 // Spread, not re-declare — see `cowork-settings-mounted.test.ts` for the
@@ -308,6 +339,7 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
     wizardStub.channelRegistered = null;
     wizardStepCell.reset();
     coworkStub.status = null;
+    tauriOverride = null;
     vi.clearAllMocks();
     // Here rather than at the end of each clipboard test: `navigator` is a
     // global and the stub replaces it wholesale (no `userAgent`, no
@@ -582,18 +614,49 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
    * every surface by regex; this one proves the corrected copy actually reaches
    * the screen, which the regex cannot see.
    */
-  it("tells the user the ONLY thing that registers the shim: the CLI flag", async () => {
+  it("tells the user the ONLY thing that registers the shim: the CLI flag (non-Tauri)", async () => {
+    tauriOverride = false;
     const { container } = mountPushMode(false);
     await tick();
     const block = q(container, "integration-wizard-push-mode") as HTMLElement;
     const text = (block.textContent ?? "").replace(/\s+/g, " ");
 
     expect(text).toContain("tandem setup --apply --with-channel-shim");
-    // doctor.ts's caveat. Omitting it sends a desktop user — the majority, and
-    // the reason #1390 exists — to a binary their install does not ship.
-    expect(text).toContain("which the desktop app does not install");
+    // #1817: the npm-package caveat moved to the Tauri-only arm — this
+    // (npm/CLI) runtime has a working `tandem` command, so it does not carry it.
+    expect(text).not.toContain("npm install -g tandem-editor");
     // The route it must NOT offer.
     expect(text).not.toMatch(/come back here and register/i);
+  });
+
+  /**
+   * #1817: the desktop app has no `tandem` command at all, so the
+   * non-registered arm splits on `isTauriRuntime()` — the desktop copy names
+   * the npm install step before the setup command that needs it, closing with
+   * the keep-the-global caveat (the shim entry runs from that global install).
+   */
+  it("names the npm install step before the setup command under Tauri", async () => {
+    tauriOverride = true;
+    const { container } = mountPushMode(false);
+    await tick();
+    const block = q(container, "integration-wizard-push-mode") as HTMLElement;
+    const text = (block.textContent ?? "").replace(/\s+/g, " ");
+
+    expect(text).toContain("npm install -g tandem-editor@latest");
+    expect(text).toContain("desktop app doesn't include the");
+    expect(text).toContain("Keep the global installed");
+    expect(text).toContain("tandem setup --apply --with-channel-shim");
+  });
+
+  it("names the setup command with no npm install step off Tauri", async () => {
+    tauriOverride = false;
+    const { container } = mountPushMode(false);
+    await tick();
+    const block = q(container, "integration-wizard-push-mode") as HTMLElement;
+    const text = (block.textContent ?? "").replace(/\s+/g, " ");
+
+    expect(text).toContain("tandem setup --apply --with-channel-shim");
+    expect(text).not.toContain("npm install -g tandem-editor");
   });
 
   it("does not imply the wizard registered the shim when one is already there", async () => {

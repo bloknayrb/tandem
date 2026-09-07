@@ -13,20 +13,50 @@
  *
  * The shim paragraph is the load-bearing half. NOTHING in the app can register
  * the channel shim — `shouldRegisterChannelShim` is `override ?? false` and the
- * wizard's apply route passes no override — so both arms must name
- * `tandem setup --apply --with-channel-shim`, and must carry `doctor.ts`'s
- * caveat that the flag needs the npm package the desktop app does not install.
- * This surface is read *inside* the desktop app, which is what makes that
- * caveat load-bearing rather than decorative.
+ * wizard's apply route passes no override — so every arm must name
+ * `tandem setup --apply --with-channel-shim`, and the **desktop** arm must
+ * carry `doctor.ts`'s caveat that the flag needs the npm package the desktop
+ * app does not install (#1817 split the non-registered arm on
+ * `isTauriRuntime()`, since the desktop build has no `tandem` command at all
+ * to run that flag against).
  */
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { render, waitFor } from "@testing-library/svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import SettingsClaudeCodeTab from "../../src/client/components/settings-tabs/SettingsClaudeCodeTab.svelte";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
 import { CLAUDE_PLUGIN_INSTALL_COMMANDS } from "../../src/shared/constants.js";
+import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
+
+// #1817: SettingsClaudeCodeTab's non-registered push-route arm splits on
+// `isTauriRuntime()`. Mock it with a mutable cell (this file's precedent is
+// `settings-claude-code-tab-cowork.test.ts:25-28`) so individual tests can
+// force either branch; forcing Tauri-true also lazy-mounts CoworkSettings
+// (`SettingsClaudeCodeTab.svelte:481-491`), whose `createCoworkStatus(() =>
+// true)` holds a live `$effect` and a real `invoke` call, so those two are
+// mocked alongside it (copied from that same file, `:25-47`).
+let tauri = false;
+vi.mock("../../src/client/cowork/cowork-helpers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/client/cowork/cowork-helpers")>();
+  return { ...actual, isTauriRuntime: () => tauri };
+});
+vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
+  createCoworkStatus: () => ({
+    status: coworkStatusFixture({ vethernetCidr: null }),
+    loading: false,
+    error: null,
+    refetch: vi.fn(async () => {}),
+  }),
+}));
+vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/client/cowork/cowork-invoke")>()),
+  loadInvoke: vi.fn(async () => vi.fn()),
+  coworkToggleIntegration: vi.fn(async () => ({ ok: true })),
+  coworkPreflightSubnet: vi.fn(async () => ({ status: "unavailable" })),
+}));
+
+import SettingsClaudeCodeTab from "../../src/client/components/settings-tabs/SettingsClaudeCodeTab.svelte";
 
 function makeProps() {
   return {
@@ -90,6 +120,7 @@ describe("Settings → AI Assistant — persistent push routes (#1432)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    tauri = false;
   });
 
   it("renders the section, with both plugin install commands verbatim", async () => {
@@ -173,7 +204,8 @@ describe("Settings → AI Assistant — persistent push routes (#1432)", () => {
     ["no channel entry", { existing: claudeCodeInstall(false) }],
     ["a failed read", { existingOk: false }],
   ] as const) {
-    it(`names the CLI flag, with the npm caveat, on ${label}`, async () => {
+    it(`names the CLI flag on ${label} (non-Tauri runtime)`, async () => {
+      tauri = false;
       mockApi({ integrations: [{ kind: "claude-code" }], ...opts });
       const { container } = render(SettingsClaudeCodeTab, { props: makeProps() });
 
@@ -184,13 +216,44 @@ describe("Settings → AI Assistant — persistent push routes (#1432)", () => {
       // The instruction must be the one that works. Nothing in the app can
       // register the shim, so anything pointing at the wizard is false.
       expect(text).toContain("tandem setup --apply --with-channel-shim");
-      // doctor.ts's caveat: this surface is read inside the desktop app, which
-      // does not install the package that command lives in.
-      expect(text).toContain("which the desktop app does not install");
+      // #1817: the npm-package caveat moved to the Tauri-only arm — this
+      // (non-Tauri) arm has a working `tandem` command, so it does not carry it.
+      expect(text).not.toContain("npm install -g tandem-editor");
       // And it must NOT claim a state it could not read.
       expect(text).not.toContain("already registered");
     });
   }
+
+  // #1817: the desktop app has no `tandem` command at all, so the
+  // non-registered arm splits on `isTauriRuntime()` — the desktop copy names
+  // the npm install step before the setup command that needs it.
+  it("names the npm install step before the setup command under Tauri", async () => {
+    tauri = true;
+    mockApi({ integrations: [{ kind: "claude-code" }], existing: claudeCodeInstall(false) });
+    const { container } = render(SettingsClaudeCodeTab, { props: makeProps() });
+
+    await waitFor(() => {
+      expect(byTestId(container, "settings-modal-push-routes-shim")).toBeTruthy();
+    });
+    const text = flat(byTestId(container, "settings-modal-push-routes-shim"));
+    expect(text).toContain("npm install -g tandem-editor@latest");
+    expect(text).toContain("desktop app doesn't include the");
+    expect(text).toContain("Keep the global installed");
+    expect(text).toContain("tandem setup --apply --with-channel-shim");
+  });
+
+  it("names the setup command with no npm install step off Tauri", async () => {
+    tauri = false;
+    mockApi({ integrations: [{ kind: "claude-code" }], existing: claudeCodeInstall(false) });
+    const { container } = render(SettingsClaudeCodeTab, { props: makeProps() });
+
+    await waitFor(() => {
+      expect(byTestId(container, "settings-modal-push-routes-shim")).toBeTruthy();
+    });
+    const text = flat(byTestId(container, "settings-modal-push-routes-shim"));
+    expect(text).toContain("tandem setup --apply --with-channel-shim");
+    expect(text).not.toContain("npm install -g tandem-editor");
+  });
 });
 
 describe("PushRoutesInfo — reduced motion (#1432)", () => {

@@ -140,13 +140,18 @@ export async function handleSave(req: Request, res: Response): Promise<void> {
       await persistSkippedSaveSession(targetId);
     }
     // #1294: this branch reports failure in a 200 body rather than through
-    // sendApiError, so the scrub there does not reach it. `reason` is the raw
-    // write error (`EACCES: permission denied, open '<abs path>'`) for a
-    // document the caller identified only by documentId — same disclosure, a
-    // different envelope. Branches 2 and 3 are exempt: their paths are the
-    // caller's own `targetPath`.
+    // sendApiError, so the scrub there does not reach it. Since #1816,
+    // `saveDocumentToDisk`'s own `reason` is already generic (never the raw
+    // write error) at the source, so this scrub is defence-in-depth rather
+    // than the only thing standing between a loopback caller and an absolute
+    // path. Branches 2 and 3 are exempt: their paths are the caller's own
+    // `targetPath`.
     if (result.status === "error" && !isLoopbackRequest(req)) {
-      res.json({ data: { ...result, reason: "The save failed." } });
+      // cr-3 (#1816 follow-up): the client always renders this as
+      // "Save failed: <reason>" — keep the defence-in-depth wording here in
+      // sync with `saveDocumentToDisk`'s own generic reason so neither
+      // caller sees a stutter ("Save failed: The save failed.").
+      res.json({ data: { ...result, reason: "The document could not be saved." } });
       return;
     }
     res.json({ data: result });

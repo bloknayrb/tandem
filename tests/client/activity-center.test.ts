@@ -15,6 +15,7 @@
 import { render } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatActivityMessage } from "../../src/client/components/activityCenter.js";
 import {
   loadActivity,
   type NotificationsState,
@@ -342,5 +343,71 @@ describe("loadActivity — rehydrate/prune", () => {
     // Keeps the newest (tail) — last id survives, first is dropped.
     expect(loaded.at(-1)?.id).toBe(`n-${ACTIVITY_HISTORY_CAP + 9}`);
     expect(loaded.map((a) => a.id)).not.toContain("n-0");
+  });
+});
+
+// cr-1 (J2 review): `errorCode` reached both toast/tray surfaces on the wire
+// but nothing read it back out, so an MCP-triggered `tandem_save` failure
+// (no HTTP body to carry a details line) toasted only the generic sentence
+// with no reason or errno at all. `formatActivityMessage` is the read side.
+describe("formatActivityMessage (cr-1)", () => {
+  it("appends the errno as a parenthetical suffix on a save-error", () => {
+    expect(
+      formatActivityMessage({
+        type: "save-error",
+        message: "Save failed for report.docx.",
+        errorCode: "EACCES",
+      }),
+    ).toBe("Save failed for report.docx. (EACCES)");
+  });
+
+  it("omits the suffix when errorCode is absent", () => {
+    expect(
+      formatActivityMessage({
+        type: "save-error",
+        message: "Save failed for report.docx.",
+        errorCode: undefined,
+      }),
+    ).toBe("Save failed for report.docx.");
+  });
+
+  it('omits the suffix for the "UNKNOWN" fallback code — it carries no information', () => {
+    expect(
+      formatActivityMessage({
+        type: "save-error",
+        message: "Save failed for report.docx.",
+        errorCode: "UNKNOWN",
+      }),
+    ).toBe("Save failed for report.docx.");
+  });
+
+  // (post-ship review of #1816/#1897) `SaveVerificationError`'s message is a
+  // deliberately complete, content-free sentence (the #1123-0e "your original
+  // file was left unchanged" reassurance) — a jargon suffix here would
+  // undercut it rather than add a diagnostic detail.
+  it('omits the suffix for "VERIFY_BLOCKED" — its message is already complete', () => {
+    expect(
+      formatActivityMessage({
+        type: "save-error",
+        message:
+          "Save failed for report.docx: the regenerated file did not re-open cleanly — your original file was left unchanged",
+        errorCode: "VERIFY_BLOCKED",
+      }),
+    ).toBe(
+      "Save failed for report.docx: the regenerated file did not re-open cleanly — your original file was left unchanged",
+    );
+  });
+
+  it("leaves non-save-error notifications untouched even when errorCode is set", () => {
+    // general-error notifications stash a semantic sentinel in errorCode
+    // (SIDECAR_RESTART_FAILED, LINK_NOT_OPENABLE, …), not a raw fs code — a
+    // parenthetical there would be noise, not a diagnostic detail.
+    expect(
+      formatActivityMessage({
+        type: "general-error",
+        message: "Tandem server failed to restart.",
+        errorCode: "SIDECAR_RESTART_FAILED",
+      }),
+    ).toBe("Tandem server failed to restart.");
   });
 });

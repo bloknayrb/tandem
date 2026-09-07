@@ -172,7 +172,7 @@ First-run experience, error handling, and UX refinements.
 - Server auto-starts when Claude Code calls any Tandem tool (check PID in `.tandem/.server-info`)
 - Server auto-stop on idle was planned but not wired up
 - Browser auto-open (removed — `open` package wrote to stdout, corrupting the MCP wire; user opens http://localhost:5173 manually)
-- ~~Browser file open~~ — implemented: "+" button in tab bar opens FileOpenDialog (path input or drag-and-drop upload), HTTP API endpoints (`/api/open`, `/api/upload`)
+- ~~Browser file open~~ — implemented: "+" button in tab bar opens the new-tab menu (recent files, plus **Browse files…** — a native picker on desktop, a read-only `upload://` dialog in the browser build) and drag-and-drop onto the editor, HTTP API endpoints (`/api/open`, `/api/upload`). There is no typed-path input; that gap is tracked as #1895
 
 ### 8b: Onboarding — DONE
 

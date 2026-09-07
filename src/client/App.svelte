@@ -287,7 +287,7 @@ if (isTauriRuntime()) {
           id: `sidecar-restart-failed-${Date.now()}`,
           type: "general-error",
           severity: "error",
-          message: "Sidecar failed to restart — see logs",
+          message: "Tandem server failed to restart.",
           dedupKey: "sidecar-restart-failed",
           timestamp: Date.now(),
           errorCode: "SIDECAR_RESTART_FAILED",

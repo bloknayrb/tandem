@@ -133,13 +133,13 @@ Press `?` at any time to open the keyboard shortcuts reference. Press `?` or `Es
 
 ### Opening Files
 
-There are three ways to open a file:
-
-**Path input** — Click the **+** button in the tab bar, type an absolute file path, and click **Open**.
+You can open a file a few ways:
 
 **Drag-and-drop** — Drag a file from your file manager onto the editor. A dashed border appears as a drop indicator.
 
-**Upload** — Click **+**, switch to **Upload** mode, and browse or drag a file into the drop zone. Uploaded files get a synthetic `upload://` path and are always read-only — `Save` preserves the session (annotations) but cannot write back to disk.
+**Recent files** — Click **+** in the tab bar to see recently opened files; type to filter, then click one to open it.
+
+**Browse or upload** — Click **+** in the tab bar, then **Browse files…**. On desktop this opens a native file picker for real (write-capable) editing. In the browser build it opens an upload dialog: uploaded files get a synthetic `upload://` path and are always read-only — `Save` preserves the session (annotations) but cannot write back to disk.
 
 ### Supported Formats
 
