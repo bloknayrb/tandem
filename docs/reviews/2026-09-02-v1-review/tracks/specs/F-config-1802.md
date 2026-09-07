@@ -55,13 +55,32 @@ and leave the file intact**. This fix makes the parse failure behave like its ow
     returns success — is a class #1599 never accepted, and asserting otherwise would launder a false
     security claim into the PR on the exact data-destruction path this issue exists to close.
 
-    **So name it as a new open condition.** Per CLAUDE.md's Security rule ("file new findings there
-    as well as in the tracker"): file a tracker issue for it and add it to
-    `docs/security.md#open-findings` on its own terms — *"a non-atomic external writer passing
-    through zero bytes is not distinguished from a genuinely empty file; today's behaviour is no
-    better"* — citing that issue number, and repeat it in the PR body so the refusal is not read as
-    total. If the implementing session cannot file, the PR body must say plainly that this is an
-    **untracked, unaccepted residual**. It may not be described as accepted either way.
+    **So name it as a new open condition — and the register is not a place a finding lands alone.**
+    Per CLAUDE.md's Security rule ("file new findings there as well as in the tracker"), the
+    residual takes **one of two paths, never a mixture**:
+
+    - **Issue number obtainable.** File the tracker issue, then in the *same commit*: add the entry
+      to `docs/security.md#open-findings` on its own terms — *"a non-atomic external writer passing
+      through zero bytes is not distinguished from a genuinely empty file; today's behaviour is no
+      better"* — citing that number; **update `CLAUDE.md:232`**, whose Security bullet today reads
+      "**Three security findings are open** … — open: #1292 …, #1609 …, and #1666 …", changing the
+      count word `Three` → `Four` (the test asserts the literal
+      `**Four security findings are open`) and appending the new `#NNNN` inside the `— open:`
+      segment **at parenthetical depth zero**; and refresh the `reconciled against the tracker
+      <date>` marker at `docs/security.md:187`. Repeat it in the PR body so the refusal is not read
+      as total. **`tests/docs/security-findings-claims.test.ts` is a touched suite, and it will not
+      catch the omission**: it derives the open set FROM CLAUDE.md (`:163-193`) and asserts each has
+      a register entry, never the reverse — so a fourth register entry with no CLAUDE.md counterpart
+      is invisible and the branch would ship an auto-loaded `CLAUDE.md` that undercounts open
+      security findings with every suite green.
+    - **No issue number obtainable.** Then **no `docs/security.md` entry lands either.** The
+      residual is recorded in the PR body alone, stated plainly as an **untracked, unaccepted
+      residual**. A register entry with no issue number is worse than no entry: nothing surfaces it
+      in `gh issue list`, every other entry there carries a link, and CLAUDE.md's own rule is that a
+      criterion whose evidence a later judge cannot look up "fails silently … toward deletion". The
+      two files must never disagree about how many findings are open.
+
+    It may not be described as accepted on either path.
   - otherwise `JSON.parse`, and on failure throw
     `new ConfigRefusalError("CONFIG_MALFORMED", \`${configPath} is not valid JSON — refusing to rewrite it\`)`
     (the class lands in the #1801 half of this branch, and its field is `reason`). The message must
@@ -70,12 +89,22 @@ and leave the file intact**. This fix makes the parse failure behave like its ow
   - The whole `.broken-backups` block (`:1058-1147`: `mkdirSync`, `randomUUID` path,
     `setRestrictiveAcl`, `copyFile` with `COPYFILE_EXCL`, the POSIX `open("wx", 0o600)`) is
     **deleted** — after this change nothing reaches it, and leaving a Windows-ACL-hardened copier
-    alive for a zero-byte file is dead weight on a security-sensitive path. Drop the imports it
-    solely owned. **Two stale docblocks, not one**: the header bullet at `:14-16`, *and*
+    alive for a zero-byte file is dead weight on a security-sensitive path. **The imports it solely
+    owned, named so the lint round-trip is not spent discovering them**: `constants as fsConstants`
+    (imported `apply.ts:23`, used only at `:1119`) and `basename` (imported `:43`, used only at
+    `:1082`). Everything else in those import lists survives — `randomUUID`, `copyFile`, `readFile`,
+    `mkdirSync`, `setRestrictiveAcl` and `resolveAppDataDir` all keep callers at `:912`, `:958`,
+    `:1250`, `:1995`, `:925` and `:1991`. `npm run lint` / `biome check .` run in verify and reject
+    an unused import. **Three stale docblocks, not two**: the header bullet at `:14-16`;
     `applyConfig`'s own "Security gates (run before any read or write)" list at `:996-1000`, which
     advertises "Malformed JSON is backed up under Tandem's data dir with mode `0o600`" — a deleted
-    gate. `.broken-backups/` itself survives: `storage.ts#backupBrokenFile` and `models/store.ts`
-    still write there, so `docs/data-locations.md:30` stays true.
+    gate; **and `removeConfigEntries`'s docblock at `:1286-1288`**, which says it "never replaces
+    malformed JSON (`applyConfig` backs it up and rewrites — on an uninstall path that would wipe
+    the user's whole config)". That sentence exists to explain why the two functions deliberately
+    differ, and after this change they do not: the contrast collapses, so the clause becomes
+    "never creates the file" with the malformed half dropped. `.broken-backups/` itself survives:
+    `storage.ts#backupBrokenFile` and `models/store.ts` still write there, so
+    `docs/data-locations.md:30` stays true.
 - **The two shape gates throw `ConfigRefusalError`, not a bare `Error` — they are the other half of
   "malformed".** `apply.ts:1046` (`root is not a JSON object — refusing to rewrite`) and `:1053`
   (`mcpServers is not an object — refusing to rewrite`) already refuse and leave the file intact,
@@ -106,17 +135,38 @@ and leave the file intact**. This fix makes the parse failure behave like its ow
   - `:1523-1533` (`checkDesktopMcpConfig`). This arm deliberately merges `unreadable` and
     `malformed` into one warn (`:1513`), so the spec's "the `unreadable` arm is untouched" carve-out
     does **not** transfer. Reword to a claim true of both rather than splitting the branch — the
-    existing comment explains why one branch covers both ("could not be read as JSON" is true
-    whether the open or the parse failed), and splitting it re-introduces the false assertion that
-    comment exists to avoid. Same rewrite-free sentence, keeping the `DESKTOP_RESTART_NOTE` second
-    `withSuffix` hop.
+    existing comment (`:1510-1512`) explains why one branch covers both ("could not be read as JSON"
+    is true whether the open or the parse failed), and splitting it re-introduces the false
+    assertion that comment exists to avoid. **The two arms deliberately do NOT share a sentence.**
+    The Claude Code arm's replacement ("Fix the JSON, or restore the file from a backup, then re-run
+    doctor — Tandem will not rewrite a config it cannot parse") is false for half of this branch: an
+    EACCES/EISDIR file was never parsed and is very likely perfectly valid JSON, so prescribing a
+    JSON fix here is the exact class of false prescription `doctor-path-safety.test.ts:452-456`
+    records as the earlier bug. Give this arm its own wording, true of both kinds and prescribing
+    nothing JSON-specific — e.g. *"Tandem will not rewrite a config it could not read. Check the
+    file's permissions and that it is valid JSON, then re-run doctor."* — keeping the
+    `DESKTOP_RESTART_NOTE` second `withSuffix` hop. **`setupApplyRemedy(cliAvailable())` is dropped
+    from this arm**, because that remedy *is* the rewrite the sentence now refuses; the arm becomes
+    a `withSuffix(<new sentence>, DESKTOP_RESTART_NOTE)`. **#1801 adds a separate `oversize` arm
+    above this one** at the same site; this rewording is scoped to `unreadable || malformed` and the
+    two do not collide.
   - Both stay path-free and parse-detail-free: they reach Copy Diagnostics and public issues.
 - **`tests/docs/config-writer-set-claims.test.ts`** — deleting the backup removes one matched
   durable-write idiom from `apply.ts` (the `copyFile` at `:1119`; the `DURABLE_WRITE` regex at
   `:122` does not match the bare `open(backupPath, "wx", 0o600)` or the `fd.write`, so the drop is
   exactly 1). **Two constants pin `apply.ts` at 10, not one**: `WRITER_SITES` (`:138-140`) and the
   repo-wide `DURABLE_WRITER_FILES` census (`:234`). Both go 10 → 9. Re-derive the numbers from the
-  test's own failure message rather than trusting this line, and update the `why` string. This is a
+  test's own failure message rather than trusting this line.
+
+  **Re-derive the `why` string too; do not edit it.** It currently reads "Six `atomicWrite` calls,
+  plus the helper's own tmp `writeFile`, `rename` and **two-call EXDEV `copyFile` fallback**"
+  (`:141-148`) — which reaches 10 only by miscounting: there is exactly **one** EXDEV `copyFile`
+  (`apply.ts:958`), and the tenth site is the malformed-backup `copyFile` at `:1119` the string
+  never mentions. A mechanical `10 → 9` would carry a justification that is already wrong forward
+  into a state where it is wrong twice. After the deletion the nine are: six `atomicWrite` calls,
+  the helper's own tmp `writeFile` (`:917`), its `rename` (`:950`), and the single EXDEV `copyFile`
+  fallback (`:958`). The sentence about which four of the six write the Claude config and which two
+  write `SKILL.md` is unaffected and stays. This is a
   **removal**; the guard exists to stop writers being *added*, and `docs/security.md:453` gets one
   clause recording it. Nothing else in the #1599 acceptance moves — in particular
   `docs/security.md:455` (iii), "a losing writer's token appears nowhere in the final file", is
@@ -154,7 +204,9 @@ backup")` is **deleted with its subject.** Both its specs are about the removed 
 assertion (`:296-314`). Neither has anything left to assert. **The hardening invariant is not
 lost** — `tests/server/integrations/storage.test.ts:131-146` keeps the 0o600/0o700 proof for the
 `.broken-backups/` directory that `storage.ts` and `models/store.ts` still write to. State that in
-the PR body; without it, deleting a mode assertion reads like dropped coverage.
+the PR body; without it, deleting a mode assertion reads like dropped coverage. **The file's
+`PathRejectedError` import survives the deletion and must not be removed** — three other specs use
+it (`:133`, `:137`, `:180`), so `:314` is not its only consumer.
 
 `tests/cli/setup.test.ts:470-508` — the CLI half of the issue's surface, and it asserts exactly the
 behaviour being removed:
@@ -166,6 +218,11 @@ behaviour being removed:
   deleted**, to `"creates no .broken-backups dir when it refuses"` — `existsSync(join(tmpDir,
   ".broken-backups"))` is `false`. Keeping it as a negative pins that the refusal happens *before*
   any copy, which is the half-fix (1) also guards against on the server side.
+  **Keep the `process.env.TANDEM_APP_DATA_DIR = tmpDir` set/restore plumbing (`:492-500`)** — it is
+  what makes the negative assertion discriminating. Deleting it as now-purposeless (the natural
+  tidy-up once the backup block is gone) sends `resolveAppDataDir()` at the real app-data dir, so
+  `join(tmpDir, ".broken-backups")` can never exist and the check passes vacuously — green against
+  today's replace-and-back-up code too, pinning nothing.
 
 `tests/server/integrations/api-routes.test.ts`: an apply against a malformed config file returns
 `status: "error"` with `code: "CONFIG_MALFORMED"`, the file is unchanged, and the response
@@ -184,8 +241,10 @@ that pins the wizard half named in "Done when".
   `not.toContain("..")` dangling-clause assertion that spec exists for, and replace
   `toContain("Tandem backs the file up before rewriting it.")` with `not.toContain("backs the file up")`.
 - **New**: the same pair of assertions against `checkDesktopMcpConfig`'s warn `fix` for a malformed
-  `claude_desktop_config.json`. Nothing pins that site today (`grep -rn "backs the file up" tests/`
-  returns one hit), which is how it would have shipped a false promise silently.
+  `claude_desktop_config.json`, plus `not.toContain("Fix the JSON")` — that arm's new sentence is
+  deliberately *not* the Claude Code one, because it also serves `unreadable`. Nothing pins that
+  site today (`grep -rn "backs the file up" tests/` returns one hit), which is how it would have
+  shipped a false promise silently.
 
 `tests/server/integrations/apply-acl.test.ts` is **deleted with its subject**: both its describes
 are about the malformed-backup block (`setRestrictiveAcl` on the dir, no orphan file, the
@@ -212,9 +271,12 @@ A malformed non-empty `~/.claude.json` is never rewritten by any Tandem path; th
 wizard both name the refusal — **for the parse failure and for both shape gates**, all three
 throwing `ConfigRefusalError("CONFIG_MALFORMED")` rather than a bare `Error` the route folds onto
 `WRITE_FAILED` — and the wizard half is pinned by a test; **both** doctor sites stop
-promising a backup-and-rewrite and both are pinned; an empty config still gets a fresh file and a
-fresh install still works; the two writer counts and the `docs/security.md` clause are updated
-together; typecheck + the touched suites green.
+promising a backup-and-rewrite and both are pinned, each with its own sentence rather than a shared
+one; an empty config still gets a fresh file and a fresh install still works; the two writer counts
+land with a **re-derived** `why` string and the `docs/security.md:453` clause; the zero-byte
+residual is either (issue filed) a register entry **plus** the `CLAUDE.md:232` `Three` → `Four`
+update and a refreshed reconciliation date, or (no issue) PR-body-only with no register entry —
+never a register entry alone; typecheck + the touched suites green.
 
 ## Not in scope
 
@@ -299,3 +361,63 @@ recorded per the Fix section, **not** something #1599 accepted.
 `tests/cli/uninstall-scrub-mcp.test.ts` (test name), the two shape gates in
 `src/server/integrations/apply.ts`, and `docs/security.md#open-findings` (the newly-named residual,
 in place of the struck #1599 claim).
+
+## Review corrections (round 3)
+
+**Adopted**
+
+- *(blocking, two findings of the same shape)* The spec told the implementer to add the zero-byte
+  truncation residual to `docs/security.md#open-findings` and never to touch `CLAUDE.md` — whose
+  Security bullet (`CLAUDE.md:232`) enumerates the open set and states "**Three security findings
+  are open**". The repo's tripwire is **directional**: `tests/docs/security-findings-claims.test.ts`
+  derives the open set from CLAUDE.md (`:163-193`) and asserts each has a register entry, never the
+  reverse — so a fourth register entry with no CLAUDE.md counterpart is invisible, and the branch
+  would ship an auto-loaded `CLAUDE.md` that undercounts open security findings with every suite
+  green, which is precisely the drift that test's docblock says costs the most. The Fix bullet now
+  splits into two exclusive paths: **issue filed** → register entry **and** `Three` → `Four`
+  (the test asserts the literal `**Four security findings are open`) **and** the new `#NNNN` at
+  parenthetical depth zero inside `— open:` **and** a refreshed `reconciled against the tracker`
+  date at `docs/security.md:187`, all in the same commit, with the suite named as touched;
+  **no issue** → PR body only and **no register entry**, so the two files cannot part. "Done when"
+  states the same disjunction.
+- *(non-blocking, two findings)* `checkDesktopMcpConfig`'s rewrite was self-contradictory: it asked
+  for a claim "true of both" `unreadable` and `malformed` while also specifying the "**Same
+  rewrite-free sentence**" as the Claude Code arm — whose text prescribes fixing the JSON, false for
+  an EACCES/EISDIR file that is very likely valid JSON and was never parsed. That is the exact false
+  prescription `doctor-path-safety.test.ts:452-456` records as the earlier bug. The desktop arm now
+  gets its own sentence, prescribing nothing JSON-specific; the spec says the two arms deliberately
+  do not share one; `setupApplyRemedy(cliAvailable())` is stated as dropped from that arm (it *is*
+  the rewrite being refused) while `DESKTOP_RESTART_NOTE` survives; and the `doctor.test.ts` case
+  gains `not.toContain("Fix the JSON")`.
+- *(non-blocking)* A **third** stale docblock, `removeConfigEntries`'s at `apply.ts:1286-1288`
+  ("never replaces malformed JSON (`applyConfig` backs it up and rewrites …)"), added to the
+  deletion bullet. It is the docblock explaining why the two functions deliberately differ — which
+  after this change they no longer do — so the clause collapses to "never creates the file".
+- *(non-blocking)* The writer-count bullet said to "update the `why` string"; it now says to
+  **re-derive** it, because the existing string is already wrong: it credits a "two-call EXDEV
+  `copyFile` fallback" when there is exactly one (`apply.ts:958`) and never mentions the
+  malformed-backup `copyFile` at `:1119` that is the actual tenth site. A mechanical `10 → 9` would
+  have carried a wrong justification forward. The nine are enumerated.
+- *(non-blocking, in part)* The deletion bullet now names the imports that go unused and would fail
+  `npm run lint` / `biome check .` in verify: `constants as fsConstants` (`apply.ts:23`, used only
+  at `:1119`) and `basename` (`:43`, used only at `:1082`), with the six symbols that survive listed
+  so nothing else is dropped by association.
+- *(non-blocking)* The converted `tests/cli/setup.test.ts:487-508` spec must **keep** its
+  `TANDEM_APP_DATA_DIR = tmpDir` set/restore plumbing. Without it `resolveAppDataDir()` points at
+  the real app-data dir, `join(tmpDir, ".broken-backups")` can never exist, and the negative
+  assertion is vacuously true — green against today's replace-and-back-up code, pinning nothing.
+
+**Not adopted**
+
+- *(non-blocking, the second half of the unused-imports finding)* "Deleting
+  `describe('applyConfig — malformed-JSON backup')` … removes the only `PathRejectedError`
+  assertion in `tests/server/integrations/apply.test.ts` (`:314`), leaving its import unused."
+  **Refuted:** that import has three further consumers in the same file — `:133`
+  (`toThrow(PathRejectedError)`), `:137` (`(err as PathRejectedError).reason`) and `:180` — so it
+  stays. The spec now says so explicitly, because removing it on the finding's advice is what would
+  break the build. The apply.ts half of the same finding was adopted above.
+
+**File-set change:** this spec now also touches **`CLAUDE.md`** (the Security bullet's count word
+and open enumeration) and `docs/security.md:187` (the reconciliation date) — but only on the branch
+where the residual's tracker issue is filed; on the no-issue branch neither file is touched and no
+register entry is added. `tests/docs/security-findings-claims.test.ts` joins the touched-suite list.

@@ -27,8 +27,19 @@ mistranslation.
 
 ## Fix
 
-- **`apply.ts:223`** — `MAX_CONFIG_BYTES = 16 * 1024 * 1024`, exported so a test can assert the
-  floor without duplicating the literal. The value is justified from the sizes this issue reports,
+- **The cap moves to `src/shared/integrations/contract.ts` and becomes `16 * 1024 * 1024`.**
+  `export const MAX_CONFIG_BYTES = 16 * 1024 * 1024;` lands there, beside the new
+  `ERROR_CODE_CONFIG_TOO_LARGE`, and `apply.ts` imports it (deleting the local `const` at `:223`);
+  `src/cli/doctor.ts` imports it from the same place. **Not exported from `apply.ts`**, which was
+  round 2's shape: `doctor.ts`'s docblock (`:22-23`) constrains it to "Pure Node.js built-ins only
+  … so the module bundles cleanly and the standalone shim can mirror it", and `apply.ts` would drag
+  in `node:crypto`, `./acl-win.js`, `../platform.js`, the whole `SKILL_CONTENT` payload (`:46`) and
+  a **module-load `readFileSync`** — `const CLI_VERSION = resolveCliVersion()` at `:214` runs at
+  import time and reads `package.json` on the tsx/vitest path. `tests/cli/doctor-path-safety.test.ts`
+  also replaces `node:fs` for everything in doctor's graph, so that side effect would land inside a
+  mocked-fs suite. `contract.ts` is a leaf with **no imports at all**, and `doctor.ts` already reaches
+  it (`:44`, today a type-only import), so this adds no runtime edge doctor did not already have in
+  spirit. The value is justified from the sizes this issue reports,
   not from an unrelated constant: the file's own sweep comment calls a real `~/.claude.json`
   "routinely multi-megabyte", and 16 MiB clears that with a wide margin while keeping the parse
   budget bounded. (The nearest repo analogue is the **per-file** cap
@@ -45,17 +56,18 @@ mistranslation.
   a later measurement may move it up or down, and should be able to without re-litigating. **The
   durable half is the legible `CONFIG_TOO_LARGE` refusal** — whatever the number, a user who hits it
   now learns what happened instead of being told the file is open in another program.
-- **Rewrite the constant's docblock (`apply.ts:216-222`).** Both of its present claims become false
+- **Rewrite the constant's docblock, which travels with it** (today `apply.ts:216-222`, after the
+  move `src/shared/integrations/contract.ts`). Both of its present claims become false
   the moment the cap moves: "the realistic `.claude.json` is single-digit kilobytes" and "the cap is
   generous enough that no legitimate user hits it" are exactly what #1801 refutes. The replacement
   states the new bound and its **cost**, which is the thing a later reader needs: the cap bounds an
   in-memory read, and both readers parse synchronously — `applyConfig` at `:1014` (`statSync`) and
   `:1034` (`readFileSync`) blocks the server on the wizard route, and `readConfigForMutation`'s
   `JSON.parse` runs on the pre-launcher startup sweep (`:1883-1886`), whose own docblock advertises
-  async I/O but not an async parse. Raising the cap moves that budget with it. No code change beyond
-  the constant.
-- **`docs/security.md`, the #1599 entry — one clause, because raising the cap WIDENS an accepted
-  finding.** `readConfigForMutation` returns `{status:"skipped", reason:"oversize"}` above the cap
+  async I/O but not an async parse. Raising the cap moves that budget with it. No behaviour change
+  beyond the constant's value and its new home.
+- **`docs/security.md`, the #1599 entry — one clause naming BOTH directions, because raising the cap
+  moves two of its callers at once.** `readConfigForMutation` returns `{status:"skipped", reason:"oversize"}` above the cap
   (`apply.ts:1249`) and `refreshAllMcpEntryBinaries` `continue`s without writing (`:1901`), so every
   config in the **5–16 MiB band is immune to the boot sweep today** and becomes exposed the moment
   the cap moves: below the cap the sweep falls through to the full-root writeback at `:1957`, which
@@ -63,21 +75,100 @@ mistranslation.
   `uninstall-scrub.ts:453` and `:449` names as the writer that silently drops a fresh install while
   reporting success. That is exactly the "routinely multi-megabyte" population this issue is about,
   moving from immune to covered. **This is a risk-widening change and must be recorded** — add a
-  clause to the #1599 entry stating that raising `MAX_CONFIG_BYTES` enlarges the set of configs the
-  sweep read-modify-writes, and say so in the PR body. No code change; one sentence. (The
-  asymmetry to avoid: `F-config-1802.md` already requires a `docs/security.md:453` clause for its
-  own writer-count change, and that one *reduces* risk.)
-- **`src/cli/doctor.ts` — add the missing `oversize` kind, ~6 lines, in the same branch.** Without
-  it the new refusal names a condition doctor reports as `ok`, and the "Not in scope" deferral would
-  be untracked. `readClaudeConfig` (`:600-623`) does a bare `readFileSync` with no size branch and
-  its `ClaudeConfigRead` union (`:548-555`) has no oversize member. Add `statSync` to the `node:fs`
-  import (`:27`), a `| { kind: "oversize" }` member, a `statSync(path).size > MAX_CONFIG_BYTES`
-  branch **before** the read (the point is not to read it), and one warn arm beside the `malformed`
-  / `unreadable` ternary at `:1149-1158`: "~/.claude.json is too large for Tandem to rewrite
-  safely", fix "Tandem will not rewrite a config this large. Nothing was changed." Path-free and
-  size-free — this text reaches Copy Diagnostics. This is the two-person "fix it rather than file
-  it" rule applied to a five-line gap in a file this branch already edits (`F-config-1802.md`
-  rewrites two other sites in it).
+  clause to the #1599 entry saying so, and say so in the PR body. No code change; one sentence.
+  (The asymmetry to avoid: `F-config-1802.md` already requires a `docs/security.md:453` clause for
+  its own writer-count change, and that one *reduces* risk.)
+
+  **The clause must name both directions, in one sentence.** `apply.ts:1249` gates *every*
+  `readConfigForMutation` caller, and its docblock at `:1237` names `removeConfigEntries` as one of
+  the two — the uninstall scrub (`uninstall-scrub.ts:453`), which the #1599 entry's own
+  *"Uninstall — does **not** fail closed"* bullet calls the sharp edge because a surviving entry
+  "carries a *live, indefinitely valid* credential". Today a 5–16 MiB config makes that scrub
+  **skip**; after the raise it is actually scrubbed. So the same move enlarges the set the boot
+  sweep read-modify-writes (risk-widening) **and** the set the uninstall scrub can clean
+  (risk-reducing, touching the credential-remanence bullet). A clause that records only the sweep
+  half tells a later reader half the truth about a bullet the entry itself flags as the sharp edge.
+- **`src/cli/doctor.ts` — add the missing `oversize` kind, in the same branch.** Without it the new
+  refusal names a condition doctor reports as `ok`, and the "Not in scope" deferral would be
+  untracked. `readClaudeConfig` (`:600-623`) does a bare `readFileSync` with no size branch and its
+  `ClaudeConfigRead` union (`:548-555`) has no oversize member. Add `statSync` to the `node:fs`
+  import (`:27`), import `MAX_CONFIG_BYTES` from `../shared/integrations/contract.js`, add a
+  `| { kind: "oversize" }` member, and then — **the placement and the error contract are the whole
+  of this bullet, and getting either wrong is a real bug the suite cannot see:**
+
+  ```ts
+  export function readClaudeConfig(path: string): ClaudeConfigRead {
+    if (rejectUnsafeWindowsPrefix(path) !== null) return { kind: "unsafe-path" };
+    let raw: string;
+    try {
+      if (statSync(path).size > MAX_CONFIG_BYTES) return { kind: "oversize" };
+      raw = readFileSync(path, "utf-8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return { kind: "absent" };
+      return { kind: "unreadable" };
+    }
+    // …unchanged from here
+  ```
+
+  Two rules, both load-bearing:
+
+  1. **The stat goes AFTER `rejectUnsafeWindowsPrefix`, never before the read in the sense of
+     "above the path screen".** That first line exists so no syscall touches a hostile path (#1417):
+     CLAUDE.md's rule is that a UNC path must be refused "**before** any filesystem call — `is_file()`
+     on a network path performs the SMB handshake the check exists to prevent". A `statSync` hoisted
+     above it re-opens the NTLM-relay leak, and **`tests/cli/doctor-path-safety.test.ts` is
+     structurally unable to catch it**: its assertion is `expect(_readFileSyncSpy).not.toHaveBeenCalled()`
+     (`:437-440`), and its own `node:fs` mock stubs `statSync` for hostile prefixes as deliberate
+     CONTAINMENT that "asserts nothing" (`:58-86`, comment at `:71-74`). A misplaced stat is
+     therefore silently refused in test, green, and shipping a real
+     `statSync("\\\\attacker\\share\\.claude.json")` on Windows.
+  2. **The stat goes INSIDE the existing `try`, so the function stays total.** `ClaudeConfigRead`
+     has no error member and every call site is unguarded; a bare `statSync` throws ENOENT on the
+     **commonest** path (no `~/.claude.json`, i.e. every fresh install) and EACCES/ELOOP on the
+     redirected-profile one, and `Recorder.check` turns that into
+     `fail("user-mcp-config check crashed (Error) …", "Please report this at …/issues")` — a clean
+     warn with a remedy becomes a file-a-bug line, and `tandem doctor` / `tandem_diagnostics` crash
+     where they used to report. Inside the try, ENOENT still answers `absent` and EACCES/EISDIR/ELOOP
+     still answer `unreadable`, so **`tests/cli/doctor-path-safety.test.ts:450-464` stays green
+     unchanged** (`absent.json` → `absent`; the directory case still reaches `readFileSync` and
+     EISDIR because a directory's `size` is far under the cap).
+
+  **All four call sites, and what happens at each** — `readClaudeConfig` is called at `:1110`,
+  `:1492`, `:1939` and `:1944`, and two of them read `read.value` after exhausting the known kinds,
+  so a new union member is a **typecheck failure** there unless an arm is added:
+
+  - **`:1110` (`checkUserMcpConfig`, `~/.claude.json`)** — a dedicated
+    `if (read.kind === "oversize") { r.warn(…); return; }` **above** the
+    `unreadable || malformed` check at `:1130`. Message "~/.claude.json is too large for Tandem to
+    rewrite safely", fix "Tandem will not rewrite a config this large. Nothing was changed."
+    Path-free and size-free — this text reaches Copy Diagnostics.
+    **Not** an arm inside the `:1149-1158` ternary, which round 2 said: that ternary sits *inside*
+    the block guarded by `:1130`, so an arm added there is unreachable and the TS2339 at `:1163`
+    survives.
+  - **`:1492` (`checkDesktopMcpConfig`)** — its own dedicated arm, above the merged
+    `unreadable || malformed` check at `:1513`, with the same two sentences worded for the desktop
+    config and keeping the `DESKTOP_RESTART_NOTE` hop. **#1801 owns this arm; #1802's rewording of
+    that site is scoped to `unreadable || malformed` and does not touch it.**
+  - **Forbidden repair:** widening either predicate to `read.kind !== "ok"`. It clears the type error
+    and makes doctor print "is not valid JSON" / "could not be read as JSON" about a file that is
+    valid and readable — the exact mistranslation class this issue exists to remove.
+  - **`:1944` (`checkTandemPlugin`'s wizard read)** — **no arm**, deliberately. It reads the same
+    `~/.claude.json` that `:1110` just reported on, and the code's own comment at `:1969`
+    ("Anything but `ok` is already reported by `checkUserMcpConfig`") is that contract; it falls
+    through to `wizardTandemEntry = false` and there is no typecheck problem, because the site tests
+    `=== "ok"` rather than exhausting kinds.
+  - **`:1939` (`checkTandemPlugin`'s `~/.claude/settings.json`)** — **one warn, not a fall-through**,
+    for the reason that function's own docblock gives at `:1925-1930`: `enabledPlugins === null`
+    means "absent or unreadable — NOT evidence", so "folding a refusal into it would make the
+    refusal silent: the one case where 'absence is not evidence' is actively wrong, because we know
+    why we did not look." Nothing else reports this file. Mirror the shape of the `unsafe-path` arm
+    just above (`:1952-1958`): `if (settingsRead.kind === "oversize") { r.warn(…); return; }`, four
+    lines, same path-free text.
+
+  This is the two-person "fix it rather than file it" rule applied to a small gap in a file this
+  branch already edits (`F-config-1802.md` rewrites two other sites in it) — but it is **not the
+  "~6 lines" round 2 called it**: the honest count is the union member, the import, the guarded stat,
+  and three warn arms.
 - **New `ConfigRefusalError` in `apply.ts`**, modelled directly on the sibling `PathRejectedError`
   (`:285-293`) — same file, same throw path, same catch chain, **and the same field name**:
   ```ts
@@ -95,7 +186,9 @@ mistranslation.
 - **`src/shared/integrations/contract.ts:245-254`** — add
   `export const ERROR_CODE_CONFIG_TOO_LARGE = "CONFIG_TOO_LARGE"` (and, for #1802,
   `ERROR_CODE_CONFIG_MALFORMED`) to the `ApplyItemErrorCode` union. The class's `reason` values are
-  these wire codes verbatim, so the route arm maps one to the other with no table.
+  these wire codes verbatim, so the route arm maps one to the other with no table. **`MAX_CONFIG_BYTES`
+  lands in this same file** (see the cap bullet above), which is why the file is edited once rather
+  than twice.
 - **`src/server/integrations/api-routes.ts`**, in the existing `catch` around `applyConfig`
   (`:942-969`), a new arm *above* the generic one, in the `PathRejectedError` shape: log `err`
   server-side, return `errorResult(entry.id, err.reason, <static message>)`. The static message
@@ -120,13 +213,21 @@ mistranslation.
 and derive both boundary payloads from the exported `MAX_CONFIG_BYTES` rather than a 5 MiB literal,
 so the boundary stays pinned to whatever the cap becomes. Neither of its two cases may be dropped.
 
-1. `"accepts a config just under the cap"` — padding of `MAX_CONFIG_BYTES - 1024`, read the file
-   back and assert `mcpServers.tandem.url` (not-throwing alone is satisfied by a silent no-op).
-   Off-by-one pin, derived from the constant.
+1. `"accepts a config under the cap"` — a **fixed, modest** under-cap payload: reuse case (3)'s
+   6 MiB body rather than `"x".repeat(MAX_CONFIG_BYTES - 1024)`. Read the file back and assert
+   `mcpServers.tandem.url` (not-throwing alone is satisfied by a silent no-op). **The boundary stays
+   pinned to the constant by case (4), not by this payload** — a `MAX_CONFIG_BYTES - 1024` string
+   would materialise ~16 MiB, `JSON.parse` it and re-`JSON.stringify` it with 2-space indent on
+   every run of the file, on top of case (3)'s own 6 MiB, and the old 5 MiB version of this case was
+   already the heaviest thing in the suite. The payload must be real bytes (it has to parse), so the
+   sparse trick is unavailable here — which is exactly why it should be small.
 2. `"rejects a config above the cap"` — replaces today's `"x".repeat(5 MiB + 1)` body with the
    sparse form: `writeFileSync(p, "")` then `truncateSync(p, MAX_CONFIG_BYTES + 1)`, so no 16 MiB
    of bytes is written and the size guard throws before any read. Assert `ConfigRefusalError` with
-   `reason === "CONFIG_TOO_LARGE"`, and prove nothing was written with
+   `reason === "CONFIG_TOO_LARGE"`, **keep today's `toThrow(/refusing to read/)` on the message**
+   (the CLI half of "Done when" — `applyConfigWithToken` at `apply.ts:2327` and `writeTargets` at
+   `setup.ts:208-211` both print `err.message`, and nothing else asserts that text survives the
+   refactor), and prove nothing was written with
    **`statSync(p).size === MAX_CONFIG_BYTES + 1` plus an unchanged `mtimeMs`** — *not* a byte
    comparison, which would materialise and string-compare two 16 MiB buffers and print a 16 MB diff
    on failure. The guard is a `statSync` before any read (`apply.ts:1012-1022`), so a content
@@ -134,9 +235,10 @@ so the boundary stays pinned to whatever the cap becomes. Neither of its two cas
    `Error` the route cannot classify.
 3. New: a **6 MiB** well-formed config (one large string field) applies successfully and keeps its
    other `mcpServers` entries. This is the discriminating test — red on today's 5 MiB cap, green
-   only if the cap actually moved. It does not duplicate (1): (1) tracks the constant wherever it
-   goes, (3) pins that the constant went *past the size the issue reports*. Kills a fix that only
-   improves the error text.
+   only if the cap actually moved. 6 MiB is chosen as "comfortably past the old cap", not as a
+   measured figure; anything above 5 MiB + a margin serves. It does not duplicate (1): (1) proves an
+   under-cap config is written rather than silently no-op'd, (3) pins that the cap went *past the
+   size the issue reports*. Kills a fix that only improves the error text.
 4. New: `MAX_CONFIG_BYTES >= 16 * 1024 * 1024`. Cheap, and kills a later "tidy-up" that walks the
    cap back down without noticing this issue.
 
@@ -159,21 +261,41 @@ safely". "Done when" claims the refusal reaches *the wizard result*, and `result
 the same hazard #1802 covers for `CONFIG_MALFORMED`. Cheap, and the only thing that pins the wizard
 half of this issue.
 
-`tests/cli/doctor.test.ts` — one case for the new `oversize` arm: a `~/.claude.json` above
-`MAX_CONFIG_BYTES` (same sparse `truncateSync` fixture) produces the "too large" warn, and the `fix`
-string contains neither the path nor a byte count. Without it the wizard's restored `tandem doctor`
-pointer is again a promise nothing keeps.
+`tests/cli/doctor.test.ts` — **two** cases, one per non-trivial arm, both using the sparse
+`truncateSync` fixture:
+
+- `~/.claude.json` above `MAX_CONFIG_BYTES` → `checkUserMcpConfig`'s "too large" warn, and the `fix`
+  string contains neither the path nor a byte count. Without it the wizard's restored
+  `tandem doctor` pointer is again a promise nothing keeps.
+- an oversize Claude Desktop config → `checkDesktopMcpConfig`'s own "too large" warn, with the same
+  leak assertions. This is the arm that would otherwise be repaired by widening the predicate to
+  `read.kind !== "ok"` and reporting "could not be read as JSON" about a valid file.
+
+(The `:1939` `~/.claude/settings.json` arm gets no case: reaching it needs a >16 MiB fixture for a
+file that is never large, and the arm exists to satisfy the `:1925-1930` docblock rule rather than
+to be exercised. Say so in the PR body rather than leaving it unexplained.)
+
+`tests/cli/doctor-path-safety.test.ts` — **no new case, but it is a touched suite and must be run.**
+Two of its existing specs are what the stat's placement is judged by: `:437-440` (hostile paths
+still answer `unsafe-path` with `readFileSync` never called) and `:450-464` (`absent.json` →
+`absent`, a directory → `unreadable`). If either is red, the stat is in the wrong place. Note in the
+PR body that the ordering itself is *not* pinned by that suite — its `statSync` stub silently
+absorbs a misplaced stat (`:58-86`) — so the placement rests on review, and the specs above only
+catch the totality half.
 
 No boot-sweep test is added: that log line exists and is unchanged. Say so in the PR body with the
 `:1893-1899` citation, so the issue's third bullet is closed by evidence rather than by silence.
 
 ## Done when
 
-The cap is 16 MiB and exported, and its docblock states the new bound, its parse cost and that the
-number is an unmeasured judgment; a 6 MiB config applies; an oversize config refuses with
-`CONFIG_TOO_LARGE` through the CLI message, the wizard result (pinned by a client test) and
-`tandem doctor`'s new `oversize` arm; the rewritten size guard derives its boundaries from the
-constant; the `docs/security.md` #1599 clause recording the sweep's widened population lands with
+The cap is 16 MiB, lives in `src/shared/integrations/contract.ts`, and its docblock states the new
+bound, its parse cost and that the number is an unmeasured judgment; a 6 MiB config applies; an
+oversize config refuses with `CONFIG_TOO_LARGE` through the CLI message (pinned by the surviving
+`/refusing to read/` assertion), the wizard result (pinned by a client test) and **both** of
+`tandem doctor`'s new `oversize` arms; `readClaudeConfig` is still total, still screens the path
+before any syscall, and `tests/cli/doctor-path-safety.test.ts` is green unchanged; the over-cap case
+derives its boundary from the constant and case (4) pins the floor; the `docs/security.md` #1599
+clause recording **both** the sweep's widened population and the scrub's widened reach lands with
 the cap change; the sweep's existing `oversize` log is cited in the PR body; typecheck + the touched
 suites green.
 
@@ -258,3 +380,67 @@ offer to trim the config.
 **File-set change:** this spec now also touches `docs/security.md` (the #1599 entry),
 `src/cli/doctor.ts`, `tests/cli/doctor.test.ts` and
 `tests/client/integration-wizard-push-support.test.ts`.
+
+## Review corrections (round 3)
+
+**Adopted**
+
+- *(blocking, three findings on one line)* The doctor bullet said to add a
+  `statSync(path).size > MAX_CONFIG_BYTES` branch **"before the read"**, with no ordering relative
+  to the path screen and no error handling. Followed literally that is two bugs. **(a) Security:**
+  `readClaudeConfig`'s first line is `rejectUnsafeWindowsPrefix` precisely so no syscall touches a
+  hostile path (#1417); a stat above it performs the SMB/NTLM handshake the check exists to prevent,
+  and `tests/cli/doctor-path-safety.test.ts` cannot see it — its assertion is
+  `expect(_readFileSyncSpy).not.toHaveBeenCalled()` (`:437-440`) and its own `node:fs` mock stubs
+  `statSync` for hostile prefixes as containment that "asserts nothing" (`:58-86`, `:71-74`), so a
+  misplaced stat is green in test and real on Windows. **(b) Totality:** `ClaudeConfigRead` has no
+  error member and today ENOENT is caught *inside* the `readFileSync` try; a bare `statSync` throws
+  on the commonest path of all — no `~/.claude.json`, every fresh install — and `Recorder.check`
+  turns that into "check crashed … Please report this at …/issues", crashing `tandem doctor` and
+  `tandem_diagnostics` where they used to warn, with `doctor-path-safety.test.ts:456` and
+  `doctor.test.ts:2026-2032` red. The bullet now carries the literal placement (after the screen,
+  inside the existing `try`, ENOENT → `absent`, everything else → `unreadable`) as a code block, and
+  `tests/cli/doctor-path-safety.test.ts` is added to the touched-suite list with the two specs that
+  judge it named.
+- *(blocking, two findings)* The `oversize` member was added to `ClaudeConfigRead` with **one** warn
+  arm named, and that arm was placed "beside the `malformed`/`unreadable` ternary at `:1149-1158`" —
+  which sits *inside* the block already guarded by `:1130`, so it is unreachable and the type error
+  survives. `readClaudeConfig` has four call sites, two of which read `read.value` after exhausting
+  the known kinds (`:1163`, `:1537`), so the new member is a TS2339 at both. The bullet now
+  enumerates all four with the outcome at each: `:1110` and `:1492` get dedicated arms **above** the
+  `unreadable || malformed` checks; `:1944` deliberately gets none (same file, and `:1969`'s own
+  comment is that contract); `:1939` gets a warn rather than falling into `enabledPlugins = null`,
+  per that function's docblock at `:1925-1930` ("the one case where 'absence is not evidence' is
+  actively wrong, because we know why we did not look"). Widening either predicate to
+  `read.kind !== "ok"` is named and forbidden — it prints "is not valid JSON" about a valid file,
+  the mistranslation this issue exists to remove. `doctor.test.ts` gains the second (desktop) case,
+  and the spec now says #1801 owns the `checkDesktopMcpConfig` `oversize` arm so it does not collide
+  with #1802's rewording of the same site.
+- *(non-blocking, two findings)* `MAX_CONFIG_BYTES` moves to `src/shared/integrations/contract.ts`
+  rather than being exported from `apply.ts`. Importing it from `apply.ts` would give `doctor.ts` —
+  whose docblock (`:22-23`) constrains it to built-ins so the standalone shim can mirror it — a
+  runtime edge to `node:crypto`, `acl-win`, `platform`, the `SKILL_CONTENT` payload and a
+  **module-load `readFileSync`** (`const CLI_VERSION = resolveCliVersion()`, `apply.ts:214`), inside
+  a suite that replaces `node:fs` wholesale. `contract.ts` has no imports at all and doctor already
+  reaches it at `:44`.
+- *(non-blocking)* The `docs/security.md` #1599 clause was scoped to the boot sweep only. The same
+  cap gates `readConfigForMutation`'s other caller, `removeConfigEntries` — the uninstall scrub the
+  entry itself calls the sharp edge for credential remanence — so raising it also makes 5–16 MiB
+  configs *scrubbable*. The clause must now name both directions in one sentence.
+- *(non-blocking, two findings)* Test 1 no longer allocates `MAX_CONFIG_BYTES - 1024` (~16 MiB of
+  real bytes, parsed and re-serialised every run, on top of test 3's 6 MiB). It uses a fixed modest
+  under-cap payload; the boundary stays pinned to the constant by test 4's floor assertion. Noted
+  that test 1's payload must be real bytes — it has to parse — which is why keeping it small is the
+  available lever.
+- *(non-blocking)* Test 2 keeps today's `toThrow(/refusing to read/)` alongside the new
+  `ConfigRefusalError` / `reason` assertions. "Done when" claimed the refusal reaches the CLI
+  message and only the wizard and doctor halves had named tests; both CLI printers emit
+  `err.message`, so nothing else would notice the text vanishing in the refactor.
+
+**Not adopted**
+
+- None.
+
+**File-set change:** `MAX_CONFIG_BYTES` now lives in `src/shared/integrations/contract.ts` (which
+this spec already edited for the error codes) rather than `src/server/integrations/apply.ts`, and
+`tests/cli/doctor-path-safety.test.ts` joins the touched-suite list (run-only, no new case).

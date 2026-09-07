@@ -19,7 +19,10 @@ Two consequences, and the docs describe neither:
 
 - **Claude Code, no flag → preserve.** `README.md:230`, `docs/architecture.md:577` and
   `CHANGELOG.md:340` all say re-running `tandem setup --apply` without the flag removes the shim.
-  It does not; only `tandem uninstall` removes it. There is no `--without-channel-shim` — the
+  It does not. The only removal command that exists today is **`tandem --uninstall-scrub`**
+  (`src/cli/index.ts:103`, documented at `docs/cli.md:45`) — and that is a whole-scrub, not a
+  shim-only path: it also removes `mcpServers.tandem`, the installed skill and (Windows) the Cowork
+  registration. So there is no way to remove the shim alone. There is no `--without-channel-shim` — the
   comment at `setup.ts:191-192` says so explicitly ("there is deliberately no
   `--no-channel-shim`"), which is right about the old default-on hazard and wrong as the whole
   story: it leaves opt-in with no opt-out.
@@ -100,7 +103,9 @@ creation**, never a licence to remove.
   already imports it at `:53`.
 
   `applyOpsForCli` keeps the **preserve** boolean, so `remove` stays `[]`; the entry is in neither
-  `create` nor `remove` and survives byte-for-byte. In `writeTargets`, `shimRegisteredFor.push`
+  `create` nor `remove`, so its **value** survives unchanged. (Not the file's bytes: `applyConfig`
+  re-serialises the whole root through `JSON.stringify(…, null, 2)` on every run regardless.) In
+  `writeTargets`, `shimRegisteredFor.push`
   (`setup.ts:206`) is gated on `writeShim`, not `preserveShim`. When `opts.withChannelShim === true`
   and the kind is `none`, print one `console.error` line naming the target
   (`  <label>: --with-channel-shim has no effect here (no channel transport); any existing entry
@@ -128,7 +133,13 @@ creation**, never a licence to remove.
   `console.log` (that stdout *is* the product, cf. `tandem doctor --json`; Critical Rule 3's
   redirect lives in `src/server/index.ts`). Add `--without-channel-shim` to the usage block.
 - **Docs.** `README.md:230` and `docs/architecture.md:577`: "re-run `tandem setup --apply` without
-  the flag" → "run `tandem setup --apply --without-channel-shim` (or `tandem uninstall`)".
+  the flag" → "run `tandem setup --apply --without-channel-shim`". **No parenthetical naming a
+  second command.** `tandem uninstall` does not exist — the only removal subcommand is
+  `tandem --uninstall-scrub` (`src/cli/index.ts:103`; the usage block at `:67` and `docs/cli.md:45`
+  both spell it that way), and even that is a whole-scrub rather than a shim-only removal, so naming
+  it here would prescribe the wrong command for the stated purpose. Writing a nonexistent command
+  into the same sentence that fixes a nonexistent command is the defect this issue closes, and
+  nothing in the suite would catch it (see the `channel-shim-optin-claims` note below).
   `docs/cli.md:32`: add the `--without-channel-shim` row. **Two more live enumerations of the flags
   `setup --apply` honors go stale the moment `--without-channel-shim` lands and are easy to miss:**
   `docs/architecture.md:829` ("non-interactive; honors `--force`, `--target=<kind>`,
@@ -136,9 +147,18 @@ creation**, never a licence to remove.
   [--target=<kind>] [--with-channel-shim]`). Both take the new flag. **`CHANGELOG.md:340` carries the same
   false sentence and is NOT edited** — the pipeline forbids touching that file and the entry is a
   shipped release record; listed for Bryan instead.
-  `tests/docs/channel-shim-optin-claims.test.ts` scans `README.md`, `docs/cli.md` and
-  `src/cli/setup.ts`: its patterns are wizard-anchored, so removal wording that names only the CLI
-  does not trip it — keep it that way (no "from the wizard" phrasing).
+  `tests/docs/channel-shim-optin-claims.test.ts` scans **thirteen** surfaces
+  (`tests/docs/channel-shim-optin-claims.test.ts:62-75`), not three: `README.md`,
+  `docs/troubleshooting.md`, `docs/user-guide.md`, `docs/cli.md`, `skills/tandem/SKILL.md`,
+  `src/cli/doctor.ts`, `src/cli/setup.ts`, `src/server/integrations/apply.ts`,
+  `src/server/integrations/api-routes.ts`, `IntegrationWizardModal.svelte`, `PushRoutesInfo.svelte`
+  and `SettingsClaudeCodeTab.svelte`. Its patterns are wizard-anchored (`APP_REGISTERS`, `:82-86`),
+  so removal wording that names only the CLI does not trip it — keep it that way (no "from the
+  wizard" phrasing). **It validates no CLI verb**, which is why the `tandem uninstall` correction
+  above has to be made by reading rather than by the suite. `skills/tandem/SKILL.md` is on that
+  surface list but is **not** edited by this spec, so the "no version bump" claim below stays true;
+  if a later revision does add removal wording there, the frontmatter `version` bump and the literal
+  in `tests/skill-instruction-contract.test.ts` come with it.
 - Nothing here adds a route, a tool, a Y.Doc write, a `data-testid` or a config writer, so
   Critical Rules 1/2/7/9, `NON_LOOPBACK_ALLOWED` and `tests/docs/config-writer-set-claims.test.ts`
   are untouched. `skills/tandem/SKILL.md` is not edited, so no version bump.
@@ -195,11 +215,17 @@ comment is the judgement #1760 reverses. Under the new resolver the read returns
 - Rename to `"preserves a hand-registered shim on a no-push target"` and assert `toBeDefined()`.
   Rewrite the `:617-619` comment: a `none` kind is a **ceiling on creation**, not a licence to
   delete.
-- **Give the fixture a distinctive body and assert it back verbatim, twice** — this is the only
-  test in the repo that can observe the "byte-identical" clause in "Done when". Write
+- **Give the fixture a distinctive body and assert the entry's VALUE back verbatim, twice** — this
+  is the only test in the repo that can observe the no-re-derive clause in "Done when". Write
   `{"tandem-channel":{"command":"/opt/custom/node","args":["/hand/rolled/shim.js"],"env":{"X":"1"}}}`,
-  run `applyConfigWithToken` **once with no flag and once with `withChannelShim: true`**, and
-  `toEqual` that exact object after each. Without it, a lazy implementation that gates only
+  run `applyConfigWithToken` **once with no flag and once with `withChannelShim: true`**, and after
+  each assert
+  `expect(desktop.mcpServers["tandem-channel"]).toEqual({command:"/opt/custom/node",args:["/hand/rolled/shim.js"],env:{X:"1"}})`.
+  **Scope the `toEqual` to that one key, never to `mcpServers` as a whole**: `buildMcpEntries`
+  (`apply.ts:452-487`) always emits a `tandem` entry — a stdio one for `claude-desktop` — and
+  `applyConfig` merges `ops.create` into `mcpServers`, so `mcpServers.tandem` is *expected* to appear
+  alongside the preserved key and a whole-object `toEqual` is red for the wrong reason. Without this
+  case, a lazy implementation that gates only
   `shimRegisteredFor.push` on `writeShim` while still passing `preserveShim` into `buildMcpEntries`
   passes every other named test and silently rewrites the user's entry onto `resolveNodeBinary()` +
   `CHANNEL_DIST`. Nothing existing covers it: `setup.test.ts:566-580` asserts only `toBeDefined()`,
@@ -216,11 +242,15 @@ exactly what lets it pin the `opts → resolver` hop at zero cost. Three changes
 - After `runSetup({ apply: true, withChannelShim: false })`,
   `expect(resolveChannelShimIntent).toHaveBeenCalledWith("claude-code", <path>, false)`. Kills a fix
   that adds the flag to the parser but never threads it to the resolver.
-- Push-status guard: `resolveChannelShimIntent` mocked `true`, `detectTargets` → `[CLAUDE_DESKTOP]`;
-  assert the stripped stderr contains "Not registered" and **not** "Registered for:". This is the
-  spec that keeps the resolver's new `true` from re-arming #1299 — the invariant at
-  `run-setup-apply.test.ts:154-156` is being deliberately replaced, so its comment is rewritten in
-  the same commit.
+- Push-status guard, run with **`runSetup({ apply: true, withChannelShim: true })`**:
+  `resolveChannelShimIntent` mocked `true`, `detectTargets` → `[CLAUDE_DESKTOP]`; assert the
+  stripped stderr contains "Not registered", **not** "Registered for:", **and** the new
+  `"has no effect here"` line. This is the spec that keeps the resolver's new `true` from re-arming
+  #1299 — the invariant at `run-setup-apply.test.ts:154-156` is being deliberately replaced, so its
+  comment is rewritten in the same commit. The `withChannelShim: true` argument is load-bearing:
+  the `console.error` is gated on `opts.withChannelShim === true`, so a case that passes no flag (or
+  `false`) cannot observe it, and "Done when"'s *"says so out loud"* clause would be pinned by
+  nothing.
 - **Repair `it("does not credit a target whose config write failed")` (`:202-226`), which the
   `writeShim` gate silently defangs.** It mocks the resolver `true` for both targets, uses
   `[CLAUDE_CODE, CLAUDE_DESKTOP]`, fails the *second* `applyConfig`, and asserts the status line
@@ -240,16 +270,22 @@ in the PR body.
 
 `resolveChannelShimIntent` preserves on every target absent a flag; `--without-channel-shim` is the
 only path that removes, and it removes on every kind; `--with-channel-shim` on a no-push target
-neither creates nor deletes and says so out loud; a preserved Claude Desktop entry is byte-identical
-after the run — **pinned by the inverted `tests/cli/setup.test.ts:601-623`, whose distinctive-body
-`toEqual` is the only thing that can observe it** — and is not announced as registered; the four
-live doc sites (`README.md:230`, `docs/architecture.md:577`, `:829`, `:1060`, plus the `docs/cli.md`
-row) name a command that works; typecheck + the touched suites green.
+neither creates nor deletes and says so out loud (pinned by the `withChannelShim: true`
+push-status case in `run-setup-apply.test.ts`); **a preserved Claude Desktop `tandem-channel`
+entry's VALUE is unchanged after a no-flag run and after a `--with-channel-shim` run** — pinned by
+the inverted `tests/cli/setup.test.ts:601-623`, whose `toEqual` against the hand-rolled
+`{command,args,env}` fixture is the only thing that can observe it. (Not "byte-identical": every
+`applyConfig` run re-serialises the whole file through `JSON.stringify(…, null, 2)`, so the file's
+bytes change either way; what is preservable, and what the test observes, is the entry's value.)
+The entry is not announced as registered; the four live doc sites (`README.md:230`,
+`docs/architecture.md:577`, `:829`, `:1060`, plus the `docs/cli.md` row) name commands that exist —
+`tandem setup --apply --without-channel-shim`, and `tandem --uninstall-scrub` wherever the scrub is
+already named; typecheck + the touched suites green.
 
 ## Not in scope
 
 `CHANGELOG.md:340` (Bryan). `shouldRegisterChannelShim` and the wizard's no-override call. Whether
-the shim should exist at all. `tandem uninstall`'s scrub path.
+the shim should exist at all. `tandem --uninstall-scrub`'s scrub path.
 
 ## Review corrections (round 1)
 
@@ -331,3 +367,45 @@ the shim should exist at all. `tandem uninstall`'s scrub path.
 **File-set change:** this spec now also touches `tests/cli/setup.test.ts`,
 `docs/architecture.md:829` and `docs/architecture.md:1060`, and adds a
 `src/shared/integrations/contract.js` import to `src/cli/setup.ts`.
+
+## Review corrections (round 3)
+
+**Adopted**
+
+- *(blocking)* The docs bullet prescribed writing **`tandem uninstall`** into `README.md:230` and
+  `docs/architecture.md:577` as a removal path, and the Problem section rested on the same command.
+  That command does not exist: `src/cli/index.ts:103` dispatches only on `--uninstall-scrub`, the
+  usage block at `:67` and `docs/cli.md:45` both spell it `tandem --uninstall-scrub`, and
+  `tests/docs/channel-shim-optin-claims.test.ts` validates no CLI verb — so a fix whose "Done when"
+  is *"the four live doc sites name a command that works"* would have shipped a second nonexistent
+  command in the same sentence, silently. The parenthetical is **dropped** rather than corrected:
+  `--uninstall-scrub` also removes `mcpServers.tandem`, the skill and the Cowork registration, so it
+  is not a shim-only removal path and naming it there prescribes the wrong command. The Problem
+  section (`:24`) and "Not in scope" are corrected to the real spelling in the same edit.
+- *(non-blocking)* `"assert it back verbatim … toEqual that exact object"` was ambiguous in a way
+  that fails as written: `applyConfigWithToken` also writes `mcpServers.tandem` (a stdio entry for
+  `claude-desktop`, `apply.ts:452-487`), so a literal `toEqual` on `mcpServers` is red. The
+  assertion is now scoped to `desktop.mcpServers["tandem-channel"]`, with `mcpServers.tandem`
+  called out as expected to appear alongside it.
+- *(non-blocking)* "Done when" promised a **byte-identical** preserved entry, which no test can
+  observe — `applyConfig` re-serialises the whole file through `JSON.stringify(…, null, 2)` on every
+  run. Reworded to the claim the `toEqual` actually pins: the `tandem-channel` entry's **value** is
+  unchanged after a no-flag run and after a `--with-channel-shim` run.
+- *(non-blocking)* "Done when" required `--with-channel-shim` on a no-push target to "say so out
+  loud" and no named test could observe the line — the `console.error` is gated on
+  `opts.withChannelShim === true` and none of the three `run-setup-apply.test.ts` changes passed it.
+  The push-status guard case now runs `runSetup({ apply: true, withChannelShim: true })` and asserts
+  `"has no effect here"` alongside the existing "Not registered" / not-"Registered for:" pair.
+- *(non-blocking)* The `tests/docs/channel-shim-optin-claims.test.ts` surface list was described as
+  three files; it is **thirteen** (`:62-75`), including `skills/tandem/SKILL.md`, `doctor.ts`,
+  `api-routes.ts` and three Svelte components. Corrected, with the conclusion kept (the
+  `APP_REGISTERS` patterns at `:82-86` are wizard-anchored and do not fire on CLI-only removal
+  wording) and the `SKILL.md` consequence stated explicitly, so the "no version bump" claim in the
+  Fix section stays true by construction rather than by luck.
+
+**Not adopted**
+
+- None.
+
+**File-set change:** unchanged from round 2 — the corrections are to wording and assertions within
+the already-listed files.
