@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { Socket } from "node:net";
 import { Readable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ControllableStream,
@@ -182,8 +183,12 @@ describe("channel shim stdin-EOF shutdown (#1804)", () => {
     // `StdioServerTransport` puts stdin in flowing mode before the listener is
     // registered. The monitor needed its own `resume()` for that reason; its
     // arming is driven for real in the describe below.
+    // `fileURLToPath`, not `new URL(...).pathname`: the latter stays
+    // percent-encoded, so a checkout under a path holding a space or a
+    // non-ASCII character (`C:\Users\My Name\tandem`) would resolve to a
+    // `%20` path that does not exist and fail this pin with ENOENT.
     const src = await readFile(
-      new URL("../../src/channel/run.ts", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
+      fileURLToPath(new URL("../../src/channel/run.ts", import.meta.url)),
       "utf8",
     );
     expect(src).toContain('process.stdin.once("end"');
