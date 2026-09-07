@@ -124,9 +124,19 @@ any stage after `review` short-circuits on `parked` or `failed`. Side effects ar
 before creating; `args.known` lets a resumed run skip.
 
 ```
-plan → reviewLoop(≤3) → implement → simplify → verify(+fix ≤2) → [e2e] → manualProbes
-     → prReviewLoop(≤3) → ship(push, PR, auto-merge-or-record, subscribe) → postShipReview
+plan → reviewLoop(S 1 / M 2 / L 3) → implement → simplify → verify(+fix ≤2) → [e2e] → manualProbes
+     → prReviewLoop(≤2, one batched skeptic) → ship(push, PR, auto-merge-or-record, subscribe)
 ```
+
+**Budget shape (2026-09-07, wave 3).** Measured on J2 (S) and F-doctor (M): plan refuters were 42–43%
+of a group's output tokens and per-finding skeptics another 10–12%, with 170M+ cached-input tokens
+riding on the refuters alone; build, verify, e2e, probes, simplify and code-review together were
+under 10%. C (L, three domain lenses at `max` every round) had spent more on plan refutation than J2
+spent end to end before it reached Build. The script now caps plan rounds by tier, lets the domain
+lens speak only in round 1 (rules + tests re-check revisions), runs PR review for two rounds with one
+skeptic judging the round's findings as a batch, drops L's domain effort to `high`, and has no
+post-ship stage. Expected on a J2-shaped group: ~50 agents → ~20. Stage numbers below are the
+post-cut shape; the ledger rows for wave 1–3 groups were run under the old one.
 
 Stages:
 
@@ -134,12 +144,14 @@ Stages:
    rows, experiments, decisions. Writes `tracks/specs/<group>-<issue>.md` per issue in the
    A8-1796 shape (non-review issues as `X-<issue>.md`). Returns `{specs[], branch, filesTouched[],
    order[], risks[], assumptions[], closes[], refs[]}`.
-2. **reviewLoop** — three refuters in parallel (2+1 at the cap): the group's repo agent via
-   `agentType`; a CLAUDE.md-rules refuter (Critical Rules 1–9, gotchas, origin helper choice,
+2. **reviewLoop** — refuters in parallel: in round 1 the group's repo agent(s) via
+   `agentType` (or `general-purpose` when none), in every round a CLAUDE.md-rules refuter (Critical Rules 1–9, gotchas, origin helper choice,
    license-gate both halves, testid snapshot, `NON_LOOPBACK_ALLOWED`, ADR-027 guard shapes, skill
    version); a tests refuter (would a lazy default arm pass? is each experiment's "still broken"
    output now a spec?). `{blocking[], nonBlocking[]}` → revise agent appends "Review corrections
-   (round n)". Loop while blocking, max 3 → `parked` with the disagreement.
+   (round n)". Loop while blocking, capped by tier (S 1, M 2, L 3); leftovers get one scope-cut
+   (M/L) and a two-lens re-refute (all tiers — for S it is what checks the single revise landed),
+   then `parked` with the disagreement.
 3. **implement** — worktree under `.claude/worktrees/wt-<group>` on `fix/<slug>-<issue>` from
    `origin/master`; `ln -s` `node_modules`; `npx husky`; Rust groups re-touch the stubs; one
    commit per issue (`fix(<area>): … (#N)`, attribution trailer, never a closing keyword in a
@@ -156,9 +168,10 @@ Stages:
 7. **manualProbes** — runs the track's named experiment / probe scripts against a scratch server on
    the harness ports (`probe-tools.mts`, `server-probes/run.sh`, harness vitest config) and captures
    the before/after lines for the PR body; emits `bryan[]` for anything hardware-gated.
-8. **prReviewLoop** — parallel: `Skill(code-review, --level high)` on the diff + the repo agent on
-   the diff; each finding through one skeptic (`default refuted=true if uncertain`); confirmed →
-   fix → re-verify; ≤3 rounds; leftovers → `unresolved[]`.
+8. **prReviewLoop** — parallel: `Skill(code-review, --level high)` on the diff + (round 1 only)
+   the repo agent on the diff; the round's findings through ONE skeptic as a batch, keyed by id
+   (`default refuted=true if uncertain`; a missing verdict keeps the finding as unverified);
+   confirmed → fix → re-verify; ≤2 rounds; leftovers → `unresolved[]`.
 9. **ship** (gate) — assert `.husky/_/pre-push` exists; `git push -u origin <branch>` (hook runs;
    failure → fix → re-push; `HUSKY=0` only in the recorded cargo case); PR body with `## Closes`
    (only `closes: true` issues), `## Refs (partial — issue stays open)` (`Refs #N — what landed;
@@ -168,10 +181,12 @@ Stages:
    data — the repo refuses while auto-merge is off); no PR-activity subscription exists here, so
    the main session polls CI (`subscribed: false`). Returns `{group, branch, pr, closes[], refs[],
    unresolved[], bryan[], skillVersion}`.
-10. **postShipReview** — `code-review` once more on the pushed head; findings → fix → push.
+10. ~~**postShipReview**~~ — removed 2026-09-07 (see the budget note above and the wave-3 lesson on
+    the resumed post-ship agent). The main session's merge-time pass covers it.
 
-Models/effort: plan + reviewers at the group's tier; L-tier domain reviewer `effort: max`;
-verify/review `high`; simplify/ship `low`. `isolation` unused (worktree managed explicitly).
+Models/effort: plan + reviewers at the group's tier; domain reviewers `effort: high` at every tier
+(L was `max` until 2026-09-07); verify/review `high`; simplify/ship `low`. `isolation` unused
+(worktree managed explicitly).
 
 ### Main-session loop around each group / wave
 
