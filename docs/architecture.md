@@ -830,7 +830,7 @@ Silent auto-configuration on startup was removed in #477 PR 3c-ii-c (ADR-038 §2
 
 First-run setup is driven by the in-app integration wizard, which auto-opens when `integrations.json` is empty (transport-agnostic — covers both the desktop bundle and the npm-browser path). The wizard persists intent via `POST /api/integrations` and applies it via `POST /api/integrations/apply`. The CLI equivalent is `tandem setup --apply` (non-interactive; honors `--force`, `--target=<kind>`, `--with-channel-shim`, `--without-channel-shim`).
 
-If no Claude installation is detected, the wizard's connect step surfaces a "We couldn't find Claude on this computer" empty state with an **Install Claude Code** action (#1084, replacing the former native dialog and the earlier download-link nudge). The tray "Setup AI Assistant" item focuses the window and re-opens the wizard.
+The wizard's connect step's empty state (no target config has ever been written) headlines on detected Claude CLI presence (#1814), not just on whether a target was found: "We couldn't find Claude on this computer" when the CLI itself is absent (or presence is still probing), or "Claude Code is installed, but hasn't connected to Tandem yet." when it is on or off PATH — both paired with an **Install Claude Code** action in the not-found case (#1084, replacing the former native dialog and the earlier download-link nudge). The tray "Setup AI Assistant" item focuses the window and re-opens the wizard.
 
 ### System Tray
 

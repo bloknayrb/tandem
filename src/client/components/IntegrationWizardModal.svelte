@@ -167,6 +167,18 @@ const cliStatus = createClaudeCliStatus(() => open && wizard.step === "connect",
 // never sees a flash of the install button before the GET resolves.
 const showInstallCta = $derived(cliStatus.presence === "NOT_INSTALLED");
 const showInstalledNotOnPath = $derived(cliStatus.presence === "INSTALLED_NOT_ON_PATH");
+// #1814: the empty state's headline used to be keyed on `wizard.existing.length
+// === 0` — i.e. "no target config file/dir has ever been written" — which is a
+// claim about whether Claude has been RUN, not whether it is INSTALLED. A user
+// who installed Claude Code but never ran it (INSTALLED_ON_PATH) or has it only
+// off PATH (INSTALLED_NOT_ON_PATH) landed on "We couldn't find Claude on this
+// computer" with "Claude Code is installed…" two lines below it. Key the
+// headline on CLI presence instead: null (still probing) reads the same as
+// NOT_INSTALLED — the safe default until the GET resolves, matching
+// `showInstallCta`'s own loading behavior above.
+const emptyStateFoundInstall = $derived(
+  cliStatus.presence === "INSTALLED_ON_PATH" || cliStatus.presence === "INSTALLED_NOT_ON_PATH",
+);
 // Rendered OUTSIDE the "we couldn't find Claude" empty state, unlike the two
 // flags above. The affected user — a Windows npm-global install — has almost
 // always run `claude` from a terminal once (cmd/PowerShell honor PATHEXT, so
@@ -875,7 +887,11 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
               {@render loadingDots("Looking for Claude on your computer…")}
             {:else if wizard.existing.length === 0}
               <div class="iw-empty" data-testid="integration-wizard-empty">
-                <p class="iw-empty-title">We couldn't find Claude on this computer.</p>
+                <p class="iw-empty-title">
+                  {emptyStateFoundInstall
+                    ? "Claude Code is installed, but hasn't connected to Tandem yet."
+                    : "We couldn't find Claude on this computer."}
+                </p>
                 {#if showInstallCta}
                   <p class="iw-hint-text">
                     Don't have Claude Code yet? Install it now — a small, signed download
