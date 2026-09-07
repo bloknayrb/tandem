@@ -480,7 +480,7 @@ The shim coexists with the HTTP MCP server — Claude Code connects to both simu
 
 When Claude Code asks for tool approval, it sends `notifications/claude/channel/permission_request` to the shim. The shim forwards the request to `POST /api/channel-permission` on the Tandem server.
 
-**The return leg does not exist — this relay is a stub, not a working feature.** Nothing in `src/client/` reads `pendingPermissions`, so no prompt is ever displayed; `permission_request` is registered as an MCP *notification* handler, and notifications cannot be answered; and `POST /api/channel-permission-verdict` deletes the pending entry and logs the verdict, which therefore never reaches Claude Code. The code says as much in place (*"SSE push to browser is a follow-up"*) — the capability was declared ahead of an implementation that never landed. It is described as shipped API in `docs/mcp-tools.md`, which is wrong and tracked for correction. This matters beyond the feature itself: it was rationale (1) for keeping the channel canonical, and [ADR-047](decisions.md#adr-047-claude-code-push-transport-activation) §3 voids it on these grounds.
+**The return leg does not exist — this relay is a stub, not a working feature.** Nothing in `src/client/` reads `pendingPermissions`, so no prompt is ever displayed; `permission_request` is registered as an MCP *notification* handler, and notifications cannot be answered; and `POST /api/channel-permission-verdict` deletes the pending entry and logs the verdict, which therefore never reaches Claude Code. The capability was declared ahead of an implementation that never landed. `docs/mcp-tools.md` used to describe it as shipped API; #1794 corrected that, and the approval prompt's `input_preview` payload is neither sent by the shim nor stored, served or logged by the server (the served `description` summary line is what #1884 still tracks). This matters beyond the feature itself: it was rationale (1) for keeping the channel canonical, and [ADR-047](decisions.md#adr-047-claude-code-push-transport-activation) §3 voids it on these grounds.
 
 ## Plugin Monitor
 
@@ -527,12 +527,14 @@ The mode cache (`getCachedMode()` warm-up + `getModeSync()` / `refreshMode()` ho
 
 ### Retry Semantics
 
-Reconnect uses exponential backoff: 2s / 4s / 8s / 16s / 30s (cap). The retry counter resets **only after `STABLE_CONNECTION_MS` (60s) of continuous uptime** — resetting per event would let a server that crashes after each event reconnect forever, never exhausting the cap.
+Reconnect uses exponential backoff: 2s / 4s / 8s / 16s / 30s (cap). The retry counter resets **only after `STABLE_CONNECTION_MS` (60s) of continuous uptime** — resetting per event would let a connect-then-die flap re-arm the once-per-outage report on every cycle, and each stdout write is a model turn.
 
-On exhaustion (`CHANNEL_MAX_RETRIES`), the monitor:
+**The consumer never exits and never stops retrying (#1804).** Neither host is respawned — the plugin monitor and the channel shim are each launched once per Claude Code session — so a process that gave up killed the push path for the rest of that session. After `CHANNEL_MAX_RETRIES` consecutive failures the consumer reports **once per outage**:
 1. POSTs `/api/channel-error` with `MONITOR_CONNECT_FAILED`.
-2. Writes a user-facing line to stdout: "Tandem monitor disconnected — restart Tandem to restore real-time events."
-3. Calls `process.exit(1)`.
+2. Writes one user-facing line to stdout: "Tandem monitor lost its connection and is retrying in the background — tandem_checkInbox still works and is authoritative."
+3. Keeps retrying at the 30s cap, with the per-failure stderr lines suppressed until the connection is restored.
+
+A later outage, after a recovery that survived `STABLE_CONNECTION_MS`, reports again.
 
 ### Awareness Lifecycle
 

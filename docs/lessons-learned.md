@@ -368,11 +368,11 @@ Initial attempts to filter at the bridge and server levels had no effect because
 
 ## 39. Retry Budgets Must Reset on Stable Uptime, Not Per Event
 
-**Problem:** Resetting the reconnect counter every time an event is successfully delivered lets a server that crashes after each event reconnect forever — the cap never fires because the counter resets before it exhausts.
+**Problem:** Resetting the reconnect counter every time an event is successfully delivered lets a server that crashes after each event look healthy forever — the counter resets before it can reach the threshold that means "say something". When that threshold was a hard cap it never fired; now that the consumer retries without limit (#1804) the threshold gates the once-per-outage report instead, and a per-event reset would re-arm that report — and the monitor's stdout notice, each one a model turn — on every connect-then-die cycle.
 
-**Solution:** Reset the retry counter only after the connection has been healthy for a meaningful continuous window (`STABLE_CONNECTION_MS` = 60s here). This decouples the "is the server stable?" signal from event throughput.
+**Solution:** Reset the retry counter only after the connection has been healthy for a meaningful continuous window (`STABLE_CONNECTION_MS` = 60s here). This decouples the "is the server stable?" signal from event throughput. One exception, and it is a transition rather than an event: the run's *first* successful handshake resets both the counter and the report latch, because failures before a server ever existed were not an outage and a latch set then would otherwise silence the first real loss.
 
-**Key insight:** The question the retry budget is trying to answer is "has this connection been healthy long enough to warrant resetting the budget?" — not "did any event arrive?" A server that delivers one event and then crashes is not a healthy server.
+**Key insight:** The question the retry counter is trying to answer is "has this connection been healthy long enough to warrant a fresh start?" — not "did any event arrive?" A server that delivers one event and then crashes is not a healthy server.
 
 ## 40. Stdio Plugin Hosts Route stdout to the User, Not stderr
 
