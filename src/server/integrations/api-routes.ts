@@ -147,6 +147,17 @@ export interface IntegrationsRoutesDeps {
    */
   shouldRegisterChannelShim?: typeof shouldRegisterChannelShim;
   /**
+   * Optional skill-install override. Production leaves this undefined and
+   * calls the real `installSkill()`, which writes `~/.claude/skills/tandem/SKILL.md`
+   * under the REAL home directory — there is deliberately no request-body
+   * `homeOverride` (see `parseApplyBody`). Tests MUST inject a spy: the apply
+   * suite drives the real route, and without this seam every `npm test` and
+   * every pre-push hook silently overwrote the operator's installed skill with
+   * whatever the checkout happened to bundle (found 2026-09-07 — it had
+   * downgraded a v15 install to v14 three times in one night).
+   */
+  installSkill?: typeof installSkill;
+  /**
    * Optional Claude-CLI binary detector override. Production leaves this
    * undefined and calls the real `detectClaudeCli()`. Tests inject a stub so
    * the status route's response doesn't depend on whether the test process
@@ -994,7 +1005,7 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
       // Skill install runs once if anything applied (per-user side effect).
       if (anyApplied) {
         try {
-          await installSkill();
+          await (deps.installSkill ?? installSkill)();
         } catch (err) {
           // Non-fatal; log only.
           console.error("[Tandem] apply: skill install failed:", err);

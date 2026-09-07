@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   _resetApplyGateForTests,
@@ -156,11 +156,18 @@ describe("integrations API routes", () => {
   let tmpDir: string;
   let deps: IntegrationsRoutesDeps;
   let backend: ReturnType<typeof memoryBackend>;
+  // The real `installSkill()` writes under the REAL home directory and the
+  // route deliberately accepts no `homeOverride`, so every app built from
+  // `deps` gets this spy. Without it the apply tests below rewrote the
+  // operator's `~/.claude/skills/tandem/SKILL.md` on every run.
+  let installSkillSpy: ReturnType<typeof vi.fn<() => Promise<void>>>;
 
   beforeEach(async () => {
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-int-api-"));
     backend = memoryBackend();
+    installSkillSpy = vi.fn(async () => {});
     deps = {
+      installSkill: installSkillSpy,
       store: createIntegrationsStore(tmpDir),
       keychain: createKeychain(backend),
       readExisting: async () =>
@@ -1150,6 +1157,9 @@ describe("integrations API routes", () => {
           TAURI_ORIGIN,
         );
         expect(res.status).toBe(200);
+        // Pins the "exactly once after the loop" contract AND that the route
+        // took the injected seam rather than the real home-directory writer.
+        expect(installSkillSpy).toHaveBeenCalledTimes(1);
         const body = res.body as { results: Array<{ status: string }>; nextNonce: string };
         expect(body.results[0]?.status).toBe("applied");
         const after = JSON.parse(fs.readFileSync(tmpClaudeJson, "utf-8"));
