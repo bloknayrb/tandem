@@ -776,7 +776,7 @@ async function main() {
       console.error("[Tandem] Hocuspocus startup error:", err);
     });
 
-    await startMcpServerStdio();
+    await startMcpServerStdio({ wsPort, mcpPort });
     console.error("[Tandem] MCP server running on stdio");
   }
 }

@@ -115,3 +115,17 @@ green.
 
 Everything the issue names: the two env vars reach `runDoctor` through the CLI wrapper, and the
 probed port is printed. No finding was outstanding against this spec.
+
+## Review corrections (post-ship)
+
+- **The stdio MCP server now carries the live ports too.** This spec's Problem section credited
+  the `/api/diagnostics` embedder with threading live ports, and the HTTP path does — but
+  `startMcpServerStdio` built its server with `{ version, transport: "stdio" }` and nothing else,
+  so `tandem_diagnostics` in stdio mode on a moved install probed the defaults, reported them not
+  listening and prescribed a second instance. `index.ts` now passes the `{ wsPort, mcpPort }` it
+  already resolved at `:98-99` (one resolution site, as this spec requires — nothing re-parses
+  env), and `startMcpServerStdio` gains an optional `transport` seam so
+  `tests/server/mcp-stdio-ports.test.ts` can drive `tandem_diagnostics` over an
+  `InMemoryTransport` with `runDoctor` mocked at the module boundary and pin the exact
+  `{ wsPort, mcpPort }` the collector receives. In stdio mode nothing listens on the MCP port, so
+  its probe still reads "not listening" — but it now names the port the user actually set.
