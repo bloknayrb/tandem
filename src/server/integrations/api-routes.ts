@@ -58,8 +58,6 @@ import {
   type ClaudeCliStatusResponse,
   ERROR_CODE_APPLY_IN_PROGRESS,
   ERROR_CODE_BAD_ORIGIN,
-  ERROR_CODE_CONFIG_MALFORMED,
-  ERROR_CODE_CONFIG_TOO_LARGE,
   ERROR_CODE_INSTALL_FAILED,
   ERROR_CODE_INSTALL_IN_PROGRESS,
   ERROR_CODE_INVALID_APPLY_REQUEST,
@@ -967,21 +965,16 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
             // field. The `reason` is the whole payload the wizard needs (#1801,
             // #1802) — without it every refusal renders as "couldn't write the
             // settings file — check it isn't open in another program", which is
-            // both wrong and unactionable.
+            // both wrong and unactionable. It is already an
+            // `ApplyItemErrorCode`, so it forwards directly; the user-facing
+            // sentence is the wizard's `resultErrorText` to own, and the terse
+            // message here matches every sibling `errorResult` above.
             console.error(
               `[Tandem] apply: ${entry.id} → ${target.configPath} refused (${err.reason}):`,
               err.message,
             );
             results.push(
-              errorResult(
-                entry.id,
-                err.reason === "CONFIG_TOO_LARGE"
-                  ? ERROR_CODE_CONFIG_TOO_LARGE
-                  : ERROR_CODE_CONFIG_MALFORMED,
-                err.reason === "CONFIG_TOO_LARGE"
-                  ? "Your Claude settings file is too large for Tandem to rewrite safely, so Tandem left it alone."
-                  : "Your Claude settings file isn't valid JSON, so Tandem left it alone.",
-              ),
+              errorResult(entry.id, err.reason, "Refused to rewrite the config — see server logs"),
             );
             continue;
           }

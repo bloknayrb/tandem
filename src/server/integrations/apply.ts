@@ -49,7 +49,11 @@ import {
   claudeCodeConfigPath,
   claudeDesktopConfigPath,
 } from "../../shared/integrations/client-config-paths.js";
-import { targetPushSupport } from "../../shared/integrations/contract.js";
+import {
+  ERROR_CODE_CONFIG_MALFORMED,
+  ERROR_CODE_CONFIG_TOO_LARGE,
+  targetPushSupport,
+} from "../../shared/integrations/contract.js";
 import { isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
 import {
   buildNpxStdioArgs,
@@ -301,15 +305,17 @@ export function applyOpsForCli(create: McpEntries, opts: { withChannelShim: bool
  * Modelled on the sibling {@link PathRejectedError}, and the field is `reason`
  * rather than `code` on purpose: `applyConfig` branches on Node's `err.code`
  * twice inside the same try/catch, so a `code` here would be read as an errno.
- * The `reason` is carried to the wizard as an `ApplyItemErrorCode`, which is
- * what turns a generic "couldn't write the settings file" into a sentence the
- * user can act on. `message` is for the CLI printers, which emit it verbatim —
- * it may name the path and the size, but never any parse detail.
+ * The `reason` IS an `ApplyItemErrorCode` — typed off the contract constants so
+ * the apply route forwards it directly rather than re-deriving it through a
+ * ternary that could drift — and it is what turns a generic "couldn't write the
+ * settings file" into a sentence the user can act on. `message` is for the CLI
+ * printers, which emit it verbatim — it may name the path and the size, but
+ * never any parse detail.
  */
 export class ConfigRefusalError extends Error {
   override readonly name = "ConfigRefusalError";
   constructor(
-    readonly reason: "CONFIG_TOO_LARGE" | "CONFIG_MALFORMED",
+    readonly reason: typeof ERROR_CODE_CONFIG_TOO_LARGE | typeof ERROR_CODE_CONFIG_MALFORMED,
     message: string,
   ) {
     super(message);
@@ -1052,7 +1058,7 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
     const { size } = statSync(configPath);
     if (size > MAX_CONFIG_BYTES) {
       throw new ConfigRefusalError(
-        "CONFIG_TOO_LARGE",
+        ERROR_CODE_CONFIG_TOO_LARGE,
         `${configPath} is ${size} bytes; refusing to read (cap: ${MAX_CONFIG_BYTES}).`,
       );
     }
@@ -1102,7 +1108,10 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
     // so a BOM-only file starts fresh rather than being refused.
     if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
 
-    if (raw.trim() !== "") {
+    // `/\S/.test`, not `raw.trim() !== ""`: identical predicate (JS `\s` is the
+    // same code-point set `String.prototype.trim` strips) without allocating a
+    // trimmed copy of a file that `MAX_CONFIG_BYTES` now permits to be 16 MiB.
+    if (/\S/.test(raw)) {
       let parsed: unknown;
       try {
         parsed = JSON.parse(raw);
@@ -1111,7 +1120,7 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
         // snippet of the source, and this file holds bearer tokens. Same rule
         // `readConfigForMutation` states.
         throw new ConfigRefusalError(
-          "CONFIG_MALFORMED",
+          ERROR_CODE_CONFIG_MALFORMED,
           `${configPath} is not valid JSON — refusing to rewrite it`,
         );
       }
