@@ -663,20 +663,32 @@ export async function saveDocumentToDisk(
 
     return { status: "saved", fidelityWarnings, integrityWarnings, unpreservedImports };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
     const errCode = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
+    // #1816: `err.message` is the raw Node fs error and typically embeds the
+    // absolute path Tandem was writing to (`EACCES: permission denied, open
+    // '/Users/…/file.md'`). Neither the pushed notification nor the returned
+    // `reason` may carry it: both reach a desktop user, who is ALWAYS a
+    // loopback caller, so `_shared.ts`'s loopback scrub — a LAN-disclosure
+    // control, orthogonal to this — never covered them. The raw error still
+    // reaches the log line below; `errorCode` is the one technical detail
+    // that travels to the client, for a "(EACCES)"-style detail suffix.
+    console.error("[Save] saveDocumentToDisk failed for", docState.filePath, err);
     pushNotification({
       id: generateNotificationId(),
       type: "save-error",
       severity: "error",
-      message: `Save failed for ${path.basename(docState.filePath)}: ${msg}`,
+      message: `Save failed for ${path.basename(docState.filePath)}.`,
       toolName: source,
       errorCode: errCode,
       documentId: safeDocId,
       dedupKey: `${source}:${safeDocId}`,
       timestamp: Date.now(),
     });
-    return { status: "error", reason: msg, errorCode: (err as NodeJS.ErrnoException).code };
+    return {
+      status: "error",
+      reason: "The document could not be saved.",
+      errorCode: (err as NodeJS.ErrnoException).code,
+    };
   } finally {
     savingDocs.delete(safeDocId);
   }
@@ -1027,20 +1039,28 @@ export async function saveDocumentAsToDisk(
 
     return { status: "saved", targetPath: resolved, fileName, format };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
     const errCode = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
+    // #1816: same fix as saveDocumentToDisk's catch above — `err.message`
+    // embeds an absolute path and must not reach either the pushed
+    // notification or the returned `reason`; `errCode` is the detail that
+    // does. The raw error is still logged below.
+    console.error("[Save As] saveDocumentAsToDisk failed for", resolved, err);
     pushNotification({
       id: generateNotificationId(),
       type: "save-error",
       severity: "error",
-      message: `Save As failed for ${path.basename(resolved)}: ${msg}`,
+      message: `Save As failed for ${path.basename(resolved)}.`,
       toolName: "manual",
       errorCode: errCode,
       documentId: docId,
       dedupKey: `save-as:${docId}`,
       timestamp: Date.now(),
     });
-    return { status: "error", reason: msg, errorCode: errCode };
+    return {
+      status: "error",
+      reason: "The document could not be saved to that location.",
+      errorCode: errCode,
+    };
   } finally {
     savingDocs.delete(docId);
   }
@@ -1185,9 +1205,16 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
   try {
     assertPathSafe(newPath, { allowedRoots: [path.parse(newPath).root] });
   } catch (err) {
+    // #1816: `assertPathSafe`'s thrown message embeds the absolute path it
+    // rejected ("Refusing to operate on symlinked path: <abs>"), and
+    // `routes/rename.ts` echoes `reason` verbatim to a loopback caller (i.e.
+    // every desktop user). Log the raw error; return the same generic string
+    // `routes/rename.ts`'s own RENAME_GENERIC_MESSAGE.PATH_REJECTED uses, so
+    // loopback and non-loopback callers see identical wording for this code.
+    console.error("[Rename] assertPathSafe rejected", newPath, err);
     return {
       status: "error",
-      reason: err instanceof Error ? err.message : String(err),
+      reason: "The destination path was rejected.",
       errorCode: "PATH_REJECTED",
     };
   }
@@ -1305,9 +1332,14 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
         );
       }
       const code = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
+      // #1816: `err.message` embeds BOTH absolute paths (old and new) and is
+      // already logged above — it must not also become the user-facing
+      // `reason`, which `routes/rename.ts` echoes verbatim to a loopback
+      // caller (i.e. every desktop user). `code` is the one technical detail
+      // that still travels, for a details suffix.
       return {
         status: "error",
-        reason: err instanceof Error ? err.message : String(err),
+        reason: "The document could not be renamed.",
         errorCode: code,
       };
     }
@@ -1532,20 +1564,24 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
 
     return { status: "renamed", oldPath, newPath, fileName };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
     const errCode = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
+    // #1816: same fix as saveDocumentToDisk's catch above. A failed
+    // `fs.rename` message embeds BOTH absolute paths (old and new); this
+    // route's loopback branch (`routes/rename.ts`) used to echo it verbatim
+    // to every desktop user. The raw error is still logged below.
+    console.error("[Rename] renameDocument failed for", oldPath, err);
     pushNotification({
       id: generateNotificationId(),
       type: "save-error",
       severity: "error",
-      message: `Rename failed for ${path.basename(oldPath)}: ${msg}`,
+      message: `Rename failed for ${path.basename(oldPath)}.`,
       toolName: "manual",
       errorCode: errCode,
       documentId: docId,
       dedupKey: `rename:${docId}`,
       timestamp: Date.now(),
     });
-    return { status: "error", reason: msg, errorCode: errCode };
+    return { status: "error", reason: "The document could not be renamed.", errorCode: errCode };
   } finally {
     savingDocs.delete(docId);
   }

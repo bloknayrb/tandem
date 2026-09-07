@@ -767,13 +767,11 @@ export function createYjsSync(opts?: {
     })
       .then(async (res) => {
         if (res.ok) return;
-        let message = `Rename failed (${res.status}).`;
-        try {
-          const body = (await res.json()) as { message?: string };
-          if (body?.message) message = body.message;
-        } catch {
-          // non-JSON body — keep the status-code message
-        }
+        // #1816: `routes/rename.ts` already sends `{ error: errorCode, message }`
+        // — the code was on the wire and simply unread here.
+        const body = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+        const base = body.message ? body.message : `Rename failed (${res.status}).`;
+        const message = body.error ? `${base} (${body.error})` : base;
         console.warn("[Tandem] Server rejected rename:", res.status, message);
         revert(message);
       })

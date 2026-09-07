@@ -88,6 +88,20 @@ describe("triggerSave / saveStore.lastSaveOk", () => {
     vi.unstubAllGlobals();
   });
 
+  // #1816: a 200 body reporting `status: "error"` (document-service.ts's own
+  // scrubbed reason) still carries `errorCode` — triggerSave renders it as a
+  // parenthetical details suffix, the client-side layer distinct from (and
+  // unaffected by) the server's own `pushNotification` scrub.
+  it("appends the errno as a details suffix when the result carries one", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(fetchWith({ status: "error", reason: "The save failed.", errorCode: "EACCES" })),
+    );
+    await expect(triggerSave("doc-1")).resolves.toBe(false);
+    expect(notified(notify, "error", "Save failed: The save failed. (EACCES)")).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
   it("sets lastSaveOk=false and notifies when the request throws", async () => {
     vi.stubGlobal(
       "fetch",

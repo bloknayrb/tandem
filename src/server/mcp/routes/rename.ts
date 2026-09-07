@@ -86,14 +86,14 @@ export async function handleRename(req: Request, res: Response): Promise<void> {
   const result = await renameDocument(documentId, newName);
   if (result.status === "error") {
     const status = errorCodeToHttpStatus(result.errorCode);
-    // #1294: the success branch below basenames its paths, but this branch used
-    // to echo `result.reason` verbatim — and two of renameDocument's reasons are
-    // absolute-path-bearing: `assertPathSafe` throws "Refusing to operate on
-    // symlinked path: <abs>", and a failed `fs.rename` throws a message carrying
-    // both the old and the new absolute path. The error branch is where this
-    // class of leak survives a fix aimed at the success branch, so it gets the
-    // same treatment sendApiError gives its detail: structured code for
-    // everyone, free-text reason for loopback only.
+    // #1294: the success branch below basenames its paths, and this branch used
+    // to echo `result.reason` verbatim — two of renameDocument's reasons were
+    // absolute-path-bearing: `assertPathSafe`'s "Refusing to operate on
+    // symlinked path: <abs>", and a failed `fs.rename`'s message carrying both
+    // the old and the new absolute path. Since #1816, neither producer's
+    // `reason` is raw any more at the source — this loopback/non-loopback
+    // split is defence-in-depth now, the same treatment sendApiError gives its
+    // detail: structured code for everyone, free-text reason for loopback only.
     res.status(status).json({
       error: result.errorCode ?? "INTERNAL",
       message: isLoopbackRequest(req)

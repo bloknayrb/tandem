@@ -121,6 +121,12 @@ describe("POST /api/convert — outputPath", () => {
   });
 });
 
+// #1816 made `saveDocumentToDisk`'s real `reason` generic at the source, so
+// this describe's `RAW` sample is injected only by the `saveDocumentToDisk`
+// mock — it no longer reflects what the real service can produce. Both cases
+// pin this route's own defence-in-depth scrub for the day
+// `document-service.ts` stops guaranteeing a generic reason, not a raw reason
+// reachable today.
 describe("POST /api/save — the 200-with-error branch", () => {
   const RAW = `EACCES: permission denied, open '${HOME_DOC}'`;
 

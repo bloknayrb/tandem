@@ -310,8 +310,12 @@ async function runTauriSaveAs(
       }),
     });
     if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { message?: string };
-      notify("error", `Save As failed: ${body.message ?? res.statusText}`);
+      // #1816: `sendApiError` already scrubs `message` to plain language and
+      // puts the structured code in `error` — append it as a details suffix,
+      // matching `triggerSave`'s `(${errorCode})` pattern.
+      const body = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+      const detail = body.error ? ` (${body.error})` : "";
+      notify("error", `Save As failed: ${body.message ?? res.statusText}${detail}`);
       return false;
     }
     const json = (await res.json().catch(() => null)) as {
@@ -436,6 +440,7 @@ export async function triggerSave(
         data?: {
           status?: "saved" | "skipped" | "error";
           reason?: string;
+          errorCode?: string;
           skipCode?: string;
           fidelityWarnings?: string[];
           integrityWarnings?: string[];
@@ -454,7 +459,15 @@ export async function triggerSave(
         return false;
       }
       if (result?.status === "error") {
-        notifyUser("error", `Save failed: ${result.reason ?? "The document could not be saved."}`);
+        // #1816: `reason` is plain language (the server never sends the raw
+        // fs error or its absolute path here, loopback or not); `errorCode`
+        // is the one technical detail that does travel, appended as a
+        // parenthetical rather than folded into the headline.
+        const detail = result.errorCode ? ` (${result.errorCode})` : "";
+        notifyUser(
+          "error",
+          `Save failed: ${result.reason ?? "The document could not be saved."}${detail}`,
+        );
         return false;
       }
       if (result?.status !== "saved") {
