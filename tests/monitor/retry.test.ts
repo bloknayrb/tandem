@@ -197,21 +197,32 @@ describe("retry counter semantics", () => {
     const healthy = new ControllableStream();
     stub.on("/api/events", () => {
       attempt++;
+      // A first connection that dies at once, so the run HAS connected and
+      // what follows is a real outage — not a never-connected start, whose
+      // latch the first handshake resets on its own (the spec below).
+      if (attempt === 1) {
+        const s = new ControllableStream();
+        setTimeout(() => s.error(new Error("stream died")), 0);
+        return sseResponse(s);
+      }
       // Six failures, then a stream held open long enough for onStable.
-      if (attempt <= CHANNEL_MAX_RETRIES + 1) throw new Error("refused");
-      if (attempt === CHANNEL_MAX_RETRIES + 2) return sseResponse(healthy);
+      if (attempt <= CHANNEL_MAX_RETRIES + 2) throw new Error("refused");
+      if (attempt === CHANNEL_MAX_RETRIES + 3) return sseResponse(healthy);
       throw new Error("refused again");
     });
 
     void main().catch(() => {});
-    // 2+4+8+16+30+30 = 90s of backoff before the seventh connect.
-    await vi.advanceTimersByTimeAsync(120_000);
+    // 2+4+8+16+30+30+30 = 120s of backoff before the eighth connect.
+    await vi.advanceTimersByTimeAsync(125_000);
     expect(errorReportBodies(stub)).toHaveLength(1);
 
     // Hold it up past STABLE_CONNECTION_MS (60s) so onStable clears the latch.
     await vi.advanceTimersByTimeAsync(60_500);
     const stderrAfterRecovery: string[] = errorSpy.mock.calls.map((c: unknown[]) => String(c[0]));
     expect(stderrAfterRecovery.filter((s) => /SSE connection restored/.test(s))).toHaveLength(1);
+    // Nothing was latched when the run first connected, so the transition
+    // line — written only to close a never-connected report — did not fire.
+    expect(stderrAfterRecovery.filter((s) => /SSE connection established/.test(s))).toHaveLength(0);
 
     // No explicit `end()`: the inactivity watchdog shares the 60s deadline and
     // cancels this quiet stream immediately after `onStable`, which is exactly
@@ -226,6 +237,53 @@ describe("retry counter semantics", () => {
     expect(stderrCalls.filter((s) => /SSE connection failed/.test(s)).length).toBeGreaterThan(
       CHANNEL_MAX_RETRIES,
     );
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("reports the first real loss after a never-connected start, even inside STABLE_CONNECTION_MS", async () => {
+    // Tandem was not running when the monitor armed: six refused connects set
+    // the once-per-outage latch with a report the monitor swallows
+    // (`everConnected` false). Then the server appears and dies on every
+    // connect before it can survive 60s, so `onStable` never fires. Without a
+    // reset on the never→connected transition the latch is still set and
+    // `retries` still past the threshold, so this — the first outage the user
+    // can feel — reports nothing: no POST, no notice, no stderr line.
+    let attempt = 0;
+    stub.on("/api/events", () => {
+      attempt++;
+      if (attempt <= CHANNEL_MAX_RETRIES + 1) throw new Error("refused");
+      const s = new ControllableStream();
+      setTimeout(() => {
+        s.push(
+          sseFrame(
+            {
+              id: `evt_${attempt}`,
+              type: "chat:message",
+              timestamp: 1,
+              payload: { messageId: "m", text: "hi", replyTo: null, anchor: null },
+            },
+            `evt_${attempt}`,
+          ),
+        );
+        s.error(new Error("stream died"));
+      }, 0);
+      return sseResponse(s);
+    });
+
+    void main().catch(() => {});
+    // 2+4+8+16+30+30 = 90s before the first connect, then a fresh ladder
+    // (2+4+8+16+30 = 60s) before the connected-then-lost report.
+    await vi.advanceTimersByTimeAsync(300_000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const reports = errorReportBodies(stub);
+    const stdoutCalls: string[] = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    const stderrCalls: string[] = errorSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    // One swallowed never-connected report, then one real one.
+    expect(reports).toHaveLength(2);
+    expect(stdoutCalls.filter((s) => /retrying in the background/.test(s))).toHaveLength(1);
+    // The transition is announced once, and only because a report was latched.
+    expect(stderrCalls.filter((s) => /SSE connection established/.test(s))).toHaveLength(1);
     expect(exitSpy).not.toHaveBeenCalled();
   });
 

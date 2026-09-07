@@ -186,10 +186,30 @@ under branch (a) of the stdin-EOF bullet, the only branch that adds a monitor st
 
 `CHANNEL_MAX_RETRIES` / `CHANNEL_RETRY_DELAY_MS` / `RETRY_MAX_DELAY_MS` values; the EPIPE exit; the
 `onStable` 60 s reset; `ensureTandemServer`'s fail-fast for `tandem channel`'s own startup; making
-`/api/channel-error` visible in the browser. Also left alone, and named in the PR body: the
-oversize-buffer throw at `src/shared/sse-consumer.ts:382-386` cannot advance `lastEventId`, so
-without the cap the same >1 MB frame is re-fetched every 30 s for the session — its fix is already
-recorded at `docs/plans/2026-08-07-channel-flag-removal.md` Stage 1b item 3.
+`/api/channel-error` visible in the browser. The oversize-buffer throw was first left alone here
+and is now fixed on this branch — see the second-pass corrections below.
+
+## Review corrections (second pass, post-PR)
+
+**The oversize-frame loop is closed, not deferred.** The first pass named it and pointed at
+`docs/plans/2026-08-07-channel-flag-removal.md` Stage 1b item 3, which is "Proposed — not
+implemented" with no tracking issue — and removing the cap turned that latent bug into a silent
+infinite loop (a >1 MB frame that cannot advance `lastEventId` is re-fetched every 30 s for the
+session). `connectAndStreamOnce` now runs the size check AFTER the boundary loop, so the buffer at
+that point is exactly one unterminated frame, reads its `id:` line off the head (the server writes
+`id:` before `data:`), advances `lastEventId` past it, and then throws as before. Pinned in
+`tests/monitor/sse-parsing.test.ts`: the id is advanced, an id-less oversize frame is not, and
+complete frames ahead of the partial are delivered first.
+
+**A never-connected report must not spend the outage budget.** `reportedExhaustion` set while Tandem
+was never running (its report swallowed by the monitor's `everConnected` guard) stayed set through
+the first successful handshake — and `retries` stayed past the threshold — so a server that came up
+and died inside `STABLE_CONNECTION_MS` produced no report, no notice and no stderr line for the first
+outage the user could feel. The `everConnected` false→true transition now resets both, via a
+`onFirstConnect` stream callback that fires once per process and so cannot be re-armed by a flap
+(the anti-flap argument for clearing on `onStable` rather than on every handshake still holds).
+Pinned by `reports the first real loss after a never-connected start`. Lesson 39 was rewritten to
+state the rule's reason as the report latch rather than the retired cap.
 
 ## Review corrections (scope cut)
 

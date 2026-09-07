@@ -41,7 +41,11 @@
  * branches just `continue`d, so a permanently-unparseable frame would be
  * replayed from `Last-Event-ID` on every reconnect forever (an infinite
  * parse-fail loop). Unifying on the channel's semantics fixes that latent
- * infinite re-delivery bug.
+ * infinite re-delivery bug. An oversize frame (one that outgrows
+ * `CHANNEL_MAX_SSE_BUFFER_BYTES` without terminating) is the third case: its
+ * `id:` line is read off the head of the buffer and advanced past before the
+ * stream is torn down, because with no retry cap (#1804) a frame that could
+ * never be skipped would be re-fetched every 30 s for the session.
  */
 
 import { API_CHANNEL_AWARENESS, API_CHANNEL_ERROR, API_EVENTS, API_MODE } from "./api-paths.js";
@@ -85,6 +89,22 @@ export function isModeReleaseWake(event: TandemEvent): boolean {
   const id = (event.payload as { annotationId?: unknown } | undefined)?.annotationId;
   return typeof id === "string" && id.startsWith(MODE_RELEASE_WAKE_ID_PREFIX);
 }
+
+/**
+ * The `id:` of a frame that has not terminated yet, or `undefined`.
+ *
+ * The server writes `id:` before `data:` (`events/sse.ts`), so an oversize
+ * frame's id is readable from its head even though the frame itself never can
+ * be parsed. Scans every line rather than trusting the first: the field order
+ * is the server's habit, not the SSE spec's rule.
+ */
+function readFrameId(partialFrame: string): string | undefined {
+  for (const line of partialFrame.split("\n")) {
+    if (line.startsWith("id: ")) return line.slice(4);
+  }
+  return undefined;
+}
+
 const STABLE_CONNECTION_MS = 60_000; // Reset retries after this much continuous uptime
 const RETRY_MAX_DELAY_MS = 30_000; // Exponential backoff cap
 
@@ -120,6 +140,11 @@ export interface EventConsumerOptions {
    * was never running". The monitor stays silent in the second case — a
    * never-connected run lost nothing, and any `tandem_*` tool call reports
    * the real problem better; see the long note at its `onExhaustion`.
+   *
+   * A never-connected report does not use up the outage budget: the first
+   * successful handshake of the run resets the retry counter and the latch, so
+   * the first *real* stream loss afterwards is reported as one — even when the
+   * stream died before it could survive `STABLE_CONNECTION_MS`.
    */
   onExhaustion?: (info: { everConnected: boolean }) => void;
 }
@@ -154,13 +179,20 @@ let _modeRefreshInFlight: Promise<void> | null = null;
 let everConnected = false;
 
 /**
- * Set when this outage has already been reported, cleared only by
- * `STABLE_CONNECTION_MS` of continuous uptime.
+ * Set when this outage has already been reported, cleared by
+ * `STABLE_CONNECTION_MS` of continuous uptime — or by the run's FIRST
+ * successful handshake, which is not an outage ending but a baseline arriving.
  *
  * The consumer retries forever (#1804) — neither host is ever respawned, so a
  * process that gives up kills the push path for the whole session — and this
  * latch is what keeps that from becoming a report and two stderr lines every
  * 30 s until the session ends.
+ *
+ * The first-handshake clear matters because a latch set while Tandem was never
+ * running (its report swallowed by the monitor's `everConnected` guard) would
+ * otherwise silence the first real stream loss: with `retries` still at the
+ * threshold and the latch still set, a server that came up and died inside
+ * `STABLE_CONNECTION_MS` produced no report, no notice and no stderr line.
  */
 let reportedExhaustion = false;
 
@@ -193,6 +225,18 @@ export async function runEventConsumer(opts: EventConsumerOptions): Promise<void
       await connectAndStreamOnce(opts, lastEventId, {
         onEventId: (id) => {
           lastEventId = id;
+        },
+        onFirstConnect: () => {
+          // Runs exactly once per process — the `everConnected` false→true
+          // transition — so unlike a clear on every handshake it cannot be
+          // re-armed by a connect-then-die flap. Failures before this point
+          // were "Tandem not running yet", not an outage; the retry counter
+          // and the latch start fresh so the first real loss is reported.
+          retries = 0;
+          if (reportedExhaustion) {
+            reportedExhaustion = false;
+            console.error(`${opts.logPrefix} SSE connection established`);
+          }
         },
         onStable: () => {
           retries = 0;
@@ -259,6 +303,8 @@ export async function runEventConsumer(opts: EventConsumerOptions): Promise<void
 export interface StreamCallbacks {
   onEventId: (id: string) => void;
   onStable?: () => void;
+  /** Fired on the run's first successful handshake only — never on a reconnect. */
+  onFirstConnect?: () => void;
 }
 
 /**
@@ -303,8 +349,13 @@ export async function connectAndStreamOnce(
 
   // Latched at the first successful handshake — see `onExhaustion`. Set here,
   // not on first event: a stream that connects and stays quiet IS connected,
-  // and losing it later is worth reporting.
-  everConnected = true;
+  // and losing it later is worth reporting. The transition is observed by the
+  // caller (retry-counter and report-latch reset); the latch itself never
+  // clears.
+  if (!everConnected) {
+    everConnected = true;
+    cb.onFirstConnect?.();
+  }
 
   // Stable-uptime reset: if the connection stays healthy for
   // STABLE_CONNECTION_MS, signal the caller to reset its retry budget.
@@ -412,12 +463,6 @@ export async function connectAndStreamOnce(
 
       buffer += decoder.decode(value, { stream: true });
 
-      if (buffer.length > CHANNEL_MAX_SSE_BUFFER_BYTES) {
-        throw new Error(
-          `SSE buffer exceeded ${CHANNEL_MAX_SSE_BUFFER_BYTES} bytes without a frame boundary`,
-        );
-      }
-
       let boundary: number;
       while ((boundary = buffer.indexOf("\n\n")) !== -1) {
         const frame = buffer.slice(0, boundary);
@@ -523,6 +568,27 @@ export async function connectAndStreamOnce(
 
         if (eventId) cb.onEventId(eventId);
         scheduleAwareness(event);
+      }
+
+      // Checked AFTER the boundary loop, so `buffer` is exactly one unterminated
+      // frame — never complete frames waiting behind it — and its `id:` line is
+      // that frame's own. Advancing past it is what keeps this from being a
+      // loop: the consumer retries forever (#1804), and a reconnect with the
+      // previous `Last-Event-ID` replays the same >1 MB frame, which throws
+      // here again before it can ever be parsed, every 30 s for the rest of
+      // the session. Same policy as the malformed-JSON and failed-validation
+      // branches above: permanently undeliverable, so skip it. The throw stays
+      // — this connection's buffer is unbounded until the frame ends, and
+      // reconnecting past it is the only way to bound it.
+      if (buffer.length > CHANNEL_MAX_SSE_BUFFER_BYTES) {
+        const oversizeId = readFrameId(buffer);
+        console.error(
+          `${opts.logPrefix} SSE buffer exceeded ${CHANNEL_MAX_SSE_BUFFER_BYTES} bytes without a frame boundary (eventId=${oversizeId ?? "none"}); skipping the frame`,
+        );
+        if (oversizeId) cb.onEventId(oversizeId);
+        throw new Error(
+          `SSE buffer exceeded ${CHANNEL_MAX_SSE_BUFFER_BYTES} bytes without a frame boundary`,
+        );
       }
     }
   } finally {

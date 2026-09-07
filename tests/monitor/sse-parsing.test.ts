@@ -119,14 +119,44 @@ describe("SSE buffer overflow", () => {
     stdoutSpy.mockRestore();
   });
 
-  it("throws when the buffer grows past 1MB without a frame boundary", async () => {
-    const promise = connectAndStream(
-      undefined,
-      () => {},
-      () => {},
-    );
+  it("throws when the buffer grows past 1MB without a frame boundary, advancing past the frame's id", async () => {
+    const onEventId = vi.fn();
+    const promise = connectAndStream(undefined, onEventId, () => {});
+    stream.push("id: oversize-1\ndata: " + "x".repeat(1_100_000));
+    await expect(promise).rejects.toThrow(/SSE buffer exceeded/);
+    // The retry loop reconnects with `Last-Event-ID` and never gives up
+    // (#1804). Without the advance the server replays the same frame, which
+    // throws here again before it can be parsed — every 30s for the session.
+    expect(onEventId).toHaveBeenCalledWith("oversize-1");
+  });
+
+  it("cannot advance past an oversize frame that carries no id, and still throws", async () => {
+    const onEventId = vi.fn();
+    const promise = connectAndStream(undefined, onEventId, () => {});
     stream.push("data: " + "x".repeat(1_100_000));
     await expect(promise).rejects.toThrow(/SSE buffer exceeded/);
+    expect(onEventId).not.toHaveBeenCalled();
+  });
+
+  it("delivers the complete frames ahead of an oversize partial before throwing on it", async () => {
+    const onEventId = vi.fn();
+    const promise = connectAndStream(undefined, onEventId, () => {});
+    const small = sseFrame(
+      {
+        id: "small",
+        type: "chat:message",
+        timestamp: 1,
+        payload: { messageId: "m", text: "hi", replyTo: null, anchor: null },
+      },
+      "small",
+    );
+    // One chunk: a whole small frame, then the head of a frame that never ends.
+    stream.push(`${small}id: oversize-2\ndata: ${"x".repeat(1_100_000)}`);
+    await expect(promise).rejects.toThrow(/SSE buffer exceeded/);
+    // The check runs after the boundary loop, so the small frame was
+    // delivered and the id read off the buffer is the oversize frame's own —
+    // not the small frame's, which would skip nothing.
+    expect(onEventId.mock.calls.map((c) => c[0])).toEqual(["small", "oversize-2"]);
   });
 
   it("allows a single 900KB event that ends with a proper boundary", async () => {

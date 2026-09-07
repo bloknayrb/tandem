@@ -9,7 +9,8 @@
  *   - eventId advance order (only after successful notification)
  *   - solo-mode suppression for non-chat events
  *   - awareness POSTs (debounced flush + auto-clear)
- *   - retry loop reports CHANNEL_CONNECT_FAILED + exits 1 after exhaustion
+ *   - retry loop reports CHANNEL_CONNECT_FAILED once per outage and keeps
+ *     retrying past exhaustion — it never exits (#1804)
  *
  * Reuses the monitor's fetch-harness for stream control + fetch stubbing.
  * `vi.resetModules()` between tests defeats the channel's module-level mode
