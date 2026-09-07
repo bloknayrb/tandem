@@ -440,20 +440,20 @@ Only pending annotations can be edited — accepted or dismissed annotations are
 
 Users can open files without Claude Code using the editor UI:
 
-### Path Input
+### Recent Files
 1. Click the **+** button at the end of the tab bar
-2. Enter the absolute file path in the text input
-3. Click **Open** — the file loads in a new tab
+2. Type to filter the recently opened files
+3. Click one — it opens in a new tab
 
 ### Drag-and-Drop
 1. Drag a file from Windows Explorer (or Finder) onto the editor area
 2. A dashed border appears as a drop indicator
 3. Drop the file — it opens in a new tab
 
-### File Upload
-1. Click **+** → switch to **Upload** mode
-2. Click the drop zone to browse, or drag a file onto it
-3. The file content is sent to the server and loaded
+### Browse or Upload
+1. Click **+** → **Browse files…**
+2. On desktop this opens a native file picker for real (write-capable) editing
+3. In the browser build it opens an upload dialog instead: click **Browse…** or drop a file anywhere in the window, and the file content is sent to the server and loaded
 
 **Note:** Uploaded files have no disk path — they use synthetic `upload://` paths and are always read-only. `tandem_save` on an uploaded file saves only the session (annotations), not the file content.
 
