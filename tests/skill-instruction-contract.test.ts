@@ -42,6 +42,21 @@ function annotationGuideSection(skill: string): string {
 }
 
 /**
+ * Extracts one numbered Hard Rule item's own text, up to (not including) the next
+ * numbered item. Scoping to the literal `N. ` / `N+1. ` markers — rather than matching
+ * loose keywords anywhere in the whole Hard Rules section — is what makes an assertion
+ * here fail when rule N is deleted: a sibling rule that happens to share vocabulary
+ * (e.g. `INVALID_ARGUMENT`, `tandem_appendContent`) can no longer stand in for it.
+ */
+function hardRuleItem(skill: string, n: number): string {
+  const rules = hardRules(skill);
+  const pattern = new RegExp(`^${n}\\. ([\\s\\S]*?)(?=^${n + 1}\\. |$(?![\\s\\S]))`, "m");
+  const item = pattern.exec(rules)?.[1];
+  expect(item, `Hard Rule ${n} not found in the shipped skill`).toBeDefined();
+  return item ?? "";
+}
+
+/**
  * Instruction guard: this tests the behavior Claude is told to perform. It is
  * intentionally lexical because SKILL.md is the public interface delivered to
  * the host; there is no executable implementation behind these instructions.
@@ -197,13 +212,19 @@ describe("shipped Tandem skill instruction contract", () => {
     expect(workflow).toContain("importSource");
 
     // promotedFrom is stamped on every promoted note, including the user's own personal
-    // notes — the recipe must say it is not a reliable import marker.
+    // notes — the recipe must say it is not a reliable import marker. `\b` word-boundaries
+    // on "not"/"never" are load-bearing: a bare substring match is satisfied by the word
+    // "note" itself (promotedFrom's own value), which is exactly the inverted claim this
+    // guards against.
     expect(workflow).toMatch(
-      /promotedFrom[\s\S]{0,200}(?:not|never)[\s\S]{0,60}(?:reliable|discriminat)/i,
+      /promotedFrom[\s\S]{0,200}\b(?:not|never)\b[\s\S]{0,60}(?:reliable|discriminat)/i,
     );
 
-    // Solo mode holds the promotion like any other user comment.
-    expect(workflow).toMatch(/solo/i);
+    // Solo mode holds the promotion like any other user comment. Anchored on the actual
+    // disclosure sentence, not a bare /solo/i scan — the workflow's export step separately
+    // mentions "withheld Solo-held annotations", which would satisfy a loose match even
+    // with this sentence deleted.
+    expect(workflow).toMatch(/the promotion is held like any other user comment/i);
   });
 
   /**
@@ -233,15 +254,19 @@ describe("shipped Tandem skill instruction contract", () => {
     const workflow = docxWorkflow(skill);
 
     // Rule 4: format-conditional newline handling, not the stale unconditional claim.
-    expect(rules).toContain("tandem_appendContent");
-    expect(rules).toContain("tandem_editList");
-    expect(rules).not.toMatch(
+    // Scoped to Rule 4's own text (not the whole Hard Rules block) — Rule 5, added in the
+    // same change, independently mentions `tandem_appendContent` and `INVALID_ARGUMENT`,
+    // so a block-wide scan would keep passing even with Rule 4 deleted outright.
+    const rule4 = hardRuleItem(skill, 4);
+    expect(rule4).toContain("tandem_appendContent");
+    expect(rule4).toContain("tandem_editList");
+    expect(rule4).not.toMatch(
       /\.html?\b[\s\S]{0,80}INVALID_ARGUMENT|INVALID_ARGUMENT[\s\S]{0,80}\.html?\b/i,
     );
-    expect(rules).toMatch(
+    expect(rule4).toMatch(
       /(?:plaintext|`\.txt`)[\s\S]{0,250}INVALID_ARGUMENT|INVALID_ARGUMENT[\s\S]{0,250}(?:plaintext|`\.txt`)/i,
     );
-    expect(rules).not.toContain("Newlines become literal characters.");
+    expect(rule4).not.toContain("Newlines become literal characters.");
 
     // New Hard Rule: sub-agents must not poll the inbox (decision H).
     expect(rules).toMatch(
