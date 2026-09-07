@@ -1161,17 +1161,23 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                 data-push-mode={wizard.channelRegistered ? "shim" : "no-shim"}
               >
                 <PushRoutesInfo />
-                <!-- Route three. BOTH arms name the CLI flag. Nothing in the app
+                <!-- Route three. Every arm names the CLI flag. Nothing in the app
                      can turn the shim on: the apply route calls
                      `shouldRegisterChannelShim` with no override, and it returns
                      `override ?? false` (`server/integrations/apply.ts`). Its call
                      site says there is deliberately no wizard checkbox, and any docs
                      claiming otherwise are wrong — that claim was in three places
-                     until 2026-08-09. This `{:else}` arm was a fourth instance until
-                     #1432; the arm above it said "registered HERE", the ambiguity
-                     that made the false one read as consistent, so both were
-                     rewritten. `tests/docs/channel-shim-optin-claims.test.ts` guards
-                     the shape now. The npm-package caveat is `doctor.ts`'s and is
+                     until 2026-08-09. The `{:else}` (non-registered) arm was a
+                     fourth instance until #1432; the arm above it said "registered
+                     HERE", the ambiguity that made the false one read as
+                     consistent, so both were rewritten. #1817 split the
+                     non-registered arm again on `isTauriRuntime()`: the desktop
+                     app has no `tandem` command at all, so the same instruction
+                     that works for an npm install dangled for a desktop one — the
+                     desktop arm names the npm install step before the setup
+                     command. `tests/docs/channel-shim-optin-claims.test.ts` guards
+                     the "nothing in the app registers it" shape across all three
+                     arms. The npm-package caveat is `doctor.ts`'s and is
                      load-bearing on this surface. -->
                 {#if wizard.channelRegistered}
                   <p>
@@ -1182,14 +1188,30 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                       >claude --dangerously-load-development-channels server:tandem-channel</code
                     >.
                   </p>
+                {:else if isTauriRuntime()}
+                  <!-- #1817: the desktop app has no `tandem` command at all (see
+                       `doctor.ts`'s npm-package caveat above), so naming the
+                       setup command with no path to running it left a desktop
+                       user with a dangling instruction. Name the npm install
+                       step first, in one line, before the command that needs it. -->
+                  <p>
+                    If Claude reports no Monitor tool at all, the channel shim is the one route
+                    that depends on neither gate. This wizard cannot register it, and the desktop
+                    app doesn't include the <code class="iw-code-inline">tandem</code> command needed
+                    to — install it with
+                    <code class="iw-code-inline">npm install -g tandem-editor@latest</code>, then run
+                    <code class="iw-code-inline">tandem setup --apply --with-channel-shim</code>
+                    from a terminal, then start each session with
+                    <code class="iw-code-inline"
+                      >claude --dangerously-load-development-channels server:tandem-channel</code
+                    >. (Keep the global installed — the shim entry runs from it.)
+                  </p>
                 {:else}
                   <p>
                     If Claude reports no Monitor tool at all, the channel shim is the one route
                     that depends on neither gate. This wizard cannot register it — run
                     <code class="iw-code-inline">tandem setup --apply --with-channel-shim</code>
-                    from a terminal (that flag is its only opt-in, and it needs Tandem's npm
-                    package, which the desktop app does not install), then start each session
-                    with
+                    from a terminal (that flag is its only opt-in), then start each session with
                     <code class="iw-code-inline"
                       >claude --dangerously-load-development-channels server:tandem-channel</code
                     >.
