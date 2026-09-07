@@ -185,7 +185,8 @@ export async function rotateToken(): Promise<void> {
   if (updatedCount === 0 && configErrors.length === 0) {
     console.error(
       "  Warning: no config file was updated, so every client still holds the OLD\n" +
-        "  token and will be rejected. Re-point them with: tandem setup --apply",
+        "  token, which the server now accepts only from loopback. Re-point them\n" +
+        "  with: tandem setup --apply",
     );
   }
 
@@ -196,8 +197,11 @@ export async function rotateToken(): Promise<void> {
   // A target counted in `updatedCount` can still be holding the OLD token: on a
   // kind with no push transport (Claude Desktop) #1760 preserves an existing
   // `tandem-channel` entry rather than deleting it, and preserving means NOT
-  // re-deriving its body — so its `env.TANDEM_AUTH_TOKEN` is untouched and the
-  // shim will 401 from here on. Before #1760 the entry was deleted, which
+  // re-deriving its body — so its `env.TANDEM_AUTH_TOKEN` is untouched. The
+  // auth middleware exempts loopback, so a default `TANDEM_URL` keeps working
+  // and only an off-loopback shim (Cowork/LAN) 401s — which is why the sentence
+  // names the superseded credential rather than promising a breakage, and why
+  // the hand-edit remedy comes first. Before #1760 the entry was deleted, which
   // scrubbed the superseded credential as a side effect. Crediting the target
   // as "Updated" and saying nothing is the failure mode this line exists to
   // prevent: rotation is what a user runs after a LEAK.
@@ -218,8 +222,8 @@ export async function rotateToken(): Promise<void> {
   for (const { label, kind } of staleTokenTargets) {
     console.error(
       `  Warning: ${label} has a tandem-channel entry Tandem does not rewrite, so it\n` +
-        "  still holds the OLD token and will be rejected. Update its\n" +
-        "  env.TANDEM_AUTH_TOKEN by hand, or drop the entry with:\n" +
+        "  still holds the OLD token, which the server now accepts only from\n" +
+        "  loopback. Update its env.TANDEM_AUTH_TOKEN by hand, or drop the entry with:\n" +
         `    tandem setup --apply --target=${kind} --without-channel-shim`,
     );
   }
