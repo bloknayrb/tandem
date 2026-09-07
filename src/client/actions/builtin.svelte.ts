@@ -42,6 +42,13 @@ import { type Action, registerActions } from "./registry.svelte.js";
 // Save — mirrors useSaveShortcut.svelte.ts logic
 // ---------------------------------------------------------------------------
 
+// #1816: both save failure paths below append the structured error code as a
+// `" (CODE)"` parenthetical rather than folding it into the (now-generic)
+// headline message. One formatter keeps that suffix shape identical.
+function errorCodeSuffix(code?: string): string {
+  return code ? ` (${code})` : "";
+}
+
 let saving = $state(false);
 // Set right before `saving` flips back to false in `triggerSave`'s `finally`,
 // so a falling-edge "Saved" flash (StatusBar.svelte) can tell a completed save
@@ -314,8 +321,10 @@ async function runTauriSaveAs(
       // puts the structured code in `error` — append it as a details suffix,
       // matching `triggerSave`'s `(${errorCode})` pattern.
       const body = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
-      const detail = body.error ? ` (${body.error})` : "";
-      notify("error", `Save As failed: ${body.message ?? res.statusText}${detail}`);
+      notify(
+        "error",
+        `Save As failed: ${body.message ?? res.statusText}${errorCodeSuffix(body.error)}`,
+      );
       return false;
     }
     const json = (await res.json().catch(() => null)) as {
@@ -463,10 +472,9 @@ export async function triggerSave(
         // fs error or its absolute path here, loopback or not); `errorCode`
         // is the one technical detail that does travel, appended as a
         // parenthetical rather than folded into the headline.
-        const detail = result.errorCode ? ` (${result.errorCode})` : "";
         notifyUser(
           "error",
-          `Save failed: ${result.reason ?? "The document could not be saved."}${detail}`,
+          `Save failed: ${result.reason ?? "The document could not be saved."}${errorCodeSuffix(result.errorCode)}`,
         );
         return false;
       }
