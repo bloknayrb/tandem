@@ -50,6 +50,16 @@ let sessionsError = $state<string | null>(null);
 let pendingDeletePath = $state<string | null>(null);
 let clearAllArmed = $state(false);
 
+// #1773 review — the confirmed request is unbounded (neither sessions.ts helper
+// has a timeout), so "armed" has to survive the await. Disarming FIRST unmounted
+// the focused confirm button for the whole round trip, dropping focus to <body>
+// (the exact state the focus block below exists to prevent) AND returning the row
+// to its idle ×, so a user who thought the click missed could fire a second
+// DELETE. Every arm/disarm/confirm handler is gated on this, and the confirm
+// buttons carry `aria-disabled` rather than `disabled` — disabling the focused
+// node blurs it, which is the bug again.
+let actionInFlight = $state(false);
+
 // Every arm/disarm swaps the button that currently has focus out of the DOM, so
 // without focus management the browser drops focus to <body> — which is OUTSIDE
 // the role="dialog" div that owns the Escape handler. The armed confirm would
@@ -88,9 +98,10 @@ function focusIfDisarmed(key: string) {
 }
 
 /**
- * Park focus on the sessions toggle after a CONFIRMED action. The confirm button
- * is gone either way — the row (or the whole list) unmounted on success, and it
- * swapped back to the arm button on failure — so there is no node to return to.
+ * Park focus on the sessions toggle after a SUCCEEDED action — the row (or the
+ * whole list) has unmounted, so there is no node to return to. Never called on
+ * failure: the row is still there, and moving focus up past a sessions-error
+ * box announces nothing about the failure (#1773 review).
  */
 function parkFocusAfterConfirm() {
   sessionsToggleEl?.focus();
@@ -129,7 +140,8 @@ function toggleSessions() {
   }
 }
 
-async function deleteSession(filePath: string) {
+/** @returns whether the delete succeeded — the caller branches focus on it. */
+async function deleteSession(filePath: string): Promise<boolean> {
   sessionsError = null;
   const result = await deleteSessionByPath(filePath);
   if (result.ok) {
@@ -137,9 +149,11 @@ async function deleteSession(filePath: string) {
   } else {
     sessionsError = result.error;
   }
+  return result.ok;
 }
 
-async function clearSessions() {
+/** @returns whether the clear succeeded — the caller branches focus on it. */
+async function clearSessions(): Promise<boolean> {
   sessionsError = null;
   const result = await clearAllSessions();
   if (result.ok) {
@@ -147,6 +161,7 @@ async function clearSessions() {
   } else {
     sessionsError = result.error;
   }
+  return result.ok;
 }
 
 function formatRelativeTime(ms: number): string {
@@ -402,14 +417,29 @@ function handleBrowse() {
               <span style="font-size: 11px; color: var(--tandem-fg);">
                 Clear all {sessions.length} saved session{sessions.length === 1 ? "" : "s"}?
               </span>
+              <!-- aria-label, not the bare text: focusOnMount moves focus here the
+                   instant the arm button ("Clear all…") is activated, and an
+                   unlabelled confirm announces as "Clear all, button" — near
+                   enough identical to what was just pressed that a second Enter
+                   reads as a retry and irreversibly destroys every session. The
+                   question lives in a sibling <span> a screen reader never
+                   reaches on focus, so the count goes in the name (#1773). -->
               <button
                 type="button"
                 data-testid="sessions-clear-all-confirm"
                 {@attach focusOnMount}
+                aria-disabled={actionInFlight}
+                aria-label={`Confirm clearing all ${sessions.length} saved session${
+                  sessions.length === 1 ? "" : "s"
+                }`}
                 onclick={async () => {
+                  if (actionInFlight) return;
+                  actionInFlight = true;
+                  const ok = await clearSessions();
+                  actionInFlight = false;
                   clearAllArmed = false;
-                  await clearSessions();
-                  parkFocusAfterConfirm();
+                  if (ok) parkFocusAfterConfirm();
+                  else refocusOnDisarm = CLEAR_ALL_FOCUS_KEY;
                 }}
                 style={destructiveBtnStyle}
               >
@@ -418,7 +448,9 @@ function handleBrowse() {
               <button
                 type="button"
                 data-testid="sessions-clear-all-cancel"
+                aria-label="Cancel clearing all saved sessions"
                 onclick={() => {
+                  if (actionInFlight) return;
                   clearAllArmed = false;
                   refocusOnDisarm = CLEAR_ALL_FOCUS_KEY;
                 }}
@@ -431,6 +463,7 @@ function handleBrowse() {
                 data-testid="sessions-clear-all"
                 {@attach focusIfDisarmed(CLEAR_ALL_FOCUS_KEY)}
                 onclick={() => {
+                  if (actionInFlight) return;
                   clearAllArmed = true;
                   pendingDeletePath = null;
                 }}
@@ -485,10 +518,17 @@ function handleBrowse() {
                     type="button"
                     data-testid="session-delete-confirm"
                     {@attach focusOnMount}
+                    aria-disabled={actionInFlight}
                     onclick={async () => {
+                      if (actionInFlight) return;
+                      actionInFlight = true;
+                      const ok = await deleteSession(session.filePath);
+                      actionInFlight = false;
                       pendingDeletePath = null;
-                      await deleteSession(session.filePath);
-                      parkFocusAfterConfirm();
+                      // On failure the row survives, so hand focus back to its ×
+                      // rather than parking above the error box.
+                      if (ok) parkFocusAfterConfirm();
+                      else refocusOnDisarm = session.filePath;
                     }}
                     aria-label={`Confirm delete session for ${filename}`}
                     style={destructiveBtnStyle}
@@ -499,6 +539,7 @@ function handleBrowse() {
                     type="button"
                     data-testid="session-delete-cancel"
                     onclick={() => {
+                      if (actionInFlight) return;
                       pendingDeletePath = null;
                       refocusOnDisarm = session.filePath;
                     }}
@@ -513,6 +554,7 @@ function handleBrowse() {
                     data-testid="session-delete"
                     {@attach focusIfDisarmed(session.filePath)}
                     onclick={() => {
+                      if (actionInFlight) return;
                       pendingDeletePath = session.filePath;
                       clearAllArmed = false;
                     }}
@@ -528,7 +570,11 @@ function handleBrowse() {
         {/if}
 
         {#if sessionsError}
+          <!-- role="alert": a failed delete or clear leaves the list looking
+               untouched, so without a live region the only signal that anything
+               went wrong is visual (#1773 review). -->
           <div
+            role="alert"
             data-testid="sessions-error"
             style="margin-top: 8px; padding: 8px 10px; font-size: 12px; color: var(--tandem-error-fg-strong); background: var(--tandem-error-bg); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-error-border);"
           >

@@ -396,6 +396,156 @@ describe("FileOpenDialog unified (#378)", () => {
       expect(text).not.toContain("saved sessions?");
     });
 
+    /**
+     * Re-install the sessions stub with the two MUTATING routes parked on a gate
+     * the test releases by hand. Everything below the release point is the
+     * in-flight window — the interval the pre-fix handlers spent with their
+     * confirm button unmounted and focus on <body>.
+     */
+    function gateMutations(response: { ok: boolean; message?: string }) {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      fetchMock.mockImplementation(async (url: unknown, init?: { method?: string }) => {
+        const href = String(url);
+        if (href.includes(API_SESSIONS_DELETE) || href.includes(API_SESSIONS_CLEAR)) {
+          await gate;
+          return { ok: response.ok, json: async () => ({ data: {}, message: response.message }) };
+        }
+        if (href.includes(API_SESSIONS) && init?.method !== "POST") {
+          return { ok: true, json: async () => ({ data: { sessions: ROWS } }) };
+        }
+        return { ok: true, json: async () => ({}) };
+      });
+      return async () => {
+        release();
+        await tick();
+        await new Promise((r) => setTimeout(r, 0));
+        await tick();
+      };
+    }
+
+    // #1773 review — the request is unbounded (neither sessions.ts helper sets a
+    // timeout), so the in-flight window is the whole exposure. Disarming BEFORE
+    // the await unmounted the focused confirm for that entire window, which is
+    // the <body>-focus state cases (g)/(g2) exist to prevent — they could not see
+    // it because they only assert after the awaits have settled.
+    it("(j) the confirm stays mounted and focused while the delete is in flight", async () => {
+      const settle = gateMutations({ ok: true });
+      const { getAllByTestId, getByTestId, queryByTestId } = await renderExpanded();
+
+      await fireEvent.click(getAllByTestId("session-delete")[0]);
+      await tick();
+      const confirm = getByTestId("session-delete-confirm");
+      expect(document.activeElement).toBe(confirm);
+
+      await fireEvent.click(confirm);
+      await tick();
+      await new Promise((r) => setTimeout(r, 0));
+      await tick();
+
+      // Still the SAME node — the discriminating assertion. Pre-fix this was
+      // null, the row was back to its idle ×, and focus had fallen to <body>.
+      expect(queryByTestId("session-delete-confirm")).toBe(confirm);
+      expect(document.activeElement).toBe(confirm);
+      expect(document.activeElement).not.toBe(document.body);
+      // aria-disabled, not `disabled`: disabling the focused node blurs it,
+      // which would reinstate exactly the bug above.
+      expect(confirm.getAttribute("aria-disabled")).toBe("true");
+      expect(confirm.hasAttribute("disabled")).toBe(false);
+
+      // A second press during the window must not issue a second DELETE.
+      await fireEvent.click(confirm);
+      await tick();
+      expect(callsTo(API_SESSIONS_DELETE)).toHaveLength(1);
+
+      await settle();
+      expect(getAllByTestId("session-row")).toHaveLength(1);
+      expect(document.activeElement).toBe(getByTestId("sessions-toggle"));
+    });
+
+    it("(j2) Clear all is likewise gated — a second press issues no second clear", async () => {
+      const settle = gateMutations({ ok: true });
+      const { getByTestId, queryByTestId } = await renderExpanded();
+
+      await fireEvent.click(getByTestId("sessions-clear-all"));
+      await tick();
+      const confirm = getByTestId("sessions-clear-all-confirm");
+      await fireEvent.click(confirm);
+      await tick();
+      await new Promise((r) => setTimeout(r, 0));
+      await tick();
+
+      expect(queryByTestId("sessions-clear-all-confirm")).toBe(confirm);
+      expect(document.activeElement).toBe(confirm);
+      await fireEvent.click(confirm);
+      await tick();
+      expect(callsTo(API_SESSIONS_CLEAR)).toHaveLength(1);
+
+      await settle();
+      expect(queryByTestId("session-row")).toBeNull();
+    });
+
+    it("(k) a FAILED delete keeps focus on the row's × and announces via role=alert", async () => {
+      const settle = gateMutations({ ok: false, message: "Store locked." });
+      const { getAllByTestId, getByTestId } = await renderExpanded();
+
+      await fireEvent.click(getAllByTestId("session-delete")[0]);
+      await tick();
+      await fireEvent.click(getByTestId("session-delete-confirm"));
+      await settle();
+
+      // The row survived, so there IS a node to return to — parking on the
+      // toggle would move a screen reader past an error it never announced.
+      expect(getAllByTestId("session-row")).toHaveLength(2);
+      expect(document.activeElement).toBe(getAllByTestId("session-delete")[0]);
+      expect(document.activeElement).not.toBe(getByTestId("sessions-toggle"));
+
+      const errorBox = getByTestId("sessions-error");
+      expect(errorBox.getAttribute("role")).toBe("alert");
+      expect(errorBox.textContent).toContain("Store locked.");
+    });
+
+    it("(l) the Clear all confirm has an accessible name distinct from its arm button", async () => {
+      const { getByTestId } = await renderExpanded();
+      const armName = getByTestId("sessions-clear-all").textContent?.trim();
+
+      await fireEvent.click(getByTestId("sessions-clear-all"));
+      await tick();
+      const confirm = getByTestId("sessions-clear-all-confirm");
+
+      // focusOnMount lands here immediately, so the announced name is all the
+      // user gets — the visible text alone is "Clear all", near enough to the
+      // "Clear all…" they just pressed to read as a no-op and invite a retry.
+      expect(confirm.textContent?.trim()).toBe("Clear all");
+      expect(confirm.getAttribute("aria-label")).toBe("Confirm clearing all 2 saved sessions");
+      expect(confirm.getAttribute("aria-label")).not.toBe(armName);
+      expect(getByTestId("sessions-clear-all-cancel").getAttribute("aria-label")).toBe(
+        "Cancel clearing all saved sessions",
+      );
+    });
+
+    it("(l2) …and the confirm's name carries the singular count", async () => {
+      fetchMock.mockImplementation(async (url: unknown, init?: { method?: string }) => {
+        const href = String(url);
+        if (href.includes(API_SESSIONS_DELETE) || href.includes(API_SESSIONS_CLEAR)) {
+          return { ok: true, json: async () => ({ data: {} }) };
+        }
+        if (href.includes(API_SESSIONS) && init?.method !== "POST") {
+          return { ok: true, json: async () => ({ data: { sessions: [ROWS[0]] } }) };
+        }
+        return { ok: true, json: async () => ({}) };
+      });
+
+      const { getByTestId } = await renderExpanded();
+      await fireEvent.click(getByTestId("sessions-clear-all"));
+      await tick();
+      expect(getByTestId("sessions-clear-all-confirm").getAttribute("aria-label")).toBe(
+        "Confirm clearing all 1 saved session",
+      );
+    });
+
     it("(f) collapsing the list disarms", async () => {
       const { getAllByTestId, getByTestId, queryByTestId } = await renderExpanded();
       await fireEvent.click(getAllByTestId("session-delete")[0]);
