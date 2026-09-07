@@ -110,6 +110,40 @@ describe("triggerSave / saveStore.lastSaveOk", () => {
     vi.unstubAllGlobals();
   });
 
+  // (post-ship review of #1816/#1897) `result.errorCode` can be "UNKNOWN"
+  // (document-service.ts's own catch-all fallback) or "VERIFY_BLOCKED"
+  // (`SaveVerificationError`, whose `reason` is already a deliberately
+  // complete, content-free sentence) — neither should get the jargon suffix.
+  it('omits the suffix for the "UNKNOWN" fallback code', async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        fetchWith({
+          status: "error",
+          reason: "The document could not be saved.",
+          errorCode: "UNKNOWN",
+        }),
+      ),
+    );
+    await expect(triggerSave("doc-1")).resolves.toBe(false);
+    expect(notified(notify, "error", "Save failed: The document could not be saved.")).toBe(true);
+    expect(notified(notify, "error", "(UNKNOWN)")).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it('omits the suffix for "VERIFY_BLOCKED" — its reason is already complete', async () => {
+    const reason =
+      "the regenerated file did not re-open cleanly — your original file was left unchanged";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(fetchWith({ status: "error", reason, errorCode: "VERIFY_BLOCKED" })),
+    );
+    await expect(triggerSave("doc-1")).resolves.toBe(false);
+    expect(notified(notify, "error", `Save failed: ${reason}`)).toBe(true);
+    expect(notified(notify, "error", "(VERIFY_BLOCKED)")).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
   // cr-3 (J2 review round 3): the client always prefixes the server's
   // `reason` with "Save failed: " — a reason that (redundantly) repeats
   // "save failed" itself stutters. Pins that the server's own generic

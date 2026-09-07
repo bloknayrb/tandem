@@ -381,6 +381,23 @@ describe("formatActivityMessage (cr-1)", () => {
     ).toBe("Save failed for report.docx.");
   });
 
+  // (post-ship review of #1816/#1897) `SaveVerificationError`'s message is a
+  // deliberately complete, content-free sentence (the #1123-0e "your original
+  // file was left unchanged" reassurance) — a jargon suffix here would
+  // undercut it rather than add a diagnostic detail.
+  it('omits the suffix for "VERIFY_BLOCKED" — its message is already complete', () => {
+    expect(
+      formatActivityMessage({
+        type: "save-error",
+        message:
+          "Save failed for report.docx: the regenerated file did not re-open cleanly — your original file was left unchanged",
+        errorCode: "VERIFY_BLOCKED",
+      }),
+    ).toBe(
+      "Save failed for report.docx: the regenerated file did not re-open cleanly — your original file was left unchanged",
+    );
+  });
+
   it("leaves non-save-error notifications untouched even when errorCode is set", () => {
     // general-error notifications stash a semantic sentinel in errorCode
     // (SIDECAR_RESTART_FAILED, LINK_NOT_OPENABLE, …), not a raw fs code — a

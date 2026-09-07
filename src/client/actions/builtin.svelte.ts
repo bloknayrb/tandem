@@ -45,8 +45,21 @@ import { type Action, registerActions } from "./registry.svelte.js";
 // #1816: both save failure paths below append the structured error code as a
 // `" (CODE)"` parenthetical rather than folding it into the (now-generic)
 // headline message. One formatter keeps that suffix shape identical.
+//
+// Two codes are exempt because their accompanying `reason`/`message` is
+// already a complete sentence, mirroring `formatRenameErrorMessage`
+// (yjsSync.svelte.ts) and `formatActivityMessage` (activityCenter.ts), which
+// suppress the same pair for the same reason: `"UNKNOWN"` is
+// `document-service.ts`'s catch-all fallback when the underlying error
+// carried no `.code`, and carries no information of its own; `"VERIFY_BLOCKED"`
+// (`SaveVerificationError`) pairs with a message built by `blockReasonMessage`
+// specifically to be content-free — including the #1123-0e "your original
+// file was left unchanged" reassurance — so a jargon code tacked on would
+// undercut it rather than add a diagnostic detail.
+const SAVE_ERROR_CODE_SUFFIX_EXEMPT = new Set(["UNKNOWN", "VERIFY_BLOCKED"]);
+
 function errorCodeSuffix(code?: string): string {
-  return code ? ` (${code})` : "";
+  return code && !SAVE_ERROR_CODE_SUFFIX_EXEMPT.has(code) ? ` (${code})` : "";
 }
 
 let saving = $state(false);

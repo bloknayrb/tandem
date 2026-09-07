@@ -57,12 +57,21 @@ export function relativeTime(timestamp: number, now: number = Date.now()): strin
  * …) that a raw parenthetical would only make noisier, not more useful.
  * `"UNKNOWN"` (document-service.ts's fallback when the underlying error
  * carried no `code`) is equally uninformative and is also suppressed.
+ *
+ * `"VERIFY_BLOCKED"` (`SaveVerificationError`, document-service.ts) gets the
+ * same exemption for a different reason: its `message` is built by
+ * `blockReasonMessage` specifically to be a complete, content-free sentence —
+ * including the #1123-0e "your original file was left unchanged"
+ * reassurance — so a jargon code tacked onto the end would undercut the
+ * reassurance rather than add a diagnostic detail.
  */
+const SAVE_ERROR_CODE_SUFFIX_EXEMPT = new Set(["UNKNOWN", "VERIFY_BLOCKED"]);
+
 export function formatActivityMessage(
   item: Pick<TandemNotification, "type" | "message" | "errorCode">,
 ): string {
   if (item.type !== "save-error") return item.message;
   const code = item.errorCode;
-  if (!code || code === "UNKNOWN") return item.message;
+  if (!code || SAVE_ERROR_CODE_SUFFIX_EXEMPT.has(code)) return item.message;
   return `${item.message} (${code})`;
 }
