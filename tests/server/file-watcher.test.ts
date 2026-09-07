@@ -53,7 +53,7 @@ const ORIGINAL_PLATFORM = process.platform;
 
 /**
  * The repo's platform-stub idiom (`document-service.test.ts:963-970`,
- * `file-io/doc-backup.test.ts`, `integrations/apply-acl.test.ts`).
+ * `file-io/doc-backup.test.ts`).
  * `vi.stubGlobal("process", …)` does NOT work — imported modules keep the same
  * `process` object. Every stubbed case restores in a `finally`: a leaked
  * `platform: "linux"` would make every LATER win32-gated assertion test the

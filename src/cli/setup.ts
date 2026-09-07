@@ -6,6 +6,7 @@ import {
   applyOpsForCli,
   buildMcpEntries,
   CHANNEL_DIST,
+  ConfigRefusalError,
   type DetectedTarget,
   detectionRefusal,
   detectTargets,
@@ -16,6 +17,11 @@ import {
   validateChannelShimPrereq,
 } from "../server/integrations/apply.js";
 import { CLAUDE_PLUGIN_INSTALL_COMMANDS } from "../shared/constants.js";
+import {
+  ERROR_CODE_CONFIG_MALFORMED,
+  ERROR_CODE_CONFIG_TOO_LARGE,
+  targetPushSupport,
+} from "../shared/integrations/contract.js";
 
 /**
  * Parse repeatable `--target=<kind>` CLI args into valid target kinds plus the
@@ -32,6 +38,24 @@ export function parseTargetArgs(args: string[]): {
   const targets = raw.filter((t): t is TargetKind => t === "claude-code" || t === "claude-desktop");
   const unknown = raw.filter((t) => t !== "claude-code" && t !== "claude-desktop");
   return { targets, unknown };
+}
+
+/**
+ * Parse the channel-shim flags into an explicit three-way intent (#1760).
+ *
+ * `--with-channel-shim` → `true`, `--without-channel-shim` → `false`, neither →
+ * `{}` (no opinion, which `resolveChannelShimIntent` reads as "preserve"). Both
+ * at once is a `conflict` the caller refuses before any write, rather than
+ * silently picking one — the two flags mean opposite things and the wrong guess
+ * deletes a deliberate opt-in. Pure + side-effect-free for unit testing.
+ */
+export function parseChannelShimArgs(args: string[]): { intent?: boolean; conflict: boolean } {
+  const on = args.includes("--with-channel-shim");
+  const off = args.includes("--without-channel-shim");
+  if (on && off) return { conflict: true };
+  if (on) return { intent: true, conflict: false };
+  if (off) return { intent: false, conflict: false };
+  return { conflict: false };
 }
 
 export interface SetupOptions {
@@ -73,7 +97,8 @@ function printGuidance(): void {
       "  • Run `tandem` to launch the editor; the first-run wizard connects\n" +
       "    Claude (Claude Code / Claude Desktop) for you.\n" +
       "  • Or run `tandem setup --apply` to write the default Claude MCP config\n" +
-      "    non-interactively. Honors --force, --target=<kind>, --with-channel-shim.\n",
+      "    non-interactively. Honors --force, --target=<kind>,\n" +
+      "    --with-channel-shim, --without-channel-shim.\n",
   );
 }
 
@@ -96,7 +121,7 @@ async function applySetup(opts: SetupOptions): Promise<void> {
     targets = targets.filter((t) => wanted.has(t.kind));
   }
 
-  let outcome: WriteOutcome = { failures: 0, shimRegisteredFor: [] };
+  let outcome: WriteOutcome = { failures: 0, refusals: [], shimRegisteredFor: [] };
   if (targets.length === 0) {
     // `detectTargets` returns an empty list for two very different reasons, and
     // the generic hint is actively wrong for one of them: when the home
@@ -126,7 +151,16 @@ async function applySetup(opts: SetupOptions): Promise<void> {
     outcome = await writeTargets(targets, opts);
 
     if (outcome.failures === targets.length) {
-      console.error("\nSetup failed — could not write any configuration. Check file permissions.");
+      // "Check file permissions" is a dead end when the file was REFUSED rather
+      // than unwritable (#1802): a malformed or oversize `~/.claude.json`
+      // throws `ConfigRefusalError` out of `applyConfig`, lands here, and the
+      // user goes and checks permissions that were fine all along. `doctor` and
+      // the wizard both name the real remedy; this was the third surface.
+      console.error(
+        outcome.refusals.length === outcome.failures
+          ? refusalSummary(outcome.refusals)
+          : "\nSetup failed — could not write any configuration. Check file permissions.",
+      );
     } else if (outcome.failures > 0) {
       console.error(
         `\nSetup partially complete (${outcome.failures} target(s) failed). Start Tandem with: tandem`,
@@ -160,8 +194,60 @@ async function applySetup(opts: SetupOptions): Promise<void> {
   }
 }
 
+/**
+ * The all-failed summary for a run where every failure was a refusal.
+ *
+ * Branches on the REASON, not merely on the count. `ConfigRefusalError` covers
+ * two conditions with nothing in common but the decision to leave the file
+ * alone, and a count-only branch printed the malformed remedy for both: a user
+ * whose `~/.claude.json` has outgrown the cap — the routinely-multi-megabyte
+ * population #1801 exists for — was told to fix JSON that parses perfectly and
+ * to restore a backup they have no reason to have, then to re-run the identical
+ * command. The wizard already branches on `err.reason`
+ * (`IntegrationWizardModal#resultErrorText`); this is the CLI half of the same
+ * fact.
+ */
+function refusalSummary(reasons: readonly ConfigRefusalError["reason"][]): string {
+  const lead =
+    "\nSetup failed — Tandem refused to rewrite the config file(s) above and left them\n" +
+    "exactly as found.";
+  const kinds = new Set(reasons);
+  if (kinds.size === 1 && kinds.has(ERROR_CODE_CONFIG_TOO_LARGE)) {
+    // No "fix the JSON" and no backup: nothing is broken. The per-target line
+    // above already printed the size and the cap, so this only has to say what
+    // to do about it — and honestly, which means naming the hand-registration
+    // route rather than implying the file can simply be shrunk.
+    return (
+      `${lead} The file is larger than Tandem will rewrite safely — it is not\n` +
+      "corrupt. Register Tandem by hand in that file, or reduce its size, then re-run:\n" +
+      "  tandem setup --apply"
+    );
+  }
+  if (kinds.size === 1 && kinds.has(ERROR_CODE_CONFIG_MALFORMED)) {
+    // "must be a JSON object" rather than "fix the JSON": the same reason
+    // covers a file that parses perfectly and is an array, a string or `null`
+    // at its root, and telling that user to fix their JSON describes nothing
+    // wrong with it. The per-target line above already said which of the two
+    // it was.
+    return (
+      `${lead} It must be a JSON object — fix it, or restore the file from a\n` +
+      "backup, then re-run:\n" +
+      "  tandem setup --apply"
+    );
+  }
+  // Mixed reasons across several targets: no single remedy is true of all of
+  // them, so point at the per-target lines rather than guessing.
+  return `${lead} Each line above says what its file needs.`;
+}
+
 interface WriteOutcome {
   failures: number;
+  /** The `reason` of each failure that was a `ConfigRefusalError` — Tandem
+   *  declining to rewrite a malformed or oversize config — rather than an I/O
+   *  error. The summary branches on the reasons, so a refusal never sends the
+   *  user to check permissions on a file whose permissions are fine, nor to fix
+   *  JSON in a file that parses. */
+  refusals: ConfigRefusalError["reason"][];
   /** Targets that actually got a channel-shim entry written. `printPushStatus`
    *  reports off THIS, not off a file-existence check — `shouldRegisterChannelShim`
    *  returns false for every Claude Desktop target, so a run that registered no
@@ -171,6 +257,7 @@ interface WriteOutcome {
 
 async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Promise<WriteOutcome> {
   let failures = 0;
+  const refusals: ConfigRefusalError["reason"][] = [];
   const shimRegisteredFor: string[] = [];
   for (const t of targets) {
     try {
@@ -188,30 +275,42 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
       // from that turns "no opinion" into `false`, which `applyOpsForCli`
       // turns into an explicit REMOVE: a user who had opted in with
       // `--with-channel-shim` lost it the next time doctor sent them here.
-      // Absent a flag, preserve; `--with-channel-shim` still turns it on, and
-      // there is deliberately no `--no-channel-shim`.
-      const withChannelShim = await resolveChannelShimIntent(
+      // Absent a flag, preserve; `--with-channel-shim` turns it on and
+      // `--without-channel-shim` is the one `tandem setup` flag that removes it
+      // (#1760). `--uninstall-scrub` and a confirmed wizard diff remove it too,
+      // by their own explicit routes — what #1760 fixed is that no IMPLICIT
+      // path removes it any more.
+      //
+      // `preserveShim` answers "should the entry exist"; `writeShim` answers
+      // "may we derive its body". They differ on a `targetPushSupport ===
+      // "none"` kind holding a hand-registered entry: `buildMcpEntries` is not
+      // target-gated, so deriving there would overwrite the user's own
+      // `command`/`args` and re-arm #1299's false "Registered for: Claude
+      // Desktop".
+      const preserveShim = await resolveChannelShimIntent(
         t.kind,
         t.configPath,
         opts.withChannelShim,
       );
+      const writeShim = preserveShim && targetPushSupport(t.kind) !== "none";
       const entries = buildMcpEntries(CHANNEL_DIST, {
-        withChannelShim,
+        withChannelShim: writeShim,
         targetKind: t.kind,
       });
-      await applyConfig(t.configPath, applyOpsForCli(entries, { withChannelShim }));
+      await applyConfig(t.configPath, applyOpsForCli(entries, { withChannelShim: preserveShim }));
       console.error(`  \x1b[32m✓\x1b[0m ${t.label}`);
       // Recorded only on a SUCCESSFUL write — a target whose config failed to
       // save has no shim, whatever we intended for it.
-      if (withChannelShim) shimRegisteredFor.push(t.label);
+      if (writeShim) shimRegisteredFor.push(t.label);
     } catch (err) {
       failures++;
+      if (err instanceof ConfigRefusalError) refusals.push(err.reason);
       console.error(
         `  \x1b[31m✗\x1b[0m ${t.label}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
-  return { failures, shimRegisteredFor };
+  return { failures, refusals, shimRegisteredFor };
 }
 
 /**
