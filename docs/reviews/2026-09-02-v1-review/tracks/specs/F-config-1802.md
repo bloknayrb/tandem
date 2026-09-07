@@ -54,14 +54,20 @@ failure behave like its neighbours.
   the code alone is the answer — say so in the PR body.
 - **`src/cli/doctor.ts` — the two sentences this change falsifies, and nothing else.**
   `grep "backs the file up"` returns exactly `:1156` and `:1529`, and `applyConfig` is
-  path-agnostic, so both promises become false the moment the refusal ships. `:1149-1158`
-  (`~/.claude.json`) gets "Fix the JSON, or restore the file from a backup, then re-run doctor —
-  Tandem will not rewrite a config it cannot parse." `:1523-1533` (`checkDesktopMcpConfig`) merges
-  `unreadable` and `malformed` into one warn (`:1513`, comment at `:1510-1512`), so it must **not**
-  be split and must **not** prescribe a JSON fix — an EACCES file was never parsed and is probably
-  valid JSON; give it its own sentence true of both ("Tandem will not rewrite a config it could not
-  read. Check the file's permissions and that it is valid JSON, then re-run doctor."), keeping the
-  `DESKTOP_RESTART_NOTE` hop. Both stay path-free and parse-detail-free.
+  path-agnostic, so both promises become false the moment the refusal ships. **In both arms the new
+  sentence REPLACES `setupApplyRemedy(...)`, it does not suffix it** — `setup --apply` routes to the
+  same `applyConfig` that now refuses this exact input (`setup.ts:64-66` records that doctor
+  prescribes it for a malformed config), and `setupApplyRemedy(false)`'s wizard fallback lands there
+  too, so keeping the remedy base ships a dead-end fix line for the condition being reported.
+  `:1149-1158` (`~/.claude.json`): the whole `fix` becomes "Fix the JSON, or restore the file from a
+  backup, then re-run doctor — Tandem will not rewrite a config it cannot parse.", with no
+  `withSuffix` hop and no remedy base. `:1523-1533` (`checkDesktopMcpConfig`) merges `unreadable`
+  and `malformed` into one warn (`:1513`, comment at `:1510-1512`), so it must **not** be split and
+  must **not** prescribe a JSON fix — an EACCES file was never parsed and is probably valid JSON;
+  give it its own sentence true of both ("Tandem will not rewrite a config it could not read. Check
+  the file's permissions and that it is valid JSON, then re-run doctor."), suffixed with
+  `DESKTOP_RESTART_NOTE` **only** — one `withSuffix` hop over the new sentence, not two over
+  `setupApplyRemedy`. Both stay path-free and parse-detail-free.
 - **`tests/docs/config-writer-set-claims.test.ts`** — deleting the backup removes one matched
   durable-write idiom (the `copyFile` at `:1119`), so `WRITER_SITES` (`:138-140`) and
   `DURABLE_WRITER_FILES` (`:234`) both go 10 → 9. Re-derive the counts from the test's own failure
@@ -113,13 +119,15 @@ invisible.
 
 `tests/cli/doctor.test.ts:2014-2023` — replace `toContain("Tandem backs the file up before rewriting
 it.")` with `not.toContain("backs the file up")` plus the new remedy sentence, keeping the
-`not.toContain("..")` dangling-clause assertion that spec exists for.
+`not.toContain("..")` dangling-clause assertion that spec exists for, and adding
+`expect(warn?.fix).not.toMatch(/setup --apply/)` so the dead-end remedy cannot return.
 
 ## Done when
 
 A malformed non-empty `~/.claude.json` is never rewritten by any Tandem path; the CLI and the wizard
 both name the refusal, the wizard half pinned by a test; both doctor sentences stop promising a
-backup-and-rewrite, each with its own wording; an empty config still gets a fresh file and a fresh
+backup-and-rewrite, each with its own wording, and neither malformed arm prescribes
+`setup --apply`; an empty config still gets a fresh file and a fresh
 install still works; the two writer counts land with a re-derived `why` string and the
 `docs/security.md:453` clause; the zero-byte residual is in the PR body; typecheck + the touched
 suites green.
@@ -157,3 +165,13 @@ Rounds 1–3 are superseded by this cut.
   makes it the protocol for changing a count, and the count change is forced by the deletion.
 - The `doctor.ts` sentence edits: this change is what makes them false, and one of the two is pinned
   by an existing test that would otherwise go red.
+
+## Review corrections (post-cut)
+
+- **The doctor remedy base, not just its suffix.** The cut spec edited only the "backs the file up"
+  sentence and preserved the `withSuffix(...)` structure, which left `setupApplyRemedy(cliAvailable())`
+  standing in both malformed arms — doctor would ship `tandem setup --apply` as the fix for the exact
+  condition this change makes that command refuse, and the wizard fallback in `setupApplyRemedy(false)`
+  routes to the same `applyConfig`. The Fix bullet now says the new sentence *replaces* the remedy in
+  both arms (the desktop arm keeping `DESKTOP_RESTART_NOTE` as its only suffix), and
+  `doctor.test.ts:2014-2023` gains `not.toMatch(/setup --apply/)` so it cannot come back.

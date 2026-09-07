@@ -89,6 +89,13 @@ scratch config file:
    conjured on a kind that cannot deliver, #1299).
 3. `claude-desktop` and `claude-code`, override `false` → `false`. The single removal path.
 4. `claude-code`, no override: entry present → `true`; absent → `false`; config missing → `false`.
+5. `claude-code`, override `true`: entry **absent** → `true`; entry present → `true`. Without it no
+   listed case distinguishes the three-arm resolver from the lazy two-arm collapse
+   (`if (override === false) return false; return await targetHasChannelEntry(configPath);`), which
+   answers identically on cases 1–4 yet never creates a shim on a fresh config — silently killing
+   the only documented opt-in (`docs/cli.md:32`, `README.md:226`). Nothing else covers it:
+   `run-setup-apply.test.ts:27` mocks the resolver, and every `withChannelShim: true` in
+   `setup.test.ts` drives `buildMcpEntries`/`applyConfig` directly.
 
 `tests/cli/parse-targets.test.ts` (`parseTargetArgs`'s home): `parseChannelShimArgs` for the four
 inputs, including `conflict`.
@@ -105,11 +112,18 @@ assert `desktop.mcpServers["tandem-channel"]` `toEqual`s that object — scoped 
 observe the no-re-derive rule. Add a sibling keeping the original invariant: a Claude Desktop
 fixture with **no** `tandem-channel`, no flag, still absent.
 
-`tests/cli/run-setup-apply.test.ts` mocks `resolveChannelShimIntent` (`:27`). Two changes: assert
+`tests/cli/run-setup-apply.test.ts` mocks `resolveChannelShimIntent` (`:27`). Three changes: assert
 `toHaveBeenCalledWith("claude-code", <path>, false)` after `runSetup({ apply: true, withChannelShim:
-false })`; and re-point the two targets of `it("does not credit a target whose config write
+false })`; re-point the two targets of `it("does not credit a target whose config write
 failed")` (`:202-226`) at two **push-capable** targets, or the `writeShim` gate excludes Claude
-Desktop before the write outcome is known and that spec passes vacuously.
+Desktop before the write outcome is known and that spec passes vacuously; and **add one case to the
+same `describe("push status")` block covering the gate that re-pointing vacates** — resolver
+`mockResolvedValue(true)`, `detectTargets` → `[CLAUDE_CODE, CLAUDE_DESKTOP]`, **both** `applyConfig`
+calls resolving, asserting the `Registered for:` line contains "Claude Code" and NOT "Claude
+Desktop". After the re-point no spec leaves the resolver answering `true` for a `none` kind, so
+nothing observes `shimRegisteredFor.push` being gated on `writeShim` rather than `preserveShim` —
+and pushing `preserveShim` re-arms #1299's false "Registered for: Claude Desktop" with a green
+suite.
 
 ## Done when
 
@@ -145,3 +159,15 @@ Rounds 1–3 are superseded; their findings survive only where the code change s
 - `tandem uninstall` does not exist. The Problem section and the docs bullet name
   `tandem --uninstall-scrub`, and the docs bullet prescribes no second command — naming a
   whole-scrub as a shim-only removal path would repeat the defect this issue closes.
+
+## Review corrections (post-cut)
+
+- **Resolver case 5 (`claude-code` + override `true`).** The cut spec's four cases all answer the
+  same on the three-arm resolver and on a lazy two-arm collapse, so the collapse — which never
+  creates a shim on a fresh config and kills the `--with-channel-shim` opt-in — passed every listed
+  case and every existing test. One case distinguishes them.
+- **A push-status case for the `writeShim` gate.** Both existing Desktop specs pre-empt the gate by
+  mocking the resolver `false` for Desktop, and the third is re-pointed onto two push-capable
+  targets precisely because the gate makes it vacuous — leaving nothing that observes
+  `shimRegisteredFor.push` being gated on `writeShim` rather than `preserveShim`. The added case is
+  the only thing that can catch a re-arming of #1299's false "Registered for: Claude Desktop".
