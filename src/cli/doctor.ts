@@ -35,7 +35,7 @@ import {
   isRecordedPathGone,
   probeNodeBinary,
 } from "../server/integrations/node-binary.js";
-import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../shared/constants.js";
+import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT, TAURI_HOSTNAME } from "../shared/constants.js";
 import { isAppTranslocatedPath } from "../shared/integrations/app-translocation.js";
 import {
   claudeCodeConfigPath,
@@ -1118,6 +1118,14 @@ const HOME_CLAUDE_JSON = `~/.${"claude"}.json`;
  * body — while `redactUserPaths`, the only scrubber downstream, knows nothing
  * about URL userinfo or a query token. `type` stays verbatim (enum-shaped).
  */
+/**
+ * Hostnames a `tandem` MCP url may name. The server binds `127.0.0.1`, so
+ * anything else is either unreachable or somebody else's machine.
+ * `TAURI_HOSTNAME` is here because the desktop WebView's own origin is that
+ * name — a config carrying it is odd but not an exfiltration shape.
+ */
+const LOOPBACK_MCP_HOSTNAMES = new Set(["127.0.0.1", "[::1]", "localhost", TAURI_HOSTNAME]);
+
 function validateUserTandemEntry(
   entry: unknown,
   mcpPort: number,
@@ -1147,6 +1155,22 @@ function validateUserTandemEntry(
     return {
       message: `${HOME_CLAUDE_JSON} tandem: unexpected config — type=${String(e.type)}, pathHasMcp=${pathHasMcp}`,
       fix: setupApplyRemedy(cliAvailable()),
+    };
+  }
+
+  // Host BEFORE port: a remote host on the right port is the one shape this
+  // check must never certify — Claude Code would send every `tandem_*` call,
+  // document text included, to it — and reporting the port there would name
+  // the wrong field. `URL.hostname` renders IPv6 bracketed, hence `[::1]`.
+  // The message names the SHAPE, not the hostname: the redaction rule above
+  // governs every part of this url, and an internal host name is exactly the
+  // kind of thing the Report-a-bug prefill must not carry into a public issue.
+  if (!LOOPBACK_MCP_HOSTNAMES.has(parsed.hostname)) {
+    return {
+      message: `${HOME_CLAUDE_JSON} tandem: url names a non-loopback host — Tandem's MCP server is loopback-only`,
+      // Not `setupApplyRemedy`: it rewrites the url at the DEFAULT port, so on
+      // a moved MCP port it trades this warn for the port one below.
+      fix: `Edit the tandem entry's url in ${HOME_CLAUDE_JSON} to point at 127.0.0.1:${mcpPort} — a remote host on that port is not this Tandem.`,
     };
   }
 

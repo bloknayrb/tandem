@@ -2245,6 +2245,36 @@ describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
       expect(warn?.fix).not.toMatch(/setup --apply/);
     });
 
+    // The one shape a green verdict would be worst on: right type, right
+    // path, right port, someone else's machine. Claude Code would send every
+    // `tandem_*` call — `tandem_getTextContent` output, `tandem_edit` payloads
+    // — to that host.
+    it.each([
+      ["a remote host on the expected port", "http://attacker.example:3479/mcp"],
+      ["a LAN address", "http://192.168.1.9:3479/mcp"],
+    ])("warns on %s", async (_label, url) => {
+      writeEntry({ type: "http", url });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain("non-loopback host");
+      // Names the shape, not the hostname: this message rides the same
+      // redaction rule as the rest, and the fix must not be the dead-end
+      // `setup --apply` (it rewrites the DEFAULT port).
+      expect(JSON.stringify(await userMcpAll())).not.toContain(new URL(url).hostname);
+      expect(warn?.fix).not.toMatch(/setup --apply/);
+    });
+
+    it.each([
+      ["127.0.0.1", "http://127.0.0.1:3479/mcp"],
+      ["localhost", "http://localhost:3479/mcp"],
+      ["bracketed IPv6 loopback", "http://[::1]:3479/mcp"],
+    ])("still passes the loopback form %s", async (_label, url) => {
+      writeEntry({ type: "http", url });
+
+      const results = await userMcpAll();
+      expect(results.some((x) => x.message === "tandem registered in ~/.claude.json")).toBe(true);
+    });
+
     it.each([
       ["userinfo and a query token", "http://tok:s3cret@example.invalid:9999/mcp?key=abc"],
       ["a secret path segment", "http://example.invalid:9999/mcp/s3cret"],
