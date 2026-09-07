@@ -398,10 +398,21 @@ function notifyFailure(
   state.lastNotifiedAt = now;
 
   const fileName = path.basename(filePath) || docHash;
+  // cr-4 (#1816 follow-up): this producer shares `type: "save-error"` with
+  // document-service.ts's save/save-as/rename notifications, which the
+  // client's `formatActivityMessage` (activityCenter.ts) renders by folding
+  // `errorCode` back into `message` as a "(CODE)" suffix. `message` here
+  // used to embed the RAW `err.message` too — Node's fs errors both name
+  // the code AND the absolute path ("EACCES: permission denied, open
+  // '/Users/…/x.md.annotations.json'") — so the tray/toast doubled the code
+  // and leaked the exact path #1816 went to some trouble to remove
+  // elsewhere. Keep `message` generic, the same shape document-service.ts's
+  // producers use, and let `errorCode` (still set below) carry the one
+  // technical detail through the shared formatter.
   const message =
     kind === "persistent"
       ? `Annotation saving disabled for ${fileName}; restart Tandem to retry.`
-      : `Failed to save annotations for ${fileName}: ${(err as Error)?.message ?? "unknown error"}`;
+      : `Failed to save annotations for ${fileName}.`;
 
   try {
     pushNotification({
@@ -417,8 +428,10 @@ function notifyFailure(
     console.error("[ANNOTATION-STORE] pushNotification threw:", notifyErr);
   }
 
-  // Always mirror to stderr for power users debugging without the UI.
-  console.error(`[ANNOTATION-STORE] ${message}`);
+  // Mirror the RAW error (path + code intact) to stderr for power users
+  // debugging without the UI — the scrub above only affects what reaches
+  // the client-facing notification.
+  console.error(`[ANNOTATION-STORE] ${message}`, err);
 }
 
 /**

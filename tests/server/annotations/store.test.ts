@@ -543,6 +543,35 @@ describe("write failure → throttled notify → disable after 3", () => {
 
     writeSpy.mockRestore();
   });
+
+  // cr-4 (J2 review round 3): this producer shares `type: "save-error"` with
+  // document-service.ts's save/save-as/rename notifications, whose `message`
+  // is deliberately generic (no path, no raw errno text) so the client's
+  // shared `formatActivityMessage` can fold `errorCode` back in as a single
+  // "(CODE)" suffix without doubling it or leaking a path that was never in
+  // `message` to begin with. Pin the same shape here.
+  it("keeps the notified message generic — no raw errno text or absolute path (cr-4)", async () => {
+    const writeSpy = vi.spyOn(fs, "writeFile").mockRejectedValue(
+      Object.assign(new Error(`EACCES: permission denied, open '${FILE_A}.annotations.json'`), {
+        code: "EACCES",
+      }),
+    );
+
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const notify = vi.mocked(pushNotification);
+
+    store.queueWrite(() => makeAnnotationDoc(HASH_A, FILE_A));
+    await expect(store.flush()).rejects.toThrow();
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    const notified = notify.mock.calls[0]?.[0] as { message: string; errorCode?: string };
+    expect(notified.message).not.toContain("EACCES");
+    expect(notified.message).not.toContain(FILE_A);
+    expect(notified.message).toBe("Failed to save annotations for doc-a.md.");
+    expect(notified.errorCode).toBe("EACCES");
+
+    writeSpy.mockRestore();
+  });
 });
 
 // ---------------------------------------------------------------------------
