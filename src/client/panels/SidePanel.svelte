@@ -214,12 +214,21 @@ $effect(() => {
   if (bulkConfirm) confirmBtnEl?.focus();
 });
 
-// Reset bulk confirm when filters change
+// Reset bulk confirm when the filters or the document change.
+//
+// The documentId read is load-bearing (#1772): SidePanel is mounted once with a
+// display toggle and no {#key documentId}, so without it an armed "Accept all /
+// Reject all" survives a tab switch and handleBulk then resolves whichever
+// document is active at confirm time. Key it on documentId ONLY — never on
+// `annotations` or its array identity, which App.svelte recomputes on every
+// store change and would silently cancel the user's armed confirm each time
+// Claude posts a comment on the document they are reviewing.
 $effect(() => {
   // read filter state to establish reactivity
   void filterType;
   void filterAuthor;
   void filterStatus;
+  void documentId;
   bulkConfirm = null;
 });
 
