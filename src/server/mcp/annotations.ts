@@ -473,7 +473,7 @@ export function registerAnnotationTools(server: McpServer): void {
           // write paths now answer identically rather than disagreeing.
           return mcpError(
             "INVALID_ARGUMENT",
-            `Annotation ${id} is a private note and cannot be resolved by Claude`,
+            `Annotation ${id} is a private note or private comment and cannot be resolved by Claude`,
           );
         case "not-pending":
           return mcpError(
@@ -515,7 +515,7 @@ export function registerAnnotationTools(server: McpServer): void {
         case "invalid-note":
           return mcpError(
             "INVALID_ARGUMENT",
-            `Annotation ${id} is a private note and cannot be removed by Claude`,
+            `Annotation ${id} is a private note or private comment and cannot be removed by Claude`,
           );
         default: {
           // A new `RemoveResult` arm errors HERE, naming it. Without this the
@@ -560,12 +560,12 @@ export function registerAnnotationTools(server: McpServer): void {
         case "not-found":
           return mcpError("NOT_FOUND", `Annotation ${id} not found`);
         case "invalid-note":
-          // ADR-027: notes are user-private. Claude must not read or modify
-          // them via MCP. The note→comment promotion path runs from the
-          // browser, not through this tool.
+          // ADR-027: notes and private comments are user-private. Claude must
+          // not read or modify them via MCP. The note→comment promotion path
+          // runs from the browser, not through this tool.
           return mcpError(
             "INVALID_ARGUMENT",
-            "Cannot edit a note via MCP — notes are user-private (ADR-027).",
+            "Cannot edit a private note or private comment via MCP — they are user-private (ADR-027).",
           );
         case "not-pending":
           return mcpError(

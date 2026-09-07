@@ -238,6 +238,33 @@ export type ReplyResult =
   | { kind: "not-pending"; currentStatus: AnnotationStatus };
 
 /**
+ * ADR-027's write-side privacy predicate (#1803): a note, or a comment whose
+ * stored `audience` is not `outbound` — the write twin of #1619's read filter.
+ *
+ * Spelled exactly as the reply guard already spelled it, and used at all FOUR
+ * Claude-facing write families (resolve, edit, reply, remove), which until #1803
+ * disagreed: a stored `{comment, audience: "private"}` record (reachable by a
+ * legacy envelope or a stale-tab merge, and NOT healed by `sanitizeAnnotation`,
+ * which derives an audience only when none is stored) was something Claude could
+ * not reply to but could edit, resolve and remove.
+ *
+ * Highlights are deliberately NOT here: they fall to their own arms
+ * (`not-repliable`, `invalid-suggestion-target`), which carry the real parent
+ * type. Widening this to `audience !== "outbound"` over every type would swallow
+ * them and answer `invalid-note` instead — a refusal naming a rule that has
+ * nothing to do with the case.
+ *
+ * Kept module-PRIVATE. Nothing new is imported by any route or MCP module, so
+ * `annotation-remove-seam.test.ts` and `annotation-reply-seam.test.ts` keep
+ * their importer sets. It must NOT be added to `addUserReply` or
+ * `removeAnnotationRecord`: the user replying in, or archiving, their own
+ * private thread is what #1000/#1680 permit.
+ */
+function isPrivateForClaude(ann: Annotation): boolean {
+  return ann.type === "note" || (ann.type === "comment" && ann.audience !== "outbound");
+}
+
+/**
  * The reply family's result: the shared outcomes plus the one arm only the
  * ADR-027 guard on {@link AnnotationLifecycle.reply} produces.
  *
@@ -832,7 +859,8 @@ function transitionPending(
   // rather than an audit of mutations.
   const ann = sanitizeAnnotation(raw as RawAnnotation, onLossy);
 
-  // ADR-027 (#1680): notes are user-private. Claude must not resolve them.
+  // ADR-027 (#1680, #1803): notes AND private comments are user-private. Claude
+  // must not resolve either.
   //
   // **After sanitize, and before the pending check — both halves matter.**
   // After, because a stored `flag` is a note only once sanitized, so a raw-type
@@ -841,7 +869,7 @@ function transitionPending(
   // a caller the note exists and is merely resolved, which is a disclosure
   // ADR-027 does not make. Only a spec seeding an ALREADY-RESOLVED note
   // distinguishes this ordering from the other one.
-  if (ann.type === "note") return { kind: "invalid-note" };
+  if (isPrivateForClaude(ann)) return { kind: "invalid-note" };
 
   if (ann.status !== "pending") {
     return { kind: "not-pending", id, currentStatus: ann.status };
@@ -901,8 +929,9 @@ function editPendingAnnotation(
   // Sanitize legacy shapes before editing (matches the pre-seam handler).
   const ann = sanitizeAnnotation(raw, onLossy);
 
-  // ADR-027: notes are user-private. Claude must not modify them via MCP.
-  if (ann.type === "note") return { kind: "invalid-note" };
+  // ADR-027 (#1803): notes AND private comments are user-private. Claude must
+  // not modify either via MCP.
+  if (isPrivateForClaude(ann)) return { kind: "invalid-note" };
 
   if (ann.status !== "pending") return { kind: "not-pending", currentStatus: ann.status };
 
@@ -1302,7 +1331,7 @@ function replyForClaude(
     // contract is identical and nothing keyed on the code could have seen it.
     // A highlight now falls through to `writeReply`, whose own refusal is the
     // one that applies to every author — the same answer master gave.
-    if (ann.type === "note" || (ann.type === "comment" && ann.audience !== "outbound")) {
+    if (isPrivateForClaude(ann)) {
       return { kind: "invalid-note" };
     }
   }
@@ -1321,10 +1350,10 @@ function removeForClaude(
   const raw = map.get(id) as RawAnnotation | undefined;
   if (!raw) return { kind: "not-found", id };
 
-  // Sanitized type, not `raw.type`. A stored legacy `flag` normalizes to a note,
+  // Sanitized record, not `raw`. A stored legacy `flag` normalizes to a note,
   // and a raw check lets exactly that record through — the same ordering the
   // resolve and edit guards use.
-  if (sanitizeAnnotation(raw, onLossy).type === "note") return { kind: "invalid-note" };
+  if (isPrivateForClaude(sanitizeAnnotation(raw, onLossy))) return { kind: "invalid-note" };
 
   return removeAnnotationRecord(ydoc, id, "mcp");
 }

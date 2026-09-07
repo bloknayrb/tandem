@@ -23,6 +23,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import {
   acceptPending,
+  createAnnotationLifecycle,
   dismissPending,
   removeAnnotationRecord,
 } from "../../src/server/annotations/lifecycle.js";
@@ -206,6 +207,96 @@ describe("checkInbox does not choke on a legacy note", () => {
       userResponses.map((r) => r.id),
       "the note is gone, the comment is not",
     ).toEqual(["real"]);
+  });
+});
+
+/**
+ * #1803 — the same four Claude-facing write families, on the OTHER half of
+ * ADR-027's privacy field.
+ *
+ * A stored `{type: "comment", audience: "private"}` record is reachable by a
+ * legacy envelope or a stale-tab merge, and `sanitizeAnnotation` does not heal
+ * one (it derives an audience only when none is stored). Until #1803 Claude
+ * could not REPLY to such a record but could edit, resolve and remove it.
+ *
+ * `seedRawAnnotation`'s defaults are `{type: "comment", author: "user",
+ * audience: "private"}`, so every CONTROL below passes both `author` and
+ * `audience: "outbound"` explicitly.
+ */
+describe("the four write guards agree on audience (#1803)", () => {
+  function lifecycle() {
+    return createAnnotationLifecycle(doc);
+  }
+
+  it("refuses a private COMMENT on resolve, edit and remove, writing nothing", () => {
+    seed("p1", { type: "comment", author: "claude", audience: "private" });
+    const replies = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    replies.set("pr1", { id: "pr1", annotationId: "p1", content: "private thread" });
+    const before = { ...(map.get("p1") as Annotation) };
+
+    expect(acceptPending("p1", doc, map, noRelay)).toStrictEqual({ kind: "invalid-note" });
+    expect(dismissPending("p1", doc, map, noRelay)).toStrictEqual({ kind: "invalid-note" });
+    expect(lifecycle().editPending("p1", { content: "rewritten" }, noRelay)).toStrictEqual({
+      kind: "invalid-note",
+    });
+    expect(store.removeAnnotation("p1")).toStrictEqual({ kind: "invalid-note" });
+
+    expect(map.get("p1")).toStrictEqual(before);
+    expect(replies.has("pr1"), "and its thread survives the remove refusal").toBe(true);
+  });
+
+  it("control: each family still writes on an OUTBOUND record", () => {
+    // Split by verb on purpose: accept is the user's decision, so the accept
+    // control is a USER-authored comment (sanitize leaves a user comment
+    // outbound) while dismiss/edit/remove use Claude's own.
+    seed("o1", { type: "comment", author: "claude", audience: "outbound" });
+    expect(dismissPending("o1", doc, map, noRelay).kind).toBe("ok");
+
+    seed("o2", { type: "comment", author: "user", audience: "outbound" });
+    expect(acceptPending("o2", doc, map, noRelay).kind).toBe("ok");
+
+    seed("o3", { type: "comment", author: "claude", audience: "outbound" });
+    expect(lifecycle().editPending("o3", { content: "rewritten" }, noRelay).kind).toBe("ok");
+
+    seed("o4", { type: "comment", author: "claude", audience: "outbound" });
+    expect(store.removeAnnotation("o4")).toStrictEqual({ kind: "ok", id: "o4" });
+  });
+
+  it("leaves a HIGHLIGHT to its own arms, never invalid-note", () => {
+    // Kills a predicate written as `audience !== "outbound"` over every type.
+    // Claude-authored so the user-scoped demotion in sanitize cannot apply;
+    // sanitize derives `private` from the absent stored audience.
+    seed("h1", { type: "highlight", author: "claude", audience: undefined });
+
+    expect(lifecycle().editPending("h1", { suggestedText: "x" }, noRelay)).toStrictEqual({
+      kind: "invalid-suggestion-target",
+      annotationType: "highlight",
+    });
+    expect(lifecycle().reply("h1", "hello", noRelay).kind).toBe("not-repliable");
+  });
+
+  it("refuses a stored `flag` at audience OUTBOUND on all four, by both halves", () => {
+    // (i) user-authored: `sanitize` demotes a user outbound flag to `private`
+    // AND makes it a note, so both halves of the predicate refuse it.
+    seed("fu", { type: "flag", author: "user", audience: "outbound" });
+    expect(acceptPending("fu", doc, map, noRelay)).toStrictEqual({ kind: "invalid-note" });
+    expect(lifecycle().editPending("fu", { content: "x" }, noRelay)).toStrictEqual({
+      kind: "invalid-note",
+    });
+    expect(store.removeAnnotation("fu")).toStrictEqual({ kind: "invalid-note" });
+    expect(lifecycle().reply("fu", "x", noRelay)).toStrictEqual({ kind: "invalid-note" });
+
+    // (ii) claude-authored: the demotion is user-scoped, so it becomes
+    // `{note, outbound}` and is refused PURELY by the `type === "note"` half.
+    // Together these two pin the after-sanitize ordering on the families that
+    // previously had no such row.
+    seed("fc", { type: "flag", author: "claude", audience: "outbound" });
+    expect(acceptPending("fc", doc, map, noRelay)).toStrictEqual({ kind: "invalid-note" });
+    expect(lifecycle().editPending("fc", { content: "x" }, noRelay)).toStrictEqual({
+      kind: "invalid-note",
+    });
+    expect(store.removeAnnotation("fc")).toStrictEqual({ kind: "invalid-note" });
+    expect(lifecycle().reply("fc", "x", noRelay)).toStrictEqual({ kind: "invalid-note" });
   });
 });
 
