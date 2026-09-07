@@ -672,12 +672,22 @@ export async function saveDocumentToDisk(
     // control, orthogonal to this — never covered them. The raw error still
     // reaches the log line below; `errorCode` is the one technical detail
     // that travels to the client, for a "(EACCES)"-style detail suffix.
+    //
+    // `SaveVerificationError` is the one exception: its message is built by
+    // `blockReasonMessage` specifically to be content-free (never a path or
+    // errno — see its docblock above), so scrubbing it down to the same
+    // generic sentence as a raw FS error would throw away the #1123-0e
+    // "your original file was left unchanged" reassurance for no privacy
+    // gain. Surface it verbatim, on loopback and non-loopback callers alike.
     console.error("[Save] saveDocumentToDisk failed for", docState.filePath, err);
+    const verificationBlock = err instanceof SaveVerificationError ? err : null;
     pushNotification({
       id: generateNotificationId(),
       type: "save-error",
       severity: "error",
-      message: `Save failed for ${path.basename(docState.filePath)}.`,
+      message: verificationBlock
+        ? `Save failed for ${path.basename(docState.filePath)}: ${verificationBlock.message}`
+        : `Save failed for ${path.basename(docState.filePath)}.`,
       toolName: source,
       errorCode: errCode,
       documentId: safeDocId,
@@ -686,7 +696,7 @@ export async function saveDocumentToDisk(
     });
     return {
       status: "error",
-      reason: "The document could not be saved.",
+      reason: verificationBlock ? verificationBlock.message : "The save failed.",
       errorCode: (err as NodeJS.ErrnoException).code,
     };
   } finally {

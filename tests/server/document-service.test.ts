@@ -710,7 +710,7 @@ describe("saveDocumentToDisk", () => {
     expect(result.reason).not.toContain(target);
     expect(result.reason).not.toContain("EACCES");
     expect(result.reason).not.toContain("secret-project");
-    expect(result.reason).toBe("The document could not be saved.");
+    expect(result.reason).toBe("The save failed.");
     expect(result.errorCode).toBe("EACCES");
 
     const { pushNotification } = await import("../../src/server/notifications.js");
@@ -805,8 +805,23 @@ describe("saveDocumentToDisk", () => {
     // watcher suppressor was never armed for a write that didn't happen.
     expect(atomicWriteBuffer).not.toHaveBeenCalled();
     expect(suppressNextChange).not.toHaveBeenCalled();
+    // #1816 follow-up (review round 2): `SaveVerificationError`'s message is
+    // deliberately content-free (`blockReasonMessage` — no path, no errno),
+    // so the #1816 scrub must not flatten it down to the generic
+    // "The save failed." sentence used for raw FS errors. Both the returned
+    // `reason` and the pushed notification carry the real, safe explanation
+    // — including the #1123-0e "your original file was left unchanged"
+    // reassurance — rather than a content-free reason going content-free
+    // twice over.
+    expect(result.reason).toBe(
+      "the regenerated file did not re-open cleanly — your original file was left unchanged",
+    );
     expect(pushNotification).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "save-error", errorCode: "VERIFY_BLOCKED" }),
+      expect.objectContaining({
+        type: "save-error",
+        errorCode: "VERIFY_BLOCKED",
+        message: expect.stringContaining("your original file was left unchanged"),
+      }),
     );
   });
 });
