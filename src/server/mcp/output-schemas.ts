@@ -128,6 +128,26 @@ const openDocumentEntry = z.object({
   readOnly: z.boolean(),
 });
 
+/**
+ * #1733: who last wrote the CTRL_ROOM mode key, and what the key read at that
+ * moment. `client` carries an opaque per-connection tag; `server` the origin tag
+ * of the helper that wrote it; `restore` means the value arrived with the
+ * ctrl-session replay; `unknown` is anything else. `null` before any write has
+ * been observed.
+ *
+ * The SDK hard-validates structured output, so this must admit every arm of the
+ * union — hence one flat object with the two discriminating fields optional.
+ */
+export const modeProvenanceSchema = z
+  .object({
+    source: z.enum(["client", "server", "restore", "unknown"]),
+    at: z.number(),
+    value: z.enum(["solo", "tandem", "indeterminate"]),
+    connection: z.string().optional(),
+    origin: z.string().optional(),
+  })
+  .nullable();
+
 /** Read mode returns the editor summary fields; write mode echoes `status` (+ optional `warning`). */
 export const statusOutputShape = {
   // Write mode (text param passed)
@@ -139,6 +159,9 @@ export const statusOutputShape = {
   // Read mode (no text param)
   running: z.boolean().optional().describe("Read mode: always true when the server responds"),
   mode: TandemModeSchema.optional().describe('Read mode: "solo" (hold annotations) or "tandem"'),
+  modeProvenance: modeProvenanceSchema
+    .optional()
+    .describe("Read mode: who last wrote the mode key, when, and what it read then (#1733)"),
   storeReadOnly: z.boolean().optional(),
   activeDocument: openDocumentEntry.omit({ readOnly: true }).nullable().optional(),
   openDocuments: z.array(openDocumentEntry).optional(),
@@ -241,6 +264,9 @@ export const checkInboxOutputShape = {
   summary: z.string(),
   hasNew: z.boolean(),
   mode: TandemModeSchema,
+  modeProvenance: modeProvenanceSchema.describe(
+    "Who last wrote the mode key, when, and what it read then; null before any write is observed (#1733)",
+  ),
   storeReadOnly: z.boolean(),
   userActions: z.array(userActionSchema).describe("New/edited user comments awaiting Claude"),
   userResponses: z

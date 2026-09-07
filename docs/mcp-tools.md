@@ -440,10 +440,13 @@ Check editor status (running state, open documents, active document) and optiona
   ],
   "documentCount": 2,
   "mode": "tandem",
+  "modeProvenance": { "source": "client", "connection": "a1b2c3d4", "at": 1710936000000, "value": "tandem" },
   "storeReadOnly": false,
   "wakeUrl": "ws://127.0.0.1:3479/api/wake"
 }
 ```
+
+`modeProvenance` says who last wrote the CTRL_ROOM mode key -- `client` with an opaque per-connection tag, `server` with the origin tag of the helper that wrote it, `restore` (the value arrived with the ctrl-session replay), or `unknown` -- when, and what the key read at that moment. It is `null` before any write has been observed. It names the last *transaction that touched the key*, which under a lost concurrent tie is not necessarily the writer of the value `mode` reports: compare `modeProvenance.value` against `mode`. MCP only (loopback, or token-gated on LAN); `GET /api/mode` does not carry it.
 
 `storeReadOnly` reports whether the durable annotation store could take its lock; when `true`, annotations live only for this run. `wakeUrl` is the `/api/wake` WebSocket endpoint ([ADR-049](decisions.md)) -- where the client can hold a persistent watch, arming one there is the push path that needs no install and no flag. It is omitted when no endpoint is available (stdio mode). See [architecture.md](architecture.md) for how it relates to the other push paths.
 
@@ -1017,6 +1020,7 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
   "summary": "1 new: 1 comment. 1 accepted. 1 new chat message.",
   "hasNew": true,
   "mode": "tandem",
+  "modeProvenance": { "source": "client", "connection": "a1b2c3d4", "at": 1710936000000, "value": "tandem" },
   "storeReadOnly": false,
   "userActions": [ { ...annotation, "textSnippet": "...", "edited": true, "alreadyPushed": true } ],
   "userReplies": [ { "id": "r_...", "annotationId": "ann_...", "author": "user", "text": "...", "timestamp": 1710936000000, "textSnippet": "...", "alreadyPushed": true } ],
@@ -1038,6 +1042,7 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
 - **Channel push never suppresses an inbox item.** An item is always returned; when it was also handed to a real-time consumer it carries `alreadyPushed: true` (`userActions` and `userReplies` only -- `userResponses` never carries the flag). The server can observe that it pushed an event to a consumer, but not that any model received it: an attached channel shim whose host never negotiated the channel accepts the notification and discards it. The flag is advisory in **both** directions -- it can be set for an item no model saw, and it is dropped once the event leaves the channel buffer, so its absence is not evidence the item wasn't pushed. (Buffer eviction is size- and age-triggered but runs only when a *later* event is pushed -- there is no timer -- so on a quiet document the flag can outlive the nominal 60s age bound by an unbounded margin. Ids are also process-global rather than per-document; the same imported Word comment promoted in two files shares one id.) Never skip an item on the strength of this flag. (This was previously a suppression, which silently dropped user comments and replies for any client without a working channel -- the default configuration.)
 - `chatMessages`: new chat messages from the user via the ChatPanel sidebar. Each entry has `id`, `author`, `text`, `timestamp`, and optionally `documentId` (the document that was active when the message was sent).
 - `mode`: the user's current collaboration mode (`"tandem"` or `"solo"`). In `"solo"` mode, hold annotations and wait for the mode to switch to `"tandem"` before resuming.
+- `modeProvenance`: who last wrote the mode key (`client` + an opaque connection tag, `server` + origin tag, `restore`, or `unknown`), when, and what the key read at that moment; `null` before any write is observed. It names the last transaction that *touched* the key, so under a lost concurrent tie it is not necessarily the writer of the reported `mode` -- compare `modeProvenance.value` against `mode`.
 
 ---
 

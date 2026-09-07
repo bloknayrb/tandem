@@ -19,7 +19,7 @@ import {
   resetForTesting as dirtyResetForTesting,
   registerDirtyObserver,
 } from "../documents/dirty.js";
-import { readModeState } from "../mode.js";
+import { installModeProvenanceObserver, readModeState } from "../mode.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import {
   isUnansweredAsk,
@@ -547,6 +547,9 @@ export function attachCtrlObservers(): void {
   ctrlCleanups = [
     makeCtrlChatObserver({ ctrlDoc, pushEvent, selectionBuffer }),
     makeCtrlMetaObserver({ ctrlDoc, pushEvent }),
+    // #1733: record which connection last wrote the mode key. Pushed here so the
+    // Hocuspocus doc swap re-installs it.
+    installModeProvenanceObserver(ctrlDoc),
   ];
 
   console.error("[EventQueue] Attached CTRL_ROOM observers (chat + documentMeta)");

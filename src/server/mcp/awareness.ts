@@ -14,7 +14,13 @@ import { isStoreReadOnly } from "../annotations/store.js";
 import { clearStreamStaleness, noteStreamSidecar } from "../chat-stream-staleness.js";
 import { recordInboxPoll, resolveDeliveryRound } from "../events/delivery-state.js";
 import { getAnnotationEditedChannelKey, wasEmittedViaChannel } from "../events/queue.js";
-import { hideFromAI, type ModeState, readModeState, reportedMode } from "../mode.js";
+import {
+  hideFromAI,
+  type ModeState,
+  readModeProvenance,
+  readModeState,
+  reportedMode,
+} from "../mode.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
 import { getCurrentDoc } from "./document.js";
@@ -432,6 +438,10 @@ export function registerAwarenessTools(server: McpServer): void {
           summary,
           hasNew,
           mode,
+          // #1733: who last wrote the mode key. Diagnostic only — compare its
+          // `value` against `mode` above; under a lost concurrent tie they can
+          // disagree.
+          modeProvenance: readModeProvenance(),
           storeReadOnly: isStoreReadOnly(),
           userActions,
           userResponses,

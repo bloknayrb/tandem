@@ -28,6 +28,10 @@ import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { registerNavigationTools } from "../../src/server/mcp/navigation.js";
 import { shutdownSearchWorker } from "../../src/server/mcp/search-worker.js";
 import {
+  _resetModeProvenanceForTests,
+  installModeProvenanceObserver,
+} from "../../src/server/mode.js";
+import {
   getBuffer as getNotificationBuffer,
   resetForTesting as resetNotifications,
 } from "../../src/server/notifications.js";
@@ -173,6 +177,45 @@ describe("MCP tool integration — document tools", () => {
     expect(parsed.error).toBe(false);
     expect(parsed.data.running).toBe(true);
     expect(parsed.data.documentCount).toBe(1);
+  });
+
+  // #1733: the field must survive the SDK's hard validation of structured
+  // output, which is what this round-trip pins — the union has four arms and the
+  // schema has to admit each.
+  it("tandem_status and tandem_checkInbox carry modeProvenance", async () => {
+    setupDoc("mcp-doc-provenance", "Content");
+    _resetModeProvenanceForTests();
+
+    const before = parseResult(await client.callTool({ name: "tandem_status", arguments: {} }));
+    expect(before.data.modeProvenance).toBeNull();
+    const inboxBefore = parseResult(
+      await client.callTool({ name: "tandem_checkInbox", arguments: {} }),
+    );
+    expect(inboxBefore.data.modeProvenance).toBeNull();
+
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    const cleanup = installModeProvenanceObserver(ctrl);
+    try {
+      const scratch = new Y.Doc();
+      Y.applyUpdate(scratch, Y.encodeStateAsUpdate(ctrl));
+      const sv = Y.encodeStateVector(scratch);
+      scratch.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_MODE, "tandem");
+      Y.applyUpdate(ctrl, Y.encodeStateAsUpdate(scratch, sv), { socketId: "abcdef0123456789" });
+
+      const status = parseResult(await client.callTool({ name: "tandem_status", arguments: {} }));
+      expect(status.data.modeProvenance).toMatchObject({
+        source: "client",
+        connection: "abcdef01",
+        value: "tandem",
+      });
+      const inbox = parseResult(
+        await client.callTool({ name: "tandem_checkInbox", arguments: {} }),
+      );
+      expect(inbox.data.modeProvenance).toMatchObject({ source: "client", value: "tandem" });
+    } finally {
+      cleanup();
+      _resetModeProvenanceForTests();
+    }
   });
 });
 
