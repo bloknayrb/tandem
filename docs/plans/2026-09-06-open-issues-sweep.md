@@ -120,8 +120,8 @@ Script `docs/plans/2026-09-06-open-issues-sweep.workflow.js`, `args = {group: {i
 One group per invocation; stages are plain sequential `await`s (no `pipeline` interleaving, so
 `resumeFromRunId` replays deterministically). Every stage returns `{ok, ...}` and never throws;
 any stage after `review` short-circuits on `parked` or `failed`. Side effects are idempotent:
-`git worktree add … || git -C <wt> checkout <branch>`; ship checks `list_pull_requests
-head=<branch>` before creating; `args.known` lets a resumed run skip.
+`git worktree add … || git -C <wt> checkout <branch>`; ship checks `gh pr list --head <branch>`
+before creating; `args.known` lets a resumed run skip.
 
 ```
 plan → reviewLoop(≤3) → implement → simplify → verify(+fix ≤2) → [e2e] → manualProbes
@@ -164,9 +164,10 @@ Stages:
    (only `closes: true` issues), `## Refs (partial — issue stays open)` (`Refs #N — what landed;
    remaining: …`), problem/solution per issue, commands run, probe output, screenshots for UI,
    assumptions, unresolved findings, the `🤖 Generated with` footer; a regex check that no closing
-   keyword + `#N` appears outside `## Closes`; `enable_pr_auto_merge` (result recorded as data);
-   `subscribe_pr_activity`. Returns `{group, branch, pr, closes[], refs[], unresolved[], bryan[],
-   skillVersion}`.
+   keyword + `#N` appears outside `## Closes`; `gh pr merge --auto --merge` (result recorded as
+   data — the repo refuses while auto-merge is off); no PR-activity subscription exists here, so
+   the main session polls CI (`subscribed: false`). Returns `{group, branch, pr, closes[], refs[],
+   unresolved[], bryan[], skillVersion}`.
 10. **postShipReview** — `code-review` once more on the pushed head; findings → fix → push.
 
 Models/effort: plan + reviewers at the group's tier; L-tier domain reviewer `effort: max`;
@@ -178,8 +179,9 @@ verify/review `high`; simplify/ship `low`. `isolation` unused (worktree managed 
    designated branch. **Before launching any group, refuse it if its planned `filesTouched`
    intersects an unmerged group's** — the wave table was de-collided from the ledgers, but the
    plan stage's real file list is the authority.
-2. CI wakes drive fixes per the PR rules (red → fix → push; `update_pull_request_branch` when
-   stale; reviewer comments addressed). If auto-merge is off, merge via API when green.
+2. Poll CI (`gh pr checks <N>`) and drive fixes per the PR rules (red → fix → push;
+   `gh pr update-branch <N>` when stale; reviewer comments addressed). If auto-merge is off,
+   merge with `gh pr merge <N> --merge` when green.
 3. After merge: fetch master, prune the worktree, confirm `Closes` issues closed, post one comment
    on each `Refs` issue (what landed, what remains), close pinned already-fixed issues, and let a
    completeness critic assert every FIX issue in the wave has a merged PR, a parked note or a
@@ -256,23 +258,39 @@ Build; `known.branch` / `known.pr` let a resumed run reuse what exists. After a 
 or crash, `Workflow({scriptPath, args: <identical>, resumeFromRunId})` replays every finished
 stage from the journal and re-runs only the one in flight — this worked across a real restart.
 
-### Windows notes (the script's bash-isms)
+### Windows notes (measured 2026-09-06 on Bryan's PC, wave 2)
 
-Claude Code's Bash tool runs under git-bash on Windows, so most of the script's commands work as
-written. Three do not: `ln -sfn <repo>/node_modules <wt>/node_modules` (use `mklink /J` from a
-cmd shell, or simply `npm ci` inside the worktree — slower but exact); `mktemp -d
-/tmp/tandem-sweep-XXXXXX` (any temp dir whose path contains `tandem` — `tests/server/platform.test.ts`
-asserts the app-data path does); `test -x .husky/_/pre-push` (use `test -f`). `CARGO_TARGET_DIR`
-must be an absolute Windows path. `cargo test` runs natively (no GTK). Read CLAUDE.md's Windows
-gotchas (CRLF, the `#!/usr/bin/env sh` shebang) before the first push.
+Claude Code's Bash tool runs under git-bash on Windows, and two of the three bash-isms the cloud
+session flagged turned out to work as written: `mktemp -d /tmp/tandem-sweep-XXXXXX` yields a path
+MSYS rewrites to `C:/Users/…/AppData/Local/Temp/tandem-sweep-…` before Node sees it (the path
+contains `tandem`, which `tests/server/platform.test.ts` requires), and `test -x .husky/_/pre-push`
+is true. The one that does not is `ln -sfn` for a directory: the script now takes `args.windows:
+true` and links `node_modules` with a PowerShell `New-Item -ItemType Junction` instead
+(`cmd /c mklink /J` from git-bash fails). **Never `git worktree remove` a worktree whose
+`node_modules` is a junction** — on Windows git walks through the junction and deletes the main
+checkout's `node_modules` contents (measured 2026-09-06 after J1 merged: 0 entries left, both
+live worktrees broken until `npm ci`). Delete the junction first, from PowerShell:
+`(Get-Item "<wt>/node_modules").Delete()` removes the reparse point only; then remove the
+worktree. `CARGO_TARGET_DIR=<repo>/src-tauri/target` with
+forward slashes is accepted by cargo. `cargo test` runs natively (no GTK). Read CLAUDE.md's
+Windows gotchas (CRLF, the `#!/usr/bin/env sh` shebang) before the first push.
 
-### Stand-ins that become real on a machine with the `dev-tools` plugin
+### GitHub access and the stand-ins (wave 2 onward)
 
-The script calls `Skill("simplify")` and `Skill("code-review", "--level high")` because the cloud
-session had no plugins. With `dev-tools@claudestuff-marketplace` installed, `/simplify` runs its
-full four-angle fan-out and `/pr-review-toolkit:review-pr` exists; either keep the script as is
-(the in-session skills are the same review, single-pass) or edit the two prompts to name the
-plugin commands. `gh` also becomes available, so `docs/stacked-prs.md` applies for layered groups.
+The script now uses `gh` for every GitHub step (issues with `--json …,comments` so comment
+authors are visible; `gh pr create --body-file`, never a heredoc body — git-bash heredocs eat
+backslashes; `gh pr merge --auto --merge`, whose refusal is recorded as data). There is no
+PR-activity subscription tool here, so the main session polls CI. `Skill("simplify")` and
+`Skill("code-review", "--level high")` are the in-session skills, single-pass inside a subagent;
+the `dev-tools` plugin's `/pr-review-toolkit:review-pr` is available but the script does not call
+it. `args.probePorts = {ws, mcp}` gives each concurrently running group its own scratch pair for
+the probes stage (`run.sh` hardcodes 4918/4919, so a second group gets 4928/4929). Two groups run
+at a time on this machine (16 CPUs, 32 GB), **but never two `e2e` groups**: the Playwright harness
+ports are fixed (`scripts/test-ports.ts`) and its boot SIGKILLs whatever holds them, so a second
+E2E run kills the first. `gh` is now a hard requirement of the script (plan, ship and post-ship);
+a resume from a machine without it must install it first — the GitHub MCP fallback is gone.
+`docs/stacked-prs.md` applies for layered groups. The environment-facts table above is the cloud
+container's record and names the MCP tools that session had; the script no longer calls them.
 
 ### Lessons from wave 1 (read before launching wave 2)
 
@@ -287,6 +305,31 @@ plugin commands. `gh` also becomes available, so `docs/stacked-prs.md` applies f
   results, never raw caller names (see the #1882 fix); the repo's other idioms are in
   `src/server/mcp/document-service.ts` ("Safe FS sink" comments and the inline separator guard).
 - **Every worktree needs the tauri_build stubs** — the pre-push hook always runs `cargo test`.
+- **A forked skill runs in the main checkout, not the worktree** (found in wave 2). `Skill("code-review")`
+  forks into the session cwd, so `cd <worktree>` in the prompt never reaches it and with no target it
+  reviews whatever branch the main checkout is on — J1's first PR-review round reviewed the sweep
+  ledger's own diff. The script now passes the group branch as the skill's target and drops findings
+  on files outside the branch diff. `Skill("simplify")` loads inline and is unaffected.
+- **The verify stage's stdio smoke is not sandboxed by `TANDEM_APP_DATA_DIR`** (found in wave 2).
+  `scripts/ci/stdio-smoke.mjs` boots `dist/server` on the product ports 3478/3479, the server
+  `freePort()`s whatever holds them, and the boot's `refreshExistingSkillIfStale()` writes
+  `~/.claude/skills/tandem/SKILL.md` when the bundled version is higher — J1's verify overwrote the
+  operator's installed skill with unmerged branch text. The script now skips the smoke when a real
+  Tandem is listening, serialises it across groups with a mkdir lock, and points
+  `USERPROFILE`/`HOME` at a scratch dir for the boot. If you ran an older script, check the
+  installed skill's `version:` against `origin/master` and restore it.
+- **A workflow agent can wedge on one tool call, and nothing times it out** (found in wave 2).
+  F-runtime's post-ship agent issued `npm run typecheck` in the worktree and never got a result;
+  the workflow sat for three hours looking "in progress". The tell is the run's `journal.jsonl`
+  ending in a `started` with no matching `result` while no `agent-*.jsonl` under the run has been
+  modified for >15 min. `TaskStop` the run, check the worktree is clean and equal to the remote,
+  then either resume from the journal (cache-hits everything before the wedged call) or finish the
+  remaining stage by hand. Review agents also leave probe scripts at the repo root (`repro.mjs`) —
+  `git status` the main checkout after each group.
+- **The branch-diff file filter on code-review drops pre-existing gaps next to the fix.** It is
+  what keeps a forked review honest about scope, but a finding on an unchanged file that the
+  fix's claim depends on (here: `src/cli/channel.ts` exiting before the never-exit consumer
+  starts) vanishes silently. Read the dropped list when the review reports one; file what is real.
 - **PR bodies**: the ship agent sometimes claims a review pass did not run because it could not
   spawn agents itself; the pipeline's PR-review stage did run the repo reviewer. Read the
   "Review" line (rounds) rather than the "For Bryan" prose when in doubt.
@@ -304,9 +347,9 @@ literal in `tests/skill-instruction-contract.test.ts` moves with it). `Hooks arm
 | 1 | K1 test gates | #1783 #1784 #1721 (count-pin only) | `fix/test-gates-1784` | #1881 (merged a07b72d2) | — | armed | merged | Attempt 1 parked (framework growth); attempt 2 minimal: #1784 gated set derived from registrations + TOOL_GATES data list (resolveAnnotation left ungated for H), coverage-gate wiring requires a real import; #1783 vacuous bodies asserted, dead skip deleted, two inbox-pull-path E2Es, hook-script vitest runner; #1721 Refs only — axe color-contrast incomplete counts pinned per surface (CI held the baseline). Residual of #1784 (hollowed suites) tracked in #1825. 4 plan-review rounds, 2 PR-review rounds, post-ship clean. |
 | 1 | A-rest | #1768 #1797 | `fix/restore-and-close-ids-1768` | #1882 (merged 454e0ef2) | — | armed | merged | #1768: no-arg `tandem_restoreBackup` now lists the `.backup.docx` sidecar (last, labelled non-managed) and never restores; restore-by-name routes through `restoreDocumentFromBackup` (readOnly, reload guard, self-write triple); symlinked sidecar → `INVALID_PATH`. #1797: `closeDocumentById` resolves the id once via `path.basename` and uses it for every step; same shape on the save path. Post-CI follow-ups: CodeQL alerts 207–210 — snapshot half fixed by joining the `basename()` result; the sidecar half is the document-path-derived class in the accepted `docs/security.md` register entry and is Bryan's to triage; `reload-family.ts` coverage floor cleared with three direct specs. Two open questions for Bryan in the PR body (`POST /api/backups/restore` can now restore the sidecar by name; the `lstat`-vs-`O_NOFOLLOW` drift in the security.md bullet). 4 plan-review rounds, 2 PR-review rounds. |
 | 1 | G2 test timing | #1672 #1699 #1674 | `fix/test-timing-1674` | #1879 (merged 06804b97) | — | armed | merged | Attempt 1 parked (calibration framework); attempt 2 under the minimality rule shipped: #1674 was a real defect in the stdio test helper (collectors attached after the child had written), fixed; #1672/#1699 did not reproduce — the 36 s came from the leaked process tree noted on #1672 — so the change is the re-dated `REAL_APPLY_TIMEOUT_MS` rationale, both closed on the measurement (Bryan can reopen as watch items). 4 plan-review rounds, 1 PR-review round, post-ship review clean. |
-| 2 | F-runtime | #1759 #1805 #1804 #1794 | — | — | — | — | planned-not-started | |
-| 2 | F-config | #1760 #1801 #1802 | — | — | — | — | planned-not-started | |
-| 2 | J1 skill + workflows doc | #1771 #1782 #1820 #1737 (+decision H) | — | — | — | — | planned-not-started | |
+| 2 | F-runtime | #1759 #1805 #1804 #1794 | `fix/push-paths-runtime-1759` | — | #1889 | b315fced | armed | merged | Launched 2026-09-06 from Bryan's Windows PC (run `wf_ce225c53-e48`, probe ports 4918/4919), concurrently with J1. 4 plan-review rounds incl. scope cut; the security refuter required a tracked home for a residual #1794 exposure → #1884 filed and registered in `docs/security.md`. Four fixes committed; stopped at the checkpoint push and resumed on the hardened script (guarded smoke, branch-targeted code-review) — the resume cache-hit through build. PR opened 2026-09-06 (green, behind master). The post-ship agent then wedged on an `npm run typecheck` Bash call for ~3 h with no result; the run was stopped and its remaining work — a second review set of 9 verifier-backed findings the pipeline never received — was applied by hand on the branch (3 commits, 9 findings + 3 doc one-liners, mutation-checked; recorded in the PR body). Merged 2026-09-07 after one `update-branch`; all four issues closed; worktree pruned junction-first. The review's file filter had also dropped a pre-existing gap in `src/cli/channel.ts` (the plugin's `tandem channel` entry still exits 1 in preflight) → #1890 filed. |
+| 2 | F-config | #1760 #1801 #1802 | `fix/push-paths-config-1760` | — | #1891 | 94e45025 | armed | merged | Launched 2026-09-06 20:57 (run `wf_1ce28428-8f9`, probe ports 4928/4929) as J1 finished, concurrently with F-runtime. 4 plan rounds, 3 PR rounds, 2 post-ship rounds; 49 agents, ~6.8M tokens, 5.9 h. Workflow returned 2026-09-07 with a stale unresolved list (all four fixed in later rounds — verified against the branch). One post-open fix by hand (`32f2fe49`, a false "will be rejected" in `rotate-token`). Eleven For-Bryan items in the PR body, notably: CHANGELOG.md:340 still carries the retracted removal instruction (pipeline may not edit CHANGELOG); `tandem doctor` has no size cap; the #1802 zero-byte truncation window is untracked. Merged 2026-09-07 after one `update-branch`; all three issues closed; worktree pruned junction-first. The first push was rejected by a Rust timing flake unrelated to the branch (`bounded_command::partial_lengths_report_what_arrived`, 3 s spawn budget missed under pre-push load; 3/3 green in isolation) → fixed in its own PR #1892. |
+| 2 | J1 skill + workflows doc | #1771 #1782 #1820 #1737 (+decision H) | `fix/skill-and-workflows-doc-1771` | — | #1888 (merged 911de885) | 15 | armed | merged | Launched 2026-09-06 from Bryan's Windows PC (run `wf_f6b7f1e4-5d1`, probe ports 4928/4929), concurrently with F-runtime. #1771, #1782, #1820, #1737 closed by the merge; one `gh pr update-branch` + CI rerun after #1886 staled it. 4 plan-review rounds (incl. scope cut); build, simplify, verify and probes green; stopped and resumed at PR review after the code-review lens was found reviewing the wrong tree (see Lessons). 3 PR-review rounds hit the cap with 5 confirmed findings left (three non-discriminating test regexes, a false `replies` claim); the post-ship pass fixed all five (e2149691). For Bryan: `SERVER_INSTRUCTIONS` in `src/server/mcp/server.ts` has no orchestrator-only carve-out — it reaches sub-agents without the skill loaded; out of #1820's scope. ~3.2M subagent tokens, 2h13m. |
 | 3 | J2 product copy | #1781 #1814 #1815 #1816 #1817 #1818 | — | — | — | — | planned-not-started | |
 | 3 | F-doctor | #1806 #1807 #1811 #1790 | — | — | — | — | planned-not-started | |
 | 3 | C privacy & authority | #1769 #1733 → #1770 #1779 #1803 (+#1619 #1710 folded into #1803) | — | — | — | — | planned-not-started | |
@@ -353,6 +396,6 @@ literal in `tests/skill-instruction-contract.test.ts` moves with it). `Hooks arm
 | Baseline `npm run typecheck` / vitest / `cargo test` on master | typecheck green; vitest 627 files / 10,531 tests green (the one red, `platform.test.ts`, was this harness's `TANDEM_APP_DATA_DIR` lacking `tandem` in its path — the prefix is now `mktemp -d /tmp/tandem-sweep-XXXXXX`); `cargo test` 215/216 with one environment failure: `the_http_client_ignores_an_ambient_proxy` was defeated by this container's ambient `no_proxy=127.0.0.1,…`, which reqwest honours. Fixed in this PR — the test now clears `no_proxy`/`NO_PROXY` for its duration and restores them. 216/216 after. |
 | Hook worktree guards | `.claude/hooks/{typecheck-on-edit,svelte-check-on-edit,related-test,format-on-edit}.sh` |
 | `Skill`-in-subagent probe | Workflow subagents (default and `agentType` ones) have the `Skill` tool. `simplify` loads its instructions inline and runs single-pass (subagents have no `Agent` tool for its 4-way fan-out); `code-review` runs as a forked execution and returns findings as text (no `ReportFindings`). The probe's `code-review` call found a real defect in the first draft of the hook guards (backslash normalisation ordering), now fixed. |
-| Worktree + symlinked `node_modules` probe | A worktree under `.claude/worktrees/` with `ln -s` `node_modules`: `npx husky` arms `.husky/_/pre-push`; `tsc`, `svelte-check`, `biome`, `vitest` and `npm run test:e2e` all run. One environment fix was needed for E2E: this container ships Chromium build 1194 under `$PLAYWRIGHT_BROWSERS_PATH` while `@playwright/test@1.58` looks for build 1234 in the newer `chrome-linux64` / `chrome-headless-shell-linux64` layout, so every launch failed. Aliased in place rather than downloaded; the workflow's E2E stage repeats the alias when needed. |
+| Worktree + symlinked `node_modules` probe | A worktree under `.claude/worktrees/` with `ln -s` `node_modules`: `npx husky` arms `.husky/_/pre-push`; `tsc`, `svelte-check`, `biome`, `vitest` and `npm run test:e2e` all run. One environment fix was needed for E2E: this container ships Chromium build 1194 under `$PLAYWRIGHT_BROWSERS_PATH` while `@playwright/test@1.58` looks for build 1234 in the newer `chrome-linux64` / `chrome-headless-shell-linux64` layout, so every launch failed. Aliased in place rather than downloaded; the workflow's E2E stage repeated the alias when needed (removed in wave 2 — the stage now runs `npx playwright install chromium` when a build is missing). |
 | Auto-merge repo setting | asked of Bryan; until enabled the loop merges via API when green |
 | Decisions recorded | `decisions.md` + comments on #1827, #1753, #1754, #1813, #1787, #1788, #1748, #1820 |
