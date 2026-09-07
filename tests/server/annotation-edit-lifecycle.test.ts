@@ -352,4 +352,48 @@ describe("editPending — the seam itself", () => {
 
     expect(lifecycle.editPending("i", { content: "x" }, noLossy).kind).toBe("invalid-note");
   });
+
+  describe("the author guard (#1770)", () => {
+    // Every `not-owned` fixture carries `author: "user"` AND
+    // `audience: "outbound"` explicitly: the guard order is private → not-owned,
+    // so a private record would answer `invalid-note` and the row would pass
+    // without the author guard existing. `seed`'s default IS outbound; it is
+    // spelled out here because the ordering is what the rows are about.
+    it("refuses a USER-authored pending comment and echoes the author", () => {
+      seed("own-u", { author: "user", audience: "outbound" });
+
+      expect(lifecycle.editPending("own-u", { content: "rewritten" }, noLossy)).toStrictEqual({
+        kind: "not-owned",
+        author: "user",
+      });
+      expect((map.get("own-u") as { content: string }).content, "and nothing was written").toBe(
+        "original",
+      );
+    });
+
+    it("answers invalid-note for an IMPORT note — privacy wins over ownership", () => {
+      seed("own-i", { type: "note", author: "import" });
+
+      expect(lifecycle.editPending("own-i", { content: "x" }, noLossy).kind).toBe("invalid-note");
+    });
+
+    it("refuses a USER highlight as not-owned", () => {
+      // Outbound so the privacy guard does not fire first. Sanitize demotes a
+      // USER outbound highlight to private, which is what would make this
+      // answer `invalid-note` — so the fixture is import-authored, whose
+      // demotion is not user-scoped, and the author is still not "claude".
+      seed("own-h", { type: "highlight", author: "import", audience: "outbound" });
+
+      expect(lifecycle.editPending("own-h", { content: "x" }, noLossy)).toStrictEqual({
+        kind: "not-owned",
+        author: "import",
+      });
+    });
+
+    it("control: Claude's own outbound comment still edits", () => {
+      seed("own-c", { author: "claude", audience: "outbound" });
+
+      expect(lifecycle.editPending("own-c", { content: "rewritten" }, noLossy).kind).toBe("ok");
+    });
+  });
 });

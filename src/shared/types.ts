@@ -233,6 +233,13 @@ interface AnnotationBase {
   rev?: number;
   /** When true, marks this annotation as created during Solo mode. Consumers use this to hold back display until mode changes. */
   heldInSolo?: boolean;
+  /**
+   * Who performed the CURRENT resolution (#1770). Absent means the user — the
+   * overwhelming majority, and the value every pre-#1770 record carries.
+   * Claude's own accept/dismiss stamps `"claude"`, which is what keeps its
+   * resolves out of `tandem_checkInbox`'s `userResponses` bucket.
+   */
+  resolvedBy?: "user" | "claude";
   /** Audience: 'private' = personal (note/highlight), 'outbound' = visible to Claude. Derived by AR1 migration on read for legacy annotations. */
   audience?: "private" | "outbound";
   /** Set when this annotation was promoted from a note via "Send to Claude". */

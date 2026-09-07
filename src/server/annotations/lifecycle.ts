@@ -153,7 +153,14 @@ export type LifecycleResult<T> =
   | { kind: "ok"; data: T }
   | { kind: "not-found"; id: string }
   | { kind: "invalid-note" }
-  | { kind: "not-pending"; id: string; currentStatus: AnnotationStatus };
+  | { kind: "not-pending"; id: string; currentStatus: AnnotationStatus }
+  // #1770: an arm only the ACCEPT verb produces, on a union that serves both
+  // verbs — the verb-specific-arm-on-a-shared-union deviation the `EditResult`
+  // docblock argues against, taken knowingly. One function
+  // (`transitionPending`) serves accept and dismiss and one consumer switches
+  // on the result, so a second union would duplicate every other arm to
+  // separate two lines.
+  | { kind: "accept-refused"; reason: "own-annotation" | "unapplied-suggestion" };
 
 /**
  * What the shared MECHANISM can answer, and the base {@link RemoveResult} widens.
@@ -275,10 +282,18 @@ function isPrivateForClaude(ann: Annotation): boolean {
  * `private`. The second case is the write-side twin of #1619 and is why the
  * arm is not simply `is-note`.
  */
-export type ClaudeReplyResult = ReplyResult | { kind: "invalid-note" };
+export type ClaudeReplyResult =
+  | ReplyResult
+  | { kind: "invalid-note" }
+  // #1770: Claude may only reply in a thread on an annotation it authored.
+  | { kind: "not-owned"; author: Annotation["author"] };
 
-/** The wire codes a reply refusal can carry. Closed, and unchanged by Unit 8f. */
-export type ReplyRefusalCode = "NOT_FOUND" | "INVALID_ARGUMENT" | "ANNOTATION_RESOLVED";
+/** The wire codes a reply refusal can carry. Closed. */
+export type ReplyRefusalCode =
+  | "NOT_FOUND"
+  | "INVALID_ARGUMENT"
+  | "ANNOTATION_RESOLVED"
+  | "NOT_OWNED";
 
 /**
  * The single description of a refusal to WRITE a reply — code and message —
@@ -333,6 +348,12 @@ export function describeReplyWriteRefusal(result: Exclude<ClaudeReplyResult, { k
       return {
         code: "INVALID_ARGUMENT",
         message: "Claude can only reply to comments that are shared with it",
+      };
+    case "not-owned":
+      return {
+        code: "NOT_OWNED",
+        message:
+          "Claude can only reply on annotations it authored; answer a user's comment with tandem_reply or a fresh tandem_comment",
       };
     default: {
       const unhandled: never = result;
@@ -406,6 +427,9 @@ export type EditResult =
   | { kind: "ok"; annotation: Annotation }
   | { kind: "not-found" }
   | { kind: "invalid-note" }
+  // #1770: Claude may only edit an annotation it authored. The author is echoed
+  // so the caller can say whose it is.
+  | { kind: "not-owned"; author: Annotation["author"] }
   | { kind: "not-pending"; currentStatus: Annotation["status"] }
   | { kind: "empty-patch" }
   | { kind: "invalid-suggestion-target"; annotationType: AnnotationType };
@@ -875,9 +899,33 @@ function transitionPending(
     return { kind: "not-pending", id, currentStatus: ann.status };
   }
 
+  // #1770 (decision 3): Claude may DISMISS or withdraw, never ACCEPT. Accepting
+  // is the user's decision, and until now Claude could accept its own annotation
+  // and the record was indistinguishable from a user's in `userResponses`.
+  //
+  // Behind the pending check on purpose, so `not-pending` keeps precedence.
+  //
+  // The second arm refuses rather than applying: `applySuggestion` is
+  // client-only, so an MCP accept has never applied `suggestedText` — it flipped
+  // status and left the document untouched, which is the opposite of what the
+  // tool description promised. Applying it here would make this tool write
+  // document content, falsifying `license-gate-coverage.test.ts`'s claim that it
+  // does not.
+  //
+  // Dismiss stays open to every non-private record, including a user's comment —
+  // the existing flow, with `resolvedBy: "claude"` as its only trace.
+  if (nextStatus === "accepted") {
+    if (ann.author === "claude") return { kind: "accept-refused", reason: "own-annotation" };
+    if (ann.suggestedText !== undefined) {
+      return { kind: "accept-refused", reason: "unapplied-suggestion" };
+    }
+  }
+
   const updated: Annotation = {
     ...ann,
     status: nextStatus,
+    // #1770: who performed THIS resolution. Absent means the user.
+    resolvedBy: "claude",
     rev: nextRev(ann),
   };
 
@@ -895,9 +943,10 @@ function transitionPending(
  *
  * **The guard ORDER is the contract, not an implementation detail**, and it is
  * asserted in three suites (`edit-annotation.test.ts`, `document-store.test.ts`
- * and `annotation-edit-lifecycle.test.ts`). not-found → sanitize → note
- * (ADR-027) → pending → empty-patch → suggestion-target. Two of those orderings
- * are load-bearing and look arbitrary:
+ * and `annotation-edit-lifecycle.test.ts`). not-found → sanitize → private
+ * (ADR-027/#1803) → not-owned (#1770) → pending → empty-patch →
+ * suggestion-target. Three of those orderings are load-bearing and look
+ * arbitrary:
  *
  * - The **note check precedes the pending check**, so editing a resolved note
  *   reports `invalid-note`, not `not-pending`. Swapping them tells a caller the
@@ -906,6 +955,10 @@ function transitionPending(
  * - **Sanitize runs before every guard**, so a legacy-shaped note is recognised
  *   as a note by its sanitized type rather than its stored one — a stored
  *   `flag` sanitizes to `note`, and a raw-type check would let Claude edit it.
+ * - **The author check follows the privacy one**, so a user's note or private
+ *   comment answers `invalid-note` rather than `not-owned`. Reversing them
+ *   would answer a question about ownership on a record whose existence
+ *   ADR-027 does not concede.
  *
  * The empty-patch / suggestion-target order is NOT in that set, despite sitting
  * in the same sequence: `empty-patch` needs both fields absent and
@@ -932,6 +985,15 @@ function editPendingAnnotation(
   // ADR-027 (#1803): notes AND private comments are user-private. Claude must
   // not modify either via MCP.
   if (isPrivateForClaude(ann)) return { kind: "invalid-note" };
+
+  // #1770 (decision 4): Claude may only edit an annotation it AUTHORED. Until
+  // now it could rewrite a user's pending comment under the user's byline.
+  //
+  // AFTER the ADR-027 guard, so a user's note or private comment answers
+  // `invalid-note` and never `not-owned`. A USER highlight answers `not-owned`
+  // on both edit and reply — not a new oracle: the existing arms already
+  // disclose `annotationType` via `invalid-suggestion-target` / `not-repliable`.
+  if (ann.author !== "claude") return { kind: "not-owned", author: ann.author };
 
   if (ann.status !== "pending") return { kind: "not-pending", currentStatus: ann.status };
 
@@ -968,10 +1030,11 @@ function editPendingAnnotation(
   // `withMcp`, and the wrong helper fails in two different directions.
   //
   // Toward the CHANNEL: only browser-origin writes reach it (`CHANNEL_SKIP` in
-  // `shared/origins.ts` holds the other five), so `withBrowser` here would emit an
-  // `annotation:edited` for a server-initiated write — specifically when Claude
-  // edits a USER-authored pending comment, the one shape the observer's update
-  // branch admits. Pinned by an origin spec rather than left to review.
+  // `shared/origins.ts` holds the other five), so `withBrowser` here would emit
+  // an `annotation:edited` for a server-initiated write. Since #1770 this
+  // function only ever writes a CLAUDE-authored record, so the observer's update
+  // branch would not admit it anyway — but the helper choice is the contract and
+  // does not depend on that. Pinned by an origin spec rather than left to review.
   //
   // Toward DISK, which is the half a "they all skip the channel anyway" reading
   // misses: `withFileSync` and `withInternal` also sit in `DURABLE_SKIP`, so
@@ -1333,6 +1396,16 @@ function replyForClaude(
     // one that applies to every author — the same answer master gave.
     if (isPrivateForClaude(ann)) {
       return { kind: "invalid-note" };
+    }
+    // #1770 (decision 4): Claude may only reply in a thread on an annotation it
+    // AUTHORED. AFTER the privacy guard, for the same reason `editPending`
+    // orders them that way.
+    //
+    // A consequence worth stating: `promotedAnnotation` writes `author: "user"`,
+    // so a promoted note or imported Word comment is NOT repliable by Claude.
+    // The replacement is `tandem_reply` (chat) or a fresh `tandem_comment`.
+    if (ann.author !== "claude") {
+      return { kind: "not-owned", author: ann.author };
     }
   }
   // A missing record falls through to `writeReply`, which answers `not-found` —

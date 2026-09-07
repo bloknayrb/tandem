@@ -70,12 +70,32 @@ describe("resolve refuses notes (ADR-027)", () => {
   it("control: a pending COMMENT still resolves, so the guard is not refusing everything", () => {
     // Without this, `if (true) return { kind: "invalid-note" }` passes the spec
     // above. This is the positive control for the guard, not for the harness.
-    seed("c1", { type: "comment", author: "claude", audience: "outbound" });
+    //
+    // USER-authored since #1770: accept is the user's decision. The sibling row
+    // below is the other half of that split, and C-1803's control set relies on
+    // the two existing separately.
+    seed("c1", { type: "comment", author: "user", audience: "outbound" });
 
     const result = acceptPending("c1", doc, map, noRelay);
 
     expect(result.kind).toBe("ok");
     expect((map.get("c1") as Annotation).status).toBe("accepted");
+  });
+
+  it("refuses an accept of CLAUDE's own annotation (#1770)", () => {
+    // The other half of the split above. Behind the pending check, so
+    // `not-pending` keeps precedence — pinned by the resolved-comment row below.
+    seed("c1b", { type: "comment", author: "claude", audience: "outbound" });
+
+    expect(acceptPending("c1b", doc, map, noRelay)).toStrictEqual({
+      kind: "accept-refused",
+      reason: "own-annotation",
+    });
+    expect((map.get("c1b") as Annotation).status, "and nothing was written").toBe("pending");
+
+    // Dismiss on Claude's own record is still permitted, and stamps who did it.
+    expect(dismissPending("c1b", doc, map, noRelay).kind).toBe("ok");
+    expect((map.get("c1b") as Annotation).resolvedBy).toBe("claude");
   });
 
   it("reports a RESOLVED note as invalid-note, not as not-pending", () => {

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type * as Y from "yjs";
 import { addUserReply, createAnnotationLifecycle } from "../../src/server/annotations/lifecycle.js";
 import { collectRepliesForAnnotation } from "../../src/server/mcp/annotations.js";
 import { hideFromAI } from "../../src/server/mode.js";
@@ -336,5 +337,71 @@ describe("tandem_removeAnnotation cleans up replies", () => {
     const remaining = collectRepliesForAnnotation(repliesMap, annId2);
     expect(remaining).toHaveLength(1);
     expect(remaining[0].text).toBe("reply to 2");
+  });
+});
+
+describe("lifecycle.reply is scoped to annotations Claude authored (#1770)", () => {
+  /**
+   * `createAnnotation` mints `author: "claude"`, `audience: "outbound"`. Every
+   * `not-owned` fixture overrides the author AND keeps `audience: "outbound"`
+   * explicit — the guard order is private → not-owned, so a private record
+   * answers `invalid-note` and the row would pass with no author guard at all.
+   */
+  function seedParent(ydoc: Y.Doc, extras: Record<string, unknown>, type = "comment"): string {
+    return createAnnotation(
+      ydoc.getMap(Y_MAP_ANNOTATIONS),
+      ydoc,
+      type as "comment" | "highlight" | "note",
+      rangeOf(0, 5, ydoc),
+      "parent",
+      extras,
+    );
+  }
+
+  it("refuses a USER-authored outbound comment and echoes the author", () => {
+    const ydoc = setupDoc("reply-own-user", "Hello world");
+    const id = seedParent(ydoc, { author: "user", audience: "outbound" });
+
+    expect(createAnnotationLifecycle(ydoc).reply(id, "hi", noRelay)).toStrictEqual({
+      kind: "not-owned",
+      author: "user",
+    });
+    expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size, "and nothing was written").toBe(0);
+  });
+
+  it("answers invalid-note for an IMPORT note — privacy wins over ownership", () => {
+    const ydoc = setupDoc("reply-own-import", "Hello world");
+    const id = seedParent(ydoc, { author: "import" }, "note");
+
+    expect(createAnnotationLifecycle(ydoc).reply(id, "hi", noRelay).kind).toBe("invalid-note");
+  });
+
+  it("answers not-owned for a USER highlight, never not-repliable", () => {
+    // Import-authored so sanitize's user-scoped demotion cannot flip the
+    // audience to private and take the `invalid-note` branch first.
+    const ydoc = setupDoc("reply-own-highlight", "Hello world");
+    const id = seedParent(ydoc, { author: "import", audience: "outbound" }, "highlight");
+
+    expect(createAnnotationLifecycle(ydoc).reply(id, "hi", noRelay)).toStrictEqual({
+      kind: "not-owned",
+      author: "import",
+    });
+  });
+
+  it("control: Claude's own outbound comment still accepts a reply", () => {
+    const ydoc = setupDoc("reply-own-claude", "Hello world");
+    const id = seedParent(ydoc, {});
+
+    assertReplyOk(createAnnotationLifecycle(ydoc).reply(id, "on it", noRelay));
+  });
+
+  it("the browser's own path is deliberately unguarded on the same record", () => {
+    // `addUserReply` must NOT acquire the guard: replying in one's own thread is
+    // what #1000 permits, and `annotation-reply-seam.test.ts` pins the count of
+    // unguarded producers.
+    const ydoc = setupDoc("reply-own-browser", "Hello world");
+    const id = seedParent(ydoc, { author: "user", audience: "outbound" });
+
+    assertReplyOk(addUserReply(ydoc, id, "my own thread", noRelay));
   });
 });

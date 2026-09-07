@@ -75,6 +75,32 @@ function ledgerKey(documentId: string, itemId: string): string {
   return `${documentId}:${itemId}`;
 }
 
+/**
+ * The ANNOTATION ledger key (#1770), which adds a status dimension for Claude's
+ * own records.
+ *
+ * The ledger keys on `editedAt` alone, and the client's Undo writes
+ * `status: "pending"` without touching it (`useAnnotationReview.svelte.ts`). So
+ * accept → poll → undo → dismiss → poll returned `userResponses: []`: the
+ * dismissal was never reported, because the id had already been surfaced at a
+ * newer-or-equal `editedAt`. Appending the status makes the dismissed record a
+ * fresh key.
+ *
+ * Not `rev`: neither the client's resolve nor its undo write bumps it.
+ *
+ * Claude-authored only. A user COMMENT keeps the bare-id key — its bucket is
+ * `userActions`, whose whole re-surface rule is the `editedAt` comparison, and
+ * a status dimension there would re-report a comment on every status change.
+ *
+ * Known limit: accept → undo → accept is not re-reported, because the key
+ * repeats. Claude's last report equals the final state, which is the property
+ * that matters.
+ */
+function inboxLedgerKey(documentId: string, ann: Pick<Annotation, "id" | "author" | "status">) {
+  const base = ledgerKey(documentId, ann.id);
+  return ann.author === "claude" ? `${base}#${ann.status}` : base;
+}
+
 /** Reset surfaced IDs (exported for testing) */
 export function resetInbox(): void {
   surfacedIds.clear();
@@ -575,7 +601,7 @@ export function processInboxAnnotations(
   // of one annotation cannot change another's selection outcome — so batching
   // costs no fidelity against the per-item loop this replaces.
   const candidates = allAnnotations.filter((raw) => {
-    const lastSurfacedEditedAt = surfaced.get(ledgerKey(documentId, raw.id));
+    const lastSurfacedEditedAt = surfaced.get(inboxLedgerKey(documentId, raw));
     return lastSurfacedEditedAt === undefined || (raw.editedAt ?? 0) > lastSurfacedEditedAt;
   });
 
@@ -628,7 +654,7 @@ function processUnsurfacedInboxAnnotations(
     // ADR-027) never enters either bucket. Before any `surfaced.set`, for the
     // same reason the Solo hold is.
     if (ann.author === "user" && ann.type === "comment" && isClaudeFacing(ann)) {
-      const lastSurfacedEditedAt = surfaced.get(ledgerKey(documentId, ann.id));
+      const lastSurfacedEditedAt = surfaced.get(inboxLedgerKey(documentId, ann));
       const alreadySurfaced = lastSurfacedEditedAt !== undefined;
       const edited = alreadySurfaced && (ann.editedAt ?? 0) > lastSurfacedEditedAt;
       const channelKey = edited ? getAnnotationEditedChannelKey(ann.id, ann.editedAt ?? 0) : ann.id;
@@ -648,10 +674,18 @@ function processUnsurfacedInboxAnnotations(
         ...(edited ? { edited: true } : {}),
         ...(wasChannelEmitted(channelKey) ? { alreadyPushed: true } : {}),
       });
-      surfaced.set(ledgerKey(documentId, ann.id), ann.editedAt ?? 0);
-    } else if (ann.author === "claude" && isClaudeFacing(ann) && ann.status !== "pending") {
+      surfaced.set(inboxLedgerKey(documentId, ann), ann.editedAt ?? 0);
+    } else if (
+      ann.author === "claude" &&
+      isClaudeFacing(ann) &&
+      ann.status !== "pending" &&
+      // #1770: Claude's own resolves are not the user's decisions. This bucket is
+      // documented as "the USER's accept/dismiss decisions", and before the stamp
+      // a Claude dismiss was indistinguishable from one.
+      ann.resolvedBy !== "claude"
+    ) {
       userResponses.push({ ...ann, textSnippet: snippet });
-      surfaced.set(ledgerKey(documentId, ann.id), ann.editedAt ?? 0);
+      surfaced.set(inboxLedgerKey(documentId, ann), ann.editedAt ?? 0);
     }
   }
 

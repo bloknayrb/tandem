@@ -88,6 +88,11 @@ const annotationBaseShape = {
     ),
   editedAt: z.number().optional(),
   rev: z.number().optional().describe("Durable-store last-writer-wins counter"),
+  // #1770. Declared, not merely tolerated — same rule as the two flags above.
+  resolvedBy: z
+    .enum(["user", "claude"])
+    .optional()
+    .describe("Who resolved this record; absent means the user"),
   audience: z.enum(["private", "outbound"]),
   promotedFrom: z.literal("note").optional(),
   importSource: z
@@ -277,7 +282,9 @@ export const checkInboxOutputShape = {
   userActions: z.array(userActionSchema).describe("New/edited user comments awaiting Claude"),
   userResponses: z
     .array(userResponseSchema)
-    .describe("User accept/dismiss decisions on Claude's annotations"),
+    .describe(
+      "The USER's accept/dismiss decisions on Claude's annotations; Claude's own resolves never appear",
+    ),
   userReplies: z
     .array(inboxUserReplySchema)
     .describe("New user replies on comment threads (held in Solo, released on flip to Tandem)"),

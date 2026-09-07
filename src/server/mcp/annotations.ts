@@ -453,10 +453,11 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_resolveAnnotation",
-    "Move a pending annotation to accepted or dismissed. Accepting one that carries " +
-      "suggestedText applies that text to the document; dismissing leaves the document " +
-      "unchanged. Only pending annotations can transition, and user notes cannot be " +
-      "transitioned at all (ADR-027). The record is kept either way — use " +
+    "Move a pending annotation to accepted or dismissed. Claude may dismiss (withdraw) " +
+      "its OWN annotations; accept is the user's decision and is refused here. Accepting a " +
+      "user-authored comment never applies text, so one carrying suggestedText is refused " +
+      "too. Only pending annotations can transition, and private notes and comments cannot " +
+      "be transitioned at all (ADR-027). The record is kept either way — use " +
       "tandem_removeAnnotation to delete it.",
     {
       id: z.string().describe("Annotation ID"),
@@ -493,6 +494,20 @@ export function registerAnnotationTools(server: McpServer): void {
             "ANNOTATION_NOT_PENDING",
             `Annotation ${id} is already ${result.currentStatus}`,
           );
+        case "accept-refused":
+          // #1770 decision 3: Claude may dismiss or withdraw, never accept.
+          return mcpError(
+            "ACCEPT_REFUSED",
+            result.reason === "own-annotation"
+              ? `Annotation ${id} is Claude's own; accept is the user's decision. Dismiss it to withdraw it.`
+              : `Annotation ${id} carries suggestedText, which an MCP accept does not apply. Leave it for the user to accept in the editor.`,
+          );
+        default: {
+          // A new `LifecycleResult` arm errors HERE, naming it — the shape the
+          // remove switch uses, for the same reason.
+          const unhandled: never = result;
+          return mcpError("INTERNAL", `unhandled resolve outcome: ${JSON.stringify(unhandled)}`);
+        }
       }
     }),
   );
@@ -579,6 +594,12 @@ export function registerAnnotationTools(server: McpServer): void {
           return mcpError(
             "INVALID_ARGUMENT",
             "Cannot edit a private note or private comment via MCP — they are user-private (ADR-027).",
+          );
+        case "not-owned":
+          // #1770 decision 4: Claude may only edit an annotation it authored.
+          return mcpError(
+            "NOT_OWNED",
+            `Annotation ${id} was authored by the ${result.author}; Claude can only edit its own annotations.`,
           );
         case "not-pending":
           return mcpError(

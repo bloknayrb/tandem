@@ -136,6 +136,14 @@ export function sanitizeAnnotation(
     // record) would see it as always-undefined. The marker gates the badge +
     // restart hold, NOT live hiding (that is server-authoritative mode-based).
     ...(typeof ann.heldInSolo === "boolean" ? { heldInSolo: ann.heldInSolo } : {}),
+    // #1770: same reason as `heldInSolo` and `rev` above — this is a STRICT
+    // allowlist, so without this line every Claude-facing read strips
+    // `resolvedBy` and the `userResponses` exclusion it exists for silently
+    // never fires. Values are validated, not passed through: a garbage value is
+    // dropped, which reads as "the user resolved it", the pre-#1770 default.
+    ...(ann.resolvedBy === "user" || ann.resolvedBy === "claude"
+      ? { resolvedBy: ann.resolvedBy }
+      : {}),
     // #1123 M3: the authoring agent's identity (local-model collaborator only).
     // sanitize is a strict allowlist, so without this line agentIdentity is
     // stripped on EVERY Claude-facing read and the provider byline silently

@@ -804,6 +804,96 @@ describe("MCP tool integration — annotation tools", () => {
   });
 });
 
+describe("MCP tool integration — author authority (#1770)", () => {
+  /**
+   * The MCP surface is where the refusal has to land: `lifecycle`'s guard is
+   * pinned separately, but a switch arm that never mapped `not-owned` onto a
+   * code would return an unhandled-result `undefined` through the SDK and read
+   * as a transport fault rather than a refusal.
+   */
+  function seedUserComment(docId: string, id: string): void {
+    const ydoc = setupDoc(docId, "Hello world test content");
+    withInternal(ydoc, () => {
+      ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, {
+        id,
+        author: "user",
+        type: "comment",
+        audience: "outbound",
+        range: { from: 0, to: 5 },
+        content: "the user's own comment",
+        status: "pending",
+        timestamp: 1,
+        rev: 1,
+      });
+    });
+  }
+
+  it("tandem_editAnnotation refuses a user-authored annotation with NOT_OWNED", async () => {
+    seedUserComment("mcp-owner-edit", "u_edit");
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_editAnnotation",
+        arguments: { id: "u_edit", content: "let me reword yours" },
+      }),
+    );
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("NOT_OWNED");
+    // The record is untouched — a refusal that still wrote would be worse than
+    // no guard, and `error: true` alone cannot see that.
+    const stored = getOrCreateDocument("mcp-owner-edit").getMap(Y_MAP_ANNOTATIONS).get("u_edit") as
+      | Annotation
+      | undefined;
+    expect(stored?.content).toBe("the user's own comment");
+  });
+
+  it("tandem_annotationReply refuses a user-authored annotation with NOT_OWNED", async () => {
+    seedUserComment("mcp-owner-reply", "u_reply");
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_annotationReply",
+        arguments: { annotationId: "u_reply", text: "answering inside your thread" },
+      }),
+    );
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("NOT_OWNED");
+  });
+
+  it("tandem_resolveAnnotation refuses accept on Claude's own record", async () => {
+    // Accept is the USER's decision. Claude may only withdraw.
+    const ydoc = setupDoc("mcp-owner-accept", "Hello world test content");
+    const id = createAnnotation(
+      ydoc.getMap(Y_MAP_ANNOTATIONS),
+      ydoc,
+      "comment",
+      rangeOf(0, 5, ydoc),
+      "mine",
+    );
+
+    const accepted = parseResult(
+      await client.callTool({
+        name: "tandem_resolveAnnotation",
+        arguments: { id, action: "accept" },
+      }),
+    );
+    expect(accepted.error).toBe(true);
+    expect(accepted.code).toBe("ACCEPT_REFUSED");
+
+    // The control: the same id, dismissed, succeeds and is stamped.
+    const dismissed = parseResult(
+      await client.callTool({
+        name: "tandem_resolveAnnotation",
+        arguments: { id, action: "dismiss" },
+      }),
+    );
+    expect(dismissed.error).toBe(false);
+    const stored = ydoc.getMap(Y_MAP_ANNOTATIONS).get(id) as Annotation;
+    expect(stored.status).toBe("dismissed");
+    expect(stored.resolvedBy).toBe("claude");
+  });
+});
+
 describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)", () => {
   afterEach(async () => {
     for (const f of sidecarTempFiles.splice(0)) {
