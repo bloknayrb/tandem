@@ -696,7 +696,12 @@ export async function saveDocumentToDisk(
     });
     return {
       status: "error",
-      reason: verificationBlock ? verificationBlock.message : "The save failed.",
+      // cr-3 (#1816 follow-up): `triggerSave` (builtin.svelte.ts) always
+      // prefixes this reason with "Save failed: ". A generic reason that
+      // repeats the same phrase stutters — "Save failed: The save failed.
+      // (EACCES)". Match Save-As's non-repeating "The document could not
+      // be saved to that location." shape instead.
+      reason: verificationBlock ? verificationBlock.message : "The document could not be saved.",
       errorCode: (err as NodeJS.ErrnoException).code,
     };
   } finally {

@@ -95,10 +95,32 @@ describe("triggerSave / saveStore.lastSaveOk", () => {
   it("appends the errno as a details suffix when the result carries one", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(fetchWith({ status: "error", reason: "The save failed.", errorCode: "EACCES" })),
+      vi.fn(
+        fetchWith({
+          status: "error",
+          reason: "The document could not be saved.",
+          errorCode: "EACCES",
+        }),
+      ),
     );
     await expect(triggerSave("doc-1")).resolves.toBe(false);
-    expect(notified(notify, "error", "Save failed: The save failed. (EACCES)")).toBe(true);
+    expect(
+      notified(notify, "error", "Save failed: The document could not be saved. (EACCES)"),
+    ).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  // cr-3 (J2 review round 3): the client always prefixes the server's
+  // `reason` with "Save failed: " — a reason that (redundantly) repeats
+  // "save failed" itself stutters. Pins that the server's own generic
+  // fallback text (not just this test's fixture) doesn't reintroduce it.
+  it("does not stutter 'Save failed: The save failed.' on the generic fallback reason", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(fetchWith({ status: "error", reason: "The document could not be saved." })),
+    );
+    await expect(triggerSave("doc-1")).resolves.toBe(false);
+    expect(notified(notify, "error", "The save failed.")).toBe(false);
     vi.unstubAllGlobals();
   });
 

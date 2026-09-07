@@ -710,7 +710,11 @@ describe("saveDocumentToDisk", () => {
     expect(result.reason).not.toContain(target);
     expect(result.reason).not.toContain("EACCES");
     expect(result.reason).not.toContain("secret-project");
-    expect(result.reason).toBe("The save failed.");
+    // cr-3 (#1816 follow-up): the client always prefixes this with
+    // "Save failed: " (builtin.svelte.ts) — a reason that repeats the same
+    // phrase stutters, so the generic fallback must not be "The save
+    // failed." itself.
+    expect(result.reason).toBe("The document could not be saved.");
     expect(result.errorCode).toBe("EACCES");
 
     const { pushNotification } = await import("../../src/server/notifications.js");
@@ -808,7 +812,9 @@ describe("saveDocumentToDisk", () => {
     // #1816 follow-up (review round 2): `SaveVerificationError`'s message is
     // deliberately content-free (`blockReasonMessage` — no path, no errno),
     // so the #1816 scrub must not flatten it down to the generic
-    // "The save failed." sentence used for raw FS errors. Both the returned
+    // "The document could not be saved." sentence used for raw FS errors
+    // (cr-3, round 3, renamed it from "The save failed." to stop a
+    // "Save failed: The save failed." stutter). Both the returned
     // `reason` and the pushed notification carry the real, safe explanation
     // — including the #1123-0e "your original file was left unchanged"
     // reassurance — rather than a content-free reason going content-free

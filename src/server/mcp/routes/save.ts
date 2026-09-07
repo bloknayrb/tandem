@@ -147,7 +147,11 @@ export async function handleSave(req: Request, res: Response): Promise<void> {
     // path. Branches 2 and 3 are exempt: their paths are the caller's own
     // `targetPath`.
     if (result.status === "error" && !isLoopbackRequest(req)) {
-      res.json({ data: { ...result, reason: "The save failed." } });
+      // cr-3 (#1816 follow-up): the client always renders this as
+      // "Save failed: <reason>" — keep the defence-in-depth wording here in
+      // sync with `saveDocumentToDisk`'s own generic reason so neither
+      // caller sees a stutter ("Save failed: The save failed.").
+      res.json({ data: { ...result, reason: "The document could not be saved." } });
       return;
     }
     res.json({ data: result });
