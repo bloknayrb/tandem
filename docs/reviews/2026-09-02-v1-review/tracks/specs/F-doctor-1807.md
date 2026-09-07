@@ -44,9 +44,14 @@ and no shared evaluator is introduced** (see the scope cut).
      scheme the warn reads `type=http, pathHasMcp=true` and names nothing actionable. Both `type`
      and `scheme` go through `describeClampedValue` — see the redaction bullet below.
   3. **The hostname is not one of `127.0.0.1` / `localhost` / `[::1]`** → message naming the
-     SHAPE (`url names a non-loopback host`), never the hostname, `fix` = a hand-edit pointing at
-     `127.0.0.1:<mcpPort>`. Host BEFORE port: a remote host on the *right* port is the one shape
-     this check must never certify, and reporting the port there names the wrong field.
+     SHAPE (`url names a non-loopback host`), never the hostname, and stating the condition
+     truthfully: the server *listens on loopback unless it was started with `TANDEM_BIND_HOST`*.
+     `fix` = a hand-edit pointing at `127.0.0.1:<mcpPort>`, prefixed with that same condition
+     (*if Tandem was not started with `TANDEM_BIND_HOST`*). Doctor runs in the user's shell, which
+     need not carry the server's env, so it does not pretend to know the bind host — it warns
+     either way and lets the reader apply the condition. Host BEFORE port: a remote host on the
+     *right* port is the one shape this check must never certify, and reporting the port there
+     names the wrong field.
      `TAURI_HOSTNAME` is deliberately NOT in the set — this arm decides REACHABILITY, and the SDK's
      `localhostHostValidation()` 403s every `/mcp` request carrying `Host: tauri.localhost` on a
      default loopback bind.
@@ -216,3 +221,15 @@ the Tauri entry below was introduced by a well-meant arm added to prevent exactl
   (enum-shaped)" was false on the one branch that prints it: arm 2 fires precisely when the value
   is *not* enum-shaped, and `~/.claude.json` is arbitrary JSON from disk that reaches
   `/api/diagnostics` and the public Report-a-bug prefill unbounded in length.
+
+## Review corrections (post-ship)
+
+- **The non-loopback warn no longer says "loopback-only".** That sentence was false under
+  `TANDEM_BIND_HOST` (`docs/configuration.md`; `src/server/bind-check.ts`; `server.ts` puts the
+  resolved LAN IP into the SDK's `allowedHosts`), so a user who deliberately bound to the LAN and
+  pointed `~/.claude.json` at that IP got a warn on a working setup whose `fix` broke it. Doctor
+  runs in the user's shell, which need not carry the server's env, so it cannot know the bind host
+  and does not pretend to: the arm stays a warn, the message reads *listens on loopback unless it
+  was started with `TANDEM_BIND_HOST`*, and the `fix` is prefixed with the same condition. The
+  no-url-interpolation rule is untouched — neither string names the hostname. The LAN-address spec
+  pins the new wording and the absence of the old one.

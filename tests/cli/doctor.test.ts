@@ -2313,6 +2313,15 @@ describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
 
       const warn = await userMcpResult();
       expect(warn?.message).toContain("non-loopback host");
+      // Post-ship review: "loopback-only" was false under `TANDEM_BIND_HOST`
+      // (docs/configuration.md), so a user who deliberately bound to the LAN
+      // and pointed `~/.claude.json` at that IP was told to break a working
+      // setup. Doctor cannot see the server's env from the user's shell, so
+      // the sentence and the remedy both carry the condition instead.
+      expect(warn?.message).toContain("unless it was started with TANDEM_BIND_HOST");
+      expect(warn?.message).not.toContain("loopback-only");
+      expect(warn?.fix).toMatch(/^If Tandem was not started with TANDEM_BIND_HOST, /);
+      expect(warn?.fix).toContain("127.0.0.1:3479");
       // Names the shape, not the hostname: this message rides the same
       // redaction rule as the rest, and the fix must not be the dead-end
       // `setup --apply` (it rewrites the DEFAULT port).
