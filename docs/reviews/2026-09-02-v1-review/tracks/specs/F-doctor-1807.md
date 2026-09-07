@@ -97,6 +97,15 @@ Windows.
    `…:3479/mcp` pass assertion too, so an over-eager arm reds every working install.
 7. Port threading: `runDoctor({ mcpPort: 4918 })` with a `…:3479/mcp` entry in the scratch home →
    the warn names 4918. The only spec that proves `mcpPort` reaches this check.
+8. **Port-less URL**: `{ tandem: { type: "http", url: "http://127.0.0.1/mcp" } }` → a
+   `user-mcp-config` warn whose message names **`(none)`** and **`3479`**, with
+   `expect(warn?.fix).not.toMatch(/setup --apply/)`. This is the only spec that pins arm 3's
+   "treat a port-less URL as a mismatch" half: every other URL here carries an explicit port, and
+   spec 2's `…:3479/` short-circuits at arm 2 before arm 3 runs. Without it, the shape a reader
+   reaches for to avoid warning on a port-less URL — `if (parsedUrl.port && parsedUrl.port !==
+   String(mcpPort))` — is green on specs 1-7 while leaving port 80 reading
+   `tandem registered in ~/.claude.json`, which is exactly the issue's stated defect: green in the
+   file Claude Code consults, and Claude Code cannot connect.
 
 ## Done when
 
@@ -153,3 +162,13 @@ entry's own validation.
 Type, path and port validation at the user level with the observed values named; the stdio
 carve-out; the redaction rule (the entries this fires on are exactly the ones whose url can carry a
 credential, and the check reaches a prefilled public issue body).
+
+## Review corrections (post-cut)
+
+- **Spec 8 (port-less URL) added.** The seven specs left after the scope cut all carried an
+  explicit port, so arm 3's stated requirement — treat a missing `URL.port` as a mismatch and
+  report `(none)` — was pinned by nothing, and the natural `if (parsedUrl.port && …)` spelling
+  passed all of them while leaving `http://127.0.0.1/mcp` (port 80) green. This is **not** the
+  port-less-`https` spec the cut removed: that one existed to exercise `defaultPortForProtocol`,
+  which is still gone. This one exercises the `(none)` branch the cut's own replacement design
+  introduced.
