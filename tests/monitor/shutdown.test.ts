@@ -196,8 +196,20 @@ describe("channel shim stdin-EOF shutdown (#1804)", () => {
 });
 
 describe("monitor stdin-EOF shutdown", () => {
-  it("arms on a socket-like stdin, resumes it, and exits 0 on EOF", async () => {
-    const { _monitorTestExports } = await import("../../src/monitor/index.js");
+  beforeEach(() => {
+    // `Date` is faked here, which is what lets a spec age the EOF without
+    // waiting out the real grace window.
+    installMonitorFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("arms on a socket-like stdin, resumes it, and exits 0 on an aged EOF", async () => {
+    const mod = await import("../../src/monitor/index.js");
+    mod._resetMonitorStateForTests();
+    const { _monitorTestExports } = mod;
     // A real `net.Socket` — a piped stdin is one, and `tty.ReadStream`
     // extends it, so this is exactly what the guard admits.
     const readable = new Socket();
@@ -215,8 +227,34 @@ describe("monitor stdin-EOF shutdown", () => {
       throw new Error(`exit:${code ?? 0}`);
     }) as never);
     vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.advanceTimersByTime(_monitorTestExports.STDIN_LIVENESS_GRACE_MS + 1);
     expect(() => readable.emit("end")).toThrow("exit:0");
     exitSpy.mockRestore();
+  });
+
+  it("does NOT exit on an EOF inside the grace window (a stdin closed at spawn)", async () => {
+    // The `Socket` guard rejects only the null-device shape. A pipe the host
+    // closes right after spawn, and an inherited stdin already at EOF under
+    // `spawn(cmd, [], { shell: true })`, are both `net.Socket` — so a bare
+    // handler would exit at STARTUP and kill the push path in every session.
+    // Whether the plugin host pipes our stdin is unmeasured, so the ambiguous
+    // case must fail toward staying up.
+    const mod = await import("../../src/monitor/index.js");
+    mod._resetMonitorStateForTests();
+    const { _monitorTestExports } = mod;
+    const readable = new Socket();
+
+    expect(_monitorTestExports.armStdinEndExit(readable)).toBe(true);
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit:${code ?? 0}`);
+    }) as never);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    expect(() => readable.emit("end")).not.toThrow();
+    expect(exitSpy).not.toHaveBeenCalled();
+    // Not silent: the run has no host-exit detection and that must be legible.
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("no stdin liveness channel"));
   });
 
   it("does NOT arm on a non-socket stdin (the null device would EOF at startup)", async () => {

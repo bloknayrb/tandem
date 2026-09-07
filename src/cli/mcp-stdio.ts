@@ -433,8 +433,6 @@ export async function runMcpStdio(): Promise<void> {
   let preflightFailed = false;
   /** The `-32000` the `preflightFailed` branch answers with. */
   let preflightSynth: { message: string; detail?: string } | undefined;
-  /** Latched so the preflight guidance is written once, not once per retry. */
-  let warnedPreflight = false;
   /**
    * The client's `initialize` was answered locally with `-32000` rather than
    * forwarded, so `captureNegotiated` never ran and there is no handshake
@@ -1379,20 +1377,19 @@ export async function runMcpStdio(): Promise<void> {
       probe.kind === "unreachable"
         ? "Start the Tauri app or run `tandem start` on the host, then retry."
         : "The Tandem server is running but unhealthy — check the host logs.";
-    // Once, not once per retry: the retry ladder runs for as long as the
-    // outage lasts, and the third line is the half that names the step the
-    // old guidance left out — following step one alone changed nothing
-    // visible, because the process it was talking to had exited (#1805).
-    if (!warnedPreflight) {
-      warnedPreflight = true;
-      process.stderr.write(
-        `[tandem mcp-stdio] Tandem server preflight failed at ${probe.url} (${probe.reason}).\n` +
-          `[tandem mcp-stdio] ${guidance}\n` +
-          `[tandem mcp-stdio] Tandem's tools will not appear in this session until the ` +
-          `server is reachable; if they are still missing after Tandem is running, restart ` +
-          `the client (Claude Desktop does not respawn this bridge). Retrying in the background.\n`,
-      );
-    }
+    // Written once because this block runs once — it is straight-line startup
+    // code, and the retry ladder lives inside `waitForUpstream` below and never
+    // re-enters here. No latch: one would read as though something re-ran.
+    // The third line is the half that names the step the old guidance left out
+    // — following step one alone changed nothing visible, because the process
+    // it was talking to had exited (#1805).
+    process.stderr.write(
+      `[tandem mcp-stdio] Tandem server preflight failed at ${probe.url} (${probe.reason}).\n` +
+        `[tandem mcp-stdio] ${guidance}\n` +
+        `[tandem mcp-stdio] Tandem's tools will not appear in this session until the ` +
+        `server is reachable; if they are still missing after Tandem is running, restart ` +
+        `the client (Claude Desktop does not respawn this bridge). Retrying in the background.\n`,
+    );
     const synthMessage =
       probe.kind === "unreachable"
         ? "Tandem server not running. Start the Tauri app or run `tandem start`."

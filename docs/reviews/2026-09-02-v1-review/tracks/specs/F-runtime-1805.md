@@ -63,8 +63,10 @@ All in `src/cli/mcp-stdio.ts`.
   fail-open that check guards**: it exists for "we had a session, lost it, and never learned what to
   expect", whereas here this *is* the first handshake. With the latch clear the branch throws exactly
   as today, so #1759's property is untouched.
-- **Log once, naming both steps.** A latched `warnedPreflight` flag (same shape as
-  `warnedNoHandshake`) gates three stderr lines written on the *first* failure only:
+- **Log once, naming both steps.** Three stderr lines, written on the *first* failure only —
+  which needs no latch: the preflight block is straight-line startup code and the retry ladder
+  lives inside `waitForUpstream`, so it cannot re-enter. (An earlier draft specified a latched
+  `warnedPreflight` flag; it guarded a block that can only run once, and was removed in review.)
   `Tandem server preflight failed at <url> (<reason>).` / `<kind-specific guidance>` /
   `Tandem's tools will not appear in this session until the server is reachable; if they are still missing after Tandem is running, restart the client (Claude Desktop does not respawn this bridge). Retrying in the background.`
   Subsequent failures write nothing; on recovery, one line: `Tandem server reachable at <url>;

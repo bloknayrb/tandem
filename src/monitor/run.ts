@@ -278,6 +278,17 @@ function installStdoutErrorHandler(): void {
 }
 
 /**
+ * How long after arming an EOF is read as "stdin was never a liveness channel"
+ * rather than "the host exited". Nothing arrives on our stdin, so a real host
+ * exit cannot plausibly land inside the first seconds of the process; an EOF
+ * that does is the null-device / already-closed / closed-at-spawn shape.
+ */
+const STDIN_LIVENESS_GRACE_MS = 5_000;
+
+/** Set by `armStdinEndExit`; read by `onStdinEnd` to age the EOF. */
+let stdinArmedAt = 0;
+
+/**
  * Exit when the host closes our stdin — the monitor's replacement for the
  * self-termination path #1804 removed.
  *
@@ -293,31 +304,60 @@ function installStdoutErrorHandler(): void {
  *  - `resume()`. The shim's `StdioServerTransport` puts stdin in flowing mode
  *    before its listener is registered. Nothing here reads stdin, and an
  *    `'end'` listener on a paused stream never fires.
- *  - The `Socket` guard. A host that spawns us with stdin ignored hands us the
- *    null device, which Node exposes as an `fs.ReadStream` at immediate EOF —
- *    arming there would kill the monitor at STARTUP rather than at host exit.
- *    Pipes, sockets and TTYs are all `net.Socket` (`tty.ReadStream` extends
- *    it), and those are exactly the stdins whose EOF means the other end went
- *    away. A hand-run `tandem monitor` therefore also exits on Ctrl-D.
+ *  - **An aged EOF, not a bare one.** The `Socket` guard alone is not enough,
+ *    and reading it as enough is the trap: it rejects only the null-device
+ *    shape (an `fs.ReadStream`), while a pipe the host closes right after spawn
+ *    — and an inherited stdin already at EOF under `spawn(cmd, [], { shell:
+ *    true })` — is a `net.Socket`, so `resume()` delivers `'end'` immediately
+ *    and a bare handler would `exit(0)` at STARTUP, killing the push path in
+ *    every session with no diagnosis. **Whether the plugin host gives us a
+ *    piped stdin held open for the session is still UNMEASURED**
+ *    (F-runtime-1804.md), so this discriminates by age instead of assuming an
+ *    answer: an EOF inside `STDIN_LIVENESS_GRACE_MS` is discounted and logged,
+ *    and the monitor stays up. The ambiguous case therefore fails toward
+ *    keeping the push path, which is the direction that cannot be silent —
+ *    a killed monitor looks exactly like a quiet one.
+ *
+ * What this does NOT cover, deliberately stated rather than implied: when the
+ * channel is absent (non-socket stdin) or its EOF is discounted, the monitor
+ * has no host-exit detection at all and a session that ends uncleanly leaves it
+ * retrying at the 30s cap. Both cases log one stderr line. Pull
+ * (`tandem_checkInbox`) stays authoritative either way.
  *
  * Exit code 0: this is a clean shutdown, not a failure, and (as with
  * `onStdoutError`) nothing respawns us either way.
  */
 function armStdinEndExit(stdin: NodeJS.ReadableStream): boolean {
   if (!(stdin instanceof Socket)) return false;
+  stdinArmedAt = Date.now();
   stdin.once("end", onStdinEnd);
   stdin.resume();
   return true;
 }
 
 function onStdinEnd(): void {
+  const ageMs = Date.now() - stdinArmedAt;
+  if (ageMs < STDIN_LIVENESS_GRACE_MS) {
+    console.error(
+      `${LOG_PREFIX} stdin reached EOF ${ageMs}ms after start — reading that as "no stdin ` +
+        `liveness channel", not a host exit; staying up with no host-exit detection`,
+    );
+    return;
+  }
   console.error(`${LOG_PREFIX} stdin closed (host exited) — shutting down`);
   process.exit(0);
 }
 
 function installStdinEndHandler(): void {
   if (IS_VITEST) return;
-  armStdinEndExit(process.stdin);
+  // The boolean is the diagnosis, so log it rather than dropping it: a decline
+  // means this run has no host-exit detection, and that is invisible otherwise.
+  if (!armStdinEndExit(process.stdin)) {
+    console.error(
+      `${LOG_PREFIX} stdin is not a pipe, socket or TTY — no host-exit detection this run; ` +
+        `tandem_checkInbox remains authoritative`,
+    );
+  }
 }
 
 // --- Mode cache re-exports (preserve existing public surface) ---
@@ -346,6 +386,7 @@ export function getModeSync(): TandemMode {
  */
 export function _resetMonitorStateForTests(): void {
   _resetSseConsumerStateForTests();
+  stdinArmedAt = 0;
   process.removeAllListeners("SIGINT");
   process.removeAllListeners("SIGTERM");
 }
@@ -359,4 +400,5 @@ export const _monitorTestExports = {
   onStdoutError,
   armStdinEndExit,
   onStdinEnd,
+  STDIN_LIVENESS_GRACE_MS,
 };

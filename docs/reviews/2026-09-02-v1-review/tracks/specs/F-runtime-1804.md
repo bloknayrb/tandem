@@ -88,6 +88,14 @@ backoff already there. No supervisor, no new abstraction, no new constant.
     `shutdownMonitor`; or **(b) not piped, or the measurement is not made** — drop the monitor half
     entirely and delete the "on both hosts" clause from "Done when", rather than shipping a line that
     cannot fire and claiming a property that does not hold.
+    **What shipped is neither branch, because review found a third option that needs no
+    measurement** (`armStdinEndExit` / `onStdinEnd`): arm and `resume()`, but discriminate the EOF by
+    AGE — one inside a 5s grace is logged and discounted (it is the `/dev/null`, closed-at-spawn or
+    inherited-already-at-EOF shape), and only an aged EOF exits. The ambiguous case therefore fails
+    toward keeping the push path rather than toward killing it at startup, and a decline of any kind
+    writes one stderr line saying this run has no host-exit detection. The residual is stated in the
+    code: when the channel is absent or its EOF is discounted, an uncleanly-ended session still
+    leaves the monitor retrying at the 30s cap.
 - `src/channel/event-bridge.ts` needs no change — it passes no `onExhaustion` and inherits the loop;
   test 6 proves it. **Say so in the PR body** with the file correction: the wave-table names
   `src/monitor/sse-consumer.ts`, which does not exist; the module is `src/shared/sse-consumer.ts`.
