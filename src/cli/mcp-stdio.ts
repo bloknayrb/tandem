@@ -32,17 +32,21 @@
  * forwarding means it holds no protocol state: the client's `initialize` and
  * `notifications/initialized` are captured in flight, then replayed against a
  * freshly-constructed transport under a private `__tandem_reinit_<uuid>` id
- * whose response is swallowed rather than forwarded. The server *name* and
- * `protocolVersion` must match what the original handshake negotiated, or the
- * reconnect fails closed — otherwise a different process that grabbed the port
- * would inherit the client's trust. A changed server *version* is a normal
- * Tandem upgrade: it is adopted and logged, never compared (#1759).
+ * whose response is swallowed rather than forwarded. The server *name* must
+ * match what the original handshake negotiated, or the reconnect fails closed
+ * — otherwise a different process that grabbed the port would inherit the
+ * client's trust. A changed server *version* is a normal Tandem upgrade, and a
+ * changed `protocolVersion` is the same upgrade seen through the server's
+ * bundled SDK (it answers `SUPPORTED_PROTOCOL_VERSIONS.includes(requested) ?
+ * requested : LATEST`, so an SDK bump can move it for the same client
+ * `initialize`): both are adopted and logged, never compared (#1759).
  *
  * Failure is soft: pending requests get their `-32000`, the queue is cleared,
  * and one capped-exponential retry is armed. We do NOT exit — killing a
  * Claude Desktop child nothing will respawn is the regression this exists to
- * prevent. `shutdown(1)` keeps only its original triggers: stdio death,
- * upstream `onclose`, startup preflight failure.
+ * prevent. `shutdown(1)` keeps only two triggers: stdio death and upstream
+ * `onclose`. A failed startup preflight retries in the background instead
+ * (#1805).
  */
 
 import { randomUUID } from "node:crypto";
@@ -267,12 +271,13 @@ export function isReplayId(id: string | number | undefined): boolean {
  * version is logged and adopted, never compared.
  *
  * The sentinel does collide with itself: two *different* servers that both
- * omit `serverInfo` compare equal here, and `protocolVersion` is the only
- * discriminator left. That is the correct trade — `serverInfo` is REQUIRED by
- * the MCP spec, so a server omitting it is already non-conforming, and the
- * alternative (fail every reconnect against such a server) would break a
- * working setup to defend against a scenario that needs an attacker who can
- * already bind the loopback port.
+ * omit `serverInfo` compare equal here, and nothing else discriminates them
+ * (`protocolVersion` is adopted on change, not compared — see the header).
+ * That is the correct trade — `serverInfo` is REQUIRED by the MCP spec, so a
+ * server omitting it is already non-conforming, and the alternative (fail
+ * every reconnect against such a server) would break a working setup to defend
+ * against a scenario that needs an attacker who can already bind the loopback
+ * port.
  */
 export function describeServerName(info: unknown): string {
   const i = info as { name?: unknown } | null | undefined;
@@ -395,8 +400,9 @@ export async function runMcpStdio(): Promise<void> {
   let http = createUpstream();
   const stdio = new StdioServerTransport();
 
-  // On upstream failure we synthesize -32000 for every entry before exit.
-  // Value is the per-request timeout handle so we can cancel it on response.
+  // On upstream failure we synthesize -32000 for every entry; the bridge itself
+  // stays alive and retries (#1805). Value is the per-request timeout handle so
+  // we can cancel it on response.
   const pendingRequests = new Map<string | number, ReturnType<typeof setTimeout>>();
   // Messages arriving before httpReady flips; either drained and forwarded
   // on success, or each request answered with -32000 on preflight/http-start
@@ -424,14 +430,14 @@ export async function runMcpStdio(): Promise<void> {
   let negotiatedServerName: string | undefined;
   let negotiatedServerVersion: string | undefined;
   /**
-   * The preflight's grace window has closed and the upstream is still down
-   * (#1805). While set, arriving requests are answered `-32000` immediately
-   * rather than joining the one-shot `preReadyBuffer` — which is drained only
-   * once, at startup, so anything landing after the window would otherwise sit
-   * there unanswered for the whole outage and then replay in one burst.
+   * Set once the preflight's grace window has closed with the upstream still
+   * down (#1805): the `-32000` to answer with. While set, arriving requests are
+   * answered immediately rather than joining the one-shot `preReadyBuffer` —
+   * which is drained only once, at startup, so anything landing after the
+   * window would otherwise sit there unanswered for the whole outage and then
+   * replay in one burst. Never cleared: once `httpReady` flips, `stdio.onmessage`
+   * no longer consults it.
    */
-  let preflightFailed = false;
-  /** The `-32000` the `preflightFailed` branch answers with. */
   let preflightSynth: { message: string; detail?: string } | undefined;
   /**
    * The client's `initialize` was answered locally with `-32000` rather than
@@ -690,7 +696,7 @@ export async function runMcpStdio(): Promise<void> {
    * Is this the client's captured `initialize`?
    *
    * One predicate for both sinks that answer a request locally — the buffered
-   * synthesis and the `preflightFailed` branch — because two independent
+   * synthesis and the `preflightSynth` branch — because two independent
    * conditions on "was the handshake answered locally?" is how they drift, and
    * the one that drifts leaves `runReconnect` throwing `no handshake baseline`
    * in a 30 s loop forever.
@@ -787,13 +793,15 @@ export async function runMcpStdio(): Promise<void> {
   function deferredSynthesize(synth: { message: string; detail?: string }): void {
     setTimeout(() => {
       if (httpReady) return;
-      void (async () => {
-        await synthesizeBuffered(synth.message, synth.detail);
-        // After the synthesis, never when the timer is armed: latching early
-        // would empty the grace window, since the probe fails in ~1ms against
-        // a dead port.
-        preflightFailed = true;
-      })();
+      // Latched here, never when the timer is armed: latching early would
+      // empty the grace window, since the probe fails in ~1ms against a dead
+      // port. And latched SYNCHRONOUSLY, before the buffered synthesis starts:
+      // `synthesizeBuffered` splices the buffer and then awaits one
+      // `stdio.send` per entry, and a stdin message arriving inside those
+      // awaits would otherwise be pushed into the now-drained one-shot buffer
+      // and go unanswered for the whole outage.
+      preflightSynth = synth;
+      void synthesizeBuffered(synth.message, synth.detail);
     }, PREFLIGHT_GRACE_MS);
   }
 
@@ -816,7 +824,8 @@ export async function runMcpStdio(): Promise<void> {
       await sleep(delay);
       const probe = await probeTandemServer({ url });
       if (probe.ok) return;
-      delay = Math.min(delay * 2, BACKOFF_MAX_MS);
+      // No session has ever existed here, so the lifetime is 0 by definition.
+      delay = nextBackoffMs(delay, 0).nextMs;
     }
   }
 
@@ -831,14 +840,30 @@ export async function runMcpStdio(): Promise<void> {
     else if (method === "notifications/initialized") handshakeInitialized = msg;
   }
 
-  /** Record the server's half — what a later reconnect must match. */
+  /**
+   * The ONE writer of the handshake baseline. Every path that seeds or adopts
+   * it — the original handshake, the deferred first handshake (#1805), and an
+   * upgrade adopted across a reconnect (#1759) — goes through here, so a field
+   * added to the baseline later cannot be forgotten on any of them. It writes
+   * every field together or none: the `negotiatedProtocolVersion === undefined`
+   * check in `runReconnect` reads "no baseline at all" from exactly that.
+   */
+  function setBaseline(identity: {
+    protocolVersion: string;
+    serverName: string;
+    serverVersion: string;
+  }): void {
+    negotiatedProtocolVersion = identity.protocolVersion;
+    negotiatedServerName = identity.serverName;
+    negotiatedServerVersion = identity.serverVersion;
+  }
+
+  /** Record the server's half of the original handshake — what a later reconnect must match. */
   function captureNegotiated(msg: JSONRPCMessage): void {
     if (negotiatedProtocolVersion !== undefined) return;
     const identity = readHandshakeIdentity(msg);
     if (identity?.protocolVersion === undefined) return;
-    negotiatedProtocolVersion = identity.protocolVersion;
-    negotiatedServerName = identity.serverName;
-    negotiatedServerVersion = identity.serverVersion;
+    setBaseline({ ...identity, protocolVersion: identity.protocolVersion });
     lastSessionOpenedAt = Date.now();
   }
 
@@ -849,7 +874,7 @@ export async function runMcpStdio(): Promise<void> {
       // buffer is a one-shot drained only at startup, so parking anything here
       // now would hang the host for the whole outage; answer immediately
       // instead, dropping id-less notifications as `synthesizeBuffered` does.
-      if (preflightFailed && preflightSynth) {
+      if (preflightSynth) {
         if (isCapturedHandshake(msg)) deferredHandshake = true;
         const id = getRequestId(msg);
         if (id !== undefined) {
@@ -1205,9 +1230,9 @@ export async function runMcpStdio(): Promise<void> {
         // never learned what to expect". With the latch clear it still throws
         // exactly as before.
         if (deferredHandshake && identity.protocolVersion !== undefined) {
-          // Through `captureNegotiated`, not by assigning the fields here: it
-          // is the one writer of the baseline, so a field added to it later
-          // cannot be forgotten on this path.
+          // Through `captureNegotiated` → `setBaseline`, not by assigning the
+          // fields here: `setBaseline` is the one writer, so a field added to
+          // the baseline later cannot be forgotten on this path.
           captureNegotiated(response);
           deferredHandshake = false;
           process.stderr.write(
@@ -1222,36 +1247,46 @@ export async function runMcpStdio(): Promise<void> {
           );
         }
       }
-      // A normal Tandem upgrade changes the version and nothing else. That is
-      // not an identity change (#1759): adopt it, log it once, and keep the
-      // adopted value so a second upgrade in one long-lived session logs
-      // against the current baseline rather than the launch-time one.
-      if (
-        identity.protocolVersion === negotiatedProtocolVersion &&
-        identity.serverName === negotiatedServerName &&
-        identity.serverVersion !== negotiatedServerVersion
-      ) {
-        process.stderr.write(
-          `[tandem mcp-stdio] upstream version changed across re-initialize ` +
-            `(was ${negotiatedServerVersion}, now ${identity.serverVersion}); ` +
-            `adopting the upgraded server\n`,
-        );
-        negotiatedServerVersion = identity.serverVersion;
-      }
       // Fail closed on an identity change. Before this change a substituted
       // upstream could not complete a session at all, because the bridge never
       // re-handshaked; reconnecting turns that fail-closed into fail-open
       // unless the new server is checked against what the client agreed to.
-      if (
-        identity.protocolVersion !== negotiatedProtocolVersion ||
-        identity.serverName !== negotiatedServerName
-      ) {
+      // The NAME is the identity. A missing `protocolVersion` is treated the
+      // same way — not as a discriminator, but because the baseline sentinel
+      // is `negotiatedProtocolVersion === undefined` and adopting `undefined`
+      // would erase it.
+      if (identity.serverName !== negotiatedServerName || identity.protocolVersion === undefined) {
         throw new Error(
           `upstream identity changed across re-initialize ` +
             `(was ${negotiatedProtocolVersion}/${negotiatedServerName}, ` +
             `now ${identity.protocolVersion}/${identity.serverName})`,
         );
       }
+      // A normal Tandem upgrade changes the version and nothing else. That is
+      // not an identity change (#1759): adopt it, log it once, and keep the
+      // adopted value so a second upgrade in one long-lived session logs
+      // against the current baseline rather than the launch-time one.
+      if (identity.serverVersion !== negotiatedServerVersion) {
+        process.stderr.write(
+          `[tandem mcp-stdio] upstream version changed across re-initialize ` +
+            `(was ${negotiatedServerVersion}, now ${identity.serverVersion}); ` +
+            `adopting the upgraded server\n`,
+        );
+      }
+      // The negotiated `protocolVersion` moves with the same upgrade: the
+      // server's bundled SDK answers the client's requested version only while
+      // it still supports it, else its own LATEST — so an SDK bump can move
+      // this for the very same replayed `initialize`. Comparing it tripped
+      // "identity changed" on every backoff tick, forever, for a server that
+      // was Tandem all along. Adopted and logged, like the version.
+      if (identity.protocolVersion !== negotiatedProtocolVersion) {
+        process.stderr.write(
+          `[tandem mcp-stdio] upstream protocol version changed across re-initialize ` +
+            `(was ${negotiatedProtocolVersion}, now ${identity.protocolVersion}); ` +
+            `adopting the upgraded server\n`,
+        );
+      }
+      setBaseline({ ...identity, protocolVersion: identity.protocolVersion });
 
       // Re-opens the server→client SSE stream: the SDK starts it only from the
       // `initialized` notification's 202 branch, so skipping this would leave
@@ -1394,8 +1429,7 @@ export async function runMcpStdio(): Promise<void> {
       probe.kind === "unreachable"
         ? "Tandem server not running. Start the Tauri app or run `tandem start`."
         : "Tandem server unhealthy (check host logs).";
-    preflightSynth = { message: synthMessage, detail: probe.reason };
-    deferredSynthesize(preflightSynth);
+    deferredSynthesize({ message: synthMessage, detail: probe.reason });
     await waitForUpstream(baseUrl);
     process.stderr.write(
       `[tandem mcp-stdio] Tandem server reachable at ${baseUrl}; upstream ready.\n`,
@@ -1420,7 +1454,16 @@ export async function runMcpStdio(): Promise<void> {
     return;
   }
   httpReady = true;
-  preflightFailed = false;
+
+  // The upstream came back after the client's `initialize` was answered
+  // locally (#1805): the transport above holds no session, so left alone the
+  // first real request would pay POST → 404 → a 1 s backoff → replay before it
+  // was served. Mint the session now instead, so it is there when the request
+  // arrives. Only on this path — after a healthy startup the handshake is
+  // forwarded below and the session comes from that. Kicked BEFORE the drain
+  // so anything drained routes through the reconnect queue rather than onto a
+  // transport the swap is about to abort.
+  if (deferredHandshake) void runReconnect("upstream reachable after a failed preflight");
 
   // Held to preserve forwarding semantics — push through the normal path
   // now that upstream is ready. Note: forwardToUpstream does not await the
@@ -1431,7 +1474,10 @@ export async function runMcpStdio(): Promise<void> {
   // removes — a client on that revision has no initialize to serialize behind,
   // so the "usually ≤1" premise for leaving this unordered expires with it.
   const buffered = preReadyBuffer.splice(0);
-  for (const msg of buffered) forwardToUpstream(msg);
+  for (const msg of buffered) {
+    if (reconnecting) enqueueForReconnect(msg);
+    else forwardToUpstream(msg);
+  }
 }
 
 export function getRequestId(msg: JSONRPCMessage): string | number | undefined {

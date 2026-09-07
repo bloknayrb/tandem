@@ -118,3 +118,23 @@ and Tests (the `:1101` interpolation rename, the one-spec grep count, both doc c
 **Kept though outside `src/cli/mcp-stdio.ts`:** the two doc clauses. Each is one sentence this
 change makes factually false, in files the project treats as instruction — two edits, not a
 mechanism.
+
+## Review corrections (second pass, post-PR)
+
+**The identity is the name alone; `protocolVersion` is adopted like the version.** The first pass
+kept `protocolVersion` in the fail-closed comparison ("the protocol half of the comparison is
+untouched here"). That was wrong for the same reason the version was: the negotiated value is
+whatever the server's bundled SDK answers — `SUPPORTED_PROTOCOL_VERSIONS.includes(requested) ?
+requested : LATEST` — so an SDK-bumping Tandem upgrade moves it for the very same replayed
+`initialize`, and the bridge then threw `upstream identity changed` on every backoff tick, forever.
+`runReconnect` now fails closed only on the server name (and on a *missing* `protocolVersion`,
+because the baseline sentinel is `negotiatedProtocolVersion === undefined` and adopting `undefined`
+would erase it), and logs-and-adopts a moved protocol version exactly as it does the server version.
+Test 3's `setProtocolVersion` knob — cut in the first pass as scope — came back as the pin for this:
+`adopts a protocol-version change across a reconnect when the server name matches`. `CLAUDE.md` and
+the ADR-045 amendment were re-corrected to match.
+
+**One writer, in fact.** The deferred-handshake branch's comment called `captureNegotiated` "the one
+writer of the baseline" while the version-adoption line thirty lines later assigned
+`negotiatedServerVersion` directly. `setBaseline` is now the single assigner; `captureNegotiated`
+and the adoption path both call it, so the claim is true rather than aspirational.

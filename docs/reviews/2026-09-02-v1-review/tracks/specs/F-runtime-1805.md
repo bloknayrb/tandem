@@ -170,3 +170,25 @@ up". And the `!httpReady`-guard spec (bind a listener ~300 ms after spawn), whos
 it "passes vacuously rather than flakily" on a slow boot — a test that cannot distinguish its two
 outcomes is not a pin. The guard is one condition on one callback, stated in Fix and accepted as
 unpinned rather than pinned by a coin flip.
+
+## Review corrections (second pass, post-PR)
+
+**The session is minted on recovery, not on the first request after it.** After `waitForUpstream`
+returned, the transport held no session, so the first real request paid POST → 404 → a 1 s backoff →
+replay before it was served. `runMcpStdio` now kicks `runReconnect` as soon as `httpReady` flips
+*when the handshake was deferred* — the only path where no session exists — and the buffered drain
+routes through the reconnect queue while that runs. Test 1 now waits for `deferred handshake
+completed` BEFORE writing `tools/list` and asserts `initCount() === 1`. What this does not change:
+`waitForUpstream`'s probe ladder still reaches the 30 s cap (it reuses the reconnect constants by
+the Fix's own rule), so a request landing inside the last probe interval after Tandem returns is
+still answered `-32000` once; the next one is served.
+
+**The latch is set before the synthesis, and there is one latch.** `preflightFailed` was assigned
+only after `synthesizeBuffered` had awaited every `stdio.send`, so a stdin message arriving inside
+those awaits was pushed into the already-drained one-shot buffer and went unanswered for the outage.
+The latch is now the synth itself — `preflightSynth`, set synchronously at the top of the grace
+callback — and the separate boolean, together with its unreachable-by-effect reset after `httpReady =
+true`, is gone. `waitForUpstream` steps its delay via `nextBackoffMs(delay, 0).nextMs` rather than a
+hand-rolled `Math.min`. The header's "`shutdown(1)` keeps … startup preflight failure" and the
+`preReadyBuffer` comment's "before exit" were corrected — both still described the exit this fix
+removed.

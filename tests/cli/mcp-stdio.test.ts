@@ -1774,6 +1774,8 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
     getCount(): number;
     /** Swap the advertised serverInfo, to exercise the fail-closed identity check. */
     setServerInfo(info: { name: string; version: string }): void;
+    /** Swap the negotiated protocolVersion — what an SDK-bumping upgrade moves. */
+    setProtocolVersion(version: string): void;
     /** Accept the next N initialize POSTs and never answer them. */
     stallInitializes(n: number): void;
     /**
@@ -1814,6 +1816,7 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
     let failNextGets = 0;
     let held: Array<{ res: ServerResponse; id: string | number | undefined }> = [];
     let serverInfo = { name: "fake-tandem", version: "0.0.0-test" };
+    let protocolVersion = "2024-11-05";
 
     const answerInitialize = (res: ServerResponse, id: string | number | undefined) => {
       minted += 1;
@@ -1824,7 +1827,7 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
           jsonrpc: "2.0",
           id,
           result: {
-            protocolVersion: "2024-11-05",
+            protocolVersion,
             capabilities: { tools: {} },
             serverInfo,
           },
@@ -1932,6 +1935,9 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
       getCount: () => gets,
       setServerInfo: (info) => {
         serverInfo = info;
+      },
+      setProtocolVersion: (version) => {
+        protocolVersion = version;
       },
       stallInitializes: (n) => {
         stallInits = n;
@@ -2150,6 +2156,18 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
     await waitFor(() => io.stderr().includes("Tandem server reachable"), "recovery line", 45_000);
     expect(child.exitCode).toBeNull();
 
+    // The session is minted on recovery, BEFORE any client request: the
+    // transport that came up holds no session, so without this kick the first
+    // real request paid POST → 404 → a 1s backoff → replay before it was
+    // served. Waiting for the line here, with nothing written yet, is what
+    // pins that; `initCount() === 1` below is its other half — the request
+    // found a live session and triggered no second handshake.
+    await waitFor(
+      () => io.stderr().includes("deferred handshake completed"),
+      "session minted on recovery",
+      30_000,
+    );
+
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
     await waitFor(() => responsesFor(io.stdout(), 2).length === 1, "served request", 30_000);
     const answer = responsesFor(io.stdout(), 2)[0];
@@ -2157,8 +2175,8 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
     // carries `no handshake baseline` instead: the locally answered
     // `initialize` was never forwarded, so there is no baseline to compare.
     expect(answer?.error).toBeUndefined();
-    expect(io.stderr()).toContain("deferred handshake completed");
-    expect(fake.initCount()).toBeGreaterThanOrEqual(1);
+    expect((answer?.result as { echo?: string })?.echo).toBe("tools/list");
+    expect(fake.initCount()).toBe(1);
   }, 90_000);
 
   it("names the restart once and keeps retrying while the upstream is down (#1805)", async () => {
@@ -2257,6 +2275,30 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
     expect(answers.length).toBe(1);
     expect(answers[0]?.error).toBeUndefined();
     expect(io.stderr()).toContain("upstream version changed across re-initialize");
+    expect(io.stderr()).not.toContain("upstream identity changed");
+    expect(child.exitCode).toBeNull();
+  }, 60_000);
+
+  it("adopts a protocol-version change across a reconnect when the server name matches (#1759)", async () => {
+    const fake = await makeSessionServer();
+    child = spawnBridge(fake.port, { TANDEM_REQUEST_TIMEOUT_MS: "4000" });
+    const io = collect(child);
+    await handshake(child, io, fake);
+
+    // The same Tandem after an SDK-bumping upgrade. `protocolVersion` is what
+    // the server's bundled SDK negotiates — the client's requested version
+    // while it is still supported, else the SDK's own LATEST — so it can move
+    // for the very same replayed `initialize`. Comparing it read as "somebody
+    // else grabbed the port" on every backoff tick, forever.
+    fake.setProtocolVersion("2025-03-26");
+    fake.retireSession();
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+
+    await waitFor(() => responsesFor(io.stdout(), 2).length === 1, "healed request", 30_000);
+    const answers = responsesFor(io.stdout(), 2);
+    expect(answers.length).toBe(1);
+    expect(answers[0]?.error).toBeUndefined();
+    expect(io.stderr()).toContain("upstream protocol version changed across re-initialize");
     expect(io.stderr()).not.toContain("upstream identity changed");
     expect(child.exitCode).toBeNull();
   }, 60_000);
