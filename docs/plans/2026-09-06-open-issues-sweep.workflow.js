@@ -737,8 +737,16 @@ Fix each in ${WT} (add or extend a test where the finding was a behaviour), re-r
     { commits: [], notes: "" }
   );
   if (!fix.ok) break;
+  // The last round's fixes are never re-reviewed (the cap ends the loop), so `confirmed` here
+  // is a list of FIXED findings, not open ones. J2 and Gc1 both shipped PR bodies calling them
+  // "unresolved". Keep the two apart: only a failed fix leaves findings genuinely open.
+  if (prRound === PR_ROUNDS) {
+    result.fixedUnreviewed = confirmed.map((f) => `${f.file}:${f.line || "?"} ${f.summary}`);
+    confirmed = [];
+  }
 }
 result.unresolved = confirmed.map((f) => `${f.file}:${f.line || "?"} ${f.summary}`);
+result.fixedUnreviewed = result.fixedUnreviewed || [];
 
 // ---------------------------------------------------------------------------------------
 // 9. Ship — push (hook runs), PR, auto-merge, subscribe
@@ -760,7 +768,7 @@ ${GITHUB_HOWTO}
    "## Closes" — one line per issue in this list only: ${closesList.length ? closesList.map((c) => `Closes ${c}`).join(", ") : "(none — omit the section)"}.
    "## Refs (partial — issue stays open)" — one line per issue in this list only: ${refsList.length ? refsList.join(", ") : "(none — omit the section)"}, each as "Refs #N — what landed; remaining: …". A closing keyword may NEVER appear on a line containing one of these numbers.
    "## Verification" — the commands run (verify list, e2e if any, cargo if any) and the probe output lines (${probes.output ? "given below" : "none"}).
-   "## Review" — plan review rounds: ${result.reviewRounds}; PR review rounds: ${result.prReviewRounds}; unresolved findings: ${result.unresolved.length ? result.unresolved.join("; ") : "none"}.
+   "## Review" — plan review rounds: ${result.reviewRounds}; PR review rounds: ${result.prReviewRounds}; unresolved findings: ${result.unresolved.length ? result.unresolved.join("; ") : "none"}; fixed in the final round and not re-reviewed (say so, and name the fixing commit): ${result.fixedUnreviewed.length ? result.fixedUnreviewed.join("; ") : "none"}.
    "## Assumptions" — ${result.assumptions && result.assumptions.length ? result.assumptions.join("; ") : "none"}.
    "## For Bryan" — ${result.bryan.length ? result.bryan.join("; ") : "nothing"}.
    Screenshots for any visible UI change (attach via the artifact/upload path the repo uses, or describe if none).
