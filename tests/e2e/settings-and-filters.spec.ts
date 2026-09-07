@@ -520,6 +520,52 @@ test("an armed bulk-confirm survives a new annotation on the same document (#177
   await expect(confirmRow).toContainText("3 annotations?", { timeout: 5_000 });
 });
 
+// #1772 review — the axis neither case above reaches: the bar's own UNMOUNT.
+//
+// BulkActions renders nothing below two pending review targets, so an arm can
+// outlive its bar without any document switch and without any filter change.
+// A reset keyed only on documentId + filters leaves the flag set through that
+// gap, and the next comment re-mounts the bar straight into the confirm branch
+// — `bind:confirmRef` re-binds, the focus effect fires, and Enter is parked on
+// "accept every pending annotation" that nobody armed. The `bulkConfirm`
+// derived's `reviewPending.length > 1` term is what masks it, mirroring
+// promoteConfirm's `size > 0` (#1444).
+test("an armed bulk-confirm does not survive the bar unmounting (#1772)", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", { from: 2, to: 6, text: "Test" });
+  await mcp.callTool("tandem_comment", { from: 7, to: 15, text: "Document" });
+
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+
+  const bulkAccept = page.locator("[data-testid='bulk-accept-btn']");
+  const bulkDismiss = page.locator("[data-testid='bulk-dismiss-btn']");
+  const confirm = page.locator("[data-testid='bulk-confirm-btn']");
+  await expect(bulkAccept).toBeVisible({ timeout: 15_000 });
+  await bulkAccept.click();
+  await expect(confirm).toBeVisible({ timeout: 2_000 });
+
+  // Drop the count to 1 the way Claude would — resolving one comment, not a
+  // filter change. The whole bar unmounts, taking the confirm row with it.
+  const annotations = (await mcp.callTool("tandem_getAnnotations", {})) as {
+    data?: { annotations?: Array<{ id?: string }> };
+  };
+  const firstId = annotations?.data?.annotations?.[0]?.id as string;
+  expect(firstId).toBeTruthy();
+  await mcp.callTool("tandem_resolveAnnotation", { id: firstId, action: "accept" });
+  await expect(bulkDismiss).not.toBeVisible({ timeout: 5_000 });
+  await expect(confirm).not.toBeVisible({ timeout: 2_000 });
+
+  // Back over the threshold: the bar must return in its REST branch.
+  await mcp.callTool("tandem_comment", { from: 16, to: 24, text: "Third" });
+
+  // The discriminating pair: `bulk-dismiss-btn` renders ONLY in the rest branch
+  // (BulkActions.svelte:73-84), so its visibility is what "disarmed" means here
+  // — a bare `confirm` check would pass on a bar that never came back.
+  await expect(bulkDismiss).toBeVisible({ timeout: 10_000 });
+  await expect(confirm).not.toBeVisible({ timeout: 2_000 });
+});
+
 test("Solo/Tandem mode toggle switches via toolbar (Wave M: fade-not-hide)", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   // Seed a pending annotation — Wave M keeps it visible (faded) in solo mode.
