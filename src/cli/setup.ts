@@ -16,6 +16,7 @@ import {
   validateChannelShimPrereq,
 } from "../server/integrations/apply.js";
 import { CLAUDE_PLUGIN_INSTALL_COMMANDS } from "../shared/constants.js";
+import { targetPushSupport } from "../shared/integrations/contract.js";
 
 /**
  * Parse repeatable `--target=<kind>` CLI args into valid target kinds plus the
@@ -32,6 +33,24 @@ export function parseTargetArgs(args: string[]): {
   const targets = raw.filter((t): t is TargetKind => t === "claude-code" || t === "claude-desktop");
   const unknown = raw.filter((t) => t !== "claude-code" && t !== "claude-desktop");
   return { targets, unknown };
+}
+
+/**
+ * Parse the channel-shim flags into an explicit three-way intent (#1760).
+ *
+ * `--with-channel-shim` → `true`, `--without-channel-shim` → `false`, neither →
+ * `{}` (no opinion, which `resolveChannelShimIntent` reads as "preserve"). Both
+ * at once is a `conflict` the caller refuses before any write, rather than
+ * silently picking one — the two flags mean opposite things and the wrong guess
+ * deletes a deliberate opt-in. Pure + side-effect-free for unit testing.
+ */
+export function parseChannelShimArgs(args: string[]): { intent?: boolean; conflict: boolean } {
+  const on = args.includes("--with-channel-shim");
+  const off = args.includes("--without-channel-shim");
+  if (on && off) return { conflict: true };
+  if (on) return { intent: true, conflict: false };
+  if (off) return { intent: false, conflict: false };
+  return { conflict: false };
 }
 
 export interface SetupOptions {
@@ -73,7 +92,8 @@ function printGuidance(): void {
       "  • Run `tandem` to launch the editor; the first-run wizard connects\n" +
       "    Claude (Claude Code / Claude Desktop) for you.\n" +
       "  • Or run `tandem setup --apply` to write the default Claude MCP config\n" +
-      "    non-interactively. Honors --force, --target=<kind>, --with-channel-shim.\n",
+      "    non-interactively. Honors --force, --target=<kind>,\n" +
+      "    --with-channel-shim, --without-channel-shim.\n",
   );
 }
 
@@ -188,22 +208,30 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
       // from that turns "no opinion" into `false`, which `applyOpsForCli`
       // turns into an explicit REMOVE: a user who had opted in with
       // `--with-channel-shim` lost it the next time doctor sent them here.
-      // Absent a flag, preserve; `--with-channel-shim` still turns it on, and
-      // there is deliberately no `--no-channel-shim`.
-      const withChannelShim = await resolveChannelShimIntent(
+      // Absent a flag, preserve; `--with-channel-shim` turns it on and
+      // `--without-channel-shim` is the one path that removes it (#1760).
+      //
+      // `preserveShim` answers "should the entry exist"; `writeShim` answers
+      // "may we derive its body". They differ on a `targetPushSupport ===
+      // "none"` kind holding a hand-registered entry: `buildMcpEntries` is not
+      // target-gated, so deriving there would overwrite the user's own
+      // `command`/`args` and re-arm #1299's false "Registered for: Claude
+      // Desktop".
+      const preserveShim = await resolveChannelShimIntent(
         t.kind,
         t.configPath,
         opts.withChannelShim,
       );
+      const writeShim = preserveShim && targetPushSupport(t.kind) !== "none";
       const entries = buildMcpEntries(CHANNEL_DIST, {
-        withChannelShim,
+        withChannelShim: writeShim,
         targetKind: t.kind,
       });
-      await applyConfig(t.configPath, applyOpsForCli(entries, { withChannelShim }));
+      await applyConfig(t.configPath, applyOpsForCli(entries, { withChannelShim: preserveShim }));
       console.error(`  \x1b[32m✓\x1b[0m ${t.label}`);
       // Recorded only on a SUCCESSFUL write — a target whose config failed to
       // save has no shim, whatever we intended for it.
-      if (withChannelShim) shimRegisteredFor.push(t.label);
+      if (writeShim) shimRegisteredFor.push(t.label);
     } catch (err) {
       failures++;
       console.error(

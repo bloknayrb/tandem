@@ -10,6 +10,7 @@ import {
   MSIX_PACKAGE_PATTERN,
   PathRejectedError,
   resolveChannelDist,
+  resolveChannelShimIntent,
   resolveStdioBridgeDist,
 } from "../../../src/server/integrations/apply.js";
 
@@ -311,6 +312,89 @@ describe("applyConfig — malformed-JSON backup", () => {
         remove: [],
       }),
     ).rejects.toBeInstanceOf(PathRejectedError);
+  });
+});
+
+describe("resolveChannelShimIntent (#1760)", () => {
+  // Drives the REAL resolver against a scratch config file. The three arms
+  // differ only in which of (kind, override, on-disk entry) they read, so a
+  // mocked read cannot tell the fix from the bug it replaces.
+  let tmpDir: string;
+  let configPath: string;
+
+  const writeShimPresent = () =>
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ mcpServers: { "tandem-channel": { command: "node" } } }),
+    );
+  const writeShimAbsent = () => fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {} }));
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-shim-intent-"));
+    configPath = path.join(tmpDir, ".claude.json");
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("preserves a hand-registered entry on a no-push kind with no override", async () => {
+    // The headline. Today's resolver answers `false` here, and `applyOpsForCli`
+    // turns that into an explicit REMOVE — so every `tandem setup --apply` and
+    // every `tandem rotate-token` deleted a Claude Desktop entry the user had
+    // registered by hand.
+    writeShimPresent();
+    await expect(resolveChannelShimIntent("claude-desktop", configPath, undefined)).resolves.toBe(
+      true,
+    );
+  });
+
+  it("on a no-push kind, an explicit true preserves but never conjures", async () => {
+    writeShimPresent();
+    await expect(resolveChannelShimIntent("claude-desktop", configPath, true)).resolves.toBe(true);
+
+    writeShimAbsent();
+    // `targetPushSupport === "none"` stays a ceiling on CREATION (#1299): the
+    // kind cannot deliver, so no flag invents an entry for it.
+    await expect(resolveChannelShimIntent("claude-desktop", configPath, true)).resolves.toBe(false);
+  });
+
+  it("honours an explicit false on every kind — the one removal path", async () => {
+    writeShimPresent();
+    await expect(resolveChannelShimIntent("claude-desktop", configPath, false)).resolves.toBe(
+      false,
+    );
+    await expect(resolveChannelShimIntent("claude-code", configPath, false)).resolves.toBe(false);
+  });
+
+  it("with no override on a push-capable kind, mirrors what is registered", async () => {
+    writeShimPresent();
+    await expect(resolveChannelShimIntent("claude-code", configPath, undefined)).resolves.toBe(
+      true,
+    );
+
+    writeShimAbsent();
+    await expect(resolveChannelShimIntent("claude-code", configPath, undefined)).resolves.toBe(
+      false,
+    );
+
+    fs.rmSync(configPath);
+    await expect(resolveChannelShimIntent("claude-code", configPath, undefined)).resolves.toBe(
+      false,
+    );
+  });
+
+  it("creates on a push-capable kind when the override is true", async () => {
+    // The case that separates the three-arm resolver from the lazy two-arm
+    // collapse (`if (override === false) return false; return
+    // targetHasChannelEntry(...)`), which answers identically on every case
+    // above yet never creates a shim on a fresh config — silently killing the
+    // only documented opt-in there is.
+    writeShimAbsent();
+    await expect(resolveChannelShimIntent("claude-code", configPath, true)).resolves.toBe(true);
+
+    writeShimPresent();
+    await expect(resolveChannelShimIntent("claude-code", configPath, true)).resolves.toBe(true);
   });
 });
 

@@ -43,6 +43,14 @@ const CLAUDE_CODE: DetectedTarget = {
   configPath: "/home/u/.claude.json",
   kind: "claude-code",
 };
+// A second push-capable target. `writeTargets` gates the push-status credit on
+// `targetPushSupport`, so a spec about write ORDERING needs two targets the
+// gate lets through — otherwise it passes for the wrong reason.
+const CLAUDE_CODE_PROJECT: DetectedTarget = {
+  label: "Claude Code (project)",
+  configPath: "/home/u/proj/.mcp.json",
+  kind: "claude-code",
+};
 const CLAUDE_DESKTOP: DetectedTarget = {
   label: "Claude Desktop",
   configPath: "/home/u/claude_desktop_config.json",
@@ -81,6 +89,25 @@ describe("runSetup({ apply: true }) orchestration", () => {
     const out = stderr();
     expect(out).toContain("Writing MCP configuration");
     expect(out).toContain("Setup complete");
+  });
+
+  it("passes an explicit false through to the resolver (--without-channel-shim)", async () => {
+    // `undefined` and `false` mean opposite things to `resolveChannelShimIntent`
+    // — preserve vs remove (#1760) — so the option has to arrive intact rather
+    // than being coerced anywhere on the way down.
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockResolvedValue(undefined);
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await runSetup({ apply: true, withChannelShim: false });
+
+    expect(resolveChannelShimIntent).toHaveBeenCalledWith(
+      "claude-code",
+      CLAUDE_CODE.configPath,
+      false,
+    );
   });
 
   it("exits 1 when every target write fails (after installing the skill)", async () => {
@@ -206,8 +233,13 @@ describe("runSetup({ apply: true }) orchestration", () => {
       //
       // Two targets, both eligible, one write failing — a single failing target
       // would take the all-failed exit path and never reach the report at all.
+      //
+      // BOTH must be push-capable (#1760). With Claude Desktop as the second
+      // target the `writeShim` gate excludes it before the write outcome is
+      // known, so the spec would pass without ever exercising the ordering it
+      // exists for.
       vi.mocked(resolveChannelShimIntent).mockResolvedValue(true);
-      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_DESKTOP]);
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_CODE_PROJECT]);
       vi.mocked(applyConfig)
         .mockResolvedValueOnce(undefined)
         .mockRejectedValueOnce(new Error("EACCES"));
@@ -215,8 +247,30 @@ describe("runSetup({ apply: true }) orchestration", () => {
 
       await runSetup({ apply: true });
 
-      // Scope to the status line — "Claude Desktop" legitimately appears
+      // Scope to the status line — the failing label legitimately appears
       // elsewhere in the output (the "Found:" list, and its own ✗ failure line).
+      const line = plain()
+        .split("\n")
+        .find((l: string) => l.includes("Registered for:"));
+      expect(line).toBeDefined();
+      expect(line).toContain("Claude Code");
+      expect(line).not.toContain("Claude Code (project)");
+    });
+
+    it("does not credit a no-push target whose entry was merely preserved", async () => {
+      // The gate the re-point above vacates. `resolveChannelShimIntent` now
+      // answers `true` for a Claude Desktop config that already holds a
+      // hand-registered entry, but nothing was written there and the kind
+      // cannot deliver — so crediting it re-arms #1299's false "Registered for:
+      // Claude Desktop". `shimRegisteredFor.push` is gated on `writeShim`, not
+      // on `preserveShim`, and this is the only spec that can see it.
+      vi.mocked(resolveChannelShimIntent).mockResolvedValue(true);
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_DESKTOP]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      noExit();
+
+      await runSetup({ apply: true });
+
       const line = plain()
         .split("\n")
         .find((l: string) => l.includes("Registered for:"));

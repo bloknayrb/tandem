@@ -2233,8 +2233,8 @@ export { CHANNEL_DIST, PACKAGE_ROOT };
  * Answers "what is registered", which is a different question from
  * `shouldRegisterChannelShim`'s "what should a fresh setup register" — see the
  * note on `applyConfigWithToken`. Unreadable, absent, oversized and malformed
- * configs all answer `false`: there is nothing to preserve in any of them, and
- * `applyConfig` will start that file fresh anyway.
+ * configs all answer `false`: there is nothing to preserve in any of them,
+ * because `applyConfig` refuses the file before any op is applied.
  */
 async function targetHasChannelEntry(configPath: string): Promise<boolean> {
   const read = await readConfigForMutation(configPath);
@@ -2249,28 +2249,39 @@ async function targetHasChannelEntry(configPath: string): Promise<boolean> {
  * pass `undefined` when the user gave no flag, and `applyOpsForCli` turns a
  * `false` into an explicit REMOVE — so "no opinion" silently meant "delete it".
  *
- * Three-way, in priority order:
+ * Three-way, in priority order (#1760):
  *
- *  1. **No push transport for this kind** (today `claude-desktop`, the Cowork
- *     stdio path) → `false`, ahead of everything, because no flag conjures a
- *     transport that does not exist (#1299). Entries there were written by
- *     Tandem during the default-on era and provably cannot deliver, so removing
- *     them is the intended cleanup rather than a surprise.
- *  2. **An explicit override** → honoured. `false` is a request to remove.
- *  3. **Otherwise, preserve what is registered.** A read failure THROWS rather
- *     than answering `false`: "I could not tell" and "there is nothing there"
- *     must not collapse, or a transient `EBUSY` from an antivirus scanner
- *     becomes a deletion. Both callers run this inside their per-target `try`,
- *     so a throw records an error and skips that target — which is the honest
- *     outcome for a config you could not read.
+ *  1. **Explicit `true`** → register, EXCEPT on a kind with no push transport
+ *     (today `claude-desktop`, the Cowork stdio path), where `targetPushSupport
+ *     === "none"` is a ceiling on CREATION only: an entry that is already there
+ *     is preserved, none is conjured (#1299), and none is deleted. A `none`
+ *     kind is never a licence to remove — nothing on disk distinguishes a
+ *     legacy artifact from a deliberate opt-in.
+ *  2. **Explicit `false`** → remove, on every kind. This is the ONLY removal
+ *     path, and `tandem setup --apply --without-channel-shim` is the only way
+ *     to reach it.
+ *  3. **No flag** → preserve what is registered, on every kind. A read failure
+ *     THROWS rather than answering `false`: "I could not tell" and "there is
+ *     nothing there" must not collapse, or a transient `EBUSY` from an
+ *     antivirus scanner becomes a deletion. Both callers run this inside their
+ *     per-target `try`, so a throw records an error and skips that target —
+ *     which is the honest outcome for a config you could not read.
+ *
+ * The answer is "should this entry EXIST after the write". Whether its body may
+ * be re-derived is a second question, and both callers gate that separately on
+ * `targetPushSupport` so a preserved hand-registered entry is never rewritten.
  */
 export async function resolveChannelShimIntent(
   targetKind: TargetKind,
   configPath: string,
   override: boolean | undefined,
 ): Promise<boolean> {
-  if (targetPushSupport(targetKind) === "none") return false;
-  if (override !== undefined) return override;
+  if (override === true) {
+    return targetPushSupport(targetKind) === "none"
+      ? await targetHasChannelEntry(configPath)
+      : true;
+  }
+  if (override === false) return false;
   return await targetHasChannelEntry(configPath);
 }
 
@@ -2296,6 +2307,15 @@ export async function resolveChannelShimIntent(
  * silently delete a shim the user had deliberately opted into. `tandem setup`
  * always passes the flag explicitly and is unaffected; rotation is the caller
  * that omits it.
+ *
+ * **Preserve and write are separate (#1760).** On a `targetPushSupport ===
+ * "none"` kind the resolver can now answer `true` for an entry that is already
+ * there, but `buildMcpEntries` is not target-gated, so re-deriving it would
+ * overwrite a hand-registered `command`/`args` with Tandem's own. `writeShim`
+ * is the narrower flag and gates only the derivation. Deliberate consequence: a
+ * preserved `none`-kind entry is never refreshed, so it keeps a rotated-away
+ * `TANDEM_AUTH_TOKEN` where today it is deleted — the price of not destroying a
+ * hand-registered entry.
  */
 export async function applyConfigWithToken(
   token: string | null,
@@ -2311,17 +2331,18 @@ export async function applyConfigWithToken(
   const errors: string[] = [];
   for (const t of targets) {
     try {
-      const withChannelShim = await resolveChannelShimIntent(
+      const preserveShim = await resolveChannelShimIntent(
         t.kind,
         t.configPath,
         opts.withChannelShim,
       );
+      const writeShim = preserveShim && targetPushSupport(t.kind) !== "none";
       const entries = buildMcpEntries(CHANNEL_DIST, {
-        withChannelShim,
+        withChannelShim: writeShim,
         token: token ?? undefined,
         targetKind: t.kind,
       });
-      await applyConfig(t.configPath, applyOpsForCli(entries, { withChannelShim }));
+      await applyConfig(t.configPath, applyOpsForCli(entries, { withChannelShim: preserveShim }));
       updated++;
     } catch (err) {
       errors.push(`${t.label}: ${err instanceof Error ? err.message : String(err)}`);

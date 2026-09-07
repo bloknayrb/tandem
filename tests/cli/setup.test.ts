@@ -598,24 +598,58 @@ describe("applyConfigWithToken — rotation preserves, it does not re-derive", (
     expect(readServers()["tandem-channel"]).toBeUndefined();
   });
 
-  it("does not conjure a shim into a config that lacks one, on any target kind", async () => {
-    // Pins the push-support branch of the resolver against a FIXTURE rather
-    // than against whatever Claude Desktop config the developer happens to
-    // have — which is how the branch went unexercised while the suite was
-    // quietly writing to the real one.
+  it("preserves a hand-registered shim on a no-push target", async () => {
+    // Inverted from "does not conjure a shim into a config that lacks one, on
+    // any target kind" (#1760): that title never matched its fixture, which
+    // HELD a `tandem-channel` entry, so what it actually pinned was the
+    // deletion this issue removes. A `targetPushSupport` of `none` is a ceiling
+    // on CREATION, never a licence to remove — nothing on disk distinguishes a
+    // legacy artifact from a deliberate opt-in.
+    //
+    // The body is distinctive on purpose: `buildMcpEntries` is not
+    // target-gated, so a `writeShim` that collapsed back into `preserveShim`
+    // would re-derive this entry from `resolveNodeBinary()` + `CHANNEL_DIST`
+    // and pass a mere `toBeDefined()`. Scoped to the one key, because
+    // `mcpServers.tandem` is legitimately rewritten on every run.
+    const handRolled = {
+      command: "/opt/custom/node",
+      args: ["/hand/rolled/shim.js"],
+      env: { X: "1" },
+    };
     const desktopPath = desktopConfigUnder(home);
     mkdirSync(dirname(desktopPath), { recursive: true });
-    writeFileSync(
-      desktopPath,
-      JSON.stringify({ mcpServers: { "tandem-channel": { command: "node" } } }),
-    );
+    const readDesktopShim = () =>
+      (
+        JSON.parse(readFileSync(desktopPath, "utf-8")) as {
+          mcpServers: Record<string, unknown>;
+        }
+      ).mcpServers["tandem-channel"];
+
+    writeFileSync(desktopPath, JSON.stringify({ mcpServers: { "tandem-channel": handRolled } }));
+    writeConfig({ tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } });
+
+    await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", { homeOverride: home });
+    expect(readDesktopShim()).toEqual(handRolled);
+
+    // And an explicit `--with-channel-shim` does not turn preserve into
+    // re-derive either.
+    await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", {
+      homeOverride: home,
+      withChannelShim: true,
+    });
+    expect(readDesktopShim()).toEqual(handRolled);
+  });
+
+  it("does not conjure a shim onto a no-push target that lacks one", async () => {
+    // The original invariant #1299 bought, kept as its own spec: preserving is
+    // not the same as creating, and a `none` kind never gets a new entry.
+    const desktopPath = desktopConfigUnder(home);
+    mkdirSync(dirname(desktopPath), { recursive: true });
+    writeFileSync(desktopPath, JSON.stringify({ mcpServers: {} }));
     writeConfig({ tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } });
 
     await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", { homeOverride: home });
 
-    // Claude Desktop has no push transport at all, so a shim there is removed
-    // regardless of what the file said (#1299) — and, crucially, the write
-    // landed inside the temp home rather than on the real config.
     const desktop = JSON.parse(readFileSync(desktopPath, "utf-8")) as {
       mcpServers: Record<string, unknown>;
     };

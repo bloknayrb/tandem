@@ -29,7 +29,8 @@ tandem setup --apply    # write config non-interactively
 |---|---|
 | `--force` | Write entries to default paths regardless of auto-detection. Useful if your AI client config lives at a non-standard location. |
 | `--target=claude-code\|claude-desktop` | Restrict the apply to specific client(s). Repeatable. |
-| `--with-channel-shim` | Also register the `tandem-channel` stdio entry, which powers Claude Code's `--dangerously-load-development-channels` real-time push. |
+| `--with-channel-shim` | Also register the `tandem-channel` stdio entry, which powers Claude Code's `--dangerously-load-development-channels` real-time push. On a target with no push transport (Claude Desktop) it neither creates nor removes an entry. |
+| `--without-channel-shim` | Remove the `tandem-channel` entry. This is the only path that removes it — absent both flags, an existing registration is preserved. Mutually exclusive with `--with-channel-shim`. |
 
 ### `tandem doctor`
 
