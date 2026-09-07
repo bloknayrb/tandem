@@ -199,7 +199,7 @@ async function applySetup(opts: SetupOptions): Promise<void> {
   console.error("\nInstalling Claude Code skill...");
   try {
     const result = await installSkill();
-    if (result?.written === false) {
+    if (!result.written) {
       // The remedy names DELETING the file, never "upgrade Tandem to move it":
       // no Tandem version moves a `version: 999` file, so that would be a
       // dead-end fix line.

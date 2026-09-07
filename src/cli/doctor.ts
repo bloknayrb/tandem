@@ -2045,16 +2045,11 @@ export function detectEnabledTandemPluginKey(): string | null {
 
 export function evaluateTandemPlugin(input: TandemPluginInput): EvalOutcome[] {
   if (input.enabledPlugins === null) return [];
-  // `false` is a real and common value — a plugin the user deliberately
-  // disabled — so test the VALUE, not just key presence. A truthiness check
-  // would report a disabled plugin as installed.
-  // Keep the KEY, not just the fact. Detection matches any marketplace
-  // (`tandem@<whatever>`) on purpose — `docs/spikes/plugin-delivery.md`
-  // recommends a local marketplace for the no-git path — so a hardcoded
-  // `tandem@tandem-editor` in the remedy hands those users a command that
-  // errors. The uninstall string has to name the plugin we actually found.
-  const installedKey = findEnabledTandemPluginKey(input.enabledPlugins) ?? undefined;
-  if (installedKey === undefined) return [];
+  // Keep the KEY, not just the fact: the uninstall string has to name the
+  // plugin we actually found. Why the value test and the open marketplace
+  // suffix are load-bearing is on {@link findEnabledTandemPluginKey}.
+  const installedKey = findEnabledTandemPluginKey(input.enabledPlugins);
+  if (installedKey === null) return [];
 
   const out: EvalOutcome[] = [
     {
