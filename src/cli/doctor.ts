@@ -1103,7 +1103,71 @@ function checkMcpJson(r: Recorder, cwd: string, cliAvailable: CliAvailability): 
  */
 const HOME_CLAUDE_JSON = `~/.${"claude"}.json`;
 
-function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability): void {
+/**
+ * Validate the user-level `tandem` entry the way the project-level twin
+ * already validates its own (#1807). Key presence alone read green while
+ * Claude Code could not connect: a leftover `type: "stdio"`, a URL with no
+ * `/mcp`, or a port left at 3479 after the server moved.
+ *
+ * Returns `null` when the entry is fine (or is not ours to judge), otherwise
+ * the warn's message and fix.
+ *
+ * NO message, fix or `data` bag may interpolate the `url` or any part of its
+ * path. `~/.claude.json` carries bearer tokens, `user-mcp-config` survives the
+ * `/api/diagnostics` filter, and the Report-a-bug link prefills a PUBLIC issue
+ * body — while `redactUserPaths`, the only scrubber downstream, knows nothing
+ * about URL userinfo or a query token. `type` stays verbatim (enum-shaped).
+ */
+function validateUserTandemEntry(
+  entry: unknown,
+  mcpPort: number,
+  cliAvailable: CliAvailability,
+): { message: string; fix?: string } | null {
+  const e = (entry ?? {}) as { type?: unknown; url?: unknown; command?: unknown };
+
+  // A stdio entry here is a hand-edit or a plugin-managed shape, and
+  // `reportEntryCommand` already owns its failure modes — warning "unexpected
+  // config" on top of that is a regression dressed as a fix.
+  if (typeof e.command === "string" && e.command.length > 0) return null;
+
+  let parsed: URL | null = null;
+  if (typeof e.url === "string") {
+    try {
+      parsed = new URL(e.url);
+    } catch {
+      parsed = null;
+    }
+  }
+
+  if (e.type !== "http" || parsed === null || !parsed.pathname.includes("/mcp")) {
+    // `pathHasMcp` is computed, not a hardcoded `false`: this arm also fires on
+    // a bad `type` with a perfectly good `/mcp` path, where `false` would be a
+    // false statement in doctor's own output.
+    const pathHasMcp = parsed === null ? "(unparsable)" : String(parsed.pathname.includes("/mcp"));
+    return {
+      message: `${HOME_CLAUDE_JSON} tandem: unexpected config — type=${String(e.type)}, pathHasMcp=${pathHasMcp}`,
+      fix: setupApplyRemedy(cliAvailable()),
+    };
+  }
+
+  // Compare the string form — `URL.port` is a string, so `!== mcpPort` would
+  // always be true — and treat a port-less URL as a mismatch: the entry must
+  // name Tandem's MCP port explicitly.
+  if (parsed.port !== String(mcpPort)) {
+    return {
+      message: `${HOME_CLAUDE_JSON} tandem: url names port ${parsed.port || "(none)"}, but Tandem's MCP port is ${mcpPort}`,
+      // Deliberately NOT `setupApplyRemedy`: `buildMcpEntries` hardcodes
+      // `MCP_URL` at the default port, so `setup --apply` rewrites the same
+      // wrong port and the warn re-fires forever — the dead-end-remedy defect
+      // this file has already been corrected for twice.
+      fix: `Edit the tandem entry's url in ${HOME_CLAUDE_JSON} to use port ${mcpPort}, or unset TANDEM_MCP_PORT and restart Tandem.`,
+    };
+  }
+
+  return null;
+}
+
+function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability, mcpPort: number): void {
   const home = process.env.HOME || process.env.USERPROFILE || "";
   // Claude Code reads global MCP servers from ~/.claude.json (under
   // `mcpServers`), which is exactly where `tandem setup` writes them. The
@@ -1206,7 +1270,15 @@ function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability): void {
   if (!servers.tandem) {
     r.warn("tandem not registered in ~/.claude.json", setupApplyRemedy(cliAvailable()));
   } else {
-    r.pass("tandem registered in ~/.claude.json");
+    const invalid = validateUserTandemEntry(servers.tandem, mcpPort, cliAvailable);
+    if (invalid) {
+      // `warn`, never `fail` — parity with the project-level twin. `tandem
+      // doctor` must not start exiting 1 on a machine whose tools arrive via
+      // the plugin.
+      r.warn(invalid.message, invalid.fix);
+    } else {
+      r.pass("tandem registered in ~/.claude.json");
+    }
     // Normally an HTTP entry here, which the helper ignores. A stdio entry in
     // this file means a hand-edit or a plugin-managed shape, and both can carry
     // the failure modes it reports.
@@ -2926,7 +2998,7 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
     recordEvaluation(r, evaluateAppTranslocation(process.execPath)),
   );
   await r.check("mcp-json", () => checkMcpJson(r, cwd, cliAvailable));
-  await r.check("user-mcp-config", () => checkUserMcpConfig(r, cliAvailable));
+  await r.check("user-mcp-config", () => checkUserMcpConfig(r, cliAvailable, mcpPort));
   await r.check("desktop-mcp-config", () =>
     checkDesktopMcpConfig(r, cliAvailable, opts.homeOverride),
   );

@@ -2027,6 +2027,9 @@ describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "tandem-doctor-usermcp-"));
     vi.stubEnv("HOME", home);
+    // Both, so the specs are machine-independent on Windows, where `homedir()`
+    // reads USERPROFILE (#1807).
+    vi.stubEnv("USERPROFILE", home);
   });
 
   afterEach(() => {
@@ -2109,6 +2112,114 @@ describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
     expect(warn?.message).toContain("not found");
     expect(warn?.fix).toContain("project-local .mcp.json");
     expect(warn?.fix).not.toContain("..");
+  });
+
+  // #1807 — the user level passed on key presence alone while its
+  // project-level twin validated the same entry, so a leftover install read
+  // green in the file Claude Code actually consults.
+  describe("validates the tandem entry, not just its presence (#1807)", () => {
+    const writeEntry = (tandem: unknown) => {
+      writeFileSync(
+        claudeCodeConfigPath({ homeOverride: home }),
+        JSON.stringify({ mcpServers: { tandem } }),
+      );
+    };
+
+    /** Every `user-mcp-config` outcome, stringified — `fix` and `data` too. */
+    const userMcpAll = async (opts: Parameters<typeof runDoctor>[0] = {}) => {
+      const report = await runDoctor(opts);
+      return report.results.filter((x) => x.check === "user-mcp-config");
+    };
+
+    it("warns on a stdio type, naming the computed pathHasMcp", async () => {
+      writeEntry({ type: "stdio", url: "http://127.0.0.1:3479/mcp" });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain("type=stdio");
+      // Computed, not a hardcoded `false`: the path really does carry /mcp.
+      expect(warn?.message).toContain("pathHasMcp=true");
+    });
+
+    it("warns on a url with no /mcp path, without echoing the url", async () => {
+      writeEntry({ type: "http", url: "http://127.0.0.1:3479/" });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain("pathHasMcp=false");
+      expect(warn?.message).not.toContain("http://127.0.0.1:3479/");
+    });
+
+    it("warns on a port that disagrees with the probed MCP port, with a remedy that works", async () => {
+      writeEntry({ type: "http", url: "http://127.0.0.1:9999/mcp" });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain("9999");
+      expect(warn?.message).toContain("3479");
+      // `setup --apply` rewrites the same hardcoded 3479, so prescribing it
+      // here would be a dead-end fix line for the condition being reported.
+      expect(warn?.fix).not.toMatch(/setup --apply/);
+    });
+
+    it.each([
+      ["userinfo and a query token", "http://tok:s3cret@example.invalid:9999/mcp?key=abc"],
+      ["a secret path segment", "http://example.invalid:9999/mcp/s3cret"],
+    ])("never echoes the url (%s)", async (_label, url) => {
+      writeEntry({ type: "http", url });
+
+      const results = await userMcpAll();
+      const serialized = JSON.stringify(results);
+      expect(results.some((x) => x.status === "warn")).toBe(true);
+      expect(serialized).not.toContain("s3cret");
+      expect(serialized).not.toContain("key=abc");
+      expect(serialized).not.toContain(url);
+    });
+
+    it("leaves a stdio (command) entry to reportEntryCommand and still passes", async () => {
+      writeEntry({ command: "/abs/node", args: [] });
+
+      const results = await userMcpAll();
+      // The positive: that pass is reachable only when the command arm returns
+      // null, so it reds both if the arm is dropped and if the validator
+      // returns null while emitting nothing at all.
+      expect(results.some((x) => x.message === "tandem registered in ~/.claude.json")).toBe(true);
+      // reportEntryCommand's own outcome still appears alongside it.
+      expect(results.length).toBeGreaterThan(1);
+    });
+
+    it("passes a healthy entry and says nothing about its url", async () => {
+      const url = "http://tok:s3cret@127.0.0.1:3479/mcp?key=abc";
+      writeEntry({ type: "http", url });
+
+      const results = await userMcpAll();
+      const serialized = JSON.stringify(results);
+      expect(results.some((x) => x.message === "tandem registered in ~/.claude.json")).toBe(true);
+      expect(serialized).not.toContain("s3cret");
+      expect(serialized).not.toContain("key=abc");
+      expect(serialized).not.toContain(url);
+    });
+
+    it("passes a plain healthy entry", async () => {
+      writeEntry({ type: "http", url: "http://127.0.0.1:3479/mcp" });
+
+      const results = await userMcpAll();
+      expect(results.some((x) => x.message === "tandem registered in ~/.claude.json")).toBe(true);
+    });
+
+    it("compares against the probed MCP port, not a hardcoded 3479", async () => {
+      writeEntry({ type: "http", url: "http://127.0.0.1:3479/mcp" });
+
+      const results = await userMcpAll({ mcpPort: 4918 });
+      const warn = results.find((x) => x.status === "warn");
+      expect(warn?.message).toContain("4918");
+    });
+
+    it("treats a port-less url as a mismatch and reports (none)", async () => {
+      writeEntry({ type: "http", url: "http://127.0.0.1/mcp" });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain("(none)");
+      expect(warn?.message).toContain("3479");
+      expect(warn?.fix).not.toMatch(/setup --apply/);
+    });
   });
 });
 
