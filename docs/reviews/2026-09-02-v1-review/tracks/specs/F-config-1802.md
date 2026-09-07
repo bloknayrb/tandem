@@ -37,12 +37,31 @@ and leave the file intact**. This fix makes the parse failure behave like its ow
     user data loses nothing by being written. The issue proposes `size === 0`; `trim()` after the
     BOM strip is the same predicate one step wider (a lone `\n`, a lone BOM), and it is checked
     *after* the strip so the BOM-only file does not fall into the refusal. **The truncation window
-    this leaves open is real and is not closed here**: a non-atomic writer doing `open(path, "w")`
-    passes through zero bytes, and Tandem will write a Tandem-only config over that and report
-    success. Today's behaviour is not better (backing up a zero-byte file preserves nothing —
-    `apply-malformed.test.ts:102`), so this is a residual, not a regression, and it sits inside the
-    already-accepted bound of #1599 (`docs/security.md:449-451`, "First install — silent,
-    permanent, and reported as success"). Say so in the PR body so the refusal is not read as total.
+    this leaves open is real, is not closed here, and is NOT covered by any existing acceptance**: a
+    non-atomic writer doing `open(path, "w")` passes through zero bytes, and Tandem will write a
+    Tandem-only config over that and report success. The verified half is that today's behaviour is
+    no better — backing up a zero-byte file preserves nothing (`apply-malformed.test.ts:102`) — so
+    this is a residual, not a regression.
+
+    **Do not claim it sits inside #1599's accepted bound; that citation is wrong.** #1599 is scoped
+    to races between Tandem's **own** writers — `docs/security.md:442` names "the boot sweep's
+    Claude Desktop npx→absolute-path convergence and a concurrently-run `tandem setup --apply` or
+    `tandem rotate-token`", and the `:449` bullet describes only `applyConfig` (`apply.ts:1007`)
+    racing `refreshAllMcpEntryBinaries`'s full-root write (`apply.ts:1957`). Its writer set is
+    *derived from Tandem's own source* (`docs/security.md:453`,
+    `tests/docs/config-writer-set-claims.test.ts:255-275` scanning `src/server/integrations/` and
+    `src/cli/`), so a third-party non-atomic writer cannot be in it and never was. What this bullet
+    describes — an **external** writer passing through zero bytes while Tandem writes over it and
+    returns success — is a class #1599 never accepted, and asserting otherwise would launder a false
+    security claim into the PR on the exact data-destruction path this issue exists to close.
+
+    **So name it as a new open condition.** Per CLAUDE.md's Security rule ("file new findings there
+    as well as in the tracker"): file a tracker issue for it and add it to
+    `docs/security.md#open-findings` on its own terms — *"a non-atomic external writer passing
+    through zero bytes is not distinguished from a genuinely empty file; today's behaviour is no
+    better"* — citing that issue number, and repeat it in the PR body so the refusal is not read as
+    total. If the implementing session cannot file, the PR body must say plainly that this is an
+    **untracked, unaccepted residual**. It may not be described as accepted either way.
   - otherwise `JSON.parse`, and on failure throw
     `new ConfigRefusalError("CONFIG_MALFORMED", \`${configPath} is not valid JSON — refusing to rewrite it\`)`
     (the class lands in the #1801 half of this branch, and its field is `reason`). The message must
@@ -57,9 +76,22 @@ and leave the file intact**. This fix makes the parse failure behave like its ow
     advertises "Malformed JSON is backed up under Tandem's data dir with mode `0o600`" — a deleted
     gate. `.broken-backups/` itself survives: `storage.ts#backupBrokenFile` and `models/store.ts`
     still write there, so `docs/data-locations.md:30` stays true.
+- **The two shape gates throw `ConfigRefusalError`, not a bare `Error` — they are the other half of
+  "malformed".** `apply.ts:1046` (`root is not a JSON object — refusing to rewrite`) and `:1053`
+  (`mcpServers is not an object — refusing to rewrite`) already refuse and leave the file intact,
+  but as plain `Error`s they fall through `api-routes.ts:960-967` to `ERROR_CODE_WRITE_FAILED`,
+  which the modal renders as "Couldn't write the settings file — check it isn't open in another
+  program" — the exact mistranslation #1801 exists to kill, on a file Tandem deliberately did not
+  write. Both become `new ConfigRefusalError("CONFIG_MALFORMED", …)` with their present messages, so
+  "Done when"'s *"the CLI and the wizard both name the refusal"* is true of malformed configs as a
+  whole rather than of the parse path alone. One-line change each; the existing specs at
+  `tests/server/integrations/apply-malformed.test.ts:61-99` assert only `rejects.toThrow()` plus
+  intact bytes and stay green — add `toBeInstanceOf(ConfigRefusalError)` to one of them so the class
+  is pinned.
 - **`src/server/integrations/api-routes.ts`** — the `ConfigRefusalError` arm added by #1801 already
   carries this code through; the static client message is "Your Claude settings file isn't valid
-  JSON, so Tandem left it alone." No path, no snippet.
+  JSON, so Tandem left it alone." No path, no snippet. With the bullet above, that one arm now
+  covers the parse failure and both shape gates.
 - **`IntegrationWizardModal.svelte#resultErrorText`** — `case "CONFIG_MALFORMED"`: "Your Claude
   settings file isn't valid JSON. Tandem left it untouched — fix or restore the file, then try
   again." This is the wizard-silence half of the issue.
@@ -108,8 +140,11 @@ and leave the file intact**. This fix makes the parse failure behave like its ow
    break every genuinely empty config; the existing spec asserted the backup, so it must change.
 4. `"\n"` and a BOM-only file → same as (3). Pins the `trim()`-after-strip decision, which is the
    one place this spec is wider than the issue's text.
-5. The non-object-root and BOM-non-object specs stay untouched and green — they are the
-   discriminating twins proving the refusal did not swallow the shape gate.
+5. The non-object-root and BOM-non-object specs (`:61-99`) keep their `rejects.toThrow()` + intact
+   bytes and stay green — they are the discriminating twins proving the refusal did not swallow the
+   shape gate. Add `toBeInstanceOf(ConfigRefusalError)` to **one** of them, pinning the class change
+   in the Fix bullet above; without it the shape gates could silently drift back to a bare `Error`
+   and the wizard would resume showing "check it isn't open in another program".
 6. The fresh-install spec ("does NOT back up on fresh install") stays green unchanged — it is what
    catches a restructure that drops the ENOENT arm.
 
@@ -158,12 +193,25 @@ source-grep TOCTOU guard), and neither has anything left to assert. It is not in
 `scripts/ci/windows-acl-proof.mjs`'s `WINDOWS_ACL_PROOF_SPECS` (it mocks `acl-win`), so the
 `windows-acl-proof` job and its wiring test are unaffected — state that in the PR body, and note
 that the same hardening invariant remains proven for `storage.ts` by
-`tests/server/file-io/doc-backup-acl-repair.test.ts`, which *is* in that list.
+`tests/server/file-io/doc-backup-acl-repair.test.ts`, which *is* in that list. **Its deletion leaves
+one dangling citation, in an unrelated file's docblock**: `tests/server/file-watcher.test.ts:56`
+lists `integrations/apply-acl.test.ts` among the repo's platform-stub idiom examples. Drop that name
+from the list in the same commit — a docblock pointing at a deleted file is the kind of stale
+cross-reference this repo pins deliberately elsewhere.
+
+`tests/cli/uninstall-scrub-mcp.test.ts:93` — **rename only, no assertion change.** Its title,
+`"malformed JSON → skipped, file untouched (never the applyConfig replace-with-fresh path)"`,
+exercises `removeConfigEntries` and so stays green — but the path it names as the contrast case
+ceases to exist on this branch, leaving a test whose name asserts something false. Drop the
+parenthetical: after this change `applyConfig` and `removeConfigEntries` agree, which is the point
+of the fix.
 
 ## Done when
 
 A malformed non-empty `~/.claude.json` is never rewritten by any Tandem path; the CLI and the
-wizard both name the refusal, and the wizard half is pinned by a test; **both** doctor sites stop
+wizard both name the refusal — **for the parse failure and for both shape gates**, all three
+throwing `ConfigRefusalError("CONFIG_MALFORMED")` rather than a bare `Error` the route folds onto
+`WRITE_FAILED` — and the wizard half is pinned by a test; **both** doctor sites stop
 promising a backup-and-rewrite and both are pinned; an empty config still gets a fresh file and a
 fresh install still works; the two writer counts and the `docs/security.md` clause are updated
 together; typecheck + the touched suites green.
@@ -172,8 +220,9 @@ together; typecheck + the touched suites green.
 
 `readConfigForMutation` (already correct — it is the model). `existing-config.ts`'s third, looser
 read. Pruning the historical `.claude.json.broken-*` copies users already have. Whether Claude Code
-writes the file atomically (unknowable here; it is why the issue is Medium) — and the zero-byte
-truncation window that follows from it, which stays inside #1599's accepted bound.
+writes the file atomically (unknowable here; it is why the issue is Medium) — and **closing** the
+zero-byte truncation window that follows from it, which is a newly-named open condition filed and
+recorded per the Fix section, **not** something #1599 accepted.
 
 ## Review corrections (round 1)
 
@@ -198,8 +247,10 @@ truncation window that follows from it, which stays inside #1599's accepted boun
 - The ENOENT arm is stated explicitly in the restructure bullet (fresh install unchanged; every
   other I/O error still rethrows; only the `SyntaxError` arm changes), and the fresh-install spec is
   listed as the test that catches its loss.
-- The empty-file carve-out now records the truncation window it leaves open, cites
-  `docs/security.md:449-451` as its accepted bound, and repeats it in "Not in scope".
+- *(**superseded in round 2**)* The empty-file carve-out now records the truncation window it leaves
+  open, cites `docs/security.md:449-451` as its accepted bound, and repeats it in "Not in scope".
+  Round 2 struck that citation as wrong — #1599 covers only races between Tandem's own writers — and
+  replaced it with a newly-named open condition to be filed and recorded.
 - A wizard assertion is added to `tests/client/integration-wizard-push-support.test.ts` — "Done
   when" claimed the wizard half and nothing tested it, and `resultErrorText`'s `default` arm makes a
   missing `case` invisible.
@@ -211,3 +262,40 @@ truncation window that follows from it, which stays inside #1599's accepted boun
 **Not adopted**
 
 - None.
+
+## Review corrections (round 2)
+
+**Adopted**
+
+- *(blocking, and a second non-blocking finding of the same shape)* The spec instructed the PR to
+  claim the zero-byte truncation window "sits inside the already-accepted bound of #1599", citing
+  `docs/security.md:449-451`. That citation is wrong and the claim is false: #1599 is scoped at
+  `docs/security.md:442` to races between Tandem's **own** writers, its `:449` bullet describes
+  `applyConfig` racing `refreshAllMcpEntryBinaries`'s full-root write, and its writer set is derived
+  from Tandem's own source (`:453`, `tests/docs/config-writer-set-claims.test.ts:255-275`) so a
+  third-party non-atomic writer cannot be in it. Following the spec would have written a false
+  security claim into the PR on the very data-destruction path the issue closes. The clause is
+  deleted from both the `raw.trim() === ""` bullet and "Not in scope"; the residual is now named as
+  a **new open condition** — file a tracker issue, add it to `docs/security.md#open-findings` on its
+  own terms, or (failing that) state plainly in the PR body that it is untracked and unaccepted. The
+  verified half — that today's behaviour is no better, per `apply-malformed.test.ts:102` — is kept.
+- *(non-blocking)* The two shape gates (`apply.ts:1046`, `:1053`) still threw bare `Error`s, so
+  "Done when"'s *"the CLI and the wizard both name the refusal"* was false for half of "malformed":
+  they fall through `api-routes.ts:960-967` to `WRITE_FAILED` and the modal shows "check it isn't
+  open in another program" — the mistranslation #1801 exists to kill — for a file Tandem
+  deliberately did not write. Both now throw `ConfigRefusalError("CONFIG_MALFORMED")`, "Done when"
+  says so, and the existing `:61-99` specs gain one `toBeInstanceOf(ConfigRefusalError)`.
+- *(non-blocking)* `tests/cli/uninstall-scrub-mcp.test.ts:93` added to the ledger as a rename-only
+  item: it stays green but its title names "the applyConfig replace-with-fresh path", which this
+  branch removes — a stale claim of exactly the kind this repo pins deliberately.
+- *(non-blocking)* Deleting `tests/server/integrations/apply-acl.test.ts` leaves a dangling citation
+  at `tests/server/file-watcher.test.ts:56`; dropping it is added to the deletion bullet.
+
+**Not adopted**
+
+- None.
+
+**File-set change:** this spec now also touches `tests/server/file-watcher.test.ts` (docblock),
+`tests/cli/uninstall-scrub-mcp.test.ts` (test name), the two shape gates in
+`src/server/integrations/apply.ts`, and `docs/security.md#open-findings` (the newly-named residual,
+in place of the struck #1599 claim).
