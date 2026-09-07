@@ -46,6 +46,7 @@ import {
   isTandemEditorRepo,
   MIN_NODE_VERSION,
   probeTandemEditorRepo,
+  resolveDoctorPortsFromEnv,
   runDoctor,
   runDoctorCli,
   setupApplyRemedy,
@@ -2438,4 +2439,124 @@ describe("checkNodeVersion wiring (via runDoctor(), not the pure evaluator)", ()
     // `failures` — so "warn" is what keeps `tandem doctor` at exit 0 on an
     // install that works.
   });
+});
+
+// #1806 — `tandem doctor` ignored TANDEM_PORT / TANDEM_MCP_PORT, so a user who
+// moved the server with the documented env vars got "server not running" plus a
+// remedy that starts a SECOND instance on the defaults.
+describe("resolveDoctorPortsFromEnv (#1806)", () => {
+  let home: string;
+
+  beforeEach(() => {
+    // The two wiring specs below run the WHOLE doctor, including
+    // `checkUserMcpConfig` and `checkTandemPlugin`, which read HOME/USERPROFILE
+    // directly — `runDoctorCli` has no `homeOverride` seam. Both variables,
+    // because `homedir()` reads USERPROFILE on Windows.
+    home = mkdtempSync(join(tmpdir(), "tandem-doctor-ports-"));
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it.each([
+    ["an explicit port", { TANDEM_PORT: "4918" }, 4918, 3479],
+    ["nothing set", {}, 3478, 3479],
+    // The `||` arm — which is why the server's `parseInt(raw || fallback)`
+    // spelling matters and `Number(raw)` would not do.
+    ["an empty string", { TANDEM_PORT: "" }, 3478, 3479],
+    // The server binds 4918abc on 4918; a stricter parser here would re-create
+    // the false "not running" for an input the server accepts.
+    ["a trailing-garbage port", { TANDEM_PORT: "4918abc" }, 4918, 3479],
+    ["an unparseable port", { TANDEM_PORT: "abc" }, 3478, 3479],
+    // The probe-side clamp: `listen(0)` is undiagnosable from outside.
+    ["zero", { TANDEM_PORT: "0" }, 3478, 3479],
+    ["an out-of-range port", { TANDEM_PORT: "70000" }, 3478, 3479],
+    ["the MCP override", { TANDEM_MCP_PORT: "4919" }, 3478, 4919],
+    ["both overrides", { TANDEM_PORT: "4918", TANDEM_MCP_PORT: "4919" }, 4918, 4919],
+  ])("resolves %s", (_label, env, wsPort, mcpPort) => {
+    expect(resolveDoctorPortsFromEnv(env as NodeJS.ProcessEnv)).toEqual({ wsPort, mcpPort });
+  });
+
+  /**
+   * An HTTP listener that answers immediately, NOT a bare `net` server:
+   * `runDoctor` runs `checkHealth` whenever the MCP probe succeeds, and
+   * `httpGet` waits 3s for a socket that never replies.
+   */
+  async function listenEphemeral(): Promise<{ port: number; close(): Promise<void> }> {
+    const server = createServer((_req, res) => {
+      res.writeHead(404);
+      res.end();
+    });
+    const port = await new Promise<number>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        const addr = server.address();
+        resolve(typeof addr === "object" && addr ? addr.port : 0);
+      });
+    });
+    return {
+      port,
+      close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    };
+  }
+
+  async function portsMessage(): Promise<string> {
+    const chunks: string[] = [];
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      chunks.push(String(chunk));
+      return true;
+    });
+    try {
+      await runDoctorCli({ json: true });
+    } finally {
+      stdoutSpy.mockRestore();
+    }
+    const parsed = JSON.parse(chunks.join(""));
+    const ports = parsed.results.find((x: { check: string }) => x.check === "ports");
+    return String(ports?.message ?? "");
+  }
+
+  // Generous budget: these drive the real doctor end to end, including
+  // `cliAvailable`'s PATH walk (~335 `statSync` calls) on top of the probes.
+  const WIRING_TIMEOUT_MS = timeoutMs(20_000, 60_000);
+
+  it(
+    "runDoctorCli probes the TANDEM_PORT the server would bind",
+    async () => {
+      const listener = await listenEphemeral();
+      try {
+        vi.stubEnv("TANDEM_PORT", String(listener.port));
+        const message = await portsMessage();
+        // Word boundaries, never `toContain`: ephemeral ports like 33478 or
+        // 34780 contain "3478" and the kernel picks which one we get.
+        expect(message).toMatch(new RegExp(String.raw`\b${listener.port}\b`));
+        expect(message).not.toMatch(/\b3478\b/);
+      } finally {
+        await listener.close();
+      }
+    },
+    WIRING_TIMEOUT_MS,
+  );
+
+  it(
+    "runDoctorCli probes the TANDEM_MCP_PORT the server would bind",
+    async () => {
+      const listener = await listenEphemeral();
+      try {
+        vi.stubEnv("TANDEM_MCP_PORT", String(listener.port));
+        const message = await portsMessage();
+        expect(message).toMatch(new RegExp(String.raw`\b${listener.port}\b`));
+        // 3479 must be gone; 3478 is EXPECTED — the ws port is still the
+        // default, and `checkPorts` names it in both surviving branches.
+        expect(message).not.toMatch(/\b3479\b/);
+        expect(message).toMatch(/\b3478\b/);
+      } finally {
+        await listener.close();
+      }
+    },
+    WIRING_TIMEOUT_MS,
+  );
 });

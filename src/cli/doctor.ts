@@ -2971,6 +2971,43 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
 
 // ── Printer + exit-code wrapper ─────────────────────────────────────
 
+/**
+ * Parse one port env var the way the *server* does, so doctor probes where the
+ * server actually binds.
+ *
+ * `parseInt(raw || String(fallback), 10)` deliberately mirrors
+ * `src/server/index.ts` — not `Number`, and not `backend-ports.ts`'s stricter
+ * `/^\d{1,5}$/`. The server binds `TANDEM_PORT=4918abc` on 4918, so a stricter
+ * parser here would re-create the false "server not running" for exactly the
+ * inputs the server accepts.
+ *
+ * The `1..65535` clamp is a probe-side decision, NOT a mirror of the server:
+ * `listen(0)` binds an OS-chosen ephemeral port, so `TANDEM_PORT=0` is not
+ * "input the server would reject" — it is undiagnosable from outside the
+ * process. Falling back to the default at least prints a port shape the user
+ * recognises.
+ */
+function envPort(raw: string | undefined, fallback: number): number {
+  const n = parseInt(raw || String(fallback), 10);
+  return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : fallback;
+}
+
+/**
+ * The single resolution site for the two documented port overrides (#1806).
+ * `runDoctor` itself never reads them — an embedder that knows its live ports
+ * (the `/api/diagnostics` route) must not get the CLI's answer layered under
+ * its own.
+ */
+export function resolveDoctorPortsFromEnv(env: NodeJS.ProcessEnv = process.env): {
+  wsPort: number;
+  mcpPort: number;
+} {
+  return {
+    wsPort: envPort(env.TANDEM_PORT, DEFAULT_WS_PORT),
+    mcpPort: envPort(env.TANDEM_MCP_PORT, DEFAULT_MCP_PORT),
+  };
+}
+
 export interface RunDoctorCliOptions {
   json?: boolean;
 }
@@ -3002,7 +3039,7 @@ export async function runDoctorCli(opts: RunDoctorCliOptions = {}): Promise<numb
 
   let report: DoctorReport;
   try {
-    report = await runDoctor();
+    report = await runDoctor(resolveDoctorPortsFromEnv());
   } catch (err) {
     const message = errMsg(err);
     if (json) {
