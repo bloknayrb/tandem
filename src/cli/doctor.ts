@@ -1117,7 +1117,12 @@ const HOME_CLAUDE_JSON = `~/.${"claude"}.json`;
  * `/api/diagnostics` filter, and the Report-a-bug link prefills a PUBLIC issue
  * body — while `redactUserPaths`, the only scrubber downstream, knows nothing
  * about URL userinfo or a query token. `type` goes through
- * {@link describeEntryType} for the same reason.
+ * {@link describeClampedValue} for the same reason.
+ *
+ * The one part of the url that is named is the SCHEME, and it is named because
+ * it can carry no secret: it is neither host, userinfo, path nor query, and it
+ * is what tells a reader why an otherwise-correct-looking entry is red. It
+ * goes through the same clamp.
  */
 /**
  * Hostnames a `tandem` MCP url may name. The server binds `127.0.0.1`, so
@@ -1138,7 +1143,7 @@ const HOME_CLAUDE_JSON = `~/.${"claude"}.json`;
 const LOOPBACK_MCP_HOSTNAMES = new Set(["127.0.0.1", "[::1]", "localhost"]);
 
 /**
- * Render an entry's `type` for the warn message.
+ * Render an entry's `type` — or a url's scheme — for the warn message.
  *
  * The warn arm below fires precisely when `type !== "http"`, i.e. precisely
  * when the value is NOT enum-shaped, so "it's an enum, print it verbatim" is
@@ -1149,10 +1154,15 @@ const LOOPBACK_MCP_HOSTNAMES = new Set(["127.0.0.1", "[::1]", "localhost"]);
  * length. So clamp it the way {@link detectEnabledTandemPluginKey} clamps the
  * plugin key, and report `(unexpected)` rather than echoing — the port arm
  * already prefers `(none)` over a raw value for the same reason.
+ *
+ * The scheme goes through the same clamp. It comes off a *parsed* `URL`, so
+ * control bytes are impossible there, but its length is not bounded and the
+ * clamp costs nothing — and reusing one renderer keeps the two fields of this
+ * message from drifting apart on the rule that governs both.
  */
-function describeEntryType(type: unknown): string {
-  if (type === undefined) return "(none)";
-  return typeof type === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(type) ? type : "(unexpected)";
+function describeClampedValue(value: unknown): string {
+  if (value === undefined) return "(none)";
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(value) ? value : "(unexpected)";
 }
 
 function validateUserTandemEntry(
@@ -1176,13 +1186,31 @@ function validateUserTandemEntry(
     }
   }
 
-  if (e.type !== "http" || parsed === null || !parsed.pathname.includes("/mcp")) {
+  // The scheme is part of this arm, not a separate one: Tandem's MCP server is
+  // plaintext HTTP on loopback, so `https://127.0.0.1:3479/mcp` clears the
+  // type, path, host and port checks while Claude Code's TLS handshake fails
+  // and no `tandem_*` tool ever appears — green in the file Claude Code
+  // consults while Claude Code cannot connect, which is #1807's own defect.
+  // Same remedy as the other two shapes here (`buildMcpEntries` writes
+  // `http://`), so the same arm is the honest home for it.
+  if (
+    e.type !== "http" ||
+    parsed === null ||
+    parsed.protocol !== "http:" ||
+    !parsed.pathname.includes("/mcp")
+  ) {
     // `pathHasMcp` is computed, not a hardcoded `false`: this arm also fires on
     // a bad `type` with a perfectly good `/mcp` path, where `false` would be a
-    // false statement in doctor's own output.
+    // false statement in doctor's own output. `scheme` is named for the same
+    // reason — without it an https url reports `type=http, pathHasMcp=true` and
+    // the warn names nothing the reader can act on.
     const pathHasMcp = parsed === null ? "(unparsable)" : String(parsed.pathname.includes("/mcp"));
+    // Scheme only — never the host, path, userinfo or query, which the
+    // redaction rule governing this whole message keeps out of doctor's output.
+    const scheme =
+      parsed === null ? "(unparsable)" : describeClampedValue(parsed.protocol.replace(/:$/, ""));
     return {
-      message: `${HOME_CLAUDE_JSON} tandem: unexpected config — type=${describeEntryType(e.type)}, pathHasMcp=${pathHasMcp}`,
+      message: `${HOME_CLAUDE_JSON} tandem: unexpected config — type=${describeClampedValue(e.type)}, scheme=${scheme}, pathHasMcp=${pathHasMcp}`,
       fix: setupApplyRemedy(cliAvailable()),
     };
   }

@@ -2261,6 +2261,35 @@ describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
       expect(warn?.message).not.toContain("http://127.0.0.1:3479/");
     });
 
+    // Round-3 review. Every other arm passes on this entry — type is "http",
+    // the path carries /mcp, the host is loopback, the port is right — but
+    // Tandem's MCP server is plaintext HTTP, so Claude Code's TLS handshake
+    // fails and no `tandem_*` tool ever appears. Certifying it green is the
+    // #1807 defect itself: a pass in the file Claude Code consults while
+    // Claude Code cannot connect.
+    it.each([
+      ["https", "https://127.0.0.1:3479/mcp"],
+      ["ws", "ws://127.0.0.1:3479/mcp"],
+    ])("warns on the %s scheme, which the MCP server does not speak", async (scheme, url) => {
+      writeEntry({ type: "http", url });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain(`scheme=${scheme}`);
+      // Named, because `type=http, pathHasMcp=true` alone tells the reader
+      // nothing they can act on — but nothing else about the url is.
+      expect(JSON.stringify(await userMcpAll())).not.toContain("127.0.0.1:3479");
+      // Here `setup --apply` IS the remedy: `buildMcpEntries` writes `http://`.
+      expect(warn?.fix).toBeTruthy();
+    });
+
+    it("reports the scheme as (unparsable) when the url will not parse", async () => {
+      writeEntry({ type: "http", url: "not a url" });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain("scheme=(unparsable)");
+      expect(warn?.message).toContain("pathHasMcp=(unparsable)");
+    });
+
     it("warns on a port that disagrees with the probed MCP port, with a remedy that works", async () => {
       writeEntry({ type: "http", url: "http://127.0.0.1:9999/mcp" });
 
