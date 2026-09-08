@@ -8,6 +8,7 @@ import {
   refreshAllRanges,
   refreshRange,
   relPosToFlatOffset,
+  remapRangeAcrossReplacement,
   resolveToElement,
   validateFlatRange,
   validateRange,
@@ -18,7 +19,7 @@ import type {
   SerializedRelPos,
 } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types.js";
-import { off } from "../helpers/positions.js";
+import { off, range } from "../helpers/positions.js";
 import {
   getAnnotationsMap,
   getFragment,
@@ -848,6 +849,49 @@ describe("refreshRange — the stored-range gate (#1764)", () => {
       expect(refreshed.annotation.range).toEqual({ from: 6, to: 6 });
       expect((map.get(ann.id) as Annotation).range).toEqual({ from: 6, to: 6 });
     });
+  });
+});
+
+/**
+ * #1765 — the pure arithmetic behind `tandem_edit`'s cross-block re-anchor.
+ * `[from, to)` becomes `newLength` units; a range that does not intersect the
+ * replacement has an exact destination, and one that does has none.
+ */
+describe("remapRangeAcrossReplacement (#1765)", () => {
+  // Replace [10, 20) — ten units — with the given length.
+  const from = off(10);
+  const to = off(20);
+
+  it("is the identity for a range entirely BEFORE the replacement", () => {
+    expect(remapRangeAcrossReplacement(range(2, 5), from, to, 3)).toEqual({ from: 2, to: 5 });
+  });
+
+  it("is the identity for a range touching the replacement's start exactly", () => {
+    // `to === from` is outside a half-open [from, to): nothing under it moved.
+    expect(remapRangeAcrossReplacement(range(2, 10), from, to, 3)).toEqual({ from: 2, to: 10 });
+  });
+
+  it("shifts a range entirely AFTER the replacement, both when it shrinks and grows", () => {
+    expect(remapRangeAcrossReplacement(range(25, 30), from, to, 2)).toEqual({ from: 17, to: 22 });
+    expect(remapRangeAcrossReplacement(range(25, 30), from, to, 40)).toEqual({ from: 55, to: 60 });
+  });
+
+  it("shifts a range touching the replacement's end exactly", () => {
+    expect(remapRangeAcrossReplacement(range(20, 24), from, to, 2)).toEqual({ from: 12, to: 16 });
+  });
+
+  it("shifts a POINT range after the replacement and keeps it a point", () => {
+    expect(remapRangeAcrossReplacement(range(25, 25), from, to, 2)).toEqual({ from: 17, to: 17 });
+  });
+
+  it("REFUSES every intersecting range rather than clamping", () => {
+    // Head overlap, tail overlap, fully contained, and a range that swallows
+    // the replacement whole. A partially overwritten annotation has no correct
+    // destination; clamping both ends to `from` would invent one.
+    expect(remapRangeAcrossReplacement(range(5, 15), from, to, 3)).toBeNull();
+    expect(remapRangeAcrossReplacement(range(15, 25), from, to, 3)).toBeNull();
+    expect(remapRangeAcrossReplacement(range(12, 18), from, to, 3)).toBeNull();
+    expect(remapRangeAcrossReplacement(range(0, 30), from, to, 3)).toBeNull();
   });
 });
 

@@ -6,6 +6,7 @@ import { z } from "zod";
 import {
   CTRL_ROOM,
   TANDEM_MODE_DEFAULT,
+  Y_MAP_ANNOTATIONS,
   Y_MAP_AUTHORSHIP,
   Y_MAP_AWARENESS,
   Y_MAP_CLAUDE,
@@ -15,12 +16,14 @@ import {
 import { flattenHeadingText, headingPrefix } from "../../shared/offsets.js";
 import { withMcp } from "../../shared/origins.js";
 import { isPlaintextFormat } from "../../shared/plaintext-format.js";
-import type { FlatOffset } from "../../shared/positions/types.js";
+import type { DocumentRange, FlatOffset, RelativeRange } from "../../shared/positions/types.js";
 import { isTopLevel, sameTextblock } from "../../shared/positions/types.js";
 import { elementAtPath, resolveToTextblock } from "../../shared/positions/ydoc.js";
-import type { AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
+import { snapshotContradicts } from "../../shared/snapshot.js";
+import type { Annotation, AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
+import { docHash } from "../annotations/doc-hash.js";
 import { isStoreReadOnly } from "../annotations/store.js";
 import { type OpenSuccess, openFromDisk, openScratchpad, toWireResult } from "../documents/open.js";
 import { getWakeEndpoint } from "../events/wake-socket.js";
@@ -28,9 +31,16 @@ import { mdParser } from "../file-io/markdown.js";
 import { appendMdast, buildListItemsFromTree } from "../file-io/mdast-ydoc.js";
 import { readModeProvenance } from "../mode.js";
 // Position system
-import { anchoredRange, describeRangeFailure, validateRange } from "../positions.js";
+import {
+  anchoredRange,
+  describeRangeFailure,
+  relPosToFlatOffset,
+  remapRangeAcrossReplacement,
+  validateRange,
+} from "../positions.js";
 import { saveSession } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
+import { collectAnnotations } from "./annotations.js";
 import { convertToMarkdown } from "./convert.js";
 // Document model (pure logic)
 import {
@@ -836,6 +846,44 @@ export function registerDocumentTools(server: McpServer): void {
           } else {
             const startIndex = startPos.path[0];
             const endIndex = endPos.path[0];
+
+            // #1765: this branch merges the tail block into the start block and
+            // then DELETES the emptied original. Yjs cannot move items, so every
+            // RelativePosition anchored in that element dies the moment the
+            // delete lands — including annotations entirely AFTER the edited
+            // range, which the edit did not touch. Capture their LIVE positions
+            // now, while the anchors still resolve, and re-anchor the survivors
+            // after the edit.
+            //
+            // A live relRange is the only pre-edit position this pass can trust,
+            // so a record without one is not remappable and no `refreshRange`
+            // (and therefore no flat-text walk) happens here. A resolved range
+            // that has COLLAPSED is skipped too: that is #1764's spurious-
+            // collapse shape, and remapping it would re-mint exactly the
+            // confident anchor #1764 exists to refuse.
+            const preEdit: Array<{
+              id: string;
+              ann: Annotation;
+              relRange: RelativeRange;
+              range: DocumentRange;
+            }> = [];
+            for (const ann of collectAnnotations(
+              r.doc.getMap(Y_MAP_ANNOTATIONS),
+              docHash(r.filePath),
+            )) {
+              if (!ann.relRange) continue;
+              const liveFrom = relPosToFlatOffset(r.doc, ann.relRange.fromRel);
+              const liveTo = relPosToFlatOffset(r.doc, ann.relRange.toRel);
+              if (liveFrom === null || liveTo === null) continue;
+              if (liveFrom === liveTo && ann.range.from !== ann.range.to) continue;
+              preEdit.push({
+                id: ann.id,
+                ann,
+                relRange: ann.relRange,
+                range: { from: liveFrom, to: liveTo },
+              });
+            }
+
             withMcp(r.doc, () => {
               // Cross-element edit, both ends top-level. Each textblock may hold
               // multiple Y.XmlText children split by sibling hardBreaks, so
@@ -872,6 +920,59 @@ export function registerDocumentTools(server: McpServer): void {
               // 5. Remove the now-emptied end element.
               fragment.delete(startIndex + 1, 1);
             });
+
+            // #1765, second half. The population is exactly the captured
+            // entries whose anchor no longer resolves — the ones the delete in
+            // step 5 killed. Its own transaction, as `stampClaudeRange` below
+            // is: `anchoredRange` must read POST-edit state.
+            const orphaned = preEdit.filter(
+              (e) =>
+                relPosToFlatOffset(r.doc, e.relRange.fromRel) === null ||
+                relPosToFlatOffset(r.doc, e.relRange.toRel) === null,
+            );
+            if (orphaned.length > 0) {
+              withMcp(r.doc, () => {
+                const annotationMap = r.doc.getMap(Y_MAP_ANNOTATIONS);
+                // Hoisted: this pass writes only annotation records, so the flat
+                // text is identical on every iteration.
+                const postText = extractText(r.doc);
+                for (const entry of orphaned) {
+                  const next = remapRangeAcrossReplacement(entry.range, from, to, newText.length);
+                  // Intersecting the replacement: no correct destination, so
+                  // leave it for #1764 to report as `degraded`.
+                  if (!next) continue;
+                  // `rejectHeadingOverlap` is deliberately omitted — this
+                  // relocates an EXISTING annotation rather than creating one,
+                  // and refusing would drop exactly the records the destroyed
+                  // element held. Precedent: the watcher's relocation anchor.
+                  // `allowEmpty` because point annotations are a real population
+                  // (Word comment import emits them) and the remap preserves
+                  // `to - from`, so it can never turn a real span into one.
+                  // No `surrogates: "ignore"` — Critical Rule 4 enumerates four
+                  // callers and this must not be a fifth.
+                  const anchored = anchoredRange(r.doc, next.from, next.to, undefined, {
+                    allowEmpty: true,
+                  });
+                  if (!anchored.ok) {
+                    console.error(
+                      `[tandem_edit] cross-block re-anchor rejected for ${entry.id}: ` +
+                        describeRangeFailure(anchored),
+                    );
+                    continue;
+                  }
+                  if (!anchored.fullyAnchored) continue;
+                  // The arithmetic's fail-safe. With a correct remap this never
+                  // fires; a violated assumption leaves the record for #1764 to
+                  // report rather than pinning it to a confident wrong anchor.
+                  if (snapshotContradicts(entry.ann, postText.slice(next.from, next.to))) continue;
+                  annotationMap.set(entry.id, {
+                    ...entry.ann,
+                    range: anchored.range,
+                    relRange: anchored.relRange,
+                  });
+                }
+              });
+            }
           }
 
           // Record authorship for the inserted text (Y.Map overlay strategy).

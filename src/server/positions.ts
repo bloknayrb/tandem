@@ -554,6 +554,51 @@ export function anchoredRange(
 }
 
 // ---------------------------------------------------------------------------
+// Pure: flat-range arithmetic across a text replacement
+// ---------------------------------------------------------------------------
+
+/**
+ * Where does `range` land after `[from, to)` is replaced by `newLength` units?
+ * (#1765)
+ *
+ * A `tandem_edit` that crosses a top-level block boundary merges the tail block
+ * into the start block and then DELETES the emptied original. Yjs cannot move
+ * items, so every RelativePosition anchored in that element dies the instant
+ * the delete lands — including annotations entirely AFTER the edited range,
+ * which the edit did not touch at all. For those the post-edit offsets are
+ * exact arithmetic rather than a guess, and this is the arithmetic.
+ *
+ * Half-open on both sides, and both boundaries are load-bearing: a range ending
+ * exactly at `from` is untouched (identity), a range starting exactly at `to`
+ * shifts by the delta.
+ *
+ * **`null` when the range INTERSECTS the replacement, and refusing is the
+ * point.** A partially overwritten annotation has no correct destination;
+ * clamping both ends to `from` would invent one. The caller leaves such a
+ * record alone, where #1764 reports it as `degraded` — honest, and recoverable.
+ *
+ * The arithmetic holds even when the edit absorbs a heading, because every
+ * character the branch removes outside `newText` lies INSIDE `[from, to)`: an
+ * absorbed heading's prefix starts at that element's block start, which is
+ * strictly between `from` and `to` (a `to` inside a prefix is already refused
+ * upstream), and the block separators that disappear are exactly the ones the
+ * span crosses.
+ */
+export function remapRangeAcrossReplacement(
+  range: DocumentRange,
+  from: FlatOffset,
+  to: FlatOffset,
+  newLength: number,
+): DocumentRange | null {
+  if (range.to <= from) return range;
+  if (range.from >= to) {
+    const delta = newLength - (to - from);
+    return { from: toFlatOffset(range.from + delta), to: toFlatOffset(range.to + delta) };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // High-level: annotation range refresh
 // ---------------------------------------------------------------------------
 

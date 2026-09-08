@@ -39,6 +39,7 @@ import {
   getBuffer as getNotificationBuffer,
   resetForTesting as resetNotifications,
 } from "../../src/server/notifications.js";
+import { anchoredRange } from "../../src/server/positions.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
@@ -52,7 +53,7 @@ import {
 import { MCP_ORIGIN, withInternal } from "../../src/shared/origins.js";
 import { SNAPSHOT_CAP } from "../../src/shared/snapshot.js";
 import type { Annotation } from "../../src/shared/types.js";
-import { range } from "../helpers/positions.js";
+import { off, range } from "../helpers/positions.js";
 import { createAnnotation, rangeOf } from "../helpers/ydoc-factory.js";
 
 let client: Client;
@@ -1964,5 +1965,190 @@ describe("MCP tool integration — anchor degradation on tandem_getAnnotations (
     expect(byContent.get("on world")?.anchor).toBe("degraded");
     expect(byContent.get("on world")?.range).toEqual({ from: 6, to: 11 });
     expect(byContent.get("on Hello")?.anchor).toBeUndefined();
+  });
+});
+
+/**
+ * #1765 — `tandem_edit`'s cross-element branch merges the tail block into the
+ * start block and then DELETES the emptied original. Yjs cannot move items, so
+ * every RelativePosition anchored in that element dies, including annotations
+ * entirely AFTER the edited range. The edit re-anchors those by arithmetic.
+ *
+ * Driven through the REGISTERED tool on purpose: `tests/server/document-edit.
+ * test.ts` is a local `applyEdit` mirror that never calls `validateRange`,
+ * `refreshRange` or `anchoredRange` and never touches `Y_MAP_ANNOTATIONS`, so a
+ * spec added there would pass with none of this existing.
+ */
+describe("MCP tool integration — cross-block tandem_edit re-anchors the tail (#1765)", () => {
+  // `populateYDoc` makes one top-level element per LINE, so this is four
+  // elements and the flat text is the input verbatim (37 units):
+  //   "Alpha beta gamma" 0..16 | "" 17 | "Delta epsilon zeta" 18..36 | "" 37
+  const FIXTURE = "Alpha beta gamma\n\nDelta epsilon zeta\n";
+  const ZETA_FROM = 32;
+  const ZETA_TO = 36;
+
+  async function annotationsOf(): Promise<Array<Record<string, unknown>>> {
+    const parsed = parseResult(
+      await client.callTool({ name: "tandem_getAnnotations", arguments: {} }),
+    );
+    expect(parsed.error).toBe(false);
+    return parsed.data.annotations as Array<Record<string, unknown>>;
+  }
+
+  /** Count Y.Map writes to the annotations map while `fn` runs. */
+  async function annotationWrites(ydoc: Y.Doc, fn: () => Promise<unknown>): Promise<number> {
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    let writes = 0;
+    const observer = (event: Y.YMapEvent<unknown>) => {
+      writes += event.keysChanged.size;
+    };
+    map.observe(observer);
+    try {
+      await fn();
+    } finally {
+      map.unobserve(observer);
+    }
+    return writes;
+  }
+
+  it("re-anchors an annotation that sat after the edited range", async () => {
+    const ydoc = setupDoc("x-block-1", FIXTURE);
+    expect(extractText(ydoc).slice(ZETA_FROM, ZETA_TO)).toBe("zeta");
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: ZETA_FROM, to: ZETA_TO, text: "on zeta" },
+    });
+
+    // The issue's headline: [6, 23) crosses the block boundary, so the tail
+    // element — the one holding this annotation — is destroyed.
+    const edit = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: { from: 6, to: 23, newText: "XX" },
+      }),
+    );
+    expect(edit.error).toBe(false);
+    expect(extractText(ydoc)).toBe("Alpha XX epsilon zeta\n");
+
+    const anns = await annotationsOf();
+    expect(anns).toHaveLength(1);
+    // delta = 2 - 17 = -15, so {32,36} → {17,21}, which is "zeta" again.
+    expect(anns[0].range).toEqual({ from: 17, to: 21 });
+    expect(extractText(ydoc).slice(17, 21)).toBe("zeta");
+    // A live anchor, not a degraded one: the record is healthy afterwards.
+    expect(anns[0].anchor).toBeUndefined();
+  });
+
+  it("re-anchors a POINT annotation in the destroyed element", async () => {
+    // Kills a missing `allowEmpty`: Word comment import emits point comments,
+    // and `checkAgainstText` drops them without it.
+    const ydoc = setupDoc("x-block-2", FIXTURE);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const point = anchoredRange(ydoc, off(30), off(30), undefined, { allowEmpty: true });
+    if (!point.ok) throw new Error("point anchor fixture failed");
+    createAnnotation(map, ydoc, "comment", point, "insertion marker");
+
+    await client.callTool({
+      name: "tandem_edit",
+      arguments: { from: 6, to: 23, newText: "XX" },
+    });
+
+    const anns = await annotationsOf();
+    expect(anns).toHaveLength(1);
+    expect(anns[0].range).toEqual({ from: 15, to: 15 });
+  });
+
+  it("refuses to relocate an annotation SPANNING the join, leaving it degraded", async () => {
+    // The second measured shape: partially overwritten, so there is no correct
+    // destination and any placement would be a guess.
+    const ydoc = setupDoc("x-block-3", FIXTURE);
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 11, to: 23, text: "spans the join" },
+    });
+
+    const writes = await annotationWrites(ydoc, () =>
+      client.callTool({ name: "tandem_edit", arguments: { from: 6, to: 23, newText: "XX" } }),
+    );
+    expect(writes, "the intersecting record is not re-anchored").toBe(0);
+
+    const anns = await annotationsOf();
+    expect(anns).toHaveLength(1);
+    expect(anns[0].anchor).toBe("degraded");
+  });
+
+  it("writes nothing on a SAME-BLOCK edit, with annotations present", async () => {
+    const ydoc = setupDoc("x-block-4", FIXTURE);
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: ZETA_FROM, to: ZETA_TO, text: "on zeta" },
+    });
+
+    const writes = await annotationWrites(ydoc, () =>
+      client.callTool({ name: "tandem_edit", arguments: { from: 0, to: 5, newText: "Aleph" } }),
+    );
+    expect(writes, "the same-block branch never enters the pass").toBe(0);
+
+    // The experiment's control: the annotation still covers its original text.
+    const anns = await annotationsOf();
+    expect(extractText(ydoc).slice(anns[0].range.from, anns[0].range.to)).toBe("zeta");
+  });
+
+  it("writes nothing when every annotation lies inside the replaced span", async () => {
+    const ydoc = setupDoc("x-block-5", FIXTURE);
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 11, to: 16, text: "on gamma" },
+    });
+
+    const writes = await annotationWrites(ydoc, () =>
+      client.callTool({ name: "tandem_edit", arguments: { from: 6, to: 23, newText: "XX" } }),
+    );
+    expect(writes, "every candidate refuses").toBe(0);
+  });
+
+  it("leaves an annotation in an untouched later paragraph covering its own text", async () => {
+    // The experiments' second control. Five elements:
+    //   "One alpha" 0..9 | "" 10 | "Two beta" 11..19 | "" 20 | "Three gamma" 21..32
+    const ydoc = setupDoc("x-block-6", "One alpha\n\nTwo beta\n\nThree gamma\n");
+    const flat = extractText(ydoc);
+    const target = flat.indexOf("gamma");
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: target, to: target + 5, text: "on gamma" },
+    });
+
+    await client.callTool({
+      name: "tandem_edit",
+      arguments: { from: 4, to: 15, newText: "Z" },
+    });
+
+    const anns = await annotationsOf();
+    expect(anns).toHaveLength(1);
+    expect(extractText(ydoc).slice(anns[0].range.from, anns[0].range.to)).toBe("gamma");
+  });
+
+  it("VERIFIES the destination and refuses a contradicting one", async () => {
+    // Nothing else reaches the `snapshotContradicts` fail-safe: the specs above
+    // have matching destinations, the spanning one is refused by the arithmetic,
+    // and the two zero-write ones never enter the branch. Without this an
+    // implementation that omits the check entirely is green.
+    const ydoc = setupDoc("x-block-7", FIXTURE);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const anchored = rangeOf(ZETA_FROM, ZETA_TO, ydoc);
+    const id = createAnnotation(map, ydoc, "comment", anchored, "stale snapshot", {
+      // A snapshot from before an earlier in-range change: it matches neither
+      // the stored offsets nor the remapped destination.
+      textSnapshot: "WRONG",
+    });
+
+    const writes = await annotationWrites(ydoc, () =>
+      client.callTool({ name: "tandem_edit", arguments: { from: 6, to: 23, newText: "XX" } }),
+    );
+    expect(writes, "the destination check refuses the write").toBe(0);
+    expect((map.get(id) as Annotation).range).toEqual({ from: ZETA_FROM, to: ZETA_TO });
+
+    const anns = await annotationsOf();
+    expect(anns[0].anchor).toBe("degraded");
   });
 });
