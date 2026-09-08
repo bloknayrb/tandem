@@ -928,8 +928,10 @@ while the leak is on the pull path. The per-mutation table lives in PR #1690 and
 in the new file's own docblock, which is where a count of "how many specs stayed
 green" can go stale without misleading anyone reading the decision.
 
-This does not close #1619. The pull surfaces still gate on `type` and never on
-`audience`, which is true of any comment, promoted or not.
+This did not close #1619: at the time the pull surfaces still gated on `type`
+and never on `audience`, which was true of any comment, promoted or not.
+**Closed since, 2026-09-07 (#1619/#1710)** — all four Claude-facing reads now
+share `isClaudeFacing`; see the ADR-027 amendment above.
 
 ### Amendment (2026-08-30, Unit 8h): `importNote` declined — the `.docx` path stays outside the seam
 
