@@ -13,24 +13,54 @@ import { TandemModeSchema } from "../../shared/types.js";
 import { logClientWarning } from "../utils/client-log.js";
 import { API_BASE } from "../utils/fileUpload.js";
 
+/** Delay before the single retry of a `MODE_NOT_TANDEM` 409 (#1769). */
+const RELEASE_RETRY_MS = 250;
+
 /**
  * WS-A2: on a Solo→Tandem flip, tell the server to RELEASE what was held —
- * flip mode server-side, clear the persisted held markers, and wake the push
- * monitor once. The held items themselves reach Claude via the checkInbox /
- * getAnnotations pull path (which re-reads live mode), so this POST is a
- * best-effort proactive nudge, NOT the delivery mechanism: if it fails, the
- * items still surface on Claude's next inbox poll. One retry covers a transient
- * blip; the badge remains the honesty backstop (it clears from the server's
- * marker-clear, never from the mode flip alone).
+ * clear the persisted held markers and wake the push monitor once. The held
+ * items themselves reach Claude via the checkInbox / getAnnotations pull path
+ * (which re-reads live mode), so this POST is a best-effort proactive nudge,
+ * NOT the delivery mechanism: if it fails, the items still surface on Claude's
+ * next inbox poll. The badge remains the honesty backstop (it clears from the
+ * server's marker-clear, never from the mode flip alone).
+ *
+ * Since #1769 the route no longer WRITES the mode key — it verifies the room
+ * already reads Tandem and answers 409 `MODE_NOT_TANDEM` otherwise. So this POST
+ * is armed by `setTandemMode` and fired by the broadcast `$effect` once its
+ * `Y_MAP_MODE` write has landed, and a `MODE_NOT_TANDEM` 409 gets ONE delayed retry
+ * (250 ms) to cover the residual where the server-side apply of that CRDT frame
+ * is still in flight. A second refusal is definitive-enough to log and stop: the
+ * items stay held AND marked, and the next Solo→Tandem toggle releases them.
+ * Any other non-ok status, or a thrown fetch, keeps the original single
+ * immediate retry.
+ *
+ * Exported for `tests/client/tandem-mode-release-trigger`.
  */
-async function triggerSoloRelease(attempt = 0): Promise<void> {
+export async function triggerSoloRelease(attempt = 0): Promise<void> {
   try {
     const res = await fetch(`${API_BASE}${API_MODE_RELEASE}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{}",
     });
-    if (!res.ok && attempt === 0) {
+    if (res.ok) return;
+    if (res.status === 409) {
+      // Read the body defensively: a 409 from anything but this route (a proxy,
+      // say) carries no `error` field and must not be retried as one.
+      const body: unknown = await res.json().catch(() => null);
+      if ((body as { error?: unknown } | null)?.error === "MODE_NOT_TANDEM") {
+        if (attempt === 0) {
+          await new Promise((resolve) => setTimeout(resolve, RELEASE_RETRY_MS));
+          return triggerSoloRelease(1);
+        }
+        // `logClientWarning`, never a bare `console.warn` (#1439) — two static
+        // literals, pinned by `tests/client/client-log-callsites.test.ts`.
+        logClientWarning("tandem-mode", "release-refused-room-not-tandem");
+        return;
+      }
+    }
+    if (attempt === 0) {
       console.warn(`[tandem] mode-release POST returned ${res.status}; retrying once`);
       return triggerSoloRelease(1);
     }
@@ -137,6 +167,29 @@ export function createTandemModeBroadcast(
    */
   let lastBroadcast: TandemMode | null = null;
 
+  /**
+   * Set by `setTandemMode` on a Solo→Tandem toggle, consumed by the broadcast
+   * `$effect` immediately after the `Y_MAP_MODE` write lands.
+   *
+   * A `tick()` deferral was here first, and it was wrong on a reachable path:
+   * `tick()` guarantees Svelte has flushed, not that the effect WROTE. The
+   * effect early-returns while the ctrl provider is unsynced (launch, and the
+   * `authenticationFailed → scheduleRebuild → startBootstrap` path after a
+   * server restart, which resets `ctrlInitialSyncComplete`), so the POST went
+   * out against a room still reading the restored `solo`/`indeterminate`, both
+   * attempts answered 409, and when sync finally landed the effect wrote
+   * `tandem` with no release behind it — held markers, `Held` pills and the
+   * StatusBar count stuck until the user cycled the toggle again. Firing from
+   * the point that knows the write happened covers that window and subsumes the
+   * `tick()` case, whose whole purpose was "after the effect".
+   *
+   * Plain `let`, not `$state`, for the same reason `lastBroadcast` is: it is
+   * read and written only from non-reactive positions, and the effect body
+   * issues a `fetch` rather than writing a rune, so no `state_unsafe_mutation`
+   * exposure. A Tandem→Solo toggle before the write lands clears it.
+   */
+  let pendingRelease = false;
+
   // Persist tandem mode to localStorage
   $effect(() => {
     const mode = tandemMode;
@@ -167,7 +220,9 @@ export function createTandemModeBroadcast(
   // concurrent cases remain, none of them regressions: the key absent entirely
   // (fresh install, or a lost ctrl session file — every writer then has a null
   // left origin); two already-synced clients toggling at once; `/api/mode/release`
-  // racing a client toggle; and a toggle made during a network blip, since
+  // landing BEFORE this client's own write (the route no longer writes the key —
+  // #1769 — so it answers 409 `MODE_NOT_TANDEM` and `triggerSoloRelease` retries
+  // once after 250 ms); and a toggle made during a network blip, since
   // `ctrlInitialSyncComplete` latches and is cleared only on doc replacement,
   // never on a plain disconnect. The read-back below is what makes those audible.
   //
@@ -200,6 +255,11 @@ export function createTandemModeBroadcast(
       const awareness = bootstrapYdoc.getMap(Y_MAP_USER_AWARENESS);
       withBrowser(bootstrapYdoc, () => awareness.set(Y_MAP_MODE, mode));
       lastBroadcast = mode;
+      // #1769: the release POST rides the write, not a timer. See `pendingRelease`.
+      if (pendingRelease && mode === "tandem") {
+        pendingRelease = false;
+        void triggerSoloRelease();
+      }
     } catch (err) {
       console.warn("[tandem] failed to broadcast tandem mode to Y.Map:", err);
     }
@@ -209,17 +269,20 @@ export function createTandemModeBroadcast(
   //
   // Part 1 fixes today's race. This is what stops the NEXT one being silent —
   // the broadcast was write-only, which is the whole reason a lost CRDT tie went
-  // unnoticed through a shipped release. Two cases part 1 does not close and
-  // this does report: two editors with different stored modes (the Tauri WebView
-  // and a browser tab have separate localStorage), and `/api/mode/release`
-  // writing "tandem" unconditionally over a second client sitting in Solo.
+  // unnoticed through a shipped release. The case part 1 does not close and this
+  // does report: two editors with different stored modes (the Tauri WebView and
+  // a browser tab have separate localStorage). `/api/mode/release` is no longer
+  // one of them — since #1769 the route writes nothing, so the room always holds
+  // some client's last CRDT write.
   //
   // It DOES NOT adopt the room's value, and that is a decision rather than a
-  // simplification. Adopting would let another window — or the server's own
-  // release route — take the user out of Solo without them touching anything,
-  // and Solo is a privacy control whose toggle promises Claude will not see
-  // their comments. A mechanism added to make that promise honest must not be
-  // able to revoke it.
+  // simplification. Adopting would let another window take the user out of Solo
+  // without them touching anything, and Solo is a privacy control whose toggle
+  // promises Claude will not see their comments. A mechanism added to make that
+  // promise honest must not be able to revoke it. Re-asserting is the mirror and
+  // is not done here either: two clients that both re-assert never converge, and
+  // bounding that needs its own design (the two-window policy is Bryan's, with
+  // #1733's server-side provenance as the diagnostic).
   //
   // The asymmetry was considered, not overlooked. The mirror case — we hold
   // "solo" and the room holds "tandem" — is the one that actually breaks Solo's
@@ -297,9 +360,14 @@ export function createTandemModeBroadcast(
       const prev = tandemMode;
       tandemMode = mode;
       // WS-A2: leaving Solo releases everything held while in Solo.
-      if (shouldReleaseSolo(prev, mode)) {
-        void triggerSoloRelease();
-      }
+      //
+      // Armed here, fired by the broadcast `$effect` once the `Y_MAP_MODE`
+      // write actually lands (#1769): the route now VERIFIES the room rather
+      // than writing it, so a POST issued before that write — in this frame, or
+      // past a `tick()` while the ctrl provider is still unsynced — takes the
+      // 409 path and releases nothing. Assigned rather than or-ed, so a
+      // Tandem→Solo toggle in the same unsynced window disarms it.
+      pendingRelease = shouldReleaseSolo(prev, mode);
     },
   };
 }

@@ -295,11 +295,11 @@ Either way, click a card to expand it while it's selected, or click its chevron 
 The title bar includes a **Solo / Tandem** toggle (`Ctrl+Shift+M`).
 
 - **Tandem** (default) — everything flows both ways: the AI's annotations appear as they arrive, and the comments and replies you write are visible to it.
-- **Solo** — the comments and replies **you** author are withheld from the AI until you switch back.
+- **Solo** — the comments and replies **you** author are withheld from the AI until you switch back. **Chat and document edits are not affected in either direction**: your chat messages still reach the AI, and it can still read the document, answer, and edit. Solo holds annotations and replies, not the conversation.
 
 **Solo is a one-way hold, and it is worth knowing which way.** The half the server enforces is outbound: since v0.19.0 nothing you write reaches the AI while you are in Solo. Each held item shows an amber **Held** pill, and the status bar shows a running count of what is being withheld. Switching back to Tandem releases the whole set at once — the AI picks them up on its next check, and a one-time nudge wakes a push-connected session to look.
 
-The inbound half is **cooperation, not enforcement**. Both `tandem_checkInbox` and `tandem_status` report the current mode, and Tandem's bundled skill asks the AI to hold off on new annotations while you are in Solo — but nothing hides an annotation it creates anyway, and the document text and your current selection stay readable to it throughout. Solo means "the AI won't hear from me", not "the AI can't see me" (#1779).
+The inbound half is **cooperation, not enforcement**. Both `tandem_checkInbox` and `tandem_status` report the current mode, and Tandem's bundled skill asks the AI to hold off on new annotations while you are in Solo — but nothing hides an annotation it creates anyway, and the document text and your current selection stay readable to it throughout. Solo means "the AI won't hear from me", not "the AI can't see me". (#1779 is the issue that corrected this section; it is closed. The absence of an inbound mechanism is a design fact, not an open bug.)
 
 If you would rather not see the annotation list at all while you write, **Settings → Collaboration → Hide side panel in Solo mode** (on by default) collapses the right rail whenever you enter Solo and restores it when you return to Tandem.
 

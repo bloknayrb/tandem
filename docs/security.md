@@ -397,10 +397,30 @@ the disclosure durable.
 exposures**: no first-party writer produces that record today. It arrives by
 legacy envelope or stale-tab CRDT merge, and `sanitizeAnnotation` does not heal
 it (its audience guard covers note/highlight/flag and deliberately not comment).
-So this is defence-in-depth, not a shipped exploit. #1619 itself — the read half,
-on `tandem_checkInbox` and three sibling reads — remains open, which means the
-two halves now disagree in the other direction: a record Claude can still SEE is
-one it can no longer reply to.
+So this is defence-in-depth, not a shipped exploit. **#1619's read half is now
+closed too**, and with it the temporary disagreement this paragraph used to
+record (a record Claude could still SEE but no longer reply to). All four
+Claude-facing reads — `tandem_checkInbox`, `tandem_getAnnotations`,
+`tandem_exportAnnotations` and `channelVisibleReplies` — share
+`isClaudeFacing` from `annotations/projection.ts`, the same conjunction the
+channel projection uses, so `type` and `audience` are checked together on every
+surface rather than `type` alone. The visible consequence is that a user
+HIGHLIGHT — always stamped `private` per ADR-027 — no longer appears on any
+Claude-facing read, which is why `tandem_getAnnotations`'s own description now
+says `type: "highlight"` returns nothing.
+
+**The write half took the widening one step further, and the asymmetry it closed
+is worth recording.** `isPrivateForClaude` (edit, reply) deliberately exempts
+highlights so they answer their own arm — `not-repliable`,
+`invalid-suggestion-target` — which names the real parent type. Resolve and
+remove have no such arm, so that exemption left `tandem_resolveAnnotation` able
+to stamp `resolvedBy: "claude"` on a user's private highlight and
+`tandem_removeAnnotation` able to delete one, while `tandem_getAnnotations`
+reported the same record only as a `privateExcluded` count. Those two families
+now use `isWithheldFromClaude` — literally `!isClaudeFacing` — so the write
+guards are no weaker than the read filter on any type. Claude cannot mint a
+highlight (`tandem_highlight` is a deprecated stub), so nothing Claude authored
+is refused by the widening.
 
 **One regression shipped with the fix, deliberately.** If a legacy imported
 comment exists on disk and the AI holds its id, a `.docx` reopen migrates it to

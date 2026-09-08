@@ -21,6 +21,7 @@ import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { describeReplyWriteRefusal } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
+import { isClaudeFacing } from "../annotations/projection.js";
 import { atomicWrite } from "../file-io/index.js";
 import { hideFromAI, readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
@@ -61,7 +62,11 @@ export function channelVisibleReplies(
   annotation: Annotation,
   loadReplies: (annotationId: string) => AnnotationReply[],
 ): AnnotationReply[] {
-  if (annotation.type !== "comment") return [];
+  // #1619: the audience half, not just the type half. A stored
+  // `{comment, audience: "private"}` parent is withheld from the channel and
+  // must be withheld here too — this is the single reply gate every Claude
+  // egress routes through, so `collectInboxUserReplies` inherits it.
+  if (annotation.type !== "comment" || !isClaudeFacing(annotation)) return [];
   return loadReplies(annotation.id).filter((r) => r.private !== true);
 }
 
@@ -383,10 +388,13 @@ export function registerAnnotationTools(server: McpServer): void {
     "tandem_getAnnotations",
     {
       description:
-        "Read annotations, optionally filtered by author/type/status. User notes are always excluded — they are private (ADR-027); notesExcluded reports how many were filtered, including imported Word comments awaiting user promotion (promoted ones surface as user comments). For new user actions, prefer tandem_checkInbox.",
+        'Read annotations, optionally filtered by author/type/status. User notes are always excluded — they are private (ADR-027); notesExcluded reports how many were filtered, including imported Word comments awaiting user promotion (promoted ones surface as user comments). Every record whose stored audience is not outbound is excluded too and counted in privateExcluded (#1619/#1710) — user highlights are always private, so type: "highlight" returns nothing. For new user actions, prefer tandem_checkInbox.',
       inputSchema: {
         author: AuthorSchema.optional().describe("Filter by author"),
-        type: z.enum(["highlight", "comment"]).optional().describe("Filter by type"),
+        type: z
+          .enum(["highlight", "comment"])
+          .optional()
+          .describe('Filter by type ("highlight" always returns nothing — highlights are private)'),
         status: AnnotationStatusSchema.optional().describe("Filter by status"),
         documentId: z
           .string()
@@ -405,9 +413,20 @@ export function registerAnnotationTools(server: McpServer): void {
         if (type) results = results.filter((a) => a.type === type);
         if (status) results = results.filter((a) => a.status === status);
 
-        // User notes are always excluded — they are private (ADR-027).
-        const notesExcluded = results.filter((a) => a.type === "note").length;
-        results = results.filter((a) => a.type !== "note");
+        // User notes are always excluded — they are private (ADR-027) — and so
+        // is every record whose stored `audience` is not outbound (#1619/#1710),
+        // user highlights included. `isClaudeFacing` is that whole conjunction,
+        // the same predicate the channel uses, so the two disclosure counters
+        // are just the two halves of what it rejects. Disclosed rather than
+        // silent, following the `notesExcluded` precedent.
+        let notesExcluded = 0;
+        let privateExcluded = 0;
+        results = results.filter((a) => {
+          if (isClaudeFacing(a)) return true;
+          if (a.type === "note") notesExcluded++;
+          else privateExcluded++;
+          return false;
+        });
 
         // WS-A2: in Solo, hide the user's own annotations (and, below, their
         // replies) — this pull surface is one of the four the hold spans.
@@ -433,6 +452,7 @@ export function registerAnnotationTools(server: McpServer): void {
           annotations: annotationsWithReplies,
           count: annotationsWithReplies.length,
           ...(notesExcluded > 0 ? { notesExcluded } : {}),
+          ...(privateExcluded > 0 ? { privateExcluded } : {}),
         });
       }),
     ),
@@ -440,9 +460,14 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_resolveAnnotation",
-    "Move a pending annotation to accepted or dismissed. Accepting one that carries " +
-      "suggestedText applies that text to the document; dismissing leaves the document " +
-      "unchanged. Only pending annotations can transition, and user notes cannot be " +
+    "Move a pending annotation to accepted or dismissed. Dismiss is open to every non-private " +
+      "record, and dismissing Claude's OWN annotation is how Claude withdraws a finding. Accept " +
+      "is refused (ACCEPT_REFUSED) on Claude's own annotation — that decision is the user's — " +
+      "and on anything carrying suggestedText, because an MCP accept flips the status and " +
+      "applies no text. Accept on a user-authored or imported comment with no suggestedText " +
+      'does go through; it is stamped resolvedBy: "claude" and is kept out of the ' +
+      "tandem_checkInbox userResponses bucket, so it never reads back as the user's decision. " +
+      "Only pending annotations can transition, and private notes and comments cannot be " +
       "transitioned at all (ADR-027). The record is kept either way — use " +
       "tandem_removeAnnotation to delete it.",
     {
@@ -473,13 +498,27 @@ export function registerAnnotationTools(server: McpServer): void {
           // write paths now answer identically rather than disagreeing.
           return mcpError(
             "INVALID_ARGUMENT",
-            `Annotation ${id} is a private note and cannot be resolved by Claude`,
+            `Annotation ${id} is user-private (a note, a private comment or a user highlight) and cannot be resolved by Claude`,
           );
         case "not-pending":
           return mcpError(
             "ANNOTATION_NOT_PENDING",
             `Annotation ${id} is already ${result.currentStatus}`,
           );
+        case "accept-refused":
+          // #1770 decision 3: Claude may dismiss or withdraw, never accept.
+          return mcpError(
+            "ACCEPT_REFUSED",
+            result.reason === "own-annotation"
+              ? `Annotation ${id} is Claude's own; accept is the user's decision. Dismiss it to withdraw it.`
+              : `Annotation ${id} carries suggestedText, which an MCP accept does not apply. Leave it for the user to accept in the editor.`,
+          );
+        default: {
+          // A new `LifecycleResult` arm errors HERE, naming it — the shape the
+          // remove switch uses, for the same reason.
+          const unhandled: never = result;
+          return mcpError("INTERNAL", `unhandled resolve outcome: ${JSON.stringify(unhandled)}`);
+        }
       }
     }),
   );
@@ -515,7 +554,7 @@ export function registerAnnotationTools(server: McpServer): void {
         case "invalid-note":
           return mcpError(
             "INVALID_ARGUMENT",
-            `Annotation ${id} is a private note and cannot be removed by Claude`,
+            `Annotation ${id} is user-private (a note, a private comment or a user highlight) and cannot be removed by Claude`,
           );
         default: {
           // A new `RemoveResult` arm errors HERE, naming it. Without this the
@@ -532,7 +571,7 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_editAnnotation",
-    "Edit the content of an existing annotation. Use newText to update replacement text, reason/content for the comment body.",
+    "Edit the content of an annotation Claude authored. Use newText to update replacement text, reason/content for the comment body. Only pending annotations can be edited, and a user-authored or imported record is refused with NOT_OWNED (#1770) — private notes and private comments are refused ahead of that (ADR-027).",
     {
       id: z.string().describe("Annotation ID"),
       content: z.string().optional().describe("New comment text"),
@@ -560,12 +599,18 @@ export function registerAnnotationTools(server: McpServer): void {
         case "not-found":
           return mcpError("NOT_FOUND", `Annotation ${id} not found`);
         case "invalid-note":
-          // ADR-027: notes are user-private. Claude must not read or modify
-          // them via MCP. The note→comment promotion path runs from the
-          // browser, not through this tool.
+          // ADR-027: notes and private comments are user-private. Claude must
+          // not read or modify them via MCP. The note→comment promotion path
+          // runs from the browser, not through this tool.
           return mcpError(
             "INVALID_ARGUMENT",
-            "Cannot edit a note via MCP — notes are user-private (ADR-027).",
+            "Cannot edit a private note or private comment via MCP — they are user-private (ADR-027).",
+          );
+        case "not-owned":
+          // #1770 decision 4: Claude may only edit an annotation it authored.
+          return mcpError(
+            "NOT_OWNED",
+            `Annotation ${id} was authored by the ${result.author}; Claude can only edit its own annotations.`,
           );
         case "not-pending":
           return mcpError(
@@ -629,8 +674,17 @@ export function registerAnnotationTools(server: McpServer): void {
         if (!store) return noDocumentError();
 
         const annotations = store.listAnnotationsRefreshed();
-        // Notes are user-private (ADR-027) — exclude from exports.
-        const notesFiltered = annotations.filter((a) => a.type !== "note");
+        // #1619/#1710: notes AND every record whose stored `audience` is not
+        // outbound are user-private (ADR-027) — excluded from exports, with the
+        // same predicate the channel and `tandem_getAnnotations` use. Notes are
+        // not counted: this export has never disclosed a note count, and
+        // `privateExcluded` names the #1619 half alone.
+        let privateExcluded = 0;
+        const claudeFacing = annotations.filter((a) => {
+          if (isClaudeFacing(a)) return true;
+          if (a.type !== "note") privateExcluded++;
+          return false;
+        });
 
         // WS-A2: the Solo hold applies here too. This was previously exempt, on a
         // documented rationale ("an export is an explicit give-Claude-everything
@@ -641,16 +695,35 @@ export function registerAnnotationTools(server: McpServer): void {
         // the user. Meanwhile the editor was showing an amber Held pill asserting
         // those very items were being withheld.
         const modeState = readModeState();
-        const exportable = notesFiltered.filter((a) => !hideFromAI(a, modeState));
-        // Disclosed below. Filtering silently would trade a privacy bug for an
-        // honesty bug — see `heldFromExport` in the return payloads.
-        const heldFromExport = notesFiltered.length - exportable.length;
+        const exportable = claudeFacing.filter((a) => !hideFromAI(a, modeState));
+        // Two SEPARATE floors, both disclosed below. `heldFromExport` counts
+        // what the Solo hold withheld out of the already-Claude-facing base;
+        // `privateExcluded` counts what ADR-027 withheld before it. Filtering
+        // either silently would trade a privacy bug for an honesty bug.
+        //
+        // Disclose what BOTH floors withheld. Without this the export ASSERTS a
+        // completeness it does not have — on a document whose annotations are
+        // all user comments, `exportable` is empty and the markdown arm returns
+        // "No annotations found", which is a false statement rather than a
+        // partial one. Mirrors the `notesExcluded` precedent on
+        // tandem_getAnnotations.
+        //
+        // The counts are not themselves a WS-A2 leak: checkInbox already reports
+        // `mode: "solo"`, so the existence of a hold is known. This adds
+        // cardinality, not content — and it is what makes the artifact honest.
+        // One object, spread at all three exits (the sidecar JSON and the two
+        // returns), so an exit cannot silently drop a floor.
+        const heldFromExport = claudeFacing.length - exportable.length;
+        const heldDisclosure = {
+          ...(heldFromExport > 0 ? { heldFromExport } : {}),
+          ...(privateExcluded > 0 ? { privateExcluded } : {}),
+        };
         const { filePath } = store;
 
         // Build the enriched JSON list up-front. It is derived from the already
-        // note-filtered `exportable` and is the ONLY annotation collection
-        // serialized to disk, so user-private notes (ADR-027) can never leak
-        // into the sidecar.
+        // Claude-facing-filtered `exportable` and is the ONLY annotation
+        // collection serialized to disk, so user-private notes and private
+        // comments (ADR-027) can never leak into the sidecar.
         const fullText = store.getText();
         const enriched = exportable.map((ann) => ({
           ...ann,
@@ -823,7 +896,7 @@ export function registerAnnotationTools(server: McpServer): void {
                 {
                   annotations: enriched,
                   count: enriched.length,
-                  ...(heldFromExport > 0 ? { heldFromExport } : {}),
+                  ...heldDisclosure,
                 },
                 null,
                 2,
@@ -832,17 +905,6 @@ export function registerAnnotationTools(server: McpServer): void {
           await atomicWrite(sidecarPath, contents);
           writtenPath = sidecarPath;
         }
-
-        // Disclose what the Solo hold withheld. Without this the export ASSERTS a
-        // completeness it does not have — on a document whose annotations are all
-        // user comments, `exportable` is empty and the markdown arm returns
-        // "No annotations found", which is a false statement rather than a partial
-        // one. Mirrors the `notesExcluded` precedent on tandem_getAnnotations.
-        //
-        // The count is not itself a WS-A2 leak: checkInbox already reports
-        // `mode: "solo"`, so the existence of a hold is known. This adds
-        // cardinality, not content — and it is what makes the artifact honest.
-        const heldDisclosure = heldFromExport > 0 ? { heldFromExport } : {};
 
         if (isJson) {
           return mcpSuccess({
@@ -865,7 +927,11 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_annotationReply",
-    "Reply to an annotation thread. Only works on pending annotations.",
+    "Reply to a thread on an annotation Claude authored. Only works on pending annotations. " +
+      "A user-authored or imported record — including a promoted note or Word comment, which is " +
+      "stored as a user comment — is refused with NOT_OWNED (#1770); answer in chat with " +
+      "tandem_reply, or leave a fresh tandem_comment. Private notes and private comments are " +
+      "refused ahead of that (ADR-027).",
     {
       annotationId: z.string().describe("The annotation ID to reply to"),
       text: z.string().describe("Reply text"),

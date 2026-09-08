@@ -25,7 +25,7 @@ Open the side panel to review any pending annotation, or switch on the margin vi
 You choose how closely your AI participates:
 
 - **Tandem mode** — you and your AI work together live: it sees your comments and edits as you make them, and its annotations appear as it works.
-- **Solo mode** — write undisturbed. The comments and replies you write are held back and reach your AI only when you switch to Tandem. It is a one-way hold: your AI is told you are in Solo and asked to hold off, but it can still read the document.
+- **Solo mode** — write undisturbed. The comments and replies you write are held back and reach your AI only when you switch to Tandem. It is a one-way hold: your AI is told you are in Solo and asked to hold off, but it can still read the document and answer chat.
 
 ## Try These
 

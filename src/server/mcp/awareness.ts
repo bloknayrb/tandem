@@ -10,11 +10,18 @@ import type {
   ChatMessage,
 } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
+import { isClaudeFacing } from "../annotations/projection.js";
 import { isStoreReadOnly } from "../annotations/store.js";
 import { clearStreamStaleness, noteStreamSidecar } from "../chat-stream-staleness.js";
 import { recordInboxPoll, resolveDeliveryRound } from "../events/delivery-state.js";
 import { getAnnotationEditedChannelKey, wasEmittedViaChannel } from "../events/queue.js";
-import { hideFromAI, type ModeState, readModeState, reportedMode } from "../mode.js";
+import {
+  hideFromAI,
+  type ModeState,
+  readModeProvenance,
+  readModeState,
+  reportedMode,
+} from "../mode.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
 import { getCurrentDoc } from "./document.js";
@@ -66,6 +73,35 @@ const replySurfacedIds = new Set<string>();
 /** Ledger key. See `surfacedIds` for why the document scope is required. */
 function ledgerKey(documentId: string, itemId: string): string {
   return `${documentId}:${itemId}`;
+}
+
+/**
+ * The ANNOTATION ledger key (#1770), which adds a status dimension for Claude's
+ * own records.
+ *
+ * The ledger keys on `editedAt` alone, and the client's Undo writes
+ * `status: "pending"` without touching it (`useAnnotationReview.svelte.ts`). So
+ * accept → poll → undo → dismiss → poll returned `userResponses: []`: the
+ * dismissal was never reported, because the id had already been surfaced at a
+ * newer-or-equal `editedAt`. Appending the status makes the dismissed record a
+ * fresh key.
+ *
+ * Not `rev`: neither the client's resolve nor its undo write bumps it.
+ *
+ * Claude-authored only. A user COMMENT keeps the bare-id key — its bucket is
+ * `userActions`, whose whole re-surface rule is the `editedAt` comparison, and
+ * a status dimension there would re-report a comment on every status change.
+ *
+ * Known limit: accept → undo → accept is not re-reported, because the key
+ * repeats. Claude's last report equals the final state, which is the property
+ * that matters.
+ */
+function inboxLedgerKey(
+  documentId: string,
+  ann: Pick<Annotation, "id" | "author" | "status">,
+): string {
+  const base = ledgerKey(documentId, ann.id);
+  return ann.author === "claude" ? `${base}#${ann.status}` : base;
 }
 
 /** Reset surfaced IDs (exported for testing) */
@@ -280,7 +316,7 @@ export function registerAwarenessTools(server: McpServer): void {
     "tandem_checkInbox",
     {
       description:
-        'Return user actions not yet returned by a previous poll — new comments, chat messages, and replies to your annotations — plus the current collaboration `mode` and `activity`. This is the authoritative delivery path: real-time push cannot be confirmed to have reached a client, so nothing here is suppressed on the strength of a push, and steady polling is the only reliable way to see user activity. Repeat calls de-duplicate against what was already returned, so frequent polling never double-reports. An item carries `alreadyPushed: true` when it was also emitted as a real-time event; that describes the server\'s side only. Does not return user notes (`type: "note"`), which are private per ADR-027.',
+        'Return user actions not yet returned by a previous poll — new comments, chat messages, and replies to your annotations — plus the current collaboration `mode` and `activity`. This is the authoritative delivery path: real-time push cannot be confirmed to have reached a client, so nothing here is suppressed on the strength of a push, and steady polling is the only reliable way to see user activity. Repeat calls de-duplicate against what was already returned, so frequent polling never double-reports. An item carries `alreadyPushed: true` when it was also emitted as a real-time event; that describes the server\'s side only. Does not return user notes (`type: "note"`), nor any record whose stored `audience` is not outbound (#1619/#1710) — user highlights are always private, so they never appear here at all.',
       inputSchema: {
         documentId: z
           .string()
@@ -432,6 +468,10 @@ export function registerAwarenessTools(server: McpServer): void {
           summary,
           hasNew,
           mode,
+          // #1733: who last wrote the mode key. Diagnostic only — compare its
+          // `value` against `mode` above; under a lost concurrent tie they can
+          // disagree.
+          modeProvenance: readModeProvenance(),
           storeReadOnly: isStoreReadOnly(),
           userActions,
           userResponses,
@@ -564,7 +604,7 @@ export function processInboxAnnotations(
   // of one annotation cannot change another's selection outcome — so batching
   // costs no fidelity against the per-item loop this replaces.
   const candidates = allAnnotations.filter((raw) => {
-    const lastSurfacedEditedAt = surfaced.get(ledgerKey(documentId, raw.id));
+    const lastSurfacedEditedAt = surfaced.get(inboxLedgerKey(documentId, raw));
     return lastSurfacedEditedAt === undefined || (raw.editedAt ?? 0) > lastSurfacedEditedAt;
   });
 
@@ -611,8 +651,13 @@ function processUnsurfacedInboxAnnotations(
     if (hideFromAI(ann, modeState)) continue;
 
     const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
-    if (ann.author === "user" && ann.type === "comment") {
-      const lastSurfacedEditedAt = surfaced.get(ledgerKey(documentId, ann.id));
+    // #1619: `isClaudeFacing` is the audience half — a stored
+    // `{comment, audience: "private"}` record is withheld from the channel and
+    // must be withheld here too, and a user HIGHLIGHT (always private per
+    // ADR-027) never enters either bucket. Before any `surfaced.set`, for the
+    // same reason the Solo hold is.
+    if (ann.author === "user" && ann.type === "comment" && isClaudeFacing(ann)) {
+      const lastSurfacedEditedAt = surfaced.get(inboxLedgerKey(documentId, ann));
       const alreadySurfaced = lastSurfacedEditedAt !== undefined;
       const edited = alreadySurfaced && (ann.editedAt ?? 0) > lastSurfacedEditedAt;
       const channelKey = edited ? getAnnotationEditedChannelKey(ann.id, ann.editedAt ?? 0) : ann.id;
@@ -632,10 +677,18 @@ function processUnsurfacedInboxAnnotations(
         ...(edited ? { edited: true } : {}),
         ...(wasChannelEmitted(channelKey) ? { alreadyPushed: true } : {}),
       });
-      surfaced.set(ledgerKey(documentId, ann.id), ann.editedAt ?? 0);
-    } else if (ann.author === "claude" && ann.type !== "note" && ann.status !== "pending") {
+      surfaced.set(inboxLedgerKey(documentId, ann), ann.editedAt ?? 0);
+    } else if (
+      ann.author === "claude" &&
+      isClaudeFacing(ann) &&
+      ann.status !== "pending" &&
+      // #1770: Claude's own resolves are not the user's decisions. This bucket is
+      // documented as "the USER's accept/dismiss decisions", and before the stamp
+      // a Claude dismiss was indistinguishable from one.
+      ann.resolvedBy !== "claude"
+    ) {
       userResponses.push({ ...ann, textSnippet: snippet });
-      surfaced.set(ledgerKey(documentId, ann.id), ann.editedAt ?? 0);
+      surfaced.set(inboxLedgerKey(documentId, ann), ann.editedAt ?? 0);
     }
   }
 

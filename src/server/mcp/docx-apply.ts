@@ -202,6 +202,11 @@ export async function applyChangesCore(
       continue;
     }
     if (ann.status !== "accepted") continue;
+    // #1770: no `resolvedBy` guard here, deliberately. Claude cannot produce an
+    // `accepted` record carrying `suggestedText` — `transitionPending` refuses
+    // that accept with `accept-refused/unapplied-suggestion` — so a
+    // Claude-resolved record can never reach this loop, and a guard would match
+    // nothing reachable.
 
     // Resolve CRDT positions, falling back to flat offsets
     let from = ann.range.from;

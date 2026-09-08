@@ -41,7 +41,7 @@ import {
 } from "../../src/server/mcp/annotations.js";
 import { getDocumentStore, YDocStore } from "../../src/server/mcp/document-store.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
-import { MCP_ORIGIN, withBrowser } from "../../src/shared/origins.js";
+import { MCP_ORIGIN, withBrowser, withMcp } from "../../src/shared/origins.js";
 import type { AnchoredRangeResult } from "../../src/shared/positions/index.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation, AnnotationType } from "../../src/shared/types.js";
@@ -135,8 +135,12 @@ describe("YDocStore.editAnnotation parity (handler guard order)", () => {
     const ydoc = setupDoc("edit-np", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const store = new YDocStore(ydoc, FILE_PATH, "edit-np");
+    // #1770: `author: "claude"` so the EDIT guard is not what refuses, and the
+    // accept that sets up the fixture is performed by `acceptPending` on a
+    // Claude record — which is now refused, so the status is flipped directly
+    // here instead. This spec is about the edit guard's order, not the accept's.
     const id = mint(ydoc, "comment", rangeOf(0, 5, ydoc), "x");
-    acceptPending(id, ydoc, map, noRelay);
+    withMcp(ydoc, () => map.set(id, { ...(map.get(id) as Annotation), status: "accepted" }));
     expect(store.editAnnotation(id, { content: "y" })).toEqual({
       kind: "not-pending",
       currentStatus: "accepted",
@@ -195,8 +199,12 @@ describe("YDocStore lifecycle parity", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const store = new YDocStore(ydoc, FILE_PATH, `parity-${want}`);
 
-    const idStore = mint(ydoc, "comment", rangeOf(0, 5, ydoc), "x");
-    const idHelper = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x");
+    // USER-authored since #1770: accept of a Claude-authored record is refused,
+    // and this spec is about store/helper PARITY, not about who may accept.
+    const idStore = mint(ydoc, "comment", rangeOf(0, 5, ydoc), "x", { author: "user" });
+    const idHelper = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x", {
+      author: "user",
+    });
 
     // Without this, `normalizeForParity` blanking `id` and `timestamp` would be
     // the whole of the comparison if `rangeOf` ever stopped anchoring.
@@ -445,6 +453,8 @@ describe("getDocumentStore factory", () => {
       "comment",
       rangeOf(0, 5, ydoc),
       "x",
+      // USER-authored since #1770 — accept of Claude's own record is refused.
+      { author: "user" },
     );
     expect(store.acceptAnnotation(id)).toMatchObject({ kind: "ok" });
     // Now non-pending: the second call must report the current status, not

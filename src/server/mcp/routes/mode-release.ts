@@ -1,13 +1,7 @@
 import type { Request, Response } from "express";
 import * as Y from "yjs";
 import { API_MODE_RELEASE } from "../../../shared/api-paths.js";
-import {
-  CTRL_ROOM,
-  Y_MAP_ANNOTATION_REPLIES,
-  Y_MAP_ANNOTATIONS,
-  Y_MAP_MODE,
-  Y_MAP_USER_AWARENESS,
-} from "../../../shared/constants.js";
+import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../../shared/constants.js";
 import { withModeRelease } from "../../../shared/origins.js";
 import { nextRev } from "../../annotations/schema.js";
 import { getOpenDocs } from "../../documents/registry.js";
@@ -16,6 +10,7 @@ import {
   assertLoopbackForMutation,
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
+import { readModeState } from "../../mode.js";
 import { getOrCreateDocument } from "../../yjs/provider.js";
 
 /**
@@ -57,21 +52,33 @@ function clearHeldMarkersForDoc(doc: Y.Doc): number {
  * POST /api/mode/release — the WS-A2 Solo→Tandem release.
  *
  * Three steps, ordered so nothing is stranded:
- *  1. Flip mode to Tandem SERVER-side (route-owned) so every hide predicate
- *     reads Tandem before the wake fires — closes the wake/mode-sync stall where
- *     the client's CRDT mode write hasn't reached the server's CTRL_ROOM doc yet.
+ *  1. VERIFY the client's CRDT mode write has landed — `readModeState()` must
+ *     read "tandem"; otherwise answer 409 MODE_NOT_TANDEM and release nothing.
+ *     The route does NOT write the mode key (#1769). It used to, unconditionally,
+ *     which meant a Solo→Tandem→Solo toggle inside this POST's latency left the
+ *     room reading "tandem" while the toggle showed Solo — with every held marker
+ *     swept. With the write gone, the room always holds the user's last CRDT
+ *     write, so the server mode can never disagree with the last user toggle.
+ *     "indeterminate" (the key absent) refuses too — fail closed, exactly as
+ *     `pushEvent`'s gate reads it.
+ *
+ *     A 409 is DEFINITIVE when the room genuinely reads Solo (the user toggled
+ *     back, or another window owns the room) and TRANSIENT when this POST simply
+ *     outran the client's own CRDT write. The client covers the second with one
+ *     250 ms retry; beyond that the held items stay held and marked, and the next
+ *     Solo→Tandem toggle releases them. Pull is authoritative regardless.
  *  2. Clear the persisted `heldInSolo` markers across ALL open docs (badge +
  *     fail-closed-restart substrate), rev-bumped and durable.
  *  3. Wake the push monitor ONCE — but only if we actually released held
- *     content (`released > 0`). Idempotency is state-based on the work done,
- *     NOT on a prior-mode read: the client broadcasts mode = Tandem into
- *     CTRL_ROOM over its CRDT socket, and that write reliably reaches the
- *     server's ctrl doc BEFORE this HTTP round-trip, so a `readModeState()`
- *     here almost always already sees "tandem" and would wrongly suppress
- *     every wake (verified live). Gating on the marker-clear count instead
- *     fires the wake exactly when there was genuinely held content to announce
- *     and stays idempotent — a repeat/flapping POST finds the markers already
- *     cleared, releases 0, and fires no duplicate wake.
+ *     content (`released > 0`). Idempotency is state-based on the work done: a
+ *     repeat/flapping POST finds the markers already cleared, releases 0, and
+ *     fires no duplicate wake.
+ *
+ * The verify and the wake are ONE synchronous frame — no `await` between them —
+ * because `pushEvent` drops the wake whenever mode reads non-Tandem.
+ *
+ * No `mode` body parameter: a stale POST from an earlier toggle would carry
+ * "tandem" too, so the room is the only witness worth reading.
  *
  * The held items themselves surface via the checkInbox / getAnnotations pull
  * path (they re-read live mode = Tandem now), NOT via this route. Gated on
@@ -81,8 +88,14 @@ export function handleModeRelease(req: Request, res: Response): void {
   if (assertOriginAllowlisted(req, res, API_MODE_RELEASE)) return;
   if (assertLoopbackForMutation(req, res)) return;
 
-  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-  withModeRelease(ctrlDoc, () => ctrlDoc.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_MODE, "tandem"));
+  if (readModeState() !== "tandem") {
+    res.status(409).json({
+      error: "MODE_NOT_TANDEM",
+      message: "The room does not read Tandem; nothing was released.",
+      data: { released: 0 },
+    });
+    return;
+  }
 
   // Sweep only OPEN docs. A doc closed while it still holds markers is not
   // visited, so its `heldInSolo` markers persist — harmless because mode is now
@@ -97,7 +110,7 @@ export function handleModeRelease(req: Request, res: Response): void {
     try {
       released += clearHeldMarkersForDoc(getOrCreateDocument(docId));
     } catch (err) {
-      console.warn(`[mode-release] failed to clear held markers for ${docId}:`, err);
+      console.warn("[mode-release] failed to clear held markers for %s:", docId, err);
     }
   }
 
