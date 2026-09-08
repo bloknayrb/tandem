@@ -152,7 +152,7 @@ const activeHint = $derived(PRESETS.find((p) => p.value === settings.editorMeasu
   <div
     role="radiogroup"
     aria-labelledby="settings-measure-label"
-    tabindex="0"
+    tabindex="-1"
     onkeydown={measureRg.handleKeyDown}
     style="display: flex; gap: var(--tandem-space-1); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2); padding: 2px;"
   >
@@ -183,7 +183,7 @@ const activeHint = $derived(PRESETS.find((p) => p.value === settings.editorMeasu
     <div
       role="radiogroup"
       aria-labelledby="settings-editor-font-label"
-      tabindex="0"
+      tabindex="-1"
       onkeydown={editorFontRg.handleKeyDown}
       style="display: flex; gap: var(--tandem-space-2);"
     >
@@ -230,7 +230,7 @@ const activeHint = $derived(PRESETS.find((p) => p.value === settings.editorMeasu
           <div
             role="radiogroup"
             aria-label={`Default font for ${row.label}`}
-            tabindex="0"
+            tabindex="-1"
             onkeydown={fontByExtensionRgs[row.format].handleKeyDown}
             style="display: flex; gap: var(--tandem-space-2); flex: 1;"
           >

@@ -24,6 +24,12 @@ export function activationKeydown(
 ): (e: KeyboardEvent) => void {
   return (e) => {
     if (opts.selfOnly && e.target !== e.currentTarget) return;
+    // A chorded Enter/Space is an app shortcut (Ctrl+Enter accept, Ctrl+Shift+Enter
+    // dismiss), never an activation — claiming it here preventDefault()s the chord
+    // before the window handler sees it (#1777 item 1). `shiftKey` is deliberately
+    // absent: Shift+Enter on a card is not a bound app chord, and Ctrl+Shift+Enter
+    // is already caught by the `ctrlKey` term.
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key !== "Enter" && e.key !== " ") return;
     e.preventDefault();
     handler();

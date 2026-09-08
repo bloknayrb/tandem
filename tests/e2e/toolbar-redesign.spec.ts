@@ -1029,3 +1029,59 @@ test("Escape closes the selection popup and returns focus to the editor", async 
   await expect(toolbar).toBeHidden({ timeout: 3_000 });
   await expect(editor).toBeFocused({ timeout: 2_000 });
 });
+
+// #1777 item 4: `capturedRange` freezes PM positions when the popup opens and
+// re-capture is suppressed while the composer has focus, so a remote (y-sync /
+// MCP) insert ABOVE the selection used to leave the annotation on shifted text.
+// The range is now mapped through every doc change while the popup is open.
+test("a remote insert above the selection does not shift the annotation (#1777)", async ({
+  page,
+}) => {
+  const PHRASE = "Another section with different content for tab switching tests.";
+
+  const open = (await mcp.callTool("tandem_open", {
+    filePath: path.join(tmpDir, "sample.md"),
+  })) as { data: { documentId: string } };
+  const docId = open.data.documentId;
+
+  await page.goto("/");
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").last()).toContainText("Another section", { timeout: 10_000 });
+
+  await editor.click();
+  await selectTextStable(editor.locator("p").last());
+  await openAnnotatePopup(page);
+  await page.locator("[data-testid='popup-annotation-input']").fill("still on the right passage");
+
+  // Insert a whole paragraph ABOVE the selection, from outside the browser.
+  const before = (await mcp.callTool("tandem_getTextContent", { documentId: docId })) as {
+    data: { text: string };
+  };
+  const at = before.data.text.indexOf("This is the first paragraph");
+  expect(at).toBeGreaterThan(-1);
+  await mcp.callTool("tandem_edit", {
+    documentId: docId,
+    from: at,
+    to: at,
+    newText: "A remote paragraph that shifts everything below it.\n",
+  });
+
+  // Synchronise BEFORE submitting. Without this the edit may not have landed,
+  // the frozen and mapped ranges are identical, and the case passes against
+  // unfixed code.
+  await expect(editor).toContainText("A remote paragraph that shifts everything below it.", {
+    timeout: 10_000,
+  });
+
+  await submitAnnotation(page, "comment");
+
+  const after = (await mcp.callTool("tandem_getTextContent", { documentId: docId })) as {
+    data: { text: string };
+  };
+  const annotations = (await mcp.callTool("tandem_getAnnotations", { documentId: docId })) as {
+    data: { annotations?: Array<{ range?: { from: number; to: number } }> };
+  };
+  const range = annotations.data.annotations?.[0]?.range;
+  expect(range).toBeTruthy();
+  expect(after.data.text.slice(range!.from, range!.to)).toBe(PHRASE);
+});

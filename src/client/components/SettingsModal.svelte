@@ -525,9 +525,20 @@ onMount(() => {
 // is a silent no-op) and the hamburger is `display: none` at wide widths.
 // The 860px breakpoint is what changes the focusable set — 640px only narrows
 // the drawer (see the media queries below).
+// The owner bail (#1778) is load-bearing here, not consistency dressing. This
+// is the OUTER dialog in both reachable stacks — ModelEditModal renders inside
+// this subtree, and the always-mounted CommandPalette opens over Settings via a
+// `toggle-palette` dispatch that carries no `settingsModalOpen` gate — and it
+// registers FIRST. `trapTab`'s recover branch fires whenever focus is outside
+// ITS container, with no `defaultPrevented` check, so without this Settings
+// yanks focus back on every Tab while the inner dialog dutifully defers.
 $effect(() => {
   if (!open) return;
-  const handler = (e: KeyboardEvent) => trapTab(e, modalEl ?? null);
+  const handler = (e: KeyboardEvent) => {
+    const owner = (document.activeElement as Element | null)?.closest('[aria-modal="true"]');
+    if (owner && owner !== modalEl && !modalEl?.contains(owner)) return;
+    trapTab(e, modalEl ?? null);
+  };
   window.addEventListener("keydown", handler);
   return () => window.removeEventListener("keydown", handler);
 });

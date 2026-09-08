@@ -252,3 +252,39 @@ test("slash menu suppresses while annotation popup is open (D10)", async ({ page
   await page.keyboard.type("/");
   await expect(slashMenu).toBeHidden();
 });
+
+// #1775: a "/" inside a code block is literal text — a path, a regex, a URL —
+// and Enter there means a newline. The menu used to open and claim the Enter,
+// converting the block and eating the typed query.
+test("slash menu never opens inside a code block and Enter stays a newline (#1775)", async ({
+  page,
+}) => {
+  await openSample(page);
+
+  // Reach a code block through the app's own affordance — the slash menu, from
+  // a paragraph where it still works. (Tiptap's ``` input rule needs a trailing
+  // whitespace character, which is fiddlier than it looks.)
+  await page.keyboard.type(" /code");
+  const menu = page.getByRole("listbox", { name: "Slash commands" });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("option", { name: "Code block" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".tiptap pre").first()).toBeVisible({ timeout: 5_000 });
+
+  await page.keyboard.type("cd /t");
+
+  // The load-bearing half: assert WHILE the query is still typed, because a
+  // post-Enter check is also satisfied by a menu that flashed open and closed.
+  // `toBeHidden`, not `toHaveCount(0)`: the menu node is reused rather than
+  // torn down, so it survives in the DOM (hidden) after the /code above ran.
+  await expect(menu).toBeHidden();
+
+  await page.keyboard.press("Enter");
+
+  await expect(page.locator(".tiptap pre").first()).toBeVisible();
+  await expect(page.locator(".tiptap pre").first()).toContainText("cd /t");
+  await expect(menu).toBeHidden();
+});

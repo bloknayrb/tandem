@@ -252,15 +252,13 @@ describe("matchShortcut — IME composition guard", () => {
   });
 });
 
-describe("matchShortcut — legacy no-modifier-gate preservation", () => {
-  // The legacy else-if chain inside the ctrl/meta block did NOT gate KeyS,
-  // KeyN, KeyW, KeyO, or Digit[1-9] on altKey/shiftKey. The faithful matcher
-  // preserves that — otherwise existing edge-case behavior would silently
-  // change with the refactor.
-  it("Ctrl+Alt+S still matches save", () => {
-    expect(matchShortcut(evt({ code: "KeyS", ctrlKey: true, altKey: true }))).toEqual({
-      id: "save",
-    });
+describe("matchShortcut — AltGr must not fire app shortcuts (#1777 item 2)", () => {
+  // Windows and Linux deliver AltGr as `ctrlKey && altKey`, so the ungated
+  // legacy branches swallowed ordinary characters on pl/ro/cs/de layouts. Every
+  // branch in the ctrl/meta block now carries `!e.altKey` EXCEPT the three
+  // deliberate Ctrl+Alt chords, which are pinned as positives further down.
+  it("Ctrl+Alt+S no longer matches save (AltGr+S → ś)", () => {
+    expect(matchShortcut(evt({ code: "KeyS", ctrlKey: true, altKey: true }))).toBeNull();
   });
   it("Ctrl+Shift+S matches save-as (#827 scratchpad promotion)", () => {
     expect(matchShortcut(evt({ code: "KeyS", ctrlKey: true, shiftKey: true }))).toEqual({
@@ -277,16 +275,48 @@ describe("matchShortcut — legacy no-modifier-gate preservation", () => {
       id: "toggle-source-view",
     });
   });
-  it("Ctrl+Alt+N still matches new-scratchpad", () => {
-    expect(matchShortcut(evt({ code: "KeyN", ctrlKey: true, altKey: true }))).toEqual({
-      id: "new-scratchpad",
-    });
+  it("Ctrl+Alt+N no longer matches new-scratchpad (AltGr+N → ń)", () => {
+    expect(matchShortcut(evt({ code: "KeyN", ctrlKey: true, altKey: true }))).toBeNull();
   });
-  it("Ctrl+Alt+1 still matches pick-tab", () => {
-    expect(matchShortcut(evt({ code: "Digit1", ctrlKey: true, altKey: true }))).toEqual({
-      id: "pick-tab",
-      context: { tabIndex: 1 },
-    });
+  it("Ctrl+Alt+1 no longer matches pick-tab", () => {
+    expect(matchShortcut(evt({ code: "Digit1", ctrlKey: true, altKey: true }))).toBeNull();
+  });
+  it("Ctrl+Alt+, no longer matches settings", () => {
+    expect(matchShortcut(evt({ code: "Comma", key: ",", ctrlKey: true, altKey: true }))).toBeNull();
+  });
+  it("Ctrl+Alt+/ no longer matches toggle-help", () => {
+    expect(matchShortcut(evt({ code: "Slash", key: "/", ctrlKey: true, altKey: true }))).toBeNull();
+  });
+  it("Ctrl+Alt+Shift+P no longer matches toggle-palette", () => {
+    expect(
+      matchShortcut(evt({ code: "KeyP", ctrlKey: true, altKey: true, shiftKey: true })),
+    ).toBeNull();
+  });
+  it("Ctrl+Alt+O no longer matches open-file (AltGr+O → ó)", () => {
+    expect(matchShortcut(evt({ code: "KeyO", ctrlKey: true, altKey: true }))).toBeNull();
+  });
+  it("Ctrl+Alt+F no longer matches find", () => {
+    expect(matchShortcut(evt({ code: "KeyF", ctrlKey: true, altKey: true }))).toBeNull();
+  });
+  it("Ctrl+Alt+G no longer matches find-nav", () => {
+    expect(matchShortcut(evt({ code: "KeyG", ctrlKey: true, altKey: true }))).toBeNull();
+  });
+
+  // Layout-realistic rows: what the AltGr chord actually produces on the
+  // affected layouts, carried in `e.key` while `e.code` is the physical key.
+  it("pl AltGr+S (ś) types instead of saving", () => {
+    expect(matchShortcut(evt({ code: "KeyS", key: "ś", ctrlKey: true, altKey: true }))).toBeNull();
+  });
+  it("pl AltGr+N (ń) types instead of opening a scratchpad", () => {
+    expect(matchShortcut(evt({ code: "KeyN", key: "ń", ctrlKey: true, altKey: true }))).toBeNull();
+  });
+  it("pl AltGr+O (ó) types instead of opening the file dialog", () => {
+    expect(matchShortcut(evt({ code: "KeyO", key: "ó", ctrlKey: true, altKey: true }))).toBeNull();
+  });
+  it("de AltGr+7 ({) types instead of switching tabs", () => {
+    expect(
+      matchShortcut(evt({ code: "Digit7", key: "{", ctrlKey: true, altKey: true })),
+    ).toBeNull();
   });
   it("Ctrl+Alt+Shift+T still matches reopen-closed-tab (legacy no-shift-gate)", () => {
     expect(
@@ -304,10 +334,20 @@ describe("matchShortcut — legacy no-modifier-gate preservation", () => {
       matchShortcut(evt({ code: "KeyA", ctrlKey: true, altKey: true, shiftKey: true })),
     ).toEqual({ id: "toggle-authorship" });
   });
-  it("Ctrl+Alt+Enter still matches accept (legacy no-alt-gate)", () => {
-    expect(matchShortcut(evt({ key: "Enter", ctrlKey: true, altKey: true }))).toEqual({
-      id: "annotation-accept-or-dismiss",
-      context: { shift: false },
+  it("Ctrl+Alt+Enter no longer matches accept", () => {
+    expect(matchShortcut(evt({ key: "Enter", ctrlKey: true, altKey: true }))).toBeNull();
+  });
+
+  // The three deliberate Ctrl+Alt chords keep firing — these are what kill a
+  // blanket `if (e.altKey) return` in the ctrl/meta block.
+  it("Ctrl+Alt+T still matches reopen-closed-tab", () => {
+    expect(matchShortcut(evt({ code: "KeyT", ctrlKey: true, altKey: true }))).toEqual({
+      id: "reopen-closed-tab",
+    });
+  });
+  it("Ctrl+Alt+M still matches comment-on-selection", () => {
+    expect(matchShortcut(evt({ code: "KeyM", ctrlKey: true, altKey: true }))).toEqual({
+      id: "comment-on-selection",
     });
   });
 });
@@ -343,12 +383,9 @@ describe("matchShortcut — negative cases / no-match", () => {
     expect(matchShortcut(evt({ key: "Enter" }))).toBeNull();
   });
 
-  it("Ctrl+Alt+W still matches close-tab (legacy: no alt gate)", () => {
-    // Legacy `else if (e.code === "KeyW")` had no modifier gate, so Ctrl+Alt+W
-    // also routed to close-tab. The new matcher preserves that semantic to
-    // avoid behavioral drift in the existing E2E suite.
-    expect(matchShortcut(evt({ code: "KeyW", ctrlKey: true, altKey: true }))).toEqual({
-      id: "close-tab",
-    });
+  it("Ctrl+Alt+W no longer matches close-tab (#1777 item 2)", () => {
+    // The legacy `else if (e.code === "KeyW")` had no modifier gate, so AltGr+W
+    // closed the active tab on layouts that produce a character there.
+    expect(matchShortcut(evt({ code: "KeyW", ctrlKey: true, altKey: true }))).toBeNull();
   });
 });

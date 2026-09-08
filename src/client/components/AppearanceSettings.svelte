@@ -72,7 +72,7 @@ const densityRg = createRadioGroup<Density>(
   <div
     role="radiogroup"
     aria-labelledby="settings-theme-label"
-    tabindex="0"
+    tabindex="-1"
     onkeydown={themeRg.handleKeyDown}
     style="display: flex; gap: var(--tandem-space-2);"
   >
@@ -126,7 +126,7 @@ const densityRg = createRadioGroup<Density>(
   <div
     role="radiogroup"
     aria-labelledby="settings-default-tab-label"
-    tabindex="0"
+    tabindex="-1"
     onkeydown={primaryTabRg.handleKeyDown}
     style="display: flex; gap: var(--tandem-space-2);"
   >
@@ -164,7 +164,7 @@ const densityRg = createRadioGroup<Density>(
   <div
     role="radiogroup"
     aria-labelledby="settings-text-size-label"
-    tabindex="0"
+    tabindex="-1"
     onkeydown={textSizeRg.handleKeyDown}
     style="display: flex; gap: var(--tandem-space-2);"
   >
@@ -217,7 +217,7 @@ const densityRg = createRadioGroup<Density>(
   <div
     role="radiogroup"
     aria-labelledby="settings-density-label"
-    tabindex="0"
+    tabindex="-1"
     onkeydown={densityRg.handleKeyDown}
     style="display: flex; gap: var(--tandem-space-2);"
   >

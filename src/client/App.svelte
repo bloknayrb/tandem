@@ -1561,6 +1561,13 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     }
   },
   "annotation-accept-or-dismiss": (e, ctx) => {
+    // The editor claims Mod-Enter (HardBreak; exitCode in a code block; the .txt
+    // split in PlaintextBreaks) and preventDefault()s it. Without this, one
+    // keystroke inserts a break AND accepts the annotation (#1777 item 1).
+    // Deliberately per-branch, not blanket: a top-level guard would also kill
+    // Ctrl+, (Settings, claimed by Subscript) and Ctrl+Shift+S (Save As,
+    // claimed by Strike) whenever the caret is in the editor.
+    if (e.defaultPrevented) return;
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
     const cur = railContent.activeOrFirstPending();

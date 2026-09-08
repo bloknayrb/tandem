@@ -1,5 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
+import type { Transaction } from "@tiptap/pm/state";
+import { ySyncPluginKey } from "@tiptap/y-tiptap";
 import { untrack } from "svelte";
 import * as Y from "yjs";
 import {
@@ -125,7 +127,16 @@ let selectionPosition = $state<{
 } | null>(null);
 let toolbarEl = $state<HTMLDivElement | null>(null);
 let annotationText = $state("");
-let capturedRange = $state<{ from: number; to: number } | null>(null);
+// Deliberately a plain `let`, NOT `$state` (#1777 item 4). Nothing reactive
+// reads this cell — no `$derived`, no template expression, only the three
+// action handlers and the `!capturedRange` guard below — and the `transaction`
+// subscriber that carries it through doc changes writes it from a Tiptap
+// callback, which is exactly the shape that throws `state_unsafe_mutation`
+// while a `$state` cell. One consequence: the `showPopup` effect below no
+// longer re-runs when `capturedRange` is cleared; the outcome is unchanged
+// because every reader refuses a collapsed range and falls back to
+// `editor.state.selection`, which is that same collapsed selection.
+let capturedRange: { from: number; to: number } | null = null;
 let textareaEl = $state<HTMLTextAreaElement | null>(null);
 let annotateMode = $state(false);
 let annotationIntent = $state<AnnotationComposerIntent>(null);
@@ -748,9 +759,50 @@ $effect(() => {
     if (popupHasFocus()) return;
     captureSelectionRange();
   };
+  // Carry the frozen range through every doc change while the popup is open, so
+  // a remote (y-sync / MCP) insert ABOVE the selection doesn't leave the
+  // annotation on shifted text (#1777 item 4). `onSelChange` bails while the
+  // composer has focus — which is exactly when a remote edit lands — so this is
+  // the only thing that can keep the range honest there.
+  //
+  // The two arms are NOT interchangeable, and using `transaction.mapping` for
+  // both is the trap. y-tiptap applies every remote Y update as a
+  // WHOLE-DOCUMENT `tr.replace(0, doc.content.size, …)` (see its `_tr.replace`
+  // sites), so mapping a position through one collapses the range to a point —
+  // `createAnnotation` would then refuse it and the annotation would be lost
+  // rather than merely shifted. The same replace is why `annotation.ts` rebuilds
+  // its decorations on a y-sync transaction instead of mapping them.
+  //
+  // What survives that replace is the SELECTION: y-tiptap restores it through
+  // the remote edit via Yjs relative positions (`restoreRelativeSelection`), and
+  // the PM selection does not move while the composer holds DOM focus. So on a
+  // remote change we re-read it, and only on a LOCAL one — where the steps are
+  // real and minimal — do we map. Assoc 1/-1 there keeps an insertion at either
+  // edge OUTSIDE the annotation.
+  const onTx = ({ transaction }: { transaction: Transaction }) => {
+    if (!capturedRange || !transaction.docChanged) return;
+    if (transaction.getMeta(ySyncPluginKey)) {
+      // Taken even when the restored selection is COLLAPSED, which is what a
+      // deletion of the annotated passage looks like. Adopting it is the safe
+      // move: the range stays in valid coordinates for the new doc, and
+      // `createAnnotation` refuses it, so the submit handlers' keep-the-draft
+      // arm runs. Holding the pre-edit range instead would leave positions
+      // pointing past the end of a shrunken document.
+      const { from, to } = ed.state.selection;
+      capturedRange = { from, to };
+      return;
+    }
+    const from = transaction.mapping.map(capturedRange.from, 1);
+    const to = transaction.mapping.map(capturedRange.to, -1);
+    capturedRange = { from, to: Math.max(from, to) };
+  };
   ed.on("selectionUpdate", onSelChange);
+  ed.on("transaction", onTx);
   return () => {
-    if (!ed.isDestroyed) ed.off("selectionUpdate", onSelChange);
+    if (!ed.isDestroyed) {
+      ed.off("selectionUpdate", onSelChange);
+      ed.off("transaction", onTx);
+    }
   };
 });
 
@@ -909,6 +961,18 @@ function openAnnotateMode() {
   requestAnimationFrame(() => textareaEl?.focus());
 }
 
+// Shared copy for the collapsed-range arm of both submit paths (#1777 item 4a).
+// Both halves matter: the draft survives, and the user has to re-select.
+function annotationRangeGoneNotification(): TandemNotification {
+  return {
+    id: `annotation-range-gone-${Date.now()}`,
+    type: "general-error",
+    severity: "warning",
+    message: "The text you annotated was deleted — re-select a passage. Your draft is kept.",
+    timestamp: Date.now(),
+  };
+}
+
 function submitAsComment() {
   if (!annotationTextTrimmed) return;
   // A27: capture the popover footprint BEFORE create (it's still mounted), then
@@ -932,24 +996,37 @@ function submitAsComment() {
     // Gated on `id` alone, not `id && rect`: a missing rect costs the fly
     // animation, not the write, and must not suppress the notice.
     //
-    // All three of `createAnnotation`'s undefined returns are unreachable from
-    // here today: no-editor/no-ydoc is gated by `canAnnotate` upstream of
-    // `showPopup`, empty content by this function's own early return, and a
-    // collapsed range by the fact that the only two collapse sites live in the
-    // format block, which is `inert` while the composer is open. The third is
-    // the one that stops being true once anything can collapse mid-compose —
-    // which the proposed in-card highlight swatches would (#1445).
+    // Two of `createAnnotation`'s three undefined returns are unreachable from
+    // here: no-editor/no-ydoc is gated by `canAnnotate` upstream of
+    // `showPopup`, and empty content by this function's own early return. The
+    // THIRD — a collapsed range — became reachable with #1777 item 4: the
+    // captured range now follows remote edits, so a passage deleted by Claude
+    // or a co-editor mid-compose collapses it. The `else` arm below
+    // is that case, and it must keep the draft rather than silently dropping it.
     window.dispatchEvent(new CustomEvent("tandem:addressed-ai", { detail: { via: "comment" } }));
+    dismissPopup();
+  } else {
+    // Clear the dead range FIRST: re-capture only fires when `capturedRange` is
+    // null (and `selectionUpdate` bails while the composer has focus), so
+    // leaving it set would retry the same collapsed range on every submit.
+    capturedRange = null;
+    onNotify?.(annotationRangeGoneNotification());
   }
-  dismissPopup();
 }
 
 function submitAsNote() {
   if (!annotationTextTrimmed) return;
   const rect = toolbarEl?.getBoundingClientRect();
   const id = createAnnotation("note", annotationTextTrimmed);
-  if (id && rect) registerFlySource(id, rect);
-  dismissPopup();
+  if (id) {
+    if (rect) registerFlySource(id, rect);
+    dismissPopup();
+  } else {
+    // See submitAsComment: `dismissPopup()` clears `annotationText`, so it must
+    // not run on the collapsed-range arm or the typed draft vanishes silently.
+    capturedRange = null;
+    onNotify?.(annotationRangeGoneNotification());
+  }
 }
 
 // Bound to the textarea AND to all three footer controls, not the textarea

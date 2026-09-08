@@ -7,6 +7,7 @@ import { runAction } from "../actions/executor.js";
 import { type Action, getActionsMap } from "../actions/registry.svelte.js";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import { STATIC_SHORTCUT_ROWS } from "../actions/static-shortcuts.js";
+import { trapTab } from "../utils/focus-trap.js";
 import { rankByScore, scoreFields, toSegments } from "../utils/fuzzy-match.js";
 import { walkHeadings } from "../utils/headings.js";
 
@@ -31,6 +32,7 @@ let { open, onClose, editor = null, annotations = [], onFocusAnnotation }: Props
 let query = $state("");
 let selectedIndex = $state(0);
 let inputEl = $state<HTMLInputElement | null>(null);
+let paletteEl = $state<HTMLDivElement | null>(null);
 
 // Detect routing prefix
 const PREFIXES = ["#", "@", "?", ">"] as const;
@@ -246,6 +248,34 @@ $effect(() => {
   }
 });
 
+// Tab focus trap (#1778). `aria-modal="true"` promises assistive tech that
+// everything outside is inert, and without this real focus walked the app
+// behind the scrim on the second Tab.
+//
+// Window-level rather than an element `onkeydown`, because `trapTab`'s
+// recover-focus branch is the half that matters: a click on the dialog's own
+// padding leaves `document.activeElement` on `<body>`, and an element handler
+// never fires again once focus is outside.
+//
+// The owner bail is required, not decorative. `trapTab`'s recover branch fires
+// whenever focus is outside ITS container — including inside another open
+// dialog — with no `defaultPrevented` check, so two live traps ping-pong within
+// one keydown. Two stacks are reachable: ModelEditModal renders inside
+// SettingsModal's subtree, and the always-mounted CommandPalette opens over
+// Settings. A bare `if (e.defaultPrevented) return;` is NOT a substitute:
+// `trapTab` preventDefaults only on the wrap and recover branches, so ordinary
+// mid-dialog Tabs would still reach both handlers.
+$effect(() => {
+  if (!open) return;
+  const handler = (e: KeyboardEvent) => {
+    const owner = (document.activeElement as Element | null)?.closest('[aria-modal="true"]');
+    if (owner && owner !== paletteEl && !paletteEl?.contains(owner)) return;
+    trapTab(e, paletteEl ?? null);
+  };
+  window.addEventListener("keydown", handler);
+  return () => window.removeEventListener("keydown", handler);
+});
+
 // Escape must close the palette regardless of which descendant holds focus and
 // ahead of any nested handler that might consume the key. A capture-phase
 // window listener (gated on `open`) is the robust pattern the other modals use;
@@ -334,6 +364,10 @@ function runResult(result: PaletteResult) {
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  // An IME candidate-confirm Enter must not submit (#1777 item 3). Safari and
+  // some IMEs deliver that keydown with `isComposing` already false, so the
+  // legacy `keyCode === 229` sentinel is the second term.
+  if (e.isComposing || e.keyCode === 229) return;
   const total = allResults.length;
   if (e.key === "ArrowDown") {
     e.preventDefault();
@@ -391,6 +425,7 @@ function handleBackdropClick(e: MouseEvent) {
       tabindex="-1"
       aria-modal="true"
       aria-label="Command palette"
+      bind:this={paletteEl}
       class="palette-modal"
       style="
         width: 640px; max-width: 92vw;
