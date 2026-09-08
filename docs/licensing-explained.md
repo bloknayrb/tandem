@@ -60,6 +60,20 @@ The cost is length: you can't make a self-proving document short. So we made
 sure you never have to type it. The email attaches it as a file, and you can
 paste it in one go.
 
+## Before any of that: the public beta is free
+
+Everything on this page describes v1.0 and later. **Every pre-1.0 release is free
+to use, with no time limit and nothing to activate** — the BUSL Additional Use
+Grant in [LICENSE](../LICENSE) says so in as many words, so this is a term you
+are granted rather than an enforcement gap you are getting away with. It is also
+not enforced: the gate ships dark, so a beta build has no trial clock running at
+all and the three states below are unreachable in it.
+
+At v1.0 the gate flips and the 14-day trial starts for new installs. **Beta users
+are grandfathered with a free license and skip the trial entirely** — see the
+claiming instructions in the README, which matter because Tandem has no telemetry
+and therefore no list of beta users to work from.
+
 ## The three states Tandem can be in
 
 1. **Trial** — 14 days from first launch. Everything works. A banner counts down.
