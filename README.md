@@ -174,7 +174,9 @@ Tandem is close to v1.0, and I keep shipping. [CHANGELOG.md](CHANGELOG.md) recor
 
 ## License
 
-Tandem is free during the public beta. At v1.0 it moves to a one-time paid license, and beta users are grandfathered with a free one. The code is under the Business Source License 1.1 (BUSL-1.1); [LICENSE](LICENSE) has the terms.
+Tandem is free during the public beta — every pre-1.0 release, with no time limit and nothing to activate. At v1.0 it moves to a **one-time paid license** with a **14-day free trial**: install it, use everything for 14 days, then buy once and keep that version forever. There is no subscription and no renewal. The run gate checks a license's signature and nothing else (`src/server/license/verifier.ts`), so the version you paid for keeps running indefinitely; what a license's expiry date governs is the *update window* — how long you keep receiving new versions — never your right to run the copy you have. Beta users are grandfathered with a free license and skip the trial entirely.
+
+The code is under the Business Source License 1.1 (BUSL-1.1); [LICENSE](LICENSE) has the terms, and [docs/licensing-explained.md](docs/licensing-explained.md) explains the mechanism in plain English. None of it is enforced yet — the gate ships dark and flips at v1.0.
 
 **Claiming the beta license:** Tandem has no telemetry, no analytics, and no signup, so there's no list of beta users to work from. I can only grandfather people who tell me they're here. If you've been using the beta, email <support@tandem.ink> with roughly when you first installed it, and I'll send you a free license before enforcement turns on. Activate it as soon as it arrives (Settings → License) rather than filing it away: the pre-v1.0 build tells you licensing isn't enforced yet, which is true, and is exactly why an unactivated key is easy to lose.
 
