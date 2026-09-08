@@ -1,15 +1,10 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { render } from "@testing-library/svelte";
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { Editor } from "@tiptap/core";
 import { describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions.js";
-import {
-  asPending,
-  useAnnotationReview,
-} from "../../src/client/panels/useAnnotationReview.svelte.js";
+import { useAnnotationReview } from "../../src/client/panels/useAnnotationReview.svelte.js";
 import UseAnnotationReviewHarness from "../../src/client/svelte-harness/UseAnnotationReviewHarness.svelte";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
@@ -85,29 +80,28 @@ describe("getReviewTargets (filter applied at review callsite)", () => {
   });
 });
 
-// B2: accept-failure toast. When `applySuggestion` can't resolve an
-// annotation's range, `resolveAnnotation` reverts the annotation to
-// "pending" — this proves `onApplyFailed` fires on that same path so the
-// caller can surface a toast instead of failing silently.
-describe("useAnnotationReview — onApplyFailed (B2)", () => {
-  /**
-   * Mounts the hook via a real Svelte component (onDestroy/$state require
-   * component-init context) and hands the returned API back synchronously.
-   */
-  function mountReview(params: Parameters<typeof useAnnotationReview>[0]) {
-    let api: ReturnType<typeof useAnnotationReview> | undefined;
-    render(UseAnnotationReviewHarness, {
-      props: {
-        params,
-        onReady: (returned: ReturnType<typeof useAnnotationReview>) => {
-          api = returned;
-        },
+/**
+ * Mounts the hook via a real Svelte component (onDestroy/$state require
+ * component-init context) and hands the returned API back synchronously.
+ *
+ * Module-scoped because two describes drive the hook now: the B2 toast path
+ * and the `resolvedBy` revert at the bottom of this file.
+ */
+function mountReview(params: Parameters<typeof useAnnotationReview>[0]) {
+  let api: ReturnType<typeof useAnnotationReview> | undefined;
+  render(UseAnnotationReviewHarness, {
+    props: {
+      params,
+      onReady: (returned: ReturnType<typeof useAnnotationReview>) => {
+        api = returned;
       },
-    });
-    if (!api) throw new Error("useAnnotationReview did not report ready");
-    return api;
-  }
+    },
+  });
+  if (!api) throw new Error("useAnnotationReview did not report ready");
+  return api;
+}
 
+describe("useAnnotationReview — onApplyFailed (B2)", () => {
   it("reverts to pending and calls onApplyFailed when the suggestion range can't resolve", () => {
     const ydoc = new Y.Doc();
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -236,54 +230,87 @@ describe("useAnnotationReview — onApplyFailed (B2)", () => {
   });
 });
 
-describe("asPending — a reverted record carries no resolver (#1770)", () => {
-  // `resolvedBy` names who performed THIS resolution, so a record going back to
-  // `pending` must not keep one. Both client revert writes spread the SANITIZED
-  // record and `resolvedBy` survives sanitize (#1770 added it to the allowlist),
-  // so without the strip the CRDT holds a self-contradictory `{pending, claude}`
-  // — the exact field `tandem_checkInbox`'s `userResponses` bucket filters on.
-  it("drops resolvedBy and sets status to pending", () => {
-    const resolved: Annotation = {
-      ...makeAnnotation({ author: "claude" }),
-      status: "dismissed",
-      resolvedBy: "claude",
+/**
+ * #1770 review round 1 — `resolvedBy` must not outlive the resolution it names.
+ *
+ * `sanitizeAnnotation` carries a stored `resolvedBy` through, so both client
+ * revert writes used to spread it back onto a record they were putting BACK to
+ * `pending`. `awareness.ts`'s `userResponses` bucket excludes
+ * `resolvedBy === "claude"` — so a user who then accepts that record has their
+ * decision permanently misattributed to Claude and reported to nobody.
+ *
+ * Reachable through a concurrent user Accept vs a Claude
+ * `tandem_resolveAnnotation` dismiss on one pending record: the client passes
+ * its own pending gate before Claude's write lands, Claude's write wins the
+ * Y.Map tie, and the id is in `recentlyResolved`, so Undo is offered on a
+ * record already stamped `claude`.
+ */
+describe("useAnnotationReview — the revert clears resolvedBy (#1770)", () => {
+  it("strips a claude stamp when a dismissal is undone", () => {
+    const ydoc = new Y.Doc();
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    // Claude's own dismiss, as `transitionPending` writes it.
+    const ann = {
+      ...makeAnnotation({
+        id: "claude-dismissed",
+        author: "claude",
+        type: "comment",
+        status: "dismissed",
+      }),
+      resolvedBy: "claude" as const,
     };
+    map.set(ann.id, ann);
 
-    const reverted = asPending(resolved);
+    const review = mountReview({
+      getYdoc: () => ydoc,
+      // No suggestedText, so the text-restore branch is never entered and the
+      // status write is the only thing under test.
+      getEditor: () => null,
+      getAnnotations: () => [map.get(ann.id) as Annotation],
+      onActiveAnnotationChange: () => {},
+      getScrollBehavior: () => "auto",
+    });
 
-    expect(reverted.status).toBe("pending");
-    expect("resolvedBy" in reverted).toBe(false);
-    // Everything else survives — this is a targeted strip, not a rebuild.
-    expect(reverted.id).toBe(resolved.id);
-    expect(reverted.author).toBe("claude");
+    expect(review.undoResolveAnnotation(ann.id)).toBe(true);
+
+    const after = map.get(ann.id) as Annotation;
+    expect(after.status).toBe("pending");
+    expect(after.resolvedBy, "a pending record has not been resolved by anyone").toBeUndefined();
   });
 
-  it("leaves a record that never carried one unchanged apart from status", () => {
-    const resolved: Annotation = { ...makeAnnotation({ author: "claude" }), status: "accepted" };
+  it("strips it on the apply-failure revert too, which is the other write", () => {
+    // Both revert sites spread the sanitized record, so a fix applied to only
+    // one of them leaves this green — hence a row per site.
+    const ydoc = new Y.Doc();
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const ann = {
+      ...makeAnnotation({
+        id: "unresolvable-stamped",
+        author: "claude",
+        type: "comment",
+        status: "pending",
+        suggestedText: "replacement text",
+        range: undefined,
+      }),
+      resolvedBy: "claude" as const,
+    };
+    map.set(ann.id, ann);
 
-    expect(asPending(resolved)).toEqual({ ...resolved, status: "pending" });
-  });
+    const editor = { state: { doc: {} }, chain: vi.fn() } as unknown as TiptapEditor;
 
-  // Pins the CALL SITES, not just the helper: a unit test of `asPending` says
-  // nothing about anyone using it, and the two revert writes are the whole
-  // point. Source-scanned because both sit behind a ProseMirror chain that a
-  // unit test cannot reach without a live editor.
-  it("is what both revert writes use", () => {
-    const source = readFileSync(
-      join(
-        import.meta.dirname,
-        "..",
-        "..",
-        "src",
-        "client",
-        "panels",
-        "useAnnotationReview.svelte.ts",
-      ),
-      "utf8",
-    );
+    const review = mountReview({
+      getYdoc: () => ydoc,
+      getEditor: () => editor,
+      getAnnotations: () => [map.get(ann.id) as Annotation],
+      onActiveAnnotationChange: () => {},
+      getScrollBehavior: () => "auto",
+      onApplyFailed: () => {},
+    });
 
-    expect(source.match(/map\.set\(id, asPending\(ann\)\)/g)).toHaveLength(2);
-    // No revert write may rebuild the record inline and re-introduce the field.
-    expect(source).not.toMatch(/map\.set\(id, \{ \.\.\.ann, status: "pending"/);
+    review.resolveAnnotation(ann.id, "accepted");
+
+    const after = map.get(ann.id) as Annotation;
+    expect(after.status).toBe("pending");
+    expect(after.resolvedBy).toBeUndefined();
   });
 });

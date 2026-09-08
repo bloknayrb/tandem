@@ -498,7 +498,7 @@ export function registerAnnotationTools(server: McpServer): void {
           // write paths now answer identically rather than disagreeing.
           return mcpError(
             "INVALID_ARGUMENT",
-            `Annotation ${id} is a private note or private comment and cannot be resolved by Claude`,
+            `Annotation ${id} is user-private (a note, a private comment or a user highlight) and cannot be resolved by Claude`,
           );
         case "not-pending":
           return mcpError(
@@ -554,7 +554,7 @@ export function registerAnnotationTools(server: McpServer): void {
         case "invalid-note":
           return mcpError(
             "INVALID_ARGUMENT",
-            `Annotation ${id} is a private note or private comment and cannot be removed by Claude`,
+            `Annotation ${id} is user-private (a note, a private comment or a user highlight) and cannot be removed by Claude`,
           );
         default: {
           // A new `RemoveResult` arm errors HERE, naming it. Without this the

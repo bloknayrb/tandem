@@ -205,18 +205,6 @@ describe("the server-side heldInSolo stamp (#1769)", () => {
     browserWrite(() => annMap().set("s1", userComment("s1")));
     expect(rec("s1").heldInSolo).toBe(true);
 
-    // A CONTROL record, and the row is vacuous without it. Written while the
-    // room reads Tandem, so the stamp declines and `hideFromAI` has nothing to
-    // withhold under `indeterminate`. Asserting only "s1 is absent" passes on an
-    // empty payload — which is exactly how this row shipped green while reading
-    // the wrong nesting (`payload.userActions` rather than `payload.data.*`) and
-    // the wrong key (`annotationId`; the bucket items are `Annotation &
-    // { textSnippet }`, keyed `id`). Both lookups were `undefined`, `ids` was
-    // always `[]`, and `not.toContain` could never fail.
-    setCtrlMode("tandem");
-    browserWrite(() => annMap().set("t1", userComment("t1")));
-    expect(rec("t1").heldInSolo).toBeUndefined();
-
     // The restart: the ctrl session is lost, so the mode key is absent and
     // `readModeState()` reads `indeterminate` — where only MARKED records are
     // withheld. Driven through the REGISTERED handler, never a reimplemented
@@ -232,19 +220,32 @@ describe("the server-side heldInSolo stamp (#1769)", () => {
     await server.connect(serverTransport);
     await mcpClient.connect(clientTransport);
 
-    const result = await mcpClient.callTool({ name: "tandem_checkInbox", arguments: {} });
-    const content = result.content as Array<{ type: string; text?: string }>;
-    const payload = JSON.parse(content.find((c) => c.type === "text")?.text ?? "{}");
+    // `mcpSuccess` wraps every payload as `{ error: false, data }` (`response.ts`)
+    // and both buckets are `Annotation & { textSnippet }`, keyed `id`. Reading
+    // `payload.userActions` / `a.annotationId` — the first draft of this row —
+    // yields `undefined` twice, so `ids` was `[]` and the negative assertion
+    // could not fail. Both the unwrap and the key are load-bearing; the
+    // positive control below is what proves the row is not vacuous again.
+    const inboxIds = async (): Promise<string[]> => {
+      const result = await mcpClient.callTool({ name: "tandem_checkInbox", arguments: {} });
+      const content = result.content as Array<{ type: string; text?: string }>;
+      const data = JSON.parse(content.find((c) => c.type === "text")?.text ?? "{}").data ?? {};
+      return [
+        ...(data.userActions ?? []).map((a: { id: string }) => a.id),
+        ...(data.userResponses ?? []).map((a: { id: string }) => a.id),
+      ];
+    };
 
-    // `mcpSuccess` wraps as `{ error: false, data }`, so the buckets are one
-    // level down — the sibling `mcp-tool-integration.test.ts` reads `parsed.data.*`.
-    expect(payload.error).toBe(false);
-    const ids = [
-      ...(payload.data?.userActions ?? []).map((a: { id?: string }) => a.id),
-      ...(payload.data?.userResponses ?? []).map((a: { id?: string }) => a.id),
-    ];
-    expect(ids).toContain("t1");
-    expect(ids).not.toContain("s1");
+    expect(await inboxIds(), "the marked comment is withheld under indeterminate").not.toContain(
+      "s1",
+    );
+
+    // Positive control, same client and same handler. The hold skips the record
+    // BEFORE the dedup ledger's `surfaced.set`, so a released item is still
+    // unsurfaced and re-appears on the first poll once the room reads Tandem.
+    // Without this, `hideFromAI` returning `true` for everything passes above.
+    setCtrlMode("tandem");
+    expect(await inboxIds(), "and delivered once the room reads Tandem again").toContain("s1");
 
     await mcpClient.close();
   });

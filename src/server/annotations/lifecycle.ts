@@ -111,6 +111,7 @@ import {
 } from "../../shared/utils.js";
 import { readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
+import { isClaudeFacing } from "./projection.js";
 import { nextRev, REPLY_TEXT_MAX } from "./schema.js";
 
 // ---------------------------------------------------------------------------
@@ -255,11 +256,12 @@ export type ReplyResult =
  * which derives an audience only when none is stored) was something Claude could
  * not reply to but could edit, resolve and remove.
  *
- * Highlights are deliberately NOT here: they fall to their own arms
- * (`not-repliable`, `invalid-suggestion-target`), which carry the real parent
- * type. Widening this to `audience !== "outbound"` over every type would swallow
- * them and answer `invalid-note` instead — a refusal naming a rule that has
- * nothing to do with the case.
+ * Highlights are deliberately NOT here: on EDIT and REPLY they fall to their own
+ * arms (`not-repliable`, `invalid-suggestion-target`), which carry the real
+ * parent type. Widening this to `audience !== "outbound"` over every type would
+ * swallow them and answer `invalid-note` instead — a refusal naming a rule that
+ * has nothing to do with the case. Resolve and remove have no such arm, which is
+ * what {@link isWithheldFromClaude} exists for.
  *
  * Kept module-PRIVATE. Nothing new is imported by any route or MCP module, so
  * `annotation-remove-seam.test.ts` and `annotation-reply-seam.test.ts` keep
@@ -269,6 +271,34 @@ export type ReplyResult =
  */
 function isPrivateForClaude(ann: Annotation): boolean {
   return ann.type === "note" || (ann.type === "comment" && ann.audience !== "outbound");
+}
+
+/**
+ * The RESOLVE and REMOVE half of the same rule, and it is the READ filter's own
+ * predicate rather than the one above (#1803 residual, closed in review).
+ *
+ * `isPrivateForClaude` leaves highlights to a per-family arm, which edit and
+ * reply both have and resolve and remove both LACK. So after #1619 made a user's
+ * private highlight unreadable on every Claude-facing surface,
+ * `tandem_resolveAnnotation` could still flip one (stamping `resolvedBy:
+ * "claude"` on the user's own markup) and `tandem_removeAnnotation` could still
+ * delete it — a record three tools disagreed about. **A read filter is not a
+ * write guard** is exactly the lesson #1680 recorded; this is its highlight
+ * instance.
+ *
+ * `!isClaudeFacing` is a strict widening of `isPrivateForClaude`: identical on
+ * notes and comments, and additionally refusing a highlight whose audience is
+ * not `outbound` — which every user highlight is, since `sanitizeAnnotation`
+ * demotes user-authored note/highlight/flag. Claude cannot MINT a highlight
+ * (`tandem_highlight` is a deprecated stub), so nothing Claude authored is lost
+ * to this.
+ *
+ * Module-PRIVATE for the same reason as its sibling; `isClaudeFacing` is a type-
+ * and-audience predicate over a plain record, so importing it here adds no cycle
+ * (`projection.ts` imports only `shared/`).
+ */
+function isWithheldFromClaude(ann: Annotation): boolean {
+  return !isClaudeFacing(ann);
 }
 
 /**
@@ -883,8 +913,10 @@ function transitionPending(
   // rather than an audit of mutations.
   const ann = sanitizeAnnotation(raw as RawAnnotation, onLossy);
 
-  // ADR-027 (#1680, #1803): notes AND private comments are user-private. Claude
-  // must not resolve either.
+  // ADR-027 (#1680, #1803): notes, private comments AND a user's private
+  // highlight are user-private. Claude must not resolve any of them —
+  // {@link isWithheldFromClaude} is the read filter's own predicate, because
+  // this family has no per-type arm to fall to.
   //
   // **After sanitize, and before the pending check — both halves matter.**
   // After, because a stored `flag` is a note only once sanitized, so a raw-type
@@ -893,7 +925,7 @@ function transitionPending(
   // a caller the note exists and is merely resolved, which is a disclosure
   // ADR-027 does not make. Only a spec seeding an ALREADY-RESOLVED note
   // distinguishes this ordering from the other one.
-  if (isPrivateForClaude(ann)) return { kind: "invalid-note" };
+  if (isWithheldFromClaude(ann)) return { kind: "invalid-note" };
 
   if (ann.status !== "pending") {
     return { kind: "not-pending", id, currentStatus: ann.status };
@@ -1425,8 +1457,10 @@ function removeForClaude(
 
   // Sanitized record, not `raw`. A stored legacy `flag` normalizes to a note,
   // and a raw check lets exactly that record through — the same ordering the
-  // resolve and edit guards use.
-  if (isPrivateForClaude(sanitizeAnnotation(raw, onLossy))) return { kind: "invalid-note" };
+  // resolve and edit guards use. The predicate is the resolve one, not edit's:
+  // this family has no highlight arm either, and deleting a user's private
+  // highlight by id is the destructive half of the same asymmetry.
+  if (isWithheldFromClaude(sanitizeAnnotation(raw, onLossy))) return { kind: "invalid-note" };
 
   return removeAnnotationRecord(ydoc, id, "mcp");
 }

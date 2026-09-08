@@ -42,7 +42,7 @@ on the `useTandemModeBroadcast` and `Toolbar` changes.
 
 - A two-window test shows the room never reads Tandem while a window that has broadcast Solo is
   attached, except for one round-trip after a competing write (the residual is pinned by name
-  and tracked in a follow-up issue — see `specs/C-1769.md`), and a held comment created in Solo
+  and tracked in [#1899](https://github.com/bloknayrb/tandem/issues/1899) — see `specs/C-1769.md`), and a held comment created in Solo
   never reaches `tandem_checkInbox` (the registered handler) after a restart.
 - `tandem_editAnnotation` and `tandem_annotationReply` on a user-authored id return a
   `not-owned` error; on a note, `invalid-note` (unchanged).

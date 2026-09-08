@@ -294,10 +294,11 @@ describe("the four write guards agree on audience (#1803)", () => {
     expect(store.removeAnnotation("o4")).toStrictEqual({ kind: "ok", id: "o4" });
   });
 
-  it("leaves a HIGHLIGHT to its own arms, never invalid-note", () => {
-    // Kills a predicate written as `audience !== "outbound"` over every type.
-    // Claude-authored so the user-scoped demotion in sanitize cannot apply;
-    // sanitize derives `private` from the absent stored audience.
+  it("leaves a HIGHLIGHT to its own arms on EDIT and REPLY, never invalid-note", () => {
+    // Kills a predicate written as `audience !== "outbound"` over every type on
+    // the two families that HAVE a per-type arm. Claude-authored so the
+    // user-scoped demotion in sanitize cannot apply; sanitize derives `private`
+    // from the absent stored audience.
     seed("h1", { type: "highlight", author: "claude", audience: undefined });
 
     expect(lifecycle().editPending("h1", { suggestedText: "x" }, noRelay)).toStrictEqual({
@@ -305,6 +306,38 @@ describe("the four write guards agree on audience (#1803)", () => {
       annotationType: "highlight",
     });
     expect(lifecycle().reply("h1", "hello", noRelay).kind).toBe("not-repliable");
+  });
+
+  it("refuses a user's private HIGHLIGHT on resolve and remove (#1803 residual)", () => {
+    // The other half of the row above, and the asymmetry review round 1 named:
+    // resolve and remove have NO per-type arm, so `isPrivateForClaude`'s
+    // deliberate highlight exemption left them acting on a record every
+    // Claude-facing READ had stopped returning after #1619. Three tools
+    // disagreed — `tandem_getAnnotations` reported it only as a
+    // `privateExcluded` count while `tandem_removeAnnotation` deleted it.
+    //
+    // The write-half kill: a stored `resolvedBy` or a missing key here means the
+    // guard is back to the narrow predicate.
+    seed("uh", { type: "highlight", author: "user", audience: undefined });
+    const before = { ...(map.get("uh") as Annotation) };
+
+    expect(acceptPending("uh", doc, map, noRelay)).toStrictEqual({ kind: "invalid-note" });
+    expect(dismissPending("uh", doc, map, noRelay)).toStrictEqual({ kind: "invalid-note" });
+    expect(store.removeAnnotation("uh")).toStrictEqual({ kind: "invalid-note" });
+
+    expect(map.get("uh"), "nothing was stamped").toStrictEqual(before);
+    expect(map.has("uh"), "and the user's own markup survives").toBe(true);
+  });
+
+  it("control: an OUTBOUND highlight still resolves and removes", () => {
+    // Without this, `if (type === "highlight") return invalid-note` passes the
+    // row above. The widened predicate is `!isClaudeFacing`, i.e. keyed on
+    // audience — not on the type — so an outbound highlight is still actionable.
+    seed("oh", { type: "highlight", author: "claude", audience: "outbound" });
+    expect(dismissPending("oh", doc, map, noRelay).kind).toBe("ok");
+
+    seed("oh2", { type: "highlight", author: "claude", audience: "outbound" });
+    expect(store.removeAnnotation("oh2")).toStrictEqual({ kind: "ok", id: "oh2" });
   });
 
   it("refuses a stored `flag` at audience OUTBOUND on all four, by both halves", () => {
