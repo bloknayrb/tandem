@@ -73,9 +73,9 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `ANNOTATION_RESOLVED` | The same condition under a different name, from `tandem_editAnnotation` and `tandem_annotationReply`. The two codes are not interchangeable -- match on the tool you called. |
 | `ACCEPT_REFUSED` | `tandem_resolveAnnotation({ action: "accept" })` on Claude's own annotation, or on one carrying `suggestedText`. Accept is the user's decision; `dismiss` withdraws instead (#1770). |
 | `SEARCH_BUSY` | `tandem_search` with `regex: true` was called while its worker queue -- one search running plus three waiting -- was already full. Retry. |
-| `INTERNAL_ERROR` | The universal boundary code: a handler threw something no arm translated and `withErrorBoundary` flattened it (`src/server/mcp/response.ts:118`). The message reads `<toolName> failed: ...`. Any tool can return it. |
+| `INTERNAL_ERROR` | The universal boundary code: a handler threw something no arm translated and `withErrorBoundary` flattened it (`src/server/mcp/response.ts:118`). The message reads `<toolName> failed: ...`. Any tool can return it. It is also the `never`-exhaustiveness arm on `tandem_resolveAnnotation` and `tandem_removeAnnotation`, reachable only if a lifecycle outcome is added without being handled -- which is a compile error first, so that message should never be seen. |
 
-Two more codes exist in source and should never be seen. `INTERNAL` -- note the missing `_ERROR` -- is the `never`-exhaustiveness arm on `tandem_resolveAnnotation` and `tandem_removeAnnotation` (`src/server/mcp/annotations.ts:520`, `:566`), reachable only if a lifecycle outcome is added without being handled, which is a compile error first. And `tandem_rename` passes five refusals through from `renameDocument` verbatim -- `NOT_RENAMABLE`, `EXTENSION_MISMATCH`, `ALREADY_EXISTS`, `RENAME_IN_PROGRESS`, `PATH_REJECTED` -- listed under that tool rather than here, because nothing else emits them.
+`INTERNAL` -- note the missing `_ERROR` -- is a **different** code and is **not** an MCP one: it belongs to the `/api` surface (`src/server/mcp/routes/_shared.ts`), which has its own code vocabulary. The two annotation exhaustiveness arms carried it by accident until they were corrected; no MCP tool emits it. And `tandem_rename` passes five refusals through from `renameDocument` verbatim -- `NOT_RENAMABLE`, `EXTENSION_MISMATCH`, `ALREADY_EXISTS`, `RENAME_IN_PROGRESS`, `PATH_REJECTED` -- listed under that tool rather than here, because nothing else emits them.
 
 ## Coordinate System
 
@@ -1055,7 +1055,8 @@ Check if the user is actively editing and where their cursor is.
 - `active` is true if `isTyping`, or the user typed within the last 10 seconds (`src/server/mcp/awareness.ts:304`).
 - `isTyping` is true during active keystroke bursts; the client clears it `TYPING_DEBOUNCE` = 3000 ms after the last keystroke (`src/shared/constants.ts:179`).
 - `cursor` is a **ProseMirror position** (#1776) — see above. `null` when there is no activity.
-- The tool returns exactly these four fields. Despite what its registered description says, it returns **no** `selection` and **no** `documentId` (`src/server/mcp/awareness.ts:292`, `:306-311`) — the description is stale, not the handler.
+- The tool returns exactly these four fields: no `selection` and no `documentId`. For what the user has selected, read `tandem_checkInbox`'s `activity.selectedText`, which *is* in flat offsets. (Until the registered description was corrected it promised both; the handler never returned either.)
+- The no-activity branch returns `active: false`, `isTyping: false`, `cursor: null`, `lastEdit: null` and a `message`. `isTyping` was absent there until it was added alongside the description fix, so an older server returns `undefined` for it on that branch.
 - Use this to avoid interrupting the user while they're typing.
 
 ---
