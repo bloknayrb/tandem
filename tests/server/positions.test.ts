@@ -18,6 +18,7 @@ import type {
   RangeValidation,
   SerializedRelPos,
 } from "../../src/shared/positions/types.js";
+import { snapshotContradicts } from "../../src/shared/snapshot.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { off, range } from "../helpers/positions.js";
 import {
@@ -116,6 +117,181 @@ describe("validateRange", () => {
       expect(result.code).toBe("INVALID_RANGE");
       if (result.code === "INVALID_RANGE") expect(result.reason).toBe("out-of-bounds");
     }
+  });
+});
+
+/**
+ * #1622 — a U+00A0 in the document made `textSnapshot` unwinnable.
+ *
+ * `tandem_getTextContent` returns a no-break space faithfully, but it is
+ * indistinguishable from U+0020 to whoever reads that output, so the snapshot
+ * comes back with an ordinary space, the exact comparison correctly fails,
+ * `indexOf` finds nothing, and the tool answers `RANGE_GONE` for text that is
+ * right there.
+ *
+ * **Every spec here that wants the new behaviour passes `normalizeSpaceClass:
+ * true`** — the option is off by default, so a spec that omits it is asserting
+ * the UNCHANGED exact behaviour. The last spec deliberately omits it.
+ */
+describe("validateRange — space-class normalization (#1622)", () => {
+  const NBSP = "\u00A0";
+  /** The issue's own phrase: an NBSP sits between "emails," and "Teams". */
+  const PHRASE = `categorized emails,${NBSP}Teams chats`;
+  /** What a caller reading `tandem_getTextContent` transcribes it as. */
+  const TRANSCRIBED = PHRASE.replace(NBSP, " ");
+
+  it("accepts a snapshot that differs from the document only in space class", () => {
+    // The headline. This also kills a `RANGE_MOVED`-with-a-`whitespaceMismatch`-flag
+    // fix, which would not return `ok`.
+    doc = makeDoc(`We ${PHRASE}, and meeting transcripts.`);
+    const full = extractText(doc);
+    const from = off(full.indexOf(PHRASE));
+    const to = off(from + PHRASE.length);
+
+    const result = validateRange(doc, from, to, {
+      textSnapshot: TRANSCRIBED,
+      normalizeSpaceClass: true,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.range).toEqual({ from, to });
+  });
+
+  it("never answers RANGE_MOVED pointing at the offsets it was just given", () => {
+    // **The loop guard, and the reason the issue's own proposal was not taken.**
+    // Relocating a whitespace-class mismatch leaves the exact slice still
+    // different at the CORRECT offsets, so the retry the caller is told to make
+    // ("use resolvedFrom/resolvedTo") comes back RANGE_MOVED naming the offsets
+    // it just passed, forever. A relocation cannot answer a mismatch that is not
+    // a relocation.
+    doc = makeDoc(`We ${PHRASE}, and meeting transcripts.`);
+    const full = extractText(doc);
+    const from = off(full.indexOf(PHRASE));
+    const to = off(from + PHRASE.length);
+
+    const result = validateRange(doc, from, to, {
+      textSnapshot: TRANSCRIBED,
+      normalizeSpaceClass: true,
+    });
+    const looped =
+      !result.ok &&
+      result.code === "RANGE_MOVED" &&
+      result.resolvedFrom === from &&
+      result.resolvedTo === to;
+    expect(looped).toBe(false);
+  });
+
+  it("relocates to the true offsets when the NBSP-bearing text has moved", () => {
+    // Pins that the normalizer is LENGTH-PRESERVING: the offsets come out of a
+    // sweep over the normalized copy and are then used to slice the ORIGINAL.
+    doc = makeDoc(`Some earlier filler sentence. We ${PHRASE}, and more.`);
+    const full = extractText(doc);
+    const trueFrom = full.indexOf(PHRASE);
+
+    const result = validateRange(doc, off(0), off(PHRASE.length), {
+      textSnapshot: TRANSCRIBED,
+      normalizeSpaceClass: true,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.code === "RANGE_MOVED") {
+      expect(result.resolvedFrom).toBe(trueFrom);
+      expect(result.resolvedTo).toBe(trueFrom + PHRASE.length);
+      expect(full.slice(result.resolvedFrom, result.resolvedTo)).toBe(PHRASE);
+    } else {
+      expect(result).toMatchObject({ code: "RANGE_MOVED" });
+    }
+  });
+
+  it("still answers RANGE_GONE for text that is genuinely absent", () => {
+    // Without this the fix could turn RANGE_GONE into dead code and nothing
+    // would notice.
+    doc = makeDoc("An entirely different sentence with no such phrase.");
+    const result = validateRange(doc, off(0), off(PHRASE.length), {
+      textSnapshot: TRANSCRIBED,
+      normalizeSpaceClass: true,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("RANGE_GONE");
+  });
+
+  it("prefers an exact occurrence over a normalized-only one", () => {
+    // **The fixture deliberately puts the NBSP variant NEARER the queried
+    // `from` than the exact occurrence.** The relocation sweep collects every
+    // hit and picks the candidate nearest `from`
+    // (`candidates.reduce((a, b) => (Math.abs(a - from) <= Math.abs(b - from) ? a : b))`),
+    // so an implementation that normalizes `fullText` and the snapshot up front
+    // and runs ONE sweep finds both occurrences and returns whichever is nearer.
+    // With the NBSP variant nearer, that implementation relocates onto it and
+    // fails here; with the exact one nearer it would pass for the wrong reason,
+    // and `tandem_edit`'s documented resolvedFrom/resolvedTo retry would then
+    // rewrite the wrong span.
+    //
+    // The queried range is stale under BOTH comparisons, so step 2 cannot fire
+    // and the question really is which sweep wins.
+    const exact = "Teams chats";
+    const variant = `Teams${NBSP}chats`;
+    doc = makeDoc(`lead in filler ${variant} and later ${exact} end.`);
+    const full = extractText(doc);
+    expect(full.indexOf(variant)).toBeLessThan(full.indexOf(exact));
+
+    const result = validateRange(doc, off(0), off(exact.length), {
+      textSnapshot: exact,
+      normalizeSpaceClass: true,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.code === "RANGE_MOVED") {
+      expect(full.slice(result.resolvedFrom, result.resolvedTo)).toBe(exact);
+    } else {
+      expect(result).toMatchObject({ code: "RANGE_MOVED" });
+    }
+  });
+
+  it("does not normalize a block separator — a newline is not a space", () => {
+    // Kills a `\s`-class regex. A newline is a block boundary in this coordinate
+    // system, so collapsing it would let a range cross one.
+    doc = makeDoc("alpha para\n\nbravo para");
+    const full = extractText(doc);
+    expect(full).toContain("\n");
+    // The snapshot the caller would send if newlines WERE in the class: the
+    // real slice with every block separator turned into an ordinary space.
+    const snapshot = full.replace(/\n/g, " ");
+    expect(snapshot).not.toBe(full);
+
+    const result = validateRange(doc, off(0), off(full.length), {
+      textSnapshot: snapshot,
+      normalizeSpaceClass: true,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("is OFF by default, and the stored-snapshot comparators still agree", () => {
+    // **The gate, both directions.** The document's NBSP has been replaced by an
+    // ordinary U+0020 — a real external edit. The watcher's shape (a STORED
+    // snapshot, no `normalizeSpaceClass`) must NOT read that as `ok`, because
+    // `snapshotContradicts` — which gates the editor accept and the `.docx`
+    // apply — is still exact and would refuse. A fix that normalizes
+    // unconditionally passes every spec above and fails only this one.
+    const storedSnapshot = `emails,${NBSP}Teams chats`;
+    doc = makeDoc("We categorized emails, Teams chats, and more.");
+    const full = extractText(doc);
+    const from = off(full.indexOf("emails, Teams chats"));
+    const to = off(from + storedSnapshot.length);
+
+    const strict = validateRange(doc, from, to, { textSnapshot: storedSnapshot });
+    expect(strict.ok).toBe(false);
+
+    const ann = makeAnnotation({
+      range: { from, to },
+      textSnapshot: storedSnapshot,
+    });
+    expect(snapshotContradicts(ann, full.slice(from, to))).toBe(true);
+
+    // ...and the opt-in direction, so this spec cannot be satisfied by a build
+    // in which the option does nothing at all.
+    const lenient = validateRange(doc, from, to, {
+      textSnapshot: storedSnapshot,
+      normalizeSpaceClass: true,
+    });
+    expect(lenient.ok).toBe(true);
   });
 });
 

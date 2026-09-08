@@ -433,6 +433,43 @@ describe("MCP tool integration — annotation tools", () => {
     expect(ok.data.annotationId).toMatch(/^ann_/);
   });
 
+  it("tandem_comment accepts a transcribed snapshot over an NBSP span and stores the real bytes (#1622)", async () => {
+    // The end of the self-contradiction the issue describes: the SAME call
+    // succeeded with `textSnapshot` omitted and then persisted the NBSP-bearing
+    // string as the annotation's snapshot — so the stored value differed from
+    // the rejected one by one invisible codepoint.
+    //
+    // A caller reading `tandem_getTextContent` cannot see the U+00A0, so it
+    // sends back an ordinary space. That is now a match, and what gets STORED is
+    // still `captureSnapshot`'s own slice of the document.
+    const NBSP = "\u00A0";
+    const body = `We categorized emails,${NBSP}Teams chats, and meeting transcripts.`;
+    const ydoc = setupDoc("mcp-ann-nbsp", body);
+    const map = ydoc.getMap<Annotation>(Y_MAP_ANNOTATIONS);
+
+    const span = `categorized emails,${NBSP}Teams chats`;
+    const from = body.indexOf(span);
+    const to = from + span.length;
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_comment",
+        arguments: {
+          from,
+          to,
+          text: "on the sources",
+          // The transcription: an ordinary space where the document has NBSP.
+          textSnapshot: span.replace(NBSP, " "),
+        },
+      }),
+    );
+    expect(parsed.error).toBe(false);
+
+    const stored = map.get(parsed.data.annotationId);
+    expect(stored?.textSnapshot).toBe(span);
+    expect(stored?.textSnapshot).toContain(NBSP);
+  });
+
   it("tandem_comment refuses a range overlapping a heading prefix (Critical Rule 6)", async () => {
     // **Nothing pinned this at the handler level until ADR-035 Unit 8j-2.** The
     // only `INVALID_RANGE` assertions in the suite were in `positions.test.ts`,
@@ -1676,6 +1713,51 @@ describe("MCP tool integration — tandem_scratchpad content seeding (#979)", ()
     // Scratchpad content is deliberately NOT authorship-stamped (ephemeral).
     const ydoc = getOrCreateDocument(created.data.documentId);
     expect(ydoc.getMap(Y_MAP_AUTHORSHIP).size).toBe(0);
+  });
+});
+
+describe("MCP tool integration — tandem_edit space-class snapshot (#1622)", () => {
+  it("accepts a transcribed snapshot over an NBSP span, and still rejects a genuinely absent one", async () => {
+    // **The call site, not the validator.** `positions.test.ts` passes
+    // `normalizeSpaceClass` itself, so it measures the option's implementation
+    // and never that `tandem_edit` opts in — deleting the flag from the handler
+    // leaves every one of those specs green while the product still answers
+    // RANGE_GONE for text that is right there.
+    const NBSP = "\u00A0";
+    const body = `We categorized emails,${NBSP}Teams chats, and more.`;
+    const ydoc = setupDoc("edit-nbsp", body);
+
+    const span = `categorized emails,${NBSP}Teams chats`;
+    const from = body.indexOf(span);
+    const to = from + span.length;
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: {
+          from,
+          to,
+          newText: "those sources",
+          // What a caller reading `tandem_getTextContent` transcribes: it cannot
+          // see the U+00A0, so it sends an ordinary space.
+          textSnapshot: span.replace(NBSP, " "),
+        },
+      }),
+    );
+    expect(parsed.error).toBe(false);
+    expect(extractText(ydoc)).toContain("We those sources, and more.");
+
+    // The control: normalization must not have turned the snapshot check off.
+    // A handler that simply dropped `textSnapshot` would also pass the assertion
+    // above.
+    const gone = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: { from: 0, to: 2, newText: "X", textSnapshot: "not in this document" },
+      }),
+    );
+    expect(gone.error).toBe(true);
+    expect(gone.code).toBe("RANGE_GONE");
   });
 });
 

@@ -54,6 +54,8 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `CONFLICT` | `tandem_convertToMarkdown` could not find a free output filename after exhausting its numbered-suffix attempts. |
 | `RANGE_MOVED` | Target text has moved. Response includes `resolvedFrom`/`resolvedTo` with relocated coordinates. |
 | `RANGE_GONE` | Target text was deleted from the document. |
+
+**Snapshot matching ignores which Unicode space separator you transcribed (#1622).** For the tools that take a caller-supplied `textSnapshot` (`tandem_edit`, `tandem_comment`/`tandem_suggest`), a snapshot that matches the document after mapping U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F and U+3000 to an ordinary U+0020 is accepted as a match, and `RANGE_GONE` now means the text is absent under that normalization too. This exists because `tandem_getTextContent` returns a no-break space faithfully and it is indistinguishable from an ordinary space when you read it back, so the snapshot you construct can never match by exact bytes. Tab, CR and LF are **not** normalized, and neither are zero-width characters. The server's own internal re-anchoring (the file watcher's relocation pass) stays byte-exact.
 | `PERMISSION_DENIED` | File path is not accessible (OS-level permission denied, e.g., `EACCES`). |
 | `DEPRECATED` | A removed tool or parameter was used — the deprecated stubs (`tandem_highlight`, `tandem_suggest`, `tandem_flag`) and `tandem_comment`'s `directedAt`. |
 | `READ_ONLY` | The document is read-only, so the mutation was refused -- **but only three tools spell it this way**: `tandem_applyChanges` (`src/server/mcp/docx-apply.ts:170`), `tandem_restoreBackup` (`src/server/documents/reload-family.ts:342`) and `tandem_rename` (`src/server/mcp/document-service.ts:1174`). The content mutators answer `FORMAT_ERROR` instead, `tandem_save` succeeds session-only with `saved: false` and `reason: "read-only"`, and the annotation tools do not check `readOnly` at all -- annotations are not document content and never reach the file. |
@@ -1001,6 +1003,8 @@ Find text and return a safe position range. **Always use this before `tandem_edi
 ```json
 { "from": 42, "to": 55, "text": "$12.4 million" }
 ```
+
+The search prefers an **exact** match and falls back to the same space-separator normalization described under the range errors above, but only when the exact search finds nothing at all (#1622) — so a pattern you typed with an ordinary space still finds a span the document spells with a no-break space, and the returned `text` carries the document's real bytes.
 
 **Errors:** `INVALID_RANGE` if text not found.
 

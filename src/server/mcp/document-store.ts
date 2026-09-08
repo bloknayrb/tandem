@@ -296,7 +296,15 @@ export class YDocStore {
     to: FlatOffset,
     textSnapshot?: string,
   ): AnchoredRangeResult | (RangeValidation & { ok: false }) {
-    return anchoredRange(this.#ydoc, from, to, textSnapshot, { rejectHeadingOverlap: true });
+    // `normalizeSpaceClass` (#1622): the only caller is `annotations.ts`'s
+    // `tandem_comment`/`tandem_suggest` path, whose `textSnapshot` is the
+    // CALLER's transcription of `tandem_getTextContent` output — where a U+00A0
+    // is invisible. The stored snapshot is still `captureSnapshot`'s own slice,
+    // so a normalized-accepted create persists the document's real bytes.
+    return anchoredRange(this.#ydoc, from, to, textSnapshot, {
+      rejectHeadingOverlap: true,
+      normalizeSpaceClass: true,
+    });
   }
 
   /**

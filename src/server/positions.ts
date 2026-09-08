@@ -159,6 +159,71 @@ export interface RangeValidationOpts extends FlatRangeOpts {
    * than hundreds of identical anonymous lines. Only meaningful with `text`.
    */
   textTag?: HoistTag;
+  /**
+   * Treat a `textSnapshot` that differs from the document only in WHICH Unicode
+   * space separator it uses as a match (#1622). Default **off**.
+   *
+   * Opt-in, and only the two caller-supplied-snapshot sites opt in:
+   * `tandem_edit`'s `validateRange` (`mcp/document.ts`) and
+   * `YDocStore.anchorRange` (`mcp/document-store.ts`, i.e. `tandem_comment` /
+   * `tandem_suggest`). A caller transcribing `tandem_getTextContent` output
+   * cannot see a U+00A0, so its snapshot comes back with U+0020 and today's
+   * exact comparison answers `RANGE_GONE` for text that is right there.
+   *
+   * **The two STORED-snapshot sites must stay exact** — `documents/watcher.ts`'s
+   * relocation probe and relocation anchor. There the snapshot is the server's
+   * own earlier slice, so an external U+00A0→U+0020 edit genuinely IS a document
+   * change; normalizing would make the probe answer `ok` while
+   * `snapshotContradicts` — still exact — refuses the editor accept and the
+   * `.docx` apply, the #1631 divergence shape.
+   *
+   * Default off because that direction fails safely: a forgotten opt-in
+   * reproduces today's visible `RANGE_GONE`, a forgotten opt-out would silently
+   * accept a stale range.
+   */
+  normalizeSpaceClass?: boolean;
+}
+
+/**
+ * Unicode `Zs` (space separator) MINUS U+0020, as a length-preserving 1:1 map
+ * onto U+0020.
+ *
+ * **Length-preserving is the invariant**: one code unit in, one out, so every
+ * offset computed against the normalized copy is valid against the original —
+ * the same constraint `flattenHeadingText` documents. That is what lets the
+ * normalized relocation sweep in `validateRange` hand back offsets that index
+ * the real document.
+ *
+ * Deliberately EXCLUDED, and not to be widened:
+ *  - `\t`, `\r`, `\n` — a newline is a block separator in this coordinate
+ *    system, so collapsing it would let a range cross a block boundary; and tab
+ *    is not a space separator in Unicode.
+ *  - zero-width characters (U+200B, U+FEFF, …) — they are not spaces, and
+ *    mapping one to U+0020 would make two visibly different strings compare
+ *    equal.
+ *
+ * The `g` regex is module-level: `String.prototype.replace` resets `lastIndex`
+ * on a global pattern before it runs, so there is no shared-state hazard.
+ */
+const SPACE_SEPARATORS_EXCEPT_U0020 = /[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g;
+
+/** See {@link SPACE_SEPARATORS_EXCEPT_U0020}. Exported because `mcp/navigation.ts` needs the
+ * IDENTICAL set for `findOccurrence`/`countOccurrences`; a second copy is how the two drift. */
+export function normalizeSpaceClass(s: string): string {
+  return s.replace(SPACE_SEPARATORS_EXCEPT_U0020, " ");
+}
+
+/** Every start offset at which `needle` occurs in `haystack`, overlaps included. */
+function collectOccurrences(haystack: string, needle: string): number[] {
+  const hits: number[] = [];
+  let searchFrom = 0;
+  while (true) {
+    const idx = haystack.indexOf(needle, searchFrom);
+    if (idx === -1) break;
+    hits.push(idx);
+    searchFrom = idx + 1;
+  }
+  return hits;
 }
 
 function invalid(reason: RangeInvalidReason, message: string): FlatRangeValidation & { ok: false } {
@@ -438,6 +503,10 @@ function resolveDocText(
  * `!== undefined`); and with a snapshot `from === to` never reaches `"empty"`,
  * because the slice is `""` and staleness fires first.
  *
+ * `opts.normalizeSpaceClass` (#1622) changes the COMPARISON inside the staleness
+ * step and nothing about this order. See the option's own doc for who opts in
+ * and why the default is off.
+ *
  * **`empty` also wins over the heading check** for a caller without
  * `allowEmpty`: an empty range inside a heading prefix answers `empty`, not
  * `HEADING_OVERLAP`, because emptiness is checked with the other text-side
@@ -464,15 +533,44 @@ export function validateRange(
   const fullText = resolveDocText(ydoc, opts?.text, opts?.textTag);
 
   // Staleness check
+  //
+  // Five steps, in this order (#1622); steps 2 and 4 run only under
+  // `normalizeSpaceClass`, steps 1/3/5 are unconditional and unchanged:
+  //   1. exact slice comparison — the fast path;
+  //   2. normalized-equal AT THESE OFFSETS ⇒ a match, not a relocation. A
+  //      whitespace-class difference is a TRANSCRIPTION difference, not evidence
+  //      the document moved, and answering RANGE_MOVED here would name the very
+  //      offsets the caller just passed — the infinite retry that made the
+  //      issue's own `whitespaceMismatch` proposal unworkable;
+  //   3. exact `indexOf` sweep — still PREFERRED, so a document holding both an
+  //      exact and a normalized-only occurrence relocates to the exact one;
+  //   4. only when the exact sweep is empty, the same sweep over the normalized
+  //      document with the normalized snapshot. Valid on the original because
+  //      the normalization is 1:1 and length-preserving;
+  //   5. RANGE_GONE only when that is empty too — so the error means what it says.
+  //
+  // The normalized full text is built LAZILY, inside step 4 and nowhere else:
+  // step 2 normalizes a slice, not the document, and `validateRange` runs once
+  // per annotation inside the watcher's relocation loop, which hoists its
+  // `extractText` precisely so a per-annotation full-document cost does not come
+  // back (#1752). A cached normalized twin on `RangeValidationOpts.text` is not
+  // the answer either — the hoist's guard is a flat-length comparison and a
+  // second cached string would need its own.
   if (opts?.textSnapshot) {
-    if (fullText.slice(from, to) !== opts.textSnapshot) {
-      const candidates: number[] = [];
-      let searchFrom = 0;
-      while (true) {
-        const idx = fullText.indexOf(opts.textSnapshot, searchFrom);
-        if (idx === -1) break;
-        candidates.push(idx);
-        searchFrom = idx + 1;
+    const normalizing = opts.normalizeSpaceClass === true;
+    const slice = fullText.slice(from, to);
+    const exactHit = slice === opts.textSnapshot;
+    const normalizedHit =
+      !exactHit &&
+      normalizing &&
+      normalizeSpaceClass(slice) === normalizeSpaceClass(opts.textSnapshot);
+    if (!exactHit && !normalizedHit) {
+      let candidates = collectOccurrences(fullText, opts.textSnapshot);
+      if (candidates.length === 0 && normalizing) {
+        candidates = collectOccurrences(
+          normalizeSpaceClass(fullText),
+          normalizeSpaceClass(opts.textSnapshot),
+        );
       }
       if (candidates.length === 0) {
         return { ok: false, code: "RANGE_GONE" };

@@ -762,10 +762,16 @@ export function registerDocumentTools(server: McpServer): void {
             );
           }
 
+          // `normalizeSpaceClass` (#1622): `textSnapshot` here is the CALLER's,
+          // transcribed from `tandem_getTextContent`, where a U+00A0 is
+          // indistinguishable from U+0020 — so an exact-only comparison answers
+          // RANGE_GONE for text that is present. The server's own STORED-snapshot
+          // re-anchoring (the watcher's probe and anchor) stays byte-exact.
           const v = validateRange(r.doc, from, to, {
             textSnapshot,
             rejectHeadingOverlap: true,
             allowEmpty: true,
+            normalizeSpaceClass: true,
           });
           if (!v.ok) {
             if (v.code === "RANGE_GONE") {

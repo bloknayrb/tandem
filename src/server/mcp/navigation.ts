@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { FlatOffset } from "../../shared/positions/types.js";
 import { toFlatOffset } from "../../shared/positions/types.js";
-import { validateFlatRange } from "../positions.js";
+import { normalizeSpaceClass, validateFlatRange } from "../positions.js";
 import { getDocumentStore } from "./document-store.js";
 import { searchOutputShape } from "./output-schemas.js";
 import {
@@ -97,7 +97,21 @@ export function searchText(
   return { matches };
 }
 
-/** Find the nth occurrence of a pattern. Pure logic extracted for testability. */
+/**
+ * Find the nth occurrence of a pattern. Pure logic extracted for testability.
+ *
+ * The pattern is caller-supplied by construction (`tandem_resolveRange`, the
+ * local-model `resolveAnchor`), so when the EXACT sweep finds **zero** matches
+ * it re-sweeps under {@link normalizeSpaceClass} (#1622): a caller transcribing
+ * `tandem_getTextContent` output cannot see a U+00A0 and sends back U+0020, and
+ * the tool the skill recommends for "offsets correct by construction" is then
+ * the one that cannot find the text. Exact wins: the fallback runs only on a
+ * count of zero, never to reach a higher `occurrence`.
+ *
+ * The returned `text` is sliced from the ORIGINAL `fullText`, so the caller sees
+ * the document's real bytes — the offsets are valid there because the
+ * normalization is 1:1 and length-preserving.
+ */
 export function findOccurrence(
   fullText: string,
   pattern: string,
@@ -124,6 +138,33 @@ export function findOccurrence(
       };
     }
   }
+  // The normalized fallback, on an exact count of ZERO only — the identical
+  // trigger `countOccurrences` uses, which is what keeps the two in agreement.
+  if (count === 0) {
+    const normalizedRegex = new RegExp(escapeRegex(normalizeSpaceClass(pattern)), "g");
+    const normalizedText = normalizeSpaceClass(fullText);
+    let normalizedMatch;
+    let normalizedCount = 0;
+    while ((normalizedMatch = normalizedRegex.exec(normalizedText)) !== null) {
+      normalizedCount++;
+      if (normalizedCount === occurrence) {
+        const start = normalizedMatch.index;
+        const end = start + normalizedMatch[0].length;
+        return {
+          from: toFlatOffset(start),
+          to: toFlatOffset(end),
+          // Sliced from the ORIGINAL text, not from `normalizedMatch[0]`: the
+          // caller asked where the text is, and must be handed the bytes that
+          // are actually there.
+          text: fullText.slice(start, end),
+        };
+      }
+    }
+    return {
+      error: `Text "${pattern}" not found (occurrence ${occurrence}, found ${normalizedCount} total)`,
+      totalCount: normalizedCount,
+    };
+  }
   return {
     error: `Text "${pattern}" not found (occurrence ${occurrence}, found ${count} total)`,
     totalCount: count,
@@ -136,13 +177,25 @@ export function findOccurrence(
  * resolve can never disagree. `findOccurrence` only exposes the total on its
  * miss path; callers that need the count on a HIT (e.g. the local-model
  * occurrence-clamp, #1123) use this instead.
+ *
+ * **The pairing covers the {@link normalizeSpaceClass} fallback (#1622), and both
+ * halves fall back only on an exact count of ZERO.** One trigger, evaluated the
+ * same way on both sides, is what keeps the claim above true: a `count <
+ * occurrence` trigger on either side would let one exact match queried at
+ * `occurrence: 2` disagree, and `local-model/tools.ts` clamps on `count === 1`
+ * before calling `findOccurrence`.
  */
 export function countOccurrences(fullText: string, pattern: string): number {
   if (pattern === "") return 0;
   const regex = new RegExp(escapeRegex(pattern), "g");
   let count = 0;
   while (regex.exec(fullText) !== null) count++;
-  return count;
+  if (count > 0) return count;
+  const normalizedRegex = new RegExp(escapeRegex(normalizeSpaceClass(pattern)), "g");
+  const normalizedText = normalizeSpaceClass(fullText);
+  let normalizedCount = 0;
+  while (normalizedRegex.exec(normalizedText) !== null) normalizedCount++;
+  return normalizedCount;
 }
 
 /** Extract context window around a range. Pure logic extracted for testability. */
