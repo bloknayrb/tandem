@@ -62,12 +62,20 @@ macOS Keychain, Linux Secret Service):
   feature is enabled. Present only if you have added a key.
 
 Whether these entries actually reach your OS keychain on the desktop app is
-tracked as unresolved in **#1761**: the issue was filed when the Rust `keyring`
-dependency had no platform backend compiled in and every "stored" secret went to
-an in-memory stand-in. The dependency has since moved to a version whose
-lockfile does pull the macOS, Windows and Linux stores in, but nobody has
-re-checked the round-trip on any platform, so treat "these entries exist" as
-expected rather than confirmed. Nothing here is lost if they do not: the
+tracked in **#1761**, and the bound is now narrower than that issue's title
+suggested. The issue was filed against `keyring` 3.x, which shipped no default
+backend, so every "stored" secret went to an in-memory stand-in. The dependency
+is now `keyring = "4"` (4.2.0), whose default `v1` feature pulls in the Apple,
+Windows and Secret-Service stores and whose `Entry::new` selects the platform
+store on first use — and which has **no mock to fall through to**: on a platform
+it cannot serve, `Entry::new` returns an error rather than silently succeeding.
+So the in-memory stand-in is gone by construction.
+
+What is still unconfirmed is narrower: nobody has run the round-trip on any
+platform (write a secret, restart, read it back), and Tandem never calls
+`Entry::store_status()`, so a machine whose credential store fails to initialise
+takes the file fallback with no diagnostic. Treat "these entries exist" as
+expected rather than observed. Nothing here is lost if they do not: the
 consequence is that a secret has to be re-entered, not that it leaks.
 
 ## Entries Tandem writes into other programs' config

@@ -21,6 +21,28 @@ the orchestrator. **`cargo` did not build during the review** (no GTK); it does 
 | M | `sidecar.rs:567-601` | Health poll accepts any 2xx, including from an old process. | [read] | Source-confirmed | [#1812](https://github.com/bloknayrb/tandem/issues/1812) |
 | L | `sidecar.rs:443`; capabilities; `show_in_file_manager`; `lib.rs:1942,1985` + `tutorial-annotations.ts:64-68`; `firewall.rs:850-875`; `license.ts:126` | Sidecar inherits the shell env (`TANDEM_MCP_PORT` / `TANDEM_BIND_HOST` leak); capabilities over-grant `shell:default` / `fs:default` and five commands have no client caller (including `cowork_apply_token`); `show_in_file_manager` path unconfined (UNC only); `welcome.md` copied only if absent so a changed tutorial is dropped for upgraders; u8 underflow (unreachable); `LICENSE_UPDATE_ENDPOINT` not asserted https; `tandem activate <dir>` uncaught. | [read] | Agent-reported | [#1825](https://github.com/bloknayrb/tandem/issues/1825) |
 
+## Superseded since the review — 2026-09-08
+
+**The keyring High is largely resolved, and not by anyone acting on it.** `Cargo.toml:47` is now
+`keyring = "4"` (4.2.0; `Cargo.lock:3275-3284` resolves `apple-native-keyring-store`,
+`windows-native-keyring-store`, `zbus-secret-service-keyring-store`). keyring 4's default `v1`
+feature *is* those three stores, and `Entry::new` lazily calls `keyring_core::set_default_store`
+with the cfg-selected one — so the `set_default_store` call this repo appears to be missing lives
+inside the crate. There is **no mock to fall through to**: an unsupported platform gets
+`Error::NoDefaultStore`, not a silent success.
+
+That kills three claims in the row above — the mock `set_password`, the fresh token per
+`get_or_create_token()`, and "#1455's root cause". #1455 should be re-checked rather than assumed
+fixed: its stated cause no longer exists, which says nothing about whether it still reproduces.
+
+The bump came from `c991b816`, "chore(deps): Bump the cargo-dependencies group" — Dependabot. So
+nothing closed #1761, and the finding sat here reading as live for a week. #1761 is now re-scoped
+to what is genuinely still open: no round-trip test on any platform, and `Entry::store_status()`
+never called, so a credential store that fails to initialise takes the file fallback (in
+`token_store.rs`) or fails silently (in `keychain.rs`, which has no fallback) with no diagnostic.
+
+Both keychain smoke lines below remain unrun.
+
 ## Leads not run (hardware)
 
 All in [smoke-lines.md](../smoke-lines.md): keychain persistence and the Cowork 401; the Windows
