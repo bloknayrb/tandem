@@ -62,6 +62,8 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `BACKUP_FAILED` | `tandem_applyChanges` could not write its backup, so it refused to touch the original. |
 | `INVALID_NAME` | `tandem_rename` was given a name that is empty, path-separated, or otherwise unusable. |
 | `INVALID_PATH` | A supplied path was relative where an absolute one is required, or used a UNC / extended-length / device-namespace prefix. |
+| `NOT_OWNED` | `tandem_editAnnotation` or `tandem_annotationReply` was aimed at an annotation Claude did not author. Authority over a user's own card belongs to the user; answer it with `tandem_reply` or a fresh `tandem_comment` ([#1770](https://github.com/bloknayrb/tandem/issues/1770)). |
+| `ACCEPT_REFUSED` | `tandem_resolveAnnotation({ action: "accept" })` on Claude's own annotation, or on one carrying `suggestedText`. Accept is the user's decision; `dismiss` withdraws instead (#1770). |
 | `SEARCH_BUSY` | `tandem_search` with `regex: true` was called while its worker queue -- one search running plus three waiting -- was already full. Retry. |
 
 ## Coordinate System
@@ -440,10 +442,13 @@ Check editor status (running state, open documents, active document) and optiona
   ],
   "documentCount": 2,
   "mode": "tandem",
+  "modeProvenance": { "source": "client", "connection": "a1b2c3d4", "at": 1710936000000, "value": "tandem" },
   "storeReadOnly": false,
   "wakeUrl": "ws://127.0.0.1:3479/api/wake"
 }
 ```
+
+`modeProvenance` says who last wrote the CTRL_ROOM mode key -- `client` with an opaque per-connection tag, `server` with the origin tag of the helper that wrote it, `restore` (the value arrived with the ctrl-session replay), or `unknown` -- when, and what the key read at that moment. It is `null` before any write has been observed. It names the last *transaction that touched the key*, which under a lost concurrent tie is not necessarily the writer of the value `mode` reports: compare `modeProvenance.value` against `mode`. MCP only (loopback, or token-gated on LAN); `GET /api/mode` does not carry it.
 
 `storeReadOnly` reports whether the durable annotation store could take its lock; when `true`, annotations live only for this run. `wakeUrl` is the `/api/wake` WebSocket endpoint ([ADR-049](decisions.md)) -- where the client can hold a persistent watch, arming one there is the push path that needs no install and no flag. It is omitted when no endpoint is available (stdio mode). See [architecture.md](architecture.md) for how it relates to the other push paths.
 
@@ -633,10 +638,12 @@ Read annotations, optionally filtered by author/type/status. For checking new us
 
 User notes are **always excluded** — they are private to the user (ADR-027) and cannot be requested via any filter. Imported `.docx` reviewer comments land as private notes (`author: "import"`, `type: "note"`) and stay excluded until the user batch-promotes them via the side rail, at which point they surface as `author: "user"`, `type: "comment"`. The `notesExcluded` response field reports how many notes were filtered out (including not-yet-promoted imports). Each returned annotation includes a `replies` array (comment parents only; user-private replies are stripped).
 
+Since [#1619](https://github.com/bloknayrb/tandem/issues/1619)/[#1710](https://github.com/bloknayrb/tandem/issues/1710), records whose stored `audience` is not `outbound` are **excluded on every Claude-facing read**, matching the channel. That covers user highlights (ADR-027 has always said they are not sent to Claude) and any legacy or stale-tab `{type: "comment", audience: "private"}` record. The `privateExcluded` response field reports the count; it is omitted when zero.
+
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `author` | enum | no | `user`, `claude`, or `import` |
-| `type` | enum | no | `highlight`, `comment` |
+| `type` | enum | no | `highlight`, `comment` — `highlight` returns nothing: every highlight is stamped `audience: "private"` (ADR-027) and `tandem_highlight` is a deprecated stub, so no outbound highlight exists to return |
 | `status` | enum | no | `pending`, `accepted`, `dismissed` |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
@@ -668,18 +675,40 @@ User notes are **always excluded** — they are private to the user (ADR-027) an
 
 ### tandem_resolveAnnotation
 
-Accept or dismiss an annotation.
+Withdraw one of Claude's own annotations, or record a dismissal. **Accepting
+Claude's own work is the user's decision and is refused here** (#1770).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `id` | string | yes | Annotation ID |
-| `action` | enum | yes | `accept` or `dismiss` |
+| `action` | enum | yes | `accept` or `dismiss` — `accept` is refused on Claude's own record and on any record carrying `suggestedText` |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
 ```json
-{ "id": "ann_1710936000000_a1b2c3", "status": "accepted" }
+{ "id": "ann_1710936000000_a1b2c3", "status": "dismissed" }
 ```
+
+**Who may accept.** Accepting is the act of agreeing to a proposal, and the only
+party who can agree to Claude's proposal is the user. Two cases are refused with
+`ACCEPT_REFUSED`:
+
+- **Claude's own annotation.** Use `dismiss` to withdraw it — that is what a
+  change of mind looks like. A record Claude resolves is stamped
+  `resolvedBy: "claude"` and is deliberately **excluded from `userResponses`** on
+  the next `tandem_checkInbox`, so Claude never reads its own withdrawal back as
+  the user's verdict.
+- **Any annotation carrying `suggestedText`.** An MCP accept flips a status field
+  and applies no text; the replacement lands only when the user accepts it in the
+  editor, or via `tandem_applyChanges`. Accepting one over MCP would leave the
+  document unchanged while the card claimed the suggestion had been taken.
+
+Everything else goes through. Dismissing a **user-authored** comment closes a
+thread rather than claiming agreement, and **accepting** one that carries no
+`suggestedText` is permitted too — there is no proposal of Claude's to agree to,
+and it is the only way an imported Word comment can be closed over MCP. Both are
+stamped `resolvedBy: "claude"` and both stay out of `userResponses`, so the
+record never reads back as the user's own decision.
 
 ---
 
@@ -701,7 +730,7 @@ Delete an annotation permanently.
 
 ### tandem_editAnnotation
 
-Edit the content of an existing annotation. Only pending annotations can be edited.
+Edit the content of an annotation Claude authored. Only pending annotations can be edited; a user-authored or imported record returns `NOT_OWNED` (#1770).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -716,7 +745,8 @@ Edit the content of an existing annotation. Only pending annotations can be edit
 { "id": "ann_1710936000000_a1b2c3", "content": "Updated: ...", "suggestedText": "replacement text if set", "editedAt": 1710936500000 }
 ```
 
-**Errors:** `NO_DOCUMENT` (document not found), error if annotation not found or not pending.
+**Errors:** `NO_DOCUMENT` (document not found), `NOT_OWNED` (the annotation was
+authored by the user), error if annotation not found or not pending.
 
 **Example:**
 ```
@@ -727,6 +757,9 @@ tandem_editAnnotation({
 ```
 
 **Notes:**
+- **Only Claude's own annotations can be edited (#1770).** A user-authored card
+  is the user's text; rewriting it would silently put words in their mouth, and
+  the editor shows no authorship change. Editing one returns `NOT_OWNED`.
 - At least one of `content`, `reason`, or `newText` must be provided.
 - `reason` is an alias for `content` — if both are provided, `content` takes precedence.
 - Only pending annotations can be edited — accepted or dismissed annotations return an error.
@@ -737,7 +770,7 @@ tandem_editAnnotation({
 
 ### tandem_annotationReply
 
-Reply to an annotation thread. Only works on pending annotations.
+Reply to a thread on an annotation Claude authored. Only works on pending annotations; a user-authored or imported parent — including a promoted note or Word comment, stored as a user comment — returns `NOT_OWNED` (#1770).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -750,7 +783,7 @@ Reply to an annotation thread. Only works on pending annotations.
 { "replyId": "reply_1710936500000_x1y2z3", "annotationId": "ann_1710936000000_a1b2c3" }
 ```
 
-**Errors:** `NO_DOCUMENT` (document not found), `NOT_FOUND` (annotation not found), `ANNOTATION_RESOLVED` (annotation already resolved).
+**Errors:** `NO_DOCUMENT` (document not found), `NOT_FOUND` (annotation not found), `NOT_OWNED` (the annotation was authored by the user), `ANNOTATION_RESOLVED` (annotation already resolved).
 
 **Example:**
 ```
@@ -761,6 +794,11 @@ tandem_annotationReply({
 ```
 
 **Notes:**
+- **Claude may only reply inside threads it started (#1770).** A user's comment
+  is addressed *to* Claude, not a thread Claude is a participant in — answer it
+  with `tandem_reply` (chat) or a fresh `tandem_comment`. A user-authored parent
+  returns `NOT_OWNED`. The user's own replies inside Claude's thread are
+  unaffected, as is the user replying in their own note thread (#1000).
 - Replies are threaded under the parent annotation. The editor renders them as a conversation.
 - Only pending annotations accept replies — resolved annotations return `ANNOTATION_RESOLVED`.
 - The reply author is set to `"claude"` when called via MCP.
@@ -779,6 +817,8 @@ Export all annotations as a formatted summary. Useful for review reports.
 | `outputPath` | string | no | Custom sidecar path for `writeToDisk` — a file path, or an existing directory the default filename is appended to. Must be **absolute** (a relative path would silently resolve against the server's CWD), and UNC / extended-length / device-namespace prefixes are rejected. The final filename must end in `.annotations.md` or `.annotations.json`, matching `format`; the destination **directory** is unrestricted ([#1654](https://github.com/bloknayrb/tandem/issues/1654)). |
 
 Solo mode applies here: while Solo is on, held comments and replies are withheld from the export and the count is disclosed as `heldFromExport` rather than being silently omitted.
+
+The sidecar and the response carry `heldFromExport` and `privateExcluded` as **two separate floors** — the first counts what the Solo hold withheld, the second what ADR-027's audience gate withheld before it (#1619/#1710) — and both are absent when zero. Neither count appears in the markdown text.
 
 **Errors:** `INVALID_PATH` — `outputPath` is relative, carries a UNC / extended-length / device-namespace prefix, contains a colon in the filename (NTFS alternate data stream), or names a file whose suffix is not `.annotations.md` / `.annotations.json` matching `format`. `FILE_NOT_FOUND` — the destination directory does not exist.
 
@@ -1017,6 +1057,7 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
   "summary": "1 new: 1 comment. 1 accepted. 1 new chat message.",
   "hasNew": true,
   "mode": "tandem",
+  "modeProvenance": { "source": "client", "connection": "a1b2c3d4", "at": 1710936000000, "value": "tandem" },
   "storeReadOnly": false,
   "userActions": [ { ...annotation, "textSnippet": "...", "edited": true, "alreadyPushed": true } ],
   "userReplies": [ { "id": "r_...", "annotationId": "ann_...", "author": "user", "text": "...", "timestamp": 1710936000000, "textSnippet": "...", "alreadyPushed": true } ],
@@ -1033,11 +1074,12 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
 
 **Notes:**
 - Each annotation is surfaced only once -- subsequent calls return only new items (edited annotations re-surface with `edited: true`).
-- `userActions`: new or edited user comments. User notes and highlights never surface here (ADR-027).
-- `userResponses`: the user's accept/dismiss decisions on Claude's annotations.
+- `userActions`: new or edited user comments. User notes and highlights never surface here (ADR-027) — and since #1619 neither does any record whose stored `audience` is not `outbound`, on either bucket, matching the channel.
+- `userResponses`: the **user's** accept/dismiss decisions on Claude's annotations. A record Claude resolved itself carries `resolvedBy: "claude"` and never appears here — reading one's own withdrawal back as a verdict is how a dismissal became "the user rejected it" (#1770). The ledger keys a Claude-authored record on `(id, status)`, so a decision made after an Undo is a fresh entry rather than a silently deduped one.
 - **Channel push never suppresses an inbox item.** An item is always returned; when it was also handed to a real-time consumer it carries `alreadyPushed: true` (`userActions` and `userReplies` only -- `userResponses` never carries the flag). The server can observe that it pushed an event to a consumer, but not that any model received it: an attached channel shim whose host never negotiated the channel accepts the notification and discards it. The flag is advisory in **both** directions -- it can be set for an item no model saw, and it is dropped once the event leaves the channel buffer, so its absence is not evidence the item wasn't pushed. (Buffer eviction is size- and age-triggered but runs only when a *later* event is pushed -- there is no timer -- so on a quiet document the flag can outlive the nominal 60s age bound by an unbounded margin. Ids are also process-global rather than per-document; the same imported Word comment promoted in two files shares one id.) Never skip an item on the strength of this flag. (This was previously a suppression, which silently dropped user comments and replies for any client without a working channel -- the default configuration.)
 - `chatMessages`: new chat messages from the user via the ChatPanel sidebar. Each entry has `id`, `author`, `text`, `timestamp`, and optionally `documentId` (the document that was active when the message was sent).
 - `mode`: the user's current collaboration mode (`"tandem"` or `"solo"`). In `"solo"` mode, hold annotations and wait for the mode to switch to `"tandem"` before resuming.
+- `modeProvenance`: who last wrote the mode key (`client` + an opaque connection tag, `server` + origin tag, `restore`, or `unknown`), when, and what the key read at that moment; `null` before any write is observed. It names the last transaction that *touched* the key, so under a lost concurrent tie it is not necessarily the writer of the reported `mode` -- compare `modeProvenance.value` against `mode`.
 
 ---
 
@@ -1131,7 +1173,7 @@ Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/healt
 | `GET /api/info` | App metadata for the About panel. | scrubs non-public fields |
 | `GET /api/diagnostics` | `tandem doctor` report + host info. | loopback-only by hand (403) |
 | `GET /api/notify-stream` | SSE stream of server notifications. | — |
-| `GET /api/mode` · `POST /api/mode/release` | Read / release Solo mode. | origin + loopback |
+| `GET /api/mode` · `POST /api/mode/release` | Read / release Solo mode. `POST /api/mode/release` no longer writes the mode key: it answers 409 `MODE_NOT_TANDEM` when the room does not read Tandem, and releases nothing (#1769). | origin + loopback |
 | `GET /api/license/status` · `POST /api/license/activate` | License status and activation. | origin + loopback |
 | `POST /api/open` | Open a file by absolute path. | **one layer** |
 | `POST /api/close` | Close a document by id. | **one layer** |

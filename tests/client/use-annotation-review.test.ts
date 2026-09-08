@@ -80,29 +80,28 @@ describe("getReviewTargets (filter applied at review callsite)", () => {
   });
 });
 
-// B2: accept-failure toast. When `applySuggestion` can't resolve an
-// annotation's range, `resolveAnnotation` reverts the annotation to
-// "pending" — this proves `onApplyFailed` fires on that same path so the
-// caller can surface a toast instead of failing silently.
-describe("useAnnotationReview — onApplyFailed (B2)", () => {
-  /**
-   * Mounts the hook via a real Svelte component (onDestroy/$state require
-   * component-init context) and hands the returned API back synchronously.
-   */
-  function mountReview(params: Parameters<typeof useAnnotationReview>[0]) {
-    let api: ReturnType<typeof useAnnotationReview> | undefined;
-    render(UseAnnotationReviewHarness, {
-      props: {
-        params,
-        onReady: (returned: ReturnType<typeof useAnnotationReview>) => {
-          api = returned;
-        },
+/**
+ * Mounts the hook via a real Svelte component (onDestroy/$state require
+ * component-init context) and hands the returned API back synchronously.
+ *
+ * Module-scoped because two describes drive the hook now: the B2 toast path
+ * and the `resolvedBy` revert at the bottom of this file.
+ */
+function mountReview(params: Parameters<typeof useAnnotationReview>[0]) {
+  let api: ReturnType<typeof useAnnotationReview> | undefined;
+  render(UseAnnotationReviewHarness, {
+    props: {
+      params,
+      onReady: (returned: ReturnType<typeof useAnnotationReview>) => {
+        api = returned;
       },
-    });
-    if (!api) throw new Error("useAnnotationReview did not report ready");
-    return api;
-  }
+    },
+  });
+  if (!api) throw new Error("useAnnotationReview did not report ready");
+  return api;
+}
 
+describe("useAnnotationReview — onApplyFailed (B2)", () => {
   it("reverts to pending and calls onApplyFailed when the suggestion range can't resolve", () => {
     const ydoc = new Y.Doc();
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -228,5 +227,90 @@ describe("useAnnotationReview — onApplyFailed (B2)", () => {
 
     expect(onApplyFailed).not.toHaveBeenCalled();
     expect((map.get(ann.id) as Annotation).status).toBe("accepted");
+  });
+});
+
+/**
+ * #1770 review round 1 — `resolvedBy` must not outlive the resolution it names.
+ *
+ * `sanitizeAnnotation` carries a stored `resolvedBy` through, so both client
+ * revert writes used to spread it back onto a record they were putting BACK to
+ * `pending`. `awareness.ts`'s `userResponses` bucket excludes
+ * `resolvedBy === "claude"` — so a user who then accepts that record has their
+ * decision permanently misattributed to Claude and reported to nobody.
+ *
+ * Reachable through a concurrent user Accept vs a Claude
+ * `tandem_resolveAnnotation` dismiss on one pending record: the client passes
+ * its own pending gate before Claude's write lands, Claude's write wins the
+ * Y.Map tie, and the id is in `recentlyResolved`, so Undo is offered on a
+ * record already stamped `claude`.
+ */
+describe("useAnnotationReview — the revert clears resolvedBy (#1770)", () => {
+  it("strips a claude stamp when a dismissal is undone", () => {
+    const ydoc = new Y.Doc();
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    // Claude's own dismiss, as `transitionPending` writes it.
+    const ann = {
+      ...makeAnnotation({
+        id: "claude-dismissed",
+        author: "claude",
+        type: "comment",
+        status: "dismissed",
+      }),
+      resolvedBy: "claude" as const,
+    };
+    map.set(ann.id, ann);
+
+    const review = mountReview({
+      getYdoc: () => ydoc,
+      // No suggestedText, so the text-restore branch is never entered and the
+      // status write is the only thing under test.
+      getEditor: () => null,
+      getAnnotations: () => [map.get(ann.id) as Annotation],
+      onActiveAnnotationChange: () => {},
+      getScrollBehavior: () => "auto",
+    });
+
+    expect(review.undoResolveAnnotation(ann.id)).toBe(true);
+
+    const after = map.get(ann.id) as Annotation;
+    expect(after.status).toBe("pending");
+    expect(after.resolvedBy, "a pending record has not been resolved by anyone").toBeUndefined();
+  });
+
+  it("strips it on the apply-failure revert too, which is the other write", () => {
+    // Both revert sites spread the sanitized record, so a fix applied to only
+    // one of them leaves this green — hence a row per site.
+    const ydoc = new Y.Doc();
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const ann = {
+      ...makeAnnotation({
+        id: "unresolvable-stamped",
+        author: "claude",
+        type: "comment",
+        status: "pending",
+        suggestedText: "replacement text",
+        range: undefined,
+      }),
+      resolvedBy: "claude" as const,
+    };
+    map.set(ann.id, ann);
+
+    const editor = { state: { doc: {} }, chain: vi.fn() } as unknown as TiptapEditor;
+
+    const review = mountReview({
+      getYdoc: () => ydoc,
+      getEditor: () => editor,
+      getAnnotations: () => [map.get(ann.id) as Annotation],
+      onActiveAnnotationChange: () => {},
+      getScrollBehavior: () => "auto",
+      onApplyFailed: () => {},
+    });
+
+    review.resolveAnnotation(ann.id, "accepted");
+
+    const after = map.get(ann.id) as Annotation;
+    expect(after.status).toBe("pending");
+    expect(after.resolvedBy).toBeUndefined();
   });
 });

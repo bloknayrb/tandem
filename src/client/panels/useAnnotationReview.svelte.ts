@@ -506,6 +506,27 @@ export function useAnnotationReview({
     return getAnnotations().filter(isPendingReviewTarget);
   }
 
+  /**
+   * The record to write when a resolution is rolled back or undone.
+   *
+   * **`resolvedBy` must not outlive the resolution it describes (#1770).** It
+   * names who performed THIS resolution, and `sanitizeAnnotation` carries the
+   * stored value through — so a plain `{ ...ann, status: "pending" }` revert
+   * leaves `resolvedBy: "claude"` on a record the USER then re-resolves, and
+   * `awareness.ts`'s `userResponses` bucket excludes `resolvedBy === "claude"`,
+   * so the user's own accept is reported to nobody, forever.
+   *
+   * Reachable, not theoretical: a user Accept concurrent with a Claude
+   * `tandem_resolveAnnotation` dismiss on the same pending record. The client
+   * passes its own pending gate before Claude's write lands, Claude's write wins
+   * the Y.Map tie, and the id is in `recentlyResolved` — so Undo is offered on a
+   * record already stamped `claude`.
+   */
+  function revertedToPending(ann: Annotation): Annotation {
+    const { resolvedBy: _resolvedBy, ...rest } = ann;
+    return { ...rest, status: "pending" };
+  }
+
   function resolveAnnotation(id: string, status: "accepted" | "dismissed") {
     const y = getYdoc();
     if (!y) return;
@@ -533,7 +554,7 @@ export function useAnnotationReview({
         const applied = applySuggestion(ann, editor, y, getFormat?.());
         if (!applied) {
           // Revert annotation status — text replacement failed
-          withBrowser(y, () => map.set(id, { ...ann, status: "pending" }));
+          withBrowser(y, () => map.set(id, revertedToPending(ann)));
           onApplyFailed?.(ann);
           return;
         }
@@ -729,7 +750,7 @@ export function useAnnotationReview({
       }
     }
 
-    withBrowser(y, () => map.set(id, { ...ann, status: "pending" as const }));
+    withBrowser(y, () => map.set(id, revertedToPending(ann)));
     removeFromResolved(id);
     if (lastResolvedId === id) {
       lastResolvedId = null;

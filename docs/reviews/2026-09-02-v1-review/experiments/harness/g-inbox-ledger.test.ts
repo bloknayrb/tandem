@@ -1,3 +1,16 @@
+/**
+ * SUPERSEDED by `tests/server/inbox-ledger-undo.test.ts` (#1770, 2026-09-07).
+ *
+ * This file is a frozen review artifact — it lives outside `tests/`, so vitest
+ * never collects it, and its first case asserts the BUG (`userResponses`
+ * empty after an undo). That assertion is now false: `inboxLedgerKey` keys a
+ * Claude-authored record on `(id, status)`, so the dismissal surfaces. Do not
+ * "fix" this file — read the real spec instead, which also carries the dedup
+ * row this one lacks.
+ *
+ * The SECOND case is #1826's, not #1770's, and still reproduces.
+ */
+
 import { describe, expect, it } from "vitest";
 import { processInboxAnnotations } from "../../../../../src/server/mcp/awareness.js";
 import type { Annotation } from "../../../../../src/shared/types.js";

@@ -27,7 +27,7 @@ const { tandemMode, onModeChange }: Props = $props();
     type="button"
     data-testid="mode-solo-btn"
     class={tandemMode === "solo" ? "on" : ""}
-    title="Write undisturbed — your AI pauses and won't see your comments or edits until you switch back to Tandem"
+    title="Write undisturbed — your comments and replies aren't sent to your AI until you switch to Tandem (chat and document edits still work)"
     aria-pressed={tandemMode === "solo"}
     onclick={() => onModeChange("solo")}
   >Solo</button>

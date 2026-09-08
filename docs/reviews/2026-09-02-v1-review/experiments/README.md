@@ -43,7 +43,7 @@ under `tests/client/` when the fix lands.
 | `harness/e-keys.test.ts` | #1777: Ctrl+Enter inserts a hard break and resolves the pending annotation; AltGr letters on pl/ro/cs/de layouts fire shortcuts (synthetic events; the Playwright lane confirmed the DOM half). |
 | `harness/f-undo.test.ts`, `f2-undo.test.ts`, `f3-undo.test.ts` | #1764: plain undo recovers the block-split collapse; after a re-anchor, undo trips the inverted-range guard and the range is `failed` forever. |
 | `harness/d-flat.test.ts` | PM ↔ flat mapping byte-identical to the server's `extractText` on 24 corpus shapes (verified fine). |
-| `harness/g-inbox-ledger.test.ts` | #1770 item 3: accept → poll → undo → dismiss → poll returns `userResponses: []`. |
+| `harness/g-inbox-ledger.test.ts` | #1770 item 3: accept → poll → undo → dismiss → poll returns `userResponses: []`. **Case 1 is fixed and superseded by `tests/server/inbox-ledger-undo.test.ts`; case 2 is #1826's and still reproduces.** |
 
 The six client Highs were also confirmed in a real browser (Playwright on the reserved harness
 ports); that spec was deleted after the run and its log is `../raw/verify-client.txt`.

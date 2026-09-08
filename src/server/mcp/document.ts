@@ -26,6 +26,7 @@ import { type OpenSuccess, openFromDisk, openScratchpad, toWireResult } from "..
 import { getWakeEndpoint } from "../events/wake-socket.js";
 import { mdParser } from "../file-io/markdown.js";
 import { appendMdast, buildListItemsFromTree } from "../file-io/mdast-ydoc.js";
+import { readModeProvenance } from "../mode.js";
 // Position system
 import { anchoredRange, describeRangeFailure, validateRange } from "../positions.js";
 import { saveSession } from "../session/manager.js";
@@ -1356,6 +1357,9 @@ export function registerDocumentTools(server: McpServer): void {
           return mcpStructured({
             running: true,
             mode,
+            // #1733: who last wrote the mode key (opaque connection tag, server
+            // origin tag, restore, or unknown), and what it read at that moment.
+            modeProvenance: readModeProvenance(),
             storeReadOnly: isStoreReadOnly(),
             ...(wakeUrl ? { wakeUrl } : {}),
             activeDocument: active

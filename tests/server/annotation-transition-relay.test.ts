@@ -95,6 +95,11 @@ function relayedFor(filePath: string): string[] {
   return errors.filter((e) => e.includes("legacy migration") && e.includes(hash));
 }
 
+// #1770: every seed in this describe is USER-authored. Accept is the user's
+// decision, so `transitionPending` refuses an accept of a CLAUDE-authored record
+// with `accept-refused/own-annotation` — which would make every row here assert
+// a relay on a path that gave up before the write. `audience: "outbound"` is
+// kept explicit: sanitize demotes only user note/highlight/flag.
 describe("YDocStore.acceptAnnotation relays sanitization events", () => {
   it("emits exactly one migration line, keyed to the store's own docHash", () => {
     // `question` is the fixture because it survives BOTH guards: it sanitizes
@@ -102,7 +107,7 @@ describe("YDocStore.acceptAnnotation relays sanitization events", () => {
     // transition completed. A fixture that gets refused cannot do the second
     // half, which is how a relay spec passes on a path that gave up early.
     const { store, filePath } = storeFor("accept");
-    seed("q1", { type: "question", author: "claude", audience: "outbound" });
+    seed("q1", { type: "question", author: "user", audience: "outbound" });
 
     const result = store.acceptAnnotation("q1");
 
@@ -114,7 +119,7 @@ describe("YDocStore.acceptAnnotation relays sanitization events", () => {
 
   it("dismiss relays too — the two share a body and can still diverge at the store", () => {
     const { store, filePath } = storeFor("dismiss");
-    seed("q2", { type: "question", author: "claude", audience: "outbound" });
+    seed("q2", { type: "question", author: "user", audience: "outbound" });
 
     expect(store.dismissAnnotation("q2").kind).toBe("ok");
     expect(relayedFor(filePath)).toHaveLength(1);
@@ -142,7 +147,7 @@ describe("YDocStore.acceptAnnotation relays sanitization events", () => {
     // from correct code at all, because for a minted record raw and sanitized
     // are the same object.
     const { store } = storeFor("sanitized-write");
-    seed("q9", { type: "question", author: "claude", audience: "outbound" });
+    seed("q9", { type: "question", author: "user", audience: "outbound" });
 
     const result = store.acceptAnnotation("q9");
 
@@ -160,7 +165,7 @@ describe("YDocStore.acceptAnnotation relays sanitization events", () => {
     // One sink argument covers every kind, so these are cheap — but "cheap to
     // add" is not "already asserted".
     const { store, filePath } = storeFor(`kind-${kind}`);
-    seed("k1", { author: "claude", audience: "outbound", ...extra });
+    seed("k1", { author: "user", audience: "outbound", ...extra });
 
     expect(store.acceptAnnotation("k1").kind).toBe("ok");
 
@@ -173,7 +178,7 @@ describe("YDocStore.acceptAnnotation relays sanitization events", () => {
     // or a spy that captures some other console.error — passes every spec
     // above.
     const { store, filePath } = storeFor("clean");
-    seed("c1", { type: "comment", author: "claude", audience: "outbound" });
+    seed("c1", { type: "comment", author: "user", audience: "outbound" });
 
     expect(store.acceptAnnotation("c1").kind).toBe("ok");
     expect(relayedFor(filePath)).toHaveLength(0);
@@ -189,7 +194,7 @@ describe("YDocStore.acceptAnnotation relays sanitization events", () => {
     // assertion above survives it; only the docHash in the body distinguishes
     // the two, and `logLegacyMigration` prints `(no docHash)` for the mutant.
     const { store, filePath } = storeFor("keyed");
-    seed("q3", { type: "question", author: "claude", audience: "outbound" });
+    seed("q3", { type: "question", author: "user", audience: "outbound" });
 
     store.acceptAnnotation("q3");
 
@@ -205,8 +210,8 @@ describe("YDocStore.acceptAnnotation relays sanitization events", () => {
     // around; a reader who does not know it exists cannot tell why the header
     // insists on `resetMigrationLog`.
     const { store, filePath } = storeFor("dedup");
-    seed("q4", { type: "question", author: "claude", audience: "outbound" });
-    seed("q5", { type: "question", author: "claude", audience: "outbound" });
+    seed("q4", { type: "question", author: "user", audience: "outbound" });
+    seed("q5", { type: "question", author: "user", audience: "outbound" });
 
     // Both arms asserted, because "one line" is also what a mutant that makes
     // the second transition fail early produces — and that reads as dedup
