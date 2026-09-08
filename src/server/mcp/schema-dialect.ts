@@ -45,7 +45,7 @@
  * ## Why input schemas too, when only output schemas were rejected
  *
  * The bug report inferred that input schemas were accepted because they omit
- * `$schema`. They do not — all 32 carry the identical draft-07 declaration, and
+ * `$schema`. They do not — all 33 carry the identical draft-07 declaration, and
  * the only reason they pass is that the client does not currently run them
  * through the same validator. Fixing one half would leave the other half armed
  * against exactly the client-side tightening that produced this issue.

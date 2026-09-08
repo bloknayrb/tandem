@@ -70,7 +70,9 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // bump ships to nobody. Pinning the current number forces a deliberate look here whenever
   // the version moves — including for an unrelated edit, which is the cost of the guard, not
   // a bug in it. When you land here: confirm the assertions below still describe the shipped
-  // wake instructions, then move the number. Last moved to 15 by the J1 group (#1771, #1820,
+  // wake instructions, then move the number. Last moved to 17 by the #1821 docs-drift group B:
+  // Hard Rule 1 now says offsets are UTF-16 code units, not characters. The wake section was
+  // re-read against the bumped file and is unchanged. Before that, to 15 by the J1 group (#1771, #1820,
   // #1737): the dead Word-comment recipe fix, four SKILL.md content gaps (stale Hard Rule 4,
   // the missing tandem_annotationReply/Edit-Write/sub-agent-inbox rules), and the
   // mid-paragraph line-break rule. The sub-agent-inbox rule (Hard Rule 7) DOES reach into this
@@ -78,7 +80,7 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // orchestrator, and the "Wakes are best-effort" bullet carries the same qualifier — so the
   // orchestrator-only assertion below is part of the wake contract, not an extra. Every wake
   // assertion here was re-read against the bumped file.
-  expect(skill).toMatch(/^version:\s*16$/m);
+  expect(skill).toMatch(/^version:\s*17$/m);
   expect(wake).toMatch(/hand-started session/i);
   expect(wake).toMatch(/first successful read-mode `tandem_status`/i);
   expect(wake).toMatch(/read `wakeUrl`/i);
@@ -330,7 +332,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "16", bodyHash: "efd6d3788153" });
+    ).toEqual({ version: "17", bodyHash: "4e3cdecc0e7a" });
   });
 
   // #1770: the skill is the only surface that tells Claude what it may NOT do with a card

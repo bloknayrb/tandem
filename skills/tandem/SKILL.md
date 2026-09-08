@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 16
+version: 17
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -19,7 +19,7 @@ Tandem lets you annotate and edit documents alongside the user in real time. The
 
 These prevent the most common failures. Follow them always.
 
-1. **Resolve before mutating.** Call `tandem_resolveRange` (or `tandem_search`) to get offsets before calling `tandem_edit` or `tandem_comment`. Never compute offsets by counting characters in previously-read text — they go stale when the user edits.
+1. **Resolve before mutating.** Call `tandem_resolveRange` (or `tandem_search`) to get offsets before calling `tandem_edit` or `tandem_comment`. Never compute offsets by counting characters in previously-read text — they go stale when the user edits, and they are not characters: offsets are **UTF-16 code units**, so every emoji or other non-BMP character in the document puts a hand-count off by one more, even on text you just read. An offset that lands between the two halves of a surrogate pair is refused with `INVALID_RANGE` and `details.reason: "surrogate"`.
 2. **Pass `textSnapshot`.** Include the matched text as `textSnapshot` on mutations and annotations. If the text moved, the server returns `RANGE_MOVED` with relocated coordinates instead of corrupting the document. The one exception is a point insertion (`from === to`), which carries none — a zero-length range matches no text, so a `textSnapshot` there is refused with `INVALID_ARGUMENT`. Before reusing a *stored* annotation's `textSnapshot` as a range guard elsewhere, check `textSnapshotTruncated` — a truncated snapshot (capped at 200 chars) resolves a shorter span than the annotation actually covers.
 3. **Use `tandem_getTextContent` for document reads.** Use `getTextContent({ section: "Section Name" })` for targeted reads. The `section` parameter is case-insensitive.
 4. **`tandem_edit` cannot create paragraphs, and newline handling is format-dependent.** In Markdown, a newline in `newText` becomes a literal soft-wrapped break, not a paragraph break. In `.docx`, it becomes a real run-level break. In a plaintext-adapted document (`.txt`, or an unrecognized extension), a literal newline is refused with `INVALID_ARGUMENT`. For multi-paragraph changes, use multiple `tandem_edit` calls, or reach for `tandem_appendContent` (Markdown-only, appends at the document end) or `tandem_editList` (Markdown/`.docx` only, list-shape changes) when they fit.
