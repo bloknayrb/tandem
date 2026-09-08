@@ -4,7 +4,7 @@ Common first-launch and runtime issues, with diagnostic steps.
 
 ## Quick diagnostic
 
-If you're running from a source checkout, `npm run doctor` checks the most common setup issues at once:
+`tandem doctor` (or `npm run doctor` from a source checkout) checks the most common setup issues at once:
 
 - Node.js ≥ 22.12.0 installed
 - `.mcp.json` valid (both `tandem` and `tandem-channel` entries)
@@ -131,14 +131,27 @@ empty-state screen, or run **Relaunch Claude in this folder** from the command p
 (`Ctrl+Shift+P`). If you installed it *after* opening Tandem, restart Tandem — a running process
 cannot see a PATH change made after it launched.
 
-If Claude keeps stopping with a healthy install, the CTA says "Restart Claude Code" instead, and
-the likeliest cause is a saved conversation Claude can no longer resume. **Start a fresh
-conversation** (the secondary action beside Restart, or the palette command) drops it and starts
-clean — irreversible, so it is never the default.
+If Claude keeps stopping with a healthy install, the CTA says "Restart Claude Code" instead. Two
+causes account for nearly all of these, and Tandem cannot yet tell them apart:
+
+- **You have never signed in to Claude Code.** A Claude Code that has not completed `claude login`
+  exits immediately with an auth message. Tandem's supervisor counts that as a crash like any
+  other, retries until the breaker trips, and then shows the same generic restart prompt — it
+  never says "sign in" (#1780). Open a terminal, run `claude` once, finish the login, then use
+  **Restart Claude anyway**. If this is your first time running both programs, try this before
+  anything else.
+- **A saved conversation Claude can no longer resume.** **Start a fresh conversation** (the
+  secondary action beside Restart, or the palette command) drops it and starts clean —
+  irreversible, so it is never the default.
 
 ## Port already in use
 
-Tandem kills stale processes on `:3478` / `:3479` at startup. If another application owns those ports and won't yield, set alternate ports:
+At startup Tandem kills **whatever** is listening on `:3478` / `:3479` — it looks up the listening
+PID and terminates it, and it has no way to tell a leftover Tandem from an unrelated program. Two
+consequences worth knowing before you debug anything else: another application on those ports is
+killed rather than worked around, and **running `tandem` in a terminal while the desktop app is
+open takes the desktop app's server down with it** (#1758). If something else owns those ports and
+you would rather move Tandem, set alternate ports:
 
 ```bash
 export TANDEM_PORT=4478

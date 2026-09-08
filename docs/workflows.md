@@ -43,7 +43,7 @@ Start Tandem from any directory:
 tandem
 ```
 
-The server starts and the editor opens (Tauri WebView in desktop, or `http://127.0.0.1:5173` in dev). `sample/welcome.md` loads on first run with the onboarding tutorial.
+The server starts. The desktop app opens its own window; the npm install opens nothing and prints the URL to visit instead — `http://127.0.0.1:3479`, served by the same process. (`http://127.0.0.1:5173` is the Vite dev server, and only exists in a source checkout.) `sample/welcome.md` loads on first run with the onboarding tutorial.
 
 In a separate terminal, start Claude Code as you normally would:
 ```bash
@@ -115,17 +115,7 @@ Claude: tandem_comment({
 })
 ```
 
-Red highlight appears in Bryan's editor. Claude suggests the fix:
-
-```
-Claude: tandem_comment({
-  from: 342, to: 355,
-  text: "Updated per Q3 financial report",
-  suggestedText: "$13.1 million"
-})
-```
-
-Bryan sees the suggestion in the side panel -- accepts or rejects with one click. Repeat for each section.
+One call does both jobs: `text` is the remark, `suggestedText` is the proposed replacement. The passage is marked in Bryan's editor, and the side-panel card shows the change as a word-level diff — he accepts or dismisses it with one click, and accepting applies the replacement. Repeat for each section.
 
 When done:
 ```
@@ -494,11 +484,11 @@ npm run test:e2e
 npm run test:e2e:ui
 ```
 
-**Requirements:** No dev server running (the test harness starts its own via `dev:standalone`; `freePort()` will kill existing servers on :3478/:3479).
+**Requirements:** none in particular — since #1492 the harness runs on its own reserved ports (defined in `scripts/test-ports.ts`, never the product's `:3478`/`:3479` or Vite's `:5173`) and starts its backend with `reuseExistingServer: false`, so a running Tandem or `npm run dev:server` coexists with a test run instead of being killed by it.
 
 **How tests work:**
 1. `beforeEach`: McpTestClient connects to MCP, fixture files copied to temp dir
 2. Test body: MCP calls open documents/create annotations, Playwright asserts browser state
 3. `afterEach`: All docs closed via MCP, temp dir cleaned up
 
-Tests use `data-testid` attributes for reliable selectors (e.g. `[data-testid="accept-btn"]`). Timing uses Playwright's auto-waiting with 10s timeout for annotation sync (multi-hop: MCP → Y.Doc → Hocuspocus WS → browser → React → ProseMirror).
+Tests use `data-testid` attributes for reliable selectors (e.g. `[data-testid="accept-btn"]`). Timing uses Playwright's auto-waiting with 10s timeout for annotation sync (multi-hop: MCP → Y.Doc → Hocuspocus WS → browser → Svelte → ProseMirror).

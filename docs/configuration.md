@@ -41,6 +41,8 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 | `TANDEM_ALLOW_UNAUTHENTICATED_LAN` | unset | Set to `1` to allow binding to a non-loopback host before an auth token has been provisioned; without it that startup is refused. **The name overstates it** — it does not turn authentication off. Non-loopback callers still need a valid Bearer token. See [security.md](security.md#network-posture). **Insecure** — trusted-network development only. |
 | `TANDEM_LAN_IP` | auto-detected | Explicit LAN IP for the welcome banner's "share this URL" message. Useful on multi-homed machines where auto-detection picks the wrong interface. |
 
+**Two variables you don't set, but that outrank the ones you do.** When Claude Code's plugin host runs one of Tandem's stdio subcommands (`tandem mcp-stdio`, `tandem channel`, `tandem monitor`) it injects `CLAUDE_PLUGIN_OPTION_SERVER_URL` and `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` from the plugin's user config. Those take **precedence over** `TANDEM_URL` and `TANDEM_AUTH_TOKEN` respectively; a blank value counts as absent, so an empty plugin option falls through rather than masking your setting. This precedence applies only to those subcommands and to `tandem rotate-token` — the server itself reads `TANDEM_URL` / `TANDEM_AUTH_TOKEN` directly. It is also why `tandem rotate-token` refuses to run when either auth variable is set: whatever injected the token would put the old value back on the next launch.
+
 ### App-data and storage
 
 | Variable | Default | Description |
