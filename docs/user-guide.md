@@ -73,7 +73,7 @@ Type `/` at the start of a line (or after a space) to open a block menu: Paragra
 
 **Paragraph** is a reset rather than an insert: it turns the current block back into plain body text, lifting it out of a list or a quote. It is first in the list, so `/p` reaches it directly and pressing `Enter` on the unfiltered menu does nothing rather than inserting a heading you didn't ask for.
 
-Use `↑` / `↓` to move, `Enter` to insert, `Esc` to close. The `/` and whatever you typed after it are removed when the command runs. The menu only opens on text you actually type, so clicking after an existing `/` won't summon it, and it stays out of the way while the find bar, command palette, or an annotation popup is open.
+Use `↑` / `↓` to move, `Enter` to insert, `Esc` to close. The `/` and whatever you typed after it are removed when the command runs. The menu only opens on text you actually type, so clicking after an existing `/` won't summon it, and it stays out of the way while the find bar, command palette, or an annotation popup is open, or when the caret is inside a code block.
 
 ### Right-Click Menus
 

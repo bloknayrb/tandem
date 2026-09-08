@@ -90,6 +90,15 @@ function resolveActiveSlashCommand(
   if (!selection.empty) return null;
 
   const $from = selection.$from;
+  // A "/" inside a code block is literal text (a path, a regex, a URL) and Enter
+  // there means a newline, not a block conversion. Same exemption
+  // `PlaintextBreaksExtension#splitInsteadOfBreak` uses, for the same reason.
+  // It belongs HERE rather than in the plugin's Enter branch: this resolver is
+  // the single entry point for both initial activation and every subsequent
+  // keystroke, so `active` is never non-null in a code block and the menu cannot
+  // even flash open (#1775). `spec.code` rather than a `codeBlock` name test, so
+  // any future code-ish node inherits it.
+  if ($from.parent.type.spec.code) return null;
   const textBeforeCursor = $from.parent.textBetween(0, $from.parentOffset, "\n", "\n");
   const match = findSlashCommandMatch(textBeforeCursor);
   if (!match) return null;

@@ -252,3 +252,30 @@ test("slash menu suppresses while annotation popup is open (D10)", async ({ page
   await page.keyboard.type("/");
   await expect(slashMenu).toBeHidden();
 });
+
+// #1775: a "/" inside a code block is literal text — a path, a regex, a URL —
+// and Enter there means a newline. The menu used to open and claim the Enter,
+// converting the block and eating the typed query.
+test("slash menu never opens inside a code block and Enter stays a newline (#1775)", async ({
+  page,
+}) => {
+  await openSample(page);
+
+  // ``` at the start of an empty line is Tiptap's code-block input rule.
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("```");
+  await expect(page.locator(".tiptap pre").first()).toBeVisible({ timeout: 5_000 });
+
+  await page.keyboard.type("cd /t");
+
+  // The load-bearing half: assert WHILE the query is still typed. The menu node
+  // is created and torn down imperatively, so a post-Enter toHaveCount(0) is
+  // also satisfied by a menu that flashed open and closed.
+  await expect(page.locator("[data-testid='slash-command-menu']")).toHaveCount(0);
+
+  await page.keyboard.press("Enter");
+
+  await expect(page.locator(".tiptap pre").first()).toBeVisible();
+  await expect(page.locator(".tiptap pre").first()).toContainText("cd /t");
+  await expect(page.locator("[data-testid='slash-command-menu']")).toHaveCount(0);
+});
