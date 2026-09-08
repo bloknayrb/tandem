@@ -18,7 +18,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { SNAPSHOT_CAP, snapshotContradicts } from "../../src/shared/snapshot";
+import { SNAPSHOT_CAP, snapshotContradicts, snapshotSearchPrefix } from "../../src/shared/snapshot";
 
 const ann = (fields: Record<string, unknown>) => ({ id: "a1", ...fields });
 
@@ -101,5 +101,94 @@ describe("snapshotContradicts", () => {
 
     expect(snapshotContradicts(rec, looksLegacy)).toBe(false);
     expect(snapshotContradicts(rec, `${"a".repeat(SNAPSHOT_CAP - 3)} real tail`)).toBe(true);
+  });
+});
+
+/**
+ * #1767: healing a snapshot a pre-fix cap left mid-surrogate-pair.
+ *
+ * The heal is a TRIM inside `snapshotSearchPrefix`, not a migration of the
+ * stored record — rewriting snapshots on disk would be a write from a read
+ * path, which is what #1764 has just removed. Shortening a search prefix is
+ * free: a prefix of a prefix is still a prefix, so the cost of trimming a
+ * legitimate trailing U+FFFD is one character of search specificity.
+ *
+ * Its PLACEMENT is what these tests really pin. Every record the fix targets
+ * carries `textSnapshotTruncated: true`, so a heal written after the
+ * legacy-ellipsis trim is unreachable for exactly the population it is for —
+ * the first two cases below are the ones the wrong placement cannot reach.
+ */
+describe("#1767: snapshotSearchPrefix heals a split-pair tail", () => {
+  const HIGH = "\uD83D"; // lone high half of U+1F600
+  const rec = (fields: Record<string, unknown>) => ({ id: "a1", ...fields });
+
+  it("trims a trailing U+FFFD from a record THIS build wrote", () => {
+    // What the corrupted record looks like after one Yjs round-trip. This is
+    // the flag-bearing branch — the one a heal placed after the ellipsis trim
+    // never sees.
+    const head = "a".repeat(SNAPSHOT_CAP - 1);
+    const stored = rec({ textSnapshot: `${head}\uFFFD`, textSnapshotTruncated: true });
+    const actual = `${head}\u{1F600} and the tail past the cap`;
+
+    expect(snapshotSearchPrefix(stored)).toBe(head);
+    expect(snapshotContradicts(stored, actual)).toBe(false);
+  });
+
+  it("trims a trailing LONE HIGH SURROGATE from the same record before any round-trip", () => {
+    // The other spelling of one record. The JSON envelope on disk is lossless,
+    // so a record read back from it still carries the raw lone surrogate; only
+    // the CRDT path turns it into U+FFFD. Both must heal or the bug survives on
+    // whichever path is not covered.
+    const head = "a".repeat(SNAPSHOT_CAP - 1);
+    const stored = rec({ textSnapshot: `${head}${HIGH}`, textSnapshotTruncated: true });
+    const actual = `${head}\u{1F600} and the tail past the cap`;
+
+    expect(snapshotSearchPrefix(stored)).toBe(head);
+    expect(snapshotContradicts(stored, actual)).toBe(false);
+  });
+
+  it("trims BOTH markers off a legacy ellipsis record", () => {
+    // No flag, cap-length, trailing "..." — and the old writer's own cut, three
+    // units earlier, could split a pair just as readily. The ellipsis goes
+    // first, then the split tail underneath it.
+    const head = "a".repeat(SNAPSHOT_CAP - 4);
+    const snapshot = `${head}${HIGH}...`;
+    // Cap-length is half of what makes `isSnapshotTruncated` fire on a flagless
+    // record, so assert it rather than counting the fixture by eye.
+    expect(snapshot).toHaveLength(SNAPSHOT_CAP);
+    const stored = rec({ textSnapshot: snapshot });
+
+    expect(snapshotSearchPrefix(stored)).toBe(head);
+    expect(snapshotContradicts(stored, `${head}\u{1F600} real tail`)).toBe(false);
+  });
+
+  it("leaves a U+FFFD on a NON-truncated snapshot alone", () => {
+    // The discriminating negative. An uncapped snapshot was never cut, so a
+    // U+FFFD in it is real document text; trimming it would break the equality
+    // a complete snapshot is held to.
+    const complete = rec({ textSnapshot: "the glyph did not load: \uFFFD" });
+    expect(snapshotSearchPrefix(complete)).toBe("the glyph did not load: \uFFFD");
+    expect(snapshotContradicts(complete, "the glyph did not load: \uFFFD")).toBe(false);
+    expect(snapshotContradicts(complete, "the glyph did not load: ")).toBe(true);
+  });
+
+  it("still reports a contradiction when the healed prefix genuinely does not match", () => {
+    // Without this, the heal could make `snapshotContradicts` unreachable on
+    // the truncated branch and every test above would still pass.
+    const head = "a".repeat(SNAPSHOT_CAP - 1);
+    const stored = rec({ textSnapshot: `${head}\uFFFD`, textSnapshotTruncated: true });
+    expect(snapshotContradicts(stored, `${"b".repeat(SNAPSHOT_CAP)} and a tail`)).toBe(true);
+  });
+
+  it("does not trim a truncated snapshot whose tail is a COMPLETE pair", () => {
+    // The other half of "only when it is split". A back-off already happened,
+    // or the cut landed between two astral characters — either way the last
+    // unit is a LOW surrogate with its partner in front of it, and trimming
+    // would cut a real character out of the search prefix.
+    const stored = rec({
+      textSnapshot: `${"a".repeat(SNAPSHOT_CAP - 2)}\u{1F600}`,
+      textSnapshotTruncated: true,
+    });
+    expect(snapshotSearchPrefix(stored)).toBe(`${"a".repeat(SNAPSHOT_CAP - 2)}\u{1F600}`);
   });
 });

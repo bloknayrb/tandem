@@ -1995,6 +1995,23 @@ describe("MCP tool integration — cross-block tandem_edit re-anchors the tail (
     return parsed.data.annotations as Array<Record<string, unknown>>;
   }
 
+  /**
+   * The `range` of a record `annotationsOf` returned. (Named `annRange`, not
+   * `rangeOf`: this file already imports a `rangeOf` from `ydoc-factory` that
+   * builds an anchored range from two offsets, and shadowing it here broke
+   * three call sites in this same describe.)
+   *
+   * `annotationsOf` deliberately types the wire payload as
+   * `Record<string, unknown>` — it is JSON off an MCP call, and the specs above
+   * assert `anns[0].range` whole against a literal, which needs no narrowing.
+   * The two specs that slice `extractText` with its ends do, and reaching
+   * through `unknown` for them is a TS2571 that `npm test` cannot see and only
+   * `typecheck:tests` reports.
+   */
+  function annRange(ann: Record<string, unknown>): { from: number; to: number } {
+    return ann.range as { from: number; to: number };
+  }
+
   /** Count Y.Map writes to the annotations map while `fn` runs. */
   async function annotationWrites(ydoc: Y.Doc, fn: () => Promise<unknown>): Promise<number> {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -2091,7 +2108,7 @@ describe("MCP tool integration — cross-block tandem_edit re-anchors the tail (
 
     // The experiment's control: the annotation still covers its original text.
     const anns = await annotationsOf();
-    expect(extractText(ydoc).slice(anns[0].range.from, anns[0].range.to)).toBe("zeta");
+    expect(extractText(ydoc).slice(annRange(anns[0]).from, annRange(anns[0]).to)).toBe("zeta");
   });
 
   it("writes nothing when every annotation lies inside the replaced span", async () => {
@@ -2125,7 +2142,7 @@ describe("MCP tool integration — cross-block tandem_edit re-anchors the tail (
 
     const anns = await annotationsOf();
     expect(anns).toHaveLength(1);
-    expect(extractText(ydoc).slice(anns[0].range.from, anns[0].range.to)).toBe("gamma");
+    expect(extractText(ydoc).slice(annRange(anns[0]).from, annRange(anns[0]).to)).toBe("gamma");
   });
 
   it("VERIFIES the destination and refuses a contradicting one", async () => {
