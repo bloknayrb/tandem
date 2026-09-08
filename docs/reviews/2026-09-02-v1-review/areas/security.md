@@ -20,11 +20,26 @@ The `security-reviewer` agent should be spawned on every track that touches `src
 | L | `src/server/yjs/provider.ts:101-107` | No `maxPayload` on Hocuspocus. Measured: an unauthenticated 90 MiB frame moved RSS 179→331 MB; 120 MiB closes 1009. Binds 127.0.0.1 always. `wake-socket.ts:172` caps its own at 1024. | [ran] | Agent-ran (`experiments/server-probes/wsprobe.mjs`) | [#1822](https://github.com/bloknayrb/tandem/issues/1822) |
 | L | `src/server/mcp/server.ts:737` | SDK app (`express.json` 100 kB) mounted at root before the `/api` large-body parser; JSON >100 kB to `/mcp` returns an HTML stack trace with the install path. | [read] | Source-confirmed | [#1822](https://github.com/bloknayrb/tandem/issues/1822) |
 | L | `src/server/launcher/supervisor.ts:723-739`, `:825` | `resolveCwd` uses `resolveSafeCwd` without `homeConfines`, so an integrations-file `workingDirectory` (`schema.ts:127`) bypasses the launcher route's confinement; spawn env is `process.env`, so `TANDEM_AUTH_TOKEN` and `SENTRY_DSN` reach the launched Claude's subprocess tree. | [read] | Source-confirmed | [#1822](https://github.com/bloknayrb/tandem/issues/1822) |
-| L | `src-tauri/src/keychain.rs:54-62` | `keychain_get` returns plaintext to the WebView (XSS amplifier; no XSS found). Moot while #1761 makes the keychain a mock. | [read] | Agent-reported | [#1822](https://github.com/bloknayrb/tandem/issues/1822) |
+| L | `src-tauri/src/keychain.rs:54-62` | `keychain_get` returns plaintext to the WebView (XSS amplifier; no XSS found). ~~Moot while #1761 makes the keychain a mock.~~ **No longer moot** — the `keyring = "4"` bump means a real platform store, so this now returns a real secret. See the note below the table. | [read] | Agent-reported | [#1822](https://github.com/bloknayrb/tandem/issues/1822) |
 | L | `src-tauri/src/sidecar.rs:426-467` | Sidecar spawned without `NODE_ENV=production`; Express default error page includes the stack. | [read] | Agent-reported | [#1822](https://github.com/bloknayrb/tandem/issues/1822) |
 | L | `src/server/server.ts:824-834` | Traversal-shaped static paths return the SPA `index.html` (phantom 200s for status-only scanners). The traversal claim itself is refuted. | [ran] | Reproduced (probe) | [#1822](https://github.com/bloknayrb/tandem/issues/1822) |
 | L | `/api/license/status` while dark | Returns `status: "licensed"` next to `gateActive: false`; `licenseInstalled` boolean reaches LAN in LAN mode. | [ran] | Agent-ran (probe) | [#1822](https://github.com/bloknayrb/tandem/issues/1822) |
 | L | `src/server/annotations/store.ts:139-146` | Lock liveness is `kill(pid, 0)`; `startedAtMs` written but never compared, so PID reuse after reboot forces read-only. | [read] | Agent-reported | [#1823](https://github.com/bloknayrb/tandem/issues/1823) |
+
+## Superseded since the review — 2026-09-08
+
+**The `keychain_get` finding's "moot" qualifier is gone, and it was load-bearing.** That row
+was downgraded on the premise that #1761 made the desktop keychain a mock, so `keychain_get`
+returned nothing worth amplifying. `src-tauri/Cargo.toml:47` is now `keyring = "4"` (4.2.0,
+`Cargo.lock:3275-3284`), whose default `v1` feature selects the Apple / Windows /
+Secret-Service store and offers no mock fallthrough — so the command now hands the WebView a
+real secret. The finding is unchanged in shape; only the reason it was parked has evaporated.
+
+**Nobody fixed #1761.** The bump arrived in `c991b816`, a Dependabot cargo-group commit, so no
+issue closed and nothing here was re-read. See the re-scoping comment on #1761 for the crate-source
+evidence and for what remains open (no round-trip test, no `Entry::store_status()` call). This is
+a note rather than a rewrite: the findings above were true when written, and a review record that
+edits its own history is worth less than one that records what changed under it.
 
 ## Restated, not new
 

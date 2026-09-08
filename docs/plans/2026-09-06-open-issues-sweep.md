@@ -411,7 +411,7 @@ literal in `tests/skill-instruction-contract.test.ts` moves with it). `Hooks arm
 | 4 | Gc2b keys + a11y | #1775 #1777 #1778 | — | — | — | — | planned-not-started | |
 | 4 | G5′ audience remnants | #1698 #1678 #1826 (+pin closing #1656) | — | — | — | — | planned-not-started | |
 | 5 | D1 markdown fidelity | #1813 #1751 #1753 #1799 #1852 #1850 + #1823 server-data bullets | — | — | — | — | planned-not-started | |
-| 5 | E1 desktop core | #1761 → #1763+#1812 → #1758+#1787 (+decision D) | — | — | — | — | planned-not-started | |
+| 5 | E1 desktop core | #1761 → #1763+#1812 → #1758+#1787 (+decision D) | — | — | — | — | planned-not-started | **#1761 shrank on 2026-09-08 — re-read it before scoping this group.** A Dependabot bump (`c991b816`) moved `keyring` 3→4, whose default `v1` feature selects the platform store and has no mock fallthrough, so the mock-keychain root cause and the "#1455 root cause" claim are both dead. What is left is a round-trip test plus an `Entry::store_status()` check — S, not the M/L this row was sized on. The E1 *sizing* is now wrong, and #1455 needs re-checking rather than assuming this fixed it. |
 | 6 | D2 docx contract | #1754 (Refs) #1755 | — | — | — | — | planned-not-started | |
 | 6 | H the flip | #1788 → #1785 → #1793+#1786 (+#1825 infra section, same ledger row; code only, **no deploy**) → #1789 #1819 — three PRs in the ledger | — | — | — | — | planned-not-started | |
 | 6 | CI-trust | #1862 #1673 | — | — | — | — | planned-not-started | |
