@@ -60,19 +60,29 @@ fields change meaning), `security-reviewer` only if a new MCP error code or rout
   shares no file with B's fix set except `docx-comment-export.ts`, which B touches only as a
   `refreshRange` consumer (the `kind === "failed"` guard is unchanged; B-1764 records that a
   collapsed annotation's exported coordinates change). It constrains nothing here. **#1737** (skill:
-  do not insert line breaks mid-paragraph) is CLOSED; it is relevant only because B-1766 now edits
-  `skills/tandem/SKILL.md`, so that file's `version` bump is on B's critical path.
-- **The group's `skill=false` flag is wrong.** B-1766 amends `skills/tandem/SKILL.md:182` (the
-  `HEADING_OVERLAP` recovery line becomes unfollowable once `tandem_edit` refuses an interior
-  overlap), which requires the frontmatter `version` bump (17 ⇒ 18) and the pinned literal in
-  `tests/skill-instruction-contract.test.ts:83` in the same commit. Treat the group as `skill=true`.
-- **File set added during round 1**, beyond what the first-pass specs named:
-  `src/server/mcp/awareness.ts` (stale docblock), `src/server/documents/watcher.ts` (three comment
-  blocks), `src/server/mcp/navigation.ts` (`findOccurrence` normalized fallback, #1622),
-  `skills/tandem/SKILL.md` + `tests/skill-instruction-contract.test.ts` (#1766),
-  `tests/server/rename-document.test.ts` and `tests/server/document-store.test.ts` (five
-  `listAnnotationsRefreshed` call sites), `tests/server/navigation-tools.test.ts`,
-  `docs/reviews/2026-09-02-v1-review/experiments/README.md`.
+  do not insert line breaks mid-paragraph) is CLOSED and constrains nothing: after the scope cut no
+  spec in this group edits `skills/tandem/SKILL.md`.
+- **The group's `skill=false` flag stands.** B-1766's `skills/tandem/SKILL.md:182` amendment was cut
+  along with the `version` bump and both `tests/skill-instruction-contract.test.ts` pins, so the
+  `filesTouched` collision with wave 4's Gc2a is gone. The residual copy gap (the skill's
+  `HEADING_OVERLAP` "no `reason`" line reads as unfollowable for an interior overlap) is a For-Bryan
+  item in B-1766 — `tandem_edit`'s own refusal message carries the actionable advice.
+- **File set after the scope cut**, beyond `positions.ts`: `src/server/mcp/document.ts`,
+  `annotations.ts`, `document-store.ts`, `output-schemas.ts`, `navigation.ts` (`findOccurrence` /
+  `countOccurrences` normalized fallback, #1622), `src/server/documents/watcher.ts` (two comments),
+  `src/shared/snapshot.ts`, `src/shared/positions/ydoc.ts`, `CLAUDE.md`, `docs/architecture.md`,
+  `docs/mcp-tools.md`, plus `tests/server/rename-document.test.ts` and
+  `tests/server/document-store.test.ts` (five `listAnnotationsRefreshed` call sites) and
+  `tests/server/navigation-tools.test.ts`. Removed during the cut: `src/server/mcp/awareness.ts`,
+  `AGENTS.md`, `docs/decisions.md`, `skills/tandem/SKILL.md`,
+  `tests/skill-instruction-contract.test.ts` and the `experiments/` rows.
+- **Three of this track's own Done-when bullets are deliberately not met by the PR**, because they
+  are track wishes rather than issue requirements and each pulls in work the issues do not ask for:
+  the `f-undo` harness files are not converted to `tests/client/` specs (they contain no `expect`
+  to invert, and the client half of #1764 is out of scope); the `experiments/` scripts are not
+  edited, so `crdt-verify.ts` / `e5-merge.ts` / `e6-snapshot.ts` keep printing what they print —
+  each spec's in-suite tests are the gate instead; and ADR-032's amendment in `docs/decisions.md`
+  is left as-is. Carry all three forward as separate items rather than reading them as regressions.
 
 ## Status
 
