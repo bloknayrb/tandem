@@ -16,7 +16,7 @@ The server stays attached to the terminal. Press `Ctrl+C` to stop.
 
 ### `tandem setup`
 
-Bare `tandem setup` prints setup guidance and points at the in-app integration wizard (the recommended path). `tandem setup --apply` writes Tandem's MCP entries to the integrations it detects (Claude Code and Claude Desktop) non-interactively, and installs the Claude Code skill at `~/.claude/skills/tandem/SKILL.md` (idempotent — refreshed on every run).
+Bare `tandem setup` prints setup guidance and points at the in-app integration wizard (the recommended path). `tandem setup --apply` writes Tandem's MCP entries to the integrations it detects (Claude Code and Claude Desktop) non-interactively, and installs the Claude Code skill at `~/.claude/skills/tandem/SKILL.md` (installed if absent, and re-written unless the installed copy is stamped with a newer version).
 
 ```bash
 tandem setup            # guidance only
@@ -45,7 +45,9 @@ The desktop app's **Settings → About → Copy Diagnostics** button runs the sa
 
 ### `tandem --uninstall-scrub`
 
-Removes every reference Tandem wrote into other programs' config: `mcpServers.tandem` / `mcpServers["tandem-channel"]` from `~/.claude.json` and any detected Claude Desktop config, the bundled skill at `~/.claude/skills/tandem/`, and (Windows) Cowork plugin registration plus the `Tandem Cowork*` firewall rules. The Windows uninstaller runs it automatically; on macOS/Linux/npm, run it yourself **before** removing the app:
+Removes every reference Tandem wrote into other programs' config: `mcpServers.tandem` / `mcpServers["tandem-channel"]` from `~/.claude.json` and any detected Claude Desktop config, the bundled skill at `~/.claude/skills/tandem/` (only when it holds nothing Tandem didn't install), the start-at-login registration on macOS/Linux, and (Windows) Cowork plugin registration plus the `Tandem Cowork*` firewall rules.
+
+**The Windows uninstaller does not run this command.** It runs the desktop binary's own narrower scrub — Cowork workspace entries, the firewall rules, and the start-at-login registration — because this CLI's bundle is not shipped as a Tauri resource. The MCP entries and the bundled skill survive a Windows uninstall unless you run the command yourself. On every platform, run it **before** removing the app, while the binary still exists:
 
 ```bash
 tandem --uninstall-scrub
@@ -61,7 +63,7 @@ Generates a new 32-byte auth token, posts it to the running server's `/api/rotat
 tandem rotate-token
 ```
 
-Fails if `TANDEM_AUTH_TOKEN` is set in the environment — the rotation routine refuses to overwrite an env-managed token. See [configuration.md](configuration.md#lan-exposure) for the auth token model.
+Fails if `TANDEM_AUTH_TOKEN` **or** `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` is set in the environment — the rotation routine refuses to overwrite a token it does not manage, because whatever injected it (Tauri, or Claude Code's plugin host) would re-inject the old value on the next launch. See [configuration.md](configuration.md#lan-exposure) for the auth token model.
 
 ### `tandem mcp-stdio`
 
@@ -143,9 +145,10 @@ Prints usage and exits.
 | Code | Meaning |
 |---|---|
 | `0` | Success. |
-| `1` | Fatal error. Stack trace logged to stderr. |
+| `1` | Fatal error. Stack trace logged to stderr. Also: an unknown subcommand, and `tandem doctor` when any check failed. |
+| `2` | `tandem doctor` only — the diagnostic itself crashed, so no verdict was reached. Distinct from `1` on purpose: `1` means "checks ran and something is wrong", `2` means "nothing was established". |
 
-`tandem rotate-token` may exit `1` with non-fatal warnings if the running server rejected the rotation but the MCP configs were updated anyway. The stderr message describes the recovery path.
+**`tandem rotate-token` on a refusal.** If the running server rejects the rotation — most often a 403, because `/api` is loopback-only for non-GET methods — the CLI restores the *previous* token to disk, leaves every MCP config untouched, and exits `0`: nothing changed, so nothing needs recovering. It exits `1` only in the narrower case where that rollback itself failed; the token file then holds a value the server will not accept, and the stderr message prints the old token's fingerprint so you can put it back by hand.
 
 ## npm run scripts (source checkouts only)
 
@@ -175,6 +178,7 @@ These commands are available when running Tandem from a source checkout (`git cl
 
 | Script | What it runs |
 |---|---|
+| `npm run test:coverage` | The same vitest run with coverage on, then the coverage manifest and the per-module coverage gate (`scripts/ci/coverage-gate.mjs`). |
 | `npm test` | Vitest unit tests. **Needs Python 3.10+ on `PATH`** (as `python3` or `python`) — see the acceptance-harness row below for why, and CONTRIBUTING.md's Prerequisites. |
 | `npm run test:e2e` | Playwright E2E tests (auto-starts servers via `webServer` config). |
 | `npm run test:e2e:ui` | Playwright UI mode for interactive E2E debugging. |
@@ -189,7 +193,8 @@ These commands are available when running Tandem from a source checkout (`git cl
 |---|---|
 | `npm run doctor` | End-to-end setup check (Node version, MCP config, server health, ports). |
 | `npm run perf:gate` | Performance gate. |
-| `npm run typecheck` | TypeScript + svelte-check across server and client. |
+| `npm run typecheck` | TypeScript + svelte-check across server and client. **It does not reach `tests/`.** |
+| `npm run typecheck:tests` | The only thing that typechecks the test tree — three configs (`tsconfig.tests.{node,client,e2e}.json`). Run by CI and the pre-push hook. |
 | `npm run lint` | ESLint across the repo. |
 | `npm run format` | Biome auto-format. |
 | `npm run check:tokens` | Scans `src/client/` for raw hex / rgba violations of the semantic-token system. |

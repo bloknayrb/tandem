@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runSetup } from "../../src/cli/setup.js";
+import { SKILL_CONTENT } from "../../src/cli/skill-content.js";
 // These helpers moved to src/server/integrations/apply.ts in #477 PR 3c-ii-a;
 // the back-compat re-export from src/cli/setup.ts was dropped in PR 3c-ii-c.
 import {
@@ -997,6 +998,92 @@ describe("installSkill", () => {
     const frontmatter = parts[1];
     expect(frontmatter).toContain("name: tandem");
     expect(frontmatter).toContain("description:");
+  });
+
+  // #1790 — `installSkill` was a bare write with no comparison, so an OLDER
+  // npm `tandem setup --apply` (which doctor prescribes for several
+  // conditions) silently downgraded a newer installed skill.
+  //
+  // The bundled number is derived from the exported SKILL_CONTENT with the
+  // four-line reader `refresh-skill.test.ts` already uses, rather than
+  // exporting `readSkillVersion` from apply.ts for a test.
+  const bundledVersion = (() => {
+    const match = SKILL_CONTENT.match(/^version:\s*(\d+)\s*$/m);
+    if (!match) return 0;
+    const n = parseInt(match[1], 10);
+    return Number.isFinite(n) ? n : 0;
+  })();
+
+  const writeSkill = (body: string): string => {
+    const skillPath = join(tmpDir, ".claude", "skills", "tandem", "SKILL.md");
+    mkdirSync(dirname(skillPath), { recursive: true });
+    writeFileSync(skillPath, body);
+    return skillPath;
+  };
+
+  it("keeps a NEWER installed skill and reports why", async () => {
+    const stub = [
+      "---",
+      "name: tandem",
+      "version: 999",
+      "description: newer",
+      "---",
+      "",
+      "newer body",
+      "",
+    ].join("\n");
+    const skillPath = writeSkill(stub);
+
+    const result = await installSkill({ homeOverride: tmpDir });
+
+    // Assert the BYTES, not just the return value — a fix that computes the
+    // verdict and writes anyway still fails here.
+    expect(readFileSync(skillPath, "utf-8")).toBe(stub);
+    expect(result).toEqual({ written: false, onDiskVersion: 999, bundledVersion });
+  });
+
+  it("overwrites an OLDER installed skill", async () => {
+    const skillPath = writeSkill(
+      ["---", "name: tandem", "version: 1", "description: old", "---", "", "old", ""].join("\n"),
+    );
+
+    const result = await installSkill({ homeOverride: tmpDir });
+
+    expect(readFileSync(skillPath, "utf-8")).toBe(SKILL_CONTENT);
+    expect(result).toEqual({ written: true });
+  });
+
+  it("REWRITES at the same version — the `>` boundary, and the repair path", async () => {
+    // The refresher's `>=` belongs to the silent background path. Here, equal
+    // is what almost every run is: `>=` would tell a current user that v15 is
+    // newer than v15, and would remove the repair path for a hand-mangled
+    // SKILL.md that still carries the current version.
+    const skillPath = writeSkill(
+      [
+        "---",
+        "name: tandem",
+        `version: ${bundledVersion}`,
+        "description: mangled",
+        "---",
+        "",
+        "mangled body",
+        "",
+      ].join("\n"),
+    );
+
+    const result = await installSkill({ homeOverride: tmpDir });
+
+    expect(readFileSync(skillPath, "utf-8")).toBe(SKILL_CONTENT);
+    expect(result).toEqual({ written: true });
+  });
+
+  it("writes when no file exists — the CREATE path", async () => {
+    // Kills copying the refresher's ENOENT early return into this path.
+    const result = await installSkill({ homeOverride: tmpDir });
+
+    const skillPath = join(tmpDir, ".claude", "skills", "tandem", "SKILL.md");
+    expect(readFileSync(skillPath, "utf-8")).toBe(SKILL_CONTENT);
+    expect(result).toEqual({ written: true });
   });
 
   it("includes key workflow guidance in the skill body", async () => {

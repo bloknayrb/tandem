@@ -1103,7 +1103,165 @@ function checkMcpJson(r: Recorder, cwd: string, cliAvailable: CliAvailability): 
  */
 const HOME_CLAUDE_JSON = `~/.${"claude"}.json`;
 
-function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability): void {
+/**
+ * Validate the user-level `tandem` entry the way the project-level twin
+ * already validates its own (#1807). Key presence alone read green while
+ * Claude Code could not connect: a leftover `type: "stdio"`, a URL with no
+ * `/mcp`, or a port left at 3479 after the server moved.
+ *
+ * Returns `null` when the entry is fine (or is not ours to judge), otherwise
+ * the warn's message and fix.
+ *
+ * NO message, fix or `data` bag may interpolate the `url` or any part of its
+ * path. `~/.claude.json` carries bearer tokens, `user-mcp-config` survives the
+ * `/api/diagnostics` filter, and the Report-a-bug link prefills a PUBLIC issue
+ * body — while `redactUserPaths`, the only scrubber downstream, knows nothing
+ * about URL userinfo or a query token. `type` goes through
+ * {@link describeClampedValue} for the same reason.
+ *
+ * The one part of the url that is named is the SCHEME, and it is named because
+ * it can carry no secret: it is neither host, userinfo, path nor query, and it
+ * is what tells a reader why an otherwise-correct-looking entry is red. It
+ * goes through the same clamp.
+ */
+/**
+ * Hostnames a `tandem` MCP url may name without a warn. The server binds
+ * `127.0.0.1` by default, so anything else is unreachable, somebody else's
+ * machine, or — the one case doctor cannot tell apart from its own shell — a
+ * deliberate `TANDEM_BIND_HOST` LAN bind. The warn's wording carries that
+ * caveat; the set does not widen for it, because doctor has no way to learn
+ * the bind host and a LAN IP it cannot verify is exactly the shape it must
+ * not certify green.
+ *
+ * `TAURI_HOSTNAME` is deliberately NOT here (round-2 review). It was, on the
+ * grounds that the desktop WebView's own origin is that name — but this arm
+ * decides REACHABILITY, not only exfiltration shape, and the two do not agree.
+ * `server.ts` passes `allowedHosts` (the only list `tauri.localhost` is on)
+ * solely when a LAN IP resolved; on a default loopback bind it is `undefined`,
+ * so the SDK installs `localhostHostValidation()`, whose allowlist is exactly
+ * `localhost` / `127.0.0.1` / `[::1]`. Every `/mcp` request carrying
+ * `Host: tauri.localhost` is answered `403 Invalid Host`. Certifying that url
+ * green is #1807's own defect — a pass in the file Claude Code consults while
+ * Claude Code cannot connect — reintroduced by the arm added to prevent it.
+ * The WebView origin is a CORS/Origin concern; it is not an MCP url host.
+ */
+const LOOPBACK_MCP_HOSTNAMES = new Set(["127.0.0.1", "[::1]", "localhost"]);
+
+/**
+ * Render an entry's `type` — or a url's scheme — for the warn message.
+ *
+ * The warn arm below fires precisely when `type !== "http"`, i.e. precisely
+ * when the value is NOT enum-shaped, so "it's an enum, print it verbatim" is
+ * false on the one branch that prints it. `~/.claude.json` is arbitrary JSON
+ * from disk: a `\r`/`\x1b[2K` value repaints doctor's own warn line as a pass,
+ * a bare `\n` forges a second result line, and the value reaches
+ * `/api/diagnostics` and from there the Report-a-bug prefill unbounded in
+ * length. So clamp it the way {@link detectEnabledTandemPluginKey} clamps the
+ * plugin key, and report `(unexpected)` rather than echoing — the port arm
+ * already prefers `(none)` over a raw value for the same reason.
+ *
+ * The scheme goes through the same clamp. It comes off a *parsed* `URL`, so
+ * control bytes are impossible there, but its length is not bounded and the
+ * clamp costs nothing — and reusing one renderer keeps the two fields of this
+ * message from drifting apart on the rule that governs both.
+ */
+function describeClampedValue(value: unknown): string {
+  if (value === undefined) return "(none)";
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(value) ? value : "(unexpected)";
+}
+
+function validateUserTandemEntry(
+  entry: unknown,
+  mcpPort: number,
+  cliAvailable: CliAvailability,
+): { message: string; fix?: string } | null {
+  const e = (entry ?? {}) as { type?: unknown; url?: unknown; command?: unknown };
+
+  // A stdio entry here is a hand-edit or a plugin-managed shape, and
+  // `reportEntryCommand` already owns its failure modes — warning "unexpected
+  // config" on top of that is a regression dressed as a fix.
+  if (typeof e.command === "string" && e.command.length > 0) return null;
+
+  let parsed: URL | null = null;
+  if (typeof e.url === "string") {
+    try {
+      parsed = new URL(e.url);
+    } catch {
+      parsed = null;
+    }
+  }
+
+  // The scheme is part of this arm, not a separate one: Tandem's MCP server is
+  // plaintext HTTP on loopback, so `https://127.0.0.1:3479/mcp` clears the
+  // type, path, host and port checks while Claude Code's TLS handshake fails
+  // and no `tandem_*` tool ever appears — green in the file Claude Code
+  // consults while Claude Code cannot connect, which is #1807's own defect.
+  // Same remedy as the other two shapes here (`buildMcpEntries` writes
+  // `http://`), so the same arm is the honest home for it.
+  if (
+    e.type !== "http" ||
+    parsed === null ||
+    parsed.protocol !== "http:" ||
+    !parsed.pathname.includes("/mcp")
+  ) {
+    // `pathHasMcp` is computed, not a hardcoded `false`: this arm also fires on
+    // a bad `type` with a perfectly good `/mcp` path, where `false` would be a
+    // false statement in doctor's own output. `scheme` is named for the same
+    // reason — without it an https url reports `type=http, pathHasMcp=true` and
+    // the warn names nothing the reader can act on.
+    const pathHasMcp = parsed === null ? "(unparsable)" : String(parsed.pathname.includes("/mcp"));
+    // Scheme only — never the host, path, userinfo or query, which the
+    // redaction rule governing this whole message keeps out of doctor's output.
+    const scheme =
+      parsed === null ? "(unparsable)" : describeClampedValue(parsed.protocol.replace(/:$/, ""));
+    return {
+      message: `${HOME_CLAUDE_JSON} tandem: unexpected config — type=${describeClampedValue(e.type)}, scheme=${scheme}, pathHasMcp=${pathHasMcp}`,
+      fix: setupApplyRemedy(cliAvailable()),
+    };
+  }
+
+  // Host BEFORE port: a remote host on the right port is the one shape this
+  // check must never certify — Claude Code would send every `tandem_*` call,
+  // document text included, to it — and reporting the port there would name
+  // the wrong field. `URL.hostname` renders IPv6 bracketed, hence `[::1]`.
+  // The message names the SHAPE, not the hostname: the redaction rule above
+  // governs every part of this url, and an internal host name is exactly the
+  // kind of thing the Report-a-bug prefill must not carry into a public issue.
+  //
+  // Still a warn, never a pass — but the sentence must be TRUE. The server
+  // listens on loopback only by DEFAULT: `TANDEM_BIND_HOST` (docs/configuration.md)
+  // binds it to a LAN address, and `server.ts` then puts the resolved LAN IP
+  // into the SDK's `allowedHosts`, so an entry naming that IP is a working
+  // setup. Doctor runs in the user's shell, which need not carry the server's
+  // env, so it cannot know which case this is — it says so rather than
+  // asserting "loopback-only" and prescribing a rewrite that breaks the LAN one.
+  if (!LOOPBACK_MCP_HOSTNAMES.has(parsed.hostname)) {
+    return {
+      message: `${HOME_CLAUDE_JSON} tandem: url names a non-loopback host — Tandem's MCP server listens on loopback unless it was started with TANDEM_BIND_HOST`,
+      // Not `setupApplyRemedy`: it rewrites the url at the DEFAULT port, so on
+      // a moved MCP port it trades this warn for the port one below.
+      fix: `If Tandem was not started with TANDEM_BIND_HOST, edit the tandem entry's url in ${HOME_CLAUDE_JSON} to point at 127.0.0.1:${mcpPort} — a remote host on that port is not this Tandem.`,
+    };
+  }
+
+  // Compare the string form — `URL.port` is a string, so `!== mcpPort` would
+  // always be true — and treat a port-less URL as a mismatch: the entry must
+  // name Tandem's MCP port explicitly.
+  if (parsed.port !== String(mcpPort)) {
+    return {
+      message: `${HOME_CLAUDE_JSON} tandem: url names port ${parsed.port || "(none)"}, but Tandem's MCP port is ${mcpPort}`,
+      // Deliberately NOT `setupApplyRemedy`: `buildMcpEntries` hardcodes
+      // `MCP_URL` at the default port, so `setup --apply` rewrites the same
+      // wrong port and the warn re-fires forever — the dead-end-remedy defect
+      // this file has already been corrected for twice.
+      fix: `Edit the tandem entry's url in ${HOME_CLAUDE_JSON} to use port ${mcpPort}, or unset TANDEM_MCP_PORT and restart Tandem.`,
+    };
+  }
+
+  return null;
+}
+
+function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability, mcpPort: number): void {
   const home = process.env.HOME || process.env.USERPROFILE || "";
   // Claude Code reads global MCP servers from ~/.claude.json (under
   // `mcpServers`), which is exactly where `tandem setup` writes them. The
@@ -1206,7 +1364,15 @@ function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability): void {
   if (!servers.tandem) {
     r.warn("tandem not registered in ~/.claude.json", setupApplyRemedy(cliAvailable()));
   } else {
-    r.pass("tandem registered in ~/.claude.json");
+    const invalid = validateUserTandemEntry(servers.tandem, mcpPort, cliAvailable);
+    if (invalid) {
+      // `warn`, never `fail` — parity with the project-level twin. `tandem
+      // doctor` must not start exiting 1 on a machine whose tools arrive via
+      // the plugin.
+      r.warn(invalid.message, invalid.fix);
+    } else {
+      r.pass("tandem registered in ~/.claude.json");
+    }
     // Normally an HTTP entry here, which the helper ignores. A stdio entry in
     // this file means a hand-edit or a plugin-managed shape, and both can carry
     // the failure modes it reports.
@@ -1914,20 +2080,70 @@ export interface TandemPluginInput {
   wizardTandemEntry: boolean;
 }
 
+/**
+ * The enabled `tandem@<marketplace>` key in `enabledPlugins`, or `null`.
+ *
+ * `value === true`, not truthiness: `false` is a real and common value — a
+ * plugin the user deliberately disabled — and a truthiness check would report
+ * it as installed. Any marketplace suffix matches on purpose
+ * (`docs/spikes/plugin-delivery.md` recommends a local one), so a hardcoded
+ * `tandem@tandem-editor` in a remedy would hand those users a command that
+ * errors.
+ *
+ * Returns the RAW key, unclamped. The key-shape clamp lives in
+ * {@link detectEnabledTandemPluginKey}, not here: `evaluateTandemPlugin`
+ * short-circuits both of its outcomes on an undefined key, so clamping here
+ * would make doctor stop reporting a plugin that is genuinely installed —
+ * a regression, not a hardening.
+ */
+export function findEnabledTandemPluginKey(
+  enabledPlugins: Record<string, unknown> | null,
+): string | null {
+  if (enabledPlugins === null) return null;
+  return (
+    Object.entries(enabledPlugins).find(
+      ([key, value]) => key.startsWith("tandem@") && value === true,
+    )?.[0] ?? null
+  );
+}
+
+/**
+ * Read `~/.claude/settings.json` and report the enabled Tandem plugin key, for
+ * the one surface that has to decide before doctor runs: `tandem setup --apply`
+ * warns that writing its own MCP entry loads the `tandem_*` toolset twice
+ * (#1811).
+ *
+ * Reuses `checkTandemPlugin`'s home spelling and its screened reader, so this
+ * adds no new reader, no second UNC screen (#1417) and no new home chain.
+ * Absence is never evidence, and this must never make `setup --apply` fail.
+ *
+ * **The key shape is clamped here**, because this fix is what newly prints the
+ * key into a terminal inside a copy-paste `claude plugin uninstall <key>`, and
+ * a newline or ANSI escape in arbitrary JSON-key text would render as something
+ * other than what it is. Suppressing the new notice for such a key costs
+ * nothing; suppressing doctor's existing report of an installed plugin would
+ * not.
+ */
+export function detectEnabledTandemPluginKey(): string | null {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  if (!home || homeIsUnsafe(home)) return null;
+
+  const read = readClaudeConfig(join(home, ".claude", "settings.json"));
+  if (read.kind !== "ok") return null;
+
+  const key = findEnabledTandemPluginKey(
+    (read.value as { enabledPlugins?: Record<string, unknown> }).enabledPlugins ?? {},
+  );
+  return key !== null && /^tandem@[A-Za-z0-9._-]+$/.test(key) ? key : null;
+}
+
 export function evaluateTandemPlugin(input: TandemPluginInput): EvalOutcome[] {
   if (input.enabledPlugins === null) return [];
-  // `false` is a real and common value — a plugin the user deliberately
-  // disabled — so test the VALUE, not just key presence. A truthiness check
-  // would report a disabled plugin as installed.
-  // Keep the KEY, not just the fact. Detection matches any marketplace
-  // (`tandem@<whatever>`) on purpose — `docs/spikes/plugin-delivery.md`
-  // recommends a local marketplace for the no-git path — so a hardcoded
-  // `tandem@tandem-editor` in the remedy hands those users a command that
-  // errors. The uninstall string has to name the plugin we actually found.
-  const installedKey = Object.entries(input.enabledPlugins).find(
-    ([key, value]) => key.startsWith("tandem@") && value === true,
-  )?.[0];
-  if (installedKey === undefined) return [];
+  // Keep the KEY, not just the fact: the uninstall string has to name the
+  // plugin we actually found. Why the value test and the open marketplace
+  // suffix are load-bearing is on {@link findEnabledTandemPluginKey}.
+  const installedKey = findEnabledTandemPluginKey(input.enabledPlugins);
+  if (installedKey === null) return [];
 
   const out: EvalOutcome[] = [
     {
@@ -2926,7 +3142,7 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
     recordEvaluation(r, evaluateAppTranslocation(process.execPath)),
   );
   await r.check("mcp-json", () => checkMcpJson(r, cwd, cliAvailable));
-  await r.check("user-mcp-config", () => checkUserMcpConfig(r, cliAvailable));
+  await r.check("user-mcp-config", () => checkUserMcpConfig(r, cliAvailable, mcpPort));
   await r.check("desktop-mcp-config", () =>
     checkDesktopMcpConfig(r, cliAvailable, opts.homeOverride),
   );
@@ -2971,6 +3187,43 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
 
 // ── Printer + exit-code wrapper ─────────────────────────────────────
 
+/**
+ * Parse one port env var the way the *server* does, so doctor probes where the
+ * server actually binds.
+ *
+ * `parseInt(raw || String(fallback), 10)` deliberately mirrors
+ * `src/server/index.ts` — not `Number`, and not `backend-ports.ts`'s stricter
+ * `/^\d{1,5}$/`. The server binds `TANDEM_PORT=4918abc` on 4918, so a stricter
+ * parser here would re-create the false "server not running" for exactly the
+ * inputs the server accepts.
+ *
+ * The `1..65535` clamp is a probe-side decision, NOT a mirror of the server:
+ * `listen(0)` binds an OS-chosen ephemeral port, so `TANDEM_PORT=0` is not
+ * "input the server would reject" — it is undiagnosable from outside the
+ * process. Falling back to the default at least prints a port shape the user
+ * recognises.
+ */
+function envPort(raw: string | undefined, fallback: number): number {
+  const n = parseInt(raw || String(fallback), 10);
+  return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : fallback;
+}
+
+/**
+ * The single resolution site for the two documented port overrides (#1806).
+ * `runDoctor` itself never reads them — an embedder that knows its live ports
+ * (the `/api/diagnostics` route) must not get the CLI's answer layered under
+ * its own.
+ */
+export function resolveDoctorPortsFromEnv(env: NodeJS.ProcessEnv = process.env): {
+  wsPort: number;
+  mcpPort: number;
+} {
+  return {
+    wsPort: envPort(env.TANDEM_PORT, DEFAULT_WS_PORT),
+    mcpPort: envPort(env.TANDEM_MCP_PORT, DEFAULT_MCP_PORT),
+  };
+}
+
 export interface RunDoctorCliOptions {
   json?: boolean;
 }
@@ -3002,7 +3255,7 @@ export async function runDoctorCli(opts: RunDoctorCliOptions = {}): Promise<numb
 
   let report: DoctorReport;
   try {
-    report = await runDoctor();
+    report = await runDoctor(resolveDoctorPortsFromEnv());
   } catch (err) {
     const message = errMsg(err);
     if (json) {

@@ -34,6 +34,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { type ZodRawShape, z } from "zod";
 import type { DoctorReport } from "../../src/cli/doctor.js";
+import { dismissPending } from "../../src/server/annotations/lifecycle.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
@@ -370,6 +371,26 @@ describe("tandem_getAnnotations structured output", () => {
     expect(JSON.stringify(sc)).not.toContain("my private thought");
     // directedAt is deprecated and stripped on read — never re-introduced
     expect(JSON.stringify(sc)).not.toContain("directedAt");
+  });
+
+  it("round-trips resolvedBy on a Claude-dismissed record (#1770)", () => {
+    // `sanitizeAnnotation` is a strict allowlist and `annotationBaseShape`
+    // DECLARES rather than tolerates: drop either half and the field silently
+    // never reaches the wire, taking the `userResponses` exclusion with it.
+    return (async () => {
+      const ydoc = setupDoc("schema-resolvedby", "Hello world");
+      const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+      const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "withdraw me");
+      expect(dismissPending(id, ydoc, map, () => {}).kind).toBe("ok");
+
+      const result = (await client.callTool({
+        name: "tandem_getAnnotations",
+        arguments: {},
+      })) as ToolResult;
+      const sc = expectStructuredMatch(result, getAnnotationsOutputShape);
+      const anns = sc.annotations as Array<Record<string, unknown>>;
+      expect(anns.find((a) => a.id === id)?.resolvedBy).toBe("claude");
+    })();
   });
 });
 

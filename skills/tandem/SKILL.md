@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 15
+version: 17
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -19,7 +19,7 @@ Tandem lets you annotate and edit documents alongside the user in real time. The
 
 These prevent the most common failures. Follow them always.
 
-1. **Resolve before mutating.** Call `tandem_resolveRange` (or `tandem_search`) to get offsets before calling `tandem_edit` or `tandem_comment`. Never compute offsets by counting characters in previously-read text — they go stale when the user edits.
+1. **Resolve before mutating.** Call `tandem_resolveRange` (or `tandem_search`) to get offsets before calling `tandem_edit` or `tandem_comment`. Never compute offsets by counting characters in previously-read text — they go stale when the user edits, and they are not characters: offsets are **UTF-16 code units**, so every emoji or other non-BMP character in the document puts a hand-count off by one more, even on text you just read. An offset that lands between the two halves of a surrogate pair is refused with `INVALID_RANGE` and `details.reason: "surrogate"`.
 2. **Pass `textSnapshot`.** Include the matched text as `textSnapshot` on mutations and annotations. If the text moved, the server returns `RANGE_MOVED` with relocated coordinates instead of corrupting the document. The one exception is a point insertion (`from === to`), which carries none — a zero-length range matches no text, so a `textSnapshot` there is refused with `INVALID_ARGUMENT`. Before reusing a *stored* annotation's `textSnapshot` as a range guard elsewhere, check `textSnapshotTruncated` — a truncated snapshot (capped at 200 chars) resolves a shorter span than the annotation actually covers.
 3. **Use `tandem_getTextContent` for document reads.** Use `getTextContent({ section: "Section Name" })` for targeted reads. The `section` parameter is case-insensitive.
 4. **`tandem_edit` cannot create paragraphs, and newline handling is format-dependent.** In Markdown, a newline in `newText` becomes a literal soft-wrapped break, not a paragraph break. In `.docx`, it becomes a real run-level break. In a plaintext-adapted document (`.txt`, or an unrecognized extension), a literal newline is refused with `INVALID_ARGUMENT`. For multi-paragraph changes, use multiple `tandem_edit` calls, or reach for `tandem_appendContent` (Markdown-only, appends at the document end) or `tandem_editList` (Markdown/`.docx` only, list-shape changes) when they fit.
@@ -58,9 +58,13 @@ Choose the right type for each finding:
 - **`tandem_comment`** — Observation or question. Use for any finding that needs explanation or a text replacement.
 - **`tandem_comment` with `suggestedText`** — Specific text replacement. **Prefer when you can provide replacement text** — the user gets one-click accept/reject. Cannot create new paragraphs. Pass replacement text as `suggestedText`; the comment text explains the reason.
 
+**The cards you may act on are the ones you wrote.** `tandem_editAnnotation` and `tandem_annotationReply` refuse a user-authored annotation with `NOT_OWNED` — the user's card is the user's text, and answering inside their thread is not your seat at it. Respond with `tandem_reply` (chat) or a fresh `tandem_comment` on the text you mean.
+
+**Accepting your own work is the user's decision, never yours.** `tandem_resolveAnnotation({ action: "accept" })` on your own annotation returns `ACCEPT_REFUSED`, as does accepting anything carrying `suggestedText` (an MCP accept flips a status and applies no text — only the user's accept in the editor, or `tandem_applyChanges`, writes the replacement). Accept on a user-authored or imported comment with no `suggestedText` is permitted — but it records a decision on the user's own card, so do it only when they asked you to. What you *may* always do is **withdraw**: `action: "dismiss"` on your own annotation is how you take back a finding you no longer stand behind. Say so in chat when you do. A record you resolved is stamped `resolvedBy: "claude"` and is deliberately kept out of `userResponses`, so you will never read your own withdrawal back as the user agreeing with you.
+
 **Note annotations** (`type: "note"`) are user-personal — `tandem_checkInbox` does not surface them to you. Don't act on notes unless the user explicitly mentions one in chat. Highlights are also user-only; `tandem_highlight` is deprecated and returns an error.
 
-**User comments.** When scanning `tandem_checkInbox` or `tandem_getAnnotations`, user-authored `type: "comment"` annotations are the ones you should respond to. A reply **on the annotation thread itself** goes through `tandem_annotationReply` — that's what keeps the reply visible on the thread rather than only in chat. Reserve `tandem_reply` for chat messages, and a fresh `tandem_comment` for a new textual annotation on different text. `tandem_annotationReply` refuses a resolved, note (ADR-027), highlight, or private (non-outbound) comment parent — fall back to `tandem_reply` for those.
+**User comments.** When scanning `tandem_checkInbox` or `tandem_getAnnotations`, user-authored `type: "comment"` annotations are the ones you should respond to. A reply **on the annotation thread itself** goes through `tandem_annotationReply` — that's what keeps the reply visible on the thread rather than only in chat. Reserve `tandem_reply` for chat messages, and a fresh `tandem_comment` for a new textual annotation on different text. `tandem_annotationReply` refuses a resolved, note (ADR-027), highlight, private (non-outbound), or **user-authored** parent — fall back to `tandem_reply` for those. So the reply tool is for continuing *your own* threads; a user comment is answered in chat or with a new comment of your own.
 
 **Before responding, check whether you already did.** None of `tandem_reply`, `tandem_comment`, or `tandem_annotationReply` is idempotent — replying twice leaves two chat bubbles or two annotation cards on the same text, which the user sees. Your own memory of the conversation is the primary check: if you recognize the comment's text, you have probably already answered it.
 

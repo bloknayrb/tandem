@@ -315,3 +315,46 @@ describe("open tray dismissal", () => {
     expect(document.activeElement).toBe(pill);
   });
 });
+
+// cr-1 (J2 review): the tray row is one of the two surfaces that must fold
+// `errorCode` back into what the user actually sees (activityCenter.test.ts
+// unit-tests the formatter itself; this pins that the row really calls it).
+describe("tray row message (cr-1)", () => {
+  it("shows the errno suffix on a save-error row", () => {
+    const { container } = render(ActivityTray, {
+      props: baseProps(
+        [
+          makeItem("save-fail", {
+            type: "save-error",
+            severity: "error",
+            message: "Save failed for report.docx.",
+            errorCode: "EACCES",
+          }),
+        ],
+        true,
+      ),
+    });
+
+    const msg = container.querySelector(".toast-row .msg");
+    expect(msg?.textContent).toBe("Save failed for report.docx. (EACCES)");
+  });
+
+  it("shows the plain message with no suffix for an unrelated errorCode sentinel", () => {
+    const { container } = render(ActivityTray, {
+      props: baseProps(
+        [
+          makeItem("sidecar-fail", {
+            type: "general-error",
+            severity: "error",
+            message: "Tandem server failed to restart.",
+            errorCode: "SIDECAR_RESTART_FAILED",
+          }),
+        ],
+        true,
+      ),
+    });
+
+    const msg = container.querySelector(".toast-row .msg");
+    expect(msg?.textContent).toBe("Tandem server failed to restart.");
+  });
+});

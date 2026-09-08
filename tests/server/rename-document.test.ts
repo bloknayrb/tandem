@@ -44,6 +44,22 @@ vi.mock("../../src/server/notifications.js", async (importOriginal) => {
   };
 });
 
+// #1816: lets one test force `assertPathSafe`'s PATH_REJECTED catch without a
+// real symlink (unusable on Windows without elevation). Delegates to the real
+// implementation whenever `pathSafeThrows` is unset (every other test in this
+// file), so this mock is otherwise a no-op passthrough.
+let pathSafeThrows: Error | null = null;
+vi.mock("../../src/server/integrations/apply.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/server/integrations/apply.js")>();
+  return {
+    ...actual,
+    assertPathSafe: (targetPath: string, opts?: { allowedRoots?: string[] }) => {
+      if (pathSafeThrows) throw pathSafeThrows;
+      return actual.assertPathSafe(targetPath, opts);
+    },
+  };
+});
+
 // Real modules (NOT mocked) — the durable-annotation envelope round-trip + the
 // tombstone observer must actually run on disk for the regression tests.
 const fsReal = await import("node:fs/promises");
@@ -87,6 +103,7 @@ beforeEach(async () => {
   storeReset();
   syncReset();
   queueReset();
+  pathSafeThrows = null;
 });
 
 afterEach(async () => {
@@ -605,6 +622,42 @@ describe("renameDocument — fs.rename failure rollback (Phase 2)", () => {
     await createStore(docHash(filePath), { filePath }).flush();
     const envelope = await createStore(docHash(filePath), { filePath }).load();
     expect(envelope.annotations.map((a) => a.id)).toContain("post-rollback");
+  });
+
+  // #1816: a failed `fs.rename`'s message embeds BOTH absolute paths (old and
+  // new), and `routes/rename.ts` echoes `result.reason` verbatim to a loopback
+  // caller — i.e. every desktop user. `reason` must be plain language with no
+  // path and no raw errno text; `errorCode` (ENOENT here) is what still
+  // travels for a details suffix.
+  it("returns a plain-language reason with no path or raw errno text (#1816)", async () => {
+    const { docId, filePath } = await openFileDoc("rollback-copy.md", "body content");
+    await fsReal.rm(filePath);
+
+    const result = await renameDocument(docId, "rollback-copy-renamed.md");
+
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("ENOENT");
+    expect(result.reason).not.toContain(filePath);
+    expect(result.reason).not.toContain("ENOENT");
+    expect(result.reason).toBe("The document could not be renamed.");
+  });
+
+  // #1816: `assertPathSafe`'s thrown message embeds the absolute path it
+  // rejected ("Refusing to operate on symlinked path: <abs>"), and
+  // `routes/rename.ts` echoes `result.reason` verbatim to a loopback caller.
+  // Forced via the module mock rather than a real symlink (unusable on
+  // Windows without elevation).
+  it("returns a plain-language reason with no path text on a rejected destination (#1816)", async () => {
+    const { docId } = await openFileDoc("path-rejected.md", "body content");
+    pathSafeThrows = new Error("Refusing to operate on symlinked path: /abs/target.md");
+
+    const result = await renameDocument(docId, "path-rejected-renamed.md");
+
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("PATH_REJECTED");
+    expect(result.reason).toBe("The destination path was rejected.");
+    expect(result.reason).not.toContain("Refusing");
+    expect(result.reason).not.toContain("/abs/target.md");
   });
 
   // #1040 rollback regression: on rollback oldHash === the still-registered

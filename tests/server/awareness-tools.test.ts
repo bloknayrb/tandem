@@ -672,6 +672,9 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
     id: "parent-comment",
     author: "user",
     type: "comment",
+    // Explicit since #1619: `makeAnnotation`-shaped fixtures carry no default
+    // audience, and every Claude-facing read now requires `outbound`.
+    audience: "outbound",
     range: range(0, 5),
     content: "parent",
     status: "pending",
@@ -1154,6 +1157,8 @@ describe("inbox ledgers are document-scoped", () => {
       id: "parent-comment",
       author: "user",
       type: "comment",
+      // Explicit since #1619 — see `commentParent` above.
+      audience: "outbound",
       range: range(0, 5),
       content: "parent",
       status: "pending",

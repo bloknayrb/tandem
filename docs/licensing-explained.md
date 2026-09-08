@@ -9,9 +9,18 @@
 > [licensing-terms.md](licensing-terms.md) (what a purchase grants),
 > [security.md](security.md), [data-locations.md](data-locations.md).
 >
-> **Status: the whole system ships dark.** `LICENSE_GATE_ENABLED = false` in
-> `tsup.config.ts`. Everything below is built and tested, and none of it does
-> anything to a user today.
+> **Status: the whole system ships dark.** Everything below is built and tested, and none
+> of it does anything to a user today.
+>
+> **Going live is TWO constants, in two languages** ([#1785](https://github.com/bloknayrb/tandem/issues/1785)).
+> `LICENSE_GATE_ENABLED = false` in `tsup.config.ts:20` turns the run gate on, and
+> `const LICENSE_UPDATE_ENDPOINT: &str = ""` at `src-tauri/src/lib.rs:171` must be pointed at
+> the deployed Worker. While that string is empty, `entitled_license_id()` short-circuits
+> (`src-tauri/src/lib.rs:2298`) and `build_updater()` falls to `app.updater()`
+> (`:2317-2332`) — so **every build today, licensed or not, checks the PUBLIC manifest**
+> from `src-tauri/tauri.conf.json`, and the `X-Tandem-License-Id` path described in Part 2
+> is unreachable code. Flipping only the first const ships a gate whose update window is
+> not actually enforced.
 
 ---
 
@@ -21,7 +30,9 @@
 
 You buy Tandem once. You get a **license key** by email — a long block of
 letters and numbers, plus a `tandem.license` file attached. You paste the key in
-(or double-click the file), and Tandem is yours: it keeps working forever, on
+(**double-clicking the file does nothing** — Tandem registers no `.license` file
+association; its only associations are `.md`/`.markdown`, `.txt`, `.html` and `.docx`,
+`src-tauri/tauri.conf.json:74-102`), and Tandem is yours: it keeps working forever, on
 any computer you personally use, with no internet connection required to prove
 it. For the first year you also get new versions as they're released.
 
@@ -236,6 +247,23 @@ body, not the registration site.**
 gated, on both halves), save/export, `GET` routes, chat, and `tandem_resolveAnnotation` — a
 status flip, not a content write.
 
+**Three mutations sit outside the gate and are not obviously reads.** Recorded here rather
+than left silent, because an absence nobody wrote down reads the same as an omission:
+
+- `tandem_rename` / `POST /api/rename` — renames the user's file on disk. Ungated
+  (`src/server/mcp/document.ts:1420` is a plain `withErrorBoundary`).
+- `tandem_convertToMarkdown` / `POST /api/convert` — **writes a new `.md` file to disk** and
+  opens it. Ungated (`src/server/mcp/document.ts:1499`).
+- `POST /api/mode/release` — clears `heldInSolo` markers on open documents
+  (`src/server/mcp/routes/mode-release.ts:108-115`). Ungated, on the same reasoning as
+  `tandem_resolveAnnotation`: a marker flip, not a content write. It has no MCP twin, and
+  since [#1769](https://github.com/bloknayrb/tandem/issues/1769) it no longer writes the mode
+  key at all.
+
+Whether any of the three should join the gated set is a decision, not a doc fix. Neither
+disk-writing tool is a *document content* write in the sense the gate is drawn around, but
+both put bytes on the user's filesystem, which is more than "a plain markdown editor".
+
 ## AI surfaces — the #1346 inventory
 
 > **Discovery step for the ADR-040 amendment (#1346, decision 3).** The amendment asks whether
@@ -252,7 +280,7 @@ changed. Six exist:
 
 | # | Surface | Admission point | Enforcement today |
 |---|---|---|---|
-| 1 | MCP over HTTP (`:3479`) | per-session `McpServer`, `onsessioninitialized` | per-tool: 12 `gatedTool`, 1 conditional in-handler, 16 ungated |
+| 1 | MCP over HTTP (`:3479`) | per-session `McpServer`, `onsessioninitialized` | per-tool: **13** `gatedTool`, 1 conditional in-handler, **19** ungated (33 registered) |
 | 2 | MCP over stdio | `src/cli/mcp-stdio.ts` | **inherits row 1** — pure JSON-RPC proxy, no handlers of its own |
 | 3 | `/api` mutating twins | Express registrars | per-route: 7 middleware mounts + 1 in-handler — **but see below: these are the *user's* surfaces** |
 | 4 | Chat | `appendClaudeChatMessage()` | **none** |
@@ -391,6 +419,12 @@ activate correctly today**.
 > assert *that*, not the unsupportable "never".
 
 ## Updates, and the endpoint that must not lie
+
+> **None of this runs today.** `LICENSE_UPDATE_ENDPOINT` is `""` (`src-tauri/src/lib.rs:171`),
+> so the updater takes the `app.updater()` branch and checks the public GitHub manifest for
+> every build. Everything in this section, and the failure mode in Part 3, describes what
+> happens **after** that const is pointed at the Worker
+> ([#1785](https://github.com/bloknayrb/tandem/issues/1785)).
 
 The desktop updater sends only an opaque UUID (`X-Tandem-License-Id`) — never
 the key, the name, or the email. The Worker looks it up and either proxies the

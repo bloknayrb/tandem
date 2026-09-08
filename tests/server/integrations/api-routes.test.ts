@@ -17,7 +17,12 @@ import {
   type IntegrationsRoutesDeps,
   registerIntegrationsRoutes,
 } from "../../../src/server/integrations/api-routes.js";
-import { MAX_CONFIG_BYTES } from "../../../src/server/integrations/apply.js";
+import {
+  _resetSkillRefreshErrorForTests,
+  getSkillRefreshError,
+  MAX_CONFIG_BYTES,
+  type SkillInstallResult,
+} from "../../../src/server/integrations/apply.js";
 import type { ExistingMcpInstall } from "../../../src/server/integrations/existing-config.js";
 import {
   ClaudeInstallError,
@@ -160,12 +165,12 @@ describe("integrations API routes", () => {
   // route deliberately accepts no `homeOverride`, so every app built from
   // `deps` gets this spy. Without it the apply tests below rewrote the
   // operator's `~/.claude/skills/tandem/SKILL.md` on every run.
-  let installSkillSpy: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  let installSkillSpy: ReturnType<typeof vi.fn<() => Promise<SkillInstallResult>>>;
 
   beforeEach(async () => {
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-int-api-"));
     backend = memoryBackend();
-    installSkillSpy = vi.fn(async () => {});
+    installSkillSpy = vi.fn(async (): Promise<SkillInstallResult> => ({ written: true }));
     deps = {
       installSkill: installSkillSpy,
       store: createIntegrationsStore(tmpDir),
@@ -183,6 +188,7 @@ describe("integrations API routes", () => {
   });
 
   afterEach(async () => {
+    _resetSkillRefreshErrorForTests();
     if (tmpDir) await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -1167,6 +1173,93 @@ describe("integrations API routes", () => {
         expect(after.mcpServers.tandem).toBeDefined();
         // The nonce rotated because a write occurred.
         expect(body.nextNonce).not.toBe(nonce);
+      });
+
+      // Post-ship review of #1790. `installSkill()` declines to downgrade a
+      // NEWER skill on disk, and the route used to discard that result: 200,
+      // every integration `applied`, and nothing anywhere said the skill was
+      // left alone — `getSkillRefreshError()` stayed null because only the
+      // refresher ever set it. The response shape is deliberately unchanged
+      // (a declined skill is not a failed integration); the decline rides the
+      // refresher's channel, which `/api/launcher/status` already surfaces.
+      describe("a declined skill install reaches the skill-refresh error channel", () => {
+        async function applyOnce(): Promise<{
+          status: number;
+          results: Array<{ status: string }>;
+        }> {
+          const tmpClaudeJson = path.join(tmpDir, ".claude.json");
+          fs.writeFileSync(tmpClaudeJson, JSON.stringify({ mcpServers: {} }));
+          await deps.store.write({
+            schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+            integrations: [
+              {
+                kind: "claude-code",
+                id: "cc-1",
+                label: "Claude Code",
+                configPath: tmpClaudeJson,
+                transport: "http",
+                url: "http://127.0.0.1:3479",
+              },
+            ],
+          });
+          const app = makeApp({
+            ...deps,
+            detectTargets: () => [
+              { label: "Claude Code", configPath: tmpClaudeJson, kind: "claude-code" },
+            ],
+            shouldRegisterChannelShim: () => false,
+          });
+          const nonce = await freshNonce(app);
+          const res = await request(
+            app,
+            "POST",
+            API_INTEGRATIONS_APPLY,
+            { ids: ["cc-1"], confirmationNonce: nonce },
+            TAURI_ORIGIN,
+          );
+          return {
+            status: res.status,
+            results: (res.body as { results: Array<{ status: string }> }).results,
+          };
+        }
+
+        it("records newer-on-disk without changing the apply response", async () => {
+          installSkillSpy.mockResolvedValueOnce({
+            written: false,
+            onDiskVersion: 16,
+            bundledVersion: 15,
+          });
+          const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+          try {
+            const { status, results } = await applyOnce();
+            expect(status).toBe(200);
+            expect(results[0]?.status).toBe("applied");
+            expect(installSkillSpy).toHaveBeenCalledTimes(1);
+            expect(getSkillRefreshError()).toEqual({
+              code: "newer-on-disk",
+              message: expect.stringMatching(/v16.*v15.*SKILL\.md/),
+            });
+            expect(errorSpy).toHaveBeenCalledWith(
+              expect.stringContaining("kept the installed skill"),
+            );
+          } finally {
+            errorSpy.mockRestore();
+          }
+        });
+
+        it("a written install clears a prior record, as the refresher's success does", async () => {
+          installSkillSpy.mockResolvedValueOnce({
+            written: false,
+            onDiskVersion: 16,
+            bundledVersion: 15,
+          });
+          await applyOnce();
+          expect(getSkillRefreshError()?.code).toBe("newer-on-disk");
+
+          // Default spy: `{ written: true }`.
+          await applyOnce();
+          expect(getSkillRefreshError()).toBeNull();
+        });
       });
 
       it("create-wins: keeps tandem-channel even when listed in removals if the shim is being registered (#985)", async () => {

@@ -193,7 +193,11 @@ describe("tandem_resolveAnnotation tool logic", () => {
   ])("%s an annotation", (_label, op, want) => {
     const ydoc = setupDoc(`ra-${want}`, "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "review me");
+    // USER-authored since #1770: accept is the user's decision, so
+    // `transitionPending` refuses an accept of a CLAUDE-authored record.
+    const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "review me", {
+      author: "user",
+    });
 
     const result = op(id, ydoc, map, noRelay);
 

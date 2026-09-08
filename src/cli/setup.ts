@@ -121,6 +121,29 @@ async function applySetup(opts: SetupOptions): Promise<void> {
     targets = targets.filter((t) => wanted.has(t.kind));
   }
 
+  // #1811 — the command that CREATES the duplication was the one surface that
+  // never mentioned it. Gated on a `claude-code` target because the plugin is a
+  // Claude Code plugin: `--target=claude-desktop` writes no Claude Code entry
+  // and duplicates nothing, so the notice there would be a false statement
+  // prescribing the uninstall of a working plugin. Dynamic import, mirroring
+  // `src/cli/index.ts`, so other `tandem setup` paths do not pay for doctor's
+  // dependency graph.
+  //
+  // The write still happens: `--apply` is the scriptable path whose contract is
+  // "write the config", and silently skipping would strand a user who later
+  // disables the plugin with no output saying why.
+  if (targets.some((t) => t.kind === "claude-code")) {
+    const pluginKey = (await import("./doctor.js")).detectEnabledTandemPluginKey();
+    if (pluginKey !== null) {
+      console.error(
+        `\n  \x1b[33m⚠\x1b[0m The Tandem plugin (${pluginKey}) is installed and already provides ` +
+          "the tandem_* tools.\n" +
+          "    Writing this config too makes every tool appear twice — keep one:\n" +
+          `    claude plugin uninstall ${pluginKey}`,
+      );
+    }
+  }
+
   let outcome: WriteOutcome = { failures: 0, refusals: [], shimRegisteredFor: [] };
   if (targets.length === 0) {
     // `detectTargets` returns an empty list for two very different reasons, and
@@ -175,8 +198,19 @@ async function applySetup(opts: SetupOptions): Promise<void> {
   // invocation (contrarian review S5), even when no targets were written.
   console.error("\nInstalling Claude Code skill...");
   try {
-    await installSkill();
-    console.error("  \x1b[32m✓\x1b[0m ~/.claude/skills/tandem/SKILL.md");
+    const result = await installSkill();
+    if (!result.written) {
+      // The remedy names DELETING the file, never "upgrade Tandem to move it":
+      // no Tandem version moves a `version: 999` file, so that would be a
+      // dead-end fix line.
+      console.error(
+        `  \x1b[33m⚠\x1b[0m kept the installed skill (v${result.onDiskVersion} on disk is newer ` +
+          `than this install's v${result.bundledVersion}) — delete ` +
+          "~/.claude/skills/tandem/SKILL.md and re-run to replace it",
+      );
+    } else {
+      console.error("  \x1b[32m✓\x1b[0m ~/.claude/skills/tandem/SKILL.md");
+    }
   } catch (err) {
     console.error(
       `  \x1b[33m⚠\x1b[0m Could not install skill: ${err instanceof Error ? err.message : String(err)}`,

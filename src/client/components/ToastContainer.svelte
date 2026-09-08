@@ -1,6 +1,6 @@
 <script lang="ts">
 import type { Toast } from "../hooks/useNotifications.svelte";
-import { SEVERITY_GLYPHS } from "./activityCenter.js";
+import { formatActivityMessage, SEVERITY_GLYPHS } from "./activityCenter.js";
 
 interface Props {
   toasts: Toast[];
@@ -36,7 +36,7 @@ let { toasts, onDismiss }: Props = $props();
           </svg>
         </span>
         <div class="body">
-          <span class="msg">{toast.message}</span>
+          <span class="msg">{formatActivityMessage(toast)}</span>
           {#if toast.count > 1}
             <span class="badge" data-testid={`toast-count-${toast.id}`}>×{toast.count}</span>
           {/if}

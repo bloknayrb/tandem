@@ -35,12 +35,30 @@ let tmpDir: string;
 
 type AnnotationRecord = { type?: string; audience?: string; content?: string };
 type AnnotationsResponse = {
-  data?: { annotations?: AnnotationRecord[] };
+  data?: { annotations?: AnnotationRecord[]; privateExcluded?: number };
 };
 
 async function getAnnotationCount(): Promise<number> {
   const res = (await mcp.callTool("tandem_getAnnotations", {})) as AnnotationsResponse;
   return res?.data?.annotations?.length ?? 0;
+}
+
+/**
+ * How many records this read WITHHELD as user-private (#1619/#1710).
+ *
+ * The counterpart to {@link getAnnotationCount}, and the reason the highlight
+ * specs below assert both. Since #1619 every Claude-facing read filters on
+ * `audience` as well as `type`, and a user's highlight is always stamped
+ * `private` — so `tandem_getAnnotations` returns none of them and discloses the
+ * count instead. Asserting only the returned length would make "the highlight
+ * was never created" and "the highlight was created and correctly withheld"
+ * indistinguishable, which is exactly the pair those specs exist to tell apart.
+ *
+ * Omitted from the response when zero, hence the `?? 0`.
+ */
+async function getPrivateExcluded(): Promise<number> {
+  const res = (await mcp.callTool("tandem_getAnnotations", {})) as AnnotationsResponse;
+  return res?.data?.privateExcluded ?? 0;
 }
 
 /** First annotation as the server sees it — used for seam-level type/audience
@@ -869,7 +887,12 @@ test("popup highlight button creates a highlight annotation", async ({ page }) =
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
     timeout: 10_000,
   });
-  expect(await getAnnotationCount()).toBe(1);
+  // Seam-level assertion, and since #1619/#1710 it is the PRIVACY one. A user's
+  // highlight is stamped `audience: "private"`, so `tandem_getAnnotations`
+  // returns nothing and discloses the count instead. Both halves are needed:
+  // the zero alone would also pass if the swatch had created nothing at all.
+  expect(await getAnnotationCount()).toBe(0);
+  expect(await getPrivateExcluded()).toBe(1);
 });
 
 test("highlight same range twice removes highlight (toggle off)", async ({ page }) => {
@@ -887,11 +910,12 @@ test("highlight same range twice removes highlight (toggle off)", async ({ page 
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
   await highlightBtn.click();
 
-  // One annotation after first click.
+  // One annotation after first click — in the user's rail, withheld from
+  // Claude's read (#1619/#1710; see `getPrivateExcluded`).
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
     timeout: 10_000,
   });
-  expect(await getAnnotationCount()).toBe(1);
+  expect(await getPrivateExcluded()).toBe(1);
 
   // Re-select the same text and click highlight again — should toggle off.
   await editor.click();
@@ -899,11 +923,14 @@ test("highlight same range twice removes highlight (toggle off)", async ({ page 
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
   await highlightBtn.click();
 
-  // Toggle off: zero annotations.
+  // Toggle off: zero annotations. The withheld count goes back to zero too,
+  // which is what distinguishes a real removal from a highlight that merely
+  // stopped being returned.
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(0, {
     timeout: 10_000,
   });
   expect(await getAnnotationCount()).toBe(0);
+  expect(await getPrivateExcluded()).toBe(0);
 });
 
 // "highlight same range with different color replaces the highlight (recolor)" is NOT
@@ -942,11 +969,12 @@ test("highlights on different ranges produce two separate annotations", async ({
   await expect(highlightBtn).toBeEnabled({ timeout: 3_000 });
   await highlightBtn.click();
 
-  // Two separate annotations.
+  // Two separate annotations, both withheld from Claude's read (#1619/#1710).
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(2, {
     timeout: 10_000,
   });
-  expect(await getAnnotationCount()).toBe(2);
+  expect(await getAnnotationCount()).toBe(0);
+  expect(await getPrivateExcluded()).toBe(2);
 });
 
 // These tests verify keyboard behaviour for the floating selection popup

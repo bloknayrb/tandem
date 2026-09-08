@@ -43,7 +43,7 @@ I built Tandem for one person working on their own documents. Those three are ex
 
 Then connect your AI. Tandem opens a setup wizard the first time you run it. If [Claude Code](https://claude.com/claude-code) isn't installed it can install it for you in one click on all three platforms, and it writes the connection settings itself. You can reopen the wizard any time from **Settings → AI Assistant**. Two things before you start. **A Claude Pro or Max subscription includes Claude Code** (pay-as-you-go API billing works too). And **the Claude you use at claude.ai in a browser can't connect**, because a web page has no way to reach a file on your disk. The subscription alone doesn't do it: you need Claude Code, or Claude Desktop, installed locally as well.
 
-Prefer a different AI? Any MCP-capable client can connect to the same endpoint. [docs/integrations.md](docs/integrations.md) covers what's supported and what's untested, and [Cowork](#cowork) covers connecting Claude Desktop on Windows.
+Prefer a different AI? Any MCP-capable client can connect to the same endpoint. [docs/integrations.md](docs/integrations.md) covers what's supported and what's untested. Claude Desktop is set up by the same wizard on all three platforms; [Cowork](#cowork), its local agent mode, is the Windows-only part.
 
 <details>
 <summary><b>System requirements</b></summary>

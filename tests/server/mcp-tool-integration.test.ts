@@ -28,6 +28,10 @@ import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { registerNavigationTools } from "../../src/server/mcp/navigation.js";
 import { shutdownSearchWorker } from "../../src/server/mcp/search-worker.js";
 import {
+  _resetModeProvenanceForTests,
+  installModeProvenanceObserver,
+} from "../../src/server/mode.js";
+import {
   getBuffer as getNotificationBuffer,
   resetForTesting as resetNotifications,
 } from "../../src/server/notifications.js";
@@ -173,6 +177,45 @@ describe("MCP tool integration — document tools", () => {
     expect(parsed.error).toBe(false);
     expect(parsed.data.running).toBe(true);
     expect(parsed.data.documentCount).toBe(1);
+  });
+
+  // #1733: the field must survive the SDK's hard validation of structured
+  // output, which is what this round-trip pins — the union has four arms and the
+  // schema has to admit each.
+  it("tandem_status and tandem_checkInbox carry modeProvenance", async () => {
+    setupDoc("mcp-doc-provenance", "Content");
+    _resetModeProvenanceForTests();
+
+    const before = parseResult(await client.callTool({ name: "tandem_status", arguments: {} }));
+    expect(before.data.modeProvenance).toBeNull();
+    const inboxBefore = parseResult(
+      await client.callTool({ name: "tandem_checkInbox", arguments: {} }),
+    );
+    expect(inboxBefore.data.modeProvenance).toBeNull();
+
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    const cleanup = installModeProvenanceObserver(ctrl);
+    try {
+      const scratch = new Y.Doc();
+      Y.applyUpdate(scratch, Y.encodeStateAsUpdate(ctrl));
+      const sv = Y.encodeStateVector(scratch);
+      scratch.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_MODE, "tandem");
+      Y.applyUpdate(ctrl, Y.encodeStateAsUpdate(scratch, sv), { socketId: "abcdef0123456789" });
+
+      const status = parseResult(await client.callTool({ name: "tandem_status", arguments: {} }));
+      expect(status.data.modeProvenance).toMatchObject({
+        source: "client",
+        connection: "abcdef01",
+        value: "tandem",
+      });
+      const inbox = parseResult(
+        await client.callTool({ name: "tandem_checkInbox", arguments: {} }),
+      );
+      expect(inbox.data.modeProvenance).toMatchObject({ source: "client", value: "tandem" });
+    } finally {
+      cleanup();
+      _resetModeProvenanceForTests();
+    }
   });
 });
 
@@ -697,10 +740,18 @@ describe("MCP tool integration — annotation tools", () => {
 
     // Seed two imported Word comments — post-#482 these are author=import,
     // type=comment (Claude-visible like any other comment).
+    //
+    // `audience: "outbound"` is explicit since #1619, and it is not decoration:
+    // `sanitizeAnnotation` derives `private` for an `author: "import"` record
+    // with no stored audience (W8/#756 — an untriaged Word comment is a private
+    // note until the user promotes it), and every Claude-facing read now honours
+    // that field as the channel always has. The PROMOTED shape carries
+    // `outbound`, which is the record this spec is about.
     const imported1: Annotation = {
       id: "imp_1",
       author: "import",
       type: "comment",
+      audience: "outbound",
       range: range(6, 11),
       content: "[Reviewer] Reword this",
       status: "pending",
@@ -711,6 +762,7 @@ describe("MCP tool integration — annotation tools", () => {
       id: "imp_2",
       author: "import",
       type: "comment",
+      audience: "outbound",
       range: range(12, 16),
       content: "[Reviewer] Check fact",
       status: "pending",
@@ -749,6 +801,152 @@ describe("MCP tool integration — annotation tools", () => {
     expect(filteredParsed.data.annotations.every((a: Annotation) => a.author === "import")).toBe(
       true,
     );
+  });
+});
+
+describe("MCP tool integration — author authority (#1770)", () => {
+  /**
+   * The MCP surface is where the refusal has to land: `lifecycle`'s guard is
+   * pinned separately, but a switch arm that never mapped `not-owned` onto a
+   * code would return an unhandled-result `undefined` through the SDK and read
+   * as a transport fault rather than a refusal.
+   */
+  function seedUserComment(docId: string, id: string): void {
+    const ydoc = setupDoc(docId, "Hello world test content");
+    withInternal(ydoc, () => {
+      ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, {
+        id,
+        author: "user",
+        type: "comment",
+        audience: "outbound",
+        range: { from: 0, to: 5 },
+        content: "the user's own comment",
+        status: "pending",
+        timestamp: 1,
+        rev: 1,
+      });
+    });
+  }
+
+  it("tandem_editAnnotation refuses a user-authored annotation with NOT_OWNED", async () => {
+    seedUserComment("mcp-owner-edit", "u_edit");
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_editAnnotation",
+        arguments: { id: "u_edit", content: "let me reword yours" },
+      }),
+    );
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("NOT_OWNED");
+    // The record is untouched — a refusal that still wrote would be worse than
+    // no guard, and `error: true` alone cannot see that.
+    const stored = getOrCreateDocument("mcp-owner-edit").getMap(Y_MAP_ANNOTATIONS).get("u_edit") as
+      | Annotation
+      | undefined;
+    expect(stored?.content).toBe("the user's own comment");
+  });
+
+  it("tandem_annotationReply refuses a user-authored annotation with NOT_OWNED", async () => {
+    seedUserComment("mcp-owner-reply", "u_reply");
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_annotationReply",
+        arguments: { annotationId: "u_reply", text: "answering inside your thread" },
+      }),
+    );
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("NOT_OWNED");
+  });
+
+  it("tandem_resolveAnnotation refuses accept on Claude's own record", async () => {
+    // Accept is the USER's decision. Claude may only withdraw.
+    const ydoc = setupDoc("mcp-owner-accept", "Hello world test content");
+    const id = createAnnotation(
+      ydoc.getMap(Y_MAP_ANNOTATIONS),
+      ydoc,
+      "comment",
+      rangeOf(0, 5, ydoc),
+      "mine",
+    );
+
+    const accepted = parseResult(
+      await client.callTool({
+        name: "tandem_resolveAnnotation",
+        arguments: { id, action: "accept" },
+      }),
+    );
+    expect(accepted.error).toBe(true);
+    expect(accepted.code).toBe("ACCEPT_REFUSED");
+
+    // The control: the same id, dismissed, succeeds and is stamped.
+    const dismissed = parseResult(
+      await client.callTool({
+        name: "tandem_resolveAnnotation",
+        arguments: { id, action: "dismiss" },
+      }),
+    );
+    expect(dismissed.error).toBe(false);
+    const stored = ydoc.getMap(Y_MAP_ANNOTATIONS).get(id) as Annotation;
+    expect(stored.status).toBe("dismissed");
+    expect(stored.resolvedBy).toBe("claude");
+  });
+
+  it("tandem_resolveAnnotation refuses accept on a suggestion it cannot apply", async () => {
+    // The SECOND `accept-refused` reason, and the one the author check cannot
+    // reach: a record Claude does NOT own, so it clears `own-annotation`, but
+    // which carries `suggestedText`. `applySuggestion` is client-only, so an
+    // MCP accept never applied it — it flipped status and left the document
+    // untouched, which is the opposite of what the tool promised.
+    const ydoc = setupDoc("mcp-unapplied-suggestion", "Hello world test content");
+    withInternal(ydoc, () => {
+      ydoc.getMap(Y_MAP_ANNOTATIONS).set("u_sugg", {
+        id: "u_sugg",
+        author: "user",
+        type: "comment",
+        audience: "outbound",
+        range: { from: 0, to: 5 },
+        content: "swap this word",
+        suggestedText: "Goodbye",
+        status: "pending",
+        timestamp: 1,
+        rev: 1,
+      });
+    });
+
+    const accepted = parseResult(
+      await client.callTool({
+        name: "tandem_resolveAnnotation",
+        arguments: { id: "u_sugg", action: "accept" },
+      }),
+    );
+    expect(accepted.error).toBe(true);
+    expect(accepted.code).toBe("ACCEPT_REFUSED");
+    // The MESSAGE, not just the code: both reasons share one envelope, so a
+    // code-only assertion passes with the two arms swapped — and swapping them
+    // would tell the user their own comment is Claude's.
+    expect(accepted.message).toContain("suggestedText");
+    expect(accepted.message).not.toContain("Claude's own");
+
+    // Refused means UNWRITTEN. The document text is the half that matters here:
+    // the whole reason for this arm is that an accept must not silently leave
+    // the suggestion unapplied while reporting success.
+    const stored = ydoc.getMap(Y_MAP_ANNOTATIONS).get("u_sugg") as Annotation;
+    expect(stored.status).toBe("pending");
+    expect(stored.resolvedBy).toBeUndefined();
+    expect(extractText(ydoc)).toContain("Hello world");
+
+    // The control: the same record dismisses, so the refusal is keyed on the
+    // accept transition and not on the record being unreachable.
+    const dismissed = parseResult(
+      await client.callTool({
+        name: "tandem_resolveAnnotation",
+        arguments: { id: "u_sugg", action: "dismiss" },
+      }),
+    );
+    expect(dismissed.error).toBe(false);
+    expect((ydoc.getMap(Y_MAP_ANNOTATIONS).get("u_sugg") as Annotation).status).toBe("dismissed");
   });
 });
 

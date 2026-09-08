@@ -104,6 +104,9 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - New-tab launcher (a7, sub-PR 1.9b): `new-tab-search`, `new-tab-recent-{*}`,
   `new-tab-browse`, `new-tab-reopen-closed`, `new-tab-empty`, `new-tab-no-match`
   (the primary action keeps `palette-item-new-scratchpad`)
+- Saved-session delete confirms (#1773): `session-delete-{confirm,cancel}` and
+  `sessions-clear-all-{confirm,cancel}` — each swaps its row's contents whole,
+  so the arm (`session-delete` / `sessions-clear-all`) is absent while armed
 
 ### Status bar
 - `status-word-count`, `save-indicator`, `sb-held`
