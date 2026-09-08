@@ -67,8 +67,11 @@ Usage:
   tandem activate <license|path>    Activate a signed license (string or file path)
   tandem license                    Show the current license / trial status
   tandem --uninstall-scrub          Remove Tandem's MCP entries, skill, and Cowork
-                                    registration from Claude configs (run before
-                                    uninstalling; the Windows uninstaller runs it)
+                                    registration from Claude configs. Run it
+                                    yourself before uninstalling — no uninstaller
+                                    runs it; the Windows one runs the desktop
+                                    app's own scrub, which leaves MCP entries and
+                                    the skill in place
   tandem mcp-stdio                  Run as a stdio MCP server proxying to local HTTP
                                     (used by the plugin's Cowork bridge; requires
                                     tandem server running on the host)
