@@ -95,8 +95,14 @@ export function makeHeldInSoloStampObserver({
         ann = sanitizeAnnotation(raw as unknown as Annotation | RawAnnotation, () => {});
       } catch (err) {
         // NAME only — the error object can embed the annotation's own content.
+        // `docName` goes in as a `%s` ARGUMENT, never inside the format string:
+        // a document id is derived from a caller-supplied path, and `console.*`
+        // interprets `%s`/`%d`/`%o` in its first argument (CodeQL alert 213,
+        // same class as #1897's 212). The same shape is used by
+        // `annotations/store.ts:436` and `events/file-sync-registry.ts:39`.
         console.warn(
-          `[held-in-solo] skipped unsanitizable annotation in ${docName}:`,
+          "[held-in-solo] skipped unsanitizable annotation in %s:",
+          docName,
           err instanceof Error ? err.name : typeof err,
         );
         continue;

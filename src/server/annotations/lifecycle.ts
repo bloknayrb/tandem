@@ -1202,7 +1202,9 @@ export function removeAnnotationRecord(
     });
     if (unreadable > 0) {
       console.warn(
-        `[Tandem] reply sweep for ${annotationId}: ${unreadable} unreadable annotationId(s), left in place`,
+        "[Tandem] reply sweep for %s: %d unreadable annotationId(s), left in place",
+        annotationId,
+        unreadable,
       );
     }
     for (const key of orphaned) repliesMap.delete(key);

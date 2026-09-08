@@ -110,7 +110,7 @@ export function handleModeRelease(req: Request, res: Response): void {
     try {
       released += clearHeldMarkersForDoc(getOrCreateDocument(docId));
     } catch (err) {
-      console.warn(`[mode-release] failed to clear held markers for ${docId}:`, err);
+      console.warn("[mode-release] failed to clear held markers for %s:", docId, err);
     }
   }
 

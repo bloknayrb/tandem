@@ -512,7 +512,7 @@ export function attachObservers(docName: string, doc: Y.Doc, opts?: { uploadDoc?
   registerDirtyObserver(docName, doc);
 
   docObservers.set(docName, cleanups);
-  console.error(`[EventQueue] Attached observers for document: ${docName}`);
+  console.error("[EventQueue] Attached observers for document: %s", docName);
 }
 
 /** Detach all observers for a document. Safe to call even if none are attached. */
@@ -521,7 +521,7 @@ export function detachObservers(docName: string): void {
   if (cleanups) {
     for (const cleanup of cleanups) cleanup();
     docObservers.delete(docName);
-    console.error(`[EventQueue] Detached observers for document: ${docName}`);
+    console.error("[EventQueue] Detached observers for document: %s", docName);
   }
 }
 
