@@ -5,7 +5,7 @@
  * record. Only a stderr line marked the loss.
  */
 import { describe, expect, it } from "vitest";
-import { addUserReply } from "../../src/server/annotations/lifecycle.js";
+import { addUserReply, describeReplyWriteRefusal } from "../../src/server/annotations/lifecycle.js";
 import { REPLY_TEXT_MAX } from "../../src/server/annotations/schema.js";
 import { Y_MAP_ANNOTATION_REPLIES } from "../../src/shared/constants.js";
 import { getAnnotationsMap, makeMarkdownDoc, noRelay } from "../helpers/ydoc-factory.js";
@@ -58,5 +58,23 @@ describe("the reply seam — write-time length bound", () => {
     expect(result.kind).toBe("ok");
     expect(replyCount(ydoc)).toBe(1);
     ydoc.destroy();
+  });
+
+  it("carries the bound into the wire message, not just the result", () => {
+    // The refusal and the SENTENCE the caller sees are two separate things, and
+    // only the first was pinned. `describeReplyWriteRefusal` is what every
+    // Claude-facing consumer routes through (the seam test pins that they all
+    // do), so an arm that dropped `result.max` would produce a limit message
+    // naming no limit — a refusal the user cannot act on — with the structured
+    // assertions above still green.
+    //
+    // Reached directly because no caller can produce it: `tandem_annotationReply`
+    // caps `text` in its Zod schema, so Claude's path is refused a layer earlier
+    // and the user's path (`addUserReply`, above) returns the raw result without
+    // describing it. That is why this arm was the file's only uncovered one.
+    expect(describeReplyWriteRefusal({ kind: "too-long", max: REPLY_TEXT_MAX })).toStrictEqual({
+      code: "INVALID_ARGUMENT",
+      message: `Reply text exceeds the ${REPLY_TEXT_MAX}-character limit`,
+    });
   });
 });

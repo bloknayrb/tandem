@@ -892,6 +892,62 @@ describe("MCP tool integration — author authority (#1770)", () => {
     expect(stored.status).toBe("dismissed");
     expect(stored.resolvedBy).toBe("claude");
   });
+
+  it("tandem_resolveAnnotation refuses accept on a suggestion it cannot apply", async () => {
+    // The SECOND `accept-refused` reason, and the one the author check cannot
+    // reach: a record Claude does NOT own, so it clears `own-annotation`, but
+    // which carries `suggestedText`. `applySuggestion` is client-only, so an
+    // MCP accept never applied it — it flipped status and left the document
+    // untouched, which is the opposite of what the tool promised.
+    const ydoc = setupDoc("mcp-unapplied-suggestion", "Hello world test content");
+    withInternal(ydoc, () => {
+      ydoc.getMap(Y_MAP_ANNOTATIONS).set("u_sugg", {
+        id: "u_sugg",
+        author: "user",
+        type: "comment",
+        audience: "outbound",
+        range: { from: 0, to: 5 },
+        content: "swap this word",
+        suggestedText: "Goodbye",
+        status: "pending",
+        timestamp: 1,
+        rev: 1,
+      });
+    });
+
+    const accepted = parseResult(
+      await client.callTool({
+        name: "tandem_resolveAnnotation",
+        arguments: { id: "u_sugg", action: "accept" },
+      }),
+    );
+    expect(accepted.error).toBe(true);
+    expect(accepted.code).toBe("ACCEPT_REFUSED");
+    // The MESSAGE, not just the code: both reasons share one envelope, so a
+    // code-only assertion passes with the two arms swapped — and swapping them
+    // would tell the user their own comment is Claude's.
+    expect(accepted.message).toContain("suggestedText");
+    expect(accepted.message).not.toContain("Claude's own");
+
+    // Refused means UNWRITTEN. The document text is the half that matters here:
+    // the whole reason for this arm is that an accept must not silently leave
+    // the suggestion unapplied while reporting success.
+    const stored = ydoc.getMap(Y_MAP_ANNOTATIONS).get("u_sugg") as Annotation;
+    expect(stored.status).toBe("pending");
+    expect(stored.resolvedBy).toBeUndefined();
+    expect(extractText(ydoc)).toContain("Hello world");
+
+    // The control: the same record dismisses, so the refusal is keyed on the
+    // accept transition and not on the record being unreachable.
+    const dismissed = parseResult(
+      await client.callTool({
+        name: "tandem_resolveAnnotation",
+        arguments: { id: "u_sugg", action: "dismiss" },
+      }),
+    );
+    expect(dismissed.error).toBe(false);
+    expect((ydoc.getMap(Y_MAP_ANNOTATIONS).get("u_sugg") as Annotation).status).toBe("dismissed");
+  });
 });
 
 describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)", () => {
