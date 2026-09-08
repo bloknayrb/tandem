@@ -3,11 +3,26 @@
 GitHub shipped native stacked PRs to **public preview on 2026-07-30**. This is the working
 guide for using them here instead of hand-chaining `--base` flags.
 
-> **Verification status.** Every command below is transcribed from GitHub's docs. The
-> `gh stack` extension was **not installed on this machine** when this was written, so nothing
-> here has been run. Treat the command surface as accurate-as-documented and the *semantics*
-> section as the part worth re-checking against `gh stack --help` on first use. The section on
-> the manual workflow's failure mode **is** first-hand — it happened on 2026-08-14.
+> **Verification status — and the two halves are not equally established.**
+>
+> **Verified 2026-09-08 against `gh stack` v0.1.1 on `gh` 2.89.0:** the extension is now
+> installed (`github/gh-stack` — first-party, MIT). Every one of the 20 subcommands named below
+> resolves, and so does every flag this file asserts — `init -b/--base`, `link --base`,
+> `view -s/--json`, `sync --prune`, `rebase --downstack/--upstack/--no-trunk/--continue/--abort`,
+> `submit --auto/--open`, `merge --merge/--squash/--rebase/--merge-method`, `unstack --local`.
+> That was checked mechanically, not by reading. So the **command surface** is no longer
+> transcription.
+>
+> **Still unrun:** everything in *Merge semantics*, *Failure modes* and the exit-code list. No
+> stack has been driven end to end here, so cascade merge, automatic retargeting, the
+> linear-history requirement and every exit code remain accurate-as-documented. `--help` proves a
+> command exists; it says nothing about what the command does. **Do not read a green presence
+> check as behavioural verification** — treat the first real stack as the test, and correct this
+> file from what it does rather than from what the docs say.
+>
+> Two things that *are* first-hand: the manual workflow's failure mode below (it happened on
+> 2026-08-14), and that the extension installs and runs on `gh` 2.89.0 without an upgrade —
+> though 2.100.0 was available at the time of writing.
 
 ## Why bother
 
@@ -47,8 +62,13 @@ retarget each child *before* its parent merges. Stacks exist so you don't have t
 gh extension install github/gh-stack
 ```
 
-Requires `gh` (2.89.0 is what's here). No repository setting to flip is documented; exit code
-**9** means stacked PRs are not enabled for the repo, which is how you'd find out otherwise.
+**Already installed here** (v0.1.1, 2026-09-08) — `gh extension list` to confirm, and
+`gh extension upgrade gh-stack` to move it. It runs on `gh` 2.89.0; no `gh` upgrade was needed.
+
+No repository setting to flip is documented; exit code **9** means stacked PRs are not enabled
+for the repo, which is how you'd find out otherwise — **and that is one of the unrun claims
+above**, so a first `gh stack submit` failing is as likely to be this as anything else. Check it
+before assuming the stack is malformed.
 
 ## A stack from scratch
 
