@@ -167,6 +167,18 @@ const cliStatus = createClaudeCliStatus(() => open && wizard.step === "connect",
 // never sees a flash of the install button before the GET resolves.
 const showInstallCta = $derived(cliStatus.presence === "NOT_INSTALLED");
 const showInstalledNotOnPath = $derived(cliStatus.presence === "INSTALLED_NOT_ON_PATH");
+// #1814: the empty state's headline used to be keyed on `wizard.existing.length
+// === 0` — i.e. "no target config file/dir has ever been written" — which is a
+// claim about whether Claude has been RUN, not whether it is INSTALLED. A user
+// who installed Claude Code but never ran it (INSTALLED_ON_PATH) or has it only
+// off PATH (INSTALLED_NOT_ON_PATH) landed on "We couldn't find Claude on this
+// computer" with "Claude Code is installed…" two lines below it. Key the
+// headline on CLI presence instead: null (still probing) reads the same as
+// NOT_INSTALLED — the safe default until the GET resolves, matching
+// `showInstallCta`'s own loading behavior above.
+const emptyStateFoundInstall = $derived(
+  cliStatus.presence === "INSTALLED_ON_PATH" || cliStatus.presence === "INSTALLED_NOT_ON_PATH",
+);
 // Rendered OUTSIDE the "we couldn't find Claude" empty state, unlike the two
 // flags above. The affected user — a Windows npm-global install — has almost
 // always run `claude` from a terminal once (cmd/PowerShell honor PATHEXT, so
@@ -875,7 +887,11 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
               {@render loadingDots("Looking for Claude on your computer…")}
             {:else if wizard.existing.length === 0}
               <div class="iw-empty" data-testid="integration-wizard-empty">
-                <p class="iw-empty-title">We couldn't find Claude on this computer.</p>
+                <p class="iw-empty-title">
+                  {emptyStateFoundInstall
+                    ? "Claude Code is installed, but hasn't connected to Tandem yet."
+                    : "We couldn't find Claude on this computer."}
+                </p>
                 {#if showInstallCta}
                   <p class="iw-hint-text">
                     Don't have Claude Code yet? Install it now — a small, signed download
@@ -1145,17 +1161,23 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                 data-push-mode={wizard.channelRegistered ? "shim" : "no-shim"}
               >
                 <PushRoutesInfo />
-                <!-- Route three. BOTH arms name the CLI flag. Nothing in the app
+                <!-- Route three. Every arm names the CLI flag. Nothing in the app
                      can turn the shim on: the apply route calls
                      `shouldRegisterChannelShim` with no override, and it returns
                      `override ?? false` (`server/integrations/apply.ts`). Its call
                      site says there is deliberately no wizard checkbox, and any docs
                      claiming otherwise are wrong — that claim was in three places
-                     until 2026-08-09. This `{:else}` arm was a fourth instance until
-                     #1432; the arm above it said "registered HERE", the ambiguity
-                     that made the false one read as consistent, so both were
-                     rewritten. `tests/docs/channel-shim-optin-claims.test.ts` guards
-                     the shape now. The npm-package caveat is `doctor.ts`'s and is
+                     until 2026-08-09. The `{:else}` (non-registered) arm was a
+                     fourth instance until #1432; the arm above it said "registered
+                     HERE", the ambiguity that made the false one read as
+                     consistent, so both were rewritten. #1817 split the
+                     non-registered arm again on `isTauriRuntime()`: the desktop
+                     app has no `tandem` command at all, so the same instruction
+                     that works for an npm install dangled for a desktop one — the
+                     desktop arm names the npm install step before the setup
+                     command. `tests/docs/channel-shim-optin-claims.test.ts` guards
+                     the "nothing in the app registers it" shape across all three
+                     arms. The npm-package caveat is `doctor.ts`'s and is
                      load-bearing on this surface. -->
                 {#if wizard.channelRegistered}
                   <p>
@@ -1166,14 +1188,30 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                       >claude --dangerously-load-development-channels server:tandem-channel</code
                     >.
                   </p>
+                {:else if isTauriRuntime()}
+                  <!-- #1817: the desktop app has no `tandem` command at all (see
+                       `doctor.ts`'s npm-package caveat above), so naming the
+                       setup command with no path to running it left a desktop
+                       user with a dangling instruction. Name the npm install
+                       step first, in one line, before the command that needs it. -->
+                  <p>
+                    If Claude reports no Monitor tool at all, the channel shim is the one route
+                    that depends on neither gate. This wizard cannot register it, and the desktop
+                    app doesn't include the <code class="iw-code-inline">tandem</code> command needed
+                    to — install it with
+                    <code class="iw-code-inline">npm install -g tandem-editor@latest</code>, then run
+                    <code class="iw-code-inline">tandem setup --apply --with-channel-shim</code>
+                    from a terminal, then start each session with
+                    <code class="iw-code-inline"
+                      >claude --dangerously-load-development-channels server:tandem-channel</code
+                    >. (Keep the global installed — the shim entry runs from it.)
+                  </p>
                 {:else}
                   <p>
                     If Claude reports no Monitor tool at all, the channel shim is the one route
                     that depends on neither gate. This wizard cannot register it — run
                     <code class="iw-code-inline">tandem setup --apply --with-channel-shim</code>
-                    from a terminal (that flag is its only opt-in, and it needs Tandem's npm
-                    package, which the desktop app does not install), then start each session
-                    with
+                    from a terminal (that flag is its only opt-in), then start each session with
                     <code class="iw-code-inline"
                       >claude --dangerously-load-development-channels server:tandem-channel</code
                     >.

@@ -41,6 +41,82 @@ let sessionsLoading = $state(false);
 let sessionsLoaded = $state(false);
 let sessionsError = $state<string | null>(null);
 
+// #1773: deleting a saved session is irreversible — it discards the persisted
+// Y.Doc state, the sourceFileMtime and the annotations the row advertises — so
+// both delete affordances arm first and act on a second, explicit click. Two
+// separate cells, never one shared flag: the BulkActions lesson (SidePanel.svelte
+// "a third value on one flag renders the wrong row's wording against the wrong
+// action"). `pendingDeletePath` also means at most one row is ever armed.
+let pendingDeletePath = $state<string | null>(null);
+let clearAllArmed = $state(false);
+
+// #1773 review — the confirmed request is unbounded (neither sessions.ts helper
+// has a timeout), so "armed" has to survive the await. Disarming FIRST unmounted
+// the focused confirm button for the whole round trip, dropping focus to <body>
+// (the exact state the focus block below exists to prevent) AND returning the row
+// to its idle ×, so a user who thought the click missed could fire a second
+// DELETE. Every arm/disarm/confirm handler is gated on this, and the confirm
+// buttons carry `aria-disabled` rather than `disabled` — disabling the focused
+// node blurs it, which is the bug again.
+let actionInFlight = $state(false);
+
+// Every arm/disarm swaps the button that currently has focus out of the DOM, so
+// without focus management the browser drops focus to <body> — which is OUTSIDE
+// the role="dialog" div that owns the Escape handler. The armed confirm would
+// then be uncancellable by keyboard and Escape would stop closing the dialog,
+// in exactly the state this two-step confirm creates. The dialog is not
+// focus-trapped (#1778), so Tab from <body> can walk into browser chrome.
+//
+// Attachments, not `bind:this` + $effect: each node gets its OWN callback, so
+// there is no shared bound ref for another row's teardown to null out — the
+// hazard SidePanel.svelte:193-198 documents for keyed {#each} rows.
+let sessionsToggleEl: HTMLButtonElement | undefined = $state();
+
+/** Focus a node the moment it mounts. Only used where mounting IS the arm. */
+function focusOnMount(node: HTMLElement) {
+  node.focus();
+}
+
+// Disarming has to be gated on intent: the rest-state buttons also mount when
+// the list first renders, and focusing one there would steal focus from the
+// autofocused Browse button. A plain `let` on purpose — this is read inside an
+// attachment, and a $state cell read-and-written in the same reaction is the
+// self-invalidating shape.
+let refocusOnDisarm: string | null = null;
+
+// Row keys are file paths, so Clear all needs one that cannot collide with a
+// real one. NUL is not legal in a path on any platform Tandem runs on.
+const CLEAR_ALL_FOCUS_KEY = "\0clear-all";
+
+/** Focus this node only if it is the arm button whose confirm was just cancelled. */
+function focusIfDisarmed(key: string) {
+  return (node: HTMLElement) => {
+    if (refocusOnDisarm !== key) return;
+    refocusOnDisarm = null;
+    node.focus();
+  };
+}
+
+/**
+ * Park focus on the sessions toggle after a SUCCEEDED action — the row (or the
+ * whole list) has unmounted, so there is no node to return to. Never called on
+ * failure: the row is still there, and moving focus up past a sessions-error
+ * box announces nothing about the failure (#1773 review).
+ */
+function parkFocusAfterConfirm() {
+  sessionsToggleEl?.focus();
+}
+
+// Both confirms render the same destructive/cancel button pair, so the recipe
+// lives once here and is interpolated — the `smallBtnBase` shape from
+// BulkActions.svelte, which is also the component this confirm mirrors. A
+// shared CSS class cannot cross the component boundary (Svelte scopes styles),
+// and this file styles inline everywhere else.
+const confirmBtnBase =
+  "border: none; font-size: 11px; cursor: pointer; padding: 2px 8px; border-radius: var(--tandem-r-1); line-height: 1.4;";
+const destructiveBtnStyle = `${confirmBtnBase} background: var(--tandem-error-bg); color: var(--tandem-error-fg-strong); font-weight: 600;`;
+const cancelBtnStyle = `${confirmBtnBase} background: none; color: var(--tandem-fg-subtle);`;
+
 async function loadSessions() {
   sessionsLoading = true;
   sessionsError = null;
@@ -56,12 +132,16 @@ async function loadSessions() {
 
 function toggleSessions() {
   sessionsExpanded = !sessionsExpanded;
+  // Collapsing disarms, so re-expanding never re-mounts into a confirm state.
+  pendingDeletePath = null;
+  clearAllArmed = false;
   if (sessionsExpanded && !sessionsLoaded && !sessionsLoading) {
     void loadSessions();
   }
 }
 
-async function deleteSession(filePath: string) {
+/** @returns whether the delete succeeded — the caller branches focus on it. */
+async function deleteSession(filePath: string): Promise<boolean> {
   sessionsError = null;
   const result = await deleteSessionByPath(filePath);
   if (result.ok) {
@@ -69,9 +149,11 @@ async function deleteSession(filePath: string) {
   } else {
     sessionsError = result.error;
   }
+  return result.ok;
 }
 
-async function clearSessions() {
+/** @returns whether the clear succeeded — the caller branches focus on it. */
+async function clearSessions(): Promise<boolean> {
   sessionsError = null;
   const result = await clearAllSessions();
   if (result.ok) {
@@ -79,6 +161,7 @@ async function clearSessions() {
   } else {
     sessionsError = result.error;
   }
+  return result.ok;
 }
 
 function formatRelativeTime(ms: number): string {
@@ -297,6 +380,7 @@ function handleBrowse() {
       <button
         type="button"
         data-testid="sessions-toggle"
+        bind:this={sessionsToggleEl}
         onclick={toggleSessions}
         aria-expanded={sessionsExpanded}
         style="width: 100%; background: none; border: none; padding: 0; cursor: pointer; display: flex; justify-content: space-between; align-items: center; color: var(--tandem-fg-subtle);"
@@ -323,15 +407,72 @@ function handleBrowse() {
             No saved sessions.
           </p>
         {:else}
-          <div style="display: flex; justify-content: flex-end; margin: 6px 0;">
-            <button
-              data-testid="sessions-clear-all"
-              onclick={clearSessions}
-              type="button"
-              style="background: none; border: none; color: var(--tandem-fg-subtle); font-size: 11px; cursor: pointer; padding: 0; text-decoration: underline;"
-            >
-              Clear all
-            </button>
+          <div
+            style="display: flex; justify-content: flex-end; align-items: center; gap: 6px; margin: 6px 0;"
+          >
+            {#if clearAllArmed}
+              <!-- #1773: Clear all keeps its OWN confirm rather than sharing the
+                   row-level flag — one flag carrying a third value renders the
+                   wrong wording against the wrong action. -->
+              <span style="font-size: 11px; color: var(--tandem-fg);">
+                Clear all {sessions.length} saved session{sessions.length === 1 ? "" : "s"}?
+              </span>
+              <!-- aria-label, not the bare text: focusOnMount moves focus here the
+                   instant the arm button ("Clear all…") is activated, and an
+                   unlabelled confirm announces as "Clear all, button" — near
+                   enough identical to what was just pressed that a second Enter
+                   reads as a retry and irreversibly destroys every session. The
+                   question lives in a sibling <span> a screen reader never
+                   reaches on focus, so the count goes in the name (#1773). -->
+              <button
+                type="button"
+                data-testid="sessions-clear-all-confirm"
+                {@attach focusOnMount}
+                aria-disabled={actionInFlight}
+                aria-label={`Confirm clearing all ${sessions.length} saved session${
+                  sessions.length === 1 ? "" : "s"
+                }`}
+                onclick={async () => {
+                  if (actionInFlight) return;
+                  actionInFlight = true;
+                  const ok = await clearSessions();
+                  actionInFlight = false;
+                  clearAllArmed = false;
+                  if (ok) parkFocusAfterConfirm();
+                  else refocusOnDisarm = CLEAR_ALL_FOCUS_KEY;
+                }}
+                style={destructiveBtnStyle}
+              >
+                Clear all
+              </button>
+              <button
+                type="button"
+                data-testid="sessions-clear-all-cancel"
+                aria-label="Cancel clearing all saved sessions"
+                onclick={() => {
+                  if (actionInFlight) return;
+                  clearAllArmed = false;
+                  refocusOnDisarm = CLEAR_ALL_FOCUS_KEY;
+                }}
+                style={cancelBtnStyle}
+              >
+                Cancel
+              </button>
+            {:else}
+              <button
+                data-testid="sessions-clear-all"
+                {@attach focusIfDisarmed(CLEAR_ALL_FOCUS_KEY)}
+                onclick={() => {
+                  if (actionInFlight) return;
+                  clearAllArmed = true;
+                  pendingDeletePath = null;
+                }}
+                type="button"
+                style="background: none; border: none; color: var(--tandem-fg-subtle); font-size: 11px; cursor: pointer; padding: 0; text-decoration: underline;"
+              >
+                Clear all…
+              </button>
+            {/if}
           </div>
           <div
             class="tandem-scroll-fade-y"
@@ -366,22 +507,74 @@ function handleBrowse() {
                       : "s"}
                   </span>
                 </button>
-                <button
-                  type="button"
-                  data-testid="session-delete"
-                  onclick={() => deleteSession(session.filePath)}
-                  aria-label={`Delete session for ${filename}`}
-                  style="background: none; border: none; color: var(--tandem-fg-subtle); font-size: 14px; cursor: pointer; padding: 4px; line-height: 1;"
-                >
-                  ×
-                </button>
+                {#if pendingDeletePath === session.filePath}
+                  <!-- #1773: the row's × swaps whole for this confirm pair, the
+                       BulkActions shape. Focus moves by ATTACHMENT rather than a
+                       bind:this + $effect: the rows live in a keyed {#each}, so
+                       one shared bound ref would be nulled by the other row's
+                       teardown. No aria-expanded either — the arm button leaves
+                       the DOM at the moment it would go true. -->
+                  <button
+                    type="button"
+                    data-testid="session-delete-confirm"
+                    {@attach focusOnMount}
+                    aria-disabled={actionInFlight}
+                    onclick={async () => {
+                      if (actionInFlight) return;
+                      actionInFlight = true;
+                      const ok = await deleteSession(session.filePath);
+                      actionInFlight = false;
+                      pendingDeletePath = null;
+                      // On failure the row survives, so hand focus back to its ×
+                      // rather than parking above the error box.
+                      if (ok) parkFocusAfterConfirm();
+                      else refocusOnDisarm = session.filePath;
+                    }}
+                    aria-label={`Confirm delete session for ${filename}`}
+                    style={destructiveBtnStyle}
+                  >
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="session-delete-cancel"
+                    onclick={() => {
+                      if (actionInFlight) return;
+                      pendingDeletePath = null;
+                      refocusOnDisarm = session.filePath;
+                    }}
+                    aria-label={`Cancel deleting session for ${filename}`}
+                    style={cancelBtnStyle}
+                  >
+                    Cancel
+                  </button>
+                {:else}
+                  <button
+                    type="button"
+                    data-testid="session-delete"
+                    {@attach focusIfDisarmed(session.filePath)}
+                    onclick={() => {
+                      if (actionInFlight) return;
+                      pendingDeletePath = session.filePath;
+                      clearAllArmed = false;
+                    }}
+                    aria-label={`Delete session for ${filename}…`}
+                    style="background: none; border: none; color: var(--tandem-fg-subtle); font-size: 14px; cursor: pointer; padding: 4px; line-height: 1;"
+                  >
+                    ×
+                  </button>
+                {/if}
               </div>
             {/each}
           </div>
         {/if}
 
         {#if sessionsError}
+          <!-- role="alert": a failed delete or clear leaves the list looking
+               untouched, so without a live region the only signal that anything
+               went wrong is visual (#1773 review). -->
           <div
+            role="alert"
             data-testid="sessions-error"
             style="margin-top: 8px; padding: 8px 10px; font-size: 12px; color: var(--tandem-error-fg-strong); background: var(--tandem-error-bg); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-error-border);"
           >

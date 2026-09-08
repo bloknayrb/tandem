@@ -20,7 +20,9 @@ let tmpDir: string;
 test.beforeEach(async () => {
   mcp = new McpTestClient();
   await mcp.connect();
-  tmpDir = createFixtureDir("sample.md");
+  // sample2.md is here for the #1772 document-switch cases below; every other
+  // test in this file only ever opens sample.md.
+  tmpDir = createFixtureDir("sample.md", "sample2.md");
 });
 
 test.afterEach(async ({ page }) => {
@@ -387,6 +389,180 @@ test("bulk-confirm resets when filter-status changes", async ({ page }) => {
   // change effect firing on the `filterStatus` dep.
   await page.getByTestId("filter-status-pending").click();
   await expect(bulkAccept).toBeVisible({ timeout: 2_000 });
+  await expect(confirm).not.toBeVisible({ timeout: 2_000 });
+});
+
+/** Locate a tab (role='tab') by its visible filename — tab-scroll-memory.spec.ts:36. */
+function tabByName(page: import("@playwright/test").Page, name: string) {
+  return page.locator("[data-testid^='tab-'][role='tab']").filter({ hasText: name });
+}
+
+/** Statuses of a document's annotations, in the order the tool returns them. */
+async function statusesFor(documentId: string): Promise<string[]> {
+  const resp = (await mcp.callTool("tandem_getAnnotations", { documentId })) as {
+    data?: { annotations?: Array<{ status?: string }> };
+  };
+  return (resp?.data?.annotations ?? []).map((a) => a.status ?? "");
+}
+
+// #1772 — the fourth axis of the bulk-confirm reset guard: the DOCUMENT.
+//
+// Two things worth knowing before editing either of these cases:
+//
+// 1. A tab switch moves `documentId` and the `annotations` array together, so
+//    this case cannot on its own isolate which axis the reset keys on. The
+//    case after it is what discriminates that, by moving `annotations` with
+//    `documentId` held fixed.
+// 2. The closing `tandem_getAnnotations` values are byte-identical to the
+//    recorded broken-build output (docs/reviews/2026-09-02-v1-review/raw/
+//    verify-client.txt:3, "DOC A STATUSES pending,pending; DOC B STATUSES
+//    accepted,accepted"). They are here so the flow executes a real
+//    `handleBulk`, not because they distinguish a fixed build from a broken
+//    one — the disarm pair below does that.
+test("bulk-confirm resets when the active document changes (#1772)", async ({ page }) => {
+  // TWO pending comments per document is mandatory: BulkActions renders only
+  // when pendingCount > 1 (BulkActions.svelte:42), so with fewer than two on
+  // the second document the bar unmounts and hides the bug entirely.
+  const docA = (await mcp.callTool("tandem_open", {
+    filePath: path.join(tmpDir, "sample.md"),
+  })) as { data?: { documentId?: string } };
+  const docAId = docA?.data?.documentId as string;
+  await mcp.callTool("tandem_comment", { from: 2, to: 6, text: "Test", documentId: docAId });
+  await mcp.callTool("tandem_comment", { from: 7, to: 15, text: "Document", documentId: docAId });
+
+  // "# Second Document": [2,8] is "Second", [9,17] is "Document" — both inside
+  // the heading TEXT, so neither overlaps the "# " markup (Critical Rule 6).
+  const docB = (await mcp.callTool("tandem_open", {
+    filePath: path.join(tmpDir, "sample2.md"),
+  })) as { data?: { documentId?: string } };
+  const docBId = docB?.data?.documentId as string;
+  await mcp.callTool("tandem_comment", { from: 2, to: 8, text: "Second", documentId: docBId });
+  await mcp.callTool("tandem_comment", { from: 9, to: 17, text: "Document", documentId: docBId });
+
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+
+  const sampleTab = tabByName(page, "sample.md");
+  await expect(sampleTab).toBeVisible({ timeout: 15_000 });
+  await sampleTab.click();
+
+  const bulkAccept = page.locator("[data-testid='bulk-accept-btn']");
+  const bulkDismiss = page.locator("[data-testid='bulk-dismiss-btn']");
+  const confirm = page.locator("[data-testid='bulk-confirm-btn']");
+  await expect(bulkAccept).toBeVisible({ timeout: 15_000 });
+  await bulkAccept.click();
+  await expect(confirm).toBeVisible({ timeout: 2_000 });
+
+  // Switch documents with the confirm armed.
+  await tabByName(page, "sample2.md").click();
+
+  // Both assertions together are the whole discriminator. Without the first,
+  // the test passes on a bar that simply vanished; `bulk-dismiss-btn` is the
+  // right mount indicator because it renders only in the bar's REST branch
+  // (BulkActions.svelte:73-84), which is exactly what "disarmed" means.
+  await expect(bulkDismiss).toBeVisible({ timeout: 5_000 });
+  await expect(confirm).not.toBeVisible({ timeout: 2_000 });
+
+  // Carry it through to the harm: re-arm on sample2.md and confirm for real,
+  // so the flow reaches `handleBulk` rather than stopping at a visibility check.
+  await bulkAccept.click();
+  await expect(confirm).toBeVisible({ timeout: 2_000 });
+  await confirm.click();
+
+  await expect
+    .poll(async () => (await statusesFor(docBId)).join(","), { timeout: 10_000 })
+    .toBe("accepted,accepted");
+  expect((await statusesFor(docAId)).join(",")).toBe("pending,pending");
+});
+
+// #1772 — the axis the switch case cannot isolate.
+//
+// A reset keyed on `annotations` (or on array identity) disarms on EVERY store
+// change, therefore also disarms on a tab switch, therefore satisfies every
+// assertion in the case above — while silently cancelling the user's armed
+// confirm each time Claude posts a comment on the document they are reviewing.
+// This case is what makes that build fail.
+//
+// PanelSlot mounts SidePanel once (PanelSlot.svelte:51, a display toggle) and
+// App.svelte passes `annotations` and `documentId` as separate props, so the
+// two move independently inside a single document. No tab switch anywhere here:
+// `documentId` is constant, so `annotations` is the only dependency that moves.
+test("an armed bulk-confirm survives a new annotation on the same document (#1772)", async ({
+  page,
+}) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", { from: 2, to: 6, text: "Test" });
+  await mcp.callTool("tandem_comment", { from: 7, to: 15, text: "Document" });
+
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+
+  const bulkAccept = page.locator("[data-testid='bulk-accept-btn']");
+  await expect(bulkAccept).toBeVisible({ timeout: 15_000 });
+  await bulkAccept.click();
+
+  const confirm = page.locator("[data-testid='bulk-confirm-btn']");
+  await expect(confirm).toBeVisible({ timeout: 2_000 });
+  // BulkActions.svelte:33-36 renders `${pendingCount} annotations?` whenever
+  // pendingCount === allPendingCount, which holds under the default all/all/all
+  // filters. The count is what makes the arrival observable below.
+  const confirmRow = page.locator("[data-testid='bulk-confirm-btn']").locator("..");
+  await expect(confirmRow).toContainText("2 annotations?", { timeout: 2_000 });
+
+  // Third comment on the SAME document, with the confirm still armed.
+  await mcp.callTool("tandem_comment", { from: 16, to: 24, text: "Third" });
+
+  // The discriminating assertion: fails on an `annotations`- or identity-keyed
+  // reset, passes on a documentId-keyed one.
+  await expect(confirm).toBeVisible({ timeout: 5_000 });
+  // ...and proof the new annotation actually reached the panel, so the
+  // assertion above cannot pass because the comment never arrived.
+  await expect(confirmRow).toContainText("3 annotations?", { timeout: 5_000 });
+});
+
+// #1772 review — the axis neither case above reaches: the bar's own UNMOUNT.
+//
+// BulkActions renders nothing below two pending review targets, so an arm can
+// outlive its bar without any document switch and without any filter change.
+// A reset keyed only on documentId + filters leaves the flag set through that
+// gap, and the next comment re-mounts the bar straight into the confirm branch
+// — `bind:confirmRef` re-binds, the focus effect fires, and Enter is parked on
+// "accept every pending annotation" that nobody armed. The `bulkConfirm`
+// derived's `reviewPending.length > 1` term is what masks it, mirroring
+// promoteConfirm's `size > 0` (#1444).
+test("an armed bulk-confirm does not survive the bar unmounting (#1772)", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", { from: 2, to: 6, text: "Test" });
+  await mcp.callTool("tandem_comment", { from: 7, to: 15, text: "Document" });
+
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+
+  const bulkAccept = page.locator("[data-testid='bulk-accept-btn']");
+  const bulkDismiss = page.locator("[data-testid='bulk-dismiss-btn']");
+  const confirm = page.locator("[data-testid='bulk-confirm-btn']");
+  await expect(bulkAccept).toBeVisible({ timeout: 15_000 });
+  await bulkAccept.click();
+  await expect(confirm).toBeVisible({ timeout: 2_000 });
+
+  // Drop the count to 1 the way Claude would — resolving one comment, not a
+  // filter change. The whole bar unmounts, taking the confirm row with it.
+  const annotations = (await mcp.callTool("tandem_getAnnotations", {})) as {
+    data?: { annotations?: Array<{ id?: string }> };
+  };
+  const firstId = annotations?.data?.annotations?.[0]?.id as string;
+  expect(firstId).toBeTruthy();
+  await mcp.callTool("tandem_resolveAnnotation", { id: firstId, action: "accept" });
+  await expect(bulkDismiss).not.toBeVisible({ timeout: 5_000 });
+  await expect(confirm).not.toBeVisible({ timeout: 2_000 });
+
+  // Back over the threshold: the bar must return in its REST branch.
+  await mcp.callTool("tandem_comment", { from: 16, to: 24, text: "Third" });
+
+  // The discriminating pair: `bulk-dismiss-btn` renders ONLY in the rest branch
+  // (BulkActions.svelte:73-84), so its visibility is what "disarmed" means here
+  // — a bare `confirm` check would pass on a bar that never came back.
+  await expect(bulkDismiss).toBeVisible({ timeout: 10_000 });
   await expect(confirm).not.toBeVisible({ timeout: 2_000 });
 });
 

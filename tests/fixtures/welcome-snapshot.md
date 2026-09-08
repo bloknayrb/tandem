@@ -43,7 +43,7 @@ Tandem is built for keyboard-first work:
 - **Outline panel** — navigate by heading and collapse whole sections to focus.
 - **Keyboard shortcuts** (Ctrl+,) — customize any shortcut, or press ? to see them all.
 
-Want to connect your AI? Open Settings → AI Assistant and use the setup wizard — one click connects Claude Code, no API key needed. (Support for additional model providers is on the way.)
+Want to connect your AI? Open Settings → AI Assistant and use the setup wizard — one click writes Claude Code's connection settings, no API key needed. Restart Claude Code to pick them up, then type `/mcp` to verify — or just ask Claude to open a document. (Support for additional model providers is on the way.)
 
 ## Sample Content
 

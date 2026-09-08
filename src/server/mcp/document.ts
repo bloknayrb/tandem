@@ -1270,9 +1270,13 @@ export function registerDocumentTools(server: McpServer): void {
       }
       // result.status === "error"
       if (result.errorCode === "EACCES" || result.errorCode === "EPERM") {
-        return mcpError("FILE_LOCKED", result.reason ?? "Save failed");
+        return mcpError("FILE_LOCKED", result.reason ?? "Save failed", {
+          errorCode: result.errorCode,
+        });
       }
-      return mcpError("FORMAT_ERROR", result.reason ?? "Save failed");
+      return mcpError("FORMAT_ERROR", result.reason ?? "Save failed", {
+        errorCode: result.errorCode,
+      });
     }),
   );
 

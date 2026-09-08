@@ -370,9 +370,13 @@ save-indicator
 saved-indicator
 send-to-claude-btn-{*}
 session-delete
+session-delete-cancel
+session-delete-confirm
 session-reopen
 session-row
 sessions-clear-all
+sessions-clear-all-cancel
+sessions-clear-all-confirm
 sessions-empty
 sessions-error
 sessions-loading

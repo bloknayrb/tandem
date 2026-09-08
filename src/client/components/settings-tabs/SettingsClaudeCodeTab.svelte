@@ -425,13 +425,16 @@ function handleReset() {
       How a Claude Code session you started yourself hears about your comments as they happen.
     </div>
     <PushRoutesInfo />
-    <!-- Route three. Names the CLI flag in BOTH arms because nothing in the app
+    <!-- Route three. Names the CLI flag in every arm because nothing in the app
          can register the shim — `shouldRegisterChannelShim` returns `override ??
          false` and the wizard's apply route passes no override, which its own
          comment states outright. The npm-package caveat is `doctor.ts`'s and
          matters most HERE: this surface is read inside the desktop app, which
-         does not install that package. Guarded by
-         `tests/docs/channel-shim-optin-claims.test.ts`. -->
+         does not install that package — #1817 is what makes that concrete
+         rather than a footnote: the non-registered arm splits on
+         `isTauriRuntime()` so the desktop copy names the npm install step
+         BEFORE the setup command that needs it, instead of leaving the command
+         to dangle. Guarded by `tests/docs/channel-shim-optin-claims.test.ts`. -->
     <p
       class="settings-hint"
       data-testid="settings-modal-push-routes-shim"
@@ -442,12 +445,20 @@ function handleReset() {
         depends on neither of those gates. Registration alone does not switch it on: start the
         session with <code>claude --dangerously-load-development-channels server:tandem-channel</code
         >.
+      {:else if isTauriRuntime()}
+        If Claude reports no Monitor tool at all, the channel shim is the one route that depends
+        on neither gate. The setup wizard cannot register it, and the desktop app doesn't include
+        the <code>tandem</code> command needed to — install it with
+        <code>npm install -g tandem-editor@latest</code>, then run
+        <code>tandem setup --apply --with-channel-shim</code> from a terminal, then start each
+        session with
+        <code>claude --dangerously-load-development-channels server:tandem-channel</code>. (Keep
+        the global installed — the shim entry runs from it.)
       {:else}
         If Claude reports no Monitor tool at all, the channel shim is the one route that depends
         on neither gate. The setup wizard cannot register it — run
         <code>tandem setup --apply --with-channel-shim</code> from a terminal (that flag is its
-        only opt-in, and it needs Tandem's npm package, which the desktop app does not install),
-        then start each session with
+        only opt-in), then start each session with
         <code>claude --dangerously-load-development-channels server:tandem-channel</code>.
       {/if}
     </p>

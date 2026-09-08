@@ -222,3 +222,50 @@ describe("IntegrationWizardModal — unlaunchable-shim warning", () => {
     expect(q(container, "integration-wizard-shim-warning")).toBeNull();
   });
 });
+
+/**
+ * #1814: the empty-state headline used to be a constant string keyed on
+ * `wizard.existing.length === 0` alone — i.e. "no target has ever been run" —
+ * so a user who has the CLI installed (on PATH or off it) but never ran it
+ * saw "We couldn't find Claude on this computer" directly above copy saying
+ * the opposite. It must now read the CLI presence.
+ */
+describe("IntegrationWizardModal — empty-state headline", () => {
+  beforeEach(() => resetStub());
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  function mount() {
+    return render(IntegrationWizardModal, { props: { open: true, onClose: vi.fn() } });
+  }
+
+  function headline(container: HTMLElement): string | null | undefined {
+    return container.querySelector(".iw-empty-title")?.textContent?.trim();
+  }
+
+  it.each([
+    { presence: "INSTALLED_ON_PATH" as ClaudeCliPresence, label: "INSTALLED_ON_PATH" },
+    { presence: "INSTALLED_NOT_ON_PATH" as ClaudeCliPresence, label: "INSTALLED_NOT_ON_PATH" },
+  ])("says Claude is installed when presence is $label but no target exists yet", async ({
+    presence,
+  }) => {
+    cliStub.presence = presence;
+    const { container } = mount();
+    await tick();
+    expect(headline(container)).toBe(
+      "Claude Code is installed, but hasn't connected to Tandem yet.",
+    );
+  });
+
+  it.each([
+    { presence: "NOT_INSTALLED" as ClaudeCliPresence, label: "NOT_INSTALLED" },
+    { presence: null as ClaudeCliPresence | null, label: "null (loading)" },
+  ])("keeps the not-found headline when presence is $label", async ({ presence }) => {
+    cliStub.presence = presence;
+    const { container } = mount();
+    await tick();
+    expect(headline(container)).toBe("We couldn't find Claude on this computer.");
+  });
+});
