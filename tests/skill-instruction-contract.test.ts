@@ -78,7 +78,7 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // orchestrator, and the "Wakes are best-effort" bullet carries the same qualifier — so the
   // orchestrator-only assertion below is part of the wake contract, not an extra. Every wake
   // assertion here was re-read against the bumped file.
-  expect(skill).toMatch(/^version:\s*15$/m);
+  expect(skill).toMatch(/^version:\s*16$/m);
   expect(wake).toMatch(/hand-started session/i);
   expect(wake).toMatch(/first successful read-mode `tandem_status`/i);
   expect(wake).toMatch(/read `wakeUrl`/i);
@@ -330,7 +330,21 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "15", bodyHash: "cfd1176de0cf" });
+    ).toEqual({ version: "16", bodyHash: "efd6d3788153" });
+  });
+
+  // #1770: the skill is the only surface that tells Claude what it may NOT do with a card
+  // it did not write. The MCP tool descriptions carry the refusal, but a refusal read at
+  // failure time is a worse teacher than a rule read before the call.
+  it("scopes annotation authority to the author (#1770)", () => {
+    const skill = readShippedSkill();
+    expect(skill).toMatch(/NOT_OWNED/);
+    expect(skill).toMatch(/ACCEPT_REFUSED/);
+    // The positive half: withdrawing is what Claude may do instead of accepting.
+    expect(skill).toMatch(
+      /action: "dismiss"[\s\S]{0,120}withdraw|withdraw[\s\S]{0,160}action: "dismiss"/i,
+    );
+    expect(skill).toMatch(/resolvedBy/);
   });
 
   it("tells Claude not to insert mid-paragraph line breaks (#1737)", () => {

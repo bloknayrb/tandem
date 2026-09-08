@@ -284,37 +284,40 @@ describe("Unit 8g G2 — a note promoted in Solo stays held until mode reads tan
   });
 });
 
-describe("Unit 8g G4 — promotion is what lets CLAUDE reply", () => {
-  it("turns replyForClaude's refusal into an accept, via the audience stamp", async () => {
-    // The user's whole reason for promoting is so Claude can respond. Claude's
-    // reply guard (`lifecycle.ts` `replyForClaude`, Unit 8f) admits a parent only
-    // at `type === "comment" && audience === "outbound"`, and the `outbound` half
-    // is stamped by `promotedAnnotation`. Every existing test of that guard's
-    // accepting branch hand-builds the parent — `replies-privacy-readwrite.test.ts`
-    // sets `audience: "outbound"` itself — so nothing joined the promoter to the
-    // consumer.
+describe("Unit 8g G4 — promotion does NOT make a parent repliable by Claude (#1770)", () => {
+  it("moves the refusal from invalid-note to not-owned, and the rationale reverses", async () => {
+    // **This row's meaning is the OPPOSITE of what it once pinned, and the
+    // reversal is the decision, not a regression.** It used to say: the user's
+    // whole reason for promoting is so Claude can respond, and the `outbound`
+    // audience stamp is what flips `replyForClaude` from a refusal to a write.
     //
-    // **This row pins a CONSEQUENCE, not a gap, and the difference is measured.**
-    // Review proposed it as a hole where dropping the audience stamp "would ship
-    // with every test green". It would not: that mutation reds six specs across
-    // `annotation-actions.test.ts`, `annotation-promote-e2e.test.ts` and
-    // `annotation-promote-event.test.ts`. What those six say is that a FIELD
-    // changed. What this says is what the field is FOR — the same promotion
-    // flips Claude from `invalid-note` to a write it can perform. Kept because
-    // that is the sentence a future reader needs, not because it is load-bearing
-    // coverage; the honest claim is in the PR body.
+    // #1770 decision 4 scopes `tandem_annotationReply` to annotations CLAUDE
+    // AUTHORED, and `promotedAnnotation` writes `author: "user"` — so a promoted
+    // note (and every imported Word comment) is user-authored and Claude cannot
+    // reply in its thread at all. The replacement is `tandem_reply` (chat) or a
+    // fresh `tandem_comment`.
+    //
+    // What survives, and is why the row is re-fixtured rather than deleted: the
+    // promotion still CHANGES the answer, and the arm it changes to is the one
+    // that names the real reason. Before promotion the record is private and
+    // ADR-027 refuses it without conceding anything about ownership; after, the
+    // record is Claude-facing and the refusal is about authorship.
     const { ydoc, noteIds } = setupImportedDoc("pull-g4");
     const parent = noteIds[0];
 
-    // Before: refused, and refused for the ADR-027 reason rather than any other.
+    // Before: refused for the ADR-027 reason rather than any other.
     expect(createAnnotationLifecycle(ydoc).reply(parent, "too early", noRelay)).toStrictEqual({
       kind: "invalid-note",
     });
 
     expect(promoteNotesToComments(ydoc, [parent], "tandem")).toBe(1);
 
-    const after = createAnnotationLifecycle(ydoc).reply(parent, "on it", noRelay);
-    expect(after.kind).toBe("ok");
+    // After: still refused, but now on authorship — and the author is echoed so
+    // the caller can see whose annotation it is.
+    expect(createAnnotationLifecycle(ydoc).reply(parent, "on it", noRelay)).toStrictEqual({
+      kind: "not-owned",
+      author: "user",
+    });
   });
 });
 

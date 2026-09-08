@@ -18,13 +18,12 @@
  *   channel. `file-io/docx-comment-export.ts` already treated type and
  *   audience as two separately-required gates; the channel path now agrees.
  *
- *   **This closes the push half only, and the pull half is the authoritative
- *   one.** Every MCP read still gates on `type` and never on `audience` —
- *   `tandem_getAnnotations`, `tandem_exportAnnotations`, `tandem_checkInbox`,
- *   and `channelVisibleReplies`. CLAUDE.md makes `tandem_checkInbox`
- *   authoritative over all four push paths, so such a record still reaches
- *   Claude one poll later. Do not read this module as having closed the
- *   audience hole; it closed it on one surface. Tracked in #1619.
+ *   **Both halves are now closed (#1619).** The MCP reads —
+ *   `tandem_getAnnotations`, `tandem_exportAnnotations`, `tandem_checkInbox`
+ *   and `channelVisibleReplies` — used to gate on `type` and never on
+ *   `audience`, so a record this module withheld from the channel reached
+ *   Claude one poll later on the surface CLAUDE.md makes authoritative. They
+ *   now share {@link isClaudeFacing}, the same conjunction stated once.
  *
  * **Why `type !== "note"` and not ADR-035's literal `type === "comment"`.**
  * The type half exists to state ADR-027, and ADR-027 is about notes. Bounding
@@ -255,6 +254,12 @@ export function narrowForChannel(
   // already checked, this is cheap duplication; against `replies.ts`'s raw
   // parent read it is the only check standing between unsanitized Y.Map content
   // and the wire.
+  //
+  // These two reason-carrying `if`s and {@link isClaudeFacing} must agree —
+  // they are the same conjunction written twice, once to feed `onRefused` with
+  // a distinguishable reason and once as a plain predicate for the pull
+  // surfaces. A grid pin in `tests/server/read-audience-filter.test.ts` asserts
+  // the equivalence over every (type × audience) cell.
   if (ann.type === "note") {
     opts.onRefused?.({ reason: "note" }, ann);
     return null;
@@ -265,6 +270,27 @@ export function narrowForChannel(
   }
 
   return ann as ChannelEligible;
+}
+
+/**
+ * ADR-027's READ-side predicate (#1619, #1710): is this record something a
+ * Claude-facing read may return?
+ *
+ * The exact conjunction {@link narrowForChannel} re-asserts above — a
+ * non-`note` whose stored `audience` is `outbound` — lifted so the pull
+ * surfaces and the push surface cannot drift by inspection. `tandem_checkInbox`
+ * is authoritative over every push path, so a filter here that is looser than
+ * the channel's simply delays the leak by one poll, which is what #1619 was.
+ *
+ * NOT the same predicate as `lifecycle.ts`'s `isPrivateForClaude` (#1803), and
+ * the names differ on purpose: a private HIGHLIGHT is unreadable here but is
+ * refused by its own arm on the write side.
+ *
+ * **Do not loosen to `audience !== "private"`.** An absent field is not
+ * consent — `channel-eligible-brand.test.ts` pins that.
+ */
+export function isClaudeFacing(ann: Pick<Annotation, "type" | "audience">): boolean {
+  return ann.type !== "note" && ann.audience === "outbound";
 }
 
 /**

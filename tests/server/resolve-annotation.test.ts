@@ -83,7 +83,12 @@ describe("tandem_resolveAnnotation precondition (issue #694)", () => {
   it("rejects re-accept on an already-accepted annotation without bumping rev", async () => {
     const ydoc = setupDoc("resolve-pre-1", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original");
+    // USER-authored since #1770: accept is the user's decision, so the tool
+    // refuses an accept of a Claude-authored record. This spec is about the
+    // not-pending precondition, which precedes that check.
+    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Original", {
+      author: "user",
+    });
 
     await client.callTool({
       name: "tandem_resolveAnnotation",
