@@ -1,10 +1,20 @@
 /**
  * Tandem `--uninstall-scrub` subcommand.
  *
- * Invoked by the Tauri NSIS installer hook during uninstall on Windows, and
- * manually invocable on every platform (run it *before* deleting the app /
- * `npm uninstall -g` — see docs/data-locations.md). Removes every reference
- * Tandem wrote into other programs' config:
+ * **Invoked by hand, on every platform** — run it *before* deleting the app /
+ * `npm uninstall -g` (see docs/data-locations.md). Nothing invokes it
+ * automatically: the Tauri NSIS uninstall hook runs
+ * `"$INSTDIR\${MAINBINARYNAME}.exe" --uninstall-scrub`, which is the DESKTOP
+ * binary and reaches the Rust `src-tauri/src/uninstall_scrub.rs`, not this
+ * file. **Neither scrub is a superset of the other**: the Rust one alone
+ * removes the start-at-login registration, and this one alone removes the MCP
+ * config entries and the bundled skill — which the desktop bundle cannot reach
+ * because the npm CLI is not among the Tauri `resources`. They overlap on the
+ * Cowork plugin entries and the Cowork firewall rules, both idempotent. So a
+ * Windows user who only uninstalls the desktop app keeps their
+ * `mcpServers.tandem` entries until they run this by hand.
+ *
+ * Removes every reference Tandem wrote into other programs' config:
  *   - Cowork workspaces (Windows): `installed_plugins.json`
  *     (`mcpServers.tandem`), `known_marketplaces.json`
  *     (`marketplaces.tandem`), `cowork_settings.json` (`tandem@tandem` in
@@ -20,16 +30,16 @@
  * keychain) — the scrub removes references to a binary about to disappear;
  * user data stays unless the user deletes it (docs/data-locations.md).
  *
- * **Runs inside the already-signed binary.** Invoked from `tandem.exe` itself —
- * NOT as a separate `uninstall_scrub.exe`. A dedicated scrub executable would be
- * an unsigned binary sitting beside the installer at uninstall time, which is a
- * binary-planting target.
+ * The signed-binary / binary-planting rationale belongs to the Rust scrub, not
+ * to this one: it is what stops the NSIS hook from shelling out to a separate
+ * `uninstall_scrub.exe` an attacker could plant. This subcommand is reached
+ * only by a user typing it, so it inherits whatever trust its `tandem` on PATH
+ * already has.
  *
  * **Failure policy:** logs every error, exits 0 on clean-or-not-installed,
- * non-zero only on unrecoverable I/O failures. NSIS logs the exit code but
- * does NOT block uninstall — Tandem must always uninstall even if a
- * workspace scrub partially fails. Each step is isolated: a failure in one
- * never skips the rest.
+ * non-zero only on unrecoverable I/O failures. Nothing consumes that exit code
+ * but the user's shell. Each step is isolated: a failure in one never skips
+ * the rest.
  *
  * **Token safety:** this scrub READS JSON to find Tandem entries but the
  * removed-entry contents (including the auth token) are NEVER logged, and

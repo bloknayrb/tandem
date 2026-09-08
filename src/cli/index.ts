@@ -67,8 +67,11 @@ Usage:
   tandem activate <license|path>    Activate a signed license (string or file path)
   tandem license                    Show the current license / trial status
   tandem --uninstall-scrub          Remove Tandem's MCP entries, skill, and Cowork
-                                    registration from Claude configs (run before
-                                    uninstalling; the Windows uninstaller runs it)
+                                    registration from Claude configs. Run it
+                                    yourself before uninstalling — no uninstaller
+                                    runs it; the Windows one runs the desktop
+                                    app's own scrub, which leaves MCP entries and
+                                    the skill in place
   tandem mcp-stdio                  Run as a stdio MCP server proxying to local HTTP
                                     (used by the plugin's Cowork bridge; requires
                                     tandem server running on the host)
@@ -103,12 +106,12 @@ if (!isStdioMode) {
 
 try {
   if (args[0] === "--uninstall-scrub") {
-    // Invoked by the Tauri NSIS uninstaller hook on Windows, and manually on
-    // any platform before removing the app. Removes Tandem's MCP config
-    // entries + bundled skill everywhere; Cowork plugin entries + firewall
-    // rules on Windows. Runs inside the already-signed tandem.exe rather than a
-    // separate uninstall_scrub.exe — a dedicated scrub binary would sit unsigned
-    // beside the installer at uninstall time, which is a binary-planting target.
+    // Run by hand on any platform before removing the app — nothing invokes it
+    // automatically. The Tauri NSIS uninstall hook runs the DESKTOP binary's
+    // --uninstall-scrub (src-tauri/src/uninstall_scrub.rs), which never reaches
+    // this file. Removes Tandem's MCP config entries + bundled skill
+    // everywhere; Cowork plugin entries + firewall rules on Windows. See the
+    // docblock in ./uninstall-scrub.ts for how the two scrubs divide.
     const { runUninstallScrub } = await import("./uninstall-scrub.js");
     const exitCode = await runUninstallScrub();
     process.exit(exitCode);
