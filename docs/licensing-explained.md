@@ -223,7 +223,7 @@ set (`tests/server/license-gate-coverage.test.ts` enforces this) — because an
 MCP write bypasses Surface A entirely, so gating a route without its twin leaves
 a hole.
 
-### The gated set — this list IS the `/api` half's review
+### The gated set
 
 > **Shape superseded 2026-08-18 (#1346, ADR-040 amendment), still current as code.** The decision
 > is that an unlicensed copy is a plain markdown editor with **no AI integration at all** — a
@@ -232,9 +232,22 @@ a hole.
 > surface until the surface gate is implemented. Read it as "what is gated today", not "what the
 > gate is for".
 
-The MCP half is CI-enforced by `tests/server/license-gate-coverage.test.ts`. **The `/api` half
-has no test: this enumeration is the review**, referenced by Critical Rule 9 in `CLAUDE.md`.
-Adding a mutating MCP tool or `/api` route means adding it here, in both halves.
+**Both halves are now CI-enforced**, so this list is a readable mirror rather than the review
+itself — which it was until 2026-09-08. `tests/server/license-gate-coverage.test.ts` covers the
+MCP tools; `tests/server/license-gate-api-coverage.test.ts` covers the `/api` routes. Each holds
+one row per surface, `gated` or `ungated`, with a written reason, and fails closed when a new
+surface appears with no row.
+
+The `/api` one was added because a prose list cannot notice an omission. `POST /api/mode/release`
+mutates annotation records across every open document and appeared in no list at all until #1821
+read the source, so nothing had ever taken a view on it. It also carries two sweeps a reader
+cannot perform reliably: one for a whole registrar file outside the five it knows, and one for a
+`licenseGate()` call in an unlisted module — the in-handler shape a `licenseGateMiddleware` grep
+does not find.
+
+Adding a mutating MCP tool or `/api` route still means adding it here, in both halves; the
+difference is that forgetting now turns `check` red instead of waiting for someone to re-read
+this page.
 
 **MCP** — `tandem_edit`, `tandem_appendContent`, `tandem_editList`, `tandem_scratchpad`, `tandem_comment`,
 `tandem_suggest`, `tandem_highlight`, `tandem_flag`, `tandem_editAnnotation`,
