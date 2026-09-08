@@ -1334,7 +1334,16 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     const older = textDoc("alpha beta gamma\n");
     const newer = textDoc("alpha beta WINNER gamma\n");
     older.transact(() => {
+      // `textSnapshot` is the text actually at {11,16}, matching the sibling
+      // envelope fixture below. `seedHighlight`'s default is `""`, which since
+      // #1764 is a REAL claim that the range held no text (`snapshotContradicts`
+      // distinguishes an empty snapshot from an absent one) — so a
+      // self-contradicting record would be refused a re-anchor here for the
+      // right reason and this spec would stop testing what it is named for.
+      // Production never writes that shape: browser highlights carry no
+      // `textSnapshot` at all and `captureSnapshot` slices the real text.
       seedHighlight(older.getMap(Y_MAP_ANNOTATIONS), "ann-S", 11, 16, {
+        textSnapshot: "gamma",
         relRange: liveRelRange(older, 11, 16),
       });
       // Same id in session and envelope: the envelope wins the merge and puts

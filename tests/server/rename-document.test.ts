@@ -954,9 +954,17 @@ describe("renameDocument — note privacy (ADR-027)", () => {
     // ADR-027 surface 2: Claude must see zero annotations here.
     const store = getDocumentStore(docId);
     expect(store).not.toBeNull();
-    const claudeVisible = store!.listAnnotationsRefreshed().filter((a) => a.type !== "note");
+    const claudeVisible = store!
+      .listAnnotationsRefreshed()
+      .map((r) => r.annotation)
+      .filter((a) => a.type !== "note");
     expect(claudeVisible).toHaveLength(0);
-    expect(store!.listAnnotationsRefreshed().some((a) => a.id === "note-1")).toBe(true);
+    expect(
+      store!
+        .listAnnotationsRefreshed()
+        .map((r) => r.annotation)
+        .some((a) => a.id === "note-1"),
+    ).toBe(true);
   });
 
   it("a withFileSync merge via open/reload re-wire that mutates a live note emits no channel event and stays hidden from Claude", async () => {
@@ -1028,10 +1036,18 @@ describe("renameDocument — note privacy (ADR-027)", () => {
     // (getDocumentStore reflects the re-wired context registered above.)
     const store = getDocumentStore(docId);
     expect(store).not.toBeNull();
-    const claudeVisible = store!.listAnnotationsRefreshed().filter((a) => a.type !== "note");
+    const claudeVisible = store!
+      .listAnnotationsRefreshed()
+      .map((r) => r.annotation)
+      .filter((a) => a.type !== "note");
     expect(claudeVisible).toHaveLength(0);
     // And the note is still present in the doc (private, not deleted).
-    expect(store!.listAnnotationsRefreshed().some((a) => a.id === "note-1")).toBe(true);
+    expect(
+      store!
+        .listAnnotationsRefreshed()
+        .map((r) => r.annotation)
+        .some((a) => a.id === "note-1"),
+    ).toBe(true);
   });
 });
 

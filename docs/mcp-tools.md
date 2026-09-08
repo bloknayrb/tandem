@@ -684,6 +684,8 @@ Since [#1619](https://github.com/bloknayrb/tandem/issues/1619)/[#1710](https://g
 
 `notesExcluded` reports how many `note`-type annotations were filtered out (only present when > 0). Notes cannot be read via MCP — they are user-private (ADR-027).
 
+`anchor` is present on an individual annotation **only when its CRDT anchor is untrustworthy** ([#1764](https://github.com/bloknayrb/tandem/issues/1764)): `"degraded"` means the anchor no longer describes this text and the `range` shown is the last one the server trusted, `"failed"` means the anchor resolved inverted. It is absent on every healthy refresh, so its absence is the normal case and carries no information.
+
 ---
 
 ### tandem_resolveAnnotation

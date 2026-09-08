@@ -37,6 +37,7 @@ import {
   getHeadingPrefixLength,
   resolveToElement,
 } from "../shared/positions/ydoc.js";
+import { snapshotContradicts } from "../shared/snapshot.js";
 import type { Annotation } from "../shared/types.js";
 import { collectXmlTexts, extractText, flatDocLength } from "./mcp/document-model.js";
 
@@ -557,6 +558,51 @@ export function anchoredRange(
 // ---------------------------------------------------------------------------
 
 /**
+ * Does the annotation's STORED flat range still hold the text its snapshot
+ * captured? (#1764)
+ *
+ * The one predicate behind all three arms of `refreshRange` that would
+ * otherwise mint or overwrite an anchor from an unverified stored range. Reuses
+ * `snapshotContradicts` rather than re-stating its rule: that function already
+ * distinguishes an ABSENT snapshot (nothing to contradict) from an empty one (a
+ * real claim that the range held no text) from a non-string one (fails toward
+ * contradiction), and already prefix-matches a truncated snapshot. A second
+ * inline copy of any of that is how the two would drift.
+ *
+ * `ann.textSnapshot === undefined` is the ONLY carve-out, and it belongs to the
+ * two mint arms alone — a record carrying no snapshot has nothing to verify
+ * against, and refusing would strand every pre-snapshot record permanently. The
+ * collapse arm deliberately requires a snapshot instead: see its own comment.
+ *
+ * An out-of-bounds stored range slices to `""` and therefore contradicts, which
+ * is the clamp #1765's body asks for.
+ */
+function storedRangeStillMatches(ann: Annotation, text: string): boolean {
+  return (
+    ann.textSnapshot === undefined ||
+    !snapshotContradicts(ann, text.slice(ann.range.from, ann.range.to))
+  );
+}
+
+/**
+ * A `getText` that materializes the flat projection at most once, and not at
+ * all when nothing asks for it.
+ *
+ * `refreshRange` needs the document text only on the guard arms, which most
+ * annotations never reach; `refreshAllRanges` builds ONE of these and passes it
+ * to every iteration, so a whole batch pays for at most one `extractText`. Safe
+ * across a batch because the only writes in that loop are annotation records —
+ * the `default` fragment is untouched.
+ */
+function memoizedDocText(ydoc: Y.Doc): () => string {
+  let cached: string | undefined;
+  return () => {
+    if (cached === undefined) cached = extractText(ydoc);
+    return cached;
+  };
+}
+
+/**
  * Refresh an annotation's flat offsets from its relRange, or lazily attach
  * relRange if missing. Returns a tagged `RefreshResult` (ADR-032) so
  * callers can distinguish healthy / updated / attached / repaired /
@@ -567,10 +613,27 @@ export function anchoredRange(
  * intentional `{fromRel, toRel}` re-assembly sites referenced by
  * `anchoredRange`'s JSDoc — both repair existing annotations rather than
  * minting new ones, so the shape duplication is deliberate, not a DRY gap.
+ * **Both are gated on {@link storedRangeStillMatches} (#1764)**: this runs from
+ * a READ path (`listAnnotationsRefreshed`), and minting a confident anchor over
+ * a stored range whose snapshot no longer holds pins the record to the wrong
+ * text with nothing warning.
+ *
+ * `getText` is internal plumbing, not a public option — omit it and each call
+ * memoizes its own. `refreshAllRanges` passes one shared getter.
  */
-export function refreshRange(ann: Annotation, ydoc: Y.Doc, map?: Y.Map<unknown>): RefreshResult {
+export function refreshRange(
+  ann: Annotation,
+  ydoc: Y.Doc,
+  map?: Y.Map<unknown>,
+  getText?: () => string,
+): RefreshResult {
+  const docText = getText ?? memoizedDocText(ydoc);
+
   if (!ann.relRange) {
-    // Lazy attachment: compute relRange from current flat offsets
+    // Lazy attachment: compute relRange from current flat offsets. Same
+    // unverified mint as the dead-relRange arm below, so it takes the same
+    // gate — fixing only that arm is defeated one call later (#1764).
+    if (!storedRangeStillMatches(ann, docText())) return { kind: "degraded", annotation: ann };
     const fromRel = flatOffsetToRelPos(ydoc, ann.range.from, 0);
     const toRel = flatOffsetToRelPos(ydoc, ann.range.to, -1);
     if (!fromRel || !toRel) return { kind: "degraded", annotation: ann };
@@ -590,13 +653,18 @@ export function refreshRange(ann: Annotation, ydoc: Y.Doc, map?: Y.Map<unknown>)
       );
     }
     // CRDT resolution failed (items deleted after content replacement).
-    // Strip the dead relRange and attempt re-anchoring from flat offsets.
-    const fromRel = flatOffsetToRelPos(ydoc, ann.range.from, 0);
-    const toRel = flatOffsetToRelPos(ydoc, ann.range.to, -1);
-    if (fromRel && toRel) {
-      const updated: Annotation = { ...ann, relRange: { fromRel, toRel } };
-      if (map) map.set(ann.id, updated);
-      return { kind: "repaired", annotation: updated };
+    // Strip the dead relRange and attempt re-anchoring from flat offsets —
+    // but only when the stored range still holds its snapshot (#1764). If the
+    // text moved while the relRange died, re-anchoring here would mint a fresh,
+    // confident anchor over the wrong span and nothing would warn.
+    if (storedRangeStillMatches(ann, docText())) {
+      const fromRel = flatOffsetToRelPos(ydoc, ann.range.from, 0);
+      const toRel = flatOffsetToRelPos(ydoc, ann.range.to, -1);
+      if (fromRel && toRel) {
+        const updated: Annotation = { ...ann, relRange: { fromRel, toRel } };
+        if (map) map.set(ann.id, updated);
+        return { kind: "repaired", annotation: updated };
+      }
     }
     // Can't re-anchor — strip dead relRange so lazy path works next time
     const stripped: Annotation = { ...ann };
@@ -610,6 +678,29 @@ export function refreshRange(ann: Annotation, ydoc: Y.Doc, map?: Y.Map<unknown>)
         `resolved [${newFrom}, ${newTo}] from flat [${ann.range.from}, ${ann.range.to}]`,
     );
     return { kind: "failed", annotation: ann };
+  }
+  // A COLLAPSE has two causes needing opposite answers (#1764). A block split,
+  // heading toggle or join resolves two live anchors onto one offset while the
+  // annotated text is still there — persisting `{n, n}` destroys the stored
+  // flat range the watcher's snapshot relocation needs, and undo then resolves
+  // the two zero-width anchors to opposite ends and the record is `failed`
+  // forever. Deleting the annotated span produces the same shape and there
+  // `{n, n}` is correct. The discriminator is the stored `textSnapshot`.
+  //
+  // **This arm does NOT inherit the mint arms' `undefined` carve-out**, and the
+  // asymmetry is load-bearing: `docx-comments.ts` strips `textSnapshot` off
+  // every imported Word comment on the drift path, and `docx-comment-export.ts`
+  // writes `refreshed.annotation.range` back into the user's `.docx`. Preserving
+  // a stale non-empty span for one of those would export a Word comment over
+  // unrelated text — a byte change in the user's file. With a snapshot
+  // required, a snapshot-less collapse keeps writing `{n, n}`.
+  if (
+    newFrom === newTo &&
+    ann.range.from !== ann.range.to &&
+    ann.textSnapshot !== undefined &&
+    storedRangeStillMatches(ann, docText())
+  ) {
+    return { kind: "degraded", annotation: ann };
   }
   if (newFrom === ann.range.from && newTo === ann.range.to) {
     return { kind: "ok", annotation: ann };
@@ -636,9 +727,13 @@ export function refreshAllRanges(
   opts?: { skipTransact?: boolean },
 ): RefreshResult[] {
   const results: RefreshResult[] = [];
+  // ONE memoized getter for the whole batch: the flat text is materialized at
+  // most once per call, and not at all when no annotation reaches a guard arm
+  // (#1764). Sound because this loop writes only annotation records.
+  const getText = memoizedDocText(ydoc);
   const run = () => {
     for (const ann of annotations) {
-      results.push(refreshRange(ann, ydoc, map));
+      results.push(refreshRange(ann, ydoc, map, getText));
     }
   };
   if (opts?.skipTransact) {

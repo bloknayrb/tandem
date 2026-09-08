@@ -22,7 +22,11 @@ import {
 } from "../../src/server/events/delivery-state.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
-import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
+import {
+  getOrCreateXmlText,
+  populateYDoc,
+  registerDocumentTools,
+} from "../../src/server/mcp/document.js";
 import { extractMarkdown, extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { registerNavigationTools } from "../../src/server/mcp/navigation.js";
@@ -1869,5 +1873,96 @@ describe("checkInbox stamps the pull path", () => {
     expect(state.state).toBe("awaiting-poll");
     expect(state.latencyMs).toBeNull();
     expect(state.pollCount).toBe(1); // liveness still stamped
+  });
+});
+
+/**
+ * #1764 — the degradation verdict `refreshRange` produces has been computed
+ * since ADR-032 and discarded by every MCP consumer. `tandem_getAnnotations`
+ * now carries it as `anchor`, and ONLY on degradation: `updated` fires for
+ * every annotation past any edit and `repaired` for the whole collection after
+ * any reload, so emitting those would bury the one signal this exists for.
+ */
+describe("MCP tool integration — anchor degradation on tandem_getAnnotations (#1764)", () => {
+  /** The single paragraph's Y.XmlText. */
+  function paragraphText(ydoc: Y.Doc): Y.XmlText {
+    return getOrCreateXmlText(ydoc.getXmlFragment("default").get(0) as Y.XmlElement);
+  }
+
+  async function annotations(): Promise<Array<Record<string, unknown>>> {
+    const parsed = parseResult(
+      await client.callTool({ name: "tandem_getAnnotations", arguments: {} }),
+    );
+    expect(parsed.error).toBe(false);
+    return parsed.data.annotations as Array<Record<string, unknown>>;
+  }
+
+  it("carries NO anchor key after a tandem_edit that merely shifts the anchors", async () => {
+    setupDoc("anchor-updated", "Hello world test");
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 6, to: 11, text: "on world" },
+    });
+
+    // An edit before the annotation: the relRange survives and resolves to new
+    // offsets, which is `updated` — the commonest outcome there is.
+    await client.callTool({
+      name: "tandem_edit",
+      arguments: { from: 0, to: 5, newText: "Hi" },
+    });
+
+    const anns = await annotations();
+    expect(anns).toHaveLength(1);
+    expect(anns[0].anchor).toBeUndefined();
+  });
+
+  it("carries NO anchor key after a byte-exact content rebuild (repaired)", async () => {
+    const ydoc = setupDoc("anchor-repaired", "Hello world test");
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 6, to: 11, text: "on world" },
+    });
+
+    // The reload shape: content replaced with identical text, so every
+    // relRange is dead and every stored range is exactly right.
+    withInternal(ydoc, () => {
+      const fragment = ydoc.getXmlFragment("default");
+      fragment.delete(0, fragment.length);
+      const el = new Y.XmlElement("paragraph");
+      fragment.insert(0, [el]);
+      el.insert(0, [new Y.XmlText("Hello world test")]);
+    });
+
+    const anns = await annotations();
+    expect(anns).toHaveLength(1);
+    expect(anns[0].anchor).toBeUndefined();
+  });
+
+  it('reports anchor: "degraded" on the one record whose anchors collapsed', async () => {
+    const ydoc = setupDoc("anchor-degraded", "Hello world test");
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 0, to: 5, text: "on Hello" },
+    });
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 6, to: 11, text: "on world" },
+    });
+
+    // Delete and re-insert "world": both of that record's anchors resolve onto
+    // one offset while its annotated text is still present and still matches
+    // its snapshot — the spurious collapse #1764 refuses to persist.
+    withInternal(ydoc, () => {
+      const xt = paragraphText(ydoc);
+      xt.delete(6, 5);
+      xt.insert(6, "world");
+    });
+
+    const anns = await annotations();
+    expect(anns).toHaveLength(2);
+    const byContent = new Map(anns.map((a) => [a.content as string, a]));
+    expect(byContent.get("on world")?.anchor).toBe("degraded");
+    expect(byContent.get("on world")?.range).toEqual({ from: 6, to: 11 });
+    expect(byContent.get("on Hello")?.anchor).toBeUndefined();
   });
 });

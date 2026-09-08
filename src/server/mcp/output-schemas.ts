@@ -196,6 +196,18 @@ export const getTextContentOutputShape = {
 
 const annotationWithRepliesSchema = z.object({
   ...annotationBaseShape,
+  // #1764. Declared on THIS schema only — `annotationBaseShape` is shared with
+  // `tandem_checkInbox`, which surfaces a different population and must not
+  // grow the field. The enum is the two DEGRADATION verdicts, not all five
+  // `RefreshResult` kinds: `updated` fires for every annotation past any edit
+  // and `repaired` for the whole collection after any reload, so emitting them
+  // would bury the one signal this exists to carry.
+  anchor: z
+    .enum(["degraded", "failed"])
+    .optional()
+    .describe(
+      'Present only when this annotation\'s CRDT anchor is untrustworthy. "degraded": the anchor no longer describes this text; the range shown is the last one the server trusted. Absent on every healthy refresh.',
+    ),
   replies: z.array(VisibleReplySchema),
 });
 

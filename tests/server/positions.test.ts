@@ -632,6 +632,225 @@ describe("refreshRange (via positions module)", () => {
   });
 });
 
+/**
+ * #1764 — `refreshRange` runs from a READ path (`listAnnotationsRefreshed`) and
+ * writes through the caller's map on three arms. Each of those arms would
+ * otherwise mint or overwrite an anchor from the annotation's STORED flat
+ * offsets with nothing checking that those offsets still describe the text the
+ * record captured.
+ */
+describe("refreshRange — the stored-range gate (#1764)", () => {
+  /** Anchor `[from, to)` and store the record, with whatever extras are given. */
+  function seed(
+    d: Y.Doc,
+    map: Y.Map<unknown>,
+    from: number,
+    to: number,
+    extras: Partial<Annotation> = {},
+    opts?: { allowEmpty?: boolean },
+  ): Annotation {
+    const result = anchoredRange(d, off(from), off(to), undefined, opts);
+    if (!result.ok) throw new Error(`anchoredRange failed: ${JSON.stringify(result)}`);
+    const ann = makeAnnotation({
+      id: "ann_gate",
+      range: result.range,
+      ...(result.fullyAnchored ? { relRange: result.relRange } : {}),
+      ...extras,
+    });
+    map.set(ann.id, ann);
+    return ann;
+  }
+
+  /** The `default` fragment's single paragraph, as a Y.XmlText. */
+  function textOf(d: Y.Doc): Y.XmlText {
+    return getOrCreateXmlText(getFragment(d).get(0) as Y.XmlElement);
+  }
+
+  /**
+   * Replace the whole fragment with one paragraph holding `text`, which is what
+   * kills a relRange: the referenced Y.XmlText is deleted outright, so
+   * `relPosToFlatOffset` answers null and the dead-relRange arm runs.
+   */
+  function replaceContent(d: Y.Doc, text: string): void {
+    const fragment = getFragment(d);
+    fragment.delete(0, fragment.length);
+    const el = new Y.XmlElement("paragraph");
+    fragment.insert(0, [el]);
+    el.insert(0, [new Y.XmlText(text)]);
+  }
+
+  it("preserves a SPURIOUS collapse: degraded, and nothing is written", () => {
+    // Both anchors resolve onto one offset while the annotated text is still
+    // there — the block-split / heading-toggle / join shape. Persisting {6,6}
+    // would destroy the stored flat range the watcher's snapshot relocation
+    // needs, and undo would then resolve the two zero-width anchors to opposite
+    // ends and strand the record as `failed` forever.
+    doc = makeDoc("hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = seed(doc, map, 6, 11, { textSnapshot: "world" });
+    const stored = map.get(ann.id);
+
+    const xt = textOf(doc);
+    xt.delete(6, 5);
+    xt.insert(6, "world");
+    expect(extractText(doc)).toBe("hello world");
+    expect(relPosToFlatOffset(doc, ann.relRange!.fromRel)).toBe(6);
+    expect(relPosToFlatOffset(doc, ann.relRange!.toRel)).toBe(6);
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("degraded");
+    expect(refreshed.annotation.range).toEqual({ from: 6, to: 11 });
+    // `toBe`, not `toEqual`: a fix that returns `degraded` but still writes
+    // would leave an equal-looking but different object here.
+    expect(map.get(ann.id)).toBe(stored);
+  });
+
+  it("still refreshes an ALREADY-empty range normally", () => {
+    // Kills a bare `newFrom === newTo` guard: a point annotation (Word's
+    // insertion markers are exactly this) legitimately resolves to an equal
+    // pair and must keep tracking the document.
+    doc = makeDoc("hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = seed(doc, map, 6, 6, { textSnapshot: "" }, { allowEmpty: true });
+
+    textOf(doc).insert(0, "XX");
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("updated");
+    expect(refreshed.annotation.range).toEqual({ from: 8, to: 8 });
+  });
+
+  it("still collapses a GENUINE deletion, and writes it", () => {
+    // The same {n,n} shape with the opposite cause: the annotated span is gone,
+    // so the stored slice no longer holds the snapshot and {6,6} is correct.
+    doc = makeDoc("hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = seed(doc, map, 6, 11, { textSnapshot: "world" });
+
+    textOf(doc).delete(6, 5);
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("updated");
+    expect(refreshed.annotation.range).toEqual({ from: 6, to: 6 });
+    expect((map.get(ann.id) as Annotation).range).toEqual({ from: 6, to: 6 });
+  });
+
+  it("refuses the dead-relRange REPAIR when the stored range contradicts its snapshot", () => {
+    doc = makeDoc("hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = seed(doc, map, 6, 11, { textSnapshot: "world" });
+
+    // Content replacement: the relRange dies, and [6,11) now holds "planet"'s
+    // text rather than "world".
+    replaceContent(doc, "hello planet!");
+    expect(relPosToFlatOffset(doc, ann.relRange!.fromRel)).toBeNull();
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("degraded");
+    // The dead relRange is STRIPPED, never preserved — that is unchanged, and
+    // it is what keeps the lazy re-attachment path reachable. What is NOT done
+    // is minting a fresh one over the wrong span.
+    expect(refreshed.annotation.relRange).toBeUndefined();
+    expect((map.get(ann.id) as Annotation).relRange).toBeUndefined();
+  });
+
+  it("still REPAIRS a dead relRange when the stored range still holds its snapshot", () => {
+    // The negative twin. Without it the fix could refuse everything.
+    doc = makeDoc("hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = seed(doc, map, 6, 11, { textSnapshot: "world" });
+
+    replaceContent(doc, "hello world");
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("repaired");
+    expect(refreshed.annotation.relRange).toBeDefined();
+    expect(refreshed.annotation.range).toEqual({ from: 6, to: 11 });
+  });
+
+  it("still REPAIRS a byte-exact clone — the #1800 regression guard", () => {
+    // `repairClonedAnchors` (`documents/annotation-wiring.ts`) runs
+    // `refreshAllRanges` over a document whose content was rebuilt identically:
+    // every relRange is dead and every stored range is exactly right.
+    doc = makeDoc("hello world");
+    const map = getAnnotationsMap(doc);
+    const a = seed(doc, map, 0, 5, { id: "a", textSnapshot: "hello" });
+    const b = seed(doc, map, 6, 11, { id: "b", textSnapshot: "world" });
+
+    replaceContent(doc, "hello world");
+
+    expect(refreshAllRanges([a, b], doc, map).map((r) => r.kind)).toEqual(["repaired", "repaired"]);
+  });
+
+  it("refuses the LAZY ATTACH when the stored range contradicts its snapshot", () => {
+    // Kills fixing only the `repaired` arm: a stripped record comes back here
+    // on the very next call, and this arm is the same unverified mint.
+    doc = makeDoc("hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = makeAnnotation({
+      id: "ann_lazy",
+      range: { from: off(6), to: off(11) },
+      textSnapshot: "planet",
+    });
+    map.set(ann.id, ann);
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("degraded");
+    expect(refreshed.annotation.relRange).toBeUndefined();
+    expect((map.get(ann.id) as Annotation).relRange).toBeUndefined();
+  });
+
+  describe("a record with NO textSnapshot — the two carve-outs point opposite ways", () => {
+    // Assumptions is not a test, and a "consistency" tidy here changes .docx
+    // export bytes silently: `docx-comments.ts` strips the snapshot off every
+    // imported Word comment, and `docx-comment-export.ts` writes the refreshed
+    // range back into the user's file.
+
+    it("still ATTACHES on the lazy arm", () => {
+      doc = makeDoc("hello world");
+      const map = getAnnotationsMap(doc);
+      const ann = makeAnnotation({ id: "ann_ns", range: { from: off(6), to: off(11) } });
+      map.set(ann.id, ann);
+
+      const refreshed = refreshRange(ann, doc, map);
+      expect(refreshed.kind).toBe("attached");
+      expect(refreshed.annotation.relRange).toBeDefined();
+    });
+
+    it("still REPAIRS a dead relRange over text that moved", () => {
+      doc = makeDoc("hello world");
+      const map = getAnnotationsMap(doc);
+      const ann = seed(doc, map, 6, 11);
+      expect(ann.textSnapshot).toBeUndefined();
+
+      replaceContent(doc, "hello planet!");
+
+      const refreshed = refreshRange(ann, doc, map);
+      expect(refreshed.kind).toBe("repaired");
+      expect(refreshed.annotation.relRange).toBeDefined();
+    });
+
+    it("but a COLLAPSE is still written as {n, n}", () => {
+      // The opposite carve-out, and the one that keeps the .docx export's bytes
+      // unchanged for the snapshot-less population. A preserve here would turn
+      // a zero-width anchor at the deletion point into a stale non-empty span
+      // and export a Word comment over unrelated text.
+      doc = makeDoc("hello world");
+      const map = getAnnotationsMap(doc);
+      const ann = seed(doc, map, 6, 11);
+
+      const xt = textOf(doc);
+      xt.delete(6, 5);
+      xt.insert(6, "world");
+
+      const refreshed = refreshRange(ann, doc, map);
+      expect(refreshed.kind).toBe("updated");
+      expect(refreshed.annotation.range).toEqual({ from: 6, to: 6 });
+      expect((map.get(ann.id) as Annotation).range).toEqual({ from: 6, to: 6 });
+    });
+  });
+});
+
 describe("refreshAllRanges", () => {
   it("batch refreshes in a transaction", () => {
     doc = makeDoc("hello world");

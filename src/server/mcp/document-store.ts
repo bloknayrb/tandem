@@ -70,7 +70,11 @@ import {
   Y_MAP_SELECTION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
-import type { AnchoredRangeResult, RangeValidation } from "../../shared/positions/index.js";
+import type {
+  AnchoredRangeResult,
+  RangeValidation,
+  RefreshResult,
+} from "../../shared/positions/index.js";
 import type { SanitizationEvent } from "../../shared/sanitize.js";
 import type { Annotation, AnnotationReply, FlatOffset } from "../../shared/types.js";
 import { docHash } from "../annotations/doc-hash.js";
@@ -222,11 +226,18 @@ export class YDocStore {
 
   /**
    * Collect annotations and refresh their CRDT-anchored ranges in one pass,
-   * **persisting any range updates back to the Y.Map**. Returns the refreshed
-   * annotations.
+   * **persisting any range updates back to the Y.Map**.
+   *
+   * Returns the tagged {@link RefreshResult}s, not bare annotations (#1764).
+   * The `.map((r) => r.annotation)` this used to do here was where the
+   * degradation verdict went to die: `refreshRange` can answer `degraded` for a
+   * record whose anchor no longer describes its text, and every MCP consumer
+   * discarded that, which is the "no visible symptom" half of #1764. A caller
+   * that genuinely wants the annotations alone still writes the `.map`; a
+   * caller that wants to report the anchor's health now can.
    */
-  listAnnotationsRefreshed(): Annotation[] {
-    return refreshAllRanges(this.listAnnotations(), this.#ydoc, this.#map).map((r) => r.annotation);
+  listAnnotationsRefreshed(): RefreshResult[] {
+    return refreshAllRanges(this.listAnnotations(), this.#ydoc, this.#map);
   }
 
   /**

@@ -479,13 +479,23 @@ describe("#1752: the relocation probe and its failure report", () => {
     expect(logs[0]).toMatch(/stale coordinates/i);
 
     // The consequence the message claims, asserted rather than trusted: the
-    // record still carries its pre-reload offsets, they no longer describe the
-    // annotated text, and `refreshAllRanges` has already minted a relRange from
-    // them — so nothing will revisit it.
+    // record still carries its pre-reload offsets and they no longer describe
+    // the annotated text.
+    //
+    // **The durable-mispin half changed with #1764, and this assertion is
+    // inverted from what it used to be.** `refreshAllRanges` used to mint a
+    // relRange from these stale offsets, so the record was pinned to
+    // coordinates describing different text and every later reload resolved it
+    // cleanly. The lazy-attach arm is now gated on the stored range still
+    // holding its `textSnapshot` — an inverted range slices to `""`, which
+    // contradicts a non-empty snapshot — so the mint is refused, the record
+    // answers `degraded`, and NO relRange is written. The rejection log above
+    // is unchanged and is still the signal; what it no longer describes is a
+    // durable pin.
     const ann = annOf(doc, id);
     expect(ann.range.from, "not relocated").toBe(staleFrom);
     expect(ann.range.to).toBe(staleTo);
-    expect(ann.relRange, "durably pinned, not merely left alone").toBeDefined();
+    expect(ann.relRange, "left alone, not durably pinned (#1764)").toBeUndefined();
     expect(extractText(doc).slice(staleFrom, staleFrom + SNAPSHOT_CAP)).not.toBe(
       LONG_BODY.slice(0, SNAPSHOT_CAP),
     );

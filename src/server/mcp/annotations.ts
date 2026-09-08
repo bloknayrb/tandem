@@ -408,7 +408,16 @@ export function registerAnnotationTools(server: McpServer): void {
         const store = getDocumentStore(documentId);
         if (!store) return noDocumentError();
 
-        let results = store.listAnnotationsRefreshed();
+        // #1764: `listAnnotationsRefreshed` now returns tagged refresh
+        // results. Keep the id → kind map beside the filter chain rather
+        // than threading the tag through every `.filter`, and emit only the
+        // two DEGRADATION verdicts below (`updated` fires for every
+        // annotation past any edit, `attached` on a pre-relRange record's
+        // first refresh, and `repaired` for the whole collection after any
+        // reload — emitting them buries the one signal #1764 asks for).
+        const refreshed = store.listAnnotationsRefreshed();
+        const kindById = new Map(refreshed.map((r) => [r.annotation.id, r.kind]));
+        let results = refreshed.map((r) => r.annotation);
         if (author) results = results.filter((a) => a.author === author);
         if (type) results = results.filter((a) => a.type === type);
         if (status) results = results.filter((a) => a.status === status);
@@ -441,12 +450,16 @@ export function registerAnnotationTools(server: McpServer): void {
         // gates so this read site can't drift from the export path / observer.
         // The trailing Solo filter hides a user's own reply on a Claude comment
         // (the parent survives the annotation-level filter; the reply must not).
-        const annotationsWithReplies = results.map((ann) => ({
-          ...ann,
-          replies: channelVisibleReplies(ann, (id) => store.listReplies(id)).filter(
-            (r) => !hideFromAI(r, modeState),
-          ),
-        }));
+        const annotationsWithReplies = results.map((ann) => {
+          const kind = kindById.get(ann.id);
+          return {
+            ...ann,
+            ...(kind === "degraded" || kind === "failed" ? { anchor: kind } : {}),
+            replies: channelVisibleReplies(ann, (id) => store.listReplies(id)).filter(
+              (r) => !hideFromAI(r, modeState),
+            ),
+          };
+        });
 
         return mcpStructured({
           annotations: annotationsWithReplies,
@@ -685,7 +698,7 @@ export function registerAnnotationTools(server: McpServer): void {
         const store = getDocumentStore(documentId);
         if (!store) return noDocumentError();
 
-        const annotations = store.listAnnotationsRefreshed();
+        const annotations = store.listAnnotationsRefreshed().map((r) => r.annotation);
         // #1619/#1710: notes AND every record whose stored `audience` is not
         // outbound are user-private (ADR-027) — excluded from exports, with the
         // same predicate the channel and `tandem_getAnnotations` use. Notes are
