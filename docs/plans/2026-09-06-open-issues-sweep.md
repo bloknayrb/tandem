@@ -124,9 +124,19 @@ any stage after `review` short-circuits on `parked` or `failed`. Side effects ar
 before creating; `args.known` lets a resumed run skip.
 
 ```
-plan → reviewLoop(≤3) → implement → simplify → verify(+fix ≤2) → [e2e] → manualProbes
-     → prReviewLoop(≤3) → ship(push, PR, auto-merge-or-record, subscribe) → postShipReview
+plan → reviewLoop(S 1 / M 2 / L 3) → implement → simplify → verify(+fix ≤2) → [e2e] → manualProbes
+     → prReviewLoop(≤2, one batched skeptic) → ship(push, PR, auto-merge-or-record, subscribe)
 ```
+
+**Budget shape (2026-09-07, wave 3).** Measured on J2 (S) and F-doctor (M): plan refuters were 42–43%
+of a group's output tokens and per-finding skeptics another 10–12%, with 170M+ cached-input tokens
+riding on the refuters alone; build, verify, e2e, probes, simplify and code-review together were
+under 10%. C (L, three domain lenses at `max` every round) had spent more on plan refutation than J2
+spent end to end before it reached Build. The script now caps plan rounds by tier, lets the domain
+lens speak only in round 1 (rules + tests re-check revisions), runs PR review for two rounds with one
+skeptic judging the round's findings as a batch, drops L's domain effort to `high`, and has no
+post-ship stage. Expected on a J2-shaped group: ~50 agents → ~20. Stage numbers below are the
+post-cut shape; the ledger rows for wave 1–3 groups were run under the old one.
 
 Stages:
 
@@ -134,12 +144,14 @@ Stages:
    rows, experiments, decisions. Writes `tracks/specs/<group>-<issue>.md` per issue in the
    A8-1796 shape (non-review issues as `X-<issue>.md`). Returns `{specs[], branch, filesTouched[],
    order[], risks[], assumptions[], closes[], refs[]}`.
-2. **reviewLoop** — three refuters in parallel (2+1 at the cap): the group's repo agent via
-   `agentType`; a CLAUDE.md-rules refuter (Critical Rules 1–9, gotchas, origin helper choice,
+2. **reviewLoop** — refuters in parallel: in round 1 the group's repo agent(s) via
+   `agentType` (or `general-purpose` when none), in every round a CLAUDE.md-rules refuter (Critical Rules 1–9, gotchas, origin helper choice,
    license-gate both halves, testid snapshot, `NON_LOOPBACK_ALLOWED`, ADR-027 guard shapes, skill
    version); a tests refuter (would a lazy default arm pass? is each experiment's "still broken"
    output now a spec?). `{blocking[], nonBlocking[]}` → revise agent appends "Review corrections
-   (round n)". Loop while blocking, max 3 → `parked` with the disagreement.
+   (round n)". Loop while blocking, capped by tier (S 1, M 2, L 3); leftovers get one scope-cut
+   (M/L) and a two-lens re-refute (all tiers — for S it is what checks the single revise landed),
+   then `parked` with the disagreement.
 3. **implement** — worktree under `.claude/worktrees/wt-<group>` on `fix/<slug>-<issue>` from
    `origin/master`; `ln -s` `node_modules`; `npx husky`; Rust groups re-touch the stubs; one
    commit per issue (`fix(<area>): … (#N)`, attribution trailer, never a closing keyword in a
@@ -156,9 +168,10 @@ Stages:
 7. **manualProbes** — runs the track's named experiment / probe scripts against a scratch server on
    the harness ports (`probe-tools.mts`, `server-probes/run.sh`, harness vitest config) and captures
    the before/after lines for the PR body; emits `bryan[]` for anything hardware-gated.
-8. **prReviewLoop** — parallel: `Skill(code-review, --level high)` on the diff + the repo agent on
-   the diff; each finding through one skeptic (`default refuted=true if uncertain`); confirmed →
-   fix → re-verify; ≤3 rounds; leftovers → `unresolved[]`.
+8. **prReviewLoop** — parallel: `Skill(code-review, --level high)` on the diff + (round 1 only)
+   the repo agent on the diff; the round's findings through ONE skeptic as a batch, keyed by id
+   (`default refuted=true if uncertain`; a missing verdict keeps the finding as unverified);
+   confirmed → fix → re-verify; ≤2 rounds; leftovers → `unresolved[]`.
 9. **ship** (gate) — assert `.husky/_/pre-push` exists; `git push -u origin <branch>` (hook runs;
    failure → fix → re-push; `HUSKY=0` only in the recorded cargo case); PR body with `## Closes`
    (only `closes: true` issues), `## Refs (partial — issue stays open)` (`Refs #N — what landed;
@@ -168,10 +181,12 @@ Stages:
    data — the repo refuses while auto-merge is off); no PR-activity subscription exists here, so
    the main session polls CI (`subscribed: false`). Returns `{group, branch, pr, closes[], refs[],
    unresolved[], bryan[], skillVersion}`.
-10. **postShipReview** — `code-review` once more on the pushed head; findings → fix → push.
+10. ~~**postShipReview**~~ — removed 2026-09-07 (see the budget note above and the wave-3 lesson on
+    the resumed post-ship agent). The main session's merge-time pass covers it.
 
-Models/effort: plan + reviewers at the group's tier; L-tier domain reviewer `effort: max`;
-verify/review `high`; simplify/ship `low`. `isolation` unused (worktree managed explicitly).
+Models/effort: plan + reviewers at the group's tier; domain reviewers `effort: high` at every tier
+(L was `max` until 2026-09-07); verify/review `high`; simplify/ship `low`. `isolation` unused
+(worktree managed explicitly).
 
 ### Main-session loop around each group / wave
 
@@ -334,9 +349,39 @@ container's record and names the MCP tools that session had; the script no longe
   what keeps a forked review honest about scope, but a finding on an unchanged file that the
   fix's claim depends on (here: `src/cli/channel.ts` exiting before the never-exit consumer
   starts) vanishes silently. Read the dropped list when the review reports one; file what is real.
+- **A post-ship agent that has reported is not finished — a late review result resumes it, and it
+  will undo hand work on "its" branch** (found in wave 3, J2). The post-ship agent had returned its
+  summary and its run's journal showed no `result` line — which reads as "wedged" under the rule
+  above, but the run was still a live task (under the Workflow tool's task id, e.g. `wwizzwgwz`, not
+  the `wf_…` run id — `TaskStop` on the run id says "no task found" and proves nothing). Twenty
+  minutes later its transcript woke again (the forked `code-review` result arriving as a tool result), it
+  re-read the branch, judged the orchestrator's hand-run follow-up commit on `docs/workflows.md`
+  "outside the diff", pushed a revert through the pre-push hook, and soft-reset the worktree — all
+  while the orchestrator's own push was in flight. The agent is doing exactly what its prompt says
+  (scope = branch diff), so the fix is procedural: after a group's run ends, **`SendMessage` its
+  post-ship agent an explicit stand-down before touching the branch by hand**, and treat a branch
+  head that moves under you as an agent, not a human — `git log origin/<branch>` and the commit's
+  `Claude-Session` trailer name the culprit. Recovery: `git reset --hard <your commit>` in the
+  worktree, then `git push --force-with-lease=refs/heads/<branch>:<their sha>`. **And a
+  stand-down message is not enough on its own**: the agent acknowledged it, but the workflow still
+  required its `StructuredOutput`, so the harness re-prompted it and it `git merge --ff-only`'d the
+  worktree back onto its revert two minutes later, while the orchestrator's force-push was in its
+  pre-push hook (that push then reported "Everything up-to-date" and moved nothing). Wait for the
+  Workflow tool's own completion notification before the recovery push, and check the reflog
+  (`git reflog show <branch>`) after it lands.
 - **PR bodies**: the ship agent sometimes claims a review pass did not run because it could not
   spawn agents itself; the pipeline's PR-review stage did run the repo reviewer. Read the
   "Review" line (rounds) rather than the "For Bryan" prose when in doubt.
+- **`resumeFromRunId` replays by (prompt, opts) — an edited script does not resume, it re-runs.**
+  Gc1 was stopped mid-plan-review and resumed under the budget-cut script and cache-hit fine,
+  because its cut fell in a *later* round. C was stopped after PR-review round 1 and resumed under
+  the same edited script and **re-ran plan review round 1 from scratch**: the cut had changed
+  `domainEffort` and the round structure, so every `refute:*:r1` key missed. Under a spend limit
+  that is not merely wasteful, it is fatal — the re-run agents 429'd and the run ended at
+  `stage: "revise-r1"`. Rule: **before resuming, diff the script against the revision the run
+  started on; if any agent call *before* the stop point changed its prompt or opts, do not resume —
+  finish the remaining stages by hand.** (`git stash` the dead agent's partial edits first so the
+  hand-run fix agent starts from a clean tree.)
 
 ## Ledger
 
@@ -354,11 +399,13 @@ literal in `tests/skill-instruction-contract.test.ts` moves with it). `Hooks arm
 | 2 | F-runtime | #1759 #1805 #1804 #1794 | `fix/push-paths-runtime-1759` | — | #1889 | b315fced | armed | merged | Launched 2026-09-06 from Bryan's Windows PC (run `wf_ce225c53-e48`, probe ports 4918/4919), concurrently with J1. 4 plan-review rounds incl. scope cut; the security refuter required a tracked home for a residual #1794 exposure → #1884 filed and registered in `docs/security.md`. Four fixes committed; stopped at the checkpoint push and resumed on the hardened script (guarded smoke, branch-targeted code-review) — the resume cache-hit through build. PR opened 2026-09-06 (green, behind master). The post-ship agent then wedged on an `npm run typecheck` Bash call for ~3 h with no result; the run was stopped and its remaining work — a second review set of 9 verifier-backed findings the pipeline never received — was applied by hand on the branch (3 commits, 9 findings + 3 doc one-liners, mutation-checked; recorded in the PR body). Merged 2026-09-07 after one `update-branch`; all four issues closed; worktree pruned junction-first. The review's file filter had also dropped a pre-existing gap in `src/cli/channel.ts` (the plugin's `tandem channel` entry still exits 1 in preflight) → #1890 filed. |
 | 2 | F-config | #1760 #1801 #1802 | `fix/push-paths-config-1760` | — | #1891 | 94e45025 | armed | merged | Launched 2026-09-06 20:57 (run `wf_1ce28428-8f9`, probe ports 4928/4929) as J1 finished, concurrently with F-runtime. 4 plan rounds, 3 PR rounds, 2 post-ship rounds; 49 agents, ~6.8M tokens, 5.9 h. Workflow returned 2026-09-07 with a stale unresolved list (all four fixed in later rounds — verified against the branch). One post-open fix by hand (`32f2fe49`, a false "will be rejected" in `rotate-token`). Eleven For-Bryan items in the PR body, notably: CHANGELOG.md:340 still carries the retracted removal instruction (pipeline may not edit CHANGELOG); `tandem doctor` has no size cap; the #1802 zero-byte truncation window is untracked. Merged 2026-09-07 after one `update-branch`; all three issues closed; worktree pruned junction-first. The first push was rejected by a Rust timing flake unrelated to the branch (`bounded_command::partial_lengths_report_what_arrived`, 3 s spawn budget missed under pre-push load; 3/3 green in isolation) → fixed in its own PR #1892. |
 | 2 | J1 skill + workflows doc | #1771 #1782 #1820 #1737 (+decision H) | `fix/skill-and-workflows-doc-1771` | — | #1888 (merged 911de885) | 15 | armed | merged | Launched 2026-09-06 from Bryan's Windows PC (run `wf_f6b7f1e4-5d1`, probe ports 4928/4929), concurrently with F-runtime. #1771, #1782, #1820, #1737 closed by the merge; one `gh pr update-branch` + CI rerun after #1886 staled it. 4 plan-review rounds (incl. scope cut); build, simplify, verify and probes green; stopped and resumed at PR review after the code-review lens was found reviewing the wrong tree (see Lessons). 3 PR-review rounds hit the cap with 5 confirmed findings left (three non-discriminating test regexes, a false `replies` claim); the post-ship pass fixed all five (e2149691). For Bryan: `SERVER_INSTRUCTIONS` in `src/server/mcp/server.ts` has no orchestrator-only carve-out — it reaches sub-agents without the skill loaded; out of #1820's scope. ~3.2M subagent tokens, 2h13m. |
-| 3 | J2 product copy | #1781 #1814 #1815 #1816 #1817 #1818 | — | — | — | — | planned-not-started | |
-| 3 | F-doctor | #1806 #1807 #1811 #1790 | — | — | — | — | planned-not-started | |
-| 3 | C privacy & authority | #1769 #1733 → #1770 #1779 #1803 (+#1619 #1710 folded into #1803) | — | — | — | — | planned-not-started | |
-| 3 | Gc1 client state Highs | #1772 #1773 | — | — | — | — | planned-not-started | |
-| 3 | #1821 docs drift | items with no `(#NNNN)` cross-reference, one PR per doc file | — | — | — | — | planned-not-started | |
+| 3 | J2 product copy | #1781 #1814 #1815 #1816 #1817 #1818 | `fix/product-copy-1814` | — | #1897 | 2148f2a5 | armed | merged | Launched 2026-09-07 04:10 from Bryan's Windows PC (run `wf_d6e0906b-2e2`, probe ports 4918/4919); F-doctor and then C ran concurrently. 4 plan rounds, 3 PR rounds, 1 post-ship round; 48 agents, ~7.4M tokens, 6.7 h. #1815 needed no code (already honest); #1781 took the delete-the-promise branch (docs only). The PR body's "unresolved" list was stale — all five were fixed by the cr-2…cr-6 review commits; rewritten by hand. Two filter-dropped findings checked by hand: `docs/workflows.md` + `docs/roadmap.md` still carried the #1781 copy (fixed, `6363e802`); the annotations-store `save-error` producer was already scrubbed (`a6c5d9c3`, mutation-checked). The post-ship agent then woke again and reverted `6363e802` as out-of-diff — see the wave-3 lesson; branch restored by force-with-lease. CodeQL then raised a real high alert (212, tainted format string) on cr-4's stderr mirror — a 3-second CodeQL failure is not always the config race; read the check's summary — fixed by hand (`%s` argument, one commit). Merged 2026-09-07 11:40; all six issues closed; worktree pruned junction-first (the directory needed a second `rm` after the shell's cwd left it). |
+| 3 | F-doctor | #1806 #1807 #1811 #1790 | `fix/doctor-and-skill-version-skew-1806` | — | #1896 | e07b8547 | armed | merged | Launched 2026-09-07 04:26 after #1894 merged (run `wf_ff413189-bd8`, probe ports 4928/4929), concurrently with J2. 4 plan rounds, 3 PR rounds, 2 post-ship rounds; 45 agents, ~6.0M tokens, 3.8 h. #1811's first half refuted (doctor already named the uninstall remedy). Workflow's one "unresolved" (no scheme check) had already landed in a post-ship commit; three post-ship findings had not (BIND_HOST wording, apply route discarding the declined skill install, stdio embedder port threading) → hand follow-up pass (3 commits, mutation-checked, recorded in the PR body). Merged 2026-09-07 08:47; all four issues closed; worktree pruned junction-first. For Bryan: `apply.ts`'s hardcoded `MCP_URL` makes #1807's port warn unclearable on a moved install (writer-side defect, unfiled); doctor still has no config size cap; an installed plugin keeps its old npm pin until reinstalled. |
+| 3 | C privacy & authority | #1769 #1733 → #1770 #1779 #1803 (+#1619 #1710 folded into #1803) | `fix/privacy-and-authority-1769` | #1900 | 16 | armed | merged | Launched 2026-09-07 08:52 after F-doctor merged (run `wf_0a5a9898-f59`, probe ports 4928/4929), concurrently with J2. Ran the OLD script shape end to end: 4 plan rounds + cut, build (7 commits, one per issue, `4bd55b88`…`6d4a795a`), simplify `a969ef71`, verify, probes, PR-review round 1 (code-review 6 findings + 7 domain-lens findings, skeptic-verified) — then the weekly/monthly spend limit (HTTP 429, resets 07:00 America/New_York) killed `fix:review:r1` mid-edit and `ship:C`. 47 agents, **~10.8M tokens**, 6.9 h — the run the budget cut was measured against. **State at 15:50:** branch was never pushed by the pipeline (the checkpoint stage's push did not land) — orchestrator stashed the dead fix agent's partial edits (`git stash list` in `wt-c`: "C fix:review:r1 partial edits") and checkpoint-pushed the 11 commits. **Resume after the reset:** `Workflow({scriptPath, resumeFromRunId: "wf_0a5a9898-f59", args: <identical, from the run's diagnostics>})` replays everything through the skeptic from cache and re-runs the fix + ship stages under the NEW script (the fix agent redoes the stash's work; drop the stash after). The workflow's "bryan" list is long and partly wrong — it claims no adversarial review happened, but the three domain lenses DID run in PR review round 1 (their findings are in the journal); trust the journal. Hand notes for merge time: `scratchpad/c-review-findings.md` (7 code-review findings + one filter-dropped `resolvedBy` item). Capacity came back within minutes (a haiku probe answered) and C was resumed 15:55 as Workflow task `wlk8fknho` — **the resume failed, and the way it failed is the lesson**: it did not replay from cache, it re-ran plan review round 1 (`refute:*:r1`, `revise:r1`), because the budget-cut edits changed those calls' `opts` (model/effort/label) and the cache key is (prompt, opts). Every re-run agent 429'd again; the run ended `failed: true, stage: "revise-r1", reviewRounds: 1, prReviewRounds: 0`. **A resume is only cache-safe if the script's earlier agent calls are byte-identical.** **Finished by hand 2026-09-08, with no agents at all** — the orchestrator applied the round-1 set itself, which cost less than a single fix agent would have. `541bd57a`: the release-arming fix (the POST now rides the `Y_MAP_MODE` write rather than a `tick()`, so the unsynced-ctrl window stops double-409ing) with two new specs, the `resolvedBy` strip, the vacuous `held-in-solo-stamp.test.ts:228` row, and five stale tool/skill descriptions. `ca045eec` **recovered the dead fix agent's STASH rather than dropping it** — it had already closed the ADR-027 highlight asymmetry (`isWithheldFromClaude` = `!isClaudeFacing` on resolve and remove, the two families with no per-type arm), written better hook-driven `resolvedBy` tests than the source-scan I had, and filed #1899. **Lesson: read a dead agent's stash before dropping it — a 429 kills an agent mid-edit, not mid-thought.** Then `bdd021fb` (the `docs/user-guide.md` sentence C-1779 deferred behind J2, now merged) and `7009a125` (a second stale "#1619 is open" claim, in `decisions.md`, same class as the `security.md` one). Every behavioural fix mutation-checked by reverting it and watching the naming spec go red. PR #1900 opened 2026-09-08 09:33. **Its first CI run was the first CI this branch ever had** — the pipeline died before the PR stage — and it went red on two SEMANTIC merge conflicts, both of which read exactly like pre-existing flakes and neither of which any local run would have caught, because both specs came in on master WHILE this branch was building. `toolbar-redesign.spec.ts` ×3 asserted `tandem_getAnnotations` returns the user highlight it had just created; #1619 (on this branch) correctly withholds it, so each now asserts BOTH halves via a new `getPrivateExcluded()` — a bare `toBe(0)` would make "never created" and "created and withheld" indistinguishable, which is the pair those specs exist to separate. `settings-and-filters.spec.ts:533` (Gc1's #1772 spec, merged as #1898) dropped the pending count by having Claude `accept` its own comment; #1770 refuses exactly that, so the count never moved and an ARMED bar hides `bulk-dismiss-btn` too — its first assertion passed vacuously and the second failed, i.e. the spec reported the bug it was watching for. Switched to `dismiss` plus an explicit landed-check. `tab-overflow.spec.ts:93` was the run's only real flake (green on retry). CodeQL then raised alert 213, `js/tainted-format-string` HIGH, on the new `held-in-solo.ts:99` — same class as J2's 212 — fixed with the codebase's `%s`-argument idiom, along with the three pre-existing siblings in files this branch already owns. **Two rules earned here:** a group whose branch is long-lived must expect master's NEW specs to encode the old contract, and a 3-second CodeQL failure carrying a `1 high` line is not the config race. The advisory `coverage` gate also went red and was worth honouring rather than waving through: it had caught `accept-refused`'s SECOND reason (`unapplied-suggestion`) arriving with no test, which is exactly the class a floor exists to detect. Merged 2026-09-08 10:55 (`3e1230fb`); all seven issues closed; `wt-c` pruned junction-first. Post-open work is recorded as a PR comment, not only in commit bodies. | Seven issues incl. the two read-side twins; skill 15 → 16 plus the body hash pinned since #1896. |
+| 3 | Gc1 client state Highs | #1772 #1773 | `fix/client-state-highs-1772` | — | #1898 | aee088f6 | armed | merged | Merged 2026-09-07 15:35; both issues closed; worktree pruned junction-first. One CI `check` red on the way: `keyboard-a11y.spec.ts` "focus is visibly indicated" found an unlabeled DIV — the run's snapshot showed the editor in "Nothing open yet" with a `sample.md` tab and an earlier "Not connected" teardown, i.e. the harness lost the document; 3/3 green locally on the branch, green on re-run. Harness flake, not the diff. First group under the budget-cut script: 26 agents, ~2.6M tokens, 2.8 h (J2: 48 / 7.4M / 6.7 h). 2 plan rounds + scope cut, 2 PR rounds; round 2's four confirmed findings fixed in `75acf558` and read by hand (aria-labels, `actionInFlight` guard, `role="alert"`); the fifth refuted with evidence. The ship agent's "unresolved" list was the round-2 set again — under a two-round cap that line always names the fixed-but-unreviewed findings; rewrite it. Launched 2026-09-07 11:50 after J2 merged (run `wf_48d2229f-41a`, Workflow task `wmphjszo9`, probe ports 4918/4919), concurrently with C (not e2e). Stopped in plan-review round 2 at 12:15 and resumed (task `wewzju0a3`) under the budget-cut script: plan, round 1 and revise r1 replayed from cache; round 2 is the M cap. C kept the old script — a resume would have re-run its three domain lenses at the new effort. Notes carry the review's file:line anchors, the promote-reset pattern for #1772, the inline two-step confirm for #1773, and the testid contract. |
+| 3 | #1821 docs drift — A repo docs | #1821 (part) | `docs/drift-1821-repo-docs` | #1901 | — | armed | merged | Hand-run as three area PRs, not a Workflow group: two attempts to launch it as one died on the 429 and left nothing, and the work is verification-shaped rather than fix-shaped. Group A is `CLAUDE.md` + `architecture.md` + `security.md` + `decisions.md`, scoped to a single general-purpose agent in `wt-docs-a` with an explicit file allowlist so the three PRs cannot conflict. Findings the sweep should carry forward: the licensing flip is TWO consts in two languages (`LICENSE_UPDATE_ENDPOINT` in `src-tauri/src/lib.rs:171` routes every build to the PUBLIC updater manifest, #1785 — this lands on wave 6's H group); force-open `fs.unlink`s the durable annotation envelope (#1813, wave 5 D1); `MAX_RESTARTS` covers the boot window only (#1809, wave 7 E2-rust); the Windows exe-unlock wait is inert on an installed build (#1762, same); ADR-032's tagged results landed but exactly ONE caller reads `kind` (#1764, wave 4 B). Verified by hand after the agent reported: 8 of its claims re-checked against source, one count corrected (eighteen `vi.mock` files, not nineteen) — a wrong number in a drift-fixing PR is the worst outcome, so recount rather than trust. Six For-Bryan items in the PR body. Merged 2026-09-08 11:17 (`3e809690`) after one `update-branch`; worktree pruned junction-first. |
+| 3 | #1821 docs drift — C user docs | #1821 (part) | `docs/drift-1821-user-docs` | #1902 | — | armed | merged | Launched 2026-09-08 10:15 in `wt-docs-c`: `user-guide`, `troubleshooting`, `cli`, `data-locations`, `integrations`, `configuration`, `.env.example`, `workflows.md`, `sample/welcome.md`, `README.md`, `semantic-tokens`. Same allowlist discipline. Headline finding: **Solo is a ONE-WAY hold** — nothing in `src/client/` filters an AI-authored annotation on mode; the only gates are `isUserPrivacyHeld`/`shouldForwardExternally`, both user-authored-only, so the inbound half is the bundled skill ASKING the AI to hold off. Merging master (#1900) then conflicted on exactly the two Solo paragraphs, in both directions: `user-guide.md` needed this branch's rewrite to win over #1900's one-liner, and `sample/welcome.md` needed master's 'and answer chat' folded INTO this branch's one-way framing. Tutorial anchor strings re-verified present-and-unique after the resolution. Four For-Bryan items, incl. the README-vs-BUSL beta wording and a possibly-stale #1761. **CI then caught a real one the agent's own verification could not**: `tests/server/tutorial-annotations.test.ts` pins the LIVE `sample/welcome.md` against `tests/fixtures/welcome-snapshot.md` in flat-text space — the anchor assertions resolve against the SNAPSHOT for worktree isolation, so live drift breaks real injection with nothing red. The agent had been scoped to `tests/docs/` + `tests/scripts/`, which do not reach it. **Lesson: an agent editing a file under `sample/` or `src/` must be told to run the FULL suite, not the doc suites** — the scoping was the orchestrator's error, not the agent's. Merged 2026-09-08 12:00 (`475eb52a`) after three `update-branch` cycles — under `strict: true` every merge invalidates the rest of the queue, so N sibling PRs cost N restacks and N `check` runs; land them in one queue rather than in parallel next time. Worktree pruned junction-first. |
+| 3 | #1821 docs drift — B MCP + licensing | #1821 (part) | `docs/drift-1821-mcp-licensing` | #1903 | 17 | armed | merged | `mcp-tools.md`, `licensing-explained.md`, `schema-dialect.ts` toolCount, `skills/tandem/SKILL.md`. Cut after #1900 merged, for the reason it was held: that PR bumps the skill to v16 and rewrites its accept line and `bodyHash`, so a branch cut earlier would have conflicted on both. Launched 2026-09-08 11:05. Also told to re-check `mcp-tools.md` against #1900's two behaviour changes — `ACCEPT_REFUSED` and the `audience` read filter — since the tool DESCRIPTIONS were updated there but the doc was not — they had been, so the re-check returned "already correct", which is the outcome that has to be reportable or the pass is theatre. Real finds instead: the `READ_ONLY` error row was false for `tandem_edit`/`editList`/`appendContent` (they answer `FORMAT_ERROR`) and the five annotation tools have no `readOnly` check at all; nine error codes were undocumented; `activity.cursor` is a ProseMirror position while `selection` beside it is flat (#1776); and the licensing doc's gated-set enumeration — the `/api` half's ONLY review per Critical Rule 9 — omitted three mutating surfaces (`tandem_rename`, `tandem_convertToMarkdown`, `POST /api/mode/release`), so the omission WAS the review failing. **Skill 16 → 17**: Hard Rule 1 gave staleness as the only reason not to hand-count offsets, but a hand-count is also wrong by construction — offsets are UTF-16 code units. Merged 2026-09-08 11:40 (`f03b2777`) after one `update-branch`; worktree pruned junction-first. Its `Closes #1821` fired while group C was still in CI, so a comment on the issue records the three-PR split and the four code-condition findings. |
 | 4 | B anchors | #1764 #1765 #1766 #1767 #1622 | — | — | — | — | planned-not-started | |
 | 4 | Gc2a position mapping | #1774 #1776 | — | — | — | — | planned-not-started | |
 | 4 | Gc2b keys + a11y | #1775 #1777 #1778 | — | — | — | — | planned-not-started | |
@@ -390,6 +437,24 @@ literal in `tests/skill-instruction-contract.test.ts` moves with it). `Hooks arm
 | 10 | G11 process docs | #1602 #1604 #1605 #1606 | — | — | — | — | planned-not-started | |
 | 11 | #1689 harness refactor | #1689 | — | — | — | — | planned-not-started | |
 | 11 | local-model flip blockers | #1657 #1292 | — | — | — | — | planned-not-started | |
+
+### Wave 3 closed — 2026-09-08
+
+Seven PRs, all merged: **#1896** F-doctor, **#1897** J2, **#1898** Gc1, **#1900** C,
+**#1901** / **#1903** / **#1902** the three #1821 docs-drift groups. Every worktree pruned
+junction-first; `.claude/worktrees/` is empty. Wave 4 is B anchors, Gc2a, Gc2b and G5′.
+
+Four things this wave established that change how the next one should be run:
+
+1. **The budget cut holds.** Gc1 under the new script: 26 agents / 2.6M tokens / 2.8 h. J2 under the old one: 48 / 7.4M / 6.7 h. Same wave, comparable size. Do not re-widen the plan-review rounds or the per-finding skeptics without a new measurement.
+2. **A resume is only cache-safe if the earlier `agent()` calls are byte-identical.** C's resume re-ran plan review round 1 and 429'd again, because the budget cut had changed `opts` on calls *before* the stop point. Diff the script against the revision a run started on before passing `resumeFromRunId`; if anything before the stop point moved, finish by hand.
+3. **A long-lived branch must expect master's NEW specs to encode the OLD contract.** C's first CI run went red on two specs that did not exist when it branched, each pinning behaviour C deliberately changed. Neither was catchable locally before the merge. Budget a reconciliation pass at PR time for any group that runs more than a day.
+4. **Verification scope is the orchestrator's job.** Group C's agent ran the doc suites it was told to and still shipped a red `check`, because the guard that caught it lives in `tests/server/`. An agent editing anything outside `docs/` gets told to run the full suite.
+
+One process cost to avoid repeating: three sibling docs PRs merged serially cost three
+`update-branch` cycles and three ~20-minute `check` runs, because `strict: true` invalidates
+the rest of the queue on every merge. Sibling PRs with disjoint files are still worth splitting
+for reviewability, but land them in one queue rather than opening them in parallel.
 
 ### Wave 0 record
 

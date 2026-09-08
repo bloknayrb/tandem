@@ -32,15 +32,14 @@ export const meta = {
   description: "Plan, adversarially review, implement, simplify, verify, review and ship one PR group",
   phases: [
     { title: "Plan", detail: "worktree + one spec per issue" },
-    { title: "Review", detail: "three refuters, revise, loop ≤3" },
+    { title: "Review", detail: "refuters (domain lens round 1 only), revise, rounds by tier: S 1 / M 2 / L 3" },
     { title: "Build", detail: "implement per spec, one commit per issue" },
     { title: "Simplify", detail: "/simplify on the branch diff" },
     { title: "Verify", detail: "the CI check list, locally" },
     { title: "E2E", detail: "Playwright on the reserved ports (client groups)" },
     { title: "Probes", detail: "the track's experiment scripts, before/after" },
-    { title: "PR review", detail: "/code-review + repo reviewer, skeptic-verified, fix loop ≤3" },
+    { title: "PR review", detail: "/code-review (+ repo reviewer round 1), one batched skeptic, fix loop ≤2" },
     { title: "Ship", detail: "push (hook runs), PR, auto-merge, subscribe" },
-    { title: "Post-ship", detail: "/code-review on the pushed head" },
   ],
 };
 
@@ -68,10 +67,19 @@ const trackFile = g.track ? `${REVIEW_DIR}/tracks/${g.track}-*.md` : "(none — 
 
 function pickModels(tier) {
   if (tier === "S") return { plan: "sonnet", build: "sonnet", review: "opus", domain: "opus", domainEffort: "high" };
-  if (tier === "L") return { plan: undefined, build: "opus", review: "opus", domain: undefined, domainEffort: "max" };
+  if (tier === "L") return { plan: undefined, build: "opus", review: "opus", domain: undefined, domainEffort: "high" };
   return { plan: "opus", build: "opus", review: "opus", domain: "opus", domainEffort: "high" };
 }
 const M = pickModels(g.tier);
+
+// Budget shape (2026-09-07, measured on wave 3): plan refuters and per-finding skeptics were
+// 55% of a group's output tokens and most of its cache reads, while build/verify/e2e/probes
+// were under 10%. So: plan review rounds are capped by tier, domain reviewers speak in round 1
+// only (rules + tests carry the later rounds), PR review is two rounds, and one skeptic judges
+// a round's findings as a batch. L's domain effort dropped from `max` to `high` — C spent more
+// on plan refutation alone than J2 spent end to end.
+const PLAN_ROUNDS = g.tier === "S" ? 1 : g.tier === "L" ? 3 : 2;
+const PR_ROUNDS = 2;
 
 // ---------------------------------------------------------------------------------------
 // Schemas
@@ -156,10 +164,15 @@ const S_REVIEW_FINDINGS = {
   required: ["findings"],
 };
 
-const S_VERDICT = {
+const S_VERDICTS = {
   type: "object",
-  properties: { refuted: { type: "boolean" }, reason: { type: "string" } },
-  required: ["refuted", "reason"],
+  properties: {
+    verdicts: {
+      type: "array",
+      items: { type: "object", properties: { id: { type: "string" }, refuted: { type: "boolean" }, reason: { type: "string" } }, required: ["id", "refuted", "reason"] },
+    },
+  },
+  required: ["verdicts"],
 };
 
 const S_SHIP = {
@@ -339,11 +352,12 @@ let round = 0;
 let blocking = [];
 // Lenses that returned `run`'s fallback in the last round — i.e. never reviewed.
 let deadLenses = [];
-while (!resumeAtBuild && round < 3) {
+while (!resumeAtBuild && round < PLAN_ROUNDS) {
   round += 1;
   result.reviewRounds = round;
   const reviewers = [];
-  const domainAgents = g.reviewers && g.reviewers.length ? g.reviewers : ["general-purpose"];
+  // The domain lens reads the plan once; later rounds re-check the revision with rules + tests.
+  const domainAgents = round > 1 ? [] : g.reviewers && g.reviewers.length ? g.reviewers : ["general-purpose"];
   for (const a of domainAgents) {
     reviewers.push(() =>
       run("review", refuterPrompt(LENS_DOMAIN), { label: `refute:${a}:r${round}`, phase: "Review", agentType: a, model: M.domain, effort: M.domainEffort, schema: S_FINDINGS }, { blocking: [], nonBlocking: [] })
@@ -401,12 +415,14 @@ Rewrite the affected sections of the specs in place (do not leave the old text),
   }
   if (blocking.length === 0 && deadLenses.length === 0) break;
 }
-// Scope-cut round: three rounds of findings usually means the plan grew machinery the
-// issue never asked for. Cut to the minimal fix once, re-refute once, then park.
+// Scope-cut round: findings surviving every capped round usually means the plan grew machinery
+// the issue never asked for. Cut to the minimal fix once, re-refute once, then park. An S group
+// gets one round, so its `blocking` list is the pre-revise one — it skips the cut and goes
+// straight to the two-lens re-refute, which is what checks that the revise landed.
 if (blocking.length > 0) {
-  const cut = await run(
+  const cut = PLAN_ROUNDS < 2 ? { ok: true, adopted: [], notAdopted: [] } : await run(
     "scope-cut",
-    `You are the planning agent. Three adversarial rounds still leave blocking findings on the specs below, which means the plan has grown beyond the issues. CUT IT TO THE MINIMAL FIX.
+    `You are the planning agent. ${round} adversarial rounds still leave blocking findings on the specs below, which means the plan has grown beyond the issues. CUT IT TO THE MINIMAL FIX.
 ${GROUP}
 ${RULES}
 Specs:
@@ -662,31 +678,34 @@ Judge the CODE against your invariants and against the spec's Done-when. Return 
 
 let prRound = 0;
 let confirmed = [];
-while (prRound < 3) {
+while (prRound < PR_ROUNDS) {
   prRound += 1;
   result.prReviewRounds = prRound;
   const reviewers = [() => run("code-review", codeReviewPrompt(prRound), { label: `code-review:r${prRound}`, phase: "PR review", model: M.review, effort: "high", schema: S_REVIEW_FINDINGS }, { findings: [] })];
-  for (const a of g.reviewers || []) {
+  // The repo reviewer reads the code once; round 2 is /code-review on the fix diff.
+  for (const a of prRound > 1 ? [] : g.reviewers || []) {
     reviewers.push(() => run("domain-review", domainReviewPrompt(prRound, a), { label: `${a}:r${prRound}`, phase: "PR review", agentType: a, model: M.domain, effort: M.domainEffort, schema: S_REVIEW_FINDINGS }, { findings: [] }));
   }
-  const raw = (await parallel(reviewers)).filter(Boolean).flatMap((r) => r.findings || []);
+  // Every finding needs an id the batched skeptic can key on; /code-review's are not guaranteed.
+  const raw = (await parallel(reviewers)).filter(Boolean).flatMap((r) => r.findings || []).map((f, i) => ({ ...f, id: f.id || `cr${prRound}-${i + 1}` }));
   log(`PR review round ${prRound}: ${raw.length} raw findings`);
   if (raw.length === 0) {
     confirmed = [];
     break;
   }
-  const verdicts = await parallel(
-    raw.map((f) => () =>
-      run(
-        "skeptic",
-        `Skeptic. Try to REFUTE this code-review finding against the actual code in ${WT} (branch ${BRANCH}). Default to refuted=true if you cannot reproduce the failure scenario by reading the code path or running a quick check.
-Finding: ${JSON.stringify(f)}
-Return {refuted, reason}.`,
-        { label: `skeptic:${f.id}`, phase: "PR review", model: M.review, effort: "high", schema: S_VERDICT },
-        { refuted: false, reason: "skeptic unavailable — no verdict" }
-      )
-    )
+  // One skeptic per round, judging the whole list: J2 spent seventeen agents re-reading the
+  // same worktree for one finding each. The batch keeps the adversarial step and the
+  // fail-toward-keeping rule below; a verdict missing from the batch counts as unverified.
+  const batch = await run(
+    "skeptic",
+    `Skeptic. Try to REFUTE each of these code-review findings against the actual code in ${WT} (branch ${BRANCH}), one verdict per finding, keyed by its id. Default a finding to refuted=true if you cannot reproduce its failure scenario by reading the code path or running a quick check; judge each on its own evidence, not on the others.
+Findings: ${JSON.stringify(raw)}
+Return {verdicts:[{id, refuted, reason}]} with exactly one entry per finding id.`,
+    { label: `skeptic:r${prRound}`, phase: "PR review", model: M.review, effort: "high", schema: S_VERDICTS },
+    { verdicts: [] }
   );
+  const byId = new Map((batch.verdicts || []).map((v) => [v.id, v]));
+  const verdicts = raw.map((f) => byId.get(f.id) || (batch.ok === false ? { ok: false, reason: batch.error || "skeptic unavailable — no verdict" } : null));
   // An absent verdict is not a refutation. The old fallback said `refuted: true`,
   // so a skeptic that died dropped a real finding silently — nothing read the
   // "skeptic unavailable" reason and nothing logged the drop. Fail toward
@@ -718,8 +737,16 @@ Fix each in ${WT} (add or extend a test where the finding was a behaviour), re-r
     { commits: [], notes: "" }
   );
   if (!fix.ok) break;
+  // The last round's fixes are never re-reviewed (the cap ends the loop), so `confirmed` here
+  // is a list of FIXED findings, not open ones. J2 and Gc1 both shipped PR bodies calling them
+  // "unresolved". Keep the two apart: only a failed fix leaves findings genuinely open.
+  if (prRound === PR_ROUNDS) {
+    result.fixedUnreviewed = confirmed.map((f) => `${f.file}:${f.line || "?"} ${f.summary}`);
+    confirmed = [];
+  }
 }
 result.unresolved = confirmed.map((f) => `${f.file}:${f.line || "?"} ${f.summary}`);
+result.fixedUnreviewed = result.fixedUnreviewed || [];
 
 // ---------------------------------------------------------------------------------------
 // 9. Ship — push (hook runs), PR, auto-merge, subscribe
@@ -741,7 +768,7 @@ ${GITHUB_HOWTO}
    "## Closes" — one line per issue in this list only: ${closesList.length ? closesList.map((c) => `Closes ${c}`).join(", ") : "(none — omit the section)"}.
    "## Refs (partial — issue stays open)" — one line per issue in this list only: ${refsList.length ? refsList.join(", ") : "(none — omit the section)"}, each as "Refs #N — what landed; remaining: …". A closing keyword may NEVER appear on a line containing one of these numbers.
    "## Verification" — the commands run (verify list, e2e if any, cargo if any) and the probe output lines (${probes.output ? "given below" : "none"}).
-   "## Review" — plan review rounds: ${result.reviewRounds}; PR review rounds: ${result.prReviewRounds}; unresolved findings: ${result.unresolved.length ? result.unresolved.join("; ") : "none"}.
+   "## Review" — plan review rounds: ${result.reviewRounds}; PR review rounds: ${result.prReviewRounds}; unresolved findings: ${result.unresolved.length ? result.unresolved.join("; ") : "none"}; fixed in the final round and not re-reviewed (say so, and name the fixing commit): ${result.fixedUnreviewed.length ? result.fixedUnreviewed.join("; ") : "none"}.
    "## Assumptions" — ${result.assumptions && result.assumptions.length ? result.assumptions.join("; ") : "none"}.
    "## For Bryan" — ${result.bryan.length ? result.bryan.join("; ") : "nothing"}.
    Screenshots for any visible UI change (attach via the artifact/upload path the repo uses, or describe if none).
@@ -766,22 +793,11 @@ if (!ship.ok) {
 result.pr = ship.pr;
 result.prUrl = ship.prUrl;
 
-// ---------------------------------------------------------------------------------------
-// 10. Post-ship review — /code-review once more on the pushed head
-// ---------------------------------------------------------------------------------------
-
-phase("Post-ship");
-
-const post = await run(
-  "post-review",
-  `Post-ship review of PR #${ship.pr} (${ship.prUrl}).
-${GROUP}
-${RULES}
-In ${WT}: \`git fetch origin && git status\` (must be clean and at origin/${BRANCH}). Invoke Skill "code-review" with args "--level high ${BRANCH}" — the branch target is required because the skill forks into the main checkout, not this worktree; discard any finding on a file outside \`git diff --name-only origin/master...HEAD\` in ${WT}. Run each finding past yourself as a skeptic (default: refuted unless the failure scenario reproduces by reading the code path). For every CONFIRMED finding: fix, test, format, commit with the trailers, then push (hook runs; same rules as before). Return {ok, commits:[…], notes:"findings confirmed / refuted, one line each"}.`,
-  { label: `post-review:${g.id}`, phase: "Post-ship", model: M.build, effort: "high", schema: S_FIX },
-  { commits: [], notes: "" }
-);
-result.postShip = post;
+// The post-ship stage (a second /code-review on the pushed head) is gone as of 2026-09-07:
+// it re-reviewed a diff the PR review had just cleared, its confirmed findings on J2 were the
+// ones the branch-diff filter had already surfaced to the orchestrator, and it is the agent
+// that woke on a late review result and reverted a hand commit (sweep doc, wave-3 lessons).
+// The orchestrator's merge-time pass covers the same ground.
 result.stage = "pr-open";
 log(`Group ${g.id}: PR #${ship.pr} open (${ship.prUrl}); auto-merge: ${ship.autoMerge}`);
 return result;
