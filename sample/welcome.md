@@ -10,13 +10,13 @@ Once Claude is connected (Settings → AI Assistant), open Claude Code from any 
 
 ## Annotations
 
-Tandem has five kinds of annotation, each with its own color in the margin and side panel:
+Tandem has three kinds of annotation, each with its own color in the margin and side panel:
 
 - **Highlights** — your color-coded marks (yellow, green, blue, pink) that flag text for attention.
 - **Notes** — private thoughts kept to yourself; your AI never reads them.
 - **Comments** — questions or remarks on a passage, shared with your AI.
-- **Suggestions** — a comment from your AI that proposes replacement text you can act on.
-- **Imported comments** — comments carried in from Word `.docx` files.
+
+Two variants are worth naming. A **suggestion** is a comment from your AI that also proposes replacement text you can accept in one click. An **imported comment** is a Word comment carried in from a `.docx` file; it arrives as a note, so it stays private until you promote it.
 
 Open the side panel to review any pending annotation, or switch on the margin view to see them anchored beside the text.
 
@@ -25,7 +25,7 @@ Open the side panel to review any pending annotation, or switch on the margin vi
 You choose how closely your AI participates:
 
 - **Tandem mode** — you and your AI work together live: it sees your comments and edits as you make them, and its annotations appear as it works.
-- **Solo mode** — write undisturbed. Your AI pauses and won't see the comments or edits you make until you switch back to Tandem.
+- **Solo mode** — write undisturbed. The comments and replies you write are held back and reach your AI only when you switch to Tandem. It is a one-way hold: your AI is told you are in Solo and asked to hold off, but it can still read the document.
 
 ## Try These
 
@@ -41,7 +41,7 @@ Tandem is built for keyboard-first work:
 - **New tab / scratchpad** (Ctrl+N) — open a fresh scratchpad; Tandem keeps every open file in its own tab.
 - **Find & replace** (Ctrl+F) — search the current document or across every open tab, with regex, case, and whole-word options.
 - **Outline panel** — navigate by heading and collapse whole sections to focus.
-- **Keyboard shortcuts** (Ctrl+,) — customize any shortcut, or press ? to see them all.
+- **Keyboard shortcuts** (Ctrl+,) — remap most shortcuts (text formatting, undo/redo and tab jumps are fixed), or press ? to see them all.
 
 Want to connect your AI? Open Settings → AI Assistant and use the setup wizard — one click writes Claude Code's connection settings, no API key needed. Restart Claude Code to pick them up, then type `/mcp` to verify — or just ask Claude to open a document. (Support for additional model providers is on the way.)
 
