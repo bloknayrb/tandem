@@ -293,7 +293,7 @@ Either way, click a card to expand it while it's selected, or click its chevron 
 The title bar includes a **Solo / Tandem** toggle (`Ctrl+Shift+M`). It holds work back in *both* directions — the AI's annotations are held from you, and your own comments are held from the AI.
 
 - **Tandem** (default) — the AI's annotations appear immediately as they arrive, and the comments and replies you write are visible to it.
-- **Solo** — the AI's pending annotations are held back from the document. Resolved annotations (accepted/dismissed) are always visible regardless of mode.
+- **Solo** — the AI's pending annotations are held back from the document. Resolved annotations (accepted/dismissed) are always visible regardless of mode. **Chat and document edits still work in both directions**: the AI can read the document, answer chat, and make edits, and your chat messages reach it. Solo holds annotations and replies, not the conversation.
 
 Since v0.19.0 the server, not the client, enforces the other direction: while you are in Solo, the comments and replies **you** author are withheld from the AI. Each held item shows an amber **Held** pill, and the status bar shows a running count of what is being withheld. Switching back to Tandem releases the whole set at once — the AI picks them up on its next check, and a one-time nudge wakes a push-connected session to look.
 
