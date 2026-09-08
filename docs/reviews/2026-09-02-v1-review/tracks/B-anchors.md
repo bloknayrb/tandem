@@ -50,6 +50,30 @@ fields change meaning), `security-reviewer` only if a new MCP error code or rout
 - `docs/architecture.md`'s coordinate-system section carries the paragraph-split caveat and
   ADR-032's "MCP errors switch on kind" is true or rewritten.
 
+## Planning notes (round 1 review)
+
+- **The wave table's "Read #1632, #1693 and #1737 first" is now answered.** #1632 (Accept button
+  stays live on an annotation that has lost its target, OPEN) is the downstream UI gate the specs
+  name as out of scope, and it constrains B only in that `anchor: "degraded"` from B-1764 is the
+  server signal it will eventually read. **#1693** (docx import: promoted-comment ghost via drift,
+  OPEN) is a `docx-comments.ts` / `docx-comment-export.ts` id-predicate defect in track D — it
+  shares no file with B's fix set except `docx-comment-export.ts`, which B touches only as a
+  `refreshRange` consumer (the `kind === "failed"` guard is unchanged; B-1764 records that a
+  collapsed annotation's exported coordinates change). It constrains nothing here. **#1737** (skill:
+  do not insert line breaks mid-paragraph) is CLOSED; it is relevant only because B-1766 now edits
+  `skills/tandem/SKILL.md`, so that file's `version` bump is on B's critical path.
+- **The group's `skill=false` flag is wrong.** B-1766 amends `skills/tandem/SKILL.md:182` (the
+  `HEADING_OVERLAP` recovery line becomes unfollowable once `tandem_edit` refuses an interior
+  overlap), which requires the frontmatter `version` bump (17 ⇒ 18) and the pinned literal in
+  `tests/skill-instruction-contract.test.ts:83` in the same commit. Treat the group as `skill=true`.
+- **File set added during round 1**, beyond what the first-pass specs named:
+  `src/server/mcp/awareness.ts` (stale docblock), `src/server/documents/watcher.ts` (three comment
+  blocks), `src/server/mcp/navigation.ts` (`findOccurrence` normalized fallback, #1622),
+  `skills/tandem/SKILL.md` + `tests/skill-instruction-contract.test.ts` (#1766),
+  `tests/server/rename-document.test.ts` and `tests/server/document-store.test.ts` (five
+  `listAnnotationsRefreshed` call sites), `tests/server/navigation-tools.test.ts`,
+  `docs/reviews/2026-09-02-v1-review/experiments/README.md`.
+
 ## Status
 
 _(empty)_
