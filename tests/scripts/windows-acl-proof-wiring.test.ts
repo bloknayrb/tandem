@@ -178,6 +178,20 @@ describe("windows-acl-proof CI wiring", () => {
       "`on.pull_request` has filters: a branch/path filter can exclude PRs to master while leaving this key in place",
     ).toBeNull();
   });
+
+  it("still triggers on the merge queue, unfiltered", () => {
+    // Since the switch from `strict: true` to a merge queue, the run that
+    // satisfies master's required checks is the `merge_group` one against the
+    // temporary queue branch, not the PR-time run. A workflow that does not fire
+    // there leaves this proof out of the decision that actually merges -- and it
+    // fails by HANGING (nothing reports, the PR is evicted on timeout), which
+    // reads as a platform problem rather than a missing trigger.
+    expect(Object.keys(workflow.on)).toContain("merge_group");
+    expect(
+      workflow.on.merge_group,
+      "`on.merge_group` has filters: a branch filter can exclude master's queue while leaving this key in place",
+    ).toBeNull();
+  });
 });
 
 describe("windows-acl-proof spec list", () => {

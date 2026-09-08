@@ -174,6 +174,24 @@ describe("acceptance-harness CI wiring", () => {
     ).toBeNull();
   });
 
+  it("still triggers on the merge queue, unfiltered", () => {
+    // Since the switch from `strict: true` to a merge queue, the PR-time run is
+    // no longer the last word: master's required checks are satisfied by the
+    // `merge_group` run against the temporary queue branch. A workflow that does
+    // not fire there leaves this gate out of the decision that actually merges.
+    //
+    // The failure is silent in the worst way. Nothing reports, so the PR does not
+    // go red -- it sits in the queue until GitHub evicts it on timeout, which
+    // reads as a platform problem. Same reasoning as the `pull_request` pin
+    // above, and the same "the key existing is not enough" caveat: a `branches:`
+    // filter here re-creates the hang for whatever it excludes.
+    expect(Object.keys(workflow.on)).toContain("merge_group");
+    expect(
+      workflow.on.merge_group,
+      "`on.merge_group` has filters: a branch filter can exclude master's queue while leaving this key in place",
+    ).toBeNull();
+  });
+
   it("fetches the tag the harness actually reads, unconditionally", () => {
     // The harness reads its immutable v9 baseline with
     // `git show <tag>:skills/tandem/SKILL.md`, and checkout@v6 is depth-1 and
