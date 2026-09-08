@@ -547,12 +547,24 @@ test("an armed bulk-confirm does not survive the bar unmounting (#1772)", async 
 
   // Drop the count to 1 the way Claude would — resolving one comment, not a
   // filter change. The whole bar unmounts, taking the confirm row with it.
+  //
+  // DISMISS, not accept (#1770): accepting is now the user's decision, so an
+  // MCP accept on Claude's own comment answers ACCEPT_REFUSED and the count
+  // never moves — which this spec would report as the #1772 bug it is watching
+  // for, because an armed bar hides `bulk-dismiss-btn` too. Dismiss is the
+  // transition Claude is still permitted, and drops the count identically.
   const annotations = (await mcp.callTool("tandem_getAnnotations", {})) as {
     data?: { annotations?: Array<{ id?: string }> };
   };
   const firstId = annotations?.data?.annotations?.[0]?.id as string;
   expect(firstId).toBeTruthy();
-  await mcp.callTool("tandem_resolveAnnotation", { id: firstId, action: "accept" });
+  const resolved = (await mcp.callTool("tandem_resolveAnnotation", {
+    id: firstId,
+    action: "dismiss",
+  })) as { error?: boolean };
+  // Assert the call landed. Without this the spec's own precondition is
+  // invisible: a refused resolve leaves two pending and reads as the bug.
+  expect(resolved?.error).toBeFalsy();
   await expect(bulkDismiss).not.toBeVisible({ timeout: 5_000 });
   await expect(confirm).not.toBeVisible({ timeout: 2_000 });
 
