@@ -4,6 +4,23 @@ on:
   push:
     branches: [master]
   pull_request:
+  # Merge queue. GitHub builds a temporary `gh-readonly-queue/master/...` branch
+  # holding master plus this PR plus everything queued ahead of it, and fires
+  # `merge_group` against it; the PR merges only if the required checks pass
+  # THERE. That is what replaced `strict: true` (require-branches-up-to-date),
+  # which forced a manual `gh pr update-branch` and a full re-run on every open
+  # PR each time any other one merged.
+  #
+  # **Without this trigger the queue does not fail — it HANGS.** No workflow runs
+  # on the merge group, the required checks never report, and each PR sits until
+  # the queue times out and evicts it. Fail-safe (nothing wrong merges) but
+  # totally opaque, and it looks like a GitHub outage rather than a missing
+  # trigger. `tests/scripts/acceptance-harness-wiring.test.ts` and
+  # `windows-acl-proof-wiring.test.ts` both pin this key for that reason.
+  #
+  # Unfiltered, like `pull_request:` above: a `branches:` filter here would
+  # re-create the hang for the branch it excludes.
+  merge_group:
   workflow_dispatch:
 
 # Least privilege for every job here (CodeQL `actions/missing-workflow-permissions`).
