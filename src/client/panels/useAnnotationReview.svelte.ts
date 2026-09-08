@@ -468,6 +468,24 @@ export interface UseAnnotationReviewParams {
   onUndoFailed?: (ann: Annotation, reason: UndoDeclineReason) => void;
 }
 
+/**
+ * The record to write when a resolution is UNDONE or reverted.
+ *
+ * `resolvedBy` (#1770) names who performed *this* resolution, so a record going
+ * back to `pending` must not keep one — both revert sites spread the SANITIZED
+ * record, and `resolvedBy` survives sanitize because #1770 added it to the
+ * allowlist. Leaving it behind is latent today (`undoable` is gated on the
+ * client-local `recentlyResolved` set, which only the user's own resolves
+ * populate, so a Claude-resolved record is never undoable from the UI) but it
+ * writes a self-contradictory record — pending, resolved by claude — into the
+ * CRDT, and `tandem_checkInbox`'s `userResponses` bucket filters on exactly that
+ * field.
+ */
+export function asPending(ann: Annotation): Annotation {
+  const { resolvedBy: _resolvedBy, ...rest } = ann;
+  return { ...rest, status: "pending" };
+}
+
 export interface UseAnnotationReviewReturn {
   resolveAnnotation: (id: string, status: "accepted" | "dismissed") => void;
   undoResolveAnnotation: (id: string) => boolean;
@@ -533,7 +551,7 @@ export function useAnnotationReview({
         const applied = applySuggestion(ann, editor, y, getFormat?.());
         if (!applied) {
           // Revert annotation status — text replacement failed
-          withBrowser(y, () => map.set(id, { ...ann, status: "pending" }));
+          withBrowser(y, () => map.set(id, asPending(ann)));
           onApplyFailed?.(ann);
           return;
         }
@@ -729,7 +747,7 @@ export function useAnnotationReview({
       }
     }
 
-    withBrowser(y, () => map.set(id, { ...ann, status: "pending" as const }));
+    withBrowser(y, () => map.set(id, asPending(ann)));
     removeFromResolved(id);
     if (lastResolvedId === id) {
       lastResolvedId = null;

@@ -22,6 +22,7 @@
  */
 
 import { cleanup, render, waitFor } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { _resetClientLog, readClientLog } from "../../src/client/utils/client-log";
@@ -316,8 +317,13 @@ describe("#1621 reading the key back", () => {
     // used to fire the POST in its own synchronous frame while the broadcast
     // `$effect` flushed on a microtask, so the request could reach the server
     // before the client's own CRDT write — which, against a route that VERIFIES
-    // rather than writes, is a 409. `setTandemMode` therefore defers past
-    // `tick()`. Red on master: the stub records the pre-write value.
+    // rather than writes, is a 409. `setTandemMode` therefore only ARMS the
+    // release and the broadcast `$effect` fires it after its own write lands.
+    // Red on master: the stub records the pre-write value.
+    //
+    // What this row records is the CLIENT's ctrl doc (`TandemModeHarness` has no
+    // server doc), so it pins effect-write-before-POST, not server-apply-before-
+    // POST — the server-side residual is what the 250 ms retry covers.
     //
     // Without this row every other named spec passes with a DOUBLY refused
     // release, and a doubly refused release leaves `heldInSolo` markers on disk
@@ -343,6 +349,56 @@ describe("#1621 reading the key back", () => {
 
     expect(roomAtPost).toEqual(["tandem"]);
     expect(distinctModeWarnings()).toEqual([]);
+  });
+
+  it("holds the release POST until the ctrl provider syncs, then issues exactly one (#1769)", async () => {
+    // The window a `tick()` deferral could not cover, and the reason the release
+    // rides the write instead of a timer. While `synced` is false the broadcast
+    // `$effect` early-returns without writing, so a POST issued "after tick()"
+    // reaches a room still holding the restored `solo` — both attempts answer
+    // 409 `MODE_NOT_TANDEM`, the held markers are never cleared, and the effect
+    // later writes `tandem` with no release behind it. Reachable at launch and
+    // on `authenticationFailed → scheduleRebuild → startBootstrap`, which resets
+    // `ctrlInitialSyncComplete`.
+    localStorage.setItem(TANDEM_MODE_KEY, "solo");
+    const client = new Y.Doc();
+    const roomAtPost: unknown[] = [];
+    fetchSpy.mockImplementation(async () => {
+      roomAtPost.push(modeOf(client));
+      return new Response("{}", { status: 200 });
+    });
+
+    const view = render<typeof TandemModeHarness>(TandemModeHarness, {
+      props: { doc: client, synced: false },
+    });
+
+    view.component.setMode("tandem");
+    await tick();
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    await view.rerender({ doc: client, synced: true });
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+
+    expect(roomAtPost).toEqual(["tandem"]);
+    expect(distinctModeWarnings()).toEqual([]);
+  });
+
+  it("disarms the pending release when the user returns to Solo before the sync (#1769)", async () => {
+    // The flag is ASSIGNED, not or-ed, so a Solo→Tandem→Solo sequence inside the
+    // unsynced window releases nothing. Or-ing would fire a release for a user
+    // who is still in Solo — the exact privacy inversion #1769 is about.
+    localStorage.setItem(TANDEM_MODE_KEY, "solo");
+    const client = new Y.Doc();
+    const view = render<typeof TandemModeHarness>(TandemModeHarness, {
+      props: { doc: client, synced: false },
+    });
+
+    view.component.setMode("tandem");
+    view.component.setMode("solo");
+    await view.rerender({ doc: client, synced: true });
+    await waitFor(() => expect(modeOf(client)).toBe("solo"));
+
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("reports from the LOSING side of a genuine concurrent tie", async () => {

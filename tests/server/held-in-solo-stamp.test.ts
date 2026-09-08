@@ -205,6 +205,18 @@ describe("the server-side heldInSolo stamp (#1769)", () => {
     browserWrite(() => annMap().set("s1", userComment("s1")));
     expect(rec("s1").heldInSolo).toBe(true);
 
+    // A CONTROL record, and the row is vacuous without it. Written while the
+    // room reads Tandem, so the stamp declines and `hideFromAI` has nothing to
+    // withhold under `indeterminate`. Asserting only "s1 is absent" passes on an
+    // empty payload — which is exactly how this row shipped green while reading
+    // the wrong nesting (`payload.userActions` rather than `payload.data.*`) and
+    // the wrong key (`annotationId`; the bucket items are `Annotation &
+    // { textSnippet }`, keyed `id`). Both lookups were `undefined`, `ids` was
+    // always `[]`, and `not.toContain` could never fail.
+    setCtrlMode("tandem");
+    browserWrite(() => annMap().set("t1", userComment("t1")));
+    expect(rec("t1").heldInSolo).toBeUndefined();
+
     // The restart: the ctrl session is lost, so the mode key is absent and
     // `readModeState()` reads `indeterminate` — where only MARKED records are
     // withheld. Driven through the REGISTERED handler, never a reimplemented
@@ -224,10 +236,14 @@ describe("the server-side heldInSolo stamp (#1769)", () => {
     const content = result.content as Array<{ type: string; text?: string }>;
     const payload = JSON.parse(content.find((c) => c.type === "text")?.text ?? "{}");
 
+    // `mcpSuccess` wraps as `{ error: false, data }`, so the buckets are one
+    // level down — the sibling `mcp-tool-integration.test.ts` reads `parsed.data.*`.
+    expect(payload.error).toBe(false);
     const ids = [
-      ...(payload.userActions ?? []).map((a: { annotationId?: string }) => a.annotationId),
-      ...(payload.userResponses ?? []).map((a: { annotationId?: string }) => a.annotationId),
+      ...(payload.data?.userActions ?? []).map((a: { id?: string }) => a.id),
+      ...(payload.data?.userResponses ?? []).map((a: { id?: string }) => a.id),
     ];
+    expect(ids).toContain("t1");
     expect(ids).not.toContain("s1");
 
     await mcpClient.close();

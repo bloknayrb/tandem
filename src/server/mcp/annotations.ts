@@ -388,10 +388,13 @@ export function registerAnnotationTools(server: McpServer): void {
     "tandem_getAnnotations",
     {
       description:
-        "Read annotations, optionally filtered by author/type/status. User notes are always excluded — they are private (ADR-027); notesExcluded reports how many were filtered, including imported Word comments awaiting user promotion (promoted ones surface as user comments). For new user actions, prefer tandem_checkInbox.",
+        'Read annotations, optionally filtered by author/type/status. User notes are always excluded — they are private (ADR-027); notesExcluded reports how many were filtered, including imported Word comments awaiting user promotion (promoted ones surface as user comments). Every record whose stored audience is not outbound is excluded too and counted in privateExcluded (#1619/#1710) — user highlights are always private, so type: "highlight" returns nothing. For new user actions, prefer tandem_checkInbox.',
       inputSchema: {
         author: AuthorSchema.optional().describe("Filter by author"),
-        type: z.enum(["highlight", "comment"]).optional().describe("Filter by type"),
+        type: z
+          .enum(["highlight", "comment"])
+          .optional()
+          .describe('Filter by type ("highlight" always returns nothing — highlights are private)'),
         status: AnnotationStatusSchema.optional().describe("Filter by status"),
         documentId: z
           .string()
@@ -457,11 +460,15 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_resolveAnnotation",
-    "Move a pending annotation to accepted or dismissed. Claude may dismiss (withdraw) " +
-      "its OWN annotations; accept is the user's decision and is refused here. Accepting a " +
-      "user-authored comment never applies text, so one carrying suggestedText is refused " +
-      "too. Only pending annotations can transition, and private notes and comments cannot " +
-      "be transitioned at all (ADR-027). The record is kept either way — use " +
+    "Move a pending annotation to accepted or dismissed. Dismiss is open to every non-private " +
+      "record, and dismissing Claude's OWN annotation is how Claude withdraws a finding. Accept " +
+      "is refused (ACCEPT_REFUSED) on Claude's own annotation — that decision is the user's — " +
+      "and on anything carrying suggestedText, because an MCP accept flips the status and " +
+      "applies no text. Accept on a user-authored or imported comment with no suggestedText " +
+      'does go through; it is stamped resolvedBy: "claude" and is kept out of the ' +
+      "tandem_checkInbox userResponses bucket, so it never reads back as the user's decision. " +
+      "Only pending annotations can transition, and private notes and comments cannot be " +
+      "transitioned at all (ADR-027). The record is kept either way — use " +
       "tandem_removeAnnotation to delete it.",
     {
       id: z.string().describe("Annotation ID"),
@@ -564,7 +571,7 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_editAnnotation",
-    "Edit the content of an existing annotation. Use newText to update replacement text, reason/content for the comment body.",
+    "Edit the content of an annotation Claude authored. Use newText to update replacement text, reason/content for the comment body. Only pending annotations can be edited, and a user-authored or imported record is refused with NOT_OWNED (#1770) — private notes and private comments are refused ahead of that (ADR-027).",
     {
       id: z.string().describe("Annotation ID"),
       content: z.string().optional().describe("New comment text"),
@@ -920,7 +927,11 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_annotationReply",
-    "Reply to an annotation thread. Only works on pending annotations.",
+    "Reply to a thread on an annotation Claude authored. Only works on pending annotations. " +
+      "A user-authored or imported record — including a promoted note or Word comment, which is " +
+      "stored as a user comment — is refused with NOT_OWNED (#1770); answer in chat with " +
+      "tandem_reply, or leave a fresh tandem_comment. Private notes and private comments are " +
+      "refused ahead of that (ADR-027).",
     {
       annotationId: z.string().describe("The annotation ID to reply to"),
       text: z.string().describe("Reply text"),

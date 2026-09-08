@@ -1,10 +1,15 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { render } from "@testing-library/svelte";
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { Editor } from "@tiptap/core";
 import { describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions.js";
-import { useAnnotationReview } from "../../src/client/panels/useAnnotationReview.svelte.js";
+import {
+  asPending,
+  useAnnotationReview,
+} from "../../src/client/panels/useAnnotationReview.svelte.js";
 import UseAnnotationReviewHarness from "../../src/client/svelte-harness/UseAnnotationReviewHarness.svelte";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
@@ -228,5 +233,57 @@ describe("useAnnotationReview — onApplyFailed (B2)", () => {
 
     expect(onApplyFailed).not.toHaveBeenCalled();
     expect((map.get(ann.id) as Annotation).status).toBe("accepted");
+  });
+});
+
+describe("asPending — a reverted record carries no resolver (#1770)", () => {
+  // `resolvedBy` names who performed THIS resolution, so a record going back to
+  // `pending` must not keep one. Both client revert writes spread the SANITIZED
+  // record and `resolvedBy` survives sanitize (#1770 added it to the allowlist),
+  // so without the strip the CRDT holds a self-contradictory `{pending, claude}`
+  // — the exact field `tandem_checkInbox`'s `userResponses` bucket filters on.
+  it("drops resolvedBy and sets status to pending", () => {
+    const resolved: Annotation = {
+      ...makeAnnotation({ author: "claude" }),
+      status: "dismissed",
+      resolvedBy: "claude",
+    };
+
+    const reverted = asPending(resolved);
+
+    expect(reverted.status).toBe("pending");
+    expect("resolvedBy" in reverted).toBe(false);
+    // Everything else survives — this is a targeted strip, not a rebuild.
+    expect(reverted.id).toBe(resolved.id);
+    expect(reverted.author).toBe("claude");
+  });
+
+  it("leaves a record that never carried one unchanged apart from status", () => {
+    const resolved: Annotation = { ...makeAnnotation({ author: "claude" }), status: "accepted" };
+
+    expect(asPending(resolved)).toEqual({ ...resolved, status: "pending" });
+  });
+
+  // Pins the CALL SITES, not just the helper: a unit test of `asPending` says
+  // nothing about anyone using it, and the two revert writes are the whole
+  // point. Source-scanned because both sit behind a ProseMirror chain that a
+  // unit test cannot reach without a live editor.
+  it("is what both revert writes use", () => {
+    const source = readFileSync(
+      join(
+        import.meta.dirname,
+        "..",
+        "..",
+        "src",
+        "client",
+        "panels",
+        "useAnnotationReview.svelte.ts",
+      ),
+      "utf8",
+    );
+
+    expect(source.match(/map\.set\(id, asPending\(ann\)\)/g)).toHaveLength(2);
+    // No revert write may rebuild the record inline and re-introduce the field.
+    expect(source).not.toMatch(/map\.set\(id, \{ \.\.\.ann, status: "pending"/);
   });
 });

@@ -1,4 +1,3 @@
-import { tick } from "svelte";
 import * as Y from "yjs";
 import { API_MODE_RELEASE } from "../../shared/api-paths.js";
 import {
@@ -28,8 +27,8 @@ const RELEASE_RETRY_MS = 250;
  *
  * Since #1769 the route no longer WRITES the mode key — it verifies the room
  * already reads Tandem and answers 409 `MODE_NOT_TANDEM` otherwise. So this POST
- * is deferred past `tick()` by `setTandemMode`, letting the broadcast `$effect`
- * write `Y_MAP_MODE` first, and a `MODE_NOT_TANDEM` 409 gets ONE delayed retry
+ * is armed by `setTandemMode` and fired by the broadcast `$effect` once its
+ * `Y_MAP_MODE` write has landed, and a `MODE_NOT_TANDEM` 409 gets ONE delayed retry
  * (250 ms) to cover the residual where the server-side apply of that CRDT frame
  * is still in flight. A second refusal is definitive-enough to log and stop: the
  * items stay held AND marked, and the next Solo→Tandem toggle releases them.
@@ -168,6 +167,29 @@ export function createTandemModeBroadcast(
    */
   let lastBroadcast: TandemMode | null = null;
 
+  /**
+   * Set by `setTandemMode` on a Solo→Tandem toggle, consumed by the broadcast
+   * `$effect` immediately after the `Y_MAP_MODE` write lands.
+   *
+   * A `tick()` deferral was here first, and it was wrong on a reachable path:
+   * `tick()` guarantees Svelte has flushed, not that the effect WROTE. The
+   * effect early-returns while the ctrl provider is unsynced (launch, and the
+   * `authenticationFailed → scheduleRebuild → startBootstrap` path after a
+   * server restart, which resets `ctrlInitialSyncComplete`), so the POST went
+   * out against a room still reading the restored `solo`/`indeterminate`, both
+   * attempts answered 409, and when sync finally landed the effect wrote
+   * `tandem` with no release behind it — held markers, `Held` pills and the
+   * StatusBar count stuck until the user cycled the toggle again. Firing from
+   * the point that knows the write happened covers that window and subsumes the
+   * `tick()` case, whose whole purpose was "after the effect".
+   *
+   * Plain `let`, not `$state`, for the same reason `lastBroadcast` is: it is
+   * read and written only from non-reactive positions, and the effect body
+   * issues a `fetch` rather than writing a rune, so no `state_unsafe_mutation`
+   * exposure. A Tandem→Solo toggle before the write lands clears it.
+   */
+  let pendingRelease = false;
+
   // Persist tandem mode to localStorage
   $effect(() => {
     const mode = tandemMode;
@@ -233,6 +255,11 @@ export function createTandemModeBroadcast(
       const awareness = bootstrapYdoc.getMap(Y_MAP_USER_AWARENESS);
       withBrowser(bootstrapYdoc, () => awareness.set(Y_MAP_MODE, mode));
       lastBroadcast = mode;
+      // #1769: the release POST rides the write, not a timer. See `pendingRelease`.
+      if (pendingRelease && mode === "tandem") {
+        pendingRelease = false;
+        void triggerSoloRelease();
+      }
     } catch (err) {
       console.warn("[tandem] failed to broadcast tandem mode to Y.Map:", err);
     }
@@ -334,14 +361,13 @@ export function createTandemModeBroadcast(
       tandemMode = mode;
       // WS-A2: leaving Solo releases everything held while in Solo.
       //
-      // Deferred past `tick()` so the broadcast `$effect` above has flushed its
-      // `Y_MAP_MODE` write before the POST is issued (#1769): the route now
-      // VERIFIES the room rather than writing it, so issuing the POST in this
-      // synchronous frame would race the client's own CRDT write and take the
-      // 409 path on the primary flow.
-      if (shouldReleaseSolo(prev, mode)) {
-        void tick().then(() => triggerSoloRelease());
-      }
+      // Armed here, fired by the broadcast `$effect` once the `Y_MAP_MODE`
+      // write actually lands (#1769): the route now VERIFIES the room rather
+      // than writing it, so a POST issued before that write — in this frame, or
+      // past a `tick()` while the ctrl provider is still unsynced — takes the
+      // 409 path and releases nothing. Assigned rather than or-ed, so a
+      // Tandem→Solo toggle in the same unsynced window disarms it.
+      pendingRelease = shouldReleaseSolo(prev, mode);
     },
   };
 }

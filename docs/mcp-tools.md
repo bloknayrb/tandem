@@ -643,7 +643,7 @@ Since [#1619](https://github.com/bloknayrb/tandem/issues/1619)/[#1710](https://g
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `author` | enum | no | `user`, `claude`, or `import` |
-| `type` | enum | no | `highlight`, `comment` (Claude-authored, outbound highlights only; user highlights are private — ADR-027) |
+| `type` | enum | no | `highlight`, `comment` — `highlight` returns nothing: every highlight is stamped `audience: "private"` (ADR-027) and `tandem_highlight` is a deprecated stub, so no outbound highlight exists to return |
 | `status` | enum | no | `pending`, `accepted`, `dismissed` |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
@@ -675,8 +675,8 @@ Since [#1619](https://github.com/bloknayrb/tandem/issues/1619)/[#1710](https://g
 
 ### tandem_resolveAnnotation
 
-Withdraw one of Claude's own annotations, or record a dismissal. **Accept is the
-user's decision and is refused here** (#1770).
+Withdraw one of Claude's own annotations, or record a dismissal. **Accepting
+Claude's own work is the user's decision and is refused here** (#1770).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -703,8 +703,12 @@ party who can agree to Claude's proposal is the user. Two cases are refused with
   editor, or via `tandem_applyChanges`. Accepting one over MCP would leave the
   document unchanged while the card claimed the suggestion had been taken.
 
-Dismissing a **user-authored** comment remains allowed: it closes a thread rather
-than claiming agreement. That, too, is stamped `resolvedBy: "claude"`.
+Everything else goes through. Dismissing a **user-authored** comment closes a
+thread rather than claiming agreement, and **accepting** one that carries no
+`suggestedText` is permitted too — there is no proposal of Claude's to agree to,
+and it is the only way an imported Word comment can be closed over MCP. Both are
+stamped `resolvedBy: "claude"` and both stay out of `userResponses`, so the
+record never reads back as the user's own decision.
 
 ---
 
@@ -726,7 +730,7 @@ Delete an annotation permanently.
 
 ### tandem_editAnnotation
 
-Edit the content of an existing annotation. Only pending annotations can be edited.
+Edit the content of an annotation Claude authored. Only pending annotations can be edited; a user-authored or imported record returns `NOT_OWNED` (#1770).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -766,7 +770,7 @@ tandem_editAnnotation({
 
 ### tandem_annotationReply
 
-Reply to an annotation thread. Only works on pending annotations.
+Reply to a thread on an annotation Claude authored. Only works on pending annotations; a user-authored or imported parent — including a promoted note or Word comment, stored as a user comment — returns `NOT_OWNED` (#1770).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|

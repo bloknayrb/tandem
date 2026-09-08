@@ -49,9 +49,22 @@ import { nextRev } from "./schema.js";
  * as one.
  *
  * The mode test is `!== "tandem"`, matching the reply stamp — so a comment
- * created while the mode key is ABSENT is stamped. The cost: such a comment
- * keeps its `Held` pill and is withheld under every later `indeterminate` until
- * a Solo→Tandem toggle clears it (only `POST /api/mode/release` clears).
+ * created while the mode key is ABSENT is stamped. That is the fail-closed
+ * direction on purpose: during `indeterminate` the server cannot know what the
+ * user's window believes, and an UNmarked comment created in that window is the
+ * #1769 hole itself (delivered after the next restart). The cost is the mirror
+ * case — a comment created in the gap between the doc room connecting and the
+ * client's `Y_MAP_MODE` broadcast landing is marked even though the user was in
+ * Tandem, and it keeps its `Held` pill and is withheld under every later
+ * `indeterminate`.
+ *
+ * **The escape hatch is a Solo→Tandem edge, and it is reachable from either
+ * side** — `POST /api/mode/release` is the only clearer and since #1769 it
+ * refuses unless the room already reads `tandem`, so a user sitting in Tandem
+ * with a false pill clears it by toggling Solo and back (the client's broadcast
+ * writes the key, the release rides that write). What has NO clearer is the
+ * state where the room never reaches `tandem` at all; that is not a stuck
+ * marker, it is a user who has not left Solo.
  *
  * A `null` transaction origin is skipped too. A browser write reaches the server
  * with the Hocuspocus `Connection` object as origin, so null here is a restore
