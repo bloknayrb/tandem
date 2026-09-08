@@ -130,7 +130,7 @@ let annotationText = $state("");
 // Deliberately a plain `let`, NOT `$state` (#1777 item 4). Nothing reactive
 // reads this cell — no `$derived`, no template expression, only the three
 // action handlers and the `!capturedRange` guard below — and the `transaction`
-// subscriber that maps it through remote edits writes it from a Tiptap
+// subscriber that carries it through doc changes writes it from a Tiptap
 // callback, which is exactly the shape that throws `state_unsafe_mutation`
 // while a `$state` cell. One consequence: the `showPopup` effect below no
 // longer re-runs when `capturedRange` is cleared; the outcome is unchanged
@@ -782,12 +782,14 @@ $effect(() => {
   const onTx = ({ transaction }: { transaction: Transaction }) => {
     if (!capturedRange || !transaction.docChanged) return;
     if (transaction.getMeta(ySyncPluginKey)) {
+      // Taken even when the restored selection is COLLAPSED, which is what a
+      // deletion of the annotated passage looks like. Adopting it is the safe
+      // move: the range stays in valid coordinates for the new doc, and
+      // `createAnnotation` refuses it, so the submit handlers' keep-the-draft
+      // arm runs. Holding the pre-edit range instead would leave positions
+      // pointing past the end of a shrunken document.
       const { from, to } = ed.state.selection;
-      // A collapsed restored selection means the annotated passage itself was
-      // deleted; keep the dead range so `createAnnotation` refuses it and the
-      // submit handlers' keep-the-draft arm runs, rather than silently
-      // re-pointing the annotation at a caret.
-      if (from !== to) capturedRange = { from, to };
+      capturedRange = { from, to };
       return;
     }
     const from = transaction.mapping.map(capturedRange.from, 1);
@@ -998,8 +1000,8 @@ function submitAsComment() {
     // here: no-editor/no-ydoc is gated by `canAnnotate` upstream of
     // `showPopup`, and empty content by this function's own early return. The
     // THIRD — a collapsed range — became reachable with #1777 item 4: the
-    // captured range is now mapped through remote edits, so a passage deleted
-    // by Claude or a co-editor mid-compose collapses it. The `else` arm below
+    // captured range now follows remote edits, so a passage deleted by Claude
+    // or a co-editor mid-compose collapses it. The `else` arm below
     // is that case, and it must keep the draft rather than silently dropping it.
     window.dispatchEvent(new CustomEvent("tandem:addressed-ai", { detail: { via: "comment" } }));
     dismissPopup();
