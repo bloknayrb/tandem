@@ -1385,6 +1385,12 @@ describe("MCP tool integration — awareness tools", () => {
     expect(empty.error).toBe(false);
     expect(empty.data.active).toBe(false);
     expect(empty.data.cursor).toBe(null);
+    // `isTyping` is present on BOTH branches, and the assertion is `toBe(false)`
+    // rather than a falsy check on purpose: this branch used to omit the field
+    // entirely, which every `if (!isTyping)` read tolerated and every
+    // `=== false` / `typeof` read did not. A falsy assertion here would pass
+    // against the omission it exists to prevent.
+    expect(empty.data.isTyping).toBe(false);
 
     // **And the `documentId` argument must still route.** The handler was
     // repointed from a hand-rolled `getCurrentDoc(documentId)` +

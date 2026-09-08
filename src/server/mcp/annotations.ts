@@ -516,8 +516,17 @@ export function registerAnnotationTools(server: McpServer): void {
         default: {
           // A new `LifecycleResult` arm errors HERE, naming it — the shape the
           // remove switch uses, for the same reason.
+          //
+          // `INTERNAL_ERROR`, not `INTERNAL`: the two are different strings on
+          // the wire, and MCP's own catch-all is `INTERNAL_ERROR`
+          // (`response.ts:118`). `INTERNAL` is the `/api` surface's code
+          // (`routes/_shared.ts`) and stays there — these two sites had it by
+          // accident, which gave the MCP surface two codes for one condition.
           const unhandled: never = result;
-          return mcpError("INTERNAL", `unhandled resolve outcome: ${JSON.stringify(unhandled)}`);
+          return mcpError(
+            "INTERNAL_ERROR",
+            `unhandled resolve outcome: ${JSON.stringify(unhandled)}`,
+          );
         }
       }
     }),
@@ -563,7 +572,10 @@ export function registerAnnotationTools(server: McpServer): void {
           // never mentions the arm or this switch, and whose obvious fix is a
           // generic `default` that swallows it.
           const unhandled: never = result;
-          return mcpError("INTERNAL", `unhandled remove outcome: ${JSON.stringify(unhandled)}`);
+          return mcpError(
+            "INTERNAL_ERROR",
+            `unhandled remove outcome: ${JSON.stringify(unhandled)}`,
+          );
         }
       }
     }),

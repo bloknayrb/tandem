@@ -274,11 +274,15 @@ export function finalizeClaudeChatMessage(id: string): void {
 export function registerAwarenessTools(server: McpServer): void {
   server.tool(
     "tandem_getActivity",
-    "Report whether the user is currently typing (`isTyping`), where their cursor and selection " +
-      "are, and which document they are in. Call it before annotating or editing near the " +
-      "user's cursor — annotating text someone is mid-sentence on is disruptive, and the range " +
-      "is likely to move under you. Returns presence only; it does not return document content " +
-      "or pending user messages (use tandem_checkInbox for those).",
+    "Report whether the user is currently typing (`isTyping`) and where their cursor is, in " +
+      "the target document. Call it before annotating or editing near the user's cursor — " +
+      "annotating text someone is mid-sentence on is disruptive, and the range is likely to " +
+      "move under you. Returns four fields — `active`, `isTyping`, `cursor`, `lastEdit` — and " +
+      "no selection: use tandem_checkInbox's `activity.selectedText` for what the user has " +
+      "selected. " +
+      "`cursor` is a ProseMirror position, not a flat offset (#1776). Returns presence only; " +
+      "it does not return document content or pending user messages (use tandem_checkInbox " +
+      "for those).",
     {
       documentId: z
         .string()
@@ -292,8 +296,15 @@ export function registerAwarenessTools(server: McpServer): void {
       const { activity } = store.getUserAwareness();
 
       if (!activity) {
+        // `isTyping` is present on BOTH branches. The tool description names it
+        // as the headline field, and a caller reading `data.isTyping` on the
+        // no-activity branch used to get `undefined` — falsy, so the common
+        // `if (!isTyping)` read happened to work, and a `typeof` or a strict
+        // `=== false` check silently did not. Never seen: awareness is absent
+        // only before the first client write.
         return mcpSuccess({
           active: false,
+          isTyping: false,
           cursor: null,
           lastEdit: null,
           message: "No activity detected",

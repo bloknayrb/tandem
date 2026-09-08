@@ -465,7 +465,7 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_open",
-    "Open a file in the Tandem editor; returns a documentId. Auto-opens the editor. force=true reloads from disk if the file changed externally.",
+    "Open a file in the Tandem editor as a new tab; returns a documentId. Does NOT launch or focus the editor — #477 removed browser auto-open, and nothing here reaches the desktop window's `show_main_window`; the user sees the tab when they next look at an editor that is already running. force=true reloads from disk if the file changed externally.",
     {
       filePath: z.string().describe("Absolute path to the file to open"),
       force: z
