@@ -39,6 +39,10 @@ function apply(): void {
 }
 
 function handleKeyDown(event: KeyboardEvent): void {
+  // An IME candidate-confirm Enter must not submit (#1777 item 3). Safari and
+  // some IMEs deliver that keydown with `isComposing` already false, so the
+  // legacy `keyCode === 229` sentinel is the second term.
+  if (event.isComposing || event.keyCode === 229) return;
   if (event.key === "Enter") {
     event.preventDefault();
     event.stopPropagation();

@@ -146,9 +146,10 @@ export function matchShortcut(
 
   const mod = e.ctrlKey || e.metaKey;
 
-  // "?" → toggle help. Legacy outermost handler had NO modifier gate; preserve
-  // that so Ctrl+Shift+/ (which produces e.key === "?" on US layouts) still
-  // routes to help. The Option+t-produces-"†" negative regression guard works
+  // "?" → toggle help. The outermost handler has NO modifier gate, so
+  // Ctrl+Shift+/ (which produces e.key === "?" on US layouts) still routes to
+  // help. This branch is deliberately left ungated by #1777: "?" is a
+  // character, not a chord, and no AltGr layout produces it from a dead key. The Option+t-produces-"†" negative regression guard works
   // because e.key === "†" doesn't match "?" — the matcher reads e.key, not a
   // character-class.
   if (e.key === "?") {
@@ -156,22 +157,29 @@ export function matchShortcut(
   }
 
   // ---- ctrl/meta block ----------------------------------------------------
-  // Faithful to the legacy else-if chain ordering. Most legacy branches did NOT
-  // gate on altKey or shiftKey — only KeyA (select-all), the explicit Shift+M
-  // (toggle-mode), and Shift+P (toggle-palette) had explicit modifier gates.
-  // Preserving the no-gate semantics keeps shortcuts like Ctrl+Alt+S → save
-  // unchanged from the original (intentional or not), so the existing E2E
-  // suite still passes.
+  // Faithful to the legacy else-if chain ORDERING, but every branch here now
+  // carries an explicit alt gate (#1777 item 2). Windows and Linux deliver
+  // AltGr as `ctrlKey && altKey`, so on pl/ro/cs/de layouts the ungated
+  // branches claimed and swallowed ordinary characters — Ctrl+Alt+S (ś),
+  // Ctrl+Alt+N (ń), Ctrl+Alt+O (ó), Ctrl+Alt+Digit ({, }, …) all fired app
+  // shortcuts instead of typing a letter, which contradicts the
+  // layout-independence guarantees in this file's header.
+  //
+  // The three DELIBERATE Ctrl+Alt chords keep their `e.altKey` requirement and
+  // must not be gated: reopen-closed-tab (Alt+KeyT), comment-on-selection
+  // (Alt+KeyM) and toggle-authorship (Alt+KeyA). AltGr+T/M/A therefore remain
+  // live collisions on those layouts — distinguishing a real Ctrl+Alt press
+  // from AltGr via `getModifierState("AltGraph")` is out of scope for #1777.
   if (mod) {
     // Ctrl+, → Settings (the single consolidated modal). Rejects shift so the
-    // shifted form is left unbound. Legacy `isSettingsShortcut`: rejects shift.
-    if (!e.shiftKey && e.code === "Comma") {
+    // shifted form is left unbound, and alt since #1777.
+    if (!e.altKey && !e.shiftKey && e.code === "Comma") {
       if (!isOverridden("settings", overrides)) return { id: "settings" };
     }
 
-    // Ctrl+/ → toggle help. (Layout-stable; appears in the legacy chain after
-    // the Comma branches, before KeyW/KeyO etc.)
-    if (e.key === "/") {
+    // Ctrl+/ → toggle help. (Layout-stable; appears in the chain after the
+    // Comma branches, before KeyW/KeyO etc.) `!altKey` since #1777.
+    if (!e.altKey && e.key === "/") {
       return { id: "toggle-help" };
     }
 
@@ -183,14 +191,15 @@ export function matchShortcut(
     }
 
     // Ctrl+Shift+S → Save As… (scratchpad promotion). Checked before plain
-    // Ctrl+S so the shift-bearing combo wins. `!altKey` so Ctrl+Shift+Alt+S
-    // falls through to the ungated save branch (legacy behavior).
+    // Ctrl+S so the shift-bearing combo wins. `!altKey` here and on `save`
+    // below means Ctrl+Shift+Alt+S now matches nothing at all (#1777 item 2);
+    // it used to fall through to the then-ungated save branch.
     if (e.shiftKey && !e.altKey && e.code === "KeyS") {
       if (!isOverridden("save-as", overrides)) return { id: "save-as" };
     }
 
-    // Ctrl+S → save. Legacy: no modifier gate.
-    if (e.code === "KeyS") {
+    // Ctrl+S → save. `!altKey` since #1777 (AltGr ś).
+    if (!e.altKey && e.code === "KeyS") {
       if (!isOverridden("save", overrides)) return { id: "save" };
     }
 
@@ -205,28 +214,28 @@ export function matchShortcut(
       if (!isOverridden("toggle-source-view", overrides)) return { id: "toggle-source-view" };
     }
 
-    // Ctrl+Shift+P → toggle palette. Legacy: `shiftKey && KeyP`, no alt gate.
-    if (e.shiftKey && e.code === "KeyP") {
+    // Ctrl+Shift+P → toggle palette. `!altKey` since #1777.
+    if (!e.altKey && e.shiftKey && e.code === "KeyP") {
       if (!isOverridden("toggle-palette", overrides)) return { id: "toggle-palette" };
     }
 
-    // Ctrl+N → new scratchpad. Legacy: no modifier gate.
-    if (e.code === "KeyN") {
+    // Ctrl+N → new scratchpad. `!altKey` since #1777 (AltGr ń).
+    if (!e.altKey && e.code === "KeyN") {
       if (!isOverridden("new-scratchpad", overrides)) return { id: "new-scratchpad" };
     }
 
-    // Ctrl+W → close active tab. Legacy: no modifier gate.
-    if (e.code === "KeyW") {
+    // Ctrl+W → close active tab. `!altKey` since #1777.
+    if (!e.altKey && e.code === "KeyW") {
       if (!isOverridden("close-tab", overrides)) return { id: "close-tab" };
     }
 
-    // Ctrl+O → open file dialog. Legacy: no modifier gate.
-    if (e.code === "KeyO") {
+    // Ctrl+O → open file dialog. `!altKey` since #1777 (AltGr ó).
+    if (!e.altKey && e.code === "KeyO") {
       if (!isOverridden("open-file", overrides)) return { id: "open-file" };
     }
 
-    // Ctrl+Digit[1-9] → pick tab. Legacy: no modifier gate.
-    if (/^Digit[1-9]$/.test(e.code)) {
+    // Ctrl+Digit[1-9] → pick tab. `!altKey` since #1777 (AltGr {, }, …).
+    if (!e.altKey && /^Digit[1-9]$/.test(e.code)) {
       return {
         id: "pick-tab",
         context: { tabIndex: Number(e.code.slice(5)) },
@@ -251,19 +260,21 @@ export function matchShortcut(
       if (!isOverridden("new-tab-menu", overrides)) return { id: "new-tab-menu" };
     }
 
-    // Ctrl+F / Ctrl+Shift+F → find. Legacy outer if: no alt gate.
-    if (e.code === "KeyF") {
+    // Ctrl+F / Ctrl+Shift+F → find. `!altKey` since #1777, so Ctrl+Alt+F and
+    // Ctrl+Alt+Shift+F become user-bindable.
+    if (!e.altKey && e.code === "KeyF") {
       return { id: "find", context: { shift: e.shiftKey } };
     }
 
-    // Ctrl+G / Ctrl+Shift+G → find-nav. Legacy: no alt gate.
-    if (e.code === "KeyG") {
+    // Ctrl+G / Ctrl+Shift+G → find-nav. `!altKey` since #1777, so Ctrl+Alt+G
+    // and Ctrl+Alt+Shift+G become user-bindable.
+    if (!e.altKey && e.code === "KeyG") {
       return { id: "find-nav", context: { shift: e.shiftKey } };
     }
 
-    // Ctrl+Enter / Ctrl+Shift+Enter → accept / dismiss. Legacy: no alt gate.
+    // Ctrl+Enter / Ctrl+Shift+Enter → accept / dismiss. `!altKey` since #1777.
     // `e.key === "Enter"` is layout-stable so we don't need e.code here.
-    if (e.key === "Enter") {
+    if (!e.altKey && e.key === "Enter") {
       return {
         id: "annotation-accept-or-dismiss",
         context: { shift: e.shiftKey },

@@ -381,12 +381,50 @@ test("Ctrl+Enter accepts the first pending annotation", async ({ page }) => {
     0,
   );
 
+  // Put focus on the rail card, which is the path #1777 fix (1) preserves.
+  // Editor.svelte autofocuses ProseMirror, and `switchToAnnotationsTab` returns
+  // silently when there is no tab to click, so without this the caret can still
+  // be in the editor — where Ctrl+Enter is now a hard break and nothing else.
+  await card.focus();
   await page.keyboard.press("Control+Enter");
 
   // After accept, the card moves into the collapsed "resolved" details section.
   await expect(page.locator("summary", { hasText: "1 resolved" })).toBeVisible({
     timeout: 5_000,
   });
+});
+
+test("Ctrl+Enter in the editor inserts a break and does NOT accept (#1777)", async ({ page }) => {
+  // The discriminating case for fix (1). Tiptap's HardBreak claims Mod-Enter on
+  // the .ProseMirror node and preventDefault()s it before App's window listener
+  // runs, so without `if (e.defaultPrevented) return;` one keystroke inserted a
+  // break AND accepted the first pending annotation.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: 2,
+    to: 15,
+    text: "Do not accept me from the editor",
+    textSnapshot: "Test Document",
+  });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+
+  const card = page.locator("[data-testid^='annotation-card-']").first();
+  await expect(card).toBeVisible({ timeout: 10_000 });
+
+  const editor = page.locator(".ProseMirror");
+  await editor.click();
+  const breaksBefore = await editor.locator("br").count();
+
+  await page.keyboard.press("Control+Enter");
+
+  // Half 1 — the break landed (the editor still owns the chord).
+  await expect
+    .poll(async () => editor.locator("br").count(), { timeout: 5_000 })
+    .toBeGreaterThan(breaksBefore);
+  // Half 2 — the annotation was NOT accepted. `toHaveCount(0)` retries, so this
+  // is not a race against a slow accept.
+  await expect(page.locator("summary", { hasText: "1 resolved" })).toHaveCount(0);
 });
 
 test("Ctrl+Shift+Enter dismisses the first pending annotation", async ({ page }) => {
@@ -403,6 +441,7 @@ test("Ctrl+Shift+Enter dismisses the first pending annotation", async ({ page })
   const card = page.locator("[data-testid^='annotation-card-']").first();
   await expect(card).toBeVisible({ timeout: 10_000 });
 
+  await card.focus();
   await page.keyboard.press("Control+Shift+Enter");
 
   await expect(page.locator("summary", { hasText: "1 resolved" })).toBeVisible({
