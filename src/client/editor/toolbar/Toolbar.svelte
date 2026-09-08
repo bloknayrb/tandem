@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import type { Transaction } from "@tiptap/pm/state";
+import { ySyncPluginKey } from "@tiptap/y-tiptap";
 import { untrack } from "svelte";
 import * as Y from "yjs";
 import {
@@ -758,14 +759,37 @@ $effect(() => {
     if (popupHasFocus()) return;
     captureSelectionRange();
   };
-  // Map the frozen range through every doc change while the popup is open, so a
-  // remote (y-sync / MCP) insert ABOVE the selection doesn't leave the
-  // annotation on shifted text (#1777 item 4). Re-capture is suppressed while
-  // the composer has focus, so mapping is the only thing that can keep the
-  // range honest there. Assoc 1/-1 keeps an insertion at either edge OUTSIDE
-  // the annotation.
+  // Carry the frozen range through every doc change while the popup is open, so
+  // a remote (y-sync / MCP) insert ABOVE the selection doesn't leave the
+  // annotation on shifted text (#1777 item 4). `onSelChange` bails while the
+  // composer has focus — which is exactly when a remote edit lands — so this is
+  // the only thing that can keep the range honest there.
+  //
+  // The two arms are NOT interchangeable, and using `transaction.mapping` for
+  // both is the trap. y-tiptap applies every remote Y update as a
+  // WHOLE-DOCUMENT `tr.replace(0, doc.content.size, …)` (see its `_tr.replace`
+  // sites), so mapping a position through one collapses the range to a point —
+  // `createAnnotation` would then refuse it and the annotation would be lost
+  // rather than merely shifted. The same replace is why `annotation.ts` rebuilds
+  // its decorations on a y-sync transaction instead of mapping them.
+  //
+  // What survives that replace is the SELECTION: y-tiptap restores it through
+  // the remote edit via Yjs relative positions (`restoreRelativeSelection`), and
+  // the PM selection does not move while the composer holds DOM focus. So on a
+  // remote change we re-read it, and only on a LOCAL one — where the steps are
+  // real and minimal — do we map. Assoc 1/-1 there keeps an insertion at either
+  // edge OUTSIDE the annotation.
   const onTx = ({ transaction }: { transaction: Transaction }) => {
     if (!capturedRange || !transaction.docChanged) return;
+    if (transaction.getMeta(ySyncPluginKey)) {
+      const { from, to } = ed.state.selection;
+      // A collapsed restored selection means the annotated passage itself was
+      // deleted; keep the dead range so `createAnnotation` refuses it and the
+      // submit handlers' keep-the-draft arm runs, rather than silently
+      // re-pointing the annotation at a caret.
+      if (from !== to) capturedRange = { from, to };
+      return;
+    }
     const from = transaction.mapping.map(capturedRange.from, 1);
     const to = transaction.mapping.map(capturedRange.to, -1);
     capturedRange = { from, to: Math.max(from, to) };

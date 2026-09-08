@@ -261,21 +261,30 @@ test("slash menu never opens inside a code block and Enter stays a newline (#177
 }) => {
   await openSample(page);
 
-  // ``` at the start of an empty line is Tiptap's code-block input rule.
+  // Reach a code block through the app's own affordance — the slash menu, from
+  // a paragraph where it still works. (Tiptap's ``` input rule needs a trailing
+  // whitespace character, which is fiddlier than it looks.)
+  await page.keyboard.type(" /code");
+  const menu = page.getByRole("listbox", { name: "Slash commands" });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("option", { name: "Code block" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   await page.keyboard.press("Enter");
-  await page.keyboard.type("```");
   await expect(page.locator(".tiptap pre").first()).toBeVisible({ timeout: 5_000 });
 
   await page.keyboard.type("cd /t");
 
-  // The load-bearing half: assert WHILE the query is still typed. The menu node
-  // is created and torn down imperatively, so a post-Enter toHaveCount(0) is
-  // also satisfied by a menu that flashed open and closed.
-  await expect(page.locator("[data-testid='slash-command-menu']")).toHaveCount(0);
+  // The load-bearing half: assert WHILE the query is still typed, because a
+  // post-Enter check is also satisfied by a menu that flashed open and closed.
+  // `toBeHidden`, not `toHaveCount(0)`: the menu node is reused rather than
+  // torn down, so it survives in the DOM (hidden) after the /code above ran.
+  await expect(menu).toBeHidden();
 
   await page.keyboard.press("Enter");
 
   await expect(page.locator(".tiptap pre").first()).toBeVisible();
   await expect(page.locator(".tiptap pre").first()).toContainText("cd /t");
-  await expect(page.locator("[data-testid='slash-command-menu']")).toHaveCount(0);
+  await expect(menu).toBeHidden();
 });
