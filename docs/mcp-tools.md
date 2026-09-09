@@ -77,6 +77,8 @@ For these tools, `structuredContent` carries the exact same object as the text e
 
 `INTERNAL` -- note the missing `_ERROR` -- is a **different** code and is **not** an MCP one: it belongs to the `/api` surface (`src/server/mcp/routes/_shared.ts`), which has its own code vocabulary. The two annotation exhaustiveness arms carried it by accident until they were corrected; no MCP tool emits it. And `tandem_rename` passes five refusals through from `renameDocument` verbatim -- `NOT_RENAMABLE`, `EXTENSION_MISMATCH`, `ALREADY_EXISTS`, `RENAME_IN_PROGRESS`, `PATH_REJECTED` -- listed under that tool rather than here, because nothing else emits them.
 
+**Snapshot matching ignores which Unicode space separator you transcribed (#1622).** For the two tools that take a caller-supplied `textSnapshot` — `tandem_edit` and `tandem_comment` (with or without `suggestedText`) — a snapshot that matches the document after mapping U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F and U+3000 to an ordinary U+0020 is accepted as a match, and `RANGE_GONE` means the text is absent under that normalization too. This exists because `tandem_getTextContent` returns a no-break space faithfully and it is indistinguishable from an ordinary space when you read it back, so the snapshot you construct can never match by exact bytes. Tab, CR and LF are **not** normalized, and neither are zero-width characters. The server's own internal re-anchoring (the file watcher's relocation pass) stays byte-exact. `tandem_suggest` is a deprecated stub that returns before any range is validated, so it is not one of the two.
+
 ## Coordinate System
 
 All MCP tools use **flat text offsets** -- the same positions you'd get from the document rendered as plain text with heading prefixes (`# `, `## `) and `\n` between paragraphs. Example:
@@ -684,6 +686,8 @@ Since [#1619](https://github.com/bloknayrb/tandem/issues/1619)/[#1710](https://g
 
 `notesExcluded` reports how many `note`-type annotations were filtered out (only present when > 0). Notes cannot be read via MCP — they are user-private (ADR-027).
 
+`anchor` is present on an individual annotation **only when its CRDT anchor is untrustworthy** ([#1764](https://github.com/bloknayrb/tandem/issues/1764)): `"degraded"` means the anchor no longer describes this text and the `range` shown is the last one the server trusted, `"failed"` means the anchor resolved inverted. It is absent on every healthy refresh, so its absence is the normal case and carries no information.
+
 ---
 
 ### tandem_resolveAnnotation
@@ -999,6 +1003,8 @@ Find text and return a safe position range. **Always use this before `tandem_edi
 ```json
 { "from": 42, "to": 55, "text": "$12.4 million" }
 ```
+
+The search prefers an **exact** match and falls back to the same space-separator normalization described under the range errors above, but only when the exact search finds nothing at all (#1622) — so a pattern you typed with an ordinary space still finds a span the document spells with a no-break space, and the returned `text` carries the document's real bytes.
 
 **Errors:** `INVALID_RANGE` if text not found.
 

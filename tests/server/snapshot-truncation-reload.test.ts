@@ -159,6 +159,25 @@ function spanOf(doc: Y.Doc, id: string): number {
   return range.to - range.from;
 }
 
+/**
+ * Every `[watcher]` line printed while `fn` runs.
+ *
+ * Module-scoped rather than nested in one describe: #1767's relocation spec
+ * asks the same question — "did this reload say anything?" — and a second copy
+ * of the filter is how two specs start disagreeing about what counts as silence.
+ */
+async function watcherLogs(fn: () => Promise<void>): Promise<string[]> {
+  const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await fn();
+    return spy.mock.calls
+      .map((args) => args.map((a) => String(a)).join(" "))
+      .filter((line) => line.includes("[watcher]"));
+  } finally {
+    spy.mockRestore();
+  }
+}
+
 /** Where `LONG_BODY` actually starts in the CURRENT document text. */
 function expectedStart(doc: Y.Doc): number {
   const idx = extractText(doc).indexOf(LONG_BODY);
@@ -344,19 +363,6 @@ describe("#1752: the relocation call keeps working under the new bounds", () => 
  * spec, and both were silent for months.
  */
 describe("#1752: the relocation probe and its failure report", () => {
-  /** Every `[watcher]` line printed while `fn` runs. */
-  async function watcherLogs(fn: () => Promise<void>): Promise<string[]> {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      await fn();
-      return spy.mock.calls
-        .map((args) => args.map((a) => String(a)).join(" "))
-        .filter((line) => line.includes("[watcher]"));
-    } finally {
-      spy.mockRestore();
-    }
-  }
-
   it("says NOTHING when a capped probe ends mid-pair and the document did not change", async () => {
     // The probe range ends at `from + probe.length`, and `captureSnapshot` caps
     // a snapshot at SNAPSHOT_CAP code units — so a body with an emoji straddling
@@ -479,15 +485,125 @@ describe("#1752: the relocation probe and its failure report", () => {
     expect(logs[0]).toMatch(/stale coordinates/i);
 
     // The consequence the message claims, asserted rather than trusted: the
-    // record still carries its pre-reload offsets, they no longer describe the
-    // annotated text, and `refreshAllRanges` has already minted a relRange from
-    // them — so nothing will revisit it.
+    // record still carries its pre-reload offsets and they no longer describe
+    // the annotated text.
+    //
+    // **The durable-mispin half changed with #1764, and this assertion is
+    // inverted from what it used to be.** `refreshAllRanges` used to mint a
+    // relRange from these stale offsets, so the record was pinned to
+    // coordinates describing different text and every later reload resolved it
+    // cleanly. The lazy-attach arm is now gated on the stored range still
+    // holding its `textSnapshot` — an inverted range slices to `""`, which
+    // contradicts a non-empty snapshot — so the mint is refused, the record
+    // answers `degraded`, and NO relRange is written. The rejection log above
+    // is unchanged and is still the signal; what it no longer describes is a
+    // durable pin.
     const ann = annOf(doc, id);
     expect(ann.range.from, "not relocated").toBe(staleFrom);
     expect(ann.range.to).toBe(staleTo);
-    expect(ann.relRange, "durably pinned, not merely left alone").toBeDefined();
+    expect(ann.relRange, "left alone, not durably pinned (#1764)").toBeUndefined();
     expect(extractText(doc).slice(staleFrom, staleFrom + SNAPSHOT_CAP)).not.toBe(
       LONG_BODY.slice(0, SNAPSHOT_CAP),
     );
+  });
+});
+
+/**
+ * #1767: a snapshot a pre-fix cap left mid-surrogate-pair must still relocate.
+ *
+ * `captureSnapshot` used to cut at 200 UTF-16 units unconditionally, so a
+ * record written over text with an emoji straddling the cap stored a LONE HIGH
+ * SURROGATE. That matched in process and matched out of the lossless JSON
+ * envelope, but the first Yjs `encodeStateAsUpdate` — session persist, doc
+ * swap, any client sync — re-encoded it as U+FFFD, after which the snapshot
+ * occurs NOWHERE in the document: `indexOf` misses, the probe answers
+ * RANGE_GONE, and the annotation stays pinned to stale coordinates on every
+ * reload forever.
+ *
+ * These records are already on disk, so the writer-side back-off cannot reach
+ * them; `snapshotSearchPrefix` trims the dead tail instead. This is the same
+ * shape as the legacy-ellipsis case above — an accidental `indexOf` miss turned
+ * into a real relocation — and it is asserted here rather than only at the
+ * predicate because the placement of that trim decides whether the flag-bearing
+ * population (i.e. all of it) is reached at all.
+ */
+describe("#1767: a split-pair snapshot tail relocates instead of going RANGE_GONE", () => {
+  /** Emoji straddling the cap: high half at CAP-1, low half at CAP. */
+  const STRADDLING = `${"x".repeat(SNAPSHOT_CAP - 1)}\u{1F600} ${LONG_BODY}`;
+
+  async function reloadWithCorruptedSnapshot(storedSnapshot: string) {
+    const { doc, filePath, triggerReload } = await setupOpenedFile(`${STRADDLING}\n`);
+    const text = extractText(doc);
+    const idx = text.indexOf(STRADDLING);
+    const id = "ann_split_tail";
+    withMcp(doc, () =>
+      doc.getMap<Annotation>(Y_MAP_ANNOTATIONS).set(id, {
+        id,
+        author: "claude",
+        type: "comment",
+        range: { from: toFlatOffset(idx), to: toFlatOffset(idx + STRADDLING.length) },
+        content: "spans the straddling body",
+        status: "pending",
+        timestamp: 0,
+        textSnapshot: storedSnapshot,
+        textSnapshotTruncated: true,
+        rev: 1,
+      } as Annotation),
+    );
+
+    const logs = await watcherLogs(async () => {
+      // Same paragraph, pushed down by a heading: the stored offsets are stale,
+      // so relocation is the only thing that can save the annotation.
+      await fs.writeFile(filePath, `# A heading that did not used to be here\n\n${STRADDLING}\n`);
+      await triggerReload();
+    });
+    return { doc, id, logs };
+  }
+
+  /** Where `STRADDLING` starts in the CURRENT document text. */
+  function straddlingStart(doc: Y.Doc): number {
+    const idx = extractText(doc).indexOf(STRADDLING);
+    if (idx < 0) throw new Error("STRADDLING not in the reloaded document");
+    return idx;
+  }
+
+  it("FIXTURE: the emoji really does straddle the cap", () => {
+    // Asserted rather than trusted. A fixture that stopped straddling would
+    // make both relocation tests below pass on any implementation.
+    expect(STRADDLING.charCodeAt(SNAPSHOT_CAP - 1)).toBeGreaterThanOrEqual(0xd800);
+    expect(STRADDLING.charCodeAt(SNAPSHOT_CAP - 1)).toBeLessThanOrEqual(0xdbff);
+    expect(STRADDLING.charCodeAt(SNAPSHOT_CAP)).toBeGreaterThanOrEqual(0xdc00);
+  });
+
+  it("relocates a record whose stored tail is U+FFFD, and says nothing", async () => {
+    const corrupted = `${STRADDLING.slice(0, SNAPSHOT_CAP - 1)}\uFFFD`;
+    const { doc, id, logs } = await reloadWithCorruptedSnapshot(corrupted);
+
+    expect(logs, "no RANGE_GONE for a record the trim can still find").toEqual([]);
+    const ann = annOf(doc, id);
+    expect(ann.range.from, "relocated to where the text now starts").toBe(straddlingStart(doc));
+    expect(ann.range.to - ann.range.from, "carried at its full span").toBe(STRADDLING.length);
+  });
+
+  it("CONTROL: the pre-round-trip spelling of the same record was never broken here", async () => {
+    // Deliberately NOT a discriminator, and labelled so no one reads it as one:
+    // it is green before this fix as well. A lone HIGH surrogate is still a
+    // UTF-16 prefix of the well-formed pair in the document, so `indexOf`
+    // finds it and relocation was always fine — which is exactly why the bug
+    // hides until a restart. The U+FFFD twin above is what discriminates, and
+    // the disk spelling is pinned at the predicate in
+    // `tests/shared/snapshot-contradicts.test.ts`, where a heal that handled
+    // only U+FFFD does go red.
+    //
+    // What it does buy: a heal that over-trimmed, or one that trimmed on the
+    // wrong branch, must still leave this record relocatable at its full span.
+    const corrupted = STRADDLING.slice(0, SNAPSHOT_CAP);
+    expect(corrupted).toHaveLength(SNAPSHOT_CAP);
+    const { doc, id, logs } = await reloadWithCorruptedSnapshot(corrupted);
+
+    expect(logs).toEqual([]);
+    const ann = annOf(doc, id);
+    expect(ann.range.from).toBe(straddlingStart(doc));
+    expect(ann.range.to - ann.range.from).toBe(STRADDLING.length);
   });
 });

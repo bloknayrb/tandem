@@ -35,8 +35,10 @@ import {
   flatOffsetToRelPos,
   getElementTextLength,
   getHeadingPrefixLength,
+  rangeOverlapsHeadingPrefix,
   resolveToElement,
 } from "../shared/positions/ydoc.js";
+import { snapshotContradicts } from "../shared/snapshot.js";
 import type { Annotation } from "../shared/types.js";
 import { collectXmlTexts, extractText, flatDocLength } from "./mcp/document-model.js";
 
@@ -141,6 +143,44 @@ export interface RangeValidationOpts extends FlatRangeOpts {
   textSnapshot?: string;
   rejectHeadingOverlap?: boolean;
   /**
+   * Also reject a range whose INTERIOR steps over a top-level heading prefix,
+   * not just one whose endpoints land inside one (#1766).
+   *
+   * **A separate option, ORed into `rejectHeadingOverlap`'s verdict rather than
+   * folded into it — and passed by the callers that eventually REWRITE the
+   * span, not by the ones that only describe it.** #1766 first phrased this as
+   * "`tandem_edit`'s alone, because annotation creation writes no text". That
+   * was true of the immediate call and false of the eventual effect, so the
+   * rule is now stated over the effect:
+   *
+   *  - PASSED by `tandem_edit`, and by the SUGGESTION arm of the two
+   *    annotation creators — `YDocStore.anchorRange({purpose: "suggestion"})`
+   *    (`tandem_comment` with `suggestedText`) and `local-model/tools.ts`'s
+   *    `"replacement"` kind. A suggestion is a text rewrite DEFERRED to Accept:
+   *    `useAnnotationReview`'s `deleteRange` + insert and `docx-apply`'s
+   *    `flatText.slice(from, to)` replacement both take the stored flat span
+   *    verbatim, and `snapshotContradicts` cannot object because the snapshot
+   *    was captured over that exact span and still matches.
+   *  - NOT passed by the plain-comment arm of either creator. A comment
+   *    spanning a section is legal, and "target the text content only" is not
+   *    advice a multi-section comment's author can follow.
+   *
+   * Both creators take the discriminant as a REQUIRED parameter, so a new arm
+   * cannot default into the wrong half without a compile error.
+   *
+   * Union, not replacement, in the other direction too: the overlap predicate
+   * alone would newly ACCEPT `to === blockStart` — the documented exclusive-end
+   * asymmetry, which is what stops `tandem_edit` swallowing the newline above a
+   * heading. That is a RELAXATION, and this change is a pure tightening, so the
+   * endpoint term stays. `positions.test.ts`'s "keeps the exclusive-end
+   * asymmetry" spec is the one that goes red for it; the local-model and
+   * `tandem_comment` heading specs do NOT, because their fixtures cover the
+   * prefix itself and answer the same under either rule.
+   *
+   * Inert without `rejectHeadingOverlap`, which is where the fragment resolves.
+   */
+  rejectHeadingInterior?: boolean;
+  /**
    * **Must be `extractText(ydoc)` of THIS ydoc, as of this call.** Not a
    * same-shaped string, not the PRE-edit text of a document this caller has
    * since written to.
@@ -158,6 +198,72 @@ export interface RangeValidationOpts extends FlatRangeOpts {
    * than hundreds of identical anonymous lines. Only meaningful with `text`.
    */
   textTag?: HoistTag;
+  /**
+   * Treat a `textSnapshot` that differs from the document only in WHICH Unicode
+   * space separator it uses as a match (#1622). Default **off**.
+   *
+   * Opt-in, and only the two caller-supplied-snapshot sites opt in:
+   * `tandem_edit`'s `validateRange` (`mcp/document.ts`) and
+   * `YDocStore.anchorRange` (`mcp/document-store.ts`, i.e. `tandem_comment`,
+   * with or without `suggestedText`). A caller transcribing
+   * `tandem_getTextContent` output
+   * cannot see a U+00A0, so its snapshot comes back with U+0020 and today's
+   * exact comparison answers `RANGE_GONE` for text that is right there.
+   *
+   * **The two STORED-snapshot sites must stay exact** — `documents/watcher.ts`'s
+   * relocation probe and relocation anchor. There the snapshot is the server's
+   * own earlier slice, so an external U+00A0→U+0020 edit genuinely IS a document
+   * change; normalizing would make the probe answer `ok` while
+   * `snapshotContradicts` — still exact — refuses the editor accept and the
+   * `.docx` apply, the #1631 divergence shape.
+   *
+   * Default off because that direction fails safely: a forgotten opt-in
+   * reproduces today's visible `RANGE_GONE`, a forgotten opt-out would silently
+   * accept a stale range.
+   */
+  normalizeSpaceClass?: boolean;
+}
+
+/**
+ * Unicode `Zs` (space separator) MINUS U+0020, as a length-preserving 1:1 map
+ * onto U+0020.
+ *
+ * **Length-preserving is the invariant**: one code unit in, one out, so every
+ * offset computed against the normalized copy is valid against the original —
+ * the same constraint `flattenHeadingText` documents. That is what lets the
+ * normalized relocation sweep in `validateRange` hand back offsets that index
+ * the real document.
+ *
+ * Deliberately EXCLUDED, and not to be widened:
+ *  - `\t`, `\r`, `\n` — a newline is a block separator in this coordinate
+ *    system, so collapsing it would let a range cross a block boundary; and tab
+ *    is not a space separator in Unicode.
+ *  - zero-width characters (U+200B, U+FEFF, …) — they are not spaces, and
+ *    mapping one to U+0020 would make two visibly different strings compare
+ *    equal.
+ *
+ * The `g` regex is module-level: `String.prototype.replace` resets `lastIndex`
+ * on a global pattern before it runs, so there is no shared-state hazard.
+ */
+const SPACE_SEPARATORS_EXCEPT_U0020 = /[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g;
+
+/** See {@link SPACE_SEPARATORS_EXCEPT_U0020}. Exported because `mcp/navigation.ts` needs the
+ * IDENTICAL set for `findOccurrence`/`countOccurrences`; a second copy is how the two drift. */
+export function normalizeSpaceClass(s: string): string {
+  return s.replace(SPACE_SEPARATORS_EXCEPT_U0020, " ");
+}
+
+/** Every start offset at which `needle` occurs in `haystack`, overlaps included. */
+function collectOccurrences(haystack: string, needle: string): number[] {
+  const hits: number[] = [];
+  let searchFrom = 0;
+  while (true) {
+    const idx = haystack.indexOf(needle, searchFrom);
+    if (idx === -1) break;
+    hits.push(idx);
+    searchFrom = idx + 1;
+  }
+  return hits;
 }
 
 function invalid(reason: RangeInvalidReason, message: string): FlatRangeValidation & { ok: false } {
@@ -437,6 +543,10 @@ function resolveDocText(
  * `!== undefined`); and with a snapshot `from === to` never reaches `"empty"`,
  * because the slice is `""` and staleness fires first.
  *
+ * `opts.normalizeSpaceClass` (#1622) changes the COMPARISON inside the staleness
+ * step and nothing about this order. See the option's own doc for who opts in
+ * and why the default is off.
+ *
  * **`empty` also wins over the heading check** for a caller without
  * `allowEmpty`: an empty range inside a heading prefix answers `empty`, not
  * `HEADING_OVERLAP`, because emptiness is checked with the other text-side
@@ -463,15 +573,44 @@ export function validateRange(
   const fullText = resolveDocText(ydoc, opts?.text, opts?.textTag);
 
   // Staleness check
+  //
+  // Five steps, in this order (#1622); steps 2 and 4 run only under
+  // `normalizeSpaceClass`, steps 1/3/5 are unconditional and unchanged:
+  //   1. exact slice comparison — the fast path;
+  //   2. normalized-equal AT THESE OFFSETS ⇒ a match, not a relocation. A
+  //      whitespace-class difference is a TRANSCRIPTION difference, not evidence
+  //      the document moved, and answering RANGE_MOVED here would name the very
+  //      offsets the caller just passed — the infinite retry that made the
+  //      issue's own `whitespaceMismatch` proposal unworkable;
+  //   3. exact `indexOf` sweep — still PREFERRED, so a document holding both an
+  //      exact and a normalized-only occurrence relocates to the exact one;
+  //   4. only when the exact sweep is empty, the same sweep over the normalized
+  //      document with the normalized snapshot. Valid on the original because
+  //      the normalization is 1:1 and length-preserving;
+  //   5. RANGE_GONE only when that is empty too — so the error means what it says.
+  //
+  // The normalized full text is built LAZILY, inside step 4 and nowhere else:
+  // step 2 normalizes a slice, not the document, and `validateRange` runs once
+  // per annotation inside the watcher's relocation loop, which hoists its
+  // `extractText` precisely so a per-annotation full-document cost does not come
+  // back (#1752). A cached normalized twin on `RangeValidationOpts.text` is not
+  // the answer either — the hoist's guard is a flat-length comparison and a
+  // second cached string would need its own.
   if (opts?.textSnapshot) {
-    if (fullText.slice(from, to) !== opts.textSnapshot) {
-      const candidates: number[] = [];
-      let searchFrom = 0;
-      while (true) {
-        const idx = fullText.indexOf(opts.textSnapshot, searchFrom);
-        if (idx === -1) break;
-        candidates.push(idx);
-        searchFrom = idx + 1;
+    const normalizing = opts.normalizeSpaceClass === true;
+    const slice = fullText.slice(from, to);
+    const exactHit = slice === opts.textSnapshot;
+    const normalizedHit =
+      !exactHit &&
+      normalizing &&
+      normalizeSpaceClass(slice) === normalizeSpaceClass(opts.textSnapshot);
+    if (!exactHit && !normalizedHit) {
+      let candidates = collectOccurrences(fullText, opts.textSnapshot);
+      if (candidates.length === 0 && normalizing) {
+        candidates = collectOccurrences(
+          normalizeSpaceClass(fullText),
+          normalizeSpaceClass(opts.textSnapshot),
+        );
       }
       if (candidates.length === 0) {
         return { ok: false, code: "RANGE_GONE" };
@@ -497,7 +636,20 @@ export function validateRange(
     if (!startPos || !endPos) {
       return invalid("unresolvable", `Cannot resolve offset range [${from}, ${to}] in document.`);
     }
-    if (startPos.clampedFromPrefix || endPos.clampedFromPrefix) {
+    // Two terms, ORed. The endpoint term is the rule for all three callers and
+    // is unchanged — in particular a `to` equal to the FIRST character of a
+    // heading prefix is still refused even though the end is exclusive, because
+    // `resolveToElement(to)` lands at offset 0 of the heading and reports
+    // `clampedFromPrefix`. That asymmetry is deliberate (it is what stops
+    // `tandem_edit` swallowing the newline above a heading) and is documented in
+    // `docs/architecture.md` rather than removed. The interior term belongs to
+    // the callers that eventually rewrite the span — see
+    // `rejectHeadingInterior`.
+    if (
+      startPos.clampedFromPrefix ||
+      endPos.clampedFromPrefix ||
+      (opts?.rejectHeadingInterior === true && rangeOverlapsHeadingPrefix(fragment, from, to))
+    ) {
       return { ok: false, code: "HEADING_OVERLAP" };
     }
   }
@@ -553,8 +705,98 @@ export function anchoredRange(
 }
 
 // ---------------------------------------------------------------------------
+// Pure: flat-range arithmetic across a text replacement
+// ---------------------------------------------------------------------------
+
+/**
+ * Where does `range` land after `[from, to)` is replaced by `newLength` units?
+ * (#1765)
+ *
+ * A `tandem_edit` that crosses a top-level block boundary merges the tail block
+ * into the start block and then DELETES the emptied original. Yjs cannot move
+ * items, so every RelativePosition anchored in that element dies the instant
+ * the delete lands — including annotations entirely AFTER the edited range,
+ * which the edit did not touch at all. For those the post-edit offsets are
+ * exact arithmetic rather than a guess, and this is the arithmetic.
+ *
+ * Half-open on both sides, and both boundaries are load-bearing: a range ending
+ * exactly at `from` is untouched (identity), a range starting exactly at `to`
+ * shifts by the delta.
+ *
+ * **`null` when the range INTERSECTS the replacement, and refusing is the
+ * point.** A partially overwritten annotation has no correct destination;
+ * clamping both ends to `from` would invent one. The caller leaves such a
+ * record alone, where #1764 reports it as `degraded` — honest, and recoverable.
+ *
+ * The arithmetic holds even when the edit absorbs a heading, because every
+ * character the branch removes outside `newText` lies INSIDE `[from, to)`: an
+ * absorbed heading's prefix starts at that element's block start, which is
+ * strictly between `from` and `to` (a `to` inside a prefix is already refused
+ * upstream), and the block separators that disappear are exactly the ones the
+ * span crosses.
+ */
+export function remapRangeAcrossReplacement(
+  range: DocumentRange,
+  from: FlatOffset,
+  to: FlatOffset,
+  newLength: number,
+): DocumentRange | null {
+  if (range.to <= from) return range;
+  if (range.from >= to) {
+    const delta = newLength - (to - from);
+    return { from: toFlatOffset(range.from + delta), to: toFlatOffset(range.to + delta) };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // High-level: annotation range refresh
 // ---------------------------------------------------------------------------
+
+/**
+ * Does the annotation's STORED flat range still hold the text its snapshot
+ * captured? (#1764)
+ *
+ * The one predicate behind all three arms of `refreshRange` that would
+ * otherwise mint or overwrite an anchor from an unverified stored range. Reuses
+ * `snapshotContradicts` rather than re-stating its rule: that function already
+ * distinguishes an ABSENT snapshot (nothing to contradict) from an empty one (a
+ * real claim that the range held no text) from a non-string one (fails toward
+ * contradiction), and already prefix-matches a truncated snapshot. A second
+ * inline copy of any of that is how the two would drift.
+ *
+ * `ann.textSnapshot === undefined` is the ONLY carve-out, and it belongs to the
+ * two mint arms alone — a record carrying no snapshot has nothing to verify
+ * against, and refusing would strand every pre-snapshot record permanently. The
+ * collapse arm deliberately requires a snapshot instead: see its own comment.
+ *
+ * An out-of-bounds stored range slices to `""` and therefore contradicts, which
+ * is the clamp #1765's body asks for.
+ */
+function storedRangeStillMatches(ann: Annotation, text: string): boolean {
+  return (
+    ann.textSnapshot === undefined ||
+    !snapshotContradicts(ann, text.slice(ann.range.from, ann.range.to))
+  );
+}
+
+/**
+ * A `getText` that materializes the flat projection at most once, and not at
+ * all when nothing asks for it.
+ *
+ * `refreshRange` needs the document text only on the guard arms, which most
+ * annotations never reach; `refreshAllRanges` builds ONE of these and passes it
+ * to every iteration, so a whole batch pays for at most one `extractText`. Safe
+ * across a batch because the only writes in that loop are annotation records —
+ * the `default` fragment is untouched.
+ */
+function memoizedDocText(ydoc: Y.Doc): () => string {
+  let cached: string | undefined;
+  return () => {
+    if (cached === undefined) cached = extractText(ydoc);
+    return cached;
+  };
+}
 
 /**
  * Refresh an annotation's flat offsets from its relRange, or lazily attach
@@ -567,10 +809,27 @@ export function anchoredRange(
  * intentional `{fromRel, toRel}` re-assembly sites referenced by
  * `anchoredRange`'s JSDoc — both repair existing annotations rather than
  * minting new ones, so the shape duplication is deliberate, not a DRY gap.
+ * **Both are gated on {@link storedRangeStillMatches} (#1764)**: this runs from
+ * a READ path (`listAnnotationsRefreshed`), and minting a confident anchor over
+ * a stored range whose snapshot no longer holds pins the record to the wrong
+ * text with nothing warning.
+ *
+ * `getText` is internal plumbing, not a public option — omit it and each call
+ * memoizes its own. `refreshAllRanges` passes one shared getter.
  */
-export function refreshRange(ann: Annotation, ydoc: Y.Doc, map?: Y.Map<unknown>): RefreshResult {
+export function refreshRange(
+  ann: Annotation,
+  ydoc: Y.Doc,
+  map?: Y.Map<unknown>,
+  getText?: () => string,
+): RefreshResult {
+  const docText = getText ?? memoizedDocText(ydoc);
+
   if (!ann.relRange) {
-    // Lazy attachment: compute relRange from current flat offsets
+    // Lazy attachment: compute relRange from current flat offsets. Same
+    // unverified mint as the dead-relRange arm below, so it takes the same
+    // gate — fixing only that arm is defeated one call later (#1764).
+    if (!storedRangeStillMatches(ann, docText())) return { kind: "degraded", annotation: ann };
     const fromRel = flatOffsetToRelPos(ydoc, ann.range.from, 0);
     const toRel = flatOffsetToRelPos(ydoc, ann.range.to, -1);
     if (!fromRel || !toRel) return { kind: "degraded", annotation: ann };
@@ -590,13 +849,18 @@ export function refreshRange(ann: Annotation, ydoc: Y.Doc, map?: Y.Map<unknown>)
       );
     }
     // CRDT resolution failed (items deleted after content replacement).
-    // Strip the dead relRange and attempt re-anchoring from flat offsets.
-    const fromRel = flatOffsetToRelPos(ydoc, ann.range.from, 0);
-    const toRel = flatOffsetToRelPos(ydoc, ann.range.to, -1);
-    if (fromRel && toRel) {
-      const updated: Annotation = { ...ann, relRange: { fromRel, toRel } };
-      if (map) map.set(ann.id, updated);
-      return { kind: "repaired", annotation: updated };
+    // Strip the dead relRange and attempt re-anchoring from flat offsets —
+    // but only when the stored range still holds its snapshot (#1764). If the
+    // text moved while the relRange died, re-anchoring here would mint a fresh,
+    // confident anchor over the wrong span and nothing would warn.
+    if (storedRangeStillMatches(ann, docText())) {
+      const fromRel = flatOffsetToRelPos(ydoc, ann.range.from, 0);
+      const toRel = flatOffsetToRelPos(ydoc, ann.range.to, -1);
+      if (fromRel && toRel) {
+        const updated: Annotation = { ...ann, relRange: { fromRel, toRel } };
+        if (map) map.set(ann.id, updated);
+        return { kind: "repaired", annotation: updated };
+      }
     }
     // Can't re-anchor — strip dead relRange so lazy path works next time
     const stripped: Annotation = { ...ann };
@@ -610,6 +874,29 @@ export function refreshRange(ann: Annotation, ydoc: Y.Doc, map?: Y.Map<unknown>)
         `resolved [${newFrom}, ${newTo}] from flat [${ann.range.from}, ${ann.range.to}]`,
     );
     return { kind: "failed", annotation: ann };
+  }
+  // A COLLAPSE has two causes needing opposite answers (#1764). A block split,
+  // heading toggle or join resolves two live anchors onto one offset while the
+  // annotated text is still there — persisting `{n, n}` destroys the stored
+  // flat range the watcher's snapshot relocation needs, and undo then resolves
+  // the two zero-width anchors to opposite ends and the record is `failed`
+  // forever. Deleting the annotated span produces the same shape and there
+  // `{n, n}` is correct. The discriminator is the stored `textSnapshot`.
+  //
+  // **This arm does NOT inherit the mint arms' `undefined` carve-out**, and the
+  // asymmetry is load-bearing: `docx-comments.ts` strips `textSnapshot` off
+  // every imported Word comment on the drift path, and `docx-comment-export.ts`
+  // writes `refreshed.annotation.range` back into the user's `.docx`. Preserving
+  // a stale non-empty span for one of those would export a Word comment over
+  // unrelated text — a byte change in the user's file. With a snapshot
+  // required, a snapshot-less collapse keeps writing `{n, n}`.
+  if (
+    newFrom === newTo &&
+    ann.range.from !== ann.range.to &&
+    ann.textSnapshot !== undefined &&
+    storedRangeStillMatches(ann, docText())
+  ) {
+    return { kind: "degraded", annotation: ann };
   }
   if (newFrom === ann.range.from && newTo === ann.range.to) {
     return { kind: "ok", annotation: ann };
@@ -636,9 +923,13 @@ export function refreshAllRanges(
   opts?: { skipTransact?: boolean },
 ): RefreshResult[] {
   const results: RefreshResult[] = [];
+  // ONE memoized getter for the whole batch: the flat text is materialized at
+  // most once per call, and not at all when no annotation reaches a guard arm
+  // (#1764). Sound because this loop writes only annotation records.
+  const getText = memoizedDocText(ydoc);
   const run = () => {
     for (const ann of annotations) {
-      results.push(refreshRange(ann, ydoc, map));
+      results.push(refreshRange(ann, ydoc, map, getText));
     }
   };
   if (opts?.skipTransact) {

@@ -104,9 +104,56 @@ export function snapshotSearchPrefix(ann: SnapshotBearing): string {
   const snapshot = ann.textSnapshot;
   if (typeof snapshot !== "string") return "";
   if (!isSnapshotTruncated(ann)) return snapshot;
-  // Flag present ⇒ this build wrote it and the text carries no marker.
-  if (ann.textSnapshotTruncated === true) return snapshot;
-  return snapshot.slice(0, -LEGACY_ELLIPSIS.length);
+  // Flag present ⇒ this build wrote it and the text carries no marker; absent
+  // ⇒ the pre-#1486 writer marked the cut in the text itself.
+  const base =
+    ann.textSnapshotTruncated === true ? snapshot : snapshot.slice(0, -LEGACY_ELLIPSIS.length);
+  return dropSplitTail(base);
+}
+
+/**
+ * Drop a trailing unit that a pre-#1767 cap left mid-surrogate-pair.
+ *
+ * Two spellings of the same record, and the reader cannot tell which it has:
+ * fresh off disk the JSON envelope is lossless, so the snapshot still ends in
+ * the LONE HIGH SURROGATE the unguarded `slice(0, 200)` stored; after one Yjs
+ * `encodeStateAsUpdate` — session persist, doc swap, any client sync — lib0's
+ * UTF-8 encode has replaced it with U+FFFD. Neither occurs in the document, so
+ * `indexOf` misses and the annotation is `RANGE_GONE` forever.
+ *
+ * **Healing here rather than by rewriting the stored record is the decision.** A
+ * migration would be a write from a read path, which is what #1764 has just
+ * finished removing; and shortening a SEARCH PREFIX is free by construction — a
+ * prefix of a prefix is still a prefix, so the cost of trimming a legitimate
+ * trailing U+FFFD is one character of search specificity. One edit heals both
+ * readers, because the relocation probe and `snapshotContradicts`' truncated
+ * branch both come through `snapshotSearchPrefix`.
+ *
+ * **Placement is load-bearing and the obvious phrasing gets it wrong.** Every
+ * record this targets carries `textSnapshotTruncated: true` (`captureSnapshot`
+ * has set it since #1486), so a heal added after the legacy-ellipsis trim is
+ * unreachable for exactly the population it is for. Hence the restructure
+ * above: both truncated branches converge on `base`, and this runs on both.
+ *
+ * **The one-sided test is CORRECT here and must not be "fixed" into
+ * `splitsSurrogatePair`.** `src/shared/` cannot import `src/server/positions.ts`
+ * — and the question is different anyway. Critical Rule 4's paired predicate
+ * asks whether an OFFSET falls between two halves, which needs the following
+ * unit; this asks whether the LAST UNIT OF A STRING is a high surrogate, which
+ * is unpaired by construction because nothing follows it. `splitsSurrogatePair`
+ * cannot answer it: there is no unit at `base.length` to pair with. This is not
+ * a fifth reading of the rule.
+ *
+ * Only truncated snapshots reach this. An uncapped one was never cut, so it
+ * cannot hold a lone surrogate the writer created, and trimming a real trailing
+ * U+FFFD off it would break the equality `snapshotContradicts` demands there.
+ */
+function dropSplitTail(base: string): string {
+  const last = base.charCodeAt(base.length - 1);
+  // NaN on an empty string, which is neither.
+  const isLoneHigh = last >= 0xd800 && last <= 0xdbff;
+  const isReplacement = last === 0xfffd;
+  return isLoneHigh || isReplacement ? base.slice(0, -1) : base;
 }
 
 /**
@@ -172,5 +219,28 @@ export function snapshotContradicts(ann: SnapshotBearing, actual: string): boole
     return true;
   }
   const expected = snapshotSearchPrefix(ann);
-  return isSnapshotTruncated(ann) ? !actual.startsWith(expected) : actual !== expected;
+  if (!isSnapshotTruncated(ann)) return actual !== expected;
+  // TRUNCATED, and the prefix came back EMPTY. `!actual.startsWith("")` is
+  // always `false`, so without this the gate is not merely weak on such a
+  // record — it is fully disarmed, and the `.docx` apply and the editor accept
+  // both proceed against a snapshot that asserts nothing.
+  //
+  // `snapshotSearchPrefix`'s own docblock warns that an empty needle matches at
+  // offset 0; the watcher guards on it (`if (probe.length === 0) continue`) and
+  // this did not. Two shapes reach it: a stored `""` flagged truncated, and a
+  // one-unit snapshot that {@link dropSplitTail} trims to nothing (#1767 widened
+  // the second by one). Neither is producible by `captureSnapshot`, whose
+  // truncated output is 199-200 units — but `textSnapshot` arrives over a Y.Map
+  // any connected client can write and `sanitizeAnnotation` copies it through on
+  // a bare presence check, which is the same reachability the non-string arm
+  // above already fails closed on.
+  //
+  // Same verdict for the same reason: a truncated snapshot claiming a
+  // zero-length prefix is evidence the RECORD is corrupt, not evidence the text
+  // is intact.
+  if (expected === "") {
+    console.warn(`[snapshot] Empty truncated prefix on ${ann.id}; treating as a contradiction`);
+    return true;
+  }
+  return !actual.startsWith(expected);
 }

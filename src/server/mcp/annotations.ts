@@ -25,6 +25,7 @@ import { isClaudeFacing } from "../annotations/projection.js";
 import { atomicWrite } from "../file-io/index.js";
 import { hideFromAI, readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
+import { splitsSurrogatePair } from "../positions.js";
 import { getCurrentDoc } from "./document.js";
 import type { FlatBreak } from "./document-model.js";
 import { extractTextWithBreaks } from "./document-model.js";
@@ -176,6 +177,24 @@ function notifyDeprecatedTool(toolName: string): void {
  * ranges (#1000 security review R2); the fix is for the consumers that need the
  * text lossless to know when it isn't.
  *
+ * The cut is also backed off by one when it would land BETWEEN the halves of a
+ * surrogate pair (#1767). A lone surrogate survives in process and survives the
+ * JSON envelope on disk, but Yjs re-encodes it as U+FFFD on the first
+ * `encodeStateAsUpdate` — session persist, doc swap, any client sync — after
+ * which the snapshot occurs nowhere in the document: the watcher's relocation
+ * pass answers `RANGE_GONE` forever and `snapshotContradicts` flips true, so
+ * Accept refuses the suggestion. It looks fine until a restart.
+ *
+ * The back-off SHORTENS to 199 rather than extending to 201, because the cap is
+ * a bound on record size (#1000 review R2) and a rule that may exceed it is not
+ * a bound. `truncated` still keys on the ORIGINAL `text.length > SNAPSHOT_CAP`:
+ * the record is a prefix either way, and `isSnapshotTruncated`'s legacy branch
+ * wants `length === SNAPSHOT_CAP` AND a trailing ellipsis, so a 199-unit
+ * snapshot does not become undetectable. The predicate is
+ * {@link splitsSurrogatePair}, the PAIRED form — a one-sided "is the unit at the
+ * cap a surrogate" test also fires at the legal boundary between two adjacent
+ * astral characters and would shorten a snapshot that splits nothing.
+ *
  * `breaks` is the other half of the same problem. The flat string spells a
  * block boundary, a hard break and a literal newline all as `"\n"`, so undo
  * cannot tell which to put back — and each one serializes differently, so
@@ -191,7 +210,8 @@ export function captureSnapshot(
   const { text: fullText, breaks: allBreaks } = extractTextWithBreaks(ydoc);
   const text = fullText.slice(from, to);
   const capped = text.length > SNAPSHOT_CAP;
-  const kept = capped ? text.slice(0, SNAPSHOT_CAP) : text;
+  const cap = splitsSurrogatePair(text, SNAPSHOT_CAP) ? SNAPSHOT_CAP - 1 : SNAPSHOT_CAP;
+  const kept = capped ? text.slice(0, cap) : text;
   // `at < from + kept.length`, not `<= to`: a break AT the range's end is the
   // separator to whatever comes NEXT and is not part of this range. Bounding on
   // the kept text also drops anything past the cap in one step.
@@ -308,7 +328,18 @@ export function registerAnnotationTools(server: McpServer): void {
           if (!store) return noDocumentError();
           const from = toFlatOffset(rawFrom);
           const to = toFlatOffset(rawTo);
-          const result = store.anchorRange(from, to, textSnapshot);
+          // `purpose` decides whether the range's INTERIOR is held to Critical
+          // Rule 6 (#1766 follow-up). `suggestedText` makes this a text rewrite
+          // deferred to Accept, and the accept path replaces the stored flat
+          // span verbatim — so a suggestion spanning a heading prefix deletes
+          // the heading, which is the damage #1766 closed for `tandem_edit`. A
+          // plain comment keeps the endpoint-only rule and may span a section.
+          const result = store.anchorRange(
+            from,
+            to,
+            suggestedText !== undefined ? "suggestion" : "comment",
+            textSnapshot,
+          );
           if (!result.ok) {
             notifyRangeFailure(result, "tandem_comment", documentId);
             return rangeFailureToError(result);
@@ -408,7 +439,16 @@ export function registerAnnotationTools(server: McpServer): void {
         const store = getDocumentStore(documentId);
         if (!store) return noDocumentError();
 
-        let results = store.listAnnotationsRefreshed();
+        // #1764: `listAnnotationsRefreshed` now returns tagged refresh
+        // results. Keep the id → kind map beside the filter chain rather
+        // than threading the tag through every `.filter`, and emit only the
+        // two DEGRADATION verdicts below (`updated` fires for every
+        // annotation past any edit, `attached` on a pre-relRange record's
+        // first refresh, and `repaired` for the whole collection after any
+        // reload — emitting them buries the one signal #1764 asks for).
+        const refreshed = store.listAnnotationsRefreshed();
+        const kindById = new Map(refreshed.map((r) => [r.annotation.id, r.kind]));
+        let results = refreshed.map((r) => r.annotation);
         if (author) results = results.filter((a) => a.author === author);
         if (type) results = results.filter((a) => a.type === type);
         if (status) results = results.filter((a) => a.status === status);
@@ -441,12 +481,16 @@ export function registerAnnotationTools(server: McpServer): void {
         // gates so this read site can't drift from the export path / observer.
         // The trailing Solo filter hides a user's own reply on a Claude comment
         // (the parent survives the annotation-level filter; the reply must not).
-        const annotationsWithReplies = results.map((ann) => ({
-          ...ann,
-          replies: channelVisibleReplies(ann, (id) => store.listReplies(id)).filter(
-            (r) => !hideFromAI(r, modeState),
-          ),
-        }));
+        const annotationsWithReplies = results.map((ann) => {
+          const kind = kindById.get(ann.id);
+          return {
+            ...ann,
+            ...(kind === "degraded" || kind === "failed" ? { anchor: kind } : {}),
+            replies: channelVisibleReplies(ann, (id) => store.listReplies(id)).filter(
+              (r) => !hideFromAI(r, modeState),
+            ),
+          };
+        });
 
         return mcpStructured({
           annotations: annotationsWithReplies,
@@ -685,7 +729,7 @@ export function registerAnnotationTools(server: McpServer): void {
         const store = getDocumentStore(documentId);
         if (!store) return noDocumentError();
 
-        const annotations = store.listAnnotationsRefreshed();
+        const annotations = store.listAnnotationsRefreshed().map((r) => r.annotation);
         // #1619/#1710: notes AND every record whose stored `audience` is not
         // outbound are user-private (ADR-027) — excluded from exports, with the
         // same predicate the channel and `tandem_getAnnotations` use. Notes are

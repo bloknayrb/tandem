@@ -70,7 +70,11 @@ import {
   Y_MAP_SELECTION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
-import type { AnchoredRangeResult, RangeValidation } from "../../shared/positions/index.js";
+import type {
+  AnchoredRangeResult,
+  RangeValidation,
+  RefreshResult,
+} from "../../shared/positions/index.js";
 import type { SanitizationEvent } from "../../shared/sanitize.js";
 import type { Annotation, AnnotationReply, FlatOffset } from "../../shared/types.js";
 import { docHash } from "../annotations/doc-hash.js";
@@ -222,11 +226,18 @@ export class YDocStore {
 
   /**
    * Collect annotations and refresh their CRDT-anchored ranges in one pass,
-   * **persisting any range updates back to the Y.Map**. Returns the refreshed
-   * annotations.
+   * **persisting any range updates back to the Y.Map**.
+   *
+   * Returns the tagged {@link RefreshResult}s, not bare annotations (#1764).
+   * The `.map((r) => r.annotation)` this used to do here was where the
+   * degradation verdict went to die: `refreshRange` can answer `degraded` for a
+   * record whose anchor no longer describes its text, and every MCP consumer
+   * discarded that, which is the "no visible symptom" half of #1764. A caller
+   * that genuinely wants the annotations alone still writes the `.map`; a
+   * caller that wants to report the anchor's health now can.
    */
-  listAnnotationsRefreshed(): Annotation[] {
-    return refreshAllRanges(this.listAnnotations(), this.#ydoc, this.#map).map((r) => r.annotation);
+  listAnnotationsRefreshed(): RefreshResult[] {
+    return refreshAllRanges(this.listAnnotations(), this.#ydoc, this.#map);
   }
 
   /**
@@ -274,18 +285,50 @@ export class YDocStore {
    * a caller's choice, and a boolean here is precisely the flag a later edit
    * drops without any type error. The one call site this replaces already passed
    * `true`. The only other `anchoredRange` caller that passes it is
-   * `local-model/tools.ts:204`; `mcp/document.ts:620` passes it to
-   * `validateRange` directly, which is a sibling function, not this one. Both
-   * resolve their own `Y.Doc` and are unaffected — and `local-model/tools.ts`
-   * still carries the bare boolean at its own call site, with the same exposure
-   * this method removes here.
+   * `local-model/tools.ts`; `mcp/document.ts` passes it to `validateRange`
+   * directly, which is a sibling function, not this one. Both resolve their own
+   * `Y.Doc` and are unaffected — and `local-model/tools.ts` still carries the
+   * bare boolean at its own call site, with the same exposure this method
+   * removes here.
+   *
+   * **`purpose` is what decides the INTERIOR term, and it is REQUIRED and
+   * POSITIONED BEFORE `textSnapshot` on purpose (#1766 follow-up).** #1766 read
+   * `rejectHeadingInterior` as `tandem_edit`'s alone because "annotation
+   * creation writes no text". That is true of the immediate call and false of
+   * the eventual effect: a `"suggestion"` — `tandem_comment` carrying
+   * `suggestedText` — is a text rewrite DEFERRED to Accept, and both consumers
+   * replace the stored flat span verbatim (`useAnnotationReview`'s
+   * `deleteRange` + insert, and `docx-apply`'s `flatText.slice(from, to)`
+   * replacement). `snapshotContradicts` cannot catch it — the snapshot was
+   * captured over that exact span and still matches — so an accepted
+   * `tandem_comment(4, 13, suggestedText: "X")` reached the same heading
+   * deletion `tandem_edit(4, 13, "X")` had just been refused for.
+   *
+   * A `"comment"` keeps the endpoint-only rule, and must: a comment spanning a
+   * section is legal, and "target the text content only" has no followable form
+   * when the target IS two blocks and the heading between them.
+   *
+   * A required discriminant rather than an optional boolean, and ahead of the
+   * optional `textSnapshot` so it CANNOT be omitted: forgetting it is a compile
+   * error, which is the one property the flag this method hardcodes was taken
+   * away from callers to get.
    */
   anchorRange(
     from: FlatOffset,
     to: FlatOffset,
+    purpose: "comment" | "suggestion",
     textSnapshot?: string,
   ): AnchoredRangeResult | (RangeValidation & { ok: false }) {
-    return anchoredRange(this.#ydoc, from, to, textSnapshot, { rejectHeadingOverlap: true });
+    // `normalizeSpaceClass` (#1622): the only caller is `annotations.ts`'s
+    // `tandem_comment` path, whose `textSnapshot` is the CALLER's transcription
+    // of `tandem_getTextContent` output — where a U+00A0 is invisible. The
+    // stored snapshot is still `captureSnapshot`'s own slice, so a
+    // normalized-accepted create persists the document's real bytes.
+    return anchoredRange(this.#ydoc, from, to, textSnapshot, {
+      rejectHeadingOverlap: true,
+      rejectHeadingInterior: purpose === "suggestion",
+      normalizeSpaceClass: true,
+    });
   }
 
   /**

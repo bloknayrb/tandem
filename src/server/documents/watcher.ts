@@ -238,10 +238,15 @@ export async function reloadFromDisk(
           //    which accept replaces only that much and the .docx apply guard,
           //    comparing the same slice, starts PASSING on the shrunken range.
           //  - Skipping the annotation entirely is no better and was this
-          //    fix's first draft: `refreshAllRanges` above has already
+          //    fix's first draft: `refreshAllRanges` above may already have
           //    re-anchored a fresh `relRange` from the STALE flat offsets, so
           //    the record ends up durably pinned to the wrong text and every
-          //    later reload resolves it cleanly and never revisits it.
+          //    later reload resolves it cleanly and never revisits it. Since
+          //    #1764 that re-anchor happens only when the stored range still
+          //    holds its `textSnapshot` — a contradicting one answers
+          //    `degraded` and writes nothing — so the durable mispin is now the
+          //    snapshot-less and still-matching cases rather than all of them.
+          //    Relocating on the prefix is what this pass is for either way.
           //
           // So: search on the prefix, and carry the span across unchanged. That
           // is exact whenever the annotated text moved without changing length,
@@ -288,9 +293,12 @@ export async function reloadFromDisk(
             // ORIGINAL span, so if the external edit deleted text INSIDE the
             // annotated region it now exceeds the new length. `resolveToElement`
             // used to clamp that away; with a real upper bound the call returns
-            // INVALID_RANGE, and `refreshAllRanges` above has already minted a
-            // fresh `relRange` from the STALE flat offsets — the durable mispin
-            // the block comment above calls the first draft's bug.
+            // INVALID_RANGE, and `refreshAllRanges` above may already have
+            // minted a fresh `relRange` from the STALE flat offsets — the
+            // durable mispin the block comment above calls the first draft's
+            // bug. Since #1764 that mint is gated on the stored range still
+            // holding its snapshot, which is the subset of this hazard that
+            // survives, not its removal.
             const resolvedTo = truncated
               ? toFlatOffset(Math.min(vr.resolvedFrom + span, text.length))
               : vr.resolvedTo;
@@ -325,12 +333,15 @@ export async function reloadFromDisk(
               // Previously there was no `else` at all, so a rejected relocation
               // left the annotation durably pinned to stale offsets in silence.
               //
-              // "Left at its previous offsets" would understate it: the
-              // `refreshAllRanges` pass above has ALREADY minted a fresh
-              // `relRange` from those stale flat offsets, so the record is now
-              // durably pinned to coordinates that describe different text, every
-              // later reload resolves that relRange cleanly, and nothing revisits
-              // it. Same consequence as the RANGE_GONE arm below.
+              // "Left at its previous offsets" can still understate it: the
+              // `refreshAllRanges` pass above may ALREADY have minted a fresh
+              // `relRange` from those stale flat offsets, in which case the
+              // record is durably pinned to coordinates that describe different
+              // text, every later reload resolves that relRange cleanly, and
+              // nothing revisits it. Since #1764 that mint is gated on the
+              // stored range still holding its `textSnapshot`, so a record whose
+              // snapshot contradicts is left `degraded` rather than pinned.
+              // Same consequence as the RANGE_GONE arm below.
               console.error(
                 `[watcher] Relocation rejected for annotation ${ann.id}: ` +
                   `[${vr.resolvedFrom}, ${resolvedTo}] — ${describeRangeFailure(relocated)}. ` +

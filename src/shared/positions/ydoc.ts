@@ -376,6 +376,64 @@ export function resolveToElement(
 }
 
 /**
+ * True when `[from, to)` overlaps any top-level heading's markup prefix.
+ *
+ * The INTERIOR half of Critical Rule 6, carried by every caller that eventually
+ * REWRITES the span: `validateRange`'s endpoint check (`clampedFromPrefix` on
+ * either resolved end) cannot see a prefix that the range steps straight over,
+ * so `tandem_edit(4, 13, "X")` on `"Para one\n## Head\nTail"` used to delete
+ * the heading outright (#1766).
+ *
+ * That is `tandem_edit`, plus the SUGGESTION arm of the two annotation creators
+ * — `YDocStore.anchorRange({purpose: "suggestion"})` and
+ * `local-model/tools.ts`'s `"replacement"` kind. A stored `suggestedText` is a
+ * deferred rewrite of the same flat span, so #1766's original "annotation
+ * creation writes no text" reasoning held only for the plain-comment half. The
+ * plain-comment arm still does NOT carry this term — a comment spanning a
+ * section is legal, and "target the text content only" is advice its author
+ * could not follow.
+ *
+ * Lives beside {@link resolveToElement} because it repeats that walk's flat
+ * arithmetic, and a fifth independent copy of the separator contract is how the
+ * existing four would drift. Two rules the loop shape encodes, both silent when
+ * broken:
+ *   - each element contributes `getHeadingPrefixLength + getElementTextLength`;
+ *   - a non-`Y.XmlElement` child `continue`s BEFORE the separator is added, so
+ *     it consumes nothing. `extractTextWithBreaks` states the same rule as "one
+ *     separator between *emitted* elements". A walker that counts one for it
+ *     puts every later block start one unit high.
+ *
+ * Top-level only, which is complete: a nested heading contributes no prefix
+ * (`resolveToTextblock`'s contract), so descending would find nothing and would
+ * need a fifth copy of the arithmetic to do it.
+ *
+ * Returns a boolean, not the offending heading — no caller needs to name which
+ * one, and returning a position would invite a message that does.
+ */
+export function rangeOverlapsHeadingPrefix(
+  fragment: Y.XmlFragment,
+  from: FlatOffset,
+  to: FlatOffset,
+): boolean {
+  let accumulated = 0;
+
+  for (let i = 0; i < fragment.length; i++) {
+    const node = fragment.get(i);
+    if (!(node instanceof Y.XmlElement)) continue;
+
+    const prefixLen = getHeadingPrefixLength(node);
+    // Half-open overlap against the prefix span [blockStart, blockStart+prefixLen).
+    if (prefixLen > 0 && accumulated < to && accumulated + prefixLen > from) return true;
+
+    accumulated += prefixLen + getElementTextLength(node);
+
+    if (i < fragment.length - 1) accumulated += 1; // \n separator
+  }
+
+  return false;
+}
+
+/**
  * Convert a flat text offset to a JSON-serialized Yjs RelativePosition.
  * Returns null if the offset falls in a heading prefix or can't be resolved.
  *

@@ -321,7 +321,10 @@ describe("YDocStore.listAnnotationsRefreshed", () => {
     const xtext = para.get(0) as Y.XmlText;
     ydoc.transact(() => xtext.insert(0, "XXX "), MCP_ORIGIN);
 
-    const refreshed = store.listAnnotationsRefreshed().find((annn) => annn.id === id)!;
+    const refreshed = store
+      .listAnnotationsRefreshed()
+      .map((r) => r.annotation)
+      .find((annn) => annn.id === id)!;
     expect(refreshed.range.from).toBe(toFlatOffset(10));
     expect(refreshed.range.to).toBe(toFlatOffset(15));
     // The refreshed range is persisted back into the Y.Map.

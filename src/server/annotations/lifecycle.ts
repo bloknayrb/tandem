@@ -407,9 +407,12 @@ export function describeReplyWriteRefusal(result: Exclude<ClaudeReplyResult, { k
  *   via `anchoredRange`'s `rejectHeadingOverlap`. Both callers that turn a
  *   caller-supplied span into a NEW annotation pass it — `YDocStore.anchorRange`
  *   (where it is now hardcoded rather than a parameter) and
- *   `local-model/tools.ts:204` — while every other `anchoredRange` caller is
+ *   `local-model/tools.ts` — while every other `anchoredRange` caller is
  *   re-anchoring a range that was already chosen and correctly passes nothing.
- *   The type cannot tell you which of those a caller is.
+ *   The type cannot tell you which of those a caller is. Nor can it tell you
+ *   whether the INTERIOR term (`rejectHeadingInterior`) was carried, which both
+ *   creators decide from a required discriminant, because a `suggestedText`
+ *   extra makes the create a deferred REWRITE of the span.
  * - A Claude-authored note (ADR-027) is unconstructible *at runtime*: `create`
  *   has no `type` parameter, and {@link stripOwnedFields} deletes `type` and
  *   `audience` from whatever a caller passes. The matching `Omit` in

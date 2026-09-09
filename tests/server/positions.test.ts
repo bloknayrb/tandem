@@ -8,6 +8,7 @@ import {
   refreshAllRanges,
   refreshRange,
   relPosToFlatOffset,
+  remapRangeAcrossReplacement,
   resolveToElement,
   validateFlatRange,
   validateRange,
@@ -17,8 +18,10 @@ import type {
   RangeValidation,
   SerializedRelPos,
 } from "../../src/shared/positions/types.js";
+import { rangeOverlapsHeadingPrefix } from "../../src/shared/positions/ydoc.js";
+import { snapshotContradicts } from "../../src/shared/snapshot.js";
 import type { Annotation } from "../../src/shared/types.js";
-import { off } from "../helpers/positions.js";
+import { off, range } from "../helpers/positions.js";
 import {
   getAnnotationsMap,
   getFragment,
@@ -115,6 +118,393 @@ describe("validateRange", () => {
       expect(result.code).toBe("INVALID_RANGE");
       if (result.code === "INVALID_RANGE") expect(result.reason).toBe("out-of-bounds");
     }
+  });
+});
+
+/**
+ * #1766 — Critical Rule 6 was ENDPOINT-only, so a range that stepped straight
+ * over a heading prefix passed and `tandem_edit` deleted the heading.
+ *
+ * The fixture is the issue's own: `"para\n## Head\nnext"`, whose heading block
+ * starts at flat offset 5 and whose `"## "` prefix occupies [5, 8).
+ *
+ * Every spec here passes `rejectHeadingOverlap` too, because the interior term
+ * lives inside that block — it is a second term, not a second check, and
+ * Critical Rule 4's order is untouched.
+ */
+describe("validateRange — heading interior scan (#1766)", () => {
+  const FIXTURE = "para\n## Head\nnext";
+
+  it("refuses a range whose interior spans the prefix, from either side", () => {
+    // The two cases the issue measured. Both endpoints clear the prefix — 4 is
+    // the paragraph's last offset, 9 is inside "Head" — so the endpoint arm
+    // alone says ok and the heading gets deleted.
+    doc = makeDoc(FIXTURE);
+    for (const [from, to] of [
+      [4, 9],
+      [0, 9],
+    ] as const) {
+      const result = validateRange(doc, off(from), off(to), {
+        rejectHeadingOverlap: true,
+        rejectHeadingInterior: true,
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.code).toBe("HEADING_OVERLAP");
+    }
+  });
+
+  it("still accepts those ranges without rejectHeadingInterior", () => {
+    // **This is what keeps annotation creation out of the widening.**
+    // `YDocStore.anchorRange` and `local-model/tools.ts` pass
+    // `rejectHeadingOverlap` alone and must keep the endpoint-only rule: a
+    // comment about a whole section spans a heading, and "target the text
+    // content only" is not advice its author can follow. An implementation that
+    // ORs the scan into the shared flag turns both of these red.
+    doc = makeDoc(FIXTURE);
+    for (const [from, to] of [
+      [4, 9],
+      [0, 9],
+    ] as const) {
+      expect(validateRange(doc, off(from), off(to), { rejectHeadingOverlap: true }).ok).toBe(true);
+    }
+  });
+
+  it("keeps the exclusive-end asymmetry: to === the prefix's first char is refused", () => {
+    // Documented, not removed (#1766's second half). `to` is exclusive, yet
+    // `resolveToElement(5)` lands at offset 0 OF THE HEADING and reports
+    // `clampedFromPrefix`, so [0, 5) is HEADING_OVERLAP — which is what stops
+    // `tandem_edit` swallowing the newline that separates the paragraph from
+    // the heading below it.
+    //
+    // **Without this spec, an implementation that REPLACES the endpoint check
+    // with the overlap predicate passes everything else in this file**: the
+    // predicate evaluates `5 < 5`, false, and silently accepts.
+    doc = makeDoc(FIXTURE);
+    const result = validateRange(doc, off(0), off(5), { rejectHeadingOverlap: true });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("HEADING_OVERLAP");
+  });
+
+  it("accepts the ranges that clear every prefix", () => {
+    doc = makeDoc(FIXTURE);
+    const opts = { rejectHeadingOverlap: true, rejectHeadingInterior: true } as const;
+    // Stops one unit short of the heading block.
+    expect(validateRange(doc, off(0), off(4), opts).ok).toBe(true);
+    // Entirely inside the heading's TEXT, past the prefix ("Head" is [8, 12)).
+    expect(validateRange(doc, off(8), off(12), opts).ok).toBe(true);
+    // Two ordinary paragraphs with no heading between them.
+    doc.destroy();
+    doc = makeDoc("alpha\nbravo");
+    expect(validateRange(doc, off(0), off(11), opts).ok).toBe(true);
+  });
+
+  it("still refuses a range from inside the prefix into the same heading's text", () => {
+    // The endpoint arm alone already did this; the assertion pins that ORing
+    // the interior term in reordered nothing.
+    doc = makeDoc(FIXTURE);
+    const result = validateRange(doc, off(6), off(10), {
+      rejectHeadingOverlap: true,
+      rejectHeadingInterior: true,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("HEADING_OVERLAP");
+  });
+
+  it("does not run ahead of the resolver's null arm", () => {
+    // The `unresolvable` fixture from the #1752 reason table (an element-free
+    // fragment, `allowEmpty`, `(0, 0)`), replayed with the new option on. The
+    // scan sits AFTER the `!startPos || !endPos` return, so the verdict is
+    // unchanged — an implementation that evaluates the predicate first would
+    // still answer `unresolvable` here only by accident, which is why the
+    // structural placement is stated in `positions.ts` as well.
+    doc = new Y.Doc();
+    doc.getXmlFragment("default");
+    const result = validateRange(doc, off(0), off(0), {
+      rejectHeadingOverlap: true,
+      rejectHeadingInterior: true,
+      allowEmpty: true,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.code === "INVALID_RANGE") {
+      expect(result.reason).toBe("unresolvable");
+    } else {
+      expect.unreachable("expected INVALID_RANGE/unresolvable");
+    }
+  });
+});
+
+/**
+ * #1766 — the separator contract, measured against `extractText`'s own offsets.
+ *
+ * `rangeOverlapsHeadingPrefix` repeats `resolveToElement`'s flat arithmetic, and
+ * the one rule an implementer drops is the `continue`: a non-`Y.XmlElement`
+ * child consumes NOTHING, because the `\n` is added after the type guard. A
+ * walker that counts one for it puts every later block start one unit high.
+ */
+describe("rangeOverlapsHeadingPrefix — separator contract (#1766)", () => {
+  it("consumes no separator for a non-element child", () => {
+    doc = new Y.Doc();
+    const fragment = doc.getXmlFragment("default");
+
+    const heading = (text: string) => {
+      const el = new Y.XmlElement("heading");
+      fragment.insert(fragment.length, [el]);
+      // Attach BEFORE populating — a detached Y.XmlText reverses segment order.
+      (el as unknown as { setAttribute: (k: string, v: number) => void }).setAttribute("level", 2);
+      el.insert(0, [new Y.XmlText(text)]);
+      return el;
+    };
+
+    heading("Alpha");
+    fragment.insert(fragment.length, [new Y.XmlText("bare")]);
+    heading("Bravo");
+
+    // The ORACLE: derive the second heading's block start from `extractText`
+    // rather than from arithmetic this test would have to keep in sync.
+    const text = extractText(doc);
+    const bs2 = text.indexOf("## Bravo");
+    expect(bs2).toBeGreaterThan(0);
+    const prefixLen = 3;
+
+    // **The one boundary that flips.** A range starting exactly one unit past
+    // the end of the second heading's prefix: with a correct walker the
+    // predicate evaluates `bs2 + prefixLen > bs2 + prefixLen`, false; with the
+    // `continue` dropped, `bs2` is one high and it evaluates
+    // `bs2 + 1 + prefixLen > bs2 + prefixLen`, true. A range covering the prefix
+    // (true either way) or ending at the block start (false either way) pins
+    // nothing.
+    expect(
+      rangeOverlapsHeadingPrefix(fragment, off(bs2 + prefixLen), off(bs2 + prefixLen + 2)),
+    ).toBe(false);
+
+    // The control: the same walker DOES see the prefix it is standing on.
+    expect(rangeOverlapsHeadingPrefix(fragment, off(bs2 + 1), off(bs2 + prefixLen + 2))).toBe(true);
+  });
+});
+
+/**
+ * #1622 — a U+00A0 in the document made `textSnapshot` unwinnable.
+ *
+ * `tandem_getTextContent` returns a no-break space faithfully, but it is
+ * indistinguishable from U+0020 to whoever reads that output, so the snapshot
+ * comes back with an ordinary space, the exact comparison correctly fails,
+ * `indexOf` finds nothing, and the tool answers `RANGE_GONE` for text that is
+ * right there.
+ *
+ * **Every spec here that wants the new behaviour passes `normalizeSpaceClass:
+ * true`** — the option is off by default, so a spec that omits it is asserting
+ * the UNCHANGED exact behaviour. The last spec deliberately omits it.
+ */
+describe("validateRange — space-class normalization (#1622)", () => {
+  const NBSP = "\u00A0";
+  /** The issue's own phrase: an NBSP sits between "emails," and "Teams". */
+  const PHRASE = `categorized emails,${NBSP}Teams chats`;
+  /** What a caller reading `tandem_getTextContent` transcribes it as. */
+  const TRANSCRIBED = PHRASE.replace(NBSP, " ");
+
+  it("accepts a snapshot that differs from the document only in space class", () => {
+    // The headline. This also kills a `RANGE_MOVED`-with-a-`whitespaceMismatch`-flag
+    // fix, which would not return `ok`.
+    doc = makeDoc(`We ${PHRASE}, and meeting transcripts.`);
+    const full = extractText(doc);
+    const from = off(full.indexOf(PHRASE));
+    const to = off(from + PHRASE.length);
+
+    const result = validateRange(doc, from, to, {
+      textSnapshot: TRANSCRIBED,
+      normalizeSpaceClass: true,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.range).toEqual({ from, to });
+  });
+
+  it("never answers RANGE_MOVED pointing at the offsets it was just given", () => {
+    // **The loop guard, and the reason the issue's own proposal was not taken.**
+    // Relocating a whitespace-class mismatch leaves the exact slice still
+    // different at the CORRECT offsets, so the retry the caller is told to make
+    // ("use resolvedFrom/resolvedTo") comes back RANGE_MOVED naming the offsets
+    // it just passed, forever. A relocation cannot answer a mismatch that is not
+    // a relocation.
+    doc = makeDoc(`We ${PHRASE}, and meeting transcripts.`);
+    const full = extractText(doc);
+    const from = off(full.indexOf(PHRASE));
+    const to = off(from + PHRASE.length);
+
+    const result = validateRange(doc, from, to, {
+      textSnapshot: TRANSCRIBED,
+      normalizeSpaceClass: true,
+    });
+    const looped =
+      !result.ok &&
+      result.code === "RANGE_MOVED" &&
+      result.resolvedFrom === from &&
+      result.resolvedTo === to;
+    expect(looped).toBe(false);
+  });
+
+  it("relocates to the true offsets when the NBSP-bearing text has moved", () => {
+    // Pins that the normalizer is LENGTH-PRESERVING: the offsets come out of a
+    // sweep over the normalized copy and are then used to slice the ORIGINAL.
+    doc = makeDoc(`Some earlier filler sentence. We ${PHRASE}, and more.`);
+    const full = extractText(doc);
+    const trueFrom = full.indexOf(PHRASE);
+
+    const result = validateRange(doc, off(0), off(PHRASE.length), {
+      textSnapshot: TRANSCRIBED,
+      normalizeSpaceClass: true,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.code === "RANGE_MOVED") {
+      expect(result.resolvedFrom).toBe(trueFrom);
+      expect(result.resolvedTo).toBe(trueFrom + PHRASE.length);
+      expect(full.slice(result.resolvedFrom, result.resolvedTo)).toBe(PHRASE);
+    } else {
+      expect(result).toMatchObject({ code: "RANGE_MOVED" });
+    }
+  });
+
+  it("still answers RANGE_GONE for text that is genuinely absent", () => {
+    // Without this the fix could turn RANGE_GONE into dead code and nothing
+    // would notice.
+    doc = makeDoc("An entirely different sentence with no such phrase.");
+    const result = validateRange(doc, off(0), off(PHRASE.length), {
+      textSnapshot: TRANSCRIBED,
+      normalizeSpaceClass: true,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("RANGE_GONE");
+  });
+
+  it("prefers an exact occurrence over a normalized-only one", () => {
+    // **The fixture deliberately puts the NBSP variant NEARER the queried
+    // `from` than the exact occurrence.** The relocation sweep collects every
+    // hit and picks the candidate nearest `from`
+    // (`candidates.reduce((a, b) => (Math.abs(a - from) <= Math.abs(b - from) ? a : b))`),
+    // so an implementation that normalizes `fullText` and the snapshot up front
+    // and runs ONE sweep finds both occurrences and returns whichever is nearer.
+    // With the NBSP variant nearer, that implementation relocates onto it and
+    // fails here; with the exact one nearer it would pass for the wrong reason,
+    // and `tandem_edit`'s documented resolvedFrom/resolvedTo retry would then
+    // rewrite the wrong span.
+    //
+    // The queried range is stale under BOTH comparisons, so step 2 cannot fire
+    // and the question really is which sweep wins.
+    const exact = "Teams chats";
+    const variant = `Teams${NBSP}chats`;
+    doc = makeDoc(`lead in filler ${variant} and later ${exact} end.`);
+    const full = extractText(doc);
+    expect(full.indexOf(variant)).toBeLessThan(full.indexOf(exact));
+
+    const result = validateRange(doc, off(0), off(exact.length), {
+      textSnapshot: exact,
+      normalizeSpaceClass: true,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.code === "RANGE_MOVED") {
+      expect(full.slice(result.resolvedFrom, result.resolvedTo)).toBe(exact);
+    } else {
+      expect(result).toMatchObject({ code: "RANGE_MOVED" });
+    }
+  });
+
+  it("does not normalize a block separator — a newline is not a space", () => {
+    // Kills a `\s`-class regex. A newline is a block boundary in this coordinate
+    // system, so collapsing it would let a range cross one.
+    doc = makeDoc("alpha para\n\nbravo para");
+    const full = extractText(doc);
+    expect(full).toContain("\n");
+    // The snapshot the caller would send if newlines WERE in the class: the
+    // real slice with every block separator turned into an ordinary space.
+    const snapshot = full.replace(/\n/g, " ");
+    expect(snapshot).not.toBe(full);
+
+    const result = validateRange(doc, off(0), off(full.length), {
+      textSnapshot: snapshot,
+      normalizeSpaceClass: true,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("is OFF by default, and the stored-snapshot comparators still agree", () => {
+    // **The gate, both directions.** The document's NBSP has been replaced by an
+    // ordinary U+0020 — a real external edit. The watcher's shape (a STORED
+    // snapshot, no `normalizeSpaceClass`) must NOT read that as `ok`, because
+    // `snapshotContradicts` — which gates the editor accept and the `.docx`
+    // apply — is still exact and would refuse. A fix that normalizes
+    // unconditionally passes every spec above and fails only this one.
+    const storedSnapshot = `emails,${NBSP}Teams chats`;
+    doc = makeDoc("We categorized emails, Teams chats, and more.");
+    const full = extractText(doc);
+    const from = off(full.indexOf("emails, Teams chats"));
+    const to = off(from + storedSnapshot.length);
+
+    const strict = validateRange(doc, from, to, { textSnapshot: storedSnapshot });
+    expect(strict.ok).toBe(false);
+
+    const ann = makeAnnotation({
+      range: { from, to },
+      textSnapshot: storedSnapshot,
+    });
+    expect(snapshotContradicts(ann, full.slice(from, to))).toBe(true);
+
+    // ...and the opt-in direction, so this spec cannot be satisfied by a build
+    // in which the option does nothing at all.
+    const lenient = validateRange(doc, from, to, {
+      textSnapshot: storedSnapshot,
+      normalizeSpaceClass: true,
+    });
+    expect(lenient.ok).toBe(true);
+  });
+});
+
+/**
+ * The CALL-SITE half of #1622's safety gate, which nothing pinned.
+ *
+ * The spec above pins the OPTION in both directions, and the integration suite
+ * pins the two opt-INs (`tandem_edit` and `YDocStore.anchorRange`) by driving a
+ * tool whose call goes red when the flag is deleted. Nothing pinned the two
+ * opt-OUTs — and a review reproduced exactly that: adding `normalizeSpaceClass:
+ * true` to BOTH watcher sites left the entire suite green (10913 passed), so a
+ * forgotten opt-out is the one direction with no detector.
+ *
+ * That asymmetry matters because #1622's own argument for default-off is that a
+ * forgotten opt-IN merely reproduces today's visible `RANGE_GONE` while a
+ * forgotten opt-OUT silently accepts a stale range: normalizing there makes the
+ * watcher's probe answer `ok` while `snapshotContradicts` — still exact —
+ * refuses the editor accept and the `.docx` apply. That is the #1631 divergence
+ * shape, and it presents as "accept stopped working", not as an error.
+ *
+ * A textual pin rather than an AST one, in the idiom of
+ * `document-write-rearm.test.ts`'s "`forbidden` files contain no reference to
+ * `rearmWatch` AT ALL": both watcher sites resolve their options through one
+ * shared `relocOpts` binding, so an AST walk over the two call expressions would
+ * miss a property added to that object — the same undercount Critical Rule 4
+ * warns about for the shared `surrogates` binding. The rationale for the opt-out
+ * belongs in `RangeValidationOpts.normalizeSpaceClass`'s docblock, which is
+ * where a reader looks; this file deliberately owns none of the prose.
+ */
+describe("#1622 call-site pin — the watcher's STORED snapshots stay byte-exact", () => {
+  const WATCHER = "src/server/documents/watcher.ts";
+
+  it(`${WATCHER} does not mention normalizeSpaceClass at all`, async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { fileURLToPath } = await import("node:url");
+    const path = await import("node:path");
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+    const text = await readFile(path.join(repoRoot, WATCHER), "utf-8");
+
+    // The control: the file really is the one holding both relocation calls, so
+    // a rename or a move fails here instead of passing vacuously.
+    expect(text).toContain("watcher/relocation-probe");
+    expect(text).toContain("watcher/relocation-anchor");
+
+    expect(
+      text.includes("normalizeSpaceClass"),
+      `${WATCHER} passes STORED snapshots and must stay byte-exact (#1622) — ` +
+        "normalizing there makes the relocation probe answer `ok` while " +
+        "`snapshotContradicts` stays exact and then refuses the editor accept and " +
+        "the .docx apply (the #1631 divergence shape).",
+    ).toBe(false);
   });
 });
 
@@ -629,6 +1019,268 @@ describe("refreshRange (via positions module)", () => {
     // returned unchanged so callers can decide how to handle the degradation.
     expect(refreshed.kind).toBe("failed");
     expect(refreshed.annotation.range).toEqual(invertedAnn.range);
+  });
+});
+
+/**
+ * #1764 — `refreshRange` runs from a READ path (`listAnnotationsRefreshed`) and
+ * writes through the caller's map on three arms. Each of those arms would
+ * otherwise mint or overwrite an anchor from the annotation's STORED flat
+ * offsets with nothing checking that those offsets still describe the text the
+ * record captured.
+ */
+describe("refreshRange — the stored-range gate (#1764)", () => {
+  /** Anchor `[from, to)` and store the record, with whatever extras are given. */
+  function seed(
+    d: Y.Doc,
+    map: Y.Map<unknown>,
+    from: number,
+    to: number,
+    extras: Partial<Annotation> = {},
+    opts?: { allowEmpty?: boolean },
+  ): Annotation {
+    const result = anchoredRange(d, off(from), off(to), undefined, opts);
+    if (!result.ok) throw new Error(`anchoredRange failed: ${JSON.stringify(result)}`);
+    const ann = makeAnnotation({
+      id: "ann_gate",
+      range: result.range,
+      ...(result.fullyAnchored ? { relRange: result.relRange } : {}),
+      ...extras,
+    });
+    map.set(ann.id, ann);
+    return ann;
+  }
+
+  /** The `default` fragment's single paragraph, as a Y.XmlText. */
+  function textOf(d: Y.Doc): Y.XmlText {
+    return getOrCreateXmlText(getFragment(d).get(0) as Y.XmlElement);
+  }
+
+  /**
+   * Replace the whole fragment with one paragraph holding `text`, which is what
+   * kills a relRange: the referenced Y.XmlText is deleted outright, so
+   * `relPosToFlatOffset` answers null and the dead-relRange arm runs.
+   */
+  function replaceContent(d: Y.Doc, text: string): void {
+    const fragment = getFragment(d);
+    fragment.delete(0, fragment.length);
+    const el = new Y.XmlElement("paragraph");
+    fragment.insert(0, [el]);
+    el.insert(0, [new Y.XmlText(text)]);
+  }
+
+  it("preserves a SPURIOUS collapse: degraded, and nothing is written", () => {
+    // Both anchors resolve onto one offset while the annotated text is still
+    // there — the block-split / heading-toggle / join shape. Persisting {6,6}
+    // would destroy the stored flat range the watcher's snapshot relocation
+    // needs, and undo would then resolve the two zero-width anchors to opposite
+    // ends and strand the record as `failed` forever.
+    doc = makeDoc("hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = seed(doc, map, 6, 11, { textSnapshot: "world" });
+    const stored = map.get(ann.id);
+
+    const xt = textOf(doc);
+    xt.delete(6, 5);
+    xt.insert(6, "world");
+    expect(extractText(doc)).toBe("hello world");
+    expect(relPosToFlatOffset(doc, ann.relRange!.fromRel)).toBe(6);
+    expect(relPosToFlatOffset(doc, ann.relRange!.toRel)).toBe(6);
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("degraded");
+    expect(refreshed.annotation.range).toEqual({ from: 6, to: 11 });
+    // `toBe`, not `toEqual`: a fix that returns `degraded` but still writes
+    // would leave an equal-looking but different object here.
+    expect(map.get(ann.id)).toBe(stored);
+  });
+
+  it("still refreshes an ALREADY-empty range normally", () => {
+    // Kills a bare `newFrom === newTo` guard: a point annotation (Word's
+    // insertion markers are exactly this) legitimately resolves to an equal
+    // pair and must keep tracking the document.
+    doc = makeDoc("hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = seed(doc, map, 6, 6, { textSnapshot: "" }, { allowEmpty: true });
+
+    textOf(doc).insert(0, "XX");
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("updated");
+    expect(refreshed.annotation.range).toEqual({ from: 8, to: 8 });
+  });
+
+  it("still collapses a GENUINE deletion, and writes it", () => {
+    // The same {n,n} shape with the opposite cause: the annotated span is gone,
+    // so the stored slice no longer holds the snapshot and {6,6} is correct.
+    doc = makeDoc("hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = seed(doc, map, 6, 11, { textSnapshot: "world" });
+
+    textOf(doc).delete(6, 5);
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("updated");
+    expect(refreshed.annotation.range).toEqual({ from: 6, to: 6 });
+    expect((map.get(ann.id) as Annotation).range).toEqual({ from: 6, to: 6 });
+  });
+
+  it("refuses the dead-relRange REPAIR when the stored range contradicts its snapshot", () => {
+    doc = makeDoc("hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = seed(doc, map, 6, 11, { textSnapshot: "world" });
+
+    // Content replacement: the relRange dies, and [6,11) now holds "planet"'s
+    // text rather than "world".
+    replaceContent(doc, "hello planet!");
+    expect(relPosToFlatOffset(doc, ann.relRange!.fromRel)).toBeNull();
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("degraded");
+    // The dead relRange is STRIPPED, never preserved — that is unchanged, and
+    // it is what keeps the lazy re-attachment path reachable. What is NOT done
+    // is minting a fresh one over the wrong span.
+    expect(refreshed.annotation.relRange).toBeUndefined();
+    expect((map.get(ann.id) as Annotation).relRange).toBeUndefined();
+  });
+
+  it("still REPAIRS a dead relRange when the stored range still holds its snapshot", () => {
+    // The negative twin. Without it the fix could refuse everything.
+    doc = makeDoc("hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = seed(doc, map, 6, 11, { textSnapshot: "world" });
+
+    replaceContent(doc, "hello world");
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("repaired");
+    expect(refreshed.annotation.relRange).toBeDefined();
+    expect(refreshed.annotation.range).toEqual({ from: 6, to: 11 });
+  });
+
+  it("still REPAIRS a byte-exact clone — the #1800 regression guard", () => {
+    // `repairClonedAnchors` (`documents/annotation-wiring.ts`) runs
+    // `refreshAllRanges` over a document whose content was rebuilt identically:
+    // every relRange is dead and every stored range is exactly right.
+    doc = makeDoc("hello world");
+    const map = getAnnotationsMap(doc);
+    const a = seed(doc, map, 0, 5, { id: "a", textSnapshot: "hello" });
+    const b = seed(doc, map, 6, 11, { id: "b", textSnapshot: "world" });
+
+    replaceContent(doc, "hello world");
+
+    expect(refreshAllRanges([a, b], doc, map).map((r) => r.kind)).toEqual(["repaired", "repaired"]);
+  });
+
+  it("refuses the LAZY ATTACH when the stored range contradicts its snapshot", () => {
+    // Kills fixing only the `repaired` arm: a stripped record comes back here
+    // on the very next call, and this arm is the same unverified mint.
+    doc = makeDoc("hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = makeAnnotation({
+      id: "ann_lazy",
+      range: { from: off(6), to: off(11) },
+      textSnapshot: "planet",
+    });
+    map.set(ann.id, ann);
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("degraded");
+    expect(refreshed.annotation.relRange).toBeUndefined();
+    expect((map.get(ann.id) as Annotation).relRange).toBeUndefined();
+  });
+
+  describe("a record with NO textSnapshot — the two carve-outs point opposite ways", () => {
+    // Assumptions is not a test, and a "consistency" tidy here changes .docx
+    // export bytes silently: `docx-comments.ts` strips the snapshot off every
+    // imported Word comment, and `docx-comment-export.ts` writes the refreshed
+    // range back into the user's file.
+
+    it("still ATTACHES on the lazy arm", () => {
+      doc = makeDoc("hello world");
+      const map = getAnnotationsMap(doc);
+      const ann = makeAnnotation({ id: "ann_ns", range: { from: off(6), to: off(11) } });
+      map.set(ann.id, ann);
+
+      const refreshed = refreshRange(ann, doc, map);
+      expect(refreshed.kind).toBe("attached");
+      expect(refreshed.annotation.relRange).toBeDefined();
+    });
+
+    it("still REPAIRS a dead relRange over text that moved", () => {
+      doc = makeDoc("hello world");
+      const map = getAnnotationsMap(doc);
+      const ann = seed(doc, map, 6, 11);
+      expect(ann.textSnapshot).toBeUndefined();
+
+      replaceContent(doc, "hello planet!");
+
+      const refreshed = refreshRange(ann, doc, map);
+      expect(refreshed.kind).toBe("repaired");
+      expect(refreshed.annotation.relRange).toBeDefined();
+    });
+
+    it("but a COLLAPSE is still written as {n, n}", () => {
+      // The opposite carve-out, and the one that keeps the .docx export's bytes
+      // unchanged for the snapshot-less population. A preserve here would turn
+      // a zero-width anchor at the deletion point into a stale non-empty span
+      // and export a Word comment over unrelated text.
+      doc = makeDoc("hello world");
+      const map = getAnnotationsMap(doc);
+      const ann = seed(doc, map, 6, 11);
+
+      const xt = textOf(doc);
+      xt.delete(6, 5);
+      xt.insert(6, "world");
+
+      const refreshed = refreshRange(ann, doc, map);
+      expect(refreshed.kind).toBe("updated");
+      expect(refreshed.annotation.range).toEqual({ from: 6, to: 6 });
+      expect((map.get(ann.id) as Annotation).range).toEqual({ from: 6, to: 6 });
+    });
+  });
+});
+
+/**
+ * #1765 — the pure arithmetic behind `tandem_edit`'s cross-block re-anchor.
+ * `[from, to)` becomes `newLength` units; a range that does not intersect the
+ * replacement has an exact destination, and one that does has none.
+ */
+describe("remapRangeAcrossReplacement (#1765)", () => {
+  // Replace [10, 20) — ten units — with the given length.
+  const from = off(10);
+  const to = off(20);
+
+  it("is the identity for a range entirely BEFORE the replacement", () => {
+    expect(remapRangeAcrossReplacement(range(2, 5), from, to, 3)).toEqual({ from: 2, to: 5 });
+  });
+
+  it("is the identity for a range touching the replacement's start exactly", () => {
+    // `to === from` is outside a half-open [from, to): nothing under it moved.
+    expect(remapRangeAcrossReplacement(range(2, 10), from, to, 3)).toEqual({ from: 2, to: 10 });
+  });
+
+  it("shifts a range entirely AFTER the replacement, both when it shrinks and grows", () => {
+    expect(remapRangeAcrossReplacement(range(25, 30), from, to, 2)).toEqual({ from: 17, to: 22 });
+    expect(remapRangeAcrossReplacement(range(25, 30), from, to, 40)).toEqual({ from: 55, to: 60 });
+  });
+
+  it("shifts a range touching the replacement's end exactly", () => {
+    expect(remapRangeAcrossReplacement(range(20, 24), from, to, 2)).toEqual({ from: 12, to: 16 });
+  });
+
+  it("shifts a POINT range after the replacement and keeps it a point", () => {
+    expect(remapRangeAcrossReplacement(range(25, 25), from, to, 2)).toEqual({ from: 17, to: 17 });
+  });
+
+  it("REFUSES every intersecting range rather than clamping", () => {
+    // Head overlap, tail overlap, fully contained, and a range that swallows
+    // the replacement whole. A partially overwritten annotation has no correct
+    // destination; clamping both ends to `from` would invent one.
+    expect(remapRangeAcrossReplacement(range(5, 15), from, to, 3)).toBeNull();
+    expect(remapRangeAcrossReplacement(range(15, 25), from, to, 3)).toBeNull();
+    expect(remapRangeAcrossReplacement(range(12, 18), from, to, 3)).toBeNull();
+    expect(remapRangeAcrossReplacement(range(0, 30), from, to, 3)).toBeNull();
   });
 });
 
