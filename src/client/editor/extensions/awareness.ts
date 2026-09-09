@@ -171,7 +171,14 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
           let activityWriteTimeout: ReturnType<typeof setTimeout> | null = null;
           let selectionDebounceTimeout: ReturnType<typeof setTimeout> | null = null;
           let pendingActivity = false;
-          let lastCursor = -1;
+          // #1776: `cursor` is published to MCP clients, which hold no ProseMirror
+          // document — so it must leave here in the SAME flat coordinate system as
+          // `Y_MAP_SELECTION` below and as annotation ranges. A raw
+          // `state.selection.from` is a PM position and disagrees with the sibling
+          // key in the same payload. The caret is captured with the doc it came
+          // from and converted at write time: `pmPosToFlatOffset` walks the doc, so
+          // converting per keystroke would undo the debounce this state exists for.
+          let lastCursor: { doc: PmNode; pos: number } | null = null;
           return {
             update(view, prevState) {
               const { state } = view;
@@ -223,24 +230,21 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
               // Broadcast typing activity — debounce the Y.Map write to avoid
               // network sync on every keystroke. Batch rapid edits into one write.
               if (state.doc !== prevState.doc) {
-                // #1776: `cursor` is published to MCP clients, which hold no
-                // ProseMirror document — so it must leave here in the SAME flat
-                // coordinate system as `Y_MAP_SELECTION` above and as annotation
-                // ranges. Convert at capture time, against the doc the position
-                // came from; a raw `state.selection.from` here is a PM position
-                // and disagrees with the sibling key in the same payload.
-                lastCursor = pmPosToFlatOffset(state.doc, toPmPos(state.selection.from));
+                lastCursor = { doc: state.doc, pos: state.selection.from };
                 pendingActivity = true;
 
                 // Debounce the "typing" write (200ms to batch rapid keystrokes)
                 if (!activityWriteTimeout) {
                   activityWriteTimeout = setTimeout(() => {
                     activityWriteTimeout = null;
-                    if (pendingActivity) {
+                    if (pendingActivity && lastCursor) {
+                      // Flat, per the note on `lastCursor`; converted outside the
+                      // Y.Doc transaction (Critical Rule 2).
+                      const cursor = pmPosToFlatOffset(lastCursor.doc, toPmPos(lastCursor.pos));
                       withBrowser(ydoc, () =>
                         userAwareness.set(Y_MAP_ACTIVITY, {
                           isTyping: true,
-                          cursor: lastCursor,
+                          cursor,
                           lastEdit: Date.now(),
                         }),
                       );
@@ -252,13 +256,12 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                 if (typingTimeout) clearTimeout(typingTimeout);
                 typingTimeout = setTimeout(() => {
                   pendingActivity = false;
-                  // Converted BEFORE the transaction callback so both halves read
-                  // one `view.state`, and so the doc walk stays outside the Y.Doc
-                  // transaction (Critical Rule 2).
-                  const cursor = pmPosToFlatOffset(
-                    view.state.doc,
-                    toPmPos(view.state.selection.from),
-                  );
+                  // Reads the live state, not `lastCursor` — this fires
+                  // TYPING_DEBOUNCE after the last change. Converted BEFORE the
+                  // transaction callback so both halves read one `view.state`, and
+                  // so the doc walk stays outside the Y.Doc transaction (Rule 2).
+                  const { doc, selection } = view.state;
+                  const cursor = pmPosToFlatOffset(doc, toPmPos(selection.from));
                   withBrowser(ydoc, () =>
                     userAwareness.set(Y_MAP_ACTIVITY, {
                       isTyping: false,
