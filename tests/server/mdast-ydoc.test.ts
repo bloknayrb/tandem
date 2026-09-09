@@ -1151,5 +1151,45 @@ describe("fence info string survives the round trip (#1799)", () => {
     const el = getFragment(doc).get(0) as Y.XmlElement;
     expect(el.nodeName).toBe("codeBlock");
     expect(el.getAttribute("language")).toBeUndefined();
+    expect(el.getAttribute("meta")).toBeUndefined();
+  });
+
+  it("stores meta in its OWN attribute, never appended to `language`", () => {
+    // The combined info string was the first cut, and it round-trips lossily:
+    // Tiptap renders `language` into the code element's class and reads it
+    // back off `classList`, so `js title="x.ts"` becomes several classes and
+    // parses back as `js`. Copy-paste inside the editor silently ate the
+    // meta. Pinned as storage shape because the markdown bytes are identical
+    // either way — see `tests/client/code-block-fence-meta.test.ts` for the
+    // round trip this protects.
+    load('```ts title="x.ts" {1,3}\nconst a = 1;\n```\n');
+    const el = getFragment(doc).get(0) as Y.XmlElement;
+    expect(el.getAttribute("language")).toBe("ts");
+    expect(el.getAttribute("meta")).toBe('title="x.ts" {1,3}');
+  });
+
+  it("normalises a multi-line `meta` before it reaches the fence line", () => {
+    // `data-meta` round-trips through the DOM by design, so forged HTML can
+    // put a newline in it; `remark-stringify` writes meta onto the fence line
+    // verbatim, and a newline there breaks out of the fence and rewrites the
+    // user's file with attacker-chosen markdown.
+    doc = new Y.Doc();
+    loadMarkdown(doc, "```ts\nconst a = 1;\n```\n");
+    const el = getFragment(doc).get(0) as Y.XmlElement;
+    el.setAttribute("meta", "ok\n```\n# injected");
+    const out = saveMarkdown(doc);
+    // One line, so the fence still closes where it did. remark-stringify
+    // escapes the backticks on its own (`&#x60;`) — that is its half, and it
+    // is worthless without this one, because it does not touch newlines.
+    expect(out).toBe("```ts ok &#x60;&#x60;&#x60; # injected\nconst a = 1;\n```\n");
+    expect(out.split("\n")).toHaveLength(4);
+  });
+
+  it("normalises a whitespace-bearing `language` down to its first token", () => {
+    doc = new Y.Doc();
+    loadMarkdown(doc, "```ts\nconst a = 1;\n```\n");
+    const el = getFragment(doc).get(0) as Y.XmlElement;
+    el.setAttribute("language", "ts evil");
+    expect(yDocToMdast(doc).children[0]).toMatchObject({ type: "code", lang: "ts" });
   });
 });

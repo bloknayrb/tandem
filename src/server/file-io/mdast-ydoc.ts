@@ -296,22 +296,26 @@ function blockToYxml(
 
     case "code": {
       const el = new Y.XmlElement("codeBlock");
-      // Carry the WHOLE info string, not just `lang` (#1799): `node.meta` held
-      // the Docusaurus/MkDocs/Shiki tail (`title="x.ts" {1,3}`) and was dropped
-      // silently. `language` is the only fence attribute in Tiptap's CodeBlock
-      // schema, and anything outside the client schema is deleted by
-      // y-prosemirror on sync (`editor-extensions.ts:291-293`), so the meta
-      // rides along in it and is split back apart in `case "codeBlock"`.
+      // Carry the meta as well as `lang` (#1799): `node.meta` holds the
+      // Docusaurus/MkDocs/Shiki tail (`title="x.ts" {1,3}`) and was dropped
+      // silently. It rides in its OWN attribute, not appended to `language`,
+      // because Tiptap's CodeBlock renders `language` into the code element's
+      // `class` and parses it back off `classList` — a value with a space in
+      // it splits into several classes there and reads back as the first
+      // token, so a combined info string is silently truncated to `js` by any
+      // clipboard HTML round trip (copy a fence, paste it). `meta` survives
+      // y-prosemirror's schema filter because `CodeBlockFenceMeta`
+      // (`src/client/editor/extensions/code-block-meta.ts`) declares it —
+      // anything outside the client schema is deleted on sync.
       //
-      // Still stored only when there is something to store — same reasoning as
+      // Each stored only when there is something to store — same reasoning as
       // `spread` above: an unconditional `setAttribute` would put `language=""`
       // on every bare fence with byte-identical output, which is why it would
-      // go unnoticed. The `??`-and-trim form is deliberate: a naive ternary
-      // interpolates the literal `"null "` when `lang` is null.
-      const info = [node.lang ?? "", node.meta ?? ""].join(" ").trim();
-      if (info) {
-        el.setAttribute("language", info);
-      }
+      // go unnoticed.
+      const lang = (node.lang ?? "").trim();
+      const meta = (node.meta ?? "").trim();
+      if (lang) el.setAttribute("language", lang);
+      if (meta) el.setAttribute("meta", meta);
       const text = new Y.XmlText();
       el.insert(0, [text]);
       deferred.push({ xmlText: text, plainText: node.value });
@@ -763,13 +767,24 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
     }
 
     case "codeBlock": {
-      // `language` carries the whole info string (#1799). Split at the first
-      // whitespace run: first token is the fence language, the remainder is
-      // mdast's `meta`, which is `null` rather than `""` when absent.
-      const info = (el.getAttribute("language") as string | undefined) ?? "";
-      const sep = info.search(/\s/);
-      const lang = sep === -1 ? info : info.slice(0, sep);
-      const meta = sep === -1 ? "" : info.slice(sep).trim();
+      // `language` is the fence language, `meta` the Docusaurus/Shiki tail
+      // (#1799) — two attributes, because Tiptap round-trips `language`
+      // through a CSS class (see `case "code"`). mdast wants `null` rather
+      // than `""` for either when absent.
+      //
+      // Both are normalised here rather than trusted: they reach the Y.Doc
+      // from a browser paste (`data-meta` survives the DOM by design, so
+      // forged HTML can carry anything) as well as from the loader, and
+      // `remark-stringify` writes them onto the fence line verbatim — a
+      // newline in either would break out of the fence and rewrite the user's
+      // file. A language is one token by definition and meta is one line, so
+      // that is what is allowed through.
+      const lang = ((el.getAttribute("language") as string | undefined) ?? "")
+        .trim()
+        .split(/\s/)[0];
+      const meta = ((el.getAttribute("meta") as string | undefined) ?? "")
+        .replace(/[\r\n]+/g, " ")
+        .trim();
       let value = "";
       for (let i = 0; i < el.length; i++) {
         const child = el.get(i);
