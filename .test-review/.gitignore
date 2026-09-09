@@ -1,0 +1,26 @@
+# Working artifacts from the test-suite audit, deliberately untracked.
+#
+# `tests/server/file-io/roundtrip-repo-metric.test.ts` round-trips EVERY tracked
+# `.md` in the repo through the Y.Doc markdown loader inside a `beforeAll` with a
+# 120s budget. Committing the full audit added 20,332 markdown lines -- a 20%
+# inflation of that corpus -- which took the hook from comfortably green to 68s
+# in isolation and past 120s under full-suite parallel load. The fidelity
+# assertions all still passed; the time budget was what broke.
+#
+# So the per-test evidence stays local. What IS tracked is the audit chain a
+# reader needs: the report, the heat map, the production model, the cleared
+# plan, the proposal inventory, the four adversarial reviews, the baseline, and
+# the standard applied.
+#
+# To regenerate the untracked half, re-run the audit -- it is reproducible from
+# `auditor-brief.md` plus the batch list in the report.
+
+audit-parts/
+model-parts/
+
+# Machine artifacts: raw reporter output and mechanical scans.
+baseline.json
+test-imports.json
+suite-inventory.csv
+batches.txt
+*.out
