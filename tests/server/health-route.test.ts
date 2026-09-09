@@ -89,6 +89,15 @@ describe("GET /health — loopback gate", () => {
     expect(body.delivery).toEqual(DELIVERY);
   });
 
+  // #1812: the Tauri shell compares this against the child it spawned, so a
+  // 2xx from a previous process still holding the port stops reading as "our
+  // sidecar is healthy". Loopback-only like every other identity signal here —
+  // the absent half is what kills hoisting the field out of the gate.
+  it("reports the process pid to a loopback caller and to nobody else", () => {
+    expect(callWith("127.0.0.1").pid).toBe(process.pid);
+    expect(callWith("203.0.113.5").pid).toBeUndefined();
+  });
+
   // The assertion the old source scan could not make, in the form that also
   // covers fields nobody has written yet. `delivery` is the case that motivated
   // widening it: its counters trace when a human's messages arrive and whether

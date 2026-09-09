@@ -37,10 +37,19 @@ export interface HealthHandlerDeps {
 /**
  * GET /health — public liveness, plus loopback-only diagnostics.
  *
- * Public: `status`, `version`, `transport`. Loopback-only: `hasSession`, `push`
- * and `delivery`.
+ * Public: `status`, `version`, `transport`. Loopback-only: `pid`, `hasSession`,
+ * `push` and `delivery`.
  *
- * All three gated fields are session-presence signals — whether an AI is attached,
+ * `pid` is the process identity the Tauri shell's health poll and its
+ * `/api/shutdown` target check compare against the child it spawned (#1812) —
+ * without it a 2xx from a *previous* process still holding the port reads as
+ * "our sidecar is healthy". It is loopback-only for the same reason as the
+ * rest: it is an identity signal, withheld from LAN callers. Do NOT publish
+ * `generationId` here as an alternative — it is pinned as the Hocuspocus
+ * provider's auth token, so that would hand a connection credential to any
+ * loopback page.
+ *
+ * The three session-presence fields are session-presence signals — whether an AI is attached,
  * whether a real-time consumer is receiving, and whether a model has polled since
  * something was handed out — so they are withheld from LAN callers for the same
  * reason. `delivery` is the most sensitive of them, not the least: its counters
@@ -89,6 +98,9 @@ export function makeHealthHandler(deps: HealthHandlerDeps): Handler {
     };
 
     if (isLoopback(req.socket.remoteAddress)) {
+      // Read `process.pid` directly rather than through a dep: there is exactly
+      // one possible value for it in this process.
+      body.pid = process.pid;
       const subscribers = deps.getSubscriberCount();
       body.hasSession = deps.hasSession();
       body.push = {

@@ -568,20 +568,86 @@ pub(crate) async fn stop_sidecar_gracefully(
     deadline_secs: u64,
 ) -> StopReport {
     let state: tauri::State<'_, SidecarState> = handle.state();
-    let owns_child = match state.0.lock() {
-        Ok(guard) => guard.is_some(),
-        Err(poisoned) => poisoned.into_inner().is_some(),
+    let owned_child_pid = match state.0.lock() {
+        Ok(guard) => guard.as_ref().map(|child| child.pid()),
+        Err(poisoned) => poisoned.into_inner().as_ref().map(|child| child.pid()),
     };
+    let owns_child = owned_child_pid.is_some();
     let report = graceful_stop_request(
         client,
         deadline_secs,
         Endpoints::PRODUCTION,
         owns_child,
+        owned_child_pid,
         SIDECAR_SHUTTING_DOWN.load(Ordering::Acquire),
     )
     .await;
     kill_sidecar_inner(handle);
     report
+}
+
+/// Bound on the pre-shutdown identity GET (#1812).
+///
+/// Well under `EXIT_GRACEFUL_BUDGET`: the same call runs inside
+/// `graceful::attempt`'s `tokio::time::timeout(budget, ...)`, so an unbounded
+/// probe against a listener that accepts and never answers could consume the
+/// budget and reach the hard kill with no flush attempted.
+const IDENTITY_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Positive foreign-identity check for the `/api/shutdown` target (#1812).
+///
+/// `Some(observed)` ONLY when `/health` answered a 2xx whose body carries a
+/// parseable `pid` that differs from ours — the one outcome that proves the POST
+/// would flush a server we do not own.
+///
+/// **Every other outcome is `None`, i.e. "POST exactly as before":** a transport
+/// error, the 1 s timeout, a non-2xx, an unparseable body, or a 2xx body with no
+/// `pid` key. The last is not an edge case — `/health` gains `pid` in the same
+/// change, so every previously-built sidecar answers without one, and treating
+/// that as foreign would hard-kill the flush on every Quit against a pre-change
+/// sidecar. A health GET that stalls after connecting is likewise not evidence
+/// of a foreign process.
+async fn foreign_health_pid(
+    client: &reqwest::Client,
+    health_url: &str,
+    child_pid: u32,
+) -> Option<u32> {
+    let probe = tokio::time::timeout(IDENTITY_PROBE_TIMEOUT, async {
+        let resp = client.get(health_url).send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        resp.text().await.ok()
+    })
+    .await;
+
+    let body = match probe {
+        Ok(Some(body)) => body,
+        Ok(None) => {
+            log::warn!(
+                "Shutdown-target identity check inconclusive (no readable 2xx from {health_url}) — POSTing anyway"
+            );
+            return None;
+        }
+        Err(_) => {
+            log::warn!(
+                "Shutdown-target identity check timed out after {}s — POSTing anyway",
+                IDENTITY_PROBE_TIMEOUT.as_secs()
+            );
+            return None;
+        }
+    };
+
+    match health_body_pid(&body) {
+        Some(observed) if observed != child_pid => Some(observed),
+        Some(_) => None,
+        None => {
+            log::warn!(
+                "Shutdown target reported no pid — a sidecar older than the identity check; POSTing anyway"
+            );
+            None
+        }
+    }
 }
 
 /// The two sidecar URLs a graceful stop touches, kept together so a test can
@@ -628,13 +694,16 @@ impl Endpoints<'static> {
 /// are two unsynchronised reads with no lock across the gap, so a Quit that
 /// calls `try_acquire()` inside that window does make it true. Not "always
 /// false": that was the previous absolute, replaced rather than fixed.
-/// Narrowing that line properly is #1812/#1825 territory (knowing what is
-/// actually on the port), not this parameter's.
+/// Narrowing that line properly is #1825 territory (deriving the URL) plus the
+/// half of #1812 that stays open — the identity check below is positive-only,
+/// so it cannot tell "nothing was ever there" from "something unidentified is".
+/// Neither is this parameter's job.
 async fn graceful_stop_request(
     client: &reqwest::Client,
     deadline_secs: u64,
     endpoints: Endpoints<'_>,
     owns_child: bool,
+    owned_child_pid: Option<u32>,
     skip_expected: bool,
 ) -> StopReport {
     let Endpoints {
@@ -659,16 +728,25 @@ async fn graceful_stop_request(
     //     instance) the POST hits *that* server, which flushes and exits, while
     //     this log line claims a graceful stop. `owns_child` only says we hold a
     //     child handle, never that the child is what is listening.
-    // The second case has a window nobody has to misconfigure anything to reach:
-    // `start_sidecar` stores the child into `SidecarState` BEFORE `wait_for_health`
-    // (up to 30s), so for that whole window `owns_child` is true while a
+    // The second case had a window nobody has to misconfigure anything to reach:
+    // `start_sidecar` stores the child into `SidecarState` BEFORE the health
+    // poll (up to 30s), so for that whole window `owns_child` is true while a
     // *different* process may still be the one answering :3479 — a Quit there
-    // POSTs at, waits on and reports a flush of someone else's server.
-    // `wait_for_port_release` polls `/health` with the same absence of an
-    // identity check. #1825 (derive the URL) and #1812 (identity) are the fixes;
-    // both are out of scope here. The spawn site now pins `TANDEM_MCP_PORT` /
-    // `TANDEM_PORT` / `TANDEM_BIND_HOST` explicitly, which removes the ambient-env
-    // half of the first case but nothing of the second.
+    // POSTed at, waited on and reported a flush of someone else's server.
+    //
+    // #1812 now narrows that: `owned_child_pid` carries the pid of the child we
+    // hold, and the identity GET below skips the POST when `/health` positively
+    // names a DIFFERENT process. What it deliberately does NOT do is fail
+    // closed — a pid-less body (every sidecar built before this change), an
+    // unreachable or stalling `/health`, a non-2xx or an unparseable body all
+    // POST exactly as before, because the POST is what flushes the user's
+    // unsaved edits and this function's own history (see the `is_timeout()`
+    // note below) is of a safe arm keyed one error class too wide.
+    // `wait_for_port_release` polls `/health` with no identity check at all,
+    // which is correct there — it asks "is anything still on the port".
+    // #1825 (derive the URL) is still open. The spawn site pins
+    // `TANDEM_MCP_PORT` / `TANDEM_PORT` / `TANDEM_BIND_HOST` explicitly, which
+    // removes the ambient-env half of the first case but nothing of the second.
     if owns_child {
         log::info!("Graceful stop: we own the sidecar child — POSTing {shutdown_url}");
         // Three POST outcomes, and `Refused` is the NARROW one — an allowlist of
@@ -687,7 +765,25 @@ async fn graceful_stop_request(
         // defect one error class over: it skipped the port wait and hard-killed
         // the flush for every non-timeout transport failure, while logging a
         // verdict that read as "the shutdown never started".
-        let posted = match client.post(shutdown_url).send().await {
+        let foreign = match owned_child_pid {
+            Some(child_pid) => foreign_health_pid(client, health_url, child_pid).await,
+            None => None,
+        };
+        let posted = match foreign {
+            // Positive foreign identity: the flush would land on someone else's
+            // server. `Posted::Refused` is the load-bearing half of the verdict
+            // — it is the ONLY arm that returns without `wait_for_server_gone`,
+            // and a foreign process does not exit, so any other verdict would
+            // burn the whole `deadline_secs` inside `graceful::attempt`'s
+            // budget and then report a `TimedOut` that is simply false.
+            Some(observed) => {
+                log::warn!(
+                    "shutdown target is not our child (pid {observed}, expected {}) — skipping the flush request",
+                    owned_child_pid.unwrap_or_default()
+                );
+                Posted::Refused
+            }
+            None => match client.post(shutdown_url).send().await {
             Ok(resp) if resp.status().is_success() => {
                 Posted::Accepted(read_already_in_progress(resp).await)
             }
@@ -725,6 +821,7 @@ async fn graceful_stop_request(
                 );
                 Posted::Unconfirmed
             }
+            },
         };
         // `already_in_progress` can only be `Some` on the `Accepted` arm, and
         // even there only when `read_already_in_progress` actually READ the
@@ -1058,6 +1155,10 @@ mod graceful {
     /// unit-testable. Windows are hidden here too — see `prepare`.
     pub(super) struct Prep {
         pub(super) owned_child: bool,
+        /// The owned child's pid, for the shutdown target's identity check
+        /// (#1812). `None` means "no check" — today's behaviour — which is what
+        /// a panicked `prepare` and an unmanaged `SidecarState` both degrade to.
+        pub(super) owned_child_pid: Option<u32>,
         /// `None` only when there is no managed client and building one failed.
         pub(super) client: Option<reqwest::Client>,
         /// `prepare`'s `catch_unwind` fired. Carried so the verdict line cannot
@@ -1098,6 +1199,7 @@ mod graceful {
                 );
                 Prep {
                     owned_child: false,
+                    owned_child_pid: None,
                     client: None,
                     panicked: true,
                     // Unknown; assume the loud branch. A false "unsaved edits
@@ -1118,13 +1220,13 @@ mod graceful {
             }
         }
 
-        let owned_child = handle
+        let owned_child_pid = handle
             .try_state::<SidecarState>()
-            .map(|state| match state.0.lock() {
-                Ok(guard) => guard.is_some(),
-                Err(poisoned) => poisoned.into_inner().is_some(),
-            })
-            .unwrap_or(false);
+            .and_then(|state| match state.0.lock() {
+                Ok(guard) => guard.as_ref().map(|child| child.pid()),
+                Err(poisoned) => poisoned.into_inner().as_ref().map(|child| child.pid()),
+            });
+        let owned_child = owned_child_pid.is_some();
 
         // Reuse the managed client so the exit path inherits the same 5s timeout
         // the budget arithmetic assumes. Never `unwrap()` the fallback build: a
@@ -1142,6 +1244,7 @@ mod graceful {
 
         Prep {
             owned_child,
+            owned_child_pid,
             client,
             panicked: false,
             skip_expected: super::SIDECAR_SHUTTING_DOWN.load(std::sync::atomic::Ordering::Acquire),
@@ -1176,6 +1279,7 @@ mod graceful {
     ) -> (Outcome, GracefulAttempted) {
         let Prep {
             owned_child,
+            owned_child_pid,
             client,
             panicked: prep_panicked,
             skip_expected,
@@ -1220,6 +1324,7 @@ mod graceful {
                         deadline_secs,
                         endpoints,
                         owned_child,
+                        owned_child_pid,
                         skip_expected,
                     ),
                 )
@@ -1560,9 +1665,13 @@ pub(crate) async fn start_sidecar(
             // after #1756, POST `/api/shutdown` at whatever else answers :3479
             // on **every Quit**. Setting these explicitly is what makes the
             // child's addresses the ones the constants above name. It does not
-            // fix #1825 (the URLs are still hardcoded) and gives the POST no
-            // identity check (#1812) — a foreign server already on :3479 is
-            // still mistaken for ours.
+            // fix #1825 (the URLs are still hardcoded). The POST's identity
+            // check now exists (#1812): `graceful_stop_request` GETs `/health`
+            // first and skips the flush when the body positively names a
+            // DIFFERENT pid. What it does not do is fail closed — a pid-less
+            // body (any sidecar older than that change) or an unreachable
+            // `/health` still POSTs, so a foreign server that does not identify
+            // itself is still mistaken for ours.
             .env("TANDEM_PORT", WS_PORT.to_string())
             .env("TANDEM_MCP_PORT", MCP_PORT.to_string())
             .env("TANDEM_BIND_HOST", SIDECAR_BIND_HOST);
@@ -1692,7 +1801,7 @@ pub(crate) async fn start_sidecar(
         }
 
         let started = std::time::Instant::now();
-        match wait_for_health(&client, &sidecar_dead).await {
+        match wait_for_health(&client, &sidecar_dead, child_pid).await {
             Ok(()) => {
                 log::info!("Sidecar healthy after {:.1}s", started.elapsed().as_secs_f64());
 
@@ -1731,20 +1840,98 @@ pub(crate) async fn start_sidecar(
     ))
 }
 
-/// Poll the health endpoint until it responds 200.
+/// The `pid` a `/health` body reports, if it reports one at all.
+///
+/// `None` covers a non-JSON body, a body with no `pid` key, and a `pid` that is
+/// not a `u32` — all of which mean "this responder did not identify itself",
+/// never "this responder is ours". `/health` publishes `pid` to loopback
+/// callers only, which is every caller here.
+fn health_body_pid(body: &str) -> Option<u32> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()?
+        .get("pid")?
+        .as_u64()?
+        .try_into()
+        .ok()
+}
+
+/// Whether a `/health` body positively identifies the child we spawned (#1812).
+///
+/// A missing or unparseable `pid` is FALSE, not "assume ours": an unidentified
+/// responder is exactly the previous-process case this check exists to catch.
+fn health_body_is_our_child(body: &str, child_pid: u32) -> bool {
+    health_body_pid(body) == Some(child_pid)
+}
+
+/// Poll the health endpoint until the child we spawned answers it.
 /// Bails early if `sidecar_dead` is set (process terminated before becoming healthy).
 async fn wait_for_health(
     client: &reqwest::Client,
     sidecar_dead: &AtomicBool,
+    child_pid: u32,
+) -> Result<(), String> {
+    wait_for_health_at(client, HEALTH_URL, sidecar_dead, child_pid, HEALTH_TIMEOUT).await
+}
+
+/// `wait_for_health` with the URL and the bound as parameters.
+///
+/// Same seam as `check_health_at`: the URL exists so a test listener can be
+/// substituted. The `timeout` is a parameter for a second reason — the elapsed
+/// check uses `std::time::Instant`, which `tokio::time::pause()` cannot
+/// advance, so a test of the mismatch path would otherwise cost the full
+/// `HEALTH_TIMEOUT` (30s) on every required `rust-test` leg and in the pre-push
+/// hook.
+///
+/// A 2xx is accepted ONLY when the body identifies `child_pid`. A mismatch or a
+/// missing `pid` is not an error — it is recorded and polling continues, so the
+/// timeout is what decides. Two distinct warn lines, each emitted once per
+/// distinct observed state: repeating either every 250 ms would bury the log.
+async fn wait_for_health_at(
+    client: &reqwest::Client,
+    health_url: &str,
+    sidecar_dead: &AtomicBool,
+    child_pid: u32,
+    timeout: Duration,
 ) -> Result<(), String> {
     let start = std::time::Instant::now();
     let mut last_error: Option<String> = None;
-    while start.elapsed() < HEALTH_TIMEOUT {
+    let mut warned_about: Option<u32> = None;
+    let mut warned_unidentified = false;
+    while start.elapsed() < timeout {
         if sidecar_dead.load(Ordering::Acquire) {
             return Err("Sidecar process terminated before becoming healthy".to_string());
         }
-        match client.get(HEALTH_URL).send().await {
-            Ok(resp) if resp.status().is_success() => return Ok(()),
+        match client.get(health_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                let body = resp.text().await.unwrap_or_default();
+                if health_body_is_our_child(&body, child_pid) {
+                    return Ok(());
+                }
+                match health_body_pid(&body) {
+                    Some(observed) => {
+                        last_error =
+                            Some(format!("answered by pid {observed}, expected {child_pid}"));
+                        if warned_about != Some(observed) {
+                            warned_about = Some(observed);
+                            log::warn!(
+                                "health answered by a different process (pid {observed}, expected {child_pid}) — still waiting"
+                            );
+                        }
+                    }
+                    None => {
+                        last_error = Some("health body carries no pid".to_string());
+                        if !warned_unidentified {
+                            warned_unidentified = true;
+                            // Under `cargo tauri dev` this is a stale
+                            // `target/debug/dist`: the shell's OWN child answers
+                            // without a pid. The fix is to rebuild `dist`.
+                            log::warn!(
+                                "health body carries no pid — this sidecar predates the identity check; still waiting"
+                            );
+                        }
+                    }
+                }
+            }
             Ok(resp) => {
                 last_error = Some(format!("HTTP {}", resp.status()));
             }
@@ -1756,7 +1943,7 @@ async fn wait_for_health(
     }
     Err(format!(
         "Health endpoint not ready after {}s (last error: {})",
-        HEALTH_TIMEOUT.as_secs(),
+        timeout.as_secs(),
         last_error.unwrap_or_else(|| "none".to_string())
     ))
 }
@@ -2577,6 +2764,7 @@ mod shutdown_guard_tests {
         let health = format!("http://{addr}/health");
         let prep = graceful::Prep {
             owned_child: true,
+            owned_child_pid: None,
             client: Some(build_http_client(HTTP_CLIENT_TIMEOUT).expect("build client")),
             panicked: false,
             skip_expected: false,
@@ -2653,6 +2841,7 @@ mod shutdown_guard_tests {
                 latched_before_prepare.set(EXITING.load(Ordering::Acquire));
                 graceful::Prep {
                     owned_child: true,
+                    owned_child_pid: None,
                     client: Some(build_http_client(HTTP_CLIENT_TIMEOUT).expect("build client")),
                     panicked: false,
                     skip_expected: false,
@@ -2716,6 +2905,7 @@ mod shutdown_guard_tests {
         let (outcome, _proof) = exit_sequence(
             || graceful::Prep {
                 owned_child: true,
+                owned_child_pid: None,
                 client: None,
                 panicked: false,
                 skip_expected: false,
@@ -3007,6 +3197,9 @@ mod shutdown_guard_tests {
                 health: &health,
             },
             true,
+            // `None` = no identity check, i.e. the behaviour these five
+            // cases were written against (#1812).
+            None,
             false,
         ));
 
@@ -3143,6 +3336,9 @@ mod shutdown_guard_tests {
                 health: &health,
             },
             true,
+            // `None` = no identity check, i.e. the behaviour these five
+            // cases were written against (#1812).
+            None,
             false,
         ));
 
@@ -3189,6 +3385,9 @@ mod shutdown_guard_tests {
                 health: &health,
             },
             true,
+            // `None` = no identity check, i.e. the behaviour these five
+            // cases were written against (#1812).
+            None,
             false,
         ));
 
@@ -3233,6 +3432,9 @@ mod shutdown_guard_tests {
                 health: &health,
             },
             true,
+            // `None` = no identity check, i.e. the behaviour these five
+            // cases were written against (#1812).
+            None,
             false,
         ));
 
@@ -3272,6 +3474,9 @@ mod shutdown_guard_tests {
                 health: &health,
             },
             true,
+            // `None` = no identity check, i.e. the behaviour these five
+            // cases were written against (#1812).
+            None,
             false,
         ));
         let elapsed = started.elapsed();
@@ -3295,6 +3500,7 @@ mod shutdown_guard_tests {
         let (outcome, _proof) = graceful::attempt(
             graceful::Prep {
                 owned_child: false,
+                owned_child_pid: None,
                 client: None,
                 panicked: true,
                 skip_expected: false,
@@ -3454,5 +3660,281 @@ mod shutdown_guard_tests {
         assert_eq!(HTTP_CLIENT_TIMEOUT.as_secs(), 5);
         assert_eq!(EXIT_GRACEFUL_BUDGET_SECS, 17);
         assert_eq!(EXIT_GRACEFUL_BUDGET, Duration::from_secs(17));
+    }
+}
+
+/// #1812 — the health poll and the shutdown POST must know WHICH process is
+/// answering :3479, not merely that something is.
+#[cfg(test)]
+mod health_identity_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpListener};
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Arc;
+
+    /// The pure predicate. The third and fourth cases are the discriminating
+    /// ones: a missing `pid` must be FALSE (a `serde` default or an
+    /// `unwrap_or(child_pid)` would restore today's bug against every pre-fix
+    /// server), and a non-JSON body must be FALSE (a `contains("pid")` string
+    /// check would pass).
+    #[test]
+    fn health_body_is_our_child_requires_a_matching_numeric_pid() {
+        assert!(health_body_is_our_child(r#"{"status":"ok","pid":4242}"#, 4242));
+        assert!(!health_body_is_our_child(
+            r#"{"status":"ok","pid":4243}"#,
+            4242
+        ));
+        assert!(!health_body_is_our_child(r#"{"status":"ok"}"#, 4242));
+        assert!(!health_body_is_our_child("pid 4242, honest", 4242));
+        assert!(!health_body_is_our_child("", 4242));
+    }
+
+    /// Answer every request with one fixed 200 body.
+    fn stub_health_body(body: &'static str, lifetime: Duration) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("local_addr");
+        listener.set_nonblocking(true).expect("set_nonblocking");
+        std::thread::spawn(move || {
+            let until = std::time::Instant::now() + lifetime;
+            while std::time::Instant::now() < until {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).expect("blocking stream");
+                        let mut buf = [0u8; 2048];
+                        let _ = stream.read(&mut buf);
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = stream.write_all(resp.as_bytes());
+                        let _ = stream.flush();
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => return,
+                }
+            }
+        });
+        addr
+    }
+
+    /// The call-site test: the predicate existing and passing its own unit test
+    /// pins nothing about anything consulting it.
+    ///
+    /// The explicit 1 s `timeout` is what keeps the mismatch case at ~1 s rather
+    /// than `HEALTH_TIMEOUT`'s 30 s on all three required `rust-test` legs and
+    /// in the pre-push hook — the cost that makes deleting this case attractive.
+    #[test]
+    fn wait_for_health_at_accepts_only_the_child_it_spawned() {
+        let dead = AtomicBool::new(false);
+        let client = build_http_client(Duration::from_secs(5)).expect("build client");
+
+        let foreign = stub_health_body(r#"{"status":"ok","pid":999999}"#, Duration::from_secs(5));
+        let foreign_url = format!("http://{foreign}/health");
+        let result = tauri::async_runtime::block_on(wait_for_health_at(
+            &client,
+            &foreign_url,
+            &dead,
+            4242,
+            Duration::from_secs(1),
+        ));
+        assert!(
+            result.is_err(),
+            "a 2xx from a DIFFERENT process must not be accepted as our sidecar"
+        );
+
+        let ours = stub_health_body(r#"{"status":"ok","pid":4242}"#, Duration::from_secs(5));
+        let ours_url = format!("http://{ours}/health");
+        let result = tauri::async_runtime::block_on(wait_for_health_at(
+            &client,
+            &ours_url,
+            &dead,
+            4242,
+            Duration::from_secs(2),
+        ));
+        assert_eq!(
+            result,
+            Ok(()),
+            "a 2xx naming our own pid must be accepted: {result:?}"
+        );
+    }
+
+    #[derive(Clone, Copy)]
+    enum FirstHealth {
+        /// Answer the first `/health` with this 200 body.
+        Body(&'static str),
+        /// Accept the first `/health` and never answer it.
+        Silent,
+    }
+
+    /// A loopback stand-in serving both `/health` and `/api/shutdown`.
+    ///
+    /// The FIRST health request takes `mode` — that is the identity GET.
+    /// Subsequent ones answer 404, which `check_health_at` reads as "the port is
+    /// released", so `wait_for_server_gone` returns immediately instead of
+    /// paying a connect refusal per poll. Every connection is handled on its own
+    /// thread so a silent health hold cannot block the shutdown POST.
+    ///
+    /// Returns the address and a counter of shutdown POSTs actually received —
+    /// the assertion that the flush request was, or was not, issued.
+    fn stub_identity_and_shutdown(
+        mode: FirstHealth,
+        lifetime: Duration,
+    ) -> (SocketAddr, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("local_addr");
+        listener.set_nonblocking(true).expect("set_nonblocking");
+        let shutdown_hits = Arc::new(AtomicUsize::new(0));
+        let hits = shutdown_hits.clone();
+        std::thread::spawn(move || {
+            let health_seen = Arc::new(AtomicUsize::new(0));
+            let until = std::time::Instant::now() + lifetime;
+            while std::time::Instant::now() < until {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let hits = hits.clone();
+                        let health_seen = health_seen.clone();
+                        std::thread::spawn(move || {
+                            stream.set_nonblocking(false).expect("blocking stream");
+                            stream
+                                .set_read_timeout(Some(Duration::from_secs(5)))
+                                .expect("read timeout");
+                            let mut buf = [0u8; 4096];
+                            let read = stream.read(&mut buf).unwrap_or(0);
+                            let head = String::from_utf8_lossy(&buf[..read]).to_string();
+                            if head.starts_with("POST /api/shutdown") {
+                                hits.fetch_add(1, Ordering::Release);
+                                let body = br#"{"data":{"shuttingDown":true}}"#;
+                                let resp = format!(
+                                    "HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                    body.len()
+                                );
+                                let _ = stream.write_all(resp.as_bytes());
+                                let _ = stream.write_all(body);
+                                let _ = stream.flush();
+                                return;
+                            }
+                            let first = health_seen.fetch_add(1, Ordering::AcqRel) == 0;
+                            if first {
+                                match mode {
+                                    FirstHealth::Body(body) => {
+                                        let resp = format!(
+                                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                            body.len()
+                                        );
+                                        let _ = stream.write_all(resp.as_bytes());
+                                        let _ = stream.flush();
+                                    }
+                                    FirstHealth::Silent => {
+                                        // Accept and never answer: the identity
+                                        // GET must be bounded by its own timeout,
+                                        // not by the client's.
+                                        std::thread::sleep(Duration::from_secs(4));
+                                    }
+                                }
+                                return;
+                            }
+                            let _ = stream.write_all(
+                                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                            );
+                            let _ = stream.flush();
+                        });
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => return,
+                }
+            }
+        });
+        (addr, shutdown_hits)
+    }
+
+    fn run_stop(
+        addr: SocketAddr,
+        deadline_secs: u64,
+        owned_child_pid: Option<u32>,
+    ) -> (StopReport, Duration) {
+        let shutdown = format!("http://{addr}/api/shutdown");
+        let health = format!("http://{addr}/health");
+        let client = build_http_client(Duration::from_secs(5)).expect("build client");
+        let started = std::time::Instant::now();
+        let report = tauri::async_runtime::block_on(graceful_stop_request(
+            &client,
+            deadline_secs,
+            Endpoints {
+                shutdown: &shutdown,
+                health: &health,
+            },
+            true,
+            owned_child_pid,
+            false,
+        ));
+        (report, started.elapsed())
+    }
+
+    /// A POSITIVE foreign identity is the one case that skips the flush.
+    ///
+    /// The verdict assertion is as load-bearing as the "received nothing" one:
+    /// only `Posted::Refused` → `PostFailed` returns without
+    /// `wait_for_server_gone`, and a foreign process never exits, so a skip that
+    /// fell into the wait would burn the whole `deadline_secs` and report a
+    /// `TimedOut` that is false — while "the endpoint received nothing" stayed
+    /// green.
+    #[test]
+    fn a_foreign_pid_skips_the_shutdown_post_without_waiting() {
+        let (addr, hits) = stub_identity_and_shutdown(
+            FirstHealth::Body(r#"{"status":"ok","pid":999999}"#),
+            Duration::from_secs(6),
+        );
+        let (report, elapsed) = run_stop(addr, 5, Some(4242));
+
+        assert_eq!(hits.load(Ordering::Acquire), 0, "the flush must not be sent");
+        assert_eq!(report.verdict, GracefulStop::PostFailed);
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "the skip must return immediately, not wait out deadline_secs: {elapsed:?}"
+        );
+    }
+
+    /// A pid-less body is the DEFAULT answer from every sidecar built before
+    /// `/health` gained `pid`. Treating "unidentified" as "foreign" would
+    /// hard-kill the flush on every Quit against one of those.
+    #[test]
+    fn a_pid_less_health_body_still_posts_the_flush() {
+        let (addr, hits) = stub_identity_and_shutdown(
+            FirstHealth::Body(r#"{"status":"ok"}"#),
+            Duration::from_secs(6),
+        );
+        let (report, _elapsed) = run_stop(addr, 3, Some(4242));
+
+        assert_eq!(
+            hits.load(Ordering::Acquire),
+            1,
+            "an unidentified responder is not proof of a foreign process — POST anyway"
+        );
+        assert_ne!(report.verdict, GracefulStop::PostFailed);
+    }
+
+    /// A health GET that accepts and never answers is a transient stall, not
+    /// evidence of a foreign process — and it must not eat the exit budget.
+    #[test]
+    fn a_stalling_identity_probe_still_posts_the_flush_and_stays_bounded() {
+        let (addr, hits) =
+            stub_identity_and_shutdown(FirstHealth::Silent, Duration::from_secs(10));
+        let (report, elapsed) = run_stop(addr, 3, Some(4242));
+
+        assert_eq!(
+            hits.load(Ordering::Acquire),
+            1,
+            "a stalled identity probe must fail OPEN — the POST is what flushes unsaved edits"
+        );
+        assert_ne!(report.verdict, GracefulStop::PostFailed);
+        assert!(
+            elapsed < EXIT_GRACEFUL_BUDGET,
+            "the identity probe is bounded at 1s; the whole stop must stay well inside the exit budget: {elapsed:?}"
+        );
     }
 }
