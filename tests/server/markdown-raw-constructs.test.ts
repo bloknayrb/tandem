@@ -49,6 +49,77 @@ function rawBlockCount(doc: Y.Doc): number {
   return n;
 }
 
+/**
+ * Apply a formatting mark to a range of the first `Y.XmlText` child of the
+ * block at `blockIndex`. This is what a client format does, and what a
+ * cross-block `tandem_edit` inherits (#1751 / exp8).
+ */
+function formatBlock(doc: Y.Doc, blockIndex: number, from: number, len: number, mark: string) {
+  const el = doc.getXmlFragment("default").get(blockIndex);
+  if (!(el instanceof Y.XmlElement)) throw new Error(`block ${blockIndex} is not an element`);
+  for (let i = 0; i < el.length; i++) {
+    const child = el.get(i);
+    if (child instanceof Y.XmlText) {
+      child.format(from, len, { [mark]: true });
+      return;
+    }
+  }
+  throw new Error(`block ${blockIndex} has no Y.XmlText child`);
+}
+
+describe("marks inside raw-carrier blocks never reach the file (#1751)", () => {
+  it("frontmatter survives a bold mark", () => {
+    // Kills a fix applied only to the `codeBlock` arm.
+    const doc = load("---\ntitle: X\n---\n\nBody.\n");
+    formatBlock(doc, 0, 0, 5, "bold");
+    const out = saveMarkdown(doc);
+    expect(out).not.toContain("<bold");
+    expect(out).toContain("title: X");
+  });
+
+  it("footnote definition survives an italic mark", () => {
+    const input = "ref[^1] here.\n\n[^1]: A footnote def.\n";
+    const doc = load(input);
+    formatBlock(doc, 1, 0, 4, "italic");
+    expect(saveMarkdown(doc)).toBe(input);
+  });
+
+  it("raw HTML block survives a bold mark", () => {
+    // Kills a fix applied to the `codeBlock` arm but not to getElementPlainText.
+    const input = "<div>\nraw html\n</div>\n";
+    const doc = load(input);
+    formatBlock(doc, 0, 0, 4, "bold");
+    expect(saveMarkdown(doc)).toBe(input);
+  });
+
+  it("fenced code body survives a bold mark", () => {
+    const doc = load("```js\nlet x = 1;\n```\n");
+    formatBlock(doc, 0, 0, 3, "bold");
+    expect(saveMarkdown(doc)).toBe("```js\nlet x = 1;\n```\n");
+  });
+
+  it("the user's OWN literal <bold> tags survive — a post-hoc scrub cannot pass this", () => {
+    // Specs 1-4 are all satisfied by `saveMarkdown(...).replace(/<\/?bold>/g, "")`.
+    // Here the source itself contains `<bold>` in a raw HTML block AND in a
+    // fence, and the mark is applied to a DIFFERENT block: only reading
+    // `toDelta()` (rather than scrubbing `toString()`'s output) is byte-identical.
+    const input = "<bold>\nliteral\n</bold>\n\nProse here.\n\n```txt\n<bold>x</bold>\n```\n";
+    const doc = load(input);
+    // The mark goes on the ordinary paragraph, so the two blocks carrying
+    // literal tags are untouched: only their own bytes may change, and a scrub
+    // would delete four tags the user wrote.
+    formatBlock(doc, 1, 0, 5, "bold");
+    expect(saveMarkdown(doc)).toBe(input.replace("Prose here.", "**Prose** here."));
+  });
+
+  it("a bold run in an ordinary paragraph still serializes as **bold**", () => {
+    // Kills a helper accidentally routed into `deltaToPhrasingContent`.
+    const doc = load("plain text here\n");
+    formatBlock(doc, 0, 0, 5, "bold");
+    expect(saveMarkdown(doc)).toBe("**plain** text here\n");
+  });
+});
+
 describe("raw-construct forward/reverse mapping", () => {
   it("footnote definition becomes a markdownRaw paragraph and re-emits verbatim", () => {
     const doc = load("ref[^1] here.\n\n[^1]: the body\n");

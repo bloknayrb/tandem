@@ -717,7 +717,7 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
       for (let i = 0; i < el.length; i++) {
         const child = el.get(i);
         if (child instanceof Y.XmlText) {
-          value += child.toString();
+          value += xmlTextPlain(child);
         }
       }
       return { type: "code", lang: lang || null, value } as any;
@@ -865,6 +865,28 @@ function flattenHeadingNewlines(children: PhrasingContent[]): PhrasingContent[] 
 }
 
 /**
+ * Text of a `Y.XmlText` with every mark stripped.
+ *
+ * `Y.XmlText.toString()` renders each formatting attribute as an XML element,
+ * so a bold run inside a raw-carrier block or a fence serialized as the literal
+ * `<bold>let</bold>` — and `html` node values are written VERBATIM by
+ * `remark-stringify`, so those tags landed in the user's file unescaped and
+ * unwarned (#1751). Same shape as `getElementText()` in
+ * `src/server/mcp/document-model.ts`: read `toDelta()`, not `toString()`.
+ *
+ * Exported rather than duplicated so a fourth reader cannot be written against
+ * `toString()` without this helper sitting beside it. This is a SERIALIZATION
+ * guarantee, not a schema one — the mark stays in the Y.Doc, so a client
+ * showing a raw block bolded keeps showing it bolded until reload; only the
+ * bytes on disk are clean.
+ */
+export function xmlTextPlain(t: Y.XmlText): string {
+  let out = "";
+  for (const op of t.toDelta()) if (typeof op.insert === "string") out += op.insert;
+  return out;
+}
+
+/**
  * Reconstruct the verbatim source of a raw block (raw HTML, footnote and link
  * reference definitions) from its Y children.
  *
@@ -887,7 +909,7 @@ function getElementPlainText(el: Y.XmlElement): string {
   let value = "";
   for (let i = 0; i < el.length; i++) {
     const child = el.get(i);
-    if (child instanceof Y.XmlText) value += child.toString();
+    if (child instanceof Y.XmlText) value += xmlTextPlain(child);
     else if (child instanceof Y.XmlElement && child.nodeName === "hardBreak") value += "\n";
   }
   return value;
