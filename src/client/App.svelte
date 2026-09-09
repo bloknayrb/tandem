@@ -1991,7 +1991,7 @@ const review = useAnnotationReview({
   // Lets the hook's auto-set effect avoid clobbering externally-set ids
   // (e.g., from Alt+]/Alt+[ keyboard navigation).
   getActiveAnnotationId: () => railContent.activeAnnotationId,
-  onApplyFailed: (ann) =>
+  onApplyFailed: (ann, reason) =>
     notifications.push({
       // Keyed by ann.id (matches dedupKey below), not Date.now() — two
       // different annotations failing in the same millisecond must not
@@ -2003,8 +2003,16 @@ const review = useAnnotationReview({
       // "was left pending", not "is still pending" — the annotation can be
       // accepted or dismissed later while this `warning` stays in the tray.
       // See `TandemNotification.severity`.
+      // Two causes, two messages. "The text has changed" is a diagnosis, and
+      // it is the wrong one for `no-editor` — that arm fires with the document
+      // untouched, most reachably from source view, where the editor is
+      // unmounted while this rail stays live. Telling the user their text moved
+      // sends them hunting for an edit nobody made; naming the view they are in
+      // gives them the one action that works.
       message:
-        "Couldn't apply the suggestion — the text has changed. The annotation was left pending.",
+        reason === "no-editor"
+          ? "Couldn't apply the suggestion — the editor isn't open. Switch out of source view and try again. The annotation was left pending."
+          : "Couldn't apply the suggestion — the text has changed. The annotation was left pending.",
       dedupKey: `suggestion-apply-failed:${ann.id}`,
       timestamp: Date.now(),
     }),

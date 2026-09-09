@@ -139,7 +139,11 @@ describe("useAnnotationReview — onApplyFailed (B2)", () => {
     review.resolveAnnotation(ann.id, "accepted");
 
     expect(onApplyFailed).toHaveBeenCalledTimes(1);
-    expect(onApplyFailed).toHaveBeenCalledWith(expect.objectContaining({ id: ann.id }));
+    // The `"range"` half of the round-3 discriminant: an editor IS present here
+    // and `applySuggestion` genuinely failed, so "the text has changed" is the
+    // correct message. Its sibling row asserts `"no-editor"` on the same
+    // callback — together they stop the two declines collapsing back into one.
+    expect(onApplyFailed).toHaveBeenCalledWith(expect.objectContaining({ id: ann.id }), "range");
     // ADR-027: the callback receives the annotation object for the caller to
     // build its own generic message from — but resolveAnnotation itself must
     // not have leaked content anywhere else. Reverted to pending:
@@ -312,5 +316,153 @@ describe("useAnnotationReview — the revert clears resolvedBy (#1770)", () => {
     const after = map.get(ann.id) as Annotation;
     expect(after.status).toBe("pending");
     expect(after.resolvedBy).toBeUndefined();
+  });
+});
+
+/**
+ * #1826 item 1 — push and pull must not disagree after a failed Accept.
+ *
+ * `resolveAnnotation` used to write `status: "accepted"` FIRST and revert to
+ * `pending` only after `applySuggestion` returned false. The server's annotation
+ * observer emits `annotation:accepted` on that first write and has NO arm for a
+ * revert to `pending`, so Claude was pushed `annotation:accepted` while every
+ * `tandem_checkInbox` read `pending`.
+ *
+ * The discriminator is the SEQUENCE of statuses written, not the final one: the
+ * two specs above already assert the final `pending` and stay green under the
+ * bug. The failure branch still writes — a bare `return` would turn the #1770
+ * stripper pin red — so "zero writes" is the wrong assertion too.
+ */
+describe("useAnnotationReview — no silent divergence after a failed Accept (#1826)", () => {
+  /** Every `status` value written to `id`, in order. */
+  function observeStatuses(map: Y.Map<unknown>, id: string): string[] {
+    const seen: string[] = [];
+    map.observe((event) => {
+      if (!event.keysChanged.has(id)) return;
+      const rec = map.get(id) as Annotation | undefined;
+      if (rec) seen.push(rec.status);
+    });
+    return seen;
+  }
+
+  it("writes only `pending` when the apply fails", () => {
+    const ydoc = new Y.Doc();
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const ann = makeAnnotation({
+      id: "unresolvable-seq",
+      author: "claude",
+      type: "comment",
+      status: "pending",
+      suggestedText: "replacement text",
+      // Neither `range` nor `relRange` — applySuggestion() returns false.
+      range: undefined,
+    });
+    map.set(ann.id, ann);
+    const seen = observeStatuses(map, ann.id);
+
+    const editor = { state: { doc: {} }, chain: vi.fn() } as unknown as TiptapEditor;
+    const review = mountReview({
+      getYdoc: () => ydoc,
+      getEditor: () => editor,
+      getAnnotations: () => [map.get(ann.id) as Annotation],
+      onActiveAnnotationChange: () => {},
+      getScrollBehavior: () => "auto",
+      onApplyFailed: () => {},
+    });
+
+    review.resolveAnnotation(ann.id, "accepted");
+
+    // Before the fix: ["accepted", "pending"] — and the "accepted" is what the
+    // observer turns into a channel event Claude can never reconcile.
+    expect(seen).toEqual(["pending"]);
+  });
+
+  it("declines the accept when there is no editor to apply into", () => {
+    // **Review round 1.** `if (editor && !applySuggestion(...))` short-circuits
+    // on a null editor and fell through to the status write, so the record went
+    // out `accepted` with the suggested text never inserted and no toast:
+    // exactly the divergence this describe exists to close, by the one route
+    // the rewritten condition made read as deliberate. `getEditor()` returns
+    // null while the Tiptap instance is absent — a tab swap or a document
+    // reload, with `SidePanel` mounted throughout by design.
+    const ydoc = new Y.Doc();
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const ann = makeAnnotation({
+      id: "no-editor",
+      author: "claude",
+      type: "comment",
+      status: "pending",
+      suggestedText: "replacement text",
+      // A range that WOULD apply cleanly, so the only reason to decline is the
+      // missing editor.
+      range: { from: toFlatOffset(0), to: toFlatOffset(11) },
+      textSnapshot: "hello world",
+    });
+    map.set(ann.id, ann);
+    const seen = observeStatuses(map, ann.id);
+    const applyFailed: string[] = [];
+    const reasons: string[] = [];
+
+    const review = mountReview({
+      getYdoc: () => ydoc,
+      getEditor: () => null,
+      getAnnotations: () => [map.get(ann.id) as Annotation],
+      onActiveAnnotationChange: () => {},
+      getScrollBehavior: () => "auto",
+      onApplyFailed: (failed, reason) => {
+        applyFailed.push(failed.id);
+        reasons.push(reason);
+      },
+    });
+
+    review.resolveAnnotation(ann.id, "accepted");
+
+    // Before the fix: ["accepted"], with the document untouched and
+    // `applyFailed` empty.
+    expect(seen).toEqual(["pending"]);
+    expect(applyFailed).toEqual(["no-editor"]);
+    // **Review round 3.** The reason, not just the fact. Both declines shared
+    // one callback and `App.svelte` renders one message from it — "the text has
+    // changed" — which is a false diagnosis here: the range above resolves
+    // cleanly and the document is untouched. Source view is the reachable
+    // route (`{#if !inSourceView}` unmounts Tiptap while this rail stays
+    // mounted), so the user is told to hunt for an edit nobody made instead of
+    // to leave the view they are in.
+    expect(reasons).toEqual(["no-editor"]);
+  });
+
+  it("writes exactly one `accepted` when the apply succeeds (positive control)", () => {
+    // Kills a fix that stops writing the status at all, and a double-write.
+    const ydoc = new Y.Doc();
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const ann = makeAnnotation({
+      id: "applies-cleanly",
+      author: "claude",
+      type: "comment",
+      status: "pending",
+      suggestedText: "goodbye world",
+      range: { from: toFlatOffset(0), to: toFlatOffset(11) },
+      textSnapshot: "hello world",
+    });
+    map.set(ann.id, ann);
+    const seen = observeStatuses(map, ann.id);
+
+    const editor = new Editor({
+      extensions: buildSchemaExtensions(),
+      content: "<p>hello world</p>",
+    });
+    const review = mountReview({
+      getYdoc: () => ydoc,
+      getEditor: () => editor,
+      getAnnotations: () => [map.get(ann.id) as Annotation],
+      onActiveAnnotationChange: () => {},
+      getScrollBehavior: () => "auto",
+      onApplyFailed: () => {},
+    });
+
+    review.resolveAnnotation(ann.id, "accepted");
+    editor.destroy();
+
+    expect(seen).toEqual(["accepted"]);
   });
 });

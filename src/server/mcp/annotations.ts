@@ -1001,11 +1001,16 @@ export function registerAnnotationTools(server: McpServer): void {
       if (!store) return noDocumentError();
 
       // #651 presence: surface the typing indicator on the specific card being
-      // replied to. ADR-027: the seam already rejects a note parent for Claude
-      // (`lifecycle.reply` returns `invalid-note`), but we belt-and-suspenders the
-      // broadcast via `sanitizeAnnotationIdForPresence` — if the lookup says
-      // note (or absent), the annotationId is dropped and the indicator falls
-      // back to the generic status-bar one.
+      // replied to. `sanitizeAnnotationIdForPresence` drops the id when the
+      // lookup says note (or absent), and the indicator falls back to the
+      // generic status-bar one.
+      //
+      // NOT belt-and-suspenders over the seam, despite the order this reads in
+      // (review round 2). `lifecycle.reply` does return `invalid-note`, but it
+      // runs inside the handler BELOW, and `withTypingPresence` broadcasts
+      // presence before it invokes that handler — so at the moment the id
+      // reaches awareness the seam has refused nothing. This call is the only
+      // ADR-027 check on the broadcast path.
       const safeId = sanitizeAnnotationIdForPresence(
         getCurrentDoc(documentId)?.docName,
         annotationId,

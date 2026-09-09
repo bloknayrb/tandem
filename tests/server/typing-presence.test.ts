@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { resetForTesting as resetEventQueue } from "../../src/server/events/queue.js";
+import { populateYDoc } from "../../src/server/mcp/document.js";
 import {
   resetTypingPresenceForTesting,
   sanitizeAnnotationIdForPresence,
@@ -21,6 +22,7 @@ import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provid
 import { Y_MAP_ANNOTATIONS, Y_MAP_AWARENESS, Y_MAP_CLAUDE } from "../../src/shared/constants.js";
 import { withMcp } from "../../src/shared/origins.js";
 import type { Annotation, ClaudeAwareness } from "../../src/shared/types.js";
+import { seedRawAnnotation } from "../helpers/ydoc-factory.js";
 
 const TEST_DOC = "test-doc-651";
 
@@ -117,6 +119,32 @@ describe("withTypingPresence", () => {
     seedAnnotation(doc, "ann_note", "note");
     const safeId = sanitizeAnnotationIdForPresence(TEST_DOC, "ann_note", Y_MAP_ANNOTATIONS);
     expect(safeId).toBeUndefined();
+  });
+
+  it("#1698 ADR-027: never broadcasts annotationId for a legacy `flag` note", () => {
+    // The discriminator for #1698. A stored `{ type: "flag" }` is a note only
+    // once `sanitizeAnnotation` normalizes it, so a guard reading the RAW type
+    // let its id through. Seeded via the shared raw helper — the local
+    // `seedAnnotation` is typed `Annotation["type"]` and cannot express `flag`.
+    //
+    // `seedRawAnnotation` anchors [0,5) through `anchoredRange` and THROWS on an
+    // empty doc, so the doc must carry text first. Scoped to this spec: the
+    // local `seedAnnotation` writes a literal `{from: 0, to: 5}` and the other
+    // specs in this file need no content.
+    populateYDoc(doc, "Hello world");
+    seedRawAnnotation(doc.getMap(Y_MAP_ANNOTATIONS), doc, "ann_flag", { type: "flag" });
+    const safeId = sanitizeAnnotationIdForPresence(TEST_DOC, "ann_flag", Y_MAP_ANNOTATIONS);
+    expect(safeId).toBeUndefined();
+  });
+
+  it("#1698: a non-note type is still broadcast (highlight)", () => {
+    // Positive control: an over-narrowing to `type === "comment"` dies here.
+    // NOT a pin that a PRIVATE highlight *should* broadcast — the guard is the
+    // note half only, and a later widening to `isClaudeFacing` is expected to
+    // change this row.
+    seedAnnotation(doc, "ann_highlight", "highlight");
+    const safeId = sanitizeAnnotationIdForPresence(TEST_DOC, "ann_highlight", Y_MAP_ANNOTATIONS);
+    expect(safeId).toBe("ann_highlight");
   });
 
   it("returns undefined for a missing annotation lookup", () => {
