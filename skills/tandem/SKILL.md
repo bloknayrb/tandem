@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 17
+version: 18
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -83,7 +83,7 @@ Selections are **not** sent as standalone events. Instead, when the user sends a
 
 ## Collaboration Etiquette
 
-- Check `tandem_getActivity()` before annotating near the user's cursor. If `isTyping` is true, wait for typing to stop before annotating that area.
+- Check `tandem_getActivity()` before annotating near the user's cursor. If `isTyping` is true, wait for typing to stop before annotating that area. `cursor` is a flat text offset (UTF-16 code units), the same system as annotation ranges — only a document change triggers a write, and the last one publishes wherever the caret is by then, so treat it as a proximity hint, never as a range endpoint for `tandem_edit` or `tandem_comment`.
 - Use `tandem_status({ text: "..." })` to show what you're working on — the user sees it in the editor status bar.
 - **Call `tandem_checkInbox` every 2-3 tool calls** (orchestrator only in a multi-agent workflow), not just at the end of a task. You cannot tell from your side whether real-time push is reaching you — the channel is often not connected, and Tandem can only tell you when *nothing at all* is subscribed, not whether the thing that is subscribed reaches you — so steady polling is the reliable path, always. It's cheap: repeat polls de-duplicate against what you've already been shown, so frequent calls don't double-report. An item that also went out as a real-time push carries `alreadyPushed: true` and still appears — the server can't confirm a push reached you, so it shows you everything rather than risk dropping it. See "User comments" above before acting on a flagged item twice. When in doubt, poll.
 - Reply to chat messages with `tandem_reply`, not annotations.

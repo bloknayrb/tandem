@@ -78,7 +78,26 @@ function walkMatches(doc: EditorState["doc"], opts: FindReplaceOptions): MatchRa
   const result: MatchRange[] = [];
   doc.descendants((node, pos) => {
     if (!node.isTextblock) return;
-    const text = node.textContent;
+    // NOT `node.textContent` (#1774). `textContent` is `textBetween(0, size, "")`,
+    // which charges a `hardBreak` **0** characters while ProseMirror charges its
+    // `nodeSize` of **1** — so the index-into-text and the PM offset below drifted
+    // by one per PRECEDING break in the block, compounding. Giving every inline
+    // LEAF exactly one character makes char index equal PM offset by construction
+    // rather than by counting breaks. `leafText` is passed explicitly rather than
+    // left to a node's `spec.leafText`, so a future leaf declaring a
+    // multi-character one cannot silently re-break the alignment.
+    //
+    // The argument covers inline LEAVES only: `Fragment.textBetween` gives an
+    // inline NON-leaf `nodeText = ""` and recurses, while its `nodeSize` is
+    // `2 + content.size` — a 2-per-node drift no `leafText` can reach. Safe today
+    // because `hardBreak` is the schema's only inline node.
+    //
+    // DELIBERATE TWIN: `src/client/positions.ts#textblockFlatText` walks the same
+    // shape and gives every non-`hardBreak` inline leaf ZERO characters, on
+    // purpose — that walk aligns to the server's flat text, this one to PM
+    // positions. Any future inline node, leaf or not, has to be considered in
+    // BOTH walks.
+    const text = node.textBetween(0, node.content.size, undefined, "\n");
     for (const m of text.matchAll(re)) {
       const idx = m.index ?? 0;
       result.push({ from: pos + 1 + idx, to: pos + 1 + idx + m[0].length });
