@@ -134,15 +134,21 @@ describe("activity.cursor is a flat text offset (#1776)", () => {
     const typedAt = activity()?.cursor as number;
 
     // Move the caret with no edit at all, still inside the typing window.
-    const elsewhere = toFlatOffset(extractText(ydoc).indexOf("Some text"));
+    // INTO THE LIST, deliberately: this assertion is also the typing-clear
+    // site's only units pin, and in the leading paragraph the PM position and
+    // the flat offset both equal 8, so a regression to `selection.from` there
+    // passes. The list item separates them (flat 23 / PM 26).
+    const elsewhere = toFlatOffset(extractText(ydoc).indexOf("one"));
     editor.commands.setTextSelection(flatOffsetToPmPos(editor.state.doc, elsewhere));
+    // Same guard test (1) provides for the typed caret, at the moved caret.
+    expect(editor.state.selection.from).not.toBe(caretFlat(editor));
     await vi.advanceTimersByTimeAsync(TYPING_DEBOUNCE + 50);
 
     const written = activity();
     expect(written?.isTyping).toBe(false);
     expect(written?.cursor).not.toBe(typedAt);
     expect(written?.cursor).toBe(caretFlat(editor));
-    expect(extractText(ydoc).slice(written?.cursor as number)).toMatch(/^Some text/);
+    expect(extractText(ydoc).slice(written?.cursor as number)).toMatch(/^one/);
   });
 
   it("(5b) a caret move with no preceding edit writes nothing", async () => {
