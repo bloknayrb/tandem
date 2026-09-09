@@ -15,7 +15,7 @@ import {
 import { withBrowser } from "../../../shared/origins";
 import { toFlatOffset, toPmPos } from "../../../shared/positions/types";
 import type { ClaudeAwareness } from "../../../shared/types";
-import { flatOffsetToPmPos, pmSelectionToFlat } from "../../positions";
+import { flatOffsetToPmPos, pmPosToFlatOffset, pmSelectionToFlat } from "../../positions";
 
 /** Exported so a test can read the decoration set back; see #1669. */
 export const awarenessPluginKey = new PluginKey("tandemAwareness");
@@ -223,7 +223,13 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
               // Broadcast typing activity — debounce the Y.Map write to avoid
               // network sync on every keystroke. Batch rapid edits into one write.
               if (state.doc !== prevState.doc) {
-                lastCursor = state.selection.from;
+                // #1776: `cursor` is published to MCP clients, which hold no
+                // ProseMirror document — so it must leave here in the SAME flat
+                // coordinate system as `Y_MAP_SELECTION` above and as annotation
+                // ranges. Convert at capture time, against the doc the position
+                // came from; a raw `state.selection.from` here is a PM position
+                // and disagrees with the sibling key in the same payload.
+                lastCursor = pmPosToFlatOffset(state.doc, toPmPos(state.selection.from));
                 pendingActivity = true;
 
                 // Debounce the "typing" write (200ms to batch rapid keystrokes)
@@ -246,10 +252,17 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                 if (typingTimeout) clearTimeout(typingTimeout);
                 typingTimeout = setTimeout(() => {
                   pendingActivity = false;
+                  // Converted BEFORE the transaction callback so both halves read
+                  // one `view.state`, and so the doc walk stays outside the Y.Doc
+                  // transaction (Critical Rule 2).
+                  const cursor = pmPosToFlatOffset(
+                    view.state.doc,
+                    toPmPos(view.state.selection.from),
+                  );
                   withBrowser(ydoc, () =>
                     userAwareness.set(Y_MAP_ACTIVITY, {
                       isTyping: false,
-                      cursor: view.state.selection.from,
+                      cursor,
                       lastEdit: Date.now(),
                     }),
                   );

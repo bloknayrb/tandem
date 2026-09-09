@@ -280,7 +280,10 @@ export function registerAwarenessTools(server: McpServer): void {
       "move under you. Returns four fields — `active`, `isTyping`, `cursor`, `lastEdit` — and " +
       "no selection: use tandem_checkInbox's `activity.selectedText` for what the user has " +
       "selected. " +
-      "`cursor` is a ProseMirror position, not a flat offset (#1776). Returns presence only; " +
+      "`cursor` is a flat text offset in UTF-16 code units — the same coordinate system as " +
+      "annotation ranges. It is a proximity hint, not an edit anchor: it is written only when " +
+      "the document changes and carries no snapshot, so take ranges from tandem_resolveRange " +
+      "or tandem_search. Returns presence only; " +
       "it does not return document content or pending user messages (use tandem_checkInbox " +
       "for those).",
     {
