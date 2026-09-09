@@ -119,4 +119,40 @@ describe("activity.cursor is a flat text offset (#1776)", () => {
     const cursor = written?.cursor as number;
     expect(extractText(ydoc).slice(cursor, cursor + 5)).toBe("three");
   });
+  /**
+   * The freshness claim on all three prose surfaces (docs/mcp-tools.md, the
+   * `tandem_getActivity` description, skills/tandem/SKILL.md) is "only a
+   * document change TRIGGERS a write", not "the value only moves when the
+   * document changes". The typing-clear timer reads `view.state` at fire time
+   * rather than the `lastCursor` captured at the edit, so a caret moved inside
+   * the `TYPING_DEBOUNCE` window rides out on a write the earlier edit armed.
+   * (5a) pins that; (5b) pins the half that is still true.
+   */
+  it("(5a) the armed typing-clear write publishes the caret's live position", async () => {
+    const { ydoc, editor, activity } = typeZBeforeThree();
+    await vi.advanceTimersByTimeAsync(250);
+    const typedAt = activity()?.cursor as number;
+
+    // Move the caret with no edit at all, still inside the typing window.
+    const elsewhere = toFlatOffset(extractText(ydoc).indexOf("Some text"));
+    editor.commands.setTextSelection(flatOffsetToPmPos(editor.state.doc, elsewhere));
+    await vi.advanceTimersByTimeAsync(TYPING_DEBOUNCE + 50);
+
+    const written = activity();
+    expect(written?.isTyping).toBe(false);
+    expect(written?.cursor).not.toBe(typedAt);
+    expect(written?.cursor).toBe(caretFlat(editor));
+    expect(extractText(ydoc).slice(written?.cursor as number)).toMatch(/^Some text/);
+  });
+
+  it("(5b) a caret move with no preceding edit writes nothing", async () => {
+    const { ydoc, editor, activity } = boundEditor(MARKDOWN);
+    vi.useFakeTimers();
+
+    const target = toFlatOffset(extractText(ydoc).indexOf("three"));
+    editor.commands.setTextSelection(flatOffsetToPmPos(editor.state.doc, target));
+    await vi.advanceTimersByTimeAsync(TYPING_DEBOUNCE + 250);
+
+    expect(activity()).toBeUndefined();
+  });
 });
