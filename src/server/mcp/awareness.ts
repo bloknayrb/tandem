@@ -666,15 +666,42 @@ function processUnsurfacedInboxAnnotations(
     if (hideFromAI(ann, modeState)) continue;
 
     const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
+    // The ledger read is hoisted above the bucket branch so the user arm's
+    // status gate can consult `edited` as a term of its own condition.
+    const key = inboxLedgerKey(documentId, ann);
+    const lastSurfacedEditedAt = surfaced.get(key);
+    const edited = lastSurfacedEditedAt !== undefined && (ann.editedAt ?? 0) > lastSurfacedEditedAt;
+
     // #1619: `isClaudeFacing` is the audience half — a stored
     // `{comment, audience: "private"}` record is withheld from the channel and
     // must be withheld here too, and a user HIGHLIGHT (always private per
     // ADR-027) never enters either bucket. Before any `surfaced.set`, for the
     // same reason the Solo hold is.
-    if (ann.author === "user" && ann.type === "comment" && isClaudeFacing(ann)) {
-      const lastSurfacedEditedAt = surfaced.get(inboxLedgerKey(documentId, ann));
-      const alreadySurfaced = lastSurfacedEditedAt !== undefined;
-      const edited = alreadySurfaced && (ann.editedAt ?? 0) > lastSurfacedEditedAt;
+    //
+    // #1826: the status gate. Without it a resolved user comment re-entered
+    // this bucket on every server restart — `surfacedIds` is module-level, so a
+    // restart empties the ledger and every dismissed or accepted user comment
+    // surfaced again as a fresh user action. Written positively
+    // (`status === "pending"`), not `!== "dismissed"`: `accepted` is a reachable
+    // end state for a user comment, since `transitionPending` refuses an accept
+    // only for a claude author or a suggestion-bearing record.
+    //
+    // `|| edited` holds WITHIN A SERVER RUN ONLY, and it is what stops this
+    // gate creating item 1's own defect class in the edit path: the observer
+    // emits `annotation:edited` on any `editedAt` advance with no status test,
+    // and Dismiss stays open to a user's comment, so a bare
+    // `status === "pending"` would push an edit-after-dismiss on the channel
+    // while `tandem_checkInbox` returned nothing. It does NOT cover
+    // restart-then-edit — `edited` needs a ledger entry, and a restart has
+    // none. Do not widen it to `lastSurfacedEditedAt ?? 0`: that re-surfaces
+    // every previously-edited resolved comment on every restart, which is the
+    // bug being fixed. Closing it properly means a durable ledger.
+    if (
+      ann.author === "user" &&
+      ann.type === "comment" &&
+      isClaudeFacing(ann) &&
+      (ann.status === "pending" || edited)
+    ) {
       const channelKey = edited ? getAnnotationEditedChannelKey(ann.id, ann.editedAt ?? 0) : ann.id;
 
       // Disclose, never suppress. `wasChannelEmitted` means "handed to >=1 SSE
@@ -692,7 +719,7 @@ function processUnsurfacedInboxAnnotations(
         ...(edited ? { edited: true } : {}),
         ...(wasChannelEmitted(channelKey) ? { alreadyPushed: true } : {}),
       });
-      surfaced.set(inboxLedgerKey(documentId, ann), ann.editedAt ?? 0);
+      surfaced.set(key, ann.editedAt ?? 0);
     } else if (
       ann.author === "claude" &&
       isClaudeFacing(ann) &&
@@ -703,7 +730,7 @@ function processUnsurfacedInboxAnnotations(
       ann.resolvedBy !== "claude"
     ) {
       userResponses.push({ ...ann, textSnippet: snippet });
-      surfaced.set(inboxLedgerKey(documentId, ann), ann.editedAt ?? 0);
+      surfaced.set(key, ann.editedAt ?? 0);
     }
   }
 

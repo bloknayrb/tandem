@@ -157,3 +157,89 @@ describe("the inbox ledger surfaces a decision made after Undo (#1770)", () => {
     expect(poll(surfaced).userActions).toEqual([]);
   });
 });
+
+/**
+ * #1826 item 2 — the `userActions` bucket had no status gate.
+ *
+ * The user arm admitted `author === "user" && type === "comment" &&
+ * isClaudeFacing(ann)` with no `status` test, while the Claude arm beside it
+ * tested `status !== "pending"`. `surfacedIds` is a module-level Map, so every
+ * server restart re-surfaced every RESOLVED user comment as a fresh user action.
+ *
+ * The gate is `status === "pending" || edited`, written positively. `|| edited`
+ * holds within one server run only and is what stops the gate creating item 1's
+ * own defect class on the edit path — the observer emits `annotation:edited` on
+ * any `editedAt` advance with no status test.
+ */
+describe("#1826: the userActions bucket has a status gate", () => {
+  /** A user comment in the browser shape, with an explicit status. */
+  function seedUserComment(id: string, extra: Record<string, unknown> = {}): void {
+    withBrowser(doc, () =>
+      map().set(id, {
+        id,
+        author: "user",
+        type: "comment",
+        audience: "outbound",
+        range: { from: 0, to: 5 },
+        content: "please fix",
+        status: "pending",
+        timestamp: 1,
+        rev: 1,
+        ...extra,
+      }),
+    );
+  }
+
+  it.each([
+    "dismissed",
+    "accepted",
+  ] as const)("a %s user comment never surfaced while pending yields no userAction", (status) => {
+    // A fresh ledger IS the restart. Both rows are red on master.
+    //
+    // The `accepted` row is what separates the specified gate from a lazy
+    // `status !== "dismissed"`: `transitionPending` refuses an accept only for
+    // a claude author or a suggestion-bearing record, so an outbound user
+    // comment really can end up `{accepted, resolvedBy: "claude"}` — which is
+    // the fixture below.
+    const surfaced = new Map<string, number>();
+    seedUserComment("u-resolved", {
+      status,
+      ...(status === "accepted" ? { resolvedBy: "claude" } : {}),
+    });
+
+    expect(poll(surfaced).userActions).toEqual([]);
+    expect([...surfaced.keys()], "and no ledger entry is written").toEqual([]);
+  });
+
+  it("the identical record at `pending` still yields one userAction (control)", () => {
+    // Without this, a gate that empties the bucket outright passes every row.
+    const surfaced = new Map<string, number>();
+    seedUserComment("u-pending");
+
+    expect(poll(surfaced).userActions.map((a) => a.id)).toEqual(["u-pending"]);
+  });
+
+  it("an edit after a dismiss still surfaces, within the same server run", () => {
+    // The 2a row: green on master and after the fix, RED against a bare
+    // `status === "pending"` gate. Its job is to stop the gate being narrowed
+    // later — the observer emits `annotation:edited` on any `editedAt` advance
+    // with no status test, so dropping `|| edited` would push on the channel
+    // while `tandem_checkInbox` returned nothing.
+    const surfaced = new Map<string, number>();
+    seedUserComment("u-edited");
+
+    expect(poll(surfaced).userActions.map((a) => a.id)).toEqual(["u-edited"]);
+
+    withBrowser(doc, () =>
+      map().set("u-edited", {
+        ...(map().get("u-edited") as Annotation),
+        status: "dismissed",
+        editedAt: 500,
+      }),
+    );
+
+    const second = poll(surfaced).userActions;
+    expect(second.map((a) => a.id)).toEqual(["u-edited"]);
+    expect(second[0].edited).toBe(true);
+  });
+});
