@@ -97,17 +97,20 @@ interface TauriBackendOptions {
 }
 
 /**
- * Pinned to keyring v3.6.3's `Display` impl (see `error.rs:64-67`). The
- * substrings come from the crate's actual formatted output — NOT the Debug
- * variant names. Update this list if the crate's error formatting changes.
+ * Pinned to keyring-core 1.0.0's `Display` impl (see `src/error.rs:81,83`),
+ * which keyring 4's `v1` feature re-exports. The substrings come from the
+ * crate's actual formatted output — NOT the Debug variant names. Both
+ * variants interpolate `{err}` after the colon, so match on the trailing
+ * colon rather than the whole sentence. Update this list if the crate's
+ * error formatting changes.
  */
 const KEYRING_UNAVAILABLE_MARKERS = [
   // Rust-side init guard (account-empty or Entry::new failure).
   "keychain-init",
-  // keyring::Error::PlatformFailure — e.g. libsecret missing on Linux.
-  "Platform secure storage failure",
-  // keyring::Error::NoStorageAccess — e.g. dbus not reachable, keychain locked.
-  "Couldn't access platform secure storage",
+  // keyring_core::Error::PlatformFailure — e.g. libsecret missing on Linux.
+  "Platform failure:",
+  // keyring_core::Error::NoStorageAccess — e.g. dbus not reachable, keychain locked.
+  "Couldn't access platform storage:",
 ];
 
 function isKeychainUnavailableMessage(message: string): boolean {
@@ -139,10 +142,10 @@ export function createTauriKeychainBackend(opts: TauriBackendOptions = {}): Clie
         // error or the platform's secure storage is unreachable). Other
         // errors are real and should be reported, not swallowed.
         //
-        // Substring choices are pinned to keyring v3.6.3's Display impl
-        // (`error.rs` lines 64-67) — the actual emitted strings, not the
-        // Debug variant names. See PR 3c-tauri-keychain's adversarial review
-        // for the bug this catches.
+        // Substring choices are pinned to keyring-core 1.0.0's Display impl
+        // (`src/error.rs:81,83`) — the actual emitted strings, not the Debug
+        // variant names. See PR 3c-tauri-keychain's adversarial review for the
+        // bug this catches, and #1761 for the keyring 3 → 4 restring.
         const message = err instanceof Error ? err.message : String(err);
         if (isKeychainUnavailableMessage(message)) return { status: "unavailable" };
         return { status: "error", message };

@@ -44,7 +44,13 @@ fn make_entry(account: &str) -> Result<Entry, String> {
             "keychain-init: account exceeds {ACCOUNT_MAX_LENGTH}-char limit"
         ));
     }
-    Entry::new(SERVICE, account).map_err(|e| format!("keychain-init: {e}"))
+    // Keep the `keychain-init:` prefix byte-identical — the client keys on the
+    // four prefixes — and name *why* the store is unavailable when it is
+    // (`Entry::store_status()` carries the one-time init error, #1761).
+    Entry::new(SERVICE, account).map_err(|e| match Entry::store_status() {
+        Err(s) => format!("keychain-init: credential store unavailable: {s}"),
+        Ok(()) => format!("keychain-init: {e}"),
+    })
 }
 
 /// Read the secret stored under `account`. Returns `None` if no entry exists.
