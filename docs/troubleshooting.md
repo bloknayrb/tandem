@@ -146,12 +146,19 @@ causes account for nearly all of these, and Tandem cannot yet tell them apart:
 
 ## Port already in use
 
-At startup Tandem kills **whatever** is listening on `:3478` / `:3479` — it looks up the listening
-PID and terminates it, and it has no way to tell a leftover Tandem from an unrelated program. Two
-consequences worth knowing before you debug anything else: another application on those ports is
-killed rather than worked around, and **running `tandem` in a terminal while the desktop app is
-open takes the desktop app's server down with it** (#1758). If something else owns those ports and
-you would rather move Tandem, set alternate ports:
+At startup an npm `tandem` first asks the MCP port's `/health` whether a live Tandem is already
+there. If one is, it **refuses to start** — naming the running version and PID — and kills nothing.
+If nothing answers as a Tandem, the old behaviour stands: it looks up the listening PID and
+terminates it, so a leftover Tandem, a wedged process or an unrelated program on those ports is
+killed rather than worked around (#1758).
+
+Two things that follow. **The desktop app is deliberately exempt from the refusal** — the Tauri
+shell delegates port reclamation to the sidecar it spawns and has no other self-heal, so its own
+child still frees the ports and the app recovers from a stale holder by itself. And **moving only
+one port still exposes the other**: the probe asks about the MCP port, while the kill is keyed on
+the port number alone, so a `TANDEM_MCP_PORT` set on its own leaves `:3478` reachable by the kill.
+If something else owns those ports and you would rather move Tandem, set alternate ports —
+all three:
 
 ```bash
 export TANDEM_PORT=4478

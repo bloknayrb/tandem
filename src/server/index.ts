@@ -51,8 +51,11 @@ import {
 } from "./mcp/server.js";
 import { pushNotification } from "./notifications.js";
 import {
+  decideStartupAction,
   freePort,
+  isTauriSidecar,
   LAST_SEEN_VERSION_FILE,
+  probeTandemInstance,
   resolveAppDataDir,
   SESSION_DIR,
   waitForPort,
@@ -291,6 +294,41 @@ async function main() {
   // error early in startup can still be shipped by handleFatalError. No-op
   // (and no @sentry/node load) when the DSN is unset.
   await initSidecarCrashReporting();
+
+  // #1758 — identify the holder of :<mcpPort> BEFORE anything mutates state.
+  // `freePort` (further down) looks up a listening PID and SIGKILLs it; it
+  // cannot ask whether that PID is a healthy Tandem serving a human. So an
+  // npm `tandem` from a terminal used to kill the desktop app's sidecar out
+  // from under the user's open documents, leaving the read-only second
+  // instance as the survivor.
+  //
+  // Order across this whole preamble, stated once: probe (HTTP only) → claim →
+  // sweep → trial → lock. Nothing has been written at this point — no lock
+  // taken, no port killed — which is the point of probing first.
+  if (transportMode === "http") {
+    const probe = await probeTandemInstance(mcpPort);
+    const action = decideStartupAction({
+      probe,
+      mode: "http",
+      isSidecar: isTauriSidecar(),
+    });
+    if (action === "refuse" && probe) {
+      // The message names ALL THREE variables deliberately. An either/or
+      // invites the user to move only the MCP port; the probe then finds that
+      // port free, startup proceeds, and `freePort(wsPort)` SIGKILLs the
+      // desktop's Hocuspocus on the other one — `freePort` keys on the port,
+      // not the bind address.
+      console.error(
+        `[Tandem] Tandem is already running at http://127.0.0.1:${mcpPort} (v${probe.version}, pid ${probe.pid}). ` +
+          `Not starting a second instance — quit the running one first, or run on different ports: ` +
+          `see "Port already in use" in docs/troubleshooting.md ` +
+          `(TANDEM_PORT, TANDEM_MCP_PORT and TANDEM_URL all have to match).`,
+      );
+      // Exit 1, not 0: this is a refusal to start, and 0 would read as success
+      // to a wrapper script.
+      process.exit(1);
+    }
+  }
 
   // Prune stale `.claude.json` backups left over from a previous run.
   // Idempotent and bounded — only touches Tandem's own `.backups/` dir.
@@ -764,7 +802,24 @@ async function main() {
   } else {
     // Stdio mode: MCP must start before Hocuspocus to beat Claude Code's init timeout
     (async () => {
-      freePort(wsPort);
+      // Probed HERE rather than at the top of `main()` so it runs concurrently
+      // with `startMcpServerStdio` below: up to ~3.5s of probing ahead of the
+      // MCP handshake would threaten the client's init timeout.
+      const probe = await probeTandemInstance(mcpPort);
+      const action = decideStartupAction({
+        probe,
+        mode: "stdio",
+        isSidecar: isTauriSidecar(),
+      });
+      if (action === "skip-freeport") {
+        // Do NOT exit: an MCP client's init would fail. This branch already
+        // tolerates a Hocuspocus bind failure, so skipping the kill turns
+        // "silently killed the desktop" into "MCP works, Hocuspocus did not
+        // bind" — the honest outcome.
+        console.error(`[Tandem] Another Tandem is serving :${mcpPort} — leaving :${wsPort} alone`);
+      } else {
+        freePort(wsPort);
+      }
       try {
         await waitForPort(wsPort);
       } catch (err) {

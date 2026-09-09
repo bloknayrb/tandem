@@ -1,16 +1,30 @@
+import { readFileSync } from "node:fs";
+import http from "http";
 import net from "net";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  decideStartupAction,
   freePort,
+  isTauriSidecar,
+  type ProbeSchedule,
   parseLsofPids,
   parseNetstatListeningPids,
   parseSsPid,
+  probeTandemInstance,
   resolveAppDataDir,
   SESSION_DIR,
+  TAURI_SIDECAR_ARGV_FLAG,
   waitForPort,
 } from "../../src/server/platform";
 import { expectWithinMs } from "../helpers/timing.js";
+
+/**
+ * A short probe schedule for the absence cases, which would otherwise pay the
+ * production ~3.5s. Shape and defaults live with `probeTandemInstance`; no
+ * production caller passes one.
+ */
+const FAST: ProbeSchedule = { attempts: 3, timeoutMs: 50, delayMs: 10 };
 
 describe("platform", () => {
   describe("SESSION_DIR", () => {
@@ -281,6 +295,184 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
       const result = resolveAppDataDir();
       expect(path.isAbsolute(result)).toBe(true);
       expect(result.replace(/\\/g, "/").toLowerCase()).toContain("tandem");
+    });
+  });
+
+  // #1758 — identify the holder of the port before `freePort` SIGKILLs it.
+  describe("probeTandemInstance", () => {
+    const servers: http.Server[] = [];
+
+    afterEach(async () => {
+      await Promise.all(
+        servers.splice(0).map(
+          (s) =>
+            new Promise<void>((resolve) => {
+              s.closeAllConnections?.();
+              s.close(() => resolve());
+            }),
+        ),
+      );
+    });
+
+    async function listen(handler: http.RequestListener): Promise<number> {
+      const server = http.createServer(handler);
+      servers.push(server);
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const addr = server.address();
+      if (typeof addr === "string" || addr === null) throw new Error("no port");
+      return addr.port;
+    }
+
+    function json(res: http.ServerResponse, status: number, body: unknown): void {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    }
+
+    it("identifies a Tandem-shaped /health body", async () => {
+      const port = await listen((_req, res) =>
+        json(res, 200, { status: "ok", version: "9.9.9", pid: 4242, transport: "http" }),
+      );
+      await expect(probeTandemInstance(port)).resolves.toEqual({ pid: 4242, version: "9.9.9" });
+    });
+
+    // A `status: "ok"` body is not proof of Tandem. Accepting one would let an
+    // unrelated health endpoint block startup forever, and a refusal nothing
+    // can recover from is worse than the bug this probe fixes.
+    it("returns null for an ok body with no pid", async () => {
+      const port = await listen((_req, res) => json(res, 200, { status: "ok", version: "x" }));
+      await expect(probeTandemInstance(port, FAST)).resolves.toBeNull();
+    });
+
+    it("returns null for a 200 that is not JSON", async () => {
+      const port = await listen((_req, res) => {
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.end("hello");
+      });
+      await expect(probeTandemInstance(port, FAST)).resolves.toBeNull();
+    });
+
+    it("returns null for a 404", async () => {
+      const port = await listen((_req, res) => json(res, 404, { error: "nope" }));
+      await expect(probeTandemInstance(port, FAST)).resolves.toBeNull();
+    });
+
+    it("returns null when nothing is listening", async () => {
+      await expect(probeTandemInstance(59_998, FAST)).resolves.toBeNull();
+    });
+
+    // Kills a missing timeout, which would hang every startup behind a
+    // black-holed port.
+    it("returns null against a server that never responds", { timeout: 15_000 }, async () => {
+      const port = await listen(() => {
+        /* never answers */
+      });
+      await expect(probeTandemInstance(port, FAST)).resolves.toBeNull();
+    });
+
+    // Kills the single-shot probe: a healthy Tandem whose event loop is
+    // briefly blocked would otherwise classify as absent and then be SIGKILLed.
+    it("retries, so a server that answers on the third attempt is found", async () => {
+      let seen = 0;
+      const port = await listen((_req, res) => {
+        seen += 1;
+        if (seen < 3) {
+          res.destroy();
+          return;
+        }
+        json(res, 200, { status: "ok", version: "1.2.3", pid: 77 });
+      });
+      await expect(probeTandemInstance(port, FAST)).resolves.toEqual({ pid: 77, version: "1.2.3" });
+    });
+  });
+
+  describe("decideStartupAction", () => {
+    const LIVE = { pid: 1, version: "1.0.0" };
+
+    // No evidence → today's behaviour, `freePort` included.
+    it("proceeds when nothing answered", () => {
+      expect(decideStartupAction({ probe: null, mode: "http", isSidecar: false })).toBe("proceed");
+    });
+
+    it("refuses when a live Tandem holds the port in http mode", () => {
+      expect(decideStartupAction({ probe: LIVE, mode: "http", isSidecar: false })).toBe("refuse");
+    });
+
+    // Kills a refusal that strands the desktop app behind its own orphaned
+    // sidecar — the shell has no other way to reclaim the port.
+    it("proceeds for the Tauri sidecar even against a live instance", () => {
+      expect(decideStartupAction({ probe: LIVE, mode: "http", isSidecar: true })).toBe("proceed");
+    });
+
+    // Kills the stdio branch inheriting the exit, which would break every MCP
+    // client that spawns it.
+    it("skips freePort rather than exiting in stdio mode", () => {
+      expect(decideStartupAction({ probe: LIVE, mode: "stdio", isSidecar: false })).toBe(
+        "skip-freeport",
+      );
+    });
+  });
+
+  // The derivation itself, through the helper — NOT a hand-passed boolean.
+  // `TANDEM_TAURI_SIDECAR` is inherited by every descendant of the sidecar, so
+  // keying the carve-out on it means an npm `tandem` launched from an
+  // auto-launched Claude Code session SIGKILLs the desktop's own sidecar: the
+  // issue's bug, reached through its fix.
+  describe("isTauriSidecar", () => {
+    const saved = process.env.TANDEM_TAURI_SIDECAR;
+    afterEach(() => {
+      if (saved === undefined) delete process.env.TANDEM_TAURI_SIDECAR;
+      else process.env.TANDEM_TAURI_SIDECAR = saved;
+    });
+
+    it("is true when argv carries the flag", () => {
+      expect(isTauriSidecar(["node", "server.js", TAURI_SIDECAR_ARGV_FLAG])).toBe(true);
+    });
+
+    it("is false for a descendant that merely inherited the env var", () => {
+      process.env.TANDEM_TAURI_SIDECAR = "1";
+      expect(isTauriSidecar(["node", "server.js"])).toBe(false);
+      expect(
+        decideStartupAction({
+          probe: { pid: 1, version: "1.0.0" },
+          mode: "http",
+          isSidecar: isTauriSidecar(["node", "server.js"]),
+        }),
+      ).toBe("refuse");
+    });
+  });
+
+  // The fix is call-site ordering, and no test can drive `main()` — the module
+  // binds ports on import. Same pattern as `tests/docs/loopback-gate-claims.
+  // test.ts` and `tests/server/document-write-rearm.test.ts`: read the source
+  // and assert by index.
+  //
+  // What it kills: landing both functions fully tested and never calling them,
+  // or calling them after `freePort`. Under that implementation every other
+  // case in this file is green and none of the behavioural clauses hold.
+  describe("startup decision wiring (source shape)", () => {
+    const source = readFileSync(
+      path.join(import.meta.dirname, "..", "..", "src", "server", "index.ts"),
+      "utf-8",
+    );
+
+    it("consults decideStartupAction before the store lock and before every freePort", () => {
+      const decide = source.indexOf("decideStartupAction(");
+      expect(decide).toBeGreaterThan(-1);
+
+      const lock = source.indexOf("acquireStoreLock(");
+      expect(lock).toBeGreaterThan(-1);
+      expect(decide).toBeLessThan(lock);
+
+      const freePorts = [...source.matchAll(/freePort\(/g)].map((m) => m.index ?? -1);
+      expect(freePorts.length).toBeGreaterThanOrEqual(2);
+      for (const at of freePorts) expect(decide).toBeLessThan(at);
+    });
+
+    it("exits 1 on the refusal arm", () => {
+      const refuse = source.indexOf('action === "refuse"');
+      expect(refuse).toBeGreaterThan(-1);
+      const window = source.slice(refuse, refuse + 1_500);
+      expect(window).toContain("process.exit(1)");
     });
   });
 });

@@ -1647,7 +1647,13 @@ pub(crate) async fn start_sidecar(
             .shell()
             .sidecar("node-sidecar")
             .map_err(|e| format!("Failed to create sidecar command: {e}"))?
-            .args([server_js_str.as_str()])
+            // `--tauri-sidecar` is the provenance discriminant the server reads
+            // (#1758, #1787). It is argv rather than an env var deliberately:
+            // `TANDEM_TAURI_SIDECAR` below is inherited by every DESCENDANT of
+            // this child, so an npm `tandem` run from an auto-launched Claude
+            // Code session's own shell would otherwise claim the sidecar's
+            // carve-outs. Argv is not inherited by grandchildren.
+            .args([server_js_str.as_str(), "--tauri-sidecar"])
             .env("TANDEM_TAURI_SIDECAR", "1")
             .env("TANDEM_DATA_DIR", app_data_dir_str.as_str())
             // Pin the sidecar's listening addresses to the ones this shell has

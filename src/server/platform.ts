@@ -44,6 +44,140 @@ export const SESSION_DIR = path.join(APP_DATA_DIR, "sessions");
 /** Path to the file tracking the last version the user ran. */
 export const LAST_SEEN_VERSION_FILE = path.join(APP_DATA_DIR, "last-seen-version");
 
+/** What a `/health` response tells us about the process already on the port. */
+export interface TandemInstanceProbe {
+  pid: number;
+  version: string;
+}
+
+/** Retry shape for {@link probeTandemInstance}. Tests only — see below. */
+export interface ProbeSchedule {
+  attempts: number;
+  timeoutMs: number;
+  delayMs: number;
+}
+
+/**
+ * Three attempts, 1s each, 250ms apart.
+ *
+ * One 1s window is not enough evidence to authorise a SIGKILL: a healthy Tandem
+ * whose event loop is briefly blocked (a `.docx` convert, a large
+ * `extractText`) answers slowly, would probe as absent, and would then be
+ * killed — the exact outcome this probe exists to prevent, reached through it.
+ */
+const DEFAULT_PROBE_SCHEDULE: ProbeSchedule = { attempts: 3, timeoutMs: 1_000, delayMs: 250 };
+
+/**
+ * Ask whether a live Tandem is already serving `mcpPort` on loopback (#1758).
+ *
+ * `freePort` is the tool for a listener that fails THIS probe — a wedged
+ * process, a crashed sidecar, an unrelated program. The probe deliberately
+ * lives beside it rather than inside it: `freePort`'s other callers (the E2E
+ * harness boot, `scripts/`) have different needs, and a probe hidden inside a
+ * kill primitive is implicit control.
+ *
+ * Returns `null` for anything short of a positive identification: a throw, a
+ * non-2xx, a non-JSON body, or a body missing `status: "ok"`, a numeric `pid`
+ * or a string `version`. `pid` is what #1812 adds to `/health`, so a Tandem
+ * older than that probes as `null` and is still `freePort`ed — today's
+ * behaviour, and the right call for an upgrade replacing its own predecessor.
+ *
+ * Always `127.0.0.1`, never the bind host: the question is "is something
+ * already on the loopback port I am about to take".
+ *
+ * `schedule` exists so the absence tests run in ~150ms rather than ~3.5s. No
+ * production call site passes one.
+ */
+export async function probeTandemInstance(
+  mcpPort: number,
+  schedule: ProbeSchedule = DEFAULT_PROBE_SCHEDULE,
+): Promise<TandemInstanceProbe | null> {
+  for (let attempt = 0; attempt < schedule.attempts; attempt++) {
+    if (attempt > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, schedule.delayMs));
+    }
+    const hit = await probeHealthOnce(mcpPort, schedule.timeoutMs);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+async function probeHealthOnce(
+  mcpPort: number,
+  timeoutMs: number,
+): Promise<TandemInstanceProbe | null> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${mcpPort}/health`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return null;
+    const body: unknown = await res.json();
+    if (typeof body !== "object" || body === null) return null;
+    const record = body as Record<string, unknown>;
+    if (record.status !== "ok") return null;
+    const { pid, version } = record;
+    if (typeof pid !== "number" || !Number.isInteger(pid)) return null;
+    if (typeof version !== "string" || version.length === 0) return null;
+    return { pid, version };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The argv flag the Tauri shell passes its sidecar, beside the server entry
+ * point (`src-tauri/src/sidecar.rs`).
+ */
+export const TAURI_SIDECAR_ARGV_FLAG = "--tauri-sidecar";
+
+/**
+ * Whether THIS process is the Tauri shell's own sidecar.
+ *
+ * **Derived from argv, never from `TANDEM_TAURI_SIDECAR`.** That variable is
+ * inherited by every descendant of the sidecar — `tauri-plugin-shell`'s
+ * `Command::new` never calls `env_clear()`, and `supervisor.ts` spawns the
+ * auto-launched Claude Code with `env: process.env` — so keying the carve-out
+ * on it means an npm `tandem` run from an auto-launched session's own shell
+ * reads `"1"`, takes the sidecar's carve-out and SIGKILLs the desktop's server:
+ * #1758's own bug, surviving on the path the product's auto-launch creates.
+ * The repo already treats the variable as too weak for provenance
+ * (`integrations/apply.ts`, `cli/doctor.ts`). Argv is not inherited by
+ * grandchildren, which is what makes it the discriminant. The env var is
+ * unchanged for its existing consumers.
+ */
+export function isTauriSidecar(argv: readonly string[] = process.argv): boolean {
+  return argv.includes(TAURI_SIDECAR_ARGV_FLAG);
+}
+
+export type StartupAction = "refuse" | "proceed" | "skip-freeport";
+
+/**
+ * What to do about a port that is already answering (#1758).
+ *
+ * - Tauri sidecar → `"proceed"` whatever the probe says. The shell delegates
+ *   port reclamation TO the sidecar it spawns (`sidecar.rs`: "The sidecar's own
+ *   `freePort()` step on start handles port conflicts cleanly"), and it has no
+ *   other self-heal. On macOS/Linux there is no job object, so a force-quit
+ *   shell leaves a live sidecar; refusing there would strand the app behind its
+ *   own orphan until `MAX_RESTARTS` ran out into the "Retry Server Start"
+ *   dialog with nothing left to clear it.
+ * - A live Tandem, http → `"refuse"`. The issue's case: an npm `tandem` must
+ *   not displace the desktop's server under the user's open documents.
+ * - A live Tandem, stdio → `"skip-freeport"`. Do NOT exit: an MCP client's init
+ *   would fail. Skipping the kill converts "silently killed the desktop" into
+ *   "MCP works, Hocuspocus did not bind", which the branch already tolerates.
+ * - No probe → `"proceed"`, i.e. today's behaviour with `freePort` intact.
+ */
+export function decideStartupAction(input: {
+  probe: TandemInstanceProbe | null;
+  mode: "http" | "stdio";
+  isSidecar: boolean;
+}): StartupAction {
+  if (input.isSidecar) return "proceed";
+  if (input.probe === null) return "proceed";
+  return input.mode === "http" ? "refuse" : "skip-freeport";
+}
+
 /**
  * Kill any process currently listening on the given TCP port.
  * Best-effort — swallows all errors so startup always proceeds.
