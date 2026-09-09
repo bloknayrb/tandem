@@ -167,10 +167,12 @@ describe("the inbox ledger surfaces a decision made after Undo (#1770)", () => {
  * tested `status !== "pending"`. `surfacedIds` is a module-level Map, so every
  * server restart re-surfaced every RESOLVED user comment as a fresh user action.
  *
- * The gate is `status === "pending" || edited`, written positively. `|| edited`
- * holds within one server run only and is what stops the gate creating item 1's
- * own defect class on the edit path — the observer emits `annotation:edited` on
- * any `editedAt` advance with no status test.
+ * The gate is `!isSettledStatus(status) || unaccountedEdit`. The status term
+ * enumerates the two end states rather than testing `"pending"` in either
+ * direction — see the last two rows for why. `|| unaccountedEdit` holds within
+ * one server run only and is what stops the gate creating item 1's own defect
+ * class on the edit path — the observer emits `annotation:edited` on any
+ * `editedAt` advance with no status test.
  */
 describe("#1826: the userActions bucket has a status gate", () => {
   /** A user comment in the browser shape, with an explicit status. */
@@ -293,5 +295,49 @@ describe("#1826: the userActions bucket has a status gate", () => {
     poll(surfaced, spy);
     poll(surfaced, spy);
     expect(refreshed).toEqual([["u-live"], [], []]);
+  });
+
+  it("an UNRECOGNIZED stored status fails open, on both the gate and its mirror", () => {
+    // **Review round 3.** `Annotation.status` types as the three-value enum,
+    // but the stored value is a bare `string`: `sanitizeAnnotation` passes it
+    // through unnormalized, and the annotations Y.Map is writable by any
+    // connected client, so this record is reachable — by a stale-tab merge or a
+    // future status this build does not know.
+    //
+    // Both spellings of a `"pending"` test fail it CLOSED, and the two halves
+    // compound into permanent invisibility rather than a delay: a positive
+    // `status === "pending"` gate never admits it to `tandem_checkInbox`, and
+    // the mirror's `status !== "pending"` calls it settled, so it is dropped
+    // from the refresh candidate set too. No ledger entry is involved, so no
+    // later poll and no restart recovers it. Enumerating the two real end
+    // states (`isSettledStatus`) is what makes an unknown status read as
+    // unsettled instead.
+    const surfaced = new Map<string, number>();
+    seedUserComment("u-unknown", { status: "archived" });
+
+    const refreshed: string[][] = [];
+    const spy = (anns: Annotation[]) => {
+      refreshed.push(anns.map((a) => a.id));
+      return anns;
+    };
+
+    expect(poll(surfaced, spy).userActions.map((a) => a.id)).toEqual(["u-unknown"]);
+    expect(refreshed, "and it reaches the refresher rather than being filtered out").toEqual([
+      ["u-unknown"],
+    ]);
+    // It leaves by the ordinary route — the ledger entry the surfacing wrote —
+    // so failing open costs at most the one duplicate, never a repeat.
+    expect(poll(surfaced).userActions).toEqual([]);
+  });
+
+  it("`accepted` and `dismissed` stay settled — failing open is not failing always-open", () => {
+    // Pins the predicate against being widened to "anything but pending is
+    // fine, and anything unknown too": the two rows above must keep their
+    // suppression, or the restart storm #1826 closed is back.
+    const surfaced = new Map<string, number>();
+    seedUserComment("u-acc", { status: "accepted" });
+    seedUserComment("u-dis", { status: "dismissed" });
+
+    expect(poll(surfaced).userActions).toEqual([]);
   });
 });

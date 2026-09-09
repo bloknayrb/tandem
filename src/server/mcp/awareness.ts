@@ -134,6 +134,28 @@ function hasUnaccountedEdit(
 }
 
 /**
+ * The two settled end states, enumerated — deliberately NOT spelled as a test
+ * against `"pending"` in either direction (review round 3).
+ *
+ * `Annotation.status` types as the three-value enum, but the stored value is a
+ * bare `string`: `sanitizeAnnotation` passes `status` straight through with no
+ * normalization, and the annotations Y.Map is writable by any connected client,
+ * so an unrecognized status is reachable on a record that reaches both callers
+ * below. Both spellings of the `"pending"` test fail such a record CLOSED, and
+ * closed here means permanently invisible rather than merely delayed:
+ * `=== "pending"` is false, so the gate never admits the comment to
+ * `tandem_checkInbox`; `!== "pending"` is true, so the mirror permanently
+ * excludes it from range refresh as well. Enumerating the real end states makes
+ * an unknown status read as UNSETTLED instead, whose cost is a duplicate.
+ *
+ * Both callers must go through this. The gate and its mirror have to agree, and
+ * one shared predicate is the only thing that keeps them in step.
+ */
+function isSettledStatus(status: string): boolean {
+  return status === "accepted" || status === "dismissed";
+}
+
+/**
  * A user comment the `userActions` gate below cannot admit: resolved, with no
  * unaccounted edit. Mirrors the gate — the two must be read together.
  *
@@ -149,7 +171,7 @@ function isSettledUserComment(ann: Annotation, lastSurfacedEditedAt: number | un
   return (
     ann.author === "user" &&
     ann.type === "comment" &&
-    ann.status !== "pending" &&
+    isSettledStatus(ann.status) &&
     !hasUnaccountedEdit(ann, lastSurfacedEditedAt)
   );
 }
@@ -751,15 +773,25 @@ function processUnsurfacedInboxAnnotations(
     // #1826: the status gate. Without it a resolved user comment re-entered
     // this bucket on every server restart — `surfacedIds` is module-level, so a
     // restart empties the ledger and every dismissed or accepted user comment
-    // surfaced again as a fresh user action. Written positively
-    // (`status === "pending"`), not `!== "dismissed"`: `accepted` is a reachable
-    // end state for a user comment, since `transitionPending` refuses an accept
-    // only for a claude author or a suggestion-bearing record.
+    // surfaced again as a fresh user action. The term enumerates the two end
+    // states via `isSettledStatus` rather than testing `"pending"` directly:
+    // `!== "dismissed"` would miss `accepted`, which `transitionPending`
+    // reaches for a user comment (it refuses an accept only for a claude author
+    // or a suggestion-bearing record), and a positive `=== "pending"` fails an
+    // unrecognized stored status closed. See that predicate.
+    //
+    // This narrows the bucket against master, intentionally: a user comment
+    // resolved BEFORE Claude's first poll used to be returned once, because the
+    // old gate carried no status term at all. It is now filtered out, so the
+    // observer's `annotation:created` push has no pull-path counterpart for
+    // that record. Accepted — the push already fired with the content, and the
+    // alternative is the restart storm above, where every previously resolved
+    // comment re-enters the bucket as if it were new.
     //
     // `|| unaccountedEdit` is what stops this gate creating item 1's own defect
     // class in the edit path: the observer emits `annotation:edited` on any
     // `editedAt` advance with no status test, and Dismiss stays open to a
-    // user's comment, so a bare `status === "pending"` would push an
+    // user's comment, so the status term ALONE would push an
     // edit-after-dismiss on the channel while `tandem_checkInbox` returned
     // nothing. The term is deliberately NOT the `edited` flag above it — that
     // one needs a prior ledger entry, which a comment resolved before it was
@@ -770,7 +802,7 @@ function processUnsurfacedInboxAnnotations(
       ann.author === "user" &&
       ann.type === "comment" &&
       isClaudeFacing(ann) &&
-      (ann.status === "pending" || unaccountedEdit)
+      (!isSettledStatus(ann.status) || unaccountedEdit)
     ) {
       const channelKey = edited ? getAnnotationEditedChannelKey(ann.id, ann.editedAt ?? 0) : ann.id;
 

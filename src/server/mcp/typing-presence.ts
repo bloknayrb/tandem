@@ -175,12 +175,22 @@ function clearPresenceOn(docName: string, expectedToken: number): void {
  * This is the note half only, on the sanitized value — not "notes are now
  * caught". A record whose `type` sanitize does not recognize is coerced to
  * `{ comment, outbound }` and still passes; so does a stored
- * `{ comment, audience: "private" }` and a user highlight. That bound is
- * accepted here because the single call site is `tandem_annotationReply`, so
- * the `annotationId` originates from the CALLER — `lifecycle.reply` has
- * already refused a private comment (`isPrivateForClaude`) and a highlight
- * (`not-repliable`), and echoing a caller-supplied id back into a marker
- * rendered on the user's own client discloses nothing Claude did not hold.
+ * `{ comment, audience: "private" }` and a user highlight.
+ *
+ * That bound rests on ONE argument, and it is not the seam's refusals (review
+ * round 2). This runs before `withTypingPresence`, which calls `setPresenceOn`
+ * before it invokes the handler — so the marker is broadcast while
+ * `lifecycle.reply` has refused nothing yet, and a caller replying to a private
+ * comment or a highlight gets the refusal only AFTER its id has been published
+ * to awareness. What actually holds is that the single call site is
+ * `tandem_annotationReply`, so the `annotationId` originates from the CALLER:
+ * echoing a caller-supplied id back into a marker rendered on the user's own
+ * client discloses nothing Claude did not already hold.
+ *
+ * The consequence for anyone tidying this: at broadcast time this function is
+ * the ONLY thing standing between a note's id and awareness. It is not
+ * redundant with the seam, and removing it as belt-and-suspenders reopens
+ * #1698.
  *
  * Callers that always target a note (none in the current four-tool set) should
  * not pass an `annotationId` at all.

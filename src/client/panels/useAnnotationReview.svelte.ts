@@ -439,15 +439,23 @@ export interface UseAnnotationReviewParams {
    */
   getFormat?: () => string | undefined;
   /**
-   * Called when accepting a suggestion fails because its range could not be
-   * resolved (e.g. the underlying text changed since the suggestion was
-   * created). The annotation is `"pending"` by the time this fires — since
-   * #1826 it was never moved off it; the failure path writes a normalized
-   * `pending` record only to strip a stale `resolvedBy` (#1770). Callers use
-   * this to surface a toast — keep any message generic per ADR-027 (never echo
-   * annotation content here).
+   * Called when accepting a suggestion fails. The annotation is `"pending"` by
+   * the time this fires — since #1826 it was never moved off it; the failure
+   * path writes a normalized `pending` record only to strip a stale
+   * `resolvedBy` (#1770). Callers use this to surface a toast — keep any
+   * message generic per ADR-027 (never echo annotation content here).
+   *
+   * `reason` exists because the two failures have different causes and
+   * different remedies, and one message is wrong for one of them (review round
+   * 3). `"range"` is the range-resolution failure — the text moved under the
+   * suggestion, and a retry after a scroll or an edit can succeed. `"no-editor"`
+   * is the Tiptap instance being absent, which is not a property of the text at
+   * all: source view unmounts the editor (`{#if !inSourceView}`) while the
+   * annotations rail stays mounted by design, so Accept is a live button with
+   * no editor behind it. Reporting that as "the text has changed" sends the
+   * user looking for an edit that never happened.
    */
-  onApplyFailed?: (ann: Annotation) => void;
+  onApplyFailed?: (ann: Annotation, reason: "range" | "no-editor") => void;
   /**
    * Called when undoing an accepted suggestion is refused because the stored
    * `textSnapshot` is a truncated prefix (#1486) — restoring it would delete
@@ -581,7 +589,10 @@ export function useAnnotationReview({
         // and emits nothing. What it does do is strip a stale `resolvedBy`
         // (#1770) — do not replace this with a bare `return`.
         withBrowser(y, () => map.set(id, revertedToPending(ann)));
-        onApplyFailed?.(ann);
+        // The two arms are reported apart because only one of them is about the
+        // text — see `onApplyFailed`. Order matters: `!editor` short-circuits,
+        // so `applySuggestion` has not run in that arm and cannot be the cause.
+        onApplyFailed?.(ann, editor ? "range" : "no-editor");
         return;
       }
     }

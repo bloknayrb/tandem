@@ -139,7 +139,11 @@ describe("useAnnotationReview — onApplyFailed (B2)", () => {
     review.resolveAnnotation(ann.id, "accepted");
 
     expect(onApplyFailed).toHaveBeenCalledTimes(1);
-    expect(onApplyFailed).toHaveBeenCalledWith(expect.objectContaining({ id: ann.id }));
+    // The `"range"` half of the round-3 discriminant: an editor IS present here
+    // and `applySuggestion` genuinely failed, so "the text has changed" is the
+    // correct message. Its sibling row asserts `"no-editor"` on the same
+    // callback — together they stop the two declines collapsing back into one.
+    expect(onApplyFailed).toHaveBeenCalledWith(expect.objectContaining({ id: ann.id }), "range");
     // ADR-027: the callback receives the annotation object for the caller to
     // build its own generic message from — but resolveAnnotation itself must
     // not have leaked content anywhere else. Reverted to pending:
@@ -397,6 +401,7 @@ describe("useAnnotationReview — no silent divergence after a failed Accept (#1
     map.set(ann.id, ann);
     const seen = observeStatuses(map, ann.id);
     const applyFailed: string[] = [];
+    const reasons: string[] = [];
 
     const review = mountReview({
       getYdoc: () => ydoc,
@@ -404,7 +409,10 @@ describe("useAnnotationReview — no silent divergence after a failed Accept (#1
       getAnnotations: () => [map.get(ann.id) as Annotation],
       onActiveAnnotationChange: () => {},
       getScrollBehavior: () => "auto",
-      onApplyFailed: (failed) => applyFailed.push(failed.id),
+      onApplyFailed: (failed, reason) => {
+        applyFailed.push(failed.id);
+        reasons.push(reason);
+      },
     });
 
     review.resolveAnnotation(ann.id, "accepted");
@@ -413,6 +421,14 @@ describe("useAnnotationReview — no silent divergence after a failed Accept (#1
     // `applyFailed` empty.
     expect(seen).toEqual(["pending"]);
     expect(applyFailed).toEqual(["no-editor"]);
+    // **Review round 3.** The reason, not just the fact. Both declines shared
+    // one callback and `App.svelte` renders one message from it — "the text has
+    // changed" — which is a false diagnosis here: the range above resolves
+    // cleanly and the document is untouched. Source view is the reachable
+    // route (`{#if !inSourceView}` unmounts Tiptap while this rail stays
+    // mounted), so the user is told to hunt for an edit nobody made instead of
+    // to leave the view they are in.
+    expect(reasons).toEqual(["no-editor"]);
   });
 
   it("writes exactly one `accepted` when the apply succeeds (positive control)", () => {
