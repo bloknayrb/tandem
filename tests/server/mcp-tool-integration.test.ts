@@ -496,6 +496,17 @@ describe("MCP tool integration — annotation tools", () => {
     expect(parsed.error).toBe(true);
     expect(parsed.code).toBe("INVALID_RANGE");
 
+    // **Byte-identical to today, and that is the point (#1766).** The annotation
+    // tools answer through `rangeFailureToError` (`mcp/annotations.ts`) and keep
+    // the ENDPOINT-only rule, so its message must not pick up `tandem_edit`'s
+    // new "split the edit at the heading boundary" advice — splitting is not
+    // something a comment author can do, and a comment spanning a section is
+    // legal. This assertion is what fails if the #1766 message edit is applied
+    // to the shared helper instead of to `tandem_edit`'s own inline `mcpError`.
+    expect(parsed.message).toBe(
+      'Range overlaps with heading markup (e.g., "## "). Target the text content only.',
+    );
+
     // **The control, and it is what makes the assertion above mean anything.**
     // `INVALID_RANGE` has several producers, so a refusal alone does not show
     // the HEADING branch fired — a wrong document, an unresolvable offset or an
@@ -509,6 +520,35 @@ describe("MCP tool integration — annotation tools", () => {
     const okParsed = parseResult(ok);
     expect(okParsed.error).toBe(false);
     expect(okParsed.data.annotationId).toMatch(/^ann_/);
+  });
+
+  it("tandem_comment still spans a heading — the #1766 interior scan is tandem_edit's alone", async () => {
+    // **The sibling of the spec above, and the only thing in the suite that
+    // would notice a fix that ORed the interior scan into `rejectHeadingOverlap`
+    // itself.** `YDocStore.anchorRange` hardcodes that flag for
+    // `tandem_comment` / `tandem_suggest`, so widening it here would refuse a
+    // comment about a whole section and answer "target the text content only" —
+    // advice with no followable form when the target IS two blocks and the
+    // heading between them.
+    //
+    // Offsets: "Intro para" is [0, 10), the heading block starts at 11 with its
+    // `"## "` prefix at [11, 14), and "Body text here" starts at 22. [0, 25)
+    // therefore steps straight over the prefix while both ENDPOINTS clear it —
+    // exactly the shape `tandem_edit` now refuses.
+    const ydoc = setupDoc("mcp-ann-span-heading", "Intro para\n## Section\nBody text here");
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_comment",
+        arguments: { from: 0, to: 25, text: "on the whole section" },
+      }),
+    );
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.annotationId).toMatch(/^ann_/);
+
+    // Stored on the span it was asked for, not silently clamped off the heading.
+    const map = ydoc.getMap<Annotation>(Y_MAP_ANNOTATIONS);
+    expect(map.get(parsed.data.annotationId)?.range).toEqual({ from: 0, to: 25 });
   });
 
   it("tandem_comment records textSnapshotTruncated when the range exceeds the cap (#1486)", async () => {
@@ -1758,6 +1798,57 @@ describe("MCP tool integration — tandem_edit space-class snapshot (#1622)", ()
     );
     expect(gone.error).toBe(true);
     expect(gone.code).toBe("RANGE_GONE");
+  });
+});
+
+/**
+ * #1766 — Critical Rule 6 was ENDPOINT-only, so a `tandem_edit` range could step
+ * straight over a heading prefix and delete the heading.
+ *
+ * Driven through the REGISTERED tool, because the predicate is not the thing at
+ * risk: `document-edit.test.ts` is a local `applyEdit` mirror whose heading arm
+ * is its own hand-copied endpoint-only check and which never calls
+ * `validateRange` at all, so a spec added there would stay green with
+ * `rejectHeadingInterior` never wired to the handler.
+ */
+describe("MCP tool integration — tandem_edit refuses a heading-spanning range (#1766)", () => {
+  it("refuses the edit that used to delete the heading, and names the split", async () => {
+    // The issue's measured case: "Para one" is [0, 8), the heading block starts
+    // at 9 with `"## "` at [9, 12), "Head" runs [12, 16). Both endpoints of
+    // [4, 13) clear the prefix, so the endpoint-only check said ok and the
+    // cross-element branch produced "ParaXead\nTail".
+    const ydoc = setupDoc("edit-heading-span", "Para one\n## Head\nTail");
+    const before = extractText(ydoc);
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: { from: 4, to: 13, newText: "X" },
+      }),
+    );
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_RANGE");
+    // Nothing else pins the one message this fix changes. "Target the text
+    // content only" is unfollowable for an INTERIOR overlap — there is no
+    // sub-range that both clears the prefix and covers what the caller asked to
+    // replace — so the refusal has to name the remedy that exists.
+    expect(parsed.message).toContain("split the edit at the heading boundary");
+
+    // The document is untouched: the refusal is the fix, not a partial apply.
+    expect(extractText(ydoc)).toBe(before);
+    expect(extractText(ydoc)).toContain("## Head");
+
+    // **The control.** Same document, same tool, a range wholly inside the
+    // leading paragraph: it must still apply. Without this the spec is
+    // satisfied by a `tandem_edit` that refuses everything.
+    const ok = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: { from: 0, to: 4, newText: "Text" },
+      }),
+    );
+    expect(ok.error).toBe(false);
+    expect(extractText(ydoc)).toBe("Text one\n## Head\nTail");
   });
 });
 

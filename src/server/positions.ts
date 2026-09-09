@@ -35,6 +35,7 @@ import {
   flatOffsetToRelPos,
   getElementTextLength,
   getHeadingPrefixLength,
+  rangeOverlapsHeadingPrefix,
   resolveToElement,
 } from "../shared/positions/ydoc.js";
 import { snapshotContradicts } from "../shared/snapshot.js";
@@ -141,6 +142,30 @@ export type HoistTag =
 export interface RangeValidationOpts extends FlatRangeOpts {
   textSnapshot?: string;
   rejectHeadingOverlap?: boolean;
+  /**
+   * Also reject a range whose INTERIOR steps over a top-level heading prefix,
+   * not just one whose endpoints land inside one (#1766).
+   *
+   * **A separate option, ORed into `rejectHeadingOverlap`'s verdict rather than
+   * folded into it — and only `tandem_edit` passes it.** The flag has three
+   * callers and only one of them rewrites text: `YDocStore.anchorRange`
+   * (`tandem_comment` / `tandem_suggest`) and `local-model/tools.ts` create
+   * annotations, and a comment spanning a section is legal. Widening the shared
+   * flag would answer "target the text content only" to a multi-section comment,
+   * which is not advice its author can follow.
+   *
+   * Union, not replacement, in the other direction too: the overlap predicate
+   * alone would newly ACCEPT `to === blockStart` — the documented exclusive-end
+   * asymmetry, which is what stops `tandem_edit` swallowing the newline above a
+   * heading. That is a RELAXATION, and this change is a pure tightening, so the
+   * endpoint term stays. `positions.test.ts`'s "keeps the exclusive-end
+   * asymmetry" spec is the one that goes red for it; the local-model and
+   * `tandem_comment` heading specs do NOT, because their fixtures cover the
+   * prefix itself and answer the same under either rule.
+   *
+   * Inert without `rejectHeadingOverlap`, which is where the fragment resolves.
+   */
+  rejectHeadingInterior?: boolean;
   /**
    * **Must be `extractText(ydoc)` of THIS ydoc, as of this call.** Not a
    * same-shaped string, not the PRE-edit text of a document this caller has
@@ -596,7 +621,19 @@ export function validateRange(
     if (!startPos || !endPos) {
       return invalid("unresolvable", `Cannot resolve offset range [${from}, ${to}] in document.`);
     }
-    if (startPos.clampedFromPrefix || endPos.clampedFromPrefix) {
+    // Two terms, ORed. The endpoint term is the rule for all three callers and
+    // is unchanged — in particular a `to` equal to the FIRST character of a
+    // heading prefix is still refused even though the end is exclusive, because
+    // `resolveToElement(to)` lands at offset 0 of the heading and reports
+    // `clampedFromPrefix`. That asymmetry is deliberate (it is what stops
+    // `tandem_edit` swallowing the newline above a heading) and is documented in
+    // `docs/architecture.md` rather than removed. The interior term is
+    // `tandem_edit`'s alone — see `rejectHeadingInterior`.
+    if (
+      startPos.clampedFromPrefix ||
+      endPos.clampedFromPrefix ||
+      (opts?.rejectHeadingInterior === true && rangeOverlapsHeadingPrefix(fragment, from, to))
+    ) {
       return { ok: false, code: "HEADING_OVERLAP" };
     }
   }

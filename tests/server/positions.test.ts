@@ -18,6 +18,7 @@ import type {
   RangeValidation,
   SerializedRelPos,
 } from "../../src/shared/positions/types.js";
+import { rangeOverlapsHeadingPrefix } from "../../src/shared/positions/ydoc.js";
 import { snapshotContradicts } from "../../src/shared/snapshot.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { off, range } from "../helpers/positions.js";
@@ -117,6 +118,167 @@ describe("validateRange", () => {
       expect(result.code).toBe("INVALID_RANGE");
       if (result.code === "INVALID_RANGE") expect(result.reason).toBe("out-of-bounds");
     }
+  });
+});
+
+/**
+ * #1766 — Critical Rule 6 was ENDPOINT-only, so a range that stepped straight
+ * over a heading prefix passed and `tandem_edit` deleted the heading.
+ *
+ * The fixture is the issue's own: `"para\n## Head\nnext"`, whose heading block
+ * starts at flat offset 5 and whose `"## "` prefix occupies [5, 8).
+ *
+ * Every spec here passes `rejectHeadingOverlap` too, because the interior term
+ * lives inside that block — it is a second term, not a second check, and
+ * Critical Rule 4's order is untouched.
+ */
+describe("validateRange — heading interior scan (#1766)", () => {
+  const FIXTURE = "para\n## Head\nnext";
+
+  it("refuses a range whose interior spans the prefix, from either side", () => {
+    // The two cases the issue measured. Both endpoints clear the prefix — 4 is
+    // the paragraph's last offset, 9 is inside "Head" — so the endpoint arm
+    // alone says ok and the heading gets deleted.
+    doc = makeDoc(FIXTURE);
+    for (const [from, to] of [
+      [4, 9],
+      [0, 9],
+    ] as const) {
+      const result = validateRange(doc, off(from), off(to), {
+        rejectHeadingOverlap: true,
+        rejectHeadingInterior: true,
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.code).toBe("HEADING_OVERLAP");
+    }
+  });
+
+  it("still accepts those ranges without rejectHeadingInterior", () => {
+    // **This is what keeps annotation creation out of the widening.**
+    // `YDocStore.anchorRange` and `local-model/tools.ts` pass
+    // `rejectHeadingOverlap` alone and must keep the endpoint-only rule: a
+    // comment about a whole section spans a heading, and "target the text
+    // content only" is not advice its author can follow. An implementation that
+    // ORs the scan into the shared flag turns both of these red.
+    doc = makeDoc(FIXTURE);
+    for (const [from, to] of [
+      [4, 9],
+      [0, 9],
+    ] as const) {
+      expect(validateRange(doc, off(from), off(to), { rejectHeadingOverlap: true }).ok).toBe(true);
+    }
+  });
+
+  it("keeps the exclusive-end asymmetry: to === the prefix's first char is refused", () => {
+    // Documented, not removed (#1766's second half). `to` is exclusive, yet
+    // `resolveToElement(5)` lands at offset 0 OF THE HEADING and reports
+    // `clampedFromPrefix`, so [0, 5) is HEADING_OVERLAP — which is what stops
+    // `tandem_edit` swallowing the newline that separates the paragraph from
+    // the heading below it.
+    //
+    // **Without this spec, an implementation that REPLACES the endpoint check
+    // with the overlap predicate passes everything else in this file**: the
+    // predicate evaluates `5 < 5`, false, and silently accepts.
+    doc = makeDoc(FIXTURE);
+    const result = validateRange(doc, off(0), off(5), { rejectHeadingOverlap: true });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("HEADING_OVERLAP");
+  });
+
+  it("accepts the ranges that clear every prefix", () => {
+    doc = makeDoc(FIXTURE);
+    const opts = { rejectHeadingOverlap: true, rejectHeadingInterior: true } as const;
+    // Stops one unit short of the heading block.
+    expect(validateRange(doc, off(0), off(4), opts).ok).toBe(true);
+    // Entirely inside the heading's TEXT, past the prefix ("Head" is [8, 12)).
+    expect(validateRange(doc, off(8), off(12), opts).ok).toBe(true);
+    // Two ordinary paragraphs with no heading between them.
+    doc.destroy();
+    doc = makeDoc("alpha\nbravo");
+    expect(validateRange(doc, off(0), off(11), opts).ok).toBe(true);
+  });
+
+  it("still refuses a range from inside the prefix into the same heading's text", () => {
+    // The endpoint arm alone already did this; the assertion pins that ORing
+    // the interior term in reordered nothing.
+    doc = makeDoc(FIXTURE);
+    const result = validateRange(doc, off(6), off(10), {
+      rejectHeadingOverlap: true,
+      rejectHeadingInterior: true,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("HEADING_OVERLAP");
+  });
+
+  it("does not run ahead of the resolver's null arm", () => {
+    // The `unresolvable` fixture from the #1752 reason table (an element-free
+    // fragment, `allowEmpty`, `(0, 0)`), replayed with the new option on. The
+    // scan sits AFTER the `!startPos || !endPos` return, so the verdict is
+    // unchanged — an implementation that evaluates the predicate first would
+    // still answer `unresolvable` here only by accident, which is why the
+    // structural placement is stated in `positions.ts` as well.
+    doc = new Y.Doc();
+    doc.getXmlFragment("default");
+    const result = validateRange(doc, off(0), off(0), {
+      rejectHeadingOverlap: true,
+      rejectHeadingInterior: true,
+      allowEmpty: true,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.code === "INVALID_RANGE") {
+      expect(result.reason).toBe("unresolvable");
+    } else {
+      expect.unreachable("expected INVALID_RANGE/unresolvable");
+    }
+  });
+});
+
+/**
+ * #1766 — the separator contract, measured against `extractText`'s own offsets.
+ *
+ * `rangeOverlapsHeadingPrefix` repeats `resolveToElement`'s flat arithmetic, and
+ * the one rule an implementer drops is the `continue`: a non-`Y.XmlElement`
+ * child consumes NOTHING, because the `\n` is added after the type guard. A
+ * walker that counts one for it puts every later block start one unit high.
+ */
+describe("rangeOverlapsHeadingPrefix — separator contract (#1766)", () => {
+  it("consumes no separator for a non-element child", () => {
+    doc = new Y.Doc();
+    const fragment = doc.getXmlFragment("default");
+
+    const heading = (text: string) => {
+      const el = new Y.XmlElement("heading");
+      fragment.insert(fragment.length, [el]);
+      // Attach BEFORE populating — a detached Y.XmlText reverses segment order.
+      (el as unknown as { setAttribute: (k: string, v: number) => void }).setAttribute("level", 2);
+      el.insert(0, [new Y.XmlText(text)]);
+      return el;
+    };
+
+    heading("Alpha");
+    fragment.insert(fragment.length, [new Y.XmlText("bare")]);
+    heading("Bravo");
+
+    // The ORACLE: derive the second heading's block start from `extractText`
+    // rather than from arithmetic this test would have to keep in sync.
+    const text = extractText(doc);
+    const bs2 = text.indexOf("## Bravo");
+    expect(bs2).toBeGreaterThan(0);
+    const prefixLen = 3;
+
+    // **The one boundary that flips.** A range starting exactly one unit past
+    // the end of the second heading's prefix: with a correct walker the
+    // predicate evaluates `bs2 + prefixLen > bs2 + prefixLen`, false; with the
+    // `continue` dropped, `bs2` is one high and it evaluates
+    // `bs2 + 1 + prefixLen > bs2 + prefixLen`, true. A range covering the prefix
+    // (true either way) or ending at the block start (false either way) pins
+    // nothing.
+    expect(
+      rangeOverlapsHeadingPrefix(fragment, off(bs2 + prefixLen), off(bs2 + prefixLen + 2)),
+    ).toBe(false);
+
+    // The control: the same walker DOES see the prefix it is standing on.
+    expect(rangeOverlapsHeadingPrefix(fragment, off(bs2 + 1), off(bs2 + prefixLen + 2))).toBe(true);
   });
 });
 

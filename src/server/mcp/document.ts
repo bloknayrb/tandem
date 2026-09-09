@@ -767,9 +767,18 @@ export function registerDocumentTools(server: McpServer): void {
           // indistinguishable from U+0020 — so an exact-only comparison answers
           // RANGE_GONE for text that is present. The server's own STORED-snapshot
           // re-anchoring (the watcher's probe and anchor) stays byte-exact.
+          //
+          // `rejectHeadingInterior` (#1766) is `tandem_edit`'s alone. The
+          // endpoint-only check let `tandem_edit(4, 13, "X")` on
+          // `"Para one\n## Head\nTail"` step straight over `"## "` and produce
+          // `"ParaXead\nTail"` — the heading deleted, which is exactly what
+          // Critical Rule 6 exists to prevent. The two annotation-creating
+          // callers of `rejectHeadingOverlap` keep the endpoint-only rule
+          // because a comment spanning a section is legal.
           const v = validateRange(r.doc, from, to, {
             textSnapshot,
             rejectHeadingOverlap: true,
+            rejectHeadingInterior: true,
             allowEmpty: true,
             normalizeSpaceClass: true,
           });
@@ -785,9 +794,18 @@ export function registerDocumentTools(server: McpServer): void {
               );
             }
             if (v.code === "HEADING_OVERLAP") {
+              // `tandem_edit`'s OWN message, not `rangeFailureToError`'s — that
+              // one serves `tandem_comment` / `tandem_suggest`, which keep the
+              // endpoint-only rule, and must stay as it is. Since #1766 this
+              // range may overlap a heading in its INTERIOR, where "target the
+              // text content only" is unfollowable: there is no sub-range of the
+              // caller's span that both clears the prefix and covers what they
+              // asked to replace. The split is the only real remedy, so the
+              // message names it.
               return mcpError(
                 "INVALID_RANGE",
-                'Edit range overlaps with heading markup (e.g., "## "). Target the text content only. ' +
+                'Edit range overlaps with heading markup (e.g., "## "). Target the text content only, ' +
+                  "or split the edit at the heading boundary and issue one call per block. " +
                   "Use tandem_resolveRange to find the text position.",
               );
             }
