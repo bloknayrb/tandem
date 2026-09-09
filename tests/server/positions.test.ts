@@ -458,6 +458,57 @@ describe("validateRange — space-class normalization (#1622)", () => {
 });
 
 /**
+ * The CALL-SITE half of #1622's safety gate, which nothing pinned.
+ *
+ * The spec above pins the OPTION in both directions, and the integration suite
+ * pins the two opt-INs (`tandem_edit` and `YDocStore.anchorRange`) by driving a
+ * tool whose call goes red when the flag is deleted. Nothing pinned the two
+ * opt-OUTs — and a review reproduced exactly that: adding `normalizeSpaceClass:
+ * true` to BOTH watcher sites left the entire suite green (10913 passed), so a
+ * forgotten opt-out is the one direction with no detector.
+ *
+ * That asymmetry matters because #1622's own argument for default-off is that a
+ * forgotten opt-IN merely reproduces today's visible `RANGE_GONE` while a
+ * forgotten opt-OUT silently accepts a stale range: normalizing there makes the
+ * watcher's probe answer `ok` while `snapshotContradicts` — still exact —
+ * refuses the editor accept and the `.docx` apply. That is the #1631 divergence
+ * shape, and it presents as "accept stopped working", not as an error.
+ *
+ * A textual pin rather than an AST one, in the idiom of
+ * `document-write-rearm.test.ts`'s "`forbidden` files contain no reference to
+ * `rearmWatch` AT ALL": both watcher sites resolve their options through one
+ * shared `relocOpts` binding, so an AST walk over the two call expressions would
+ * miss a property added to that object — the same undercount Critical Rule 4
+ * warns about for the shared `surrogates` binding. The rationale for the opt-out
+ * belongs in `RangeValidationOpts.normalizeSpaceClass`'s docblock, which is
+ * where a reader looks; this file deliberately owns none of the prose.
+ */
+describe("#1622 call-site pin — the watcher's STORED snapshots stay byte-exact", () => {
+  const WATCHER = "src/server/documents/watcher.ts";
+
+  it(`${WATCHER} does not mention normalizeSpaceClass at all`, async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { fileURLToPath } = await import("node:url");
+    const path = await import("node:path");
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+    const text = await readFile(path.join(repoRoot, WATCHER), "utf-8");
+
+    // The control: the file really is the one holding both relocation calls, so
+    // a rename or a move fails here instead of passing vacuously.
+    expect(text).toContain("watcher/relocation-probe");
+    expect(text).toContain("watcher/relocation-anchor");
+
+    expect(
+      text.includes("normalizeSpaceClass"),
+      `${WATCHER} passes STORED snapshots and must stay byte-exact (#1622) — ` +
+        "normalizing there makes the relocation probe answer `ok` while " +
+        "`snapshotContradicts` stays exact and then refuses the editor accept and " +
+        "the .docx apply (the #1631 divergence shape).",
+    ).toBe(false);
+  });
+});
+
+/**
  * #1752: `validateRange` used to check only ordering, staleness and heading
  * overlap. Out-of-bounds, negative, fractional, zero-length and mid-surrogate
  * offsets all passed and reached a Y.Doc write.

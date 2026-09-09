@@ -321,7 +321,7 @@ describe("MCP tool boundary rejects out-of-range offsets", () => {
     const len = extractText(ydoc).length;
     const store = getDocumentStore("bounds-store");
     expect(store).toBeDefined();
-    expect(store?.anchorRange(off(0), off(len + 1)).ok).toBe(false);
+    expect(store?.anchorRange(off(0), off(len + 1), "comment").ok).toBe(false);
   });
 });
 

@@ -147,12 +147,26 @@ export interface RangeValidationOpts extends FlatRangeOpts {
    * not just one whose endpoints land inside one (#1766).
    *
    * **A separate option, ORed into `rejectHeadingOverlap`'s verdict rather than
-   * folded into it — and only `tandem_edit` passes it.** The flag has three
-   * callers and only one of them rewrites text: `YDocStore.anchorRange`
-   * (`tandem_comment` / `tandem_suggest`) and `local-model/tools.ts` create
-   * annotations, and a comment spanning a section is legal. Widening the shared
-   * flag would answer "target the text content only" to a multi-section comment,
-   * which is not advice its author can follow.
+   * folded into it — and passed by the callers that eventually REWRITE the
+   * span, not by the ones that only describe it.** #1766 first phrased this as
+   * "`tandem_edit`'s alone, because annotation creation writes no text". That
+   * was true of the immediate call and false of the eventual effect, so the
+   * rule is now stated over the effect:
+   *
+   *  - PASSED by `tandem_edit`, and by the SUGGESTION arm of the two
+   *    annotation creators — `YDocStore.anchorRange({purpose: "suggestion"})`
+   *    (`tandem_comment` with `suggestedText`) and `local-model/tools.ts`'s
+   *    `"replacement"` kind. A suggestion is a text rewrite DEFERRED to Accept:
+   *    `useAnnotationReview`'s `deleteRange` + insert and `docx-apply`'s
+   *    `flatText.slice(from, to)` replacement both take the stored flat span
+   *    verbatim, and `snapshotContradicts` cannot object because the snapshot
+   *    was captured over that exact span and still matches.
+   *  - NOT passed by the plain-comment arm of either creator. A comment
+   *    spanning a section is legal, and "target the text content only" is not
+   *    advice a multi-section comment's author can follow.
+   *
+   * Both creators take the discriminant as a REQUIRED parameter, so a new arm
+   * cannot default into the wrong half without a compile error.
    *
    * Union, not replacement, in the other direction too: the overlap predicate
    * alone would newly ACCEPT `to === blockStart` — the documented exclusive-end
@@ -190,8 +204,9 @@ export interface RangeValidationOpts extends FlatRangeOpts {
    *
    * Opt-in, and only the two caller-supplied-snapshot sites opt in:
    * `tandem_edit`'s `validateRange` (`mcp/document.ts`) and
-   * `YDocStore.anchorRange` (`mcp/document-store.ts`, i.e. `tandem_comment` /
-   * `tandem_suggest`). A caller transcribing `tandem_getTextContent` output
+   * `YDocStore.anchorRange` (`mcp/document-store.ts`, i.e. `tandem_comment`,
+   * with or without `suggestedText`). A caller transcribing
+   * `tandem_getTextContent` output
    * cannot see a U+00A0, so its snapshot comes back with U+0020 and today's
    * exact comparison answers `RANGE_GONE` for text that is right there.
    *
@@ -627,8 +642,9 @@ export function validateRange(
     // `resolveToElement(to)` lands at offset 0 of the heading and reports
     // `clampedFromPrefix`. That asymmetry is deliberate (it is what stops
     // `tandem_edit` swallowing the newline above a heading) and is documented in
-    // `docs/architecture.md` rather than removed. The interior term is
-    // `tandem_edit`'s alone — see `rejectHeadingInterior`.
+    // `docs/architecture.md` rather than removed. The interior term belongs to
+    // the callers that eventually rewrite the span — see
+    // `rejectHeadingInterior`.
     if (
       startPos.clampedFromPrefix ||
       endPos.clampedFromPrefix ||

@@ -180,6 +180,49 @@ describe("#1767: snapshotSearchPrefix heals a split-pair tail", () => {
     expect(snapshotContradicts(stored, `${"b".repeat(SNAPSHOT_CAP)} and a tail`)).toBe(true);
   });
 
+  it("treats an EMPTY truncated prefix as a contradiction rather than a free pass", () => {
+    // **`!actual.startsWith("")` is always false, so an empty prefix does not
+    // weaken the gate — it disarms it entirely**, and the `.docx` apply and the
+    // editor accept both proceed against a snapshot that asserts nothing.
+    // `snapshotSearchPrefix`'s own docblock warns that an empty needle matches
+    // at offset 0; the watcher guards on it (`if (probe.length === 0) continue`)
+    // and this predicate did not.
+    //
+    // Two shapes reach it, neither producible by `captureSnapshot` (whose
+    // truncated output is 199-200 units) — but `textSnapshot` arrives over a
+    // Y.Map any connected client can write and `sanitizeAnnotation` copies it
+    // through on a bare presence check, the same reachability the non-string arm
+    // above already fails closed on.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // (a) a stored empty snapshot flagged truncated.
+      expect(snapshotContradicts(rec({ textSnapshot: "", textSnapshotTruncated: true }), "x")).toBe(
+        true,
+      );
+      // (b) a one-unit snapshot that `dropSplitTail` trims to nothing — the
+      // shape #1767 widened by one, since it now trims a U+FFFD too.
+      expect(
+        snapshotContradicts(rec({ textSnapshot: "\uD83D", textSnapshotTruncated: true }), "x"),
+      ).toBe(true);
+      expect(
+        snapshotContradicts(rec({ textSnapshot: "\uFFFD", textSnapshotTruncated: true }), "x"),
+      ).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+
+    // **The control that keeps this from being satisfiable by "truncated always
+    // contradicts".** A one-unit prefix that survives the trim still matches.
+    expect(
+      snapshotContradicts(rec({ textSnapshot: "a", textSnapshotTruncated: true }), "a tail"),
+    ).toBe(false);
+
+    // ...and an ABSENT snapshot is still not a contradiction: the carve-out is
+    // keyed on the truncated branch, not on `snapshotSearchPrefix() === ""`,
+    // which collapses absent, empty and malformed together.
+    expect(snapshotContradicts(ann({}), "anything")).toBe(false);
+  });
+
   it("does not trim a truncated snapshot whose tail is a COMPLETE pair", () => {
     // The other half of "only when it is split". A back-off already happened,
     // or the cut landed between two astral characters — either way the last

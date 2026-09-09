@@ -768,12 +768,13 @@ export function registerDocumentTools(server: McpServer): void {
           // RANGE_GONE for text that is present. The server's own STORED-snapshot
           // re-anchoring (the watcher's probe and anchor) stays byte-exact.
           //
-          // `rejectHeadingInterior` (#1766) is `tandem_edit`'s alone. The
-          // endpoint-only check let `tandem_edit(4, 13, "X")` on
-          // `"Para one\n## Head\nTail"` step straight over `"## "` and produce
-          // `"ParaXead\nTail"` — the heading deleted, which is exactly what
-          // Critical Rule 6 exists to prevent. The two annotation-creating
-          // callers of `rejectHeadingOverlap` keep the endpoint-only rule
+          // `rejectHeadingInterior` (#1766). The endpoint-only check let
+          // `tandem_edit(4, 13, "X")` on `"Para one\n## Head\nTail"` step
+          // straight over `"## "` and produce `"ParaXead\nTail"` — the heading
+          // deleted, which is exactly what Critical Rule 6 exists to prevent.
+          // The two annotation-creating callers carry the same term on their
+          // SUGGESTION arm only (a stored `suggestedText` is a rewrite deferred
+          // to Accept); their plain-comment arm keeps the endpoint-only rule,
           // because a comment spanning a section is legal.
           const v = validateRange(r.doc, from, to, {
             textSnapshot,

@@ -6,7 +6,7 @@
  * (quoted_text, occurrence_index); the server resolves to a CRDT-anchored range:
  *
  *   unescape -> countOccurrences -> (clamp occ->1 iff occ>1 and count===1) ->
- *   findOccurrence -> anchoredRange({rejectHeadingOverlap}) ->
+ *   findOccurrence -> anchoredRange({rejectHeadingOverlap, rejectHeadingInterior}) ->
  *   AnnotationReplier.create / .reply                 (wrapped in withMcp)
  *
  * Anchor/validation failures are returned to the model as structured tool errors
@@ -182,8 +182,21 @@ function unescapeMarkdown(quote: string): string {
 /**
  * Resolve a quote anchor to a validated, CRDT-anchored range, or a structured
  * error. Unescape + count + clamp all run against the SAME `fullText` snapshot.
+ *
+ * **`kind` decides the heading-INTERIOR term (#1766 follow-up), and it is a
+ * required parameter so forgetting it is a compile error.** A `"replacement"`
+ * stores `suggestedText`, which the editor's accept and the `.docx` apply both
+ * turn into a verbatim replacement of the stored flat span — so a replacement
+ * whose interior steps over a `"## "` deletes the heading, exactly as
+ * `tandem_edit` did before #1766. A `"comment"` writes nothing and keeps the
+ * endpoint-only rule, because a comment spanning a section is legal.
  */
-function resolveAnchor(ydoc: Y.Doc, rawQuote: string, rawOcc: number) {
+function resolveAnchor(
+  ydoc: Y.Doc,
+  rawQuote: string,
+  rawOcc: number,
+  kind: "comment" | "replacement",
+) {
   const fullText = extractText(ydoc);
   const quoted = unescapeMarkdown(rawQuote);
   // M0 fix #2: a redundant occurrence_index on a unique quote is clamped to 1.
@@ -201,7 +214,10 @@ function resolveAnchor(ydoc: Y.Doc, rawQuote: string, rawOcc: number) {
       occ,
     };
   }
-  const anchored = anchoredRange(ydoc, hit.from, hit.to, undefined, { rejectHeadingOverlap: true });
+  const anchored = anchoredRange(ydoc, hit.from, hit.to, undefined, {
+    rejectHeadingOverlap: true,
+    rejectHeadingInterior: kind === "replacement",
+  });
   if (!anchored.ok) {
     return {
       ok: false as const,
@@ -232,7 +248,7 @@ function annotateFromQuote(
 ): ToolOutcome {
   const quoted = asString(args.quoted_text);
   const occ = asOccurrence(args.occurrence_index);
-  const r = resolveAnchor(ydoc, quoted, occ);
+  const r = resolveAnchor(ydoc, quoted, occ, kind);
   if (!r.ok) {
     return {
       result: { error: r.errorCode, message: r.message },

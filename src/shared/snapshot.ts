@@ -219,5 +219,28 @@ export function snapshotContradicts(ann: SnapshotBearing, actual: string): boole
     return true;
   }
   const expected = snapshotSearchPrefix(ann);
-  return isSnapshotTruncated(ann) ? !actual.startsWith(expected) : actual !== expected;
+  if (!isSnapshotTruncated(ann)) return actual !== expected;
+  // TRUNCATED, and the prefix came back EMPTY. `!actual.startsWith("")` is
+  // always `false`, so without this the gate is not merely weak on such a
+  // record — it is fully disarmed, and the `.docx` apply and the editor accept
+  // both proceed against a snapshot that asserts nothing.
+  //
+  // `snapshotSearchPrefix`'s own docblock warns that an empty needle matches at
+  // offset 0; the watcher guards on it (`if (probe.length === 0) continue`) and
+  // this did not. Two shapes reach it: a stored `""` flagged truncated, and a
+  // one-unit snapshot that {@link dropSplitTail} trims to nothing (#1767 widened
+  // the second by one). Neither is producible by `captureSnapshot`, whose
+  // truncated output is 199-200 units — but `textSnapshot` arrives over a Y.Map
+  // any connected client can write and `sanitizeAnnotation` copies it through on
+  // a bare presence check, which is the same reachability the non-string arm
+  // above already fails closed on.
+  //
+  // Same verdict for the same reason: a truncated snapshot claiming a
+  // zero-length prefix is evidence the RECORD is corrupt, not evidence the text
+  // is intact.
+  if (expected === "") {
+    console.warn(`[snapshot] Empty truncated prefix on ${ann.id}; treating as a contradiction`);
+    return true;
+  }
+  return !actual.startsWith(expected);
 }

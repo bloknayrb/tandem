@@ -378,14 +378,20 @@ export function resolveToElement(
 /**
  * True when `[from, to)` overlaps any top-level heading's markup prefix.
  *
- * The INTERIOR half of Critical Rule 6, and it is `tandem_edit`'s alone:
- * `validateRange`'s endpoint check (`clampedFromPrefix` on either resolved end)
- * cannot see a prefix that the range steps straight over, so
- * `tandem_edit(4, 13, "X")` on `"Para one\n## Head\nTail"` used to delete the
- * heading outright (#1766). Annotation creation (`YDocStore.anchorRange`,
- * `local-model/tools.ts`) deliberately does NOT carry this term — a comment
- * spanning a section is legal, and "target the text content only" is advice its
- * author could not follow.
+ * The INTERIOR half of Critical Rule 6, carried by every caller that eventually
+ * REWRITES the span: `validateRange`'s endpoint check (`clampedFromPrefix` on
+ * either resolved end) cannot see a prefix that the range steps straight over,
+ * so `tandem_edit(4, 13, "X")` on `"Para one\n## Head\nTail"` used to delete
+ * the heading outright (#1766).
+ *
+ * That is `tandem_edit`, plus the SUGGESTION arm of the two annotation creators
+ * — `YDocStore.anchorRange({purpose: "suggestion"})` and
+ * `local-model/tools.ts`'s `"replacement"` kind. A stored `suggestedText` is a
+ * deferred rewrite of the same flat span, so #1766's original "annotation
+ * creation writes no text" reasoning held only for the plain-comment half. The
+ * plain-comment arm still does NOT carry this term — a comment spanning a
+ * section is legal, and "target the text content only" is advice its author
+ * could not follow.
  *
  * Lives beside {@link resolveToElement} because it repeats that walk's flat
  * arithmetic, and a fifth independent copy of the separator contract is how the

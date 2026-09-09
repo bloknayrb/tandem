@@ -551,6 +551,59 @@ describe("MCP tool integration — annotation tools", () => {
     expect(map.get(parsed.data.annotationId)?.range).toEqual({ from: 0, to: 25 });
   });
 
+  it("tandem_comment WITH suggestedText refuses the same span — a suggestion rewrites it", async () => {
+    // **The other half of the spec above, and the hole #1766 left open.** #1766
+    // read `rejectHeadingInterior` as `tandem_edit`'s alone because "annotation
+    // creation writes no text". True of the immediate call, false of the
+    // eventual effect: `suggestedText` is a rewrite DEFERRED to Accept, and both
+    // consumers replace the stored flat span verbatim — `useAnnotationReview`'s
+    // `deleteRange({from, to})` + insert, and `docx-apply`'s
+    // `flatText.slice(from, to)` replacement. `snapshotContradicts` cannot stop
+    // it: the snapshot was captured over that exact span and still matches.
+    //
+    // So before this fix `tandem_edit(0, 25, "X")` was refused while
+    // `tandem_comment(0, 25, { suggestedText: "X" })` plus one click in the
+    // editor reached the same heading deletion.
+    //
+    // The fixture and offsets are the sibling spec's, deliberately: the ONLY
+    // difference between the two calls is `suggestedText`, so this cannot pass
+    // for any reason other than the arm it is testing.
+    const ydoc = setupDoc("mcp-ann-span-heading-suggest", "Intro para\n## Section\nBody text here");
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_comment",
+        arguments: {
+          from: 0,
+          to: 25,
+          text: "rewrite the whole section",
+          suggestedText: "Replacement",
+        },
+      }),
+    );
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_RANGE");
+    expect(parsed.message).toBe(
+      'Range overlaps with heading markup (e.g., "## "). Target the text content only.',
+    );
+
+    // Nothing was stored — a refusal that still created the annotation would be
+    // the same bug wearing an error message.
+    expect(ydoc.getMap<Annotation>(Y_MAP_ANNOTATIONS).size).toBe(0);
+
+    // **The control.** The same suggestion inside one block must still be
+    // accepted, or this spec would be green against a build in which
+    // `suggestedText` is refused outright.
+    const ok = parseResult(
+      await client.callTool({
+        name: "tandem_comment",
+        arguments: { from: 22, to: 26, text: "tighten", suggestedText: "Text" },
+      }),
+    );
+    expect(ok.error).toBe(false);
+    expect(ok.data.annotationId).toMatch(/^ann_/);
+  });
+
   it("tandem_comment records textSnapshotTruncated when the range exceeds the cap (#1486)", async () => {
     // The call site, not the helper. `captureSnapshot` returns `{text, truncated}`
     // and the handler has to spread the second half onto the annotation — a

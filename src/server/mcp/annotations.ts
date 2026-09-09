@@ -328,7 +328,18 @@ export function registerAnnotationTools(server: McpServer): void {
           if (!store) return noDocumentError();
           const from = toFlatOffset(rawFrom);
           const to = toFlatOffset(rawTo);
-          const result = store.anchorRange(from, to, textSnapshot);
+          // `purpose` decides whether the range's INTERIOR is held to Critical
+          // Rule 6 (#1766 follow-up). `suggestedText` makes this a text rewrite
+          // deferred to Accept, and the accept path replaces the stored flat
+          // span verbatim — so a suggestion spanning a heading prefix deletes
+          // the heading, which is the damage #1766 closed for `tandem_edit`. A
+          // plain comment keeps the endpoint-only rule and may span a section.
+          const result = store.anchorRange(
+            from,
+            to,
+            suggestedText !== undefined ? "suggestion" : "comment",
+            textSnapshot,
+          );
           if (!result.ok) {
             notifyRangeFailure(result, "tandem_comment", documentId);
             return rangeFailureToError(result);
