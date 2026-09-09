@@ -468,6 +468,28 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
       for (const at of freePorts) expect(decide).toBeLessThan(at);
     });
 
+    // #1787's two load-bearing wiring lines. Its own tests all drive
+    // `claimAppDataDir` directly against `mkdtemp` dirs, so an implementation
+    // that lands `app-data-owner.ts` fully tested and never calls it passes
+    // every one of them while shipping nothing. Claiming after the sweep, the
+    // trial clock or the lock would also stamp and sweep two different
+    // directories — all three read `resolveAppDataDir()`.
+    it("claims the app-data dir before the sweep, the trial clock and the store lock", () => {
+      const claim = source.indexOf("claimAppDataDir(");
+      expect(claim).toBeGreaterThan(-1);
+      for (const later of ["sweepBackupsOnStartup", "ensureTrialStarted", "acquireStoreLock("]) {
+        const at = source.indexOf(later);
+        expect(at).toBeGreaterThan(-1);
+        expect(claim).toBeLessThan(at);
+      }
+    });
+
+    it("exits 1 when the app-data claim is refused", () => {
+      const refused = source.indexOf('claim !== "claimed"');
+      expect(refused).toBeGreaterThan(-1);
+      expect(source.slice(refused, refused + 400)).toContain("process.exit(1)");
+    });
+
     it("exits 1 on the refusal arm", () => {
       const refuse = source.indexOf('action === "refuse"');
       expect(refuse).toBeGreaterThan(-1);

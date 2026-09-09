@@ -229,6 +229,11 @@ const CONFIG_API_REFERENCES = [
  */
 const DURABLE_WRITER_FILES: Record<string, number> = {
   "src/cli/rotate-token.ts": 4,
+  // #1787: the app-data ownership stamp. TWO durable writes, not one — the
+  // `fs.cp` one-time legacy migration is in the counted idiom set alongside the
+  // stamp's own `writeFile`. It writes Tandem's own state root, never a Claude
+  // config file, so `docs/security.md`'s accepted #1599 scope is unchanged.
+  "src/server/app-data-owner.ts": 2,
   "src/cli/uninstall-scrub.ts": 2,
   "src/client/tabs/TabItem.svelte": 1,
   "src/server/annotations/store.ts": 5,
@@ -261,6 +266,11 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
  * module. Not one of them may be a config writer.
  */
 const TOKEN_FILE_REFERENCES = [
+  // #1787: references `TOKEN_FILE_NAME` to EXCLUDE it from the legacy
+  // migration. The constant is imported rather than re-spelled as a literal,
+  // which is what keeps the exclusion pinned to the writer — and is why this
+  // row exists.
+  "src/server/app-data-owner.ts",
   "src/cli/rotate-token.ts",
   "src/server/auth/token-store.ts",
   "src/server/index.ts",

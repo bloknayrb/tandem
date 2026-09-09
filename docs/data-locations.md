@@ -9,13 +9,43 @@ Your documents are never moved: Tandem edits files where they live on disk.
 
 ## App data directory
 
+**The desktop app and the npm install use SEPARATE directories** (#1787). They ship
+on independent schedules, so sharing one root meant every downgrade hazard was
+reachable with no downgrade.
+
+npm install (`env-paths`):
+
 | OS | Path |
 | --- | --- |
 | Windows | `%LOCALAPPDATA%\tandem\Data\` |
 | macOS | `~/Library/Application Support/tandem/` |
 | Linux | `$XDG_DATA_HOME/tandem/` (default `~/.local/share/tandem/`) |
 
-Inside it:
+Desktop app (Tauri `app_data_dir()`, under the `com.tandem.editor` identifier):
+
+| OS | Path |
+| --- | --- |
+| Windows | `%APPDATA%\com.tandem.editor\` |
+| macOS | `~/Library/Application Support/com.tandem.editor/` |
+| Linux | `$XDG_DATA_HOME/com.tandem.editor/` (default `~/.local/share/com.tandem.editor/`) |
+
+Each root carries an `owner.json` stamping which install claimed it; a directory one
+flavor owns is **refused** by the other rather than shared. The first desktop launch
+after this version **copies** the npm directory across, once, leaving the original
+intact. The copy excludes four things: `owner.json` itself (so an interrupted copy
+retries instead of leaving a foreign stamp), `annotations/store.lock` (a copied live
+lock would make the new directory read-only for annotations forever), in-flight
+`.tandem-tmp-*` atomic-write temporaries, and `auth-token` (whose only reader derives
+the npm path directly — see the note under its row).
+
+Two consequences worth knowing. The annotation-store lock is **per-flavor** now, so
+running both flavors against the same document on different ports lets each write its
+own durable envelope and neither sees the other's. And unsaved **scratchpad recovery
+drafts** live in browser localStorage keyed by an install id derived from the app-data
+root, so they do not survive the move — a one-time loss, bounded to drafts that were
+never saved to disk.
+
+Inside either directory:
 
 | Entry | What it holds |
 | --- | --- |
@@ -23,7 +53,8 @@ Inside it:
 | `annotations/` | The durable annotation store (one JSON per document hash) and its `store.lock` |
 | `doc-backups/` | Pre-overwrite snapshots of your documents — verbatim byte copies taken before Tandem's first write to a file each run, restorable with any file manager (see [troubleshooting → Recovering a previous version](troubleshooting.md#recovering-a-previous-version-of-a-document)) |
 | `integrations.json` | Integration config; secrets are keychain references, not plaintext |
-| `auth-token` | The auto-generated Bearer token (mode `0o600`) that non-loopback callers must present. Deleting it makes Tandem mint a new one on next launch, which invalidates any config still carrying the old value — run `tandem rotate-token` instead of deleting it by hand. |
+| `owner.json` | Which install claimed this directory (`{"version", "flavor"}`). Delete it only to hand the directory to the other flavor deliberately. |
+| `auth-token` | **npm location only.** Its path is derived from the `env-paths` root directly and deliberately ignores `TANDEM_APP_DATA_DIR`, so it never appears in the desktop directory — the desktop keeps its token in the OS keychain and passes it to the sidecar. The auto-generated Bearer token (mode `0o600`) that non-loopback callers must present. Deleting it makes Tandem mint a new one on next launch, which invalidates any config still carrying the old value — run `tandem rotate-token` instead of deleting it by hand. |
 | `license.json` | **Your activated license.** Contains the signed blob, which carries your name and email address — the only identity information Tandem writes to disk. Deleting it means re-activating from the key you were emailed. |
 | `trial.json` | The trial clock's start timestamp. Deleting it restarts the trial (the clock is deliberately soft — see [ADR-040](decisions.md)). |
 | `.backups/` | Backups of `~/.claude.json` and the Claude Desktop config, taken before Tandem rewrote an entry you had customized. Named `claude-json-<YYYYMMDD-HHMMSS>-<id>.json`; the three most recent are kept |
@@ -145,7 +176,8 @@ If the binary is already gone, or you want zero traces:
 > re-activated — so keep that email (or copy `license.json` somewhere first) if
 > you intend to reinstall.
 
-1. Delete the app-data directory for your OS (table above).
+1. Delete the app-data directories for your OS — **both tables above** if you ran the
+   desktop app and the npm install.
 2. Delete the log directory (table above).
 3. Open `~/.claude.json` in an editor and delete the `"tandem"` (and
    `"tandem-channel"`, if present) keys under `"mcpServers"`. Do the same in

@@ -1531,6 +1531,51 @@ pub(crate) enum SpawnOutcome {
     Declined,
 }
 
+/// The unconditional environment the sidecar child is launched with.
+///
+/// Extracted from `start_sidecar`'s builder chain so the one line that carries
+/// the app-data separation is observable by a test (#1787). The `Option`-gated
+/// pairs (`TANDEM_AUTH_TOKEN`, `TANDEM_CHANNEL_DIST`, `TANDEM_STDIO_BRIDGE_DIST`)
+/// stay at the call site.
+///
+/// `TANDEM_DATA_DIR` and `TANDEM_APP_DATA_DIR` take the SAME value and mean
+/// different things: the first names the *resource/sample* base, the second the
+/// *state* root that `resolveAppDataDir()` actually reads. Only the first was
+/// ever set, so the desktop sidecar and an npm `tandem` shared one state root —
+/// sessions, `last-seen-version`, `integrations.json`, the annotation envelope
+/// dir, doc backups and (once the gate is live) the license files (#1787).
+/// `strip_win_prefix` is applied by the caller; keep it.
+///
+/// Pinning the listening addresses is separate and older. **`tauri-plugin-shell`
+/// DOES inherit the parent environment**: `Command::new`
+/// (`tauri-plugin-shell-2.3.5/src/process/mod.rs:162-179`) never calls
+/// `env_clear()`; `env_clear` (`:205-208`) runs only when the caller asks;
+/// `spawn` (`:305-320`) hands a plain `std::process::Command` to
+/// `SharedChild::spawn`, which inherits by default. So an ambient
+/// `TANDEM_MCP_PORT` in the environment that launched the desktop app reached
+/// the child and moved it off :3479, after which the shell missed its own child
+/// on every health poll and — after #1756 — POSTed `/api/shutdown` at whatever
+/// else answered :3479 on **every Quit**. Setting these explicitly makes the
+/// child's addresses the ones `HEALTH_URL` / `SHUTDOWN_URL` / `WS_PORT` /
+/// `MCP_PORT` name. It does not fix #1825 (those are still hardcoded). The
+/// POST's identity check now exists (#1812) but is positive-only: a pid-less
+/// body or an unreachable `/health` still POSTs.
+///
+/// That same inheritance is why `TANDEM_TAURI_SIDECAR` is NOT the provenance
+/// discriminant — it reaches every descendant. The `--tauri-sidecar` argv flag
+/// beside `server_js_str` is (#1758, #1787); this variable is kept unchanged
+/// for its existing consumers.
+fn sidecar_env_pairs(app_data_dir: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("TANDEM_TAURI_SIDECAR", "1".to_string()),
+        ("TANDEM_DATA_DIR", app_data_dir.to_string()),
+        ("TANDEM_APP_DATA_DIR", app_data_dir.to_string()),
+        ("TANDEM_PORT", WS_PORT.to_string()),
+        ("TANDEM_MCP_PORT", MCP_PORT.to_string()),
+        ("TANDEM_BIND_HOST", SIDECAR_BIND_HOST.to_string()),
+    ]
+}
+
 /// Spawn the Node.js sidecar and wait for the health endpoint.
 /// Retries up to MAX_RESTARTS times with exponential backoff on crash.
 ///
@@ -1653,34 +1698,10 @@ pub(crate) async fn start_sidecar(
             // this child, so an npm `tandem` run from an auto-launched Claude
             // Code session's own shell would otherwise claim the sidecar's
             // carve-outs. Argv is not inherited by grandchildren.
-            .args([server_js_str.as_str(), "--tauri-sidecar"])
-            .env("TANDEM_TAURI_SIDECAR", "1")
-            .env("TANDEM_DATA_DIR", app_data_dir_str.as_str())
-            // Pin the sidecar's listening addresses to the ones this shell has
-            // hardcoded in `HEALTH_URL` / `SHUTDOWN_URL` / `WS_PORT` / `MCP_PORT`.
-            //
-            // **`tauri-plugin-shell` DOES inherit the parent environment.**
-            // `Command::new` (`tauri-plugin-shell-2.3.5/src/process/mod.rs:162-179`)
-            // never calls `env_clear()`; `env_clear` (`:205-208`) runs only when
-            // the caller asks for it; `spawn` (`:305-320`) converts to a plain
-            // `std::process::Command` and hands it to `SharedChild::spawn`,
-            // which inherits by default. So an ambient `TANDEM_MCP_PORT` in the
-            // environment that launched the desktop app reached the child and
-            // moved it off :3479 (`src/server/index.ts:97-98`, `:503`); the
-            // shell would then miss its own child on every health poll and,
-            // after #1756, POST `/api/shutdown` at whatever else answers :3479
-            // on **every Quit**. Setting these explicitly is what makes the
-            // child's addresses the ones the constants above name. It does not
-            // fix #1825 (the URLs are still hardcoded). The POST's identity
-            // check now exists (#1812): `graceful_stop_request` GETs `/health`
-            // first and skips the flush when the body positively names a
-            // DIFFERENT pid. What it does not do is fail closed — a pid-less
-            // body (any sidecar older than that change) or an unreachable
-            // `/health` still POSTs, so a foreign server that does not identify
-            // itself is still mistaken for ours.
-            .env("TANDEM_PORT", WS_PORT.to_string())
-            .env("TANDEM_MCP_PORT", MCP_PORT.to_string())
-            .env("TANDEM_BIND_HOST", SIDECAR_BIND_HOST);
+            .args([server_js_str.as_str(), "--tauri-sidecar"]);
+        for (key, value) in sidecar_env_pairs(app_data_dir_str.as_str()) {
+            cmd = cmd.env(key, value);
+        }
 
         if let Some(ref token) = auth_token {
             cmd = cmd.env("TANDEM_AUTH_TOKEN", token.as_str());
@@ -3941,6 +3962,83 @@ mod health_identity_tests {
         assert!(
             elapsed < EXIT_GRACEFUL_BUDGET,
             "the identity probe is bounded at 1s; the whole stop must stay well inside the exit budget: {elapsed:?}"
+        );
+    }
+}
+
+/// #1787 — the sidecar's app-data separation is one line, so it gets a test.
+#[cfg(test)]
+mod sidecar_env_tests {
+    use super::*;
+
+    /// Spelled by `concat!` so the occurrence count in
+    /// `start_sidecar_folds_the_env_pairs_onto_the_command` does not count this
+    /// module's own uses of it.
+    const APP_DATA_KEY: &str = concat!("TANDEM_APP_", "DATA_DIR");
+
+    /// Dropping `TANDEM_APP_DATA_DIR` does not merely leave the bug: once the
+    /// desktop has claimed the LEGACY directory as `flavor: "desktop"`, the next
+    /// npm `tandem` hits the flavor refusal and exits. So this is a hard-failure
+    /// guard, not a hygiene one.
+    #[test]
+    fn sidecar_env_pairs_exports_both_data_dir_variables() {
+        let pairs = sidecar_env_pairs("/tmp/x");
+        let get = |key: &str| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.as_str())
+        };
+
+        assert_eq!(get("TANDEM_DATA_DIR"), Some("/tmp/x"));
+        assert_eq!(
+            get(APP_DATA_KEY),
+            Some("/tmp/x"),
+            "`resolveAppDataDir()` reads TANDEM_APP_DATA_DIR; TANDEM_DATA_DIR alone leaves the \
+             desktop sharing the npm install's state root"
+        );
+        assert_eq!(get("TANDEM_TAURI_SIDECAR"), Some("1"));
+        assert!(get("TANDEM_PORT").is_some());
+        assert!(get("TANDEM_MCP_PORT").is_some());
+        assert!(get("TANDEM_BIND_HOST").is_some());
+    }
+
+    /// The half the value assertion above cannot make: that `start_sidecar`
+    /// actually consumes the helper.
+    ///
+    /// Without this, adding `sidecar_env_pairs`, passing its test and leaving
+    /// the original inline `.env()` chain in place ships no fix at all. The
+    /// occurrence count is what pins the ONE home of the literal.
+    #[test]
+    fn start_sidecar_folds_the_env_pairs_onto_the_command() {
+        let src = include_str!("sidecar.rs");
+        let start = src
+            .find("pub(crate) async fn start_sidecar")
+            .or_else(|| src.find("async fn start_sidecar"))
+            .expect("start_sidecar must exist");
+        // Bounded window: the next top-level `\n}` closes the function body far
+        // past the builder chain, so scan a generous slice rather than the whole
+        // file, which would match this test module itself.
+        let tail = &src[start..];
+        // Char-indexed, not byte-sliced: this file is full of em dashes.
+        let end = tail
+            .char_indices()
+            .take(20_000)
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(tail.len());
+        let body = &tail[..end];
+        assert!(
+            body.contains("sidecar_env_pairs("),
+            "start_sidecar must fold sidecar_env_pairs onto the command builder"
+        );
+
+        let needle = format!("\"{APP_DATA_KEY}\"");
+        let occurrences = src.matches(needle.as_str()).count();
+        assert_eq!(
+            occurrences, 1,
+            "the TANDEM_APP_DATA_DIR literal belongs in sidecar_env_pairs and nowhere else \
+             (found {occurrences})"
         );
     }
 }

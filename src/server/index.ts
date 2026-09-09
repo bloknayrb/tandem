@@ -330,6 +330,23 @@ async function main() {
     }
   }
 
+  // #1787 — claim the app-data root for THIS install before anything writes
+  // into it. The sweep, the trial clock and the store lock below all read
+  // `resolveAppDataDir()`, so claiming after them would sweep and stamp two
+  // different directories. Never throws: an escaping error here reaches
+  // `main().catch(...) => process.exit(1)`, which for the desktop is an app
+  // that never starts.
+  {
+    const { claimAppDataDir, refusalMessage } = await import("./app-data-owner.js");
+    const appDataDir = resolveAppDataDir();
+    const flavor = isTauriSidecar() ? "desktop" : "npm";
+    const claim = await claimAppDataDir(appDataDir, APP_VERSION, flavor);
+    if (claim !== "claimed") {
+      console.error(refusalMessage(appDataDir, claim.refused, flavor));
+      process.exit(1);
+    }
+  }
+
   // Prune stale `.claude.json` backups left over from a previous run.
   // Idempotent and bounded — only touches Tandem's own `.backups/` dir.
   // Failures are non-fatal (a backup dir we can't sweep is operationally
