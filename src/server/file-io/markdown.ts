@@ -260,6 +260,25 @@ export function serializeMdast(tree: Root): string {
   visit(tree, "definition", (node) => {
     activeRefDefs.add(node.identifier);
   });
+  // Reference and footnote definitions do NOT reach a Y.Doc-derived tree as
+  // `definition` nodes: they are raw-carrier paragraphs (#981 / ADR-042)
+  // re-emitted as `{ type: "html", value: "[label]: https://…" }`, so the visit
+  // above finds nothing and rule 1 un-escapes a `\[label]` whose definition is
+  // still live in the same file — turning it into a shortcut reference LINK
+  // (#1753). The corrupt output is a stable fixed point, so an idempotency-only
+  // suite is green on it. The `definition` visit stays: a tree built by
+  // `appendMdast` from pasted markdown can still carry real definition nodes.
+  //
+  // Bounded quantifier and a class excluding `\`, `[`, `]` — the same linearity
+  // posture rule 1's own label class documents. Footnote labels (`[^1]`) match
+  // and are added; that is strictly conservative, since an extra member can only
+  // KEEP an escape, never strip one.
+  visit(tree, "html", (node) => {
+    for (const line of node.value.split("\n")) {
+      const m = /^ {0,3}\[([^\\[\]\n]{1,999})\]:/.exec(line);
+      if (m) activeRefDefs.add(normalizeLabel(m[1]));
+    }
+  });
   return mdStringifier.stringify(tree);
 }
 

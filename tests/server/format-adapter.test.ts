@@ -117,6 +117,36 @@ describe("MarkdownAdapter — two-phase parse/apply", () => {
     // atomic update (load-bearing for #609 large-doc client freeze).
     expect(transactCount).toBe(1);
   });
+
+  // Obsidian vaults are out of scope for v1 (decision A, 2026-09-06): warn
+  // once per file, do not build wikilink support.
+  describe("wikilink warning (#1753)", () => {
+    it("returns one file-named `other` issue for a document containing [[…]]", async () => {
+      const adapter = getAdapter("md");
+      const doc = new Y.Doc();
+      const prepared = await adapter.parse("See [[Note]]\n");
+      const issues = adapter.apply(doc, prepared, { fileName: "vault-note.md" });
+      expect(issues).toHaveLength(1);
+      expect(issues[0].kind).toBe("other");
+      expect(issues[0].kind === "other" && issues[0].message).toContain("vault-note.md");
+      expect(issues[0].kind === "other" && issues[0].message).toContain("[[wikilinks]]");
+    });
+
+    it("returns no issue for a document with no wikilinks", async () => {
+      const adapter = getAdapter("md");
+      const doc = new Y.Doc();
+      expect(adapter.apply(doc, await adapter.parse("No brackets here\n"))).toEqual([]);
+    });
+
+    it("still escapes the wikilink on save — the warning replaces support, it is not a fix", async () => {
+      const adapter = getAdapter("md");
+      const doc = new Y.Doc();
+      adapter.apply(doc, await adapter.parse("See [[Note]]\n"));
+      // Pinning today's output keeps a "while I'm here" wikilink node from
+      // landing unreviewed: decision A says do not build one.
+      expect(adapter.save?.(doc)).toBe("See \\[[Note]]\n");
+    });
+  });
 });
 
 describe("DocxAdapter — two-phase parse/apply (#696, ADR-036, PR #707 review)", () => {

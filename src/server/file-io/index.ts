@@ -54,9 +54,33 @@ const markdownAdapter: FormatAdapter = {
       issues: [],
     };
   },
-  apply(doc, prepared) {
+  apply(doc, prepared, ctx) {
     if (prepared.format !== "md") return [];
     loadMarkdown(doc, prepared.content);
+    // Obsidian-style vaults are out of scope for v1 (#1753): `[[wikilinks]]`
+    // and `![[embeds]]` have no mdast representation here, so they survive as
+    // literal text and pick up a `\` escape on save. Warn once per file per
+    // open rather than pretending to support them — `notifyIssue`'s `"other"`
+    // arm dedups on `load-other:${dedupSource}`. This is `apply` rather than
+    // `parse` because only `ApplyContext` carries the file name.
+    //
+    // The `a[[i]]` false positive (R indexing, a nested Python list literal,
+    // in prose or inside a fence) is ACCEPTED, not engineered around: the
+    // notification is warn-only, changes no bytes and blocks nothing, whereas
+    // excluding fenced regions would mean a second scanner agreeing with the
+    // parser about fence boundaries.
+    if (/\[\[[^\]\n]+\]\]/.test(prepared.content)) {
+      return [
+        {
+          kind: "other",
+          error: undefined,
+          message:
+            `${ctx?.fileName ?? "This document"} contains [[wikilinks]]. Tandem does not ` +
+            `preserve them — they are saved as literal text. Obsidian-style vaults are not ` +
+            `supported in this release.`,
+        },
+      ];
+    }
     return [];
   },
   save(doc) {

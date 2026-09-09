@@ -81,7 +81,11 @@ export type Prepared =
   | {
       format: "md";
       content: string;
-      /** Always empty for md today — placeholder for future warnings. */
+      /**
+       * Always empty from `parse` — the md adapter's only warning today is the
+       * `[[wikilink]]` notice (#1753), which is raised from `apply` because
+       * only `ApplyContext` carries the file name to put in the message.
+       */
       issues: LoadIssue[];
     }
   | {
