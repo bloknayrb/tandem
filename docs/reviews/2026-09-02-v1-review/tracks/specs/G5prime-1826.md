@@ -23,7 +23,9 @@ The issue lists five items. Two are fixed here; three are refuted or belong else
 ```ts
 if (status === "accepted" && ann.suggestedText !== undefined) {
   const editor = getEditor();
-  if (editor && !applySuggestion(ann, editor, y, getFormat?.())) {
+  // `!editor ||`, not `editor &&` — see `## PR review round 1`. A missing
+  // editor is a failed apply, not a licence to publish `accepted`.
+  if (!editor || !applySuggestion(ann, editor, y, getFormat?.())) {
     // Normalizing write, NOT a status change: the record is still `pending`, so
     // the observer's claude-update arm has no matching case and emits nothing.
     // What it does do is strip a stale `resolvedBy` (#1770).
@@ -46,19 +48,22 @@ withBrowser(y, () => map.set(id, { ...ann, status }));
 ```ts
 const key = inboxLedgerKey(documentId, ann);
 const lastSurfacedEditedAt = surfaced.get(key);
+// The WIRE flag: shown before, changed since.
 const edited = lastSurfacedEditedAt !== undefined && (ann.editedAt ?? 0) > lastSurfacedEditedAt;
+// The GATE term, and NOT the same predicate — see `## PR review round 1`.
+const unaccountedEdit = hasUnaccountedEdit(ann, lastSurfacedEditedAt);
 
 if (
   ann.author === "user" &&
   ann.type === "comment" &&
   isClaudeFacing(ann) &&
-  (ann.status === "pending" || edited)
+  (ann.status === "pending" || unaccountedEdit)
 ) {
 ```
 
 with the existing body reusing `key` and `edited` (the `channelKey` line and the `surfaced.set` otherwise unchanged).
 
-- **`|| edited` holds WITHIN A SERVER RUN only; state the bound in the branch comment, do not widen the predicate.** It is what stops the gate creating **2a**'s divergence. It does not cover restart-then-edit: `edited` needs `lastSurfacedEditedAt !== undefined`, and a restart empties the in-memory ledger, so a comment resolved before a restart and edited after it surfaces on the channel and not on pull. No pure predicate does better — comparing against `lastSurfacedEditedAt ?? 0` would re-surface every previously-edited resolved comment on every restart, which is the bug being fixed. Accepted and named in `## Not in scope`.
+- **~~`|| edited` holds WITHIN A SERVER RUN only; do not widen the predicate.~~ Superseded by review round 1 — see `## PR review round 1`.** The bound this bullet prescribed was *stronger than the code*: `edited` needs a prior surfacing, and a record the gate rejects takes no `surfaced.set`, so a user comment resolved before it was ever surfaced can never acquire the ledger entry the hatch requires. The suppression was permanent, not restart-bounded, and reachable in one server run with no restart. The shipped gate term is `hasUnaccountedEdit` (`editedAt > (last ?? 0)`), kept distinct from the `edited` wire flag.
 - **The gate is a term of the `if` condition, never a check inside the block** — same reason as the Solo hold's `continue`: a rejected record must take no `surfaced.set`, or the ledger is poisoned and the record is permanently dedup-skipped. Position among the conjuncts is immaterial; all four are pure predicates over `ann`.
 - Write the gate in its positive form (`status === "pending"`), not `status !== "dismissed"` — `accepted` is a reachable end state for a user comment (`transitionPending` refuses an accept only for a claude author or a suggestion-bearing record, `src/server/annotations/lifecycle.ts:952-957`).
 - Path is read-only; no origin helper involved.
@@ -93,7 +98,7 @@ Word the ledger and PR claim as **"no SILENT divergence after a failed Accept"**
 
 **The Undo path reproduces the same divergence, by design.** `undoResolveAnnotation` writes `revertedToPending(ann)` after `annotation:accepted` was emitted, and the observer still has no revert arm. That is a deliberate user reversal, recovered on pull via #1770's `(id, status)` ledger key. This PR closes only the failed-Accept arm.
 
-**Restart-then-edit of a resolved user comment reproduces the same class, and this PR accepts it.** Bounded in the item-2 Fix; closing it properly means a durable ledger, which is scope this group does not carry. Do not word the PR claim as though the edit path is covered after a restart.
+**A restart re-surfaces an already-edited resolved user comment once, and this PR accepts it.** After round 1 the residual is a *duplicate*, not a silent loss: an empty ledger and a never-surfaced record are indistinguishable without durable state, so `hasUnaccountedEdit` reads a pre-restart `editedAt` as unaccounted and surfaces the record one more time, after which its fresh ledger entry quiets it. The #1826 population — resolved comments never edited — stays suppressed across restarts, which is the whole of item 2. Closing the residual means a durable ledger, which is scope this group does not carry.
 
 `docs/mcp-tools.md` and `docs/security.md` — untouched (see the scope cut). A new channel event type for un-resolve. Server-serialized annotation writes (item 3's real fix). #1779's Solo copy. #1813's force-open envelope decision. Any change to the observer, to `isClaudeFacing`, to the four write guards, or to `addUserReply` / `removeAnnotationRecord`, which the two seam tests pin as unguarded.
 
@@ -124,3 +129,15 @@ Word the ledger and PR claim as **"no SILENT divergence after a failed Accept"**
 **Adopted**
 
 - **Item 3 lost its tracked home.** The spec refuted the proposed `version`-field compare-and-set correctly (it cannot hold in a CRDT), then parked the real fix "under `bryan`" — a list that does not exist. Checked: `grep -n 1826 docs/plans/2026-09-06-open-issues-sweep.md` returns only the wave-table row (`:86`), the bulk mention (`:219`) and the status table (`:411`); the DECIDE bucket at `:54` does not list it. Meanwhile `docs/reviews/2026-09-02-v1-review/areas/annotations.md:23` records the race as reproduced 3/3 with two named consequences. Refuting an item is not the same as closing it, and `Closes #1826` would have retired both together. `## Done when` now requires a filed issue (or an explicit DECIDE row) before merge. No code change: the refutation itself stands.
+
+## PR review round 1
+
+**Adopted — three findings, all behavioural, each with a mutation-killed test.**
+
+- **The `|| edited` hatch was reachable-broken within one server run, not only across a restart** (`awareness.ts`, the item-2 gate). Two reviewers found the same shape. `edited` requires `lastSurfacedEditedAt !== undefined`, and a record the gate rejects takes no `surfaced.set` — so a user comment that Claude learned of from `tandem_getAnnotations` or the channel, resolved with `tandem_resolveAnnotation`, and never polled for, has no ledger entry and can never get one. A later user edit then emitted `annotation:edited` on the channel while `tandem_checkInbox` returned nothing, permanently: item 1's own defect class, in the path the hatch existed to protect, and a regression against master (which surfaced the record). Fixed by splitting the two meanings the one name carried. `hasUnaccountedEdit(ann, last)` = `editedAt > (last ?? 0)` is the GATE term; `edited` keeps `!== undefined` and stays the WIRE flag, because `edited: true` claims "you were shown this and it changed since" and that is false of a record never surfaced. The spec's "do not widen the predicate" bullet is struck: it was written against a bound the code did not have. Test: a `{dismissed, editedAt}` record with an empty ledger surfaces once, carries no `edited` flag, and does not repeat.
+- **A gate-rejected record never left the candidate set.** With no `surfaced.set`, every resolved user comment was re-selected on every poll and re-handed to `refreshAll` — in production `store.refreshAnnotations`, a `withMcp` transaction over `refreshAllRanges` that persists range repairs — for the life of the process. The candidates filter now mirrors the user arm's status gate (`isSettledUserComment`), so the record is excluded before the refresh rather than after it. Mirrored rather than moved, and deliberately WITHOUT the `isClaudeFacing` half: a record withheld for audience must be able to come back if the stored envelope is healed, and status is safe to key on because the predicate re-runs against the live record every poll and holds no state. Stamping the ledger on rejection was the other candidate fix and was rejected — it would make a resolved-then-reopened comment permanently invisible.
+- **A null editor published `accepted` with nothing applied** (`useAnnotationReview.svelte.ts`). `if (editor && !applySuggestion(...))` short-circuited to the status write, so an Accept fired while the Tiptap instance was absent (tab swap, document reload — `SidePanel` stays mounted by design) told Claude the suggestion had landed, with the document unchanged and no `onApplyFailed` toast. That is the one remaining hole in item 1's claim, reached by the route the reorder made read as deliberate. `!editor ||` now takes the decline branch.
+
+**Not adopted**
+
+- *Nothing was refused on its merits.*

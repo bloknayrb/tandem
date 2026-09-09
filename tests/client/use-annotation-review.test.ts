@@ -373,6 +373,48 @@ describe("useAnnotationReview — no silent divergence after a failed Accept (#1
     expect(seen).toEqual(["pending"]);
   });
 
+  it("declines the accept when there is no editor to apply into", () => {
+    // **Review round 1.** `if (editor && !applySuggestion(...))` short-circuits
+    // on a null editor and fell through to the status write, so the record went
+    // out `accepted` with the suggested text never inserted and no toast:
+    // exactly the divergence this describe exists to close, by the one route
+    // the rewritten condition made read as deliberate. `getEditor()` returns
+    // null while the Tiptap instance is absent — a tab swap or a document
+    // reload, with `SidePanel` mounted throughout by design.
+    const ydoc = new Y.Doc();
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const ann = makeAnnotation({
+      id: "no-editor",
+      author: "claude",
+      type: "comment",
+      status: "pending",
+      suggestedText: "replacement text",
+      // A range that WOULD apply cleanly, so the only reason to decline is the
+      // missing editor.
+      range: { from: toFlatOffset(0), to: toFlatOffset(11) },
+      textSnapshot: "hello world",
+    });
+    map.set(ann.id, ann);
+    const seen = observeStatuses(map, ann.id);
+    const applyFailed: string[] = [];
+
+    const review = mountReview({
+      getYdoc: () => ydoc,
+      getEditor: () => null,
+      getAnnotations: () => [map.get(ann.id) as Annotation],
+      onActiveAnnotationChange: () => {},
+      getScrollBehavior: () => "auto",
+      onApplyFailed: (failed) => applyFailed.push(failed.id),
+    });
+
+    review.resolveAnnotation(ann.id, "accepted");
+
+    // Before the fix: ["accepted"], with the document untouched and
+    // `applyFailed` empty.
+    expect(seen).toEqual(["pending"]);
+    expect(applyFailed).toEqual(["no-editor"]);
+  });
+
   it("writes exactly one `accepted` when the apply succeeds (positive control)", () => {
     // Kills a fix that stops writing the status at all, and a double-write.
     const ydoc = new Y.Doc();

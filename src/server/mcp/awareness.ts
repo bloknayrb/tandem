@@ -104,6 +104,56 @@ function inboxLedgerKey(
   return ann.author === "claude" ? `${base}#${ann.status}` : base;
 }
 
+/**
+ * An edit this ledger has not accounted for — **including one on a record the
+ * ledger has no entry for at all** (`?? 0`, not `!== undefined`).
+ *
+ * That second half is the whole point and it is NOT the `edited` re-surface
+ * flag. A user comment can be resolved before it was ever surfaced — Claude can
+ * learn of it from `tandem_getAnnotations` or the channel and call
+ * `tandem_resolveAnnotation` without ever polling `tandem_checkInbox` — and a
+ * record rejected by the `userActions` status gate takes no `surfaced.set`, so
+ * it can never acquire the entry a "surfaced before, edited since" test needs.
+ * Requiring one loses the user's subsequent edit for the life of the process
+ * while the observer still emits `annotation:edited` on the channel: push and
+ * pull disagree, permanently, which is the exact defect #1826 item 1 removed
+ * from the accept path.
+ *
+ * Residual, and it is a duplicate rather than a loss: an already-edited,
+ * resolved user comment surfaces once more after a server restart, because an
+ * empty ledger and a never-surfaced record are indistinguishable without
+ * durable state. The #1826 population — resolved comments never edited — stays
+ * suppressed, since `editedAt` is then absent and `0 > 0` is false. Closing the
+ * residual means a durable ledger.
+ */
+function hasUnaccountedEdit(
+  ann: Pick<Annotation, "editedAt">,
+  lastSurfacedEditedAt: number | undefined,
+): boolean {
+  return (ann.editedAt ?? 0) > (lastSurfacedEditedAt ?? 0);
+}
+
+/**
+ * A user comment the `userActions` gate below cannot admit: resolved, with no
+ * unaccounted edit. Mirrors the gate — the two must be read together.
+ *
+ * Deliberately omits the `isClaudeFacing` half of the gate. A record withheld
+ * for AUDIENCE is skipped in the loop and also takes no `surfaced.set`, so it
+ * too re-enters the candidate set on every poll; excluding it here would key a
+ * permanent skip on a field the loop is not the only writer of, and a stored
+ * `{comment, private}` record healed to outbound must be able to come back.
+ * Status is safe to key on because this predicate re-runs against the live
+ * record on every poll and holds no state of its own.
+ */
+function isSettledUserComment(ann: Annotation, lastSurfacedEditedAt: number | undefined): boolean {
+  return (
+    ann.author === "user" &&
+    ann.type === "comment" &&
+    ann.status !== "pending" &&
+    !hasUnaccountedEdit(ann, lastSurfacedEditedAt)
+  );
+}
+
 /** Reset surfaced IDs (exported for testing) */
 export function resetInbox(): void {
   surfacedIds.clear();
@@ -620,7 +670,21 @@ export function processInboxAnnotations(
   // costs no fidelity against the per-item loop this replaces.
   const candidates = allAnnotations.filter((raw) => {
     const lastSurfacedEditedAt = surfaced.get(inboxLedgerKey(documentId, raw));
-    return lastSurfacedEditedAt === undefined || (raw.editedAt ?? 0) > lastSurfacedEditedAt;
+    // The dedup: already surfaced, nothing new since.
+    if (lastSurfacedEditedAt !== undefined && !hasUnaccountedEdit(raw, lastSurfacedEditedAt)) {
+      return false;
+    }
+    // The user arm's status gate, mirrored. Without it a resolved user comment
+    // — which fails that gate and therefore takes no `surfaced.set` — re-enters
+    // this set on every poll for the life of the process and is re-handed to
+    // `refreshAll`, in production a `withMcp` transaction over
+    // `refreshAllRanges` that persists range repairs. Mirrored, not moved: the
+    // loop keeps its own copy (both are pinned by
+    // `tests/server/inbox-ledger-undo.test.ts`) and every other reason a record
+    // is skipped stays there. Sound to evaluate pre-refresh because a refresh
+    // only improves ranges — it never changes `author`, `type`, `status` or
+    // `editedAt`, which is the same property that makes the split legal at all.
+    return !isSettledUserComment(raw, lastSurfacedEditedAt);
   });
 
   // **`candidates` is the answer; `refreshAll` only gets to improve the ranges
@@ -670,7 +734,13 @@ function processUnsurfacedInboxAnnotations(
     // status gate can consult `edited` as a term of its own condition.
     const key = inboxLedgerKey(documentId, ann);
     const lastSurfacedEditedAt = surfaced.get(key);
+    // Two names, and collapsing them into one is a bug in whichever direction
+    // you collapse. `edited` is the WIRE claim — "you were shown this and the
+    // user has changed it since" — so it needs a prior surfacing and is false on
+    // a record with no ledger entry. `unaccountedEdit` is the GATE term and
+    // treats a missing entry as `0`; see `hasUnaccountedEdit`.
     const edited = lastSurfacedEditedAt !== undefined && (ann.editedAt ?? 0) > lastSurfacedEditedAt;
+    const unaccountedEdit = hasUnaccountedEdit(ann, lastSurfacedEditedAt);
 
     // #1619: `isClaudeFacing` is the audience half — a stored
     // `{comment, audience: "private"}` record is withheld from the channel and
@@ -686,21 +756,21 @@ function processUnsurfacedInboxAnnotations(
     // end state for a user comment, since `transitionPending` refuses an accept
     // only for a claude author or a suggestion-bearing record.
     //
-    // `|| edited` holds WITHIN A SERVER RUN ONLY, and it is what stops this
-    // gate creating item 1's own defect class in the edit path: the observer
-    // emits `annotation:edited` on any `editedAt` advance with no status test,
-    // and Dismiss stays open to a user's comment, so a bare
-    // `status === "pending"` would push an edit-after-dismiss on the channel
-    // while `tandem_checkInbox` returned nothing. It does NOT cover
-    // restart-then-edit — `edited` needs a ledger entry, and a restart has
-    // none. Do not widen it to `lastSurfacedEditedAt ?? 0`: that re-surfaces
-    // every previously-edited resolved comment on every restart, which is the
-    // bug being fixed. Closing it properly means a durable ledger.
+    // `|| unaccountedEdit` is what stops this gate creating item 1's own defect
+    // class in the edit path: the observer emits `annotation:edited` on any
+    // `editedAt` advance with no status test, and Dismiss stays open to a
+    // user's comment, so a bare `status === "pending"` would push an
+    // edit-after-dismiss on the channel while `tandem_checkInbox` returned
+    // nothing. The term is deliberately NOT the `edited` flag above it — that
+    // one needs a prior ledger entry, which a comment resolved before it was
+    // ever surfaced can never acquire here, making the suppression permanent
+    // rather than restart-bounded (review round 1). Its residual and the reason
+    // this is a duplicate rather than a loss are in `hasUnaccountedEdit`.
     if (
       ann.author === "user" &&
       ann.type === "comment" &&
       isClaudeFacing(ann) &&
-      (ann.status === "pending" || edited)
+      (ann.status === "pending" || unaccountedEdit)
     ) {
       const channelKey = edited ? getAnnotationEditedChannelKey(ann.id, ann.editedAt ?? 0) : ann.id;
 

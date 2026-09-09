@@ -66,17 +66,18 @@ function userDecides(id: string, status: Annotation["status"]): void {
   withBrowser(doc, () => map().set(id, { ...(map().get(id) as Annotation), status }));
 }
 
-function poll(surfaced: Map<string, number>) {
+/**
+ * `refreshAll` is the identity by default. Pass a spy to assert WHICH records
+ * reach it — in production it is `YDocStore.refreshAnnotations`, a `withMcp`
+ * transaction over `refreshAllRanges` that persists range repairs, so the
+ * candidate set is a cost as well as a selection.
+ */
+function poll(
+  surfaced: Map<string, number>,
+  refreshAll: (anns: Annotation[]) => Annotation[] = (a) => a,
+) {
   const all = [...map().values()] as Annotation[];
-  return processInboxAnnotations(
-    all,
-    TEXT,
-    surfaced,
-    (a) => a,
-    DOC_ID,
-    "tandem",
-    () => false,
-  );
+  return processInboxAnnotations(all, TEXT, surfaced, refreshAll, DOC_ID, "tandem", () => false);
 }
 
 beforeEach(() => {
@@ -219,11 +220,34 @@ describe("#1826: the userActions bucket has a status gate", () => {
     expect(poll(surfaced).userActions.map((a) => a.id)).toEqual(["u-pending"]);
   });
 
+  it("an edit after a dismiss still surfaces, having never been surfaced", () => {
+    // **Review round 1.** The gate's escape hatch was `edited`, which requires
+    // a prior ledger entry — and a record rejected by the gate takes no
+    // `surfaced.set`, so a comment resolved before it was ever surfaced could
+    // never acquire one. No restart involved: Claude learns of the comment from
+    // `tandem_getAnnotations` or the channel, calls `tandem_resolveAnnotation`,
+    // and never polls. The user's later edit then reached the channel as
+    // `annotation:edited` and `tandem_checkInbox` — the documented authority —
+    // returned nothing, for the life of the process.
+    const surfaced = new Map<string, number>();
+    seedUserComment("u-never-surfaced", { status: "dismissed", editedAt: 500 });
+
+    const first = poll(surfaced).userActions;
+    expect(first.map((a) => a.id)).toEqual(["u-never-surfaced"]);
+    // ...and NOT flagged `edited`: that field claims "you were shown this and
+    // it changed since", which is false here. A fix that widens the flag itself
+    // instead of splitting gate from flag turns this row red.
+    expect(first[0].edited).toBeUndefined();
+
+    // The ledger entry the surfacing wrote is what stops it repeating.
+    expect(poll(surfaced).userActions).toEqual([]);
+  });
+
   it("an edit after a dismiss still surfaces, within the same server run", () => {
     // The 2a row: green on master and after the fix, RED against a bare
     // `status === "pending"` gate. Its job is to stop the gate being narrowed
     // later — the observer emits `annotation:edited` on any `editedAt` advance
-    // with no status test, so dropping `|| edited` would push on the channel
+    // with no status test, so dropping the edit term would push on the channel
     // while `tandem_checkInbox` returned nothing.
     const surfaced = new Map<string, number>();
     seedUserComment("u-edited");
@@ -241,5 +265,33 @@ describe("#1826: the userActions bucket has a status gate", () => {
     const second = poll(surfaced).userActions;
     expect(second.map((a) => a.id)).toEqual(["u-edited"]);
     expect(second[0].edited).toBe(true);
+  });
+
+  it("a resolved user comment stops being handed to refreshAll", () => {
+    // **Review round 1.** A record the status gate rejects takes no
+    // `surfaced.set`, so nothing removes it from the candidate set: on master
+    // it surfaced once, got a ledger entry and left, and with the gate alone it
+    // would be re-selected and re-refreshed on every poll forever —
+    // `store.refreshAnnotations` in production, a `withMcp` transaction over
+    // `refreshAllRanges` that persists range repairs. The candidates filter
+    // mirrors the gate to close that.
+    const surfaced = new Map<string, number>();
+    seedUserComment("u-settled", { status: "dismissed" });
+    seedUserComment("u-live");
+
+    const refreshed: string[][] = [];
+    const spy = (anns: Annotation[]) => {
+      refreshed.push(anns.map((a) => a.id));
+      return anns;
+    };
+
+    expect(poll(surfaced, spy).userActions.map((a) => a.id)).toEqual(["u-live"]);
+    // The dismissed comment never reaches the refresher, on this poll or any
+    // later one; the pending one leaves via its ledger entry, as it always did.
+    expect(refreshed).toEqual([["u-live"]]);
+
+    poll(surfaced, spy);
+    poll(surfaced, spy);
+    expect(refreshed).toEqual([["u-live"], [], []]);
   });
 });

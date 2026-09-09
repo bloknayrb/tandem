@@ -567,7 +567,15 @@ export function useAnnotationReview({
     // `undoResolveAnnotation` below exists to serve.
     if (status === "accepted" && ann.suggestedText !== undefined) {
       const editor = getEditor();
-      if (editor && !applySuggestion(ann, editor, y, getFormat?.())) {
+      // A missing editor is a FAILED apply, not a licence to publish `accepted`
+      // (review round 1). `getEditor()` returns null while the Tiptap instance
+      // is absent — a tab swap or a document reload, with `SidePanel` still
+      // mounted by design — and the old `editor && !applySuggestion(...)` fell
+      // through to the status write, so the record went out `accepted` with the
+      // suggested text never inserted, the observer emitted
+      // `annotation:accepted`, and the user got no toast. Declining leaves the
+      // record `pending`, which the next Accept can retry.
+      if (!editor || !applySuggestion(ann, editor, y, getFormat?.())) {
         // A normalizing write, NOT a status change: the record is still
         // `pending`, so the observer's claude-update arm has no matching case
         // and emits nothing. What it does do is strip a stale `resolvedBy`
