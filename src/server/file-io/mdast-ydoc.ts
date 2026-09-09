@@ -216,7 +216,39 @@ function blockToYxml(
       // Tiptap's block Image node. Inline text runs around an image stay as
       // their own paragraphs. Block images live as top-level fragment children
       // with empty getElementText(), preserving flat-offset alignment.
-      if (node.children.some((c) => c.type === "image")) {
+      //
+      // Promote ONLY when the paragraph is nothing but images plus
+      // whitespace-only text (#1799). The predicate used to be a bare `some`,
+      // so a paragraph with prose AROUND an image was split into three blocks:
+      // the file was rewritten on open, a list item went loose, and two block
+      // separators entered the flat text, moving every annotation offset past
+      // the image. #153 only ever needed the standalone case.
+      //
+      // A prose-surrounded image now takes the inline `case "image"` arm below,
+      // which stores it as a `rawMarkdown` run — the same treatment footnote
+      // references, reference links and inline HTML already get under ADR-042.
+      // It shows in the editor as literal `![x](a.png)` rather than a picture;
+      // the alternative is a Tiptap inline-image node plus a y-prosemirror
+      // mapping, and until that exists the promotion silently rewrites the
+      // user's file. Standalone and multi-image paragraphs still promote (and
+      // still go through `sanitizeImageSrc`); an inline one does not, so a
+      // rejected URL becomes an inert raw text run rather than a downgraded
+      // paragraph.
+      //
+      // A `break` is filler alongside whitespace-only text. Two trailing spaces
+      // before the newline is the HARD-break spelling of the very same file a
+      // bare newline writes as a `text` node, and admitting only the second made
+      // two visually identical documents diverge: the hard-break form failed
+      // `every`, fell through to literal `rawMarkdown` runs, and so skipped
+      // `sanitizeImageSrc` entirely — which is the half that matters. The break
+      // itself is dropped in `splitParagraphImages`: the images it separated
+      // become block-level siblings, a stronger separation than the break.
+      const isImageFiller = (c: PhrasingContent) =>
+        c.type === "break" || (c.type === "text" && c.value.trim() === "");
+      const onlyImages =
+        node.children.some((c) => c.type === "image") &&
+        node.children.every((c) => c.type === "image" || isImageFiller(c));
+      if (onlyImages) {
         return splitParagraphImages(node.children, deferred);
       }
       const el = new Y.XmlElement("paragraph");
@@ -264,9 +296,26 @@ function blockToYxml(
 
     case "code": {
       const el = new Y.XmlElement("codeBlock");
-      if (node.lang) {
-        el.setAttribute("language", node.lang);
-      }
+      // Carry the meta as well as `lang` (#1799): `node.meta` holds the
+      // Docusaurus/MkDocs/Shiki tail (`title="x.ts" {1,3}`) and was dropped
+      // silently. It rides in its OWN attribute, not appended to `language`,
+      // because Tiptap's CodeBlock renders `language` into the code element's
+      // `class` and parses it back off `classList` — a value with a space in
+      // it splits into several classes there and reads back as the first
+      // token, so a combined info string is silently truncated to `js` by any
+      // clipboard HTML round trip (copy a fence, paste it). `meta` survives
+      // y-prosemirror's schema filter because `CodeBlockFenceMeta`
+      // (`src/client/editor/extensions/code-block-meta.ts`) declares it —
+      // anything outside the client schema is deleted on sync.
+      //
+      // Each stored only when there is something to store — same reasoning as
+      // `spread` above: an unconditional `setAttribute` would put `language=""`
+      // on every bare fence with byte-identical output, which is why it would
+      // go unnoticed.
+      const lang = (node.lang ?? "").trim();
+      const meta = (node.meta ?? "").trim();
+      if (lang) el.setAttribute("language", lang);
+      if (meta) el.setAttribute("meta", meta);
       const text = new Y.XmlText();
       el.insert(0, [text]);
       deferred.push({ xmlText: text, plainText: node.value });
@@ -484,6 +533,12 @@ function splitParagraphImages(
     if (child.type === "image") {
       flushInline();
       result.push(imageToYxml(child));
+    } else if (child.type === "break") {
+      // Dropped, not accumulated. The caller only routes here when every
+      // non-image child is filler, so a break can only sit BETWEEN two images
+      // about to become separate block-level siblings — and `flushInline`'s
+      // `hasContent` test reads a break as content, so accumulating it would
+      // emit a paragraph holding nothing but a hardBreak.
     } else {
       inlineRun.push(child);
     }
@@ -712,15 +767,32 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
     }
 
     case "codeBlock": {
-      const lang = el.getAttribute("language") as string | undefined;
+      // `language` is the fence language, `meta` the Docusaurus/Shiki tail
+      // (#1799) — two attributes, because Tiptap round-trips `language`
+      // through a CSS class (see `case "code"`). mdast wants `null` rather
+      // than `""` for either when absent.
+      //
+      // Both are normalised here rather than trusted: they reach the Y.Doc
+      // from a browser paste (`data-meta` survives the DOM by design, so
+      // forged HTML can carry anything) as well as from the loader, and
+      // `remark-stringify` writes them onto the fence line verbatim — a
+      // newline in either would break out of the fence and rewrite the user's
+      // file. A language is one token by definition and meta is one line, so
+      // that is what is allowed through.
+      const lang = ((el.getAttribute("language") as string | undefined) ?? "")
+        .trim()
+        .split(/\s/)[0];
+      const meta = ((el.getAttribute("meta") as string | undefined) ?? "")
+        .replace(/[\r\n]+/g, " ")
+        .trim();
       let value = "";
       for (let i = 0; i < el.length; i++) {
         const child = el.get(i);
         if (child instanceof Y.XmlText) {
-          value += child.toString();
+          value += xmlTextPlain(child);
         }
       }
-      return { type: "code", lang: lang || null, value } as any;
+      return { type: "code", lang: lang || null, meta: meta || null, value } as any;
     }
 
     case "horizontalRule":
@@ -865,6 +937,42 @@ function flattenHeadingNewlines(children: PhrasingContent[]): PhrasingContent[] 
 }
 
 /**
+ * Text of a `Y.XmlText` with every mark stripped.
+ *
+ * `Y.XmlText.toString()` renders each formatting attribute as an XML element,
+ * so a bold run inside a raw-carrier block or a fence serialized as the literal
+ * `<bold>let</bold>` — and `html` node values are written VERBATIM by
+ * `remark-stringify`, so those tags landed in the user's file unescaped and
+ * unwarned (#1751). Same shape as `getElementText()` in
+ * `src/server/mcp/document-model.ts`: read `toDelta()`, not `toString()`.
+ *
+ * Exported rather than duplicated so a fourth reader cannot be written against
+ * `toString()` without this helper sitting beside it. This is a SERIALIZATION
+ * guarantee, not a schema one — the mark stays in the Y.Doc, so a client
+ * showing a raw block bolded keeps showing it bolded until reload; only the
+ * bytes on disk are clean.
+ *
+ * It is also the ONLY plain-text reader in this file. There used to be a second,
+ * `xmlTextToPlainText`, identical but for the embed arm below, so the same
+ * `Y.XmlText` yielded different text depending on which one a caller picked.
+ */
+export function xmlTextPlain(t: Y.XmlText): string {
+  let out = "";
+  for (const op of t.toDelta()) {
+    if (typeof op.insert === "string") {
+      out += op.insert;
+    } else if (op.insert instanceof Y.XmlElement && op.insert.nodeName === "hardBreak") {
+      // A hardBreak reaches here as an EMBED (`processInline` inserts it that
+      // way; `normalizeHardBreaks` only rewrites the ones it walks). Dropping it
+      // collapses the line exactly as #1458's sibling-only reader did, so the
+      // embed and the sibling spelling both answer a newline.
+      out += "\n";
+    }
+  }
+  return out;
+}
+
+/**
  * Reconstruct the verbatim source of a raw block (raw HTML, footnote and link
  * reference definitions) from its Y children.
  *
@@ -887,7 +995,7 @@ function getElementPlainText(el: Y.XmlElement): string {
   let value = "";
   for (let i = 0; i < el.length; i++) {
     const child = el.get(i);
-    if (child instanceof Y.XmlText) value += child.toString();
+    if (child instanceof Y.XmlText) value += xmlTextPlain(child);
     else if (child instanceof Y.XmlElement && child.nodeName === "hardBreak") value += "\n";
   }
   return value;
@@ -933,10 +1041,13 @@ function segmentLeaf(seg: Segment): PhrasingContent {
   // segment, so:
   //   (a) an outer mark on the run is preserved (e.g. bold around a footnote
   //       ref), and
-  //   (b) crucially, a raw inline IMAGE stays wrapped inside its mark rather
-  //       than becoming a bare paragraph-child image — which the #153
-  //       `splitParagraphImages` promotion would otherwise turn into a block
-  //       image on reload, collapsing the inline run's flat length and
+  //   (b) a raw inline IMAGE stays wrapped inside its mark rather than becoming
+  //       a bare paragraph-child image. Since #1799 the promotion predicate is
+  //       image-only-paragraphs, so a raw run surrounded by prose no longer
+  //       promotes on reload either way; keeping the wrapper still matters for
+  //       the shape this arm names — an image that is a marked run's ONLY
+  //       content, which unwrapped would be an image-only paragraph and would
+  //       promote to a block image, collapsing the inline run's flat length and
   //       desyncing every later annotation offset.
   // Two adjacent UNMARKED raw runs (e.g. `[^1][^2]`) stay separate: `html` has
   // no wrapper, so `coalescePhrasing`'s `sameWrapper` never merges them.
@@ -1229,7 +1340,7 @@ function plainTextFromElement(element: Y.XmlElement): string {
   for (let i = 0; i < element.length; i++) {
     const child = element.get(i);
     if (child instanceof Y.XmlText) {
-      parts.push(xmlTextToPlainText(child));
+      parts.push(xmlTextPlain(child));
       hasPriorContent = true;
     } else if (child instanceof Y.XmlElement) {
       if (child.nodeName === "hardBreak") {
@@ -1244,12 +1355,4 @@ function plainTextFromElement(element: Y.XmlElement): string {
   }
 
   return parts.join("");
-}
-
-function xmlTextToPlainText(xmlText: Y.XmlText): string {
-  let text = "";
-  for (const op of xmlText.toDelta()) {
-    text += typeof op.insert === "string" ? op.insert : "\n";
-  }
-  return text;
 }

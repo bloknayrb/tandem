@@ -81,7 +81,7 @@ const ROUTE_GATES: RouteGate[] = [
   {
     constant: "API_OPEN",
     gate: "ungated",
-    why: "plain open is the read/export escape hatch — but it carries an IN-HANDLER gate on the `force === true` sub-path (`mcp/routes/open.ts`), which wipes the durable annotation store. The chain regex cannot see that; IN_HANDLER_GATED below asserts it directly, and `license-force-open-gate.test.ts` covers it behaviourally",
+    why: "plain open is the read/export escape hatch — but it carries an IN-HANDLER gate on the `force === true` sub-path (`mcp/routes/open.ts`), which discards the in-memory annotation, awareness and content maps and rebuilds the document from disk. The chain regex cannot see that; IN_HANDLER_GATED below asserts it directly, and `license-force-open-gate.test.ts` covers it behaviourally",
   },
   {
     constant: "API_SAVE",

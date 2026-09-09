@@ -256,7 +256,18 @@ describe("markdownToSlice", () => {
     const code = doc.firstChild!;
     expect(code.type.name).toBe("codeBlock");
     expect(code.attrs.language).toBe("js");
+    expect(code.attrs.meta).toBeNull();
     expect(code.textContent).toBe("const x = 1;");
+  });
+
+  it("splits a fence info string into language and meta, as the loader does (#1799)", () => {
+    // markdown-it hands the whole info string over as one blob. Keeping it in
+    // `language` puts a spaced value into the code element's class, where
+    // Tiptap reads back only the first token — so the meta died on the first
+    // DOM round trip and paste disagreed with file-open about the same fence.
+    const code = parseToDoc('```js title="x.ts" {1,3}\nconst x = 1;\n```').firstChild!;
+    expect(code.attrs.language).toBe("js");
+    expect(code.attrs.meta).toBe('title="x.ts" {1,3}');
   });
 
   it("produces multiple block nodes for mixed content", () => {

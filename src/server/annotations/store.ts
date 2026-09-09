@@ -46,6 +46,18 @@ export interface DocStore {
    */
   queueWrite(snapshot: () => AnnotationDocV1): void;
   flush(): Promise<void>;
+  /**
+   * Drop any pending debounced write WITHOUT touching the file — `clearOne`'s
+   * first half, split out in #1813.
+   *
+   * `clearOne` used to be the only canceller, and the force-open / source-view
+   * teardown stopped calling it: it now flushes instead, so a mutation landing
+   * inside the flush's own await (the annotation observer is still attached
+   * across it) would arm a FRESH timer that fires after the Y.Maps are cleared,
+   * snapshot the emptied map and full-clobber the envelope. This is what keeps
+   * that teardown total while the unlink goes away.
+   */
+  cancelPendingWrite(): void;
   clear(): Promise<void>;
   isReadOnly(): boolean;
   isDisabled(docHash: string): boolean;
@@ -637,14 +649,20 @@ async function loadOne(docHash: string, filePath: string): Promise<AnnotationDoc
   return emptyDoc(docHash, filePath);
 }
 
-async function clearOne(docHash: string): Promise<void> {
+/** Drop a pending debounced write without touching the file (#1813). */
+function cancelPendingWriteOne(docHash: string): void {
   if (isFeatureDisabled()) return;
-  // Drop any pending write so we don't immediately re-create the file.
   const entry = pending.get(docHash);
   if (entry) {
     clearTimeout(entry.timer);
     pending.delete(docHash);
   }
+}
+
+async function clearOne(docHash: string): Promise<void> {
+  if (isFeatureDisabled()) return;
+  // Drop any pending write so we don't immediately re-create the file.
+  cancelPendingWriteOne(docHash);
   const target = filePathFor(docHash);
   try {
     await fs.unlink(target);
@@ -681,6 +699,9 @@ export function createStore(docHash: string, meta: { filePath: string }): DocSto
       async flush() {
         /* inert */
       },
+      cancelPendingWrite() {
+        /* inert */
+      },
       async clear() {
         /* inert */
       },
@@ -697,6 +718,7 @@ export function createStore(docHash: string, meta: { filePath: string }): DocSto
     load: () => loadOne(docHash, meta.filePath),
     queueWrite: (snapshotFn) => scheduleWrite(docHash, meta.filePath, snapshotFn),
     flush: () => flushOne(docHash),
+    cancelPendingWrite: () => cancelPendingWriteOne(docHash),
     clear: () => clearOne(docHash),
     isReadOnly: () => readOnly,
     isDisabled: (h) => failureState.get(h)?.disabled === true,

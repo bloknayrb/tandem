@@ -24,6 +24,7 @@
 
 import fs from "fs/promises";
 import path from "path";
+import type * as Y from "yjs";
 import {
   mayHoldUnsavedWork,
   Y_MAP_ANNOTATIONS,
@@ -197,173 +198,9 @@ export async function reloadFromDisk(
       writeImportLossReport(doc, reloadPrepared);
     });
 
-    // 3. Refresh all annotation ranges in a batch transaction (sanitize legacy shapes)
-    const annotationMap = doc.getMap(Y_MAP_ANNOTATIONS);
-    const annotations: Annotation[] = [];
-    const reloadDocHash = docHash(filePath);
-    annotationMap.forEach((val) =>
-      annotations.push(
-        sanitizeAnnotation(val as Annotation, (event) =>
-          relaySanitizationEvent(reloadDocHash, event),
-        ),
-      ),
-    );
-
-    if (annotations.length > 0) {
-      // Merge refresh + textSnapshot relocation into a single `withReload`
-      // transact so durable-sync persists the re-anchored ranges in one step.
-      // Closes the two-write crash window (GH #622): a process kill between
-      // the refresh and relocation passes previously left annotations stored
-      // at partially refreshed ranges.
-      withReload(doc, () => {
-        const refreshed = refreshAllRanges(annotations, doc, annotationMap, {
-          skipTransact: true,
-        }).map((r) => r.annotation);
-
-        // 4. Second pass: textSnapshot-based relocation for annotations with stale relRanges.
-        // Hoisted: this loop runs per annotation over a document that does not
-        // change across it, so one materialization serves every `validateRange`
-        // and `anchoredRange` call below (#1752).
-        const text = extractText(doc);
-        for (const ann of refreshed) {
-          if (!ann.textSnapshot) continue;
-
-          // A capped snapshot is a PREFIX of the annotated text, not all of it
-          // (#1486), so it can locate the range's START but says nothing about
-          // its END. Both halves of that matter here:
-          //
-          //  - Searching with it and taking `match + snapshot.length` as the
-          //    end — what this pass does for a whole snapshot — silently
-          //    shrinks a long annotation to the cap on every reload, after
-          //    which accept replaces only that much and the .docx apply guard,
-          //    comparing the same slice, starts PASSING on the shrunken range.
-          //  - Skipping the annotation entirely is no better and was this
-          //    fix's first draft: `refreshAllRanges` above may already have
-          //    re-anchored a fresh `relRange` from the STALE flat offsets, so
-          //    the record ends up durably pinned to the wrong text and every
-          //    later reload resolves it cleanly and never revisits it. Since
-          //    #1764 that re-anchor happens only when the stored range still
-          //    holds its `textSnapshot` — a contradicting one answers
-          //    `degraded` and writes nothing — so the durable mispin is now the
-          //    snapshot-less and still-matching cases rather than all of them.
-          //    Relocating on the prefix is what this pass is for either way.
-          //
-          // So: search on the prefix, and carry the span across unchanged. That
-          // is exact whenever the annotated text moved without changing length,
-          // which is the same assumption the whole-snapshot branch makes.
-          const truncated = isSnapshotTruncated(ann);
-          const probe = snapshotSearchPrefix(ann);
-          if (probe.length === 0) continue;
-          const span = ann.range.to - ann.range.from;
-
-          // For a truncated snapshot the staleness question is "is the prefix
-          // still at `from`?", so the range handed to `validateRange` is the
-          // prefix's own, not the annotation's.
-          const probeTo = truncated ? toFlatOffset(ann.range.from + probe.length) : ann.range.to;
-          // This call is safe under #1752's new bounds ONLY because staleness
-          // runs BEFORE the upper bound. An out-of-bounds or collapsed stale
-          // range slices to "" — which never equals the non-empty probe — so it
-          // comes back RANGE_MOVED / RANGE_GONE and gets relocated, rather than
-          // INVALID_RANGE, which has no handler here. The guard that keeps a
-          // point comment out of this loop is the `!ann.textSnapshot` check
-          // above (its snapshot is ""), not `probe.length === 0`.
-          //
-          // `surrogates: "ignore"` for the same reason the relocation anchor
-          // below carries it, and this call needs it MORE: `probeTo` is
-          // `from + probe.length`, and `captureSnapshot` caps a snapshot at 200
-          // code units (`annotations.ts`), so a cap landing between the halves
-          // of a pair puts `probeTo` mid-pair. On a reload that does NOT move
-          // the annotation, staleness then passes and the surrogate check fires
-          // `INVALID_RANGE` — which is not `RANGE_MOVED`, so a perfectly healthy
-          // annotation takes the `else` arm below and is reported as durably
-          // mispinned, on every reload, forever. These are DERIVED offsets and
-          // nothing here is written to a file.
-          const surrogates = "ignore" as const;
-          const vr = validateRange(doc, ann.range.from, probeTo, {
-            textSnapshot: probe,
-            surrogates,
-            text,
-            textTag: "watcher/relocation-probe",
-          });
-
-          if (vr.ok) continue; // Range is still valid
-
-          if (vr.code === "RANGE_MOVED") {
-            // CLAMP the carried span (#1752). `resolvedFrom + span` uses the
-            // ORIGINAL span, so if the external edit deleted text INSIDE the
-            // annotated region it now exceeds the new length. `resolveToElement`
-            // used to clamp that away; with a real upper bound the call returns
-            // INVALID_RANGE, and `refreshAllRanges` above may already have
-            // minted a fresh `relRange` from the STALE flat offsets — the
-            // durable mispin the block comment above calls the first draft's
-            // bug. Since #1764 that mint is gated on the stored range still
-            // holding its snapshot, which is the subset of this hazard that
-            // survives, not its removal.
-            const resolvedTo = truncated
-              ? toFlatOffset(Math.min(vr.resolvedFrom + span, text.length))
-              : vr.resolvedTo;
-            // No snapshot argument on the truncated branch: `anchoredRange`
-            // would re-validate the prefix against the FULL relocated range
-            // and reject the very placement just computed.
-            //
-            // `allowEmpty` because `span` can be 0: `refreshRange` may resolve a
-            // relRange to newFrom === newTo (#1764) while the annotation keeps
-            // its older non-empty snapshot, so it passes both guards above and
-            // arrives here collapsed. `surrogates` is the SAME policy the probe
-            // uses, shared from one binding rather than written twice — the
-            // capped-probe rationale is identical at both ends and they went out
-            // of sync once already.
-            const relocOpts = {
-              allowEmpty: true,
-              surrogates,
-              text,
-              textTag: "watcher/relocation-anchor" as const,
-            };
-            const relocated = truncated
-              ? anchoredRange(doc, vr.resolvedFrom, resolvedTo, undefined, relocOpts)
-              : anchoredRange(doc, vr.resolvedFrom, resolvedTo, ann.textSnapshot, relocOpts);
-            if (relocated.ok) {
-              const updated: Annotation = {
-                ...ann,
-                range: relocated.range,
-                relRange: relocated.fullyAnchored ? relocated.relRange : undefined,
-              };
-              annotationMap.set(ann.id, updated);
-            } else {
-              // Previously there was no `else` at all, so a rejected relocation
-              // left the annotation durably pinned to stale offsets in silence.
-              //
-              // "Left at its previous offsets" can still understate it: the
-              // `refreshAllRanges` pass above may ALREADY have minted a fresh
-              // `relRange` from those stale flat offsets, in which case the
-              // record is durably pinned to coordinates that describe different
-              // text, every later reload resolves that relRange cleanly, and
-              // nothing revisits it. Since #1764 that mint is gated on the
-              // stored range still holding its `textSnapshot`, so a record whose
-              // snapshot contradicts is left `degraded` rather than pinned.
-              // Same consequence as the RANGE_GONE arm below.
-              console.error(
-                `[watcher] Relocation rejected for annotation ${ann.id}: ` +
-                  `[${vr.resolvedFrom}, ${resolvedTo}] — ${describeRangeFailure(relocated)}. ` +
-                  "The annotation stays pinned to its stale coordinates and will not be revisited.",
-              );
-            }
-          } else {
-            // Everything that is not RANGE_MOVED — in practice RANGE_GONE, the
-            // annotated text being nowhere in the new file. This arm was SILENT
-            // while its RANGE_MOVED twin above logs, and the consequence is
-            // identical: `refreshAllRanges` has already re-anchored a fresh
-            // `relRange` onto the stale flat offsets, so the record is durably
-            // mispinned rather than benignly "left as-is".
-            console.error(
-              `[watcher] Snapshot relocation failed for annotation ${ann.id}: ` +
-                `[${ann.range.from}, ${probeTo}] — ${describeRangeFailure(vr)}. ` +
-                "The annotation stays pinned to its stale coordinates and will not be revisited.",
-            );
-          }
-        }
-      });
-    }
+    // 3-4. Re-anchor every annotation against the repopulated body: range
+    //      refresh, then textSnapshot relocation, in one transact.
+    reanchorAnnotations(doc, filePath);
 
     // 5. Reattach event queue observers (idempotent)
     attachObservers(id, doc);
@@ -377,6 +214,202 @@ export async function reloadFromDisk(
     return true;
   } finally {
     releaseReloadGuard(id);
+  }
+}
+
+/**
+ * Re-anchor every annotation in `doc` against the body it now holds, in one
+ * `withReload` transact: `refreshAllRanges` first, then a `textSnapshot`-based
+ * relocation pass for records whose relRange died with the old lineage.
+ *
+ * **This is the half that makes a content-replacing reload non-destructive, and
+ * it is not implied by re-merging the envelope.** `loadAndMerge` re-inserts each
+ * stored record VERBATIM — its pre-edit flat `range` and its now-dead `relRange`
+ * — and then queues that state back to `<annotations-dir>/<docHash>.json`. So a
+ * caller that clears and repopulates the fragment WITHOUT this pass leaves every
+ * annotation whose text moved durably pinned to coordinates describing different
+ * text: the client's `annotationToPmRange` fails on the dead relRange, warns, and
+ * paints the highlight over whatever now occupies the stale offsets. Before
+ * #1813 the force-open and source-view paths destroyed the envelope instead, so
+ * nothing was mis-rendered; keeping the records is what makes the pass load-bearing
+ * on all three callers rather than only on the watcher's.
+ *
+ * Three callers, all after the body has been replaced and (for the two
+ * caller-initiated ones) after `wireAnnotationStore` has merged the envelope
+ * back in: `reloadFromDisk` above, `reloadDocumentFromMarkdown` (source-view
+ * commit) and `openFromDisk`'s force-reload arm.
+ *
+ * Not exported from a new module: the two `textTag` literals below are pinned to
+ * THIS file by `tests/server/positions.test.ts` (#1622), which reads it to prove
+ * the stored-snapshot call sites stay byte-exact.
+ */
+export function reanchorAnnotations(doc: Y.Doc, filePath: string): void {
+  // 3. Refresh all annotation ranges in a batch transaction (sanitize legacy shapes)
+  const annotationMap = doc.getMap(Y_MAP_ANNOTATIONS);
+  const annotations: Annotation[] = [];
+  const reloadDocHash = docHash(filePath);
+  annotationMap.forEach((val) =>
+    annotations.push(
+      sanitizeAnnotation(val as Annotation, (event) =>
+        relaySanitizationEvent(reloadDocHash, event),
+      ),
+    ),
+  );
+
+  if (annotations.length > 0) {
+    // Merge refresh + textSnapshot relocation into a single `withReload`
+    // transact so durable-sync persists the re-anchored ranges in one step.
+    // Closes the two-write crash window (GH #622): a process kill between
+    // the refresh and relocation passes previously left annotations stored
+    // at partially refreshed ranges.
+    withReload(doc, () => {
+      const refreshed = refreshAllRanges(annotations, doc, annotationMap, {
+        skipTransact: true,
+      }).map((r) => r.annotation);
+
+      // 4. Second pass: textSnapshot-based relocation for annotations with stale relRanges.
+      // Hoisted: this loop runs per annotation over a document that does not
+      // change across it, so one materialization serves every `validateRange`
+      // and `anchoredRange` call below (#1752).
+      const text = extractText(doc);
+      for (const ann of refreshed) {
+        if (!ann.textSnapshot) continue;
+
+        // A capped snapshot is a PREFIX of the annotated text, not all of it
+        // (#1486), so it can locate the range's START but says nothing about
+        // its END. Both halves of that matter here:
+        //
+        //  - Searching with it and taking `match + snapshot.length` as the
+        //    end — what this pass does for a whole snapshot — silently
+        //    shrinks a long annotation to the cap on every reload, after
+        //    which accept replaces only that much and the .docx apply guard,
+        //    comparing the same slice, starts PASSING on the shrunken range.
+        //  - Skipping the annotation entirely is no better and was this
+        //    fix's first draft: `refreshAllRanges` above may already have
+        //    re-anchored a fresh `relRange` from the STALE flat offsets, so
+        //    the record ends up durably pinned to the wrong text and every
+        //    later reload resolves it cleanly and never revisits it. Since
+        //    #1764 that re-anchor happens only when the stored range still
+        //    holds its `textSnapshot` — a contradicting one answers
+        //    `degraded` and writes nothing — so the durable mispin is now the
+        //    snapshot-less and still-matching cases rather than all of them.
+        //    Relocating on the prefix is what this pass is for either way.
+        //
+        // So: search on the prefix, and carry the span across unchanged. That
+        // is exact whenever the annotated text moved without changing length,
+        // which is the same assumption the whole-snapshot branch makes.
+        const truncated = isSnapshotTruncated(ann);
+        const probe = snapshotSearchPrefix(ann);
+        if (probe.length === 0) continue;
+        const span = ann.range.to - ann.range.from;
+
+        // For a truncated snapshot the staleness question is "is the prefix
+        // still at `from`?", so the range handed to `validateRange` is the
+        // prefix's own, not the annotation's.
+        const probeTo = truncated ? toFlatOffset(ann.range.from + probe.length) : ann.range.to;
+        // This call is safe under #1752's new bounds ONLY because staleness
+        // runs BEFORE the upper bound. An out-of-bounds or collapsed stale
+        // range slices to "" — which never equals the non-empty probe — so it
+        // comes back RANGE_MOVED / RANGE_GONE and gets relocated, rather than
+        // INVALID_RANGE, which has no handler here. The guard that keeps a
+        // point comment out of this loop is the `!ann.textSnapshot` check
+        // above (its snapshot is ""), not `probe.length === 0`.
+        //
+        // `surrogates: "ignore"` for the same reason the relocation anchor
+        // below carries it, and this call needs it MORE: `probeTo` is
+        // `from + probe.length`, and `captureSnapshot` caps a snapshot at 200
+        // code units (`annotations.ts`), so a cap landing between the halves
+        // of a pair puts `probeTo` mid-pair. On a reload that does NOT move
+        // the annotation, staleness then passes and the surrogate check fires
+        // `INVALID_RANGE` — which is not `RANGE_MOVED`, so a perfectly healthy
+        // annotation takes the `else` arm below and is reported as durably
+        // mispinned, on every reload, forever. These are DERIVED offsets and
+        // nothing here is written to a file.
+        const surrogates = "ignore" as const;
+        const vr = validateRange(doc, ann.range.from, probeTo, {
+          textSnapshot: probe,
+          surrogates,
+          text,
+          textTag: "watcher/relocation-probe",
+        });
+
+        if (vr.ok) continue; // Range is still valid
+
+        if (vr.code === "RANGE_MOVED") {
+          // CLAMP the carried span (#1752). `resolvedFrom + span` uses the
+          // ORIGINAL span, so if the external edit deleted text INSIDE the
+          // annotated region it now exceeds the new length. `resolveToElement`
+          // used to clamp that away; with a real upper bound the call returns
+          // INVALID_RANGE, and `refreshAllRanges` above may already have
+          // minted a fresh `relRange` from the STALE flat offsets — the
+          // durable mispin the block comment above calls the first draft's
+          // bug. Since #1764 that mint is gated on the stored range still
+          // holding its snapshot, which is the subset of this hazard that
+          // survives, not its removal.
+          const resolvedTo = truncated
+            ? toFlatOffset(Math.min(vr.resolvedFrom + span, text.length))
+            : vr.resolvedTo;
+          // No snapshot argument on the truncated branch: `anchoredRange`
+          // would re-validate the prefix against the FULL relocated range
+          // and reject the very placement just computed.
+          //
+          // `allowEmpty` because `span` can be 0: `refreshRange` may resolve a
+          // relRange to newFrom === newTo (#1764) while the annotation keeps
+          // its older non-empty snapshot, so it passes both guards above and
+          // arrives here collapsed. `surrogates` is the SAME policy the probe
+          // uses, shared from one binding rather than written twice — the
+          // capped-probe rationale is identical at both ends and they went out
+          // of sync once already.
+          const relocOpts = {
+            allowEmpty: true,
+            surrogates,
+            text,
+            textTag: "watcher/relocation-anchor" as const,
+          };
+          const relocated = truncated
+            ? anchoredRange(doc, vr.resolvedFrom, resolvedTo, undefined, relocOpts)
+            : anchoredRange(doc, vr.resolvedFrom, resolvedTo, ann.textSnapshot, relocOpts);
+          if (relocated.ok) {
+            const updated: Annotation = {
+              ...ann,
+              range: relocated.range,
+              relRange: relocated.fullyAnchored ? relocated.relRange : undefined,
+            };
+            annotationMap.set(ann.id, updated);
+          } else {
+            // Previously there was no `else` at all, so a rejected relocation
+            // left the annotation durably pinned to stale offsets in silence.
+            //
+            // "Left at its previous offsets" can still understate it: the
+            // `refreshAllRanges` pass above may ALREADY have minted a fresh
+            // `relRange` from those stale flat offsets, in which case the
+            // record is durably pinned to coordinates that describe different
+            // text, every later reload resolves that relRange cleanly, and
+            // nothing revisits it. Since #1764 that mint is gated on the
+            // stored range still holding its `textSnapshot`, so a record whose
+            // snapshot contradicts is left `degraded` rather than pinned.
+            // Same consequence as the RANGE_GONE arm below.
+            console.error(
+              `[watcher] Relocation rejected for annotation ${ann.id}: ` +
+                `[${vr.resolvedFrom}, ${resolvedTo}] — ${describeRangeFailure(relocated)}. ` +
+                "The annotation stays pinned to its stale coordinates and will not be revisited.",
+            );
+          }
+        } else {
+          // Everything that is not RANGE_MOVED — in practice RANGE_GONE, the
+          // annotated text being nowhere in the new file. This arm was SILENT
+          // while its RANGE_MOVED twin above logs, and the consequence is
+          // identical: `refreshAllRanges` has already re-anchored a fresh
+          // `relRange` onto the stale flat offsets, so the record is durably
+          // mispinned rather than benignly "left as-is".
+          console.error(
+            `[watcher] Snapshot relocation failed for annotation ${ann.id}: ` +
+              `[${ann.range.from}, ${probeTo}] — ${describeRangeFailure(vr)}. ` +
+              "The annotation stays pinned to its stale coordinates and will not be revisited.",
+          );
+        }
+      }
+    });
   }
 }
 

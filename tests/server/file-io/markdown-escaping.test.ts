@@ -5,6 +5,7 @@ import { visit } from "unist-util-visit";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { mdParser, saveMarkdown, serializeMdast } from "../../../src/server/file-io/markdown.js";
+import { yDocToMdast } from "../../../src/server/file-io/mdast-ydoc.js";
 import { makeMarkdownDoc } from "../../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
@@ -325,6 +326,51 @@ describe("markdown escaping (#605)", () => {
       const input = "Curly “quotes” and an em—dash — again.\n";
       const once = roundTrip(input);
       expect(roundTrip(once)).toBe(once);
+    });
+  });
+
+  // A reference definition never reaches a Y.Doc-derived tree as a
+  // `definition` node — it is a raw-carrier paragraph (#981 / ADR-042)
+  // re-emitted as an `html` node — so `serializeMdast`'s `definition` visit
+  // found nothing and rule 1's guard was structurally dead for every file
+  // loaded through the Y.Doc. These four specs MUST use `roundTrip()` (the
+  // Y.Doc detour), never `serializerRoundTrip()`: under the serializer-only
+  // helper a real `definition` node populates `activeRefDefs`, so all four are
+  // green against unfixed code and discriminate nothing.
+  describe("reference definitions reached through the Y.Doc keep their escapes (#1753)", () => {
+    it("shortcut reference: `\\[label]` with a live definition stays escaped on pass 1", () => {
+      const input = "A \\[label] here.\n\n[label]: https://example.com\n";
+      const out = roundTrip(input);
+      // The corrupt form (`A [label] here.` — a LIVE shortcut reference link)
+      // is itself a fixed point, so idempotency proves nothing; pass 1 is the
+      // assertion. Pin that the tree really is a raw carrier, so it is the
+      // `html` scan being exercised and not a surviving `definition` node.
+      expect(yDocToMdast(doc).children.map((c) => c.type)).toEqual(["paragraph", "html"]);
+      expect(out).toBe(input);
+    });
+
+    it("collapsed reference: `\\[label][]` does not re-form a live reference link", () => {
+      const input = "Escaped \\[label][] now.\n\n[label]: https://example.com\n";
+      const out = roundTrip(input);
+      // Measured: the output is `Escaped \[label]\[] now.` — an extra `\[]`,
+      // because rule 1's label class is non-empty and cannot un-escape the
+      // empty `[]`. It renders identically. Chasing byte-identity here pushes
+      // toward re-adding a `\[]` un-escape rule, which is the #1448 corruption
+      // class rule 3 exists to warn about.
+      expect(out).toMatch(/\\\[label]/);
+      parseEqual(out, input);
+    });
+
+    it("rule 1 still fires: `\\[label]` with NO definition anywhere is un-escaped", () => {
+      // Without this, a "just delete rule 1" fix passes the two specs above and
+      // silently re-opens #1448's diff noise.
+      expect(roundTrip("A \\[label] here.\n")).toBe("A [label] here.\n");
+    });
+
+    it("a footnote definition does not over-block an unrelated label", () => {
+      const input = "See \\[note] and [^1] here.\n\n[^1]: body\n";
+      const out = roundTrip(input);
+      expect(out).toContain("See [note] and");
     });
   });
 

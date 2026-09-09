@@ -6,7 +6,12 @@ import remarkStringify from "remark-stringify";
 import { unified } from "unified";
 import { visit } from "unist-util-visit";
 import * as Y from "yjs";
-import { normalizeAndRecordLineEnding, restoreLineEndings } from "./line-endings.js";
+import {
+  normalizeAndRecordLineEnding,
+  restoreBom,
+  restoreLineEndings,
+  stripAndRecordBom,
+} from "./line-endings.js";
 import { mdastToYDoc, yDocToMdast } from "./mdast-ydoc.js";
 
 /**
@@ -78,13 +83,15 @@ const stringifyOptions = {
  * recorded on the doc for `saveMarkdown` to restore — see `line-endings.ts`.
  */
 export function loadMarkdown(doc: Y.Doc, markdown: string): void {
-  const tree = mdParser.parse(normalizeAndRecordLineEnding(doc, markdown)) as Root;
+  const tree = mdParser.parse(
+    stripAndRecordBom(doc, normalizeAndRecordLineEnding(doc, markdown)),
+  ) as Root;
   mdastToYDoc(doc, tree);
 }
 
 /** Serialize a Y.Doc's XmlFragment back to markdown, in the doc's own endings. */
 export function saveMarkdown(doc: Y.Doc): string {
-  return restoreLineEndings(doc, serializeMdast(yDocToMdast(doc)));
+  return restoreBom(doc, restoreLineEndings(doc, serializeMdast(yDocToMdast(doc))));
 }
 
 /**
@@ -95,6 +102,17 @@ export function saveMarkdown(doc: Y.Doc): string {
  * stringify is synchronous, single-threaded, and never re-entrant.
  */
 let activeRefDefs = new Set<string>();
+
+/**
+ * A reference/footnote definition line inside a raw-carrier `html` node's value
+ * (#1753). Multiline + global so one pass over the node covers every line.
+ *
+ * Bounded quantifier and a class excluding `\`, `[`, `]` — the same linearity
+ * posture rule 1's own label class documents. Footnote labels (`[^1]`) match and
+ * are added; that is strictly conservative, since an extra member can only KEEP
+ * an escape, never strip one.
+ */
+const RAW_REF_DEF_LINE = /^ {0,3}\[([^\\[\]\n]{1,999})\]:/gm;
 
 /**
  * The project's configured markdown stringifier, frozen once (mirrors the
@@ -259,6 +277,19 @@ export function serializeMdast(tree: Root): string {
   activeRefDefs = new Set<string>();
   visit(tree, "definition", (node) => {
     activeRefDefs.add(node.identifier);
+  });
+  // Reference and footnote definitions do NOT reach a Y.Doc-derived tree as
+  // `definition` nodes: they are raw-carrier paragraphs (#981 / ADR-042)
+  // re-emitted as `{ type: "html", value: "[label]: https://…" }`, so the visit
+  // above finds nothing and rule 1 un-escapes a `\[label]` whose definition is
+  // still live in the same file — turning it into a shortcut reference LINK
+  // (#1753). The corrupt output is a stable fixed point, so an idempotency-only
+  // suite is green on it. The `definition` visit stays: a tree built by
+  // `appendMdast` from pasted markdown can still carry real definition nodes.
+  visit(tree, "html", (node) => {
+    for (const m of node.value.matchAll(RAW_REF_DEF_LINE)) {
+      activeRefDefs.add(normalizeLabel(m[1]));
+    }
   });
   return mdStringifier.stringify(tree);
 }

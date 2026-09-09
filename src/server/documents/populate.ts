@@ -29,7 +29,7 @@ import {
 import { withFileSync, withInternal } from "../../shared/origins.js";
 import type { FidelityReport } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
-import { attachObservers, clearFileSyncContext } from "../events/queue.js";
+import { attachObservers, clearFileSyncContext, getFileSyncContext } from "../events/queue.js";
 import { getAdapter, type LoadIssue, type Prepared } from "../file-io/index.js";
 import { pushNotification } from "../notifications.js";
 import { deleteSession } from "../session/manager.js";
@@ -381,20 +381,44 @@ export async function clearAndReload(
 ): Promise<void> {
   console.error("[Tandem] clearAndReload: reloading %s from disk", id);
 
-  // 0. Detach durable-annotation sync for this doc before clearing Y.Maps so
-  //    the observer doesn't queue a write snapshotting the mid-clear state,
-  //    and wipe the on-disk annotation file so loadAndMerge (run by the
-  //    caller after repopulation) doesn't resurrect the pre-reload set.
+  // 0. Flush the pending durable-annotation write FIRST, then detach the
+  //    observer, then cancel anything the flush's own await let through. The
+  //    on-disk envelope is deliberately NOT unlinked (#1813, decision C): the
+  //    caller re-wires the store immediately (`wireAnnotationStore` ->
+  //    `loadAndMerge`) and then re-anchors the merged records against the new
+  //    body (`reanchorAnnotations`), so the user's personal notes (ADR-027) come
+  //    back rather than being deleted by a reload they asked for to recover from
+  //    a bad state. Both halves are required of every caller: the merge alone
+  //    restores the records at their PRE-reload offsets and persists them there.
+  //
+  //    The ORDER is the contract. `clearFileSyncContext` runs the `"close"`
+  //    cleanup phase, which does `tombstonesByDoc.delete(docHash)`; the flushed
+  //    thunk reads that ledger and `performWrite` is a full clobber, so
+  //    flushing AFTER the cleanup would write `tombstones: []` and erase every
+  //    historical tombstone — re-opening the Word-comment resurrection window
+  //    the union seed exists to close.
+  //
+  //    And the CANCEL, not the flush, is what makes the teardown total.
+  //    `flushOne` awaits real disk I/O with the annotation observer still
+  //    attached, so a mutation landing inside that await arms a fresh
+  //    DEBOUNCE_MS timer; `clearFileSyncContext` unobserves but never touches
+  //    `pending`, and the only canceller used to be the `store.clear()` this
+  //    fix removes. That timer would fire after `clearDocMaps` below — and
+  //    `prepareContent` is async parsing, so >100 ms is ordinary — snapshot the
+  //    emptied `Y.Map('annotations')` and clobber the envelope to zero.
+  //
   //    Failures here must not abort the reload — annotations are additive
   //    durability and we still want the content reload to land.
-  const dropped = clearFileSyncContext(id);
-  if (dropped) {
+  const syncCtx = getFileSyncContext(id);
+  if (syncCtx) {
     try {
-      await dropped.store.clear();
+      await syncCtx.store.flush();
     } catch (err) {
-      console.error("[Tandem] clearAndReload: store.clear failed for %s:", id, err);
+      console.error("[Tandem] clearAndReload: store.flush failed for %s:", id, err);
     }
   }
+  clearFileSyncContext(id);
+  syncCtx?.store.cancelPendingWrite();
 
   // 1. Pre-parse OUTSIDE the transaction (async I/O / docx parsing). Reuses
   //    prepareContent so the docx pre-parse and comment-extract notification

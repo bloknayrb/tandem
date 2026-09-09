@@ -79,6 +79,7 @@ import {
   getHeadingPrefixLength,
 } from "../mcp/document-model.js";
 import { type ExportComment, prepareExportComments } from "./docx-comment-export.js";
+import { xmlTextPlain } from "./mdast-ydoc.js";
 
 // -- Trust-boundary helpers ---------------------------------------------------
 
@@ -696,11 +697,17 @@ function tableToDocx(tableEl: Y.XmlElement, emit: EmitCtx): Table {
   return new Table({ rows, width: { size: 100, type: WidthType.PERCENTAGE } });
 }
 
+/**
+ * Fence body text for the codeBlock arm. Marks are stripped (#1751):
+ * `toString()` would export the literal `<bold>let</bold>` into
+ * `word/document.xml` AND shift every Word-comment anchor after the block,
+ * because `emitTextSegments` advances `emit.pos` over the string's own length.
+ */
 function readXmlTextChild(el: Y.XmlElement): string {
   let out = "";
   for (let i = 0; i < el.length; i++) {
     const c = el.get(i);
-    if (c instanceof Y.XmlText) out += c.toString();
+    if (c instanceof Y.XmlText) out += xmlTextPlain(c);
   }
   return out;
 }
