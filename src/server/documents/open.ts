@@ -929,8 +929,8 @@ async function abandonFallbackToDisk(
  * `documentMeta` is MIRRORED, not copied-when-present, for exactly the four
  * keys written only by an adapter import (`Y_MAP_FOOTNOTE_BODIES`,
  * `Y_MAP_FIDELITY_REPORT`, `Y_MAP_LINE_ENDING`, `Y_MAP_BOM` — same inertness,
- * no observer on the server): set when the scratch has the key, `delete` when it does
- * not. The partial `applyUpdate` integrates all seven winner keys and the
+ * no observer on the server): set when the scratch has the key, `delete` when
+ * it does not. The partial `applyUpdate` integrates all seven winner keys and the
  * evict never touches `documentMeta`, so a "copy when present" clone would
  * leave the WINNER's value live over the FALLBACK's fragment (for
  * `footnoteBodies` that is the export mismatch the mirror exists to

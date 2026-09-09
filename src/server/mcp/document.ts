@@ -492,10 +492,11 @@ export function registerDocumentTools(server: McpServer): void {
     withErrorBoundary("tandem_open", async ({ filePath, force, authoredBy }) => {
       // License gate (#1116) — ONLY the destructive force-reload sub-path. Plain
       // open stays ungated (the read/export escape hatch), but force=true runs
-      // clearAndReload, which discards the in-memory annotation, awareness and content maps and rebuilds the document from disk
-      // — an editing-class operation a restricted user must not reach. (It no
-      // longer unlinks the durable envelope; that was #1813.) Gate sits OUTSIDE the inner
-      // try so a (post-flip) open throw keeps its own error categorization.
+      // clearAndReload, which discards the in-memory annotation, awareness and
+      // content maps and rebuilds the document from disk — an editing-class
+      // operation a restricted user must not reach. (It no longer unlinks the
+      // durable envelope; that was #1813.) Gate sits OUTSIDE the inner try so a
+      // (post-flip) open throw keeps its own error categorization.
       if (force === true) {
         const blocked = licenseGate();
         if (blocked) return blocked;

@@ -104,6 +104,17 @@ export function saveMarkdown(doc: Y.Doc): string {
 let activeRefDefs = new Set<string>();
 
 /**
+ * A reference/footnote definition line inside a raw-carrier `html` node's value
+ * (#1753). Multiline + global so one pass over the node covers every line.
+ *
+ * Bounded quantifier and a class excluding `\`, `[`, `]` — the same linearity
+ * posture rule 1's own label class documents. Footnote labels (`[^1]`) match and
+ * are added; that is strictly conservative, since an extra member can only KEEP
+ * an escape, never strip one.
+ */
+const RAW_REF_DEF_LINE = /^ {0,3}\[([^\\[\]\n]{1,999})\]:/gm;
+
+/**
  * The project's configured markdown stringifier, frozen once (mirrors the
  * `mdParser` pattern). The custom `text` handler reads `activeRefDefs` at call
  * time, so the same frozen processor serves every tree.
@@ -275,15 +286,9 @@ export function serializeMdast(tree: Root): string {
   // (#1753). The corrupt output is a stable fixed point, so an idempotency-only
   // suite is green on it. The `definition` visit stays: a tree built by
   // `appendMdast` from pasted markdown can still carry real definition nodes.
-  //
-  // Bounded quantifier and a class excluding `\`, `[`, `]` — the same linearity
-  // posture rule 1's own label class documents. Footnote labels (`[^1]`) match
-  // and are added; that is strictly conservative, since an extra member can only
-  // KEEP an escape, never strip one.
   visit(tree, "html", (node) => {
-    for (const line of node.value.split("\n")) {
-      const m = /^ {0,3}\[([^\\[\]\n]{1,999})\]:/.exec(line);
-      if (m) activeRefDefs.add(normalizeLabel(m[1]));
+    for (const m of node.value.matchAll(RAW_REF_DEF_LINE)) {
+      activeRefDefs.add(normalizeLabel(m[1]));
     }
   });
   return mdStringifier.stringify(tree);

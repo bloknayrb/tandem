@@ -383,20 +383,23 @@ export function tempSiblingPath(filePath: string): string {
 }
 
 /**
- * Atomic file write: write to a temp file, then rename.
- * Prevents partial writes on crash. Retries the rename up to 3 times on
- * EPERM/EACCES (Windows file-handle contention) with exponential backoff.
+ * Shared body of `atomicWrite` / `atomicWriteBuffer`: write a temp sibling,
+ * then rename it over the target.
+ *
+ * On a failed write, unlink the partial temp before rethrowing — mirroring
+ * `renameWithRetry`'s own failure arm. A partial sibling in the USER's document
+ * directory is never reaped (the boot reaper sweeps the annotations + sessions
+ * dirs only), and on the buffer path it is the largest file Tandem writes.
+ * The unlink is swallowed: the write error is the one the caller must see, and
+ * the temp may legitimately not exist (an ENOSPC that failed before `open`).
+ * (#1850)
  */
-export async function atomicWrite(filePath: string, content: string): Promise<void> {
+async function writeTempThenRename(filePath: string, content: string | Buffer): Promise<void> {
   const tempPath = tempSiblingPath(filePath);
   try {
-    await fs.writeFile(tempPath, content, "utf-8");
+    if (typeof content === "string") await fs.writeFile(tempPath, content, "utf-8");
+    else await fs.writeFile(tempPath, content);
   } catch (err) {
-    // Mirror renameWithRetry's failure arm: a partial temp sibling in the
-    // USER's document directory is never reaped (the boot reaper sweeps the
-    // annotations + sessions dirs only). Swallow the unlink — the write error
-    // is the one the caller must see, and the temp may legitimately not exist
-    // (an ENOSPC that failed before `open`) (#1850).
     await fs.unlink(tempPath).catch(() => {});
     throw err;
   }
@@ -404,20 +407,20 @@ export async function atomicWrite(filePath: string, content: string): Promise<vo
 }
 
 /**
+ * Atomic file write: write to a temp file, then rename.
+ * Prevents partial writes on crash. Retries the rename up to 3 times on
+ * EPERM/EACCES (Windows file-handle contention) with exponential backoff, and
+ * cleans up the temp sibling on a failed write (#1850).
+ */
+export function atomicWrite(filePath: string, content: string): Promise<void> {
+  return writeTempThenRename(filePath, content);
+}
+
+/**
  * Atomic binary file write: write Buffer to a temp file, then rename.
  * Used for .docx (ZIP) output where UTF-8 encoding would corrupt binary data.
- * Shares the same EPERM/EACCES retry behaviour as `atomicWrite`.
+ * Shares the same retry and temp-cleanup behaviour as `atomicWrite`.
  */
-export async function atomicWriteBuffer(filePath: string, content: Buffer): Promise<void> {
-  const tempPath = tempSiblingPath(filePath);
-  try {
-    await fs.writeFile(tempPath, content);
-  } catch (err) {
-    // Same cleanup as `atomicWrite` (#1850) — and the higher-stakes half: these
-    // are the largest files Tandem writes, so a leaked `.docx` temp sits in the
-    // user's document directory at full size.
-    await fs.unlink(tempPath).catch(() => {});
-    throw err;
-  }
-  await renameWithRetry(tempPath, filePath);
+export function atomicWriteBuffer(filePath: string, content: Buffer): Promise<void> {
+  return writeTempThenRename(filePath, content);
 }

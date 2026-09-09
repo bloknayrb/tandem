@@ -88,14 +88,13 @@ export function stripAndRecordBom(doc: Y.Doc, text: string): string {
 /**
  * Re-prepend the doc's recorded BOM to freshly serialized output.
  *
- * Runs after `restoreLineEndings` as a convention — it survives a future
- * `restoreLineEndings` that normalizes more than `
-`. It is not a tested
- * invariant: a BOM contains no `
-` or `
-`, so the two compositions are
- * byte-identical today.
+ * Runs after `restoreLineEndings` by convention, so it keeps working if that
+ * ever normalizes more than line endings. Not a tested invariant: a BOM carries
+ * no line ending, so the two orders are byte-identical today.
+ *
+ * The prefix is spelled as an escape, never pasted literally: a raw U+FEFF in
+ * source is invisible in every editor and diff.
  */
 export function restoreBom(doc: Y.Doc, text: string): string {
-  return doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_BOM) === true ? `﻿${text}` : text;
+  return doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_BOM) === true ? `\uFEFF${text}` : text;
 }
