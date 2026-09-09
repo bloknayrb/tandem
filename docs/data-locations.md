@@ -32,8 +32,11 @@ Desktop app (Tauri `app_data_dir()`, under the `com.tandem.editor` identifier):
 Each root carries an `owner.json` stamping which install claimed it; a directory one
 flavor owns is **refused** by the other rather than shared. The first desktop launch
 after this version **copies** the npm directory across, once, leaving the original
-intact. The copy excludes four things: `owner.json` itself (so an interrupted copy
-retries instead of leaving a foreign stamp), `annotations/store.lock` (a copied live
+intact. "Once" is recorded in its own file, `npm-migration-complete` — not in
+`owner.json` — so deleting the stamp hands the directory over without re-importing
+anything. The copy excludes five things: `owner.json` itself (so an interrupted copy
+retries instead of leaving a foreign stamp), `npm-migration-complete` (so a
+half-finished copy can never read as finished), `annotations/store.lock` (a copied live
 lock would make the new directory read-only for annotations forever), in-flight
 `.tandem-tmp-*` atomic-write temporaries, and `auth-token` (whose only reader derives
 the npm path directly — see the note under its row).
@@ -53,7 +56,8 @@ Inside either directory:
 | `annotations/` | The durable annotation store (one JSON per document hash) and its `store.lock` |
 | `doc-backups/` | Pre-overwrite snapshots of your documents — verbatim byte copies taken before Tandem's first write to a file each run, restorable with any file manager (see [troubleshooting → Recovering a previous version](troubleshooting.md#recovering-a-previous-version-of-a-document)) |
 | `integrations.json` | Integration config; secrets are keychain references, not plaintext |
-| `owner.json` | Which install claimed this directory (`{"version", "flavor"}`). Delete it only to hand the directory to the other flavor deliberately. |
+| `owner.json` | Which install claimed this directory (`{"version", "flavor"}`). Delete it only to hand the directory to the other flavor deliberately; doing so does not re-run the one-time npm import. |
+| `npm-migration-complete` | **Desktop location only.** The record that the one-time copy from the npm directory already happened. Deleting it makes the next desktop launch re-import that directory, so leave it alone. |
 | `auth-token` | **npm location only.** Its path is derived from the `env-paths` root directly and deliberately ignores `TANDEM_APP_DATA_DIR`, so it never appears in the desktop directory — the desktop keeps its token in the OS keychain and passes it to the sidecar. The auto-generated Bearer token (mode `0o600`) that non-loopback callers must present. Deleting it makes Tandem mint a new one on next launch, which invalidates any config still carrying the old value — run `tandem rotate-token` instead of deleting it by hand. |
 | `license.json` | **Your activated license.** Contains the signed blob, which carries your name and email address — the only identity information Tandem writes to disk. Deleting it means re-activating from the key you were emailed. |
 | `trial.json` | The trial clock's start timestamp. Deleting it restarts the trial (the clock is deliberately soft — see [ADR-040](decisions.md)). |

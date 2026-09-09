@@ -229,11 +229,15 @@ const CONFIG_API_REFERENCES = [
  */
 const DURABLE_WRITER_FILES: Record<string, number> = {
   "src/cli/rotate-token.ts": 4,
-  // #1787: the app-data ownership stamp. TWO durable writes, not one — the
+  // #1787: the app-data ownership stamp. THREE durable writes, not one — the
   // `fs.cp` one-time legacy migration is in the counted idiom set alongside the
-  // stamp's own `writeFile`. It writes Tandem's own state root, never a Claude
-  // config file, so `docs/security.md`'s accepted #1599 scope is unchanged.
-  "src/server/app-data-owner.ts": 2,
+  // stamp's own `atomicWrite`, and the review added a third: the migration's
+  // completion marker (`npm-migration-complete`), which is what stops the
+  // desktop refusal message's "delete owner.json" advice from re-importing the
+  // whole legacy npm tree. All three write Tandem's own state root, never a
+  // Claude config file, so `docs/security.md`'s accepted #1599 scope is
+  // unchanged.
+  "src/server/app-data-owner.ts": 3,
   "src/cli/uninstall-scrub.ts": 2,
   "src/client/tabs/TabItem.svelte": 1,
   "src/server/annotations/store.ts": 5,

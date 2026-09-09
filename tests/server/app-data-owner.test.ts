@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type AppDataFlavor,
   claimAppDataDir,
+  MIGRATION_MARKER_FILE,
   OWNER_STAMP_FILE,
   refusalMessage,
 } from "../../src/server/app-data-owner.js";
@@ -191,6 +192,98 @@ describe("claimAppDataDir — one-time legacy migration", () => {
   });
 });
 
+/**
+ * #1787 review — the migration is gated on its OWN completion marker, not on
+ * the stamp.
+ *
+ * The desktop refusal message tells the user to delete `owner.json`. While the
+ * migration was stamp-gated, following that advice silently re-ran `fs.cp` over
+ * the whole legacy npm tree: `force: false` protects only files that still
+ * EXIST, so sessions, annotation envelopes and doc backups the user had since
+ * deleted came back. The same path was reachable with no user action at all,
+ * because a truncated stamp reads as "unowned" — which is also why the stamp is
+ * now written through `atomicWrite`.
+ */
+describe("claimAppDataDir — migration completion marker", () => {
+  async function migrateOnce(): Promise<{ source: string; target: string }> {
+    const source = tempDir("legacy-marker");
+    const target = tempDir("desktop-marker");
+    withLegacyRoot(source);
+    fs.mkdirSync(path.join(source, "sessions"), { recursive: true });
+    fs.writeFileSync(path.join(source, "sessions", "a.json"), "{}", "utf8");
+    await expect(claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
+    expect(fs.existsSync(path.join(target, "sessions", "a.json"))).toBe(true);
+    return { source, target };
+  }
+
+  it("records the completed migration in its own file", async () => {
+    const { target } = await migrateOnce();
+    expect(fs.existsSync(path.join(target, MIGRATION_MARKER_FILE))).toBe(true);
+  });
+
+  // The headline regression: the product's own printed remedy must not
+  // resurrect deleted state.
+  it("does not re-import the legacy tree after the stamp is deleted", async () => {
+    const { target } = await migrateOnce();
+    fs.rmSync(path.join(target, "sessions", "a.json"));
+    fs.rmSync(path.join(target, OWNER_STAMP_FILE));
+
+    await expect(claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
+
+    expect(fs.existsSync(path.join(target, "sessions", "a.json"))).toBe(false);
+    expect(readStamp(target)).toEqual({ version: "1.0.0", flavor: "desktop" });
+  });
+
+  // `readStamp` reports a malformed stamp as "unowned" too, so a stamp-gated
+  // migration re-ran on a crash mid-write with nobody having touched anything.
+  it("does not re-import the legacy tree behind a truncated stamp", async () => {
+    const { target } = await migrateOnce();
+    fs.rmSync(path.join(target, "sessions", "a.json"));
+    fs.writeFileSync(path.join(target, OWNER_STAMP_FILE), '{"version":"1.0.0","fla', "utf8");
+
+    await expect(claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
+    expect(fs.existsSync(path.join(target, "sessions", "a.json"))).toBe(false);
+  });
+
+  // The marker is the completion record, so a legacy copy of one must not be
+  // able to precede an interrupted `fs.cp` (which gives no ordering guarantee)
+  // and make a half-migrated directory read as finished.
+  it("never copies a legacy marker in", async () => {
+    const source = tempDir("legacy-marker-src");
+    const target = tempDir("desktop-marker-src");
+    withLegacyRoot(source);
+    fs.writeFileSync(path.join(source, MIGRATION_MARKER_FILE), "{}", "utf8");
+    fs.writeFileSync(path.join(source, "keep.json"), "{}", "utf8");
+
+    await expect(claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
+    expect(fs.existsSync(path.join(target, "keep.json"))).toBe(true);
+    // Present, but written by US after the copy — never the legacy one.
+    expect(fs.readFileSync(path.join(target, MIGRATION_MARKER_FILE), "utf8")).not.toBe("{}");
+  });
+
+  /**
+   * The stamp goes down through `atomicWrite` — temp sibling, then rename — so
+   * a crash mid-write cannot leave a truncated `owner.json` that hands the
+   * directory to the other flavor.
+   *
+   * Asserted on the rename because that IS the guarantee: no state where the
+   * final path holds a partial file.
+   */
+  it("writes the stamp atomically rather than in place", async () => {
+    const dir = tempDir("stamp-atomic");
+    const rename = vi.spyOn(fs.promises, "rename");
+    await expect(claimAppDataDir(dir, "1.0.0", "npm")).resolves.toBe("claimed");
+
+    const stamp = path.join(dir, OWNER_STAMP_FILE);
+    const call = rename.mock.calls.find(([, to]) => to === stamp);
+    expect(call, "the stamp must arrive by rename, not by a direct write").toBeDefined();
+    expect(path.basename(String(call?.[0]))).toMatch(
+      new RegExp(`^${ATOMIC_TEMP_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+    );
+    expect(readStamp(dir)).toEqual({ version: "1.0.0", flavor: "npm" });
+  });
+});
+
 describe("claimAppDataDir — failure contract", () => {
   /**
    * It is called where `main().catch(...) => process.exit(1)` turns any throw
@@ -229,9 +322,23 @@ describe("refusalMessage", () => {
   const owner = { version: "1.0.0", flavor: "desktop" as AppDataFlavor };
 
   it("offers TANDEM_APP_DATA_DIR to the npm install", () => {
-    const message = refusalMessage("/tmp/x", owner, "npm");
+    const message = refusalMessage("/tmp/x", owner, "npm", {});
     expect(message).toContain("TANDEM_APP_DATA_DIR");
     expect(message).toContain("desktop install");
+  });
+
+  /**
+   * #1787 review — "Set TANDEM_APP_DATA_DIR" reads as a no-op when the variable
+   * is already set, invisibly, by an ancestor process. `supervisor.ts`'s
+   * `childEnv` strips it for the auto-launched session, but a hand-exported one
+   * still arrives, so the message states the value it is actually running with.
+   */
+  it("names the current TANDEM_APP_DATA_DIR when one is already set", () => {
+    const message = refusalMessage("/tmp/x", owner, "npm", {
+      TANDEM_APP_DATA_DIR: "/desktop/root",
+    });
+    expect(message).toContain("/desktop/root");
+    expect(message).toContain("inherited");
   });
 
   // The env-var remedy is inert on the desktop arm: the sidecar sets that

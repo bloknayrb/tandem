@@ -98,6 +98,22 @@ const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// That case is a different failure with its own deadline and its own error
 /// message; we deliberately do not size this constant for it.
 pub(crate) const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long `wait_for_health_at` holds out for a `pid` before accepting a 2xx
+/// that carries none (#1812 review).
+///
+/// A bounded degradation, not a loophole: a *current* sidecar always reports
+/// its pid, so only a responder that predates the identity check can reach this
+/// arm, and a different CURRENT process still mismatches and is still rejected
+/// for the full `HEALTH_TIMEOUT`. Without it, a Tauri shell paired with an
+/// older Node `dist` — every developer's stale `target/debug/dist`, and any
+/// release build whose two halves drifted — never starts at all: four attempts
+/// of `HEALTH_TIMEOUT`, then a "Retry Server Start" dialog that retries into
+/// the same wall.
+///
+/// Sized well under `HEALTH_TIMEOUT` so the identity check still gets the first
+/// word, and well over `HEALTH_POLL_INTERVAL` so a slow-but-current sidecar
+/// answering with its pid is never beaten to it by the grace.
+pub(crate) const PIDLESS_HEALTH_GRACE: Duration = Duration::from_secs(5);
 pub(crate) const HTTP_CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long to wait for the sidecar to exit after POST /api/shutdown before
 /// hard-killing it. The Node shutdown's disk flush is 5s-bounded
@@ -1904,10 +1920,23 @@ async fn wait_for_health(
 /// `HEALTH_TIMEOUT` (30s) on every required `rust-test` leg and in the pre-push
 /// hook.
 ///
-/// A 2xx is accepted ONLY when the body identifies `child_pid`. A mismatch or a
-/// missing `pid` is not an error — it is recorded and polling continues, so the
+/// A 2xx is accepted immediately when the body identifies `child_pid`. A
+/// MISMATCH is not an error — it is recorded and polling continues, so the
 /// timeout is what decides. Two distinct warn lines, each emitted once per
 /// distinct observed state: repeating either every 250 ms would bury the log.
+///
+/// **A pid-LESS 2xx is accepted after `PIDLESS_HEALTH_GRACE`, loudly.** Holding
+/// out for the whole `HEALTH_TIMEOUT` bricks any shell paired with a Node `dist`
+/// older than the identity check: `start_sidecar` retries `0..=MAX_RESTARTS`
+/// into the same failure and then shows "Retry Server Start", which retries into
+/// it again — ~2 minutes and no in-product recovery. That is not hypothetical
+/// for developers (`target/debug/dist` is not hot-reloaded, so every
+/// pre-existing one is stale) and it would make `src-tauri` and the bundled
+/// `dist` a hard same-commit coupling in release builds, with "the app never
+/// starts" as the failure mode. The grace costs the identity guarantee only
+/// against a responder that cannot answer it at all; a CURRENT sidecar always
+/// carries a pid, so a *different* current process still mismatches and still
+/// never takes this arm.
 async fn wait_for_health_at(
     client: &reqwest::Client,
     health_url: &str,
@@ -1916,6 +1945,9 @@ async fn wait_for_health_at(
     timeout: Duration,
 ) -> Result<(), String> {
     let start = std::time::Instant::now();
+    // Never longer than the overall bound, so a short test timeout still
+    // reaches the grace arm rather than expiring first.
+    let grace = std::cmp::min(PIDLESS_HEALTH_GRACE, timeout / 2);
     let mut last_error: Option<String> = None;
     let mut warned_about: Option<u32> = None;
     let mut warned_unidentified = false;
@@ -1942,6 +1974,16 @@ async fn wait_for_health_at(
                         }
                     }
                     None => {
+                        if start.elapsed() >= grace {
+                            // Grace expired: accept, and say why in one line a
+                            // bug report can carry. See the docblock — the
+                            // alternative is an app that never starts.
+                            log::warn!(
+                                "health body still carries no pid after {}s — accepting UNVERIFIED (this sidecar predates the identity check; rebuild `dist` to restore it)",
+                                grace.as_secs()
+                            );
+                            return Ok(());
+                        }
                         last_error = Some("health body carries no pid".to_string());
                         if !warned_unidentified {
                             warned_unidentified = true;
@@ -1949,7 +1991,8 @@ async fn wait_for_health_at(
                             // `target/debug/dist`: the shell's OWN child answers
                             // without a pid. The fix is to rebuild `dist`.
                             log::warn!(
-                                "health body carries no pid — this sidecar predates the identity check; still waiting"
+                                "health body carries no pid — this sidecar predates the identity check; waiting up to {}s before accepting it unverified",
+                                grace.as_secs()
                             );
                         }
                     }
@@ -3778,6 +3821,64 @@ mod health_identity_tests {
             result,
             Ok(()),
             "a 2xx naming our own pid must be accepted: {result:?}"
+        );
+    }
+
+    /// The grace arm (#1812 review): a pid-LESS 2xx is accepted once
+    /// `PIDLESS_HEALTH_GRACE` has elapsed, while a pid MISMATCH never is.
+    ///
+    /// Without the grace, a Tauri shell paired with a Node `dist` older than
+    /// the identity check never starts — four `HEALTH_TIMEOUT` attempts into a
+    /// "Retry Server Start" dialog that retries into the same wall. The second
+    /// half is what keeps the grace from becoming "accept anything": both
+    /// bodies are unverifiable-looking, and only the pid-less one is let
+    /// through.
+    ///
+    /// The 2 s / 1 s timeouts keep this at ~3 s rather than `HEALTH_TIMEOUT`'s
+    /// 30 s; `grace` is `min(PIDLESS_HEALTH_GRACE, timeout / 2)`, so the first
+    /// call accepts at ~1 s.
+    #[test]
+    fn wait_for_health_at_accepts_a_pidless_body_after_the_grace() {
+        let dead = AtomicBool::new(false);
+        let client = build_http_client(Duration::from_secs(5)).expect("build client");
+
+        let legacy = stub_health_body(
+            r#"{"status":"ok","version":"0.1.0"}"#,
+            Duration::from_secs(6),
+        );
+        let legacy_url = format!("http://{legacy}/health");
+        let started = std::time::Instant::now();
+        let result = tauri::async_runtime::block_on(wait_for_health_at(
+            &client,
+            &legacy_url,
+            &dead,
+            4242,
+            Duration::from_secs(2),
+        ));
+        assert_eq!(
+            result,
+            Ok(()),
+            "a pid-less 2xx must be accepted after the grace rather than bricking startup: {result:?}"
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(900),
+            "the grace must actually be waited out, not skipped"
+        );
+
+        // The mismatch arm is untouched: a DIFFERENT current process still
+        // fails for the full bound.
+        let foreign = stub_health_body(r#"{"status":"ok","pid":999999}"#, Duration::from_secs(3));
+        let foreign_url = format!("http://{foreign}/health");
+        let result = tauri::async_runtime::block_on(wait_for_health_at(
+            &client,
+            &foreign_url,
+            &dead,
+            4242,
+            Duration::from_secs(1),
+        ));
+        assert!(
+            result.is_err(),
+            "the grace must not extend to a body that names a different pid"
         );
     }
 

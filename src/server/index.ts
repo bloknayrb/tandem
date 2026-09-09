@@ -67,6 +67,7 @@ import {
   cleanupStaleTombstones,
   stopAutoSave,
 } from "./session/manager.js";
+import { isShuttingDown, markShuttingDown } from "./shutdown-state.js";
 import { maybeOpenStartupFile } from "./startup-file.js";
 import { checkVersionChange } from "./version-check.js";
 import { startHocuspocus } from "./yjs/provider.js";
@@ -102,7 +103,6 @@ const wsPort = parseInt(process.env.TANDEM_PORT || String(DEFAULT_WS_PORT), 10);
 const mcpPort = parseInt(process.env.TANDEM_MCP_PORT || String(DEFAULT_MCP_PORT), 10);
 
 let httpServer: Server | null = null;
-let isShuttingDown = false;
 let launcherSupervisor: import("./launcher/supervisor.js").Supervisor | null = null;
 let launcherUnavailableReason: import("../shared/launcher/contract.js").LauncherUnavailableReason =
   resolveInitialLauncherReason(process.env);
@@ -160,7 +160,7 @@ async function handleFatalError(label: string, value: unknown): Promise<void> {
     console.error("[Tandem] Known WS error (swallowed):", value.message, value.stack);
     return;
   }
-  if (isShuttingDown) {
+  if (isShuttingDown()) {
     console.error(`[Tandem] ${label} during shutdown (ignored):`, value);
     return;
   }
@@ -192,8 +192,10 @@ if (transportMode === "stdio") {
 
 // Graceful shutdown: save session + stop auto-save before exit
 async function shutdown(signal: string) {
-  if (isShuttingDown) return;
-  isShuttingDown = true;
+  // The latch and the single-flight guard are one call (see
+  // `shutdown-state.ts`): `/health` reads the same flag, so a second SIGTERM
+  // must not be able to observe it unset.
+  if (!markShuttingDown()) return;
   console.error(`[Tandem] ${signal} received, saving session...`);
   try {
     unwatchAll();
@@ -318,8 +320,15 @@ async function main() {
       // port free, startup proceeds, and `freePort(wsPort)` SIGKILLs the
       // desktop's Hocuspocus on the other one — `freePort` keys on the port,
       // not the bind address.
+      // `probe.host` is the address actually asked, which is the bind host when
+      // `TANDEM_BIND_HOST` moved it off loopback — naming 127.0.0.1 there would
+      // point the user at a port nothing is listening on. `pid` is `null` on
+      // that arm (it is loopback-only in `/health`), so the message degrades to
+      // the version alone rather than printing "pid null".
       console.error(
-        `[Tandem] Tandem is already running at http://127.0.0.1:${mcpPort} (v${probe.version}, pid ${probe.pid}). ` +
+        `[Tandem] Tandem is already running at http://${probe.host}:${mcpPort} (v${probe.version}${
+          probe.pid === null ? "" : `, pid ${probe.pid}`
+        }). ` +
           `Not starting a second instance — quit the running one first, or run on different ports: ` +
           `see "Port already in use" in docs/troubleshooting.md ` +
           `(TANDEM_PORT, TANDEM_MCP_PORT and TANDEM_URL all have to match).`,

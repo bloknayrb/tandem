@@ -13,6 +13,7 @@ import {
   parseSsPid,
   probeTandemInstance,
   resolveAppDataDir,
+  resolveProbeHost,
   SESSION_DIR,
   TAURI_SIDECAR_ARGV_FLAG,
   waitForPort,
@@ -332,7 +333,24 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
       const port = await listen((_req, res) =>
         json(res, 200, { status: "ok", version: "9.9.9", pid: 4242, transport: "http" }),
       );
-      await expect(probeTandemInstance(port)).resolves.toEqual({ pid: 4242, version: "9.9.9" });
+      await expect(probeTandemInstance(port)).resolves.toEqual({
+        pid: 4242,
+        version: "9.9.9",
+        host: "127.0.0.1",
+      });
+    });
+
+    /**
+     * #1758 review — a Tandem that is SHUTTING DOWN must not refuse its own
+     * replacement. `/health` keeps answering 200 for the whole flush window
+     * (`shutdown()` closes the listener last), so the `status` field is the
+     * only discriminant; see `src/server/shutdown-state.ts`.
+     */
+    it("returns null for a body that says it is shutting down", async () => {
+      const port = await listen((_req, res) =>
+        json(res, 200, { status: "shutting-down", version: "9.9.9", pid: 4242 }),
+      );
+      await expect(probeTandemInstance(port, FAST)).resolves.toBeNull();
     });
 
     // A `status: "ok"` body is not proof of Tandem. Accepting one would let an
@@ -381,12 +399,85 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
         }
         json(res, 200, { status: "ok", version: "1.2.3", pid: 77 });
       });
-      await expect(probeTandemInstance(port, FAST)).resolves.toEqual({ pid: 77, version: "1.2.3" });
+      await expect(probeTandemInstance(port, FAST)).resolves.toEqual({
+        pid: 77,
+        version: "1.2.3",
+        host: "127.0.0.1",
+      });
+    });
+
+    /**
+     * The LAN arm (#1758 review). `freePort` kills by PORT NUMBER irrespective
+     * of bind address, so with `TANDEM_BIND_HOST` on a LAN IP a loopback-only
+     * probe finds nothing and the live instance is SIGKILLed with its open
+     * documents — the very failure this probe exists to prevent.
+     *
+     * `/health` withholds `pid` from non-loopback callers by design, so the arm
+     * cannot require one. It takes `transport: "http"` as the Tandem signature
+     * instead, and records `pid: null`.
+     *
+     * Driven through the explicit `host` parameter rather than by binding a
+     * real LAN socket, which no CI runner can promise.
+     */
+    it("accepts a pid-less body from a non-loopback bind host", async () => {
+      const port = await listen((_req, res) =>
+        // No `pid` — exactly what a LAN caller receives.
+        json(res, 200, { status: "ok", version: "3.2.1", transport: "http" }),
+      );
+      await expect(probeTandemInstance(port, FAST, "localhost")).resolves.toEqual({
+        pid: null,
+        version: "3.2.1",
+        host: "localhost",
+      });
+    });
+
+    // …but not just any health endpoint: without `transport` there is nothing
+    // left identifying the responder as Tandem at all.
+    it("rejects a pid-less non-loopback body with no transport field", async () => {
+      const port = await listen((_req, res) => json(res, 200, { status: "ok", version: "3.2.1" }));
+      await expect(probeTandemInstance(port, FAST, "localhost")).resolves.toBeNull();
+    });
+  });
+
+  // #1758 review — the probe must ask the address the server actually bound.
+  describe("resolveProbeHost", () => {
+    const saved = process.env.TANDEM_BIND_HOST;
+    afterEach(() => {
+      if (saved === undefined) delete process.env.TANDEM_BIND_HOST;
+      else process.env.TANDEM_BIND_HOST = saved;
+    });
+
+    it("defaults to loopback when TANDEM_BIND_HOST is unset", () => {
+      delete process.env.TANDEM_BIND_HOST;
+      expect(resolveProbeHost()).toBe("127.0.0.1");
+    });
+
+    // A wildcard bind DOES cover loopback, and loopback is the better target
+    // there: `/health` reveals `pid` only to a loopback caller.
+    it.each([
+      "127.0.0.1",
+      "::1",
+      "localhost",
+      "0.0.0.0",
+      "::",
+    ])("resolves %s back to 127.0.0.1", (host) => {
+      expect(resolveProbeHost(host)).toBe("127.0.0.1");
+    });
+
+    // The finding itself: a LAN bind is not on 127.0.0.1 at all, so probing
+    // loopback returns ECONNREFUSED and `freePort` SIGKILLs the live instance.
+    it("returns a LAN bind host unchanged", () => {
+      expect(resolveProbeHost("192.168.1.50")).toBe("192.168.1.50");
+    });
+
+    it("reads TANDEM_BIND_HOST when no argument is given", () => {
+      process.env.TANDEM_BIND_HOST = "10.0.0.7";
+      expect(resolveProbeHost()).toBe("10.0.0.7");
     });
   });
 
   describe("decideStartupAction", () => {
-    const LIVE = { pid: 1, version: "1.0.0" };
+    const LIVE = { pid: 1, version: "1.0.0", host: "127.0.0.1" };
 
     // No evidence → today's behaviour, `freePort` included.
     it("proceeds when nothing answered", () => {
@@ -433,7 +524,7 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
       expect(isTauriSidecar(["node", "server.js"])).toBe(false);
       expect(
         decideStartupAction({
-          probe: { pid: 1, version: "1.0.0" },
+          probe: { pid: 1, version: "1.0.0", host: "127.0.0.1" },
           mode: "http",
           isSidecar: isTauriSidecar(["node", "server.js"]),
         }),

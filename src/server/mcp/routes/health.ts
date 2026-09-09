@@ -32,6 +32,12 @@ export interface HealthHandlerDeps {
    * detached consumer turns into a `waitingMs` that climbs for days.
    */
   getDeliveryState: (externalConsumerCount: number) => DeliveryState;
+  /**
+   * True once `shutdown()` has begun. Flips `status` from `"ok"` to
+   * `"shutting-down"` — see the note on that field below, and
+   * `server/shutdown-state.ts` for why it is the field and not the status code.
+   */
+  isShuttingDown: () => boolean;
 }
 
 /**
@@ -39,6 +45,14 @@ export interface HealthHandlerDeps {
  *
  * Public: `status`, `version`, `transport`. Loopback-only: `pid`, `hasSession`,
  * `push` and `delivery`.
+ *
+ * `status` is `"ok"` until `shutdown()` starts and `"shutting-down"` after, and
+ * the response stays a 200 in both states. That distinction is what stops a
+ * dying instance from refusing its own replacement (`probeTandemInstance`
+ * requires `"ok"`), while keeping the Tauri shell's `wait_for_server_gone`
+ * waiting for the real exit rather than hard-killing the flush. The full
+ * argument is in `server/shutdown-state.ts`; do not "simplify" this into a
+ * non-2xx.
  *
  * `pid` is the process identity the Tauri shell's health poll and its
  * `/api/shutdown` target check compare against the child it spawned (#1812) —
@@ -92,7 +106,7 @@ export interface HealthHandlerDeps {
 export function makeHealthHandler(deps: HealthHandlerDeps): Handler {
   return (req: Request, res: Response): void => {
     const body: Record<string, unknown> = {
-      status: "ok",
+      status: deps.isShuttingDown() ? "shutting-down" : "ok",
       version: deps.version,
       transport: "http",
     };

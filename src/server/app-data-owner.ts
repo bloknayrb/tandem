@@ -2,7 +2,7 @@ import envPaths from "env-paths";
 import fs from "fs";
 import path from "path";
 import { TOKEN_FILE_NAME } from "../shared/constants.js";
-import { ATOMIC_TEMP_PREFIX } from "./file-io/index.js";
+import { ATOMIC_TEMP_PREFIX, atomicWrite } from "./file-io/index.js";
 
 /**
  * Ownership stamp for the app-data root (#1787, decision D).
@@ -21,6 +21,21 @@ import { ATOMIC_TEMP_PREFIX } from "./file-io/index.js";
 
 /** The file this module owns, inside the app-data root. */
 export const OWNER_STAMP_FILE = "owner.json";
+
+/**
+ * The one-time legacy migration's completion record (#1787 review).
+ *
+ * **Separate from the stamp on purpose.** The migration used to be gated on
+ * "no stamp yet", and the desktop refusal message tells the user to delete
+ * `owner.json` — so following the product's own advice silently re-ran
+ * `fs.cp` over the whole legacy npm tree, resurrecting sessions, annotation
+ * envelopes and doc backups the user had since deleted (`force: false` only
+ * protects files that still EXIST). The same path was reachable with no user
+ * action at all while the stamp was written non-atomically: a truncated stamp
+ * reads as unowned. The stamp is now written through `atomicWrite`, and the
+ * migration is gated on this file, which nothing ever tells anyone to delete.
+ */
+export const MIGRATION_MARKER_FILE = "npm-migration-complete";
 
 /**
  * Which install wrote the stamp.
@@ -61,7 +76,7 @@ async function readStamp(appDataDir: string): Promise<OwnerStamp | null> {
 }
 
 /**
- * The four things the one-time migration must NOT copy.
+ * The five things the one-time migration must NOT copy.
  *
  * 1. `owner.json` — **the stamp is the only file never copied, and that is what
  *    makes it the completion record.** `fs.cp` gives no ordering guarantee, so a
@@ -81,10 +96,16 @@ async function readStamp(appDataDir: string): Promise<OwnerStamp | null> {
  *    deliberately. A copy in the desktop directory has no reader, is never
  *    rotated by `/api/rotate-token`, and never gets `readTokenFromFile`'s 0600
  *    repair — it is only a second copy of a secret.
+ * 5. `npm-migration-complete` — the completion record, for the same reason as
+ *    the stamp. `fs.cp` gives no ordering guarantee, so a marker copied early
+ *    and then an interrupted copy would leave a directory that reads as fully
+ *    migrated while most of the tree never arrived. It cannot legitimately
+ *    exist in an npm root anyway (only the desktop arm writes one).
  */
 function shouldMigrate(source: string): boolean {
   const base = path.basename(source);
   if (base === OWNER_STAMP_FILE) return false;
+  if (base === MIGRATION_MARKER_FILE) return false;
   if (base === "store.lock") return false;
   if (base.startsWith(ATOMIC_TEMP_PREFIX)) return false;
   if (base === TOKEN_FILE_NAME) return false;
@@ -104,8 +125,15 @@ function legacyAppDataDir(): string {
  * Tandem's own state — user documents live wherever the user put them and are
  * referenced by path.
  *
- * Runs only before a FIRST stamp is written, only for `flavor: "desktop"`, and
- * only when the resolved directory actually differs from the legacy one.
+ * Runs only for `flavor: "desktop"`, only when {@link MIGRATION_MARKER_FILE} is
+ * absent, and only when the resolved directory actually differs from the legacy
+ * one. **The gate is the marker, not the stamp** — see the marker's docblock:
+ * the desktop refusal message tells the user to delete the stamp, and a
+ * stamp-gated migration therefore re-imports the whole legacy tree on the next
+ * launch.
+ *
+ * The marker is written only after `fs.cp` resolves, so an interrupted copy
+ * retries rather than recording a migration that did not finish.
  */
 async function migrateLegacyTree(appDataDir: string): Promise<void> {
   const legacy = legacyAppDataDir();
@@ -122,6 +150,20 @@ async function migrateLegacyTree(appDataDir: string): Promise<void> {
     errorOnExist: false,
     filter: shouldMigrate,
   });
+  await atomicWrite(
+    path.join(appDataDir, MIGRATION_MARKER_FILE),
+    `${JSON.stringify({ from: legacy, at: new Date().toISOString() }, null, 2)}\n`,
+  );
+}
+
+/** Whether the one-time legacy migration has already completed here. */
+async function migrationAlreadyRan(appDataDir: string): Promise<boolean> {
+  try {
+    await fs.promises.access(path.join(appDataDir, MIGRATION_MARKER_FILE));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -173,14 +215,13 @@ export async function claimAppDataDir(
   }
 
   try {
-    if (!existing && flavor === "desktop") {
+    if (!existing && flavor === "desktop" && !(await migrationAlreadyRan(appDataDir))) {
       await migrateLegacyTree(appDataDir);
     }
-    await fs.promises.writeFile(
-      stampPath(appDataDir),
-      `${JSON.stringify({ version, flavor }, null, 2)}\n`,
-      "utf8",
-    );
+    // `atomicWrite`, not `fs.promises.writeFile`: `readStamp` reports a
+    // truncated stamp as "unowned", so a crash or power loss mid-write would
+    // hand this directory to the other flavor without a word.
+    await atomicWrite(stampPath(appDataDir), `${JSON.stringify({ version, flavor }, null, 2)}\n`);
   } catch (err) {
     // No stamp written: the next launch re-attempts the migration rather than
     // recording a copy that did not happen.
@@ -201,17 +242,29 @@ export async function claimAppDataDir(
  * Flavor-aware: the `TANDEM_APP_DATA_DIR` remedy is inert on the desktop arm,
  * because the sidecar sets that variable explicitly on the child and an
  * explicit `.env()` overrides an inherited value.
+ *
+ * On the npm arm the remedy names a variable that may ALREADY be set — the
+ * sidecar exports it and it is inherited by descendants (`supervisor.ts`'s
+ * `childEnv` strips it for the auto-launched session, but a hand-exported one,
+ * or any other descendant, still arrives). "Set TANDEM_APP_DATA_DIR" then reads
+ * as a no-op, so the message states the current value when there is one, taken
+ * from `env` rather than from `process.env` directly so a test can drive it.
  */
 export function refusalMessage(
   appDataDir: string,
   owner: OwnerStamp,
   flavor: AppDataFlavor,
+  env: NodeJS.ProcessEnv = process.env,
 ): string {
   const head =
     `[Tandem] This app-data directory (${appDataDir}) belongs to the ${owner.flavor} ` +
     `install (last used by v${owner.version}). Refusing to share it.`;
   if (flavor === "npm") {
-    return `${head} Set TANDEM_APP_DATA_DIR to run against a different directory.`;
+    const inherited = env.TANDEM_APP_DATA_DIR;
+    const preamble = inherited
+      ? ` TANDEM_APP_DATA_DIR is currently "${inherited}" — it may have been inherited from a parent process.`
+      : "";
+    return `${head}${preamble} Set TANDEM_APP_DATA_DIR to a different directory (or unset it to use this install's default).`;
   }
   return `${head} Quit the npm \`tandem\` and relaunch, or remove ${path.join(
     appDataDir,
