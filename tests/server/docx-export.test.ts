@@ -242,3 +242,26 @@ describe("detectExportFidelityIssues", () => {
     expect(warnings.some((w) => w.includes("somethingExotic"))).toBe(true);
   });
 });
+
+describe("marks inside a fenced code block do not reach word/document.xml (#1751)", () => {
+  it("a bold mark on a fence body exports no <bold tag", async () => {
+    doc = new Y.Doc();
+    const frag = doc.getXmlFragment("default");
+    const el = new Y.XmlElement("codeBlock");
+    const xmlText = new Y.XmlText();
+    el.insert(0, [xmlText]);
+    frag.insert(0, [el]);
+    // Attach BEFORE populating (Y.js gotcha), then mark like a client would.
+    xmlText.insert(0, "let x = 1;");
+    xmlText.format(0, 3, { bold: true });
+
+    const zip = await JSZip.loadAsync(await exportYDocToDocx(doc));
+    const docXml = (await zip.file("word/document.xml")?.async("text")) ?? "";
+    // `readXmlTextChild` used `toString()`, which renders each mark as an XML
+    // element: the literal `<bold>let</bold>` went into the user's Word file
+    // AND lengthened the string `emitTextSegments` advances `emit.pos` over,
+    // shifting every comment anchor after the block.
+    expect(docXml).not.toContain("<bold");
+    expect(docXml).toContain("let x = 1;");
+  });
+});

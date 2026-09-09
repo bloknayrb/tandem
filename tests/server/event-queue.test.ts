@@ -1007,6 +1007,7 @@ describe("reattachObservers — file-sync context rebind", () => {
       }),
       queueWrite: queueWriteSpy,
       flush: async () => {},
+      cancelPendingWrite: () => {},
       clear: async () => {},
       isReadOnly: () => false,
       isDisabled: () => false,
@@ -1092,6 +1093,7 @@ describe("reattachObservers — file-sync context rebind", () => {
         pendingThunk = thunk;
       },
       flush: async () => {},
+      cancelPendingWrite: () => {},
       clear: async () => {},
       isReadOnly: () => false,
       isDisabled: () => false,
@@ -1160,6 +1162,7 @@ describe("reattachObservers — file-sync context rebind", () => {
       }),
       queueWrite: vi.fn(),
       flush: async () => {},
+      cancelPendingWrite: () => {},
       clear: async () => {},
       isReadOnly: () => false,
       isDisabled: () => false,

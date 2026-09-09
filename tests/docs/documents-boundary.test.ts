@@ -412,6 +412,7 @@ const FAN_OUT = [
   "server/documents/reload-family.ts -> server/file-io/doc-backup.ts (value) x1",
   "server/documents/reload-family.ts -> server/file-io/docx-size-gate.ts (value) x1",
   "server/documents/reload-family.ts -> server/file-io/index.ts (value) x1",
+  "server/documents/reload-family.ts -> server/file-io/line-endings.ts (value) x1",
   "server/documents/reload-family.ts -> server/file-watcher.ts (value) x1",
   "server/documents/reload-family.ts -> server/mcp/document-service.ts (value) x1",
   "server/documents/reload-family.ts -> server/notifications.ts (value) x1",

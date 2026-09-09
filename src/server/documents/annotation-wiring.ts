@@ -27,9 +27,11 @@ import { pushNotification } from "../notifications.js";
  * branch — re-anchored from stored flat offsets, which is only safe because
  * the clone is byte-exact. Byte-exactness expires at the first edit, so the
  * repair cannot wait for whoever calls `refreshAllRanges` next: nothing on
- * the open path calls it (every server caller is downstream of a later
- * action and the client never writes back), while `loadAndMerge` snapshots
- * the dead relRange into the durable envelope on this very open.
+ * the NORMAL open path calls it (every other server caller is downstream of a
+ * later action and the client never writes back — the force-reload arm's
+ * `reanchorAnnotations` is a different arm and never reaches the fallback
+ * restore), while `loadAndMerge` snapshots the dead relRange into the durable
+ * envelope on this very open.
  *
  * `map` is a PARAMETER, not `doc.getMap(Y_MAP_ANNOTATIONS)` computed here:
  * this module has no `shared/constants.ts` edge and computing it here would
@@ -105,8 +107,10 @@ export async function wireAnnotationStore(
     // is the one loadAndMerge picks up. Gating on "no existing envelope"
     // guarantees recovery never steals from a live envelope.
     //
-    // Only enabled for the normal-open path. Force-reload (clearAndReload)
-    // deliberately clears the envelope and must NOT resurrect a stale orphan;
+    // Only enabled for the normal-open path: recovery is a FIRST-OPEN-only
+    // heuristic, and a force-reload is a reload of an already-open document
+    // that has its own envelope (kept since #1813 — clearAndReload no longer
+    // unlinks it), so an orphan match there would be a stale one.
     // upload:// recovery is deferred (see rename-recovery.ts header).
     if (opts?.allowRecovery && !(await annotationFileExists(hash))) {
       await recoverRenamedEnvelope(doc, hash, filePath);

@@ -28,7 +28,12 @@ import {
   structuralLossLines,
 } from "./docx-lost-features.js";
 import { assertDocxWithinSizeLimits } from "./docx-size-gate.js";
-import { normalizeAndRecordLineEnding, restoreLineEndings } from "./line-endings.js";
+import {
+  normalizeAndRecordLineEnding,
+  restoreBom,
+  restoreLineEndings,
+  stripAndRecordBom,
+} from "./line-endings.js";
 import { loadMarkdown, saveMarkdown } from "./markdown.js";
 import type { FormatAdapter, LoadIssue, Prepared } from "./types.js";
 
@@ -42,6 +47,27 @@ export type { ApplyContext, FormatAdapter, LoadIssue, Prepared } from "./types.j
 
 // -- Adapter implementations (ADR-036 two-phase parse/apply) --
 
+/**
+ * Does this markdown contain an Obsidian-style `[[wikilink]]`?
+ *
+ * Exported so its COST is testable on its own: `loadMarkdown` is seconds-slow
+ * on the same pathological input, so a timing assertion around the whole
+ * `apply` measures remark rather than this.
+ *
+ * `[` is EXCLUDED from the negated class, and that is load-bearing rather than
+ * tidiness: with `[` admitted, every `[[` start re-scans the rest of the line
+ * before failing, so an unterminated `[[` in a long line is quadratic —
+ * `"see [[note ".repeat(20000)` measured 3.3 s. This runs synchronously inside
+ * the Y.Doc transact on every open AND every file-watcher reload, so that time
+ * is a stall of Hocuspocus sync and every other open document. Excluding `[`
+ * costs no matches: a wikilink target cannot contain one, so `[[note]]`,
+ * `![[image.png]]` and `[[note|alias]]` all still match, at 0.5 ms on that
+ * same input.
+ */
+export function containsWikilink(content: string): boolean {
+  return /\[\[[^[\]\n]+\]\]/.test(content);
+}
+
 const markdownAdapter: FormatAdapter = {
   async parse(content): Promise<Prepared> {
     // Decode here, not at the consumer. `unified().parse` accepts a Buffer
@@ -54,9 +80,33 @@ const markdownAdapter: FormatAdapter = {
       issues: [],
     };
   },
-  apply(doc, prepared) {
+  apply(doc, prepared, ctx) {
     if (prepared.format !== "md") return [];
     loadMarkdown(doc, prepared.content);
+    // Obsidian-style vaults are out of scope for v1 (#1753): `[[wikilinks]]`
+    // and `![[embeds]]` have no mdast representation here, so they survive as
+    // literal text and pick up a `\` escape on save. Warn once per file per
+    // open rather than pretending to support them — `notifyIssue`'s `"other"`
+    // arm dedups on `load-other:${dedupSource}`. This is `apply` rather than
+    // `parse` because only `ApplyContext` carries the file name.
+    //
+    // The `a[[i]]` false positive (R indexing, a nested Python list literal,
+    // in prose or inside a fence) is ACCEPTED, not engineered around: the
+    // notification is warn-only, changes no bytes and blocks nothing, whereas
+    // excluding fenced regions would mean a second scanner agreeing with the
+    // parser about fence boundaries.
+    if (containsWikilink(prepared.content)) {
+      return [
+        {
+          kind: "other",
+          error: undefined,
+          message:
+            `${ctx?.fileName ?? "This document"} contains [[wikilinks]]. Tandem does not ` +
+            `preserve them — they are saved as literal text. Obsidian-style vaults are not ` +
+            `supported in this release.`,
+        },
+      ];
+    }
     return [];
   },
   save(doc) {
@@ -71,7 +121,7 @@ const plaintextAdapter: FormatAdapter = {
   },
   apply(doc, prepared) {
     if (prepared.format !== "other") return [];
-    populateYDoc(doc, normalizeAndRecordLineEnding(doc, prepared.content));
+    populateYDoc(doc, stripAndRecordBom(doc, normalizeAndRecordLineEnding(doc, prepared.content)));
     return [];
   },
   save(doc) {
@@ -79,7 +129,7 @@ const plaintextAdapter: FormatAdapter = {
     // function is also the flat-offset coordinate system every annotation range
     // is expressed in (Critical Rule 5), and a `\r` there would shift every
     // offset past it. Only the disk-bound copy gets the file's own endings.
-    return restoreLineEndings(doc, extractText(doc));
+    return restoreBom(doc, restoreLineEndings(doc, extractText(doc)));
   },
 };
 
@@ -354,23 +404,44 @@ export function tempSiblingPath(filePath: string): string {
 }
 
 /**
+ * Shared body of `atomicWrite` / `atomicWriteBuffer`: write a temp sibling,
+ * then rename it over the target.
+ *
+ * On a failed write, unlink the partial temp before rethrowing — mirroring
+ * `renameWithRetry`'s own failure arm. A partial sibling in the USER's document
+ * directory is never reaped (the boot reaper sweeps the annotations + sessions
+ * dirs only), and on the buffer path it is the largest file Tandem writes.
+ * The unlink is swallowed: the write error is the one the caller must see, and
+ * the temp may legitimately not exist (an ENOSPC that failed before `open`).
+ * (#1850)
+ */
+async function writeTempThenRename(filePath: string, content: string | Buffer): Promise<void> {
+  const tempPath = tempSiblingPath(filePath);
+  try {
+    if (typeof content === "string") await fs.writeFile(tempPath, content, "utf-8");
+    else await fs.writeFile(tempPath, content);
+  } catch (err) {
+    await fs.unlink(tempPath).catch(() => {});
+    throw err;
+  }
+  await renameWithRetry(tempPath, filePath);
+}
+
+/**
  * Atomic file write: write to a temp file, then rename.
  * Prevents partial writes on crash. Retries the rename up to 3 times on
- * EPERM/EACCES (Windows file-handle contention) with exponential backoff.
+ * EPERM/EACCES (Windows file-handle contention) with exponential backoff, and
+ * cleans up the temp sibling on a failed write (#1850).
  */
-export async function atomicWrite(filePath: string, content: string): Promise<void> {
-  const tempPath = tempSiblingPath(filePath);
-  await fs.writeFile(tempPath, content, "utf-8");
-  await renameWithRetry(tempPath, filePath);
+export function atomicWrite(filePath: string, content: string): Promise<void> {
+  return writeTempThenRename(filePath, content);
 }
 
 /**
  * Atomic binary file write: write Buffer to a temp file, then rename.
  * Used for .docx (ZIP) output where UTF-8 encoding would corrupt binary data.
- * Shares the same EPERM/EACCES retry behaviour as `atomicWrite`.
+ * Shares the same retry and temp-cleanup behaviour as `atomicWrite`.
  */
-export async function atomicWriteBuffer(filePath: string, content: Buffer): Promise<void> {
-  const tempPath = tempSiblingPath(filePath);
-  await fs.writeFile(tempPath, content);
-  await renameWithRetry(tempPath, filePath);
+export function atomicWriteBuffer(filePath: string, content: Buffer): Promise<void> {
+  return writeTempThenRename(filePath, content);
 }

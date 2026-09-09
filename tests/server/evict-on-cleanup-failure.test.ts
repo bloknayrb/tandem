@@ -135,6 +135,7 @@ describe("evictPartialDocState (#616)", () => {
       },
       queueWrite,
       flush: async () => undefined,
+      cancelPendingWrite: () => {},
       clear: async () => undefined,
       isReadOnly: () => false,
       isDisabled: () => false,

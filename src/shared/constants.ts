@@ -342,6 +342,21 @@ export const Y_MAP_FOOTNOTE_BODIES = "footnoteBodies";
  */
 export const Y_MAP_LINE_ENDING = "lineEnding";
 /**
+ * Whether this document's file began with a UTF-8 BOM (U+FEFF) (#1823).
+ *
+ * Stripped before the parser sees the text and re-prepended at save, exactly
+ * like Y_MAP_LINE_ENDING. A BOM left in the parsed text becomes a character in
+ * the first text node and shifts EVERY flat offset by one — an annotation-
+ * coordinate bug, not a formatting one — which is why it is recorded
+ * off-fragment rather than carried in the body.
+ *
+ * Same inertness as Y_MAP_LINE_ENDING for the channel and durable-sync
+ * subsystems: there is no observer on per-document documentMeta. Not
+ * client-invisible, though — that map syncs to every connected browser over
+ * Hocuspocus, and the client reads `readOnly` / `fileName` / `format` from it.
+ */
+export const Y_MAP_BOM = "bom";
+/**
  * Per-document mirror of the server's authoritative unsaved-edits flag (#1447).
  * `true` while the Y.Doc body holds edits that are not yet on disk.
  *

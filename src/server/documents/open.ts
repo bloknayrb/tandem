@@ -81,6 +81,7 @@ import {
   Y_MAP_ANNOTATION_REPLIES,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AUTHORSHIP,
+  Y_MAP_BOM,
   Y_MAP_DOCUMENT_META,
   Y_MAP_EXTERNAL_CONFLICT,
   Y_MAP_FIDELITY_REPORT,
@@ -127,7 +128,7 @@ import {
   openDocument,
   openDocumentWhenReady,
 } from "./registry.js";
-import { wireFileWatcher } from "./watcher.js";
+import { reanchorAnnotations, wireFileWatcher } from "./watcher.js";
 
 /**
  * The flat JSON shape a successful open puts on the MCP and HTTP wire.
@@ -384,6 +385,15 @@ export async function openFromDisk(
         { id: existingId, filePath: resolved, format, readOnly, source: "file" },
         async () => {
           await wireAnnotationStore(existingId, doc, resolved);
+          // Since #1813 the envelope survives a force-open, so `loadAndMerge`
+          // above has just re-inserted every record VERBATIM: its pre-reload
+          // flat range, and a relRange anchored into the XmlFragment
+          // `clearAndReload` destroyed. Disk content differing from the
+          // in-memory doc is the whole REASON to force, so "the text moved" is
+          // this path's normal case, not its edge one — without this pass the
+          // surviving notes come back pinned to stale offsets and the durable
+          // observer writes that state back. Re-anchor before returning.
+          reanchorAnnotations(doc, resolved);
         },
       );
       ensureAutoSave();
@@ -925,11 +935,11 @@ async function abandonFallbackToDisk(
  * the PR body: the session record should win over the envelope for cloned
  * ids); not worse than the status quo, which had no anchor at all.
  *
- * `documentMeta` is MIRRORED, not copied-when-present, for exactly the three
+ * `documentMeta` is MIRRORED, not copied-when-present, for exactly the four
  * keys written only by an adapter import (`Y_MAP_FOOTNOTE_BODIES`,
- * `Y_MAP_FIDELITY_REPORT`, `Y_MAP_LINE_ENDING` — same inertness, no observer
- * on the server): set when the scratch has the key, `delete` when it does
- * not. The partial `applyUpdate` integrates all seven winner keys and the
+ * `Y_MAP_FIDELITY_REPORT`, `Y_MAP_LINE_ENDING`, `Y_MAP_BOM` — same inertness,
+ * no observer on the server): set when the scratch has the key, `delete` when
+ * it does not. The partial `applyUpdate` integrates all seven winner keys and the
  * evict never touches `documentMeta`, so a "copy when present" clone would
  * leave the WINNER's value live over the FALLBACK's fragment (for
  * `footnoteBodies` that is the export mismatch the mirror exists to
@@ -956,14 +966,14 @@ async function abandonFallbackToDisk(
  * origin-blind).
  *
  * documentMeta residue table (why neither this clone nor the disk path
- * strands a stale winner value — seven keys, four mechanisms, so nobody
+ * strands a stale winner value — eight keys, four mechanisms, so nobody
  * "simplifies" one away): `readOnly`/`format`/`documentId`/`fileName`/
  * `externalConflict` by `writeDocMeta`; `savedAtVersion` by
  * `initSavedBaseline` and then the explicit-save guard write; `dirtyState`
  * by `registerDirtyObserver`'s unconditional `publishDirty` (the heal
  * point — the only thing standing between this fix and a permanent false
- * unsaved-edits dot); `lineEnding`/`fidelityReport`/`footnoteBodies` by the
- * adapter import on the disk path or by this mirror on the fallback path.
+ * unsaved-edits dot); `lineEnding`/`bom`/`fidelityReport`/`footnoteBodies` by
+ * the adapter import on the disk path or by this mirror on the fallback path.
  * The partial state IS emitted before the throw (measured), so the clear is
  * what converges an attached client — not an optimisation to remove later.
  */
@@ -988,7 +998,12 @@ function cloneFallbackIntoDoc(doc: Y.Doc, scratch: Y.Doc, resolved: string): voi
     }
     const scratchMeta = scratch.getMap(Y_MAP_DOCUMENT_META);
     const liveMeta = doc.getMap(Y_MAP_DOCUMENT_META);
-    for (const key of [Y_MAP_FOOTNOTE_BODIES, Y_MAP_FIDELITY_REPORT, Y_MAP_LINE_ENDING] as const) {
+    for (const key of [
+      Y_MAP_FOOTNOTE_BODIES,
+      Y_MAP_FIDELITY_REPORT,
+      Y_MAP_LINE_ENDING,
+      Y_MAP_BOM,
+    ] as const) {
       if (scratchMeta.has(key)) liveMeta.set(key, scratchMeta.get(key));
       else liveMeta.delete(key);
     }

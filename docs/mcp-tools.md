@@ -61,7 +61,7 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `FILE_MODIFIED` | **`tandem_applyChanges` only.** The source file's mtime/size moved between the read and the write-back, so it refused to overwrite (`src/server/mcp/docx-apply.ts:305`). On `tandem_save` the same word is a *success* skip `reason`, never an error code -- see that tool's notes. |
 | `SOURCE_MISSING` | **`tandem_applyChanges` only.** The source file disappeared before the write-back (`src/server/mcp/docx-apply.ts:296`). Same `tandem_save` caveat as `FILE_MODIFIED`. |
 | `RELOAD_IN_PROGRESS` | A reload from disk is mid-flight; retry once it settles. |
-| `LICENSE_REQUIRED` | The license gate is active and restricted. Reads, plain `tandem_open`, saves and exports still work; content mutations do not. `tandem_open` with `force: true` **is** gated -- it runs `clearAndReload`, which wipes the durable annotation file. Never returned while the gate ships dark. |
+| `LICENSE_REQUIRED` | The license gate is active and restricted. Reads, plain `tandem_open`, saves and exports still work; content mutations do not. `tandem_open` with `force: true` **is** gated -- it runs `clearAndReload`, which discards the in-memory annotation, awareness and content maps and rebuilds the document from disk. Never returned while the gate ships dark. |
 | `NO_SUGGESTIONS` | `tandem_applyChanges` found no accepted suggestions to write. |
 | `BACKUP_FAILED` | `tandem_applyChanges` could not write its backup, so it refused to touch the original. |
 | `INVALID_NAME` | `tandem_rename` was given a name that is empty, path-separated, or otherwise unusable. |
@@ -113,7 +113,7 @@ Open a file in the Tandem editor. Returns a `documentId` for multi-document work
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `filePath` | string | yes | Path to the file to open. Absolute is what you should pass, but it is **not enforced**: the schema is a bare `z.string()` and `open.ts` calls `path.resolve(filePath)` (`src/server/documents/open.ts:678`), so a relative path silently resolves against the *server's* working directory rather than yours. There is no root confinement either ([#1666](https://github.com/bloknayrb/tandem/issues/1666), open). |
-| `force` | boolean | no | Force reload from disk even if already open. Clears annotations and session. |
+| `force` | boolean | no | Force reload from disk even if already open. Clears the in-memory annotations and the session; the durable annotation envelope survives and is re-merged on the same open, re-anchored where each record's `textSnapshot` still matches (#1813). |
 | `authoredBy` | `"claude"` | no | Pass when you wrote the file wholesale before opening it, to stamp Claude authorship across its content. Idempotent, and only ever stamps Claude — it cannot forge user attribution. |
 
 **Returns:**
@@ -147,7 +147,7 @@ tandem_open({ filePath: "C:\\Users\\bkolb\\Documents\\progress-report-feb.md" })
 - Opening a file that's already open switches to its tab (returns `alreadyOpen: true`).
 - **Auto-reload:** Open documents are automatically reloaded when the file changes on disk (e.g., Claude's Edit tool, `git pull`). Annotations are preserved. A toast notification appears in the editor.
 - **Exception — unsaved edits:** if the document has body edits that haven't reached disk, the reload is held and the editor raises a keep-vs-reload banner instead (#1238). Until the user answers it, every save path is blocked, including `tandem_save`, which returns `EXTERNAL_CONFLICT`. Note that `tandem_edit` marks a document dirty, so editing through Tandem and then through your own file-editing tool raises this banner rather than auto-reloading. A document that is read-only because the *user* asked for it (View Changelog, an explicit `readOnly` open) still reloads unconditionally — but a `.html`, read-only only because its format cannot be written back, gets the banner like any other dirty document (#1798). Its Y.Doc is the only copy of those edits, so reloading over them would destroy them.
-- Pass `force: true` to manually reload from disk. Clears annotations and session. Returns `forceReloaded: true`. Typically unnecessary now that auto-reload handles external changes.
+- Pass `force: true` to manually reload from disk. Clears the in-memory annotations and the session, then re-merges the durable envelope from disk (records whose `textSnapshot` no longer matches come back `degraded`, #1813). Returns `forceReloaded: true`. Typically unnecessary now that auto-reload handles external changes.
 - Multiple documents can be open simultaneously -- each gets its own tab.
 - If a session exists for this file (and the source hasn't changed), annotations are restored.
 
@@ -1317,7 +1317,7 @@ Open a file by its absolute path on disk. Equivalent to `tandem_open` but callab
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `filePath` | string | yes | Absolute path to the file |
-| `force` | boolean | no | Reload from disk even if already open (clears annotations + session). Gated by the license gate; plain open is not. |
+| `force` | boolean | no | Reload from disk even if already open (clears the in-memory annotations + session; the durable envelope survives and re-merges, #1813). Gated by the license gate; plain open is not. |
 | `readOnly` | boolean | no | Force read-only mode. Used by the View Changelog button. |
 
 **Response (200):**
@@ -1550,7 +1550,7 @@ Tandem's MCP tools each return a **single discrete result** — there is no part
 
 1. `tandem_edit` on a multi-paragraph document (verify the edit lands once, ranges resolve).
 2. `tandem_save` (verify a single save result, file written once).
-3. `tandem_open` with `force: true` (force-reload; verify content/annotations clear-and-repopulate in one result).
+3. `tandem_open` with `force: true` (force-reload; verify content/annotations clear-and-repopulate in one result, and that the durable envelope's records come back).
 4. Issue two tool calls back-to-back (e.g. `tandem_getOutline` then `tandem_edit`) and confirm responses are correctly correlated to their requests.
 
 Expected result: no behavioral change versus the pre-2.1.154 opt-in path. Record the observed CLI version and outcome on issue #1043 when run.

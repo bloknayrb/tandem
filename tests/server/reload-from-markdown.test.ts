@@ -72,6 +72,7 @@ import {
 } from "../../src/server/documents/watcher.js";
 import { docIdFromPath, extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
+import { handleGetDocumentRaw } from "../../src/server/mcp/routes/document-raw.js";
 import { anchoredRange } from "../../src/server/positions.js";
 import { isAutoSaveRunning, stopAutoSave } from "../../src/server/session/manager.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
@@ -187,14 +188,83 @@ describe("reloadDocumentFromMarkdown — round-trip + disk persistence", () => {
     expect(onDisk).not.toContain("Original.");
   });
 
-  it("clears all annotations on reload", async () => {
+  it("an annotation survives the source-view commit, re-merged from the envelope (#1813)", async () => {
+    // Inverted by decision C and RESTATED rather than deleted: a reload path
+    // silently losing annotations is still worth a spec, now stated the other
+    // way round. `clearAndReload` empties the Y.Map but FLUSHES the durable
+    // envelope instead of unlinking it, and `reload-family.ts` re-wires the
+    // store immediately — so `loadAndMerge` brings the record back. Here the
+    // annotated span is gone from the new content, so it comes back
+    // `degraded` (see force-open-envelope.test.ts) rather than re-anchored.
     const { id, doc } = await openMdFile("# Title\n\nThe quick brown fox.\n");
     seedAnnotation(doc, "brown");
     expect(doc.getMap(Y_MAP_ANNOTATIONS).size).toBe(1);
 
     await reloadDocumentFromMarkdown(id, "# Title\n\nA different sentence.\n");
 
-    expect(doc.getMap(Y_MAP_ANNOTATIONS).size).toBe(0);
+    expect(doc.getMap(Y_MAP_ANNOTATIONS).size).toBe(1);
+  });
+
+  it("re-anchors a surviving annotation whose text MOVED (#1813 review round 1)", async () => {
+    // Surviving the commit is only half of #1813. `loadAndMerge` re-inserts the
+    // record VERBATIM — its pre-commit flat range and a relRange anchored into
+    // the XmlFragment `clearAndReload` destroyed — and the durable observer then
+    // persists exactly that. Without the re-anchor pass the annotation comes
+    // back durably pinned to whatever text now sits at [from, to), and every
+    // reader (the client's decorations, `.docx` comment export,
+    // `tandem_getAnnotations`) reports the wrong span. Deleting a paragraph
+    // ABOVE the annotated one is the minimal shape that moves it.
+    //
+    // The sibling spec above asserts `size`, which passes with no re-anchor at
+    // all; this one asserts the resolved TEXT, which is the property that was
+    // silently wrong.
+    const { id, doc } = await openMdFile("# Title\n\nAlpha beta gamma.\n\nDelta epsilon.\n");
+    seedAnnotation(doc, "Delta epsilon");
+    const before = doc.getMap<Annotation>(Y_MAP_ANNOTATIONS).values().next().value as Annotation;
+    expect(extractText(doc).slice(before.range.from, before.range.to)).toBe("Delta epsilon");
+
+    await reloadDocumentFromMarkdown(id, "# Title\n\nDelta epsilon.\n");
+
+    const after = doc.getMap<Annotation>(Y_MAP_ANNOTATIONS).values().next().value as Annotation;
+    expect(after).toBeDefined();
+    // The control: the span really did move, so a spec that merely re-read the
+    // stored offsets could not pass by accident.
+    expect(after.range.from).not.toBe(before.range.from);
+    expect(extractText(doc).slice(after.range.from, after.range.to)).toBe(after.textSnapshot);
+  });
+
+  it("keeps the file's UTF-8 BOM across a source-view round trip (#1823 review round 1)", async () => {
+    // `saveMarkdown` re-attaches the BOM, and `GET /api/document/raw` used to
+    // serve it — invisible in the textarea, so a caret at offset 0 lands in
+    // FRONT of it. The committed string then no longer starts with a BOM,
+    // `stripAndRecordBom` records `false`, and the next save writes the file
+    // without the BOM it had, leaving a stray U+FEFF inside the body.
+    const BOM = "\uFEFF";
+    const { id, filePath } = await openMdFile(`${BOM}# Title\n\nBody.\n`);
+
+    const res = {
+      _json: undefined as unknown,
+      status() {
+        return this;
+      },
+      json(body: unknown) {
+        this._json = body;
+        return this;
+      },
+    };
+    handleGetDocumentRaw(
+      { socket: { remoteAddress: "127.0.0.1" }, query: { documentId: id } } as never,
+      res as never,
+    );
+    const served = (res._json as { markdown: string }).markdown;
+    expect(served.startsWith(BOM), "the source view was handed an invisible BOM").toBe(false);
+
+    await reloadDocumentFromMarkdown(id, `X${served}`);
+
+    const onDisk = await fs.readFile(filePath, "utf-8");
+    expect(onDisk.startsWith(BOM), "the commit dropped the file's BOM").toBe(true);
+    expect(onDisk.slice(1)).not.toContain(BOM);
+    expect(onDisk).toContain("X# Title");
   });
 });
 

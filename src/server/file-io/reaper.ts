@@ -44,8 +44,11 @@ export const ATOMIC_TEMP_RE = new RegExp(
  * Boot-time sweep for orphaned atomic-write temp files.
  *
  * `atomicWrite`/`atomicWriteBuffer` write a `.tandem-tmp-*` sibling then rename
- * it over the target. The error path unlinks the temp on terminal rename
- * failure, so failed writes never orphan. Orphans accumulate ONLY when the
+ * it over the target. BOTH error paths unlink the temp — a failing
+ * `fs.writeFile` (#1850) and a terminal rename failure — so failed writes never
+ * orphan. Until #1850 the write half did not, which is why a user's document
+ * directory (never swept here) could keep a partial sibling after an ENOSPC.
+ * Orphans accumulate ONLY when the
  * process is killed (SIGKILL: dev restarts, force-quits, crashes) in the window
  * between `fs.writeFile` and `fs.rename`. In-process cleanup cannot catch these;
  * a startup sweep is the only fix.

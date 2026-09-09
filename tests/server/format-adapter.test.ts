@@ -16,7 +16,7 @@ vi.mock("../../src/server/file-io/docx.js", async (importOriginal) => {
   };
 });
 
-import { getAdapter } from "../../src/server/file-io/index.js";
+import { containsWikilink, getAdapter } from "../../src/server/file-io/index.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import { off } from "../helpers/positions.js";
 
@@ -116,6 +116,70 @@ describe("MarkdownAdapter — two-phase parse/apply", () => {
     // Apply must NOT open its own transact — the populate should be one
     // atomic update (load-bearing for #609 large-doc client freeze).
     expect(transactCount).toBe(1);
+  });
+
+  // Obsidian vaults are out of scope for v1 (decision A, 2026-09-06): warn
+  // once per file, do not build wikilink support.
+  describe("wikilink warning (#1753)", () => {
+    it("returns one file-named `other` issue for a document containing [[…]]", async () => {
+      const adapter = getAdapter("md");
+      const doc = new Y.Doc();
+      const prepared = await adapter.parse("See [[Note]]\n");
+      const issues = adapter.apply(doc, prepared, { fileName: "vault-note.md" });
+      expect(issues).toHaveLength(1);
+      expect(issues[0].kind).toBe("other");
+      expect(issues[0].kind === "other" && issues[0].message).toContain("vault-note.md");
+      expect(issues[0].kind === "other" && issues[0].message).toContain("[[wikilinks]]");
+    });
+
+    it("returns no issue for a document with no wikilinks", async () => {
+      const adapter = getAdapter("md");
+      const doc = new Y.Doc();
+      expect(adapter.apply(doc, await adapter.parse("No brackets here\n"))).toEqual([]);
+    });
+
+    it("still matches embeds and aliases — the narrowed class must not lose them", async () => {
+      const adapter = getAdapter("md");
+      for (const input of ["![[image.png]]\n", "See [[note|alias]]\n"]) {
+        const doc = new Y.Doc();
+        expect(adapter.apply(doc, await adapter.parse(input))).toHaveLength(1);
+      }
+    });
+
+    it("scans an unterminated `[[` in linear time, not quadratically", () => {
+      // The probe runs synchronously inside the Y.Doc transact on every open
+      // and every watcher reload, so a backtracking class stalls Hocuspocus
+      // sync and every other open document for its whole duration. Admitting
+      // `[` into the negated class takes this input from 0.5 ms to 3.3 s.
+      //
+      // Timed on `containsWikilink` alone rather than through `apply`:
+      // `loadMarkdown` needs ~3 s on this same input all by itself, so an
+      // `apply`-level assertion measures remark and can never see the probe.
+      const pathological = "see [[note ".repeat(20000);
+      const started = performance.now();
+      expect(containsWikilink(pathological)).toBe(false);
+      // ~100x the healthy run, so this fails on the regression (3.3 s) and
+      // never on a loaded machine.
+      expect(performance.now() - started).toBeLessThan(50);
+    });
+
+    it("the probe still matches every wikilink shape the warning claims", () => {
+      for (const hit of ["a [[note]] b", "![[image.png]]", "[[note|alias]]", "a[[i]]"]) {
+        expect(containsWikilink(hit), hit).toBe(true);
+      }
+      for (const miss of ["no brackets", "[[unterminated", "[ [x] ]", "[[\n]]"]) {
+        expect(containsWikilink(miss), miss).toBe(false);
+      }
+    });
+
+    it("still escapes the wikilink on save — the warning replaces support, it is not a fix", async () => {
+      const adapter = getAdapter("md");
+      const doc = new Y.Doc();
+      adapter.apply(doc, await adapter.parse("See [[Note]]\n"));
+      // Pinning today's output keeps a "while I'm here" wikilink node from
+      // landing unreviewed: decision A says do not build one.
+      expect(adapter.save?.(doc)).toBe("See \\[[Note]]\n");
+    });
   });
 });
 

@@ -31,6 +31,7 @@ import {
 import {
   clearFileSyncContext,
   resetForTesting as fileSyncResetForTesting,
+  getFileSyncContext,
   reattachFileSyncObserver,
   setFileSyncContext,
 } from "./file-sync-registry.js";
@@ -42,7 +43,7 @@ import { makeRepliesObserver } from "./observers/replies.js";
 import type { BufferedSelection, TandemEvent } from "./types.js";
 import { generateEventId } from "./types.js";
 
-export { clearFileSyncContext, setFileSyncContext };
+export { clearFileSyncContext, getFileSyncContext, setFileSyncContext };
 
 type EventCallback = (event: TandemEvent) => void;
 

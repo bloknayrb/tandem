@@ -583,9 +583,13 @@ export async function loadAndMerge(
   //
   // Safe on force-reload: `clearAndReload` calls `clearFileSyncContext` (which
   // runs the observer cleanup's "close" phase → `tombstonesByDoc.delete(hash)`)
-  // AND `store.clear()` BEFORE this runs, so the in-memory ledger starts empty
-  // there and the union degenerates to the (empty) file seed — no stale
-  // tombstone can be resurrected across a legitimate reload.
+  // BEFORE this runs, so the IN-MEMORY ledger starts empty there and no stale
+  // ledger entry can be resurrected across a legitimate reload. Since #1813 the
+  // FILE seed is no longer empty on that path — `clearAndReload` flushes the
+  // envelope instead of unlinking it, so the union degenerates to whatever the
+  // flushed file carries, which is the pre-reload tombstone set. That is the
+  // point: the flush runs BEFORE the cleanup precisely so those tombstones are
+  // still in the ledger when the snapshot is taken.
   const seed = tombstonesByDoc.get(docHash) ?? new Map<string, TombstoneRecordV1>();
   // Track whether the pre-existing in-memory ledger carries tombstones the file
   // does not — those are migrated-forward deletes (rename) that must still be
