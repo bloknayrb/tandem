@@ -91,26 +91,24 @@ describe("createTauriKeychainBackend", () => {
   });
 
   it("set(): keyring PlatformFailure (Display string) → unavailable", async () => {
-    // Pinned to keyring v3.6.3's actual Display output in error.rs:64 —
-    // NOT the Debug variant name. PR 3c-tauri-keychain's review caught
-    // this exact mismatch.
+    // Pinned to keyring-core 1.0.0's actual Display output in
+    // `src/error.rs:81` — NOT the Debug variant name, and NOT keyring
+    // v3.6.3's wording, which the Dependabot 3 → 4 bump retired (#1761).
     const invoke = vi
       .fn()
-      .mockRejectedValue(
-        new Error("keychain-set: Platform secure storage failure: dbus not running"),
-      );
+      .mockRejectedValue(new Error("keychain-set: Platform failure: dbus not reachable"));
     const backend = createTauriKeychainBackend({ invoke });
     const result = await backend.set("ref-1", "secret");
     expect(result).toEqual({ status: "unavailable" });
   });
 
   it("set(): keyring NoStorageAccess (Display string) → unavailable", async () => {
-    // keyring v3.6.3 error.rs:65-67 — macOS Keychain locked, Linux dbus
-    // unreachable, etc.
+    // keyring-core 1.0.0 `src/error.rs:83` — macOS Keychain locked, Linux
+    // dbus unreachable, etc.
     const invoke = vi
       .fn()
       .mockRejectedValue(
-        new Error("keychain-set: Couldn't access platform secure storage: locked"),
+        new Error("keychain-get: Couldn't access platform storage: the keychain is locked"),
       );
     const backend = createTauriKeychainBackend({ invoke });
     const result = await backend.set("ref-1", "secret");

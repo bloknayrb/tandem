@@ -72,6 +72,17 @@ jobs:
         with:
           toolchain: stable
 
+      # The GitHub-hosted Ubuntu image ships a Google Chrome apt source that we do
+      # not use — Playwright downloads its own chromium binary, and `--with-deps`
+      # installs system libraries rather than Chrome. When that repo serves a
+      # Packages.gz whose hash disagrees with its Release file, `apt-get update`
+      # exits 100 and every job that touches apt dies in its dependency step,
+      # before any Tandem code runs. Dropping the source makes an outage in a
+      # repository we have no use for stop gating the merge queue.
+      - name: Drop the unused Google Chrome apt source
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo find /etc/apt/sources.list.d -maxdepth 1 -name 'google*' -print -delete
+
       - name: Install Linux system dependencies
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -378,6 +389,16 @@ jobs:
       - name: Monitor subcommand smoke test
         run: node scripts/ci/monitor-smoke.mjs
         timeout-minutes: 1
+
+      # The GitHub-hosted Ubuntu image ships a Google Chrome apt source that we do
+      # not use — Playwright downloads its own chromium binary, and `--with-deps`
+      # installs system libraries rather than Chrome. When that repo serves a
+      # Packages.gz whose hash disagrees with its Release file, `apt-get update`
+      # exits 100 and every job that touches apt dies in its dependency step,
+      # before any Tandem code runs. Dropping the source makes an outage in a
+      # repository we have no use for stop gating the merge queue.
+      - name: Drop the unused Google Chrome apt source
+        run: sudo find /etc/apt/sources.list.d -maxdepth 1 -name 'google*' -print -delete
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium

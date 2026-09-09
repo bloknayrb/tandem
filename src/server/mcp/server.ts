@@ -27,6 +27,7 @@ import { createIntegrationsStore } from "../integrations/storage.js";
 import { registerModelsRoutes } from "../models/api-routes.js";
 import { resolveAppDataDir, SESSION_DIR } from "../platform.js";
 import { runWithMcpContext } from "../sessions/context.js";
+import { isShuttingDown } from "../shutdown-state.js";
 import { registerAnnotationTools } from "./annotations.js";
 import {
   apiMiddleware,
@@ -722,6 +723,7 @@ export async function startMcpServerHttp(
       getPushLiveness: getPushConsumerLiveness,
       getDeliveryState: (externalConsumerCount) =>
         getDeliveryState(Date.now(), externalConsumerCount),
+      isShuttingDown,
     }),
   );
 

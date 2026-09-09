@@ -153,6 +153,13 @@ const OPEN_URL: &str = "http://127.0.0.1:3479/api/open";
 /// in src/shared/api-paths.ts.
 const LAUNCHER_NONCE_URL: &str = "http://127.0.0.1:3479/api/launcher/nonce";
 const LAUNCHER_START_URL: &str = "http://127.0.0.1:3479/api/launcher/start";
+/// Origin header for the launcher hops (#1763). Both routes call
+/// `assertOriginAllowlisted`, which fails CLOSED on a missing header, so a
+/// header-less reqwest call 403s at the *nonce* GET and the deferred launcher
+/// can never be released. This is the actual origin of the URLs being
+/// requested — a same-origin declaration rather than a claim to be the WebView,
+/// which also keeps the raw `"tauri.localhost"` literal out of Rust.
+const LOOPBACK_ORIGIN: &str = "http://127.0.0.1:3479";
 /// How long a presence signal waits for the sidecar before giving up and
 /// re-arming the latch. Generous: the user has already shown up, so a slow boot
 /// should still get Claude launched rather than silently skipping it.
@@ -670,24 +677,34 @@ fn handle_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
 /// route: fetch a single-use nonce, then spend it. Best-effort — a failure means
 /// the user simply doesn't get Claude auto-launched this session, which is the
 /// same outcome as before this feature existed, so it logs and moves on.
+/// Apply the headers both launcher hops need: the allowlisted `Origin` the
+/// server's CSRF gate requires, and `Authorization` when a token was minted.
+///
+/// A named function rather than a closure so a test can build a request through
+/// it without a live server (`RequestBuilder::build()` performs no I/O).
+fn launcher_request(
+    req: reqwest::RequestBuilder,
+    auth_token: Option<&str>,
+) -> reqwest::RequestBuilder {
+    let req = req.header("Origin", LOOPBACK_ORIGIN);
+    match auth_token {
+        Some(token) => req.header("Authorization", format!("Bearer {token}")),
+        None => req,
+    }
+}
+
 async fn request_launcher_start(
     client: &reqwest::Client,
     auth_token: Option<&str>,
+    nonce_url: &str,
+    start_url: &str,
 ) -> Result<(), String> {
-    let with_auth = |req: reqwest::RequestBuilder| match auth_token {
-        Some(token) => req.header("Authorization", format!("Bearer {token}")),
-        None => req,
-    };
-
-    let nonce_resp = with_auth(client.get(LAUNCHER_NONCE_URL))
+    let nonce_resp = launcher_request(client.get(nonce_url), auth_token)
         .send()
         .await
-        .map_err(|e| format!("GET {LAUNCHER_NONCE_URL} failed: {e}"))?;
+        .map_err(|e| format!("GET {nonce_url} failed: {e}"))?;
     if !nonce_resp.status().is_success() {
-        return Err(format!(
-            "GET {LAUNCHER_NONCE_URL} returned {}",
-            nonce_resp.status()
-        ));
+        return Err(format!("GET {nonce_url} returned {}", nonce_resp.status()));
     }
     let nonce: serde_json::Value = nonce_resp
         .json()
@@ -699,14 +716,14 @@ async fn request_launcher_start(
         .ok_or_else(|| "nonce body missing `nonce`".to_string())?;
 
     let body = serde_json::json!({ "nonce": nonce });
-    let resp = with_auth(client.post(LAUNCHER_START_URL).json(&body))
+    let resp = launcher_request(client.post(start_url).json(&body), auth_token)
         .send()
         .await
-        .map_err(|e| format!("POST {LAUNCHER_START_URL} failed: {e}"))?;
+        .map_err(|e| format!("POST {start_url} failed: {e}"))?;
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!("POST {LAUNCHER_START_URL} returned {status}: {text}"));
+        return Err(format!("POST {start_url} returned {status}: {text}"));
     }
     Ok(())
 }
@@ -753,7 +770,14 @@ fn note_user_presence(app: &tauri::AppHandle) {
         }
         let client = app.state::<reqwest::Client>().inner().clone();
         let token = best_effort_token("deferred launcher start");
-        if let Err(e) = request_launcher_start(&client, token.as_deref()).await {
+        if let Err(e) = request_launcher_start(
+            &client,
+            token.as_deref(),
+            LAUNCHER_NONCE_URL,
+            LAUNCHER_START_URL,
+        )
+        .await
+        {
             // Restore the latch so a later presence signal retries. The `swap`
             // above is a claim, not a commitment — without this a transient
             // failure would permanently strand the launcher.
@@ -3360,4 +3384,171 @@ mod classify_opened_url_tests {
         );
     }
 
+}
+
+#[cfg(test)]
+mod launcher_request_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    /// The cheap unit: the helper applies `Origin` unconditionally and
+    /// `Authorization` only when a token exists. `RequestBuilder::build()`
+    /// performs no I/O, so this needs no server.
+    ///
+    /// What it does NOT cover: whether `request_launcher_start`'s two hops
+    /// actually go through the helper. That is
+    /// `sends_loopback_origin_on_both_launcher_hops` below.
+    #[test]
+    fn launcher_request_applies_origin_and_auth() {
+        // A port change to one constant alone would turn the header into a
+        // cross-origin claim the server then 403s — today's failure with no
+        // new symptom.
+        assert!(
+            LAUNCHER_NONCE_URL.starts_with(LOOPBACK_ORIGIN),
+            "LAUNCHER_NONCE_URL ({LAUNCHER_NONCE_URL}) must be same-origin with {LOOPBACK_ORIGIN}"
+        );
+        assert!(
+            LAUNCHER_START_URL.starts_with(LOOPBACK_ORIGIN),
+            "LAUNCHER_START_URL ({LAUNCHER_START_URL}) must be same-origin with {LOOPBACK_ORIGIN}"
+        );
+
+        tauri::async_runtime::block_on(async {
+            let client = reqwest::Client::new();
+            for url in [LAUNCHER_NONCE_URL, LAUNCHER_START_URL] {
+                for post in [false, true] {
+                    let builder = if post { client.post(url) } else { client.get(url) };
+                    let authed = launcher_request(builder, Some("t"))
+                        .build()
+                        .expect("build with a token");
+                    assert_eq!(
+                        authed.headers().get("origin").and_then(|v| v.to_str().ok()),
+                        Some(LOOPBACK_ORIGIN),
+                        "Origin must be applied to {url}"
+                    );
+                    assert_eq!(
+                        authed
+                            .headers()
+                            .get("authorization")
+                            .and_then(|v| v.to_str().ok()),
+                        Some("Bearer t")
+                    );
+
+                    let builder = if post { client.post(url) } else { client.get(url) };
+                    // The login-launch shape: no token was minted, and the
+                    // Origin header must survive that arm.
+                    let anon = launcher_request(builder, None)
+                        .build()
+                        .expect("build without a token");
+                    assert_eq!(
+                        anon.headers().get("origin").and_then(|v| v.to_str().ok()),
+                        Some(LOOPBACK_ORIGIN),
+                        "Origin must be applied to {url} with no auth token"
+                    );
+                    assert!(anon.headers().get("authorization").is_none());
+                }
+            }
+        });
+    }
+
+    /// A recording loopback stand-in for `/api/launcher/nonce` +
+    /// `/api/launcher/start`: answers the nonce GET with a nonce, accepts the
+    /// POST, and yields both request heads.
+    ///
+    /// Each response closes its connection so the POST opens a fresh one and
+    /// the two heads stay separable. Accepts are deadlined, so a regression
+    /// that stops issuing a hop turns the test RED rather than hanging the
+    /// suite on `join()`.
+    fn stub_launcher_endpoints() -> (std::net::SocketAddr, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("local_addr");
+        listener.set_nonblocking(true).expect("set_nonblocking");
+        let server = std::thread::spawn(move || {
+            let nonce_body: &[u8] = b"{\"nonce\":\"n\"}";
+            let ok_body: &[u8] = b"{\"ok\":true}";
+            let mut heads: Vec<String> = Vec::new();
+            for body in [nonce_body, ok_body] {
+                let accept_by = std::time::Instant::now() + Duration::from_secs(5);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            if std::time::Instant::now() >= accept_by {
+                                heads.push("<no connection within 5s>".to_string());
+                                return heads;
+                            }
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(e) => {
+                            heads.push(format!("<accept failed: {e}>"));
+                            return heads;
+                        }
+                    }
+                };
+                stream.set_nonblocking(false).expect("blocking stream");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .expect("read timeout");
+                let mut buf = [0u8; 4096];
+                let n = match stream.read(&mut buf) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        heads.push(format!("<read failed: {e}>"));
+                        return heads;
+                    }
+                };
+                heads.push(String::from_utf8_lossy(&buf[..n]).to_string());
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.write_all(body);
+                let _ = stream.flush();
+            }
+            heads
+        });
+        (addr, server)
+    }
+
+    /// The discriminating test: drive the real `request_launcher_start` against
+    /// a recording stub and assert BOTH received requests carry the Origin.
+    ///
+    /// Kills wiring the header onto only one hop, and adding `launcher_request`
+    /// while leaving either `with_auth(...)` call in place — both of which pass
+    /// `launcher_request_applies_origin_and_auth`.
+    #[test]
+    fn sends_loopback_origin_on_both_launcher_hops() {
+        for auth_token in [None, Some("t")] {
+            let (addr, server) = stub_launcher_endpoints();
+            let nonce_url = format!("http://{addr}/api/launcher/nonce");
+            let start_url = format!("http://{addr}/api/launcher/start");
+
+            let result = tauri::async_runtime::block_on(async {
+                let client = reqwest::Client::new();
+                request_launcher_start(&client, auth_token, &nonce_url, &start_url).await
+            });
+            let heads = server.join().expect("stub thread must not panic");
+
+            result.expect("the launcher flow should succeed against the stub");
+            assert_eq!(heads.len(), 2, "both hops must reach the server: {heads:?}");
+            for head in &heads {
+                let lower = head.to_lowercase();
+                assert!(
+                    lower.contains(&format!("origin: {}", LOOPBACK_ORIGIN.to_lowercase())),
+                    "every launcher hop must carry the allowlisted Origin, got: {head}"
+                );
+                match auth_token {
+                    Some(token) => assert!(
+                        lower.contains(&format!("authorization: bearer {token}")),
+                        "expected a bearer token on this hop, got: {head}"
+                    ),
+                    None => assert!(
+                        !lower.contains("authorization:"),
+                        "no token was minted, so no Authorization header belongs here: {head}"
+                    ),
+                }
+            }
+        }
+    }
 }

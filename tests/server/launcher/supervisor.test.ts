@@ -13,8 +13,10 @@ import { createIntegrationsStore } from "../../../src/server/integrations/storag
 import {
   attachChildStreamErrorHandlers,
   buildClaudeArgs,
+  childEnv,
   createLineFramer,
   createSupervisor,
+  DESKTOP_ONLY_ENV_KEYS,
   homeCwd,
   makeStdinGoneHandler,
   RESUME_CONFIRM_MS,
@@ -1068,5 +1070,69 @@ describe("attachChildStreamErrorHandlers — a child-stdin write error is a chil
     expect(lines[callIdx].trim()).toBe("attachChildStreamErrorHandlers(spawned, onStdinGone);");
     // Even an exact text pin cannot see a thunk forged behind an alias; the
     // POSIX-only end-to-end Case 1 is what catches `() => true`.
+  });
+});
+
+/**
+ * #1787 review — the desktop's app-data root must not be inherited by the
+ * auto-launched session.
+ *
+ * `sidecar_env_pairs` (`src-tauri/src/sidecar.rs`) sets `TANDEM_APP_DATA_DIR`
+ * and `TANDEM_DATA_DIR` on the sidecar child, and `tauri-plugin-shell` never
+ * calls `env_clear()`, so with `env: process.env` here they reached the
+ * launched Claude Code and every command run inside it. An npm `tandem` in that
+ * session then resolved the DESKTOP's root, derived `flavor: "npm"` from argv,
+ * read a `"desktop"` stamp and exited 1 — while `refusalMessage` told the user
+ * to set a variable they never set and could not see. `tandem doctor` and
+ * `tandem setup --apply` read and wrote that root for the same reason.
+ *
+ * That is the same inheritance that already disqualified `TANDEM_TAURI_SIDECAR`
+ * as the provenance discriminant; the fix there was applied to the flavor but
+ * not to the directory it is compared against.
+ */
+describe("childEnv — the launched session must not inherit the desktop's app-data root", () => {
+  it("strips both desktop-only variables", () => {
+    const env = childEnv({
+      PATH: "/usr/bin",
+      TANDEM_APP_DATA_DIR: "/desktop/app-data",
+      TANDEM_DATA_DIR: "/desktop/app-data",
+    });
+    expect(env.TANDEM_APP_DATA_DIR).toBeUndefined();
+    expect(env.TANDEM_DATA_DIR).toBeUndefined();
+    expect(env.PATH).toBe("/usr/bin");
+  });
+
+  // A copy, never a mutation: this server still needs both for its own
+  // `resolveAppDataDir()`.
+  it("does not mutate the environment it was given", () => {
+    const base = { TANDEM_APP_DATA_DIR: "/desktop/app-data" };
+    childEnv(base);
+    expect(base.TANDEM_APP_DATA_DIR).toBe("/desktop/app-data");
+  });
+
+  /**
+   * `TANDEM_TAURI_SIDECAR` stays. Its consumers read it as a soft "am I under
+   * the desktop app" hint and nothing keys a destructive decision on it, so
+   * removing it here would be a behaviour change outside this fix — and the
+   * provenance decisions that matter already come from argv. Pinned so the list
+   * cannot quietly widen.
+   */
+  it("leaves TANDEM_TAURI_SIDECAR alone", () => {
+    expect(childEnv({ TANDEM_TAURI_SIDECAR: "1" }).TANDEM_TAURI_SIDECAR).toBe("1");
+    expect(DESKTOP_ONLY_ENV_KEYS).toEqual(["TANDEM_APP_DATA_DIR", "TANDEM_DATA_DIR"]);
+  });
+
+  /**
+   * The call-site pin. `childEnv` existing and passing its own unit test says
+   * nothing about the spawn using it, and `env: process.env` is exactly what
+   * a later edit would restore without noticing.
+   */
+  it("is what spawnOnce hands the child", () => {
+    const source = fs.readFileSync(
+      fileURLToPath(new URL("../../../src/server/launcher/supervisor.ts", import.meta.url)),
+      "utf8",
+    );
+    expect(source).toContain("env: childEnv(),");
+    expect(source).not.toContain("env: process.env,");
   });
 });

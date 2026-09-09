@@ -32,15 +32,38 @@ export interface HealthHandlerDeps {
    * detached consumer turns into a `waitingMs` that climbs for days.
    */
   getDeliveryState: (externalConsumerCount: number) => DeliveryState;
+  /**
+   * True once `shutdown()` has begun. Flips `status` from `"ok"` to
+   * `"shutting-down"` — see the note on that field below, and
+   * `server/shutdown-state.ts` for why it is the field and not the status code.
+   */
+  isShuttingDown: () => boolean;
 }
 
 /**
  * GET /health — public liveness, plus loopback-only diagnostics.
  *
- * Public: `status`, `version`, `transport`. Loopback-only: `hasSession`, `push`
- * and `delivery`.
+ * Public: `status`, `version`, `transport`. Loopback-only: `pid`, `hasSession`,
+ * `push` and `delivery`.
  *
- * All three gated fields are session-presence signals — whether an AI is attached,
+ * `status` is `"ok"` until `shutdown()` starts and `"shutting-down"` after, and
+ * the response stays a 200 in both states. That distinction is what stops a
+ * dying instance from refusing its own replacement (`probeTandemInstance`
+ * requires `"ok"`), while keeping the Tauri shell's `wait_for_server_gone`
+ * waiting for the real exit rather than hard-killing the flush. The full
+ * argument is in `server/shutdown-state.ts`; do not "simplify" this into a
+ * non-2xx.
+ *
+ * `pid` is the process identity the Tauri shell's health poll and its
+ * `/api/shutdown` target check compare against the child it spawned (#1812) —
+ * without it a 2xx from a *previous* process still holding the port reads as
+ * "our sidecar is healthy". It is loopback-only for the same reason as the
+ * rest: it is an identity signal, withheld from LAN callers. Do NOT publish
+ * `generationId` here as an alternative — it is pinned as the Hocuspocus
+ * provider's auth token, so that would hand a connection credential to any
+ * loopback page.
+ *
+ * The other three gated fields are session-presence signals — whether an AI is attached,
  * whether a real-time consumer is receiving, and whether a model has polled since
  * something was handed out — so they are withheld from LAN callers for the same
  * reason. `delivery` is the most sensitive of them, not the least: its counters
@@ -83,12 +106,15 @@ export interface HealthHandlerDeps {
 export function makeHealthHandler(deps: HealthHandlerDeps): Handler {
   return (req: Request, res: Response): void => {
     const body: Record<string, unknown> = {
-      status: "ok",
+      status: deps.isShuttingDown() ? "shutting-down" : "ok",
       version: deps.version,
       transport: "http",
     };
 
     if (isLoopback(req.socket.remoteAddress)) {
+      // Read `process.pid` directly rather than through a dep: there is exactly
+      // one possible value for it in this process.
+      body.pid = process.pid;
       const subscribers = deps.getSubscriberCount();
       body.hasSession = deps.hasSession();
       body.push = {

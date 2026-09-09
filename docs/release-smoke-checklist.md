@@ -214,13 +214,16 @@ Three things this run established:
   report as skip-shaped **passes**; a `[FAIL]` on either is a regression. The instruction that stood
   here before #1470 told the operator to expect two failing rows and tick the box, which
   would now train them straight past a real fault. Measured here: 16 PASS, 6 WARN, 0 FAIL, exit 0.
-- **§4 cannot run while the desktop app is running, and the failure is quiet.** Both
-  bind 3478/3479 and contend on the annotation-store lock; the npm server retries for
-  30s and gives up rather than displacing the app. Correct behaviour, but it means §4
-  has to be run with Tandem quit — and killing the `tandem` wrapper does **not** kill
-  the node child it spawned, which will then take the ports the moment the app releases
-  them. Confirm with `Get-Process node-sidecar` and `Get-NetTCPConnection -LocalPort
-  3478,3479 -State Listen` before and after.
+- **§4 cannot run while the desktop app is running.** Both bind 3478/3479. The
+  certification that stood here — "the npm server retries for 30s and gives up rather
+  than displacing the app. Correct behaviour" — **is withdrawn: it never matched the
+  code.** The store-lock retry ran first and then `freePort` SIGKILLed the desktop's
+  sidecar anyway (#1758). Since that fix §4 identifies the holder over `/health` first
+  and **refuses with a named message**, killing nothing — so the section still has to be
+  run with Tandem quit, but the failure is now loud instead of destructive. Killing the
+  `tandem` wrapper does **not** kill the node child it spawned, which will then take the
+  ports the moment the app releases them. Confirm with `Get-Process node-sidecar` and
+  `Get-NetTCPConnection -LocalPort 3478,3479 -State Listen` before and after.
 - **The orphan check has a positive identity, not just a name.** The sidecar is
   `node-sidecar` (Tauri `externalBin`), distinct from the several `node.exe` under
   `C:\Program Files\nodejs` that Claude Code and MCP servers keep alive regardless.

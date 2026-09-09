@@ -487,6 +487,47 @@ export function buildClaudeArgs(plan: { sessionId: string; resuming: boolean }):
 }
 
 /**
+ * The desktop-only variables that must NOT reach the auto-launched session
+ * (#1787 review).
+ *
+ * `sidecar.rs`'s `sidecar_env_pairs` sets both on the sidecar child, and
+ * `tauri-plugin-shell` never calls `env_clear()`, so without this they reach
+ * the launched Claude Code and every command run inside it. That is the same
+ * inheritance that makes `TANDEM_TAURI_SIDECAR` unusable as a provenance
+ * discriminant (see `isTauriSidecar` in `platform.ts`) — but where that was
+ * fixed by deriving `flavor` from argv, the DIRECTORY the flavor is compared
+ * against still came from the inherited variable, so an npm `tandem` in an
+ * auto-launched session resolved the DESKTOP's app-data root, derived
+ * `flavor: "npm"`, read a `"desktop"` stamp there and `process.exit(1)` — while
+ * `refusalMessage` told the user to "Set TANDEM_APP_DATA_DIR", a variable they
+ * never set and cannot see. `tandem doctor` and `tandem setup --apply` read and
+ * wrote that root for the same reason.
+ *
+ * `TANDEM_DATA_DIR` (the resource/sample base) goes with it: it takes the same
+ * value from the same call and has the same inheritance.
+ *
+ * **`TANDEM_TAURI_SIDECAR` is deliberately NOT in this list.** Its existing
+ * consumers (`integrations/apply.ts`, `cli/doctor.ts`) read it as a soft "am I
+ * under the desktop app" hint and nothing keys a destructive decision on it;
+ * removing it here would be a behaviour change outside this fix, and the
+ * provenance decisions that matter already use argv.
+ */
+export const DESKTOP_ONLY_ENV_KEYS = ["TANDEM_APP_DATA_DIR", "TANDEM_DATA_DIR"] as const;
+
+/**
+ * The environment the launched Claude Code is spawned with: ours, minus
+ * {@link DESKTOP_ONLY_ENV_KEYS}.
+ *
+ * A copy, never a mutation of `process.env` — this server still needs both
+ * variables for its own `resolveAppDataDir()`.
+ */
+export function childEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
+  for (const key of DESKTOP_ONLY_ENV_KEYS) delete env[key];
+  return env;
+}
+
+/**
  * Newline framer for a child's stdout/stderr.
  *
  * `data` events carry arbitrary byte-range chunks, not lines: a single
@@ -909,7 +950,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     const spawned = spawn(reaper, reaperArgs, {
       cwd: plan.cwd,
       stdio: ["pipe", "pipe", "pipe"],
-      env: process.env,
+      // NOT `process.env` — see `childEnv`. The desktop's app-data root must
+      // not reach a session whose own `tandem` would then claim it.
+      env: childEnv(),
       windowsHide: true,
     });
     child = spawned;
