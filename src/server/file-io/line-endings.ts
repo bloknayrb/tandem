@@ -1,8 +1,9 @@
 import type * as Y from "yjs";
-import { Y_MAP_DOCUMENT_META, Y_MAP_LINE_ENDING } from "../../shared/constants.js";
+import { Y_MAP_BOM, Y_MAP_DOCUMENT_META, Y_MAP_LINE_ENDING } from "../../shared/constants.js";
 
 /**
- * Line-ending preservation (#1448 W2).
+ * Source-encoding facts that must survive a round trip: line endings (#1448 W2)
+ * and the UTF-8 BOM (#1823).
  *
  * A CRLF file previously came back MIXED, which is worse than either pure form:
  * `remark-stringify` joins blocks with `\n` while an intra-paragraph soft wrap
@@ -65,4 +66,36 @@ export function restoreLineEndings(doc: Y.Doc, text: string): string {
   const stored = doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_LINE_ENDING);
   if (stored !== "\r\n" && stored !== "\r") return text;
   return toLf(text).replace(/\n/g, stored);
+}
+
+/**
+ * Record whether `text` starts with a UTF-8 BOM and return it stripped (#1823).
+ *
+ * Strip BEFORE the parser, restore AFTER the serializer. A U+FEFF left in the
+ * parsed text lands as a character in the first text node and shifts every flat
+ * offset — the annotation coordinate system — by one.
+ *
+ * Writes a Y.Map, so it must run inside the caller's already-origin-tagged
+ * transact, exactly like `normalizeAndRecordLineEnding`; it opens none of its
+ * own (a raw `doc.transact` in `src/` is forbidden, Critical Rule 2).
+ */
+export function stripAndRecordBom(doc: Y.Doc, text: string): string {
+  const has = text.charCodeAt(0) === 0xfeff;
+  doc.getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_BOM, has);
+  return has ? text.slice(1) : text;
+}
+
+/**
+ * Re-prepend the doc's recorded BOM to freshly serialized output.
+ *
+ * Runs after `restoreLineEndings` as a convention — it survives a future
+ * `restoreLineEndings` that normalizes more than `
+`. It is not a tested
+ * invariant: a BOM contains no `
+` or `
+`, so the two compositions are
+ * byte-identical today.
+ */
+export function restoreBom(doc: Y.Doc, text: string): string {
+  return doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_BOM) === true ? `﻿${text}` : text;
 }

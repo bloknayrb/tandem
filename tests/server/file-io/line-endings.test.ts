@@ -6,6 +6,8 @@
  * test would pass on the wrong input. Every input here is synthesized.
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { getAdapter } from "../../../src/server/file-io/index.js";
@@ -16,6 +18,9 @@ import {
 } from "../../../src/server/file-io/line-endings.js";
 import { loadMarkdown, saveMarkdown } from "../../../src/server/file-io/markdown.js";
 import { extractText } from "../../../src/server/mcp/document-model.js";
+import { anchoredRange } from "../../../src/server/positions.js";
+import { Y_MAP_BOM, Y_MAP_DOCUMENT_META } from "../../../src/shared/constants.js";
+import { toFlatOffset } from "../../../src/shared/positions/types.js";
 
 describe("detectLineEnding", () => {
   it("reads a pure CRLF file as CRLF", () => {
@@ -161,5 +166,106 @@ describe("markdown documents keep a lone-CR ending too", () => {
     } finally {
       doc.destroy();
     }
+  });
+});
+
+/**
+ * UTF-8 BOM preservation (#1823). Synthesized in the spec, never a fixture:
+ * `.gitattributes` normalization makes a committed BOM fixture unreliable in
+ * exactly the way this file's header already documents for CRLF.
+ */
+describe("markdown documents keep (or keep out) a UTF-8 BOM", () => {
+  const BOM = "\uFEFF";
+
+  function roundTrip(input: string): { out: string; doc: Y.Doc } {
+    const doc = new Y.Doc();
+    loadMarkdown(doc, input);
+    return { out: saveMarkdown(doc), doc };
+  }
+
+  it("a BOM survives a round trip", () => {
+    const input = `${BOM}# Title\n`;
+    expect(roundTrip(input).out).toBe(input);
+  });
+
+  it("a file without a BOM does not gain one", () => {
+    // Kills a `restoreBom` that reads a missing key as truthy.
+    expect(roundTrip("# Title\n").out).toBe("# Title\n");
+  });
+
+  it("a BOM and CRLF endings survive together — a Windows editor's .md", () => {
+    const input = `${BOM}# Title\r\n\r\nBody.\r\n`;
+    expect(roundTrip(input).out).toBe(input);
+  });
+
+  it("the BOM lands OFF the body and shifts no offset", () => {
+    // The discriminating spec. A "fix" that kept the BOM in the doc and
+    // stripped it at save time passes all three above and silently shifts
+    // every annotation offset by one.
+    const withBom = roundTrip(`${BOM}# Title\n\nBody.\n`);
+    const without = roundTrip("# Title\n\nBody.\n");
+    expect(withBom.doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_BOM)).toBe(true);
+    expect(without.doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_BOM)).toBe(false);
+    const flat = extractText(withBom.doc);
+    expect(flat.startsWith("#")).toBe(true);
+    expect(flat).toBe(extractText(without.doc));
+
+    const range = anchoredRange(withBom.doc, toFlatOffset(2), toFlatOffset(7), "Title");
+    const twin = anchoredRange(without.doc, toFlatOffset(2), toFlatOffset(7), "Title");
+    expect(range.ok).toBe(true);
+    expect(range.ok && range.range).toEqual(twin.ok && twin.range);
+  });
+});
+
+describe("plaintext documents keep (or keep out) a UTF-8 BOM", () => {
+  // A second call-site pair: a fix applied only to `markdown.ts` passes every
+  // markdown spec above and drops the BOM from every `.txt` / `.html`.
+  const BOM = "\uFEFF";
+  const adapter = getAdapter("other");
+
+  async function roundTrip(input: string): Promise<{ out: string; doc: Y.Doc }> {
+    const doc = new Y.Doc();
+    adapter.apply(doc, await adapter.parse(input));
+    return { out: adapter.save?.(doc) ?? "", doc };
+  }
+
+  it("a BOM survives", async () => {
+    expect((await roundTrip(`${BOM}one\ntwo`)).out).toBe(`${BOM}one\ntwo`);
+  });
+
+  it("a file without a BOM does not gain one", async () => {
+    expect((await roundTrip("one\ntwo")).out).toBe("one\ntwo");
+  });
+
+  it("the BOM lands off the body and shifts no offset", async () => {
+    const withBom = await roundTrip(`${BOM}one\ntwo`);
+    const without = await roundTrip("one\ntwo");
+    expect(withBom.doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_BOM)).toBe(true);
+    expect(extractText(withBom.doc)).toBe(extractText(without.doc));
+    expect(extractText(withBom.doc).startsWith("one")).toBe(true);
+  });
+});
+
+describe("the session-restore fallback mirror carries `bom` (#1823)", () => {
+  it("`bom` is in the mirrored key set, alongside the other adapter-written keys", () => {
+    // `cloneFallbackIntoDoc` set/deletes exactly the adapter-written
+    // `documentMeta` keys, precisely so a copy-when-present clone cannot leave
+    // the WINNER's value live over the FALLBACK's fragment. A `bom` missing
+    // there writes a U+FEFF into a file that never had one — or drops a real
+    // one — and nothing at the loadMarkdown/saveMarkdown level can see it.
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../../../src/server/documents/open.ts"),
+      "utf-8",
+    );
+    const block =
+      /for \(const key of \[([^\]]*)\] as const\) \{\s*if \(scratchMeta\.has\(key\)\)/.exec(src);
+    expect(block).not.toBeNull();
+    const mirrored = (block?.[1] ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    expect(new Set(mirrored)).toEqual(
+      new Set(["Y_MAP_FOOTNOTE_BODIES", "Y_MAP_FIDELITY_REPORT", "Y_MAP_LINE_ENDING", "Y_MAP_BOM"]),
+    );
   });
 });

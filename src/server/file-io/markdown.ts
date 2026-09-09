@@ -6,7 +6,12 @@ import remarkStringify from "remark-stringify";
 import { unified } from "unified";
 import { visit } from "unist-util-visit";
 import * as Y from "yjs";
-import { normalizeAndRecordLineEnding, restoreLineEndings } from "./line-endings.js";
+import {
+  normalizeAndRecordLineEnding,
+  restoreBom,
+  restoreLineEndings,
+  stripAndRecordBom,
+} from "./line-endings.js";
 import { mdastToYDoc, yDocToMdast } from "./mdast-ydoc.js";
 
 /**
@@ -78,13 +83,15 @@ const stringifyOptions = {
  * recorded on the doc for `saveMarkdown` to restore — see `line-endings.ts`.
  */
 export function loadMarkdown(doc: Y.Doc, markdown: string): void {
-  const tree = mdParser.parse(normalizeAndRecordLineEnding(doc, markdown)) as Root;
+  const tree = mdParser.parse(
+    stripAndRecordBom(doc, normalizeAndRecordLineEnding(doc, markdown)),
+  ) as Root;
   mdastToYDoc(doc, tree);
 }
 
 /** Serialize a Y.Doc's XmlFragment back to markdown, in the doc's own endings. */
 export function saveMarkdown(doc: Y.Doc): string {
-  return restoreLineEndings(doc, serializeMdast(yDocToMdast(doc)));
+  return restoreBom(doc, restoreLineEndings(doc, serializeMdast(yDocToMdast(doc))));
 }
 
 /**

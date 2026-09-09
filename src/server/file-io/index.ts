@@ -28,7 +28,12 @@ import {
   structuralLossLines,
 } from "./docx-lost-features.js";
 import { assertDocxWithinSizeLimits } from "./docx-size-gate.js";
-import { normalizeAndRecordLineEnding, restoreLineEndings } from "./line-endings.js";
+import {
+  normalizeAndRecordLineEnding,
+  restoreBom,
+  restoreLineEndings,
+  stripAndRecordBom,
+} from "./line-endings.js";
 import { loadMarkdown, saveMarkdown } from "./markdown.js";
 import type { FormatAdapter, LoadIssue, Prepared } from "./types.js";
 
@@ -95,7 +100,7 @@ const plaintextAdapter: FormatAdapter = {
   },
   apply(doc, prepared) {
     if (prepared.format !== "other") return [];
-    populateYDoc(doc, normalizeAndRecordLineEnding(doc, prepared.content));
+    populateYDoc(doc, stripAndRecordBom(doc, normalizeAndRecordLineEnding(doc, prepared.content)));
     return [];
   },
   save(doc) {
@@ -103,7 +108,7 @@ const plaintextAdapter: FormatAdapter = {
     // function is also the flat-offset coordinate system every annotation range
     // is expressed in (Critical Rule 5), and a `\r` there would shift every
     // offset past it. Only the disk-bound copy gets the file's own endings.
-    return restoreLineEndings(doc, extractText(doc));
+    return restoreBom(doc, restoreLineEndings(doc, extractText(doc)));
   },
 };
 
