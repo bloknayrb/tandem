@@ -52,10 +52,6 @@ describe("withTypingPresence", () => {
 
   beforeEach(() => {
     doc = getOrCreateDocument(TEST_DOC);
-    // `seedRawAnnotation` anchors [0,5) through `anchoredRange` and THROWS on an
-    // empty doc, so the doc must carry text before any raw seed. The local
-    // `seedAnnotation` writes a literal `{from: 0, to: 5}` and never needed it.
-    populateYDoc(doc, "Hello world");
     addDoc(TEST_DOC, {
       id: TEST_DOC,
       filePath: "/tmp/test.md",
@@ -130,6 +126,12 @@ describe("withTypingPresence", () => {
     // once `sanitizeAnnotation` normalizes it, so a guard reading the RAW type
     // let its id through. Seeded via the shared raw helper — the local
     // `seedAnnotation` is typed `Annotation["type"]` and cannot express `flag`.
+    //
+    // `seedRawAnnotation` anchors [0,5) through `anchoredRange` and THROWS on an
+    // empty doc, so the doc must carry text first. Scoped to this spec: the
+    // local `seedAnnotation` writes a literal `{from: 0, to: 5}` and the other
+    // specs in this file need no content.
+    populateYDoc(doc, "Hello world");
     seedRawAnnotation(doc.getMap(Y_MAP_ANNOTATIONS), doc, "ann_flag", { type: "flag" });
     const safeId = sanitizeAnnotationIdForPresence(TEST_DOC, "ann_flag", Y_MAP_ANNOTATIONS);
     expect(safeId).toBeUndefined();
