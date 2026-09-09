@@ -32,7 +32,7 @@ No Y.Doc write is added (the guard is read-only; `withTypingPresence`'s own writ
 
 `tests/server/typing-presence.test.ts`, beside the existing note case:
 
-1. **The discriminator.** Seed a record stored as `{ type: "flag" }` and assert `sanitizeAnnotationIdForPresence` returns `undefined`. Red on `origin/master`, green after — it is the only thing that kills the raw read (a `type: "note"` seed stays green under the bug). Seed it via the shared `seedRawAnnotation` (`tests/helpers/ydoc-factory.ts:116`), whose `extra` is `Record<string, unknown>` and needs no cast; the file's local `seedAnnotation` is typed `Annotation["type"]` and cannot express `flag` — do **not** widen and cast it, and leave the well-formed rows on it.
+1. **The discriminator.** Seed a record stored as `{ type: "flag" }` and assert `sanitizeAnnotationIdForPresence` returns `undefined`. Red on `origin/master`, green after — it is the only thing that kills the raw read (a `type: "note"` seed stays green under the bug). Seed it via the shared `seedRawAnnotation` (`tests/helpers/ydoc-factory.ts:116`), whose `extra` is `Record<string, unknown>` and needs no cast; the file's local `seedAnnotation` is typed `Annotation["type"]` and cannot express `flag` — do **not** widen and cast it, and leave the well-formed rows on it. **`seedRawAnnotation` anchors `[0,5)` via `rangeOf` and THROWS (`anchoredRange failed in test helper`) on an empty doc**, and this suite's `doc` is a bare `getOrCreateDocument(TEST_DOC)` that is never populated — so `beforeEach` must call `populateYDoc(doc, "Hello world")` (import from `../../src/server/mcp/document.js`) before any raw seed. The local `seedAnnotation` never needed it because it writes a literal `{from: 0, to: 5}`; `sanitizeAnnotationIdForPresence` reads only `ann.type`, so the CRDT anchor buys nothing here beyond making the shared helper usable.
 2. **Positive control.** Add a `highlight` row asserting the id IS returned, framed as "a non-note type is broadcast" so an over-narrowing to `type === "comment"` dies. An in-test comment must say this is not a pin that a private highlight *should* broadcast — a later `isClaudeFacing` tightening is expected to change this row.
 
 Run: `npx vitest run tests/server/typing-presence.test.ts tests/server/adr027-note-write-guards.test.ts`, plus `npm run typecheck`.
@@ -57,3 +57,9 @@ Removed, not repaired:
 - Both rounds of prior review-correction prose (~30 lines), which restated findings already folded into the text.
 
 No blocking finding was outstanding against this spec; nothing was refused.
+
+## Review corrections (post-cut)
+
+**Adopted**
+
+- **Test row 1 was unexecutable as written.** `seedRawAnnotation` (`tests/helpers/ydoc-factory.ts:116-133`) eagerly evaluates `range: rangeOf(0, 5, doc).range`, and `rangeOf` (`:99-103`) throws `Error("anchoredRange failed in test helper")` when `anchoredRange` fails. `tests/server/typing-presence.test.ts:50` takes its doc from `getOrCreateDocument(TEST_DOC)` — `provider.ts` hands back a bare `new Y.Doc()` — and never populates it, so `anchoredRange(doc, 0, 5)` is out of bounds. Measured on this worktree: a probe seeding through `seedRawAnnotation` on that doc threw; the same probe after `populateYDoc(doc, "Hello world")` passed and confirmed the stored record reads `type: "flag"` while `sanitizeAnnotation(raw, () => {}).type === "note"` — the exact discriminator row 1 needs. Row 1 now carries the `populateYDoc` precondition. The prohibition on widening-and-casting the local `seedAnnotation` is unchanged: without the precondition stated, the only repair left open to the builder was seeding a well-formed `note`, which is green on `origin/master` and pins nothing.
