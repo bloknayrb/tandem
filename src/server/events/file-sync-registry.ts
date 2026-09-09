@@ -75,6 +75,23 @@ export function setFileSyncContext(
 }
 
 /**
+ * Read the file-sync context for a document WITHOUT disposing anything.
+ *
+ * Same `{ store, docHash }` shape `clearFileSyncContext` returns. Exists for
+ * the force-open / source-view teardown (#1813), which must flush the pending
+ * annotation write while the observer is still attached and the per-doc
+ * tombstone ledger is still populated — i.e. BEFORE the cleanup — and then
+ * detach.
+ */
+export function getFileSyncContext(
+  docName: string,
+): { store: DocStore; docHash: string } | undefined {
+  const entry = fileSyncContexts.get(docName);
+  if (!entry) return undefined;
+  return { store: entry.ctx.store, docHash: entry.ctx.docHash };
+}
+
+/**
  * Drop the file-sync context for a document (on close or force-reload prep).
  * Returns the dropped `{ store, docHash }` so callers can flush/clear the
  * durable store without recomputing the hash or minting a transient handle.

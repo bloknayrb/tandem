@@ -105,8 +105,10 @@ export async function wireAnnotationStore(
     // is the one loadAndMerge picks up. Gating on "no existing envelope"
     // guarantees recovery never steals from a live envelope.
     //
-    // Only enabled for the normal-open path. Force-reload (clearAndReload)
-    // deliberately clears the envelope and must NOT resurrect a stale orphan;
+    // Only enabled for the normal-open path: recovery is a FIRST-OPEN-only
+    // heuristic, and a force-reload is a reload of an already-open document
+    // that has its own envelope (kept since #1813 — clearAndReload no longer
+    // unlinks it), so an orphan match there would be a stale one.
     // upload:// recovery is deferred (see rename-recovery.ts header).
     if (opts?.allowRecovery && !(await annotationFileExists(hash))) {
       await recoverRenamedEnvelope(doc, hash, filePath);

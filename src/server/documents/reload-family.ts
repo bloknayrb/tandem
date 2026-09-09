@@ -146,8 +146,10 @@ export async function reloadDocumentFromMarkdown(id: string, markdown: string): 
       markCleanAfter: false,
       conflictGuard: { raw: rawConflictBeforeCommit },
     });
-    // File-source docs re-wire the durable annotation store (clearAndReload
-    // wiped it) and persist the new markdown to disk immediately. Scratchpads
+    // File-source docs re-wire the durable annotation store and persist the new
+    // markdown to disk immediately. The re-wire's `loadAndMerge` is what brings
+    // the surviving envelope back into the repopulated Y.Doc, each record
+    // re-anchored by `refreshRange` (#1813). Scratchpads
     // (source: "upload") have no durable store and no disk file — skip both.
     if (existing.source === "file") {
       await wireAnnotationStore(id, doc, existing.filePath);

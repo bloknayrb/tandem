@@ -72,7 +72,7 @@ const TOOL_GATES: ToolGate[] = [
   {
     name: "tandem_open",
     gate: "ungated",
-    why: "stays on withErrorBoundary so PLAIN open is the read/export escape hatch — but it carries an IN-HANDLER gate on the `force === true` sub-path (which runs clearAndReload → wipes the durable annotation store). The wrapper-based regex below can't see that sub-path gate; it's covered behaviorally in license-force-open-gate.test.ts (#1116 H1)",
+    why: "stays on withErrorBoundary so PLAIN open is the read/export escape hatch — but it carries an IN-HANDLER gate on the `force === true` sub-path (which runs clearAndReload → discards the in-memory annotation, awareness and content maps and rebuilds the document from disk). The wrapper-based regex below can't see that sub-path gate; it's covered behaviorally in license-force-open-gate.test.ts (#1116 H1)",
   },
   { name: "tandem_getAnnotations", gate: "ungated", why: "read" },
   { name: "tandem_getTextContent", gate: "ungated", why: "read" },

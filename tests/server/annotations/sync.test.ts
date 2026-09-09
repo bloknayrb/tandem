@@ -1042,8 +1042,10 @@ describe("loadAndMerge — rename tombstone union (#1040)", () => {
   });
 
   // Force-reload safety: clearAndReload clears the in-memory ledger (via
-  // clearFileSyncContext's "close" phase -> tombstonesByDoc.delete) AND the store
-  // BEFORE loadAndMerge runs, so the union degenerates to the (empty) file seed.
+  // clearFileSyncContext's "close" phase -> tombstonesByDoc.delete) BEFORE
+  // loadAndMerge runs, so the union degenerates to the file seed. (Since #1813
+  // the envelope itself survives the reload — only the in-memory half is
+  // emptied — which is what this spec models: the file is the authority.)
   // A stale ledger entry must NOT survive a legitimate reload to eat a freshly
   // resurrected annotation. We emulate that ordering: seed a stale tombstone,
   // clear the ledger (migrateTombstoneLedger from an empty source is a no-op; the

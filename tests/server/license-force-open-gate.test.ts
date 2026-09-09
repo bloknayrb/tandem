@@ -6,8 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * #1116 H1: the DESTRUCTIVE force-reload sub-path of open must be license-gated
  * on BOTH transports (MCP `tandem_open` + HTTP `/api/open`), while PLAIN open
  * stays ungated (the read/export escape hatch). force=true runs `clearAndReload`,
- * which wipes the durable annotation store — an editing-class op a restricted
- * user must not reach.
+ * which discards the in-memory annotation, awareness and content maps and rebuilds the document from disk — an
+ * editing-class op a restricted user must not reach. (Since #1813 it no longer
+ * unlinks the durable envelope; the gate's reason is the rebuild, not the
+ * unlink.)
  *
  * Outcome test (not a source scan): mock `licenseGate` to restrict, and use a
  * NONEXISTENT path. If the gate fires first, the handler returns the block

@@ -187,14 +187,21 @@ describe("reloadDocumentFromMarkdown — round-trip + disk persistence", () => {
     expect(onDisk).not.toContain("Original.");
   });
 
-  it("clears all annotations on reload", async () => {
+  it("an annotation survives the source-view commit, re-merged from the envelope (#1813)", async () => {
+    // Inverted by decision C and RESTATED rather than deleted: a reload path
+    // silently losing annotations is still worth a spec, now stated the other
+    // way round. `clearAndReload` empties the Y.Map but FLUSHES the durable
+    // envelope instead of unlinking it, and `reload-family.ts` re-wires the
+    // store immediately — so `loadAndMerge` brings the record back. Here the
+    // annotated span is gone from the new content, so it comes back
+    // `degraded` (see force-open-envelope.test.ts) rather than re-anchored.
     const { id, doc } = await openMdFile("# Title\n\nThe quick brown fox.\n");
     seedAnnotation(doc, "brown");
     expect(doc.getMap(Y_MAP_ANNOTATIONS).size).toBe(1);
 
     await reloadDocumentFromMarkdown(id, "# Title\n\nA different sentence.\n");
 
-    expect(doc.getMap(Y_MAP_ANNOTATIONS).size).toBe(0);
+    expect(doc.getMap(Y_MAP_ANNOTATIONS).size).toBe(1);
   });
 });
 
