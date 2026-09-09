@@ -47,6 +47,27 @@ export type { ApplyContext, FormatAdapter, LoadIssue, Prepared } from "./types.j
 
 // -- Adapter implementations (ADR-036 two-phase parse/apply) --
 
+/**
+ * Does this markdown contain an Obsidian-style `[[wikilink]]`?
+ *
+ * Exported so its COST is testable on its own: `loadMarkdown` is seconds-slow
+ * on the same pathological input, so a timing assertion around the whole
+ * `apply` measures remark rather than this.
+ *
+ * `[` is EXCLUDED from the negated class, and that is load-bearing rather than
+ * tidiness: with `[` admitted, every `[[` start re-scans the rest of the line
+ * before failing, so an unterminated `[[` in a long line is quadratic —
+ * `"see [[note ".repeat(20000)` measured 3.3 s. This runs synchronously inside
+ * the Y.Doc transact on every open AND every file-watcher reload, so that time
+ * is a stall of Hocuspocus sync and every other open document. Excluding `[`
+ * costs no matches: a wikilink target cannot contain one, so `[[note]]`,
+ * `![[image.png]]` and `[[note|alias]]` all still match, at 0.5 ms on that
+ * same input.
+ */
+export function containsWikilink(content: string): boolean {
+  return /\[\[[^[\]\n]+\]\]/.test(content);
+}
+
 const markdownAdapter: FormatAdapter = {
   async parse(content): Promise<Prepared> {
     // Decode here, not at the consumer. `unified().parse` accepts a Buffer
@@ -74,7 +95,7 @@ const markdownAdapter: FormatAdapter = {
     // notification is warn-only, changes no bytes and blocks nothing, whereas
     // excluding fenced regions would mean a second scanner agreeing with the
     // parser about fence boundaries.
-    if (/\[\[[^\]\n]+\]\]/.test(prepared.content)) {
+    if (containsWikilink(prepared.content)) {
       return [
         {
           kind: "other",
