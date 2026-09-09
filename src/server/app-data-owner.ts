@@ -117,13 +117,97 @@ function legacyAppDataDir(): string {
 }
 
 /**
+ * Copy one file so that an interruption can never leave a TRUNCATED target
+ * (review round 2).
+ *
+ * `fs.cp` writes each file in place. A kill or a full disk mid-copy therefore
+ * leaves a half-written file at the destination — and the retry's "an existing
+ * target wins" rule then skips it **forever**, because the check is existence,
+ * not completeness. The user is left with a silently truncated session file or
+ * annotation envelope and a directory that reports itself fully migrated.
+ * Temp-then-rename makes the target appear only once it is whole, so the retry
+ * either finds a complete file or finds nothing and copies it again.
+ *
+ * The temp sibling carries {@link ATOMIC_TEMP_PREFIX}, so `shouldMigrate`
+ * already refuses to migrate one and the boot-time orphan reaper already knows
+ * the shape.
+ */
+async function copyFileAtomically(from: string, to: string): Promise<void> {
+  const tmp = path.join(path.dirname(to), `${ATOMIC_TEMP_PREFIX}${path.basename(to)}`);
+  try {
+    await fs.promises.copyFile(from, tmp);
+    await fs.promises.rename(tmp, to);
+  } catch (err) {
+    // Never leave our own temp behind on a failed copy (#1850's class).
+    await fs.promises.rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
+}
+
+/**
+ * Walk the legacy tree, copying entry by entry and COLLECTING failures rather
+ * than aborting on the first one (review round 2).
+ *
+ * This replaces a single `fs.promises.cp(..., {recursive: true})`, which is
+ * all-or-nothing: one unreadable entry anywhere in the tree — a permission-denied
+ * file, a stale Windows lock, a dangling symlink — rejected the whole call. That
+ * failure propagated to `claimAppDataDir`'s catch, which returns without writing
+ * the stamp, so **the ownership guard #1787 exists to install never armed at
+ * all**, on that launch or any later one: the retry hit the same bad entry and
+ * failed the same way, every single time. A defect in one file silently disabled
+ * the separation guard for the whole install.
+ *
+ * Existing targets are skipped rather than overwritten — the `force: false`
+ * semantics of the call this replaces — so a retry can never clobber state the
+ * desktop has since written.
+ *
+ * Symlinks and special files are deliberately not followed: the app-data root
+ * holds Tandem's own state, and a symlink there points somewhere this migration
+ * has no business writing.
+ */
+async function copyTreeCollectingFailures(
+  from: string,
+  to: string,
+  failures: string[],
+): Promise<void> {
+  let entries: import("fs").Dirent[];
+  try {
+    entries = await fs.promises.readdir(from, { withFileTypes: true });
+  } catch (err) {
+    failures.push(`${from}: ${err instanceof Error ? err.message : err}`);
+    return;
+  }
+
+  for (const entry of entries) {
+    const source = path.join(from, entry.name);
+    if (!shouldMigrate(source)) continue;
+    const target = path.join(to, entry.name);
+    try {
+      if (entry.isDirectory()) {
+        await fs.promises.mkdir(target, { recursive: true });
+        await copyTreeCollectingFailures(source, target, failures);
+      } else if (entry.isFile()) {
+        try {
+          await fs.promises.access(target);
+          continue; // an existing target wins
+        } catch {
+          // absent — copy it
+        }
+        await copyFileAtomically(source, target);
+      }
+    } catch (err) {
+      failures.push(`${source}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+}
+
+/**
  * Copy the legacy npm app-data tree into the desktop's own directory, once.
  *
- * Copy-only and filtered: the legacy directory is left intact, and
- * `force: false` means an existing target file wins, so a retry can never
- * clobber state the desktop has since written. The app-data root holds only
- * Tandem's own state — user documents live wherever the user put them and are
- * referenced by path.
+ * Copy-only and filtered: the legacy directory is left intact, and an existing
+ * target file wins, so a retry can never clobber state the desktop has since
+ * written. The app-data root holds only Tandem's own state — user documents live
+ * wherever the user put them and are referenced by path.
  *
  * Runs only for `flavor: "desktop"`, only when {@link MIGRATION_MARKER_FILE} is
  * absent, and only when the resolved directory actually differs from the legacy
@@ -132,8 +216,10 @@ function legacyAppDataDir(): string {
  * stamp-gated migration therefore re-imports the whole legacy tree on the next
  * launch.
  *
- * The marker is written only after `fs.cp` resolves, so an interrupted copy
- * retries rather than recording a migration that did not finish.
+ * The marker is written only when EVERY entry arrived, so a partial copy retries
+ * rather than recording a migration that did not finish. A partial copy is
+ * reported and otherwise tolerated: see `copyTreeCollectingFailures` for why one
+ * bad entry must not be allowed to abort the caller.
  */
 async function migrateLegacyTree(appDataDir: string): Promise<void> {
   const legacy = legacyAppDataDir();
@@ -144,12 +230,18 @@ async function migrateLegacyTree(appDataDir: string): Promise<void> {
   } catch {
     return;
   }
-  await fs.promises.cp(legacy, appDataDir, {
-    recursive: true,
-    force: false,
-    errorOnExist: false,
-    filter: shouldMigrate,
-  });
+
+  const failures: string[] = [];
+  await copyTreeCollectingFailures(legacy, appDataDir, failures);
+
+  if (failures.length > 0) {
+    console.error(
+      `[Tandem] Warning: ${failures.length} item(s) could not be migrated from ${legacy} — ` +
+        `retrying on the next launch. First: ${failures[0]}`,
+    );
+    return;
+  }
+
   await atomicWrite(
     path.join(appDataDir, MIGRATION_MARKER_FILE),
     `${JSON.stringify({ from: legacy, at: new Date().toISOString() }, null, 2)}\n`,
@@ -214,17 +306,40 @@ export async function claimAppDataDir(
     return { refused: existing };
   }
 
-  try {
-    if (!existing && flavor === "desktop" && !(await migrationAlreadyRan(appDataDir))) {
+  // The migration gets its OWN catch, so a failed copy cannot cost us the stamp
+  // (review round 2). Directory separation is the mechanism decision D asks
+  // for; importing the old tree is a convenience on top of it. Holding the
+  // stamp hostage to the copy inverted that — one unreadable legacy file left
+  // the directory unstamped on every launch, which is precisely the shared,
+  // unguarded state #1787 exists to end. The marker is untouched here, so the
+  // copy still retries next time.
+  // Gated on the MARKER alone — deliberately not also on "no stamp yet". Once
+  // the stamp stopped being withheld on failure (above), a `!existing` term
+  // would let the migration run exactly once and never retry: the first
+  // attempt stamps the directory, and every retry then sees a stamp and skips.
+  // The marker is the completion record; it is the only correct gate, which is
+  // what this module's docblocks have said since the round-1 fix.
+  if (flavor === "desktop" && !(await migrationAlreadyRan(appDataDir))) {
+    try {
       await migrateLegacyTree(appDataDir);
+    } catch (err) {
+      console.error(
+        `[Tandem] Warning: legacy app-data migration failed (${
+          err instanceof Error ? err.message : err
+        }) — continuing; it retries on the next launch`,
+      );
     }
+  }
+
+  try {
     // `atomicWrite`, not `fs.promises.writeFile`: `readStamp` reports a
     // truncated stamp as "unowned", so a crash or power loss mid-write would
     // hand this directory to the other flavor without a word.
     await atomicWrite(stampPath(appDataDir), `${JSON.stringify({ version, flavor }, null, 2)}\n`);
   } catch (err) {
-    // No stamp written: the next launch re-attempts the migration rather than
-    // recording a copy that did not happen.
+    // No stamp written — the directory stays unowned and the next launch tries
+    // again. Unlike the migration above, nothing here is retried-but-partial:
+    // `atomicWrite` either published a whole stamp or none.
     console.error(
       `[Tandem] Warning: app-data claim incomplete (${
         err instanceof Error ? err.message : err
@@ -266,7 +381,18 @@ export function refusalMessage(
       : "";
     return `${head}${preamble} Set TANDEM_APP_DATA_DIR to a different directory (or unset it to use this install's default).`;
   }
-  return `${head} Quit the npm \`tandem\` and relaunch, or remove ${path.join(
+  // NOT "quit the npm `tandem` and relaunch" (review round 2). The stamp is a
+  // durable file, not a lock: quitting the other install changes nothing, so
+  // that remedy sent the user to do something that could not possibly work and
+  // then hit the same refusal. A desktop reaching this arm was pointed at the
+  // npm directory by an inherited `TANDEM_APP_DATA_DIR` — separation gives it
+  // its own otherwise — so unsetting that is the remedy that acts.
+  const inherited = env.TANDEM_APP_DATA_DIR;
+  const pointedHere =
+    inherited && path.resolve(inherited) === path.resolve(appDataDir)
+      ? ` TANDEM_APP_DATA_DIR is set to "${inherited}" and is what pointed the desktop here; unset it to use the desktop's own directory.`
+      : "";
+  return `${head}${pointedHere} Remove ${path.join(
     appDataDir,
     OWNER_STAMP_FILE,
   )} if you are certain no npm install uses this directory.`;

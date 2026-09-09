@@ -845,11 +845,17 @@ async function main() {
         console.error(`[Tandem] Another Tandem is serving :${mcpPort} — leaving :${wsPort} alone`);
       } else {
         freePort(wsPort);
-      }
-      try {
-        await waitForPort(wsPort);
-      } catch (err) {
-        console.error(`[Tandem] ${err instanceof Error ? err.message : err} — proceeding anyway`);
+        // Only after a kill is there anything to wait FOR: `waitForPort` polls
+        // for the port to come free. On the `skip-freeport` arm we have just
+        // decided to leave it occupied, so the poll was guaranteed to burn its
+        // whole timeout and then proceed anyway (review round 2) — pure startup
+        // latency on every stdio launch alongside a running desktop, which is
+        // the exact case this branch exists to serve.
+        try {
+          await waitForPort(wsPort);
+        } catch (err) {
+          console.error(`[Tandem] ${err instanceof Error ? err.message : err} — proceeding anyway`);
+        }
       }
       await startHocuspocus(wsPort);
       console.error(`[Tandem] Hocuspocus WebSocket server running on ws://127.0.0.1:${wsPort}`);

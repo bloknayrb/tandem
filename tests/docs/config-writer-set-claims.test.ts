@@ -237,7 +237,12 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   // whole legacy npm tree. All three write Tandem's own state root, never a
   // Claude config file, so `docs/security.md`'s accepted #1599 scope is
   // unchanged.
-  "src/server/app-data-owner.ts": 3,
+  // 4 since review round 2: the legacy migration copies entry by entry through
+  // a temp-then-rename (`copyFileAtomically`) instead of one `fs.cp`. Its
+  // destinations are all inside Tandem's OWN app-data root — no Claude config
+  // file is reachable from it — so this is a census update, not a widening of
+  // the accepted scope in docs/security.md.
+  "src/server/app-data-owner.ts": 4,
   "src/cli/uninstall-scrub.ts": 2,
   "src/client/tabs/TabItem.svelte": 1,
   "src/server/annotations/store.ts": 5,

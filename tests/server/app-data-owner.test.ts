@@ -291,22 +291,138 @@ describe("claimAppDataDir — failure contract", () => {
    * `MAX_RESTARTS` into the "Retry Server Start" dialog, i.e. an app that never
    * starts with no in-product recovery.
    */
-  it("never throws when the migration fails, and writes no stamp", async () => {
+  /**
+   * **Review round 2 changed this contract deliberately, so read the assertion
+   * as the fix rather than as a relaxation.** It used to require that a failed
+   * migration write NO stamp. That coupling is what made a single unreadable
+   * legacy entry disable #1787 outright: the copy failed, the stamp was skipped,
+   * and the next launch hit the same entry and failed identically — so the
+   * directory stayed unowned forever and the two installs went on sharing it
+   * unguarded, which is the whole condition this module exists to end.
+   *
+   * Directory separation is the mechanism; importing the old tree is a
+   * convenience on top of it. The stamp is therefore written even when the copy
+   * fails, and the MARKER is what still withholds "migration finished".
+   */
+  it("stamps the directory even when the migration fails, and leaves no marker", async () => {
     const source = tempDir("legacy-throw");
     const target = tempDir("desktop-throw");
     withLegacyRoot(source);
     fs.mkdirSync(path.join(source, "sessions"), { recursive: true });
     fs.writeFileSync(path.join(source, "sessions", "a.json"), "{}", "utf8");
 
-    const cp = vi.spyOn(fs.promises, "cp").mockRejectedValue(new Error("EBUSY"));
+    const readdir = vi.spyOn(fs.promises, "readdir").mockRejectedValue(new Error("EBUSY"));
     await expect(claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
-    expect(fs.existsSync(path.join(target, OWNER_STAMP_FILE))).toBe(false);
+    // The guard ARMS — this is the row that matters.
+    expect(readStamp(target)).toEqual({ version: "1.0.0", flavor: "desktop" });
+    // ...but the copy is not recorded as done, so it retries.
+    expect(fs.existsSync(path.join(target, MIGRATION_MARKER_FILE))).toBe(false);
 
-    // No stamp means the NEXT launch re-attempts the migration rather than
-    // recording a copy that did not happen.
-    cp.mockRestore();
+    readdir.mockRestore();
     await expect(claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
     expect(fs.existsSync(path.join(target, "sessions", "a.json"))).toBe(true);
+    expect(fs.existsSync(path.join(target, MIGRATION_MARKER_FILE))).toBe(true);
+  });
+
+  /**
+   * The other half of the decoupling, and the one that needs a THROW rather
+   * than a collected failure to reach it: `copyTreeCollectingFailures` absorbs
+   * per-entry errors itself, so the only way out of `migrateLegacyTree` by
+   * exception is the marker write. Without its own catch that exception would
+   * skip the stamp — the same disarm, arriving by a different door.
+   */
+  it("stamps the directory even when the migration throws outright", async () => {
+    const source = tempDir("legacy-marker-throw");
+    const target = tempDir("desktop-marker-throw");
+    withLegacyRoot(source);
+    fs.writeFileSync(path.join(source, "a.json"), "{}", "utf8");
+
+    // Keyed on the rename TARGET, not on `writeFile`: `atomicWrite` writes to a
+    // randomly-named temp sibling that does not carry the basename, so a
+    // writeFile mock matching the marker name never fires and the marker lands
+    // anyway — which is how this row first passed while proving nothing.
+    const realRename = fs.promises.rename.bind(fs.promises);
+    const rename = vi
+      .spyOn(fs.promises, "rename")
+      .mockImplementation(async (from, to: Parameters<typeof realRename>[1]) => {
+        if (String(to).includes(MIGRATION_MARKER_FILE)) throw new Error("ENOSPC");
+        return realRename(from, to);
+      });
+
+    await expect(claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
+    rename.mockRestore();
+
+    expect(readStamp(target)).toEqual({ version: "1.0.0", flavor: "desktop" });
+    expect(fs.existsSync(path.join(target, MIGRATION_MARKER_FILE))).toBe(false);
+    // The tree itself still arrived; only the completion record did not.
+    expect(fs.existsSync(path.join(target, "a.json"))).toBe(true);
+  });
+
+  /**
+   * **The finding this file is really about (review round 2).** The copy was one
+   * `fs.cp({recursive: true})`, which is all-or-nothing: one permission-denied
+   * file, stale Windows lock or dangling symlink anywhere in the tree rejected
+   * the entire call. Everything else in the legacy directory then never migrated
+   * — not on that launch, and not on any later one, because the retry met the
+   * same entry.
+   */
+  it("a single unreadable entry does not stop the rest of the tree migrating", async () => {
+    const source = tempDir("legacy-partial");
+    const target = tempDir("desktop-partial");
+    withLegacyRoot(source);
+    fs.mkdirSync(path.join(source, "sessions"), { recursive: true });
+    fs.writeFileSync(path.join(source, "sessions", "good.json"), '{"ok":true}', "utf8");
+    fs.writeFileSync(path.join(source, "bad.bin"), "x", "utf8");
+    fs.writeFileSync(path.join(source, "also-good.json"), "{}", "utf8");
+
+    const realCopy = fs.promises.copyFile.bind(fs.promises);
+    const copyFile = vi
+      .spyOn(fs.promises, "copyFile")
+      .mockImplementation(async (from: Parameters<typeof realCopy>[0], to, mode?) => {
+        if (String(from).endsWith("bad.bin")) throw new Error("EACCES");
+        return realCopy(from, to, mode);
+      });
+
+    await expect(claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
+    copyFile.mockRestore();
+
+    // Everything except the one bad entry arrived...
+    expect(fs.existsSync(path.join(target, "sessions", "good.json"))).toBe(true);
+    expect(fs.existsSync(path.join(target, "also-good.json"))).toBe(true);
+    expect(fs.existsSync(path.join(target, "bad.bin"))).toBe(false);
+    // ...the guard armed anyway...
+    expect(readStamp(target)).toEqual({ version: "1.0.0", flavor: "desktop" });
+    // ...and the incomplete copy is not recorded as finished.
+    expect(fs.existsSync(path.join(target, MIGRATION_MARKER_FILE))).toBe(false);
+  });
+
+  /**
+   * **Review round 2.** `fs.cp` writes each file in place, so a kill mid-copy
+   * leaves a TRUNCATED file at the destination — and the retry's "an existing
+   * target wins" rule is an EXISTENCE check, so it skipped that file forever.
+   * The user kept a silently half-written session file or annotation envelope.
+   * Temp-then-rename means the target appears only once whole.
+   */
+  it("an interrupted copy leaves no truncated target for the retry to skip", async () => {
+    const source = tempDir("legacy-trunc");
+    const target = tempDir("desktop-trunc");
+    withLegacyRoot(source);
+    const body = "COMPLETE-CONTENTS";
+    fs.writeFileSync(path.join(source, "big.json"), body, "utf8");
+
+    // Die after the bytes are written but before the rename publishes them.
+    const rename = vi.spyOn(fs.promises, "rename").mockRejectedValueOnce(new Error("EIO"));
+    await expect(claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
+    rename.mockRestore();
+
+    // Nothing half-written is visible under the real name, and no temp is left
+    // behind either (#1850's class).
+    expect(fs.existsSync(path.join(target, "big.json"))).toBe(false);
+    expect(fs.readdirSync(target).some((f) => f.startsWith(ATOMIC_TEMP_PREFIX))).toBe(false);
+
+    // So the retry actually copies it, whole.
+    await expect(claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
+    expect(fs.readFileSync(path.join(target, "big.json"), "utf8")).toBe(body);
   });
 
   it("never throws when the stamp write fails", async () => {
@@ -345,8 +461,37 @@ describe("refusalMessage", () => {
   // variable explicitly on the child, and an explicit `.env()` overrides an
   // inherited value.
   it("points the desktop at the stamp file instead of the env var", () => {
-    const message = refusalMessage("/tmp/x", { version: "2.0.0", flavor: "npm" }, "desktop");
+    // Explicit `{}` rather than the default `process.env`: since review round 2
+    // the desktop arm DOES name the variable when it is what pointed us here,
+    // so an ambient one on the developer's machine would decide this row.
+    const message = refusalMessage("/tmp/x", { version: "2.0.0", flavor: "npm" }, "desktop", {});
     expect(message).not.toContain("TANDEM_APP_DATA_DIR");
+    expect(message).toContain(OWNER_STAMP_FILE);
+  });
+
+  /**
+   * **Review round 2.** The desktop arm used to open with "Quit the npm
+   * `tandem` and relaunch". The stamp is a durable FILE, not a lock — quitting
+   * the other install changes nothing on disk, so the first thing the product
+   * told the user to do could not possibly work, and they arrived back at the
+   * identical refusal. A remedy that cannot act is worse than no remedy: it
+   * spends the user's trust before the one that works.
+   */
+  it("does not offer quitting the npm install, which cannot clear a durable stamp", () => {
+    const message = refusalMessage("/tmp/x", { version: "2.0.0", flavor: "npm" }, "desktop", {});
+    expect(message.toLowerCase()).not.toContain("quit");
+  });
+
+  /**
+   * The desktop only reaches this arm because something aimed it at the npm
+   * directory; separation gives it its own. When that something is a visible
+   * `TANDEM_APP_DATA_DIR`, naming it is the remedy that acts.
+   */
+  it("names TANDEM_APP_DATA_DIR to the desktop when that is what pointed it here", () => {
+    const message = refusalMessage("/tmp/x", { version: "2.0.0", flavor: "npm" }, "desktop", {
+      TANDEM_APP_DATA_DIR: "/tmp/x",
+    });
+    expect(message).toContain("TANDEM_APP_DATA_DIR");
     expect(message).toContain(OWNER_STAMP_FILE);
   });
 });
