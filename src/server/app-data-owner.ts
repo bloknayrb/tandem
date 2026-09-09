@@ -164,17 +164,9 @@ export async function claimAppDataDir(
     return "claimed";
   }
 
-  let existing: OwnerStamp | null;
-  try {
-    existing = await readStamp(appDataDir);
-  } catch (err) {
-    console.error(
-      `[Tandem] Warning: could not read the app-data owner stamp: ${
-        err instanceof Error ? err.message : err
-      }`,
-    );
-    return "claimed";
-  }
+  // `readStamp` reports every failure as `null` (unowned) rather than throwing,
+  // so there is nothing to catch here.
+  const existing = await readStamp(appDataDir);
 
   if (existing && existing.flavor !== flavor) {
     return { refused: existing };
@@ -215,9 +207,9 @@ export function refusalMessage(
   owner: OwnerStamp,
   flavor: AppDataFlavor,
 ): string {
-  const head = `[Tandem] This app-data directory (${appDataDir}) belongs to the ${
-    owner.flavor === "desktop" ? "desktop" : "npm"
-  } install (last used by v${owner.version}). Refusing to share it.`;
+  const head =
+    `[Tandem] This app-data directory (${appDataDir}) belongs to the ${owner.flavor} ` +
+    `install (last used by v${owner.version}). Refusing to share it.`;
   if (flavor === "npm") {
     return `${head} Set TANDEM_APP_DATA_DIR to run against a different directory.`;
   }

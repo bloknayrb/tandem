@@ -765,63 +765,66 @@ async fn graceful_stop_request(
         // defect one error class over: it skipped the port wait and hard-killed
         // the flush for every non-timeout transport failure, while logging a
         // verdict that read as "the shutdown never started".
+        // Pair the observation with the pid it was compared against, so the log
+        // line below names the expected pid from the same value the comparison
+        // used rather than re-unwrapping an `Option` that cannot be `None` here.
         let foreign = match owned_child_pid {
-            Some(child_pid) => foreign_health_pid(client, health_url, child_pid).await,
+            Some(child_pid) => foreign_health_pid(client, health_url, child_pid)
+                .await
+                .map(|observed| (observed, child_pid)),
             None => None,
         };
-        let posted = match foreign {
-            // Positive foreign identity: the flush would land on someone else's
-            // server. `Posted::Refused` is the load-bearing half of the verdict
-            // — it is the ONLY arm that returns without `wait_for_server_gone`,
-            // and a foreign process does not exit, so any other verdict would
-            // burn the whole `deadline_secs` inside `graceful::attempt`'s
-            // budget and then report a `TimedOut` that is simply false.
-            Some(observed) => {
-                log::warn!(
-                    "shutdown target is not our child (pid {observed}, expected {}) — skipping the flush request",
-                    owned_child_pid.unwrap_or_default()
-                );
-                Posted::Refused
+        // Positive foreign identity: the flush would land on someone else's
+        // server. `Posted::Refused` is the load-bearing half of the verdict — it
+        // is the ONLY arm that returns without `wait_for_server_gone`, and a
+        // foreign process does not exit, so any other verdict would burn the
+        // whole `deadline_secs` inside `graceful::attempt`'s budget and then
+        // report a `TimedOut` that is simply false.
+        let posted = if let Some((observed, expected)) = foreign {
+            log::warn!(
+                "shutdown target is not our child (pid {observed}, expected {expected}) — skipping the flush request"
+            );
+            Posted::Refused
+        } else {
+            match client.post(shutdown_url).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    Posted::Accepted(read_already_in_progress(resp).await)
+                }
+                Ok(resp) => {
+                    log::warn!(
+                        "Graceful shutdown POST answered HTTP {} — not a 2xx, so this route registered no shutdown; falling back to hard kill",
+                        resp.status()
+                    );
+                    Posted::Refused
+                }
+                Err(e) if e.is_connect() => {
+                    // Nothing was ever delivered. Note that reqwest's `is_timeout()`
+                    // is NOT the discriminator: it walks the source chain for its own
+                    // `TimedOut` marker, a hyper timeout, or any
+                    // `io::ErrorKind::TimedOut`, so it is also true for a
+                    // connect-phase stall — while being false for every
+                    // post-delivery break we most need to treat as unconfirmed.
+                    // `is_connect()` (hyper-util legacy `Error::is_connect`) is the
+                    // one that actually means "never reached the handler".
+                    log::warn!(
+                        "Graceful shutdown POST never connected ({e}) — falling back to hard kill"
+                    );
+                    Posted::Refused
+                }
+                Err(e) => {
+                    // Measured on Windows: refusing a closed loopback port takes ~2s
+                    // of SYN retransmits, inside the 5s client timeout, so an
+                    // ordinary "nothing is listening" carries a connect error and
+                    // takes the arm above. What lands here is a request whose fate is
+                    // genuinely unknown, and the cost of assuming the worse case is
+                    // one extra `/health` poll against a port that is not answering
+                    // — well inside `EXIT_GRACEFUL_BUDGET`.
+                    log::warn!(
+                        "Graceful shutdown POST failed after connecting ({e}) — the server may have started the flush anyway; waiting for the port instead of killing"
+                    );
+                    Posted::Unconfirmed
+                }
             }
-            None => match client.post(shutdown_url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                Posted::Accepted(read_already_in_progress(resp).await)
-            }
-            Ok(resp) => {
-                log::warn!(
-                    "Graceful shutdown POST answered HTTP {} — not a 2xx, so this route registered no shutdown; falling back to hard kill",
-                    resp.status()
-                );
-                Posted::Refused
-            }
-            Err(e) if e.is_connect() => {
-                // Nothing was ever delivered. Note that reqwest's `is_timeout()`
-                // is NOT the discriminator: it walks the source chain for its own
-                // `TimedOut` marker, a hyper timeout, or any
-                // `io::ErrorKind::TimedOut`, so it is also true for a
-                // connect-phase stall — while being false for every
-                // post-delivery break we most need to treat as unconfirmed.
-                // `is_connect()` (hyper-util legacy `Error::is_connect`) is the
-                // one that actually means "never reached the handler".
-                log::warn!(
-                    "Graceful shutdown POST never connected ({e}) — falling back to hard kill"
-                );
-                Posted::Refused
-            }
-            Err(e) => {
-                // Measured on Windows: refusing a closed loopback port takes ~2s
-                // of SYN retransmits, inside the 5s client timeout, so an
-                // ordinary "nothing is listening" carries a connect error and
-                // takes the arm above. What lands here is a request whose fate is
-                // genuinely unknown, and the cost of assuming the worse case is
-                // one extra `/health` poll against a port that is not answering
-                // — well inside `EXIT_GRACEFUL_BUDGET`.
-                log::warn!(
-                    "Graceful shutdown POST failed after connecting ({e}) — the server may have started the flush anyway; waiting for the port instead of killing"
-                );
-                Posted::Unconfirmed
-            }
-            },
         };
         // `already_in_progress` can only be `Some` on the `Accepted` arm, and
         // even there only when `read_already_in_progress` actually READ the
@@ -1882,14 +1885,6 @@ fn health_body_pid(body: &str) -> Option<u32> {
         .ok()
 }
 
-/// Whether a `/health` body positively identifies the child we spawned (#1812).
-///
-/// A missing or unparseable `pid` is FALSE, not "assume ours": an unidentified
-/// responder is exactly the previous-process case this check exists to catch.
-fn health_body_is_our_child(body: &str, child_pid: u32) -> bool {
-    health_body_pid(body) == Some(child_pid)
-}
-
 /// Poll the health endpoint until the child we spawned answers it.
 /// Bails early if `sidecar_dead` is set (process terminated before becoming healthy).
 async fn wait_for_health(
@@ -1931,10 +1926,11 @@ async fn wait_for_health_at(
         match client.get(health_url).send().await {
             Ok(resp) if resp.status().is_success() => {
                 let body = resp.text().await.unwrap_or_default();
-                if health_body_is_our_child(&body, child_pid) {
-                    return Ok(());
-                }
+                // A missing or unparseable `pid` is never "assume ours": an
+                // unidentified responder is exactly the previous-process case
+                // this check exists to catch.
                 match health_body_pid(&body) {
+                    Some(observed) if observed == child_pid => return Ok(()),
                     Some(observed) => {
                         last_error =
                             Some(format!("answered by pid {observed}, expected {child_pid}"));
@@ -3700,21 +3696,18 @@ mod health_identity_tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
 
-    /// The pure predicate. The third and fourth cases are the discriminating
-    /// ones: a missing `pid` must be FALSE (a `serde` default or an
-    /// `unwrap_or(child_pid)` would restore today's bug against every pre-fix
-    /// server), and a non-JSON body must be FALSE (a `contains("pid")` string
-    /// check would pass).
+    /// The pure extractor every identity check is keyed on. The last three
+    /// cases are the discriminating ones: a missing `pid` must be `None` (a
+    /// `serde` default or an `unwrap_or(child_pid)` would restore today's bug
+    /// against every pre-fix server), and a non-JSON body must be `None` too (a
+    /// `contains("pid")` string check would pass).
     #[test]
-    fn health_body_is_our_child_requires_a_matching_numeric_pid() {
-        assert!(health_body_is_our_child(r#"{"status":"ok","pid":4242}"#, 4242));
-        assert!(!health_body_is_our_child(
-            r#"{"status":"ok","pid":4243}"#,
-            4242
-        ));
-        assert!(!health_body_is_our_child(r#"{"status":"ok"}"#, 4242));
-        assert!(!health_body_is_our_child("pid 4242, honest", 4242));
-        assert!(!health_body_is_our_child("", 4242));
+    fn health_body_pid_requires_a_numeric_pid() {
+        assert_eq!(health_body_pid(r#"{"status":"ok","pid":4242}"#), Some(4242));
+        assert_eq!(health_body_pid(r#"{"status":"ok","pid":4243}"#), Some(4243));
+        assert_eq!(health_body_pid(r#"{"status":"ok"}"#), None);
+        assert_eq!(health_body_pid("pid 4242, honest"), None);
+        assert_eq!(health_body_pid(""), None);
     }
 
     /// Answer every request with one fixed 200 body.

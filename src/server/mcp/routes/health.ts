@@ -49,7 +49,7 @@ export interface HealthHandlerDeps {
  * provider's auth token, so that would hand a connection credential to any
  * loopback page.
  *
- * The three session-presence fields are session-presence signals — whether an AI is attached,
+ * The other three gated fields are session-presence signals — whether an AI is attached,
  * whether a real-time consumer is receiving, and whether a model has polled since
  * something was handed out — so they are withheld from LAN callers for the same
  * reason. `delivery` is the most sensitive of them, not the least: its counters
