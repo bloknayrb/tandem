@@ -13,7 +13,9 @@ import * as Y from "yjs";
 import { getAdapter } from "../../../src/server/file-io/index.js";
 import {
   detectLineEnding,
+  restoreBom,
   restoreLineEndings,
+  stripBom,
   toLf,
 } from "../../../src/server/file-io/line-endings.js";
 import { loadMarkdown, saveMarkdown } from "../../../src/server/file-io/markdown.js";
@@ -214,6 +216,49 @@ describe("markdown documents keep (or keep out) a UTF-8 BOM", () => {
     const twin = anchoredRange(without.doc, toFlatOffset(2), toFlatOffset(7), "Title");
     expect(range.ok).toBe(true);
     expect(range.ok && range.range).toEqual(twin.ok && twin.range);
+  });
+
+  /**
+   * Review round 1: the BOM `saveMarkdown` re-attaches also flows into
+   * `GET /api/document/raw`, where it is invisible in the source-view textarea
+   * — so a caret at offset 0 lands in FRONT of it and the commit silently
+   * de-BOMs the file while leaving a stray U+FEFF in the body.
+   */
+  it("the raw-source view is served without the BOM, and the commit re-attaches it", () => {
+    const input = `${BOM}# Title\n\nBody.\n`;
+    const doc = new Y.Doc();
+    loadMarkdown(doc, input);
+
+    // What `GET /api/document/raw` hands the source view.
+    const served = stripBom(saveMarkdown(doc));
+    expect(served.startsWith(BOM), "an invisible BOM in the textarea").toBe(false);
+    expect(served).toBe("# Title\n\nBody.\n");
+
+    // The user types at offset 0 — in front of where the BOM used to be — and
+    // commits. `reloadDocumentFromMarkdown` re-attaches the recorded BOM before
+    // the reparse, so the round trip keeps it and gains no stray U+FEFF.
+    const edited = `X${served}`;
+    const committed = restoreBom(doc, edited);
+    const reloaded = new Y.Doc();
+    loadMarkdown(reloaded, committed);
+
+    const out = saveMarkdown(reloaded);
+    expect(out.startsWith(BOM), "the file lost its BOM").toBe(true);
+    expect(out.slice(1).includes(BOM), "a stray U+FEFF landed in the body").toBe(false);
+    expect(extractText(reloaded).startsWith("X#")).toBe(true);
+  });
+
+  it("restoreBom does not double a BOM the submitted string already carries", () => {
+    // The source-view commit path feeds `restoreBom` a USER-supplied string. A
+    // second BOM would not be an encoding mark — it would be a character at
+    // offset 0 of the body, shifting every annotation offset by one.
+    const doc = new Y.Doc();
+    loadMarkdown(doc, `${BOM}# Title\n`);
+    expect(restoreBom(doc, `${BOM}# Pasted\n`)).toBe(`${BOM}# Pasted\n`);
+  });
+
+  it("stripBom leaves a BOM-less string untouched", () => {
+    expect(stripBom("# Title\n")).toBe("# Title\n");
   });
 });
 

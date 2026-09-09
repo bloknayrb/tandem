@@ -52,6 +52,7 @@ import {
 } from "../file-io/doc-backup.js";
 import { assertDocxWithinSizeLimits } from "../file-io/docx-size-gate.js";
 import { atomicWrite, atomicWriteBuffer } from "../file-io/index.js";
+import { restoreBom } from "../file-io/line-endings.js";
 import { rearmWatch, recordSelfWrite, suppressNextChange } from "../file-watcher.js";
 import { canSaveToDisk, saveDocumentToDisk } from "../mcp/document-service.js";
 import { pushNotification } from "../notifications.js";
@@ -65,6 +66,7 @@ import { broadcastOpenDocs, getOpenDocs } from "./registry.js";
 import {
   acquireReloadGuard,
   isReloadInProgress,
+  reanchorAnnotations,
   releaseReloadGuard,
   reloadFromDisk,
 } from "./watcher.js";
@@ -75,8 +77,9 @@ import {
  *
  * Mirrors the force-reload lifecycle (`clearAndReload`) but sources content from
  * the passed string instead of disk, and leaves the doc DIRTY so the new content
- * is persisted to disk. Annotations are cleared (the source edit re-anchors the
- * whole document — same trade-off as `tandem_open force:true`).
+ * is persisted to disk. The in-memory annotation map is cleared and then rebuilt
+ * from the surviving durable envelope and re-anchored against the committed text
+ * (#1813) — same contract as `tandem_open force:true`.
  *
  * Throws coded errors the routes map to HTTP status:
  *  - NO_DOCUMENT        — not currently open
@@ -130,6 +133,15 @@ export async function reloadDocumentFromMarkdown(id: string, markdown: string): 
   // reloadFromDisk's rawConflictBeforeReload guard.
   const rawConflictBeforeCommit = doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_EXTERNAL_CONFLICT);
 
+  // Re-attach the file's UTF-8 BOM before the reparse (#1823). `GET
+  // /api/document/raw` serves the source stripped of it, so the string arriving
+  // here never carries one for a BOM file — and `loadMarkdown`'s
+  // `stripAndRecordBom` re-derives the flag from exactly this string, so without
+  // this the commit would silently rewrite the file without its BOM. Read BEFORE
+  // `clearAndReload`, which is where the flag is overwritten. Idempotent, so a
+  // user who pasted a BOM of their own still gets exactly one.
+  const committed = restoreBom(doc, markdown);
+
   // Serialize against the file-watcher reload path (which guards on the same
   // Set) so two clear+repopulate transactions never interleave on one Y.Doc.
   if (!acquireReloadGuard(id)) {
@@ -142,17 +154,24 @@ export async function reloadDocumentFromMarkdown(id: string, markdown: string): 
     // dirty version past savedVersion, so any concurrent autosave's
     // markCleanIfUnchanged(snapshot) sees a newer version and won't clear-to-
     // clean against stale content (#851 mechanism).
-    await clearAndReload(id, doc, existing.filePath, "md", existing, markdown, {
+    await clearAndReload(id, doc, existing.filePath, "md", existing, committed, {
       markCleanAfter: false,
       conflictGuard: { raw: rawConflictBeforeCommit },
     });
     // File-source docs re-wire the durable annotation store and persist the new
     // markdown to disk immediately. The re-wire's `loadAndMerge` is what brings
-    // the surviving envelope back into the repopulated Y.Doc, each record
-    // re-anchored by `refreshRange` (#1813). Scratchpads
+    // the surviving envelope back into the repopulated Y.Doc (#1813). Scratchpads
     // (source: "upload") have no durable store and no disk file — skip both.
     if (existing.source === "file") {
       await wireAnnotationStore(id, doc, existing.filePath);
+      // `loadAndMerge` re-inserts each record VERBATIM — pre-commit flat range,
+      // relRange belonging to the XmlFragment `clearAndReload` just destroyed —
+      // and the durable observer then persists exactly that. So the re-merge
+      // alone would turn #1813's "notes survive a source-view commit" into
+      // "notes survive it pinned to whatever text now sits at their old
+      // offsets", durably. This is the pass that re-anchors them, and it runs
+      // AFTER the merge because it is the merged records it must fix.
+      reanchorAnnotations(doc, existing.filePath);
       // Persist the new content to disk now. The only transient skip reachable
       // here is the per-doc autosave lock (`savingDocs`) being held by a
       // concurrent 60s autosave at this instant — every other skip reason is

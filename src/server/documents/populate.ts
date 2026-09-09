@@ -385,9 +385,11 @@ export async function clearAndReload(
   //    observer, then cancel anything the flush's own await let through. The
   //    on-disk envelope is deliberately NOT unlinked (#1813, decision C): the
   //    caller re-wires the store immediately (`wireAnnotationStore` ->
-  //    `loadAndMerge`) and each merged record is re-anchored by `refreshRange`,
-  //    so the user's personal notes (ADR-027) come back rather than being
-  //    deleted by a reload they asked for to recover from a bad state.
+  //    `loadAndMerge`) and then re-anchors the merged records against the new
+  //    body (`reanchorAnnotations`), so the user's personal notes (ADR-027) come
+  //    back rather than being deleted by a reload they asked for to recover from
+  //    a bad state. Both halves are required of every caller: the merge alone
+  //    restores the records at their PRE-reload offsets and persists them there.
   //
   //    The ORDER is the contract. `clearFileSyncContext` runs the `"close"`
   //    cleanup phase, which does `tombstonesByDoc.delete(docHash)`; the flushed

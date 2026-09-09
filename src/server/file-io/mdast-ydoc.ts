@@ -234,11 +234,20 @@ function blockToYxml(
       // still go through `sanitizeImageSrc`); an inline one does not, so a
       // rejected URL becomes an inert raw text run rather than a downgraded
       // paragraph.
+      //
+      // A `break` is filler alongside whitespace-only text. Two trailing spaces
+      // before the newline is the HARD-break spelling of the very same file a
+      // bare newline writes as a `text` node, and admitting only the second made
+      // two visually identical documents diverge: the hard-break form failed
+      // `every`, fell through to literal `rawMarkdown` runs, and so skipped
+      // `sanitizeImageSrc` entirely — which is the half that matters. The break
+      // itself is dropped in `splitParagraphImages`: the images it separated
+      // become block-level siblings, a stronger separation than the break.
+      const isImageFiller = (c: PhrasingContent) =>
+        c.type === "break" || (c.type === "text" && c.value.trim() === "");
       const onlyImages =
         node.children.some((c) => c.type === "image") &&
-        node.children.every(
-          (c) => c.type === "image" || (c.type === "text" && c.value.trim() === ""),
-        );
+        node.children.every((c) => c.type === "image" || isImageFiller(c));
       if (onlyImages) {
         return splitParagraphImages(node.children, deferred);
       }
@@ -520,6 +529,12 @@ function splitParagraphImages(
     if (child.type === "image") {
       flushInline();
       result.push(imageToYxml(child));
+    } else if (child.type === "break") {
+      // Dropped, not accumulated. The caller only routes here when every
+      // non-image child is filler, so a break can only sit BETWEEN two images
+      // about to become separate block-level siblings — and `flushInline`'s
+      // `hasContent` test reads a break as content, so accumulating it would
+      // emit a paragraph holding nothing but a hardBreak.
     } else {
       inlineRun.push(child);
     }
@@ -921,10 +936,24 @@ function flattenHeadingNewlines(children: PhrasingContent[]): PhrasingContent[] 
  * guarantee, not a schema one — the mark stays in the Y.Doc, so a client
  * showing a raw block bolded keeps showing it bolded until reload; only the
  * bytes on disk are clean.
+ *
+ * It is also the ONLY plain-text reader in this file. There used to be a second,
+ * `xmlTextToPlainText`, identical but for the embed arm below, so the same
+ * `Y.XmlText` yielded different text depending on which one a caller picked.
  */
 export function xmlTextPlain(t: Y.XmlText): string {
   let out = "";
-  for (const op of t.toDelta()) if (typeof op.insert === "string") out += op.insert;
+  for (const op of t.toDelta()) {
+    if (typeof op.insert === "string") {
+      out += op.insert;
+    } else if (op.insert instanceof Y.XmlElement && op.insert.nodeName === "hardBreak") {
+      // A hardBreak reaches here as an EMBED (`processInline` inserts it that
+      // way; `normalizeHardBreaks` only rewrites the ones it walks). Dropping it
+      // collapses the line exactly as #1458's sibling-only reader did, so the
+      // embed and the sibling spelling both answer a newline.
+      out += "\n";
+    }
+  }
   return out;
 }
 
@@ -1296,7 +1325,7 @@ function plainTextFromElement(element: Y.XmlElement): string {
   for (let i = 0; i < element.length; i++) {
     const child = element.get(i);
     if (child instanceof Y.XmlText) {
-      parts.push(xmlTextToPlainText(child));
+      parts.push(xmlTextPlain(child));
       hasPriorContent = true;
     } else if (child instanceof Y.XmlElement) {
       if (child.nodeName === "hardBreak") {
@@ -1311,12 +1340,4 @@ function plainTextFromElement(element: Y.XmlElement): string {
   }
 
   return parts.join("");
-}
-
-function xmlTextToPlainText(xmlText: Y.XmlText): string {
-  let text = "";
-  for (const op of xmlText.toDelta()) {
-    text += typeof op.insert === "string" ? op.insert : "\n";
-  }
-  return text;
 }

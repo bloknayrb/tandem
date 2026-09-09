@@ -159,6 +159,41 @@ describe("force-open keeps the durable annotation envelope (#1813)", () => {
     }
   });
 
+  it("a record whose text MOVED is re-anchored in the map, not just resolvable (#1813 review)", async () => {
+    // The discriminating spec for the re-anchor pass, and the one the three
+    // around it cannot be: the first force-opens content that leaves the
+    // annotated span byte-identical, and it reads the verdict out of a
+    // `refreshRange(ann, live)` call with no `map` — a pure-function answer that
+    // says nothing about what was PERSISTED.
+    //
+    // Disk content differing from the in-memory doc is the entire reason to pass
+    // `force: true`, so "the text moved" is this path's normal case. Since #1813
+    // the record survives, so without the re-anchor it survives PINNED to its
+    // pre-reload offsets — and `loadAndMerge`'s own `queueWrite` puts that state
+    // back in the envelope, where every later open resolves it cleanly and
+    // nothing revisits it.
+    const { filePath, id, doc } = await openDoc();
+    const annId = seed(doc, "second paragraph", "note", "user");
+    const before = doc.getMap<Annotation>(Y_MAP_ANNOTATIONS).get(annId) as Annotation;
+    await settleEnvelope(filePath);
+
+    // Delete the paragraph ABOVE the annotated one: the span moves earlier and
+    // the relRange dies with the replaced fragment.
+    await fs.writeFile(filePath, "# Title\n\nA second paragraph here.\n", "utf-8");
+    await openFromDisk(filePath, { force: true });
+
+    const live = getOrCreateDocument(id);
+    const ann = live.getMap<Annotation>(Y_MAP_ANNOTATIONS).get(annId) as Annotation;
+    expect(ann).toBeDefined();
+    // The control: the span really did move, so reading back the stored offsets
+    // cannot pass by accident.
+    expect(ann.range.from).not.toBe(before.range.from);
+    // Read the STORED range straight out of the map — no refreshRange in front
+    // of it, because the client, `.docx` comment export and
+    // `tandem_getAnnotations` all read exactly this.
+    expect(extractText(live).slice(ann.range.from, ann.range.to)).toBe("second paragraph");
+  });
+
   it("the personal NOTE specifically survives — the loss this issue is about", async () => {
     // Asserted apart from the comment: notes are ADR-027 personal data, and a
     // read filter hiding them would let a comments-only assertion pass.

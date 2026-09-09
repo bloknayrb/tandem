@@ -2,7 +2,7 @@ import type { Root } from "mdast";
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { loadMarkdown, mdParser, saveMarkdown } from "../../src/server/file-io/markdown.js";
-import { mdastToYDoc, yDocToMdast } from "../../src/server/file-io/mdast-ydoc.js";
+import { mdastToYDoc, xmlTextPlain, yDocToMdast } from "../../src/server/file-io/mdast-ydoc.js";
 import { extractText, getElementText } from "../../src/server/mcp/document.js";
 import { getFragment } from "../helpers/ydoc-factory.js";
 
@@ -1009,6 +1009,45 @@ describe("inline images stay inline (#1799)", () => {
     expect(names()).toEqual(["image", "image"]);
   });
 
+  it("a HARD break between two images promotes them, same as a soft one (review round 1)", () => {
+    // Two trailing spaces = an mdast `break` node. The predicate admitted
+    // whitespace-only `text` and nothing else, so the two spellings of one
+    // visually identical file diverged: this one failed `every`, fell through
+    // to literal `rawMarkdown` runs, and skipped `sanitizeImageSrc` with it.
+    const soft = "![a](1.png)\n![b](2.png)\n";
+    doc = new Y.Doc();
+    loadMarkdown(doc, soft);
+    expect(names(), "control: the soft-break spelling promotes").toEqual(["image", "image"]);
+
+    load("![a](1.png)  \n![b](2.png)\n");
+    expect(names()).toEqual(["image", "image"]);
+    const first = getFragment(doc).get(0) as Y.XmlElement;
+    expect(first.getAttribute("src")).toBe("1.png");
+  });
+
+  it("a hard break carries the sanitizer with it — a rejected src cannot slip past", () => {
+    // The half that matters. On the raw-run fall-through an `image` element is
+    // never built, so `sanitizeImageSrc` never runs; promotion is what puts the
+    // hostile URL back in front of it, where it downgrades to alt text.
+    load("![a](1.png)  \n![evil](javascript:alert(1))\n");
+    const frag = getFragment(doc);
+    const srcs: (string | undefined)[] = [];
+    for (let i = 0; i < frag.length; i++) {
+      const el = frag.get(i);
+      if (el instanceof Y.XmlElement) srcs.push(el.getAttribute("src") as string | undefined);
+    }
+    expect(srcs, "the safe image still promoted").toContain("1.png");
+    expect(srcs.some((s) => s?.includes("javascript:"))).toBe(false);
+  });
+
+  it("a break-only run emits no empty paragraph beside the images", () => {
+    // `flushInline`'s `hasContent` reads a `break` as content, so accumulating
+    // one would add a paragraph holding nothing but a hardBreak between the two
+    // image blocks.
+    load("![a](1.png)  \n  \n![b](2.png)\n");
+    expect(names()).not.toContain("paragraph");
+  });
+
   it("image first, prose after: one paragraph, byte-identical", () => {
     // Kills a predicate keyed on "the first child is an image".
     const input = "![x](a.png) trailing\n";
@@ -1039,6 +1078,43 @@ describe("inline images stay inline (#1799)", () => {
         expect(el.getAttribute("src")).toBeUndefined();
       }
     }
+  });
+});
+
+/**
+ * Review round 1: this file held TWO plain-text readers — `xmlTextPlain` and a
+ * private `xmlTextToPlainText` — identical but for the embed arm, so the same
+ * `Y.XmlText` yielded different text depending on which one a caller picked
+ * (the fence/raw-block readers dropped an embedded hardBreak; the table-cell
+ * reader turned it into a newline). One reader now, and it keeps the newline.
+ */
+describe("xmlTextPlain is the file's single plain-text reader", () => {
+  it("reads an embedded hardBreak as a newline, matching the sibling spelling", () => {
+    doc = new Y.Doc();
+    const frag = getFragment(doc);
+    const el = new Y.XmlElement("paragraph");
+    // Attached BEFORE populating — a detached Y.XmlText reverses segment order.
+    frag.insert(0, [el]);
+    const t = new Y.XmlText();
+    el.insert(0, [t]);
+    t.insert(0, "a");
+    t.insertEmbed(t.length, new Y.XmlElement("hardBreak"));
+    t.insert(t.length, "b");
+
+    expect(xmlTextPlain(t)).toBe("a\nb");
+  });
+
+  it("strips marks, which is the guarantee it was extracted for (#1751)", () => {
+    doc = new Y.Doc();
+    const frag = getFragment(doc);
+    const el = new Y.XmlElement("codeBlock");
+    frag.insert(0, [el]);
+    const t = new Y.XmlText();
+    el.insert(0, [t]);
+    t.insert(0, "let", { bold: {} });
+    t.insert(t.length, " x");
+
+    expect(xmlTextPlain(t)).toBe("let x");
   });
 });
 

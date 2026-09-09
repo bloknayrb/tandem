@@ -128,7 +128,7 @@ import {
   openDocument,
   openDocumentWhenReady,
 } from "./registry.js";
-import { wireFileWatcher } from "./watcher.js";
+import { reanchorAnnotations, wireFileWatcher } from "./watcher.js";
 
 /**
  * The flat JSON shape a successful open puts on the MCP and HTTP wire.
@@ -385,6 +385,15 @@ export async function openFromDisk(
         { id: existingId, filePath: resolved, format, readOnly, source: "file" },
         async () => {
           await wireAnnotationStore(existingId, doc, resolved);
+          // Since #1813 the envelope survives a force-open, so `loadAndMerge`
+          // above has just re-inserted every record VERBATIM: its pre-reload
+          // flat range, and a relRange anchored into the XmlFragment
+          // `clearAndReload` destroyed. Disk content differing from the
+          // in-memory doc is the whole REASON to force, so "the text moved" is
+          // this path's normal case, not its edge one — without this pass the
+          // surviving notes come back pinned to stale offsets and the durable
+          // observer writes that state back. Re-anchor before returning.
+          reanchorAnnotations(doc, resolved);
         },
       );
       ensureAutoSave();
