@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type AppDataFlavor,
   claimAppDataDir,
@@ -16,10 +16,18 @@ import { TOKEN_FILE_NAME } from "../../src/shared/constants.js";
  * Separation is the mechanism (the sidecar now exports `TANDEM_APP_DATA_DIR`);
  * these cover the ownership stamp that makes any residual sharing loud.
  *
- * Every case runs against `mkdtemp` directories. The migration cases point the
- * legacy root at a temp dir by stubbing `env-paths`, so no test ever reads or
- * writes the operator's real app-data.
+ * Every case runs against `mkdtemp` directories, and **`env-paths` is mocked
+ * for the whole file**. That is not tidiness: `env-paths` is how the module
+ * finds the legacy npm root to migrate FROM, so an unmocked `flavor: "desktop"`
+ * claim would `fs.cp` the operator's real app-data directory into a temp dir.
+ * It also turned two cases into 15s timeouts under a full-suite run, which is
+ * how it was caught.
  */
+
+const legacy = vi.hoisted(() => ({ root: "" }));
+vi.mock("env-paths", () => ({
+  default: () => ({ data: legacy.root }),
+}));
 
 const created: string[] = [];
 
@@ -29,30 +37,22 @@ function tempDir(label: string): string {
   return dir;
 }
 
+/** Point the module's legacy-root derivation at `dir`. */
+function withLegacyRoot(dir: string): void {
+  legacy.root = dir;
+}
+
 function readStamp(dir: string): unknown {
   return JSON.parse(fs.readFileSync(path.join(dir, OWNER_STAMP_FILE), "utf8"));
 }
 
-/**
- * Point the module's legacy-root derivation at `legacy`.
- *
- * `env-paths` is what `app-data-owner.ts` calls to find the npm root, so this
- * is the seam. Reset in `afterEach` with `vi.resetModules()` so the next case
- * gets a clean import.
- */
-async function withLegacyRoot(
-  legacy: string,
-): Promise<typeof import("../../src/server/app-data-owner.js")> {
-  vi.doMock("env-paths", () => ({
-    default: () => ({ data: legacy }),
-  }));
-  vi.resetModules();
-  return await import("../../src/server/app-data-owner.js");
-}
+beforeEach(() => {
+  // Default: an EMPTY legacy root, so a case that does not care about the
+  // migration cannot accidentally reach a real one.
+  withLegacyRoot(tempDir("legacy-empty"));
+});
 
 afterEach(() => {
-  vi.doUnmock("env-paths");
-  vi.resetModules();
   vi.restoreAllMocks();
   for (const dir of created.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -111,38 +111,38 @@ describe("claimAppDataDir", () => {
 
 describe("claimAppDataDir — one-time legacy migration", () => {
   it("copies the legacy tree once, leaves it intact, and does not re-copy", async () => {
-    const legacy = tempDir("legacy");
+    const source = tempDir("legacy");
     const target = tempDir("desktop");
-    fs.mkdirSync(path.join(legacy, "sessions"), { recursive: true });
-    fs.mkdirSync(path.join(legacy, "annotations"), { recursive: true });
-    fs.writeFileSync(path.join(legacy, "sessions", "a.json"), "{}", "utf8");
-    fs.writeFileSync(path.join(legacy, "annotations", "b.json"), "{}", "utf8");
+    withLegacyRoot(source);
+    fs.mkdirSync(path.join(source, "sessions"), { recursive: true });
+    fs.mkdirSync(path.join(source, "annotations"), { recursive: true });
+    fs.writeFileSync(path.join(source, "sessions", "a.json"), "{}", "utf8");
+    fs.writeFileSync(path.join(source, "annotations", "b.json"), "{}", "utf8");
 
-    const mod = await withLegacyRoot(legacy);
-    await expect(mod.claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
+    await expect(claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
 
     expect(fs.existsSync(path.join(target, "sessions", "a.json"))).toBe(true);
     expect(fs.existsSync(path.join(target, "annotations", "b.json"))).toBe(true);
-    expect(fs.existsSync(path.join(legacy, "sessions", "a.json"))).toBe(true);
+    expect(fs.existsSync(path.join(source, "sessions", "a.json"))).toBe(true);
     expect(readStamp(target)).toEqual({ version: "1.0.0", flavor: "desktop" });
 
     // A second claim finds a stamp, so the migration must not run again — a
     // file deleted from the target in between stays deleted.
     fs.rmSync(path.join(target, "sessions", "a.json"));
-    await expect(mod.claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
+    await expect(claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
     expect(fs.existsSync(path.join(target, "sessions", "a.json"))).toBe(false);
   });
 
   // Kills a migration that fires for the npm install too, which would copy the
   // desktop's state sideways.
   it("does not migrate for the npm flavor", async () => {
-    const legacy = tempDir("legacy-npm");
+    const source = tempDir("legacy-npm");
     const target = tempDir("npm-target");
-    fs.mkdirSync(path.join(legacy, "sessions"), { recursive: true });
-    fs.writeFileSync(path.join(legacy, "sessions", "a.json"), "{}", "utf8");
+    withLegacyRoot(source);
+    fs.mkdirSync(path.join(source, "sessions"), { recursive: true });
+    fs.writeFileSync(path.join(source, "sessions", "a.json"), "{}", "utf8");
 
-    const mod = await withLegacyRoot(legacy);
-    await expect(mod.claimAppDataDir(target, "1.0.0", "npm")).resolves.toBe("claimed");
+    await expect(claimAppDataDir(target, "1.0.0", "npm")).resolves.toBe("claimed");
     expect(fs.existsSync(path.join(target, "sessions"))).toBe(false);
   });
 
@@ -156,23 +156,23 @@ describe("claimAppDataDir — one-time legacy migration", () => {
    * refusal pointing at an env var rather than at a file to delete).
    */
   it("excludes the stamp, the store lock, atomic temps and the auth token", async () => {
-    const legacy = tempDir("legacy-filter");
+    const source = tempDir("legacy-filter");
     const target = tempDir("desktop-filter");
-    fs.mkdirSync(path.join(legacy, "sessions"), { recursive: true });
-    fs.mkdirSync(path.join(legacy, "annotations"), { recursive: true });
-    fs.mkdirSync(path.join(legacy, "doc-backups"), { recursive: true });
-    fs.writeFileSync(path.join(legacy, OWNER_STAMP_FILE), '{"version":"0.1.0","flavor":"npm"}');
-    fs.writeFileSync(path.join(legacy, "annotations", "store.lock"), '{"pid":1}');
+    withLegacyRoot(source);
+    fs.mkdirSync(path.join(source, "sessions"), { recursive: true });
+    fs.mkdirSync(path.join(source, "annotations"), { recursive: true });
+    fs.mkdirSync(path.join(source, "doc-backups"), { recursive: true });
+    fs.writeFileSync(path.join(source, OWNER_STAMP_FILE), '{"version":"0.1.0","flavor":"npm"}');
+    fs.writeFileSync(path.join(source, "annotations", "store.lock"), '{"pid":1}');
     // The real shape production writes — a PREFIX, never a `*.tmp` fixture,
     // which nothing produces and which would therefore pass a no-op filter.
     const temp = `${ATOMIC_TEMP_PREFIX}1700000000-abc`;
-    fs.writeFileSync(path.join(legacy, "sessions", temp), "partial");
-    fs.writeFileSync(path.join(legacy, TOKEN_FILE_NAME), "s3cret");
-    fs.writeFileSync(path.join(legacy, "sessions", "a.json"), "{}");
-    fs.writeFileSync(path.join(legacy, "doc-backups", "y.md"), "# y");
+    fs.writeFileSync(path.join(source, "sessions", temp), "partial");
+    fs.writeFileSync(path.join(source, TOKEN_FILE_NAME), "s3cret");
+    fs.writeFileSync(path.join(source, "sessions", "a.json"), "{}");
+    fs.writeFileSync(path.join(source, "doc-backups", "y.md"), "# y");
 
-    const mod = await withLegacyRoot(legacy);
-    await expect(mod.claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
+    await expect(claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
 
     expect(fs.existsSync(path.join(target, "annotations", "store.lock"))).toBe(false);
     expect(fs.existsSync(path.join(target, "sessions", temp))).toBe(false);
@@ -186,7 +186,7 @@ describe("claimAppDataDir — one-time legacy migration", () => {
     // refuse. This is only true because `owner.json` is the one file never
     // copied — `fs.cp` gives no ordering guarantee.
     fs.rmSync(path.join(target, OWNER_STAMP_FILE));
-    await expect(mod.claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
+    await expect(claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
     expect(readStamp(target)).toEqual({ version: "1.0.0", flavor: "desktop" });
   });
 });
@@ -199,20 +199,20 @@ describe("claimAppDataDir — failure contract", () => {
    * starts with no in-product recovery.
    */
   it("never throws when the migration fails, and writes no stamp", async () => {
-    const legacy = tempDir("legacy-throw");
+    const source = tempDir("legacy-throw");
     const target = tempDir("desktop-throw");
-    fs.mkdirSync(path.join(legacy, "sessions"), { recursive: true });
-    fs.writeFileSync(path.join(legacy, "sessions", "a.json"), "{}", "utf8");
+    withLegacyRoot(source);
+    fs.mkdirSync(path.join(source, "sessions"), { recursive: true });
+    fs.writeFileSync(path.join(source, "sessions", "a.json"), "{}", "utf8");
 
-    const mod = await withLegacyRoot(legacy);
     const cp = vi.spyOn(fs.promises, "cp").mockRejectedValue(new Error("EBUSY"));
-    await expect(mod.claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
+    await expect(claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
     expect(fs.existsSync(path.join(target, OWNER_STAMP_FILE))).toBe(false);
 
     // No stamp means the NEXT launch re-attempts the migration rather than
     // recording a copy that did not happen.
     cp.mockRestore();
-    await expect(mod.claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
+    await expect(claimAppDataDir(target, "1.0.0", "desktop")).resolves.toBe("claimed");
     expect(fs.existsSync(path.join(target, "sessions", "a.json"))).toBe(true);
   });
 
