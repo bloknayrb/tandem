@@ -384,7 +384,17 @@ export function tempSiblingPath(filePath: string): string {
  */
 export async function atomicWrite(filePath: string, content: string): Promise<void> {
   const tempPath = tempSiblingPath(filePath);
-  await fs.writeFile(tempPath, content, "utf-8");
+  try {
+    await fs.writeFile(tempPath, content, "utf-8");
+  } catch (err) {
+    // Mirror renameWithRetry's failure arm: a partial temp sibling in the
+    // USER's document directory is never reaped (the boot reaper sweeps the
+    // annotations + sessions dirs only). Swallow the unlink — the write error
+    // is the one the caller must see, and the temp may legitimately not exist
+    // (an ENOSPC that failed before `open`) (#1850).
+    await fs.unlink(tempPath).catch(() => {});
+    throw err;
+  }
   await renameWithRetry(tempPath, filePath);
 }
 
@@ -395,6 +405,14 @@ export async function atomicWrite(filePath: string, content: string): Promise<vo
  */
 export async function atomicWriteBuffer(filePath: string, content: Buffer): Promise<void> {
   const tempPath = tempSiblingPath(filePath);
-  await fs.writeFile(tempPath, content);
+  try {
+    await fs.writeFile(tempPath, content);
+  } catch (err) {
+    // Same cleanup as `atomicWrite` (#1850) — and the higher-stakes half: these
+    // are the largest files Tandem writes, so a leaked `.docx` temp sits in the
+    // user's document directory at full size.
+    await fs.unlink(tempPath).catch(() => {});
+    throw err;
+  }
   await renameWithRetry(tempPath, filePath);
 }
