@@ -216,7 +216,30 @@ function blockToYxml(
       // Tiptap's block Image node. Inline text runs around an image stay as
       // their own paragraphs. Block images live as top-level fragment children
       // with empty getElementText(), preserving flat-offset alignment.
-      if (node.children.some((c) => c.type === "image")) {
+      //
+      // Promote ONLY when the paragraph is nothing but images plus
+      // whitespace-only text (#1799). The predicate used to be a bare `some`,
+      // so a paragraph with prose AROUND an image was split into three blocks:
+      // the file was rewritten on open, a list item went loose, and two block
+      // separators entered the flat text, moving every annotation offset past
+      // the image. #153 only ever needed the standalone case.
+      //
+      // A prose-surrounded image now takes the inline `case "image"` arm below,
+      // which stores it as a `rawMarkdown` run — the same treatment footnote
+      // references, reference links and inline HTML already get under ADR-042.
+      // It shows in the editor as literal `![x](a.png)` rather than a picture;
+      // the alternative is a Tiptap inline-image node plus a y-prosemirror
+      // mapping, and until that exists the promotion silently rewrites the
+      // user's file. Standalone and multi-image paragraphs still promote (and
+      // still go through `sanitizeImageSrc`); an inline one does not, so a
+      // rejected URL becomes an inert raw text run rather than a downgraded
+      // paragraph.
+      const onlyImages =
+        node.children.some((c) => c.type === "image") &&
+        node.children.every(
+          (c) => c.type === "image" || (c.type === "text" && c.value.trim() === ""),
+        );
+      if (onlyImages) {
         return splitParagraphImages(node.children, deferred);
       }
       const el = new Y.XmlElement("paragraph");
@@ -264,8 +287,21 @@ function blockToYxml(
 
     case "code": {
       const el = new Y.XmlElement("codeBlock");
-      if (node.lang) {
-        el.setAttribute("language", node.lang);
+      // Carry the WHOLE info string, not just `lang` (#1799): `node.meta` held
+      // the Docusaurus/MkDocs/Shiki tail (`title="x.ts" {1,3}`) and was dropped
+      // silently. `language` is the only fence attribute in Tiptap's CodeBlock
+      // schema, and anything outside the client schema is deleted by
+      // y-prosemirror on sync (`editor-extensions.ts:291-293`), so the meta
+      // rides along in it and is split back apart in `case "codeBlock"`.
+      //
+      // Still stored only when there is something to store — same reasoning as
+      // `spread` above: an unconditional `setAttribute` would put `language=""`
+      // on every bare fence with byte-identical output, which is why it would
+      // go unnoticed. The `??`-and-trim form is deliberate: a naive ternary
+      // interpolates the literal `"null "` when `lang` is null.
+      const info = [node.lang ?? "", node.meta ?? ""].join(" ").trim();
+      if (info) {
+        el.setAttribute("language", info);
       }
       const text = new Y.XmlText();
       el.insert(0, [text]);
@@ -712,7 +748,13 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
     }
 
     case "codeBlock": {
-      const lang = el.getAttribute("language") as string | undefined;
+      // `language` carries the whole info string (#1799). Split at the first
+      // whitespace run: first token is the fence language, the remainder is
+      // mdast's `meta`, which is `null` rather than `""` when absent.
+      const info = (el.getAttribute("language") as string | undefined) ?? "";
+      const sep = info.search(/\s/);
+      const lang = sep === -1 ? info : info.slice(0, sep);
+      const meta = sep === -1 ? "" : info.slice(sep).trim();
       let value = "";
       for (let i = 0; i < el.length; i++) {
         const child = el.get(i);
@@ -720,7 +762,7 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
           value += xmlTextPlain(child);
         }
       }
-      return { type: "code", lang: lang || null, value } as any;
+      return { type: "code", lang: lang || null, meta: meta || null, value } as any;
     }
 
     case "horizontalRule":
@@ -955,10 +997,13 @@ function segmentLeaf(seg: Segment): PhrasingContent {
   // segment, so:
   //   (a) an outer mark on the run is preserved (e.g. bold around a footnote
   //       ref), and
-  //   (b) crucially, a raw inline IMAGE stays wrapped inside its mark rather
-  //       than becoming a bare paragraph-child image — which the #153
-  //       `splitParagraphImages` promotion would otherwise turn into a block
-  //       image on reload, collapsing the inline run's flat length and
+  //   (b) a raw inline IMAGE stays wrapped inside its mark rather than becoming
+  //       a bare paragraph-child image. Since #1799 the promotion predicate is
+  //       image-only-paragraphs, so a raw run surrounded by prose no longer
+  //       promotes on reload either way; keeping the wrapper still matters for
+  //       the shape this arm names — an image that is a marked run's ONLY
+  //       content, which unwrapped would be an image-only paragraph and would
+  //       promote to a block image, collapsing the inline run's flat length and
   //       desyncing every later annotation offset.
   // Two adjacent UNMARKED raw runs (e.g. `[^1][^2]`) stay separate: `html` has
   // no wrapper, so `coalescePhrasing`'s `sameWrapper` never merges them.

@@ -1,7 +1,7 @@
 import type { Root } from "mdast";
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { loadMarkdown, saveMarkdown } from "../../src/server/file-io/markdown.js";
+import { loadMarkdown, mdParser, saveMarkdown } from "../../src/server/file-io/markdown.js";
 import { mdastToYDoc, yDocToMdast } from "../../src/server/file-io/mdast-ydoc.js";
 import { extractText, getElementText } from "../../src/server/mcp/document.js";
 import { getFragment } from "../helpers/ydoc-factory.js";
@@ -11,6 +11,24 @@ let doc: Y.Doc;
 afterEach(() => {
   doc?.destroy();
 });
+
+/** Strip mdast `position` metadata so two trees compare semantically. */
+function stripPositions(tree: unknown): unknown {
+  if (Array.isArray(tree)) return tree.map(stripPositions);
+  if (tree && typeof tree === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(tree as Record<string, unknown>)) {
+      if (k === "position") continue;
+      out[k] = stripPositions(v);
+    }
+    return out;
+  }
+  return tree;
+}
+
+function parseEqual(a: string, b: string): void {
+  expect(stripPositions(mdParser.parse(a))).toEqual(stripPositions(mdParser.parse(b)));
+}
 
 function makeMdast(children: any[]): Root {
   return { type: "root", children };
@@ -935,5 +953,127 @@ describe("yDocToMdast — table cell block flattening", () => {
     loadMarkdown(reloaded, markdown);
     expect(extractText(reloaded)).toContain("First Second");
     reloaded.destroy();
+  });
+});
+
+/**
+ * #1799: a paragraph with prose AROUND an image used to be split into three
+ * blocks by `splitParagraphImages`. Promotion is now image-only-paragraphs;
+ * a prose-surrounded image is a `rawMarkdown` run (ADR-042).
+ */
+describe("inline images stay inline (#1799)", () => {
+  /** Top-level block node names of the current doc, in order. */
+  function names(): string[] {
+    const frag = getFragment(doc);
+    const out: string[] = [];
+    for (let i = 0; i < frag.length; i++) {
+      const el = frag.get(i);
+      if (el instanceof Y.XmlElement) out.push(el.nodeName);
+    }
+    return out;
+  }
+
+  function load(input: string): string {
+    doc = new Y.Doc();
+    loadMarkdown(doc, input);
+    return saveMarkdown(doc);
+  }
+
+  it("prose around an image stays ONE paragraph and round-trips byte-identical", () => {
+    const input = "Text before ![x](a.png) text after\n";
+    const out = load(input);
+    // The block count is the discriminating half: a fix that re-joined the
+    // paragraphs at save time passes the byte check and still moves every
+    // annotation offset.
+    expect(names()).toEqual(["paragraph"]);
+    expect(out).toBe(input);
+  });
+
+  it("an inline image in a list item keeps the list tight", () => {
+    const input = "- one ![x](a.png) two\n- three\n";
+    const out = load(input);
+    expect(out).toBe(input);
+    const list = getFragment(doc).get(0) as Y.XmlElement;
+    expect(list.getAttribute("spread")).toBeUndefined();
+  });
+
+  it("a standalone image still promotes to a block image element (#153)", () => {
+    load("![x](a.png)\n");
+    expect(names()).toEqual(["image"]);
+    const img = getFragment(doc).get(0) as Y.XmlElement;
+    expect(img.getAttribute("src")).toBe("a.png");
+  });
+
+  it("two images with no prose still promote to two image blocks", () => {
+    load("![a](1.png)![b](2.png)\n");
+    expect(names()).toEqual(["image", "image"]);
+  });
+
+  it("image first, prose after: one paragraph, byte-identical", () => {
+    // Kills a predicate keyed on "the first child is an image".
+    const input = "![x](a.png) trailing\n";
+    const out = load(input);
+    expect(names()).toEqual(["paragraph"]);
+    expect(out).toBe(input);
+  });
+
+  it("a rejected image src in prose stores a raw run, never an `image` element", () => {
+    // `imageToYxml`'s `sanitizeImageSrc` downgrade is not on this path any
+    // more: the inline arm never consults the sanitizer. The outcome is inert
+    // — a text run, never an element with a `src` — and it stops rewriting the
+    // user's file.
+    const input = "Text ![x](javascript:alert(1)) after\n";
+    const out = load(input);
+    expect(names()).toEqual(["paragraph"]);
+    // NOT byte-identical: `serializeMdastInline` emits
+    // `![x](javascript:alert\(1\))` — remark escapes the parentheses — so the
+    // stored raw run is two characters longer than the source. The plain
+    // `![x](a.png)` control above is the byte-identical case.
+    parseEqual(out, input);
+    expect(extractText(doc)).toContain("javascript:alert");
+    const frag = getFragment(doc);
+    for (let i = 0; i < frag.length; i++) {
+      const el = frag.get(i);
+      if (el instanceof Y.XmlElement) {
+        expect(el.nodeName).not.toBe("image");
+        expect(el.getAttribute("src")).toBeUndefined();
+      }
+    }
+  });
+});
+
+describe("fence info string survives the round trip (#1799)", () => {
+  function load(input: string): string {
+    doc = new Y.Doc();
+    loadMarkdown(doc, input);
+    return saveMarkdown(doc);
+  }
+
+  it("`lang` plus meta round-trips byte-identical", () => {
+    const input = '```ts title="x.ts" {1,3}\nconst a = 1;\n```\n';
+    expect(load(input)).toBe(input);
+  });
+
+  it("a bare-language fence still yields lang with meta null", () => {
+    load("```ts\nconst a = 1;\n```\n");
+    const tree = yDocToMdast(doc);
+    expect(tree.children[0]).toMatchObject({ type: "code", lang: "ts", meta: null });
+  });
+
+  it("a double-space info string keeps lang and meta (bytes cannot be preserved)", () => {
+    // remark collapses the whitespace run at parse time, below anything
+    // mdast-ydoc.ts controls, so assert the values rather than the bytes.
+    load("```ts  {1,3}\nconst a = 1;\n```\n");
+    const tree = yDocToMdast(doc);
+    expect(tree.children[0]).toMatchObject({ type: "code", lang: "ts", meta: "{1,3}" });
+  });
+
+  it("a bare ``` fence carries NO `language` attribute (not the empty string)", () => {
+    // Kills the unconditional `setAttribute` form, whose byte output is
+    // identical — same reasoning as list `spread`.
+    load("```\nplain\n```\n");
+    const el = getFragment(doc).get(0) as Y.XmlElement;
+    expect(el.nodeName).toBe("codeBlock");
+    expect(el.getAttribute("language")).toBeUndefined();
   });
 });
