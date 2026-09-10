@@ -235,6 +235,33 @@ describe("#1748 a prerelease tag reaches neither update channel", () => {
     expect(call).toContain("repo: context.repo.repo");
   });
 
+  it("keeps the reuse branch's PATCH from moving `releases/latest` backwards", () => {
+    // Review round 1. The reuse branch PATCHed unconditionally, and GitHub's
+    // update-a-release endpoint defaults `make_latest` to TRUE. So re-running
+    // this workflow on an OLDER tag — which its own comment calls normal for a
+    // four-platform signed build — republished v0.25.0 as Latest while v0.26.0
+    // was published, and tauri.conf.json points the updater at
+    // `releases/latest/download/latest.json`: every installed 0.26.0 copy would
+    // read a 0.25.0 manifest. Two independent halves, so assert both.
+    const job = jobOf("tauri-release.yml", "create-release");
+    const step = (job.steps ?? []).find((s) => s.uses?.startsWith("actions/github-script@"));
+    const script = step?.with?.script;
+    if (typeof script !== "string") throw new Error("github-script step has no `script`");
+
+    // Half 1: the PATCH is skipped entirely when the flag is already right,
+    // which is the case on every ordinary re-run.
+    expect(script).toContain("existing[0].prerelease !== prerelease");
+    const guardAt = script.indexOf("existing[0].prerelease !== prerelease");
+    const callAt = script.indexOf("updateRelease(");
+    expect(callAt).toBeGreaterThan(guardAt);
+
+    // Half 2: the PATCH that DOES fire re-derives latest from date + semver
+    // rather than forcing this release into it. Scoped to the call arguments —
+    // a `make_latest` mentioned only in the surrounding comment is not a fix.
+    const call = script.slice(callAt, script.indexOf("});", callAt));
+    expect(call).toContain("make_latest: 'legacy'");
+  });
+
   it("derives the npm dist-tag inside the publish step itself", () => {
     const job = jobOf("publish.yml", "publish");
     const hits = (job.steps ?? []).filter((s) => s.run?.includes("npm publish"));

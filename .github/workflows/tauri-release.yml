@@ -111,17 +111,34 @@ jobs:
             if (existing.length === 1) {
               core.info(`Reusing existing release ${existing[0].id} for ${tag}`);
               // Re-runs are NORMAL for a four-platform signed build, and this
-              // branch returns before createRelease -- so without this the
-              // re-run would inherit the first run's flag. `owner`/`repo` are
-              // spelled out because this script binds only the action's
-              // `github, context, core`; a bare `{ owner, repo }` shorthand
-              // ReferenceErrors at a `v*` tag, on exactly this path.
-              await github.rest.repos.updateRelease({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                release_id: existing[0].id,
-                prerelease,
-              });
+              // branch returns before createRelease -- so without a PATCH the
+              // re-run would inherit the first run's flag.
+              //
+              // Two things make that PATCH conditional rather than
+              // unconditional, and both are about `releases/latest`, which
+              // tauri.conf.json's updater endpoint resolves:
+              //
+              //  * The guard. A re-run on an OLDER tag (v0.25.0 while v0.26.0
+              //    is published) normally finds the flag already correct, and
+              //    the cheapest way not to disturb `latest` is not to write.
+              //  * `make_latest`. GitHub's update-a-release endpoint defaults
+              //    it to TRUE, so the one PATCH we do issue would promote the
+              //    older release and point every installed 0.26.0 copy at a
+              //    0.25.0 manifest. `'legacy'` asks GitHub to re-derive latest
+              //    from creation date + semver instead of forcing this one.
+              //
+              // `owner`/`repo` are spelled out because this script binds only
+              // the action's `github, context, core`; a bare `{ owner, repo }`
+              // shorthand ReferenceErrors at a `v*` tag, on exactly this path.
+              if (existing[0].prerelease !== prerelease) {
+                await github.rest.repos.updateRelease({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  release_id: existing[0].id,
+                  prerelease,
+                  make_latest: 'legacy',
+                });
+              }
               core.setOutput('release_id', existing[0].id);
               return;
             }
