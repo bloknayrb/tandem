@@ -168,6 +168,17 @@ function structuralLossesOf(report: FidelityReport | undefined): number {
 }
 
 /**
+ * How many body pictures the import dropped (#1755). Mirrors
+ * `structuralLossesOf`, including its `typeof` guard, because `fidelityReportOf`
+ * is a bare cast over a CRDT-synced value that survives session restore
+ * un-revalidated.
+ */
+function droppedImagesOf(report: FidelityReport | undefined): number {
+  const value = report?.droppedImages;
+  return typeof value === "number" && value > 0 ? value : 0;
+}
+
+/**
  * Machine-readable discriminator for a `skipped` save. Named so `tandem_save`
  * can tether its own `reason` field to this union rather than restating eleven
  * literals that would then drift (#1798).
@@ -454,6 +465,33 @@ export async function saveDocumentToDisk(
       // Binary branch (#576, .docx). Capture fidelity warnings against the same
       // Y.Doc snapshot we serialize, then write the ZIP via atomicWriteBuffer
       // (atomicWrite's UTF-8 encoding would corrupt the binary).
+      // Refuse before anything else in this branch (#1755). `exportYDocToDocx`
+      // regenerates the file from a Y.Doc that never received the document's
+      // pictures, so writing would silently strip them from the user's .docx.
+      // Placement is constrained from both sides: it must sit ABOVE the pinned
+      // `prepareExportComments`/`saveBinary` window (no `await` may be inserted
+      // inside that), and being before `saveBinary` means no bytes are
+      // generated and the once-per-run pre-overwrite backup gate is not
+      // consumed, while being before `atomicWriteBuffer`/`suppressNextChange`
+      // means the file is untouched and the watcher suppressor never armed.
+      //
+      // `saveDocumentToDisk` CATCHES this and returns
+      // `{ status: "error", errorCode: "VERIFY_BLOCKED" }` — it does not reject.
+      // The throw also lands before `saveSession`, so no session snapshot is
+      // written: the repo's softer `saved: false` + skip-reason vocabulary reads
+      // as a benign no-op, and these edits genuinely cannot reach .docx.
+      // Annotations are unaffected either way (durable annotation store).
+      //
+      // NOT added to `tandem_applyChanges`: `file-io/docx-apply.ts` edits the
+      // ORIGINAL `word/document.xml` in place and re-zips, so the pictures
+      // survive it. Adding this "for consistency" would break the one write path
+      // that preserves them.
+      if (droppedImagesOf(fidelityReportOf(doc)) > 0) {
+        throw new SaveVerificationError(
+          blockReasonMessage("import-image-loss"),
+          "import-image-loss",
+        );
+      }
       const warnings = detectExportFidelityIssues(doc);
       // Comment-side fidelity (#1142 G3): flattened reply threads and comments
       // whose ranges no longer resolve. Computed from ONE `prepareExportComments`

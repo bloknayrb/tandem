@@ -419,6 +419,46 @@ describe("fidelity report wiring", () => {
     expect(result.unpreservedImports).toBeUndefined();
   });
 
+  // -------------------------------------------------------------------------
+  // #1755 — dropped body pictures are reported, and the save is REFUSED
+  // -------------------------------------------------------------------------
+
+  it("refuses the save of an image-bearing .docx and leaves the file untouched", async () => {
+    const corpus = await import("../helpers/docx-corpus.js");
+    const filePath = path.join(tmpDir, "picture.docx");
+    const original = await corpus.buildEmbeddedImage();
+    await fs.writeFile(filePath, original);
+
+    const opened = await openFromDisk(filePath);
+    const report = reportOf(getOrCreateDocument(opened.documentId))!;
+    // The count reaches Y_MAP_FIDELITY_REPORT, not just the LoadIssue.
+    expect(report.droppedImages).toBe(1);
+
+    // A RETURNED value, never a rejection: saveDocumentToDisk catches
+    // SaveVerificationError and answers a SaveResult.
+    const result = await saveDocumentToDisk(opened.documentId, "manual");
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("VERIFY_BLOCKED");
+    expect(result.reason).toMatch(/picture/i);
+
+    // The half that kills an implementation throwing AFTER atomicWriteBuffer.
+    const after = await fs.readFile(filePath);
+    expect(after.length).toBe(original.length);
+    expect(after.equals(original)).toBe(true);
+  });
+
+  it("an image-free .docx still saves — kills 'refuse every .docx'", async () => {
+    const corpus = await import("../helpers/docx-corpus.js");
+    const filePath = path.join(tmpDir, "headings.docx");
+    await fs.writeFile(filePath, await corpus.buildHeadings());
+
+    const opened = await openFromDisk(filePath);
+    expect(reportOf(getOrCreateDocument(opened.documentId))?.droppedImages ?? 0).toBe(0);
+
+    const result = await saveDocumentToDisk(opened.documentId, "manual");
+    expect(result.status).toBe("saved");
+  });
+
   it("writes NO report for a non-docx (.md) document", async () => {
     const filePath = path.join(tmpDir, "note.md");
     await fs.writeFile(filePath, "# Heading\n\nPlain markdown.\n", "utf-8");

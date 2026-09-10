@@ -15,6 +15,7 @@ import {
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { wireFileWatcher } from "../../src/server/documents/watcher.js";
 import { listDocBackups } from "../../src/server/file-io/doc-backup.js";
+import { loadDocx } from "../../src/server/file-io/docx.js";
 import {
   applySingleSuggestion,
   applyTrackedChanges,
@@ -25,6 +26,7 @@ import {
   importAnnotationId,
   injectCommentsAsAnnotations,
 } from "../../src/server/file-io/docx-comments.js";
+import { htmlToYDoc } from "../../src/server/file-io/docx-html.js";
 import { walkDocumentBody } from "../../src/server/file-io/docx-walker.js";
 import { unwatchFile } from "../../src/server/file-watcher.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
@@ -38,6 +40,7 @@ import {
   Y_MAP_EXTERNAL_CONFLICT,
   Y_MAP_SAVED_AT_VERSION,
 } from "../../src/shared/constants.js";
+import { withInternal } from "../../src/shared/origins.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { toFlatOffset } from "../../src/shared/types.js";
 import { timeoutMs } from "../helpers/timing.js";
@@ -1804,5 +1807,42 @@ describe("the special-character span fence (#1754)", () => {
       true,
     );
     expect(await producedDocumentXml(output.buffer)).toContain("beta");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1755 — the scope pin: applyChanges must NOT gain the image refusal
+// ---------------------------------------------------------------------------
+
+describe("applyTrackedChanges on an image-bearing .docx (#1755)", () => {
+  it("still applies, and the picture is still in the output package", async () => {
+    // `file-io/docx-apply.ts` edits the ORIGINAL word/document.xml in place and
+    // re-zips, so the pictures survive it. Adding `tandem_save`'s refusal here
+    // "for consistency" would break the one write path that preserves them.
+    const { buildEmbeddedImageWithText } = await import("../helpers/docx-corpus.js");
+    const docxBuffer = await buildEmbeddedImageWithText();
+    const documentXml = await producedDocumentXml(docxBuffer);
+    const flat = walkDocumentBody(documentXml).flatText;
+    const from = flat.indexOf("Hello");
+    expect(from).toBeGreaterThanOrEqual(0);
+    // `ydocFlatText` below is the walker's own answer, so assert it is also the
+    // REAL import's — otherwise the flat-text guard is satisfied trivially and
+    // the fixture proves nothing about a genuine image-bearing document.
+    const importDoc = new Y.Doc();
+    const html = await loadDocx(docxBuffer);
+    withInternal(importDoc, () => htmlToYDoc(importDoc, html));
+    expect(flat).toBe(extractText(importDoc));
+    importDoc.destroy();
+
+    const output = await applyTrackedChanges(
+      docxBuffer,
+      [{ id: "s1", from, to: from + 5, newText: "Goodbye" }],
+      { author: "Test", ydocFlatText: flat },
+    );
+
+    expect(output.applied).toBe(1);
+    expect(output.rejectedDetails).toEqual([]);
+    const zip = await JSZip.loadAsync(output.buffer);
+    expect(Object.keys(zip.files).some((f) => f.startsWith("word/media/"))).toBe(true);
   });
 });

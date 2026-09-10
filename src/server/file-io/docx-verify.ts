@@ -58,7 +58,18 @@ const SOFT_RETENTION = 0.85;
 
 // --- Verdict (scalar/enum only — structurally incapable of holding text) ------
 
-export type BlockReason = "reimport-failed" | "degenerate-model" | "gross-text-loss";
+/**
+ * `import-image-loss` (#1755) has NO producer inside this module, deliberately:
+ * `verifyDocxRoundtrips` compares an export against a re-import of that same
+ * export, and both sides are equally image-less, so it is structurally incapable
+ * of seeing the loss. It is raised in `mcp/document-service.ts` off the
+ * PERSISTED import report, before any bytes are generated.
+ */
+export type BlockReason =
+  | "reimport-failed"
+  | "degenerate-model"
+  | "gross-text-loss"
+  | "import-image-loss";
 export type AdvisoryReason = "comment-loss" | "footnote-loss" | "soft-text-loss" | "verifier-error";
 
 /** All scalars. Safe to `console.error`/`warn` and to surface to the client. */
@@ -434,5 +445,7 @@ export function blockReasonMessage(reason: BlockReason): string {
       return `the regenerated file was missing most of its content${tail}`;
     case "gross-text-loss":
       return `the regenerated file was missing a large amount of text${tail}`;
+    case "import-image-loss":
+      return `this file's pictures couldn't be imported, so saving would remove them${tail}`;
   }
 }

@@ -431,7 +431,7 @@ Three further skip codes exist on `SaveResult` but **cannot reach `tandem_save`'
 - Read-only documents save their session only (annotations persist), not the source file, and answer `saved: false`.
 - Writable `.docx` documents save on **explicit save only** (never auto-save). The save writes the document body **plus pending `comment`-type annotations as Word comments** (`comments.xml` + range markers), anchored to their current ranges (#1068). `note` and `highlight` annotations are never written to the file (ADR-027), so un-promoted imported Word comments — which live as private notes until batch-promoted — are dropped from the saved file. Accepted/dismissed comments are dropped too (Word has no resolved-state channel we can write). Threaded replies flatten into the comment body with attribution lines; private replies (including imported Word reply threads) are never written.
 
-**Errors:** `FILE_LOCKED` (file open in another program)
+**Errors:** `FILE_LOCKED` (file open in another program), `VERIFY_BLOCKED` (the save was refused before touching the file -- the regenerated `.docx` failed post-write verification, or the import dropped body pictures the export would strip, #1755)
 
 ---
 

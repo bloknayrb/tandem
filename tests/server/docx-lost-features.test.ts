@@ -20,12 +20,15 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
+import { countDroppedImages, htmlToYDoc } from "../../src/server/file-io/docx-html.js";
 import {
   type DocxLostFeatures,
   lostFeatureLossLines,
   scanDocxLostFeatures,
   structuralLossLines,
 } from "../../src/server/file-io/docx-lost-features.js";
+import { withInternal } from "../../src/shared/origins.js";
 import {
   buildFormatRevision,
   buildHeaderFooter,
@@ -587,5 +590,57 @@ describe("lostFeatureLossLines — content contract", () => {
     expect(lines[1]).toMatch(/tracked insertion/);
     expect(lines.at(-2)).toMatch(/page header/);
     expect(lines.at(-1)).toMatch(/page footer/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1755 — countDroppedImages
+// ---------------------------------------------------------------------------
+//
+// The count is `total − kept` read off the REAL walk: no ancestor list is
+// mirrored anywhere, because no hand-written one is right. `"img"` is itself in
+// `BLOCK_TAGS`, so a DIRECT `<img>` child of `li`/`td`/`th`/`blockquote` takes
+// the block arm and is KEPT, while the same `<img>` one level deeper is deferred
+// to `processInlineNodes`, which has no `img` arm. These fixtures are
+// behavioural, so they cannot go stale against a refactor of that switch.
+
+describe("countDroppedImages (#1755)", () => {
+  // Matches SAFE_IMAGE_DATA_URI. The dispatch fixtures MUST carry an allowlisted
+  // src: a srcless <img> is dropped on EVERY arm (the block `case "img"` runs
+  // `sanitizeImageSrc(undefined)` first and gets null), so a srcless pair makes
+  // the kept fixture unachievable and the dropped one pass for the wrong reason.
+  const PNG = `data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==`;
+
+  it("counts a mammoth body picture — <p><img></p> — as dropped", () => {
+    expect(countDroppedImages(`<p><img src="${PNG}"></p>`)).toBe(1);
+  });
+
+  it("counts a DIRECT <img> child of <li> as kept, with a real image node", () => {
+    // The over-count direction, whose failure mode is a permanently unsaveable
+    // file — and the only fixture that catches a future removal of "img" from
+    // BLOCK_TAGS.
+    const html = `<ul><li><img src="${PNG}"></li></ul>`;
+    expect(countDroppedImages(html)).toBe(0);
+    const doc = new Y.Doc();
+    withInternal(doc, () => htmlToYDoc(doc, html));
+    expect(JSON.stringify(doc.getXmlFragment("default").toJSON())).toContain("<image");
+    doc.destroy();
+  });
+
+  it("counts a rejected src as dropped even on the block arm", () => {
+    // The block arm downgrades a non-allowlisted src to a paragraph, so this is
+    // a real loss the user should be told about before the save overwrites it.
+    expect(countDroppedImages(`<img src="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=">`)).toBe(1);
+    expect(countDroppedImages(`<img>`)).toBe(1);
+  });
+
+  it("does NOT count an image inside an approved footnote body", () => {
+    // Those <li>s are pruned before the walk and reconstructed through
+    // Y_MAP_FOOTNOTE_BODIES, so counting them would refuse the save on a
+    // document whose body pictures are all intact.
+    const html =
+      `<p>Body<sup><a href="#footnote-1" id="footnote-ref-1">[1]</a></sup></p>` +
+      `<ol><li id="footnote-1"><p>Note <img src="${PNG}"> body. <a href="#footnote-ref-1">↑</a></p></li></ol>`;
+    expect(countDroppedImages(html, { "1": { text: "Note body.", hadFormatting: false } })).toBe(0);
   });
 });

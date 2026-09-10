@@ -250,10 +250,20 @@ const CORPUS: Fixture[] = [
     name: "embedded image",
     build: corpus.buildEmbeddedImage,
     status: "breaks",
-    reason: "mammoth wraps images in <p>; htmlToYDoc drops inline images (no top-level <img>)",
+    reason:
+      "mammoth wraps images in <p>; htmlToYDoc drops inline images (no top-level <img>) — " +
+      "now REPORTED, and the save is refused rather than silently overwriting them away (#1755)",
     check(rt) {
-      // CURRENT LOSS — no image node survives the import.
+      // CURRENT LOSS — no image node survives the import. #1755 makes the loss
+      // LEGIBLE; it does not preserve images.
       expect(hasNode(rt.gen1, "image")).toBe(false);
+      const line = rt.importWarnings.find((w) => /picture/i.test(w));
+      expect(line, "the picture loss must be reported").toBeDefined();
+      // The copy describes a REFUSAL, not a lossy save...
+      expect(line).toContain("can't be saved");
+      expect(line).not.toMatch(/won'?t be in the saved file/i);
+      // ...and names an exit reachable from THIS document.
+      expect(line).toMatch(/ask claude to convert it to markdown/i);
     },
   },
   {
