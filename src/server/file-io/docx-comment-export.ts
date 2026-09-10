@@ -149,6 +149,28 @@ export interface ExportComment {
    * `bodyParagraphs` — keep it that way.
    */
   annotationId: string;
+  /**
+   * Map keys of the OTHER records that named this comment's stored `w:id` and
+   * were collapsed into it by the ghost-pair rule (#1693 review round 2).
+   * Empty for the overwhelming majority of comments.
+   *
+   * Two things depend on it, and the second is why it has to be carried rather
+   * than recomputed:
+   *
+   *   - their exportable replies are flattened into THIS `bodyParagraphs`, so
+   *     the collapse loses no reply text (`exportableReplies`);
+   *   - `reconcileImportCommentIds` rewrites THEIR stored
+   *     `importSource.commentId` to `id` as well, not just the kept record's.
+   *     Healing only the keeper is what made the collapse a one-shot: the pair
+   *     would then name two different ids, `keysDriftIndex` would bucket them
+   *     separately on the next save, and the export would write two Word
+   *     comments for one original — the #1448 symptom the collapse exists to
+   *     prevent, arriving one save later and with no log line.
+   *
+   * EXPORT-SIDE LINKAGE ONLY, exactly like `annotationId`: a reimported twin
+   * carries `[]`, so `commentKey` (docx-verify.ts) must keep ignoring it.
+   */
+  suppressedAnnotationIds: string[];
 }
 
 /**
@@ -257,14 +279,34 @@ function isAnnotationShaped(value: unknown): value is Annotation {
 }
 
 /**
- * Collect exportable (non-private) replies for an annotation, oldest first.
+ * Collect exportable (non-private) replies for a SET of annotation ids, oldest
+ * first across the whole set.
+ *
+ * A set rather than one id because of the ghost-pair collapse (#1693 review
+ * round 2): when two records naming one stored `w:id` are collapsed to a single
+ * Word comment, replies parented to the SUPPRESSED record still belong in the
+ * file. They are matched strictly on `reply.annotationId`, so leaving them
+ * behind drops them from the saved `.docx` AND from the comment-loss advisory
+ * (which counts range failures, not this) — a silent loss of the colleague's
+ * Word reply, and a regression against the pre-collapse behaviour where both
+ * records exported and the reply survived on the ghost's comment.
+ *
+ * The merged set is NOT de-duplicated by text. The suppressed record is a twin
+ * of the kept one, but their replies are not: export FLATTENS replies into the
+ * comment body, so a reply that already round-tripped comes back as body text
+ * and never as a second reply record. A text-equality filter would therefore
+ * catch nothing that actually occurs while introducing a fresh silent drop for
+ * a colleague who genuinely replied twice with the same words.
  */
-function exportableReplies(repliesMap: Y.Map<unknown>, annotationId: string): AnnotationReply[] {
+function exportableReplies(
+  repliesMap: Y.Map<unknown>,
+  annotationIds: ReadonlySet<string>,
+): AnnotationReply[] {
   const out: AnnotationReply[] = [];
   repliesMap.forEach((value) => {
     if (typeof value !== "object" || value === null) return;
     const reply = value as AnnotationReply;
-    if (reply.annotationId !== annotationId) return;
+    if (!annotationIds.has(reply.annotationId)) return;
     // ADR-027/#1000: private replies never reach Claude. The .docx file
     // round-trip is a separate boundary: an imported Word reply (isImportReply)
     // is written back to the file it came from even though it's private. A
@@ -477,9 +519,12 @@ export function prepareExportComments(
   // resolves is already gone, and leaving the note to carry the comment writes it
   // rather than losing it.
   //
-  // NOT counted through `onSkip`: the comment is written, once. `onSkip` feeds
-  // the comment-LOSS advisory, and reporting a suppressed duplicate there would
-  // tell the user a comment vanished when none did.
+  // NOT counted through `onSkip`: the comment is written, once, and nothing the
+  // suppressed record carried is dropped — its replies are flattened into the
+  // kept comment's body below, and the save path points its stored `w:id` at
+  // the one written. `onSkip` feeds the comment-LOSS advisory, and reporting a
+  // suppressed duplicate there would tell the user a comment vanished when none
+  // did.
   //
   // `keysDriftIndex` is the injectivity gate, imported rather than restated: a
   // stored id AT or PAST `IMPORT_COMMENT_ID_MAX` may be the truncation of a
@@ -488,6 +533,11 @@ export function prepareExportComments(
   // duplicate the drift index already accepts for them — the same boundary,
   // failing the same conservative way.
   const keptForCommentId = new Map<string, { ann: Annotation; from: number; to: number }>();
+  // Keyed by the stored `w:id` rather than by the kept record's key, so a later
+  // entry that OUTRANKS the current keeper inherits the ids already collapsed
+  // under it. Keying by keeper would strand them on a record that is itself
+  // about to be suppressed.
+  const suppressedByCommentId = new Map<string, string[]>();
   for (const entry of resolved) {
     const cid = entry.ann.importSource?.commentId;
     if (!keysDriftIndex(cid)) continue;
@@ -503,6 +553,9 @@ export function prepareExportComments(
     const kept = entryWins ? entry : prev;
     const dropped = entryWins ? prev : entry;
     keptForCommentId.set(cid, kept);
+    const suppressed = suppressedByCommentId.get(cid);
+    if (suppressed) suppressed.push(dropped.ann.id);
+    else suppressedByCommentId.set(cid, [dropped.ann.id]);
     // `JSON.stringify`, not bare interpolation: `cid` came out of the user's
     // `.docx` and the length gate above bounds it but does not stop a newline or
     // a NUL forging a log line (#1693 finding 3, the same class `logId` answers
@@ -546,7 +599,14 @@ export function prepareExportComments(
     if (ann.type === "comment" && ann.suggestedText) {
       bodyParagraphs.push("", `Suggested replacement: ${ann.suggestedText}`);
     }
-    const replies = exportableReplies(repliesMap, ann.id);
+    // The records this one absorbed, if any. Their replies are flattened into
+    // THIS body (see `exportableReplies`) and the save path reconciles their
+    // stored `w:id` onto the one written here (see `suppressedAnnotationIds`).
+    const cid = ann.importSource?.commentId;
+    const suppressedAnnotationIds = keysDriftIndex(cid)
+      ? (suppressedByCommentId.get(cid) ?? [])
+      : [];
+    const replies = exportableReplies(repliesMap, new Set([ann.id, ...suppressedAnnotationIds]));
     for (const reply of replies) {
       const replyLines = toParagraphLines(reply.text);
       bodyParagraphs.push("", `Reply from ${replyAuthorLabel(reply)}: ${replyLines[0]}`);
@@ -562,6 +622,7 @@ export function prepareExportComments(
       bodyParagraphs,
       flattenedReplies: replies.length,
       annotationId: ann.id,
+      suppressedAnnotationIds,
     });
   }
   return out;

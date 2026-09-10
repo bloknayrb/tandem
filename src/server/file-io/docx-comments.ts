@@ -623,6 +623,17 @@ function writeReconciledCommentId(map: Y.Map<unknown>, id: string, commentId: st
  * anyway. What keeps that pair out of the user's FILE is the ghost-pair collapse
  * in `prepareExportComments`; the leftover duplicate NOTE is #1954.
  *
+ * ## Both halves of a collapsed pair are healed, not just the survivor
+ *
+ * When the collapse suppressed a record, `ExportComment.suppressedAnnotationIds`
+ * names it and it is rewritten to the same `w:id` as the record that WAS
+ * written. Healing only the survivor makes the collapse fire exactly once: the
+ * pair then names two different stored ids, the next open buckets them
+ * separately, and the save after that writes two Word comments for one original
+ * — the #1448 symptom, one save later, with no log line to show for it. This is
+ * reachable for every id `reusableWordId` declines, which is every id the ghost
+ * reproduces with (`0123`, a negative id, one past int32, `c-9182`).
+ *
  * Export re-mints whenever `reusableWordId` declines the stored id — a
  * non-numeric one (`c-9182`, this tree's own `nc:`-tagged fallback ids), a
  * NEGATIVE one (declined on purpose, see that module's doc), one past the int32
@@ -659,14 +670,28 @@ function writeReconciledCommentId(map: Y.Map<unknown>, id: string, commentId: st
  */
 export function reconcileImportCommentIds(
   doc: Y.Doc,
-  written: ReadonlyArray<{ annotationId: string; id: number }>,
+  written: ReadonlyArray<{
+    annotationId: string;
+    id: number;
+    suppressedAnnotationIds?: ReadonlyArray<string>;
+  }>,
 ): number {
   if (written.length === 0) return 0;
   const map = doc.getMap(Y_MAP_ANNOTATIONS);
   return withMcp(doc, () => {
     let rewritten = 0;
-    for (const { annotationId, id } of written) {
-      if (writeReconciledCommentId(map, annotationId, String(id))) rewritten++;
+    for (const { annotationId, id, suppressedAnnotationIds } of written) {
+      const commentId = String(id);
+      if (writeReconciledCommentId(map, annotationId, commentId)) rewritten++;
+      // The collapsed twins get the SAME id, and that is the point rather than
+      // tidiness: they named one stored `w:id` before the save and must still
+      // name one after it, or `keysDriftIndex` buckets them apart on the next
+      // open and the collapse never fires again. Optional so the two test call
+      // sites that hand-build `{annotationId, id}` rows stay valid; the one
+      // production caller passes `ExportComment[]` and carries it already.
+      for (const suppressed of suppressedAnnotationIds ?? []) {
+        if (writeReconciledCommentId(map, suppressed, commentId)) rewritten++;
+      }
     }
     return rewritten;
   });

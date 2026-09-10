@@ -711,6 +711,59 @@ describe("exportYDocToDocx — import/export idempotency", () => {
     expect(prepared[0].id).toBe(1);
   });
 
+  it("flattens the suppressed record's replies into the comment it collapsed into (#1693)", () => {
+    // The collapse must not cost the user content. `exportableReplies` matches
+    // strictly on `reply.annotationId`, so a reply parented to the record the
+    // collapse drops reaches neither the saved `.docx` nor the comment-loss
+    // advisory (which counts range failures, not this) — a silent loss, and a
+    // regression against the pre-collapse behaviour where both records exported
+    // and the reply survived on the ghost's comment. It is reachable after
+    // promote → external Word edit → cold open, where the colleague's new Word
+    // reply lands on the freshly injected ghost rather than on the promotion.
+    const d = docFromHtml("<p>Hello brave world</p>");
+    addAnnotation(d, 0, 5, {
+      id: "zzz-ghost",
+      content: "Imported body",
+      author: "import",
+      type: "note",
+      audience: "private",
+      importSource: { author: "Rita", file: "f.docx", commentId: "1" },
+    });
+    addAnnotation(d, 0, 5, {
+      id: "aaa-promotion",
+      content: "Promoted body",
+      author: "user",
+      promotedFrom: "note",
+      importSource: { author: "Rita", file: "f.docx", commentId: "1" },
+    });
+    // The colleague's Word reply, on the record that loses the collapse.
+    addReply(d, {
+      annotationId: "zzz-ghost",
+      author: "import",
+      importAuthor: "Rita",
+      private: true,
+      text: "Please clarify",
+      timestamp: 1700000002000,
+    });
+    // ...and one on the winner, so the ordering claim is testable.
+    addReply(d, { annotationId: "aaa-promotion", text: "On it", timestamp: 1700000001000 });
+
+    const prepared = prepareExportComments(d);
+    expect(prepared).toHaveLength(1);
+    expect(prepared[0].suppressedAnnotationIds).toEqual(["zzz-ghost"]);
+    const body = prepared[0].bodyParagraphs.join("\n");
+    expect(body).toContain("Please clarify");
+    // Oldest-first across the MERGED set, not one record's replies after the
+    // other's — the thread is one thread once the comment is one comment.
+    expect(body.indexOf("On it")).toBeLessThan(body.indexOf("Please clarify"));
+    // And the count stays honest about the bytes: both replies were flattened,
+    // so both are reported.
+    expect(prepared[0].flattenedReplies).toBe(2);
+    expect(commentExportDowngrades(prepared, { unresolved: 0, malformed: 0 }).downgrades).toEqual([
+      "2 comment replies flattened into their parent comments (Word reply threads aren't supported)",
+    ]);
+  });
+
   it("keeps both when the shared stored id may be a truncation (#1693)", () => {
     // The injectivity boundary, and the direction it fails in. A stored id AT or
     // PAST `IMPORT_COMMENT_ID_MAX` may be the prefix of a longer `w:id`, so two

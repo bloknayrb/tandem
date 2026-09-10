@@ -554,3 +554,113 @@ describe("a cold open still writes one Word comment per original", () => {
     });
   }
 });
+
+// ---------------------------------------------------------------------------
+// 6. The SECOND save — the collapse must not be a one-shot
+// ---------------------------------------------------------------------------
+
+describe("a collapsed pair is still one Word comment on the second save", () => {
+  // `reconcileImportCommentIds` heals BOTH halves of a collapsed pair, not just
+  // the record that was written. Healing only the survivor makes the collapse
+  // fire exactly once: the pair then names two different stored ids,
+  // `keysDriftIndex` buckets them apart on the next open, and the export writes
+  // TWO Word comments for one original — the #1448 symptom the collapse exists
+  // to prevent, arriving one save later and with no log line to show for it.
+  //
+  // The pair is built the way the finding reaches it, and NOT via a re-export:
+  // promote, quit WITHOUT saving, a colleague edits the .docx in Word (the
+  // offsets drift and they add a reply), reopen cold. The file therefore still
+  // carries the ORIGINAL `w:id`, so both records name a stored id export may
+  // have to re-mint — which is the only shape in which the two can diverge.
+  //
+  // `0123`, `-1` and `c-9182` are the discriminating rows: `reusableWordId`
+  // declines all three, so save 1 mints a different id and the stored ids move.
+  // `1000000000` and the control are reused verbatim, so there is nothing to
+  // reconcile — they pin that the row does not depend on a rewrite happening.
+  for (const commentId of ["0123", "-1", "c-9182", "1000000000", CONTROL_ID]) {
+    it(`writes one comment on both saves for w:id ${JSON.stringify(commentId)}`, async () => {
+      const body = "Imported body";
+      // The session that promoted, and never saved.
+      const home = new Y.Doc();
+      htmlToYDoc(home, "<p>Hello World</p>");
+      const homeMap = home.getMap(Y_MAP_ANNOTATIONS);
+      expect(
+        injectCommentsAsAnnotations(
+          home,
+          [{ commentId, authorName: "Rita", bodyText: body, from: off(0), to: off(5) }],
+          "r.docx",
+        ),
+      ).toBe(1);
+      const key = Array.from(homeMap.keys())[0];
+      promoteInPlace(home, key);
+      expectPromotedShape(home, key, commentId);
+      const promoted = homeMap.get(key) as Annotation;
+
+      // The cold open: content first, annotation map EMPTY, so the drift index
+      // has nothing in it and the ghost forms under the drifted offsets' key.
+      const cold = new Y.Doc();
+      htmlToYDoc(cold, "<p>Hello World</p>");
+      const coldMap = cold.getMap(Y_MAP_ANNOTATIONS);
+      const replyText = "Please clarify";
+      expect(
+        injectCommentsAsAnnotations(
+          cold,
+          [
+            {
+              commentId,
+              authorName: "Rita",
+              bodyText: body,
+              from: off(6),
+              to: off(11),
+              replies: [{ commentId: "r1", authorName: "Rita", bodyText: replyText }],
+            },
+          ],
+          "r.docx",
+        ),
+      ).toBe(1);
+      const ghostKey = Array.from(coldMap.keys())[0];
+      expect(ghostKey).not.toBe(key);
+      // ...and only afterwards does `loadAndMerge` put the envelope back.
+      withInternal(cold, () => coldMap.set(key, promoted));
+      expect(coldMap.size).toBe(2);
+      // The colleague's Word reply is on the GHOST — the half the collapse drops.
+      const replies = Array.from(
+        cold.getMap(Y_MAP_ANNOTATION_REPLIES).values() as Iterable<AnnotationReply>,
+      );
+      expect(replies).toHaveLength(1);
+      expect(replies[0].annotationId).toBe(ghostKey);
+
+      // SAVE 1 — one Word comment, the user's promotion, carrying the ghost's
+      // reply rather than leaving it behind with the record that was dropped.
+      const first = prepareExportComments(cold);
+      expect(first).toHaveLength(1);
+      expect(first[0].annotationId).toBe(key);
+      expect(first[0].suppressedAnnotationIds).toEqual([ghostKey]);
+      const firstBytes = await exportYDocToDocx(cold);
+      const firstWritten = await extractDocxComments(firstBytes);
+      expect(firstWritten).toHaveLength(1);
+      expect(firstWritten[0].bodyText).toContain(replyText);
+      // The save path's order: bytes first, then the reconcile.
+      reconcileImportCommentIds(cold, first);
+
+      // SAVE 2 — still one Word comment in the user's file, and still the
+      // promotion. This is the consequence, asserted before the mechanism: heal
+      // only the survivor and the count here is 2.
+      const second = prepareExportComments(cold);
+      expect(second).toHaveLength(1);
+      expect(second[0].annotationId).toBe(key);
+      expect(await extractDocxComments(await exportYDocToDocx(cold))).toHaveLength(1);
+
+      // And the mechanism that makes it so: both halves name the id the FILE
+      // carries, so `keysDriftIndex` still buckets them together.
+      const storedIds = Array.from(coldMap.values() as Iterable<Annotation>).map(
+        (ann) => ann.importSource?.commentId,
+      );
+      expect(storedIds).toHaveLength(2);
+      expect(new Set(storedIds)).toEqual(new Set([String(first[0].id)]));
+
+      home.destroy();
+      cold.destroy();
+    });
+  }
+});
