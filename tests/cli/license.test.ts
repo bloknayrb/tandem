@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { formatLicenseStatus, resolveLicenseInput } from "../../src/cli/license.js";
+import fs from "fs";
+import os from "os";
+import path from "path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatLicenseStatus, resolveLicenseInput, runActivate } from "../../src/cli/license.js";
 import type { LicenseState } from "../../src/server/license/license-types.js";
 
 describe("resolveLicenseInput", () => {
@@ -75,5 +78,59 @@ describe("formatLicenseStatus", () => {
     expect(formatLicenseStatus(licensed, false).join("\n")).toContain(
       "Enforcement:   off (activates at v1.0)",
     );
+  });
+});
+
+/**
+ * `runActivate`'s error paths — this file's first coverage of them (#1789).
+ *
+ * The `exit` spy must be NON-throwing. A throwing mock leaves `runActivate` AT
+ * `process.exit(1)`, so the explicit `return` after it is unreachable in the
+ * test and the "only one message" negative below passes with and without the
+ * fix — the assertion would defeat itself.
+ */
+describe("runActivate — unreadable input (#1789)", () => {
+  let errors: string[];
+  let exit: ReturnType<typeof vi.spyOn>;
+  let dir: string;
+  let previousAppDataDir: string | undefined;
+
+  beforeEach(() => {
+    errors = [];
+    // A NAMED temp dir: a bare `mkdtemp` prefix fails platform.test.ts. This
+    // path does go through `resolveAppDataDir()`, so it must be redirected.
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-"));
+    previousAppDataDir = process.env.TANDEM_APP_DATA_DIR;
+    process.env.TANDEM_APP_DATA_DIR = dir;
+    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      errors.push(args.map(String).join(" "));
+    });
+    exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+  });
+
+  afterEach(() => {
+    if (previousAppDataDir === undefined) delete process.env.TANDEM_APP_DATA_DIR;
+    else process.env.TANDEM_APP_DATA_DIR = previousAppDataDir;
+    vi.restoreAllMocks();
+  });
+
+  it("a directory argument prints one sentence, not a stack trace", async () => {
+    // `existsSync` says yes for a directory and `readFileSync` then throws
+    // EISDIR. Before the fix that call sat outside every handler.
+    await expect(runActivate(["activate", dir])).resolves.toBeUndefined();
+
+    expect(exit).toHaveBeenCalledWith(1);
+    const out = errors.join("\n");
+    expect(out).toContain("Could not read a license from");
+    // The negative that pins BOTH the explicit `return` and the sibling (never
+    // nested) `try`: either mistake prints the generic copy on top of this one.
+    expect(out).not.toContain("License activation failed");
+  });
+
+  it("no argument exits without throwing past the spy", async () => {
+    await expect(runActivate(["activate"])).resolves.toBeUndefined();
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errors.join("\n")).toContain("Usage: tandem activate");
+    expect(errors.join("\n")).not.toContain("License activation failed");
   });
 });

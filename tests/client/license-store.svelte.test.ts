@@ -167,3 +167,94 @@ describe("licenseStore (singleton lifecycle)", () => {
     expect(fetchLicenseStatus).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * A failed poll must be VISIBLE and must change nothing else (#1789). Before
+ * this the catch was a bare comment, so a first-poll failure left `status`
+ * null and Settings → License asserted "Not enforced in this version" from a
+ * fetch that never answered.
+ */
+describe("licenseStore — statusUnavailable (#1789)", () => {
+  let warn: ReturnType<typeof vi.fn<(...args: unknown[]) => void>>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fetchLicenseStatus.mockReset();
+    licenseStore.stop();
+    warn = vi.fn();
+    vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => warn(...args));
+  });
+
+  afterEach(() => {
+    licenseStore.stop();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("a failed poll sets the flag and leaves status and ui at their last values", async () => {
+    fetchLicenseStatus.mockResolvedValueOnce(TRIAL(5));
+    licenseStore.start();
+    await flush();
+    expect(licenseStore.statusUnavailable).toBe(false);
+
+    fetchLicenseStatus.mockRejectedValue(new Error("ECONNREFUSED"));
+    await licenseStore.refresh();
+    await flush();
+
+    expect(licenseStore.statusUnavailable).toBe(true);
+    // The `ui`-unchanged half is a real guard only because `deriveLicenseUi`
+    // must NOT take `statusUnavailable` — `ui` stays a pure function of
+    // `status`, so a transient loopback failure structurally cannot raise the
+    // wall or flip editability. A later widening breaks these two lines.
+    expect(licenseStore.status).toEqual(TRIAL(5));
+    expect(licenseStore.ui.showTrialBanner).toBe(true);
+    expect(licenseStore.ui.editable).toBe(true);
+  });
+
+  it("two consecutive failures warn exactly once", async () => {
+    fetchLicenseStatus.mockRejectedValue(new Error("down"));
+    licenseStore.start();
+    await flush();
+    await licenseStore.refresh();
+    await flush();
+
+    expect(licenseStore.statusUnavailable).toBe(true);
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes("[license]"))).toHaveLength(1);
+  });
+
+  it("a later success clears it", async () => {
+    fetchLicenseStatus.mockRejectedValueOnce(new Error("down"));
+    licenseStore.start();
+    await flush();
+    expect(licenseStore.statusUnavailable).toBe(true);
+
+    fetchLicenseStatus.mockResolvedValue(TRIAL(3));
+    await licenseStore.refresh();
+    await flush();
+    expect(licenseStore.statusUnavailable).toBe(false);
+  });
+
+  it("set() clears it — an activate response is a successful observation", async () => {
+    fetchLicenseStatus.mockRejectedValue(new Error("down"));
+    licenseStore.start();
+    await flush();
+    expect(licenseStore.statusUnavailable).toBe(true);
+
+    licenseStore.set(LICENSED);
+    expect(licenseStore.statusUnavailable).toBe(false);
+  });
+
+  it("stop() resets it with the rest of the baseline", async () => {
+    fetchLicenseStatus.mockRejectedValue(new Error("down"));
+    licenseStore.start();
+    await flush();
+    expect(licenseStore.statusUnavailable).toBe(true);
+
+    licenseStore.stop();
+    expect(licenseStore.statusUnavailable).toBe(false);
+  });
+});
+// The `status === null` row is deliberately NOT here: `stop()` never clears
+// `status` and `set()` always assigns a non-null one, so within this file the
+// singleton has held a status since the first describe's `beforeEach`. That row
+// needs a fresh module instance and lives in `settings-license-tab.test.ts`.

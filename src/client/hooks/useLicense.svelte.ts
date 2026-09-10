@@ -26,6 +26,14 @@ const POLL_INTERVAL_MS = 60_000;
 
 function createLicenseStore() {
   let status = $state<LicenseStatusResponse | null>(null);
+  // The last poll failed and this is a stale/absent view (#1789). Surfaced so
+  // Settings → License can say so instead of asserting a state it no longer has
+  // evidence for.
+  //
+  // Deliberately NOT an input to `deriveLicenseUi` below: `ui` stays a pure
+  // function of `status`, so a transient loopback failure structurally cannot
+  // raise the restricted wall or flip editability.
+  let statusUnavailable = $state(false);
   // One derived `ui` shared by all consumers (banner, wall, tab, editor) so
   // `deriveLicenseUi` runs once per status change, not once per consumer per cycle.
   const ui = $derived(deriveLicenseUi(status));
@@ -60,23 +68,42 @@ function createLicenseStore() {
     started = false;
     onTransition = null;
     wasRestricted = null;
+    statusUnavailable = false;
   }
 
   async function poll(): Promise<void> {
     try {
       const next = await fetchLicenseStatus();
       status = next;
+      statusUnavailable = false;
       reconcileTransition(isRestricted(next));
       // The build flag never flips at runtime — a dark build polls once, then rests.
       if (!next.gateActive) stop();
     } catch {
-      // Server unavailable / transient — keep last-known state, retry next tick.
+      // Server unavailable / transient — keep last-known `status`, retry next
+      // tick. What must NOT happen is the silent version: before #1789 this
+      // catch was a bare comment, so a first-poll failure left `status === null`
+      // and Settings → License then read "Not enforced in this version" — an
+      // assertion about the gate made with no evidence at all.
+      //
+      // Warn on the TRANSITION into failure only. The timer fires forever, so a
+      // per-tick warn is a console flood on any sustained outage.
+      if (!statusUnavailable) {
+        console.warn("[license] status poll failed — showing last known state, if any");
+      }
+      statusUnavailable = true;
     }
   }
 
   return {
     get status(): LicenseStatusResponse | null {
       return status;
+    },
+    /** True when the last poll failed, so `status` is stale or has never been
+     *  observed. A getter, not a plain property: this object is built once, so
+     *  a snapshot would freeze at its initial value. */
+    get statusUnavailable(): boolean {
+      return statusUnavailable;
     },
     get ui(): LicenseUi {
       return ui;
@@ -103,6 +130,10 @@ function createLicenseStore() {
      *  triggers the same provider rebuild the poll path would. */
     set(next: LicenseStatusResponse): void {
       status = next;
+      // A successful observation by definition — this is the activate response.
+      // Without the clear, a just-activated license renders beside a stale
+      // "couldn't reach the server" warning.
+      statusUnavailable = false;
       reconcileTransition(isRestricted(next));
     },
   };
