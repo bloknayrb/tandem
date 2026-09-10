@@ -15,7 +15,7 @@
 > **Going live is TWO constants, in two languages** ([#1785](https://github.com/bloknayrb/tandem/issues/1785)).
 > `LICENSE_GATE_ENABLED = false` in `tsup.config.ts:20` turns the run gate on, and
 > `const LICENSE_UPDATE_ENDPOINT: &str = ""` at `src-tauri/src/lib.rs:171` must be pointed at
-> the deployed Worker. While that string is empty, `entitled_license_id()` short-circuits
+> the deployed Worker. While that string is empty, `resolve_update_route()` short-circuits
 > (`src-tauri/src/lib.rs:2298`) and `build_updater()` falls to `app.updater()`
 > (`:2317-2332`) — so **every build today, licensed or not, checks the PUBLIC manifest**
 > from `src-tauri/tauri.conf.json`, and the `X-Tandem-License-Id` path described in Part 2
