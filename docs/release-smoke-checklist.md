@@ -28,6 +28,10 @@ matrix across OS versions, observer soak, accessibility) live in
 - [ ] File association, cold start: with Tandem closed, double-click a `.md` file — Tandem opens **with that file** (not `welcome.md`).
 - [ ] File association, warm start: with Tandem running, double-click another `.md` — it opens as a new tab in the existing window (single-instance).
 - [ ] Updater: on a machine/VM with the **previous** version installed, launch and wait for the titlebar update dot → install → app restarts → About shows the new version → open a document and type (sidecar survived the restart). **And no "Tandem may not have finished updating" banner appears** — that banner firing after a *successful* update is #1118's false-positive mode, and it would reach every user at once.
+
+  **Watch the window — there is no success line to grep.** `evaluate_pending_update_marker`'s two verdicts sit at different levels: `MayHaveFailed` is a `warn!` and reaches `tandem.log`, but `Completed` is an `info!`, below the release `LevelFilter::Warn` floor. The marker is then cleared unconditionally on **both** paths, so `update-pending.json` being gone proves nothing. The rule is one-sided: `Pending-update marker survived an update` present = the banner fired; absent = you still need a human to confirm the window was clean. Same trap as the quit-flush row's `info!` banners below.
+
+  **While you are here, check #1762 in the same restart.** Have a document open, and grep the post-update log for `skipping unlock wait`. Seeing `Sidecar exe not on disk at ...node-sidecar-<triple>.exe — skipping unlock wait (packaging bug?)` means the Windows exe-unlock wait is still dead code (`sidecar_exe_path` builds the triple-suffixed name; the bundler installs plain `node-sidecar.exe`), leaving the NSIS `PREINSTALL` kill hook as the only thing stopping a running sidecar from being overwritten. Observed on the v0.24.1 → v0.25.0 run.
 - [ ] **Quit flushes unsaved edits (#1756).** Edit an open `.md` and Quit from the tray **within 10 s, without saving** — autosave has not fired yet, so this is the graceful stop or nothing. Relaunch: **the edit is present**. Then **one grep** of `tandem.log` for `Exit: sidecar shutdown complete`, and the line it finds must read `verdict=Flushed`, `timed_out=false`, `owned_child=true`. Task Manager shows **no orphaned `node-sidecar` process**.
 
   **Grep that one line, not the `info!` banners.** In release the log floor is `LevelFilter::Warn`, so `Exit: stopping sidecar gracefully` and `Sidecar exited gracefully after /api/shutdown` are `info!` and never reach `tandem.log` on an installed build — a checklist that greps for them finds nothing and reads as a failure. The verdict line is a `warn!` for exactly this reason, and `verdict_line_carries_the_substrings_the_smoke_checklist_greps` in `src-tauri/src/sidecar.rs` is what keeps **this row's** four strings and the code's format agreeing — it covers the verdict line and nothing else. The row below has its own guard, `respawn_guard_lines_are_warns_and_match_the_smoke_checklist`, which pins both of that row's literals *and* their level; until it existed one of those two sat at `info!` under this same floor. A neutered attempt cannot forge them: it shows `verdict=none` with `timed_out=true` and `elapsed` in single-digit ms.
@@ -111,6 +115,57 @@ before it meets a paying user.
 Note the outcome (platforms covered, anything skipped, anything found) in a
 comment on the release's tracking issue or the release PR. A skipped platform
 is fine when stated; an unstated skip reads as "verified" and isn't.
+
+## What the v0.25.0 run settled
+
+v0.25.0 (2026-09-06), run 2026-09-09. **§1's updater row was EXECUTED — the first
+time since it was written.** Nothing else in §1 was run, and §2/§3/§4 were not run.
+
+**Updater row: v0.24.1 → v0.25.0, PASS. No "Tandem may not have finished updating"
+banner appeared.** That closes [#1596](https://github.com/bloknayrb/tandem/issues/1596)
+and is the first hardware exercise of #1118's false-positive mode.
+
+Recorded precisely, because the criterion asked for it:
+
+- **From** v0.24.1 (installed NSIS build, `tandem-desktop.exe` ProductVersion `0.24.1`)
+  **to** v0.25.0, taken through the in-app banner's *Restart to install*, against the
+  public `releases/latest/download/latest.json` manifest.
+- Pre-state verified clean: no `update-pending.json` in `%APPDATA%\com.tandem.editor`.
+- Post-state: `tandem-desktop.exe` reports `0.25.0`, marker absent, and `tandem.log`
+  carries **no** `Pending-update marker survived an update` line.
+- The banner was observed absent **on screen**, by a human, which is the half no log
+  can supply — see the next paragraph.
+
+**A future operator cannot confirm this row from the log alone, and must watch the
+window.** `evaluate_pending_update_marker` logs its two verdicts at different levels:
+`MayHaveFailed` is a `warn!`, but `Completed` is an `info!` — below the release
+`LevelFilter::Warn` floor. So a *successful* update writes **nothing**, and the marker
+is cleared unconditionally on both paths, so its absence proves nothing either. The
+usable rule is one-sided: the `warn!` line present means the banner fired; absent plus
+a human confirming a clean window means it did not. Grepping for a success line finds
+nothing and reads like a failure — the same trap the §1 quit-flush row documents for
+`Exit: stopping sidecar gracefully`.
+
+**The run also caught [#1762](https://github.com/bloknayrb/tandem/issues/1762) live**,
+which had been a code-reading claim. On the real upgrade `tandem.log` recorded:
+
+```
+[2026-09-10][01:22:37][app_lib][WARN] Sidecar exe not on disk at
+C:\Users\blokn\AppData\Local\Tandem\node-sidecar-x86_64-pc-windows-msvc.exe
+  — skipping unlock wait (packaging bug?)
+```
+
+`sidecar_exe_path` builds `node-sidecar-{TARGET_TRIPLE}.exe` while the bundler installs
+plain `node-sidecar.exe`, so `wait_for_sidecar_unlock` returned `true` without waiting.
+Documents were open at the time, which is exactly the condition #1762's suggested fix
+asks a checklist line to create. **The update still succeeded and the sidecar binary
+WAS replaced** (its mtime moved), so the NSIS `PREINSTALL` kill hook held on this run —
+which bounds #1762's impact rather than dismissing it: the unlock wait is dead code, and
+the kill hook is now the only protection.
+
+**Not exercised, and worth naming:** the half-install residual `classify_pending_update`
+documents — NSIS replacing `Tandem.exe` but not `node-sidecar.exe`, which classifies as
+`Completed`. Both binaries were replaced here, so that path remains untested.
 
 ## What the v0.24.1 run settled
 
