@@ -144,7 +144,7 @@ This trips up every new clone, so it is stated exactly:
   `scripts/check-semantic-tokens.ts` on staged `src/client/**`, and an EOL normalizer on staged
   markdown/YAML. **It does not typecheck and does not run tests.**
 - **`pre-push`** runs, in order:
-  1. `npx biome check src/ tests/`
+  1. `npx biome check .`
   2. `npm test -- --run --reporter=dot` — the **full** Vitest suite, not a subset
   3. `cargo test --manifest-path src-tauri/Cargo.toml`
 

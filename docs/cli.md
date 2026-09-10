@@ -172,7 +172,7 @@ These commands are available when running Tandem from a source checkout (`git cl
 | `npm run build:server` | tsup only — bundles server, CLI, channel shim, monitor and the stdio bridge into `dist/`. A missing `dist/stdio-bridge/` is not a build error: the generated `tandem` MCP entry silently falls back to bare `npx` behind a `log::warn!`. |
 | `npm run build:reaper` | Builds the `tandem-reaper` sidecar. Both declared `externalBin`s must exist or `cargo tauri dev/build` fails its existence check. |
 | `npm run build:tauri` | Tauri production build — produces installers. |
-| `npm run check:fonts` | Validates that all referenced font assets are present. |
+| `npm run check:fonts` | Validates that all referenced font assets are present. Requires a prior `npm run build`: it inspects the built `dist/client/index.html` and errors if that file is absent. |
 
 ### Testing
 

@@ -27,7 +27,9 @@
       "!dist/**",
       "!node_modules/**",
       "!package-lock.json",
-      "!tests/tauri-driver/**"
+      "!tests/tauri-driver/**",
+      "!.claude",
+      "!.worktrees"
     ]
   }
 }
