@@ -585,6 +585,30 @@ describe("exportYDocToDocx — import/export idempotency", () => {
     expect(ids).toContain(1); // reused original Word id
   });
 
+  it("reuses a large or negative stored comment id (#1693)", () => {
+    // `reusableWordId` is keyed on "can this be written into a `w:id` and read
+    // back as the same string", which admits every `ST_DecimalNumber` — the
+    // whole int32 window, negatives included. The predicate it replaced
+    // rejected both of these, so the promoted comment was written back under a
+    // freshly minted id the import drift index had never seen and re-imported
+    // as a ghost note beside the promotion (#1448).
+    const d = docFromHtml("<p>Hello brave world</p>");
+    addAnnotation(d, 0, 5, {
+      content: "Billion",
+      author: "user",
+      importSource: { author: "A", file: "f.docx", commentId: "1000000000" },
+    });
+    addAnnotation(d, 6, 11, {
+      content: "Negative",
+      author: "user",
+      importSource: { author: "A", file: "f.docx", commentId: "-1" },
+    });
+
+    const prepared = prepareExportComments(d);
+    expect(prepared).toHaveLength(2);
+    expect(prepared.map((c) => c.id).sort((a, b) => a - b)).toEqual([-1, 1000000000]);
+  });
+
   it("does not reuse non-canonical or hostile stored comment ids", () => {
     const d = docFromHtml("<p>Hello brave world</p>");
     addAnnotation(d, 0, 5, {
@@ -596,6 +620,9 @@ describe("exportYDocToDocx — import/export idempotency", () => {
       importSource: { author: "A", file: "f.docx", commentId: "99999999999999" },
     });
 
+    // Both are still refused, and for the right reason after #1693: "01"
+    // re-serializes as `1` (so the stored key and the written key would
+    // diverge) and "99999999999999" is past the int32 ceiling.
     const prepared = prepareExportComments(d);
     expect(prepared.map((p) => p.id).sort()).toEqual([1, 2]);
   });

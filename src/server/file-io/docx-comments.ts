@@ -16,7 +16,6 @@ import { toFlatOffset } from "../../shared/types.js";
 import { IMPORT_AUTHOR_MAX, IMPORT_REPLY_BODY_CAP, nextRev } from "../annotations/schema.js";
 import { extractText } from "../mcp/document-model.js";
 import { anchoredRange, describeRangeFailure } from "../positions.js";
-import { isCanonicalWordId } from "./docx-comment-id.js";
 import {
   findAllByName,
   getAttr,
@@ -24,6 +23,66 @@ import {
   isElement,
   walkDocumentBody,
 } from "./docx-walker.js";
+
+/**
+ * Width cap for an untrusted id rendered into a stderr line. Generous enough
+ * that a real Word `w:id` (a short decimal) is never elided.
+ */
+const LOG_ID_MAX = 64;
+
+/** How many ids one aggregate log line names before it says `(+N more)`. */
+const MAX_LOGGED_IDS = 10;
+
+/**
+ * Render an untrusted id (`w:id`, `paraId`, reply id) safe for one stderr line.
+ *
+ * Exported rather than module-private, and deliberately so: two of its rows —
+ * an unpaired surrogate, and a pair straddling the truncation boundary —
+ * cannot be driven through either behaviourally reachable call site. Those two
+ * read their id off a `w:id` attribute in a JSZip-generated `comments.xml`, and
+ * a lone surrogate does not survive UTF-8 serialization into one. A unit test
+ * is the only thing that can reach them, so the symbol is public.
+ *
+ * **A log helper, not a validator.** Nothing downstream parses these strings;
+ * every id used as a key or a hash input is the raw value. Two properties:
+ *   - every C0 (U+0000–U+001F), U+007F, C1 (U+0080–U+009F) and every UNPAIRED
+ *     surrogate becomes U+FFFD, so a crafted id cannot forge a newline and
+ *     inject a second log line (nor a NUL, which several of these ids can
+ *     legitimately carry — see `NON_CANONICAL_TAG`);
+ *   - the result is capped at `LOG_ID_MAX` units with a trailing ellipsis, and
+ *     a trailing lone HIGH surrogate is dropped before the ellipsis so the
+ *     truncation cannot mint the very thing the pass above just removed.
+ */
+export function logId(raw: string): string {
+  let out = "";
+  for (let i = 0; i < raw.length; i++) {
+    const code = raw.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f || (code >= 0x80 && code <= 0x9f)) {
+      out += "\uFFFD";
+      continue;
+    }
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = raw.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        out += raw[i] + raw[i + 1];
+        i++;
+      } else {
+        out += "\uFFFD";
+      }
+      continue;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      out += "\uFFFD";
+      continue;
+    }
+    out += raw[i];
+  }
+  if (out.length <= LOG_ID_MAX) return out;
+  let cut = out.slice(0, LOG_ID_MAX);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return `${cut}\u2026`;
+}
 
 /**
  * Tag opening every NON-canonical hash pre-image, and the whole
@@ -39,7 +98,8 @@ import {
  * back tagged is satisfied by a gate that stopped tagging anything.
  *
  * An earlier form of this argument ran on the first character being a digit,
- * which held only because the gate was `isCanonicalWordId`. Narrowing that gate
+ * which held only because the gate was a canonical-decimal predicate (since
+ * split in two by #1693 and gone under that name). Narrowing that gate
  * to the delimiter (see `annotationPreImage`) admits `nc:`-prefixed ids into
  * the canonical branch, so the digit argument had to go with it. On the
  * annotation side the branches would still be separable without the tag clause
@@ -128,13 +188,16 @@ export function replyPreImage(
  * to contain anything. A `commentId` carrying a NUL takes the tagged fallback
  * instead, and the two branches cannot meet.
  *
- * The gate was first written as `isCanonicalWordId`, which closed the collision
- * but was far broader than it: that predicate also rejects a `w:id` above nine
+ * The gate was first written as a canonical-decimal predicate, which closed the
+ * collision but was far broader than it: it also rejected a `w:id` above nine
  * digits, a negative one and a leading-zero one, all of which OOXML admits and
  * none of which can construct a shift. Moving those ids re-injected a ghost
  * note beside an already-promoted comment, whose export then wrote a second
  * Word comment for one original (#1448). The gate is now the discriminating
- * condition and nothing wider.
+ * condition and nothing wider — and that predicate no longer exists in any
+ * form: #1693 split it into the drift index's LENGTH gate (see
+ * `IMPORT_COMMENT_ID_MAX`) and export's `reusableWordId`, which are different
+ * properties and must never be re-merged.
  */
 export function importAnnotationId(
   commentId: string,
@@ -217,8 +280,14 @@ const MAX_THREAD_DEPTH = 64;
 /**
  * Length cap for the original Word `w:id` stored in `importSource.commentId`
  * (#1068). Real Word ids are short decimal strings; the cap only bounds a
- * crafted/hostile attribute. Export-side reuse additionally validates the
- * stored value is a canonical non-negative decimal before emitting it.
+ * crafted/hostile attribute.
+ *
+ * It is also the drift-dedup index's own gate (#1693): a stored id shorter
+ * than the cap was not truncated on the way in, so it is the raw `w:id` and
+ * indexing it is injective. Export-side reuse is a SEPARATE and narrower
+ * question — whether the id survives a number round trip — answered by
+ * `reusableWordId` in `docx-comment-id.ts`. The two are deliberately not one
+ * predicate.
  */
 export const IMPORT_COMMENT_ID_MAX = 32;
 
@@ -278,7 +347,9 @@ export async function extractDocxComments(buffer: Buffer): Promise<DocxComment[]
     const visited = new Set<string>();
     for (let depth = 0; depth < MAX_THREAD_DEPTH; depth++) {
       if (visited.has(currentId)) {
-        console.error(`[docx-comments] Comment thread cycle at ${currentId}; treating as root`);
+        console.error(
+          `[docx-comments] Comment thread cycle at ${logId(currentId)}; treating as root`,
+        );
         return currentId;
       }
       visited.add(currentId);
@@ -290,7 +361,7 @@ export async function extractDocxComments(buffer: Buffer): Promise<DocxComment[]
       if (!parentId || parentId === currentId) {
         if (!parentId) {
           console.error(
-            `[docx-comments] Reply ${currentId} references unresolved parent paraId ${parentParaId}; treating as root`,
+            `[docx-comments] Reply ${logId(currentId)} references unresolved parent paraId ${logId(parentParaId)}; treating as root`,
           );
         }
         return currentId;
@@ -298,7 +369,7 @@ export async function extractDocxComments(buffer: Buffer): Promise<DocxComment[]
       currentId = parentId;
     }
     console.error(
-      `[docx-comments] Comment thread exceeded depth ${MAX_THREAD_DEPTH} at ${startId}; treating as root`,
+      `[docx-comments] Comment thread exceeded depth ${MAX_THREAD_DEPTH} at ${logId(startId)}; treating as root`,
     );
     return currentId;
   };
@@ -329,7 +400,7 @@ export async function extractDocxComments(buffer: Buffer): Promise<DocxComment[]
     const range = ranges.get(id);
     if (!range) {
       console.error(
-        `[docx-comments] Comment ${id} has no range markers in document.xml — skipping`,
+        `[docx-comments] Comment ${logId(id)} has no range markers in document.xml — skipping`,
       );
       continue;
     }
@@ -450,8 +521,15 @@ export function calculateCommentRanges(
   });
 
   if (openRanges.size > 0) {
+    // Every unclosed id joined into ONE line, so this is the only site where
+    // the cap has to bound the COUNT as well as each id: a crafted document can
+    // declare thousands of unclosed ranges.
+    const unclosed = [...openRanges.keys()];
+    const named = unclosed.slice(0, MAX_LOGGED_IDS).map(logId).join(", ");
+    const rest = unclosed.length - MAX_LOGGED_IDS;
     console.error(
-      `[docx-comments] ${openRanges.size} comment range(s) had start markers but no end markers: ${[...openRanges.keys()].join(", ")}`,
+      `[docx-comments] ${openRanges.size} comment range(s) had start markers but no end markers: ${named}` +
+        (rest > 0 ? ` (+${rest} more)` : ""),
     );
   }
 
@@ -529,6 +607,7 @@ export function injectCommentsAsAnnotations(
   let migrated = 0;
   let reanchored = 0;
   let injectedReplies = 0;
+  let repairedReplies = 0;
   let clampedCount = 0;
   let maxClamp = 0;
 
@@ -543,8 +622,22 @@ export function injectCommentsAsAnnotations(
   //     (which would double-write the .docx on the next export). The update filter
   //     is `author === "import"` exactly — NOT `importSource != null`, which
   //     survives promotion (ADR-027: a blind rewrite would silently un-promote).
-  // Only canonical-decimal ids are trusted (see isCanonicalWordId). Two stored
-  // records can legitimately share one `commentId` only as a legacy duplicate
+  // The gate is the LENGTH of the stored id, and nothing else (#1693). What
+  // this index needs is injectivity: distinct stored strings must be distinct
+  // buckets, so that a hit means "the same Word comment", not "two comments
+  // that happen to look alike". A stored value SHORTER than
+  // `IMPORT_COMMENT_ID_MAX` cannot be a truncation of anything, so it equals
+  // the raw `w:id` a previous run saw and equals the one the next import will
+  // present. A value AT or PAST the cap is ambiguous — it may be a 32-character
+  // raw id, or the prefix of a longer one — and two distinct comments could
+  // collapse into one bucket, which is a silent cross-comment content swap. So
+  // `>=`, not `>`; those degrade to the (accepted) duplicate-on-drift
+  // behaviour. Canonical numeric FORM is deliberately not tested here: it is
+  // the export side's property (`reusableWordId`), and sharing one predicate
+  // across both is what made the two layers protecting a promoted comment fail
+  // together and inject a ghost note beside it (#1448, #1693).
+  //
+  // Two stored records can legitimately share one `commentId` only as a legacy duplicate
   // (e.g. a pre-#1150 ghost note alongside its promoted record). When that
   // happens, deterministically prefer the PROMOTED record so the skip branch
   // wins regardless of Y.Map iteration order, and log the collision — it's a
@@ -552,7 +645,7 @@ export function injectCommentsAsAnnotations(
   const byCommentId = new Map<string, { key: string; ann: Annotation }>();
   for (const [key, val] of map as Iterable<[string, Annotation]>) {
     const cid = val?.importSource?.commentId;
-    if (!isCanonicalWordId(cid)) continue;
+    if (!cid || cid.length >= IMPORT_COMMENT_ID_MAX) continue;
     const isPromoted = val.promotedFrom === "note";
     if (val.author !== "import" && !isPromoted) continue;
     const existing = byCommentId.get(cid);
@@ -561,11 +654,11 @@ export function injectCommentsAsAnnotations(
     } else if (isPromoted && existing.ann.promotedFrom !== "note") {
       byCommentId.set(cid, { key, ann: val });
       console.error(
-        `[docx-comments] Duplicate imported commentId ${cid}: preferred promoted record ${key} over import note ${existing.key}.`,
+        `[docx-comments] Duplicate imported commentId ${logId(cid)}: preferred promoted record ${key} over import note ${existing.key}.`,
       );
     } else {
       console.error(
-        `[docx-comments] Duplicate imported commentId ${cid}: kept ${existing.key}, ignored ${key}.`,
+        `[docx-comments] Duplicate imported commentId ${logId(cid)}: kept ${existing.key}, ignored ${key}.`,
       );
     }
   }
@@ -599,7 +692,7 @@ export function injectCommentsAsAnnotations(
         clampedCount++;
         maxClamp = Math.max(maxClamp, comment.from - from, comment.to - to);
         console.error(
-          `[docx-comments] Clamped imported comment ${comment.commentId}: ` +
+          `[docx-comments] Clamped imported comment ${logId(comment.commentId)}: ` +
             `[${comment.from}, ${comment.to}] → [${from}, ${to}] (document length ${flatText.length}).`,
         );
       }
@@ -625,7 +718,7 @@ export function injectCommentsAsAnnotations(
       });
       if (!result.ok) {
         console.error(
-          `[docx-comments] Skipping imported comment ${comment.commentId}: ` +
+          `[docx-comments] Skipping imported comment ${logId(comment.commentId)}: ` +
             `range [${comment.from}, ${comment.to}] — ${describeRangeFailure(result)}`,
         );
         continue;
@@ -747,15 +840,18 @@ export function injectCommentsAsAnnotations(
           // provenance with the second's. All of these need the same
           // 48-bit collision to reach.
           console.error(
-            `[docx-comments] Annotation id collision on ${offsetId}: stored record names comment ${existing.importSource.commentId.slice(0, IMPORT_COMMENT_ID_MAX)}, so comment ${importSource.commentId} was not imported.`,
+            `[docx-comments] Annotation id collision on ${offsetId}: stored record names comment ${logId(existing.importSource.commentId.slice(0, IMPORT_COMMENT_ID_MAX))}, so comment ${logId(importSource.commentId)} was not imported.`,
           );
         }
       } else {
         // Offset-id miss. Before injecting, consult the commentId index — a miss
         // here may be drift (same Word comment, moved/edited), not a new comment.
-        const drift = isCanonicalWordId(comment.commentId)
-          ? byCommentId.get(comment.commentId)
-          : undefined;
+        // Same gate as the index build, and it MUST stay the same expression:
+        // build and lookup failing together is exactly the #1693 defect.
+        const drift =
+          comment.commentId.length < IMPORT_COMMENT_ID_MAX
+            ? byCommentId.get(comment.commentId)
+            : undefined;
 
         if (drift && drift.ann.author === "import") {
           // Drift: re-anchor the existing note IN PLACE under its existing key
@@ -855,8 +951,54 @@ export function injectCommentsAsAnnotations(
           // stored body differing, so the ordinary re-import stays quiet.
           if (clash.text !== reply.bodyText.slice(0, IMPORT_REPLY_BODY_CAP)) {
             console.error(
-              `[docx-comments] reply id collision on ${replyId}: a different reply is already stored under this id, so this one was not imported (root=${comment.commentId})`,
+              `[docx-comments] reply id collision on ${replyId}: a different reply is already stored under this id, so this one was not imported (root=${logId(comment.commentId)})`,
             );
+          } else if (
+            clash.author === "import" &&
+            clash.annotationId !== effectiveKey &&
+            !map.has(clash.annotationId)
+          ) {
+            // Same reply, same body, but its stored `annotationId` names a root
+            // that is GONE from this run's map (#1693 finding 4). Nothing
+            // rebuilt it before, and `exportableReplies` filters strictly on
+            // `annotationId` — so the reply survived in the store, was absent
+            // from every re-saved .docx, and the user simply lost it. The same
+            // loss class #1691 closed, from the other direction.
+            //
+            // `!map.has(clash.annotationId)` is LOAD-BEARING, not a cheap
+            // pre-check. Without it the repair also fires when the drift lookup
+            // missed and the branch above injected a ghost note: `effectiveKey`
+            // is then the GHOST's key, and reparenting moves the reply's text
+            // out of the user's promoted thread and into the ghost's duplicate
+            // Word comment. That is a regression master does not have — master
+            // leaves the reply on the promotion. With the term, the repair
+            // fires only when the named root genuinely no longer exists.
+            //
+            // `nextRev(clash)`, never a bare `nextRev()`: that form takes no
+            // prior record and is literally `1`, so on a reply that has moved
+            // past rev 1 it writes a rev LOWER than the one it replaces. The
+            // durable copy still names the stale root at the higher rev, and
+            // `pickWinner` (`annotations/sync.ts`) is higher-rev-wins — so the
+            // next `loadAndMerge` restores the stale parent and the repair
+            // silently reverts. Every other in-place rewrite in this function
+            // already passes the prior record (`nextRev(existing)`,
+            // `nextRev(drift.ann)`); only the two fresh-injection paths use the
+            // bare form, and this is an update, not an injection.
+            //
+            // `private: true` is required, not cosmetic: `writeImportReply`
+            // stamps only the author, so `private` would otherwise be spread
+            // from `clash`. `effectiveKey` names a promoted, Claude-facing
+            // record, and `channelVisibleReplies` is (parent Claude-facing) AND
+            // (`private !== true`) — a stored `{import, private: undefined}`
+            // reply would be handed to Claude. A read filter is not a write
+            // guard (#1680).
+            writeImportReply(repliesMap, replyId, {
+              ...clash,
+              annotationId: effectiveKey,
+              private: true,
+              rev: nextRev(clash),
+            });
+            repairedReplies++;
           }
           continue;
         }
@@ -876,12 +1018,19 @@ export function injectCommentsAsAnnotations(
     }
   });
 
-  if (injected > 0 || migrated > 0 || reanchored > 0 || injectedReplies > 0) {
+  if (
+    injected > 0 ||
+    migrated > 0 ||
+    reanchored > 0 ||
+    injectedReplies > 0 ||
+    repairedReplies > 0
+  ) {
     console.error(
       `[docx-comments] Imported ${injected}/${comments.length} Word comments as private notes` +
         (injectedReplies > 0 ? ` + ${injectedReplies} threaded replies` : "") +
         (migrated > 0 ? ` (migrated ${migrated} legacy records to note shape)` : "") +
-        (reanchored > 0 ? ` (re-anchored ${reanchored} drifted notes)` : ""),
+        (reanchored > 0 ? ` (re-anchored ${reanchored} drifted notes)` : "") +
+        (repairedReplies > 0 ? ` (repaired ${repairedReplies} reply parents)` : ""),
     );
   }
 

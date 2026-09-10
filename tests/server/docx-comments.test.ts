@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { IMPORT_AUTHOR_MAX, IMPORT_REPLY_BODY_CAP } from "../../src/server/annotations/schema.js";
-import { isCanonicalWordId } from "../../src/server/file-io/docx-comment-id.js";
+import { prepareExportComments } from "../../src/server/file-io/docx-comment-export.js";
+import { reusableWordId } from "../../src/server/file-io/docx-comment-id.js";
 import {
   annotationPreImage,
   calculateCommentRanges,
@@ -10,11 +11,13 @@ import {
   importAnnotationId,
   importReplyId,
   injectCommentsAsAnnotations,
+  logId,
   parseCommentMetadata,
   parseCommentThreading,
   replyPreImage,
 } from "../../src/server/file-io/docx-comments.js";
 import { htmlToYDoc } from "../../src/server/file-io/docx-html.js";
+import { channelVisibleReplies } from "../../src/server/mcp/annotations.js";
 import { refreshRange } from "../../src/server/positions.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
@@ -880,12 +883,19 @@ describe("injectCommentsAsAnnotations", () => {
     expect(map.size).toBe(2);
   });
 
-  it("does NOT dedup on drift for a non-canonical w:id — it duplicates instead [#1150 safety boundary]", () => {
+  it("DOES dedup on drift for a short non-canonical w:id [#1693]", () => {
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
-    // "01" is non-canonical (String(Number("01")) === "1" !== "01"), so it must
-    // never enter the byCommentId index: trusting it could collapse two distinct
-    // comments into one bucket (a silent cross-comment content swap). The safe
-    // degradation is duplicate-on-drift.
+    // This spec asserted the opposite until #1693, and that narrowness is the
+    // defect: "01" is two characters, so it survives the
+    // IMPORT_COMMENT_ID_MAX slice un-truncated and the stored value IS the raw
+    // `w:id` the next import presents.
+    //
+    // The index rests on INJECTIVITY, not on canonical form. Distinct stored
+    // strings are distinct buckets; the only ambiguous value is one AT or PAST
+    // the cap, which may be a 32-character raw id or the truncation of a longer
+    // one — that, and only that, could collapse two distinct comments into one
+    // bucket. The duplicate-on-drift safety boundary therefore moved onto an
+    // at-cap id and is pinned in `docx-comment-id-roundtrip.test.ts`.
     injectCommentsAsAnnotations(
       doc,
       [{ commentId: "01", authorName: "A", bodyText: "Good", from: off(0), to: off(5) }],
@@ -898,8 +908,8 @@ describe("injectCommentsAsAnnotations", () => {
       [{ commentId: "01", authorName: "A", bodyText: "Good", from: off(6), to: off(11) }],
       "f.docx",
     );
-    expect(injected).toBe(1); // injected as new, NOT re-anchored in place
-    expect(map.size).toBe(2); // the accepted duplicate-on-drift fallback
+    expect(injected).toBe(0); // re-anchored in place, not duplicated
+    expect(map.size).toBe(1);
   });
 
   it("prefers the promoted record over a stale import note for the same commentId [#1150]", () => {
@@ -996,12 +1006,28 @@ describe("injectCommentsAsAnnotations", () => {
     expect(reply.author).toBe("import"); // private by its own durable property
   });
 
-  it("isCanonicalWordId accepts canonical decimals and rejects everything else", () => {
-    for (const ok of ["0", "5", "42", "123456789"]) {
-      expect(isCanonicalWordId(ok)).toBe(true);
-    }
-    for (const bad of ["01", "-1", "", " 5", "5 ", "0x5", "1234567890", "abc", undefined]) {
-      expect(isCanonicalWordId(bad)).toBe(false);
+  it("reusableWordId reuses exactly the ids that survive a number round trip", () => {
+    // The EXPORT half of #1693's two-predicate contract: "this id can be
+    // written into a `w:id` and read back as the same string". It is
+    // deliberately NOT the drift index's gate, which is the stored id's LENGTH
+    // (see IMPORT_COMMENT_ID_MAX) — sharing one predicate across both is what
+    // made the two layers protecting a promoted comment fail together.
+    expect(reusableWordId("1000000000")).toBe(1000000000);
+    expect(reusableWordId("-1")).toBe(-1);
+    expect(reusableWordId("0")).toBe(0);
+    expect(reusableWordId("7")).toBe(7);
+    for (const bad of [
+      "0123", // would be written back as 123
+      "-0", // String(-0) === "0"
+      "2147483648", // past the int32 ceiling
+      "3000000000",
+      "9007199254740993", // past Number.MAX_SAFE_INTEGER
+      "c-9182", // no ST_DecimalNumber representation at all
+      "",
+      " 5",
+      undefined,
+    ]) {
+      expect(reusableWordId(bad)).toBeNull();
     }
   });
 });
@@ -1060,7 +1086,8 @@ describe("import id collision gate", () => {
   // rides out into the re-saved .docx because export reads off the replies map.
   //
   // These two pins are the defect itself. Each was measured colliding before
-  // `isCanonicalWordId` gated the ids, so each fails if the gate is removed.
+  // the pre-image gate (the delimiter plus the `nc:` tag) was added, so each
+  // fails if that gate is removed. It is unrelated to either #1693 predicate.
   it("does not collide when a NUL shifts a token across an annotation field boundary", () => {
     // The annotation delimiter is \0, so a space cannot forge it — but a
     // literal NUL byte in comments.xml survives htmlparser2 into both the
@@ -1247,14 +1274,15 @@ describe("import id collision gate", () => {
   });
 
   it("leaves every delimiter-free id unmoved, including the shapes OOXML allows", () => {
-    // These four are why the gate was narrowed. The first draft tested
-    // `isCanonicalWordId`, which rejects a `w:id` above nine digits, a negative
-    // one and a leading-zero one — all legal `ST_DecimalNumber` values, none of
-    // which can construct a boundary shift. Moving their ids disabled BOTH
-    // layers protecting an already-promoted comment (the offset lookup missed,
-    // and the drift index refuses non-canonical ids), so a ghost note was
-    // injected beside the promotion and export wrote a second Word comment for
-    // one original.
+    // These four are why the gate was narrowed. The first draft tested a
+    // canonical-decimal predicate, which rejects a `w:id` above nine digits, a
+    // negative one and a leading-zero one — all legal `ST_DecimalNumber`
+    // values, none of which can construct a boundary shift. Moving their ids
+    // disabled BOTH layers protecting an already-promoted comment (the offset
+    // lookup missed, and the drift index refused the same ids), so a ghost note
+    // was injected beside the promotion and export wrote a second Word comment
+    // for one original. #1693 finished that split: the drift index now gates on
+    // LENGTH and export on `reusableWordId`, and the shared predicate is gone.
     //
     // Pinned to the PRE-gate values, so this fails if the gate ever widens back.
     expect(importAnnotationId("c-9182", 34, 901, "review this")).toBe("import-71a4425a9a98");
@@ -1516,5 +1544,281 @@ describe("injectCommentsAsAnnotations — threaded replies (#1000)", () => {
     expect(importReplyId("1", "2", "body")).toBe(importReplyId("1", "2", "body"));
     expect(importReplyId("1", "2", "body")).not.toBe(importReplyId("1", "3", "body"));
     expect(importReplyId("1", "2", "a")).not.toBe(importReplyId("1", "2", "b"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// logId — untrusted ids in stderr (#1693 finding 3)
+// ---------------------------------------------------------------------------
+
+describe("logId", () => {
+  // Control characters are spelled as escapes throughout, never as literals:
+  // `tests/scripts/src-control-characters.test.ts` scopes `tests/` too.
+  const REPLACEMENT = "\uFFFD";
+
+  it("replaces every C0 control character, U+007F and every C1 with U+FFFD", () => {
+    for (const raw of ["\u0000", "\u0001", "\u000a", "\u000d", "\u001f"]) {
+      expect(logId(`a${raw}b`)).toBe(`a${REPLACEMENT}b`);
+    }
+    expect(logId(`a\u007fb`)).toBe(`a${REPLACEMENT}b`);
+    for (const raw of ["\u0080", "\u0085", "\u009f"]) {
+      expect(logId(`a${raw}b`)).toBe(`a${REPLACEMENT}b`);
+    }
+  });
+
+  it("cannot be made to forge a second log line", () => {
+    // The whole point of the pass: a crafted `w:id` must not be able to end the
+    // line and start a new one that reads like a fresh diagnostic.
+    const forged = logId(`7\u000a[docx-comments] everything is fine`);
+    expect(forged).not.toContain("\u000a");
+    expect(forged.startsWith(`7${REPLACEMENT}`)).toBe(true);
+  });
+
+  it("leaves ordinary text and a well-formed astral pair alone", () => {
+    expect(logId("1000000000")).toBe("1000000000");
+    expect(logId("c-9182")).toBe("c-9182");
+    const pair = "\ud83d\ude00";
+    expect(logId(`x${pair}y`)).toBe(`x${pair}y`);
+  });
+
+  it("replaces an UNPAIRED surrogate, high or low", () => {
+    expect(logId(`a\ud800b`)).toBe(`a${REPLACEMENT}b`);
+    expect(logId(`a\udc00b`)).toBe(`a${REPLACEMENT}b`);
+    expect(logId("\ud800")).toBe(REPLACEMENT);
+  });
+
+  it("truncates past 64 units and marks it", () => {
+    const out = logId("a".repeat(200));
+    expect(out).toBe(`${"a".repeat(64)}\u2026`);
+  });
+
+  it("truncates a boundary-straddling pair without minting a lone surrogate", () => {
+    // 63 ordinary units then an astral pair: a naive slice(0, 64) keeps the
+    // HIGH half alone, re-introducing exactly what the pass above removes.
+    const out = logId(`${"a".repeat(63)}\ud83d\ude00${"b".repeat(20)}`);
+    expect(out).toBe(`${"a".repeat(63)}\u2026`);
+    const last = out.charCodeAt(out.length - 2);
+    expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+  });
+
+  it("bounds the no-range-markers line at a behaviourally reachable site", async () => {
+    const JSZip = (await import("jszip")).default;
+    const zip = new JSZip();
+    const hostile = "9".repeat(500);
+    zip.file(
+      "word/document.xml",
+      `<?xml version="1.0"?>` +
+        `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+        `<w:body><w:p><w:r><w:t>Hello</w:t></w:r></w:p></w:body>` +
+        `</w:document>`,
+    );
+    zip.file(
+      "word/comments.xml",
+      `<?xml version="1.0"?>` +
+        `<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+        `<w:comment w:id="${hostile}" w:author="A" w:date="2026-01-01T00:00:00Z">` +
+        `<w:p><w:r><w:t>Body</w:t></w:r></w:p></w:comment>` +
+        `</w:comments>`,
+    );
+    const buffer = (await zip.generateAsync({ type: "nodebuffer" })) as Buffer;
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await extractDocxComments(buffer)).toEqual([]);
+      const lines = spy.mock.calls.map((c) => String(c[0]));
+      const line = lines.find((l) => l.includes("no range markers"));
+      expect(line).toBeDefined();
+      expect(line!.length).toBeLessThan(200);
+      expect(line).not.toContain(hostile);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("bounds the unclosed-ranges line, in ids AND in count", async () => {
+    // The one aggregate line: every unclosed id joined into one string, so a
+    // crafted document can flood it two different ways at once.
+    const ids = Array.from({ length: 25 }, (_, i) => `${"7".repeat(300)}-${i}`);
+    const xml =
+      `<?xml version="1.0"?>` +
+      `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+      `<w:body><w:p>` +
+      ids.map((id) => `<w:commentRangeStart w:id="${id}"/>`).join("") +
+      `<w:r><w:t>Hello</w:t></w:r></w:p></w:body></w:document>`;
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(calculateCommentRanges(xml).size).toBe(0);
+      const line = spy.mock.calls
+        .map((c) => String(c[0]))
+        .find((l) => l.includes("no end markers"));
+      expect(line).toBeDefined();
+      expect(line!.length).toBeLessThan(10 * 64 + 200);
+      expect(line).toContain("(+15 more)");
+      expect(line).not.toContain(ids[0]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reply parent repair (#1693 finding 4)
+// ---------------------------------------------------------------------------
+
+describe("injectCommentsAsAnnotations — repairs a stranded reply parent", () => {
+  let doc: Y.Doc;
+
+  const root: DocxComment = {
+    commentId: "1",
+    authorName: "Alice",
+    bodyText: "Root note",
+    from: off(0),
+    to: off(5),
+    replies: [{ commentId: "2", authorName: "Bob", bodyText: "Bob reply" }],
+  };
+
+  beforeEach(() => {
+    doc = new Y.Doc();
+    htmlToYDoc(doc, "<p>Hello World</p>");
+  });
+
+  /** Promote the imported note in place, to `promotedAnnotation`'s shape. */
+  const promote = (key: string): void => {
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    const ann = map.get(key) as Annotation;
+    map.set(key, {
+      ...ann,
+      type: "comment",
+      author: "user",
+      audience: "outbound",
+      promotedFrom: "note",
+      status: "pending",
+      rev: (ann.rev ?? 0) + 1,
+    } as never);
+  };
+
+  /** Import once, promote the root, and hand back both maps plus the key. */
+  const seed = (): {
+    map: Y.Map<unknown>;
+    repliesMap: Y.Map<unknown>;
+    key: string;
+    replyId: string;
+  } => {
+    injectCommentsAsAnnotations(doc, [root], "f.docx");
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    const repliesMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    const key = Array.from(map.keys())[0];
+    promote(key);
+    const replyId = Array.from(repliesMap.keys())[0];
+    return { map, repliesMap, key, replyId };
+  };
+
+  it("reparents a reply whose stored root is GONE, at rev + 1", () => {
+    const { repliesMap, key, replyId } = seed();
+    const stored = repliesMap.get(replyId) as AnnotationReply;
+    // A realistic stored rev: the genuine injection path mints rev 1, so a
+    // rev-0 fixture would let a bare `nextRev()` implementation pass.
+    const clash: AnnotationReply = { ...stored, annotationId: "import-deadbeef00", rev: 3 };
+    repliesMap.set(replyId, clash);
+
+    injectCommentsAsAnnotations(doc, [root], "f.docx");
+
+    const after = repliesMap.get(replyId) as AnnotationReply;
+    expect(after.annotationId).toBe(key);
+    // Exactly one, not "increased". A bare `nextRev()` writes 1 — LOWER than
+    // the stored 3 — so the durable copy, which still names the stale root at
+    // rev 3, wins `pickWinner` on the next merge and the repair reverts.
+    expect(after.rev).toBe((clash.rev ?? 0) + 1);
+    expect(after.author).toBe("import");
+
+    // And the reply now reaches the re-saved .docx, which is the loss itself.
+    const prepared = prepareExportComments(doc);
+    expect(prepared).toHaveLength(1);
+    expect(prepared[0].bodyParagraphs.join("|")).toContain("Bob reply");
+  });
+
+  it("refuses when the stored root is still present under its own key", () => {
+    const { map, repliesMap, replyId } = seed();
+    // A second, unrelated record — present in the map, so the reply is not
+    // stranded and reparenting it would MOVE a reply the user can still see.
+    map.set("other-root", {
+      id: "other-root",
+      author: "user",
+      type: "comment",
+      audience: "outbound",
+      range: { from: 6, to: 11 },
+      content: "Other",
+      status: "pending",
+      timestamp: 1,
+      rev: 1,
+    } as never);
+    const stored = repliesMap.get(replyId) as AnnotationReply;
+    repliesMap.set(replyId, { ...stored, annotationId: "other-root", rev: 3 });
+
+    injectCommentsAsAnnotations(doc, [root], "f.docx");
+
+    const after = repliesMap.get(replyId) as AnnotationReply;
+    expect(after.annotationId).toBe("other-root");
+    expect(after.rev).toBe(3);
+  });
+
+  it("leaves a genuine body-differing collision alone, and still logs it", () => {
+    const { repliesMap, replyId } = seed();
+    const stored = repliesMap.get(replyId) as AnnotationReply;
+    repliesMap.set(replyId, {
+      ...stored,
+      annotationId: "import-deadbeef00",
+      text: "A different reply entirely",
+      rev: 3,
+    });
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      injectCommentsAsAnnotations(doc, [root], "f.docx");
+      const logged = spy.mock.calls.map((c) => String(c[0]));
+      expect(logged.some((l) => l.includes("reply id collision"))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+
+    const after = repliesMap.get(replyId) as AnnotationReply;
+    expect(after.annotationId).toBe("import-deadbeef00");
+    expect(after.rev).toBe(3);
+  });
+
+  it("stamps the repaired reply private, whatever the stored record said", () => {
+    // `writeImportReply` stamps only the author, so `private` would otherwise
+    // be spread from the stored record. The repaired reply hangs off a
+    // PROMOTED, Claude-facing parent — `channelVisibleReplies` is (parent
+    // Claude-facing) AND (`private !== true`), so a `{import, private:
+    // undefined}` record (the #1619 class, unhealed by `sanitizeAnnotation`)
+    // would be handed to Claude. A read filter is not a write guard (#1680).
+    for (const stray of [undefined, false] as const) {
+      doc = new Y.Doc();
+      htmlToYDoc(doc, "<p>Hello World</p>");
+      const { map, repliesMap, key, replyId } = seed();
+      const stored = repliesMap.get(replyId) as AnnotationReply;
+      const { private: _drop, ...withoutPrivate } = stored;
+      repliesMap.set(replyId, {
+        ...withoutPrivate,
+        annotationId: "import-deadbeef00",
+        rev: 3,
+        ...(stray === false ? { private: false } : {}),
+      });
+
+      injectCommentsAsAnnotations(doc, [root], "f.docx");
+
+      const after = repliesMap.get(replyId) as AnnotationReply;
+      expect(after.private).toBe(true);
+
+      const parent = map.get(key) as Annotation;
+      const visible = channelVisibleReplies(parent, (id) =>
+        Array.from(repliesMap.values() as Iterable<AnnotationReply>).filter(
+          (r) => r.annotationId === id,
+        ),
+      );
+      expect(visible).toEqual([]);
+    }
   });
 });

@@ -71,7 +71,7 @@ import {
   splitsSurrogatePair,
   validateFlatRange,
 } from "../positions.js";
-import { isCanonicalWordId } from "./docx-comment-id.js";
+import { reusableWordId } from "./docx-comment-id.js";
 
 /**
  * The restore promise every integrity advisory ends with. ONE definition,
@@ -176,18 +176,6 @@ function isImportReply(reply: AnnotationReply): boolean {
     typeof reply.importAuthor === "string" &&
     reply.importAuthor.length > 0
   );
-}
-
-/**
- * Returns the original Word comment id as a number when it can be reused
- * verbatim, else null. Reusing the original id keeps `importAnnotationId`
- * stable across a promote → save → re-open cycle. The canonical-form check
- * (which also rejects "01", whose re-imported id would differ) is the shared
- * `isCanonicalWordId` predicate — the import drift-dedup index (#1150) trusts
- * the same gate.
- */
-function reusableCommentId(raw: string | undefined): number | null {
-  return isCanonicalWordId(raw) ? Number(raw) : null;
 }
 
 function authorLabel(ann: Annotation): string {
@@ -410,7 +398,7 @@ export function prepareExportComments(
   const usedIds = new Set<number>();
   const reserved = new Map<string, number>();
   for (const { ann } of resolved) {
-    const original = reusableCommentId(ann.importSource?.commentId);
+    const original = reusableWordId(ann.importSource?.commentId);
     if (original !== null && !usedIds.has(original)) {
       usedIds.add(original);
       reserved.set(ann.id, original);
