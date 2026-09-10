@@ -87,9 +87,11 @@ function parseSignature(signature) {
   // alg(2) | key_id(8) | sig(64)
   const payload = decodeExact(lines[1], 74, "signature payload");
   const trustedLine = lines[2];
-  if (typeof trustedLine !== "string" || !trustedLine.startsWith("trusted comment:")) {
+  if (!trustedLine?.startsWith("trusted comment:")) {
     throw new MalformedError("signature has no `trusted comment:` line");
   }
+  // Explicit, because `decodeExact(undefined, …)` throws a TypeError rather
+  // than the MalformedError the `malformed` outcome is built from.
   if (typeof lines[3] !== "string") {
     throw new MalformedError("signature has no global-signature line");
   }
@@ -200,8 +202,7 @@ export async function verifyManifest({ publicKey, platforms, fetchBytes }) {
     // A rejection propagates: an artifact we could not download is a
     // signature we did not check, not a signature that passed.
     const data = await downloads.get(url);
-    const outcome = verifyMinisign({ publicKey, signature, data });
-    results.push({ key, ok: outcome.ok, reason: outcome.ok ? undefined : outcome.reason });
+    results.push({ key, ...verifyMinisign({ publicKey, signature, data }) });
   }
 
   const failures = results.filter((r) => !r.ok).map(({ key, reason }) => ({ key, reason }));
@@ -227,33 +228,29 @@ async function main() {
   const repo = requireEnv("GH_REPO");
   const releaseId = requireEnv("RELEASE_ID");
 
-  const api = async (url) => {
+  // One authenticated GET; the `accept` header is the only thing that differs
+  // between the two callers below, and it is what decides whether the API
+  // hands back JSON or the raw asset bytes.
+  const get = async (url, accept) => {
     const res = await fetch(url, {
       headers: {
-        accept: "application/vnd.github+json",
+        accept,
         authorization: `Bearer ${token}`,
         "x-github-api-version": "2022-11-28",
       },
     });
     if (!res.ok) throw new Error(`GET ${url} -> ${res.status} ${res.statusText}`);
-    return res.json();
+    return res;
   };
+
+  const api = async (url) => (await get(url, "application/vnd.github+json")).json();
 
   // `arrayBuffer()` always yields bytes. Do NOT copy the content-type-driven
   // body parsing from the neighbouring github-script step: that shape exists
   // because octokit picks its parser from the response content-type, which is
   // whatever was recorded at upload time.
-  const fetchBytes = async (url) => {
-    const res = await fetch(url, {
-      headers: {
-        accept: "application/octet-stream",
-        authorization: `Bearer ${token}`,
-        "x-github-api-version": "2022-11-28",
-      },
-    });
-    if (!res.ok) throw new Error(`GET ${url} -> ${res.status} ${res.statusText}`);
-    return Buffer.from(await res.arrayBuffer());
-  };
+  const fetchBytes = async (url) =>
+    Buffer.from(await (await get(url, "application/octet-stream")).arrayBuffer());
 
   const assets = await api(
     `https://api.github.com/repos/${repo}/releases/${releaseId}/assets?per_page=100`,
