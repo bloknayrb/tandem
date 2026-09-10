@@ -119,20 +119,42 @@ describe("the coverage baseline measures what it claims", () => {
     expect(vitestConfig).toContain('provider: "v8"');
   });
 
-  it("runs the manifest step, and cannot skip it on a failed measurement", () => {
-    const script = pkg.scripts["test:coverage"];
-    expect(script, "no test:coverage script").toBeDefined();
-    expect(script).toContain("node scripts/ci/coverage-manifest.mjs");
-    // `&&`, never `;` or `||`. A `;` would emit a manifest from whatever stale
-    // summary was on disk after a failed run; a `||` would emit one INSTEAD of
-    // failing. Both publish a number that no run produced.
-    expect(script).toContain("&& node scripts/ci/coverage-manifest.mjs");
-    expect(script).not.toContain("|| node scripts/ci/coverage-manifest.mjs");
-    expect(script).not.toContain("; node scripts/ci/coverage-manifest.mjs");
+  it("runs the manifest in its own step, unconditional except for cancellation", () => {
+    // This asserted that `test:coverage`'s `&&` chain could not be weakened to
+    // `;` or `||`. **There is no chain now** (#1862): any vitest exit
+    // short-circuited it, so the manifest and the gate never ran and the job's
+    // red said nothing about the floors. The manifest is its own step, and the
+    // ordering guarantee the `&&` used to provide is restated inside
+    // `coverage-gate.mjs` as a precondition — it refuses, with exit 3, when
+    // there is no manifest to vouch for the measurement.
+    //
+    // The disarm surface moved with it. `npm run coverage:manifest || true` in
+    // ci.yml leaves package.json byte-identical and `continue-on-error` absent,
+    // so the step's own shell line is pinned by exact equality here — the
+    // `typecheck-tests-wiring.test.ts` idiom, which subsumes the whole
+    // exit-code-masking family in one assertion.
+    expect(pkg.scripts["coverage:manifest"]).toBe("node scripts/ci/coverage-manifest.mjs");
+
     // The json-summary reporter is what the manifest reads. Without it the
     // script fails closed, but failing for a missing-file reason reads as a
     // broken script rather than a missing reporter.
-    expect(script).toContain("json-summary");
+    expect(pkg.scripts["test:coverage"], "no test:coverage script").toContain("json-summary");
+
+    const workflow = parse(readFileSync(path.join(ROOT, ".github/workflows/ci.yml"), "utf-8")) as {
+      jobs: Record<
+        string,
+        { steps?: { run?: string; if?: string; "continue-on-error"?: boolean }[] }
+      >;
+    };
+    const step = (workflow.jobs.coverage.steps ?? []).find((s) =>
+      s.run?.includes("coverage:manifest"),
+    );
+    expect(step, "the coverage job never runs coverage:manifest").toBeDefined();
+    expect(step?.run?.trim()).toBe("npm run coverage:manifest");
+    // Literal equality: `success()` re-creates the short-circuit this change
+    // removed, and `always()` would run the manifest on a cancelled job.
+    expect(step?.if).toBe("${{ !cancelled() }}");
+    expect(step?.["continue-on-error"], "the manifest step swallows its own failure").toBeFalsy();
   });
 
   // The script's REFUSAL LOGIC is not tested here. It lives in

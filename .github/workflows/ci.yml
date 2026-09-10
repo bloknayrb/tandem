@@ -220,6 +220,21 @@ jobs:
   # sits at uniformly zero covered statements (what a single-project run looks
   # like from the outside).
   #
+  # **How to read a red here (#1862).** The measurement, the manifest and the
+  # floors are three steps, not one `&&` chain: any vitest exit used to
+  # short-circuit the chain, so the gate never ran and the job showed the
+  # identical red a genuine floor breach gets. Measured 2026-09-09 on a
+  # docs-only PR — vitest exited 1 on an EnvironmentTeardownError with 652 files
+  # passed and 0 failed, no floor breached and no floor evaluated.
+  #
+  # A red `Coverage floors` means the gate RAN — read its last line.
+  # `[coverage-gate] N failure(s).` is a real floor breach on a measurement that
+  # completed and was accepted. `The gate could not evaluate. This is not a
+  # pass.` is a measurement that did not happen; read the two steps above it.
+  # Not covered here: a measurement that exited 0 having silently lost test
+  # files still grades as a floor breach — that is the vitest file anchor in
+  # `check` (#1673).
+  #
   # The artifact uploads with `if: always()` because the manifest is most worth
   # reading on the run where something went wrong.
   #
@@ -238,9 +253,25 @@ jobs:
       - run: npm ci
 
       - name: Coverage baseline
+        id: baseline
         run: npm run test:coverage
         timeout-minutes: 30
 
+      - name: Coverage manifest
+        if: ${{ !cancelled() }}
+        run: npm run coverage:manifest
+
+      - name: Coverage floors
+        if: ${{ !cancelled() }}
+        run: npm run coverage:gate
+        env:
+          TANDEM_MEASUREMENT_OUTCOME: ${{ steps.baseline.outcome }}
+
+      # `Upload coverage baseline` stays LAST. It is `if: always()` and its
+      # `path:` names coverage/baseline-manifest.json, which the `Coverage
+      # manifest` step above now produces — appending the new steps after the
+      # upload would publish an artifact missing the file that made the
+      # 2026-09-09 diagnosis possible.
       - name: Upload coverage baseline
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
