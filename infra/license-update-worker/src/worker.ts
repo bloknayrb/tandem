@@ -239,16 +239,35 @@ const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  *  license id never enters it, so an alert channel is not a per-customer update
  *  history by another route. */
 function alertBody(entry: LogEntry): string {
+  // ONE ARM PER `isAlertable` CLASS, the way the issuance Worker's `alertBody`
+  // splits — because the two classes are reached by different failures and
+  // repaired differently. `unknown-id` is an ABSENCE. `unparseable` is a key
+  // that is present and readable and holds malformed JSON (most plausibly the
+  // hand-run `wrangler kv key put` tombstone in §7, with shell-mangled
+  // quoting), so sending that operator to hunt a missing key and a
+  // namespace-id mismatch aims them at a repair that does not apply.
+  const diagnosis =
+    entry.reason === "unparseable"
+      ? [
+          "A KV entry for this license EXISTS and is readable, but is not valid",
+          "JSON — most likely a hand-run `wrangler kv key put` (§7) whose quoting",
+          "was mangled by the shell. Nothing is missing.",
+          "Repair: re-PUT valid JSON over the existing key. See",
+          "docs/licensing-operations.md §7 (tombstone) or §3 (entitlement).",
+        ]
+      : [
+          "An entitlement nobody removed is gone (a failed KV write, an eviction, or a",
+          "namespace-id mismatch between the two wrangler.toml files).",
+          "Repair: re-PUT the entitlement from the ledger record — it is fully",
+          "derivable, so nothing needs re-issuing. See docs/licensing-operations.md §3.",
+        ];
   return [
     "Tandem update endpoint: a licensed install was refused an update for a",
     "reason that should not occur.",
     `result=${entry.result} reason=${entry.reason ?? "-"}`,
     "",
-    "An entitlement nobody removed is gone (a failed KV write, an eviction, or a",
-    "namespace-id mismatch between the two wrangler.toml files). Affected",
-    'installs are told "You\'re up to date" forever while starved.',
-    "Repair: re-PUT the entitlement from the ledger record — it is fully",
-    "derivable, so nothing needs re-issuing. See docs/licensing-operations.md §3.",
+    'Affected installs are told "You\'re up to date" forever while starved.',
+    ...diagnosis,
   ].join("\n");
 }
 
@@ -271,10 +290,16 @@ async function sendOperatorAlert(env: WorkerEnv, entry: LogEntry): Promise<void>
   }
   // The channel is absent or exhausted. Say so, or the throttle slot is
   // consumed and nothing records that the alert never landed.
+  //
+  // `ts` is epoch MILLISECONDS, matching every other line this Worker emits
+  // (`handleUpdateRequest`'s `now()` is wired to `Date.now()`). These sit side
+  // by side in the retained log, and an operator correlating an undeliverable
+  // line against the `unknown-id` line that produced it would otherwise read
+  // timestamps 1000x apart — a 1970 date next to a 2026 one.
   console.log(
     JSON.stringify({
       result: "alert-undeliverable",
-      ts: Math.floor(Date.now() / 1000),
+      ts: Date.now(),
       ...(entry.reason ? { reason: entry.reason } : {}),
     }),
   );

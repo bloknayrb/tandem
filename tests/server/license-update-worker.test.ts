@@ -395,6 +395,28 @@ describe("the silent-no-update detector: alerting (#1786)", () => {
     expect(body).not.toContain(UUID);
   });
 
+  it("the unparseable alert names the RIGHT repair, not the unknown-id one", async () => {
+    // `isAlertable` is true for both classes, so a single unconditional body
+    // would send this operator hunting a missing key and a namespace-id
+    // mismatch. Here the key is present and readable — the repair is to re-PUT
+    // valid JSON over it, and nothing is missing.
+    const out = await viaFetch(UUID, { [UUID]: "{not json" }, { ALERT_WEBHOOK_URL: HOOK });
+    const body = JSON.parse(hookPosts(out.posts)[0][1]?.body as string).text as string;
+    expect(body).toContain("unparseable");
+    expect(body).toContain("re-PUT valid JSON over the existing key");
+    expect(body).not.toContain("namespace-id mismatch");
+    expect(body).not.toContain("nobody removed is gone");
+    // The privacy pin holds on this arm too.
+    expect(body).not.toContain(UUID);
+
+    // And the unknown-id arm keeps the absence diagnosis it was written for.
+    _resetAlertThrottleForTests();
+    const missing = await viaFetch(UUID, {}, { ALERT_WEBHOOK_URL: HOOK });
+    const missingBody = JSON.parse(hookPosts(missing.posts)[0][1]?.body as string).text as string;
+    expect(missingBody).toContain("namespace-id mismatch");
+    expect(missingBody).not.toContain("re-PUT valid JSON over the existing key");
+  });
+
   it("a NON-UUID id logs unknown-id but never pages — the anti-flood gate", async () => {
     // This endpoint is unauthenticated: one KV get off a caller-supplied header
     // on a public host. Without the shape gate, scanner traffic pages the
@@ -484,7 +506,17 @@ describe("the silent-no-update detector: alerting (#1786)", () => {
     // alert never landed.
     const out = await viaFetch(UUID, {});
     expect(hookPosts(out.posts)).toHaveLength(0);
-    expect(out.logs.filter((e) => e.result === "alert-undeliverable")).toHaveLength(1);
+    const undeliverable = out.logs.filter((e) => e.result === "alert-undeliverable");
+    expect(undeliverable).toHaveLength(1);
+
+    // Same UNIT as every other line in this Worker: epoch milliseconds. The two
+    // lines land side by side in the retained log, and an operator correlating
+    // one against the other must not see timestamps 1000x apart. Epoch seconds
+    // is ~1.7e9 and fails both assertions.
+    const noUpdate = out.logs.find((e) => e.result === "no-update");
+    const ts = undeliverable[0].ts as number;
+    expect(ts).toBeGreaterThan(1e12);
+    expect(Math.abs(ts - (noUpdate?.ts as number))).toBeLessThan(5_000);
   });
 
   it("expired does NOT alert — the operator would be paged forever otherwise", async () => {

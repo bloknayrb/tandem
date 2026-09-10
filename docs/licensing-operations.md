@@ -627,8 +627,11 @@ Then walk §5a steps 2–4 with that order number.
       `stage: "config-resend-from"`, before anything is minted); that the domain
       is actually verified in Resend is still only this checklist line, and it is
       what the end-to-end send test above proves.
-- [ ] `ALERT_WEBHOOK_URL` reachable, because the config-stage 503s are now
-      alertable and a broken `RESEND_FROM` cannot be reported through Resend.
+- [ ] `ALERT_WEBHOOK_URL` set on the **issuance** Worker and reachable. One box,
+      two reasons: the config-stage 503s are now alertable and a broken
+      `RESEND_FROM` cannot be reported through Resend (its own arm skips the
+      Resend fallback), and without the webhook you cannot be alerted about the
+      email failures that disable the endpoint (§5c).
 - [ ] `ALERT_WEBHOOK_URL` set on the **update** Worker too, and
       `[observability]` deployed on **both**. Until then the #1786 detector is
       merged and inert: nothing retains the `reason` lines and nothing reaches
@@ -641,8 +644,6 @@ Then walk §5a steps 2–4 with that order number.
       per-customer update history the no-id invariant exists to prevent. If it
       does, the response is to drop `[observability]` on the update Worker or to
       stop sending the id in a header. Do not assume either way from the docs.
-- [ ] `ALERT_WEBHOOK_URL` set (see §5c — without it you cannot be alerted about
-      the email failures that disable the endpoint).
 - [ ] A sandbox purchase completed end-to-end: email → activate →
       `tandem license` reports `licensed` → §5a step 4 returns a manifest.
       Deploy the sandbox with **`TANDEM_ISSUANCE_ENV=production` and its own KV

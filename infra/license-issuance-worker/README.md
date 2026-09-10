@@ -94,8 +94,22 @@ Polar retry landing on a different PoP can trigger it.
 
 **Operational mitigation until this is closed:** after refunding a
 higher-value order, verify with `npx wrangler kv key get "order:live:<orderId>"
---remote --namespace-id <LEDGER_KV id>` that `refunded: true` and that `LICENSE_KV` no
-longer has a live entry for that order's `licenseId`.
+--remote --namespace-id <LEDGER_KV id>` that `refunded: true`, then read the
+entitlement itself with `npx wrangler kv key get "<licenseId>" --remote
+--namespace-id <LICENSE_KV id>`.
+
+**Read the value, not its presence.** Revocation writes a TOMBSTONE rather than
+deleting the key (a deletion is indistinguishable from an eviction or a failed
+write, and the update Worker pages on that), so a successful revocation and the
+failure this check exists to catch both return a value:
+
+- pass — the tombstone, exactly `{"updateWindowEnd":null,"status":"revoked"}`;
+- fail — a live entitlement, `{"updateWindowEnd":"<date>","status":"personal",…}`,
+  i.e. a mint that landed after the refund's recheck. Re-run the §7 revocation
+  procedure by hand.
+
+`expectRevoked()` / `expectLive()` in `tests/server/license-issuance-worker.test.ts`
+assert the same two shapes.
 
 **Proper fix (follow-up, not built here):** a Cloudflare Durable Object keyed
 on `orderId`, using `blockConcurrencyWhile` (or a single serialized queue) to

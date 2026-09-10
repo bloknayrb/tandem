@@ -23,9 +23,14 @@ npx wrangler kv namespace create LICENSE_KV   # paste the id into wrangler.toml
 npx wrangler@4.130.0 deploy
 ```
 
-The version is pinned deliberately: `./crypto.js` resolving to `crypto.ts` is the
-bundler rewriting the extension, and the bundle shape is wrangler's too, so two
-deploys of identical source can differ across wrangler versions. To advance it,
+The version is pinned deliberately, and **the reason here is not the issuance
+Worker's**: this Worker is a single `src/worker.ts` with no multi-file import
+graph, so it does not carry that Worker's `./crypto.js` → `crypto.ts` extension
+rewrite. What applies here is the other half — the bundle shape is wrangler's,
+so two deploys of identical source can differ across wrangler versions, and the
+two Workers are pinned together so a deploy pair is reproducible. Do not read
+the absence of a `crypto.ts` here as evidence the pin was copy-pasted in error.
+To advance it,
 re-run `npm view wrangler version` and update **all six** deploy sites together —
 `docs/licensing-operations.md` §3, §3.5b and both §9 quick-reference rows, plus the
 two Worker READMEs.
