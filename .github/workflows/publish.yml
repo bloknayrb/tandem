@@ -118,4 +118,25 @@ jobs:
       # instead of silently shipping without it. It has always been driven by
       # the same `id-token: write` OIDC token, so it is orthogonal to the auth
       # change.
-      - run: npm publish --provenance --access public
+      #
+      # The dist-tag is DERIVED IN THIS STEP rather than in a step of its own:
+      # `release: types: [published]` fires for a prerelease too, and the
+      # tag/package.json check above passes for `v1.0.0-rc.1`, so a bare
+      # `npm publish` stamps `latest` and every `npm i -g tandem` gets the RC
+      # (#1748). Keeping the derivation and the publish in one `run` means the
+      # outcome-deciding half cannot be deleted or disarmed independently of
+      # the half `release-ci-hygiene.test.ts` pins. `next` is npm's
+      # prerelease-channel convention; `latest` is npm's default, so the
+      # non-prerelease path is unchanged in effect while becoming explicit.
+      # The `-` test matches the desktop half in tauri-release.yml, so the two
+      # channels cannot disagree about what a prerelease is.
+      - name: Publish to npm
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in
+            *-*) NPM_TAG=next ;;
+            *)   NPM_TAG=latest ;;
+          esac
+          npm publish --provenance --access public --tag "$NPM_TAG"

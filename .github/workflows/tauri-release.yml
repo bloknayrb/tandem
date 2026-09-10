@@ -101,8 +101,27 @@ jobs:
                   .join(', ')}). Delete all but one and re-run.`,
               );
             }
+            // A prerelease tag must not auto-update every installed copy:
+            // GitHub's `releases/latest` resolves to the newest NON-prerelease
+            // release, which is the only thing keeping the updater endpoint in
+            // tauri.conf.json off an RC. The `-` test, not a semver parse: the
+            // tag is already pinned equal to `v${tauri.conf.json.version}` by
+            // the step above.
+            const prerelease = tag.includes('-');
             if (existing.length === 1) {
               core.info(`Reusing existing release ${existing[0].id} for ${tag}`);
+              // Re-runs are NORMAL for a four-platform signed build, and this
+              // branch returns before createRelease -- so without this the
+              // re-run would inherit the first run's flag. `owner`/`repo` are
+              // spelled out because this script binds only the action's
+              // `github, context, core`; a bare `{ owner, repo }` shorthand
+              // ReferenceErrors at a `v*` tag, on exactly this path.
+              await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: existing[0].id,
+                prerelease,
+              });
               core.setOutput('release_id', existing[0].id);
               return;
             }
@@ -113,7 +132,7 @@ jobs:
               name: `Tandem ${tag}`,
               body: 'See the assets to download and install Tandem.',
               draft: true,
-              prerelease: false,
+              prerelease,
             });
             core.info(`Created draft release ${data.id} for ${tag}`);
             core.setOutput('release_id', data.id);
