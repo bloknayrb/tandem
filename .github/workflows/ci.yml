@@ -174,7 +174,7 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      - run: npm ci --ignore-scripts
 
       - name: Real-icacls proof (#1299 recovery path)
         run: node scripts/ci/windows-acl-proof.mjs
@@ -250,7 +250,7 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      - run: npm ci --ignore-scripts
 
       - name: Coverage baseline
         id: baseline
@@ -341,7 +341,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - run: npm ci
+      - run: npm ci --ignore-scripts
 
       - name: Lint
         run: npm run lint

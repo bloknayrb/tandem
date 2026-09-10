@@ -206,8 +206,19 @@ jobs:
         with:
           workspaces: "./src-tauri -> target"
 
+      # --ignore-scripts closes the install-time entrypoint: dependency
+      # lifecycle scripts no longer run in this job, which later logs into
+      # Azure and signs Windows binaries. It does NOT change the trust
+      # boundary -- the build that follows runs the same dependency tree with
+      # the same privileges (#1832).
+      #
+      # NEVER move this into `.npmrc` or NPM_CONFIG_IGNORE_SCRIPTS. As npm
+      # *config* it applies to every npm command including `npm publish`, and
+      # package.json has `prepublishOnly: npm run build` -- so config-level
+      # would skip the build and publish whatever dist/ happened to be on the
+      # runner, green. The CLI flag on `npm ci` cannot reach `npm publish`.
       - name: Install npm dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Download Node.js sidecar
         run: node scripts/download-node-sidecar.mjs --target ${{ matrix.node-target }}

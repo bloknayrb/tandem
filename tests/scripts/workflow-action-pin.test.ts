@@ -33,9 +33,13 @@ const WORKFLOW_DIR = path.join(ROOT, ".github/workflows");
  *     provenance check in CONTRIBUTING.md is a human step, by necessity. The
  *     owner/repo SET below is what stops a typosquat or a brand-new action
  *     arriving unnoticed.
- *   - **`npm ci` runs in the same jobs**, before the signing steps, with no
- *     `--ignore-scripts`. Compromising one transitive dependency is a cheaper
- *     attack than moving a tag, and pinning actions does nothing about it.
+ *   - **Dependency code still runs in the same jobs**, before the signing
+ *     steps. #1832 added `--ignore-scripts` to every `npm ci` (pinned by
+ *     `release-ci-hygiene.test.ts`), which closes the install-time
+ *     entrypoint only: the build that follows runs the same dependency tree
+ *     with the same privileges, as do `cargo build.rs`, `cargo install
+ *     tauri-driver` and the Windows job's `dotnet tool install`. Compromising
+ *     one transitive dependency is still a cheaper attack than moving a tag.
  *
  * Following the existing wiring tests: parse YAML rather than substring-match
  * the file, pin SETS rather than validating whatever members happen to be there

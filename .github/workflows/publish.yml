@@ -110,7 +110,7 @@ jobs:
             exit 1
           fi
 
-      - run: npm ci
+      - run: npm ci --ignore-scripts
 
       # `--provenance` is redundant under trusted publishing — npm generates the
       # attestation either way — but it is kept because it is the fail-closed
