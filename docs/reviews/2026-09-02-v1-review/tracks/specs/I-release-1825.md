@@ -67,7 +67,14 @@ non-numeric prerelease" is informational and *bounds* #1748 item 1.
   worktree carries the repo's own tracked `biome.json` and biome 2.x refuses rather than ignoring it
   (CI is green only because a runner has no worktrees). Fix, verified against a minimal reproduction:
   add `"!.claude"` and `"!.worktrees"` to `files.includes` — bare directory names, since biome ≥2.2
-  flags a trailing `/**` via `lint/suspicious/useBiomeIgnoreFolder`. **Run `npx biome check .` from
+  flags a trailing `/**` via `lint/suspicious/useBiomeIgnoreFolder`. **Superseded in PR review:** that
+  enumeration only ever covered the two worktree roots this repo's own tooling uses, so a `git
+  worktree` at any other path (`../tandem-wt`, `./tmp-wt`) aborted every push with an error that
+  never named the worktree as the cause. What shipped instead is
+  `vcs: {enabled, clientKind: "git", useIgnoreFile: true}` with **no** per-path negations — biome
+  skips whatever `.gitignore` already skips, and both worktree roots are gitignored. Do not re-add
+  `"!.claude"` / `"!.worktrees"`: `tests/scripts/biome-worktree-scope.test.ts` fails on either.
+  **Run `npx biome check .` from
   the main checkout, with worktrees present, before committing** and paste the result in the PR body;
   a run from inside a worktree sees no nested config and proves nothing. Two tracked docs quote the
   old command and must change in the same commit — `AGENTS.md:17` and `CONTRIBUTING.md:146-149` item
@@ -103,8 +110,10 @@ No experiment in `docs/reviews/2026-09-02-v1-review/experiments/` covers any of 
 
 ## Done when
 
-The five fixed; `biome.json` carrying `"!.claude"` and `"!.worktrees"` in the **same commit** as the
-`.husky/pre-push` change, with `npx biome check .` run from the main checkout with worktrees present
+The five fixed; `biome.json` carrying the worktree exclusion in the **same commit** as the
+`.husky/pre-push` change (shipped as `vcs.useIgnoreFile`, not the `"!.claude"` / `"!.worktrees"`
+enumeration this spec first named — see the superseding note above), with `npx biome check .` run
+from the main checkout with worktrees present
 and its output in the PR body; `AGENTS.md:17`, `CONTRIBUTING.md:146-149` and `docs/cli.md:175`
 updated; both `check-font-assets` runs recorded, including the non-zero one; the refuted/already-done
 set recorded with its evidence; the three Playwright configs stated as checked; `npm run lint`,

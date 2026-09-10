@@ -1,4 +1,9 @@
 {
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
   "formatter": {
     "enabled": true,
     "indentStyle": "space",
@@ -27,9 +32,7 @@
       "!dist/**",
       "!node_modules/**",
       "!package-lock.json",
-      "!tests/tauri-driver/**",
-      "!.claude",
-      "!.worktrees"
+      "!tests/tauri-driver/**"
     ]
   }
 }
