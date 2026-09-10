@@ -252,12 +252,21 @@ Two paths write `KV[licenseId] = { updateWindowEnd, status, version }`:
 > Permanently. While starved.
 >
 > The same dead state is reachable at least five ways: a failed write, a
-> refund (`applyRefund` deletes the entitlement while the blob still verifies
-> forever), the revocation procedure in §7, KV eviction, and a namespace-id
-> mismatch between the two `wrangler.toml` files.
+> refund, the revocation procedure in §7, KV eviction, and a namespace-id
+> mismatch between the two `wrangler.toml` files. **The first of those five is
+> now distinguishable from the rest**: a refund and a §7 revocation write a
+> `{"updateWindowEnd": null, "status": "revoked"}` TOMBSTONE rather than
+> deleting the key, so the Worker answers `revoked` — deliberately not alerted
+> on, because it is your own action. A key that is simply *gone* is the one
+> that means something broke.
 >
-> **Detection:** the update Worker logs `{ result: "no-update", reason, ts }`.
-> A rising `unknown-id` count is the only evidence any of the above happened.
+> **Detection.** The update Worker logs `{ result: "no-update", reason, ts }`,
+> `[observability]` retains those lines, and `unknown-id` / `unparseable` POST
+> an alert to `ALERT_WEBHOOK_URL` (throttled per reason, gated on a UUID-shaped
+> id because the endpoint is unauthenticated). A log line nobody retains and
+> nobody is notified about was never a detector — that is what #1786 fixed.
+> Both halves are merged but **inert until both Workers are redeployed** with
+> `[observability]` and `ALERT_WEBHOOK_URL` set (§8).
 > **Repair:** re-`PUT KV[licenseId]` from the ledger record — `entitlementValue`
 > is fully derivable, so nothing needs re-issuing. If the customer still has
 > their key, that works too: the blob carries id/name/email/type/createdAt/
@@ -266,7 +275,8 @@ Two paths write `KV[licenseId] = { updateWindowEnd, status, version }`:
 ### 3c. Behavior
 
 - Updater asks `GET /api/license/status` (loopback). If `gateActive && licenseId && updateWindowCurrent`, it points at the Worker with an `X-Tandem-License-Id` header; otherwise it uses the public GitHub `latest.json`.
-- The Worker returns a **byte-identical no-update** response for unknown ids and expired windows (no existence oracle) and logs `{ result, reason, ts }` — the reason is a coarse enum about the *service's* state, never the license id.
+- The Worker returns a **byte-identical no-update** response for unknown ids, expired windows and revocation tombstones (no existence oracle) and logs `{ result, reason, ts }` — the reason is a coarse enum about the *service's* state, never the license id.
+- **The automatic detector is the alert on `unknown-id`/`unparseable`**; `[observability]` on both Workers is what retains the lines behind it; and the `revoked` tombstone is what keeps your own refunds and revocations out of the alert. Both halves are merged but **inert until the Workers are redeployed** with `[observability]` and `ALERT_WEBHOOK_URL` set (§8).
 
 ## 3.5. The issuance endpoint (Cloudflare — owner-deployed)
 
@@ -502,6 +512,26 @@ storm doesn't become an alert storm.
 no notification, and it dies with the terminal session. Cloudflare offers nothing
 free that emails on a log condition, so don't plan around one.
 
+**The update Worker (#1786).** It alerts too, on `unknown-id` and `unparseable`
+— an entitlement *nobody removed* is gone, which is the "You're up to date
+forever" state. One channel only: `ALERT_WEBHOOK_URL`. There is deliberately no
+`ALERT_EMAIL` here, because this Worker has no Resend binding and the one
+surface that must answer every anonymous updater should not hold a mail secret.
+Three properties worth knowing before you read a quiet channel as health:
+
+- `expired` and `revoked` never alert. Both are expected — the second is your
+  own refund or §7 revocation, and paging you for it on every check for the life
+  of the blob is how a channel gets muted.
+- The alert fires only for a **UUID-shaped** id. The endpoint is
+  unauthenticated, so without that gate a scanner pages you on a healthy system.
+  A non-UUID id is still logged; it just never pages.
+- **Residual, stated rather than fixed:** a UUID-shaped flood still reaches the
+  channel and consumes the per-isolate throttle slot, which can suppress a
+  genuine event for five minutes. Bounding that needs a KV counter, i.e. a write
+  per request, and is not worth it.
+
+Both halves are merged but **inert until the Workers are redeployed** with `[observability]` and `ALERT_WEBHOOK_URL` set (§8).
+
 ## 6. Back up `LEDGER_KV`
 
 `LEDGER_KV` is the only copy of the only non-derivable data in the system. A
@@ -538,17 +568,31 @@ record and re-`PUT` their entitlement.
 ## 7. Refunds, revocation, and the kill switch
 
 - **A refund does not stop the software running, and that is intentional.**
-  `applyRefund` deletes the update entitlement; the signed blob still verifies
-  forever (ADR-040 §4 — activation is air-gapped by design). Consumer law
-  obliges returning the money, not technical revocability.
+  `applyRefund` writes a revocation **tombstone** over the update entitlement;
+  the signed blob still verifies forever (ADR-040 §4 — activation is air-gapped
+  by design). Consumer law obliges returning the money, not technical
+  revocability.
 - Note the arithmetic before pricing: 14-day trial + a 14-day EU withdrawal
   window + perpetual run ≈ **28 days of legitimate free use ending in a
   permanent license.** That's a deliberate consequence of the design, not a leak
   to plug — but it should be a decision, not a surprise.
-- **Revoking updates** = deleting `KV[licenseId]`. Remember that this puts the
-  customer into the exact "You're up to date, forever" state described in §3b,
-  which is indistinguishable from a bug. Record every deliberate revocation
-  somewhere you'll look when they open a ticket.
+- **Revoking updates** = writing a TOMBSTONE over `KV[licenseId]`, never
+  deleting it:
+
+  ```bash
+  npx wrangler kv key put "<licenseId>" '{"updateWindowEnd":null,"status":"revoked"}' \
+    --remote --namespace-id <LICENSE_KV id>
+  ```
+
+  **Do not `kv key delete`.** A deleted key is indistinguishable from a key that
+  was lost (a failed write, an eviction, a namespace-id mismatch), and the
+  update Worker alerts on that absence — so deleting would page you for your own
+  deliberate action on every check that customer's install makes, forever, until
+  you mute the channel and stop detecting the real thing. The tombstone answers
+  `revoked` instead: retained and readable, never alerted on. It still puts the
+  customer into the "You're up to date, forever" state described in §3b, so
+  record every deliberate revocation somewhere you'll look when they open a
+  ticket.
 - **Kill switch: unpublish the Polar product.** If issuance is broken, the
   instinct is to debug while broken sales keep arriving. Stop the sales first.
   Every minute spent debugging a live checkout is another customer to reconcile
@@ -585,6 +629,18 @@ Then walk §5a steps 2–4 with that order number.
       what the end-to-end send test above proves.
 - [ ] `ALERT_WEBHOOK_URL` reachable, because the config-stage 503s are now
       alertable and a broken `RESEND_FROM` cannot be reported through Resend.
+- [ ] `ALERT_WEBHOOK_URL` set on the **update** Worker too, and
+      `[observability]` deployed on **both**. Until then the #1786 detector is
+      merged and inert: nothing retains the `reason` lines and nothing reaches
+      you when an entitlement goes missing.
+- [ ] **Verify what Cloudflare's retained invocation record actually holds**,
+      against a real deployment. Tandem's own log line carries `{result, reason,
+      ts}` and no license id — that is pinned by tests. The platform's
+      invocation record is not ours and has never been read: if it carries
+      request headers it holds `X-Tandem-License-Id`, i.e. exactly the
+      per-customer update history the no-id invariant exists to prevent. If it
+      does, the response is to drop `[observability]` on the update Worker or to
+      stop sending the id in a header. Do not assume either way from the docs.
 - [ ] `ALERT_WEBHOOK_URL` set (see §5c — without it you cannot be alerted about
       the email failures that disable the endpoint).
 - [ ] A sandbox purchase completed end-to-end: email → activate →
@@ -633,5 +689,5 @@ Then walk §5a steps 2–4 with that order number.
 | Read an order's ledger record | `npx wrangler kv key get "order:live:<orderId>" --remote --namespace-id <LEDGER_KV>` |
 | Read an entitlement | `npx wrangler kv key get "<licenseId>" --remote --namespace-id <LICENSE_KV>` |
 | **Prove a license gets updates** | `curl -H "X-Tandem-License-Id: <licenseId>" https://<endpoint>/latest.json -i` (expect 200, not 204) |
-| Revoke updates | `npx wrangler kv key delete "<licenseId>" --remote --namespace-id <LICENSE_KV>` |
+| Revoke updates (tombstone, never delete — §7) | `npx wrangler kv key put "<licenseId>" '{"updateWindowEnd":null,"status":"revoked"}' --remote --namespace-id <LICENSE_KV>` |
 | Stop the bleeding | Unpublish the Polar product |

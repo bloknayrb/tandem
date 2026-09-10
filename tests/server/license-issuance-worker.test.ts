@@ -181,6 +181,27 @@ interface LedgerRec {
 const ledgerRec = (deps: TestDeps, orderId = "ord_1", mode = "live"): LedgerRec =>
   JSON.parse(deps.ledgerKv.map.get(`order:${mode}:${orderId}`) as string) as LedgerRec;
 
+/** A revoked entitlement is a TOMBSTONE, not an absence (#1786) — a deleted key
+ *  and a LOST key read identically to the update Worker, which pages on the
+ *  latter. Asserted as the exact parsed value, never `toBeDefined()`: a
+ *  tombstone satisfies that as readily as a resurrected live entitlement, which
+ *  is precisely what the resurrection tests exist to catch. */
+function expectRevoked(deps: TestDeps, licenseId: string): void {
+  expect(JSON.parse(deps.entitlementKv.map.get(licenseId) as string)).toEqual({
+    updateWindowEnd: null,
+    status: "revoked",
+  });
+}
+
+/** The complement: still LIVE. Also spelled as the exact value, for the same
+ *  reason — `toBeDefined()` stopped discriminating the moment revocation began
+ *  writing a key instead of removing one. */
+function expectLive(deps: TestDeps, licenseId: string): void {
+  const value = JSON.parse(deps.entitlementKv.map.get(licenseId) as string);
+  expect(value.status).toBe("personal");
+  expect(value.updateWindowEnd).not.toBeNull();
+}
+
 // ===========================================================================
 describe("crypto: canonicalize parity with the server verifier", () => {
   const hostile = [
@@ -646,7 +667,7 @@ describe("handleIssuance: order.refunded", () => {
 
     const res = await handleIssuance(makeRequest(refundBody("ord_1"), { id: "evt_refund" }), deps);
     expect(res.status).toBe(200);
-    expect(deps.entitlementKv.map.get(licenseId)).toBeUndefined(); // revoked
+    expectRevoked(deps, licenseId);
     expect(ledgerRec(deps).refunded).toBe(true);
     expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
   });
@@ -655,7 +676,7 @@ describe("handleIssuance: order.refunded", () => {
     const deps = await issued();
     const licenseId = ledgerRec(deps).licenseId;
     await handleIssuance(makeRequest(refundBody("ord_1", false), { id: "evt_r2" }), deps);
-    expect(deps.entitlementKv.map.get(licenseId)).toBeDefined(); // NOT revoked
+    expectLive(deps, licenseId); // NOT revoked
   });
 
   it("a missing/ambiguous refunded field is 'dropped' — NOT revoked, NOT ignored, NOT marked done", async () => {
@@ -669,7 +690,7 @@ describe("handleIssuance: order.refunded", () => {
     const res = await handleIssuance(makeRequest(body, { id: "evt_ambig" }), deps);
     expect(res.status).toBe(200); // a retry carries the same bytes
     expect(deps.log).toHaveBeenLastCalledWith({ result: "dropped", ts: NOW / 1000 });
-    expect(deps.entitlementKv.map.get(licenseId)).toBeDefined(); // NOT revoked on a guess
+    expectLive(deps, licenseId); // NOT revoked on a guess
     expect(deps.ledgerKv.map.get("evt:live:evt_ambig")).toBeUndefined(); // NOT marked done
 
     // Once the real field shape is confirmed, a manual re-send with an
@@ -681,7 +702,7 @@ describe("handleIssuance: order.refunded", () => {
     );
     expect(res2.status).toBe(200);
     expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
-    expect(deps.entitlementKv.map.get(licenseId)).toBeUndefined();
+    expectRevoked(deps, licenseId);
   });
 
   it("does not resurrect a refunded entitlement when the paid event retries (H2)", async () => {
@@ -693,12 +714,12 @@ describe("handleIssuance: order.refunded", () => {
     const licenseId = ledgerRec(deps).licenseId;
 
     await handleIssuance(makeRequest(refundBody("ord_1"), { id: "evt_refund" }), deps);
-    expect(deps.entitlementKv.map.get(licenseId)).toBeUndefined(); // revoked
+    expectRevoked(deps, licenseId);
 
     // Retry the original paid event.
     const res = await handleIssuance(makeRequest(paidBody("ord_1"), { id: "evt_1" }), deps);
     expect(res.status).toBe(200);
-    expect(deps.entitlementKv.map.get(licenseId)).toBeUndefined(); // NOT resurrected
+    expectRevoked(deps, licenseId); // NOT resurrected — still the tombstone
   });
 
   it("a refund that outraces the paid event writes a tombstone that blocks later issuance", async () => {
@@ -715,7 +736,13 @@ describe("handleIssuance: order.refunded", () => {
     const res2 = await handleIssuance(makeRequest(paidBody("ord_race"), { id: "evt_p" }), deps);
     expect(res2.status).toBe(200);
     expect(deps.log).toHaveBeenLastCalledWith({ result: "duplicate", ts: NOW / 1000 });
+    // A refund-before-paid record has `licenseId: ""`, which is the half
+    // `applyRefund`'s guard skips. Now that revocation WRITES a key rather than
+    // deleting one, this is the only assertion that would catch a tombstone
+    // landing under the empty key — a `LICENSE_KV[""]` the update Worker could
+    // never be asked about and nothing would ever clean up.
     expect(deps.entitlementKv.map.size).toBe(0);
+    expect(deps.entitlementKv.map.has("")).toBe(false);
     expect(deps.sendEmail).not.toHaveBeenCalled();
   });
 
@@ -867,7 +894,7 @@ describe("handleIssuance: pre-commit recheck narrows the double-mint/tombstone-c
     );
     expect(res.status).toBe(200);
     expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
-    expect(deps.entitlementKv.map.get("lic-race")).toBeUndefined(); // revoked, not orphaned
+    expectRevoked(deps, "lic-race"); // revoked, not orphaned
     expect(calls).toBeGreaterThan(1); // the recheck actually ran
   });
 });

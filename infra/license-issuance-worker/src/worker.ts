@@ -449,12 +449,31 @@ function isFreeOrder(data: any): boolean {
 // resolves to "dropped" (alert, no commit) rather than a guessed revoke/ignore.
 // ---------------------------------------------------------------------------
 
-/** Revoke an order that ALREADY has a ledger record: delete its entitlement
- * (tombstones and never-entitled records have no licenseId, so this is a
- * no-op for them) and mark it refunded. Idempotent — revoking an
- * already-refunded record just re-writes the same state. */
+/** Revoke an order that ALREADY has a ledger record: write a REVOCATION
+ * TOMBSTONE over its entitlement (tombstones and never-entitled records have no
+ * licenseId, so this is a no-op for them) and mark it refunded. Idempotent —
+ * revoking an already-refunded record just re-writes the same state.
+ *
+ * WHY A TOMBSTONE RATHER THAN A DELETE (#1786). A deleted key and a LOST key
+ * are the same absence, and the update Worker reads that absence as
+ * `unknown-id` — the one reason worth paging an operator about, because it
+ * means an entitlement nobody removed has gone. Deleting here would make every
+ * refunded customer's update check page the operator for their own deliberate
+ * action, forever, and a muted channel detects nothing. The tombstone lets the
+ * update Worker answer `revoked` instead, which is retained and readable but
+ * deliberately not alerted on.
+ *
+ * `{updateWindowEnd: null, status: "revoked"}` is NOT a `LicenseEntitlement`:
+ * the null window is what a grandfathered entitlement carries, so the update
+ * Worker MUST read `status` before it compares the window or it grandfathers a
+ * refunded customer forever. See that file's own placement comment. */
 async function applyRefund(rec: LedgerRecord, deps: IssuanceDeps): Promise<EventOutcome> {
-  if (!deps.isTest && rec.licenseId) await deps.entitlementKv.delete(rec.licenseId);
+  if (!deps.isTest && rec.licenseId) {
+    await deps.entitlementKv.put(
+      rec.licenseId,
+      JSON.stringify({ updateWindowEnd: null, status: "revoked" }),
+    );
+  }
   rec.refunded = true;
   await writeOrder(deps, rec);
   return "revoked";

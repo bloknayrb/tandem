@@ -45,6 +45,13 @@ SUPPORT_EMAIL = "REPLACE_WITH_SUPPORT_INBOX"
 # ALERT_WEBHOOK_URL = "REPLACE_WITH_INCOMING_WEBHOOK_URL"
 # ALERT_EMAIL = "REPLACE_WITH_OPERATOR_INBOX"
 
+# Retention. Without this the log lines above are kept NOWHERE: `wrangler tail`
+# is a live stream that dies with the terminal session, so a `dropped` or
+# `stage: "email"` line is unreadable ten minutes later. Alerting is the half
+# that reaches a human; this is the half that lets them see what happened.
+[observability]
+enabled = true
+
 # Update entitlements: licenseId -> { updateWindowEnd, status, version }. This
 # MUST be the SAME namespace the license-update Worker reads (paste the same id
 # you used in infra/license-update-worker/wrangler.toml — the placeholder name

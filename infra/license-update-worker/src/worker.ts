@@ -13,31 +13,45 @@
  *    (HTTP 204, empty body) — no existence oracle.
  *  - Logs only `{ result, reason, ts }` — never the license id (per-customer
  *    update-check logs would be telemetry). The `reason` is a closed enum
- *    describing OUR state, not the caller's identity.
+ *    describing OUR state, not the caller's identity. That invariant is about
+ *    OUR OWN log line; what Cloudflare's platform-level invocation record holds
+ *    is a separate question, unverified from here, and carried as a checklist
+ *    line in docs/licensing-operations.md §8.
  */
 
 /**
- * Why a request was answered with no-update. All five reasons return identical
+ * Why a request was answered with no-update. All six reasons return identical
  * bytes to the caller — this exists purely so the operator can tell them apart.
  *
- * It is the single detector for the worst failure mode in the licensing system:
- * a license whose entitlement is missing is served 204, `tauri-plugin-updater`
- * early-returns `Ok(None)`, and the desktop app tells the user **"You're up to
- * date."** — permanently, while starved. That is indistinguishable from health
- * at every layer above this line. A rising `unknown-id` count is the only
- * evidence that licenses are being issued without entitlements (a broken
- * issuance path, a KV namespace-id mismatch between the two wrangler.toml
- * files, an eviction, or a refund).
+ * It names the worst failure mode in the licensing system: a license whose
+ * entitlement is missing is served 204, `tauri-plugin-updater` early-returns
+ * `Ok(None)`, and the desktop app tells the user **"You're up to date."** —
+ * permanently, while starved. That is indistinguishable from health at every
+ * layer above this line.
+ *
+ * `reason` ALONE was never a detector, and calling it one is what #1786 fixed:
+ * a log line nobody retains and nobody is notified about only makes evidence
+ * readable to someone who already suspects. The detector is two halves, both
+ * below, and both **inert until the Worker is redeployed**:
+ *   - retention — `[observability]` in `wrangler.toml`;
+ *   - notification — `sendOperatorAlert` on `ALERT_WEBHOOK_URL`, which must be
+ *     set (docs/licensing-operations.md §8).
  */
 export type NoUpdateReason =
   /** No `X-Tandem-License-Id` header — an unlicensed/public updater client. */
   | "no-header"
-  /** Header present, but no KV entry. THE alert-worthy one. */
+  /** Header present, but no KV entry: an entitlement WE DID NOT REMOVE is gone
+   *  (a failed write, an eviction, a namespace-id mismatch). Alertable. */
   | "unknown-id"
-  /** KV entry present but not parsable JSON. */
+  /** KV entry present but not parsable JSON. Alertable. */
   | "unparseable"
   /** Entitled, but past the update window. Expected and benign. */
   | "expired"
+  /** A revocation TOMBSTONE — the operator's own refund (`applyRefund`) or a
+   *  hand-run revocation (docs/licensing-operations.md §7). Deliberately NOT
+   *  alertable: paging someone for their own deliberate action, on every check
+   *  for the life of the blob, is how an alert channel gets muted. */
+  | "revoked"
   /** Entitled and in-window, but the upstream manifest fetch failed. */
   | "upstream";
 
@@ -51,6 +65,15 @@ export interface LogEntry {
   ts: number;
   /** Present on `no-update` only. */
   reason?: NoUpdateReason;
+}
+
+/** Cloudflare's `ctx`, structurally. Declared locally rather than imported —
+ *  this is a separate Cloudflare build with no shared module and no
+ *  `@cloudflare/workers-types` dependency, and the issuance Worker carries the
+ *  identical declaration. That duplication, and the alerting duplication below,
+ *  is deliberate for the same reason. */
+export interface ExecutionContext {
+  waitUntil(promise: Promise<unknown>): void;
 }
 
 export interface UpdateDeps {
@@ -69,6 +92,11 @@ export const LICENSE_HEADER = "X-Tandem-License-Id";
 // `updateWindowEnd` is read) — kept in lockstep by the parity test in
 // tests/server/license-update-worker.test.ts. `status`/`version` are optional
 // here because the Worker tolerates entries that omit them.
+//
+// The namespace holds TWO shapes now: entitlements, and revocation tombstones
+// (`{updateWindowEnd: null, status: "revoked"}`). A tombstone is deliberately
+// NOT a `LicenseEntitlement` — only `applyRefund` in the issuance Worker and a
+// hand-run `kv key put` (docs/licensing-operations.md §7 / §9) write one.
 interface Entitlement {
   updateWindowEnd: string | null;
   status?: string;
@@ -88,7 +116,7 @@ export async function handleUpdateRequest(request: Request, deps: UpdateDeps): P
   const { kv, latestJsonUrl, fetchFn, now, log } = deps;
   const ts = now();
   // The `reason` is logged, never returned — the response stays byte-identical
-  // across all five branches, so this cannot become an existence oracle.
+  // across all six branches, so this cannot become an existence oracle.
   const reject = (reason: NoUpdateReason): Response => {
     log?.({ result: "no-update", ts, reason });
     return noUpdate();
@@ -106,6 +134,22 @@ export async function handleUpdateRequest(request: Request, deps: UpdateDeps): P
   } catch {
     return reject("unparseable");
   }
+
+  // PLACEMENT IS LOAD-BEARING: this runs immediately after the parse and BEFORE
+  // the window comparison below, and each ordering has its own distinct failure.
+  //
+  //  - Omit it entirely and a `{updateWindowEnd: null}` tombstone is never
+  //    `expired`, so it falls through to the upstream fetch and SERVES THE
+  //    MANIFEST to a refunded customer. The null window is exactly what a
+  //    grandfathered entitlement carries; that is the grandfathering hazard.
+  //  - Put it AFTER the window comparison and a tombstone whose window has
+  //    already passed reports `expired` instead of `revoked` — a mislabel, and
+  //    `expired` is deliberately non-alertable, so the operator's own
+  //    revocation and an ordinary out-of-window customer become the same line
+  //    in the retained log. Nothing between the `expired` branch and the fetch
+  //    below serves anything, so the wrong ORDER does not serve a manifest;
+  //    only omitting the check does.
+  if (entry.status === "revoked") return reject("revoked");
 
   // null updateWindowEnd ⇒ never expires (grandfathered). Otherwise compare epochs.
   const expired = entry.updateWindowEnd != null && new Date(entry.updateWindowEnd).getTime() < ts;
@@ -133,17 +177,147 @@ export async function handleUpdateRequest(request: Request, deps: UpdateDeps): P
 interface WorkerEnv {
   LICENSE_KV: KvGetter;
   PUBLIC_LATEST_JSON_URL: string;
+  /** Any incoming webhook (Slack/Discord/ntfy). Without it, retention is all
+   *  there is and nothing reaches a human unprompted. */
+  ALERT_WEBHOOK_URL?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Operator alerting.
+//
+// Mirrors the issuance Worker's plumbing (`infra/license-issuance-worker/`)
+// rather than inventing a shape. The duplication is deliberate: the two are
+// separate Cloudflare builds with no shared module, so an import is not
+// available and a copied 40 lines beats a build-tooling dependency.
+//
+// There is NO `ALERT_EMAIL` here on purpose. This Worker has no Resend binding,
+// and adding one would give the update endpoint — the one surface that must
+// answer every anonymous updater — a reason to hold a mail secret.
+// ---------------------------------------------------------------------------
+
+/** Best-effort per-isolate throttle, same shape and window as the issuance
+ *  Worker's. Isolates are short-lived, so this narrows a storm rather than
+ *  eliminating it — the right trade for an alert you must not miss entirely. */
+const ALERT_THROTTLE_MS = 5 * 60 * 1000;
+const lastAlertAt = new Map<string, number>();
+
+function shouldAlert(key: string, nowMs: number): boolean {
+  const prev = lastAlertAt.get(key);
+  if (prev !== undefined && nowMs - prev < ALERT_THROTTLE_MS) return false;
+  lastAlertAt.set(key, nowMs);
+  return true;
+}
+
+/** Test-only: clear the throttle so each case starts from a clean isolate.
+ *  Without this the second test to provoke a given key is silently suppressed
+ *  and every "does not alert" assertion passes vacuously. */
+export function _resetAlertThrottleForTests(): void {
+  lastAlertAt.clear();
+}
+
+/**
+ * Does this log entry warrant waking the operator?
+ *
+ * ENUMERATED, and the four it excludes are the discriminating half:
+ *   - `no-header` — an ordinary unlicensed client, i.e. most of the traffic.
+ *   - `expired` — expected and benign; alerting would page for every
+ *     out-of-window customer, forever.
+ *   - `revoked` — the operator's own tombstone. Same, and worse: it is their
+ *     own action being reported back to them.
+ *   - `upstream` — a GitHub-side blip that would storm.
+ */
+export function isAlertable(entry: LogEntry): boolean {
+  return entry.reason === "unknown-id" || entry.reason === "unparseable";
+}
+
+/** A license id as both mint sites produce one: the issuance Worker's
+ *  `globalThis.crypto.randomUUID()` and the out-of-band
+ *  `scripts/sign-license.ts`. */
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Alert text. Carries `reason` and the repair pointer and NOTHING else — the
+ *  license id never enters it, so an alert channel is not a per-customer update
+ *  history by another route. */
+function alertBody(entry: LogEntry): string {
+  return [
+    "Tandem update endpoint: a licensed install was refused an update for a",
+    "reason that should not occur.",
+    `result=${entry.result} reason=${entry.reason ?? "-"}`,
+    "",
+    "An entitlement nobody removed is gone (a failed KV write, an eviction, or a",
+    "namespace-id mismatch between the two wrangler.toml files). Affected",
+    'installs are told "You\'re up to date" forever while starved.',
+    "Repair: re-PUT the entitlement from the ledger record — it is fully",
+    "derivable, so nothing needs re-issuing. See docs/licensing-operations.md §3.",
+  ].join("\n");
+}
+
+async function sendOperatorAlert(env: WorkerEnv, entry: LogEntry): Promise<void> {
+  if (env.ALERT_WEBHOOK_URL) {
+    try {
+      const resp = await fetch(env.ALERT_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: alertBody(entry) }),
+      });
+      // A non-ok response is a failure, not a delivery: a retired Slack webhook
+      // 404s rather than throwing, and treating that as success loses the alert
+      // silently — in the one piece of code whose whole purpose is not to be
+      // missed.
+      if (resp.ok) return;
+    } catch {
+      // fall through
+    }
+  }
+  // The channel is absent or exhausted. Say so, or the throttle slot is
+  // consumed and nothing records that the alert never landed.
+  console.log(
+    JSON.stringify({
+      result: "alert-undeliverable",
+      ts: Math.floor(Date.now() / 1000),
+      ...(entry.reason ? { reason: entry.reason } : {}),
+    }),
+  );
 }
 
 export default {
-  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
+  async fetch(request: Request, env: WorkerEnv, ctx?: ExecutionContext): Promise<Response> {
+    // `ctx` is always supplied by the real runtime; optional so the two-arg
+    // test harness still calls this.
+    const lid = request.headers.get(LICENSE_HEADER);
     return handleUpdateRequest(request, {
       kv: env.LICENSE_KV,
       latestJsonUrl: env.PUBLIC_LATEST_JSON_URL,
       fetchFn: fetch,
       now: () => Date.now(),
       // JSON line; carries the coarse reason but deliberately no license id.
-      log: (entry) => console.log(JSON.stringify(entry)),
+      log: (entry) => {
+        console.log(JSON.stringify(entry));
+        // A SECOND precondition, deliberately here rather than inside
+        // `isAlertable`: the id must be UUID-shaped. This endpoint is
+        // unauthenticated — one KV `get` off a caller-supplied header, on a
+        // public host — so scanner traffic would otherwise page the operator on
+        // a perfectly healthy system, and a low-rate flood would hold the
+        // throttle slot and suppress the genuine event. Both mint sites produce
+        // UUIDs today (the issuance Worker's `randomUUID()` and
+        // `scripts/sign-license.ts`); a future generator must stay UUID-shaped
+        // or the alert silently stops covering its cohort. Non-UUID input still
+        // LOGS `unknown-id`, it just never pages.
+        //
+        // RESIDUAL, stated rather than fixed: a UUID-shaped flood still reaches
+        // the channel and consumes the slot. A KV counter is the only way to
+        // bound that on a stateless Worker, and it is not worth a write per
+        // request. See docs/licensing-operations.md §5c.
+        if (!isAlertable(entry) || !lid || !UUID_SHAPE.test(lid)) return;
+        // Keyed on result AND reason. `result` alone collapses `unknown-id` and
+        // `unparseable` into one slot — every no-update logs the same result —
+        // so an `unparseable` storm would suppress the genuine event.
+        if (!shouldAlert(`${entry.result}:${entry.reason ?? "-"}`, Date.now())) return;
+        // Off the response path entirely: the alert must never delay the
+        // request or change the response bytes.
+        const pending = sendOperatorAlert(env, entry).catch(() => {});
+        if (ctx) ctx.waitUntil(pending);
+      },
     });
   },
 };
