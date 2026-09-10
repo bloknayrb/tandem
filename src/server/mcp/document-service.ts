@@ -155,26 +155,26 @@ function fidelityReportOf(doc: Y.Doc): FidelityReport | undefined {
 }
 
 /**
- * How many STRUCTURAL import losses a report carries (#1142 G3) — content or
- * page furniture that is gone, not mammoth's style-level tail. This is what the
- * save-time overwrite warning gates on; see the field's note in
- * `shared/types.ts` for why the broader count would make it ambient. Takes the
- * report rather than the doc so a caller can read it ONCE and use the same
- * snapshot for what it returns and what it persists.
+ * A positive count field off a fidelity report, or 0. The `typeof` guard is
+ * load-bearing rather than ceremonial: `fidelityReportOf` is a bare cast over a
+ * CRDT-synced value that survives session restore un-revalidated, so a legacy or
+ * malformed field must read as "none" instead of reaching arithmetic.
+ *
+ * Takes the report rather than the doc so a caller can read it ONCE and use the
+ * same snapshot for what it returns and what it persists.
+ *
+ * - `structuralLosses` (#1142 G3) — content or page furniture that is gone, not
+ *   mammoth's style-level tail. This is what the save-time overwrite warning
+ *   gates on; see the field's note in `shared/types.ts` for why the broader
+ *   count would make it ambient.
+ * - `droppedImages` (#1755) — body pictures the import dropped, which REFUSES
+ *   the binary save rather than merely warning.
  */
-function structuralLossesOf(report: FidelityReport | undefined): number {
-  const value = report?.structuralLosses;
-  return typeof value === "number" && value > 0 ? value : 0;
-}
-
-/**
- * How many body pictures the import dropped (#1755). Mirrors
- * `structuralLossesOf`, including its `typeof` guard, because `fidelityReportOf`
- * is a bare cast over a CRDT-synced value that survives session restore
- * un-revalidated.
- */
-function droppedImagesOf(report: FidelityReport | undefined): number {
-  const value = report?.droppedImages;
+function reportCount(
+  report: FidelityReport | undefined,
+  field: "structuralLosses" | "droppedImages",
+): number {
+  const value = report?.[field];
   return typeof value === "number" && value > 0 ? value : 0;
 }
 
@@ -486,7 +486,7 @@ export async function saveDocumentToDisk(
       // ORIGINAL `word/document.xml` in place and re-zips, so the pictures
       // survive it. Adding this "for consistency" would break the one write path
       // that preserves them.
-      if (droppedImagesOf(fidelityReportOf(doc)) > 0) {
+      if (reportCount(fidelityReportOf(doc), "droppedImages") > 0) {
         throw new SaveVerificationError(
           blockReasonMessage("import-image-loss"),
           "import-image-loss",
@@ -517,7 +517,7 @@ export async function saveDocumentToDisk(
       // persisted `structuralLosses` disagree with the count already delivered
       // to the toast and to Claude.
       importSnapshot = fidelityReportOf(doc);
-      unpreservedImports = structuralLossesOf(importSnapshot) || undefined;
+      unpreservedImports = reportCount(importSnapshot, "structuralLosses") || undefined;
       const buffer = await adapter.saveBinary!(doc);
       // Pre-overwrite snapshot of the on-disk original (first write per path per
       // run), mirroring the text branch below. .docx is the highest-stakes case:
@@ -608,7 +608,7 @@ export async function saveDocumentToDisk(
       if (isBinary) {
         meta.set(Y_MAP_FIDELITY_REPORT, {
           importLosses: importSnapshot?.importLosses ?? [],
-          structuralLosses: structuralLossesOf(importSnapshot),
+          structuralLosses: reportCount(importSnapshot, "structuralLosses"),
           exportDowngrades,
           // Post-write verify advisories (#1123 0e) — louder than downgrades;
           // `?? []` clears a prior save's advisory on a now-clean save.
