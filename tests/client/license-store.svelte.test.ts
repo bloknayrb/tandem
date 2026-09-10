@@ -167,3 +167,143 @@ describe("licenseStore (singleton lifecycle)", () => {
     expect(fetchLicenseStatus).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * A failed poll must be VISIBLE and must change nothing else (#1789). Before
+ * this the catch was a bare comment, so a first-poll failure left `status`
+ * null and Settings → License asserted "Not enforced in this version" from a
+ * fetch that never answered.
+ */
+describe("licenseStore — statusUnavailable (#1789)", () => {
+  let warn: ReturnType<typeof vi.fn<(...args: unknown[]) => void>>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fetchLicenseStatus.mockReset();
+    licenseStore.stop();
+    warn = vi.fn();
+    vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => warn(...args));
+  });
+
+  afterEach(() => {
+    licenseStore.stop();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("a failed poll sets the flag and leaves status and ui at their last values", async () => {
+    fetchLicenseStatus.mockResolvedValueOnce(TRIAL(5));
+    licenseStore.start();
+    await flush();
+    expect(licenseStore.statusUnavailable).toBe(false);
+
+    fetchLicenseStatus.mockRejectedValue(new Error("ECONNREFUSED"));
+    await licenseStore.refresh();
+    await flush();
+
+    expect(licenseStore.statusUnavailable).toBe(true);
+    // The `ui`-unchanged half is a real guard only because `deriveLicenseUi`
+    // must NOT take `statusUnavailable` — `ui` stays a pure function of
+    // `status`, so a transient loopback failure structurally cannot raise the
+    // wall or flip editability. A later widening breaks these two lines.
+    expect(licenseStore.status).toEqual(TRIAL(5));
+    expect(licenseStore.ui.showTrialBanner).toBe(true);
+    expect(licenseStore.ui.editable).toBe(true);
+  });
+
+  it("two consecutive failures warn exactly once", async () => {
+    fetchLicenseStatus.mockRejectedValue(new Error("down"));
+    licenseStore.start();
+    await flush();
+    await licenseStore.refresh();
+    await flush();
+
+    expect(licenseStore.statusUnavailable).toBe(true);
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes("[license]"))).toHaveLength(1);
+  });
+
+  /**
+   * Review round 1. The once-per-transition warn recorded THAT the poll failed
+   * and not WHY. The on-screen copy asserts Tandem "couldn't reach its local
+   * server" — true of an ECONNREFUSED, false of a 500 from
+   * `/api/license/status`, a 401 after token rotation, or a JSON parse failure
+   * on a truncated body, all of which mean the server answered. Without the
+   * cause in the line those four are indistinguishable in a bug report.
+   */
+  it("the warn names the cause, not just the failure", async () => {
+    fetchLicenseStatus.mockRejectedValue(new Error("HTTP 401"));
+    licenseStore.start();
+    await flush();
+
+    const line = warn.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+    expect(line).toContain("[license]");
+    expect(line).toContain("HTTP 401");
+  });
+
+  it("a later success clears it", async () => {
+    fetchLicenseStatus.mockRejectedValueOnce(new Error("down"));
+    licenseStore.start();
+    await flush();
+    expect(licenseStore.statusUnavailable).toBe(true);
+
+    fetchLicenseStatus.mockResolvedValue(TRIAL(3));
+    await licenseStore.refresh();
+    await flush();
+    expect(licenseStore.statusUnavailable).toBe(false);
+  });
+
+  it("set() clears it — an activate response is a successful observation", async () => {
+    fetchLicenseStatus.mockRejectedValue(new Error("down"));
+    licenseStore.start();
+    await flush();
+    expect(licenseStore.statusUnavailable).toBe(true);
+
+    licenseStore.set(LICENSED);
+    expect(licenseStore.statusUnavailable).toBe(false);
+  });
+
+  /**
+   * Review round 2. The try used to span `reconcileTransition`, whose
+   * `onTransition` is `yjsSync.rebuildForLicenseChange()` — `teardownAllTabs()`
+   * + `startBootstrap()`, real Y.js/provider work. A throw there landed in this
+   * catch and Settings → License then said Tandem "couldn't reach its local
+   * server", about a status it had just fetched successfully. The console line
+   * misdiagnosed it the same way, defeating the round-1 reason for binding the
+   * error at all.
+   */
+  it("a throwing onTransition is not reported as an unreachable server", async () => {
+    const onTransition = vi.fn(() => {
+      throw new Error("provider rebuild failed");
+    });
+    fetchLicenseStatus.mockResolvedValueOnce(TRIAL(5));
+    licenseStore.start({ onTransition });
+    await flush(); // baseline: no edge from the null baseline
+    expect(licenseStore.statusUnavailable).toBe(false);
+
+    fetchLicenseStatus.mockResolvedValue(RESTRICTED);
+    // The client-side defect stays visible as a rejection rather than being
+    // relabelled an outage.
+    await expect(licenseStore.refresh()).rejects.toThrow("provider rebuild failed");
+    expect(onTransition).toHaveBeenCalledTimes(1);
+
+    // The fetch SUCCEEDED, so the fresh status is stored and nothing on screen
+    // may claim the local server is unreachable.
+    expect(licenseStore.status).toEqual(RESTRICTED);
+    expect(licenseStore.statusUnavailable).toBe(false);
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes("[license]"))).toHaveLength(0);
+  });
+
+  it("stop() resets it with the rest of the baseline", async () => {
+    fetchLicenseStatus.mockRejectedValue(new Error("down"));
+    licenseStore.start();
+    await flush();
+    expect(licenseStore.statusUnavailable).toBe(true);
+
+    licenseStore.stop();
+    expect(licenseStore.statusUnavailable).toBe(false);
+  });
+});
+// The `status === null` row is deliberately NOT here: `stop()` never clears
+// `status` and `set()` always assigns a non-null one, so within this file the
+// singleton has held a status since the first describe's `beforeEach`. That row
+// needs a fresh module instance and lives in `settings-license-tab.test.ts`.

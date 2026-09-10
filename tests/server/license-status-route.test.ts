@@ -1,7 +1,9 @@
 import crypto from "crypto";
 import type { Request, Response } from "express";
 import fs from "fs";
-import { describe, expect, it, vi } from "vitest";
+import os from "os";
+import path from "path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LicenseState } from "../../src/server/license/license-types.js";
 import * as verifier from "../../src/server/license/verifier.js";
 import { canonicalize } from "../../src/server/license/verifier.js";
@@ -137,6 +139,46 @@ describe("handleActivateLicense", () => {
     expect(message).not.toMatch(/TANDEM_ALLOW_UNAUTHENTICATED_LAN/);
   });
 
+  /**
+   * Review round 2. The refusal used to end "… or run `tandem activate` on
+   * it." unconditionally. On a desktop install that is the wrong-root no-op
+   * #1789 removed from the Settings hint two functions away: the CLI writes
+   * `license.json` under the npm env-paths root while the sidecar reads the
+   * Tauri app-data dir, so it prints "✓ License activated" and nothing changes.
+   * `npmCliSharesAppDataRoot()` is the same discriminant `loopbackLicenseWire`
+   * already uses, and an overridden root is the fail-closed direction.
+   */
+  it("drops the CLI clause when the npm CLI would write a root this server never reads", async () => {
+    const saved = process.env.TANDEM_APP_DATA_DIR;
+    process.env.TANDEM_APP_DATA_DIR = path.join(os.tmpdir(), "tandem-desktop-root-fixture");
+    try {
+      const res = fakeRes();
+      await handleActivateLicense(activateReq({ body: { license: "x" } }), res);
+      const message = (res.body as { message: string }).message;
+      expect(res.statusCode).toBe(403);
+      // The actionable half survives; only the no-op instruction goes.
+      expect(message).toMatch(/computer running Tandem/);
+      expect(message).toMatch(/paste the key there/);
+      expect(message).not.toContain("tandem activate");
+    } finally {
+      if (saved === undefined) delete process.env.TANDEM_APP_DATA_DIR;
+      else process.env.TANDEM_APP_DATA_DIR = saved;
+    }
+  });
+
+  it("keeps the CLI clause when the npm CLI and this server share a root", async () => {
+    const saved = process.env.TANDEM_APP_DATA_DIR;
+    delete process.env.TANDEM_APP_DATA_DIR;
+    try {
+      const res = fakeRes();
+      await handleActivateLicense(activateReq({ body: { license: "x" } }), res);
+      expect((res.body as { message: string }).message).toContain("tandem activate");
+    } finally {
+      if (saved === undefined) delete process.env.TANDEM_APP_DATA_DIR;
+      else process.env.TANDEM_APP_DATA_DIR = saved;
+    }
+  });
+
   it("reports a filesystem failure as 500 LICENSE_WRITE_FAILED, not a bad key", async () => {
     // The distinction the taxonomy exists for: "your input is wrong" (400) vs
     // "our disk is wrong" (500). Previously every cause collapsed into a 400
@@ -219,5 +261,54 @@ describe("dark-build wire shape", () => {
     const scrubbed = scrubForNonLoopback({ gateActive: false });
     expect(scrubbed).not.toHaveProperty("licenseeName");
     expect(typeof scrubbed.licenseInstalled).toBe("boolean");
+  });
+});
+
+/**
+ * #1789, review round 1. The Settings → License CLI hint cannot be decided in
+ * the client: `isTauriRuntime()` answers "am I in the Tauri WebView", and a
+ * desktop install also serves this same client over `http://127.0.0.1:3479`, so
+ * a desktop user browsing there reads FALSE and is offered `tandem activate` —
+ * which writes `license.json` under the npm env-paths root while the sidecar
+ * reads the Tauri app-data dir. It prints "✓ License activated" and the desktop
+ * never sees it. The server owns the discriminant; this is its wire.
+ */
+describe("cliActivateEffective on the wire", () => {
+  let saved: string | undefined;
+
+  beforeEach(() => {
+    saved = process.env.TANDEM_APP_DATA_DIR;
+  });
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.TANDEM_APP_DATA_DIR;
+    else process.env.TANDEM_APP_DATA_DIR = saved;
+  });
+
+  it("is false for a loopback caller whose server reads an overridden root", () => {
+    process.env.TANDEM_APP_DATA_DIR = path.join(os.tmpdir(), "tandem-desktop-root-fixture");
+    const res = fakeRes();
+    handleGetLicenseStatus(reqFrom("127.0.0.1"), res);
+    expect((res.body as { cliActivateEffective?: boolean }).cliActivateEffective).toBe(false);
+  });
+
+  it("is true for a loopback caller on the plain npm root", () => {
+    delete process.env.TANDEM_APP_DATA_DIR;
+    const res = fakeRes();
+    handleGetLicenseStatus(reqFrom("127.0.0.1"), res);
+    expect((res.body as { cliActivateEffective?: boolean }).cliActivateEffective).toBe(true);
+  });
+
+  /**
+   * Absence, not an always-false key: a LAN caller runs the CLI on THEIR
+   * machine, which can never reach this server's root, and the client reads a
+   * missing field as false. Keeping it off the scrubbed wire also keeps that
+   * payload from widening.
+   */
+  it("never reaches a non-loopback caller", () => {
+    delete process.env.TANDEM_APP_DATA_DIR;
+    const res = fakeRes();
+    handleGetLicenseStatus(reqFrom("203.0.113.5"), res);
+    expect(res.body).not.toHaveProperty("cliActivateEffective");
   });
 });
