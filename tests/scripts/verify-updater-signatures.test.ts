@@ -1,4 +1,7 @@
+import { spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, type KeyObject, randomBytes, sign } from "node:crypto";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { verifyManifest, verifyMinisign } from "../../scripts/ci/verify-updater-signatures.mjs";
 
@@ -229,5 +232,61 @@ describe("verifyManifest", () => {
       }),
     ).rejects.toThrow(/platforms/);
     expect(fetchBytes).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Review round 1. The entrypoint guard called `realpathSync(process.argv[1])`
+ * with no `try`, and `realpathSync` throws `ENOENT` on a path that does not
+ * exist. `process.argv[1]` is not guaranteed to be one — under `node -e` it is
+ * whatever positional word follows the eval string — so importing this module
+ * for its two pure exports died at EVALUATION time, before either export was
+ * reachable. A guard that decides "am I the entrypoint?" must never be able to
+ * abort the import it is guarding.
+ *
+ * A child process, not an in-process import: vitest already holds this module
+ * in its ESM cache with a real `argv[1]`, so the failure is unreachable from
+ * inside the suite.
+ */
+describe("the entrypoint guard survives an argv[1] that is not a path", () => {
+  const modUrl = pathToFileURL(
+    path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../scripts/ci/verify-updater-signatures.mjs",
+    ),
+  ).href;
+
+  function importUnder(argv1: string) {
+    return spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        "const m = await import(process.env.MOD); console.log(typeof m.verifyMinisign, typeof m.verifyManifest);",
+        argv1,
+      ],
+      { encoding: "utf8", env: { ...process.env, MOD: modUrl } },
+    );
+  }
+
+  it("imports cleanly when argv[1] does not exist", () => {
+    const res = importUnder("SOMEARG_NOT_A_PATH");
+    // Assert on stderr too: an ENOENT here names `lstat` and the bogus word,
+    // which is a far clearer failure message than a bare non-zero status.
+    expect(res.stderr).not.toMatch(/ENOENT/);
+    expect(res.status).toBe(0);
+    expect(res.stdout.trim()).toBe("function function");
+  });
+
+  it("does not run main() when argv[1] is empty or absent", () => {
+    // Regression pin for the `!== null` half rather than a second reproduction
+    // of the crash: two UNRESOLVABLE paths must not compare equal and drag
+    // `main()` — which reaches for GITHUB_TOKEN and the network — into a
+    // process that only wanted the exports. (Windows drops a "" argument
+    // entirely, so this arrives as either an empty string or no argv[1] at
+    // all; both take the same branch.)
+    const res = importUnder("");
+    expect(res.status).toBe(0);
+    expect(res.stdout.trim()).toBe("function function");
   });
 });

@@ -280,8 +280,30 @@ async function main() {
   console.log(`all ${results.length} platform signatures verify against plugins.updater.pubkey`);
 }
 
-const invokedPath = process.argv[1];
-if (invokedPath && realpathSync(invokedPath) === realpathSync(fileURLToPath(import.meta.url))) {
+/**
+ * `realpathSync` THROWS on a path that does not exist, and `process.argv[1]` is
+ * not guaranteed to be one — `node --input-type=module -e "await
+ * import('./scripts/ci/verify-updater-signatures.mjs')" SOMEARG` puts the bare
+ * word `SOMEARG` there. An unguarded call therefore kills the IMPORT at
+ * evaluation time, before any export is reachable: the exact opposite of what
+ * an entrypoint guard is for, and this module is imported by
+ * `tests/scripts/verify-updater-signatures.test.ts` for its two pure exports.
+ * Both sides go through it, because the module's own path can equally sit
+ * behind a link that no longer resolves.
+ */
+function realpathOrNull(candidate) {
+  if (!candidate) return null;
+  try {
+    return realpathSync(candidate);
+  } catch {
+    return null;
+  }
+}
+
+// `!== null` matters: two unresolvable paths must NOT compare equal and run
+// `main()` in a process that never asked for it.
+const invokedPath = realpathOrNull(process.argv[1]);
+if (invokedPath !== null && invokedPath === realpathOrNull(fileURLToPath(import.meta.url))) {
   main().catch((err) => {
     console.error(`::error::${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
