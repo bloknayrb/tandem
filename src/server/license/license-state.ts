@@ -6,7 +6,7 @@ import { LicenseActivationError } from "./activation.js";
 import { GATE_ENABLED } from "./gate-flag.js";
 import type { LicenseFile, LicenseState, SignatureVerified, TrialFile } from "./license-types.js";
 import { MAX_NORMALIZE_INPUT, normalizePastedLicense } from "./paste.js";
-import { licenseFilePath, TRIAL_MS, trialFilePath } from "./paths.js";
+import { licenseFilePath, TRIAL_DAYS, TRIAL_MS, trialFilePath } from "./paths.js";
 import { LicenseVerifyError, verifyLicenseSignature } from "./verifier.js";
 
 // Known license schema majors. The signed `version` field becomes load-bearing:
@@ -202,7 +202,37 @@ export function resolveLicenseState(deps: {
   const firstRunAt = trialFirstRunAt(tf, nowMs);
   const expiresAt = firstRunAt + TRIAL_MS;
   if (nowMs < expiresAt) {
-    const daysRemaining = Math.max(0, Math.ceil((expiresAt - nowMs) / 86_400_000));
+    // DISPLAY clamp, both ends (#1819). `Math.max(0, …)` alone is a lower bound,
+    // and two routes push the upper end past `TRIAL_DAYS`:
+    //
+    // - A stored `firstRunAt` up to `TRIAL_FUTURE_SLACK_MS` (24 h) ahead of now
+    //   is "usable" by design — the slack absorbs write/read clock skew — so
+    //   `ensureTrialStarted` leaves it and this reads 15. The clock-sanity bound
+    //   took this from unbounded to `TRIAL_DAYS + 1`; it did not close it.
+    // - `ensureTrialStarted` runs ONCE at startup while this re-reads per
+    //   dispatch on a live clock, so a clock moved BACK mid-session yields
+    //   `TRIAL_DAYS + N` until restart — the issue's "24 of 14 days left".
+    //
+    // Clamping here covers all three consumers (the banner, the Settings pill,
+    // `tandem license`) in one place. `nowMs < expiresAt` above is deliberately
+    // untouched: a backwards clock still LENGTHENS the trial, which is ADR-040
+    // §3's deliberately-soft clock, not a hole this issue closes.
+    //
+    // `warnOnce` writes to `console.error` (stderr — Critical Rule 3) once per
+    // process, and it is reachable on a shipped DARK build: `runLicenseStatus`
+    // (src/cli/license.ts) and `darkInstallInfo()` (src/server/mcp/routes/
+    // license.ts) both resolve with `gateEnabled: true`. One stderr line per
+    // process on a genuinely bogus clock is the point.
+    const rawDays = Math.ceil((expiresAt - nowMs) / 86_400_000);
+    if (rawDays > TRIAL_DAYS) {
+      warnOnce(
+        "trial:days-clamp",
+        `[license] trial clock reports ${rawDays} days remaining, more than the ${TRIAL_DAYS}-day ` +
+          "trial — the device clock moved backwards, or trial.json holds a future firstRunAt. " +
+          `Reporting ${TRIAL_DAYS}; the clock itself is left alone (ADR-040 §3).`,
+      );
+    }
+    const daysRemaining = Math.min(TRIAL_DAYS, Math.max(0, rawDays));
     return {
       gateActive: true,
       status: "trial",

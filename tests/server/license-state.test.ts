@@ -2,9 +2,10 @@ import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readGateFlag } from "../../src/server/license/gate-flag.js";
 import {
+  _resetLicenseWarningsForTests,
   activateLicense,
   ensureTrialStarted,
   resolveLicenseState,
@@ -386,6 +387,91 @@ describe("resolveLicenseState — trial boundary", () => {
     );
     expect(s.status).toBe("trial");
     expect(s.status === "trial" && s.trial.daysRemaining).toBe(1);
+  });
+});
+
+/**
+ * `daysRemaining` is a DISPLAY value and is clamped at both ends (#1819).
+ * Without the upper clamp the banner reads "24 of 14 days left".
+ *
+ * Two routes reach it, and the clock-sanity bound on `firstRunAt` closed
+ * NEITHER — it bounded the first at `TRIAL_DAYS + 1` and never touched the
+ * second. The stored-route test below asserts the file is left byte-unchanged
+ * for exactly that reason: it is what kills "the bound made this unreachable".
+ */
+describe("resolveLicenseState — daysRemaining is display-clamped (#1819)", () => {
+  const t0 = Date.UTC(2026, 5, 1);
+  let errors: string[];
+
+  beforeEach(() => {
+    // `loggedOnce` is module-global and every case here trips the same key.
+    _resetLicenseWarningsForTests();
+    errors = [];
+    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      errors.push(args.map(String).join(" "));
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("a stored firstRunAt inside the future slack still reports TRIAL_DAYS", async () => {
+    const dir = tmp();
+    writeTrial(dir, t0 + 12 * 3_600_000);
+    const before = fs.readFileSync(trialFilePath(dir), "utf-8");
+
+    await ensureTrialStarted(dir, () => t0, true);
+    expect(
+      fs.readFileSync(trialFilePath(dir), "utf-8"),
+      "12 h ahead is under TRIAL_FUTURE_SLACK_MS, so the clock-sanity repair never fires — " +
+        "this route is still live and the display clamp is what covers it",
+    ).toBe(before);
+
+    const s = assertGateActive(
+      resolveLicenseState({ appDataDir: dir, now: () => t0, gateEnabled: true }),
+    );
+    expect(s.status).toBe("trial");
+    expect(s.status === "trial" && s.trial.daysRemaining).toBe(TRIAL_DAYS);
+  });
+
+  it("an in-session clock change backwards still reports TRIAL_DAYS", () => {
+    const dir = tmp();
+    // `ensureTrialStarted` runs ONCE at startup; `resolveLicenseState` re-reads
+    // per dispatch on a live clock, so a clock moved back mid-session yields
+    // TRIAL_DAYS + N until restart. Nothing repairs this route.
+    writeTrial(dir, t0);
+    const s = assertGateActive(
+      resolveLicenseState({ appDataDir: dir, now: () => t0 - 10 * DAY, gateEnabled: true }),
+    );
+    expect(s.status).toBe("trial");
+    expect(s.status === "trial" && s.trial.daysRemaining).toBe(TRIAL_DAYS);
+  });
+
+  it("does not over-clamp a normal trial", () => {
+    const dir = tmp();
+    writeTrial(dir, t0 - 13.5 * DAY);
+    const late = assertGateActive(
+      resolveLicenseState({ appDataDir: dir, now: () => t0, gateEnabled: true }),
+    );
+    expect(late.status === "trial" && late.trial.daysRemaining).toBe(1);
+
+    const fresh = tmp();
+    writeTrial(fresh, t0);
+    const day0 = assertGateActive(
+      resolveLicenseState({ appDataDir: fresh, now: () => t0, gateEnabled: true }),
+    );
+    expect(day0.status === "trial" && day0.trial.daysRemaining).toBe(TRIAL_DAYS);
+  });
+
+  it("warns once across two resolves, on stderr", () => {
+    const dir = tmp();
+    writeTrial(dir, t0);
+    const now = () => t0 - 10 * DAY;
+    resolveLicenseState({ appDataDir: dir, now, gateEnabled: true });
+    resolveLicenseState({ appDataDir: dir, now, gateEnabled: true });
+    const clampLines = errors.filter((l) => l.includes("more than the"));
+    expect(clampLines).toHaveLength(1);
+    expect(clampLines[0]).toContain("[license]");
   });
 });
 

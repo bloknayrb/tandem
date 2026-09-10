@@ -2304,8 +2304,10 @@ fn show_update_error_dialog(app: &tauri::AppHandle, error: &str) {
 /// wraps the honest line in copy that misattributes it to a transient network
 /// fault, and the state is not transient, so "try again later" is false. The
 /// user then retries, checks their network, and files a support request about a
-/// broken updater instead of acting on the licence line. #1819 owns the final
-/// wording; the misattribution is not a wording question.
+/// broken updater instead of acting on the licence line. The wording was settled
+/// in #1819 and the two arms below stand as written; the misattribution is not a
+/// wording question, so what must survive any later rewrite is that the two arms
+/// say different things.
 fn show_update_withheld_dialog(app: &tauri::AppHandle, reason: WithheldReason) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
@@ -2316,6 +2318,49 @@ fn show_update_withheld_dialog(app: &tauri::AppHandle, reason: WithheldReason) {
         .title(title)
         .kind(MessageDialogKind::Warning);
     builder = attach_main_window_or_warn(app, builder, "show_update_withheld_dialog");
+    builder.show(|_| {});
+}
+
+/// `(title, body)` for `show_update_window_ended_dialog` -- pure, so `cargo
+/// test` reaches the copy without an `AppHandle`.
+///
+/// The body reports THIS DEVICE'S OWN VIEW, never a verdict. `expiresAt` is
+/// read out of the locally stored license, so after a KV-only renewal the
+/// Worker may still consider the device entitled while this flag says the
+/// window ended. That is accepted rather than papered over: `SettingsLicenseTab`
+/// already asserts the same thing from the same field, and the authoritative
+/// detector is the Worker's `reason` (#1786), which is invisible through the
+/// `Ok(None)` this branch fires on.
+///
+/// No purchase/renewal URL literal lives here: `TANDEM_PURCHASE_URL` lives once
+/// in `src/shared/constants.ts`, and a native message dialog holds no link
+/// anyway -- so the copy points at Settings -> License, which does.
+fn window_ended_copy(version: &str) -> (&'static str, String) {
+    (
+        "Update Window Ended",
+        format!(
+            "This device's license shows an update window that has ended, so new releases \
+             may no longer be offered here.\n\n\
+             Tandem v{version} keeps running forever -- a license never stops working. To \
+             receive new releases again, renew from Settings -> License."
+        ),
+    )
+}
+
+/// Tell a licensed user whose LOCAL update window has ended that this is why
+/// the check found nothing -- instead of "You're running the latest version",
+/// which is the same silent-starvation lie #1786 exists to detect, reached by a
+/// different route (a lapsed entitlement arrives as a 204, i.e. `Ok(None)`).
+fn show_update_window_ended_dialog(app: &tauri::AppHandle) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+    let (title, message) = window_ended_copy(env!("CARGO_PKG_VERSION"));
+    let mut builder = app
+        .dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Warning);
+    builder = attach_main_window_or_warn(app, builder, "show_update_window_ended_dialog");
     builder.show(|_| {});
 }
 
@@ -2377,10 +2422,12 @@ impl WithheldReason {
         }
     }
 
-    /// `(title, body)` for `show_update_withheld_dialog`. #1819 owns the final
-    /// wording; what is NOT wording, and must survive that rewrite, is that the
-    /// two arms say different things -- one is a licensing state, the other is a
-    /// local server that is not answering.
+    /// `(title, body)` for `show_update_withheld_dialog`. Wording settled in
+    /// #1819: both pairs stand as written, because neither overlaps the
+    /// ended-window copy this crate now also carries. What is NOT wording, and
+    /// must survive any later rewrite, is that the two arms say different things
+    /// -- one is a licensing state, the other is a local server that is not
+    /// answering.
     fn dialog_copy(self) -> (&'static str, &'static str) {
         match self {
             Self::StatusUnavailable => (
@@ -2465,6 +2512,28 @@ fn update_route(endpoint: &str, probe: Option<&LicenseStatusResponse>) -> Update
     UpdateRoute::Public
 }
 
+/// Does THIS DEVICE'S OWN copy of the license say its update window has ended?
+///
+/// The conjunction `resolve_update_route` already evaluates for its
+/// `log::warn!`, hoisted so the log line and the dialog cannot diverge. No new
+/// probe and no new request: it reads the response already in hand.
+///
+/// **This is the LOCAL view, never a verdict** (#1819). `update_window_current`
+/// is computed from the `expiresAt` inside the stored license, so after a
+/// KV-only renewal the Worker may still consider the device entitled while this
+/// says the window ended. That disagreement is accepted rather than papered
+/// over: `SettingsLicenseTab`'s `license-update-window-ended` line already
+/// asserts the same thing from the same field, and the authoritative detector
+/// stays the Worker's `reason` (#1786), which a 204 -- `Ok(None)` in Rust --
+/// makes invisible here.
+///
+/// Gated on `Licensed` and not on the probe alone, which is the discriminating
+/// half: every TRIAL device reports `update_window_current: false`, so a
+/// probe-only flag would tell each evaluator their update window had ended.
+fn local_window_ended(route: &UpdateRoute, probe: Option<&LicenseStatusResponse>) -> bool {
+    matches!(route, UpdateRoute::Licensed(_)) && !probe.is_some_and(|p| p.update_window_current)
+}
+
 /// Ask the sidecar (loopback) which manifest this device may use, then classify
 /// with `update_route`. Never errors -- update checks must not depend on the
 /// license probe succeeding.
@@ -2472,9 +2541,15 @@ fn update_route(endpoint: &str, probe: Option<&LicenseStatusResponse>) -> Update
 /// The endpoint check stays FIRST, so while `LICENSE_UPDATE_ENDPOINT` is empty
 /// this returns `Public` without probing at all. That early return is the
 /// byte-identity argument for the whole change.
-async fn resolve_update_route(app: &tauri::AppHandle) -> UpdateRoute {
+///
+/// The second tuple element is `local_window_ended` -- the device's own view,
+/// carried to the dialog rather than only to the `log::warn!` below (#1819).
+/// It is bound ONCE and used for both, so the log and the screen cannot say
+/// different things. The empty-endpoint early return answers `false`: no probe
+/// happened, so there is no local view to report.
+async fn resolve_update_route(app: &tauri::AppHandle) -> (UpdateRoute, bool) {
     if LICENSE_UPDATE_ENDPOINT.is_empty() {
-        return UpdateRoute::Public;
+        return (UpdateRoute::Public, false);
     }
     let probe: Option<LicenseStatusResponse> = async {
         let client = app.try_state::<reqwest::Client>()?.inner().clone();
@@ -2492,15 +2567,14 @@ async fn resolve_update_route(app: &tauri::AppHandle) -> UpdateRoute {
     // Logged only when the local window has ended, which is the only
     // correlatable case, and at `warn!` because release builds filter at
     // `LevelFilter::Warn` (the #1416 trap at :200).
-    if matches!(route, UpdateRoute::Licensed(_))
-        && !probe.as_ref().is_some_and(|p| p.update_window_current)
-    {
+    let local_window_ended = local_window_ended(&route, probe.as_ref());
+    if local_window_ended {
         log::warn!(
             "Routing to the licensed update endpoint with a LOCALLY expired update window -- \
              the Worker decides; expect a 204 with reason `expired` if it agrees"
         );
     }
-    route
+    (route, local_window_ended)
 }
 
 /// What `build_updater` resolved: a manifest source, or a refusal that still
@@ -2512,7 +2586,14 @@ async fn resolve_update_route(app: &tauri::AppHandle) -> UpdateRoute {
 /// The reason already exists in `UpdateRoute`; this just stops dropping it.
 enum UpdateOutcome {
     /// Check this updater. Built from the `Public` or `Licensed` arm.
-    Serve(tauri_plugin_updater::Updater),
+    ///
+    /// `local_window_ended` rides along so `check_for_update`'s `Ok(None)` arm
+    /// can tell a lapsed entitlement apart from a genuinely current install
+    /// (#1819). It is the LOCAL view -- see `local_window_ended`.
+    Serve {
+        updater: tauri_plugin_updater::Updater,
+        local_window_ended: bool,
+    },
     /// No manifest is served for this device, and why.
     Withheld(WithheldReason),
 }
@@ -2527,7 +2608,8 @@ enum UpdateOutcome {
 /// `tests/docs/license-flip-consts.test.ts` counts occurrences for exactly that
 /// reason.
 async fn build_updater(app: &tauri::AppHandle) -> Result<UpdateOutcome, String> {
-    match resolve_update_route(app).await {
+    let (route, local_window_ended) = resolve_update_route(app).await;
+    match route {
         UpdateRoute::Licensed(lid) => {
             // `Url::parse` stays INSIDE this arm, so a malformed configured
             // endpoint is still `Err` rather than a silent fall-through to public.
@@ -2540,7 +2622,10 @@ async fn build_updater(app: &tauri::AppHandle) -> Result<UpdateOutcome, String> 
                 .map_err(|e| e.to_string())?
                 .build()
                 .map_err(|e| e.to_string())
-                .map(UpdateOutcome::Serve)
+                .map(|updater| UpdateOutcome::Serve {
+                    updater,
+                    local_window_ended,
+                })
         }
         // `license-flip-consts.test.ts` counts `app.updater()` across the crate
         // and requires exactly one, pinning it as this arm's alone. It counts
@@ -2548,7 +2633,13 @@ async fn build_updater(app: &tauri::AppHandle) -> Result<UpdateOutcome, String> 
         // across lines is fine -- but a SECOND occurrence anywhere, most
         // plausibly a lazy `NoUpdates(_) => app.updater()`, is #1785 itself and
         // turns that test red.
-        UpdateRoute::Public => app.updater().map_err(|e| e.to_string()).map(UpdateOutcome::Serve),
+        UpdateRoute::Public => app
+            .updater()
+            .map_err(|e| e.to_string())
+            .map(|updater| UpdateOutcome::Serve {
+                updater,
+                local_window_ended,
+            }),
         UpdateRoute::NoUpdates(reason) => {
             // `warn!`, not `info!`, and this is not style: lib.rs sets
             // `LevelFilter::Warn` for release builds, so an `info!` writes ZERO
@@ -2561,8 +2652,11 @@ async fn build_updater(app: &tauri::AppHandle) -> Result<UpdateOutcome, String> 
 }
 
 async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
-    let updater = match build_updater(app).await {
-        Ok(UpdateOutcome::Serve(u)) => u,
+    let (updater, local_window_ended) = match build_updater(app).await {
+        Ok(UpdateOutcome::Serve {
+            updater,
+            local_window_ended,
+        }) => (updater, local_window_ended),
         // No manifest is served for this device (#1785). Deliberately NOT
         // `show_up_to_date_dialog` -- "You're running the latest version" is the
         // exact lie #1786 exists to detect. The dialog branches on `reason`: a
@@ -2594,7 +2688,17 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
         Ok(None) => {
             log::info!("No update available");
             if manual {
-                show_up_to_date_dialog(app);
+                // A lapsed entitlement arrives here as `Ok(None)`: the Worker
+                // answers 204 and the updater reports "nothing newer". Telling
+                // that user "You're running the latest version" is the same
+                // silent-starvation lie #1786 detects Worker-side, reached by a
+                // different route -- so the LOCAL view names itself instead
+                // (#1819). Everyone else sees byte-identical copy.
+                if local_window_ended {
+                    show_update_window_ended_dialog(app);
+                } else {
+                    show_up_to_date_dialog(app);
+                }
             }
             return;
         }
@@ -2653,7 +2757,7 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
         .await
         .map_err(|e| format!("Updater not configured: {e}"))?
     {
-        UpdateOutcome::Serve(u) => u,
+        UpdateOutcome::Serve { updater, .. } => updater,
         UpdateOutcome::Withheld(reason) => {
             // The dialog is fired HERE, not left to the caller. The only caller
             // is `useUpdaterBanner.svelte.ts`'s `install()`, whose catch does
@@ -2671,7 +2775,8 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
             // Machine-readable, and now carries the reason, because the
             // neighbouring "No update available" means something genuinely
             // different: there IS a manifest and it holds nothing newer.
-            // #1819 owns the user-facing wording.
+            // The user-facing wording is the dialog's, settled in #1819; this
+            // string is machine-readable and never reaches the screen.
             return Err(format!("UPDATE_WITHHELD:{}", reason.code()));
         }
     };
@@ -3757,9 +3862,9 @@ mod update_route_tests {
     /// sidecar; see the retry dialog at `:1855`) clicked "Check for updates"
     /// and was told their licensed install needs a license.
     ///
-    /// The assertion is on the SUBSTANCE, not the wording, because #1819 owns
-    /// the wording: the unreachable-sidecar copy must not mention licensing at
-    /// all, and the restricted copy must.
+    /// The assertion is on the SUBSTANCE, not the wording, and stays that way
+    /// now that #1819 has settled the wording: the unreachable-sidecar copy must
+    /// not mention licensing at all, and the restricted copy must.
     #[test]
     fn withheld_copy_separates_a_dead_sidecar_from_an_entitlement() {
         let (unavailable_title, unavailable) = WithheldReason::StatusUnavailable.dialog_copy();
@@ -3781,6 +3886,72 @@ mod update_route_tests {
             WithheldReason::NoEntitlement.code(),
             "the codes reach the log line and install_update's error string"
         );
+    }
+
+    /// The ended-window copy must not be the up-to-date copy (#1819). A
+    /// licensed device whose window has lapsed gets a 204, which the updater
+    /// reports as `Ok(None)` -- and "You're running the latest version" is the
+    /// exact silent starvation #1786 exists to detect, reached from a different
+    /// direction.
+    ///
+    /// Asserted on substance, not phrasing: it must name the window, must point
+    /// at the surface that can renew (Settings), and must not claim the install
+    /// is current.
+    #[test]
+    fn window_ended_copy_names_the_window_and_points_at_settings() {
+        let (title, body) = window_ended_copy("9.9.9");
+        assert_eq!(title, "Update Window Ended");
+        assert!(
+            body.to_lowercase().contains("update window"),
+            "the body must name the update window, which is the whole diagnosis: {body}"
+        );
+        assert!(
+            body.contains("Settings"),
+            "a native dialog holds no link, so it must name the surface that can renew: {body}"
+        );
+        assert!(
+            !body.contains("latest version"),
+            "this arm exists precisely because \"latest version\" is false here: {body}"
+        );
+        assert!(
+            body.contains("9.9.9"),
+            "the running version is what keeps working forever: {body}"
+        );
+    }
+
+    /// `local_window_ended`'s truth table.
+    ///
+    /// The `Public` row is the discriminating one: every TRIAL device reports
+    /// `update_window_current: false`, so a flag read off the probe ALONE would
+    /// tell each evaluator their update window had ended, on a dialog they
+    /// reach by clicking "Check for updates".
+    #[test]
+    fn local_window_ended_is_licensed_and_not_current() {
+        let licensed = UpdateRoute::Licensed("lic-1".to_string());
+
+        let lapsed = probe(true, Some("lic-1"), false, Some("licensed"));
+        assert!(local_window_ended(&licensed, Some(&lapsed)));
+
+        let current = probe(true, Some("lic-1"), true, Some("licensed"));
+        assert!(!local_window_ended(&licensed, Some(&current)));
+
+        let trial = probe(true, None, false, Some("trial"));
+        assert!(
+            !local_window_ended(&UpdateRoute::Public, Some(&trial)),
+            "a trial device reports update_window_current: false and must NOT be told its \
+             window ended"
+        );
+
+        assert!(!local_window_ended(
+            &UpdateRoute::NoUpdates(WithheldReason::StatusUnavailable),
+            None
+        ));
+
+        // Unreachable from `resolve_update_route` -- step 2 of `update_route`
+        // answers `NoUpdates(StatusUnavailable)` when the probe is absent, so a
+        // `Licensed` route always carries one. Pinned anyway so the fail
+        // direction is a decision rather than an accident.
+        assert!(local_window_ended(&licensed, None));
     }
 }
 
