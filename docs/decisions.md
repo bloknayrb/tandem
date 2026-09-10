@@ -1930,7 +1930,7 @@ Instances:
 | `tauri-release.yml`'s signing gates | `tests/scripts/release-signing-gates.test.ts` |
 | `node-sidecar-pin` | `tests/scripts/node-sidecar-pin-wiring.test.ts` |
 | `check`'s vitest file anchor | `tests/scripts/vitest-file-anchor-wiring.test.ts` |
-| Release/CI hygiene: `npm ci --ignore-scripts` at every site | `tests/scripts/release-ci-hygiene.test.ts` |
+| Release/CI hygiene: `npm ci --ignore-scripts`, the updater-signature gate | `tests/scripts/release-ci-hygiene.test.ts` |
 
 **The eighth (#1673) is the first instance INSIDE a required job, and it is the
 one that shows what "required" does and does not buy.** The anchor step runs in

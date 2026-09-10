@@ -942,3 +942,21 @@ jobs:
               throw new Error(`latest.json references assets not on this release:\n${dangling.join('\n')}`);
             }
             core.info('manifest OK: all platform keys present, every URL resolves to an attached asset');
+
+      # The shape gate above and this signature gate are deliberately separate
+      # steps: the github-script step has no checkout, so keeping it untouched
+      # keeps the two independently reviewable.
+      #
+      # The `# gate:updater-sig` marker lives INSIDE the run body, not on the
+      # `name:` line: a YAML comment is absent from the parse tree, so a marker
+      # on `name:` is invisible to the wiring test that finds this step
+      # (tests/scripts/release-ci-hygiene.test.ts). Same shape as APPLE_GATE_RUN.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify updater signatures against tauri.conf.json pubkey
+        run: |
+          # gate:updater-sig
+          node scripts/ci/verify-updater-signatures.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
