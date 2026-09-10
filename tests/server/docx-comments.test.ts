@@ -1013,11 +1013,18 @@ describe("injectCommentsAsAnnotations", () => {
     // (see IMPORT_COMMENT_ID_MAX) — sharing one predicate across both is what
     // made the two layers protecting a promoted comment fail together.
     expect(reusableWordId("1000000000")).toBe(1000000000);
-    expect(reusableWordId("-1")).toBe(-1);
     expect(reusableWordId("0")).toBe(0);
     expect(reusableWordId("7")).toBe(7);
+    expect(reusableWordId("2147483647")).toBe(2147483647);
     for (const bad of [
       "0123", // would be written back as 123
+      // Negatives are re-minted rather than reused (#1693 review): nothing in
+      // this tree establishes that Word emits or reopens a negative
+      // `w:comment/@w:id`, `verifyDocxRoundtrips` is id-agnostic and so cannot
+      // catch it, and the re-mint no longer ghosts now that the save path
+      // reconciles the written id back onto the stored record.
+      "-1",
+      "-2147483648",
       "-0", // String(-0) === "0"
       "2147483648", // past the int32 ceiling
       "3000000000",

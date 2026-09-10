@@ -78,6 +78,7 @@ import {
   validateFlatRange,
 } from "../positions.js";
 import { reusableWordId } from "./docx-comment-id.js";
+import { keysDriftIndex } from "./docx-comments.js";
 
 /**
  * The restore promise every integrity advisory ends with. ONE definition,
@@ -183,6 +184,21 @@ function isImportRoundtrip(ann: Annotation): boolean {
     typeof ann.importSource?.author === "string" &&
     ann.importSource.author.length > 0
   );
+}
+
+/**
+ * Which of two records naming ONE stored `w:id` gets written. Higher wins.
+ *
+ * The same ordering the import-side drift index uses when it finds a duplicate
+ * bucket (`docx-comments.ts`): a record the user promoted out of an import is
+ * the one carrying their edits, so it outranks the note; any non-import record
+ * outranks a raw import note for the same reason. Equal ranks are broken by
+ * annotation id at the call site, so nothing here depends on Y.Map order.
+ */
+function ghostRank(ann: Annotation): number {
+  if (ann.promotedFrom === "note") return 2;
+  if (ann.author !== "import") return 1;
+  return 0;
 }
 
 /**
@@ -302,7 +318,31 @@ export function prepareExportComments(
   const repliesMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
 
   const candidates: Annotation[] = [];
+  // Every `w:id` any stored record still claims, gathered BEFORE any gate and
+  // from every value in the map — the malformed ones, the resolved user
+  // comments, the private notes, the records whose ranges will fail to resolve
+  // below. `allocate()` must not mint one of these (#1693 review).
+  //
+  // The blind spot this closes: seeding only from the EXPORTED set let
+  // `allocate()` hand out an id another stored record already named, and
+  // `reconcileImportCommentIds` then wrote that id onto the record it was minted
+  // for — so two records durably claimed one `w:id`. The next open's drift index
+  // buckets both under it, logs a duplicate, keeps one by its own preference
+  // rule, and can re-anchor the survivor onto the OTHER Word comment's content.
+  // Before the reconcile existed the collision was transient (the unexported
+  // record kept its own, usually non-numeric, stored id); the reconcile is what
+  // makes stored ids converge on this allocator's 1, 2, 3… space, and therefore
+  // what makes the collision reachable.
+  const claimedWordIds = new Set<number>();
   map.forEach((value) => {
+    const stored =
+      typeof value === "object" && value !== null
+        ? (value as { importSource?: { commentId?: unknown } }).importSource?.commentId
+        : undefined;
+    if (typeof stored === "string") {
+      const claimed = reusableWordId(stored);
+      if (claimed !== null) claimedWordIds.add(claimed);
+    }
     if (!isAnnotationShaped(value)) {
       // A FOURTH drop, earlier and previously entirely silent (no log, no
       // counter): a durable record that lost or corrupted its id/content/range
@@ -413,14 +453,79 @@ export function prepareExportComments(
   }
   if (resolved.length === 0) return [];
 
+  // ONE Word comment per original (#1693 review). Two resolved records naming
+  // the same stored `importSource.commentId` are the ghost pair, and this is the
+  // last place before the bytes where the pair can be collapsed.
+  //
+  // The pair is reachable on every path where `injectCommentsAsAnnotations` runs
+  // against an EMPTY annotation map, which the import-side drift index cannot
+  // help with because there is nothing in it to look up: a cold `openFromDisk`
+  // (`documents/open.ts` runs `loadContentIntoDoc` BEFORE `wireAnnotationStore`
+  // → `loadAndMerge`) and `tandem_open force: true` (`documents/populate.ts`
+  // clears the map, then injects). The freshly injected note lands under
+  // `importAnnotationId(<the id in the file>, …)` while the promoted record
+  // merges back under the key it was minted with, so the document holds two
+  // records over one span — and both pass the gates above, the note through the
+  // `isImportRoundtrip` bypass and the promotion as a pending outbound comment.
+  // Without this collapse the next save writes TWO Word comments for one
+  // original, which is an unexpected change to the user's file (#1448).
+  //
+  // Preference mirrors the import-side index build: the record the user PROMOTED
+  // wins, then any non-import record, then the lexicographically smaller
+  // annotation id so the choice does not depend on Y.Map iteration order. It
+  // runs after range resolution deliberately — a promotion whose range no longer
+  // resolves is already gone, and leaving the note to carry the comment writes it
+  // rather than losing it.
+  //
+  // NOT counted through `onSkip`: the comment is written, once. `onSkip` feeds
+  // the comment-LOSS advisory, and reporting a suppressed duplicate there would
+  // tell the user a comment vanished when none did.
+  //
+  // `keysDriftIndex` is the injectivity gate, imported rather than restated: a
+  // stored id AT or PAST `IMPORT_COMMENT_ID_MAX` may be the truncation of a
+  // longer `w:id`, so two DISTINCT Word comments can store the same string and
+  // collapsing them would delete one from the user's file. Those degrade to the
+  // duplicate the drift index already accepts for them — the same boundary,
+  // failing the same conservative way.
+  const keptForCommentId = new Map<string, { ann: Annotation; from: number; to: number }>();
+  for (const entry of resolved) {
+    const cid = entry.ann.importSource?.commentId;
+    if (!keysDriftIndex(cid)) continue;
+    const prev = keptForCommentId.get(cid);
+    if (!prev) {
+      keptForCommentId.set(cid, entry);
+      continue;
+    }
+    const entryRank = ghostRank(entry.ann);
+    const prevRank = ghostRank(prev.ann);
+    const entryWins =
+      entryRank > prevRank || (entryRank === prevRank && entry.ann.id < prev.ann.id);
+    const kept = entryWins ? entry : prev;
+    const dropped = entryWins ? prev : entry;
+    keptForCommentId.set(cid, kept);
+    // `JSON.stringify`, not bare interpolation: `cid` came out of the user's
+    // `.docx` and the length gate above bounds it but does not stop a newline or
+    // a NUL forging a log line (#1693 finding 3, the same class `logId` answers
+    // in `docx-comments.ts`). The escaping is what makes it one line.
+    warn(
+      `[docx-comment-export] Duplicate stored comment id ${JSON.stringify(cid)}: ` +
+        `writing ${kept.ann.id} once, suppressing ${dropped.ann.id}`,
+    );
+  }
+  const exportable = resolved.filter((entry) => {
+    const cid = entry.ann.importSource?.commentId;
+    return !keysDriftIndex(cid) || keptForCommentId.get(cid) === entry;
+  });
+
   // Stable output order: document position, then id.
-  resolved.sort((a, b) => a.from - b.from || a.to - b.to || a.ann.id.localeCompare(b.ann.id));
+  exportable.sort((a, b) => a.from - b.from || a.to - b.to || a.ann.id.localeCompare(b.ann.id));
 
   // Allocate w:id values. Promoted imports reuse their original Word id
-  // (importAnnotationId stability); everything else gets the next free id.
+  // (importAnnotationId stability); everything else gets the next free id that
+  // no stored record already claims.
   const usedIds = new Set<number>();
   const reserved = new Map<string, number>();
-  for (const { ann } of resolved) {
+  for (const { ann } of exportable) {
     const original = reusableWordId(ann.importSource?.commentId);
     if (original !== null && !usedIds.has(original)) {
       usedIds.add(original);
@@ -429,13 +534,13 @@ export function prepareExportComments(
   }
   let nextId = 1;
   const allocate = (): number => {
-    while (usedIds.has(nextId)) nextId++;
+    while (usedIds.has(nextId) || claimedWordIds.has(nextId)) nextId++;
     usedIds.add(nextId);
     return nextId;
   };
 
   const out: ExportComment[] = [];
-  for (const { ann, from, to } of resolved) {
+  for (const { ann, from, to } of exportable) {
     const label = authorLabel(ann);
     const bodyParagraphs = toParagraphLines(ann.content);
     if (ann.type === "comment" && ann.suggestedText) {

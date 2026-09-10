@@ -20,11 +20,11 @@
 // `docx-comments.ts` where `IMPORT_COMMENT_ID_MAX` lives.
 //
 // What `reusableWordId` admits, and why each term is there:
-//   - `/^-?\d+$/` — `ST_DecimalNumber` is an int32, optionally signed. A
-//     **non-numeric** id (`c-9182`, or this tree's own `nc:`-tagged fallback
-//     pre-image ids) has NO representation in that type, so reuse is
-//     permanently impossible for it. That is a property of the format, not a
-//     gap in this predicate.
+//   - `/^\d+$/` — `ST_DecimalNumber` is an int32, and a `w:id` Tandem writes is
+//     an UNSIGNED decimal. A **non-numeric** id (`c-9182`, or this tree's own
+//     `nc:`-tagged fallback pre-image ids) has NO representation in that type,
+//     so reuse is permanently impossible for it. That is a property of the
+//     format, not a gap in this predicate.
 //
 //     **Declining to reuse no longer means the comment ghosts**, and reading it
 //     that way is what made #1693 look unfixable for this family. When export
@@ -33,8 +33,8 @@
 //     once the bytes are on disk — so the next open's drift index finds the
 //     record whether or not reuse was ever possible. What is still open here is
 //     narrower and is only about the VALUE written: `#1951`.
-//   - `Number.isSafeInteger` + the int32 window — a value outside it either
-//     loses precision through `Number` or is not a legal `w:id`.
+//   - `Number.isSafeInteger` + the `<= 2147483647` ceiling — a value past it
+//     either loses precision through `Number` or is not a legal `w:id`.
 //   - `String(n) === raw` — the round-trip term, and the one that keeps this
 //     honest. `ExportComment.id` is a `number`, so a stored `"0123"` could only
 //     be written back as `123`; the next import would then present an id the
@@ -43,23 +43,30 @@
 //     all — and where it does not, the post-write reconcile named above makes
 //     them equal after the fact rather than leaving them to disagree.
 //
-// **Negative ids are an accepted, explicitly unverified change to bytes in the
-// user's file.** A `-1` reaching us was already in their document, but nothing
-// in this tree establishes that Word emits or reopens a negative
-// `w:comment/@w:id`. It is accepted because the alternative re-mints the id and
-// reopens the ghost for every negative id, and because the value written is
-// exactly the value read. Stated as a bound, not as a fact about Word.
+// **A NEGATIVE stored id is not reused, and that is a deliberate reversal.** An
+// earlier draft of this predicate admitted the whole signed int32 window on the
+// argument that re-minting a negative id reopened the ghost for every one of
+// them. `reconcileImportCommentIds` removed that argument: a re-minted id is now
+// pointed back at the stored record after the write, so declining reuse costs a
+// negative id nothing the non-numeric family does not already pay. What reuse
+// cost was worse and was never established away — writing `w:id="-1"` puts a
+// value into the user's saved `.docx` that nothing in this tree shows Word emits
+// or reopens, and `verifyDocxRoundtrips` cannot see it (it re-imports through
+// mammoth, which is id-agnostic, and matches on author + body only). So the
+// failure would have surfaced in Word, after Tandem had already overwritten the
+// file, with a green verify verdict. Re-minting produces a file Word certainly
+// opens; that is the trade taken here (#1693 review).
 
 /**
  * The original Word `w:id` as a number when it may be reused verbatim on
  * export, else `null`. See the module doc for each term.
  */
 export function reusableWordId(raw: string | undefined): number | null {
-  if (!raw || !/^-?\d+$/.test(raw)) return null;
+  // The regex carries the sign rule: a leading `-` fails here, so `"-1"` and
+  // `"-0"` are both re-minted rather than written back.
+  if (!raw || !/^\d+$/.test(raw)) return null;
   const n = Number(raw);
   if (!Number.isSafeInteger(n)) return null;
-  if (n < -2147483648 || n > 2147483647) return null;
-  // `String(-0) === "0"`, so this also rejects "-0" — deliberately: it would be
-  // written back as `0` and re-imported under a different stored key.
+  if (n > 2147483647) return null;
   return String(n) === raw ? n : null;
 }

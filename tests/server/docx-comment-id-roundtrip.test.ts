@@ -153,7 +153,10 @@ describe("promoted Word comment survives offset drift, for every reproducing w:i
 // ---------------------------------------------------------------------------
 
 describe("promoted Word comment round-trips through an actual save", () => {
-  for (const commentId of ["1000000000", "-1", CONTROL_ID]) {
+  // `-1` used to live here. It is now in describe 3 with the other re-minted
+  // ids: reuse would have written `w:id="-1"` into the user's file, which
+  // nothing in this tree shows Word accepts (#1693 review).
+  for (const commentId of ["1000000000", CONTROL_ID]) {
     it(`reuses w:id ${JSON.stringify(commentId)} on export and dedupes on re-open`, async () => {
       const doc = new Y.Doc();
       const original = await buildDocxWithCommentIds([commentId]);
@@ -212,6 +215,8 @@ describe("a re-minted w:id is reconciled onto the stored record", () => {
   //     format, not a gap.
   //   - OUTSIDE INT32 (`3000000000`) and NON-CANONICAL FORM (`0123`): reuse is
   //     closable and is not closed here. Tracked in #1951.
+  //   - NEGATIVE (`-1`): reuse is possible and is REFUSED, on purpose — see the
+  //     row's own comment below.
   //
   // The GHOST is a different question from reuse and it IS closed, for both:
   // after the bytes land the save path calls `reconcileImportCommentIds`, which
@@ -226,6 +231,13 @@ describe("a re-minted w:id is reconciled onto the stored record", () => {
     { commentId: "c-9182" },
     { commentId: "nc:x" },
     { commentId: "3000000000" },
+    // NEGATIVE (`-1`): reuse is possible in `ST_DecimalNumber` and is declined
+    // anyway (#1693 review) — writing `w:id="-1"` puts a value into the user's
+    // saved `.docx` that nothing here shows Word emits or reopens, and the
+    // verifier cannot see it. This row is what pins that the decline costs the
+    // comment nothing: the reconcile keeps it findable exactly as it does for
+    // the ids reuse can never rescue.
+    { commentId: "-1", mintedId: 1 },
     // With one promoted record and no reuse, `nextId` starts at 1 and
     // `allocate` walks up from there, so 1 is the only value that can be
     // minted. This exact assertion is the ONLY thing that kills a
@@ -468,4 +480,77 @@ describe("the drift index gates on length, at IMPORT_COMMENT_ID_MAX", () => {
     // the new contract and the boundary moved here.
     expect(driftTwice("b".repeat(32))).toEqual({ injected: 1, size: 2 });
   });
+});
+
+// ---------------------------------------------------------------------------
+// 5. The COLD open — the half the reconcile alone does not close
+// ---------------------------------------------------------------------------
+
+describe("a cold open still writes one Word comment per original", () => {
+  // `reconcileImportCommentIds` repairs `importSource.commentId`; it does NOT
+  // re-key the record, and it cannot, because the map key is a hash of the id
+  // the record was imported under. Every describe above re-injects into the
+  // SAME Y.Doc, which is the reload shape — annotations preserved, so the drift
+  // index has something in it to find.
+  //
+  // The COLD shape is the other one, and it is the majority of opens: quit,
+  // reopen the file. `documents/open.ts` runs `loadContentIntoDoc` (→ inject)
+  // BEFORE `finalizeDocOpen` → `wireAnnotationStore` → `loadAndMerge`, so
+  // injection runs against an EMPTY annotation map — the drift index is empty
+  // and cannot fire. `tandem_open force: true` has the same shape for the same
+  // reason (`documents/populate.ts` clears the map, then injects). The freshly
+  // injected note lands under the id in the FILE while the promotion merges back
+  // under the id it was imported with, and the document then holds two records
+  // over one span. Both pass the export gates, so the next save wrote TWO Word
+  // comments for one original (#1448) — measured, not inferred.
+  //
+  // What closes it is the ghost-pair collapse in `prepareExportComments`, which
+  // needs no index and no ordering: after the reconcile both records name one
+  // stored `w:id`, so one comment is written and it is the user's promotion.
+  for (const commentId of ["c-9182", "0123", "-1", "1000000000", CONTROL_ID]) {
+    it(`collapses the pair for w:id ${JSON.stringify(commentId)}`, async () => {
+      const doc = new Y.Doc();
+      const original = await buildDocxWithCommentIds([commentId]);
+      expect((await openInto(doc, original, "r.docx")).injected).toBe(1);
+      const map = doc.getMap(Y_MAP_ANNOTATIONS);
+      const key = Array.from(map.keys())[0];
+      promoteInPlace(doc, key);
+      expectPromotedShape(doc, key, commentId);
+
+      const prepared = prepareExportComments(doc);
+      expect(prepared).toHaveLength(1);
+      const bytes = await exportYDocToDocx(doc);
+      // The save path, in its order: bytes first, then the reconcile.
+      reconcileImportCommentIds(doc, prepared);
+      const promoted = map.get(key) as Annotation;
+
+      // The cold open: a FRESH doc, so the annotation map is empty while the
+      // `.docx` comments are injected.
+      const cold = new Y.Doc();
+      const reopened = await openInto(cold, bytes, "r.docx");
+      expect(reopened.comments).toHaveLength(1);
+      const coldMap = cold.getMap(Y_MAP_ANNOTATIONS);
+      // ...and only afterwards does `loadAndMerge` put the envelope back. It is
+      // per-id, so the promotion returns under its own key whatever the
+      // injection just did.
+      withInternal(cold, () => coldMap.set(key, promoted));
+
+      // GUARD: for every id export re-mints, the ghost really is there — the row
+      // is not green because there was nothing to collapse. `1000000000` and the
+      // control reuse their id, so injection hits the promotion's own key and no
+      // pair forms at all; both outcomes are correct and the assertion below is
+      // the one that matters either way.
+      const reused = String(prepared[0].id) === commentId;
+      expect(coldMap.size).toBe(reused ? 1 : 2);
+
+      // The property, on both branches: one Word comment for one original, and
+      // it is the user's promotion rather than the re-imported note.
+      const coldPrepared = prepareExportComments(cold);
+      expect(coldPrepared).toHaveLength(1);
+      expect(coldPrepared[0].annotationId).toBe(key);
+
+      doc.destroy();
+      cold.destroy();
+    });
+  }
 });

@@ -282,8 +282,17 @@ export const IMPORT_COMMENT_ID_MAX = 32;
  * gated on a predicate that made them fail TOGETHER and inject a ghost note
  * beside an already-promoted comment. The rationale for the gate itself is on
  * `IMPORT_COMMENT_ID_MAX` and at the index build.
+ *
+ * There is now a THIRD consumer, in `docx-comment-export.ts`: the ghost-pair
+ * collapse that writes one Word comment when two records name one stored id.
+ * It asks the same question these two do — "is this stored string a unique name
+ * for one Word comment?" — so it is the same predicate rather than a fourth
+ * copy. Sharing it here is safe in the way #1693's sharing was not: this gate
+ * failing sends all three consumers toward the SAME conservative answer (treat
+ * the id as ambiguous, keep the records apart), whereas the predicate #1693
+ * split sent the index and export toward answers that only made sense together.
  */
-function keysDriftIndex(id: string | undefined): id is string {
+export function keysDriftIndex(id: string | undefined): id is string {
   return !!id && id.length < IMPORT_COMMENT_ID_MAX;
 }
 
@@ -605,11 +614,19 @@ function writeReconciledCommentId(map: Y.Map<unknown>, id: string, commentId: st
  * an already-promoted Word comment miss together, a ghost note lands beside the
  * promotion, and the save after that writes TWO Word comments for one original
  * (#1448). Splitting the shared predicate closed the no-save half; this closes
- * the half a save mediates.
+ * the half a save mediates — on the RELOAD path, where the annotation envelope
+ * survives the re-injection and the drift index therefore has something to find.
+ * It does NOT close the COLD open, and cannot: this rewrites the stored id, not
+ * the record's map KEY, which is a hash of the id the record was imported under.
+ * When injection runs against an EMPTY map (a cold `openFromDisk`, or
+ * `tandem_open force: true`) there is no index to consult and the pair forms
+ * anyway. What keeps that pair out of the user's FILE is the ghost-pair collapse
+ * in `prepareExportComments`; the leftover duplicate NOTE is #1954.
  *
  * Export re-mints whenever `reusableWordId` declines the stored id — a
- * non-numeric one (`c-9182`, this tree's own `nc:`-tagged fallback ids), one
- * outside int32, one in non-canonical form (`0123`), or one stored at/past
+ * non-numeric one (`c-9182`, this tree's own `nc:`-tagged fallback ids), a
+ * NEGATIVE one (declined on purpose, see that module's doc), one past the int32
+ * ceiling, one in non-canonical form (`0123`), or one stored at/past
  * `IMPORT_COMMENT_ID_MAX`. Reuse for those is a separate question, and for the
  * non-numeric family a permanently impossible one: `ST_DecimalNumber` has no
  * representation for them. What is NOT impossible is keeping the stored id
