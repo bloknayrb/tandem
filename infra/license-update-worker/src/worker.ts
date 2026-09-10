@@ -243,14 +243,15 @@ function alertBody(entry: LogEntry): string {
   // splits — because the two classes are reached by different failures and
   // repaired differently. `unknown-id` is an ABSENCE. `unparseable` is a key
   // that is present and readable and holds malformed JSON (most plausibly the
-  // hand-run `wrangler kv key put` tombstone in §7, with shell-mangled
+  // hand-run `wrangler kv key put` tombstone in
+  // docs/licensing-operations.md §7, with shell-mangled
   // quoting), so sending that operator to hunt a missing key and a
   // namespace-id mismatch aims them at a repair that does not apply.
   const diagnosis =
     entry.reason === "unparseable"
       ? [
           "A KV entry for this license EXISTS and is readable, but is not valid",
-          "JSON — most likely a hand-run `wrangler kv key put` (§7) whose quoting",
+          "JSON — most likely a hand-run `wrangler kv key put` whose quoting",
           "was mangled by the shell. Nothing is missing.",
           "Repair: re-PUT valid JSON over the existing key. See",
           "docs/licensing-operations.md §7 (tombstone) or §3 (entitlement).",
