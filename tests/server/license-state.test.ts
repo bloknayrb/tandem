@@ -291,7 +291,7 @@ describe("resolveLicenseState — fail-closed on corrupt files", () => {
  * string-lenient parse — `Date.parse(0)` → `"0"` → 946684800000 (2000), or a
  * lazy `new Date(null).getTime()` → 0 (1970) — expires long before any realistic
  * `now`, and these assertions would read `restricted` and PASS even with the
- * `typeof v === "string"` half of `hasUsableFirstRunAt` deleted. At epoch 0 that
+ * `typeof v === "string"` half of `trialFirstRunAt` deleted. At epoch 0 that
  * same mutation reads `trial` and goes red.
  *
  * Mutations these four cases exist to catch (hand-checked; restore from a file
@@ -299,7 +299,7 @@ describe("resolveLicenseState — fail-closed on corrupt files", () => {
  *   1. revert to `tf?.firstRunAt ? new Date(tf.firstRunAt).getTime() : nowMs` —
  *      all four go red (plus the whole-body-scalar case below, and the
  *      end-to-end disk case in license-armed-restricted.test.ts).
- *   2. drop `typeof v === "string" &&` from `hasUsableFirstRunAt` — `0` goes red
+ *   2. drop the `typeof v === "string"` test in `trialFirstRunAt` — `0` goes red
  *      (`Date.parse(0)` coerces to `"0"` ⇒ a year-2000 clock).
  *   3. drop that guard AND spell the parse `new Date(v).getTime()` — `null` and
  *      `0` both go red (`new Date(null)` is a finite `0`, not `NaN`).

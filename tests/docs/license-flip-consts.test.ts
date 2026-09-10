@@ -34,6 +34,14 @@ import { REPO_ROOT, rustSourceDefining, rustSources } from "./rust-sources.js";
 
 const TSUP_CONFIG = join(REPO_ROOT, "tsup.config.ts");
 
+/**
+ * The crate walked ONCE for this file — each `rustSources()` call re-reads and
+ * re-strips every `.rs` file, and this file otherwise wanted four walks.
+ */
+const RUST_SOURCES = rustSources();
+/** Every Rust file's comment- and test-stripped code, concatenated. */
+const ALL_RUST_CODE = RUST_SOURCES.map((f) => f.code).join("\n");
+
 /** The `false` / `true` literal `tsup.config.ts` declares the run gate with. */
 function readGateLiteral(): string {
   const src = readFileSync(TSUP_CONFIG, "utf8");
@@ -64,7 +72,7 @@ function readEndpointLiteral(): string {
   // The helper's required positive control: a walk that silently returns
   // nothing satisfies every assertion built on it.
   expect(
-    rustSources().map((f) => f.rel),
+    RUST_SOURCES.map((f) => f.rel),
     "the Rust walk no longer sees the file defining LICENSE_UPDATE_ENDPOINT",
   ).toContain(source.rel);
 
@@ -85,13 +93,6 @@ function readEndpointLiteral(): string {
       "the pin is disarmed, not passing",
   ).not.toBeNull();
   return (match as RegExpExecArray)[1];
-}
-
-/** Every Rust file's comment- and test-stripped code, concatenated. */
-function allRustCode(): string {
-  return rustSources()
-    .map((f) => f.code)
-    .join("\n");
 }
 
 function countOccurrences(haystack: string, needle: string): number {
@@ -125,7 +126,7 @@ describe("the update route shape #1785 fixes (#1785)", () => {
   // i.e. the filed bug, unchanged — makes this 2 and passes every cargo case.
   it("app.updater() appears exactly once in the crate", () => {
     expect(
-      countOccurrences(allRustCode(), "app.updater()"),
+      countOccurrences(ALL_RUST_CODE, "app.updater()"),
       "app.updater() serves the PUBLIC manifest and belongs to build_updater's Public arm " +
         "only. A second occurrence means some other route — most likely NoUpdates — is " +
         "falling back to public builds, which is #1785 itself.",
@@ -137,7 +138,7 @@ describe("the update route shape #1785 fixes (#1785)", () => {
   // would satisfy the looser spelling, making the count non-discriminating.
   it("show_up_to_date_dialog(app) is called exactly once", () => {
     expect(
-      countOccurrences(allRustCode(), "show_up_to_date_dialog(app)"),
+      countOccurrences(ALL_RUST_CODE, "show_up_to_date_dialog(app)"),
       '"You\'re running the latest version" is the exact lie #1786 exists to detect. It may ' +
         "be shown only for a real Ok(None) from updater.check() — never on the withheld-manifest " +
         "arm, which serves no manifest and never calls check() at all.",

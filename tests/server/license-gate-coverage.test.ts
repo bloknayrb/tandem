@@ -41,8 +41,8 @@ type ToolGate = { name: string; gate: "gated" | "ungated"; why: string };
  *
  * List-scoped rationale, `ungated`: read / escape-hatch tools that MUST stay
  * ungated so a restricted user can still read, save and export existing work.
- * Accept/dismiss is NOT in that set — see the `tandem_resolveAnnotation` row. Navigation / inspection / chat / file-management tools are here
- * too: none mutate Y.Doc *content* — reads, outline and search are pure;
+ * Accept/dismiss is NOT in that set — see the `tandem_resolveAnnotation` row.
+ * Navigation / inspection / chat / file-management tools are here too: none mutate Y.Doc *content* — reads, outline and search are pure;
  * tandem_convertToMarkdown writes a separate export file; tandem_rename is a
  * filesystem op (not a content write); tandem_reply/checkInbox/getActivity touch
  * CTRL_ROOM (chat/awareness), which stays writable when restricted;
