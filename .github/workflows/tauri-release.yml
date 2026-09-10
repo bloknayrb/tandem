@@ -122,7 +122,7 @@ jobs:
     needs: create-release
     permissions:
       contents: write
-      # OIDC token write for azure/login@v2 (Windows signing).
+      # OIDC token write for azure/login (Windows signing).
       id-token: write
     # `release` environment binds the OIDC token subject to
     # `repo:bloknayrb/tandem:environment:release`, matching the federated
@@ -221,21 +221,21 @@ jobs:
       # Windows signing uses Azure Trusted Signing via the Microsoft-maintained
       # dotnet/sign CLI. Authentication is OIDC -> federated credential on the
       # tandem-ci-trusted-signing service principal -- no AZURE_CLIENT_SECRET
-      # needed. azure/login@v2 caches the auth session in the Azure CLI; the
+      # needed. azure/login caches the auth session in the Azure CLI; the
       # `sign` tool picks it up via DefaultAzureCredential -> AzureCliCredential.
       - name: Azure OIDC login
         if: matrix.platform == 'windows-latest'
-        # Deliberately NOT re-resolved to current v2 (7184910... as of
-        # 2026-09-02) when every other action in this repo was pinned. This is
-        # the highest-privilege step here -- it mints the OIDC session that
-        # signs Windows binaries -- and a stale pin at a SHA that has been
-        # audited and in service since 2026-05-15 beats a fresh pin at an
-        # unaudited HEAD. "It works" would be an availability argument standing
-        # in for a security one; this is the security one. The upgrade path is
-        # a reviewed Dependabot bump, not a blind re-resolve. Residual carried
-        # knowingly: this misses any auth-handling fix shipped upstream since.
-        # Audited 2026-09-02.
-        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v2
+        # Held at the v3.0.2 SHA a reviewed Dependabot bump landed (#1835), and
+        # deliberately NOT re-resolved to whatever the tag or the branch points
+        # at now. This is the highest-privilege step here -- it mints the OIDC
+        # session that signs Windows binaries -- so a held pin at a reviewed SHA
+        # beats a fresh pin at an unaudited HEAD. "It works" would be an
+        # availability argument standing in for a security one; this is the
+        # security one. The upgrade path is a reviewed Dependabot bump, not a
+        # blind re-resolve. Residual carried knowingly: this misses any
+        # auth-handling fix shipped upstream since.
+        # Audited 2026-09-10 (tag v3.0.2 -> 7ddb5af1, confirmed via gh api).
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -277,7 +277,7 @@ jobs:
           # RFC 3161 timestamping internally; no --timestamp-url flag is
           # accepted on the `code artifact-signing` subcommand.
           # --azure-credential-type=azure-cli pins the auth flow to the
-          # session cached by azure/login@v2 (deterministic; avoids
+          # session cached by azure/login (deterministic; avoids
           # DefaultAzureCredential trying managed identity / env first).
           $signCommand = [ordered]@{
             cmd  = $env:SIGN_EXE_PATH
