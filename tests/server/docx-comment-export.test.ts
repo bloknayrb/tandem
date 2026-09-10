@@ -585,6 +585,213 @@ describe("exportYDocToDocx — import/export idempotency", () => {
     expect(ids).toContain(1); // reused original Word id
   });
 
+  it("reuses a large stored comment id but re-mints a negative one (#1693)", () => {
+    // `reusableWordId` is keyed on "can this be written into a `w:id` and read
+    // back as the same string". `1000000000` is inside the int32 window and the
+    // predicate this replaced rejected it, so the promoted comment was written
+    // back under a freshly minted id the import drift index had never seen and
+    // re-imported as a ghost note beside the promotion (#1448).
+    //
+    // `-1` is the deliberate exclusion (#1693 review). Reusing it wrote
+    // `w:id="-1"` into the user's saved file, and nothing in this tree
+    // establishes that Word emits or reopens a negative `w:comment/@w:id` —
+    // `verifyDocxRoundtrips` re-imports through mammoth, which is id-agnostic,
+    // so the failure would have surfaced only in Word, after the overwrite, on a
+    // green verdict. Re-minting is now free of the ghost it used to cost:
+    // `reconcileImportCommentIds` points the stored id at what was written.
+    const d = docFromHtml("<p>Hello brave world</p>");
+    addAnnotation(d, 0, 5, {
+      content: "Billion",
+      author: "user",
+      importSource: { author: "A", file: "f.docx", commentId: "1000000000" },
+    });
+    addAnnotation(d, 6, 11, {
+      content: "Negative",
+      author: "user",
+      importSource: { author: "A", file: "f.docx", commentId: "-1" },
+    });
+
+    const prepared = prepareExportComments(d);
+    expect(prepared).toHaveLength(2);
+    expect(prepared.map((c) => c.id).sort((a, b) => a - b)).toEqual([1, 1000000000]);
+    // The negative one is the re-minted one, not the reused one.
+    expect(prepared.find((c) => c.bodyParagraphs[0] === "Negative")?.id).toBe(1);
+  });
+
+  it("never mints a w:id another stored record still claims (#1693)", () => {
+    // `usedIds` used to be seeded from the EXPORTED set alone, so a record the
+    // gates dropped kept its stored `importSource.commentId` and was invisible
+    // to the allocator. `reconcileImportCommentIds` then wrote the minted id
+    // onto the record it was minted for, and TWO records durably claimed one
+    // `w:id` — the next open buckets both under it, logs a duplicate, keeps one
+    // by its own preference rule, and can re-anchor the survivor onto the other
+    // Word comment's content and body.
+    const d = docFromHtml("<p>Hello brave world</p>");
+    // Dropped by the status gate (`status !== "pending"`, and NOT an import
+    // round-trip because promotion made the author "user"), so it never reaches
+    // `resolved` — but it still stores `w:id` 1.
+    addAnnotation(d, 0, 5, {
+      content: "Resolved promotion",
+      author: "user",
+      status: "dismissed",
+      promotedFrom: "note",
+      importSource: { author: "A", file: "f.docx", commentId: "1" },
+    });
+    // Exported, and its stored id is not reusable, so it takes an allocated one.
+    addAnnotation(d, 6, 11, {
+      content: "Needs a fresh id",
+      author: "user",
+      promotedFrom: "note",
+      importSource: { author: "A", file: "f.docx", commentId: "c-9182" },
+    });
+
+    const prepared = prepareExportComments(d);
+    expect(prepared).toHaveLength(1);
+    expect(prepared[0].bodyParagraphs[0]).toBe("Needs a fresh id");
+    // 1 is spoken for. The allocator must walk past it.
+    expect(prepared[0].id).not.toBe(1);
+    expect(prepared[0].id).toBe(2);
+  });
+
+  it("skips a w:id claimed by a record whose range no longer resolves (#1693)", () => {
+    // The same blind spot reached through the OTHER drop: a stored import record
+    // that survives every gate and then fails range resolution. It is equally
+    // invisible to an allocator seeded from `resolved`, and equally still holds
+    // its stored id.
+    const d = docFromHtml("<p>Hello brave world</p>");
+    addAnnotation(d, 0, 5, {
+      content: "Unresolvable",
+      author: "import",
+      type: "note",
+      audience: "private",
+      importSource: { author: "A", file: "f.docx", commentId: "1" },
+      range: { from: toFlatOffset(9000), to: toFlatOffset(9010) },
+      relRange: undefined,
+    });
+    addAnnotation(d, 6, 11, {
+      content: "Needs a fresh id",
+      author: "user",
+      promotedFrom: "note",
+      importSource: { author: "A", file: "f.docx", commentId: "nc:x" },
+    });
+
+    const prepared = prepareExportComments(d);
+    expect(prepared).toHaveLength(1);
+    expect(prepared[0].bodyParagraphs[0]).toBe("Needs a fresh id");
+    expect(prepared[0].id).not.toBe(1);
+  });
+
+  it("writes one Word comment when two records name one stored w:id (#1693)", () => {
+    // The ghost pair, collapsed at the last place before the bytes. Both records
+    // pass the gates — the note through the `isImportRoundtrip` bypass, the
+    // promotion as a pending outbound comment — so without the collapse the save
+    // writes TWO Word comments for one original (#1448).
+    const d = docFromHtml("<p>Hello brave world</p>");
+    addAnnotation(d, 0, 5, {
+      id: "zzz-ghost",
+      content: "Imported body",
+      author: "import",
+      type: "note",
+      audience: "private",
+      importSource: { author: "A", file: "f.docx", commentId: "1" },
+    });
+    addAnnotation(d, 0, 5, {
+      id: "aaa-promotion",
+      content: "Promoted body",
+      author: "user",
+      promotedFrom: "note",
+      importSource: { author: "A", file: "f.docx", commentId: "1" },
+    });
+
+    const prepared = prepareExportComments(d);
+    expect(prepared).toHaveLength(1);
+    // The user's promotion wins, not the raw import note — and not whichever
+    // record Y.Map happened to iterate first.
+    expect(prepared[0].bodyParagraphs[0]).toBe("Promoted body");
+    expect(prepared[0].id).toBe(1);
+  });
+
+  it("flattens the suppressed record's replies into the comment it collapsed into (#1693)", () => {
+    // The collapse must not cost the user content. `exportableReplies` matches
+    // strictly on `reply.annotationId`, so a reply parented to the record the
+    // collapse drops reaches neither the saved `.docx` nor the comment-loss
+    // advisory (which counts range failures, not this) — a silent loss, and a
+    // regression against the pre-collapse behaviour where both records exported
+    // and the reply survived on the ghost's comment. It is reachable after
+    // promote → external Word edit → cold open, where the colleague's new Word
+    // reply lands on the freshly injected ghost rather than on the promotion.
+    const d = docFromHtml("<p>Hello brave world</p>");
+    addAnnotation(d, 0, 5, {
+      id: "zzz-ghost",
+      content: "Imported body",
+      author: "import",
+      type: "note",
+      audience: "private",
+      importSource: { author: "Rita", file: "f.docx", commentId: "1" },
+    });
+    addAnnotation(d, 0, 5, {
+      id: "aaa-promotion",
+      content: "Promoted body",
+      author: "user",
+      promotedFrom: "note",
+      importSource: { author: "Rita", file: "f.docx", commentId: "1" },
+    });
+    // The colleague's Word reply, on the record that loses the collapse.
+    addReply(d, {
+      annotationId: "zzz-ghost",
+      author: "import",
+      importAuthor: "Rita",
+      private: true,
+      text: "Please clarify",
+      timestamp: 1700000002000,
+    });
+    // ...and one on the winner, so the ordering claim is testable.
+    addReply(d, { annotationId: "aaa-promotion", text: "On it", timestamp: 1700000001000 });
+
+    const prepared = prepareExportComments(d);
+    expect(prepared).toHaveLength(1);
+    expect(prepared[0].suppressedAnnotationIds).toEqual(["zzz-ghost"]);
+    const body = prepared[0].bodyParagraphs.join("\n");
+    expect(body).toContain("Please clarify");
+    // Oldest-first across the MERGED set, not one record's replies after the
+    // other's — the thread is one thread once the comment is one comment.
+    expect(body.indexOf("On it")).toBeLessThan(body.indexOf("Please clarify"));
+    // And the count stays honest about the bytes: both replies were flattened,
+    // so both are reported.
+    expect(prepared[0].flattenedReplies).toBe(2);
+    expect(commentExportDowngrades(prepared, { unresolved: 0, malformed: 0 }).downgrades).toEqual([
+      "2 comment replies flattened into their parent comments (Word reply threads aren't supported)",
+    ]);
+  });
+
+  it("keeps both when the shared stored id may be a truncation (#1693)", () => {
+    // The injectivity boundary, and the direction it fails in. A stored id AT or
+    // PAST `IMPORT_COMMENT_ID_MAX` may be the prefix of a longer `w:id`, so two
+    // records naming it can be two DISTINCT Word comments — collapsing them
+    // would delete one from the user's file. `keysDriftIndex` refuses to key
+    // them, here exactly as it does in the import drift index, and the duplicate
+    // is accepted instead.
+    const d = docFromHtml("<p>Hello brave world</p>");
+    const truncated = "c".repeat(32);
+    addAnnotation(d, 0, 5, {
+      content: "First comment",
+      author: "import",
+      type: "note",
+      audience: "private",
+      importSource: { author: "A", file: "f.docx", commentId: truncated },
+    });
+    addAnnotation(d, 6, 11, {
+      content: "Second comment",
+      author: "user",
+      promotedFrom: "note",
+      importSource: { author: "A", file: "f.docx", commentId: truncated },
+    });
+
+    const prepared = prepareExportComments(d);
+    expect(prepared).toHaveLength(2);
+    expect(new Set(prepared.map((c) => c.id)).size).toBe(2);
+  });
+
   it("does not reuse non-canonical or hostile stored comment ids", () => {
     const d = docFromHtml("<p>Hello brave world</p>");
     addAnnotation(d, 0, 5, {
@@ -596,6 +803,9 @@ describe("exportYDocToDocx — import/export idempotency", () => {
       importSource: { author: "A", file: "f.docx", commentId: "99999999999999" },
     });
 
+    // Both are still refused, and for the right reason after #1693: "01"
+    // re-serializes as `1` (so the stored key and the written key would
+    // diverge) and "99999999999999" is past the int32 ceiling.
     const prepared = prepareExportComments(d);
     expect(prepared.map((p) => p.id).sort()).toEqual([1, 2]);
   });
