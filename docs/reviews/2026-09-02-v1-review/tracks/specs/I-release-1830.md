@@ -27,8 +27,16 @@ Measured against the real v0.25.0 release, not assumed:
   **artifact signature `true`, trusted-comment global signature `true`.** No minisign binary, no
   apt install, no new dependency.
 
-**`scripts/ci/verify-updater-signatures.mjs`** (new). Two halves, and the split is what makes it
-testable:
+**`scripts/ci/verify-updater-signatures.mjs`** (new). **Three** halves, not two, and the split is
+what makes it testable. Round 1 exported only `verifyMinisign` and then asked for a unit case
+("one url, two keys, one bad signature") that `verifyMinisign` structurally cannot express — it
+takes a single `{publicKey, signature, data}` triple, so "11 keys, 7 downloads, name the bad key"
+is a property of the manifest walk, which lived only inside `main()` with no export and no test.
+Followed as written, the implementer would have dropped the case or invented an export, and the
+exact wrong implementation this issue exists to remove (dedupe the *verification*, leaving 4 of 11
+`signature` strings never read) would ship with the unit suite green. The same gap left "exit 1
+(never 0) if it cannot evaluate" asserted by nothing, in a step that first executes at a `v*` tag.
+So:
 
 - `export function verifyMinisign({ publicKey, signature, data })` — pure. `publicKey` and
   `signature` are the base64-wrapped file bodies exactly as they appear in `tauri.conf.json` and
@@ -37,17 +45,35 @@ testable:
   `"global-signature"`, `"malformed"`. **Reject an unexpected algorithm explicitly** — a legacy
   `Ed` (non-prehashed) signature must not fall through to a `false` that reads like tampering, and
   must not be silently accepted by hashing differently.
-- CLI `main()` — reads `plugins.updater.pubkey` from `src-tauri/tauri.conf.json`, lists the release's
-  assets, downloads `latest.json`, **dedupes the DOWNLOAD by `url`** — caching the fetched *bytes*
-  keyed by url — and then **verifies all 11 `platforms[*]` entries, each against its own
-  `signature` field**. The distinction is the whole gate: the 11 keys resolve to 7 distinct URLs
-  (`darwin-*`/`-app`, `linux-x86_64`/`-appimage`, `windows-x86_64`/`-nsis` pair up), so deduping
-  the *verification* would leave 4 of 11 `signature` strings never read — a complete-looking gate
-  silently checking less, which is the exact shape #1830 exists to remove. Fetch with
-  `Accept: application/octet-stream` + `Authorization: Bearer ${GH_TOKEN}`, and
-  fail with a message naming every platform key that did not verify and why. Env: `GH_TOKEN`,
-  `GH_REPO`, `RELEASE_ID`. Exit 1 on any failure; exit 1 (never 0) if it cannot evaluate — no
-  artifacts, no manifest, a fetch error. A gate reporting success when it could not evaluate is the
+- `export async function verifyManifest({ publicKey, platforms, fetchBytes })` — the manifest walk,
+  pure of the network and of `process.env`. `platforms` is `latest.json`'s `platforms` object;
+  `fetchBytes(url)` is injected and returns the asset bytes. It **dedupes the DOWNLOAD by `url`** —
+  caching the bytes `fetchBytes` returned, keyed by url — and then **verifies all 11
+  `platforms[*]` entries, each against its own `signature` field**, returning
+  `{ ok, results: [{key, ok, reason}], failures: [{key, reason}] }`. The distinction is the whole
+  gate: the 11 keys resolve to 7 distinct URLs (`darwin-*`/`-app`, `linux-x86_64`/`-appimage`,
+  `windows-x86_64`/`-nsis` pair up — measured against the real v0.25.0 manifest), so deduping the
+  *verification* would leave 4 of 11 `signature` strings never read. **It must throw, never resolve
+  `ok`, when it cannot evaluate**: an empty or absent `platforms` object, an entry with no
+  `signature`, or a `fetchBytes` rejection. That is the "cannot evaluate" contract, and putting it
+  on this seam is what makes it assertable — inside `main()` it was asserted by nothing.
+- CLI `main()` — **env-reading plus one call to `verifyManifest`, and nothing else.** It reads
+  `plugins.updater.pubkey` from `src-tauri/tauri.conf.json` and `GH_TOKEN` / `GH_REPO` /
+  `RELEASE_ID` from the environment, lists the release's assets, downloads `latest.json`, passes
+  `platforms` and a `fetchBytes` closure to `verifyManifest`, prints one line per platform key, and
+  exits 1 on `!ok` **or on a throw** with a message naming every platform key that did not verify
+  and why. Guard it behind an explicit entrypoint check
+  (`if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))`), so
+  importing the module from a test runs no CLI, reads no env and makes no request.
+  `fetchBytes` uses `fetch` with `Accept: application/octet-stream` +
+  `Authorization: Bearer ${GH_TOKEN}` and reads the body with `arrayBuffer()`. **Do not copy the
+  octokit body-parsing shape from the neighbouring step** (`tauri-release.yml:893-904`): that long
+  comment exists because octokit picks its parser from the *response* content-type, so `latest.json`
+  can arrive pre-parsed and `Buffer.from(raw)` throws `ERR_INVALID_ARG_TYPE`. `fetch` +
+  `arrayBuffer()` always yields bytes, so that branch does not apply here and must not be
+  reproduced. The manifest's `platforms[*].url` values are asset **API** URLs, not browser download
+  URLs (`tauri-release.yml:917-919` states this), which is what makes a token-authenticated fetch
+  work against a still-unpublished draft. A gate reporting success when it could not evaluate is the
   #1229 failure mode named in `ci.yml:419-421`.
 
 **`tauri-release.yml`, `verify-release-manifest` job** — two steps added, the existing
@@ -57,6 +83,7 @@ keeping it untouched keeps the manifest-shape gate and the signature gate indepe
 ```yaml
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify updater signatures against tauri.conf.json pubkey
+        shell: bash
         run: |
           # gate:updater-sig
           node scripts/ci/verify-updater-signatures.mjs
@@ -113,16 +140,31 @@ body**, so a reviewer who finds it does not re-derive it as a refutation of #183
    - tampered trusted comment → `reason: "global-signature"` (*kills* a verifier that stops at the
      artifact signature; minisign's trusted comment is the half an attacker can rewrite freely);
    - truncated / non-base64 input → `reason: "malformed"`, never a throw.
-   - **one url, two keys, one bad signature** — a manifest fixture where two platform keys share a
-     `url` and carry *different* `signature` values, only one of which verifies. The failure must
-     **name the bad key**. *Kills:* the dedupe-the-verification implementation that checks 7 of 11.
+
+   **A second describe in the same file, against `verifyManifest`** — this is where the walk's
+   properties live, and they cannot be expressed against `verifyMinisign` (see the Fix section).
+   Drive it with a stub `fetchBytes` that records its calls:
+   - **one url, two keys, one bad signature** — a `platforms` fixture where two keys share a `url`
+     and carry *different* `signature` values, only one of which verifies. Assert **11 results from
+     7 `fetchBytes` calls** (build the fixture with the real pairing shape), `ok === false`, and
+     that `failures` **names the bad key**. *Kills:* the dedupe-the-verification implementation that
+     checks 7 of 11 — the exact wrong shape #1830 exists to remove;
+   - **cannot evaluate: no `platforms` entry** (empty object, or a key whose entry has no
+     `signature`) → it **throws**, and specifically does not resolve `{ ok: true }`;
+   - **cannot evaluate: `fetchBytes` rejects** → it **throws**, not a swallowed `ok`.
+   The last two are the assertable form of "exit 1, never 0, if it cannot evaluate", which nothing
+   asserted while that logic lived in `main()`.
 2. **`tests/scripts/release-ci-hygiene.test.ts`** (the group's shared new file), one describe —
    ADR-051 wiring, modelled on `tests/scripts/release-signing-gates.test.ts`, whose helpers this
    should reuse in shape: find the step **by the `# gate:updater-sig` marker inside its own `run`
    body** (a YAML comment is not in the parse tree — see the Fix section), never by `name:`;
-   **throw** if the finder returns nothing or more than one; pin `run`, `env` and `shell` by exact
-   equality **including the marker line**, the way `APPLE_GATE_RUN` does, so the anchor and the
-   assertion are the same string; assert `if` and `continue-on-error` are absent on the step;
+   **throw** if the finder returns nothing or more than one; pin `run` and `env` by exact equality
+   **including the marker line**, the way `APPLE_GATE_RUN` does, so the anchor and the assertion are
+   the same string; and pin `shell` as the literal `"bash"` — the prescribed YAML block now carries
+   `shell: bash` for exactly this reason. (The sibling asserts
+   `step.shell === "bash" || step.shell === "pwsh"` at `release-signing-gates.test.ts:396-397`,
+   which fails against an absent `shell`; round 1 told the implementer to pin a key its own YAML did
+   not have, and the way out would have been to weaken the assertion.) assert `if` and `continue-on-error` are absent on the step;
    assert the `checkout` step precedes it. **And pin the job-level disarm vectors, which the sibling
    test already treats as required** (`release-signing-gates.test.ts:400`, "not at the job or
    workflow level either"): assert the job's `needs` still contains `create-release` and
@@ -138,8 +180,9 @@ no still-broken-when output to convert into an assertion.
 
 ## Done when
 
-Eight unit cases green (the six original, with the key-id one split in two and the shared-url one
-added); the wiring describe green; `node scripts/ci/verify-updater-signatures.mjs` run by hand
+Ten unit cases green — seven against `verifyMinisign` (the six original, with the key-id one split
+in two) and three against `verifyManifest` (shared-url/11-from-7, and the two cannot-evaluate
+throws); the wiring describe green; `node scripts/ci/verify-updater-signatures.mjs` run by hand
 against the real v0.25.0 release id, printing **11 `ok` lines — one per platform key, not 7** (that
 IS runnable here and must be run — it is the only end-to-end evidence this PR can produce); the PR
 body states that the workflow step itself has never executed and will first run at the next `v*`
@@ -192,3 +235,40 @@ Publishing the draft.
 `tests/scripts/verify-updater-signatures.test.ts`, a describe in the shared
 `tests/scripts/release-ci-hygiene.test.ts`, and two steps added to `.github/workflows/tauri-release.yml`.
 `src-tauri/tauri.conf.json` stays read-only.
+
+## Review corrections (round 2)
+
+**Adopted.**
+
+- **BLOCKING — the anti-vacuity case could not be written as specified.** Verified: round 1 defined
+  the only pure export as `verifyMinisign({publicKey, signature, data})`, scoped the whole describe
+  as "unit, against `verifyMinisign`", and then placed the shared-url/dedupe case inside it — but
+  that case is a property of the manifest walk (11 `EXPECTED` keys collapsing to 7 URLs,
+  `tauri-release.yml:868-873`), which lived only in `main()` with no export and no test. Followed
+  as written, the implementer drops the case or invents an export, and the dedupe-the-verification
+  implementation ships with the suite green. Adopted the fix: a second pure export,
+  `verifyManifest({publicKey, platforms, fetchBytes})`, returning `{ok, results, failures}`;
+  `main()` reduced to env-reading plus one call to it, behind an explicit entrypoint guard so an
+  import runs no CLI; the shared-url case moved onto that seam with a recording stub asserting **11
+  results from 7 `fetchBytes` calls** and a named bad key; and two cannot-evaluate cases (no
+  `platforms` entry, `fetchBytes` rejects) asserting a throw — which is the assertable form of the
+  spec's "exit 1, never 0, if it cannot evaluate", previously asserted by nothing in a step that
+  first runs at a `v*` tag. Done-when now says ten unit cases.
+- **The wiring describe pinned a `shell` key the prescribed YAML did not have.** Verified:
+  `release-signing-gates.test.ts:396-397` asserts `step.shell === "bash" || step.shell === "pwsh"`,
+  which fails against `undefined`. Added `shell: bash` to the prescribed step and pinned it as the
+  literal `"bash"`, matching the sibling — rather than leaving the implementer to resolve the
+  contradiction by weakening the assertion.
+- **The new script must not reuse the neighbouring step's octokit body-parsing shape.** Verified at
+  `tauri-release.yml:893-904` (content-type-driven parser, `Buffer.from` on a pre-parsed body throws
+  `ERR_INVALID_ARG_TYPE`). Added to the Fix section: `fetchBytes` uses `fetch` + `arrayBuffer()`,
+  which always yields bytes, so that branch does not apply and must not be reproduced — plus one
+  line confirming `platforms[*].url` values are asset **API** URLs (`:917-919`), which is what makes
+  the token-authenticated fetch work against an unpublished draft.
+
+**Not adopted.** None.
+
+**File set:** unchanged — new `scripts/ci/verify-updater-signatures.mjs` (now exporting
+`verifyMinisign` **and** `verifyManifest`), new `tests/scripts/verify-updater-signatures.test.ts`
+(two describes), a describe in the shared `tests/scripts/release-ci-hygiene.test.ts`, and two steps
+added to `.github/workflows/tauri-release.yml`. `src-tauri/tauri.conf.json` stays read-only.

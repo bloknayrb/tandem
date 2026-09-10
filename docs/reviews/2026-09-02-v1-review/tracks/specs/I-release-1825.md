@@ -62,6 +62,14 @@ wrong section of this same issue.
     `dist/` present, so it cannot be unconditional).
   - Keep the `TARGETS.length === 0` throw as a second layer, but **stop describing it as the
     anti-vacuity guard** — it catches only the impossible zero case.
+  - **Pin the flag itself.** `--require-built` *is* the anti-vacuity mechanism, and nothing reads
+    `package.json`'s `build` script: drop the flag from it and `TARGETS` falls back to
+    `["index.html"]`, the script exits 0 having inspected only the source file, and no test goes
+    red — the exact regression the round-1 correction was written to close. This group is already
+    landing `tests/scripts/release-ci-hygiene.test.ts` (#1832 owns the file), so add one assertion
+    there: `JSON.parse(readFileSync("package.json", "utf8")).scripts.build` contains
+    `check-font-assets.mjs --require-built`, with a comment naming it as the half that makes the
+    check non-vacuous. Same delegated-half precedent this spec already invokes for `scripts.test`.
 
   Discriminating check, and it must be run: after `npm run build`,
   `rm dist/client/index.html && node scripts/check-font-assets.mjs --require-built` exits
@@ -70,21 +78,52 @@ wrong section of this same issue.
   only.
 - `.husky/pre-push` — `npx biome check src/ tests/` → `npx biome check .`. The `files.includes` in
   `biome.json` is what bounds `.`; this makes the hook and CI the same command, which is the point.
+
+  **This change does NOT ship alone: `biome.json` must gain two exclusions in the same commit, or
+  the hook breaks every push from Bryan's main checkout.** Round 1 filed this as a possible slowness
+  ("if the first run is slow, that is why; it is not a hang") and named `"!.claude/**"` as "the fix
+  if it ever matters". Measured on 2026-09-10, from `C:/Users/blokn/Documents/Github/tandem` with
+  biome 2.4.8, it is not slowness — it is a hard refusal:
+
+  ```
+  $ npx biome check .
+  C:\...\tandem\.claude\worktrees\wt-g8\biome.json configuration ━━━
+    × Found a nested root configuration, but there's already a root configuration.
+  … (same for wt-i-release, and for .worktrees/tiptap-v3)
+    × Biome exited because the configuration resulted in errors. Please fix them.
+  ```
+
+  Exit non-zero, **zero files checked**, in ~1.8s. Every `git worktree` checkout carries the
+  repo's own tracked `biome.json`, and biome 2.x treats a nested root config under the scanned
+  directory as a configuration error rather than ignoring it. CI is green only because a runner has
+  no worktrees. Both directories are involved and both are needed —
+  `.claude/worktrees/{wt-ci-trust,wt-g8,wt-i-release}` (this sweep's) and
+  `.worktrees/{tiptap-v3,ui-refinement}` (older). Fix, verified against a minimal reproduction:
+  adding the exclusions to `files.includes` suppresses the nested-config discovery and the run
+  proceeds normally.
+
+  - `biome.json` `files.includes` — add `"!.claude"` and `"!.worktrees"`. Bare directory names, not
+    `"!.claude/**"`: since biome 2.2 the trailing `/**` is redundant and its own
+    `lint/suspicious/useBiomeIgnoreFolder` rule flags it (observed in the reproduction). The repo's
+    existing `"!dist/**"`-style entries pre-date that and are not this commit's business.
+  - **Run `npx biome check .` from the main checkout, with worktrees present, before committing**,
+    and paste the result in the PR body. That is the only run that exercises the condition; a run
+    from inside a worktree sees no nested config and proves nothing.
+
   **Two tracked contributor docs state the old command and must change in the same commit**, or the
   hook and its documentation disagree in the file CLAUDE.md designates as the contract non-Claude
-  agents read:
+  agents read. **Three, in fact — and all three are also wrong about the hook in a second way:** it
+  has run four commands since #1616 and every one of these enumerates three.
   - `AGENTS.md:17` — "`pre-push` runs `biome check src/ tests/`, the **full** Vitest suite, and
-    `cargo test`" → `biome check .`.
-  - `CONTRIBUTING.md:146-149` — the ordered list. Change item 1 to `npx biome check .`, **and while
-    there add the missing `npm run typecheck:tests` step**: the hook has run four commands since
-    #1616 and this list enumerates three, so it is already wrong about the order it claims to state
-    "exactly".
-  Note for the PR body, not a code change: on Bryan's main checkout `.` walks
-  `.claude/worktrees/`, which holds full checkouts during this sweep. Nothing there is *checked* —
-  `biome.json:20-30` bounds by positive includes (`src/**`, `tests/**`, `scripts/**`, `infra/**`,
-  `packages/**`, root `*.{ts,json,html}`) and nothing under `.claude/` matches one — but the walk
-  happens, and worktree `node_modules` are junctions on Windows. If the first run is slow, that is
-  why; it is not a hang. `"!.claude/**"` in `files.includes` is the fix if it ever matters.
+    `cargo test`" → `biome check .`, **and add `npm run typecheck:tests` to the list**.
+  - `CONTRIBUTING.md:146-149` — the ordered list. Change item 1 to `npx biome check .`, add the
+    missing `npm run typecheck:tests` item, **and change the trailing sentence "A delete-only push
+    (branch pruning) skips all three." to "all four"** — otherwise the fix leaves the sentence
+    counting the list it just lengthened.
+  - `CLAUDE.md`, the Hooks section: "**The pre-push hook runs biome + the full vitest suite + `cargo
+    test`.**" → "biome + the test-tree typecheck + the full vitest suite + `cargo test`". It is the
+    auto-loaded contract and the file most likely to be read as authoritative; leaving it stating
+    three of four while two other docs are corrected is the drift this bullet exists to stop.
 - `playwright.config.ts` `use` — add `trace: "on-first-retry"` and `screenshot: "only-on-failure"`.
   **Not `video`**: it is the expensive one, the issue does not ask for it, and adding it would
   leave the corrected ci.yml comment naming something we chose not to enable.
@@ -101,10 +140,14 @@ wrong section of this same issue.
 
 ## Tests
 
-**None new.** Every one of these five is a config or comment line whose failure is visible in the
-tool's own output on the next run, and the minimality rule is explicit that a batch of Lows is not
-an invitation to build drift guards. Two of them are self-verifying by construction and the
-implementer must show it rather than assert it:
+**One assertion, added to a file this group is already landing; nothing else.** The exception is
+`--require-built` (see the Fix bullet): it is the whole anti-vacuity mechanism for
+`check-font-assets`, it lives in a `package.json` script no test reads, and dropping it silently
+restores the finding — so it gets one line in `tests/scripts/release-ci-hygiene.test.ts` asserting
+`scripts.build` contains `check-font-assets.mjs --require-built`. Everything else here is a config
+or comment line whose failure is visible in the tool's own output on the next run, and the
+minimality rule is explicit that a batch of Lows is not an invitation to build drift guards. Two of
+them are self-verifying by construction and the implementer must show it rather than assert it:
 
 - `check-font-assets`: **two runs, not one.** (a) After `npm run build`, insert
   `fonts.googleapis.com` into `dist/client/index.html` and watch the script throw — before the fix
@@ -119,12 +162,16 @@ there is no still-broken-when output to convert into an assertion.
 
 ## Done when
 
-The five fixed; `AGENTS.md:17` and `CONTRIBUTING.md:146-149` updated with the hook, the latter
-gaining its missing `typecheck:tests` line; both `check-font-assets` runs recorded, including the
-non-zero `--require-built` one; the five refuted/already-done recorded in the PR body with their
-evidence; the three Playwright downstream configs stated as checked; `npm run lint`,
-`npx biome check .`, `npm test` and a full `npm run build` green; the `Refs` paragraph names the
-bullets and hands Tauri to E2-rust and Tests to K-tests **by name**.
+The five fixed; `biome.json` carrying `"!.claude"` and `"!.worktrees"` in the **same commit** as the
+`.husky/pre-push` change, with `npx biome check .` run **from the main checkout with worktrees
+present** and its output in the PR body; `AGENTS.md:17`, `CONTRIBUTING.md:146-152` and CLAUDE.md's
+Hooks bullet all updated to the hook's **four** commands (CONTRIBUTING's "skips all three" → "all
+four"); `--require-built` pinned by the assertion in `tests/scripts/release-ci-hygiene.test.ts`;
+both `check-font-assets` runs recorded, including the non-zero `--require-built` one; the five
+refuted/already-done recorded in the PR body with their evidence; the three Playwright downstream
+configs stated as checked; `npm run lint`, `npx biome check .`, `npm test` and a full
+`npm run build` green; the `Refs` paragraph names the bullets and hands Tauri to E2-rust and Tests
+to K-tests **by name**.
 
 ## Not in scope — and these stay tracked in the still-open #1825, which is why it is not closed
 
@@ -176,3 +223,41 @@ open is their tracked home; do not write "tracked separately" about any of them.
 **File set changed** — added: `AGENTS.md`, `CONTRIBUTING.md`, `package.json` (the `build` script
 gains `--require-built`, alongside the already-planned `lint-staged` key). Already present:
 `scripts/check-font-assets.mjs`, `.husky/pre-push`, `playwright.config.ts`, `.github/workflows/ci.yml`.
+
+## Review corrections (round 2)
+
+**Adopted.**
+
+- **The `npx biome check .` change was filed as a possible slowdown; measured, it is a hard break —
+  and the fix moves into the same commit.** Round 1 said "if the first run is slow, that is why; it
+  is not a hang" and named `"!.claude/**"` as the fix "if it ever matters". Measured 2026-09-10 from
+  the main checkout with biome 2.4.8: `npx biome check .` exits **non-zero having checked zero
+  files**, with `× Found a nested root configuration, but there's already a root configuration` for
+  `.claude/worktrees/wt-g8`, `.claude/worktrees/wt-i-release` and `.worktrees/tiptap-v3` — every
+  worktree carries the repo's own tracked `biome.json`, and biome 2.x refuses rather than ignoring
+  it. So the round-1 text would have shipped a hook that blocks every push from Bryan's checkout
+  while any worktree exists (CI stays green: a runner has no worktrees). Verified against a minimal
+  reproduction that the exclusions suppress nested-config discovery and the run then proceeds.
+  `biome.json` joins the file set with `"!.claude"` and `"!.worktrees"` — bare names, since biome
+  ≥2.2 flags the trailing `/**` via `lint/suspicious/useBiomeIgnoreFolder` — and Done-when requires
+  the main-checkout run with its output in the PR body.
+- **The two contributor docs stayed wrong about the hook in a second way, and a third doc was
+  missed.** `.husky/pre-push` runs four commands; `AGENTS.md:17` names three, `CONTRIBUTING.md`'s
+  list has three items plus "skips all three", and CLAUDE.md's Hooks bullet says "biome + the full
+  vitest suite + `cargo test`". All three now change in the same commit: the `typecheck:tests`
+  entry added to `AGENTS.md` and `CONTRIBUTING.md`, "all three" → "all four", and CLAUDE.md's
+  bullet rewritten to name the test-tree typecheck.
+- **`--require-built` was the anti-vacuity mechanism and was pinned by nothing.** Dropping it from
+  `package.json`'s `build` leaves `TARGETS` at `["index.html"]` and the script exits 0 having
+  inspected only the source file, with no test red. One assertion added to
+  `tests/scripts/release-ci-hygiene.test.ts` (the file #1832 lands for this group): `scripts.build`
+  contains `check-font-assets.mjs --require-built`. The `## Tests` section's "None new" is corrected
+  to name that one exception.
+
+**Not adopted.** None.
+
+**File set changed** — added: `biome.json` (the two exclusions, same commit as `.husky/pre-push`),
+`CLAUDE.md` (Hooks bullet), and one assertion in `tests/scripts/release-ci-hygiene.test.ts` (the
+file itself is #1832's). Already present: `package.json`, `scripts/check-font-assets.mjs`,
+`.husky/pre-push`, `playwright.config.ts`, `.github/workflows/ci.yml`, `AGENTS.md`,
+`CONTRIBUTING.md`.

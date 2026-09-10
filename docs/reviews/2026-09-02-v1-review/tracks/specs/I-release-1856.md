@@ -97,19 +97,37 @@ here is the root-cause fix: with `# v3.0.2` in place, the next bump updates the 
 **No experiment in `docs/reviews/2026-09-02-v1-review/experiments/` covers this issue; there is no
 still-broken-when output to convert into an assertion.**
 
-Discriminating check for the implementer (a command, not a spec): after the edit,
-`grep -c 'azure/login@v2\|# v2$' .github/workflows/tauri-release.yml` returns 0, and
-`npx vitest run tests/scripts/workflow-action-pin.test.ts` stays green (it must — nothing it
-asserts changes).
+Discriminating check for the implementer — **one check, stated once**, because the two the spec
+previously carried disagreed about what was being asserted. A `grep -c` for
+`'azure/login@v2\|# v2$'` returns 0 for a comment rewritten to `# v2.3.0` and for a `# v2` line with
+trailing whitespace, so it is weaker than the Done-when it was supposed to back. Use instead:
+
+```bash
+grep -n 'azure/login' .github/workflows/tauri-release.yml
+```
+
+It must show **four lines, none of them containing `v2`**, and the line-238 trailing comment must
+read exactly `# v3.0.2`. **Paste that output into the PR body** alongside the `gh api` tag-to-SHA
+output required above. Then `npx vitest run tests/scripts/workflow-action-pin.test.ts` stays green
+(it must — nothing it asserts changes).
 
 ## Done when
 
 Four comment sites corrected; the pin's trailing comment is a full `vX.Y.Z`; the `gh api`
 tag-to-SHA check run and its output in the PR body; the `Audited` date advanced **only** on the
 strength of that run (otherwise left at `2026-09-02` with the post-dating stated in the block);
-`:238-241` byte-identical; `grep azure/login` shows no `v2` anywhere in the file;
+`:238-241` byte-identical; the single `grep -n 'azure/login'` check above shows four lines, none
+containing `v2`, with its output in the PR body;
 `workflow-action-pin.test.ts` green; the PR body records that #1856's body was wrong about line
 238 and why, and that the note block is at `:228-237` rather than where the issue implies.
+
+**Group-wide, stated here because #1856 is the group's first commit.** Six issues land on one
+branch (`fix/release-and-ci-hygiene-1856`), touching four workflows, `scripts/ci/`, `tests/scripts/`,
+`package.json`, `biome.json`, `.husky/pre-push`, `playwright.config.ts` and four tracked docs. That is
+a large diff to review as one blob, so the branch carries **one commit per issue, in the brief's
+implementation order** (#1856 → #1831 → #1832 → #1830 → #1748 → #1825), each with its issue number
+in the subject, and the PR body says so — a reviewer reads it commit-by-commit even though it merges
+as one branch.
 
 ## Not in scope
 
@@ -140,3 +158,22 @@ only via a reviewed Dependabot bump). Any other stale comment in the file. Widen
 
 **File set:** unchanged (`.github/workflows/tauri-release.yml`, comments only). The added `gh api`
 check touches no tracked file.
+
+## Review corrections (round 2)
+
+**Adopted.**
+
+- **The discriminating grep was weaker than the Done-when it backed.** `grep -c 'azure/login@v2\|# v2$'`
+  returns 0 for a comment rewritten to `# v2.3.0` or carrying trailing whitespace, and the Done-when
+  separately claimed the stronger property ("no `v2` anywhere"). Replaced by a single stated check —
+  `grep -n 'azure/login' .github/workflows/tauri-release.yml` must show four lines, none containing
+  `v2`, with `:238`'s trailing comment reading exactly `# v3.0.2` — whose output goes in the PR body
+  next to the `gh api` tag-to-SHA output. `## Tests` and `## Done when` now assert the same thing.
+- **One commit per issue for the group.** Six issues, four workflows, a new CI script, three new
+  test files and four tracked docs on one branch is a large single diff. The commit-shape rule is
+  stated here because #1856 is the first commit: one commit per issue in the brief's order, issue
+  number in each subject, and the PR body says so.
+
+**Not adopted.** None.
+
+**File set:** unchanged (`.github/workflows/tauri-release.yml`, comments only).

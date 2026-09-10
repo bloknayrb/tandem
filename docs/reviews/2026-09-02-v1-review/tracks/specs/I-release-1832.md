@@ -25,6 +25,19 @@ So, in order, and the ship stage must not improvise here:
 3. **Only then** may the PR body carry `Closes #1832`. If for any reason the issue was not filed,
    #1832 moves to `## Refs (partial — issue stays open)` naming the `npm ci` half as done and the
    toolchain-plus-build class as remaining.
+4. **The PR body must state, in one sentence, why the `Closes` is defensible** — because the ship
+   stage must not be left to re-derive it against a ledger row that says "Bryan half". Write it as:
+   *"#1832's finding — `npm ci` runs lifecycle scripts in the same job as the signing secrets — is
+   fixed in code at all six sites; the isolate-or-accept decision that remains is a different
+   question and is tracked as #\<new\>."* Without that sentence the `Closes` reads exactly like
+   wave 6's #1862, which is the thing this ordering exists to distinguish itself from.
+
+**Why this differs from `I-release-1831.md`, which does NOT close.** Both issues have a Bryan half
+in the same ledger row, and they resolve differently on purpose: #1832's fix is a code change that
+resolves the issue's stated finding completely, with the residual becoming its own numbered issue —
+so the finding has no untracked half left. #1831's disposition **is** the Bryan decision (delete the
+workflow or not); there is no code change that resolves it without taking that decision, so it
+stays `Refs`. Do not read either as precedent for the other.
 
 ## Problem
 
@@ -43,6 +56,17 @@ executables, `$GITHUB_ENV` and `$GITHUB_PATH` before signing.
 ```
 esbuild @0.28.2 -> postinstall: node install.js
 ```
+
+**That count is "one non-optional script", and the qualifier matters.** The same walk returns three
+more entries, all `fsevents` (`node_modules/fsevents@2.3.2`, plus `tsx`'s and `vite`'s nested
+`@2.3.3`), each `"os": ["darwin"]` and `"optional": true` — which is why a dependency-tree count run
+on Windows or Linux does not surface them. `tauri-release.yml:210`'s `npm ci` runs on
+`macos-latest` in the build matrix, so on that leg `--ignore-scripts` leaves `fsevents` unbuilt:
+`require('fsevents')` throws and chokidar/vite fall back to polling. That is benign for a one-shot
+`tauri build` (nothing watches), but it is a second behaviour change and the PR body must not be
+silent about it. State the measurement as **"one non-optional install script (`esbuild`), plus
+darwin-only optional `fsevents`, which affects file *watching* and not the build"** — never as
+"exactly one script".
 
 And esbuild works without it: `npm install --ignore-scripts esbuild@0.28.2` in a clean directory,
 then `require("esbuild").transform("let x=1")` → `let x = 1;`, `version 0.28.2`. esbuild ≥0.16
@@ -128,25 +152,36 @@ four of the six sites live in workflows no required check reads):
 3. **`package.json`'s `prepublishOnly` is still `npm run build`.** One line, exact equality. It is
    the thing test 2 is protecting; without it, test 2 guards a property nobody can see is needed.
 
+**This spec lands `tests/scripts/release-ci-hygiene.test.ts`, the group's shared new file and the
+ninth ADR-051 instance.** So this spec also owns the enumeration edit: `docs/decisions.md:1916`
+reads "The pattern, now used **eight** times" above an eight-row `Instances` table (verified:
+`:1921-1930`). Bump it to **nine** and add the `release-ci-hygiene.test.ts` row (naming what it
+anchors: the six `--ignore-scripts` sites, #1830's updater-signature step, #1748's `prerelease`
+derivation and its post-Build required step).
+
+4. **And pin that table, since this group is already writing the file it names.** Round 1 recorded
+   "no test pins that table, so it drifts silently if skipped" and stopped there — which leaves the
+   ninth row drifting exactly as the count has before. One assertion in
+   `release-ci-hygiene.test.ts` closes it: read `docs/decisions.md`, parse the `Instances` table's
+   data rows, and assert (a) the row count equals the number word in the sentence above it (map
+   `eight`/`nine`/`ten` → integer; a mismatch means someone added a row without the count or a
+   count without the row), and (b) a row naming `tests/scripts/release-ci-hygiene.test.ts` is
+   present. *Kills:* the bump skipped, the row skipped, and the next instance repeating the drift.
+
 No unit test — there is no new code, only a flag. **No experiment in
 `docs/reviews/2026-09-02-v1-review/experiments/` covers this issue**; there is no still-broken-when
 output to convert into an assertion.
-
-**This spec lands `tests/scripts/release-ci-hygiene.test.ts`, the group's shared new file and the
-ninth ADR-051 instance.** So this spec also owns the enumeration edit: `docs/decisions.md:1916`
-reads "The pattern, now used **eight** times" above an eight-row `Instances` table. Bump it to
-**nine** and add the `release-ci-hygiene.test.ts` row (naming what it anchors: the six
-`--ignore-scripts` sites, #1830's updater-signature step, #1748's `prerelease` derivation and its
-post-Build required step). No test pins that table, so it drifts silently if skipped.
 
 ## Done when
 
 Six sites flagged; `typecheck-tests-wiring.test.ts:167` widened in the same commit (**without it
 `check` throws and goes red** — this is expected and is a guard change, not a repair);
 `workflow-action-pin.test.ts:36-38`'s now-false claim rewritten; ADR-051's count bumped to nine and
-the new row added; the three assertions green; a full `check` run green (which is the actual
-evidence that `--ignore-scripts` does not break the build); the measured one-script finding and the
-`.npmrc`/`NPM_CONFIG_IGNORE_SCRIPTS`/`prepublishOnly` interaction written into the PR body.
+the new row added and **pinned by assertion 4**; the four assertions green; a full `check` run green
+(which is the actual evidence that `--ignore-scripts` does not break the build); the measurement
+written into the PR body as *one non-optional install script (`esbuild`) plus darwin-only optional
+`fsevents`* — never as "exactly one script" — along with the
+`.npmrc`/`NPM_CONFIG_IGNORE_SCRIPTS`/`prepublishOnly` interaction.
 
 **The PR body must state the boundary precisely, because "untrusted code no longer runs before
 signing in that job" is the wrong claim and the easy one to make.** `--ignore-scripts` closes the
@@ -214,3 +249,34 @@ change to what a release *does* — this PR only changes what CI installs.
 `tests/scripts/workflow-action-pin.test.ts`, `docs/decisions.md`. Unchanged: `.github/workflows/`
 (six `npm ci` sites across `ci.yml`, `publish.yml`, `tauri-release.yml`, `tauri-webdriver.yml`),
 new `tests/scripts/release-ci-hygiene.test.ts`.
+
+## Review corrections (round 2)
+
+**Adopted.**
+
+- **`Closes #1832` sits over the same DECIDE-bucket row as #1831, and rule 1 as stated sends such an
+  issue to `Refs`.** The spec's round-1 mechanism (file the isolate-or-accept residual as its own
+  numbered issue *before* the PR body is written, then `Closes`) is kept — it gives the residual a
+  tracked home and satisfies rule 2 — but the choice is no longer left implicit for the ship stage.
+  Added as step 4 of the split: the PR body must carry a one-sentence justification naming the
+  finding as fixed in code at all six sites and the remaining decision by its new issue number. Also
+  added an explicit contrast with `I-release-1831.md`, which resolves the *opposite* way in round 2,
+  so neither is read as precedent for the other.
+- **The dependency-tree measurement missed `fsevents`, which is darwin-gated and optional.**
+  Verified in `package-lock.json`: four packages carry `hasInstallScript` — `esbuild@0.28.2`
+  (required) and three `fsevents` copies (`2.3.2` root, `2.3.3` under `tsx` and `vite`), each
+  `"os": ["darwin"]` and `optional: true`. `tauri-release.yml:210` runs on `macos-latest`, so
+  `--ignore-scripts` leaves `fsevents` unbuilt there and watchers fall back to polling — benign for
+  a one-shot build, but a second behaviour change. The Problem section now states the count as "one
+  non-optional install script plus darwin-only optional `fsevents`", and Done-when requires the PR
+  body to use that phrasing.
+- **The ADR-051 Instances table was left unpinned while this group writes the file it names.**
+  Verified: `docs/decisions.md:1916` ("now used eight times") sits above an eight-row table at
+  `:1921-1930`, and nothing reads either. Added assertion 4 to `release-ci-hygiene.test.ts`: the
+  table's data-row count must equal the number word in the sentence above it, and a row naming
+  `tests/scripts/release-ci-hygiene.test.ts` must be present.
+
+**Not adopted.** None.
+
+**File set:** unchanged from round 1 (`docs/decisions.md` was already in it; assertion 4 pins it
+rather than adding a file).

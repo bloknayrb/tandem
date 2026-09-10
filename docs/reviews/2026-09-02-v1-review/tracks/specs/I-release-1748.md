@@ -53,8 +53,24 @@ Four independent findings, treated as four.
   `prerelease` on the `createRelease` call, so a tag whose **first** run created the draft and then
   failed downstream comes back on re-run carrying whatever `prerelease` that first run wrote — and
   re-runs are the normal case for a four-platform signed build. Add, before the `return`:
-  `await github.rest.repos.updateRelease({ owner, repo, release_id: existing[0].id, prerelease: tag.includes('-') })`,
-  so a re-run converges rather than inheriting.
+
+  ```js
+  await github.rest.repos.updateRelease({
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    release_id: existing[0].id,
+    prerelease: tag.includes('-'),
+  });
+  ```
+
+  so a re-run converges rather than inheriting. **Spell `owner` and `repo` out from `context.repo`;
+  the bare-shorthand `{ owner, repo, … }` form throws here.** Verified on `origin/master` fff8e312:
+  this `github-script` body (`:80-119`) binds nothing but the action's own
+  `github, context, core, …`, and both existing API calls spell the repo out (`:87-89`, `:112-114`).
+  The `const owner = context.repo.owner` pair that makes the shorthand legal exists only in the
+  *verify-release-manifest* step's separate script at `:872-873`. A shorthand here would throw
+  `ReferenceError: owner is not defined` on exactly the path this bullet exists to fix — every
+  re-run — and, since the file runs only at a `v*` tag, nothing would catch it before a release.
 - `.claude/skills/release/SKILL.md` step 7: split the publish command. For a tag with **no** `-`,
   unchanged (`--draft=false --latest`). For a tag **with** `-`, publish as
   `gh release edit v<version> --draft=false --prerelease --latest=false`, and say why in one
@@ -76,6 +92,7 @@ Four independent findings, treated as four.
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
+          # gate:npm-dist-tag
           set -euo pipefail
           case "$TAG" in
             *-*) echo "NPM_TAG=next" >> "$GITHUB_ENV" ;;
@@ -83,6 +100,12 @@ Four independent findings, treated as four.
           esac
       - run: npm publish --provenance --access public --tag "$NPM_TAG"
   ```
+
+  **The `# gate:npm-dist-tag` marker line is load-bearing, not decoration.** It is what test 1 finds
+  the derive step by, and it must be a *shell* comment inside the `run` body: a YAML comment is
+  absent from `yaml`'s parse tree (`workflow-action-pin.test.ts:150-152`), so a marker on the
+  `name:` line is invisible to the finder. This is the shape `release-signing-gates.test.ts:81-90`
+  and `:131` already use (`# gate:apple-signing`).
 
   `next` is the npm convention for a prerelease channel and is what `npm i -g tandem@next` reaches;
   `latest` is what a bare `npm i -g tandem` reaches and is npm's own default, so the non-prerelease
@@ -95,22 +118,37 @@ Four independent findings, treated as four.
 reordering: moving `Test` after `Build` would disturb the `Every collected test file actually ran`
 anchor (`ci.yml:394-396`) and the acceptance-harness step, both pinned by exact equality in
 `vitest-file-anchor-wiring.test.ts` and `acceptance-harness-wiring.test.ts`.
-- Both spec files read `const REQUIRE = process.env.TANDEM_REQUIRE_BUILD_ARTIFACTS === "1";` and
-  gate on `describe.skipIf(!REQUIRE && !existsSync(<bundle>))`. `build-artifact.test.ts` loses its
-  two early `return`s (`:9-12`, `:17`); its first `it` already ends in
-  `expect(statSync(MONITOR_DIST).size).toBeGreaterThan(1000)`, so removing the guard is enough
-  there. **`version-baked.test.ts` needs the assertion added, and this is not implied by the
-  sentence above:** its first `it` (`:22-27`) goes straight to `readFileSync(bundlePath)`, so a
-  required run with no bundle dies on an ENOENT stack — the outcome this bullet exists to avoid.
-  Add as its first line:
+- Both spec files read, **verbatim**, `const REQUIRE = process.env.TANDEM_REQUIRE_BUILD_ARTIFACTS === "1";`
+  and gate on a `describe.skipIf(!REQUIRE && !existsSync(<bundle>))` opener.
+  `build-artifact.test.ts` loses **both** early `return`s (`:9-12`, `:17`) — after which no
+  `if (!existsSync(MONITOR_DIST))` guard may remain anywhere in the file.
+- **Every `it` body in both files gets an existence assertion as its first line — all four, not
+  one.** Round 1 added it to `version-baked.test.ts`'s first `it` only, on the reasoning that
+  `build-artifact.test.ts:13` "already ends in `expect(statSync(MONITOR_DIST).size)`". That
+  reasoning is wrong: `statSync` **throws ENOENT before the `expect` is reached**, so under
+  `TANDEM_REQUIRE_BUILD_ARTIFACTS=1` on a tree with no `dist/` that `it` dies on a raw stack — the
+  outcome the bullet existed to avoid. The same is true of `build-artifact.test.ts:18`
+  (`readFileSync`) and `version-baked.test.ts:23` and `:30` (`readFileSync`). Either put this line
+  first in each of the four bodies, or hoist it into a `beforeAll` in each file:
   ```ts
   expect(existsSync(bundlePath), "run `npm run build:server` first — TANDEM_REQUIRE_BUILD_ARTIFACTS=1 makes this required").toBe(true);
   ```
+  (`existsSync` is already imported in both files — `build-artifact.test.ts:1`,
+  `version-baked.test.ts:9`; use `MONITOR_DIST` as the path in the monitor file.) The run is red
+  either way — the gate works — but the diagnostic is the difference between "run the build first"
+  and an ENOENT stack in CI.
 - `ci.yml`, a new step immediately **after** `Build`:
   `run: npm test -- --run tests/build/version-baked.test.ts tests/monitor/build-artifact.test.ts`
   with `env: TANDEM_REQUIRE_BUILD_ARTIFACTS: "1"`. It must sit after `Build` and after the
   file-anchor step (which consumes `.vitest-report.json` from the pre-Build run); the new step
-  writes no JSON report, so it cannot clobber it.
+  writes no JSON report, so it cannot clobber it. **The ordering is load-bearing for two wiring
+  tests this spec previously did not name**, and getting it wrong reds them for a reason that reads
+  unrelated to the diff: `vitest-file-anchor-wiring.test.ts:98`
+  (`checkSteps().find((s) => /^npm test\b/.test((s.run ?? "").trim()))`, then `:100` pins that
+  step's `run.trim()` to the long `--outputFile.json` command) and
+  `acceptance-harness-wiring.test.ts:251-253` (`stepIndex("the vitest step", …/^npm test\b/…)`)
+  both resolve `/^npm test\b/` to the **first** match. The new step matches that predicate too, so
+  placing it above the existing `Test` step hands both finders the wrong step.
 - Local `npm test` and the pre-push hook are unchanged: without the env var the old skip-if-absent
   behaviour holds, so a developer with no `dist/` is not blocked.
 
@@ -128,20 +166,68 @@ targets are in workflows no required check reads, in a step that can be `|| true
 runbook file nothing asserts at all):
 
 1. **Item 1, the workflow halves.** Parse `tauri-release.yml`, find the `create-release` job's
-   `github-script` step (throw if absent), and assert its `with.script` contains
-   `prerelease: tag.includes('-')` **at least twice** (the `createRelease` call and the reuse
-   branch's `updateRelease`) and **does not contain** `prerelease: false`. Both halves: the positive
-   alone passes a body carrying both lines, the negative alone passes a body carrying neither.
-   Then parse `publish.yml`: find the step whose `run` contains `npm publish` (throw if absent),
-   assert its `run.trim()` equals `npm publish --provenance --access public --tag "$NPM_TAG"`
-   exactly, and assert **no** step in the file runs a bare `npm publish` without `--tag`. *Kills:*
-   a revert to the constant; a "tidy" that drops the field (it defaults to `false` at the API and
-   silently restores the bug); the re-run path inheriting the first run's flag; and the npm half
-   left on `latest`.
+   `github-script` step (throw if absent), and assert its `with.script`:
+   - contains `tag.includes('-')` **at least once** and **does not contain** `prerelease: false`;
+   - contains `updateRelease`, and both the `createRelease` and `updateRelease` call sites pass a
+     `prerelease` key.
+
+   **Not "the literal `prerelease: tag.includes('-')` at least twice".** That was round 1's form and
+   it punishes the better implementation: `const prerelease = tag.includes('-');` computed once and
+   passed to both calls is correct and less duplicated, and would go red — tempting the implementer
+   to duplicate a literal purely to satisfy a test. The kill set is identical.
+   - **And assert the reuse branch is runnable, not just present:** the script must contain
+     `context.repo.owner` **within its `updateRelease` call** — equivalently, it must contain no
+     bare-shorthand `{ owner, repo` anywhere. This is the discriminator between the runnable form
+     and the one that throws `ReferenceError: owner is not defined` on every re-run (see the Fix
+     bullet: this `github-script` body binds only `github, context, core, …`). Without it, the
+     broken form satisfies every other assertion here and the file runs only at a `v*` tag, so
+     nothing else would ever catch it.
+
+   Then parse `publish.yml`. **Two steps, and the derive step is the one that decides the outcome:**
+   - Find the derive step **by the `# gate:npm-dist-tag` marker inside its own `run` body**; throw
+     unless exactly one step matches. Pin its `run` by **exact equality including the marker line**
+     and both `case` arms, pin its `env.TAG` by exact equality, assert it carries no `if:` and no
+     `continue-on-error`, and assert its index is **less** than the publish step's.
+   - Find the step whose `run` contains `npm publish` (throw if absent), assert its `run.trim()`
+     equals `npm publish --provenance --access public --tag "$NPM_TAG"` exactly, and assert **no**
+     step in the file runs a bare `npm publish` without `--tag`.
+
+   **Pinning only the publish step is not enough, and round 1's claimed kill ("the npm half left on
+   `latest`") was false without this.** Delete the derive step, or rewrite its `case` to always emit
+   `latest`, and `$NPM_TAG` expands empty (or to `latest`) while the pinned publish string stays
+   byte-identical: `check` green, the RC on the `latest` dist-tag, the finding fully live. That is
+   the eighth-ADR-051-instance shape — a step that never runs, not a red one.
+
+   *Kills:* a revert to the constant; a "tidy" that drops the field (it defaults to `false` at the
+   API and silently restores the bug); the re-run path inheriting the first run's flag; the re-run
+   path throwing a `ReferenceError` instead; the derive step deleted, disarmed or reordered after
+   the publish; and the npm half left on `latest`.
 2. **Item 2.** Find the ci.yml step whose `run` names both spec paths (throw if absent); assert its
    `run` and `env` by **exact equality**; assert no `if:` and no `continue-on-error`; assert its
-   index is **greater** than the `Build` step's. Separately, assert **both spec files** contain the
-   literal `TANDEM_REQUIRE_BUILD_ARTIFACTS`. **And pin the delegated half:** the step's body is
+   index is **greater** than the `Build` step's, **and greater than the index of the step whose
+   `run.trim()` equals the pinned `TEST_COMMAND`** (`vitest-file-anchor-wiring.test.ts:98-100`) —
+   the two sibling wiring tests resolve `/^npm test\b/` to the first match, so a new step above
+   `Test` reds them instead.
+
+   **Then pin the spec files by exact lines, not by `toContain`.** Round 1 asserted only that both
+   files "contain the literal `TANDEM_REQUIRE_BUILD_ARTIFACTS`", which a docblock mention or an
+   unused const satisfies while `describe.skipIf(!existsSync(bundlePath))` and the two early
+   `return`s stay in place — the step runs, vitest no-ops, exit 0, `check` green, item 2 vacuous.
+   Nothing else catches that: the new step writes no `.vitest-report.json`, so
+   `scripts/ci/vitest-file-anchor.mjs` never sees it, and
+   `docs/reviews/2026-09-02-v1-review/experiments/scan-zero-assert.mjs:5` matches `expect` anywhere
+   in a body, so an `expect` behind an early `return` reads as an assertion. Assert instead that
+   **each** of `tests/build/version-baked.test.ts` and `tests/monitor/build-artifact.test.ts`
+   contains, verbatim:
+   - `const REQUIRE = process.env.TANDEM_REQUIRE_BUILD_ARTIFACTS === "1";`
+   - a `describe.skipIf(!REQUIRE && !existsSync(` opener;
+
+   and that `tests/monitor/build-artifact.test.ts` contains **no** `if (!existsSync(MONITOR_DIST))`
+   early-return guard. The Done-when hand-run (the step observed failing with `dist/` moved aside)
+   stays as evidence, not as the durable anchor — it runs once, by hand, and no required check
+   repeats it.
+
+   **And pin the delegated half:** the step's body is
    `npm test -- --run …`, so `package.json`'s `scripts.test` is where a `|| true` would disarm it
    (and the existing `Test` step) with `ci.yml` byte-identical — the eighth-instance rule. Assert
    `JSON.parse(readFileSync("package.json")).scripts.test === "vitest"` with a comment naming it as
@@ -240,3 +326,56 @@ Already present: `.github/workflows/tauri-release.yml`, `.claude/skills/release/
 `.github/workflows/ci.yml`, `tests/build/version-baked.test.ts`,
 `tests/monitor/build-artifact.test.ts`, `.github/codeql/codeql-config.yml` (deleted), and the
 shared `tests/scripts/release-ci-hygiene.test.ts`.
+
+## Review corrections (round 2)
+
+**Adopted.**
+
+- **BLOCKING — the prescribed `updateRelease` call used identifiers that do not exist in that
+  `github-script` scope.** Verified on `origin/master` fff8e312: the `create-release` script
+  (`tauri-release.yml:80-119`) binds only the action's `github, context, core, …`, and both existing
+  calls spell the repo out (`:87-89`, `:112-114`); the `const owner = context.repo.owner` pair is in
+  the *verify-release-manifest* step's separate script at `:872-873`. Round 1's bare
+  `{ owner, repo, release_id, prerelease }` would throw `ReferenceError: owner is not defined` on
+  every re-run — exactly the path the bullet exists to fix — and round 1's test (the literal
+  `prerelease: tag.includes('-')` twice) accepted the throwing form. Fixed both: the Fix bullet now
+  prescribes `owner: context.repo.owner` / `repo: context.repo.repo`, and test 1 asserts
+  `context.repo.owner` inside the `updateRelease` call (equivalently: no bare-shorthand
+  `{ owner, repo`).
+- **BLOCKING — the npm dist-tag fix had its outcome-deciding half unpinned, and test 1's stated kill
+  was false.** Verified: round 1 pinned only the publish step's `run` plus a bare-`npm publish`
+  sweep; the step that computes `NPM_TAG` was asserted nowhere, so deleting it or rewriting its
+  `case` to always emit `latest` left the pin green with an RC on `latest`. Added a
+  `# gate:npm-dist-tag` shell-comment marker as the derive step's first `run` line (a YAML comment
+  is not in the parse tree — `workflow-action-pin.test.ts:150-152`; this is
+  `release-signing-gates.test.ts:81-90,131`'s own shape), and test 1 now finds that step by the
+  marker, throws unless exactly one matches, pins its `run` (marker line and both `case` arms) and
+  `env.TAG` by exact equality, forbids `if:`/`continue-on-error`, and asserts its index is less than
+  the publish step's.
+- **BLOCKING — item 2's guard was satisfiable by a comment.** Verified: round 1's "both spec files
+  contain the literal `TANDEM_REQUIRE_BUILD_ARTIFACTS`" passes on a docblock mention while
+  `tests/build/version-baked.test.ts:21`'s `describe.skipIf(!existsSync(bundlePath))` and
+  `tests/monitor/build-artifact.test.ts:9-12`/`:17`'s early `return`s stay — the step runs, vitest
+  no-ops, exit 0. Nothing else catches it: the new step writes no `.vitest-report.json` so
+  `vitest-file-anchor.mjs` never sees it, and `experiments/scan-zero-assert.mjs:5` matches an
+  `expect` sitting behind an early `return`. Replaced with exact-line pins (`const REQUIRE = …`, a
+  `describe.skipIf(!REQUIRE && !existsSync(` opener, and no `if (!existsSync(MONITOR_DIST))` guard
+  left in the monitor file); the hand-run stays as evidence, not as the anchor.
+- **Test 1's "at least twice" punished the cleaner implementation.** A single
+  `const prerelease = tag.includes('-')` passed to both call sites is correct and would have gone
+  red. Replaced with: `tag.includes('-')` at least once, no `prerelease: false`, `updateRelease`
+  present, and both call sites passing a `prerelease` key — same kill set, no false red.
+- **"Removing the guard is enough there" was inaccurate, in four places rather than one.**
+  `statSync` at `build-artifact.test.ts:13` throws ENOENT *before* its `expect` is reached, and the
+  same holds for `:18`'s `readFileSync` and `version-baked.test.ts:23`/`:30`. The existence
+  assertion now goes into **all four** `it` bodies (or a `beforeAll` per file), and the
+  "already ends in a statSync assertion" justification is deleted.
+- **The new ci.yml step matches the `/^npm test\b/` predicate two existing wiring tests use.**
+  Verified: `vitest-file-anchor-wiring.test.ts:98` and `acceptance-harness-wiring.test.ts:252` both
+  take the FIRST match, so the fix is correct only because the new step sits after `Test`. Named
+  both files in the Fix bullet and added an index assertion against the pinned `TEST_COMMAND` step
+  to test 2, so a future reorder fails in *this* spec's test rather than confusingly in theirs.
+
+**Not adopted.** None.
+
+**File set:** unchanged from round 1.
