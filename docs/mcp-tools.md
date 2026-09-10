@@ -130,9 +130,12 @@ Open a file in the Tandem editor. Returns a `documentId` for multi-document work
   "restoredFromSession": false,
   "alreadyOpen": false,
   "forceReloaded": false,
-  "message": "Document opened: report.md"
+  "message": "Document opened: report.md",
+  "wakeUrl": "ws://127.0.0.1:3479/api/wake"
 }
 ```
+
+`wakeUrl` is omitted when no wake transport is running (stdio mode). It is on the tool response only -- `POST /api/open` does not carry it.
 
 **Errors:** `FILE_NOT_FOUND` (doesn't exist, UNC path), `FILE_LOCKED` (open in Word), `FORMAT_ERROR` (>50MB)
 
@@ -166,9 +169,12 @@ Create and open a new Scratchpad tab, optionally seeded with markdown content. S
 {
   "documentId": "scratchpad-a1b2c3",
   "fileName": "Scratchpad.md",
-  "format": "md"
+  "format": "md",
+  "wakeUrl": "ws://127.0.0.1:3479/api/wake"
 }
 ```
+
+`wakeUrl` is omitted when no wake transport is running (stdio mode). Seeding a scratchpad with `content` is a complete task in one call, so this response is what a session that does nothing else arms its wake watch from.
 
 **Example:**
 ```
@@ -465,7 +471,7 @@ Check editor status (running state, open documents, active document) and optiona
 
 `modeProvenance` says who last wrote the CTRL_ROOM mode key -- `client` with an opaque per-connection tag, `server` with the origin tag of the helper that wrote it, `restore` (the value arrived with the ctrl-session replay), or `unknown` -- when, and what the key read at that moment. It is `null` before any write has been observed. It names the last *transaction that touched the key*, which under a lost concurrent tie is not necessarily the writer of the value `mode` reports: compare `modeProvenance.value` against `mode`. MCP only (loopback, or token-gated on LAN); `GET /api/mode` does not carry it.
 
-`storeReadOnly` reports whether the durable annotation store could take its lock; when `true`, annotations live only for this run. `wakeUrl` is the `/api/wake` WebSocket endpoint ([ADR-049](decisions.md)) -- where the client can hold a persistent watch, arming one there is the push path that needs no install and no flag. It is omitted when no endpoint is available (stdio mode). See [architecture.md](architecture.md) for how it relates to the other push paths.
+`storeReadOnly` reports whether the durable annotation store could take its lock; when `true`, annotations live only for this run. `wakeUrl` is the `/api/wake` WebSocket endpoint ([ADR-049](decisions.md)) -- where the client can hold a persistent watch, arming one there is the push path that needs no install and no flag. It is omitted when no endpoint is available (stdio mode). `tandem_status` is not its only producer: `tandem_open` and `tandem_scratchpad` return the same field, so a session whose whole task is one call can still arm. `tandem_checkInbox` deliberately does NOT carry it -- it is polled every few tool calls, and re-offering the address that often invites a second watch. See [architecture.md](architecture.md) for how it relates to the other push paths.
 
 **Returns (write mode — with `text` param):**
 ```json
