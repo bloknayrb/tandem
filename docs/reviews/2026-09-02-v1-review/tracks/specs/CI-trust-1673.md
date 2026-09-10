@@ -6,57 +6,97 @@ Branch `fix/ci-reds-that-say-nothing-about-the-diff-under-test-1673`. Closes #16
 
 Vitest's summary counts what it **ran**. It never asserts that what it ran equals what it **collected**. A run that loses seven files to `[vitest-pool]: Failed to start forks worker` prints `580 passed (580)` where the healthy tree reports 587 — indistinguishable from a pass unless the reader knows the number by heart. The recorded instance exited 1 (via the `Unhandled Errors` block), which is why the owner's triage comment on the issue asks for a discriminating run before treating silent-green as reproduced. The hardening request stands on its own regardless: **nothing in the tree compares the two lists**, so the exit code of a starved run is a property of which files happened to be lost, not a property the suite asserts. This is the #1229 / #1399 / #1529 zero-of-zero shape, and every previous instance was closed with a positive anchor.
 
-The `check` job is a required status check, so an anchor placed there **blocks** — no ADR-051 wiring test is needed for it (ADR-051 governs advisory jobs; this is not one).
+The `check` job is a required status check, so the anchor's own red **blocks**. That is not a reason to skip a wiring test — see the ADR-051 half below; review round 1 refuted the earlier claim that it was.
 
 ## Fix
 
-One new script and one new `check` step. Nothing about pool sizing, timeouts or `maxForks` — the issue names raising ceilings as explicitly not the fix, and `vitest.config.ts`'s two existing comments already say those ceilings were measuring contention.
+One new script, two new `check` steps, one wiring test. Nothing about pool sizing, timeouts or `maxForks` — the issue names raising ceilings as explicitly not the fix, and `vitest.config.ts`'s two existing comments already say those ceilings were measuring contention.
 
 **`scripts/ci/vitest-file-anchor.mjs`** (new). Modelled on `scripts/ci/coverage-gate.mjs` — a pure exported comparator plus a `main()` behind the `import.meta.url` guard — and on `scripts/ci/windows-acl-proof.mjs` for the vitest-JSON-report shape and the fresh-report-directory rule.
 
 - `export const EXIT_CANNOT_EVALUATE = 3;` — same convention and same value as `coverage-gate.mjs`, so a run that could not evaluate is distinguishable from one that evaluated and refused.
-- `export function compareFileSets({ expected, reported })` — pure, touches no filesystem, exits no process. `expected` is `vitest list --filesOnly --json`'s array (`{file, projectName}`); `reported` is the run report's `testResults` (`{name, status}`). Returns the same four keys on every path: `{ ok, cannotEvaluate, checked, failures }`, `failures` present and empty on success (the reason `coverage-gate.mjs` gives: an optional array reads as `T[] | undefined` at every call site and `expect(v.ok).toBe(false)` does not narrow it).
-  - Compare **normalized absolute paths**, not raw strings: `String(p).replace(/\\/g, "/")`, the `toPosix` helper `windows-acl-proof.mjs` already uses. Measured on Windows: both sources emit forward slashes today, so a raw comparison would pass here and be untestable — normalize anyway and pin both spellings, the same seam `relativizeSummaryKey` was rewritten for.
+- `export function compareFileSets({ expected, reported, repoRoot })` — pure, touches no filesystem, exits no process. `expected` is `vitest list --filesOnly --json`'s array (`{file, projectName}`); `reported` is the run report's `testResults` (`{name, status}`). Returns the same four keys on every path: `{ ok, cannotEvaluate, checked, failures }`, `failures` present and empty on success (the reason `coverage-gate.mjs` gives: an optional array reads as `T[] | undefined` at every call site and `expect(v.ok).toBe(false)` does not narrow it).
+  - Compare **resolved absolute posix paths**, not raw strings: `path.resolve(repoRoot, String(p)).replace(/\\/g, "/")`. Separator normalization alone is not enough — it handles Windows and does nothing about relativity, and the whole comparison was measured on Windows only. Measured on this tree (Node v24.2.0, vitest 4.1.11): `vitest list --filesOnly --json` emits 655 entries whose `file` is an **absolute, forward-slashed** path, and the JSON reporter's `testResults[].name` is `file.filepath`, also absolute and forward-slashed. So both sides agree today on both axes and a raw comparison would pass here — resolve anyway and pin both spellings, the same seam `relativizeSummaryKey` was rewritten for.
+  - **`expected` is reduced to a `Set` of normalized paths before comparison.** `vitest list` emits one entry per (file, project) pair, and the run report carries no project at all (`testResults[].name` is the filepath alone), so a file collected by two projects cannot be matched twice and would become a permanent false DID-NOT-RUN. Measured: 655 entries / 655 unique files today, across projects `client` and `node` — the sets are disjoint only because `vitest.config.ts:69` excludes `tests/client/**` from the node project. **State this in the comparator's header comment**: the path-only key is sound only while the projects are disjoint, with a pointer to that `exclude`.
   - A file in `expected` with **no** entry in `reported` → `failures.push({ file, kind: "DID-NOT-RUN" })`.
-  - A file reported with status `"pending"`/`"skipped"` **ran**. The issue is explicit: *a file that never started is not a skip.* Likewise `"failed"` ran — this anchor is not a test-failure gate; vitest's own exit code is.
+  - The comparator **never reads `status`**. A file that is reported at all **ran**. The issue is explicit: *a file that never started is not a skip.* Measured: vitest's file-level `status` enum is `passed | failed` and nothing else (a fully skipped file reports `passed`, with `skipped` appearing only on `assertionResults`), so a status filter could only ever subtract from a presence test.
   - `expected` empty, or not an array → `cannotEvaluate` ("zero collected" is the failure this exists to catch, never "nothing to check, therefore fine" — `windows-acl-proof.mjs`'s own phrasing).
   - `reported` missing or not an array → `cannotEvaluate`.
 - `main()`: reads the run report from `process.argv[2]`; obtains `expected` either from `--expected=<path>` (a JSON file) or, absent that flag, by spawning `npx vitest list --filesOnly --json=<tmp>` into a fresh `mkdtempSync` directory. Measured: 2.46 s, 655 files, so the extra vitest boot is noise against `check`'s 13 min. Prints every missing filename (the issue asks for names, not a count), then `exit 0 / 1 / EXIT_CANNOT_EVALUATE`. **The `--expected=` seam exists so the exit-code contract is testable without booting vitest** — `main()` being coverable by nothing is the defect review found in `coverage-gate.mjs`, where `process.exit(EXIT_CANNOT_EVALUATE) → process.exit(0)` survived every spec.
 
-**`.github/workflows/ci.yml`**, `check` job. The `Test` step becomes a block that clears any stale report first (`windows-acl-proof.mjs`'s fresh-report rule: a leftover at a fixed path is parsed as this run's if vitest died before writing one):
+**`.github/workflows/ci.yml`**, `check` job. Two new steps, and the existing `Test` step gains reporter flags **on the same single line**:
 
 ```yaml
+      - name: Clear stale vitest report
+        run: rm -f .vitest-report.json
+
       - name: Test
-        run: |
-          rm -f .vitest-report.json
-          npm test -- --run --reporter=default --reporter=json --outputFile.json=.vitest-report.json
+        run: npm test -- --run --reporter=default --reporter=json --outputFile.json=.vitest-report.json
 
       - name: Every collected test file actually ran
         if: ${{ !cancelled() }}
         run: node scripts/ci/vitest-file-anchor.mjs .vitest-report.json
 ```
 
-`--reporter=default` is kept so the human-readable output does not disappear; `--outputFile.json=` is the per-reporter form required when two reporters are active (verified: the report is written and the default output still prints). `if: ${{ !cancelled() }}` and not `always()`: a run can both fail a test **and** lose files, so the anchor must survive a red `Test`; `success()` would re-create exactly the bug #1862 is about. No `continue-on-error`, no `|| true`.
+**The `Test` step's `run` MUST stay a single line beginning with `npm test`, and this is load-bearing.** `tests/scripts/acceptance-harness-wiring.test.ts:251-253` locates that step with `/^npm test\b/.test(s.run.trim())`, and its `stepIndex` helper (`:87-93`) **throws** rather than returning -1 when nothing matches. An earlier draft of this spec made `run:` a `run: |` block whose first line was `rm -f .vitest-report.json`; `run.trim()` would then start with `rm`, the predicate would never match, and the *"provisions python before both steps that need it"* spec would fail with a thrown error — turning the required `check` job red for a reason unrelated to the diff, which is the exact class this group exists to remove. Hence the separate clear step. **Do not relax that predicate to `/npm test\b/`** to make a block form work: its own header explains that a sentinel-based ordering assertion "passes vacuously the moment the thing it orders is deleted."
+
+The clear step keeps `windows-acl-proof.mjs`'s fresh-report rule (a leftover at a fixed path is parsed as this run's if vitest died before writing one). In CI `actions/checkout` gives a fresh tree so no leftover can exist; it is kept for the local invocation and costs one line.
+
+`--reporter=default` is kept so the human-readable output does not disappear; `--outputFile.json=` is the per-reporter form required when two reporters are active. **Verified end to end on this tree**: `npx vitest run <file> --reporter=default --reporter=json --outputFile.json=<path>` writes the report *and* still prints the default output. `if: ${{ !cancelled() }}` and not `always()`: a run can both fail a test **and** lose files, so the anchor must survive a red `Test`; `success()` would re-create exactly the bug #1862 is about. No `continue-on-error`, no `|| true`.
 
 **`.gitignore`**: add `.vitest-report.json` beside the existing `coverage/` block.
 
+**ADR-051 half — the anchor step gets a wiring test.** The earlier draft declined one on the ground that `check` is required and that failing closed on a missing report (exit 3) covers the disarm. That is wrong on both halves and round 1 refuted it: exit 3 covers only "someone dropped the json reporter", and covers none of `continue-on-error: true`, an added `if:`, a custom `shell:`, an appended `|| true`, or **deleting the anchor step outright** — each of which leaves `check` green with the anchor dead and nothing in the tree noticing. The repo's precedent for steps inside this same required job is uniformly the opposite: `acceptance-harness-wiring.test.ts:115-140` pins its step by exact `run` equality plus parsed `if` / `continue-on-error` / `shell`, and `typecheck-tests-wiring.test.ts:133-143` does the same.
+
+New file **`tests/scripts/vitest-file-anchor-wiring.test.ts`** (its own file rather than a graft onto the acceptance-harness one, so ADR-051 rule 5's "name an owner" is satisfied by the filename). Parsed YAML fields, never substrings of the file (ADR-051 rule 2):
+
+- a step exists in `check` whose `run.trim()` is **exactly** `node scripts/ci/vitest-file-anchor.mjs .vitest-report.json` (exact equality subsumes `|| true`, `; true`, a trailing pipe);
+- its parsed `if` is **exactly** the string `${{ !cancelled() }}` — literal equality, not truthiness and not `toContain("cancelled")`, so `success()` and `always()` both fail it;
+- its parsed `continue-on-error` is falsy, and its `shell` is default;
+- its index is greater than the `Test` step's;
+- the `Test` step's `run` still contains `--outputFile.json=.vitest-report.json` — without this, dropping the reporter is a one-token disarm whose only symptom is an exit-3 red that the next reader deletes.
+
 ## Tests
 
-`tests/scripts/vitest-file-anchor.test.ts`, importing `compareFileSets` and `EXIT_CANNOT_EVALUATE` (the `coverage-gate.test.ts` pattern — synthetic inputs, every verdict driven, no CI involved). Each case names the wrong implementation it kills:
+`tests/scripts/vitest-file-anchor.test.ts`, importing `compareFileSets` and `EXIT_CANNOT_EVALUATE` (the `coverage-gate.test.ts` pattern — synthetic inputs, every verdict driven, no CI involved). Each case names what it pins:
 
 1. **Equal counts, different names** (one file lost, one unexpected extra) → `ok:false`, the lost name in `failures`. Kills the naive `expected.length === reported.length`, which is the first thing anyone writes and which passes the starvation case whenever a file is added in the same run.
 2. **One collected file absent from the report** → `ok:false`, `kind: "DID-NOT-RUN"`, and the message contains the filename. Kills a count-only or boolean-only anchor (the issue: print the names).
-3. **Reported with `status: "pending"`, and again with `"skipped"`** → `ok:true`. Kills the implementation that treats a skip as an absence — the anchor would then be red on every run of this tree, which has 3 skipped files, and would be disabled within a day.
-4. **Reported with `status: "failed"`** → `ok:true`. Kills an anchor that duplicates vitest's exit code and turns one failing test into two reds saying different things.
-5. **`expected: []`** → `cannotEvaluate:true`, `ok:false`. Kills "nothing collected, therefore fine" — the #1229 shape one level up, and the one a green `vitest list` failure would produce.
-6. **`reported` undefined / not an array** → `cannotEvaluate:true`. Kills a comparator that treats a missing report as an empty one and reports every file missing (a red for the wrong reason) or none (a green for the wrong reason).
-7. **Separator normalization**: `expected` with `/`, `reported` with `\` for the same file → `ok:true`; and the same pair with genuinely different files → `ok:false`. Kills a raw-string comparison, which on this repo's Windows checkout is indistinguishable from the real thing.
-8. **CLI exit codes, subprocess** (the `coverage-gate-wiring.test.ts` `main()` spec's shape, `spawnSync(process.execPath, [script, report, "--expected=" + expectedPath])` over temp fixtures): a complete pair → exit 0; one missing file → exit 1; a report path that does not exist → exit `EXIT_CANNOT_EVALUATE` (3), **not** 1 and **not** 0. Without this the three arms of `main()` are covered by nothing and `process.exit(3) → process.exit(0)` survives the whole file.
+3. **Reported with file-level `status: "passed"`, and again with `"failed"`** → `ok:true` in both, with byte-identical output and `failures` empty. This is a **regression guard, not a mutant kill**: the comparator specified above never reads `status`, so no live implementation fails it. It exists because the tempting later "improvement" is a status filter, and vitest's file-level enum is only `passed | failed` — measured, and *not* `pending`/`skipped`, which appear on `assertionResults` alone. An anchor that subtracted skips would be red on every run of this tree (3 skipped files) and would be disabled within a day.
+4. **`expected: []`** → `cannotEvaluate:true`, `ok:false`. Kills "nothing collected, therefore fine" — the #1229 shape one level up, and the one a green `vitest list` failure would produce.
+5. **`reported` undefined / not an array** → `cannotEvaluate:true`. Kills a comparator that treats a missing report as an empty one and reports every file missing (a red for the wrong reason) or none (a green for the wrong reason).
+6. **Separator normalization**: `expected` with `/`, `reported` with `\` for the same file → `ok:true`; and the same pair with genuinely different files → `ok:false`. Kills a raw-string comparison, which on this repo's Windows checkout is indistinguishable from the real thing.
+7. **Relativity normalization**: `expected` absolute, `reported` repo-relative for the same file → `ok:true`. Kills the separator-only normalization, which would put every file in `failures` as DID-NOT-RUN if the two sources ever disagree on absoluteness — a red for the wrong reason, on the required job, on the first PR.
+8. **Duplicate `expected` entries**: the same file listed twice under two `projectName`s, reported once → `ok:true`. Kills the missing `Set` reduction, which is invisible today (the projects are disjoint) and becomes a permanent false red the moment an include overlaps.
+9. **CLI exit codes, subprocess** (the `coverage-gate-wiring.test.ts` `main()` spec's shape, `spawnSync(process.execPath, [script, report, "--expected=" + expectedPath])` over temp fixtures): a complete pair → exit 0; one missing file → exit 1; a report path that does not exist → exit `EXIT_CANNOT_EVALUATE` (3), **not** 1 and **not** 0. Without this the three arms of `main()` are covered by nothing and `process.exit(3) → process.exit(0)` survives the whole file.
+
+Plus `tests/scripts/vitest-file-anchor-wiring.test.ts`, whose five assertions are enumerated in the ADR-051 half above.
 
 ## Done when
 
-`compareFileSets` refuses a collected-but-unrun file by name; the eight cases above pass; the `check` job runs the anchor after `Test` with `if: ${{ !cancelled() }}`; a hand-edited report with one entry deleted turns the anchor red locally; `npm run typecheck:tests` and the suite are green.
+`compareFileSets` refuses a collected-but-unrun file by name; the nine cases above pass; the wiring test's five assertions pass and each fails when the field it pins is mutated in a scratch copy of `ci.yml`; the `check` job runs the anchor after `Test` with `if: ${{ !cancelled() }}`; `tests/scripts/acceptance-harness-wiring.test.ts` is still green (the `/^npm test\b/` predicate still matches the `Test` step); a hand-edited report with one entry deleted turns the anchor red locally; `npm run typecheck:tests` and the suite are green.
+
+**One measurement is owed before merge**, because the spec's load-bearing premise is asserted nowhere: kill a forks worker mid-run (a scratch spec calling `process.exit(1)` under `--pool=forks --poolOptions.forks.maxForks=1`) and record whether the co-resident files appear in `testResults`. The premise is that a file lost to worker starvation is **absent** from `testResults`. If instead it appears as `failed`, presence is not a proxy for having run, the comparator needs a second rule (an `expected` file whose entry has zero `assertionResults` alongside a pool-level error), and this spec is what says so. Record the result in the PR body either way.
+
+## Files touched
+
+`scripts/ci/vitest-file-anchor.mjs` (new), `tests/scripts/vitest-file-anchor.test.ts` (new), `tests/scripts/vitest-file-anchor-wiring.test.ts` (new, added in round 1), `.github/workflows/ci.yml`, `.gitignore`.
 
 ## Not in scope
 
-The pre-push hook (the anchor is CI-only; the hook already runs the full suite and a starved local run is the developer's own machine). `maxForks` / pool sizing — the issue calls it a partial mitigation and explicitly not a substitute. Any change to `vitest.config.ts`'s two timeouts. A wiring test pinning the anchor step: `check` is required, so the anchor's own red is the signal, and the step failing closed on a missing report (exit 3) already covers the disarm-by-dropping-the-reporter case.
+The pre-push hook (the anchor is CI-only; the hook already runs the full suite and a starved local run is the developer's own machine). `maxForks` / pool sizing — the issue calls it a partial mitigation and explicitly not a substitute. Any change to `vitest.config.ts`'s two timeouts. Relaxing `acceptance-harness-wiring.test.ts`'s `/^npm test\b/` predicate.
+
+## Review corrections (round 1)
+
+**Adopted**
+
+- *The multi-line `Test` step breaks `tests/scripts/acceptance-harness-wiring.test.ts` inside the required `check` job* (raised three times, blocking). Verified in the tree: `:251-253` matches `/^npm test\b/` against `s.run.trim()`, and `stepIndex` at `:87-93` throws rather than returning -1. The `Test` step is now a single line beginning with `npm test`, the stale-report clear moved to its own preceding step, and the constraint plus the reason is written into the Fix section so the next editor cannot re-introduce it. The predicate is explicitly not relaxed.
+- *The anchor ships with no wiring test, and the stated reason is factually wrong* (blocking, plus two non-blocking restatements). Adopted in full: a new `tests/scripts/vitest-file-anchor-wiring.test.ts` with five parsed-field assertions (exact `run` equality, literal `${{ !cancelled() }}`, falsy `continue-on-error`, default `shell`, index after `Test`, and the `--outputFile.json=` flag still present on `Test`). The old "`check` is required, so exit 3 covers the disarm" sentence is deleted from **Not in scope** and replaced with the refutation.
+- *Path normalization handles separators but not relativity, and was measured on Windows only.* Adopted: normalization is now `path.resolve(repoRoot, p)` then posix-ify, `compareFileSets` takes `repoRoot`, and case 7 pins absolute-vs-relative. Re-measured here: both sources emit absolute forward-slashed paths today, so the case is a guard rather than a live fix — stated as such.
+- *The comparator does not deduplicate `expected` by file.* Adopted: `expected` is reduced to a `Set` before comparison, case 8 pins it, and the header comment records that the path-only key is sound only while the two projects are disjoint, with the pointer to `vitest.config.ts:69`. Measured: 655 entries / 655 unique files, projects `client` and `node`.
+- *Test case 3 pins a report shape vitest never emits, and cases 3-4 kill no live mutant.* Adopted: the two cases are merged into one, restated as a regression guard rather than a mutant kill, and corrected to the file-level enum vitest actually emits (`passed | failed`, measured). The "3 skipped files" justification is kept as the reason the guard is worth having, not as the reason it is red today.
+- *The load-bearing premise — a starved file is absent rather than present-and-failed — is measured nowhere.* Adopted as a required measurement in **Done when**, with the second comparator rule named in advance for the case where it comes back the other way.
+
+**Not adopted**
+
+- None. Every round-1 finding on this spec was adopted.

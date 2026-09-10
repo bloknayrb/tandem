@@ -1,6 +1,6 @@
 # CI-trust — #1862 coverage job: a red reads as a floor breach when vitest can flake before the gate ever runs
 
-Branch `fix/ci-reds-that-say-nothing-about-the-diff-under-test-1673`. Closes #1862 on its part 2 (the part the issue itself calls "the part that matters more"); part 1 is refuted as a file-specific bug and gets its own issue — see Not in scope. Track: `docs/reviews/2026-09-02-v1-review/tracks/K-tests-and-lows.md`. Probe: run `npm run coverage:gate` with `coverage/` absent and read its exit code.
+Branch `fix/ci-reds-that-say-nothing-about-the-diff-under-test-1673`. Closes #1862 on its part 2 (the part the issue itself calls "the part that matters more"); part 1 is refuted as a file-specific bug and gets its own issue, **filed before this PR opens** — see Not in scope. Track: `docs/reviews/2026-09-02-v1-review/tracks/K-tests-and-lows.md`. Probe: run `node scripts/ci/coverage-gate.mjs` from a temp tree with `coverage/` absent and read its exit code.
 
 ## Problem
 
@@ -8,11 +8,15 @@ Branch `fix/ci-reds-that-say-nothing-about-the-diff-under-test-1673`. Closes #18
 
 Measured 2026-09-09 on PR #1930, a docs-only diff: vitest exited 1 with 652 files passed / 0 failed and one `EnvironmentTeardownError` (`Closing rpc while "onUserConsoleLog" was pending`, originating in `tests/server/snapshot-truncation-reload.test.ts`). No floor was breached; no floor was **evaluated**. Establishing that took reading a whole log for a verdict line that was absent, then downloading the `if: always()` artifact to find `coverage-summary.json` present and `baseline-manifest.json` absent.
 
-The gate already knows how to say this. `coverage-gate.mjs` exports `EXIT_CANNOT_EVALUATE = 3`, prints `The gate could not evaluate. This is not a pass.`, and `coverage-gate-wiring.test.ts` pins exit 3 against a missing summary. **The bug is not that the gate cannot report "I could not evaluate" — it is that the gate is never reached to say it.** So the issue's second suggestion ("have the gate emit an explicit did-not-evaluate line") needs no code; only the first one does.
+The gate already knows how to say this. `coverage-gate.mjs` exports `EXIT_CANNOT_EVALUATE = 3`, prints `The gate could not evaluate. This is not a pass.`, and `coverage-gate-wiring.test.ts` pins exit 3 against a missing summary. **The bug is not that the gate cannot report "I could not evaluate" — it is that the gate is never reached to say it.**
+
+**But the `&&` chain is doing a second job, and round 1 caught the fix destroying it.** Today the chain is also what stops the gate judging a measurement nobody vouched for: a vitest exit or a manifest refusal both prevent the gate from running at all. Decouple the steps naively — `if: ${{ !cancelled() }}` on both, no change to `coverage-gate.mjs` — and a run that *loses test files* (exactly #1673's premise, the sibling issue in this same group) still writes `coverage/coverage-summary.json`; `coverage-manifest.mjs` refuses it and exits 1, and the gate then evaluates it anyway. Under `coverage.include: ["src/**/*.ts", "src/**/*.svelte"]` an unexercised module reports **0%**, so the gate emits specific per-module floor breaches — a red that reads as a precise finding about the diff. That is strictly worse than today: the case is currently ambiguous, and the naive fix makes it actively misleading. `coverage-manifest.mjs`'s own refusals are family/area-level (zero statements measured, a family with no files, an area uniformly zero), so it catches the total wipeout and not the loss of a handful of files.
+
+So the fix has two halves: **run the gate whatever vitest did**, and **never let it reach exit 1 on a measurement that was not vouched for.**
 
 ## Fix
 
-Split the chain into three named steps, so the UI names the failing one and the gate runs whatever vitest did.
+Split the chain into three named steps, and make the gate fail closed on an incomplete or refused measurement.
 
 **`package.json`** — three scripts where there was one. The vitest half keeps its flags byte-for-byte:
 
@@ -24,6 +28,7 @@ Split the chain into three named steps, so the UI names the failing one and the 
 
 ```yaml
       - name: Coverage baseline
+        id: baseline
         run: npm run test:coverage
         timeout-minutes: 30
 
@@ -34,37 +39,83 @@ Split the chain into three named steps, so the UI names the failing one and the 
       - name: Coverage floors
         if: ${{ !cancelled() }}
         run: npm run coverage:gate
+        env:
+          TANDEM_MEASUREMENT_OUTCOME: ${{ steps.baseline.outcome }}
+
+      - name: Upload coverage baseline
+        uses: actions/upload-artifact@… # unchanged
+        if: always()
+        …
 ```
 
-`${{ !cancelled() }}`, never `always()` and never `success()`. `success()` is the present behaviour written as YAML — the whole bug. `always()` would also run the gate on a cancelled job, producing a cannot-evaluate red for a run nobody asked to finish. Both later steps stay blocking: no `continue-on-error`, no `|| true`. The job comment block above `coverage:` (`ci.yml:183-227`) must be updated where it says the chain runs as one step, and must state the new invariant: **a red `Coverage floors` step means the gate evaluated; a red `Coverage baseline` with a green `Coverage floors` means the measurement flaked and no floor moved.**
+`${{ !cancelled() }}`, never `always()` and never `success()`. `success()` is the present behaviour written as YAML — the whole bug. `always()` would also run the gate on a cancelled job, producing a cannot-evaluate red for a run nobody asked to finish. Both later steps stay blocking: no `continue-on-error`, no `|| true`.
 
-No change to `coverage-gate.mjs`, `coverage-manifest.mjs` or `coverage-policy.json`. Adding a v8-ignore hint anywhere here is forbidden (CLAUDE.md, Testing & E2E), as is `|| true`.
+**`Upload coverage baseline` stays LAST**, after `Coverage floors`. It is `if: always()` and its `path:` names `coverage/baseline-manifest.json`; the manifest used to be produced inside the `Coverage baseline` step's `&&` chain, and appending the two new steps after the upload would publish an artifact missing the very file that made the 2026-09-09 diagnosis possible.
 
-**ADR-051 half.** `coverage` is advisory and not a required status check (#1728, dated), so the guarantee this fix adds — *the gate runs even when the measurement is red* — is disarmable by editing one YAML line and must be pinned from inside `check`. Both existing wiring tests currently pin the old shape and will fail; updating them **is** the ADR-051 work, not extra scope:
+**`scripts/ci/coverage-gate.mjs` — two new fail-closed arms.** The earlier draft's "no change to `coverage-gate.mjs`" prohibition is lifted for exactly these, and nothing else. Both run **before** `evaluateGate`, so neither can be reached by a floor comparison, and both exit `EXIT_CANNOT_EVALUATE` (3) — never 1:
 
-- `tests/scripts/coverage-gate-wiring.test.ts:280-308`. Its `toBe(...)` exact-equality pin on `test:coverage` (ADR-051 rule 1 — never `toContain`, because `|| true` leaves `ci.yml` byte-identical) becomes three exact-equality pins, one per script. Its "the job and the measurement step carry no `if:`" assertion keeps the measurement half and gains: the step whose `run` includes `coverage:gate` exists, its parsed `if` is **exactly** the string `${{ !cancelled() }}`, and its `continue-on-error` is falsy. Pin the `if` by literal equality, not by "is truthy" or "contains cancelled" — `success()` and `always()` must both fail it, and only a literal does that.
-- `tests/scripts/coverage-manifest-wiring.test.ts:123-131`. Its three substring assertions over `test:coverage` (`toContain("&& node scripts/ci/coverage-manifest.mjs")`, `not.toContain("|| …")`, `not.toContain("; …")`) were checking that a chain could not be weakened; there is no chain now. Replace with an exact-equality pin on `coverage:manifest` plus the same step-shape assertions against the `Coverage manifest` step. Its `TANDEM_COVERAGE` sweep (`:213-222`) asserts the variable is set **only** by `test:coverage` — that still holds, and must keep holding: do not move `cross-env TANDEM_COVERAGE=1` onto the new scripts.
-- Read YAML attributes as **parsed fields**, never as substrings of the file (ADR-051 rule 2 — `continue-on-error` is a sibling of `run:` and never appears in a shell line; both these files have already shipped that mistake once each). Both already parse the workflow; keep it that way.
+1. **The measurement must have completed.** If `process.env.TANDEM_MEASUREMENT_OUTCOME` is set and is not `"success"`, print `[coverage-gate] the measurement did not complete (outcome: <v>); this is not a pass` and exit 3. **Absent** is not a failure: a local `npm run coverage:gate` sets nothing and must keep taking the normal path. That makes the env line a gate whose deletion disarms it, which is why the wiring test pins its value by exact equality.
+2. **The manifest must have accepted the measurement.** If `coverage/baseline-manifest.json` does not exist, print `[coverage-gate] no baseline manifest: the measurement was refused as partial` and exit 3. `coverage-manifest.mjs` writes that file **only** on acceptance (`OUT` at `:47`, and every refusal path goes through `die()` → `process.exit(1)` at `:525` without writing), so its absence is the manifest's refusal carried forward — the ordering guarantee the `&&` used to provide, restated as a precondition the gate checks for itself.
 
-**`docs/cli.md:181`** — the `npm run test:coverage` row now describes vitest alone; add rows for `coverage:manifest` and `coverage:gate` naming the exit-3 convention.
+No change to `coverage-manifest.mjs` or `coverage-policy.json`. Adding a v8-ignore hint anywhere here is forbidden (CLAUDE.md, Testing & E2E), as is `|| true`.
+
+**The job comment block above `coverage:` (`ci.yml:183-227`)** must be updated where it says the chain runs as one step, and must state the outcome as the **three-way** thing it is. The earlier draft's wording — *"a red `Coverage floors` step means the gate evaluated"* — is false in two directions and is itself the defect this group fixes: exit 3 is also a red, and with `!cancelled()` the step runs even after `npm ci` fails. Write it as:
+
+> A red `Coverage floors` means the gate **ran** — read its last line. `[coverage-gate] N failure(s).` is a real floor breach on a measurement that completed and was accepted. `The gate could not evaluate. This is not a pass.` is a measurement that did not happen; read `Coverage baseline` and `Coverage manifest` above it. A red `Coverage baseline` with a **green** `Coverage floors` cannot occur under the two fail-closed arms — that combination would mean the gate judged a measurement nobody vouched for.
+
+**`docs/cli.md:181`** — the `npm run test:coverage` row now describes vitest alone; add rows for `coverage:manifest` and `coverage:gate`. **The exit-3 convention belongs to the `coverage:gate` row only**: `coverage-manifest.mjs` exits **1** on every refusal (`process.exit(1)` at `:525` is its only exit call, and `EXIT_CANNOT_EVALUATE` appears nowhere in the file), so its row says it exits 1 when it refuses to publish a manifest and names the three refusals its header lists.
+
+**ADR-051 half.** `coverage` is advisory and not a required status check (#1728, dated), so the guarantee this fix adds — *the gate runs even when the measurement is red, and refuses to grade it when it should not* — is disarmable by editing one YAML line and must be pinned from inside `check`. Both existing wiring tests currently pin the old shape and will fail; updating them **is** the ADR-051 work, not extra scope:
+
+- `tests/scripts/coverage-gate-wiring.test.ts:280-308`. Its `toBe(...)` exact-equality pin on `test:coverage` (ADR-051 rule 1 — never `toContain`, because `|| true` leaves `ci.yml` byte-identical) becomes three exact-equality pins, one per script. Its "the job and the measurement step carry no `if:`" assertion keeps the measurement half and gains: the step whose `run` includes `coverage:gate` exists, its parsed `if` is **exactly** the string `${{ !cancelled() }}`, its `continue-on-error` is falsy, and its parsed `env.TANDEM_MEASUREMENT_OUTCOME` is **exactly** `${{ steps.baseline.outcome }}` against a `Coverage baseline` step whose `id` is exactly `baseline`. Pin the `if` by literal equality, not by "is truthy" or "contains cancelled" — `success()` and `always()` must both fail it, and only a literal does that.
+- `tests/scripts/coverage-manifest-wiring.test.ts:123-131`. Its three substring assertions over `test:coverage` (`toContain("&& node scripts/ci/coverage-manifest.mjs")`, `not.toContain("|| …")`, `not.toContain("; …")`) were checking that a chain could not be weakened; there is no chain now. Replace with an exact-equality pin on `coverage:manifest` plus the same step-shape assertions against the `Coverage manifest` step, **and an ordering assertion that the upload step's index is greater than the `Coverage floors` step's** (this file already locates the upload step at `:316`). Its `TANDEM_COVERAGE` sweep (`:213-222`) asserts the variable is set **only** by `test:coverage` — that still holds, and must keep holding: do not move `cross-env TANDEM_COVERAGE=1` onto the new scripts. The new variable is named `TANDEM_MEASUREMENT_OUTCOME`, not `TANDEM_COVERAGE_MEASUREMENT_OUTCOME`, **so that it cannot collide with that sweep by construction** rather than by reading its regex correctly: the matcher is `/TANDEM_COVERAGE\s*[=:]/` (`:210`), which a `TANDEM_COVERAGE_*` name would escape only because `_` is neither whitespace nor `[=:]` — a one-character dependency on someone else's test, and not worth taking.
+- Read YAML attributes as **parsed fields**, never as substrings of the file (ADR-051 rule 2 — `continue-on-error` and `env` are siblings of `run:` and never appear in a shell line; both these files have already shipped that mistake once each). Both already parse the workflow; keep it that way.
 
 ## Tests
 
-The wiring tests above are the tests, and each edit is stated as a mutant it kills:
+The wiring tests above are most of the tests, and each edit is stated as a mutant it kills:
 
 1. `if: success()` on the `Coverage floors` step → the literal-equality assertion fails. This is the exact regression under fix; a `toBeTruthy()` or a `toContain("cancelled")` check would pass `always()` and a `toBeDefined()` would pass `success()`.
 2. `if: always()` → same assertion fails (a cancelled run must not manufacture a cannot-evaluate red).
 3. `|| true` appended to `coverage:gate` in `package.json` → the exact-equality pin fails while `ci.yml` stays byte-identical. This is ADR-051 rule 1's whole reason and the only check that catches it.
 4. The `Coverage floors` step deleted → the "a step runs `coverage:gate`" assertion fails.
 5. `continue-on-error: true` on either new step → the parsed-field assertion fails (a substring check over the `run:` line would not).
-6. `cross-env TANDEM_COVERAGE=1` copied onto `coverage:gate` → the existing `TANDEM_COVERAGE`-setters sweep fails.
+6. The `env:` block or the `id: baseline` deleted → the parsed-field assertions fail. Without them the gate silently loses arm 1 and starts grading incomplete measurements again, with no other symptom.
+7. `Upload coverage baseline` moved above `Coverage floors` → the ordering assertion fails, and the artifact would otherwise lose `baseline-manifest.json`.
+8. `cross-env TANDEM_COVERAGE=1` copied onto `coverage:gate` → the existing `TANDEM_COVERAGE`-setters sweep fails.
 
-Add one behavioural spec to `tests/scripts/coverage-gate-wiring.test.ts` alongside its existing temp-tree spec: with `coverage/coverage-summary.json` absent, the shipped `coverage:gate` **script name** resolves to a process that exits 3 and prints `[coverage-gate]`. The existing spec pins the `.mjs` path; this one pins that the npm script the workflow now calls reaches it, which is the new indirection the split introduces.
+Two behavioural specs in `tests/scripts/coverage-gate.test.ts` (or alongside the existing temp-tree spec in `coverage-gate-wiring.test.ts`, whichever owns the spawned-script fixtures), both driven the way the existing exit-3 spec is — **by copying `coverage-gate.mjs` and `coverage-policy.json` into a `mkdtempSync` tree so `repoRoot` resolves there**, since `main()` resolves `repoRoot` from the script's own directory (`:229-230`):
+
+9. Summary present, `baseline-manifest.json` absent → exit **3**, output contains `no baseline manifest`. Kills arm 2's removal, which is the regression that would let a partial run land as a floor breach.
+10. Summary present, manifest present, `TANDEM_MEASUREMENT_OUTCOME=failure` → exit **3**, output names the outcome. With the same fixture and the variable **unset** → not 3 (the local path still works). Kills both an arm-1 removal and an over-eager arm 1 that breaks every local `npm run coverage:gate`.
+
+**Not a spec: "the shipped `coverage:gate` script name resolves to a process that exits 3."** Round 1 refuted it three times and the refutation holds against the source: `coverage-gate.mjs` resolves `repoRoot` from its own directory (`:229-230`) and reads `coverage/coverage-summary.json` beneath it (`:242`); `coverage/` is gitignored (`.gitignore:123`) and persists locally, so on any machine that has ever run `test:coverage` — and in the `coverage` job itself — the shipped script takes the pass/fail path and exits 0 or 1. The existing sibling spec says exactly this in its own comment (`coverage-gate-wiring.test.ts:334-341`) and works around it with the temp tree, which an npm *script name* cannot use without also planting a `package.json` there; and `spawnSync("npm", …)` needs `shell: true` or `npm.cmd` on Windows, where the pre-push hook runs the full suite. As written the spec would be flaky or vacuous — a CI red that says nothing about the diff, one level down. **What the new indirection actually adds is pinned textually instead**, which is all it needs: `expect(pkg.scripts["coverage:gate"]).toBe("node scripts/ci/coverage-gate.mjs")` by exact equality (already required above) plus `existsSync` on that path. The exit-3 proof stays where it already lives, on the temp-tree copy of the `.mjs`.
 
 ## Done when
 
-Three steps in the `coverage` job; a vitest exit no longer prevents the gate from reporting; the two wiring tests pin the `if` literal and the three scripts by exact equality; `docs/cli.md` updated; `npm run typecheck:tests` and the suite green. The observable outcome: a run that flakes at teardown shows `Coverage baseline` red and `Coverage floors` green, and the reader needs no artifact download.
+Three steps in the `coverage` job plus the upload last; a vitest exit no longer prevents the gate from reporting; the gate cannot reach exit 1 on a measurement that did not complete or that the manifest refused; the two wiring tests pin the `if` literal, the `env` passthrough, the `id`, the step ordering and the three scripts by exact equality; the two new gate arms are pinned by temp-tree specs; `docs/cli.md` updated with the exit conventions attributed to the right script; `npm run typecheck:tests` and the suite green. The observable outcome: a run that flakes at teardown shows `Coverage baseline` red and `Coverage floors` red **with `The gate could not evaluate. This is not a pass.` as its last line**, and the reader needs no artifact download to tell that apart from a floor breach.
+
+## Files touched
+
+`package.json`, `.github/workflows/ci.yml`, `scripts/ci/coverage-gate.mjs` (added in round 1 — the two fail-closed arms), `tests/scripts/coverage-gate-wiring.test.ts`, `tests/scripts/coverage-manifest-wiring.test.ts`, `tests/scripts/coverage-gate.test.ts` (the two new behavioural specs), `docs/cli.md`.
 
 ## Not in scope
 
-**Part 1 of the issue — the `EnvironmentTeardownError` flake — is not fixed here, and the issue's own hypothesis is refuted.** The issue proposes stubbing `console` in `tests/client/useTauriTheme.svelte.test.ts`; the 2026-09-09 instance originated in `tests/server/snapshot-truncation-reload.test.ts`, a different file in the other project. Two distinct originating files means the class is `onUserConsoleLog` still in flight at environment teardown, not one noisy spec, so silencing one file buys nothing and would read as a fix. It gets its own issue at ship time rather than a "tracked separately" with no number. Also out: making `coverage` a required check (#1728 carries that decision, dated); any change to the floors, the policy, or `vitest.config.ts`.
+**Part 1 of the issue — the `EnvironmentTeardownError` flake — is not fixed here, and the issue's own hypothesis is refuted.** The issue proposes stubbing `console` in `tests/client/useTauriTheme.svelte.test.ts`; the 2026-09-09 instance originated in `tests/server/snapshot-truncation-reload.test.ts`, a different file in the other project. Two distinct originating files means the class is `onUserConsoleLog` still in flight at environment teardown, not one noisy spec, so silencing one file buys nothing and would read as a fix. **It must be filed as its own issue BEFORE this PR opens**, with the number written into this spec, the PR body and the `Closes #1862` comment; if it is not filed by then, this PR downgrades to `Refs #1862` and #1862 stays open. "Gets its own issue at ship time" is the untracked-deferral shape that has already produced work nobody was on.
+
+Also out: making `coverage` a required check (#1728 carries that decision, dated); any change to the floors, the policy, `coverage-manifest.mjs`, or `vitest.config.ts`.
+
+## Review corrections (round 1)
+
+**Adopted**
+
+- *Running `coverage:gate` unconditionally after a failed measurement makes an INCOMPLETE measurement produce a red shaped exactly like a floor breach* (blocking), and its sibling *the split silently removes the `&&`'s anti-partial-run ordering guarantee, so the gate evaluates a summary the manifest refused* (blocking). Both adopted together, and they are the largest change in this revision: the "No change to `coverage-gate.mjs`" prohibition is lifted for two new fail-closed arms — a measurement-outcome env passthrough (`id: baseline` → `TANDEM_MEASUREMENT_OUTCOME`) and a required `coverage/baseline-manifest.json` — both exiting 3, never 1, both pinned by parsed-field wiring assertions and by temp-tree behavioural specs. Verified against the source: `coverage-manifest.mjs` writes `OUT` only on acceptance (`:47`) and every refusal exits 1 (`:525`), so the file's absence is a sound proxy for refusal.
+- *The behavioural spec "the shipped `coverage:gate` script name resolves to a process that exits 3" cannot hold and would be a false red* (blocking, raised three times). Adopted fix (a): the spawn is dropped, the indirection is pinned by exact equality on the package.json script plus `existsSync`, and the exit-3 proof stays on the temp-tree copy. The refutation is written into the Tests section so it is not re-proposed. This also moots the Windows `spawnSync("npm", …)` ENOENT finding — adopted by removal.
+- *The ci.yml invariant "a red `Coverage floors` means the gate evaluated" is false* (raised twice). Adopted: replaced with the three-way wording, which also drops the now-impossible "red baseline + green floors" claim, since arms 1 and 2 make that combination mean the gate graded something nobody vouched for.
+- *`docs/cli.md` must not attribute the exit-3 convention to `coverage:manifest`.* Adopted, verified: `process.exit(1)` at `:525` is that script's only exit call and `EXIT_CANNOT_EVALUATE` appears nowhere in it.
+- *The spec never says where the new steps sit relative to `Upload coverage baseline`.* Adopted: the upload stays last, stated in the Fix section, and pinned by an index-ordering assertion in `coverage-manifest-wiring.test.ts` (mutant 7).
+- *Closing #1862 while not fixing part 1 needs the part-1 issue filed first.* Adopted: filing before the PR opens is now a stated precondition, with the downgrade to `Refs #1862` named as the alternative.
+
+**Not adopted**
+
+- None. Every round-1 finding on this spec was adopted; the two npm-spawn findings were resolved by removing the spawn rather than by hardening it.
