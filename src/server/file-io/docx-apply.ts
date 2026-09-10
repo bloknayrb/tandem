@@ -247,6 +247,57 @@ function isParagraphDirectRun(paragraph: Element, run: Element): boolean {
 }
 
 /**
+ * Does anything strictly BETWEEN the two endpoint runs hide a `<w:r>` inside a
+ * wrapper element (`<w:hyperlink>`, `<w:ins>`, `<w:smartTag>`, …)?
+ *
+ * `isParagraphDirectRun` only screens the two ENDPOINTS, and every DOM operation
+ * downstream — `collectTouchedRuns`, step 3's collection loop, step 6's
+ * `removeChild` — walks `paragraph.children` and skips anything that is not a
+ * direct `<w:r>`. An interior wrapper is therefore invisible to all of them: the
+ * suggestion reports `applied: 1`, the wrapped text is absent from the `<w:del>`
+ * record, and it survives REORDERED after the insertion. Neither accepting nor
+ * rejecting the tracked change in Word can recover the original wording, because
+ * the deletion never claimed that text. `<w:ins>` is the ordinary shape of a
+ * document already under review — precisely `tandem_applyChanges`' domain — so
+ * this is the common case, not an exotic one.
+ *
+ * Refusing is the fix rather than growing nesting support, same as the endpoint
+ * fence: see `isParagraphDirectRun`.
+ */
+function hasNestedRunBetween(paragraph: Element, fromRun: Element, toRun: Element): boolean {
+  const fromIdx = paragraph.children.indexOf(fromRun);
+  const toIdx = paragraph.children.indexOf(toRun);
+  if (fromIdx < 0 || toIdx < 0) return false;
+  const lo = Math.min(fromIdx, toIdx);
+  const hi = Math.max(fromIdx, toIdx);
+  for (let i = lo + 1; i < hi; i++) {
+    const child = paragraph.children[i];
+    if (!isElement(child) || child.name === "w:r") continue;
+    if (findAllByName("w:r", [child]).length > 0) return true;
+  }
+  return false;
+}
+
+/**
+ * How many DIRECT `<w:t>` children `run` carries.
+ *
+ * Step 4 rebuilds the deletion text from `findTextNode(run)`, which returns only
+ * the FIRST `<w:t>`, while step 6 `removeChild`s the whole run — so a run holding
+ * two `<w:t>` children loses the trailing one silently AND without it appearing
+ * in the `<w:del>` record. The special-character fence does not cover this: two
+ * plain `<w:t>` separated by nothing, or by an element the walker ignores (a
+ * `<w:cr/>`), produce no `SpecialCharSpan` at all. Same invariant as the
+ * run-keyed half of that fence, keyed on the same destroyed-run set.
+ */
+function countTextNodes(run: Element): number {
+  let n = 0;
+  for (const child of run.children) {
+    if (isElement(child) && child.name === "w:t") n++;
+  }
+  return n;
+}
+
+/**
  * The subset of `collectTouchedRuns` that `applySingleSuggestion` actually
  * DESTROYS: it drops `toRun` when the exclusive `to` offset lands on that run's
  * FIRST character, mirroring the `toEntry.charIndex === 0 && child ===
@@ -707,9 +758,18 @@ export async function applyTrackedChanges(
     // the paragraph in `applySingleSuggestion` while reporting `applied: 1`.
     // Newly reachable: before the tab/break/symbol fix a hyperlinked, tabbed
     // document died on the flat-text guard above instead.
+    //
+    // Review round 2: the endpoints alone are not enough. A wrapper sitting
+    // BETWEEN two paragraph-direct endpoint runs is invisible to every loop that
+    // follows, and the failure is silent corruption reported as `applied: 1` —
+    // see `hasNestedRunBetween`. The interior scan is gated on a single
+    // paragraph because a cross-paragraph pair's indices are not comparable;
+    // `applySingleSuggestion` refuses that shape on its own.
     if (
       !isParagraphDirectRun(fromEntry.paragraph, fromEntry.run) ||
-      !isParagraphDirectRun(toEntry.paragraph, toEntry.run)
+      !isParagraphDirectRun(toEntry.paragraph, toEntry.run) ||
+      (fromEntry.paragraph === toEntry.paragraph &&
+        hasNestedRunBetween(fromEntry.paragraph, fromEntry.run, toEntry.run))
     ) {
       rejectedDetails.push({
         id: s.id,
@@ -736,10 +796,22 @@ export async function applyTrackedChanges(
         (span.run !== undefined && touchedRunSet.has(span.run)),
     );
 
-    if (hasComplex || hasSpecialChar) {
+    // Review round 2: a destroyed run with a SECOND `<w:t>` loses that text with
+    // no record of it, and no `SpecialCharSpan` marks the shape — see
+    // `countTextNodes`. Same destroyed-run set as predicate 2, so the same
+    // `toRun`-exclusion applies and an adjacent suggestion is not refused.
+    const hasSplitText = touchedRuns.some((run) => countTextNodes(run) > 1);
+
+    if (hasComplex || hasSpecialChar || hasSplitText) {
       rejectedDetails.push({
         id: s.id,
-        reason: "Overlaps a footnote, drawing, field, tab, break or symbol and couldn't be applied",
+        // The named-element reason WINS when both hold: a run reading
+        // `<w:t>alpha</w:t><w:sym/><w:t>beta</w:t>` satisfies both predicates,
+        // and the element it carries is the more diagnosable half.
+        reason:
+          hasComplex || hasSpecialChar
+            ? "Overlaps a footnote, drawing, field, tab, break or symbol and couldn't be applied"
+            : "Spans a run with multiple text segments and couldn't be applied",
       });
     } else {
       validAfterComplexCheck.push(s);

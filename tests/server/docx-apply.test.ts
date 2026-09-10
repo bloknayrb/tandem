@@ -1870,6 +1870,100 @@ describe("the special-character span fence (#1754)", () => {
     expect(produced).toContain("<w:tab/>");
     expect(produced).not.toContain("<w:del ");
   });
+  it.each([
+    ["<w:hyperlink>", `<w:hyperlink r:id="rId4"><w:r><w:t>BBB</w:t></w:r></w:hyperlink>`],
+    [
+      "<w:ins>",
+      `<w:ins w:id="90" w:author="X" w:date="2020-01-01T00:00:00Z"><w:r><w:t>BBB</w:t></w:r></w:ins>`,
+    ],
+  ])("REFUSES a suggestion whose INTERIOR crosses a run nested in %s", async (_label, wrapped) => {
+    // Review round 2. Both ENDPOINT runs are paragraph-direct, so the round-1
+    // fence passes; the wrapper sits BETWEEN them, where `collectTouchedRuns`
+    // and step 3's loop both skip it. Measured on the unfixed branch: the
+    // apply reported `applied: 1` and wrote
+    // `<w:del>AAA CCC</w:del><w:ins>ZZZ</w:ins><w:hyperlink>BBB</w:hyperlink>`
+    // — the file reads "ZZZBBB", and "BBB" is absent from the deletion record,
+    // so neither accepting nor rejecting the change in Word restores the
+    // original wording. The `<w:ins>` shape is a document already under
+    // review, which is `tandem_applyChanges`' whole domain.
+    const xml = wrapBody(`<w:p><w:r><w:t>AAA</w:t></w:r>${wrapped}<w:r><w:t>CCC</w:t></w:r></w:p>`);
+    assertGuardPasses(xml, "AAABBBCCC");
+    const docxBuffer = await createTestDocx(xml);
+
+    const output = await applyTrackedChanges(
+      docxBuffer,
+      [{ id: "s1", from: 0, to: 9, newText: "ZZZ" }],
+      { author: "Test", ydocFlatText: "AAABBBCCC" },
+    );
+
+    expect(output.applied).toBe(0);
+    expect(output.rejectedDetails.some((r) => r.id === "s1" && r.reason.includes("nested"))).toBe(
+      true,
+    );
+    // Re-walked rather than asserted off `applied`: nothing moved, nothing
+    // vanished, and no tracked change was written at all.
+    const produced = await producedDocumentXml(output.buffer);
+    expect(walkDocumentBody(produced).flatText).toBe("AAABBBCCC");
+    expect(produced).not.toContain("<w:del ");
+  });
+
+  it("applies a suggestion whose own span holds only paragraph-direct runs", async () => {
+    // The discriminator for the interior scan: it must look STRICTLY BETWEEN the
+    // two endpoints, not at the paragraph. Scanning the whole paragraph would
+    // refuse every suggestion in any document that merely CONTAINS a hyperlink —
+    // the same false-refusal class #1754 exists to remove. The link is placed
+    // FIRST here on purpose: a suggestion ENDING at one is already refused by
+    // the round-1 endpoint fence, because `buildOffsetMap` resolves the
+    // exclusive `to` into the START of the nested run's hit.
+    const xml = wrapBody(
+      `<w:p><w:hyperlink r:id="rId4"><w:r><w:t>BBB</w:t></w:r></w:hyperlink>` +
+        `<w:r><w:t>AAA</w:t></w:r><w:r><w:t>DDD</w:t></w:r></w:p>`,
+    );
+    assertGuardPasses(xml, "BBBAAADDD");
+    const docxBuffer = await createTestDocx(xml);
+
+    const output = await applyTrackedChanges(
+      docxBuffer,
+      [{ id: "s1", from: 3, to: 9, newText: "ZZZ" }],
+      { author: "Test", ydocFlatText: "BBBAAADDD" },
+    );
+
+    expect(output.rejectedDetails).toEqual([]);
+    expect(output.applied).toBe(1);
+    expect(walkDocumentBody(await producedDocumentXml(output.buffer)).flatText).toBe("BBBZZZ");
+  });
+
+  it.each([
+    ["two adjacent <w:t>", `<w:r><w:t>ab</w:t><w:t>cd</w:t></w:r>`],
+    [
+      "two <w:t> around a <w:cr/> the walker ignores",
+      `<w:r><w:t>ab</w:t><w:cr/><w:t>cd</w:t></w:r>`,
+    ],
+  ])("REFUSES a suggestion over a run holding %s", async (_label, run) => {
+    // Review round 2. Step 4 rebuilds the deletion from `findTextNode(run)`,
+    // which returns only the FIRST `<w:t>`, while step 6 removes the whole run —
+    // so "cd" left the saved .docx AND was absent from the `<w:del>` record,
+    // meaning rejecting the change in Word restored only "ab". No
+    // `SpecialCharSpan` marks this shape: neither child is a tab, break, symbol
+    // or hyphen, so the round-1 run-keyed fence could not see it.
+    const xml = wrapBody(`<w:p>${run}</w:p>`);
+    assertGuardPasses(xml, "abcd");
+    const docxBuffer = await createTestDocx(xml);
+
+    const output = await applyTrackedChanges(
+      docxBuffer,
+      [{ id: "s1", from: 0, to: 4, newText: "X" }],
+      { author: "Test", ydocFlatText: "abcd" },
+    );
+
+    expect(output.applied).toBe(0);
+    expect(
+      output.rejectedDetails.some((r) => r.id === "s1" && r.reason.includes("text segments")),
+    ).toBe(true);
+    const produced = await producedDocumentXml(output.buffer);
+    expect(walkDocumentBody(produced).flatText).toBe("abcd");
+    expect(produced).not.toContain("<w:del ");
+  });
 });
 
 // ---------------------------------------------------------------------------

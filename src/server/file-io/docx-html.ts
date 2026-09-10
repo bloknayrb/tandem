@@ -67,7 +67,14 @@ type DeferredText = { xmlText: Y.XmlText; children: ChildNode[]; marks: Record<s
 // match them — endnotes keep degrading to a visible list (CRITICAL-2).
 
 const FOOTNOTE_REF_HREF = /^#footnote-(\d+)$/;
-const FOOTNOTE_LI_ID = /^footnote-(\d+)$/;
+/**
+ * Both note namespaces, because two callers need OPPOSITE halves of it:
+ * reconciliation is footnote-only (endnotes have no capture and must keep
+ * degrading to a visible list), while the `countDroppedImages` probe must
+ * recognise BOTH or an image inside an endnote body is counted as a dropped
+ * body picture — the over-count direction that refuses the save forever.
+ */
+const NOTE_LI_ID = /^(footnote|endnote)-(\d+)$/;
 
 /** If `<a>` is a footnote inline reference, its id; else null. */
 function footnoteRefId(el: Element): string | null {
@@ -82,15 +89,30 @@ function footnoteRefId(el: Element): string | null {
  * for a flattened footnote (false-removal guard).
  */
 function footnoteListItemId(li: Element): string | null {
-  const match = (li.attribs.id || "").match(FOOTNOTE_LI_ID);
+  const key = noteListItemId(li);
+  return key?.startsWith("footnote-") ? key.slice("footnote-".length) : null;
+}
+
+/**
+ * If `<li>` is a mammoth footnote OR endnote list item, its NAMESPACED key
+ * (`"footnote-3"` / `"endnote-3"`); else null. Namespaced because the two id
+ * spaces are disjoint but their numbers are not — footnote 1 and endnote 1
+ * coexist in one document, and a bare `"1"` would conflate them.
+ *
+ * The back-link requirement is the same false-removal guard `footnoteListItemId`
+ * documents: a coincidental author-authored `id="endnote-5"` carries no
+ * `<a href="#endnote-ref-5">` and is left alone.
+ */
+function noteListItemId(li: Element): string | null {
+  const match = (li.attribs.id || "").match(NOTE_LI_ID);
   if (!match) return null;
-  const backLink = `#footnote-ref-${match[1]}`;
+  const backLink = `#${match[1]}-ref-${match[2]}`;
   const stack: ChildNode[] = [...li.children];
   while (stack.length > 0) {
     const node = stack.pop();
     if (node && isElement(node)) {
       if (node.tagName.toLowerCase() === "a" && (node.attribs.href || "") === backLink) {
-        return match[1];
+        return `${match[1]}-${match[2]}`;
       }
       stack.push(...node.children);
     }
@@ -184,20 +206,28 @@ export function reconcileFootnoteIds(
 }
 
 /**
- * Detector B: remove approved footnotes' trailing `<li>`s so the reconstructed
- * body doesn't ALSO survive as a visible list. Operates at `<li>` granularity
- * (leaves endnote / non-approved items in place) and drops an enclosing `<ol>`
- * only when no `<li>` survives. Returns the rewritten children array.
+ * Detector B: remove the trailing `<li>`s `shouldPrune` selects, so a
+ * reconstructed body doesn't ALSO survive as a visible list. Operates at `<li>`
+ * granularity and drops an enclosing `<ol>` only when no `<li>` survives.
+ * Returns the rewritten children array.
+ *
+ * The predicate is a parameter rather than a set of ids because the two callers
+ * want disjoint things: the real walk prunes APPROVED FOOTNOTES only (an
+ * unapproved footnote and every endnote degrade to a visible list on purpose),
+ * while the `countDroppedImages` probe prunes EVERY note list item of EITHER
+ * namespace — see `HtmlToYDocProbe`.
  */
-function pruneFootnoteListItems(nodes: ChildNode[], approved: Set<string>): ChildNode[] {
+function pruneNoteListItems(
+  nodes: ChildNode[],
+  shouldPrune: (li: Element) => boolean,
+): ChildNode[] {
   const out: ChildNode[] = [];
   for (const node of nodes) {
     if (isElement(node)) {
       if (node.tagName.toLowerCase() === "ol") {
         const kept = node.children.filter((child) => {
           if (isElement(child) && child.tagName.toLowerCase() === "li") {
-            const id = footnoteListItemId(child);
-            if (id !== null && approved.has(id)) return false;
+            if (shouldPrune(child)) return false;
           }
           return true;
         });
@@ -205,11 +235,11 @@ function pruneFootnoteListItems(nodes: ChildNode[], approved: Set<string>): Chil
           (child) => isElement(child) && child.tagName.toLowerCase() === "li",
         );
         if (!survivingLi) continue; // list emptied by removal → drop it entirely
-        node.children = pruneFootnoteListItems(kept, approved);
+        node.children = pruneNoteListItems(kept, shouldPrune);
         out.push(node);
         continue;
       }
-      node.children = pruneFootnoteListItems(node.children, approved);
+      node.children = pruneNoteListItems(node.children, shouldPrune);
     }
     out.push(node);
   }
@@ -244,13 +274,15 @@ function isText(node: ChildNode): node is Text {
  * - Footnote reconciliation logs NOTHING. `reconcileFootnoteIds`'s docblock
  *   promises a discrepancy is "recorded exactly once", on the apply path; a
  *   probe running the same reconciliation printed every line twice per open.
- * - EVERY footnote `<li>` is pruned, not only the approved ones.
- *   `pruneFootnoteListItems` leaves an UNAPPROVED footnote body in the DOM by
- *   design (it degrades to a visible list), so its `<li><p><img></p></li>`
- *   counted as a dropped BODY picture — refusing the save forever on a document
- *   that never contained one, with no override. Footnote images are out of
- *   scope for this count, and pruning them removes them from BOTH sides of
- *   `total − kept`, which counting alone could not do.
+ * - EVERY note `<li>` is pruned — both namespaces, not only the approved
+ *   footnotes. `pruneNoteListItems` leaves an UNAPPROVED footnote body, and
+ *   every ENDNOTE body, in the DOM by design (each degrades to a visible list),
+ *   so its `<li><p><img></p></li>` counted as a dropped BODY picture — refusing
+ *   the save forever on a document that never contained one, with no override.
+ *   Note images are out of scope for this count, and pruning them removes them
+ *   from BOTH sides of `total − kept`, which counting alone could not do.
+ *   Reconciliation stays footnote-only: this widening is the PROBE's, and an
+ *   endnote must still degrade to a visible list on the real walk.
  */
 interface HtmlToYDocProbe {
   onImgTagCount(n: number): void;
@@ -292,11 +324,17 @@ export function htmlToYDoc(
     footnoteBodies,
     probe === undefined,
   );
-  // On the probe walk, prune EVERY footnote <li> — see `HtmlToYDocProbe`.
-  const prunedFootnotes = probe
-    ? new Set([...approvedFootnotes, ...collectFootnoteSignals(parsed.children).listIds])
-    : approvedFootnotes;
-  parsed.children = pruneFootnoteListItems(parsed.children, prunedFootnotes);
+  // On the probe walk, prune EVERY note <li> of EITHER namespace — see
+  // `HtmlToYDocProbe`.
+  parsed.children = pruneNoteListItems(
+    parsed.children,
+    probe
+      ? (li) => noteListItemId(li) !== null
+      : (li) => {
+          const id = footnoteListItemId(li);
+          return id !== null && approvedFootnotes.has(id);
+        },
+  );
 
   // Report how many <img> tags the walk below is ABOUT to see (#1755). Counted
   // POST-prune on purpose: an approved footnote body's <li> is removed here and

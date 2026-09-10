@@ -659,6 +659,43 @@ describe("countDroppedImages (#1755)", () => {
     expect(countDroppedImages(html, {})).toBe(0);
   });
 
+  it("does NOT count an image inside an ENDNOTE body", () => {
+    // Review round 2. Endnotes use the DISJOINT `#endnote-N` / `id="endnote-N"`
+    // namespace, so `collectFootnoteSignals` never matched them and the probe's
+    // widened prune never reached them: a `.docx` whose body holds no picture at
+    // all but whose endnote holds one got `droppedImages: 1` stamped into
+    // Y_MAP_FIDELITY_REPORT, and every later save answered VERIFY_BLOCKED
+    // forever with no override. Round 1 closed exactly this for unreconciled
+    // footnotes; this is the twin it missed.
+    const html =
+      `<p>Body<sup><a href="#endnote-1" id="endnote-ref-1">[1]</a></sup></p>` +
+      `<ol><li id="endnote-1"><p>Note <img src="${PNG}"> body. <a href="#endnote-ref-1">↑</a></p></li></ol>`;
+    expect(countDroppedImages(html)).toBe(0);
+  });
+
+  it("still counts an image in an <li> that merely LOOKS like an endnote", () => {
+    // The false-removal guard, and what keeps the widened prune from swallowing
+    // a real body picture: an author-authored `id="endnote-1"` carries no
+    // `<a href="#endnote-ref-1">` back-link, so it is NOT a note list item and
+    // its picture is a body picture like any other.
+    const html = `<ol><li id="endnote-1"><p>Just a list <span><img src="${PNG}"></span></p></li></ol>`;
+    expect(countDroppedImages(html)).toBe(1);
+  });
+
+  it("leaves an endnote <li> in the document on the REAL walk", () => {
+    // The prune widening is the PROBE's alone. Reconciliation stays
+    // footnote-only — an endnote has no captured body to reconstruct from, so
+    // degrading to a visible list is the lesser evil and removing the <li> would
+    // be silent loss (CRITICAL-2).
+    const html =
+      `<p>Body<sup><a href="#endnote-1" id="endnote-ref-1">[1]</a></sup></p>` +
+      `<ol><li id="endnote-1"><p>Endnote body. <a href="#endnote-ref-1">↑</a></p></li></ol>`;
+    const doc = new Y.Doc();
+    withInternal(doc, () => htmlToYDoc(doc, html));
+    expect(JSON.stringify(doc.getXmlFragment("default").toJSON())).toContain("Endnote body.");
+    doc.destroy();
+  });
+
   it("logs nothing: the probe walk must not double footnote reconciliation lines", () => {
     // `reconcileFootnoteIds`'s docblock promises a discrepancy is "recorded
     // exactly once", on the apply path. The probe runs the SAME reconciliation,
