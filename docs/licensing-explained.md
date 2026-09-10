@@ -499,9 +499,11 @@ signed public manifest or returns `204`.
 Every rejection returns **byte-identical** bytes, so the endpoint is not an
 existence oracle. It logs `{result, reason, ts}` — the reason is a closed enum
 describing *our* state (`no-header`, `unknown-id`, `unparseable`, `expired`,
-`upstream`), never the license id, so no per-customer update history exists.
+`revoked`, `upstream`), never the license id, so no per-customer update history
+exists. `revoked` is the operator's own tombstone — a refund or a hand-run
+revocation — and is deliberately the one absence that does *not* raise an alert.
 
-That `reason` field is five lines of code and it is the most important
+That `reason` field is a handful of lines of code and it is the most important
 observability in the system. See Part 3.
 
 ---
@@ -525,12 +527,17 @@ the public GitHub endpoint — no error" — and that sentence is precisely the
 mental model that produced the bug.
 
 The state is reachable at least five ways: a failed entitlement write, a refund
-(which deletes the entitlement while the blob still verifies forever), the
+(which revokes the entitlement while the blob still verifies forever), the
 documented revocation procedure, KV eviction, and a namespace-id mismatch
-between the two `wrangler.toml` files.
+between the two `wrangler.toml` files. The first two are *deliberate*, and they
+now write a revocation tombstone rather than deleting the key, so the Worker can
+tell the operator's own action apart from an entitlement that simply vanished.
 
-**Detection:** a rising `unknown-id` count. Nothing else distinguishes it from
-health.
+**Detection:** the Worker POSTs an operator alert on `unknown-id` /
+`unparseable`, and `[observability]` retains the log lines behind it. A `reason`
+enum on its own was never a detector — nothing kept the lines and nothing
+notified anyone. Merged but **inert until both Workers are redeployed** with
+`[observability]` and `ALERT_WEBHOOK_URL` set.
 **Repair:** re-`PUT` the entitlement from the ledger — it's fully derivable, so
 nothing needs re-issuing.
 

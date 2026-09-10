@@ -2465,9 +2465,11 @@ enum UpdateRoute {
     Public,
     /// This device holds a license id: the Worker, with the opaque
     /// `X-Tandem-License-Id`. Sent even when the LOCAL update window has ended --
-    /// the Worker's KV is the authority and its `expired` reason is the detector
-    /// #1786 hangs off. A client that short-circuits on its own copy of the
-    /// window turns that branch into dead code in production.
+    /// the Worker's KV is the authority, and its `expired` reason is what makes
+    /// that decision readable in the retained log. `expired` is deliberately NOT
+    /// alerted on (it is every out-of-window customer, forever); the alerting
+    /// detector #1786 built is `unknown-id`. A client that short-circuits on its
+    /// own copy of the window turns that branch into dead code in production.
     Licensed(String),
     /// Serve NO manifest -- never the public one. A restricted device, or a probe
     /// that could not answer at all. The reason is carried all the way to the
