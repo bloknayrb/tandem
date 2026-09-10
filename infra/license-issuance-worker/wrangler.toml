@@ -19,6 +19,12 @@ TANDEM_ISSUANCE_ENV = "production"
 # The verified Resend sender, e.g. "Tandem <noreply@yourdomain.com>".
 # MUST be on a domain verified in Resend with SPF/DKIM/DMARC, or Resend returns
 # 422 and every license email fails. See the auto-disable warning below.
+# REQUIRED. The Worker validates this on every request and returns 503
+# (`stage: "config-resend-from"`) while it is unset, still this placeholder, or
+# not address-shaped — deploying it unedited stops issuance rather than minting
+# a license, charging the buyer, and then failing to email it. No length cap
+# here (unlike SUPPORT_EMAIL): this value is a header, never rendered into the
+# email body, so a long display name is legal.
 RESEND_FROM = "REPLACE_WITH_VERIFIED_SENDER"
 # Monitored inbox used as the license email's reply_to. Keep in sync with
 # TANDEM_SUPPORT_EMAIL in src/shared/constants.ts. Without it a buyer whose

@@ -114,13 +114,15 @@ export type ResultKind =
  * upstream HTTP status for email — costs no security and makes a launch-day
  * Resend misconfiguration debuggable.
  *
- * `config` is the signing key; `config-support-email` is SUPPORT_EMAIL. They
- * are separate values on purpose — both fail closed with an identical 503, so
- * the stage is the only thing that tells an operator whether to re-put a secret
- * or edit a `[vars]` line. */
+ * `config` is the signing key; `config-support-email` is SUPPORT_EMAIL;
+ * `config-resend-from` is RESEND_FROM. They are separate values on purpose —
+ * all three fail closed with an identical 503, so the stage is the only thing
+ * that tells an operator whether to re-put a secret or which `[vars]` line to
+ * edit. */
 export type FailStage =
   | "config"
   | "config-support-email"
+  | "config-resend-from"
   | "email"
   | "blob-size"
   | "ledger"
@@ -237,7 +239,7 @@ function writeOrder(deps: IssuanceDeps, rec: LedgerRecord): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /** C0 controls + DEL, as \u escapes so the source carries no control bytes. */
- 
+
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/g;
 
 function cleanName(raw: unknown): string {
@@ -309,6 +311,27 @@ async function reDrive(existing: LedgerRecord, deps: IssuanceDeps): Promise<Even
   return "duplicate";
 }
 
+/** The order id a payload is about — the ledger key both `issue()` and
+ *  `revoke()` derive everything else from.
+ *
+ *  `order_id` is preferred over `id` because `id` is the id of the OBJECT being
+ *  delivered, which for an `order.refunded` payload carrying a refund object is
+ *  the refund's own id, not the order's. Reading `data.id` there would key the
+ *  ledger under a refund id: the live order record stays untouched (its
+ *  entitlement never revoked) while a junk record accumulates beside it.
+ *
+ *  HONESTLY: the preference is a SHAPE GUESS until the real Polar sandbox
+ *  fixtures land (docs/licensing-operations.md §8). It is one shared helper
+ *  precisely so the two callers cannot drift — they agree on the ledger key by
+ *  construction, and nothing has been deployed, so no stored record can be
+ *  stranded if the guess turns out to be wrong. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function orderIdOf(data: any): string | null {
+  if (typeof data?.order_id === "string") return data.order_id;
+  if (typeof data?.id === "string") return data.id;
+  return null;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<EventOutcome> {
   // `data.customer` is Polar's authoritative buyer object; the extra fallbacks
@@ -322,7 +345,7 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Even
   if (!email) return "dropped";
 
   const name = cleanName(data?.customer?.name ?? data?.user?.name);
-  const orderId = typeof data?.id === "string" ? data.id : null;
+  const orderId = orderIdOf(data);
   if (!orderId) return "dropped";
 
   const grandfathered = deps.isGrandfathered(email);
@@ -450,7 +473,7 @@ async function revoke(data: any, deps: IssuanceDeps, nowMs: number): Promise<Eve
   // forever) — it falls through to "dropped" below: alertable, not committed
   // either way, recoverable via a manual Polar re-send once confirmed.
   if (data?.refunded === false) return "ignored";
-  const orderId = typeof data?.id === "string" ? data.id : null;
+  const orderId = orderIdOf(data);
   if (!orderId) return "dropped";
   if (data?.refunded !== true) return "dropped";
 
@@ -461,10 +484,17 @@ async function revoke(data: any, deps: IssuanceDeps, nowMs: number): Promise<Eve
   // `issue()`'s pre-commit recheck: a concurrent `order.paid` mint may be
   // committing right now, between our read above and the tombstone write
   // below. Re-read immediately before writing the tombstone; if a mint landed,
-  // revoke IT (delete its entitlement, mark refunded) instead of blindly
+  // revoke IT (mark refunded, tombstone its entitlement) instead of blindly
   // writing an empty-licenseId tombstone that would silently orphan its
   // entitlement forever (Polar never redelivers a refund we've already 200'd,
   // so there is no second chance to catch this).
+  //
+  // WHAT THIS ACTUALLY NARROWS, precisely — the two reads are adjacent, so it
+  // is tempting to call it a no-op and delete it. It is not `issue()`'s
+  // narrowing (that one spans the await for Ed25519 signing, i.e. most of the
+  // request); the window it closes is this second read's snapshot to the
+  // tombstone write below — ONE KV round trip. Small, real, and cheaper than
+  // the orphaned entitlement it prevents.
   const recheck = await readOrder(deps, orderId);
   if (recheck) return applyRefund(recheck, deps);
 
@@ -702,12 +732,14 @@ export function licenseAttachment(blob: string): { content: string; filename: st
 export type SupportEmailProblem = "unset" | "placeholder" | "malformed" | "too-long";
 
 /** Placeholder shapes that actually occur here, not an invented list: the
- *  deploy template ships `SUPPORT_EMAIL = "REPLACE_WITH_SUPPORT_INBOX"`, and the
- *  comment three lines above it offers `noreply@yourdomain.com` as the
- *  RESEND_FROM example — the two strings an operator can plausibly leave behind
- *  or half-edit. Matched against the raw value, so a display-name wrapper can't
- *  smuggle one past. */
-const SUPPORT_EMAIL_PLACEHOLDER = /replace_with|yourdomain/i;
+ *  deploy template ships `SUPPORT_EMAIL = "REPLACE_WITH_SUPPORT_INBOX"` and
+ *  `RESEND_FROM = "REPLACE_WITH_VERIFIED_SENDER"`, and the comment above the
+ *  latter offers `Tandem <noreply@yourdomain.com>` as its example — the strings
+ *  an operator can plausibly leave behind or half-edit. Matched against the raw
+ *  value, so a display-name wrapper can't smuggle one past. Shared by BOTH
+ *  config guards (hence the name): the two leftovers are the same two shapes,
+ *  and a second regex would drift from this one. */
+const CONFIG_PLACEHOLDER = /replace_with|yourdomain/i;
 
 /** Longest value that still renders inside the body's line ceiling: the address
  *  gets its own line under a two-space indent, and `wrapBlob`'s 72 is the width
@@ -737,7 +769,7 @@ const MAX_SUPPORT_EMAIL_LEN = 70;
 export function supportEmailProblem(raw: string | undefined | null): SupportEmailProblem | null {
   const value = (raw ?? "").trim();
   if (value === "") return "unset";
-  if (SUPPORT_EMAIL_PLACEHOLDER.test(value)) return "placeholder";
+  if (CONFIG_PLACEHOLDER.test(value)) return "placeholder";
   const wrapped = /^[^<>]*<([^<>]*)>$/.exec(value);
   const address = (wrapped ? wrapped[1] : value).trim();
   if (!/^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(address)) return "malformed";
@@ -745,10 +777,38 @@ export function supportEmailProblem(raw: string | undefined | null): SupportEmai
   return null;
 }
 
+/** Everything `supportEmailProblem` can find in a value that is NOT printed in
+ *  the email body. The one divergence is deliberate — see below. */
+export type ResendFromProblem = Exclude<SupportEmailProblem, "too-long">;
+
+/**
+ * Validate the operator-configured Resend sender.
+ *
+ * The same checks as `supportEmailProblem`, with `"too-long"` mapped to `null`,
+ * and deliberately NOT a second regex: the two vars carry the same two
+ * leftovers and a copy would drift.
+ *
+ * WHY THE LENGTH DIVERGES. `MAX_SUPPORT_EMAIL_LEN` exists because
+ * `SUPPORT_EMAIL` is PRINTED in the email body, on its own line beneath the
+ * wrapped base64 key: push that line past 72 columns and an MTA re-encodes the
+ * body as quoted-printable, whose soft line break truncates the key.
+ * `RESEND_FROM` is a header, never rendered into the body, so the cap buys
+ * nothing there and would 503 a perfectly legal
+ * `Long Display Name <noreply@…>` — refusing every sale over a value that
+ * works.
+ */
+export function resendFromProblem(raw: string | undefined | null): ResendFromProblem | null {
+  const problem = supportEmailProblem(raw);
+  return problem === "too-long" ? null : problem;
+}
+
 async function sendViaResend(env: WorkerEnv, to: string, name: string, blob: string) {
   // Not configured counts as a delivery failure so the event stays retryable
   // (the handler's 500 path logs it) rather than silently dropping a paid
-  // customer's license.
+  // customer's license. RESEND_FROM is belt-and-braces here — the fetch handler
+  // now 503s on an unset/placeholder/malformed value BEFORE anything is minted
+  // — but RESEND_API_KEY is a *secret*, deliberately unvalidated up front, and
+  // an unset one still needs to land as the alertable `stage: "email"`.
   if (!env.RESEND_API_KEY || !env.RESEND_FROM) return { ok: false };
   try {
     const resp = await fetch("https://api.resend.com/emails", {
@@ -833,9 +893,12 @@ export function licenseEmailText(name: string, blob: string, supportEmail: strin
 // nothing free that emails on a log condition. So the alert is raised in-band,
 // from the same log entry the handler already produces.
 //
-// Two results are worth waking someone for:
+// Three classes are worth waking someone for:
 //   - `dropped`  — a payload we couldn't fulfil. A paid sale may be behind it.
 //   - `stage:"email"` — the license was minted but not delivered.
+//   - the `config*` stages — the Worker is 503ing every webhook, so no sale can
+//     complete at all. These are the only ones raised before signature
+//     verification; see `isAlertable` for that bound.
 //
 // CRITICAL: the email-stage alert must NOT go through Resend, which is the thing
 // that just failed. It degrades to ALERT_WEBHOOK_URL (any incoming-webhook
@@ -868,10 +931,17 @@ export function _resetAlertThrottleForTests(): void {
 /** Alert text. Carries the coarse result/stage ONLY — never an email, a license
  *  id, or payload bytes, so an alert channel is not a PII sink. */
 function alertBody(entry: LogEntry): string {
-  // Only reachable for the two `isAlertable` conditions, so these are the only
-  // two cases — a third "generic error" arm here would be dead code.
-  const what =
-    entry.stage === "email"
+  // One arm per `isAlertable` class. The config arm names `stage` rather than a
+  // source line, because `config` is OVERLOADED across two secrets — a
+  // TANDEM_PRIVATE_KEY that will not import, and a missing POLAR_WEBHOOK_SECRET
+  // — so there is no one-to-one stage→line map to promise.
+  const isConfig =
+    entry.stage === "config" ||
+    entry.stage === "config-support-email" ||
+    entry.stage === "config-resend-from";
+  const what = isConfig
+    ? "The Worker is refusing every webhook (misconfiguration) — no sale can complete"
+    : entry.stage === "email"
       ? "A license was minted but could NOT be emailed"
       : "A webhook event could not be fulfilled (a paid sale may be behind it)";
   return [
@@ -887,8 +957,12 @@ function alertBody(entry: LogEntry): string {
 async function sendOperatorAlert(env: WorkerEnv, entry: LogEntry): Promise<void> {
   const body = alertBody(entry);
   // Resend is the thing that just failed — do not report an email failure
-  // through it.
-  const resendIsSuspect = entry.stage === "email";
+  // through it. `config-resend-from` joins it for a sharper reason: the
+  // ALERT_EMAIL fallback below sends `from: env.RESEND_FROM`, so reporting a
+  // broken RESEND_FROM through Resend uses the broken address and the alert
+  // dies with the thing it is about. `config` and `config-support-email` leave
+  // Resend perfectly usable.
+  const resendIsSuspect = entry.stage === "email" || entry.stage === "config-resend-from";
 
   if (env.ALERT_WEBHOOK_URL) {
     try {
@@ -940,9 +1014,32 @@ async function sendOperatorAlert(env: WorkerEnv, entry: LogEntry): Promise<void>
   );
 }
 
-/** Does this log entry warrant waking the operator? */
+/**
+ * Does this log entry warrant waking the operator?
+ *
+ * The three `config*` stages are ENUMERATED, not prefix-matched. Two
+ * shorthands were rejected: `stage?.startsWith("config")` silently adopts every
+ * future stage that happens to start with those six characters, and
+ * `result === "error"` sweeps in `ledger` / `unexpected` / `blob-size`, which
+ * storm on transient failures.
+ *
+ * THE BOUND, written down because it is unusual: these three are the first
+ * alertable class reachable BEFORE `verifyStandardWebhook` — both config guards
+ * run in `default.fetch`, ahead of the signature gate — so their volume is
+ * bounded by inbound requests rather than by authenticated ones, against a
+ * per-isolate throttle. That is acceptable only because they fire exactly while
+ * the Worker is already refusing every sale, which is the thing you must not
+ * miss. Do NOT move the guards behind verification to tighten it: that puts
+ * `RESEND_FROM` back after the mint, which is the defect they exist to fix.
+ */
 export function isAlertable(entry: LogEntry): boolean {
-  return entry.result === "dropped" || entry.stage === "email";
+  return (
+    entry.result === "dropped" ||
+    entry.stage === "email" ||
+    entry.stage === "config" ||
+    entry.stage === "config-support-email" ||
+    entry.stage === "config-resend-from"
+  );
 }
 
 export default {
@@ -994,6 +1091,32 @@ export default {
         result: "error",
         ts: Math.floor(Date.now() / 1000),
         stage: "config-support-email",
+      });
+      return jsonResponse(503);
+    }
+
+    // Same treatment, same reason, one stage further: RESEND_FROM.
+    //
+    // WHY HERE and not at the point of use in `sendViaResend`. That guard is a
+    // bare `!env.RESEND_FROM`, which the SHIPPED value passes — the deploy
+    // template's `REPLACE_WITH_VERIFIED_SENDER` is present, just not a sender.
+    // Resend answers 422, the handler collapses to a retryable 500, and Polar
+    // retries into endpoint auto-disable — AFTER the license was minted, the
+    // entitlement written to LICENSE_KV and the order recorded in the ledger.
+    // The buyer is charged, the license exists, and the email never sends.
+    // Checking here means nothing durable is written, the untouched event is
+    // simply re-delivered once the var is fixed, and the failure is visible on
+    // the first request rather than the first sale.
+    //
+    // An UNSET value fails here too, deliberately: `if (env.RESEND_FROM && …)`
+    // would keep the old point-of-use behaviour for the one case a fresh deploy
+    // is most likely to hit. Its own stage, because the stage is the only thing
+    // telling an operator which `[vars]` line to edit.
+    if (resendFromProblem(env.RESEND_FROM) !== null) {
+      log({
+        result: "error",
+        ts: Math.floor(Date.now() / 1000),
+        stage: "config-resend-from",
       });
       return jsonResponse(503);
     }

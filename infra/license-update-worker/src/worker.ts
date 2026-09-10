@@ -108,8 +108,7 @@ export async function handleUpdateRequest(request: Request, deps: UpdateDeps): P
   }
 
   // null updateWindowEnd ⇒ never expires (grandfathered). Otherwise compare epochs.
-  const expired =
-    entry.updateWindowEnd != null && new Date(entry.updateWindowEnd).getTime() < ts;
+  const expired = entry.updateWindowEnd != null && new Date(entry.updateWindowEnd).getTime() < ts;
   if (expired) return reject("expired");
 
   // Entitled — proxy the signed public manifest. A failed upstream fetch

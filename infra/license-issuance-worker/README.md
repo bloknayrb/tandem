@@ -56,13 +56,22 @@ on errors — never an email or license id.
 # One entitlement namespace (shared with the update Worker) + one ledger namespace
 npx wrangler kv namespace create LICENSE_KV   # or reuse the update Worker's id
 npx wrangler kv namespace create LEDGER_KV
-# edit wrangler.toml: paste both ids, set RESEND_FROM + TANDEM_ISSUANCE_ENV
+# edit wrangler.toml: paste both ids, set RESEND_FROM, SUPPORT_EMAIL and
+#   TANDEM_ISSUANCE_ENV. RESEND_FROM and SUPPORT_EMAIL are both ENFORCED — the
+#   Worker 503s every webhook while either is unset or still a placeholder.
 npx wrangler secret put TANDEM_PRIVATE_KEY    # Ed25519 PEM PKCS#8
 npx wrangler secret put POLAR_WEBHOOK_SECRET  # whsec_...
 npx wrangler secret put RESEND_API_KEY        # re_...
 npx wrangler secret put GRANDFATHER_EMAILS    # optional, comma/space-separated
-npx wrangler deploy
+npx wrangler@4.130.0 deploy
 ```
+
+The version is pinned deliberately: `./crypto.js` resolving to `crypto.ts` is the
+bundler rewriting the extension, and the bundle shape is wrangler's too, so two
+deploys of identical source can differ across wrangler versions. To advance it,
+re-run `npm view wrangler version` and update **all six** deploy sites together —
+`docs/licensing-operations.md` §3, §3.5b and both §9 quick-reference rows, plus the
+two Worker READMEs.
 
 Point the Polar webhook endpoint at the deployed URL. Deploy a **separate**
 sandbox instance (`TANDEM_ISSUANCE_ENV=sandbox`, sandbox Polar secret) to test
@@ -85,7 +94,7 @@ Polar retry landing on a different PoP can trigger it.
 
 **Operational mitigation until this is closed:** after refunding a
 higher-value order, verify with `npx wrangler kv key get "order:live:<orderId>"
---namespace-id <LEDGER_KV id>` that `refunded: true` and that `LICENSE_KV` no
+--remote --namespace-id <LEDGER_KV id>` that `refunded: true` and that `LICENSE_KV` no
 longer has a live entry for that order's `licenseId`.
 
 **Proper fix (follow-up, not built here):** a Cloudflare Durable Object keyed

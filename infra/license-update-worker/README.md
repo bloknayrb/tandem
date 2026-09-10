@@ -13,15 +13,25 @@ on a valid, in-window license id. Part of the licensing system (#1116, ADR-040 �
 2. The Worker looks the id up in the `LICENSE_KV` namespace (written by the issuance webhook on a real purchase).
 3. Entitled + inside the update window → it proxies `PUBLIC_LATEST_JSON_URL` (the signed manifest; the minisign signature is unchanged and still verified by the Tauri client `pubkey`). Otherwise → **HTTP 204**, byte-identical for unknown ids and expired windows (no existence oracle).
 
-It logs only `{ result, ts }` — never the license id.
+It logs `{ result, reason, ts }` — never the license id.
 
 ## Deploy
 
 ```bash
 npx wrangler kv namespace create LICENSE_KV   # paste the id into wrangler.toml
 # edit wrangler.toml: PUBLIC_LATEST_JSON_URL → your release manifest
-npx wrangler deploy
+npx wrangler@4.130.0 deploy
 ```
 
-The webhook side needs `TANDEM_CF_ACCOUNT_ID`, `TANDEM_CF_KV_NAMESPACE_ID`, and a
-`TANDEM_CF_KV_API_TOKEN` (scoped *Workers KV Storage: Edit*) to populate the namespace.
+The version is pinned deliberately: `./crypto.js` resolving to `crypto.ts` is the
+bundler rewriting the extension, and the bundle shape is wrangler's too, so two
+deploys of identical source can differ across wrangler versions. To advance it,
+re-run `npm view wrangler version` and update **all six** deploy sites together —
+`docs/licensing-operations.md` §3, §3.5b and both §9 quick-reference rows, plus the
+two Worker READMEs.
+
+The OUT-OF-BAND writer — `scripts/sign-license.ts`, via
+`src/server/license/kv-store.ts` — needs `TANDEM_CF_ACCOUNT_ID`,
+`TANDEM_CF_KV_NAMESPACE_ID`, and a `TANDEM_CF_KV_API_TOKEN` (scoped *Workers KV
+Storage: Edit*) to populate the namespace. The issuance Worker does not: it holds
+its own `LICENSE_KV` binding and never touches those vars.

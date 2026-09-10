@@ -201,8 +201,15 @@ Cloudflare account, KV namespace, custom domain, and secrets.
    `wrangler.toml` (NOT a Worker *secret*; it's a public URL the Worker reads via
    `env.PUBLIC_LATEST_JSON_URL`) — then deploy:
    ```bash
-   cd infra/license-update-worker && npx wrangler deploy
+   cd infra/license-update-worker && npx wrangler@4.130.0 deploy
    ```
+
+   The wrangler version is pinned deliberately: `./crypto.js` resolving to
+   `crypto.ts` is the bundler rewriting the extension, and the bundle shape is
+   wrangler's too, so two deploys of identical source can differ across wrangler
+   versions. To advance it, re-run `npm view wrangler version` and update **all
+   six** deploy sites together — §3 and §3.5b here, both §9 quick-reference rows,
+   and the two Worker READMEs.
 4. **Put a custom domain in front of it, and use that in `lib.rs`.** The
    endpoint URL is compiled into every shipped desktop binary
    (`LICENSE_UPDATE_ENDPOINT`, `src-tauri/src/lib.rs`). Ship `*.workers.dev` and
@@ -316,8 +323,14 @@ npx wrangler secret put TANDEM_PRIVATE_KEY        # Ed25519 PEM PKCS#8 (§0)
 npx wrangler secret put POLAR_WEBHOOK_SECRET      # whsec_... from Polar
 npx wrangler secret put RESEND_API_KEY            # re_... from Resend
 npx wrangler secret put GRANDFATHER_EMAILS        # optional (§1b)
-npx wrangler deploy
+npx wrangler@4.130.0 deploy
 ```
+
+The wrangler version is pinned deliberately: `./crypto.js` resolving to `crypto.ts`
+is the bundler rewriting the extension, and the bundle shape is wrangler's too, so
+two deploys of identical source can differ across wrangler versions. To advance it,
+re-run `npm view wrangler version` and update **all six** deploy sites together —
+§3 and §3.5b here, both §9 quick-reference rows, and the two Worker READMEs.
 
 Also set in `[vars]`: `SUPPORT_EMAIL` (the license email's `reply_to` — without
 it a buyer whose activation fails has no inbound channel but the public issue
@@ -327,6 +340,12 @@ tracker, where they will paste a key carrying their own name and email), and
 `SUPPORT_EMAIL` is **required and enforced**: the Worker rejects every request
 with 503 and `stage: "config-support-email"` while the value is unset, still the
 `REPLACE_WITH_…` placeholder, not address-shaped, or longer than 70 characters.
+`RESEND_FROM` is enforced the same way and for the same reason, under its own
+`stage: "config-resend-from"`: the shipped `REPLACE_WITH_VERIFIED_SENDER` is
+*present*, so a point-of-use presence check passed it and the Worker minted the
+license, wrote the entitlement, then got a Resend 422 — buyer charged, license
+issued, email never sent. Both guards now run before any webhook processing.
+
 That is deliberate — the alternative was emitting a license email with no support
 address at all, or with the placeholder printed in it, to a customer who has
 already paid. The length bound is not cosmetic: the address prints on its own
@@ -458,8 +477,16 @@ record but no entitlement, re-`PUT` the entitlement (§3b) — no re-issuing.
 
 ### 5c. Alerting
 
-The issuance Worker raises operator alerts in-band on the two results worth
-waking for: `dropped`, and any `stage: "email"` failure.
+The issuance Worker raises operator alerts in-band on the results worth waking
+for: `dropped`, any `stage: "email"` failure, and the three **config stages**
+(`config`, `config-support-email`, `config-resend-from`) — a misconfigured Worker
+503s *every* webhook, so no sale can complete at all, and an unalerted 503 loop is
+exactly what drives Polar's endpoint auto-disable. The config stages are
+enumerated rather than prefix-matched, and they are the only alerts raised before
+signature verification, so their volume is bounded by inbound requests against the
+per-isolate throttle rather than by authenticated ones. An alert about a broken
+`RESEND_FROM` never goes through Resend, for the same reason an email-stage one
+does not: the fallback would send *from* the broken address.
 
 - `ALERT_WEBHOOK_URL` — any incoming webhook (Slack/Discord/ntfy).
   **Required to be alerted about email failures**, which cannot be reported
@@ -551,6 +578,13 @@ Then walk §5a steps 2–4 with that order number.
 - [ ] `SUPPORT_EMAIL` set, the mailbox actually exists, and someone reads it.
       The Worker enforces the first clause (503 on unset/placeholder/malformed);
       the mailbox existing and being read is still only this checklist line.
+- [ ] `RESEND_FROM` set to the **verified** sender, not the shipped
+      `REPLACE_WITH_VERIFIED_SENDER`. Enforced like `SUPPORT_EMAIL` (503,
+      `stage: "config-resend-from"`, before anything is minted); that the domain
+      is actually verified in Resend is still only this checklist line, and it is
+      what the end-to-end send test above proves.
+- [ ] `ALERT_WEBHOOK_URL` reachable, because the config-stage 503s are now
+      alertable and a broken `RESEND_FROM` cannot be reported through Resend.
 - [ ] `ALERT_WEBHOOK_URL` set (see §5c — without it you cannot be alerted about
       the email failures that disable the endpoint).
 - [ ] A sandbox purchase completed end-to-end: email → activate →
@@ -594,8 +628,8 @@ Then walk §5a steps 2–4 with that order number.
 | Sign paid license (1y updates) | `npx tsx scripts/sign-license.ts --name N --email E --type personal --expires 365` |
 | Activate (tester) | `tandem activate <key-or-path>` |
 | Check status (tester) | `tandem license` |
-| Deploy update Worker | `cd infra/license-update-worker && npx wrangler deploy` |
-| Deploy issuance Worker | `cd infra/license-issuance-worker && npx wrangler deploy` |
+| Deploy update Worker | `cd infra/license-update-worker && npx wrangler@4.130.0 deploy` |
+| Deploy issuance Worker | `cd infra/license-issuance-worker && npx wrangler@4.130.0 deploy` |
 | Read an order's ledger record | `npx wrangler kv key get "order:live:<orderId>" --remote --namespace-id <LEDGER_KV>` |
 | Read an entitlement | `npx wrangler kv key get "<licenseId>" --remote --namespace-id <LICENSE_KV>` |
 | **Prove a license gets updates** | `curl -H "X-Tandem-License-Id: <licenseId>" https://<endpoint>/latest.json -i` (expect 200, not 204) |
