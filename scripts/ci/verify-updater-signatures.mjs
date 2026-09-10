@@ -252,12 +252,26 @@ async function main() {
   const fetchBytes = async (url) =>
     Buffer.from(await (await get(url, "application/octet-stream")).arrayBuffer());
 
-  const assets = await api(
-    `https://api.github.com/repos/${repo}/releases/${releaseId}/assets?per_page=100`,
-  );
+  // Paginate rather than raising the page size, because the diagnosis this
+  // script emits on a miss is an ASSERTION about the release ("latest.json is
+  // not attached"), and a single page can only ever support "not on the page I
+  // asked for". `per_page=100` alone moves the bound from 30 to 100; it does
+  // not remove it, and at 101 assets the message would still be confidently
+  // wrong. A release carries ~15 assets today, so this loop runs once — it is
+  // here so the claim stays true if that ever stops being so.
+  const assets = [];
+  for (let page = 1; ; page += 1) {
+    const batch = await api(
+      `https://api.github.com/repos/${repo}/releases/${releaseId}/assets?per_page=100&page=${page}`,
+    );
+    assets.push(...batch);
+    if (batch.length < 100) break;
+  }
   const manifestAsset = assets.find((a) => a.name === "latest.json");
   if (!manifestAsset) {
-    throw new Error(`latest.json is not attached to release ${releaseId}`);
+    throw new Error(
+      `latest.json is not attached to release ${releaseId} (searched ${assets.length} assets)`,
+    );
   }
   const manifest = JSON.parse((await fetchBytes(manifestAsset.url)).toString("utf8"));
 
