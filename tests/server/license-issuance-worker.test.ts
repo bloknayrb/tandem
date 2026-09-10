@@ -12,11 +12,14 @@ import {
 import issuanceWorker, {
   _resetAlertThrottleForTests,
   EVENT_TTL_S,
+  type FailStage,
   handleIssuance,
   type IssuanceDeps,
+  isAlertable,
   type KvNamespace,
   LICENSE_VERSION,
   licenseEmailText,
+  resendFromProblem,
   supportEmailProblem,
 } from "../../infra/license-issuance-worker/src/worker.js";
 import {
@@ -177,6 +180,27 @@ interface LedgerRec {
  * it pins the mode-scoped `order:<mode>:<id>` convention against refactors. */
 const ledgerRec = (deps: TestDeps, orderId = "ord_1", mode = "live"): LedgerRec =>
   JSON.parse(deps.ledgerKv.map.get(`order:${mode}:${orderId}`) as string) as LedgerRec;
+
+/** A revoked entitlement is a TOMBSTONE, not an absence (#1786) — a deleted key
+ *  and a LOST key read identically to the update Worker, which pages on the
+ *  latter. Asserted as the exact parsed value, never `toBeDefined()`: a
+ *  tombstone satisfies that as readily as a resurrected live entitlement, which
+ *  is precisely what the resurrection tests exist to catch. */
+function expectRevoked(deps: TestDeps, licenseId: string): void {
+  expect(JSON.parse(deps.entitlementKv.map.get(licenseId) as string)).toEqual({
+    updateWindowEnd: null,
+    status: "revoked",
+  });
+}
+
+/** The complement: still LIVE. Also spelled as the exact value, for the same
+ *  reason — `toBeDefined()` stopped discriminating the moment revocation began
+ *  writing a key instead of removing one. */
+function expectLive(deps: TestDeps, licenseId: string): void {
+  const value = JSON.parse(deps.entitlementKv.map.get(licenseId) as string);
+  expect(value.status).toBe("personal");
+  expect(value.updateWindowEnd).not.toBeNull();
+}
 
 // ===========================================================================
 describe("crypto: canonicalize parity with the server verifier", () => {
@@ -365,6 +389,35 @@ describe("handleIssuance: order.paid happy path", () => {
     const blob = deps.sendEmail.mock.calls[0][2] as string;
     expect(blobVerifies(blob)).toBe(true);
     expect(decodeBlob(blob).metadata.email).toBe("buyer@example.com");
+  });
+
+  it("order.paid resolves its ledger key through the SAME helper as order.refunded", async () => {
+    // Today's fixtures emit `data.id` only, so nothing covered the disagreement:
+    // if `issue()` and `revoke()` derived the key differently, a refund would
+    // write its record beside the order's instead of onto it, and the
+    // entitlement would never be revoked. One shared helper makes them agree by
+    // construction; this is what pins that they still both use it.
+    const body = JSON.stringify({
+      type: "order.paid",
+      data: {
+        id: "ord_x",
+        order_id: "ord_y",
+        total_amount: 4900,
+        customer: { email: "buyer@example.com", name: "Jane Buyer" },
+      },
+    });
+    await handleIssuance(makeRequest(body, { id: "evt_pair" }), deps);
+    expect(deps.ledgerKv.map.get("order:live:ord_y")).toBeDefined();
+    expect(deps.ledgerKv.map.get("order:live:ord_x")).toBeUndefined();
+
+    // ...and a refund on the same pair finds it.
+    const refund = JSON.stringify({
+      type: "order.refunded",
+      data: { id: "ord_x", order_id: "ord_y", refunded: true },
+    });
+    await handleIssuance(makeRequest(refund, { id: "evt_pair_r" }), deps);
+    expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
+    expect(ledgerRec(deps, "ord_y").refunded).toBe(true);
   });
 
   it("never returns the blob in the HTTP response and logs only { result, ts }", async () => {
@@ -614,7 +667,7 @@ describe("handleIssuance: order.refunded", () => {
 
     const res = await handleIssuance(makeRequest(refundBody("ord_1"), { id: "evt_refund" }), deps);
     expect(res.status).toBe(200);
-    expect(deps.entitlementKv.map.get(licenseId)).toBeUndefined(); // revoked
+    expectRevoked(deps, licenseId);
     expect(ledgerRec(deps).refunded).toBe(true);
     expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
   });
@@ -623,7 +676,7 @@ describe("handleIssuance: order.refunded", () => {
     const deps = await issued();
     const licenseId = ledgerRec(deps).licenseId;
     await handleIssuance(makeRequest(refundBody("ord_1", false), { id: "evt_r2" }), deps);
-    expect(deps.entitlementKv.map.get(licenseId)).toBeDefined(); // NOT revoked
+    expectLive(deps, licenseId); // NOT revoked
   });
 
   it("a missing/ambiguous refunded field is 'dropped' — NOT revoked, NOT ignored, NOT marked done", async () => {
@@ -637,7 +690,7 @@ describe("handleIssuance: order.refunded", () => {
     const res = await handleIssuance(makeRequest(body, { id: "evt_ambig" }), deps);
     expect(res.status).toBe(200); // a retry carries the same bytes
     expect(deps.log).toHaveBeenLastCalledWith({ result: "dropped", ts: NOW / 1000 });
-    expect(deps.entitlementKv.map.get(licenseId)).toBeDefined(); // NOT revoked on a guess
+    expectLive(deps, licenseId); // NOT revoked on a guess
     expect(deps.ledgerKv.map.get("evt:live:evt_ambig")).toBeUndefined(); // NOT marked done
 
     // Once the real field shape is confirmed, a manual re-send with an
@@ -649,7 +702,7 @@ describe("handleIssuance: order.refunded", () => {
     );
     expect(res2.status).toBe(200);
     expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
-    expect(deps.entitlementKv.map.get(licenseId)).toBeUndefined();
+    expectRevoked(deps, licenseId);
   });
 
   it("does not resurrect a refunded entitlement when the paid event retries (H2)", async () => {
@@ -661,12 +714,12 @@ describe("handleIssuance: order.refunded", () => {
     const licenseId = ledgerRec(deps).licenseId;
 
     await handleIssuance(makeRequest(refundBody("ord_1"), { id: "evt_refund" }), deps);
-    expect(deps.entitlementKv.map.get(licenseId)).toBeUndefined(); // revoked
+    expectRevoked(deps, licenseId);
 
     // Retry the original paid event.
     const res = await handleIssuance(makeRequest(paidBody("ord_1"), { id: "evt_1" }), deps);
     expect(res.status).toBe(200);
-    expect(deps.entitlementKv.map.get(licenseId)).toBeUndefined(); // NOT resurrected
+    expectRevoked(deps, licenseId); // NOT resurrected — still the tombstone
   });
 
   it("a refund that outraces the paid event writes a tombstone that blocks later issuance", async () => {
@@ -683,8 +736,72 @@ describe("handleIssuance: order.refunded", () => {
     const res2 = await handleIssuance(makeRequest(paidBody("ord_race"), { id: "evt_p" }), deps);
     expect(res2.status).toBe(200);
     expect(deps.log).toHaveBeenLastCalledWith({ result: "duplicate", ts: NOW / 1000 });
+    // A refund-before-paid record has `licenseId: ""`, which is the half
+    // `applyRefund`'s guard skips. Now that revocation WRITES a key rather than
+    // deleting one, this is the only assertion that would catch a tombstone
+    // landing under the empty key — a `LICENSE_KV[""]` the update Worker could
+    // never be asked about and nothing would ever clean up.
     expect(deps.entitlementKv.map.size).toBe(0);
+    expect(deps.entitlementKv.map.has("")).toBe(false);
     expect(deps.sendEmail).not.toHaveBeenCalled();
+  });
+
+  // --- the order id a payload is ABOUT (#1793) -------------------------------
+  // `revoke()` read `data.id`, which for an `order.refunded` delivery carrying a
+  // REFUND object is the refund's own id, not the order's. Measured consequence
+  // on real Polar shapes: such a payload carries no `refunded` boolean and exits
+  // "dropped" before the id is used, so this is a latent id assumption rather
+  // than a live silent-revocation miss — but it is wrong for any `order_id`-
+  // bearing payload, and `orderIdOf` is shared so `issue()` and `revoke()`
+  // cannot disagree about the ledger key.
+  //
+  // These assert on the LEDGER only. The post-refund entitlement key's value is
+  // the revocation tombstone, which lands in the same branch — an assertion on
+  // LICENSE_KV here would be green when written and red an hour later.
+
+  it("a payload carrying BOTH ids resolves through order_id, not the object id", async () => {
+    const deps = await issued();
+    const body = JSON.stringify({
+      type: "order.refunded",
+      data: { id: "ref_1", order_id: "ord_1", refunded: true },
+    });
+    const res = await handleIssuance(makeRequest(body, { id: "evt_both" }), deps);
+    expect(res.status).toBe(200);
+    expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
+    expect(ledgerRec(deps, "ord_1").refunded).toBe(true);
+    // The refund's own id must never become a ledger key: under `data.id` the
+    // real order's record stays untouched and a junk record accumulates here.
+    expect(deps.ledgerKv.map.get("order:live:ref_1")).toBeUndefined();
+  });
+
+  it("the shape that actually occurs — both ids, no `refunded` — is still dropped", async () => {
+    const deps = await issued();
+    const before = new Map(deps.ledgerKv.map);
+    const body = JSON.stringify({
+      type: "order.refunded",
+      data: { id: "ref_1", order_id: "ord_1" },
+    });
+    const res = await handleIssuance(makeRequest(body, { id: "evt_nb" }), deps);
+    expect(res.status).toBe(200);
+    expect(deps.log).toHaveBeenLastCalledWith({ result: "dropped", ts: NOW / 1000 });
+    expect([...deps.ledgerKv.map]).toEqual([...before]); // nothing committed
+    expect(deps.ledgerKv.map.get("evt:live:evt_nb")).toBeUndefined(); // not marked done
+  });
+
+  it("an ORDER-object payload (id only) still revokes — the preference is a fallback", async () => {
+    // Together with the both-ids case above, this pins the *preference* rather
+    // than a switch to `order_id` only, which would break every payload Polar
+    // sends today.
+    const deps = baseDeps();
+    await handleIssuance(makeRequest(paidBody("ord_2"), { id: "evt_2" }), deps);
+    const body = JSON.stringify({
+      type: "order.refunded",
+      data: { id: "ord_2", refunded: true },
+    });
+    const res = await handleIssuance(makeRequest(body, { id: "evt_only" }), deps);
+    expect(res.status).toBe(200);
+    expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
+    expect(ledgerRec(deps, "ord_2").refunded).toBe(true);
   });
 });
 
@@ -777,7 +894,7 @@ describe("handleIssuance: pre-commit recheck narrows the double-mint/tombstone-c
     );
     expect(res.status).toBe(200);
     expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
-    expect(deps.entitlementKv.map.get("lic-race")).toBeUndefined(); // revoked, not orphaned
+    expectRevoked(deps, "lic-race"); // revoked, not orphaned
     expect(calls).toBeGreaterThan(1); // the recheck actually ran
   });
 });
@@ -1190,10 +1307,16 @@ describe("default fetch wiring (env → deps)", () => {
     } finally {
       spy.mockRestore();
     }
-    expect(logs.map((e) => (e as { stage?: string }).stage)).toEqual([
-      "config-support-email",
-      "config",
-    ]);
+    // Filter to the ERROR lines before mapping. Config stages are alertable
+    // now, and `makeEnv()` configures no alert channel, so `sendOperatorAlert`
+    // reaches its `alert-undeliverable` console.log synchronously inside
+    // `log()` — an unfiltered collector interleaves those and the stage list
+    // stops being the thing under test.
+    expect(
+      logs
+        .filter((e) => (e as { result?: string }).result === "error")
+        .map((e) => (e as { stage?: string }).stage),
+    ).toEqual(["config-support-email", "config"]);
   });
 
   it("a configured SUPPORT_EMAIL reaches both reply_to and the email body", async () => {
@@ -1261,8 +1384,14 @@ describe("default fetch wiring (env → deps)", () => {
     expect(supportEmailProblem(`a${atCeiling}`)).toBe("too-long");
   });
 
-  it("unconfigured Resend → retryable 500, not a silent drop", async () => {
-    const env = makeEnv({ RESEND_API_KEY: undefined, RESEND_FROM: undefined });
+  it("an unset RESEND_API_KEY → retryable 500, not a silent drop", async () => {
+    // RESEND_API_KEY is a *secret*, deliberately NOT validated up front (the
+    // fetch handler only guards `[vars]`), so this is still the point-of-use
+    // failure: mint, ledger, then an undeliverable email and an alertable
+    // `stage: "email"`. RESEND_FROM must stay VALID here — an unset one now
+    // 503s before the mint, and the ledger parse below would throw. That case
+    // is its own test in the RESEND_FROM block.
+    const env = makeEnv({ RESEND_API_KEY: undefined });
     const res = await issuanceWorker.fetch(
       makeRequest(paidBody("ord_r"), { id: "evt_r", ts: nowTs() }),
       env as never,
@@ -1271,5 +1400,190 @@ describe("default fetch wiring (env → deps)", () => {
     // ledger holds the emailSent:false record for the retry to re-drive
     const rec = JSON.parse(env.LEDGER_KV.map.get("order:live:ord_r") as string);
     expect(rec.emailSent).toBe(false);
+  });
+
+  // --- RESEND_FROM fail-closed guard (#1793) --------------------------------
+  // The shipped `REPLACE_WITH_VERIFIED_SENDER` is *present*, so the old
+  // point-of-use `!env.RESEND_FROM` check passed it — after the license was
+  // minted, the entitlement written and the order ledgered. Resend then 422s,
+  // the handler returns a retryable 500, and Polar retries into endpoint
+  // auto-disable. Buyer charged, license issued, email never sent.
+
+  it("resendFromProblem names the misconfiguration, diverging only on length", () => {
+    expect(resendFromProblem(undefined)).toBe("unset");
+    // The literal value shipped in infra/license-issuance-worker/wrangler.toml.
+    expect(resendFromProblem("REPLACE_WITH_VERIFIED_SENDER")).toBe("placeholder");
+    // The half-edited form: the toml's own example domain, left in place.
+    expect(resendFromProblem("Tandem <noreply@yourdomain.com>")).toBe("placeholder");
+    expect(resendFromProblem("noreply")).toBe("malformed");
+    expect(resendFromProblem("Tandem <noreply@tandem.ink>")).toBeNull();
+
+    // The one deliberate divergence. MAX_SUPPORT_EMAIL_LEN (70) exists because
+    // SUPPORT_EMAIL is PRINTED in the email body under a two-space indent, and a
+    // line over 72 columns invites an MTA to re-encode as quoted-printable,
+    // whose soft break truncates the base64 key. RESEND_FROM is a header, never
+    // rendered, so the cap would 503 a perfectly legal long display name.
+    // The length is asserted rather than eyeballed — a hand-picked "long"
+    // literal is easily under the cap, and then this pins nothing.
+    const long = `Tandem Support (include your order id) <${"a".repeat(20)}@tandem.ink>`;
+    expect(long.length).toBeGreaterThan(70); // MAX_SUPPORT_EMAIL_LEN
+    expect(supportEmailProblem(long)).toBe("too-long");
+    expect(resendFromProblem(long)).toBeNull();
+  });
+
+  /** 503, and NOTHING durable written: Polar simply re-delivers the untouched
+   *  event once the var is fixed. That last part is what kills the
+   *  mint-then-fail order the guard exists to prevent. */
+  async function expect503WithoutMint(
+    resendFrom: string | undefined,
+    orderId: string,
+    eventId: string,
+  ): Promise<void> {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const env = makeEnv({ RESEND_FROM: resendFrom });
+    const res = await issuanceWorker.fetch(
+      makeRequest(paidBody(orderId), { id: eventId, ts: nowTs() }),
+      env as never,
+    );
+    expect(res.status).toBe(503);
+    expect(env.LEDGER_KV.map.size).toBe(0);
+    expect(env.LICENSE_KV.map.size).toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  }
+
+  it("a placeholder RESEND_FROM → 503 before anything is minted or emailed", async () => {
+    await expect503WithoutMint("REPLACE_WITH_VERIFIED_SENDER", "ord_rf", "evt_rf");
+  });
+
+  // Its own `it()`, not a second case in the block above: both key on
+  // `error:config-resend-from`, `shouldAlert` suppresses a repeat for five
+  // minutes, and the reset is a `beforeEach` firing per `it()`. A suppressed
+  // alert produces exactly the "fetch never called" this asserts, so a shared
+  // block would pass vacuously.
+  it("an UNSET RESEND_FROM → 503 too, not a mint that can never be delivered", async () => {
+    // `if (env.RESEND_FROM && resendFromProblem(...) !== null)` would keep the
+    // old point-of-use behaviour for the one case a fresh deploy most likely
+    // hits, while leaving every other test green. This is what refuses it.
+    await expect503WithoutMint(undefined, "ord_rf2", "evt_rf2");
+  });
+
+  it("all three config stages are distinguishable in the log", async () => {
+    // Every one fails closed with an identical 503, so the stage is the only
+    // thing telling an operator which secret to re-put or which [vars] line to
+    // edit. Collapsing any pair makes the 503 undiagnosable.
+    const logs: unknown[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((line: string) => {
+      logs.push(JSON.parse(line));
+    });
+    try {
+      await issuanceWorker.fetch(
+        makeRequest(paidBody("ord_s1"), { id: "evt_s1", ts: nowTs() }),
+        makeEnv({ RESEND_FROM: "REPLACE_WITH_VERIFIED_SENDER" }) as never,
+      );
+      await issuanceWorker.fetch(
+        makeRequest(paidBody("ord_s2"), { id: "evt_s2", ts: nowTs() }),
+        makeEnv({ SUPPORT_EMAIL: "  " }) as never,
+      );
+      await issuanceWorker.fetch(
+        makeRequest(paidBody("ord_s3"), { id: "evt_s3", ts: nowTs() }),
+        makeEnv({ TANDEM_PRIVATE_KEY: "garbage-not-a-pem" }) as never,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    expect(
+      logs
+        .filter((e) => (e as { result?: string }).result === "error")
+        .map((e) => (e as { stage?: string }).stage),
+    ).toEqual(["config-resend-from", "config-support-email", "config"]);
+  });
+
+  it("isAlertable covers exactly dropped, email and the three config stages", () => {
+    expect(isAlertable({ result: "dropped", ts: 0 })).toBe(true);
+    expect(isAlertable({ result: "error", ts: 0, stage: "email" })).toBe(true);
+    expect(isAlertable({ result: "error", ts: 0, stage: "config" })).toBe(true);
+    expect(isAlertable({ result: "error", ts: 0, stage: "config-support-email" })).toBe(true);
+    expect(isAlertable({ result: "error", ts: 0, stage: "config-resend-from" })).toBe(true);
+
+    // These three kill a lazy `result === "error"`: they are transient failures
+    // that would storm an alert channel.
+    expect(isAlertable({ result: "error", ts: 0, stage: "ledger" })).toBe(false);
+    expect(isAlertable({ result: "error", ts: 0, stage: "unexpected" })).toBe(false);
+    expect(isAlertable({ result: "error", ts: 0, stage: "blob-size" })).toBe(false);
+    expect(isAlertable({ result: "issued", ts: 0 })).toBe(false);
+
+    // And this one kills `stage?.startsWith("config")`. Nothing else here can:
+    // `FailStage` holds no non-alerting stage beginning "config", so the rows
+    // above pass under either implementation. An unknown future `config-*`
+    // stage must NOT be adopted into alerting silently, which is the property
+    // the "enumerated, not prefix-matched" comment claims.
+    expect(isAlertable({ result: "error", ts: 0, stage: "config-future" as FailStage })).toBe(
+      false,
+    );
+  });
+
+  it("a broken RESEND_FROM alerts via the webhook and NEVER via Resend", async () => {
+    // `sendOperatorAlert` returns the moment a webhook stub answers ok, so a
+    // Resend assertion against a HEALTHY webhook is vacuous whatever
+    // `resendIsSuspect` says. The stub 404s to exhaust the webhook channel:
+    // only then does the Resend fallback become reachable, and only then does
+    // leaving `resendIsSuspect` at `stage === "email"` go red.
+    const calls: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      calls.push(String(input));
+      return new Response("gone", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const logs: unknown[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((line: string) => {
+      logs.push(JSON.parse(line));
+    });
+    const pending: Promise<unknown>[] = [];
+    try {
+      await issuanceWorker.fetch(
+        makeRequest(paidBody("ord_a1"), { id: "evt_a1", ts: nowTs() }),
+        makeEnv({
+          RESEND_FROM: "REPLACE_WITH_VERIFIED_SENDER",
+          ALERT_WEBHOOK_URL: "https://hooks.example/tandem",
+          ALERT_EMAIL: "ops@tandem.test",
+        }) as never,
+        { waitUntil: (p: Promise<unknown>) => pending.push(p) } as never,
+      );
+      await Promise.all(pending);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(calls).toEqual(["https://hooks.example/tandem"]);
+    expect(
+      logs.filter((e) => (e as { result?: string }).result === "alert-undeliverable"),
+    ).toHaveLength(1);
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init?.body as string).text as string;
+    expect(body).toContain("config-resend-from");
+    // The config arm, not the `dropped` one — a misconfigured Worker refuses
+    // every webhook, which is not the same story as one unfulfillable payload.
+    expect(body).not.toContain("a paid sale may be behind it");
+  });
+
+  it("with only ALERT_EMAIL, a broken-RESEND_FROM alert is dropped, not sent from it", async () => {
+    const calls: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      calls.push(String(input));
+      return new Response("{}", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const pending: Promise<unknown>[] = [];
+    await issuanceWorker.fetch(
+      makeRequest(paidBody("ord_a2"), { id: "evt_a2", ts: nowTs() }),
+      makeEnv({
+        RESEND_FROM: "REPLACE_WITH_VERIFIED_SENDER",
+        ALERT_EMAIL: "ops@tandem.test",
+      }) as never,
+      { waitUntil: (p: Promise<unknown>) => pending.push(p) } as never,
+    );
+    await Promise.all(pending);
+    expect(calls).not.toContain("https://api.resend.com/emails");
   });
 });

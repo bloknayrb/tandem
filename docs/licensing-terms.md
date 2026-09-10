@@ -93,7 +93,7 @@ What exists, so a privacy notice can be accurate rather than aspirational:
 | `license.json` on the buyer's device | name, email (inside the signed blob) | The only identity PII Tandem writes to disk. |
 | `LEDGER_KV` (Cloudflare, seller-side) | orderId, licenseId, **email, name**, type, dates, delivery/refund flags | The only PII store the seller operates. |
 | `LICENSE_KV` (Cloudflare) | updateWindowEnd, status, version | Keyed by an opaque UUID. **No PII.** |
-| Update endpoint logs | `{ result, reason, ts }` | No licence id, no IP recorded by us. |
+| Update endpoint logs | `{ result, reason, ts }` | No licence id, no IP recorded by us. Retained by our own Cloudflare `[observability]` configuration, so the operator can detect a missing entitlement without waiting for a report. |
 | Resend | delivery of the licence email | Processor. |
 
 Open questions:
@@ -108,8 +108,15 @@ Open questions:
   PII-free, **updates survive erasure** — a good outcome worth stating.
 - ⚖️ **Processor agreements and transfer mechanism** for Cloudflare and Resend.
 - ⚖️ Whether "no telemetry" survives platform-level request logging at
-  Cloudflare. `security.md` now says the honest version: it's a claim about what
-  Tandem records, not about what a CDN sees.
+  Cloudflare. `security.md` says the honest version: it's a claim about what
+  Tandem records, not about what a CDN sees. Two halves, and only one is
+  settled. **Ours:** the retained line is `{ result, reason, ts }` and carries no
+  licence id — that is our configuration and it is pinned by tests. **Theirs:**
+  what Cloudflare's own invocation record holds has never been read against a
+  live deployment, and it matters here because the licence id travels in a
+  request header. `docs/licensing-operations.md` §8 carries that as a
+  pre-launch verification, with the two responses if it turns out to hold
+  headers.
 
 > **Ordering constraint for a future resend-my-licence feature:** an
 > `email:<hash>` index entry must be deleted **before** the ledger record's email
