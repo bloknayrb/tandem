@@ -18,6 +18,14 @@
 //     import will present";
 //   - export gates on `reusableWordId`, i.e. "this id can be written into a
 //     `w:id` and read back as the same string".
+//
+// Splitting them closes the no-save half. The half a SAVE mediates needs one
+// more thing, because an id export cannot reuse is written anyway and the drift
+// index is then keyed on a value the file no longer carries:
+// `reconcileImportCommentIds` points the stored `importSource.commentId` at the
+// `w:id` that was actually written, once the bytes are on disk. Describe 3
+// covers that population; `docx-comment-id-save-reid.test.ts` covers the
+// production caller.
 
 import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
@@ -28,6 +36,7 @@ import {
   extractDocxComments,
   importReplyId,
   injectCommentsAsAnnotations,
+  reconcileImportCommentIds,
 } from "../../src/server/file-io/docx-comments.js";
 import { exportYDocToDocx } from "../../src/server/file-io/docx-export.js";
 import { htmlToYDoc } from "../../src/server/file-io/docx-html.js";
@@ -190,24 +199,30 @@ describe("promoted Word comment round-trips through an actual save", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 3. The residual, pinned rather than described
+// 3. Re-minted ids, and the save-path reconcile that keeps them findable
 // ---------------------------------------------------------------------------
 
-describe("ids reusableWordId declines still re-mint on export (documented residual)", () => {
-  // These rows assert what this PR does NOT close, so the boundary is a pin
-  // rather than a sentence. Three populations, and they are not one thing:
+describe("a re-minted w:id is reconciled onto the stored record", () => {
+  // These rows are the population `reusableWordId` DECLINES, so export allocates
+  // a fresh `w:id` for them and the stored `importSource.commentId` no longer
+  // names the id in the file. Two sub-populations, and they are not one thing:
   //
-  //   - NON-NUMERIC (`c-9182`, `nc:x`): `ST_DecimalNumber` has no
-  //     representation for them, so ID REUSE is permanently impossible. The
-  //     GHOST is a separate and closable question — rewriting the stored
-  //     `importSource.commentId` to the id actually written at export would
-  //     close it with no reuse — so it is not written off. Its tracked home is
-  //     #1693, which this PR leaves OPEN for exactly that reason. Their
-  //     NO-SAVE half is closed here, by the first describe above.
-  //   - OUTSIDE INT32 (`3000000000`) and NON-CANONICAL FORM (`0123`): closable,
-  //     tracked in #1951.
-  //   - AT OR PAST the cap: the fourth describe's far side, also #1951.
-  const residual: Array<{ commentId: string; mintedId?: number }> = [
+  //   - NON-NUMERIC (`c-9182`, `nc:x`): `ST_DecimalNumber` has no representation
+  //     for them, so ID REUSE is permanently impossible — a property of the
+  //     format, not a gap.
+  //   - OUTSIDE INT32 (`3000000000`) and NON-CANONICAL FORM (`0123`): reuse is
+  //     closable and is not closed here. Tracked in #1951.
+  //
+  // The GHOST is a different question from reuse and it IS closed, for both:
+  // after the bytes land the save path calls `reconcileImportCommentIds`, which
+  // points the stored id at the `w:id` that was actually written. So the next
+  // open's drift index finds the record whether or not reuse was ever possible.
+  // Each row runs export → reconcile → re-open in that order, which is the order
+  // `saveDocumentToDisk`'s binary branch runs them in; that the PRODUCTION path
+  // really does call it is pinned end-to-end, through `saveDocumentToDisk`
+  // itself, in `docx-comment-id-save-reid.test.ts` — asserting the reconcile
+  // here only would pin the function and not its caller.
+  const reminted: Array<{ commentId: string; mintedId?: number }> = [
     { commentId: "c-9182" },
     { commentId: "nc:x" },
     { commentId: "3000000000" },
@@ -215,14 +230,13 @@ describe("ids reusableWordId declines still re-mint on export (documented residu
     // `allocate` walks up from there, so 1 is the only value that can be
     // minted. This exact assertion is the ONLY thing that kills a
     // `reusableWordId` missing its `String(n) === raw` term: without it
-    // `"0123"` reuses as `123`, which matches the shape check below, differs
-    // from the stored value, and still misses a drift index keyed on `"0123"` —
-    // so every other assertion in this row stays green.
+    // `"0123"` reuses as `123`, which matches the shape check below and differs
+    // from the stored value, so every other assertion in this row stays green.
     { commentId: "0123", mintedId: 1 },
   ];
 
-  for (const { commentId, mintedId } of residual) {
-    it(`mints a fresh w:id for ${JSON.stringify(commentId)} and re-injects`, async () => {
+  for (const { commentId, mintedId } of reminted) {
+    it(`re-mints ${JSON.stringify(commentId)}, then reconciles so re-open finds it`, async () => {
       const doc = new Y.Doc();
       const original = await buildDocxWithCommentIds([commentId]);
       expect((await openInto(doc, original, "r.docx")).injected).toBe(1);
@@ -234,51 +248,123 @@ describe("ids reusableWordId declines still re-mint on export (documented residu
 
       const prepared = prepareExportComments(doc);
       expect(prepared).toHaveLength(1);
-      // "differs from stored" on its own admits an implementation that feeds
+      // The reuse residual (#1951), asserted rather than described. "differs
+      // from stored" on its own admits an implementation that feeds
       // `Number(raw)` through unguarded and writes `w:id="NaN"`, so the shape
       // assertion runs too.
       expect(String(prepared[0].id)).toMatch(/^[1-9][0-9]*$/);
       expect(String(prepared[0].id)).not.toBe(commentId);
       if (mintedId !== undefined) expect(prepared[0].id).toBe(mintedId);
+      // The linkage the reconcile needs. Without it the caller holds an id and a
+      // body and cannot say which record produced them.
+      expect(prepared[0].annotationId).toBe(key);
 
       const reexported = await exportYDocToDocx(doc);
+      // What the save path does once the bytes are on disk, and only then.
+      expect(reconcileImportCommentIds(doc, prepared)).toBe(1);
+      expectPromotedShape(doc, key, String(prepared[0].id));
+
       const reopened = await openInto(doc, reexported, "r.docx");
       expect(reopened.comments[0].commentId).not.toBe(commentId);
-      expect(reopened.injected).toBe(1);
-      expect(map.size).toBe(2);
+      expect(reopened.comments[0].commentId).toBe(String(prepared[0].id));
+      // No ghost: one record, still the user's promotion.
+      expect(reopened.injected).toBe(0);
+      expect(map.size).toBe(1);
+      expect((map.get(key) as Annotation).author).toBe("user");
 
       doc.destroy();
     });
   }
 
-  it("leaves a stored reply on the promotion when the ghost appears", async () => {
-    // The `!map.has(clash.annotationId)` term on the finding-4 repair, pinned
-    // where it actually matters. In this population the drift lookup misses and
-    // a ghost note is injected, so `effectiveKey` is the GHOST's key. An
-    // unconditional reparent would move the user's reply text out of their
-    // promoted thread and into the ghost's duplicate Word comment — a
-    // regression master does not have.
-    const commentId = "0123";
+  it("is a no-op on the second save, because the first made the id reusable", async () => {
+    // Convergence, which is what makes the repair a repair rather than a
+    // treadmill: `reconcileImportCommentIds` writes a canonical decimal, so the
+    // NEXT export reuses it and there is nothing left to reconcile. A row that
+    // stopped at one save would be equally green if every save rewrote the id.
     const doc = new Y.Doc();
-    const original = await buildDocxWithCommentIds([commentId]);
+    const original = await buildDocxWithCommentIds(["c-9182"]);
     await openInto(doc, original, "r.docx");
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    const key = Array.from(map.keys())[0];
+    promoteInPlace(doc, key);
+
+    const first = prepareExportComments(doc);
+    await exportYDocToDocx(doc);
+    expect(reconcileImportCommentIds(doc, first)).toBe(1);
+    const revAfterFirst = (map.get(key) as Annotation).rev;
+
+    const second = prepareExportComments(doc);
+    expect(second[0].id).toBe(first[0].id);
+    await exportYDocToDocx(doc);
+    expect(reconcileImportCommentIds(doc, second)).toBe(0);
+    // And no rev churn — an unconditional rewrite would bump it every save,
+    // which is a durable write per save for no change.
+    expect((map.get(key) as Annotation).rev).toBe(revAfterFirst);
+
+    doc.destroy();
+  });
+
+  it("touches nothing that carries no import provenance", () => {
+    // The writer reads the stored record rather than taking one, so the only
+    // way it could damage a user comment is by MINTING provenance onto it. A
+    // record with no `importSource` is left exactly as it was — including its
+    // `rev`, so it does not even take a durable write.
+    const doc = new Y.Doc();
+    htmlToYDoc(doc, "<p>Hello World</p>");
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    const plain: Annotation = {
+      id: "user-1",
+      type: "comment",
+      author: "user",
+      audience: "outbound",
+      status: "pending",
+      content: "A plain user comment",
+      range: { from: off(0), to: off(5) },
+      timestamp: 1700000000000,
+      rev: 3,
+    };
+    withInternal(doc, () => map.set(plain.id, plain));
+
+    expect(reconcileImportCommentIds(doc, [{ annotationId: "user-1", id: 42 }])).toBe(0);
+    expect(map.get("user-1")).toStrictEqual(plain);
+    // A record that is not there at all is also a no-op, not a fresh write.
+    expect(reconcileImportCommentIds(doc, [{ annotationId: "gone", id: 42 }])).toBe(0);
+    expect(map.size).toBe(1);
+
+    doc.destroy();
+  });
+
+  it("leaves a stored reply on the promotion when a ghost does appear", () => {
+    // The `!map.has(clash.annotationId)` term on the finding-4 repair, pinned
+    // where it still matters. The reconcile above closes the SAVE-mediated
+    // ghost, but not the one the drift index cannot key at all: an id at or past
+    // `IMPORT_COMMENT_ID_MAX` is refused by `keysDriftIndex` on purpose (the
+    // #1150 injectivity boundary, describe 4), so drifted offsets still inject a
+    // ghost beside the promotion. In that population `effectiveKey` is the
+    // GHOST's key, and an unconditional reparent would move the user's reply
+    // text out of their promoted thread and into the ghost's duplicate Word
+    // comment — a regression master does not have.
+    const commentId = "c".repeat(32);
+    const doc = new Y.Doc();
+    htmlToYDoc(doc, "<p>Hello World</p>");
 
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    const bodyText = "Imported body";
+    expect(
+      injectCommentsAsAnnotations(
+        doc,
+        [{ commentId, authorName: "Rita", bodyText, from: off(0), to: off(5) }],
+        "r.docx",
+      ),
+    ).toBe(1);
     const promotionKey = Array.from(map.keys())[0];
     promoteInPlace(doc, promotionKey);
     expectPromotedShape(doc, promotionKey, commentId);
 
-    const reexported = await exportYDocToDocx(doc);
-    const html = await loadDocx(reexported);
-    htmlToYDoc(doc, html);
-    const comments = await extractDocxComments(reexported);
-    const freshId = comments[0].commentId;
-    expect(freshId).not.toBe(commentId);
-
-    // A Word reply arriving on the re-imported (freshly-numbered) comment,
-    // whose stored twin already points at the promotion.
+    // A Word reply arriving on the drifted comment, whose stored twin already
+    // points at the promotion.
     const replyText = "Please clarify";
-    const replyId = importReplyId(freshId, "r1", replyText);
+    const replyId = importReplyId(commentId, "r1", replyText);
     const repliesMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
     withInternal(doc, () => {
       repliesMap.set(replyId, {
@@ -293,18 +379,27 @@ describe("ids reusableWordId declines still re-mint on export (documented residu
       } satisfies AnnotationReply);
     });
 
-    // Give the promotion a distinguishable body before the re-import — editing
-    // a promoted comment is exactly what promotion enables — so the two
-    // exported comments can be told apart by more than their minted ids. It
-    // does not touch the dedup: the ghost's key is derived from the FRESH
-    // `w:id` and the re-imported body, neither of which this changes.
+    // Give the promotion a distinguishable body — editing a promoted comment is
+    // exactly what promotion enables — so the two exported comments can be told
+    // apart by more than their minted ids. It does not touch the dedup: the
+    // ghost's key is derived from the drifted offsets and the imported body,
+    // neither of which this changes.
     withInternal(doc, () => {
       const promoted = map.get(promotionKey) as Annotation;
       map.set(promotionKey, { ...promoted, content: "Promoted body" });
     });
 
-    comments[0].replies = [{ commentId: "r1", authorName: "Rita", bodyText: replyText }];
-    expect(injectCommentsAsAnnotations(doc, comments, "r.docx")).toBe(1); // the ghost
+    const drifted: DocxComment[] = [
+      {
+        commentId,
+        authorName: "Rita",
+        bodyText,
+        from: off(6),
+        to: off(11),
+        replies: [{ commentId: "r1", authorName: "Rita", bodyText: replyText }],
+      },
+    ];
+    expect(injectCommentsAsAnnotations(doc, drifted, "r.docx")).toBe(1); // the ghost
     expect(map.size).toBe(2);
 
     const after = repliesMap.get(replyId) as AnnotationReply;
@@ -323,7 +418,7 @@ describe("ids reusableWordId declines still re-mint on export (documented residu
     expect(carrying[0].id).toBe(promotionExport?.id);
     // ...and not the ghost's, which is the record an unconditional reparent
     // would have moved it to.
-    const ghostExport = prepared.find((c) => c.bodyParagraphs[0] === "Body of comment 1");
+    const ghostExport = prepared.find((c) => c.bodyParagraphs[0] === bodyText);
     expect(ghostExport).toBeDefined();
     expect(carrying[0].id).not.toBe(ghostExport?.id);
 

@@ -42,6 +42,7 @@ import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
 import { snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
 import { commentExportDowngrades, prepareExportComments } from "../file-io/docx-comment-export.js";
+import { reconcileImportCommentIds } from "../file-io/docx-comments.js";
 import { detectExportFidelityIssues } from "../file-io/docx-export.js";
 import {
   type BlockReason,
@@ -554,6 +555,21 @@ export async function saveDocumentToDisk(
       } finally {
         rearmWatch(docState.filePath);
       }
+      // The bytes are on disk, so the `w:id` values in `exportComments` are now
+      // the ones the FILE carries — point the stored `importSource.commentId`s
+      // at them (#1693). `prepareExportComments` re-mints whenever the stored id
+      // is not reusable as a `w:id`, and the next open then misses BOTH layers
+      // that protect an already-promoted Word comment (the hashed offset key and
+      // the `commentId` drift index), injecting a ghost note whose own next save
+      // writes two Word comments for one original (#1448).
+      //
+      // Placement is the contract, on both sides. It is BELOW the write because
+      // this branch can still refuse above it — a `blocked` verify verdict or a
+      // throwing `atomicWriteBuffer` — and rewriting the stored ids for a save
+      // that never landed is the same ghost with the two sides swapped. It is
+      // OUTSIDE the inner `try`, not a fourth line in it: that block is the
+      // #1749 write triple, whose `finally` exists for `rearmWatch` alone.
+      reconcileImportCommentIds(doc, exportComments);
       // `fidelityWarnings` drives the save toast; `exportDowngrades` is the
       // persistent notice. They differ by exactly the flattened-reply line,
       // which is deliberately persistent-only: imported Word reply threads

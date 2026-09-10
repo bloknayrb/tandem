@@ -10,7 +10,7 @@ import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
-import { withInternal } from "../../shared/origins.js";
+import { withInternal, withMcp } from "../../shared/origins.js";
 import type { Annotation, AnnotationReply, FlatOffset } from "../../shared/types.js";
 import { toFlatOffset } from "../../shared/types.js";
 import { IMPORT_AUTHOR_MAX, IMPORT_REPLY_BODY_CAP, nextRev } from "../annotations/schema.js";
@@ -561,6 +561,98 @@ function writeImportAnnotation(map: Y.Map<unknown>, id: string, record: Annotati
 /** The reply half of the same funnel. See `writeImportAnnotation`. */
 function writeImportReply(repliesMap: Y.Map<unknown>, id: string, record: AnnotationReply): void {
   repliesMap.set(id, { ...record, author: "import" } satisfies AnnotationReply);
+}
+
+/**
+ * The third and last direct annotation write in this module (#1693), and the
+ * only one that is not an injection: it rewrites `importSource.commentId` on a
+ * record that ALREADY carries import provenance, and changes nothing else.
+ *
+ * **It takes no caller-built record.** `writeImportAnnotation` defends its one
+ * field by stamping it; this one defends EVERY field by reading the stored
+ * record itself, so a call site cannot express `author: "claude"`, a different
+ * range, or a different body no matter what it holds. That is deliberate and
+ * not merely tidier: the records this touches are mostly PROMOTED ones
+ * (`author: "user"`, `type: "comment"`), so routing it through
+ * `writeImportAnnotation` would stamp `author: "import"` and silently
+ * un-promote the user's comment — the opposite of the bug being fixed.
+ *
+ * Returns whether it wrote. A no-op when the record is gone, carries no
+ * `importSource`, or already names `commentId`.
+ */
+function writeReconciledCommentId(map: Y.Map<unknown>, id: string, commentId: string): boolean {
+  const existing = map.get(id) as Annotation | undefined;
+  if (!existing?.importSource) return false;
+  if (existing.importSource.commentId === commentId) return false;
+  map.set(id, {
+    ...existing,
+    importSource: { ...existing.importSource, commentId },
+    rev: nextRev(existing),
+  } satisfies Annotation);
+  return true;
+}
+
+/**
+ * Point every exported import record's stored `w:id` at the id the `.docx`
+ * export just wrote for it. Returns how many records were rewritten.
+ *
+ * ## Why this exists (#1693, the save-mediated half of the ghost)
+ *
+ * `importAnnotationId` hashes the `w:id`, so the moment export writes a
+ * DIFFERENT one the next open's offset-key lookup misses by construction — and
+ * the drift-dedup index that exists to catch exactly that miss is keyed on
+ * `importSource.commentId`, which still names the OLD id. Both layers protecting
+ * an already-promoted Word comment miss together, a ghost note lands beside the
+ * promotion, and the save after that writes TWO Word comments for one original
+ * (#1448). Splitting the shared predicate closed the no-save half; this closes
+ * the half a save mediates.
+ *
+ * Export re-mints whenever `reusableWordId` declines the stored id — a
+ * non-numeric one (`c-9182`, this tree's own `nc:`-tagged fallback ids), one
+ * outside int32, one in non-canonical form (`0123`), or one stored at/past
+ * `IMPORT_COMMENT_ID_MAX`. Reuse for those is a separate question, and for the
+ * non-numeric family a permanently impossible one: `ST_DecimalNumber` has no
+ * representation for them. What is NOT impossible is keeping the stored id
+ * honest, and that is all this does — after it runs, the stored id is the id in
+ * the file, so the drift index finds the record on the next open whether or not
+ * reuse was ever possible. (The narrower reuse residual is tracked in #1951.)
+ *
+ * ## Two constraints on the call site, each with its own failure
+ *
+ * It MUST run AFTER the bytes reach disk. The save path can still refuse
+ * between building the comments and writing them — `verifyDocxRoundtrips`
+ * returns `blocked`, `atomicWriteBuffer` throws — and rewriting the stored id
+ * on a save that never landed points every record at a `w:id` the file does not
+ * contain, which is this same ghost with the two sides swapped.
+ *
+ * It MUST NOT run for a `.docx` written by any path that does not re-mint:
+ * `tandem_applyChanges` edits the original `word/document.xml` in place and
+ * carries the original `w:id` values through untouched, so a reconcile there
+ * would rewrite stored ids to match ids that never changed — a no-op today and
+ * a live hazard the moment that path gains its own allocator.
+ *
+ * `withMcp` is the origin, and it is chosen for its OBSERVER PROFILE rather
+ * than for authorship (ADR-031): the rewritten record must reach the durable
+ * envelope — `file-sync` and `internal` skip the durable-sync observer, so
+ * either would leave the repair in memory and reopen the ghost on the next
+ * restart — and it must emit NO channel event, because nothing the user or
+ * Claude can see about the annotation changed. It is the same profile, and the
+ * same reasoning, as the `withMcp` block that marks the document clean a few
+ * lines later in the same save.
+ */
+export function reconcileImportCommentIds(
+  doc: Y.Doc,
+  written: ReadonlyArray<{ annotationId: string; id: number }>,
+): number {
+  if (written.length === 0) return 0;
+  const map = doc.getMap(Y_MAP_ANNOTATIONS);
+  return withMcp(doc, () => {
+    let rewritten = 0;
+    for (const { annotationId, id } of written) {
+      if (writeReconciledCommentId(map, annotationId, String(id))) rewritten++;
+    }
+    return rewritten;
+  });
 }
 
 /**

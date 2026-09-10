@@ -51,9 +51,15 @@
 //
 // Range resolution mirrors the read paths: `refreshRange` resolves the CRDT
 // `relRange` first and falls back to flat offsets (read-only here — no Y.Map
-// writes, no transactions; a .docx save must not mutate the Y.Doc). Ranges
-// that no longer resolve are skipped with a stderr warning instead of
-// failing the save.
+// writes, no transactions; nothing this module runs may mutate the Y.Doc, and
+// `prepareExportComments` in particular is called twice per save on an
+// unmutated doc and must return the same set both times). Ranges that no longer
+// resolve are skipped with a stderr warning instead of failing the save.
+//
+// The ONE Y.Doc write the .docx save owes the annotation map is deliberately
+// not here: `reconcileImportCommentIds` (docx-comments.ts) rewrites a stored
+// `importSource.commentId` to the `w:id` this module allocated, and the save
+// path calls it AFTER the bytes land — see `ExportComment.annotationId`.
 //
 // Threaded replies: docx@9.6 cannot emit `commentsExtended.xml` (the part
 // Word uses for reply threading), so exportable replies are FLATTENED into
@@ -125,6 +131,23 @@ export interface ExportComment {
    * `bodyParagraphs` — keep it that way.
    */
   flattenedReplies: number;
+  /**
+   * The map key of the annotation this comment was built from (#1693).
+   *
+   * Present so the save path can reconcile the stored `importSource.commentId`
+   * against the `w:id` this export ACTUALLY wrote — see
+   * `reconcileImportCommentIds` (docx-comments.ts). Without the link the caller
+   * has an id and a body and no way to say which record produced them, and a
+   * body match is not one: two comments may legitimately carry identical text.
+   *
+   * EXPORT-SIDE LINKAGE ONLY, for the same reason `flattenedReplies` is
+   * telemetry only: the reimported twin's `annotationId` is a fresh
+   * `importAnnotationId` derived from the written `w:id`, never the live
+   * record's key, so a structural deep-equal across the two generations would
+   * false-fire. `commentKey` (docx-verify.ts) reads only `author` +
+   * `bodyParagraphs` — keep it that way.
+   */
+  annotationId: string;
 }
 
 /**
@@ -433,6 +456,7 @@ export function prepareExportComments(
       to,
       bodyParagraphs,
       flattenedReplies: replies.length,
+      annotationId: ann.id,
     });
   }
   return out;

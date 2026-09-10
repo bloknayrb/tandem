@@ -25,14 +25,23 @@
 //     pre-image ids) has NO representation in that type, so reuse is
 //     permanently impossible for it. That is a property of the format, not a
 //     gap in this predicate.
+//
+//     **Declining to reuse no longer means the comment ghosts**, and reading it
+//     that way is what made #1693 look unfixable for this family. When export
+//     mints a fresh id, `reconcileImportCommentIds` (`docx-comments.ts`) points
+//     the stored `importSource.commentId` at the id that was actually written,
+//     once the bytes are on disk — so the next open's drift index finds the
+//     record whether or not reuse was ever possible. What is still open here is
+//     narrower and is only about the VALUE written: `#1951`.
 //   - `Number.isSafeInteger` + the int32 window — a value outside it either
 //     loses precision through `Number` or is not a legal `w:id`.
 //   - `String(n) === raw` — the round-trip term, and the one that keeps this
 //     honest. `ExportComment.id` is a `number`, so a stored `"0123"` could only
 //     be written back as `123`; the next import would then present an id the
-//     stored record does not carry, which is the same ghost one step removed.
-//     Declining to reuse it means the stored key and the written key are equal
-//     by construction whenever reuse happens at all.
+//     stored record does not carry. Declining to reuse it means the stored key
+//     and the written key are equal by construction whenever reuse happens at
+//     all — and where it does not, the post-write reconcile named above makes
+//     them equal after the fact rather than leaving them to disagree.
 //
 // **Negative ids are an accepted, explicitly unverified change to bytes in the
 // user's file.** A `-1` reaching us was already in their document, but nothing
