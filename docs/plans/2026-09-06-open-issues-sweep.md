@@ -727,6 +727,63 @@ merges. Two things about it that a reader will otherwise get wrong:
 than out of the review, which is the second time this sweep that following a CI failure to
 its floor produced a tracked defect instead of a shrug.
 
+### Wave 6 closed — 2026-09-10
+
+Five PRs closing eight issues, with eight more left open by design, and #1596 and #1788 closed
+alongside them (the smoke run and decision F). D2 docx contract merged as **#1939**
+(`1aca8bc1`, #1754 #1755), CI-trust as **#1936** (`06403bec`, #1673 #1933), then H's three in
+order: **#1940** (`52fa195c`, #1785), **#1944** (`d2cc5e08`, #1793 #1786) and **#1945**
+(`fff8e312`, #1789 #1819). #1932 (`7ee66a5c`) and the two ledger PRs #1934 / #1935 sit alongside.
+
+**Open by design, and each has a reason rather than a backlog slot:** #1862 (its coverage-job
+half — a red that reads as a floor breach; #1937 carries the vitest exit-1-with-zero-failures
+half), #1754 → decision B, #1825 (its Infra section is 2-of-3 and the CI/build `infra/` bullet is
+done; the rest of CI/build, all of Tauri and the Tests remainder are wave 7), #1941 (the `.docx`
+save override — Bryan's explicit choice of *refuse by default, add an override*, split out rather
+than stacked so the safety half shipped first),
+#1942 (signing-key rotation, dated), #1943 (deactivation policy, Bryan's), #1946 (the desktop
+token panel, found while fixing #1789(a)).
+
+Four lessons, and three of them are about the seam between a group and the merge rather than
+about code.
+
+**1. A comment stating a safety margin is a measurement claim, and it expires.** #1933 began as a
+`check` flake and ended as a wrong test: the comment claimed one `exec` spinning for 20–35 s
+against a 2 s hard timeout, and the measurement was 3.07 s. The margin had eroded to ~1.5×
+without anyone editing the line that asserted it. Chasing a CI failure to its floor produced a
+tracked defect rather than a shrug for the second time this sweep.
+
+**2. "Required" protects against a RED, not against a step that never runs.** The eighth ADR-051
+instance (#1673) is the first one *inside* a required job, which is exactly where the pattern
+reads as unnecessary. It is not: `run: … || true`, `continue-on-error: true`, an `if:` that stops
+matching, or deleting the step each leave `check` green with the anchor dead — the #1229 shape,
+re-created inside the very group that exists to fix it.
+
+**3. A ship stage's `Closes` / `Refs` lines need reading before the merge button, every time.**
+Three separate failures in one wave, none of which any test could catch. CI-trust wrote
+`Closes #1862` against its own buildNotes and three of its own `bryan[]` entries saying #1862 must
+NOT be closed. #1944's Refs paragraph said "the Infra section only" and then listed three CI/build
+items, omitting two Infra bullets it had actually fixed — and stated the `config-*` alerting rule
+backwards (`CONFIG_STAGES` is enumerated, not prefix-matched, and the test asserts a
+`config-future` stage is **not** alertable, precisely so a later one must be adopted
+deliberately). A `Closes` line is the only artefact that changes issue state, and it is written by
+the stage least able to check it.
+
+**4. A handover between two concurrent groups needs an owner at merge time, not at plan time.**
+H-c correctly refused to edit `docs/licensing-operations.md` — H-b owned it — and named the
+correction in its `bryan[]` list as "needs to land in whichever PR merges second". That phrasing
+is right and is also the whole risk: nothing enforces it, and the second PR's author is not the
+one who wrote the note. It landed on #1945 (`f48ff671`). The generalisation for wave 7: a
+cross-group handover belongs in the *second* group's checklist, not in the first's output.
+
+The same class produced **#1946**. H-c ended a `bryan[]` entry with "say the word and I will file
+it", which is an untracked deferral wearing the clothes of a decision. Verifying it before filing
+found the panel is wrong in two more ways than reported: `tokenRotatedAt` is loopback-only and the
+Tauri WebView is loopback, so the block always renders on desktop, and the `auth-token` file is
+npm-location-only by design — so the desktop panel reports "Auth token not yet created" for a
+token that exists and is in use, or, on a dual-install machine, shows the npm install's rotation
+time inside the desktop app.
+
 ### Wave 0 record
 
 | Step | Result |
