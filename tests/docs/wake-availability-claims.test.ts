@@ -164,7 +164,7 @@ describe("hand-started sessions get the automatic first-use contract", () => {
         /ask Claude to watch(?: Tandem)? for updates/i,
       );
       expect(text, `${rel}: does not say when the automatic attempt happens`).toMatch(
-        /first (?:successful read-mode )?`?tandem_status`?|first (?:Tandem|skill) use|first Tandem response/i,
+        /first (?:successful read-mode )?`?tandem_status`?|first (?:Tandem|skill) use/i,
       );
       expect(text, `${rel}: omits the built-in Monitor precondition`).toMatch(/built-in Monitor/i);
     }
@@ -191,8 +191,17 @@ describe("hand-started sessions get the automatic first-use contract", () => {
       // is the same looseness the phrasing-negative had: `docs/workflows.md` names
       // `tandem_open` in unrelated prose, so a trigger paragraph narrowed back to
       // `tandem_status` alone still cleared a whole-file check. Verified by mutation.
+      // Scoped to paragraphs that describe the trigger MOMENT, not every paragraph that
+      // mentions the topic. Without the `first` conjunct this also caught per-tool payload
+      // EXAMPLES — a `tandem_scratchpad` response block showing `wakeUrl` names one producer
+      // and matches ABOUT_THE_TRIGGER, so documenting the field correctly turned this red.
+      // A response example is not a trigger description; the trigger is the sentence that says
+      // WHEN the attempt happens, and every carrier phrases that with "first".
       const triggerParas = paragraphs(text).filter(
-        (p) => ABOUT_THE_TRIGGER.test(p) && WAKE_URL_PRODUCERS.some((tool) => p.includes(tool)),
+        (p) =>
+          ABOUT_THE_TRIGGER.test(p) &&
+          /\bfirst\b/i.test(p) &&
+          WAKE_URL_PRODUCERS.some((tool) => p.includes(tool)),
       );
       expect(
         triggerParas.length,

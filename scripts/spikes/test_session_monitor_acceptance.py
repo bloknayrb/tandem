@@ -1884,6 +1884,53 @@ class NaturalDeclineTests(unittest.TestCase):
         # The spread stays last -- the payload is copied verbatim, host keys and all.
         self.assertLess(writer.index(subject.HOOK_EVENT_TIME_KEY), writer.index("...payload"))
 
+    def test_a_session_that_arms_off_any_producer_is_not_scored_a_decline(self):
+        """The widening, exercised rather than grepped.
+
+        Before it, `wake_url` was derived only from `tandem_status`, so a session whose whole
+        task was one `tandem_scratchpad({content})` call scored `status_succeeded=False` AND
+        `monitor_attempted=False` and landed in `hard_failures` as "declined" -- while CI stayed
+        green, because every fixture here hardcoded `tandem_status`. A source-string `assertIn`
+        cannot catch that returning; only driving each producer through the real derivation can.
+        """
+        wake = "ws://127.0.0.1:43079/api/wake"
+        for producer in ("tandem_status", "tandem_open", "tandem_scratchpad"):
+            with self.subTest(producer=producer):
+                subject = load_subject()
+                events = [
+                    {"harness_at": 1, "hook_event_name": "UserPromptSubmit", "prompt": "neutral"},
+                    {
+                        "harness_at": 2,
+                        "hook_event_name": "PostToolUse",
+                        "tool_name": f"mcp__tandem__{producer}",
+                        "tool_response": {"wakeUrl": wake},
+                    },
+                    {
+                        "harness_at": 3,
+                        "hook_event_name": "PreToolUse",
+                        "tool_name": "Monitor",
+                        "tool_input": {"ws": {"url": wake}, "persistent": True},
+                    },
+                    {"harness_at": 4, "hook_event_name": "Stop"},
+                ]
+                observed = subject.derive_structured_observations(
+                    events,
+                    dispatch_marker_seen=True,
+                    event_text="x",
+                    injected_at=5,
+                    transcript_health={f: True for f in subject.PRECONDITION_FIELDS[:3]},
+                    decoy_count=1,
+                    armed_count=2,
+                )
+                self.assertTrue(
+                    observed["status_succeeded"],
+                    f"{producer} returned a wakeUrl but the harness did not see one",
+                )
+                self.assertTrue(
+                    observed["monitor_attempted"],
+                    f"arming off {producer} was not scored as an attempt",
+                )
+
     def test_host_tool_names_are_matched_bare_and_mcp_tools_by_suffix(self):
         subject = load_subject()
         source = inspect.getsource(subject)

@@ -459,7 +459,8 @@ Scratchpads are ephemeral documents with no file on disk — useful for brainsto
 
 ```
 tandem_scratchpad()
-→ { documentId: "abc123", fileName: "Scratchpad.md", format: "md" }
+→ { documentId: "abc123", fileName: "Scratchpad.md", format: "md",
+    wakeUrl: "ws://127.0.0.1:3479/api/wake" }   // wakeUrl omitted in stdio mode
 
 tandem_edit({ from: 0, to: 0, newText: "# Draft Outline\n\n1. Introduction\n2. Analysis\n3. Conclusion" })
 → Content appears in the scratchpad tab

@@ -35,6 +35,7 @@ vi.mock("../../src/server/events/wake-socket.js", () => ({
 
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { getWakeEndpoint } from "../../src/server/events/wake-socket.js";
+import { registerAwarenessTools } from "../../src/server/mcp/awareness.js";
 import { registerDocumentTools } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { WAKE_URL_PRODUCERS } from "../../src/server/mcp/wake-url.js";
@@ -60,6 +61,7 @@ beforeEach(async () => {
 
   const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
   registerDocumentTools(server);
+  registerAwarenessTools(server);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   client = new Client({ name: "test-client", version: "0.0.1" });
   await server.connect(serverTransport);
@@ -121,24 +123,30 @@ describe("wakeUrl surfacing — the session-opening tools", () => {
     // is the raw object, so it is the only surface where absent-vs-present-undefined is
     // observable — and it is the surface a strict client validates against, where an
     // undefined key reads as a live transport that is not running.
+    // `structuredContent` is only set by `mcpStructured`, so it exists for `tandem_status` and
+    // NOT for the two `mcpSuccess` producers. That is not a hole in this spec: for an
+    // `mcpSuccess` tool the absent-vs-present-undefined distinction is genuinely UNOBSERVABLE
+    // on the wire, because `JSON.stringify` drops an undefined value — measured, an envelope
+    // assertion here is a guard that cannot fail. The invariant is real but belongs to the
+    // helper, so it is asserted directly in `wake-url-seam.test.ts` rather than faked here.
     const structured = raw.structuredContent as Record<string, unknown> | undefined;
     if (structured !== undefined) {
       expect(Object.keys(structured)).not.toContain("wakeUrl");
     }
   });
 
-  it("tandem_scratchpad's response alone is enough to arm from", () => {
+  it("tandem_scratchpad's response alone is enough to arm from", async () => {
     // The whole point of the change: this tool completes a task in one call, so if its
-    // response did not carry both an id and an address, such a session could never arm.
+    // response did not carry both an id and an address, such a session could never arm. The
+    // table row above covers the address; this adds the id, which is what makes the response
+    // self-sufficient rather than merely correct.
     mockedGetWakeEndpoint.mockReturnValue(LIVE_WAKE_URL);
 
-    return client
-      .callTool({ name: "tandem_scratchpad", arguments: { content: "# Draft" } })
-      .then((r) => {
-        const res = parsed(r);
-        expect(res.data.documentId).toBeTruthy();
-        expect(res.data.wakeUrl).toBe(LIVE_WAKE_URL);
-      });
+    const res = parsed(
+      await client.callTool({ name: "tandem_scratchpad", arguments: { content: "# Draft" } }),
+    );
+    expect(res.data.documentId).toBeTruthy();
+    expect(res.data.wakeUrl).toBe(LIVE_WAKE_URL);
   });
 
   it("tandem_checkInbox never carries it, however the transport is running", async () => {
@@ -146,6 +154,27 @@ describe("wakeUrl surfacing — the session-opening tools", () => {
     // address would be re-presented dozens of times per session — the documented route to
     // a second watch, which burns a MAX_WAKE_CONSUMERS slot and makes the zero-subscriber
     // signal unreachable process-globally for every other session.
-    expect(WAKE_URL_PRODUCERS).not.toContain("tandem_checkInbox");
+    //
+    // This used to assert `WAKE_URL_PRODUCERS` did not contain the name — a tautology over a
+    // literal, which could not have noticed a `...wakeUrlField()` added to the handler. Call
+    // the tool for real, with the transport LIVE, which is what the title claims.
+    mockedGetWakeEndpoint.mockReturnValue(LIVE_WAKE_URL);
+
+    // A document must be OPEN first. `beforeEach` clears the registry, and `tandem_checkInbox`
+    // answers NO_DOCUMENT with no `data` — against which `Object.keys(res.data ?? {})` is
+    // vacuously true. Measured: without this open, a `wakeUrl` deliberately added to the
+    // checkInbox payload left this spec green. Assert the success envelope before the absence.
+    await client.callTool({ name: "tandem_scratchpad", arguments: { content: "# Draft" } });
+
+    const raw = await client.callTool({ name: "tandem_checkInbox", arguments: {} });
+    const res = parsed(raw);
+    expect(res.error, `checkInbox did not succeed: ${JSON.stringify(res)}`).toBe(false);
+    expect(Object.keys(res.data ?? {}), "control: the payload was empty").toContain("summary");
+    expect(Object.keys(res.data ?? {})).not.toContain("wakeUrl");
+
+    const structured = raw.structuredContent as Record<string, unknown> | undefined;
+    if (structured !== undefined) {
+      expect(Object.keys(structured)).not.toContain("wakeUrl");
+    }
   });
 });
