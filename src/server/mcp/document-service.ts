@@ -155,15 +155,26 @@ function fidelityReportOf(doc: Y.Doc): FidelityReport | undefined {
 }
 
 /**
- * How many STRUCTURAL import losses a report carries (#1142 G3) — content or
- * page furniture that is gone, not mammoth's style-level tail. This is what the
- * save-time overwrite warning gates on; see the field's note in
- * `shared/types.ts` for why the broader count would make it ambient. Takes the
- * report rather than the doc so a caller can read it ONCE and use the same
- * snapshot for what it returns and what it persists.
+ * A positive count field off a fidelity report, or 0. The `typeof` guard is
+ * load-bearing rather than ceremonial: `fidelityReportOf` is a bare cast over a
+ * CRDT-synced value that survives session restore un-revalidated, so a legacy or
+ * malformed field must read as "none" instead of reaching arithmetic.
+ *
+ * Takes the report rather than the doc so a caller can read it ONCE and use the
+ * same snapshot for what it returns and what it persists.
+ *
+ * - `structuralLosses` (#1142 G3) — content or page furniture that is gone, not
+ *   mammoth's style-level tail. This is what the save-time overwrite warning
+ *   gates on; see the field's note in `shared/types.ts` for why the broader
+ *   count would make it ambient.
+ * - `droppedImages` (#1755) — body pictures the import dropped, which REFUSES
+ *   the binary save rather than merely warning.
  */
-function structuralLossesOf(report: FidelityReport | undefined): number {
-  const value = report?.structuralLosses;
+function reportCount(
+  report: FidelityReport | undefined,
+  field: "structuralLosses" | "droppedImages",
+): number {
+  const value = report?.[field];
   return typeof value === "number" && value > 0 ? value : 0;
 }
 
@@ -454,6 +465,33 @@ export async function saveDocumentToDisk(
       // Binary branch (#576, .docx). Capture fidelity warnings against the same
       // Y.Doc snapshot we serialize, then write the ZIP via atomicWriteBuffer
       // (atomicWrite's UTF-8 encoding would corrupt the binary).
+      // Refuse before anything else in this branch (#1755). `exportYDocToDocx`
+      // regenerates the file from a Y.Doc that never received the document's
+      // pictures, so writing would silently strip them from the user's .docx.
+      // Placement is constrained from both sides: it must sit ABOVE the pinned
+      // `prepareExportComments`/`saveBinary` window (no `await` may be inserted
+      // inside that), and being before `saveBinary` means no bytes are
+      // generated and the once-per-run pre-overwrite backup gate is not
+      // consumed, while being before `atomicWriteBuffer`/`suppressNextChange`
+      // means the file is untouched and the watcher suppressor never armed.
+      //
+      // `saveDocumentToDisk` CATCHES this and returns
+      // `{ status: "error", errorCode: "VERIFY_BLOCKED" }` — it does not reject.
+      // The throw also lands before `saveSession`, so no session snapshot is
+      // written: the repo's softer `saved: false` + skip-reason vocabulary reads
+      // as a benign no-op, and these edits genuinely cannot reach .docx.
+      // Annotations are unaffected either way (durable annotation store).
+      //
+      // NOT added to `tandem_applyChanges`: `file-io/docx-apply.ts` edits the
+      // ORIGINAL `word/document.xml` in place and re-zips, so the pictures
+      // survive it. Adding this "for consistency" would break the one write path
+      // that preserves them.
+      if (reportCount(fidelityReportOf(doc), "droppedImages") > 0) {
+        throw new SaveVerificationError(
+          blockReasonMessage("import-image-loss"),
+          "import-image-loss",
+        );
+      }
       const warnings = detectExportFidelityIssues(doc);
       // Comment-side fidelity (#1142 G3): flattened reply threads and comments
       // whose ranges no longer resolve. Computed from ONE `prepareExportComments`
@@ -479,7 +517,7 @@ export async function saveDocumentToDisk(
       // persisted `structuralLosses` disagree with the count already delivered
       // to the toast and to Claude.
       importSnapshot = fidelityReportOf(doc);
-      unpreservedImports = structuralLossesOf(importSnapshot) || undefined;
+      unpreservedImports = reportCount(importSnapshot, "structuralLosses") || undefined;
       const buffer = await adapter.saveBinary!(doc);
       // Pre-overwrite snapshot of the on-disk original (first write per path per
       // run), mirroring the text branch below. .docx is the highest-stakes case:
@@ -570,7 +608,20 @@ export async function saveDocumentToDisk(
       if (isBinary) {
         meta.set(Y_MAP_FIDELITY_REPORT, {
           importLosses: importSnapshot?.importLosses ?? [],
-          structuralLosses: structuralLossesOf(importSnapshot),
+          structuralLosses: reportCount(importSnapshot, "structuralLosses"),
+          // Carried, and deliberately RE-READ rather than taken from
+          // `importSnapshot` (#1755) — the opposite of the pinning above,
+          // because this field is a safety gate rather than a number already
+          // delivered to the toast. It looks dead (the refusal at the top of
+          // this branch fires for exactly the documents with a non-zero value),
+          // but five awaits separate the two: a file-watcher reload landing in
+          // that window — the file was replaced on disk by a picture-bearing
+          // version — runs `writeImportLossReport` and sets it. Omitting the
+          // field from this WHOLE-OBJECT replace would then erase the refusal
+          // for the rest of the session and the next `tandem_save` would
+          // regenerate the .docx image-less. `satisfies FidelityReport` cannot
+          // catch the omission: the field is optional.
+          droppedImages: reportCount(fidelityReportOf(doc), "droppedImages"),
           exportDowngrades,
           // Post-write verify advisories (#1123 0e) — louder than downgrades;
           // `?? []` clears a prior save's advisory on a now-clean save.

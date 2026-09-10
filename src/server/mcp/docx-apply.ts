@@ -478,7 +478,9 @@ async function docxSidecarEntry(filePath: string): Promise<DocBackupSnapshot | n
 export function registerApplyTools(server: McpServer): void {
   server.tool(
     "tandem_applyChanges",
-    "Apply all accepted suggestions to the .docx file as tracked changes (w:del + w:ins). " +
+    "EXPERIMENTAL. Apply all accepted suggestions to the .docx file as tracked changes " +
+      "(w:del + w:ins). It refuses documents whose flat text it cannot reproduce; some Word " +
+      "documents are a known limitation. " +
       "Creates a backup before writing. Only works on .docx files opened from disk.",
     {
       documentId: z.string().optional().describe("Target document ID (defaults to active doc)"),

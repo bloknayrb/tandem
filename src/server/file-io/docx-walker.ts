@@ -8,6 +8,7 @@
 // (mammoth excludes all three), while <w:ins> subtrees are traversed normally
 // (mammoth includes inserted text).
 
+import { hex as dingbatHex } from "dingbat-to-unicode";
 import type { ChildNode, Element } from "domhandler";
 import { parseDocument } from "htmlparser2";
 import { headingPrefixLength } from "../../shared/offsets.js";
@@ -58,12 +59,34 @@ const INVISIBLE_TEXT_ELEMENTS = new Set([
   "moveTo",
 ]);
 
+// mammoth's `ignoreElements` (body-reader.js:700-720), restricted to the
+// property containers. An ignored element returns `emptyResult()` with NO
+// recursion (:45-56), so nothing inside one reaches a reader — while this
+// walker's catch-all used to recurse and count every `<w:tab/>` inside
+// `<w:pPr><w:tabs>`, a tab-STOP DEFINITION, as a body character. Matched by
+// `localName` like `INVISIBLE_TEXT_ELEMENTS` is, for the reason in that
+// function's docblock.
+//
+// `detectHeadingLevel` reads `<w:pPr>` DIRECTLY off the paragraph element
+// rather than through `walk`, so skipping the subtree here does not blind
+// heading detection.
+const SKIPPED_SUBTREE_ELEMENTS = new Set([
+  "pPr",
+  "rPr",
+  "sectPr",
+  "tblPr",
+  "tblGrid",
+  "trPr",
+  "tcPr",
+]);
+
 /**
  * Like `getTextContent`, but skipping the subtrees mammoth drops.
  *
  * NOT a full model of what the import produces — `walkDocumentBody` additionally
- * maps `SINGLE_CHAR_ELEMENTS` to one character and separates paragraphs with
- * `\n`, neither of which this does. It is exactly `getTextContent` minus the
+ * resolves `flatTextForElement` elements (tab, break, symbol, both hyphens) and
+ * separates paragraphs with `\n`, neither of which this does. It is exactly
+ * `getTextContent` minus the
  * invisible subtrees, which is what a body-capture caller needs.
  *
  * Use this — not `getTextContent` — whenever the result will be written back
@@ -150,10 +173,29 @@ export interface CommentStartHit {
   paragraphId: string | undefined;
 }
 
+/**
+ * A span the walker produced from a NON-`<w:t>` element (`<w:tab>`, `<w:br>`,
+ * `<w:sym>`, either hyphen) — i.e. flat text `buildRun("w:t", …)` cannot
+ * reproduce.
+ *
+ * Fired for the ZERO-LENGTH cases too (an unrecognised `w:br w:type`, an
+ * unmapped `w:sym`): the run-keyed half of the apply-side fence is
+ * length-independent and is the only thing that can see them (#1754).
+ */
+export interface SpecialCharSpan {
+  offsetStart: number;
+  /** UTF-16 units the element contributed. May be 0. */
+  length: number;
+  paragraph: Element;
+  /** The enclosing `<w:r>`, or undefined for an element directly under `<w:p>`. */
+  run: Element | undefined;
+}
+
 export interface WalkerCallbacks {
   onText?(hit: TextHit): void;
   onCommentStart?(hit: CommentStartHit): void;
   onCommentEnd?(commentId: string, offset: number): void;
+  onSpecialChar?(span: SpecialCharSpan): void;
 }
 
 export interface WalkerResult {
@@ -162,10 +204,59 @@ export interface WalkerResult {
 }
 
 // ---------------------------------------------------------------------------
-// Single-character elements that mammoth maps to one character
+// Non-<w:t> elements that contribute flat text
 // ---------------------------------------------------------------------------
 
-const SINGLE_CHAR_ELEMENTS = new Set(["w:tab", "w:br", "w:noBreakHyphen", "w:softHyphen", "w:sym"]);
+/**
+ * The flat text a non-`<w:t>` element contributes, or `null` for "not one of
+ * mine" (the caller then recurses). Transcribed from mammoth, not paraphrased:
+ * `body-reader.js:315-327,360-368` + `readSymbol` (:233-249), and
+ * `document-to-html.js:337-352,373`.
+ *
+ * Deliberately keeps the `w:`-PREFIXED name matching the walker has always used
+ * on this arm. Widening it to `localName` is a namespace change (it would newly
+ * count DrawingML text-box characters and an unbound-prefix `x:tab`, neither of
+ * which mammoth reads) and belongs to the deferred half of #1754.
+ */
+function flatTextForElement(el: Element): string | null {
+  switch (el.name) {
+    case "w:tab":
+      return "\t";
+    // Written as escapes on purpose: U+2011 is easy to mistake for ASCII "-" and
+    // U+00AD is INVISIBLE in a diff, so a mis-transcription would ship silently.
+    case "w:noBreakHyphen":
+      return "\u2011";
+    case "w:softHyphen":
+      return "\u00AD";
+    case "w:br": {
+      const type = getAttr(el, "w:type");
+      if (type === undefined || type === "textWrapping") return "\n";
+      // DEFERRED (#1754, decision B): a page/column break keeps the historical
+      // one-character placeholder, which the real import does NOT produce. Do
+      // not "finish the table" here — the reconciliation for these is a
+      // separate, larger piece of work and #1754 stays open for it.
+      if (type === "page" || type === "column") return " ";
+      // mammoth's `else` arm warns and emits nothing. An unknown type must NOT
+      // route to the placeholder above.
+      return "";
+    }
+    case "w:sym": {
+      const font = getAttr(el, "w:font");
+      const char = getAttr(el, "w:char");
+      // Bail BEFORE calling hex(): dingbat-to-unicode's codePoint() calls
+      // typeface.toUpperCase(), so hex(undefined, char) throws — and this walker
+      // also runs at apply time against bytes re-read from disk, with mammoth
+      // nowhere in the path to have screened them.
+      if (font === undefined || char === undefined) return "";
+      const resolved =
+        dingbatHex(font, char) ??
+        (/^F0..$/.test(char) ? dingbatHex(font, char.slice(2)) : undefined);
+      return resolved?.string ?? "";
+    }
+    default:
+      return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Walker
@@ -264,18 +355,34 @@ export function walkDocumentBody(xml: string, callbacks: WalkerCallbacks = {}): 
         }
         offset += text.length;
         textParts.push(text);
-      } else if (SINGLE_CHAR_ELEMENTS.has(node.name)) {
-        offset += 1;
-        textParts.push(" "); // placeholder character
       } else if (node.name === "w:r") {
         // Track current run for onText callback
         const prevRun = currentRun;
         currentRun = node;
         walk(node.children);
         currentRun = prevRun;
+      } else if (SKIPPED_SUBTREE_ELEMENTS.has(localName(node.name))) {
+        // A property container. mammoth ignores it WITHOUT recursing, so a
+        // <w:tab/> declaring a tab stop inside <w:pPr><w:tabs> is not a body
+        // character. Descending here is what made every tabbed Word document
+        // fail the apply-time flat-text guard (#1754).
       } else {
-        // Recurse into w:ins, w:hyperlink, w:pPr children, etc.
-        walk(node.children);
+        const special = flatTextForElement(node);
+        if (special === null) {
+          // Recurse into w:ins, w:hyperlink, w:tbl, etc.
+          walk(node.children);
+          continue;
+        }
+        // Fire for the "" cases too — the apply-side run-keyed fence is
+        // length-independent and is the only half that can see them.
+        callbacks.onSpecialChar?.({
+          offsetStart: offset,
+          length: special.length,
+          paragraph: currentParagraph!,
+          run: currentRun,
+        });
+        offset += special.length;
+        if (special.length > 0) textParts.push(special);
       }
     }
   }

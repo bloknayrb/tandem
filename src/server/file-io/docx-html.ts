@@ -5,6 +5,7 @@ import * as htmlparser2 from "htmlparser2";
 import * as Y from "yjs";
 import { DOCX_INLINE_MARKS } from "../../shared/constants.js";
 import { sanitizeImageSrc } from "../../shared/image-src-safety.js";
+import { withInternal } from "../../shared/origins.js";
 import type { FootnoteBody } from "../../shared/types.js";
 import { normalizeHardBreaks } from "./hardbreak-normalize.js";
 
@@ -66,7 +67,14 @@ type DeferredText = { xmlText: Y.XmlText; children: ChildNode[]; marks: Record<s
 // match them — endnotes keep degrading to a visible list (CRITICAL-2).
 
 const FOOTNOTE_REF_HREF = /^#footnote-(\d+)$/;
-const FOOTNOTE_LI_ID = /^footnote-(\d+)$/;
+/**
+ * Both note namespaces, because two callers need OPPOSITE halves of it:
+ * reconciliation is footnote-only (endnotes have no capture and must keep
+ * degrading to a visible list), while the `countDroppedImages` probe must
+ * recognise BOTH or an image inside an endnote body is counted as a dropped
+ * body picture — the over-count direction that refuses the save forever.
+ */
+const NOTE_LI_ID = /^(footnote|endnote)-(\d+)$/;
 
 /** If `<a>` is a footnote inline reference, its id; else null. */
 function footnoteRefId(el: Element): string | null {
@@ -81,15 +89,30 @@ function footnoteRefId(el: Element): string | null {
  * for a flattened footnote (false-removal guard).
  */
 function footnoteListItemId(li: Element): string | null {
-  const match = (li.attribs.id || "").match(FOOTNOTE_LI_ID);
+  const key = noteListItemId(li);
+  return key?.startsWith("footnote-") ? key.slice("footnote-".length) : null;
+}
+
+/**
+ * If `<li>` is a mammoth footnote OR endnote list item, its NAMESPACED key
+ * (`"footnote-3"` / `"endnote-3"`); else null. Namespaced because the two id
+ * spaces are disjoint but their numbers are not — footnote 1 and endnote 1
+ * coexist in one document, and a bare `"1"` would conflate them.
+ *
+ * The back-link requirement is the same false-removal guard `footnoteListItemId`
+ * documents: a coincidental author-authored `id="endnote-5"` carries no
+ * `<a href="#endnote-ref-5">` and is left alone.
+ */
+function noteListItemId(li: Element): string | null {
+  const match = (li.attribs.id || "").match(NOTE_LI_ID);
   if (!match) return null;
-  const backLink = `#footnote-ref-${match[1]}`;
+  const backLink = `#${match[1]}-ref-${match[2]}`;
   const stack: ChildNode[] = [...li.children];
   while (stack.length > 0) {
     const node = stack.pop();
     if (node && isElement(node)) {
       if (node.tagName.toLowerCase() === "a" && (node.attribs.href || "") === backLink) {
-        return match[1];
+        return `${match[1]}-${match[2]}`;
       }
       stack.push(...node.children);
     }
@@ -133,6 +156,7 @@ function collectFootnoteSignals(nodes: ChildNode[]): {
 function reconcileFootnotes(
   nodes: ChildNode[],
   footnoteBodies: Record<string, FootnoteBody>,
+  log: boolean,
 ): Set<string> {
   const { refIds, listIds } = collectFootnoteSignals(nodes);
   const bodyIds = new Set(Object.keys(footnoteBodies));
@@ -140,7 +164,7 @@ function reconcileFootnotes(
   for (const id of new Set([...refIds, ...listIds, ...bodyIds])) {
     if (refIds.has(id) && listIds.has(id) && bodyIds.has(id)) {
       approved.add(id);
-    } else {
+    } else if (log) {
       console.error(
         `[docx-footnotes] footnote id=${id} failed reconciliation ` +
           `(inline-ref=${refIds.has(id)} list-item=${listIds.has(id)} body=${bodyIds.has(id)}); ` +
@@ -160,7 +184,10 @@ function reconcileFootnotes(
  * a footnote that fails reconciliation (an orphaned definition with no inline
  * ref, or a future mammoth-format drift) is reported as a real loss instead of
  * being silently claimed "preserved". Logging stays in `reconcileFootnotes` (the
- * apply path) so a discrepancy is recorded exactly once.
+ * apply path) so a discrepancy is recorded exactly once — which is why the
+ * `countDroppedImages` probe (#1755), the second caller of that shared walk,
+ * passes `log: false`. Without it every failed-reconciliation line was printed
+ * twice per open and an operator counting them to size the loss double-counted.
  */
 export function reconcileFootnoteIds(
   html: string,
@@ -179,20 +206,28 @@ export function reconcileFootnoteIds(
 }
 
 /**
- * Detector B: remove approved footnotes' trailing `<li>`s so the reconstructed
- * body doesn't ALSO survive as a visible list. Operates at `<li>` granularity
- * (leaves endnote / non-approved items in place) and drops an enclosing `<ol>`
- * only when no `<li>` survives. Returns the rewritten children array.
+ * Detector B: remove the trailing `<li>`s `shouldPrune` selects, so a
+ * reconstructed body doesn't ALSO survive as a visible list. Operates at `<li>`
+ * granularity and drops an enclosing `<ol>` only when no `<li>` survives.
+ * Returns the rewritten children array.
+ *
+ * The predicate is a parameter rather than a set of ids because the two callers
+ * want disjoint things: the real walk prunes APPROVED FOOTNOTES only (an
+ * unapproved footnote and every endnote degrade to a visible list on purpose),
+ * while the `countDroppedImages` probe prunes EVERY note list item of EITHER
+ * namespace — see `HtmlToYDocProbe`.
  */
-function pruneFootnoteListItems(nodes: ChildNode[], approved: Set<string>): ChildNode[] {
+function pruneNoteListItems(
+  nodes: ChildNode[],
+  shouldPrune: (li: Element) => boolean,
+): ChildNode[] {
   const out: ChildNode[] = [];
   for (const node of nodes) {
     if (isElement(node)) {
       if (node.tagName.toLowerCase() === "ol") {
         const kept = node.children.filter((child) => {
           if (isElement(child) && child.tagName.toLowerCase() === "li") {
-            const id = footnoteListItemId(child);
-            if (id !== null && approved.has(id)) return false;
+            if (shouldPrune(child)) return false;
           }
           return true;
         });
@@ -200,11 +235,11 @@ function pruneFootnoteListItems(nodes: ChildNode[], approved: Set<string>): Chil
           (child) => isElement(child) && child.tagName.toLowerCase() === "li",
         );
         if (!survivingLi) continue; // list emptied by removal → drop it entirely
-        node.children = pruneFootnoteListItems(kept, approved);
+        node.children = pruneNoteListItems(kept, shouldPrune);
         out.push(node);
         continue;
       }
-      node.children = pruneFootnoteListItems(node.children, approved);
+      node.children = pruneNoteListItems(node.children, shouldPrune);
     }
     out.push(node);
   }
@@ -232,6 +267,28 @@ function isText(node: ChildNode): node is Text {
 }
 
 /**
+ * Passed by `countDroppedImages` to make the walk a MEASUREMENT rather than an
+ * import (#1755). Beyond the callback it changes two things, and both are
+ * corrections rather than conveniences:
+ *
+ * - Footnote reconciliation logs NOTHING. `reconcileFootnoteIds`'s docblock
+ *   promises a discrepancy is "recorded exactly once", on the apply path; a
+ *   probe running the same reconciliation printed every line twice per open.
+ * - EVERY note `<li>` is pruned — both namespaces, not only the approved
+ *   footnotes. `pruneNoteListItems` leaves an UNAPPROVED footnote body, and
+ *   every ENDNOTE body, in the DOM by design (each degrades to a visible list),
+ *   so its `<li><p><img></p></li>` counted as a dropped BODY picture — refusing
+ *   the save forever on a document that never contained one, with no override.
+ *   Note images are out of scope for this count, and pruning them removes them
+ *   from BOTH sides of `total − kept`, which counting alone could not do.
+ *   Reconciliation stays footnote-only: this widening is the PROBE's, and an
+ *   endnote must still degrade to a visible list on the real walk.
+ */
+interface HtmlToYDocProbe {
+  onImgTagCount(n: number): void;
+}
+
+/**
  * Convert parsed HTML into Y.Doc XmlFragment elements.
  * Two-pass pattern per ADR-009: build element tree first, then populate text.
  *
@@ -246,6 +303,7 @@ export function htmlToYDoc(
   doc: Y.Doc,
   html: string,
   footnoteBodies: Record<string, FootnoteBody> = {},
+  probe?: HtmlToYDocProbe,
 ): Record<string, FootnoteBody> {
   const fragment = doc.getXmlFragment("default");
 
@@ -261,8 +319,30 @@ export function htmlToYDoc(
   // Footnote reconciliation: which ids have a mark target (A), a removable
   // trailing <li> (B), AND a captured body (C). Then prune the approved <li>s
   // from the DOM BEFORE the transform so the body doesn't double as a list.
-  const approvedFootnotes = reconcileFootnotes(parsed.children, footnoteBodies);
-  parsed.children = pruneFootnoteListItems(parsed.children, approvedFootnotes);
+  const approvedFootnotes = reconcileFootnotes(
+    parsed.children,
+    footnoteBodies,
+    probe === undefined,
+  );
+  // On the probe walk, prune EVERY note <li> of EITHER namespace — see
+  // `HtmlToYDocProbe`.
+  parsed.children = pruneNoteListItems(
+    parsed.children,
+    probe
+      ? (li) => noteListItemId(li) !== null
+      : (li) => {
+          const id = footnoteListItemId(li);
+          return id !== null && approvedFootnotes.has(id);
+        },
+  );
+
+  // Report how many <img> tags the walk below is ABOUT to see (#1755). Counted
+  // POST-prune on purpose: an approved footnote body's <li> is removed here and
+  // reconstructed through Y_MAP_FOOTNOTE_BODIES, so counting its image would
+  // report a loss on a document whose body pictures are all intact. A plain
+  // recursive tag count, never a regex — a regex would also match the string
+  // "<img" inside a text node.
+  probe?.onImgTagCount(countImgTags(parsed.children));
 
   const deferred: DeferredText[] = [];
   const allElements: Y.XmlElement[] = [];
@@ -291,6 +371,80 @@ export function htmlToYDoc(
   const reconciled: Record<string, FootnoteBody> = {};
   for (const id of approvedFootnotes) reconciled[id] = footnoteBodies[id];
   return reconciled;
+}
+
+/** Every `<img>` in a DOM subtree, at any depth. */
+function countImgTags(nodes: ChildNode[]): number {
+  let n = 0;
+  for (const node of nodes) {
+    if (!isElement(node)) continue;
+    if (node.tagName.toLowerCase() === "img") n++;
+    n += countImgTags(node.children);
+  }
+  return n;
+}
+
+/** Every `image` element in a produced fragment, at any depth. */
+function countImageElements(node: Y.XmlFragment | Y.XmlElement): number {
+  let n = 0;
+  for (let i = 0; i < node.length; i++) {
+    const child = node.get(i);
+    if (child instanceof Y.XmlElement) {
+      if (child.nodeName === "image") n++;
+      n += countImageElements(child);
+    }
+  }
+  return n;
+}
+
+/**
+ * How many of a `.docx`'s body pictures `htmlToYDoc` DROPS (#1755).
+ *
+ * Deliberately `total − kept`, both read off the REAL walk, because no
+ * hand-written ancestor list is right: `"img"` is itself in `BLOCK_TAGS`, so a
+ * DIRECT `<img>` child of `li`/`td`/`th`/`blockquote` takes the block arm and is
+ * KEPT, while the same `<img>` one `<span>` deeper is deferred to
+ * `processInlineNodes`, which has no `img` arm and discards it; `<p>`, `h1`–`h6`
+ * and `pre` defer wholesale; the `ul`/`ol`/`table` arms ignore a stray child
+ * outright. Counting the output instead of mirroring the dispatch means the two
+ * numbers cannot drift from it.
+ *
+ * The failure direction is asymmetric and that is why this is measured rather
+ * than listed: an OVER-count refuses the save forever with no override, so the
+ * user's edits could never be written back.
+ *
+ * FOOTNOTE images are out of scope on both sides of the subtraction — see
+ * `HtmlToYDocProbe`, which is what makes that true for an UNAPPROVED footnote
+ * body as well as an approved one.
+ *
+ * Runs against a throwaway `Y.Doc` that is never registered with Hocuspocus,
+ * never persisted and never observed; `withInternal` supplies the outer
+ * transaction `htmlToYDoc` needs (Critical Rule 2), same as `docx-verify.ts`.
+ * It is a second full walk of the same HTML, which is the price of the count
+ * being `total − kept` off the real dispatch: `parse` must put the number in
+ * `prepared.issues` before `apply` runs the real walk. It is skipped entirely
+ * for the save-verification re-import (`scanLostFeatures === false`), so the
+ * cost is one extra conversion per real document open and zero per save.
+ */
+export function countDroppedImages(
+  html: string,
+  footnoteBodies: Record<string, FootnoteBody> = {},
+): number {
+  const probe = new Y.Doc();
+  try {
+    let total = 0;
+    withInternal(probe, () => {
+      htmlToYDoc(probe, html, footnoteBodies, {
+        onImgTagCount: (n) => {
+          total = n;
+        },
+      });
+    });
+    const kept = countImageElements(probe.getXmlFragment("default"));
+    return Math.max(0, total - kept);
+  } finally {
+    probe.destroy();
+  }
 }
 
 /** Convert a DOM node to Y.XmlElement(s). Inline-only containers become paragraphs. */

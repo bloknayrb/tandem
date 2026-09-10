@@ -284,7 +284,12 @@ describe("verifyDocxRoundtrips", () => {
 
 describe("blockReasonMessage", () => {
   it("is content-free and reassures the original file was left unchanged", () => {
-    for (const reason of ["reimport-failed", "degenerate-model", "gross-text-loss"] as const) {
+    for (const reason of [
+      "reimport-failed",
+      "degenerate-model",
+      "gross-text-loss",
+      "import-image-loss",
+    ] as const) {
       const msg = blockReasonMessage(reason);
       expect(msg).toContain("left unchanged");
       expect(msg).not.toMatch(/[A-Z]:\\/); // no Windows absolute path

@@ -204,3 +204,37 @@ describe("coordinate safety — flat text is stable across round-trip", () => {
     expect(flat).not.toContain("raw footnote def\n\n");
   });
 });
+
+// ---------------------------------------------------------------------------
+// #1755 — a rejected image src is PRESERVED, not downgraded to alt text
+// ---------------------------------------------------------------------------
+//
+// Before this, `![Architecture diagram](file:///C:/x/d.png)` saved back as the
+// bare words `Architecture diagram`: the URL was gone from the user's file.
+// Each fixture is measured — it parses as an mdast `image`, `sanitizeImageSrc`
+// rejects it (unknown scheme; non-allowlisted `data:` subtype; a space in
+// URL_HOSTILE_CHARS), and `serializeMdastInline` reproduces it byte-for-byte.
+// A bare `![a](my image.png)` is deliberately NOT a fixture: CommonMark parses
+// it as `text`, so it never reaches `imageToYxml`.
+
+describe("rejected image sources round-trip verbatim (#1755)", () => {
+  const fixtures: Array<[string, string]> = [
+    ["a file: URL", "![Architecture diagram](file:///C:/x/d.png)\n"],
+    ["an SVG data URI", "![svg](data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=)\n"],
+    ["a space-bearing path", "![a](<my image.png>)\n"],
+  ];
+
+  it.each(fixtures)("%s survives one save byte-identically", (_label, input) => {
+    const doc = load(input);
+    expect(saveMarkdown(doc)).toBe(input);
+    // And the src never reaches the Y.Doc as an `image` element (#1420 unchanged).
+    expect(JSON.stringify(doc.getXmlFragment("default").toJSON())).not.toContain("<image");
+  });
+
+  it.each(fixtures)("%s is a fixed point across two saves", (_label, input) => {
+    // The raw run must not re-escape on each save.
+    const { out } = roundTripFlat(input);
+    expect(out).toBe(input);
+    expect(saveMarkdown(load(out))).toBe(input);
+  });
+});

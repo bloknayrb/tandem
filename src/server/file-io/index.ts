@@ -7,7 +7,12 @@ import {
   Y_MAP_FOOTNOTE_BODIES,
 } from "../../shared/constants.js";
 import { extractText, populateYDoc } from "../mcp/document-model.js";
-import { htmlToYDoc, loadDocxWithWarnings, reconcileFootnoteIds } from "./docx.js";
+import {
+  countDroppedImages,
+  htmlToYDoc,
+  loadDocxWithWarnings,
+  reconcileFootnoteIds,
+} from "./docx.js";
 import {
   type DocxComment,
   extractDocxComments,
@@ -238,6 +243,15 @@ const docxAdapter: FormatAdapter = {
     // mammoth-format drift) is reported as a loss, not silently claimed
     // "preserved".
     const reconciliation = reconcileFootnoteIds(loaded.html, notes.footnotes);
+    // Body pictures (#1755). mammoth emits a picture as `<p><img src="data:…"/></p>`
+    // and the paragraph arm defers its children to `processInlineNodes`, which has
+    // no `img` arm — so the image is discarded, `scanDocxLostFeatures` says nothing,
+    // and `tandem_save` then regenerates the .docx without it. Skipped when the
+    // caller skipped the lost-feature scan, because that is the `docx-verify.ts`
+    // re-import, which reads no `prepared.issues`: this costs one extra conversion
+    // per real document open and zero per save verification.
+    const droppedImages =
+      options?.scanLostFeatures === false ? 0 : countDroppedImages(loaded.html, notes.footnotes);
     // mammoth is the ONE revision family it isn't silent about: it emits
     // "unrecognised element was ignored: w:move…" for both halves of a move and
     // their range markers. `loadDocxWithWarnings` keeps those OUT of the capped
@@ -265,6 +279,19 @@ const docxAdapter: FormatAdapter = {
       ...(commentsFailed
         ? ["this file's Word comments couldn't be read and won't be in the saved file"]
         : []),
+      // `structural` because `structural` means "things that ARE gone" — NOT
+      // because it drives the overwrite warning, which for this document can no
+      // longer happen: the save is refused outright (`import-image-loss`).
+      // Count-only, never a `src` or an `alt`; and the copy has to describe the
+      // REFUSAL and name an exit reachable FROM THIS DOCUMENT. The only client
+      // conversion affordance sits behind the review-only banner, which a
+      // writable on-disk .docx never shows, so the exit is Claude.
+      ...(droppedImages > 0
+        ? [
+            `${droppedImages} picture(s) couldn't be imported, so this file can't be saved ` +
+              "back as .docx — ask Claude to convert it to Markdown to keep your edits",
+          ]
+        : []),
     ];
     // A footnote that reconstructs but lost its bold is NOT structural loss —
     // the line literally says "preserved". Counting it would fire the overwrite
@@ -289,6 +316,7 @@ const docxAdapter: FormatAdapter = {
         // `message` above drives the transient open-time toast.
         importLosses,
         structuralLosses: structural.length,
+        droppedImages,
       });
     }
     return { format: "docx", html: loaded.html, comments, footnoteBodies: notes.footnotes, issues };
