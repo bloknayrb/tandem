@@ -40,7 +40,7 @@ const pillLabel = $derived(
     (status == null
       ? "License status unknown"
       : darkInstalled
-        ? status?.licenseeName
+        ? status.licenseeName
           ? `License installed for ${status.licenseeName} — takes effect at v1.0`
           : "License installed — takes effect at v1.0"
         : "Not enforced in this version"),
@@ -111,14 +111,9 @@ function onActivated(): void {
        the activation succeeds and the app never sees it. No
        `npm install -g tandem-editor` escape hatch, for that reason. -->
   <div class="settings-hint" style="margin-top: var(--tandem-space-1);">
-    {#if isDesktop}
-      Paste a license key you received by email. A valid license unlocks editing and runs
-      forever; the update window is separate and is shown above once activated.
-    {:else}
-      Paste a license key you received by email, or run <code>tandem activate &lt;file&gt;</code>
-      from the command line. A valid license unlocks editing and runs forever; the update window
-      is separate and is shown above once activated.
-    {/if}
+    Paste a license key you received by email{#if !isDesktop}, or run
+      <code>tandem activate &lt;file&gt;</code> from the command line{/if}. A valid license unlocks
+    editing and runs forever; the update window is separate and is shown above once activated.
   </div>
   <div class="settings-hint" style="margin-top: var(--tandem-space-2);">
     Don't have one yet?
