@@ -47,7 +47,7 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 
 | Variable | Default | Description |
 |---|---|---|
-| `TANDEM_APP_DATA_DIR` | platform default (see below) | Override the app-data root that holds sessions, the auth token, and durable annotations. |
+| `TANDEM_APP_DATA_DIR` | platform default (see below) | Override the app-data root that holds sessions, the auth token, durable annotations, `license.json` and `trial.json`. Pointing it somewhere new presents a fresh trial and an apparently-unlicensed device — the license is still on disk under the old root. |
 | `TANDEM_DATA_DIR` | repo-relative | Override the project-relative data dir used to locate `sample/welcome.md`. Distinct from `TANDEM_APP_DATA_DIR`; most users don't need this. |
 | `TANDEM_ANNOTATION_STORE` | unset | Set to `off` to disable durable annotation persistence (annotations then live only in session files). |
 

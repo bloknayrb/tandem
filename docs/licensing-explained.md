@@ -45,6 +45,17 @@ association; its only associations are `.md`/`.markdown`, `.txt`, `.html` and `.
 any computer you personally use, with no internet connection required to prove
 it. For the first year you also get new versions as they're released.
 
+**Where you paste it depends on which Tandem you're running.** On the desktop app
+the only route is Settings → License; the desktop bundle ships no `tandem`
+command, so there is nothing to run. The `tandem activate <file>` command belongs
+to the npm install, and it writes into **that install's own app-data
+directory** — so running a separately installed CLI to license a desktop app
+succeeds and changes nothing the desktop can see. Nothing reports that, which is
+why it is worth stating here. That holds even if you reach the desktop's own
+editor through a browser (it serves the same UI on `http://127.0.0.1:3479`): the
+server there still reads the desktop's app-data directory, so Settings → License
+is still the only route, and it stops offering the command accordingly.
+
 ## What you get, precisely
 
 | | |
@@ -118,6 +129,13 @@ which was especially wrong for beta testers who never had a trial.
 There's one failure that looks exactly like everything being fine: your license
 works, Tandem runs, but you silently stop being offered updates — and the app
 cheerfully reports **"You're up to date"** forever.
+
+Half of that is now closed on the device itself: if *this* copy of Tandem can see
+that its own update window has ended, a manual check for updates says so and
+points at Settings → License, rather than claiming you are current. The other
+half — the case where the device still believes it is entitled and the server
+disagrees — is invisible from here (it arrives as an ordinary "nothing new"
+response), so the server's own refusal reason stays the authoritative detector.
 
 That's the worst kind of bug, because nobody files a ticket for it. A large part
 of the engineering below exists purely to make that state detectable.
@@ -481,9 +499,11 @@ signed public manifest or returns `204`.
 Every rejection returns **byte-identical** bytes, so the endpoint is not an
 existence oracle. It logs `{result, reason, ts}` — the reason is a closed enum
 describing *our* state (`no-header`, `unknown-id`, `unparseable`, `expired`,
-`upstream`), never the license id, so no per-customer update history exists.
+`revoked`, `upstream`), never the license id, so no per-customer update history
+exists. `revoked` is the operator's own tombstone — a refund or a hand-run
+revocation — and is deliberately the one absence that does *not* raise an alert.
 
-That `reason` field is five lines of code and it is the most important
+That `reason` field is a handful of lines of code and it is the most important
 observability in the system. See Part 3.
 
 ---
@@ -507,12 +527,17 @@ the public GitHub endpoint — no error" — and that sentence is precisely the
 mental model that produced the bug.
 
 The state is reachable at least five ways: a failed entitlement write, a refund
-(which deletes the entitlement while the blob still verifies forever), the
+(which revokes the entitlement while the blob still verifies forever), the
 documented revocation procedure, KV eviction, and a namespace-id mismatch
-between the two `wrangler.toml` files.
+between the two `wrangler.toml` files. The first two are *deliberate*, and they
+now write a revocation tombstone rather than deleting the key, so the Worker can
+tell the operator's own action apart from an entitlement that simply vanished.
 
-**Detection:** a rising `unknown-id` count. Nothing else distinguishes it from
-health.
+**Detection:** the Worker POSTs an operator alert on `unknown-id` /
+`unparseable`, and `[observability]` retains the log lines behind it. A `reason`
+enum on its own was never a detector — nothing kept the lines and nothing
+notified anyone. Merged but **inert until both Workers are redeployed** with
+`[observability]` and `ALERT_WEBHOOK_URL` set.
 **Repair:** re-`PUT` the entitlement from the ledger — it's fully derivable, so
 nothing needs re-issuing.
 

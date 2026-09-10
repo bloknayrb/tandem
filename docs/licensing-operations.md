@@ -201,8 +201,15 @@ Cloudflare account, KV namespace, custom domain, and secrets.
    `wrangler.toml` (NOT a Worker *secret*; it's a public URL the Worker reads via
    `env.PUBLIC_LATEST_JSON_URL`) — then deploy:
    ```bash
-   cd infra/license-update-worker && npx wrangler deploy
+   cd infra/license-update-worker && npx wrangler@4.130.0 deploy
    ```
+
+   The wrangler version is pinned deliberately: `./crypto.js` resolving to
+   `crypto.ts` is the bundler rewriting the extension, and the bundle shape is
+   wrangler's too, so two deploys of identical source can differ across wrangler
+   versions. To advance it, re-run `npm view wrangler version` and update **all
+   six** deploy sites together — §3 and §3.5b here, both §9 quick-reference rows,
+   and the two Worker READMEs.
 4. **Put a custom domain in front of it, and use that in `lib.rs`.** The
    endpoint URL is compiled into every shipped desktop binary
    (`LICENSE_UPDATE_ENDPOINT`, `src-tauri/src/lib.rs`). Ship `*.workers.dev` and
@@ -244,13 +251,35 @@ Two paths write `KV[licenseId] = { updateWindowEnd, status, version }`:
 > `Ok(None)` → `check_for_update` shows the user **"You're up to date."**
 > Permanently. While starved.
 >
-> The same dead state is reachable at least five ways: a failed write, a
-> refund (`applyRefund` deletes the entitlement while the blob still verifies
-> forever), the revocation procedure in §7, KV eviction, and a namespace-id
-> mismatch between the two `wrangler.toml` files.
+> **That last step is conditional since #1819, and the condition deliberately
+> does NOT rescue this case.** The `Ok(None)` arm now splits on
+> `local_window_ended` — `UpdateRoute::Licensed` AND the sidecar probe not
+> reporting `update_window_current` — and the ended arm shows an "Update Window
+> Ended" warning instead. That is **this device's own copy of the license
+> talking, not the Worker's verdict**, so it fires exactly when the local
+> `expiresAt` has passed. A device whose local window is still open takes the
+> up-to-date arm no matter what KV holds, which is precisely the scenario above:
+> a missing entitlement against a still-current local license is still told
+> "You're up to date." The new dialog covers the opposite mismatch (local
+> window ended, entitlement possibly renewed KV-side), and the Worker's `reason`
+> remains the only detector for this one.
 >
-> **Detection:** the update Worker logs `{ result: "no-update", reason, ts }`.
-> A rising `unknown-id` count is the only evidence any of the above happened.
+> The same dead state is reachable at least five ways: a failed write, a
+> refund, the revocation procedure in §7, KV eviction, and a namespace-id
+> mismatch between the two `wrangler.toml` files. **The first of those five is
+> now distinguishable from the rest**: a refund and a §7 revocation write a
+> `{"updateWindowEnd": null, "status": "revoked"}` TOMBSTONE rather than
+> deleting the key, so the Worker answers `revoked` — deliberately not alerted
+> on, because it is your own action. A key that is simply *gone* is the one
+> that means something broke.
+>
+> **Detection.** The update Worker logs `{ result: "no-update", reason, ts }`,
+> `[observability]` retains those lines, and `unknown-id` / `unparseable` POST
+> an alert to `ALERT_WEBHOOK_URL` (throttled per reason, gated on a UUID-shaped
+> id because the endpoint is unauthenticated). A log line nobody retains and
+> nobody is notified about was never a detector — that is what #1786 fixed.
+> Both halves are merged but **inert until both Workers are redeployed** with
+> `[observability]` and `ALERT_WEBHOOK_URL` set (§8).
 > **Repair:** re-`PUT KV[licenseId]` from the ledger record — `entitlementValue`
 > is fully derivable, so nothing needs re-issuing. If the customer still has
 > their key, that works too: the blob carries id/name/email/type/createdAt/
@@ -259,7 +288,8 @@ Two paths write `KV[licenseId] = { updateWindowEnd, status, version }`:
 ### 3c. Behavior
 
 - Updater asks `GET /api/license/status` (loopback). If `gateActive && licenseId && updateWindowCurrent`, it points at the Worker with an `X-Tandem-License-Id` header; otherwise it uses the public GitHub `latest.json`.
-- The Worker returns a **byte-identical no-update** response for unknown ids and expired windows (no existence oracle) and logs `{ result, reason, ts }` — the reason is a coarse enum about the *service's* state, never the license id.
+- The Worker returns a **byte-identical no-update** response for unknown ids, expired windows and revocation tombstones (no existence oracle) and logs `{ result, reason, ts }` — the reason is a coarse enum about the *service's* state, never the license id.
+- **The automatic detector is the alert on `unknown-id`/`unparseable`**; `[observability]` on both Workers is what retains the lines behind it; and the `revoked` tombstone is what keeps your own refunds and revocations out of the alert. Both halves are merged but **inert until the Workers are redeployed** with `[observability]` and `ALERT_WEBHOOK_URL` set (§8).
 
 ## 3.5. The issuance endpoint (Cloudflare — owner-deployed)
 
@@ -316,8 +346,14 @@ npx wrangler secret put TANDEM_PRIVATE_KEY        # Ed25519 PEM PKCS#8 (§0)
 npx wrangler secret put POLAR_WEBHOOK_SECRET      # whsec_... from Polar
 npx wrangler secret put RESEND_API_KEY            # re_... from Resend
 npx wrangler secret put GRANDFATHER_EMAILS        # optional (§1b)
-npx wrangler deploy
+npx wrangler@4.130.0 deploy
 ```
+
+The wrangler version is pinned deliberately: `./crypto.js` resolving to `crypto.ts`
+is the bundler rewriting the extension, and the bundle shape is wrangler's too, so
+two deploys of identical source can differ across wrangler versions. To advance it,
+re-run `npm view wrangler version` and update **all six** deploy sites together —
+§3 and §3.5b here, both §9 quick-reference rows, and the two Worker READMEs.
 
 Also set in `[vars]`: `SUPPORT_EMAIL` (the license email's `reply_to` — without
 it a buyer whose activation fails has no inbound channel but the public issue
@@ -327,6 +363,12 @@ tracker, where they will paste a key carrying their own name and email), and
 `SUPPORT_EMAIL` is **required and enforced**: the Worker rejects every request
 with 503 and `stage: "config-support-email"` while the value is unset, still the
 `REPLACE_WITH_…` placeholder, not address-shaped, or longer than 70 characters.
+`RESEND_FROM` is enforced the same way and for the same reason, under its own
+`stage: "config-resend-from"`: the shipped `REPLACE_WITH_VERIFIED_SENDER` is
+*present*, so a point-of-use presence check passed it and the Worker minted the
+license, wrote the entitlement, then got a Resend 422 — buyer charged, license
+issued, email never sent. Both guards now run before any webhook processing.
+
 That is deliberate — the alternative was emitting a license email with no support
 address at all, or with the placeholder printed in it, to a customer who has
 already paid. The length bound is not cosmetic: the address prints on its own
@@ -458,8 +500,16 @@ record but no entitlement, re-`PUT` the entitlement (§3b) — no re-issuing.
 
 ### 5c. Alerting
 
-The issuance Worker raises operator alerts in-band on the two results worth
-waking for: `dropped`, and any `stage: "email"` failure.
+The issuance Worker raises operator alerts in-band on the results worth waking
+for: `dropped`, any `stage: "email"` failure, and the three **config stages**
+(`config`, `config-support-email`, `config-resend-from`) — a misconfigured Worker
+503s *every* webhook, so no sale can complete at all, and an unalerted 503 loop is
+exactly what drives Polar's endpoint auto-disable. The config stages are
+enumerated rather than prefix-matched, and they are the only alerts raised before
+signature verification, so their volume is bounded by inbound requests against the
+per-isolate throttle rather than by authenticated ones. An alert about a broken
+`RESEND_FROM` never goes through Resend, for the same reason an email-stage one
+does not: the fallback would send *from* the broken address.
 
 - `ALERT_WEBHOOK_URL` — any incoming webhook (Slack/Discord/ntfy).
   **Required to be alerted about email failures**, which cannot be reported
@@ -474,6 +524,26 @@ storm doesn't become an alert storm.
 `wrangler tail` is a **debugging tool, not an alert**: no history, no thresholds,
 no notification, and it dies with the terminal session. Cloudflare offers nothing
 free that emails on a log condition, so don't plan around one.
+
+**The update Worker (#1786).** It alerts too, on `unknown-id` and `unparseable`
+— an entitlement *nobody removed* is gone, which is the "You're up to date
+forever" state. One channel only: `ALERT_WEBHOOK_URL`. There is deliberately no
+`ALERT_EMAIL` here, because this Worker has no Resend binding and the one
+surface that must answer every anonymous updater should not hold a mail secret.
+Three properties worth knowing before you read a quiet channel as health:
+
+- `expired` and `revoked` never alert. Both are expected — the second is your
+  own refund or §7 revocation, and paging you for it on every check for the life
+  of the blob is how a channel gets muted.
+- The alert fires only for a **UUID-shaped** id. The endpoint is
+  unauthenticated, so without that gate a scanner pages you on a healthy system.
+  A non-UUID id is still logged; it just never pages.
+- **Residual, stated rather than fixed:** a UUID-shaped flood still reaches the
+  channel and consumes the per-isolate throttle slot, which can suppress a
+  genuine event for five minutes. Bounding that needs a KV counter, i.e. a write
+  per request, and is not worth it.
+
+Both halves are merged but **inert until the Workers are redeployed** with `[observability]` and `ALERT_WEBHOOK_URL` set (§8).
 
 ## 6. Back up `LEDGER_KV`
 
@@ -511,17 +581,31 @@ record and re-`PUT` their entitlement.
 ## 7. Refunds, revocation, and the kill switch
 
 - **A refund does not stop the software running, and that is intentional.**
-  `applyRefund` deletes the update entitlement; the signed blob still verifies
-  forever (ADR-040 §4 — activation is air-gapped by design). Consumer law
-  obliges returning the money, not technical revocability.
+  `applyRefund` writes a revocation **tombstone** over the update entitlement;
+  the signed blob still verifies forever (ADR-040 §4 — activation is air-gapped
+  by design). Consumer law obliges returning the money, not technical
+  revocability.
 - Note the arithmetic before pricing: 14-day trial + a 14-day EU withdrawal
   window + perpetual run ≈ **28 days of legitimate free use ending in a
   permanent license.** That's a deliberate consequence of the design, not a leak
   to plug — but it should be a decision, not a surprise.
-- **Revoking updates** = deleting `KV[licenseId]`. Remember that this puts the
-  customer into the exact "You're up to date, forever" state described in §3b,
-  which is indistinguishable from a bug. Record every deliberate revocation
-  somewhere you'll look when they open a ticket.
+- **Revoking updates** = writing a TOMBSTONE over `KV[licenseId]`, never
+  deleting it:
+
+  ```bash
+  npx wrangler kv key put "<licenseId>" '{"updateWindowEnd":null,"status":"revoked"}' \
+    --remote --namespace-id <LICENSE_KV id>
+  ```
+
+  **Do not `kv key delete`.** A deleted key is indistinguishable from a key that
+  was lost (a failed write, an eviction, a namespace-id mismatch), and the
+  update Worker alerts on that absence — so deleting would page you for your own
+  deliberate action on every check that customer's install makes, forever, until
+  you mute the channel and stop detecting the real thing. The tombstone answers
+  `revoked` instead: retained and readable, never alerted on. It still puts the
+  customer into the "You're up to date, forever" state described in §3b, so
+  record every deliberate revocation somewhere you'll look when they open a
+  ticket.
 - **Kill switch: unpublish the Polar product.** If issuance is broken, the
   instinct is to debug while broken sales keep arriving. Stop the sales first.
   Every minute spent debugging a live checkout is another customer to reconcile
@@ -551,8 +635,28 @@ Then walk §5a steps 2–4 with that order number.
 - [ ] `SUPPORT_EMAIL` set, the mailbox actually exists, and someone reads it.
       The Worker enforces the first clause (503 on unset/placeholder/malformed);
       the mailbox existing and being read is still only this checklist line.
-- [ ] `ALERT_WEBHOOK_URL` set (see §5c — without it you cannot be alerted about
-      the email failures that disable the endpoint).
+- [ ] `RESEND_FROM` set to the **verified** sender, not the shipped
+      `REPLACE_WITH_VERIFIED_SENDER`. Enforced like `SUPPORT_EMAIL` (503,
+      `stage: "config-resend-from"`, before anything is minted); that the domain
+      is actually verified in Resend is still only this checklist line, and it is
+      what the end-to-end send test above proves.
+- [ ] `ALERT_WEBHOOK_URL` set on the **issuance** Worker and reachable. One box,
+      two reasons: the config-stage 503s are now alertable and a broken
+      `RESEND_FROM` cannot be reported through Resend (its own arm skips the
+      Resend fallback), and without the webhook you cannot be alerted about the
+      email failures that disable the endpoint (§5c).
+- [ ] `ALERT_WEBHOOK_URL` set on the **update** Worker too, and
+      `[observability]` deployed on **both**. Until then the #1786 detector is
+      merged and inert: nothing retains the `reason` lines and nothing reaches
+      you when an entitlement goes missing.
+- [ ] **Verify what Cloudflare's retained invocation record actually holds**,
+      against a real deployment. Tandem's own log line carries `{result, reason,
+      ts}` and no license id — that is pinned by tests. The platform's
+      invocation record is not ours and has never been read: if it carries
+      request headers it holds `X-Tandem-License-Id`, i.e. exactly the
+      per-customer update history the no-id invariant exists to prevent. If it
+      does, the response is to drop `[observability]` on the update Worker or to
+      stop sending the id in a header. Do not assume either way from the docs.
 - [ ] A sandbox purchase completed end-to-end: email → activate →
       `tandem license` reports `licensed` → §5a step 4 returns a manifest.
       Deploy the sandbox with **`TANDEM_ISSUANCE_ENV=production` and its own KV
@@ -594,10 +698,10 @@ Then walk §5a steps 2–4 with that order number.
 | Sign paid license (1y updates) | `npx tsx scripts/sign-license.ts --name N --email E --type personal --expires 365` |
 | Activate (tester) | `tandem activate <key-or-path>` |
 | Check status (tester) | `tandem license` |
-| Deploy update Worker | `cd infra/license-update-worker && npx wrangler deploy` |
-| Deploy issuance Worker | `cd infra/license-issuance-worker && npx wrangler deploy` |
+| Deploy update Worker | `cd infra/license-update-worker && npx wrangler@4.130.0 deploy` |
+| Deploy issuance Worker | `cd infra/license-issuance-worker && npx wrangler@4.130.0 deploy` |
 | Read an order's ledger record | `npx wrangler kv key get "order:live:<orderId>" --remote --namespace-id <LEDGER_KV>` |
 | Read an entitlement | `npx wrangler kv key get "<licenseId>" --remote --namespace-id <LICENSE_KV>` |
 | **Prove a license gets updates** | `curl -H "X-Tandem-License-Id: <licenseId>" https://<endpoint>/latest.json -i` (expect 200, not 204) |
-| Revoke updates | `npx wrangler kv key delete "<licenseId>" --remote --namespace-id <LICENSE_KV>` |
+| Revoke updates (tombstone, never delete — §7) | `npx wrangler kv key put "<licenseId>" '{"updateWindowEnd":null,"status":"revoked"}' --remote --namespace-id <LICENSE_KV>` |
 | Stop the bleeding | Unpublish the Polar product |

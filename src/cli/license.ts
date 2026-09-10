@@ -122,8 +122,40 @@ export async function runActivate(args: string[]): Promise<void> {
   if (!input) {
     console.error("Usage: tandem activate <license-string-or-path>");
     process.exit(1);
+    // `process.exit` is typed `never`, so TS is satisfied without this — but
+    // under a spied `exit` (which does not terminate) the function falls
+    // through, and the next lines then run with `input` undefined.
+    return;
   }
-  const blob = resolveLicenseInput(input, fs.existsSync, (p) => fs.readFileSync(p, "utf-8"));
+  // Its OWN try, a SIBLING of the one below and never nested (#1789).
+  // `resolveLicenseInput` sat outside any handler: `existsSync` says yes for a
+  // DIRECTORY, `readFileSync` throws EISDIR, and the buyer got a raw stack trace
+  // instead of the per-cause copy the activation catch prints. Nesting it inside
+  // that catch instead would print the generic "License activation failed." line
+  // on top — the double message, reintroduced by structure.
+  //
+  // Echoing `input` is safe: this branch is reachable only once
+  // `fileExists(input)` returned true, so it is a path, not blob bytes.
+  let blob: string;
+  try {
+    blob = resolveLicenseInput(input, fs.existsSync, (p) => fs.readFileSync(p, "utf-8"));
+  } catch (err) {
+    // Bind the error and print its message (review round 1). A bare `catch`
+    // reported EVERY read failure with folder-specific advice: an EACCES on a
+    // readable-looking file, or an EIO on a disconnected share, told the buyer
+    // to check whether their file was a folder while the errno that actually
+    // named the cause was discarded. `err.message` from `readFileSync` carries
+    // the errno and the path — never blob bytes, since this branch is reachable
+    // only once `fileExists(input)` returned true.
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error(
+      `\n[Tandem] Could not read a license from ${input}.\n` +
+        "If that's a folder, point at the .license file inside it — or paste the license " +
+        `key itself as the argument.\nReason: ${reason}\n`,
+    );
+    process.exit(1);
+    return;
+  }
   try {
     const state = await activateLicense(resolveAppDataDir(), blob);
     const lic = state.gateActive && state.status === "licensed" ? state.license : null;

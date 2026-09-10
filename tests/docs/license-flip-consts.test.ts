@@ -32,7 +32,9 @@ import { REPO_ROOT, rustSourceDefining, rustSources } from "./rust-sources.js";
  * `const LICENSE_GATE_ENABLED = false;` above a flipped-to-`true` live one ⇒
  * red (the tsup half is comment-stripped for the same reason the Rust half
  * reads `.code`); add a second `app.updater()` ⇒ red; add an
- * `Ok(UpdateOutcome::Withheld(_)) => show_up_to_date_dialog(app)` arm ⇒ red.
+ * `Ok(UpdateOutcome::Withheld(_)) => show_up_to_date_dialog(app)` arm ⇒ red;
+ * add a second `show_update_window_ended_dialog(app)` call anywhere ⇒ red;
+ * delete the one in `check_for_update`'s `Ok(None)` arm ⇒ red.
  */
 
 const TSUP_CONFIG = join(REPO_ROOT, "tsup.config.ts");
@@ -323,6 +325,34 @@ describe("the update route shape #1785 fixes (#1785)", () => {
       '"You\'re running the latest version" is the exact lie #1786 exists to detect. It may ' +
         "be shown only for a real Ok(None) from updater.check() — never on the withheld-manifest " +
         "arm, which serves no manifest and never calls check() at all.",
+    ).toBe(1);
+  });
+
+  /**
+   * The ended-window arm has to reach the SCREEN, and nothing else can see that
+   * (#1819). `check_for_update` needs an `AppHandle` no `cargo test` can build,
+   * and on a dark build `resolve_update_route` returns `(Public, false)` before
+   * probing, so the branch is unreachable by hand too — an implementation that
+   * defines `window_ended_copy` and `local_window_ended`, tests both, threads
+   * the flag through `UpdateOutcome::Serve` and never touches the `Ok(None)` arm
+   * compiles with at most a `dead_code` warning and passes every other check.
+   *
+   * Discriminating for the same reason its neighbour above is: `rust-sources.ts`
+   * strips comments and `#[cfg(test)]`, and after `\s+` collapse neither the
+   * definition (`fnshow_update_window_ended_dialog(app:&tauri::AppHandle)`) nor
+   * the `attach_main_window_or_warn(app,builder,"show_update_window_ended_dialog")`
+   * wiring line contains the searched `(app)` spelling. Only the real call site
+   * can satisfy it, so the lazy implementation reads 0.
+   *
+   * What it still cannot see is which side of the `if/else` each dialog sits on
+   * — that stays a hand-check on the diff.
+   */
+  it("show_update_window_ended_dialog(app) is called exactly once", () => {
+    expect(
+      countOccurrences(COMPACT_RUST_CODE, "show_update_window_ended_dialog(app)"),
+      "a licensed device whose LOCAL update window has ended must be told so on the manual " +
+        "check, not told it is up to date. Zero means the branch never left " +
+        "resolve_update_route's log::warn! — the no-op PR that reads as done.",
     ).toBe(1);
   });
 });

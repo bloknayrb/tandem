@@ -16,7 +16,7 @@ import {
   resolveLiveLicenseState,
 } from "../../license/license-state.js";
 import type { LicenseState, LicenseStatus } from "../../license/license-types.js";
-import { resolveAppDataDir } from "../../platform.js";
+import { npmCliSharesAppDataRoot, resolveAppDataDir } from "../../platform.js";
 
 /**
  * Loopback (full) status wire. `LicenseState` is a discriminated union whose
@@ -108,6 +108,29 @@ export function scrubForNonLoopback(s: LicenseState): {
 }
 
 /**
+ * The loopback payload plus `cliActivateEffective` (#1789, review round 1).
+ *
+ * Deliberately NOT inside `toLicenseStatusWire`, which stays a pure function of
+ * the state it is handed; this reads the environment, so it belongs on the
+ * request path. Deliberately NOT on `scrubForNonLoopback` either: a LAN caller
+ * runs `tandem activate` on THEIR machine, which can never reach this server's
+ * app-data root, and the client reads a missing field as `false` — so absence
+ * is already the right answer there, and adding an always-`false` key would only
+ * widen the scrubbed wire.
+ *
+ * Both loopback callers go through here so the GET and the activate response
+ * cannot disagree — the client's `set()` replaces `status` wholesale with the
+ * activate payload, and a missing flag there would blank the hint on the very
+ * screen the user just used.
+ */
+function loopbackLicenseWire(state: LicenseState): Record<string, unknown> {
+  return {
+    ...toLicenseStatusWire(state, state.gateActive ? undefined : darkInstallInfo()),
+    cliActivateEffective: npmCliSharesAppDataRoot(),
+  };
+}
+
+/**
  * GET /api/license/status — current on-device license state, recomputed fresh.
  * Loopback callers get the full state (incl. licensee name + licenseId for the
  * updater); non-loopback callers get the scrubbed subset (raw `isLoopback` check,
@@ -116,7 +139,7 @@ export function scrubForNonLoopback(s: LicenseState): {
 export function handleGetLicenseStatus(req: Request, res: Response): void {
   const state = resolveLiveLicenseState();
   if (isLoopback(req.socket.remoteAddress)) {
-    res.json(toLicenseStatusWire(state, state.gateActive ? undefined : darkInstallInfo()));
+    res.json(loopbackLicenseWire(state));
     return;
   }
   res.json(scrubForNonLoopback(state));
@@ -139,9 +162,19 @@ export async function handleActivateLicense(req: Request, res: Response): Promis
   // TANDEM_ALLOW_UNAUTHENTICATED_LAN — internal vocabulary that reaches the
   // activation form verbatim, since the client passes `json.message` straight
   // through.
+  //
+  // The `tandem activate` clause is conditional on the SAME discriminant the
+  // Settings hint uses (review round 2). On a desktop install the sidecar reads
+  // the Tauri app-data dir while an npm-installed CLI writes `license.json`
+  // under its own env-paths root, so the command prints "✓ License activated"
+  // and changes nothing the app can see — the exact wrong-root no-op #1789
+  // removed from the hint two functions away. `npmCliSharesAppDataRoot()` is the
+  // server saying the two roots coincide; anything else, and we only say "paste
+  // the key there".
   const LOCAL_ONLY =
     "A license can only be activated on the computer running Tandem. Open Tandem on that " +
-    "computer and paste the key there, or run `tandem activate` on it.";
+    "computer and paste the key there" +
+    (npmCliSharesAppDataRoot() ? ", or run `tandem activate` on it." : ".");
   if (assertOriginAllowlisted(req, res, API_LICENSE_ACTIVATE, LOCAL_ONLY)) return;
   if (assertLoopbackForMutation(req, res, LOCAL_ONLY)) return;
 
@@ -165,7 +198,7 @@ export async function handleActivateLicense(req: Request, res: Response): Promis
     // "your update window has ended" warning, on a build that gates nothing.
     // Same shaping as GET /api/license/status, so the two can't disagree.
     const live = resolveLiveLicenseState();
-    res.json(toLicenseStatusWire(live, live.gateActive ? undefined : darkInstallInfo()));
+    res.json(loopbackLicenseWire(live));
   } catch (err) {
     const code = err instanceof LicenseActivationError ? err.code : "UNKNOWN";
     // A write failure is OUR fault, not the caller's — 500, not 400. The
