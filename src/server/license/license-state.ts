@@ -48,6 +48,70 @@ function readJson<T>(filePath: string): T | null {
 }
 
 /**
+ * The epoch ms the trial clock starts from, given a parsed `trial.json` body
+ * (#1788). `NaN` when the body is present but cannot run a clock — `NaN` makes
+ * `nowMs < expiresAt` false ⇒ restricted (decision 5).
+ *
+ * Only `null` — file absent, unreadable, unparseable, or a literal `null` body,
+ * which `readJson` cannot tell apart — is day 0. Every other body is
+ * authoritative, so a bogus `firstRunAt` fails closed.
+ *
+ * `Date.parse` on a STRING-typed field, not `new Date(x).getTime()`:
+ * `new Date(null)` and `new Date(0)` are a **finite** `0` — a 1970 epoch that
+ * reads as a usable timestamp — while `new Date("")` is `NaN`. Typing the field
+ * first is what makes `null` and `0` fail here rather than silently becoming a
+ * 1970 clock.
+ */
+function trialFirstRunAt(tf: unknown, nowMs: number): number {
+  if (tf === null) return nowMs;
+  const v = (tf as Partial<TrialFile>).firstRunAt;
+  return typeof v === "string" ? Date.parse(v) : NaN;
+}
+
+/**
+ * The earliest `firstRunAt` that can be a real first run: 2020-01-01Z, comfortably
+ * before Tandem existed and comfortably after the two values a broken clock
+ * actually produces (the 1970 epoch, and the 2015-2016 dates a dead RTC restores).
+ */
+const TRIAL_EPOCH_FLOOR_MS = Date.UTC(2020, 0, 1);
+
+/**
+ * Can this parsed `trial.json` body run a clock? The predicate `ensureTrialStarted`
+ * repairs against, kept beside `trialFirstRunAt` so the two cannot disagree.
+ *
+ * **Finiteness is not enough, and that gap was live in the first draft of #1788.**
+ * `Date.parse` is happy with any well-formed date, so a *valid but wrong*
+ * `firstRunAt` passed a bare `Number.isFinite` check and was never repaired —
+ * failing in both directions from one root cause:
+ *
+ * - **Too old ⇒ permanently restricted.** A device whose RTC battery is dead
+ *   boots at, say, 2016-01-01, writes that as `firstRunAt`, and NTP then
+ *   corrects the clock. The trial is now years expired, the body is "usable",
+ *   so the repair never runs and the device is restricted forever with no
+ *   recovery — verbatim the failure `ensureTrialStarted` exists to close.
+ * - **Too far future ⇒ perpetual trial.** The mirror image, and it fails OPEN:
+ *   a `firstRunAt` of 3000-01-01 is finite, so `nowMs < firstRunAt + TRIAL_MS`
+ *   holds forever and `daysRemaining` (~355,000) reaches the wire and the
+ *   client banner. That contradicted `trialFirstRunAt`'s own promise that a
+ *   bogus `firstRunAt` fails closed.
+ *
+ * So the bound is two-sided. The future edge is `nowMs` rather than a constant
+ * because a trial cannot legitimately start after now; a little slack absorbs
+ * clock skew between the write and this read.
+ *
+ * `0` for `nowMs` in the finiteness call is deliberate and not a placeholder:
+ * the only body this is asked about is a non-`null` one, where `trialFirstRunAt`
+ * does not read `nowMs` at all.
+ */
+const TRIAL_FUTURE_SLACK_MS = 86_400_000;
+
+function trialBodyIsUsable(tf: unknown, nowMs: number): boolean {
+  const firstRunAt = trialFirstRunAt(tf, 0);
+  if (!Number.isFinite(firstRunAt)) return false;
+  return firstRunAt >= TRIAL_EPOCH_FLOOR_MS && firstRunAt <= nowMs + TRIAL_FUTURE_SLACK_MS;
+}
+
+/**
  * Resolve on-device license state — computed FRESH on every call (no cache).
  * A cache caused the two-writer staleness + mid-session-expiry bugs the spec
  * reviews found, so the gate re-reads `license.json`/`trial.json` per dispatch.
@@ -125,8 +189,17 @@ export function resolveLicenseState(deps: {
   }
 
   // 2. Trial clock (soft by design — ADR-040 §3). Absent file ⇒ day 0.
-  const tf = readJson<TrialFile>(trialFilePath(appDataDir));
-  const firstRunAt = tf?.firstRunAt ? new Date(tf.firstRunAt).getTime() : nowMs;
+  //
+  // readJson<unknown>, not <TrialFile>: the cast is blind (:42-48), and a
+  // TrialFile-typed `tf` would narrow away the non-null-but-unusable bodies that
+  // carry decision 5 (a whole-body scalar, `firstRunAt: 0`).
+  //
+  // Before #1788 this read `tf?.firstRunAt ? new Date(tf.firstRunAt).getTime() :
+  // nowMs`, which sent every FALSY value down the absent-file branch — so
+  // `firstRunAt: ""` was a PERPETUAL 14-day trial on every dispatch, a fail-open
+  // and the opposite of what a non-empty unparseable value already did.
+  const tf = readJson<unknown>(trialFilePath(appDataDir));
+  const firstRunAt = trialFirstRunAt(tf, nowMs);
   const expiresAt = firstRunAt + TRIAL_MS;
   if (nowMs < expiresAt) {
     const daysRemaining = Math.max(0, Math.ceil((expiresAt - nowMs) / 86_400_000));
@@ -172,6 +245,28 @@ export function resolveLiveLicenseState(): LicenseState {
  * once, with an exclusive create (`flag: "wx"`) so concurrent stdio+HTTP first
  * boots agree on a single `firstRunAt` (first writer wins). No-op when the gate
  * is dark — so the v1.0 flag-flip starts a clean 14-day trial.
+ *
+ * **It also REPAIRS an existing file that cannot run a clock**, and that half is
+ * what stops #1788's fix from creating a state with no way out. Since #1788 a
+ * body that parses but carries an unusable `firstRunAt` resolves `restricted`
+ * (correct — the fail-open it replaces was real), but the old
+ * `if (existsSync) return;` meant nothing ever rewrote it: post-flip the device
+ * was restricted on every boot, forever, told "your trial has ended" having
+ * never had one. Reachable from a hand-edited file, a `{}` / `0` / `[]` body, or
+ * a `firstRunAt` written by a schema revision this build does not understand —
+ * and the spec itself pins `firstRunAt: 0` as restricted, which is exactly what
+ * an epoch-ms revision would write.
+ *
+ * **The repair is gated on a successful READ AND PARSE**, which is the errno
+ * discrimination that made this look expensive when it was first deferred. A
+ * transient Windows AV/indexer lock, or any other read failure, leaves the file
+ * strictly alone — rewriting on a failed read would reset a real, running clock.
+ * An unparseable body is left alone too: `readJson` already reads that as day 0,
+ * so it is not stuck, and the file may still be recoverable by hand.
+ *
+ * A repair grants one fresh 14-day trial, which is no new abuse surface:
+ * deleting `trial.json` already does that, and ADR-040 §3 makes the clock soft
+ * by design.
  */
 export async function ensureTrialStarted(
   appDataDir: string,
@@ -180,7 +275,25 @@ export async function ensureTrialStarted(
 ): Promise<void> {
   if (!gateEnabled) return;
   const filePath = trialFilePath(appDataDir);
-  if (fs.existsSync(filePath)) return;
+  let repairing = false;
+  if (fs.existsSync(filePath)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    } catch {
+      // Unreadable (a lock) or unparseable. Either way this process has no
+      // evidence the clock is broken, so it must not overwrite it.
+      return;
+    }
+    if (parsed === null || trialBodyIsUsable(parsed, now())) return;
+    repairing = true;
+    warnOnce(
+      "trial:repair",
+      "[license] trial.json holds no usable firstRunAt (missing, unparseable, before 2020, " +
+        "or in the future — a dead RTC writes all three) — rewriting it and starting a fresh " +
+        "trial clock. Without this the device stays restricted on every boot with no recovery.",
+    );
+  }
   const body: TrialFile = { version: 1, firstRunAt: new Date(now()).toISOString() };
   try {
     // The directory may not exist yet — `tandem activate ./x.license`, which the
@@ -188,7 +301,12 @@ export async function ensureTrialStarted(
     // Tandem has ever launched. (The activate path gets its mkdir from
     // `atomicWriteConfigFile`; this one writes directly for the `wx` semantics.)
     fs.mkdirSync(appDataDir, { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify(body), { flag: "wx" });
+    // `wx` on the CREATE path only. The repair path has already established
+    // that a file is there and that it cannot run a clock, so an exclusive
+    // create would throw every time and the repair would never land. Two
+    // processes repairing at once both write a `firstRunAt` of roughly now, so
+    // losing that race costs nothing.
+    fs.writeFileSync(filePath, JSON.stringify(body), { flag: repairing ? "w" : "wx" });
   } catch {
     // Lost the race to a concurrently-starting process — its file stands.
     // (Or the directory is unwritable, in which case the trial fails OPEN by

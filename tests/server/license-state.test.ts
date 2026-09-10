@@ -278,6 +278,90 @@ describe("resolveLicenseState — fail-closed on corrupt files", () => {
   });
 });
 
+/**
+ * #1788 decision 5: a `trial.json` that PARSES to a non-null body is
+ * authoritative even when its `firstRunAt` cannot run a clock. Before the fix
+ * `tf?.firstRunAt ? new Date(tf.firstRunAt).getTime() : nowMs` sent every FALSY
+ * value down the ABSENT-FILE branch, so `firstRunAt: ""` was a perpetual 14-day
+ * trial on every dispatch — a real fail-open, and the opposite direction to the
+ * `"not-a-date"` case above, which already resolved closed.
+ *
+ * **The clock is the discriminator here, and it is `now: () => 0` on purpose.**
+ * `TRIAL_MS` is 14 days (~1.21e9 ms), so a `firstRunAt` that coerces through a
+ * string-lenient parse — `Date.parse(0)` → `"0"` → 946684800000 (2000), or a
+ * lazy `new Date(null).getTime()` → 0 (1970) — expires long before any realistic
+ * `now`, and these assertions would read `restricted` and PASS even with the
+ * `typeof v === "string"` half of `trialFirstRunAt` deleted. At epoch 0 that
+ * same mutation reads `trial` and goes red.
+ *
+ * Mutations these four cases exist to catch (hand-checked; restore from a file
+ * copy, never `git checkout`):
+ *   1. revert to `tf?.firstRunAt ? new Date(tf.firstRunAt).getTime() : nowMs` —
+ *      all four go red (plus the whole-body-scalar case below, and the
+ *      end-to-end disk case in license-armed-restricted.test.ts).
+ *   2. drop the `typeof v === "string"` test in `trialFirstRunAt` — `0` goes red
+ *      (`Date.parse(0)` coerces to `"0"` ⇒ a year-2000 clock).
+ *   3. drop that guard AND spell the parse `new Date(v).getTime()` — `null` and
+ *      `0` both go red (`new Date(null)` is a finite `0`, not `NaN`).
+ */
+describe("resolveLicenseState — unusable firstRunAt is not a fresh trial (#1788)", () => {
+  function writeTrialBody(dir: string, body: unknown): void {
+    fs.writeFileSync(trialFilePath(dir), JSON.stringify(body));
+  }
+
+  it.each([
+    ["empty string", { version: 1, firstRunAt: "" }],
+    ["null", { version: 1, firstRunAt: null }],
+    ["numeric zero", { version: 1, firstRunAt: 0 }],
+    ["key absent", { version: 1 }],
+  ])("firstRunAt %s ⇒ restricted, not day 0", (_label, body) => {
+    const dir = tmp();
+    writeTrialBody(dir, body);
+    const s = assertGateActive(
+      resolveLicenseState({ appDataDir: dir, now: () => 0, gateEnabled: true }),
+    );
+    expect(s.status).toBe("restricted");
+  });
+
+  // The discriminating twin: a usable value still runs the clock. Realistic
+  // `now` here (matching the `"not-a-date"` case above), because this one is
+  // about the ordinary path, not about coercion.
+  it("a valid recent ISO firstRunAt still ⇒ trial", () => {
+    const dir = tmp();
+    const now = Date.UTC(2026, 0, 1);
+    writeTrialBody(dir, { version: 1, firstRunAt: new Date(now - DAY).toISOString() });
+    const s = assertGateActive(
+      resolveLicenseState({ appDataDir: dir, now: () => now, gateEnabled: true }),
+    );
+    expect(s.status).toBe("trial");
+  });
+
+  // The boundary of what `readJson` can actually see. It cannot separate "file
+  // absent", "file unreadable", "unparseable JSON" and "the body is literally
+  // null" — all four are `null` — so only that collapsed case is day 0. Any
+  // other scalar body is a non-null parse and resolves closed. Recorded as two
+  // cases so the next reader does not assume the file-existence claim is
+  // stronger than it is.
+  it("a whole-body scalar trial.json (0) ⇒ restricted", () => {
+    const dir = tmp();
+    writeTrialBody(dir, 0);
+    const s = assertGateActive(
+      resolveLicenseState({ appDataDir: dir, now: () => 0, gateEnabled: true }),
+    );
+    expect(s.status).toBe("restricted");
+  });
+
+  it("a whole-body null trial.json ⇒ day-0 trial (indistinguishable from absent)", () => {
+    const dir = tmp();
+    writeTrialBody(dir, null);
+    const s = assertGateActive(
+      resolveLicenseState({ appDataDir: dir, now: () => 0, gateEnabled: true }),
+    );
+    expect(s.status).toBe("trial");
+    expect(s.status === "trial" && s.trial.daysRemaining).toBe(TRIAL_DAYS);
+  });
+});
+
 // The 14-day boundary is strict `<`. Both edges deterministic with the injected
 // clock (the PR deferred this; landing it before the v1.0 flag-flip).
 describe("resolveLicenseState — trial boundary", () => {
@@ -306,18 +390,127 @@ describe("resolveLicenseState — trial boundary", () => {
 });
 
 describe("ensureTrialStarted", () => {
+  // Both clocks must be REAL epoch values, not the synthetic `123_000` this
+  // test used before the clock-sanity bound landed. 123 s after the epoch is
+  // 1970, which the bound now (correctly) reads as a dead-RTC timestamp and
+  // repairs — so the old fixture would have proved the opposite of its name.
   it("writes trial.json once when gate enabled and does not overwrite", async () => {
     const dir = tmp();
-    await ensureTrialStarted(dir, () => 123_000, true);
+    const t0 = Date.UTC(2026, 0, 1);
+    await ensureTrialStarted(dir, () => t0, true);
     const first = fs.readFileSync(trialFilePath(dir), "utf-8");
-    await ensureTrialStarted(dir, () => 999_000, true);
+    await ensureTrialStarted(dir, () => t0 + 60_000, true);
     expect(fs.readFileSync(trialFilePath(dir), "utf-8")).toBe(first);
+  });
+
+  /**
+   * The clock-sanity bound (#1788 review). `Date.parse` accepts any well-formed
+   * date, so before this a VALID BUT WRONG `firstRunAt` was judged usable and
+   * never repaired — and it failed in both directions from the one root cause.
+   *
+   * These two cases are the ones a bare `Number.isFinite` check cannot see.
+   * Deleting the bound turns both red; deleting only one edge turns one red.
+   */
+  it.each([
+    [
+      "a dead-RTC past timestamp (restricted forever without the bound)",
+      new Date(Date.UTC(2016, 0, 1)).toISOString(),
+    ],
+    [
+      "a far-future timestamp (perpetual trial without the bound)",
+      new Date(Date.UTC(3000, 0, 1)).toISOString(),
+    ],
+  ])("repairs %s", async (_label, firstRunAt) => {
+    const dir = tmp();
+    const now = Date.UTC(2026, 0, 1);
+    fs.writeFileSync(trialFilePath(dir), JSON.stringify({ version: 1, firstRunAt }));
+
+    await ensureTrialStarted(dir, () => now, true);
+
+    const body = JSON.parse(fs.readFileSync(trialFilePath(dir), "utf-8"));
+    expect(body.firstRunAt).toBe(new Date(now).toISOString());
+  });
+
+  it("leaves a firstRunAt inside the bound alone", async () => {
+    const dir = tmp();
+    const now = Date.UTC(2026, 0, 1);
+    const legit = new Date(now - 3 * 86_400_000).toISOString();
+    fs.writeFileSync(trialFilePath(dir), JSON.stringify({ version: 1, firstRunAt: legit }));
+
+    await ensureTrialStarted(dir, () => now, true);
+
+    const body = JSON.parse(fs.readFileSync(trialFilePath(dir), "utf-8"));
+    expect(body.firstRunAt).toBe(legit);
   });
 
   it("writes nothing when the gate is disabled", async () => {
     const dir = tmp();
     await ensureTrialStarted(dir, () => 123_000, false);
     expect(fs.existsSync(trialFilePath(dir))).toBe(false);
+  });
+
+  /**
+   * The recovery route for #1788's closed path. Without it a body that parses
+   * but cannot run a clock resolves `restricted` on every boot forever, and
+   * `existsSync` guaranteed nothing ever rewrote it — the user is told their
+   * trial ended having never had one, with no in-app recovery.
+   *
+   * Each case asserts the RESOLVED STATE, not just the file bytes: rewriting
+   * the file with something still unusable would satisfy a bytes-changed
+   * assertion and leave the device exactly as stuck.
+   */
+  describe("repairs a trial.json that cannot run a clock", () => {
+    for (const [name, body] of [
+      ['firstRunAt: ""', { version: 1, firstRunAt: "" }],
+      ["firstRunAt: 0 (an epoch-ms schema revision)", { version: 1, firstRunAt: 0 }],
+      ["firstRunAt absent", { version: 1 }],
+      ["a whole-body scalar", 0],
+      ["an array body", []],
+      ["an unparseable-date string", { version: 1, firstRunAt: "yesterday" }],
+    ] as Array<[string, unknown]>) {
+      it(name, async () => {
+        const dir = tmp();
+        fs.writeFileSync(trialFilePath(dir), JSON.stringify(body));
+        const now = Date.now();
+
+        // Before: restricted, and no route out.
+        expect(
+          assertGateActive(
+            resolveLicenseState({ appDataDir: dir, now: () => now, gateEnabled: true }),
+          ).status,
+        ).toBe("restricted");
+
+        await ensureTrialStarted(dir, () => now, true);
+
+        expect(
+          assertGateActive(
+            resolveLicenseState({ appDataDir: dir, now: () => now, gateEnabled: true }),
+          ).status,
+        ).toBe("trial");
+      });
+    }
+  });
+
+  it("leaves a running clock alone (a valid firstRunAt is never rewritten)", async () => {
+    const dir = tmp();
+    const started = new Date(Date.now() - 3 * DAY).toISOString();
+    fs.writeFileSync(trialFilePath(dir), JSON.stringify({ version: 1, firstRunAt: started }));
+    await ensureTrialStarted(dir, () => Date.now(), true);
+    expect(JSON.parse(fs.readFileSync(trialFilePath(dir), "utf-8")).firstRunAt).toBe(started);
+  });
+
+  /**
+   * The errno discrimination the repair is gated on. A file this process could
+   * not PARSE is not evidence that the clock is broken — a truncated write, a
+   * Windows AV/indexer lock mid-read — and rewriting on that evidence resets a
+   * real, running clock. `readJson` already reads an unparseable body as day 0,
+   * so the device is not stuck either way.
+   */
+  it("leaves an unparseable trial.json alone rather than resetting a real clock", async () => {
+    const dir = tmp();
+    fs.writeFileSync(trialFilePath(dir), "{ truncated");
+    await ensureTrialStarted(dir, () => Date.now(), true);
+    expect(fs.readFileSync(trialFilePath(dir), "utf-8")).toBe("{ truncated");
   });
 });
 

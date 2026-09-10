@@ -522,7 +522,12 @@ export function registerAnnotationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    withErrorBoundary("tandem_resolveAnnotation", async ({ id, action, documentId }) => {
+    // gatedTool, not withErrorBoundary (decision F, #1788): restricted mode is
+    // SYMMETRIC read-only. Accept/dismiss writes the document room's annotation
+    // map, which Surface A already refuses from the browser when restricted —
+    // leaving the MCP twin ungated let Claude triage a document its own user
+    // cannot. The gate runs before this handler; no body change.
+    gatedTool("tandem_resolveAnnotation", async ({ id, action, documentId }) => {
       const store = getDocumentStore(documentId);
       if (!store) return noDocumentError();
 

@@ -382,12 +382,26 @@ so this is unblocked before any LLC/payout setup.
 
 ## 4. The v1.0 flag flip (enabling enforcement)
 
+**Two consts flip, in two languages, and they must land in the SAME commit.**
+`tests/docs/license-flip-consts.test.ts` asserts the biconditional — gate dark
+⇔ endpoint empty — in both directions, and `check` is a required status check,
+so a half-flip turns `master` red rather than shipping an armed run gate with an
+inert update window (#1785).
+
 1. Confirm the commercial-readiness exit criterion (ADR-040 / roadmap).
 2. Flip `const LICENSE_GATE_ENABLED = false` → `true` in `tsup.config.ts`.
-3. Rebuild and release. On first launch of a gate-active build, each user starts
+3. Set `const LICENSE_UPDATE_ENDPOINT: &str = ""` in `src-tauri/src/lib.rs` to
+   the deployed Worker URL, **in that same commit**. While it is empty,
+   `resolve_update_route` returns `Public` on its first line without probing, so
+   the update window gates nobody however the run gate is set.
+4. **Verify** `tauri.conf.json`'s public endpoint is now reachable only from the
+   trial and dark-gate arms of `update_route`. This is a check, **not a
+   deletion**: `Public` is what still serves every trialing device, and removing
+   the endpoint would cut off every evaluator on flip day.
+5. Rebuild and release. On first launch of a gate-active build, each user starts
    a clean **14-day trial** (`trial.json` is only written when the gate is on, so
    prior dark installs don't pre-burn the clock).
-4. Grandfathered/paid testers who already ran `tandem activate` are `licensed`
+6. Grandfathered/paid testers who already ran `tandem activate` are `licensed`
    immediately — no trial, no wall.
 
 ## 5. First-sale verification, and reconciling from Polar
@@ -554,6 +568,22 @@ Then walk §5a steps 2–4 with that order number.
 - [ ] Terms, refund policy and privacy notice published (see
       `docs/licensing-terms.md`).
 - [ ] Beta-cohort claim path and copy settled (§1c).
+- [ ] **A license whose update window has ENDED reaches the Worker and is
+      refused there** — not served public builds. `update_route` classifies it
+      `Licensed`, so the check carries `X-Tandem-License-Id` and the Worker's KV
+      is what decides; expect the 204 and an `expired` reason in the Worker log
+      (#1785). Serving that device a public manifest is the defect the route
+      exists to prevent, so this is the one §8 line a passing §5a cannot cover.
+- [ ] **A restricted install receives no in-app update at all** — `update_route`
+      answers `NoUpdates("no-entitlement")`, `build_updater` returns
+      `Ok(UpdateOutcome::Withheld(reason))`, and no request is issued. Grep for
+      `UpdateOutcome::Withheld`, not `Ok(None)`: the bare `None` threw the reason
+      away and is the shape this arm was rewritten out of, so finding it would
+      mean the fix is absent. A manual check shows `show_update_withheld_dialog`
+      — a native dialog whose copy differs per `WithheldReason`, so a paying
+      customer with a dead sidecar reads "Update Check Unavailable" rather than
+      being told to buy a license — never "You're up to date" (#1786 owns the
+      final surfacing, #1819 the wording).
 
 ## 9. Quick reference
 

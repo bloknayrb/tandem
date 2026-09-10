@@ -13,14 +13,23 @@
 > of it does anything to a user today.
 >
 > **Going live is TWO constants, in two languages** ([#1785](https://github.com/bloknayrb/tandem/issues/1785)).
-> `LICENSE_GATE_ENABLED = false` in `tsup.config.ts:20` turns the run gate on, and
-> `const LICENSE_UPDATE_ENDPOINT: &str = ""` at `src-tauri/src/lib.rs:171` must be pointed at
-> the deployed Worker. While that string is empty, `entitled_license_id()` short-circuits
-> (`src-tauri/src/lib.rs:2298`) and `build_updater()` falls to `app.updater()`
-> (`:2317-2332`) — so **every build today, licensed or not, checks the PUBLIC manifest**
-> from `src-tauri/tauri.conf.json`, and the `X-Tandem-License-Id` path described in Part 2
-> is unreachable code. Flipping only the first const ships a gate whose update window is
-> not actually enforced.
+> `const LICENSE_GATE_ENABLED` in `tsup.config.ts` turns the run gate on, and
+> `const LICENSE_UPDATE_ENDPOINT: &str = ""` in `src-tauri/src/lib.rs` must be pointed at
+> the deployed Worker. While that string is empty, `resolve_update_route()` short-circuits on
+> its first line and `build_updater()` takes its `Public` arm, `app.updater()` — so **every
+> build today, licensed or not, checks the PUBLIC manifest** from `src-tauri/tauri.conf.json`,
+> and the `X-Tandem-License-Id` path described in Part 2 is unreachable code. Flipping only
+> the first const ships a gate whose update window is not actually enforced;
+> `tests/docs/license-flip-consts.test.ts` refuses that half-flip.
+>
+> **Symbol names, not line numbers, on purpose.** This banner is the flip checklist, and it
+> already sent an operator to the wrong line once: the number that used to sit here landed on
+> `LICENSE_STATUS_URL`, one const above the target — also a URL, also license-related, so
+> "point it at the Worker" repoints
+> the loopback probe instead — after which `update_route` answers
+> `NoUpdates("status-unavailable")` for *every* device, licensed and trial alike, with only a
+> `log::warn!` to show for it. A line number in a file under active edit is a pointer that
+> goes stale silently; grep the const name.
 
 ---
 
@@ -251,8 +260,8 @@ this page.
 
 **MCP** — `tandem_edit`, `tandem_appendContent`, `tandem_editList`, `tandem_scratchpad`, `tandem_comment`,
 `tandem_suggest`, `tandem_highlight`, `tandem_flag`, `tandem_editAnnotation`,
-`tandem_annotationReply`, `tandem_removeAnnotation`, `tandem_applyChanges`,
-`tandem_restoreBackup`.
+`tandem_annotationReply`, `tandem_removeAnnotation`, `tandem_resolveAnnotation`,
+`tandem_applyChanges`, `tandem_restoreBackup`.
 
 **`/api`** — `apply-changes`, `annotation-reply`, `remove-annotation`, `document/reload`,
 `external-conflict/resolve`, `backups/restore`, `scratchpad`.
@@ -271,8 +280,13 @@ gates the `force === true` sub-path of `POST /api/open`, mirroring the `tandem_o
 body, not the registration site.**
 
 **Deliberately ungated:** all reads, *plain* `open` (only the destructive `force: true` reload is
-gated, on both halves), save/export, `GET` routes, chat, and `tandem_resolveAnnotation` — a
-status flip, not a content write.
+gated, on both halves), save/export, `GET` routes, and chat. `tandem_resolveAnnotation` left this
+set in [#1788](https://github.com/bloknayrb/tandem/issues/1788) (decision F): accept/dismiss
+writes the document room's annotation map, which Surface A already refuses from the browser when
+restricted, so leaving the MCP twin ungated let Claude triage a document its own user could not.
+It has **no `/api` twin** — `src/shared/api-paths.ts` carries reply and remove and nothing
+resolve-shaped, the browser accepting over Hocuspocus — so the `/api` half of Critical Rule 9 is
+satisfied by construction rather than by an edit.
 
 **Three mutations sit outside the gate and are not obviously reads.** Recorded here rather
 than left silent, because an absence nobody wrote down reads the same as an omission:
@@ -282,10 +296,17 @@ than left silent, because an absence nobody wrote down reads the same as an omis
 - `tandem_convertToMarkdown` / `POST /api/convert` — **writes a new `.md` file to disk** and
   opens it. Ungated (`src/server/mcp/document.ts:1499`).
 - `POST /api/mode/release` — clears `heldInSolo` markers on open documents
-  (`src/server/mcp/routes/mode-release.ts:108-115`). Ungated, on the same reasoning as
-  `tandem_resolveAnnotation`: a marker flip, not a content write. It has no MCP twin, and
-  since [#1769](https://github.com/bloknayrb/tandem/issues/1769) it no longer writes the mode
-  key at all.
+  (`src/server/mcp/routes/mode-release.ts:108-115`). Ungated, and the reasoning is now its own
+  rather than a cross-reference to `tandem_resolveAnnotation`: **mode lives in `CTRL_ROOM`, which
+  Surface A deliberately never marks read-only**, so a restricted user can still toggle
+  Solo→Tandem. Gating only the RELEASE would let them reach Solo and never leave it, stranding
+  their annotations behind a Held pill while their reads stay open — worse than what gating
+  prevents. Decision F asked for the opposite; the later (2026-09-08) reasoning won because it is
+  the only one of the two that considered the user afterwards, and re-gating one row is one line.
+  **Open for Bryan** on [#1788](https://github.com/bloknayrb/tandem/issues/1788) (comment
+  5612504584). It has no MCP twin, and since
+  [#1769](https://github.com/bloknayrb/tandem/issues/1769) it no longer writes the mode key at
+  all.
 
 Whether any of the three should join the gated set is a decision, not a doc fix. Neither
 disk-writing tool is a *document content* write in the sense the gate is drawn around, but
@@ -307,7 +328,7 @@ changed. Six exist:
 
 | # | Surface | Admission point | Enforcement today |
 |---|---|---|---|
-| 1 | MCP over HTTP (`:3479`) | per-session `McpServer`, `onsessioninitialized` | per-tool: **13** `gatedTool`, 1 conditional in-handler, **19** ungated (33 registered) |
+| 1 | MCP over HTTP (`:3479`) | per-session `McpServer`, `onsessioninitialized` | per-tool: **14** `gatedTool`, 1 conditional in-handler, **18** ungated (33 registered) |
 | 2 | MCP over stdio | `src/cli/mcp-stdio.ts` | **inherits row 1** — pure JSON-RPC proxy, no handlers of its own |
 | 3 | `/api` mutating twins | Express registrars | per-route: 7 middleware mounts + 1 in-handler — **but see below: these are the *user's* surfaces** |
 | 4 | Chat | `appendClaudeChatMessage()` | **none** |
@@ -447,7 +468,7 @@ activate correctly today**.
 
 ## Updates, and the endpoint that must not lie
 
-> **None of this runs today.** `LICENSE_UPDATE_ENDPOINT` is `""` (`src-tauri/src/lib.rs:171`),
+> **None of this runs today.** `LICENSE_UPDATE_ENDPOINT` is `""` (`src-tauri/src/lib.rs`),
 > so the updater takes the `app.updater()` branch and checks the public GitHub manifest for
 > every build. Everything in this section, and the failure mode in Part 3, describes what
 > happens **after** that const is pointed at the Worker

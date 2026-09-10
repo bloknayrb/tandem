@@ -3,7 +3,7 @@
  *
  * The defect this covers (D1): the script used to print a blob and stop. With
  * `--expires` optional, `expiresAt` stayed `null`, which downstream reads as
- * "update window never ends" — so `entitled_license_id()` returns the id,
+ * "update window never ends" — so `resolve_update_route()` answers `Licensed`,
  * `build_updater()` REPLACES the endpoint list with the license-checked one, KV
  * misses, the Worker returns 204, `tauri-plugin-updater` early-returns
  * `Ok(None)`, and the app says **"You're up to date."** permanently while
