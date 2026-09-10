@@ -48,35 +48,15 @@ const MAX_LOGGED_IDS = 10;
  *   - every C0 (U+0000–U+001F), U+007F, C1 (U+0080–U+009F) and every UNPAIRED
  *     surrogate becomes U+FFFD, so a crafted id cannot forge a newline and
  *     inject a second log line (nor a NUL, which several of these ids can
- *     legitimately carry — see `NON_CANONICAL_TAG`);
+ *     legitimately carry — see `NON_CANONICAL_TAG`). `\p{Cc}` is exactly the
+ *     first set; `\p{Cs}` under `/u` is exactly the second, because a WELL-formed
+ *     pair is one astral code point there and so is not in Cs at all;
  *   - the result is capped at `LOG_ID_MAX` units with a trailing ellipsis, and
  *     a trailing lone HIGH surrogate is dropped before the ellipsis so the
  *     truncation cannot mint the very thing the pass above just removed.
  */
 export function logId(raw: string): string {
-  let out = "";
-  for (let i = 0; i < raw.length; i++) {
-    const code = raw.charCodeAt(i);
-    if (code <= 0x1f || code === 0x7f || (code >= 0x80 && code <= 0x9f)) {
-      out += "\uFFFD";
-      continue;
-    }
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = raw.charCodeAt(i + 1);
-      if (next >= 0xdc00 && next <= 0xdfff) {
-        out += raw[i] + raw[i + 1];
-        i++;
-      } else {
-        out += "\uFFFD";
-      }
-      continue;
-    }
-    if (code >= 0xdc00 && code <= 0xdfff) {
-      out += "\uFFFD";
-      continue;
-    }
-    out += raw[i];
-  }
+  const out = raw.replace(/[\p{Cc}\p{Cs}]/gu, "\uFFFD");
   if (out.length <= LOG_ID_MAX) return out;
   let cut = out.slice(0, LOG_ID_MAX);
   const last = cut.charCodeAt(cut.length - 1);
@@ -290,6 +270,22 @@ const MAX_THREAD_DEPTH = 64;
  * predicate.
  */
 export const IMPORT_COMMENT_ID_MAX = 32;
+
+/**
+ * Whether a stored/incoming `w:id` is short enough to have survived the
+ * `IMPORT_COMMENT_ID_MAX` slice un-truncated, and so may key the drift-dedup
+ * index in `injectCommentsAsAnnotations`.
+ *
+ * ONE function rather than the condition written twice, because the index
+ * BUILD and the index LOOKUP must agree by construction: two copies that
+ * drift apart is exactly the #1693 defect, in which build and lookup were
+ * gated on a predicate that made them fail TOGETHER and inject a ghost note
+ * beside an already-promoted comment. The rationale for the gate itself is on
+ * `IMPORT_COMMENT_ID_MAX` and at the index build.
+ */
+function keysDriftIndex(id: string | undefined): id is string {
+  return !!id && id.length < IMPORT_COMMENT_ID_MAX;
+}
 
 // ---------------------------------------------------------------------------
 // Top-level extraction
@@ -645,7 +641,7 @@ export function injectCommentsAsAnnotations(
   const byCommentId = new Map<string, { key: string; ann: Annotation }>();
   for (const [key, val] of map as Iterable<[string, Annotation]>) {
     const cid = val?.importSource?.commentId;
-    if (!cid || cid.length >= IMPORT_COMMENT_ID_MAX) continue;
+    if (!keysDriftIndex(cid)) continue;
     const isPromoted = val.promotedFrom === "note";
     if (val.author !== "import" && !isPromoted) continue;
     const existing = byCommentId.get(cid);
@@ -846,12 +842,12 @@ export function injectCommentsAsAnnotations(
       } else {
         // Offset-id miss. Before injecting, consult the commentId index — a miss
         // here may be drift (same Word comment, moved/edited), not a new comment.
-        // Same gate as the index build, and it MUST stay the same expression:
-        // build and lookup failing together is exactly the #1693 defect.
-        const drift =
-          comment.commentId.length < IMPORT_COMMENT_ID_MAX
-            ? byCommentId.get(comment.commentId)
-            : undefined;
+        // `keysDriftIndex` is the index build's own gate, called rather than
+        // restated: build and lookup failing together is exactly the #1693
+        // defect.
+        const drift = keysDriftIndex(comment.commentId)
+          ? byCommentId.get(comment.commentId)
+          : undefined;
 
         if (drift && drift.ann.author === "import") {
           // Drift: re-anchor the existing note IN PLACE under its existing key
