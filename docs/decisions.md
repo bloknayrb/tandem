@@ -1913,7 +1913,7 @@ three times (#1229), which is why the acceptance harness's step carries no `if:`
 no `continue-on-error` and no `|| true`, and why `check` fails when any of that
 changes.
 
-**Decision.** The pattern, now used seven times, is: **the job does the work; a
+**Decision.** The pattern, now used eight times, is: **the job does the work; a
 wiring test inside `check` pins the job's shape and the inputs it reads.** The
 work stays where it is cheap. The disarming becomes expensive, because disarming
 it means editing something a required check reads.
@@ -1929,8 +1929,23 @@ Instances:
 | Every workflow's actions are SHA-pinned | `tests/scripts/workflow-action-pin.test.ts` |
 | `tauri-release.yml`'s signing gates | `tests/scripts/release-signing-gates.test.ts` |
 | `node-sidecar-pin` | `tests/scripts/node-sidecar-pin-wiring.test.ts` |
+| `check`'s vitest file anchor | `tests/scripts/vitest-file-anchor-wiring.test.ts` |
 
-The last three (#1745–#1747) stretch the pattern in a direction worth naming,
+**The eighth (#1673) is the first instance INSIDE a required job, and it is the
+one that shows what "required" does and does not buy.** The anchor step runs in
+`check`, so the obvious reading is that it needs no wiring test at all — being
+required is the protection. That reading is wrong and this PR's own first draft
+held it: **required makes a RED block; it does nothing about a step that never
+runs.** `run: … || true`, `continue-on-error: true`, an `if:` that stops
+matching, or deleting the step outright each leave `check` green with the anchor
+dead — the #1229 shape, re-created inside the very group that exists to fix it.
+`check` already carried two step-level gates pinned from inside itself for
+exactly this reason (`typecheck:tests` and the acceptance harness), so the
+anchor is the third, not a new category. It is also the weakest of the three,
+because it is the only one carrying an `if:` — a condition nothing else
+constrains.
+
+The last three of the first seven (#1745–#1747) stretch the pattern in a direction worth naming,
 because two of them pin something that is not a *job*. `tauri-release.yml` and
 `dependabot.yml` run on a `v*` tag and on Dependabot's own schedule; neither is
 reachable from any required check, and neither has ever been read by anything
