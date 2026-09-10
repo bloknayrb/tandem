@@ -205,8 +205,8 @@ describe("ids reusableWordId declines still re-mint on export (documented residu
   //     #1693, which this PR leaves OPEN for exactly that reason. Their
   //     NO-SAVE half is closed here, by the first describe above.
   //   - OUTSIDE INT32 (`3000000000`) and NON-CANONICAL FORM (`0123`): closable,
-  //     tracked in the residual-ids follow-up filed with this PR.
-  //   - AT OR PAST the cap: the fourth describe's far side.
+  //     tracked in #1951.
+  //   - AT OR PAST the cap: the fourth describe's far side, also #1951.
   const residual: Array<{ commentId: string; mintedId?: number }> = [
     { commentId: "c-9182" },
     { commentId: "nc:x" },
