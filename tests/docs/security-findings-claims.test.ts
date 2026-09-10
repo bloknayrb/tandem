@@ -241,3 +241,47 @@ describe("open security-findings claims (CLAUDE.md vs docs/security.md)", () => 
     ).toEqual([]);
   });
 });
+
+/**
+ * The REVERSE direction. Every spec above reads CLAUDE.md and asks the register to agree;
+ * nothing asked the register's own entries to be accounted for. That is how a new entry (the
+ * `wakeUrl` finding, 2026-09-10) made the real count five while CLAUDE.md still said Four and
+ * every spec here stayed green.
+ *
+ * Keyed on the ISSUE REF, not on a status word. The register has no uniform status token —
+ * #1609, #1884 and #1292 carry none, and #1420 reads "not open" — so a "contains the word open"
+ * predicate is wrong in both directions. It is also why "every entry appears in CLAUDE.md or
+ * carries a not-counted marker" is unbuildable here: the `## Open findings` section holds ~27
+ * top-level bullets of which only ~10 are entries, the rest being unindented PROSE bullets
+ * inside entry bodies. Those prose bullets carry no issue ref, which is exactly what makes
+ * "has a top-level ref" a clean entry discriminator.
+ *
+ * Its bound, stated plainly: a new entry with NO issue number escapes this guard. That is
+ * acceptable only because this section's own rule is that an open finding is filed as well as
+ * recorded here — the exemption and the rule are the same sentence.
+ */
+const CLOSED_NOT_IN_CLAUDE_MD = [
+  // Retained under the closed-findings heading because the mechanism is load-bearing for the
+  // entry above it; closed findings are deliberately not carried in CLAUDE.md's bullet at all.
+  { issue: 1537, why: "hyphenated-scheme render bypass — CLOSED, kept for the mechanism" },
+];
+
+describe("the register does not outgrow CLAUDE.md's enumeration", () => {
+  it("every issue the register files an entry for is accounted for in CLAUDE.md", () => {
+    const allowed = new Set(CLOSED_NOT_IN_CLAUDE_MD.map((r) => r.issue));
+    const bullet = claimBullet();
+    const refs = entryOpenings().flatMap(issueRefsAtTopLevel);
+
+    expect(refs.length, "control: derived no register entries at all").toBeGreaterThan(5);
+
+    const unaccounted = [...new Set(refs)].filter(
+      (n) => !allowed.has(n) && !new RegExp(`#${n}(?!\\d)`).test(bullet),
+    );
+    expect(
+      unaccounted,
+      "register entries whose issue CLAUDE.md's findings bullet never mentions. Add them to " +
+        "the enumeration (and move the count word), or add a row to CLOSED_NOT_IN_CLAUDE_MD " +
+        "with a written reason if the finding is closed.",
+    ).toEqual([]);
+  });
+});

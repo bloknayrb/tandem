@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { SERVER_INSTRUCTIONS } from "../../src/server/mcp/server.js";
+import { WAKE_URL_PRODUCERS } from "../../src/server/mcp/wake-url.js";
 
 /**
  * Prose constraints on the MCP `instructions` string.
@@ -60,6 +61,20 @@ describe("MCP server instructions", () => {
     // inapplicable.
     expect(SERVER_INSTRUCTIONS).toMatch(/if your client can hold a persistent watch/i);
     expect(SERVER_INSTRUCTIONS).not.toMatch(/\bskill\b/i);
+  });
+
+  // These instructions load BEFORE any skill decision, so a model that never dispatches the
+  // skill has only this text to learn which call can hand it an address. The producer set
+  // lived here as prose with nothing tying it to `wake-url.ts` — which is how the old
+  // `tandem_status`-only trigger stayed stated on this surface after the code widened.
+  it("names every tool that can actually produce a wakeUrl", () => {
+    for (const tool of WAKE_URL_PRODUCERS) {
+      expect(
+        SERVER_INSTRUCTIONS,
+        `SERVER_INSTRUCTIONS never mentions ${tool}, which returns wakeUrl. A model reading ` +
+          "only this text would not know it can arm from that response.",
+      ).toContain(tool);
+    }
   });
 
   it("bounds arming to once per session", () => {

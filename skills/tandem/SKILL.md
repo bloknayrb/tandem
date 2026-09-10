@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 19
+version: 21
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -32,11 +32,11 @@ These prevent the most common failures. Follow them always.
 
 Standard workflow:
 
-1. `tandem_status` — check for already-open documents (sessions restore automatically)
+1. `tandem_status` — check for already-open documents (sessions restore automatically) and read `mode` (see "Collaboration Mode"). Opening or creating one instead — `tandem_open`, or `tandem_scratchpad` for an ephemeral draft tab — reaches the same `wakeUrl` (see "Getting Woken While Idle"), so a task that starts by creating a document does not need a separate status call *to arm a watch*. It substitutes for nothing else in this step: neither response carries `mode`, and neither tells you what else is already open.
 2. `tandem_getOutline` — understand document structure
 3. `tandem_status({ text: "Working on [section]...", focusParagraph: N })` — show progress (use `index` from outline)
 4. `tandem_getTextContent({ section: "..." })` — read one section at a time
-5. Annotate or edit as needed (see annotation guide below)
+5. Annotate or edit as needed (see annotation guide below) — **not before you know `mode`.** If no response this session has carried `mode`, call `tandem_checkInbox` now and read it from there.
 6. `tandem_checkInbox` — check for user messages and actions (orchestrator only in a multi-agent workflow)
 7. Repeat steps 3-6 for each section
 8. `tandem_save` — persist edits to disk when done
@@ -77,6 +77,8 @@ Check `mode` from `tandem_status` or `tandem_checkInbox` and adapt:
 - **Tandem** (`"tandem"`, default) — Full collaboration. Annotate freely and react to selections and document changes.
 - **Solo** (`"solo"`) — The user wants to write undisturbed. Only respond when the user sends a chat message. Do not proactively annotate or react to document activity.
 
+**Knowing `mode` is a precondition for annotating, not a nicety.** `tandem_open` and `tandem_scratchpad` do not return it, so a session that began by opening or creating a document has not seen it yet — read it from a read-mode `tandem_status` or your first `tandem_checkInbox` before your first annotation or proactive reaction. Solo is enforced on what reaches *you*: the server holds the user's comments and replies until they switch back. It is **not** enforced on what you write — an annotation you create in Solo appears in the user's editor exactly as it would in Tandem, so the hold is yours to keep.
+
 ## Reacting to Document Events
 
 Selections are **not** sent as standalone events. Instead, when the user sends a chat message, any buffered selection is attached as a `selection` field on the `chat:message` payload. This gives you context about what text the user was looking at when they wrote their message. When polling via `tandem_checkInbox`, the current selection shows up under `activity.selectedText`. Use `tandem_reply` for any document-context reaction (chat messages, question annotations); reserve terminal output for non-document work the user explicitly requests. In Solo mode, hold reactions until the user sends a chat message.
@@ -94,22 +96,26 @@ Polling is the reliable path and stays the authority on what you see. But betwee
 
 **In a multi-agent workflow, only the orchestrator arms a watch.** A sub-agent must not: Hard Rule 7 forbids it the `tandem_checkInbox` call a wake exists to trigger, so its watch could only wake it into the poll that empties the orchestrator's inbox. Everything below is addressed to the session that polls.
 
-In a **hand-started session**, after the first successful read-mode `tandem_status`, if your host offers a `Monitor` tool, read `wakeUrl` from that response and arm one persistent watch. **Arm it at most once per session. Do not use Tandem's process-global subscriber count to decide whether this session is covered.** Other sessions and inert channel shims appear in that count, and the plugin monitor triggered by this skill can attach after the status response, so the count is stale by construction.
+In a **hand-started session**, arm one persistent watch on the **first** `tandem_*` response that carries a `wakeUrl`. Read `wakeUrl` from that response — read-mode `tandem_status`, `tandem_open` and `tandem_scratchpad` all return it — and if your host offers a `Monitor` tool, arm then and there. If none of your first few Tandem calls returned one, make a single read-mode `tandem_status` call to fetch it; one such call, not one per turn. **Arm it at most once per session — a later response carrying `wakeUrl` is not a second invitation. Do not use Tandem's process-global subscriber count to decide whether this session is covered.** Other sessions and inert channel shims appear in that count, and the plugin monitor triggered by this skill can attach after your first Tandem call, so the count is stale by construction.
+
+**How to tell which you are.** A session Tandem launched is told so in the turn that started it, and told again on every wake: that turn says Tandem is already waking you directly and that you must not arm a watch. If any turn in this conversation says that, you are not hand-started — do not arm. If you can see the start of this conversation and nothing says it, you are hand-started. **If you cannot see the start — it was compacted or summarised away — do not arm.** Absence proves nothing there: the turn that would have told you is exactly what a compaction drops, and it is also where your own record of having already armed went. A session that has run long enough to compact passed this trigger's moment long ago, so declining costs it almost nothing: keep polling, and if the user asks you to watch, arm then — that request is the recovery.
 
 If the Monitor tool is absent or the attempt fails, say so once and stop trying. The tool is enabled per account rather than per version, so upgrading may not add it, and Tandem's server cannot see whether you have it. On Windows, the built-in Monitor tool additionally requires Git Bash. The plugin monitor shares the same per-account feature gate, so it cannot help when that gate is off. But the plugin monitor does not require Git Bash on Windows and can fall back to PowerShell, so it can help when Git Bash is the missing precondition. Tell the user that the channel shim is the setup that does not need Monitor (`tandem setup --apply --with-channel-shim`), then keep polling. Asking Claude to watch is recovery only: if this first-use attempt was skipped, make the same attempt when asked, but never start a second watch.
 
-**Read the URL from `tandem_status`, don't assume it.** Read mode returns `wakeUrl` — the live address of the wake stream, reported by the server that is running it. It is usually `ws://127.0.0.1:3479/api/wake`, but the port is configurable and guessing it is a *silent* failure: you would open a socket to whatever unrelated service holds 3479 and sit there believing you were armed. If `wakeUrl` is absent, this Tandem has no wake transport and there is nothing to arm — keep polling.
+**Read the URL from Tandem's own response, don't assume it.** `wakeUrl` is the live address of the wake stream, reported by the server that is running it, and comes back on read-mode `tandem_status`, `tandem_open` and `tandem_scratchpad`. It is usually `ws://127.0.0.1:3479/api/wake`, but the port is configurable and guessing it is a *silent* failure: you would open a socket to whatever unrelated service holds 3479 and sit there believing you were armed. If `wakeUrl` is absent, this Tandem has no wake transport and there is nothing to arm — keep polling.
 
 ```
-Monitor({ ws: { url: <wakeUrl from tandem_status> }, persistent: true })
+Monitor({ ws: { url: <the wakeUrl Tandem returned> }, persistent: true })
 ```
 
-Three things to know before you do:
+Before you arm, know these:
 
-- **Do not arm one if Tandem launched you.** A launcher-spawned session is already woken directly on its input, and the wake turn says so explicitly. A second watch double-wakes every message.
+- **Do not arm one if Tandem launched you.** A launcher-spawned session is already woken directly on its input, and the wake turn says so explicitly. A second watch double-wakes every message. This is the same test as "How to tell which you are" above, restated where you are about to act on it.
 - **A wake tells you *that* something happened, never *what*.** Frames carry an id, a type and a timestamp — no message text, by design. Always call `tandem_checkInbox` to find out what actually arrived. Answering from the notification is how the same item gets replied to twice: the inbox never marks it seen, so it comes back.
 - **Wakes are best-effort and can be dropped.** A burst of activity is rate-limited by the host, so some notifications never arrive even though every event reached the server. This is exactly why the point above matters — the inbox has all of them; the wake stream may not. Keep polling every 2-3 tool calls regardless (orchestrator only in a multi-agent workflow).
 - **If every wake arrives twice, you are the second consumer — stand down.** A subscriber count of zero at the moment you check is not a promise it stays zero. If the user has the Tandem plugin installed, dispatching this skill is what starts its monitor, and that takes some seconds to connect — so a count you read in your first tool call can be stale by the time your watch is open. Nothing on Tandem's side can tell the two apart; doubled wakes are the signal. Stop your watch with `TaskStop` and keep polling, rather than leaving both running. No item is lost either way: the inbox de-duplicates, so the cost is a wasted turn, not a duplicate reply.
+
+- **A later turn telling you Tandem wakes you directly retracts your watch.** If you armed one and a turn then arrives saying Tandem is already waking you directly and not to arm, that turn is right and your watch is the duplicate — stop it with `TaskStop` and say so. The once-per-session bound is about not arming twice; it never bars you from standing one down.
 
 If `ws` is unavailable, the equivalent stream is `GET /api/events?filter=wake` on the same host and port as `wakeUrl` (so `ws://127.0.0.1:3479/api/wake` → `http://127.0.0.1:3479/api/events?filter=wake`), which is payload-free in the same way. It needs a shell with `curl` — fine on macOS and Linux, absent on a stock Windows install.
 
@@ -120,7 +126,7 @@ If `ws` is unavailable, the equivalent stream is `GET /api/events?filter=wake` o
    - `tandem_getAnnotations({ author: "import" })` — expect the `annotations` array to be empty: imports live as private notes until the user promotes them, so they don't survive the note-type filter. **If anything does appear there, it is a real imported comment — act on it.** `notesExcluded` in the response is the "N Word comments awaiting promotion" probe — **the field is absent, not zero, when nothing is awaiting promotion.**
    - Once promoted, they arrive via `tandem_checkInbox`, and a catch-up read is `tandem_getAnnotations({ author: "user" })` filtered client-side on a populated `importSource` field, which carries the original reviewer's name and file. `promotedFrom: "note"` is also present on these records but is NOT a reliable import marker — it's stamped on every promoted note, including one the user sent to Claude personally with no `importSource` at all. In Solo mode, the promotion is held like any other user comment and arrives on the first poll after the user switches back to Tandem — see Collaboration Mode.
    - **The Word thread's own replies never reach Claude, even after promotion.** Every threaded reply imported from the `.docx` is stamped `private: true` at import time, and that flag is permanent — `channelVisibleReplies` strips it from `tandem_getAnnotations` forever, so those original Word-thread replies never appear in `replies`, no matter how many follow-ups the thread holds. A reply written *after* promotion — the user's own, or yours via `tandem_annotationReply` — is not stamped private and does surface, so an empty `replies` array only means the imported thread itself had none; it does not mean nothing has been added since. Treat an empty thread on a freshly-promoted import as "ask the user," never as "no follow-up happened" — a colleague may already have answered in Word.
-3. Annotate with findings (comment, comment with suggestedText)
+3. Annotate with findings (comment, comment with suggestedText) — after you know `mode`; in Solo, hold them and tell the user you are holding them.
 4. `tandem_exportAnnotations` — generate a review summary the user can share. `heldFromExport` counts withheld Solo-held *annotations* (absent, not zero, when none are withheld) but not withheld *replies* on an otherwise-visible comment — a floor, not a total.
 
 Then pick an ending, and say which one you're doing:

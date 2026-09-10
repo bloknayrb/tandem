@@ -1857,6 +1857,43 @@ Three reasons, in ascending order of force:
 >
 > **`when: "always"` stays rejected — decided by Bryan, 2026-08-11: "i dont want the monitor to always be armed."** This closes the question #1354 left open. The 3-of-6 measurement above was new input to it and did not change the answer, so the one *model-independent* arming option is off the table for good: #1354's `on-skill-invoke` trigger stands, and first-use arming remains a matter of raising the probability that the model chooses to arm (this amendment, plus the skill description) rather than removing the judgment. Do not re-propose `always` on the strength of a low dispatch rate — that argument has been made, with data, and declined.
 
+> **Amendment (2026-09-10) — `wakeUrl` is no longer read-mode `tandem_status` alone.** This ADR
+> never named a producer itself; the "read `wakeUrl` from a read-mode `tandem_status` response"
+> invariant lived in `SKILL.md`, `SERVER_INSTRUCTIONS` and the Track-D plan docs, with
+> `getWakeEndpoint()` having exactly one caller to match. It is recorded here because this is the
+> decision those surfaces implement, and because a reader who trusts the ADR should not have to
+> reconstruct the trigger from three prose copies. That made the trigger unsatisfiable for a
+> whole population, silently: `tandem_scratchpad({ content })` opens a draft tab and seeds it in
+> ONE call, so a session asked to jot something into Tandem completes its task without ever
+> needing a status read — and `SKILL.md` correctly forbids guessing the URL, because a wrong port
+> opens a socket to an unrelated service and looks armed. Such a session could not arm, and was
+> right not to. Observed 2026-09-10 in a real session, which called `tandem_scratchpad` exactly
+> once and armed nothing.
+>
+> `tandem_open` and `tandem_scratchpad` now return `wakeUrl` as well, and the skill's anchor moved
+> to **the first `tandem_*` response that carries one**. The anchor stays a single moment
+> deliberately: the bound was never the word "status", it was the word "first", and several
+> producers with no anchor would read as several standing invitations to arm.
+>
+> **`tandem_checkInbox` deliberately does NOT carry it.** It is polled every 2-3 tool calls, so it
+> would re-present the arm affordance dozens of times per session — the route to a second watch
+> that `wake-advisory.ts` documents, which also burns a `MAX_WAKE_CONSUMERS` slot and makes
+> `getSubscriberCount() === 0`, the only sound negative in the connection-honesty surface,
+> unreachable process-globally for every other session. Its marginal coverage is near zero anyway:
+> any session that reaches a poll has already called one of the three producers.
+>
+> One thing this amendment does NOT change: `wakeUrl` still names `127.0.0.1` unconditionally, so
+> under a non-loopback bind a remote MCP client receives an address on its own machine. That is
+> pre-existing and tracked in [security.md](security.md#open-findings); widening the producer set
+> multiplies its reach without altering its shape.
+>
+> One consequence worth stating, because no commit message does: for the common
+> `tandem_open`-first flow the arm moment now lands on the session's FIRST tool call rather than
+> after a status read. That widens the window in which the plugin monitor has not yet connected
+> and a self-armed watch reads a stale zero subscriber count, so the doubled-wake stand-down in
+> `SKILL.md` should be expected to fire more often than before. It is the recovery, and it works
+> — but a rise in its rate is a consequence of this change, not evidence of a new fault.
+
 **Cross-references:** [ADR-045](#adr-045-mcp-transport-multiplexing--one-mcpserver-per-session-keyed-by-mcp-session-id) (why neither session id is a usable key), ADR-027 (the Solo/privacy contract the strip reinforces), #1266 (the supervisor's payload-free wake), `docs/spikes/monitor-self-arm-probe.md` (P-A2, P4, and the burst measurement).
 
 ---

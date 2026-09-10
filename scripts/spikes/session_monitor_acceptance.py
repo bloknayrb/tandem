@@ -97,6 +97,21 @@ DISPATCH_CONSEQUENT_FIELDS = (
     "subscriber_growth_proven",
     "autonomous_turn_seen",
 )
+# The MCP tools whose responses carry a `wakeUrl`, suffix-matched because MCP tool names
+# arrive prefixed (`mcp__tandem__tandem_scratchpad`). Module scope, not function-local:
+# `_evaluate_shape` reasons about these too, and a local binding forced it to restate the
+# names in prose where they could drift unnoticed.
+#
+# Narrowing this to `tandem_status` alone was measuring the OLD trigger. A session that
+# armed off `tandem_scratchpad` — the one-call shape that motivated widening the set —
+# scored `status_succeeded=False` AND `monitor_attempted=False`, landing in
+# `hard_failures` as "declined" when it had in fact armed correctly. The unit fixtures
+# hardcode `tandem_status`, so that mis-scoring never showed up in CI.
+#
+# Kept in sync with `WAKE_URL_PRODUCERS` in `src/server/mcp/wake-url.ts` by
+# `tests/scripts/acceptance-harness-wiring.test.ts` — this harness is a separate process
+# in a separate language, so nothing but that test links the two.
+WAKE_URL_PRODUCERS = ("tandem_status", "tandem_open", "tandem_scratchpad")
 # The first three preconditions are the PTY-derived health signals; the rest come from
 # the structured trace. Named rather than sliced -- this was `PRECONDITION_FIELDS[:3]`,
 # which happened to stay correct across the re-homing above only because the moved
@@ -552,7 +567,8 @@ def derive_structured_observations(
     status_events = [
         event
         for event in events
-        if event_name(event) == "PostToolUse" and tool_name(event).endswith("tandem_status")
+        if event_name(event) == "PostToolUse"
+        and tool_name(event).endswith(WAKE_URL_PRODUCERS)
     ]
     wake_url: str | None = None
     status_at: float | None = None
@@ -2866,8 +2882,9 @@ def _evaluate_shape(
             hard_failures.append(f"{trial_id}: natural run declined or failed after dispatch")
         elif not chain["skill_dispatched"] and any(
             # Ranges over DISPATCH_CONSEQUENT_FIELDS, not all of CHAIN_FIELDS: a
-            # declining model still calls `tandem_status`, whose response carries a
-            # wakeUrl whenever a wake transport is running (so: in every trial here), so
+            # declining model still calls one of WAKE_URL_PRODUCERS -- `tandem_status`,
+            # `tandem_open` or `tandem_scratchpad` -- whose response carries a wakeUrl
+            # whenever a wake transport is running (so: in every trial here), so
             # `status_succeeded` is true on an honest decline and would make every one of
             # them look self-contradictory here.
             chain[field]
@@ -2876,7 +2893,7 @@ def _evaluate_shape(
             inconclusive.append(f"{trial_id}: later chain evidence exists without observed dispatch")
         elif not chain["skill_dispatched"] and not chain["status_succeeded"]:
             # A decline is only evidence about the model if the model actually reached
-            # Tandem. `status_succeeded` means a read-mode `tandem_status` returned a
+            # Tandem. `status_succeeded` means one of WAKE_URL_PRODUCERS returned a
             # wakeUrl (present whenever a wake transport is running, as it is in every
             # trial here), so the session had everything it needed and still did not arm --
             # attributable, and exactly the measurement. Without it the session never got
@@ -2885,7 +2902,7 @@ def _evaluate_shape(
             # refreshes are already caught above by the skill-hash proofs; this covers
             # the remaining case, a session that reached the tool and got nothing back.)
             inconclusive.append(
-                f"{trial_id}: decline is not attributable -- no successful tandem_status in this session"
+                f"{trial_id}: decline is not attributable -- no wakeUrl-bearing Tandem response in this session"
             )
 
     controls = [row for row in rows if row["prompt_kind"] == "control"]
