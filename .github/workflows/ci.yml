@@ -341,7 +341,28 @@ jobs:
         run: npm run typecheck:tests
 
       - name: Test
-        run: npm test -- --run
+        run: npm test -- --run --reporter=default --reporter=json --outputFile.json=.vitest-report.json
+
+      # #1673: vitest's summary counts what it RAN, and nothing compared that
+      # against what it COLLECTED. A run that loses files to
+      # `[vitest-pool]: Failed to start forks worker` reports a smaller total
+      # and can exit 0 — a green that should be red.
+      #
+      # `if: ${{ !cancelled() }}`, never `always()` and never `success()`: a run
+      # can both fail a test AND lose files, so the anchor must survive a red
+      # `Test`, while `success()` would re-create the bug this step is about.
+      #
+      # An exit-3 here after a SKIPPED `Test` step means an earlier step in this
+      # job failed (npm ci, a lint, a typecheck) and vitest never ran — not that
+      # files were lost. This step's last output line tells the two apart: a
+      # named cannot-evaluate reason, versus a DID-NOT-RUN list.
+      #
+      # tests/scripts/vitest-file-anchor-wiring.test.ts pins this step's `run`,
+      # `if`, `continue-on-error` and `shell`, and the `Test` step's `run`, all
+      # by exact equality (ADR-051).
+      - name: Every collected test file actually ran
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/vitest-file-anchor.mjs .vitest-report.json
 
       # The session-monitor acceptance harness (82 tests) guards the first-use
       # auto-arm gate and had no runner in CI or the pre-push hook until #1399 --
