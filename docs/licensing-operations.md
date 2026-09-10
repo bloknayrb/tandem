@@ -251,6 +251,19 @@ Two paths write `KV[licenseId] = { updateWindowEnd, status, version }`:
 > `Ok(None)` → `check_for_update` shows the user **"You're up to date."**
 > Permanently. While starved.
 >
+> **That last step is conditional since #1819, and the condition deliberately
+> does NOT rescue this case.** The `Ok(None)` arm now splits on
+> `local_window_ended` — `UpdateRoute::Licensed` AND the sidecar probe not
+> reporting `update_window_current` — and the ended arm shows an "Update Window
+> Ended" warning instead. That is **this device's own copy of the license
+> talking, not the Worker's verdict**, so it fires exactly when the local
+> `expiresAt` has passed. A device whose local window is still open takes the
+> up-to-date arm no matter what KV holds, which is precisely the scenario above:
+> a missing entitlement against a still-current local license is still told
+> "You're up to date." The new dialog covers the opposite mismatch (local
+> window ended, entitlement possibly renewed KV-side), and the Worker's `reason`
+> remains the only detector for this one.
+>
 > The same dead state is reachable at least five ways: a failed write, a
 > refund, the revocation procedure in §7, KV eviction, and a namespace-id
 > mismatch between the two `wrangler.toml` files. **The first of those five is
