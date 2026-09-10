@@ -69,15 +69,46 @@ function trialFirstRunAt(tf: unknown, nowMs: number): number {
 }
 
 /**
+ * The earliest `firstRunAt` that can be a real first run: 2020-01-01Z, comfortably
+ * before Tandem existed and comfortably after the two values a broken clock
+ * actually produces (the 1970 epoch, and the 2015-2016 dates a dead RTC restores).
+ */
+const TRIAL_EPOCH_FLOOR_MS = Date.UTC(2020, 0, 1);
+
+/**
  * Can this parsed `trial.json` body run a clock? The predicate `ensureTrialStarted`
  * repairs against, kept beside `trialFirstRunAt` so the two cannot disagree.
  *
- * `0` for `nowMs` is deliberate and not a placeholder: the only body this is
- * asked about is a non-`null` one, where `nowMs` is unread. Passing a real clock
- * would suggest the answer moves with time, and it does not.
+ * **Finiteness is not enough, and that gap was live in the first draft of #1788.**
+ * `Date.parse` is happy with any well-formed date, so a *valid but wrong*
+ * `firstRunAt` passed a bare `Number.isFinite` check and was never repaired —
+ * failing in both directions from one root cause:
+ *
+ * - **Too old ⇒ permanently restricted.** A device whose RTC battery is dead
+ *   boots at, say, 2016-01-01, writes that as `firstRunAt`, and NTP then
+ *   corrects the clock. The trial is now years expired, the body is "usable",
+ *   so the repair never runs and the device is restricted forever with no
+ *   recovery — verbatim the failure `ensureTrialStarted` exists to close.
+ * - **Too far future ⇒ perpetual trial.** The mirror image, and it fails OPEN:
+ *   a `firstRunAt` of 3000-01-01 is finite, so `nowMs < firstRunAt + TRIAL_MS`
+ *   holds forever and `daysRemaining` (~355,000) reaches the wire and the
+ *   client banner. That contradicted `trialFirstRunAt`'s own promise that a
+ *   bogus `firstRunAt` fails closed.
+ *
+ * So the bound is two-sided. The future edge is `nowMs` rather than a constant
+ * because a trial cannot legitimately start after now; a little slack absorbs
+ * clock skew between the write and this read.
+ *
+ * `0` for `nowMs` in the finiteness call is deliberate and not a placeholder:
+ * the only body this is asked about is a non-`null` one, where `trialFirstRunAt`
+ * does not read `nowMs` at all.
  */
-function trialBodyIsUsable(tf: unknown): boolean {
-  return Number.isFinite(trialFirstRunAt(tf, 0));
+const TRIAL_FUTURE_SLACK_MS = 86_400_000;
+
+function trialBodyIsUsable(tf: unknown, nowMs: number): boolean {
+  const firstRunAt = trialFirstRunAt(tf, 0);
+  if (!Number.isFinite(firstRunAt)) return false;
+  return firstRunAt >= TRIAL_EPOCH_FLOOR_MS && firstRunAt <= nowMs + TRIAL_FUTURE_SLACK_MS;
 }
 
 /**
@@ -254,11 +285,12 @@ export async function ensureTrialStarted(
       // evidence the clock is broken, so it must not overwrite it.
       return;
     }
-    if (parsed === null || trialBodyIsUsable(parsed)) return;
+    if (parsed === null || trialBodyIsUsable(parsed, now())) return;
     repairing = true;
     warnOnce(
       "trial:repair",
-      "[license] trial.json holds no usable firstRunAt — rewriting it and starting a fresh " +
+      "[license] trial.json holds no usable firstRunAt (missing, unparseable, before 2020, " +
+        "or in the future — a dead RTC writes all three) — rewriting it and starting a fresh " +
         "trial clock. Without this the device stays restricted on every boot with no recovery.",
     );
   }

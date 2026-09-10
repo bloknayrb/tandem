@@ -390,12 +390,57 @@ describe("resolveLicenseState — trial boundary", () => {
 });
 
 describe("ensureTrialStarted", () => {
+  // Both clocks must be REAL epoch values, not the synthetic `123_000` this
+  // test used before the clock-sanity bound landed. 123 s after the epoch is
+  // 1970, which the bound now (correctly) reads as a dead-RTC timestamp and
+  // repairs — so the old fixture would have proved the opposite of its name.
   it("writes trial.json once when gate enabled and does not overwrite", async () => {
     const dir = tmp();
-    await ensureTrialStarted(dir, () => 123_000, true);
+    const t0 = Date.UTC(2026, 0, 1);
+    await ensureTrialStarted(dir, () => t0, true);
     const first = fs.readFileSync(trialFilePath(dir), "utf-8");
-    await ensureTrialStarted(dir, () => 999_000, true);
+    await ensureTrialStarted(dir, () => t0 + 60_000, true);
     expect(fs.readFileSync(trialFilePath(dir), "utf-8")).toBe(first);
+  });
+
+  /**
+   * The clock-sanity bound (#1788 review). `Date.parse` accepts any well-formed
+   * date, so before this a VALID BUT WRONG `firstRunAt` was judged usable and
+   * never repaired — and it failed in both directions from the one root cause.
+   *
+   * These two cases are the ones a bare `Number.isFinite` check cannot see.
+   * Deleting the bound turns both red; deleting only one edge turns one red.
+   */
+  it.each([
+    [
+      "a dead-RTC past timestamp (restricted forever without the bound)",
+      new Date(Date.UTC(2016, 0, 1)).toISOString(),
+    ],
+    [
+      "a far-future timestamp (perpetual trial without the bound)",
+      new Date(Date.UTC(3000, 0, 1)).toISOString(),
+    ],
+  ])("repairs %s", async (_label, firstRunAt) => {
+    const dir = tmp();
+    const now = Date.UTC(2026, 0, 1);
+    fs.writeFileSync(trialFilePath(dir), JSON.stringify({ version: 1, firstRunAt }));
+
+    await ensureTrialStarted(dir, () => now, true);
+
+    const body = JSON.parse(fs.readFileSync(trialFilePath(dir), "utf-8"));
+    expect(body.firstRunAt).toBe(new Date(now).toISOString());
+  });
+
+  it("leaves a firstRunAt inside the bound alone", async () => {
+    const dir = tmp();
+    const now = Date.UTC(2026, 0, 1);
+    const legit = new Date(now - 3 * 86_400_000).toISOString();
+    fs.writeFileSync(trialFilePath(dir), JSON.stringify({ version: 1, firstRunAt: legit }));
+
+    await ensureTrialStarted(dir, () => now, true);
+
+    const body = JSON.parse(fs.readFileSync(trialFilePath(dir), "utf-8"));
+    expect(body.firstRunAt).toBe(legit);
   });
 
   it("writes nothing when the gate is disabled", async () => {
