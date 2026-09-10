@@ -13,6 +13,10 @@ const MANIFEST = '{"version":"1.2.3","platforms":{}}';
 const URL_LATEST = "https://example.com/latest.json";
 const NOW = 1_700_000_000_000;
 const DAY = 86_400_000;
+/** A license id in the shape both mint sites produce; the alert path's UUID gate
+ *  refuses anything else. */
+const UUID = "3f7c1e2a-9b4d-4c8e-a1f5-0d6b2e9c7a13";
+const HOOK = "https://hooks.example/tandem";
 
 function kvWith(map: Record<string, string>): KvGetter {
   return { get: async (k) => (k in map ? map[k] : null) };
@@ -26,6 +30,25 @@ function req(lid?: string): Request {
 
 function okFetch(): typeof fetch {
   return vi.fn(async () => new Response(MANIFEST, { status: 200 })) as unknown as typeof fetch;
+}
+
+/** Drive the PURE handler and report what it answered plus the `reason` it
+ *  logged. Shared by every reason/tombstone case — the alerting cases must use
+ *  `viaFetch` instead, which drives the real default export. */
+async function reasonFor(
+  lid: string | undefined,
+  kv: Record<string, string>,
+  fetchFn: typeof fetch = okFetch(),
+): Promise<{ status: number; body: string; reason: string | undefined }> {
+  const entries: LogEntry[] = [];
+  const res = await handleUpdateRequest(req(lid), {
+    kv: kvWith(kv),
+    latestJsonUrl: URL_LATEST,
+    fetchFn,
+    now: () => NOW,
+    log: (e) => entries.push(e),
+  });
+  return { status: res.status, body: await res.text(), reason: entries.at(-1)?.reason };
 }
 
 describe("handleUpdateRequest (license-update Worker)", () => {
@@ -189,22 +212,6 @@ describe("handleUpdateRequest (license-update Worker)", () => {
  * indistinguishable from health.
  */
 describe("no-update reasons (the silent-failure detector)", () => {
-  async function reasonFor(
-    lid: string | undefined,
-    kv: Record<string, string>,
-    fetchFn: typeof fetch = okFetch(),
-  ): Promise<{ status: number; body: string; reason: string | undefined }> {
-    const entries: LogEntry[] = [];
-    const res = await handleUpdateRequest(req(lid), {
-      kv: kvWith(kv),
-      latestJsonUrl: URL_LATEST,
-      fetchFn,
-      now: () => NOW,
-      log: (e) => entries.push(e),
-    });
-    return { status: res.status, body: await res.text(), reason: entries.at(-1)?.reason };
-  }
-
   const IN_WINDOW = JSON.stringify({ updateWindowEnd: new Date(NOW + DAY).toISOString() });
 
   it("no-header — an unlicensed/public updater client", async () => {
@@ -313,9 +320,6 @@ describe("no-update reasons (the silent-failure detector)", () => {
  *     — "still 204" and "zero webhook POSTs" then both hold trivially.
  */
 describe("the silent-no-update detector: alerting (#1786)", () => {
-  const UUID = "3f7c1e2a-9b4d-4c8e-a1f5-0d6b2e9c7a13";
-  const HOOK = "https://hooks.example/tandem";
-
   beforeEach(() => {
     _resetAlertThrottleForTests();
   });
@@ -492,21 +496,6 @@ describe("the silent-no-update detector: alerting (#1786)", () => {
 });
 
 describe("the revocation tombstone (#1786)", () => {
-  async function reasonFor(
-    lid: string,
-    kv: Record<string, string>,
-  ): Promise<{ status: number; served: boolean; reason: string | undefined }> {
-    const entries: LogEntry[] = [];
-    const res = await handleUpdateRequest(req(lid), {
-      kv: kvWith(kv),
-      latestJsonUrl: URL_LATEST,
-      fetchFn: okFetch(),
-      now: () => NOW,
-      log: (e) => entries.push(e),
-    });
-    return { status: res.status, served: res.status === 200, reason: entries.at(-1)?.reason };
-  }
-
   it("a null-window tombstone is refused, NOT grandfathered into a served manifest", async () => {
     // This row pins the check's EXISTENCE. `updateWindowEnd: null` is what a
     // grandfathered entitlement carries, so with no `status` check at all the
@@ -516,8 +505,8 @@ describe("the revocation tombstone (#1786)", () => {
       "lic-rev": JSON.stringify({ updateWindowEnd: null, status: "revoked" }),
     });
     expect(out.reason).toBe("revoked");
+    // 204, so the manifest was not served — the whole point of the branch.
     expect(out.status).toBe(204);
-    expect(out.served).toBe(false);
   });
 
   it("a PAST-window tombstone reports revoked, not expired", async () => {
@@ -540,8 +529,6 @@ describe("the revocation tombstone (#1786)", () => {
     // Placement-blind by construction (`revoked` is non-alertable whichever
     // branch reports it), so this pins non-alerting only — the order is the
     // past-window row's job alone.
-    const UUID = "3f7c1e2a-9b4d-4c8e-a1f5-0d6b2e9c7a13";
-    const HOOK = "https://hooks.example/tandem";
     _resetAlertThrottleForTests();
     const posts: string[] = [];
     vi.stubGlobal(

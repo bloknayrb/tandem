@@ -1431,20 +1431,29 @@ describe("default fetch wiring (env → deps)", () => {
     expect(resendFromProblem(long)).toBeNull();
   });
 
-  it("a placeholder RESEND_FROM → 503 before anything is minted or emailed", async () => {
+  /** 503, and NOTHING durable written: Polar simply re-delivers the untouched
+   *  event once the var is fixed. That last part is what kills the
+   *  mint-then-fail order the guard exists to prevent. */
+  async function expect503WithoutMint(
+    resendFrom: string | undefined,
+    orderId: string,
+    eventId: string,
+  ): Promise<void> {
     const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    const env = makeEnv({ RESEND_FROM: "REPLACE_WITH_VERIFIED_SENDER" });
+    const env = makeEnv({ RESEND_FROM: resendFrom });
     const res = await issuanceWorker.fetch(
-      makeRequest(paidBody("ord_rf"), { id: "evt_rf", ts: nowTs() }),
+      makeRequest(paidBody(orderId), { id: eventId, ts: nowTs() }),
       env as never,
     );
     expect(res.status).toBe(503);
-    // Nothing durable: Polar simply re-delivers the untouched event once the
-    // var is fixed. This is the assertion that kills the mint-then-fail order.
     expect(env.LEDGER_KV.map.size).toBe(0);
     expect(env.LICENSE_KV.map.size).toBe(0);
     expect(fetchMock).not.toHaveBeenCalled();
+  }
+
+  it("a placeholder RESEND_FROM → 503 before anything is minted or emailed", async () => {
+    await expect503WithoutMint("REPLACE_WITH_VERIFIED_SENDER", "ord_rf", "evt_rf");
   });
 
   // Its own `it()`, not a second case in the block above: both key on
@@ -1456,17 +1465,7 @@ describe("default fetch wiring (env → deps)", () => {
     // `if (env.RESEND_FROM && resendFromProblem(...) !== null)` would keep the
     // old point-of-use behaviour for the one case a fresh deploy most likely
     // hits, while leaving every other test green. This is what refuses it.
-    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const env = makeEnv({ RESEND_FROM: undefined });
-    const res = await issuanceWorker.fetch(
-      makeRequest(paidBody("ord_rf2"), { id: "evt_rf2", ts: nowTs() }),
-      env as never,
-    );
-    expect(res.status).toBe(503);
-    expect(env.LEDGER_KV.map.size).toBe(0);
-    expect(env.LICENSE_KV.map.size).toBe(0);
-    expect(fetchMock).not.toHaveBeenCalled();
+    await expect503WithoutMint(undefined, "ord_rf2", "evt_rf2");
   });
 
   it("all three config stages are distinguishable in the log", async () => {

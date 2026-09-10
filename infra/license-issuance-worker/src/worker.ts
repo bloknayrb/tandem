@@ -947,6 +947,23 @@ export function _resetAlertThrottleForTests(): void {
   lastAlertAt.clear();
 }
 
+/**
+ * The stages that mean "the Worker is misconfigured and refusing every
+ * webhook". ENUMERATED, not prefix-matched: `stage?.startsWith("config")`
+ * would silently adopt every future stage that happens to start with those six
+ * characters. One list, read by both `alertBody` and `isAlertable`, so the two
+ * cannot disagree about what counts as a config failure.
+ */
+const CONFIG_STAGES: readonly FailStage[] = [
+  "config",
+  "config-support-email",
+  "config-resend-from",
+];
+
+function isConfigStage(stage: FailStage | undefined): boolean {
+  return stage !== undefined && CONFIG_STAGES.includes(stage);
+}
+
 /** Alert text. Carries the coarse result/stage ONLY — never an email, a license
  *  id, or payload bytes, so an alert channel is not a PII sink. */
 function alertBody(entry: LogEntry): string {
@@ -954,11 +971,7 @@ function alertBody(entry: LogEntry): string {
   // source line, because `config` is OVERLOADED across two secrets — a
   // TANDEM_PRIVATE_KEY that will not import, and a missing POLAR_WEBHOOK_SECRET
   // — so there is no one-to-one stage→line map to promise.
-  const isConfig =
-    entry.stage === "config" ||
-    entry.stage === "config-support-email" ||
-    entry.stage === "config-resend-from";
-  const what = isConfig
+  const what = isConfigStage(entry.stage)
     ? "The Worker is refusing every webhook (misconfiguration) — no sale can complete"
     : entry.stage === "email"
       ? "A license was minted but could NOT be emailed"
@@ -1036,11 +1049,10 @@ async function sendOperatorAlert(env: WorkerEnv, entry: LogEntry): Promise<void>
 /**
  * Does this log entry warrant waking the operator?
  *
- * The three `config*` stages are ENUMERATED, not prefix-matched. Two
- * shorthands were rejected: `stage?.startsWith("config")` silently adopts every
- * future stage that happens to start with those six characters, and
- * `result === "error"` sweeps in `ledger` / `unexpected` / `blob-size`, which
- * storm on transient failures.
+ * The three `config*` stages come from `CONFIG_STAGES`, which is ENUMERATED
+ * rather than prefix-matched for the reason stated there. The other rejected
+ * shorthand is `result === "error"`, which sweeps in `ledger` / `unexpected` /
+ * `blob-size` — transient failures that would storm the channel.
  *
  * THE BOUND, written down because it is unusual: these three are the first
  * alertable class reachable BEFORE `verifyStandardWebhook` — both config guards
@@ -1052,13 +1064,7 @@ async function sendOperatorAlert(env: WorkerEnv, entry: LogEntry): Promise<void>
  * `RESEND_FROM` back after the mint, which is the defect they exist to fix.
  */
 export function isAlertable(entry: LogEntry): boolean {
-  return (
-    entry.result === "dropped" ||
-    entry.stage === "email" ||
-    entry.stage === "config" ||
-    entry.stage === "config-support-email" ||
-    entry.stage === "config-resend-from"
-  );
+  return entry.result === "dropped" || entry.stage === "email" || isConfigStage(entry.stage);
 }
 
 export default {
