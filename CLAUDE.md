@@ -238,7 +238,7 @@ error or failing test making it obvious:
 Mechanism, ops and failure modes: [docs/licensing-explained.md](docs/licensing-explained.md)
 (start there), `docs/licensing-operations.md`, `infra/license-*-worker/`. Inline:
 
-- **It must stay byte-identical to today while dark.** `const LICENSE_GATE_ENABLED = false` in `tsup.config.ts` → `__LICENSE_GATE_ENABLED__` define, read by `gate-flag.ts#GATE_ENABLED` (env fallback `TANDEM_LICENSE_GATE=1` for tsx/vitest). **Two consts flip at v1.0, in two languages, with nothing linking them (#1785).** The second is `const LICENSE_UPDATE_ENDPOINT: &str = ""` in `src-tauri/src/lib.rs:171`: while it is empty, `entitled_license_id` (`lib.rs:2297-2312`) returns `None` before it reads anything, so the licensed-updater path is never taken — and the `None` arm of `build_updater` (`:2318-2332`) is `app.updater()`, the **public** manifest from `tauri.conf.json`. Flipping the tsup const alone arms the gate and leaves the update window inert; neutralising that public endpoint belongs to the same flip.
+- **It must stay byte-identical to today while dark.** `const LICENSE_GATE_ENABLED = false` in `tsup.config.ts` → `__LICENSE_GATE_ENABLED__` define, read by `gate-flag.ts#GATE_ENABLED` (env fallback `TANDEM_LICENSE_GATE=1` for tsx/vitest). **Two consts flip at v1.0, in two languages, with nothing linking them (#1785).** The second is `const LICENSE_UPDATE_ENDPOINT: &str = ""` in `src-tauri/src/lib.rs:178`: while it is empty, `entitled_license_id` (`lib.rs:2321-2340`) returns `None` on its first line, before it reads anything, so the licensed-updater path is never taken — and the `None` arm of `build_updater` (`:2342-2357`) is `app.updater()`, the **public** manifest from `tauri.conf.json`. Flipping the tsup const alone arms the gate and leaves the update window inert; neutralising that public endpoint belongs to the same flip.
 - **Two server-hard surfaces**, because an MCP-layer gate alone is client-trust — browser edits flow over Hocuspocus, not MCP. **A** = `provider.ts onAuthenticate` marks document rooms read-only (never `CTRL_ROOM`). **B** = `gatedTool()` on MCP tools + `licenseGateMiddleware` on mutating `/api` routes.
 - **The gated set is enumerated in [docs/licensing-explained.md](docs/licensing-explained.md#the-gated-set), and pinned by the two coverage tables in Critical Rule 9.** Adding a mutating tool or route means editing the list and the matching table, in both halves. Two things that surprise people: **gate each MCP/`/api` pair together** (an MCP write bypasses Surface A), and **grepping `licenseGateMiddleware` finds only half the mechanism** — direct in-handler `licenseGate()` calls exist too, so audit the handler body, not the registration site. The `/api` table sweeps for exactly that, but only against a known caller list, so a new one is a row to add rather than something it can decide for you.
 - A paid license runs **forever** — the run gate checks the signature only; `expiresAt` governs the update window alone. The update endpoint's `.endpoints()` **replaces** the manifest list rather than falling back, so a missing entitlement means the app says "You're up to date" forever, silently. The Worker's `reason` enum is the only detector.
@@ -247,11 +247,15 @@ Mechanism, ops and failure modes: [docs/licensing-explained.md](docs/licensing-e
 
 **Shipped: v0.25.0** (2026-09-05). Release history is [CHANGELOG.md](CHANGELOG.md); remaining
 v1.0 work is [docs/roadmap.md](docs/roadmap.md#active--toward-v10); what the last smoke run
-settled is in [docs/release-smoke-checklist.md](docs/release-smoke-checklist.md#what-the-v0241-run-settled).
-**Do not re-narrate any of them here.** **§1 Windows has now gone three releases unrun**, so
-#1118's post-update banner — the one whose false-positive reaches every user at once — is
-unverified against a real upgrade rather than merely untested this cycle; tracked with a
-date in #1596.
+settled is in [docs/release-smoke-checklist.md](docs/release-smoke-checklist.md#what-the-v0250-run-settled).
+**Do not re-narrate any of them here.** **§1's updater row finally ran** (2026-09-09,
+v0.24.1 → v0.25.0, no banner), closing #1596 — so #1118's false-positive mode has now been
+exercised on hardware once. Two things that run left behind: an operator **cannot** confirm
+that row from `tandem.log`, because `Completed` is an `info!` below the release
+`LevelFilter::Warn` floor while `MayHaveFailed` is a `warn!`, so a successful update writes
+nothing and the marker is cleared on both paths — the check is one-sided and needs a human
+watching the window. And the **`MayHaveFailed` arm — the half that should show the banner —
+is still untested.**
 
 Core is complete — 30 active MCP tools, multi-doc tabs, CRDT-anchored annotations, chat, four
 push paths (self-armed wake, plugin monitor, opt-in channel shim, supervisor stdin),
