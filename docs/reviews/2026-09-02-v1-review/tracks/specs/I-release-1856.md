@@ -1,179 +1,99 @@
 # I-release — #1856 stale `azure/login@v2` comments in `tauri-release.yml` after the v3 bump
 
-Branch `fix/release-and-ci-hygiene-1856`. **Closes #1856.** Ledger:
-`docs/reviews/2026-09-02-v1-review/areas/ci-build.md` (this one arrived from #1835's Dependabot
-bump, not from the review sweep — it has no ledger row of its own; its track home is
-`tracks/I-supply-chain.md`). Probe: `grep -n 'azure/login' .github/workflows/tauri-release.yml`.
+Branch `fix/release-and-ci-hygiene-1856`. **Closes #1856.** Track home: `tracks/I-supply-chain.md`
+(this one arrived from #1835's Dependabot bump, so it has no `areas/ci-build.md` row).
+Probe: `grep -n 'azure/login' .github/workflows/tauri-release.yml`.
 
 ## Problem
 
-Dependabot bumped `azure/login` from 2.3.0 to 3.0.2 in `2cbacf4f`, changing exactly one line —
-the SHA. Four comments still name v2. **The issue body is wrong about one of them and it is the
-load-bearing one:** it says "Line 238 pin is now v3 (trailing comment updated by Dependabot)".
-Measured on `origin/master` (fff8e312), line 238 reads
+Dependabot bumped `azure/login` 2.3.0 → 3.0.2 in `2cbacf4f`, changing exactly one line — the SHA.
+Four comments still say v2. **The issue body is wrong about the load-bearing one:** it claims
+"line 238 pin is now v3 (trailing comment updated by Dependabot)". Measured on `origin/master`
+(fff8e312), `:238` is `uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v2` — a v3.0.2
+SHA behind a `# v2` comment, so the human-readable half of the pin lies.
+`tests/scripts/workflow-action-pin.test.ts:222-236` cannot see it: that assertion is deliberately
+presence-not-truth (`/@[0-9a-f]{40}\s+#\s*\S/`), because a stricter regex breaks on this repo's own
+`# stable` rust-toolchain pin.
 
-```
-        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v2
-```
-
-— a v3.0.2 SHA behind a `# v2` comment. So the human-readable half of the pin actively lies, and
-`tests/scripts/workflow-action-pin.test.ts:222-236` cannot see it: that assertion is documented as
-presence-not-truth (`/@[0-9a-f]{40}\s+#\s*\S/`), deliberately, because a stricter regex breaks on
-this repo's own `# stable` rust-toolchain pin.
-
-**Root cause, and it is why this will recur if only the prose is fixed.** `azure/login` is the
-only pin in the repo carrying a bare major (`# v2`); every other one carries a full `vX.Y.Z`
-(`# v7.0.1`, `# v9.0.0`, `# v2.9.2`, `# v1.0.213`), and Dependabot rewrote all of those in place
-(`e783e3af` moved `# v6.5.0` → `# v7.0.0`). Dependabot matches and rewrites the *version string*
-it wrote; a hand-written major it never wrote is not a pattern it updates. The bare major is the
-defect, not just the digit.
+`azure/login` is also the only pin here carrying a bare major; every other one carries a full
+`vX.Y.Z`, and Dependabot rewrites the version string it wrote. The bare major is why the comment
+went stale, so the full version is part of the fix, not cosmetics.
 
 ## Fix
 
-`.github/workflows/tauri-release.yml`, comments only — no `uses:`, `run:`, `env:` or `with:` value
-changes anywhere in the file.
+`.github/workflows/tauri-release.yml`, **comments only** — no `uses:`, `run:`, `env:` or `with:`
+value changes anywhere in the file, and `:238-241` (the pin plus its OIDC `with:` block) stays
+byte-identical apart from `:238`'s trailing comment.
 
-- **`:238` trailing pin comment `# v2` → `# v3.0.2`.** This is the fix that stops the recurrence:
-  a full version is the shape Dependabot maintains. Do not drop this comment —
-  `workflow-action-pin.test.ts` requires a trailing comment on every pinned ref.
-  **Verify the version before writing it, and this is a required step, not a nicety.**
-  `CONTRIBUTING.md:250-260` states that a 40-hex ref is *a shape, not an identity* — GitHub
-  resolves `owner/repo@<sha>` against the whole fork network and **no check in CI can detect
-  that** — so for each bumped action a human must confirm the SHA is reachable in the *upstream*
-  repo and is what the trailing comment claims. Dependabot's own commit metadata (`2cbacf4f`) is
-  the artefact CONTRIBUTING says to check **against**, not with, so it is not sufficient basis for
-  writing `# v3.0.2`. Run:
+- **`:238` trailing comment `# v2` → `# v3.0.2`.** Verify the version before writing it —
+  `CONTRIBUTING.md:250-260` says a 40-hex ref is a shape, not an identity, and no CI check can
+  detect a fork-network SHA, so Dependabot's own metadata is the thing to check *against*:
 
   ```bash
   gh api repos/Azure/login/git/ref/tags/v3.0.2 --jq '.object.sha,.object.type'
-  # if .object.type is "tag" (annotated), dereference it:
-  gh api repos/Azure/login/git/tags/<that sha> --jq .object.sha
+  # if .object.type is "tag" (annotated), dereference: gh api repos/Azure/login/git/tags/<sha> --jq .object.sha
   ```
 
-  and confirm the final SHA equals `7ddb5af1ef8758cf1353cf3b42f940aee27ba21c`. **Paste that
-  command and its output into the PR body.** If it does not match, stop and report — do not write
-  a version comment the check contradicts.
-- **`:125`, `:224`, `:280` — drop the version qualifier**, since these are prose about the action's
-  behaviour and the version is irrelevant to what they say: `azure/login@v2` → `azure/login`.
-- **`:228-237`** — the ten-line `# Deliberately NOT re-resolved…` block that sits **above** the
-  `uses:` line, not below it. (Measured on `origin/master` fff8e312: the block runs `:228`
-  `# Deliberately NOT re-resolved to current v2 (7184910... as of` through `:237`
-  `# Audited 2026-09-02.`. **Lines `:239-241` are `with:` / `client-id:` / `tenant-id:` — the OIDC
-  binding this step's own comment calls "the highest-privilege step here". They are `with:` values
-  and this spec forbids touching them; leave `:238-241` byte-identical.**)
+  The final SHA must equal `7ddb5af1ef8758cf1353cf3b42f940aee27ba21c`. Paste the command and its
+  output into the PR body. If it does not match, stop and report — do not write a version the check
+  contradicts.
+- **`:125`, `:224`, `:280` — drop the version qualifier** (`azure/login@v2` → `azure/login`). These
+  are prose about the action's behaviour; the version is irrelevant to what they say.
+- **`:228-237`, the `# Deliberately NOT re-resolved…` block above the `uses:` line.** Two facts in
+  it are now false and the rewrite is bounded to exactly those two — this is not an invitation to
+  re-argue the pinning policy: (1) "current v2 (7184910… as of 2026-09-02)" names the v2 branch tip
+  the pin was held back *from*, and the pin no longer sits on that lineage; (2) "a stale pin at a
+  SHA … in service since 2026-05-15" was true of `a457da9e` (2.3.0), not of `7ddb5af1` (3.0.2),
+  which landed 2026-09-03 — after the audit stamp below it. Either restate the rationale against
+  v3.0.2 (the argument holds: hold this SHA, upgrade only by reviewed Dependabot bump) or delete
+  those two sentences.
+- **The `Audited <date>` line at `:237`.** Advance it to today **only** on the strength of the
+  `gh api` run above — the stamp's whole meaning is that a human looked. If the check was not run,
+  leave `2026-09-02` and add one sentence saying the pin post-dates the audit (which is the state on
+  master today).
 
-  Two facts in that block are now false and the rewrite is bounded to exactly those two — this is
-  not an invitation to re-argue the pinning policy:
-
-  1. *"current v2 (7184910… as of 2026-09-02)"* names the v2 branch tip the pin was being held
-     back **from**. The pin no longer sits on the v2 line at all, so the sentence compares against
-     the wrong lineage.
-  2. *"a stale pin at a SHA that has been audited and in service since 2026-05-15"* was true of
-     `a457da9e` (2.3.0). It is false of `7ddb5af1` (3.0.2), which landed on 2026-09-03 in
-     `2cbacf4f` — **after** the audit stamp below it.
-
-  Either re-state the rationale against v3.0.2 (the argument still holds: hold this SHA, upgrade
-  only by reviewed Dependabot bump) or delete those two sentences. Do not leave the block naming
-  v2.
-- **The `Audited <date>` line at `:237`.** Update it to today **only if** the `gh api` check above
-  was actually run — the stamp's entire meaning is that a human looked, and writing today's date
-  without looking is the drift this bullet exists to catch. **If the check was not run, leave
-  `2026-09-02` untouched and add one sentence to the block saying the pin post-dates the audit.**
-  Note that this is already the situation on master: the stamp reads `2026-09-02` while the SHA it
-  stamps arrived `2026-09-03`.
-
-Rules that bite: this file runs only on `push: tags: ["v*"]`, so nothing here is exercised by any
-PR-time check. The change is comments-only precisely so that "the YAML still parses" is the whole
-claim being made — state it that way in the PR body, never under a Verification heading that
-implies a run.
+This file runs only on `push: tags: ["v*"]`, so nothing here is exercised by any PR-time check. The
+change is comments-only precisely so that "the YAML still parses" is the whole claim — state it that
+way in the PR body, never under a Verification heading.
 
 ## Tests
 
-**None, and the absence is the decision.** The natural guard — assert the trailing comment's
-version matches the SHA's tag — cannot be written offline (the SHA-to-tag mapping lives on
-GitHub), and asserting `# v` *shape* would go red on `dtolnay/rust-toolchain@… # stable`, which
-`workflow-action-pin.test.ts:222-236` already rejected with a written reason. What replaces a test
-here is the root-cause fix: with `# v3.0.2` in place, the next bump updates the comment itself.
-**No experiment in `docs/reviews/2026-09-02-v1-review/experiments/` covers this issue; there is no
-still-broken-when output to convert into an assertion.**
+**None, and the absence is the decision.** The natural guard — assert the trailing comment matches
+the SHA's tag — cannot be written offline, and asserting `# v` shape goes red on
+`dtolnay/rust-toolchain@… # stable`, which `workflow-action-pin.test.ts:222-236` already rejected
+with a written reason. What replaces a test is the root-cause fix: with `# v3.0.2` in place the next
+bump updates the comment itself. No experiment in
+`docs/reviews/2026-09-02-v1-review/experiments/` covers this issue.
 
-Discriminating check for the implementer — **one check, stated once**, because the two the spec
-previously carried disagreed about what was being asserted. A `grep -c` for
-`'azure/login@v2\|# v2$'` returns 0 for a comment rewritten to `# v2.3.0` and for a `# v2` line with
-trailing whitespace, so it is weaker than the Done-when it was supposed to back. Use instead:
-
-```bash
-grep -n 'azure/login' .github/workflows/tauri-release.yml
-```
-
-It must show **four lines, none of them containing `v2`**, and the line-238 trailing comment must
-read exactly `# v3.0.2`. **Paste that output into the PR body** alongside the `gh api` tag-to-SHA
-output required above. Then `npx vitest run tests/scripts/workflow-action-pin.test.ts` stays green
-(it must — nothing it asserts changes).
+Discriminating check, one, stated once: `grep -n 'azure/login' .github/workflows/tauri-release.yml`
+must show **four lines, none containing `v2`**, with `:238`'s trailing comment reading exactly
+`# v3.0.2`. Paste that output into the PR body. `npx vitest run tests/scripts/workflow-action-pin.test.ts`
+stays green — nothing it asserts changes.
 
 ## Done when
 
-Four comment sites corrected; the pin's trailing comment is a full `vX.Y.Z`; the `gh api`
-tag-to-SHA check run and its output in the PR body; the `Audited` date advanced **only** on the
-strength of that run (otherwise left at `2026-09-02` with the post-dating stated in the block);
-`:238-241` byte-identical; the single `grep -n 'azure/login'` check above shows four lines, none
-containing `v2`, with its output in the PR body;
-`workflow-action-pin.test.ts` green; the PR body records that #1856's body was wrong about line
-238 and why, and that the note block is at `:228-237` rather than where the issue implies.
+Four comment sites corrected; the pin carries a full `vX.Y.Z`; the `gh api` check run with its
+output in the PR body; the `Audited` date advanced only on that basis; `:238-241` otherwise
+byte-identical; the grep shows four `v2`-free lines; `workflow-action-pin.test.ts` green; the PR
+body records that #1856's body was wrong about `:238`.
 
-**Group-wide, stated here because #1856 is the group's first commit.** Six issues land on one
-branch (`fix/release-and-ci-hygiene-1856`), touching four workflows, `scripts/ci/`, `tests/scripts/`,
-`package.json`, `biome.json`, `.husky/pre-push`, `playwright.config.ts` and four tracked docs. That is
-a large diff to review as one blob, so the branch carries **one commit per issue, in the brief's
-implementation order** (#1856 → #1831 → #1832 → #1830 → #1748 → #1825), each with its issue number
-in the subject, and the PR body says so — a reviewer reads it commit-by-commit even though it merges
-as one branch.
+**Group commit shape, stated here because #1856 is the first commit.** Six issues land on one
+branch, **one commit per issue in the brief's order** (#1856 → #1831 → #1832 → #1830 → #1748 →
+#1825), each with its issue number in the subject, so a reviewer can read it commit-by-commit.
 
 ## Not in scope
 
-Re-resolving the `azure/login` pin to a newer SHA (the step's own comment explains why it moves
-only via a reviewed Dependabot bump). Any other stale comment in the file. Widening
+Re-resolving the pin to a newer SHA. Any other stale comment in the file. Widening
 `workflow-action-pin.test.ts`'s version-comment assertion.
 
-## Review corrections (round 1)
+## Review corrections (scope cut)
 
-**Adopted.**
+**Removed.** The round-1/round-2 correction logs (their adopted content is folded into the body
+above); the root-cause essay on Dependabot's rewrite behaviour, compressed to two lines; the
+duplicate/contradictory `grep -c` check, already superseded in round 2 and now stated once.
 
-- **The `:239-241` edit instruction pointed at the wrong lines, and at lines the spec itself
-  forbids touching.** The `# Deliberately NOT re-resolved…` note is at `:228-237`, above the
-  `uses:`; `:239-241` are the `with:` / `client-id:` / `tenant-id:` OIDC binding. Bullet replaced,
-  with the two specific false facts named so the rewrite is bounded, and an explicit instruction to
-  leave `:238-241` byte-identical.
-- **Writing `# v3.0.2` and refreshing `Audited <date>` were two unverified provenance claims with
-  no verification step and, by the spec's own decision, no test.** Added the `gh api
-  repos/Azure/login/git/ref/tags/v3.0.2` check (with the annotated-tag dereference) as a required
-  step whose output goes in the PR body, and made the `Audited` stamp conditional on it having been
-  run — otherwise the date stays `2026-09-02` and the block says the pin post-dates the audit. This
-  is CONTRIBUTING.md:250-260's stated rule; Dependabot's own commit metadata is the artefact to
-  check against, not with.
-- **No experiment covers this issue** — stated in `## Tests` so the ship stage does not have to
-  re-derive "no experiment existed" from "the experiment's output was dropped".
+**Kept, with reasons.** The `gh api` tag-to-SHA check — it is a one-command provenance check
+required by `CONTRIBUTING.md:250-260`, not a repo mechanism, and it is the only thing that makes
+`# v3.0.2` a fact rather than a guess. The no-test decision is unchanged.
 
-**Not adopted.** None.
-
-**File set:** unchanged (`.github/workflows/tauri-release.yml`, comments only). The added `gh api`
-check touches no tracked file.
-
-## Review corrections (round 2)
-
-**Adopted.**
-
-- **The discriminating grep was weaker than the Done-when it backed.** `grep -c 'azure/login@v2\|# v2$'`
-  returns 0 for a comment rewritten to `# v2.3.0` or carrying trailing whitespace, and the Done-when
-  separately claimed the stronger property ("no `v2` anywhere"). Replaced by a single stated check —
-  `grep -n 'azure/login' .github/workflows/tauri-release.yml` must show four lines, none containing
-  `v2`, with `:238`'s trailing comment reading exactly `# v3.0.2` — whose output goes in the PR body
-  next to the `gh api` tag-to-SHA output. `## Tests` and `## Done when` now assert the same thing.
-- **One commit per issue for the group.** Six issues, four workflows, a new CI script, three new
-  test files and four tracked docs on one branch is a large single diff. The commit-shape rule is
-  stated here because #1856 is the first commit: one commit per issue in the brief's order, issue
-  number in each subject, and the PR body says so.
-
-**Not adopted.** None.
-
-**File set:** unchanged (`.github/workflows/tauri-release.yml`, comments only).
+**File set:** `.github/workflows/tauri-release.yml`, comments only.
