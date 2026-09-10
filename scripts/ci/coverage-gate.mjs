@@ -39,7 +39,7 @@
  * synthetic input and asserts it actually refuses.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -225,6 +225,22 @@ const cannot = (message) => ({
   failures: [{ path: "-", kind: "CANNOT-EVALUATE", detail: message }],
 });
 
+/**
+ * The shared closing line every cannot-evaluate path ends on (#1862).
+ *
+ * It used to be printed at exactly ONE site — `evaluateGate`'s
+ * `verdict.cannotEvaluate` branch — which no early exit reaches, because each
+ * of them `process.exit`s first. So the line the ci.yml triage guide tells a
+ * reader to key on was a line no exit-3 path printed, and telling a flake apart
+ * from a floor breach still meant reading the whole log. Now the specific
+ * reason is the second-to-last line and this is the last one, on every path.
+ */
+function cannotEvaluate(reason) {
+  console.error(`[coverage-gate] ${reason}`);
+  console.error("[coverage-gate] The gate could not evaluate. This is not a pass.");
+  process.exit(EXIT_CANNOT_EVALUATE);
+}
+
 function main() {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const repoRoot = path.resolve(here, "..", "..");
@@ -234,16 +250,56 @@ function main() {
   try {
     policy = JSON.parse(readFileSync(path.join(here, "coverage-policy.json"), "utf8"));
   } catch (error) {
-    console.error(`[coverage-gate] cannot read coverage-policy.json: ${error.message}`);
-    process.exit(EXIT_CANNOT_EVALUATE);
+    cannotEvaluate(`cannot read coverage-policy.json: ${error.message}`);
   }
   try {
     summary = JSON.parse(
       readFileSync(path.join(repoRoot, "coverage", "coverage-summary.json"), "utf8"),
     );
   } catch (error) {
-    console.error(`[coverage-gate] cannot read coverage/coverage-summary.json: ${error.message}`);
-    process.exit(EXIT_CANNOT_EVALUATE);
+    cannotEvaluate(`cannot read coverage/coverage-summary.json: ${error.message}`);
+  }
+
+  // The two preconditions the `&&` chain used to provide, restated (#1862).
+  //
+  // `test:coverage` was one `&&` chain behind one CI step, so ANY vitest exit
+  // short-circuited it and the gate never ran at all — the job went red for a
+  // teardown flake and reported the identical red a genuine floor breach gets.
+  // The steps are decoupled now, which means the gate CAN be reached on a
+  // measurement nobody vouched for; under `coverage.include` an unexercised
+  // module reports 0 %, so a naive decoupling would emit specific per-module
+  // floor breaches on a partial run. That is worse than today. Hence: run
+  // whatever vitest did, and never reach exit 1 on a measurement that did not
+  // complete or that the manifest refused.
+  //
+  // **Placement is load-bearing.** Both arms sit AFTER the summary read, never
+  // before it: `coverage-gate-wiring.test.ts`'s temp tree holds only this
+  // script and its policy, so `coverage/baseline-manifest.json` is absent there
+  // too, and it asserts the SPECIFIC `cannot read coverage/coverage-summary.json`
+  // message with status 3. Arm 2 first turns that spec red inside the REQUIRED
+  // `check` job for a reason unrelated to the diff — this group's own failure
+  // class — and the likely repair would be to relax the one assertion pinning
+  // this script's `process.exit(EXIT_CANNOT_EVALUATE)`.
+
+  // Arm 1: the measurement must have completed. ABSENT is not a failure — a
+  // local `npm run coverage:gate` sets nothing and keeps the normal path.
+  const outcome = process.env.TANDEM_MEASUREMENT_OUTCOME;
+  if (outcome && outcome !== "success") {
+    cannotEvaluate(`the measurement did not complete (outcome: ${outcome}); this is not a pass`);
+  }
+
+  // Arm 2: the manifest must have accepted the measurement. coverage-manifest.mjs
+  // writes `baseline-manifest.json` ONLY on acceptance — every refusal goes
+  // through `die()` → exit 1 without writing — so its absence carries the
+  // manifest's refusal forward. It never unlinks a previous manifest, so absence
+  // is a sound proxy for refusal on a fresh checkout (CI) and can be masked
+  // locally by a stale file; the parenthetical is what tells a local reader
+  // which case they are in.
+  if (!existsSync(path.join(repoRoot, "coverage", "baseline-manifest.json"))) {
+    cannotEvaluate(
+      "no baseline manifest: the measurement was refused as partial " +
+        "(or coverage:manifest has not run since it)",
+    );
   }
 
   const verdict = evaluateGate({ policy, summary, repoRoot });
