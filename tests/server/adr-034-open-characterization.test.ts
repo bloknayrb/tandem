@@ -776,6 +776,11 @@ describe("toWireResult keeps the payload the wire sites already ship", () => {
    * because the MCP payload's consumer is the calling model, which no grep of
    * this repo can see. Unread-by-us is not unread.
    */
+  // `wakeUrl` is deliberately NOT here, and must never be added. `tandem_open` returns it,
+  // but on the TOOL payload — this projection is also what `POST /api/open`, `/api/upload`
+  // and `/api/scratchpad` return (`mcp/routes/send-open-result.ts`), and `res.json` takes
+  // `unknown`, so widening it here would put a transport fact into three HTTP wire contracts
+  // with nothing to catch it. This census is that catch.
   const WIRE_KEYS = [
     "alreadyOpen",
     "documentId",

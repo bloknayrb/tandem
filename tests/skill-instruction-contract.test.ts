@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { WAKE_URL_PRODUCERS } from "../src/server/mcp/wake-url.js";
 
 function readShippedSkill(): string {
   return readFileSync(new URL("../skills/tandem/SKILL.md", import.meta.url), "utf8");
@@ -70,7 +71,28 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // bump ships to nobody. Pinning the current number forces a deliberate look here whenever
   // the version moves — including for an unrelated edit, which is the cost of the guard, not
   // a bug in it. When you land here: confirm the assertions below still describe the shipped
-  // wake instructions, then move the number. Last moved to 18 by the Gc2a position-mapping group
+  // wake instructions, then move the number. Last moved to 21 by the arm-trigger REVIEW group,
+  // which changed the wake contract again in two ways. (a) The launcher test now FAILS CLOSED:
+  // "if you cannot see the start of this conversation, do not arm". Concluding hand-started from
+  // ABSENCE was wrong because a compaction drops exactly the turn that would have said otherwise
+  // — and the supervised double-wake does NOT present as "every wake arrives twice" (the
+  // supervisor writes a stdin USER TURN, `contract.ts:319`: "indistinguishable from the user
+  // speaking"), so the stand-down bullet was never its recovery. A spurious watch also silences
+  // the zero-subscriber advisory process-globally, so the cost is not confined to the session
+  // that armed. (b) A retraction bullet: the no-arm clause rides every wake turn, so it must
+  // also stand a watch DOWN, not only prevent one. Before that, to 20 by the arm-trigger group: this
+  // one DOES change the wake contract rather than passing through it. The trigger is no longer
+  // anchored to read-mode `tandem_status` — `tandem_open` and `tandem_scratchpad` now return
+  // `wakeUrl` too, and the anchor moved to "the FIRST `tandem_*` response that carries a
+  // `wakeUrl`". The word `first` is what carries the at-most-once bound now that four moments
+  // can supply the URL, so it is pinned below in its own assertion; a reword that drops it
+  // turns a single anchored event back into a standing obligation. A launcher-detection
+  // paragraph was added directly under the trigger, because `SUPERVISOR_NO_ARM_CLAUSE`
+  // (`src/shared/launcher/contract.ts`) rides every supervisor turn and makes "hand-started"
+  // mechanically decidable — the skill previously never stated that test.
+  // (The narration below skipped 19: the bump to 19 moved the assertion without extending this
+  // chain. 19 was the Gd docx group — no wake-section change.) Before that, to 18 by the Gc2a
+  // position-mapping group
   // (#1776): the Collaboration Etiquette bullet now says `tandem_getActivity`'s `cursor` is a
   // flat UTF-16 offset and a proximity hint only. That bullet is outside the wake section; every
   // wake assertion below was re-read against the bumped file and is unchanged. Before that, to
@@ -84,13 +106,48 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // orchestrator, and the "Wakes are best-effort" bullet carries the same qualifier — so the
   // orchestrator-only assertion below is part of the wake contract, not an extra. Every wake
   // assertion here was re-read against the bumped file.
-  expect(skill).toMatch(/^version:\s*19$/m);
+  expect(skill).toMatch(/^version:\s*21$/m);
   expect(wake).toMatch(/hand-started session/i);
-  expect(wake).toMatch(/first successful read-mode `tandem_status`/i);
+  // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
+  // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
+  expect(wake).toMatch(/\*\*first\*\* `tandem_\*` response that carries a `wakeUrl`/i);
+  expect(wake).toMatch(/a later response carrying `wakeUrl` is not a second invitation/i);
+  // Derived from WAKE_URL_PRODUCERS, never a literal. A hardcoded list here is why adding a
+  // fourth producer to the constant left the SHIPPED skill green with a stale claim —
+  // measured: `tests/docs/` + this file were 32/32 green with `tandem_getOutline` added.
+  // That is the PR's own bug one layer up: a fact stated in prose that nothing ties to code.
+  for (const tool of WAKE_URL_PRODUCERS) {
+    expect(
+      wake,
+      `the wake section never names \`${tool}\`, which returns wakeUrl. A session whose only ` +
+        "Tandem call is that tool would read this and not know it can arm.",
+    ).toContain(tool);
+  }
   expect(wake).toMatch(/read `wakeUrl`/i);
+  // The fence must keep the provenance instruction: a bare <wakeUrl> placeholder reads as
+  // "any URL of that shape", which is the hardcoded-port silent failure this section exists
+  // to prevent.
   expect(wake).toContain(
-    "Monitor({ ws: { url: <wakeUrl from tandem_status> }, persistent: true })",
+    "Monitor({ ws: { url: <the wakeUrl Tandem returned> }, persistent: true })",
   );
+  // The launcher test, stated where arming is decided rather than three paragraphs below it.
+  // Mirrors SUPERVISOR_NO_ARM_CLAUSE, which rides both the bootstrap and every wake turn.
+  expect(wake).toMatch(/How to tell which you are/i);
+  // The fallback is the clause that makes the producer LIST non-load-bearing: a session
+  // working on an already-open document reaches none of the three producers, and this is
+  // what tells it to go get an address rather than finish unarmed. Every other clause in
+  // the paragraph is pinned; this one carries more weight than the tool names beside it.
+  expect(wake).toMatch(/make a single read-mode `tandem_status` call to fetch it/i);
+  expect(wake).toMatch(/one such call, not one per turn/i);
+  // FAIL CLOSED on absence. This is the half a compaction breaks, and the half whose failure is
+  // silent and cross-session: a wrongly-armed supervised session degrades the zero-subscriber
+  // signal for every other session in the process.
+  expect(wake).toMatch(/If you cannot see the start .* do not arm/i);
+  expect(wake).toMatch(/Absence proves nothing there/i);
+  // The clause is a RETRACTION as well as a pre-arm test — it rides every supervisor wake turn,
+  // so a session that already armed must read it as "stand down", not as advice about a past
+  // decision. Without this the once-per-session bound argues for leaving the duplicate running.
+  expect(wake).toMatch(/retracts your watch/i);
   // Hard Rule 7 forbids a sub-agent the poll a wake exists to trigger, so arming has to be
   // scoped too — an unqualified "arm one watch" here is read by the sub-agent that also loads
   // this skill, and its first wake drives the poll that empties the orchestrator's inbox.
@@ -112,6 +169,33 @@ function expectPerSessionAutoArmContract(skill: string): void {
 }
 
 describe("shipped Tandem skill instruction contract", () => {
+  // Solo is enforced on what reaches Claude, never on what Claude writes: `readModeState` is
+  // read at the annotation READ and EXPORT filters only (`src/server/mcp/annotations.ts`), never
+  // on the create path. So an annotation written in Solo lands in the user's editor exactly as a
+  // Tandem-mode one would, and the entire "don't annotate at me" promise is this prose.
+  //
+  // Widening the arm trigger let a session substitute `tandem_open`/`tandem_scratchpad` for the
+  // Workflow's opening `tandem_status` — but neither carries `mode`, so that substitution
+  // silently removed the only step that supplied it before the step that annotates.
+  it("never lets a session reach the annotate step without knowing mode", () => {
+    const skill = readShippedSkill();
+    const workflow = namedSection(skill, "Workflow");
+
+    // Step 1 must deny the wholesale substitution, not just describe it.
+    expect(workflow).toMatch(/substitutes for nothing else in this step/i);
+    expect(workflow).toMatch(/neither response carries `mode`/i);
+    // And the precondition must sit on the step that annotates, where it is acted on.
+    expect(workflow).toMatch(/not before you know `mode`/i);
+
+    // The standing rule, reachable from every path — including the ones with no numbered list.
+    const collab = namedSection(skill, "Collaboration Mode");
+    expect(collab).toMatch(/precondition for annotating/i);
+    expect(collab).toMatch(/not\*\* enforced on what you write|not enforced on what you write/i);
+
+    // The `.docx` review path annotates at its own step 3 and touches neither status nor inbox.
+    expect(namedSection(skill, ".docx Review Workflow")).toMatch(/after you know `mode`/i);
+  });
+
   it("attempts one session-local persistent wake watch on first hand-started use", () => {
     expectPerSessionAutoArmContract(readShippedSkill());
   });
@@ -152,8 +236,15 @@ describe("shipped Tandem skill instruction contract", () => {
   it.each([
     [
       "the once-per-session limit",
-      "Arm it at most once per session.",
-      "Arm a persistent watch for this turn.",
+      // No trailing period: the sentence now continues into the "not a second invitation"
+      // clause, which is what holds the bound once several tools can supply a `wakeUrl`.
+      "Arm it at most once per session",
+      "Arm a persistent watch for this turn",
+    ],
+    [
+      "the not-a-second-invitation clause",
+      "a later response carrying `wakeUrl` is not a second invitation",
+      "each later response carrying `wakeUrl` is a fresh invitation",
     ],
     [
       "the failed-attempt stop rule",
@@ -336,7 +427,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "19", bodyHash: "dd9eaf39affa" });
+    ).toEqual({ version: "21", bodyHash: "6d0e67ccac3a" });
   });
 
   // #1770: the skill is the only surface that tells Claude what it may NOT do with a card
