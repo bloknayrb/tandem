@@ -547,6 +547,14 @@ export interface FidelityReport {
    */
   structuralLosses?: number;
   /**
+   * How many body pictures the import DROPPED (#1755). Not a display count and
+   * not a subset of `structuralLosses`' role: a non-zero value REFUSES the
+   * binary save, because `exportYDocToDocx` regenerates the file from a Y.Doc
+   * that never received those images and would overwrite them away. Optional
+   * for forward-compat: pre-#1755 reports lack it, so every reader uses `?? 0`.
+   */
+  droppedImages?: number;
+  /**
    * Content the export downgraded on the most recent save (unsupported blocks,
    * non-`data:` images, flattened comment reply threads). Refreshed each binary
    * save; reset by a re-import. These are ANNOUNCED, expected downgrades —

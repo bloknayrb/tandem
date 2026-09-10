@@ -20,12 +20,15 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
+import { countDroppedImages, htmlToYDoc } from "../../src/server/file-io/docx-html.js";
 import {
   type DocxLostFeatures,
   lostFeatureLossLines,
   scanDocxLostFeatures,
   structuralLossLines,
 } from "../../src/server/file-io/docx-lost-features.js";
+import { withInternal } from "../../src/shared/origins.js";
 import {
   buildFormatRevision,
   buildHeaderFooter,
@@ -587,5 +590,137 @@ describe("lostFeatureLossLines — content contract", () => {
     expect(lines[1]).toMatch(/tracked insertion/);
     expect(lines.at(-2)).toMatch(/page header/);
     expect(lines.at(-1)).toMatch(/page footer/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1755 — countDroppedImages
+// ---------------------------------------------------------------------------
+//
+// The count is `total − kept` read off the REAL walk: no ancestor list is
+// mirrored anywhere, because no hand-written one is right. `"img"` is itself in
+// `BLOCK_TAGS`, so a DIRECT `<img>` child of `li`/`td`/`th`/`blockquote` takes
+// the block arm and is KEPT, while the same `<img>` one level deeper is deferred
+// to `processInlineNodes`, which has no `img` arm. These fixtures are
+// behavioural, so they cannot go stale against a refactor of that switch.
+
+describe("countDroppedImages (#1755)", () => {
+  // Matches SAFE_IMAGE_DATA_URI. The dispatch fixtures MUST carry an allowlisted
+  // src: a srcless <img> is dropped on EVERY arm (the block `case "img"` runs
+  // `sanitizeImageSrc(undefined)` first and gets null), so a srcless pair makes
+  // the kept fixture unachievable and the dropped one pass for the wrong reason.
+  const PNG = `data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==`;
+
+  it("counts a mammoth body picture — <p><img></p> — as dropped", () => {
+    expect(countDroppedImages(`<p><img src="${PNG}"></p>`)).toBe(1);
+  });
+
+  it("counts a DIRECT <img> child of <li> as kept, with a real image node", () => {
+    // The over-count direction, whose failure mode is a permanently unsaveable
+    // file — and the only fixture that catches a future removal of "img" from
+    // BLOCK_TAGS.
+    const html = `<ul><li><img src="${PNG}"></li></ul>`;
+    expect(countDroppedImages(html)).toBe(0);
+    const doc = new Y.Doc();
+    withInternal(doc, () => htmlToYDoc(doc, html));
+    expect(JSON.stringify(doc.getXmlFragment("default").toJSON())).toContain("<image");
+    doc.destroy();
+  });
+
+  it("counts a rejected src as dropped even on the block arm", () => {
+    // The block arm downgrades a non-allowlisted src to a paragraph, so this is
+    // a real loss the user should be told about before the save overwrites it.
+    expect(countDroppedImages(`<img src="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=">`)).toBe(1);
+    expect(countDroppedImages(`<img>`)).toBe(1);
+  });
+
+  it("does NOT count an image inside an approved footnote body", () => {
+    // Those <li>s are pruned before the walk and reconstructed through
+    // Y_MAP_FOOTNOTE_BODIES, so counting them would refuse the save on a
+    // document whose body pictures are all intact.
+    const html =
+      `<p>Body<sup><a href="#footnote-1" id="footnote-ref-1">[1]</a></sup></p>` +
+      `<ol><li id="footnote-1"><p>Note <img src="${PNG}"> body. <a href="#footnote-ref-1">↑</a></p></li></ol>`;
+    expect(countDroppedImages(html, { "1": { text: "Note body.", hadFormatting: false } })).toBe(0);
+  });
+
+  it("does NOT count an image inside an UNRECONCILED footnote body", () => {
+    // Review round 1, and the over-count direction: `pruneFootnoteListItems`
+    // removes only APPROVED footnote <li>s, so an orphaned definition (or any
+    // refIds/listIds/bodyIds disagreement — a mammoth-format drift, a
+    // footnotes.xml capture miss) left its `<li><p><img></p></li>` in the DOM to
+    // be counted as a dropped BODY picture. A document with no body pictures at
+    // all then became permanently unsaveable, with no override.
+    const html =
+      `<p>Body<sup><a href="#footnote-1" id="footnote-ref-1">[1]</a></sup></p>` +
+      `<ol><li id="footnote-1"><p>Note <img src="${PNG}"> body. <a href="#footnote-ref-1">↑</a></p></li></ol>`;
+    // No captured body for id 1 → reconciliation fails → the <li> survives the
+    // apply-path prune. Identical HTML to the approved case above.
+    expect(countDroppedImages(html, {})).toBe(0);
+  });
+
+  it("does NOT count an image inside an ENDNOTE body", () => {
+    // Review round 2. Endnotes use the DISJOINT `#endnote-N` / `id="endnote-N"`
+    // namespace, so `collectFootnoteSignals` never matched them and the probe's
+    // widened prune never reached them: a `.docx` whose body holds no picture at
+    // all but whose endnote holds one got `droppedImages: 1` stamped into
+    // Y_MAP_FIDELITY_REPORT, and every later save answered VERIFY_BLOCKED
+    // forever with no override. Round 1 closed exactly this for unreconciled
+    // footnotes; this is the twin it missed.
+    const html =
+      `<p>Body<sup><a href="#endnote-1" id="endnote-ref-1">[1]</a></sup></p>` +
+      `<ol><li id="endnote-1"><p>Note <img src="${PNG}"> body. <a href="#endnote-ref-1">↑</a></p></li></ol>`;
+    expect(countDroppedImages(html)).toBe(0);
+  });
+
+  it("still counts an image in an <li> that merely LOOKS like an endnote", () => {
+    // The false-removal guard, and what keeps the widened prune from swallowing
+    // a real body picture: an author-authored `id="endnote-1"` carries no
+    // `<a href="#endnote-ref-1">` back-link, so it is NOT a note list item and
+    // its picture is a body picture like any other.
+    const html = `<ol><li id="endnote-1"><p>Just a list <span><img src="${PNG}"></span></p></li></ol>`;
+    expect(countDroppedImages(html)).toBe(1);
+  });
+
+  it("leaves an endnote <li> in the document on the REAL walk", () => {
+    // The prune widening is the PROBE's alone. Reconciliation stays
+    // footnote-only — an endnote has no captured body to reconstruct from, so
+    // degrading to a visible list is the lesser evil and removing the <li> would
+    // be silent loss (CRITICAL-2).
+    const html =
+      `<p>Body<sup><a href="#endnote-1" id="endnote-ref-1">[1]</a></sup></p>` +
+      `<ol><li id="endnote-1"><p>Endnote body. <a href="#endnote-ref-1">↑</a></p></li></ol>`;
+    const doc = new Y.Doc();
+    withInternal(doc, () => htmlToYDoc(doc, html));
+    expect(JSON.stringify(doc.getXmlFragment("default").toJSON())).toContain("Endnote body.");
+    doc.destroy();
+  });
+
+  it("logs nothing: the probe walk must not double footnote reconciliation lines", () => {
+    // `reconcileFootnoteIds`'s docblock promises a discrepancy is "recorded
+    // exactly once", on the apply path. The probe runs the SAME reconciliation,
+    // so without the silencing flag every failed-reconciliation line was printed
+    // twice per document open and an operator sizing the loss double-counted.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      countDroppedImages(
+        `<p>Body<sup><a href="#footnote-1" id="footnote-ref-1">[1]</a></sup></p>`,
+        {
+          "1": { text: "Orphan", hadFormatting: false },
+        },
+      );
+      expect(spy).not.toHaveBeenCalled();
+      // The apply path still logs — this is a probe carve-out, not a deletion.
+      const doc = new Y.Doc();
+      withInternal(doc, () =>
+        htmlToYDoc(doc, `<p>Body<sup><a href="#footnote-1" id="footnote-ref-1">[1]</a></sup></p>`, {
+          "1": { text: "Orphan", hadFormatting: false },
+        }),
+      );
+      doc.destroy();
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
