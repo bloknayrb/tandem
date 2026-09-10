@@ -87,10 +87,7 @@ export function compareFileSets({ expected, reported, repoRoot }) {
     if (!ran.has(file)) failures.push({ file, kind: "DID-NOT-RUN" });
   }
 
-  if (failures.length > 0) {
-    return { ok: false, cannotEvaluate: false, checked: collected.size, failures };
-  }
-  return { ok: true, cannotEvaluate: false, checked: collected.size, failures: [] };
+  return { ok: failures.length === 0, cannotEvaluate: false, checked: collected.size, failures };
 }
 
 /**
@@ -134,7 +131,8 @@ function collectExpected(repoRoot) {
         "--filesOnly",
         `--json=${out}`,
       ],
-      { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
+      // stdout is never read — the file list lands in `out`; stderr stays visible.
+      { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "ignore", "inherit"] },
     );
     if (r.status !== 0) {
       console.error(`[vitest-file-anchor] cannot collect: vitest list exited ${r.status}`);
@@ -146,6 +144,9 @@ function collectExpected(repoRoot) {
   }
 }
 
+/** Escape hatch for the specs: feed a synthetic collected-file list instead of spawning vitest. */
+const EXPECTED_FLAG = "--expected=";
+
 function main() {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const repoRoot = path.resolve(here, "..", "..");
@@ -154,16 +155,16 @@ function main() {
   if (!reportPath) {
     console.error("[vitest-file-anchor] cannot read the run report: no path given");
     console.error(
-      "[vitest-file-anchor] usage: vitest-file-anchor.mjs <report.json> [--expected=<list.json>]",
+      `[vitest-file-anchor] usage: vitest-file-anchor.mjs <report.json> [${EXPECTED_FLAG}<list.json>]`,
     );
     process.exit(EXIT_CANNOT_EVALUATE);
   }
 
   const report = readJsonOrDie(path.resolve(repoRoot, reportPath), "the run report at");
 
-  const flag = process.argv.slice(3).find((a) => a.startsWith("--expected="));
+  const flag = process.argv.slice(3).find((a) => a.startsWith(EXPECTED_FLAG));
   const expected = flag
-    ? readJsonOrDie(path.resolve(repoRoot, flag.slice("--expected=".length)), "--expected at")
+    ? readJsonOrDie(path.resolve(repoRoot, flag.slice(EXPECTED_FLAG.length)), "--expected at")
     : collectExpected(repoRoot);
 
   const verdict = compareFileSets({ expected, reported: report?.testResults, repoRoot });
