@@ -91,6 +91,8 @@ tandem
 
 Even with a valid token, a LAN peer can only **read** `/api` — writes are refused by the loopback invariant (#1320). See [security.md](security.md#the-api-invariant-1320).
 
+**That is a property of `/api`, not of the server.** `enforceLoopbackMutation` is mounted on `/api` and on nothing else, so a token-holding LAN peer *can* still mutate documents over the MCP endpoint (`POST /mcp` — `tandem_edit`, `tandem_comment`, `tandem_save` and the rest). Whether that is intended (a remote MCP client is arguably what the LAN bind is for) or a gap to close is an open question tracked in [#1906](https://github.com/bloknayrb/tandem/issues/1906) and [security.md → Open findings](security.md#open-findings). Treat a LAN bind as granting **write** access to anyone holding the token, and rotate it if it leaks.
+
 See [security.md](security.md) for the full security model.
 
 ## App-data directories

@@ -241,3 +241,74 @@ describe("open security-findings claims (CLAUDE.md vs docs/security.md)", () => 
     ).toEqual([]);
   });
 });
+
+/**
+ * The conditionals that have to stay ambient.
+ *
+ * The findings bullet was compressed from 4,276 bytes to ~2,300 on 2026-09-08.
+ * Most of what came out was description, which a reader can get from the
+ * register. These four sentences are not description: each one fires on
+ * pattern-match for someone who is NOT looking for the finding, and a link
+ * cannot do that job — a link only helps a reader who already suspects the
+ * connection.
+ *
+ * The case that made this concrete, and it is a plausible autonomous task in
+ * this repo rather than a hypothetical: an agent triaging CodeQL alerts sees
+ * alert 16, has no reason to connect it to #1654, and does the ordinary thing
+ * with an apparently-stale alert — dismisses it as a false positive. That
+ * silently closes an accepted-but-monitored finding. The only thing standing in
+ * front of it is the sentence being in ambient context.
+ *
+ * So this spec exists to make the NEXT compression pass loud. Anyone shortening
+ * the bullet further has to delete an assertion with a reason attached, rather
+ * than trimming a clause that reads like prose. Keyed on the load-bearing
+ * phrase, not the whole sentence, so wording stays free to change.
+ */
+const AMBIENT_CONDITIONALS: Array<{ finding: string; phrase: RegExp; why: string }> = [
+  {
+    finding: "#1654",
+    phrase: /CodeQL alert 16 stays open and must not be dismissed as a false positive/i,
+    why: "routine CodeQL triage will suppress alert 16 as stale without this",
+  },
+  {
+    finding: "#1666",
+    phrase: /`assertPathSafe`'s default roots cover nearly every document a user opens/i,
+    why: "the obvious containment helper is a no-op fix, and nothing else says so",
+  },
+  {
+    finding: "#1599",
+    phrase: /adding a config writer is what widens it/i,
+    why: "the trigger, not the revisit date, is what connects new work to this finding",
+  },
+  {
+    finding: "#1609",
+    phrase: /reopens if a document or tool argument can influence those probe inputs/i,
+    why: "without the reopen trigger the acceptance reads as unconditional",
+  },
+];
+
+describe("conditionals that must stay in CLAUDE.md, not just in the register", () => {
+  it.each(AMBIENT_CONDITIONALS)("$finding keeps its trigger clause ($why)", ({ phrase, why }) => {
+    // Scoped to the findings bullet rather than the whole file: the phrase
+    // appearing somewhere else in CLAUDE.md would satisfy a file-wide search
+    // while the bullet a reader actually scans had lost it.
+    expect(
+      claimBullet(),
+      `the findings bullet no longer carries this clause — ${why}. ` +
+        "If it was moved to docs/security.md, that is the change this spec exists to refuse: " +
+        "the clause has to fire for a reader who is not already looking for the finding.",
+    ).toMatch(phrase);
+  });
+
+  it("the bullet stays materially shorter than the 4,276 bytes it replaced", () => {
+    // The other direction. Compression is only worth its risk while it holds,
+    // and this bullet grew to 4,276 bytes one appended clause at a time — no
+    // single edit looked like the problem. A ceiling makes the next one visible.
+    //
+    // 3,000 leaves roughly 650 bytes of headroom for a new finding's label and
+    // bound, which is about two entries' worth. Breaching it is the signal to
+    // move description out, not to raise the number.
+    const size = claimBullet().length;
+    expect(size, `the findings bullet is back up to ${size} bytes`).toBeLessThan(3000);
+  });
+});
