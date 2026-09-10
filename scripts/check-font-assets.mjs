@@ -2,13 +2,20 @@ import fs from "fs";
 import path from "path";
 
 const FORBIDDEN = ["fonts.googleapis.com", "fonts.gstatic.com"];
-const TARGETS = [path.join("dist", "index.html"), "index.html"].filter((candidate) =>
-  fs.existsSync(candidate),
-);
 
-if (TARGETS.length === 0) {
-  throw new Error("No HTML files found to inspect for remote font references.");
+// #1825: this inspected `dist/index.html`, a path the build never writes --
+// vite.config.ts sets `outDir: "dist/client"` -- so the shipped artifact this
+// check exists to inspect was never read. Fixing the path alone re-creates the
+// bug: the old `.filter(existsSync)` plus a throw at `TARGETS.length === 0`
+// cannot fire while the repo-root `index.html` (the client entry, present in
+// every checkout) is in the list, so a future output-path move would silently
+// degrade this back to a source-only check. The required-built check is
+// unconditional for that reason.
+const BUILT = path.join("dist", "client", "index.html");
+if (!fs.existsSync(BUILT)) {
+  throw new Error(`${BUILT} not found — run \`npm run build\` first.`);
 }
+const TARGETS = [BUILT, "index.html"];
 
 const offenders = [];
 

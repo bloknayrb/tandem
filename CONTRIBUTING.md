@@ -144,7 +144,7 @@ This trips up every new clone, so it is stated exactly:
   `scripts/check-semantic-tokens.ts` on staged `src/client/**`, and an EOL normalizer on staged
   markdown/YAML. **It does not typecheck and does not run tests.**
 - **`pre-push`** runs, in order:
-  1. `npx biome check src/ tests/`
+  1. `npx biome check .`
   2. `npm test -- --run --reporter=dot` — the **full** Vitest suite, not a subset
   3. `cargo test --manifest-path src-tauri/Cargo.toml`
 
@@ -261,8 +261,10 @@ gh api repos/<owner>/<repo>/commits/<new-sha> --jq .sha
 
 This is why the `github-actions` ecosystem is deliberately **ungrouped** in
 `.github/dependabot.yml`: a grouped PR mutating a dozen 40-hex strings is exactly the artifact in
-which one wrong SHA is invisible. Note also that `.github/workflows/claude-code-review.yml` skips
-PRs authored by a bot, so the automated reviewer never looks at these.
+which one wrong SHA is invisible. **Nothing automated covers a Dependabot bump, so the two commands
+above are human-only.** The repo has no working automated reviewer: `claude-code-review.yml` has not
+completed a run since 2026-05-27 — it passes `secrets.ANTHROPIC_API_KEY`, which does not exist, so
+every run since has failed — and its `if:` excludes bot-authored PRs in any case (#1831).
 
 If a change touches network posture, CORS, authentication, or the `/api` surface, read
 [docs/security.md](docs/security.md) first — several invariants there are enforced by review

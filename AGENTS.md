@@ -14,7 +14,7 @@ Tandem is a TypeScript/Vite document editor with a Node server, CLI, monitor, an
 - `npm run test:e2e`: runs Playwright end-to-end tests.
 - `npm run lint` / `npm run format`: run ESLint and Biome formatting.
 - `npm run dev:tauri` / `npm run build:tauri`: run or package the Tauri desktop app.
-- Git hooks: `pre-commit` runs lint-staged (ESLint + Biome + a semantic-token scan); `pre-push` runs `biome check src/ tests/`, the **full** Vitest suite, and `cargo test`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the one-time setup `cargo test` needs — a fresh clone cannot push without it.
+- Git hooks: `pre-commit` runs lint-staged (ESLint + Biome + a semantic-token scan); `pre-push` runs `biome check .`, the **full** Vitest suite, and `cargo test`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the one-time setup `cargo test` needs — a fresh clone cannot push without it.
 
 ## Invariants That Fail Silently
 

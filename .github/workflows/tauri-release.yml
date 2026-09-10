@@ -101,8 +101,44 @@ jobs:
                   .join(', ')}). Delete all but one and re-run.`,
               );
             }
+            // A prerelease tag must not auto-update every installed copy:
+            // GitHub's `releases/latest` resolves to the newest NON-prerelease
+            // release, which is the only thing keeping the updater endpoint in
+            // tauri.conf.json off an RC. The `-` test, not a semver parse: the
+            // tag is already pinned equal to `v${tauri.conf.json.version}` by
+            // the step above.
+            const prerelease = tag.includes('-');
             if (existing.length === 1) {
               core.info(`Reusing existing release ${existing[0].id} for ${tag}`);
+              // Re-runs are NORMAL for a four-platform signed build, and this
+              // branch returns before createRelease -- so without a PATCH the
+              // re-run would inherit the first run's flag.
+              //
+              // Two things make that PATCH conditional rather than
+              // unconditional, and both are about `releases/latest`, which
+              // tauri.conf.json's updater endpoint resolves:
+              //
+              //  * The guard. A re-run on an OLDER tag (v0.25.0 while v0.26.0
+              //    is published) normally finds the flag already correct, and
+              //    the cheapest way not to disturb `latest` is not to write.
+              //  * `make_latest`. GitHub's update-a-release endpoint defaults
+              //    it to TRUE, so the one PATCH we do issue would promote the
+              //    older release and point every installed 0.26.0 copy at a
+              //    0.25.0 manifest. `'legacy'` asks GitHub to re-derive latest
+              //    from creation date + semver instead of forcing this one.
+              //
+              // `owner`/`repo` are spelled out because this script binds only
+              // the action's `github, context, core`; a bare `{ owner, repo }`
+              // shorthand ReferenceErrors at a `v*` tag, on exactly this path.
+              if (existing[0].prerelease !== prerelease) {
+                await github.rest.repos.updateRelease({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  release_id: existing[0].id,
+                  prerelease,
+                  make_latest: 'legacy',
+                });
+              }
               core.setOutput('release_id', existing[0].id);
               return;
             }
@@ -113,7 +149,7 @@ jobs:
               name: `Tandem ${tag}`,
               body: 'See the assets to download and install Tandem.',
               draft: true,
-              prerelease: false,
+              prerelease,
             });
             core.info(`Created draft release ${data.id} for ${tag}`);
             core.setOutput('release_id', data.id);
@@ -122,7 +158,7 @@ jobs:
     needs: create-release
     permissions:
       contents: write
-      # OIDC token write for azure/login@v2 (Windows signing).
+      # OIDC token write for azure/login (Windows signing).
       id-token: write
     # `release` environment binds the OIDC token subject to
     # `repo:bloknayrb/tandem:environment:release`, matching the federated
@@ -206,8 +242,19 @@ jobs:
         with:
           workspaces: "./src-tauri -> target"
 
+      # --ignore-scripts closes the install-time entrypoint: dependency
+      # lifecycle scripts no longer run in this job, which later logs into
+      # Azure and signs Windows binaries. It does NOT change the trust
+      # boundary -- the build that follows runs the same dependency tree with
+      # the same privileges (#1832).
+      #
+      # NEVER move this into `.npmrc` or NPM_CONFIG_IGNORE_SCRIPTS. As npm
+      # *config* it applies to every npm command including `npm publish`, and
+      # package.json has `prepublishOnly: npm run build` -- so config-level
+      # would skip the build and publish whatever dist/ happened to be on the
+      # runner, green. The CLI flag on `npm ci` cannot reach `npm publish`.
       - name: Install npm dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Download Node.js sidecar
         run: node scripts/download-node-sidecar.mjs --target ${{ matrix.node-target }}
@@ -221,21 +268,21 @@ jobs:
       # Windows signing uses Azure Trusted Signing via the Microsoft-maintained
       # dotnet/sign CLI. Authentication is OIDC -> federated credential on the
       # tandem-ci-trusted-signing service principal -- no AZURE_CLIENT_SECRET
-      # needed. azure/login@v2 caches the auth session in the Azure CLI; the
+      # needed. azure/login caches the auth session in the Azure CLI; the
       # `sign` tool picks it up via DefaultAzureCredential -> AzureCliCredential.
       - name: Azure OIDC login
         if: matrix.platform == 'windows-latest'
-        # Deliberately NOT re-resolved to current v2 (7184910... as of
-        # 2026-09-02) when every other action in this repo was pinned. This is
-        # the highest-privilege step here -- it mints the OIDC session that
-        # signs Windows binaries -- and a stale pin at a SHA that has been
-        # audited and in service since 2026-05-15 beats a fresh pin at an
-        # unaudited HEAD. "It works" would be an availability argument standing
-        # in for a security one; this is the security one. The upgrade path is
-        # a reviewed Dependabot bump, not a blind re-resolve. Residual carried
-        # knowingly: this misses any auth-handling fix shipped upstream since.
-        # Audited 2026-09-02.
-        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v2
+        # Held at the v3.0.2 SHA a reviewed Dependabot bump landed (#1835), and
+        # deliberately NOT re-resolved to whatever the tag or the branch points
+        # at now. This is the highest-privilege step here -- it mints the OIDC
+        # session that signs Windows binaries -- so a held pin at a reviewed SHA
+        # beats a fresh pin at an unaudited HEAD. "It works" would be an
+        # availability argument standing in for a security one; this is the
+        # security one. The upgrade path is a reviewed Dependabot bump, not a
+        # blind re-resolve. Residual carried knowingly: this misses any
+        # auth-handling fix shipped upstream since.
+        # Audited 2026-09-10 (tag v3.0.2 -> 7ddb5af1, confirmed via gh api).
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -277,7 +324,7 @@ jobs:
           # RFC 3161 timestamping internally; no --timestamp-url flag is
           # accepted on the `code artifact-signing` subcommand.
           # --azure-credential-type=azure-cli pins the auth flow to the
-          # session cached by azure/login@v2 (deterministic; avoids
+          # session cached by azure/login (deterministic; avoids
           # DefaultAzureCredential trying managed identity / env first).
           $signCommand = [ordered]@{
             cmd  = $env:SIGN_EXE_PATH
@@ -931,3 +978,21 @@ jobs:
               throw new Error(`latest.json references assets not on this release:\n${dangling.join('\n')}`);
             }
             core.info('manifest OK: all platform keys present, every URL resolves to an attached asset');
+
+      # The shape gate above and this signature gate are deliberately separate
+      # steps: the github-script step has no checkout, so keeping it untouched
+      # keeps the two independently reviewable.
+      #
+      # The `# gate:updater-sig` marker lives INSIDE the run body, not on the
+      # `name:` line: a YAML comment is absent from the parse tree, so a marker
+      # on `name:` is invisible to the wiring test that finds this step
+      # (tests/scripts/release-ci-hygiene.test.ts). Same shape as APPLE_GATE_RUN.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify updater signatures against tauri.conf.json pubkey
+        run: |
+          # gate:updater-sig
+          node scripts/ci/verify-updater-signatures.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}

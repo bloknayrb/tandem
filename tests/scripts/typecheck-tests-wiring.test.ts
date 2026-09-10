@@ -164,7 +164,14 @@ describe("typecheck:tests CI wiring", () => {
 
   it("runs after dependencies are installed", () => {
     const [, job] = typecheckJob();
-    const install = stepIndex(job, "`npm ci`", (s) => s.run?.trim() === "npm ci");
+    // Prefix match, not exact equality: `npm ci` carries `--ignore-scripts`
+    // since #1832, and `stepIndex` throws on no match, so an exact-equality
+    // finder here turns required `check` red on a flag change. This is the
+    // shape acceptance-harness-wiring.test.ts:264 and
+    // windows-acl-proof-wiring.test.ts:161 already use. The flag itself is
+    // pinned by exact equality in release-ci-hygiene.test.ts, so widening
+    // here loses nothing — this assertion is about ORDER.
+    const install = stepIndex(job, "`npm ci`", (s) => /^npm ci\b/.test(s.run?.trim() ?? ""));
     const check = stepIndex(job, COMMAND, (s) => s.run?.includes("typecheck:tests") ?? false);
     expect(check).toBeGreaterThan(install);
   });

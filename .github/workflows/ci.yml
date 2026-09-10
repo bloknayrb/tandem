@@ -174,7 +174,7 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      - run: npm ci --ignore-scripts
 
       - name: Real-icacls proof (#1299 recovery path)
         run: node scripts/ci/windows-acl-proof.mjs
@@ -250,7 +250,7 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      - run: npm ci --ignore-scripts
 
       - name: Coverage baseline
         id: baseline
@@ -341,7 +341,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - run: npm ci
+      - run: npm ci --ignore-scripts
 
       - name: Lint
         run: npm run lint
@@ -357,10 +357,11 @@ jobs:
 
       # The root config covers `src/` -- including `src/cli`, which neither the
       # client nor the server config includes. It already ran, but only inside
-      # the `Build` step five steps below, so a type error in the 2,905-line
-      # doctor.ts surfaced behind `Test`, the tag fetch and the acceptance
-      # harness rather than here. This is about WHEN it fails, not whether it
-      # runs.
+      # the `Build` step lower down, so a type error in the 2,905-line doctor.ts
+      # surfaced there rather than here. This is about WHEN it fails, not
+      # whether it runs. (#1748 moved `Build` above `Test`, which shortens that
+      # gap; `Build` still runs after every typecheck step, so this is still the
+      # earlier failure.)
       - name: Typecheck (root)
         run: npx tsc --noEmit
 
@@ -370,6 +371,9 @@ jobs:
       # conditional, or allowed to continue-on-error.
       - name: Typecheck (tests)
         run: npm run typecheck:tests
+
+      - name: Build
+        run: npm run build
 
       - name: Test
         run: npm test -- --run --reporter=default --reporter=json --outputFile.json=.vitest-report.json
@@ -427,9 +431,6 @@ jobs:
       - name: Acceptance harness (session-monitor auto-arm)
         run: npm run test:acceptance-harness
         timeout-minutes: 3
-
-      - name: Build
-        run: npm run build
 
       - name: Verify harness components stripped from client bundle
         run: node scripts/ci/verify-harness-stripped.mjs
@@ -503,10 +504,11 @@ jobs:
         if: failure()
         with:
           name: playwright-report
-          # `test-results/` carries Playwright's trace.zip / video.webm /
-          # screenshot artifacts (configured in playwright.config.ts via
-          # trace/screenshot/video). Without this path, diagnosing a CI-only
-          # flake requires re-running the spec locally.
+          # `test-results/` carries Playwright's trace.zip and failure
+          # screenshots (playwright.config.ts sets `trace: on-first-retry` and
+          # `screenshot: only-on-failure`; video is deliberately NOT enabled).
+          # Without this path, diagnosing a CI-only flake requires re-running
+          # the spec locally.
           path: |
             playwright-report/
             test-results/
