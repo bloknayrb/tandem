@@ -125,6 +125,34 @@ describe("runActivate — unreadable input (#1789)", () => {
     // The negative that pins BOTH the explicit `return` and the sibling (never
     // nested) `try`: either mistake prints the generic copy on top of this one.
     expect(out).not.toContain("License activation failed");
+    // Review round 1: the errno survives. A bare `catch` gave every read
+    // failure the folder advice above and discarded the cause, so an EACCES on
+    // a real file, or an EIO on a disconnected share, was indistinguishable
+    // from pointing at a directory — with nothing left naming which.
+    expect(out).toContain("Reason:");
+    expect(out).toContain("EISDIR");
+  });
+
+  it("names the cause when the file exists but cannot be read", async () => {
+    // The case the folder-specific advice is actively wrong about.
+    const file = path.join(dir, "jane.license");
+    fs.writeFileSync(file, "blob");
+    const readSpy = vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+      throw Object.assign(new Error("EACCES: permission denied, open 'jane.license'"), {
+        code: "EACCES",
+      });
+    });
+    try {
+      await expect(runActivate(["activate", file])).resolves.toBeUndefined();
+    } finally {
+      readSpy.mockRestore();
+    }
+
+    expect(exit).toHaveBeenCalledWith(1);
+    const out = errors.join("\n");
+    expect(out).toContain("Could not read a license from");
+    expect(out).toContain("EACCES");
+    expect(out).not.toContain("License activation failed");
   });
 
   it("no argument exits without throwing past the spy", async () => {

@@ -79,7 +79,7 @@ function createLicenseStore() {
       reconcileTransition(isRestricted(next));
       // The build flag never flips at runtime — a dark build polls once, then rests.
       if (!next.gateActive) stop();
-    } catch {
+    } catch (err) {
       // Server unavailable / transient — keep last-known `status`, retry next
       // tick. What must NOT happen is the silent version: before #1789 this
       // catch was a bare comment, so a first-poll failure left `status === null`
@@ -88,8 +88,16 @@ function createLicenseStore() {
       //
       // Warn on the TRANSITION into failure only. The timer fires forever, so a
       // per-tick warn is a console flood on any sustained outage.
+      //
+      // The cause is part of the record (review round 1): the on-screen copy
+      // asserts Tandem "couldn't reach its local server", which is true of an
+      // ECONNREFUSED and false of a 500, a 401 after token rotation, or a parse
+      // failure on a truncated body — all of which mean the server answered.
+      // Without the bound error those four are indistinguishable in the console.
       if (!statusUnavailable) {
-        console.warn("[license] status poll failed — showing last known state, if any");
+        console.warn(
+          `[license] status poll failed — showing last known state, if any: ${String(err)}`,
+        );
       }
       statusUnavailable = true;
     }

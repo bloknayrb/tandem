@@ -1,7 +1,9 @@
 import crypto from "crypto";
 import type { Request, Response } from "express";
 import fs from "fs";
-import { describe, expect, it, vi } from "vitest";
+import os from "os";
+import path from "path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LicenseState } from "../../src/server/license/license-types.js";
 import * as verifier from "../../src/server/license/verifier.js";
 import { canonicalize } from "../../src/server/license/verifier.js";
@@ -219,5 +221,54 @@ describe("dark-build wire shape", () => {
     const scrubbed = scrubForNonLoopback({ gateActive: false });
     expect(scrubbed).not.toHaveProperty("licenseeName");
     expect(typeof scrubbed.licenseInstalled).toBe("boolean");
+  });
+});
+
+/**
+ * #1789, review round 1. The Settings → License CLI hint cannot be decided in
+ * the client: `isTauriRuntime()` answers "am I in the Tauri WebView", and a
+ * desktop install also serves this same client over `http://127.0.0.1:3479`, so
+ * a desktop user browsing there reads FALSE and is offered `tandem activate` —
+ * which writes `license.json` under the npm env-paths root while the sidecar
+ * reads the Tauri app-data dir. It prints "✓ License activated" and the desktop
+ * never sees it. The server owns the discriminant; this is its wire.
+ */
+describe("cliActivateEffective on the wire", () => {
+  let saved: string | undefined;
+
+  beforeEach(() => {
+    saved = process.env.TANDEM_APP_DATA_DIR;
+  });
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.TANDEM_APP_DATA_DIR;
+    else process.env.TANDEM_APP_DATA_DIR = saved;
+  });
+
+  it("is false for a loopback caller whose server reads an overridden root", () => {
+    process.env.TANDEM_APP_DATA_DIR = path.join(os.tmpdir(), "tandem-desktop-root-fixture");
+    const res = fakeRes();
+    handleGetLicenseStatus(reqFrom("127.0.0.1"), res);
+    expect((res.body as { cliActivateEffective?: boolean }).cliActivateEffective).toBe(false);
+  });
+
+  it("is true for a loopback caller on the plain npm root", () => {
+    delete process.env.TANDEM_APP_DATA_DIR;
+    const res = fakeRes();
+    handleGetLicenseStatus(reqFrom("127.0.0.1"), res);
+    expect((res.body as { cliActivateEffective?: boolean }).cliActivateEffective).toBe(true);
+  });
+
+  /**
+   * Absence, not an always-false key: a LAN caller runs the CLI on THEIR
+   * machine, which can never reach this server's root, and the client reads a
+   * missing field as false. Keeping it off the scrubbed wire also keeps that
+   * payload from widening.
+   */
+  it("never reaches a non-loopback caller", () => {
+    delete process.env.TANDEM_APP_DATA_DIR;
+    const res = fakeRes();
+    handleGetLicenseStatus(reqFrom("203.0.113.5"), res);
+    expect(res.body).not.toHaveProperty("cliActivateEffective");
   });
 });

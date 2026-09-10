@@ -222,6 +222,24 @@ describe("licenseStore — statusUnavailable (#1789)", () => {
     expect(warn.mock.calls.filter((c) => String(c[0]).includes("[license]"))).toHaveLength(1);
   });
 
+  /**
+   * Review round 1. The once-per-transition warn recorded THAT the poll failed
+   * and not WHY. The on-screen copy asserts Tandem "couldn't reach its local
+   * server" — true of an ECONNREFUSED, false of a 500 from
+   * `/api/license/status`, a 401 after token rotation, or a JSON parse failure
+   * on a truncated body, all of which mean the server answered. Without the
+   * cause in the line those four are indistinguishable in a bug report.
+   */
+  it("the warn names the cause, not just the failure", async () => {
+    fetchLicenseStatus.mockRejectedValue(new Error("HTTP 401"));
+    licenseStore.start();
+    await flush();
+
+    const line = warn.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+    expect(line).toContain("[license]");
+    expect(line).toContain("HTTP 401");
+  });
+
   it("a later success clears it", async () => {
     fetchLicenseStatus.mockRejectedValueOnce(new Error("down"));
     licenseStore.start();

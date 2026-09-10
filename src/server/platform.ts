@@ -15,6 +15,33 @@ export function resolveAppDataDir(): string {
 }
 
 /**
+ * Would an npm-installed `tandem activate <file>` write where THIS server reads?
+ *
+ * The discriminant behind the Settings → License CLI hint (#1789, review round
+ * 1). `isTauriRuntime()` in the client answers "am I in the Tauri WebView",
+ * which is NOT the same question: a desktop install also serves the full client
+ * over `http://127.0.0.1:3479` (`bundle.resources` ships `dist/client/`), and a
+ * desktop user who opens that URL in a browser reads `isTauriRuntime() ===
+ * false`. Offering them the command there is the exact failure the hint was
+ * withdrawn for — `src/cli/license.ts` never sets `TANDEM_APP_DATA_DIR`, so an
+ * npm CLI writes `license.json` under the npm env-paths root while the desktop
+ * sidecar was launched pointing at the Tauri app-data dir (`sidecar.rs` sets
+ * both `TANDEM_DATA_DIR` and `TANDEM_APP_DATA_DIR`). Activation prints
+ * "✓ License activated" and the desktop never sees it.
+ *
+ * Only the server can answer it, because only the server knows which root it
+ * resolved. `true` means this process reads the same directory a fresh npm
+ * `tandem` would write; any override (the desktop sidecar, or a test tempdir)
+ * makes it `false`, which is the fail-closed direction — the hint disappears
+ * rather than naming a command that silently does nothing.
+ */
+export function npmCliSharesAppDataRoot(): boolean {
+  return (
+    path.resolve(resolveAppDataDir()) === path.resolve(envPaths("tandem", { suffix: "" }).data)
+  );
+}
+
+/**
  * Resolve a Windows system binary by absolute path under `%SystemRoot%`.
  * Bypasses `PATH` so a git-bash / MSYS / Cygwin shadow (e.g. their own
  * `whoami` that doesn't understand Windows flags) can't intercept us — and so

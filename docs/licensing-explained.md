@@ -46,12 +46,15 @@ any computer you personally use, with no internet connection required to prove
 it. For the first year you also get new versions as they're released.
 
 **Where you paste it depends on which Tandem you're running.** On the desktop app
-the only route is Settings -> License; the desktop bundle ships no `tandem`
+the only route is Settings → License; the desktop bundle ships no `tandem`
 command, so there is nothing to run. The `tandem activate <file>` command belongs
 to the npm install, and it writes into **that install's own app-data
-directory** -- so running a separately installed CLI to license a desktop app
+directory** — so running a separately installed CLI to license a desktop app
 succeeds and changes nothing the desktop can see. Nothing reports that, which is
-why it is worth stating here.
+why it is worth stating here. That holds even if you reach the desktop's own
+editor through a browser (it serves the same UI on `http://127.0.0.1:3479`): the
+server there still reads the desktop's app-data directory, so Settings → License
+is still the only route, and it stops offering the command accordingly.
 
 ## What you get, precisely
 
@@ -129,7 +132,7 @@ cheerfully reports **"You're up to date"** forever.
 
 Half of that is now closed on the device itself: if *this* copy of Tandem can see
 that its own update window has ended, a manual check for updates says so and
-points at Settings -> License, rather than claiming you are current. The other
+points at Settings → License, rather than claiming you are current. The other
 half — the case where the device still believes it is entitled and the server
 disagrees — is invisible from here (it arrives as an ordinary "nothing new"
 response), so the server's own refusal reason stays the authoritative detector.

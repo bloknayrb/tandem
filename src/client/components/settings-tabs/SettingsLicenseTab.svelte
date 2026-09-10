@@ -25,6 +25,14 @@ const statusUnavailable = $derived(licenseStore.statusUnavailable);
 // required", which tells a beta tester holding a free license that it's
 // unnecessary — so they archive it, and then need it at the v1.0 flip. Say what
 // is actually true instead: enforcement is off in THIS version.
+// Whether a `tandem activate` would land where the server that answered us
+// reads (#1789, review round 1). `isDesktop` alone is a WebView test, and the
+// desktop sidecar serves this same client over http://127.0.0.1:3479 — opened
+// there in a browser it reads false, so the withdrawn CLI hint came back on the
+// one install where running it silently does nothing. Only the server can tell
+// the two app-data roots apart, so it answers, and a missing field (LAN-scrubbed
+// payload, failed poll, older server) reads as false: hide rather than mislead.
+const cliActivateEffective = $derived(status?.cliActivateEffective === true);
 const gateDark = $derived(status != null && !status.gateActive);
 // On a dark build the gate reports nothing, so `statusLabel` is "". Say whether
 // a license is actually installed — otherwise activating one changes nothing on
@@ -82,8 +90,15 @@ function onActivated(): void {
     <!-- The 60 s poll used to swallow every failure (#1789), so this state was
          invisible: either a frozen countdown the server may no longer agree
          with, or — on a first-poll failure — a pill asserting the gate is off.
-         Split on whether there is a last known state at all. -->
-    <div class="license-warning" data-testid="license-status-unavailable">
+         Split on whether there is a last known state at all.
+
+         `role="status"` because this block is inserted and removed under a live
+         Settings tab: without it a screen-reader user goes on reading a pill and
+         countdown the page has just stopped vouching for, which is the silent
+         staleness the block exists to end. Polite rather than `role="alert"`
+         (the sibling below) — it is transient and self-clearing on the next
+         successful poll, so it must not interrupt. -->
+    <div class="license-warning" data-testid="license-status-unavailable" role="status">
       {#if status != null}
         Tandem couldn't reach its local server, so this is the last known state and it may be
         out of date.
@@ -109,9 +124,16 @@ function onActivated(): void {
        worse than absent here: it writes `license.json` under its OWN env-paths
        root while the desktop points its sidecar at the Tauri app-data dir, so
        the activation succeeds and the app never sees it. No
-       `npm install -g tandem-editor` escape hatch, for that reason. -->
+       `npm install -g tandem-editor` escape hatch, for that reason.
+
+       BOTH conditions, and the server's is the load-bearing one: `isDesktop` is
+       a WebView test, so it misses the desktop's own client served over
+       127.0.0.1 in a browser — the same wrong-root no-op, reached by a different
+       route. `cliActivateEffective` is the server saying its app-data root is
+       the npm one. `isDesktop` stays as the second layer for a desktop build
+       whose sidecar somehow resolved the npm root anyway. -->
   <div class="settings-hint" style="margin-top: var(--tandem-space-1);">
-    Paste a license key you received by email{#if !isDesktop}, or run
+    Paste a license key you received by email{#if !isDesktop && cliActivateEffective}, or run
       <code>tandem activate &lt;file&gt;</code> from the command line{/if}. A valid license unlocks
     editing and runs forever; the update window is separate and is shown above once activated.
   </div>

@@ -139,11 +139,19 @@ export async function runActivate(args: string[]): Promise<void> {
   let blob: string;
   try {
     blob = resolveLicenseInput(input, fs.existsSync, (p) => fs.readFileSync(p, "utf-8"));
-  } catch {
+  } catch (err) {
+    // Bind the error and print its message (review round 1). A bare `catch`
+    // reported EVERY read failure with folder-specific advice: an EACCES on a
+    // readable-looking file, or an EIO on a disconnected share, told the buyer
+    // to check whether their file was a folder while the errno that actually
+    // named the cause was discarded. `err.message` from `readFileSync` carries
+    // the errno and the path — never blob bytes, since this branch is reachable
+    // only once `fileExists(input)` returned true.
+    const reason = err instanceof Error ? err.message : String(err);
     console.error(
       `\n[Tandem] Could not read a license from ${input}.\n` +
         "If that's a folder, point at the .license file inside it — or paste the license " +
-        "key itself as the argument.\n",
+        `key itself as the argument.\nReason: ${reason}\n`,
     );
     process.exit(1);
     return;
