@@ -278,6 +278,90 @@ describe("resolveLicenseState — fail-closed on corrupt files", () => {
   });
 });
 
+/**
+ * #1788 decision 5: a `trial.json` that PARSES to a non-null body is
+ * authoritative even when its `firstRunAt` cannot run a clock. Before the fix
+ * `tf?.firstRunAt ? new Date(tf.firstRunAt).getTime() : nowMs` sent every FALSY
+ * value down the ABSENT-FILE branch, so `firstRunAt: ""` was a perpetual 14-day
+ * trial on every dispatch — a real fail-open, and the opposite direction to the
+ * `"not-a-date"` case above, which already resolved closed.
+ *
+ * **The clock is the discriminator here, and it is `now: () => 0` on purpose.**
+ * `TRIAL_MS` is 14 days (~1.21e9 ms), so a `firstRunAt` that coerces through a
+ * string-lenient parse — `Date.parse(0)` → `"0"` → 946684800000 (2000), or a
+ * lazy `new Date(null).getTime()` → 0 (1970) — expires long before any realistic
+ * `now`, and these assertions would read `restricted` and PASS even with the
+ * `typeof v === "string"` half of `hasUsableFirstRunAt` deleted. At epoch 0 that
+ * same mutation reads `trial` and goes red.
+ *
+ * Mutations these four cases exist to catch (hand-checked; restore from a file
+ * copy, never `git checkout`):
+ *   1. revert to `tf?.firstRunAt ? new Date(tf.firstRunAt).getTime() : nowMs` —
+ *      all four go red (plus the whole-body-scalar case below, and the
+ *      end-to-end disk case in license-armed-restricted.test.ts).
+ *   2. drop `typeof v === "string" &&` from `hasUsableFirstRunAt` — `0` goes red
+ *      (`Date.parse(0)` coerces to `"0"` ⇒ a year-2000 clock).
+ *   3. drop that guard AND spell the parse `new Date(v).getTime()` — `null` and
+ *      `0` both go red (`new Date(null)` is a finite `0`, not `NaN`).
+ */
+describe("resolveLicenseState — unusable firstRunAt is not a fresh trial (#1788)", () => {
+  function writeTrialBody(dir: string, body: unknown): void {
+    fs.writeFileSync(trialFilePath(dir), JSON.stringify(body));
+  }
+
+  it.each([
+    ["empty string", { version: 1, firstRunAt: "" }],
+    ["null", { version: 1, firstRunAt: null }],
+    ["numeric zero", { version: 1, firstRunAt: 0 }],
+    ["key absent", { version: 1 }],
+  ])("firstRunAt %s ⇒ restricted, not day 0", (_label, body) => {
+    const dir = tmp();
+    writeTrialBody(dir, body);
+    const s = assertGateActive(
+      resolveLicenseState({ appDataDir: dir, now: () => 0, gateEnabled: true }),
+    );
+    expect(s.status).toBe("restricted");
+  });
+
+  // The discriminating twin: a usable value still runs the clock. Realistic
+  // `now` here (matching the `"not-a-date"` case above), because this one is
+  // about the ordinary path, not about coercion.
+  it("a valid recent ISO firstRunAt still ⇒ trial", () => {
+    const dir = tmp();
+    const now = Date.UTC(2026, 0, 1);
+    writeTrialBody(dir, { version: 1, firstRunAt: new Date(now - DAY).toISOString() });
+    const s = assertGateActive(
+      resolveLicenseState({ appDataDir: dir, now: () => now, gateEnabled: true }),
+    );
+    expect(s.status).toBe("trial");
+  });
+
+  // The boundary of what `readJson` can actually see. It cannot separate "file
+  // absent", "file unreadable", "unparseable JSON" and "the body is literally
+  // null" — all four are `null` — so only that collapsed case is day 0. Any
+  // other scalar body is a non-null parse and resolves closed. Recorded as two
+  // cases so the next reader does not assume the file-existence claim is
+  // stronger than it is.
+  it("a whole-body scalar trial.json (0) ⇒ restricted", () => {
+    const dir = tmp();
+    writeTrialBody(dir, 0);
+    const s = assertGateActive(
+      resolveLicenseState({ appDataDir: dir, now: () => 0, gateEnabled: true }),
+    );
+    expect(s.status).toBe("restricted");
+  });
+
+  it("a whole-body null trial.json ⇒ day-0 trial (indistinguishable from absent)", () => {
+    const dir = tmp();
+    writeTrialBody(dir, null);
+    const s = assertGateActive(
+      resolveLicenseState({ appDataDir: dir, now: () => 0, gateEnabled: true }),
+    );
+    expect(s.status).toBe("trial");
+    expect(s.status === "trial" && s.trial.daysRemaining).toBe(TRIAL_DAYS);
+  });
+});
+
 // The 14-day boundary is strict `<`. Both edges deterministic with the injected
 // clock (the PR deferred this; landing it before the v1.0 flag-flip).
 describe("resolveLicenseState — trial boundary", () => {

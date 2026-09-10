@@ -48,6 +48,21 @@ function readJson<T>(filePath: string): T | null {
 }
 
 /**
+ * A parsed `trial.json` whose `firstRunAt` can actually run a clock (#1788).
+ *
+ * `Date.parse` on a STRING-typed field, not `new Date(x).getTime()`:
+ * `new Date(null)` and `new Date(0)` are a **finite** `0` — a 1970 epoch that
+ * reads as a usable timestamp — while `new Date("")` is `NaN`. Typing the field
+ * first is what makes `null` and `0` fail here rather than silently becoming a
+ * 1970 clock.
+ */
+function hasUsableFirstRunAt(tf: unknown): tf is TrialFile {
+  if (typeof tf !== "object" || tf === null) return false;
+  const v = (tf as TrialFile).firstRunAt;
+  return typeof v === "string" && Number.isFinite(Date.parse(v));
+}
+
+/**
  * Resolve on-device license state — computed FRESH on every call (no cache).
  * A cache caused the two-writer staleness + mid-session-expiry bugs the spec
  * reviews found, so the gate re-reads `license.json`/`trial.json` per dispatch.
@@ -125,8 +140,24 @@ export function resolveLicenseState(deps: {
   }
 
   // 2. Trial clock (soft by design — ADR-040 §3). Absent file ⇒ day 0.
-  const tf = readJson<TrialFile>(trialFilePath(appDataDir));
-  const firstRunAt = tf?.firstRunAt ? new Date(tf.firstRunAt).getTime() : nowMs;
+  //
+  // readJson<unknown>, not <TrialFile>: the cast is blind (:42-48), and a
+  // TrialFile-typed `tf` narrows the false branch to `null`, making the `: NaN`
+  // arm `never` to tsc — the arm that carries decision 5 for a whole-body scalar.
+  const tf = readJson<unknown>(trialFilePath(appDataDir));
+  // A trial.json that PARSES to a non-null body is authoritative even when its
+  // firstRunAt is unusable: "", null, 0 and a missing key all resolve to NaN,
+  // and NaN makes `nowMs < expiresAt` false ⇒ restricted (decision 5, #1788).
+  // Before that fix `tf?.firstRunAt ? … : nowMs` sent every FALSY value down the
+  // absent-file branch, so `firstRunAt: ""` was a PERPETUAL 14-day trial on every
+  // dispatch — a fail-open, and the opposite of what a non-empty unparseable
+  // value already did. Only an absent or wholly unreadable file is day 0, which
+  // keeps ensureTrialStarted's soft clock (ADR-040 §3) intact.
+  const firstRunAt = hasUsableFirstRunAt(tf)
+    ? Date.parse(tf.firstRunAt)
+    : tf === null
+      ? nowMs
+      : NaN;
   const expiresAt = firstRunAt + TRIAL_MS;
   if (nowMs < expiresAt) {
     const daysRemaining = Math.max(0, Math.ceil((expiresAt - nowMs) / 86_400_000));

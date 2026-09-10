@@ -251,8 +251,8 @@ this page.
 
 **MCP** — `tandem_edit`, `tandem_appendContent`, `tandem_editList`, `tandem_scratchpad`, `tandem_comment`,
 `tandem_suggest`, `tandem_highlight`, `tandem_flag`, `tandem_editAnnotation`,
-`tandem_annotationReply`, `tandem_removeAnnotation`, `tandem_applyChanges`,
-`tandem_restoreBackup`.
+`tandem_annotationReply`, `tandem_removeAnnotation`, `tandem_resolveAnnotation`,
+`tandem_applyChanges`, `tandem_restoreBackup`.
 
 **`/api`** — `apply-changes`, `annotation-reply`, `remove-annotation`, `document/reload`,
 `external-conflict/resolve`, `backups/restore`, `scratchpad`.
@@ -271,8 +271,13 @@ gates the `force === true` sub-path of `POST /api/open`, mirroring the `tandem_o
 body, not the registration site.**
 
 **Deliberately ungated:** all reads, *plain* `open` (only the destructive `force: true` reload is
-gated, on both halves), save/export, `GET` routes, chat, and `tandem_resolveAnnotation` — a
-status flip, not a content write.
+gated, on both halves), save/export, `GET` routes, and chat. `tandem_resolveAnnotation` left this
+set in [#1788](https://github.com/bloknayrb/tandem/issues/1788) (decision F): accept/dismiss
+writes the document room's annotation map, which Surface A already refuses from the browser when
+restricted, so leaving the MCP twin ungated let Claude triage a document its own user could not.
+It has **no `/api` twin** — `src/shared/api-paths.ts` carries reply and remove and nothing
+resolve-shaped, the browser accepting over Hocuspocus — so the `/api` half of Critical Rule 9 is
+satisfied by construction rather than by an edit.
 
 **Three mutations sit outside the gate and are not obviously reads.** Recorded here rather
 than left silent, because an absence nobody wrote down reads the same as an omission:
@@ -282,10 +287,17 @@ than left silent, because an absence nobody wrote down reads the same as an omis
 - `tandem_convertToMarkdown` / `POST /api/convert` — **writes a new `.md` file to disk** and
   opens it. Ungated (`src/server/mcp/document.ts:1499`).
 - `POST /api/mode/release` — clears `heldInSolo` markers on open documents
-  (`src/server/mcp/routes/mode-release.ts:108-115`). Ungated, on the same reasoning as
-  `tandem_resolveAnnotation`: a marker flip, not a content write. It has no MCP twin, and
-  since [#1769](https://github.com/bloknayrb/tandem/issues/1769) it no longer writes the mode
-  key at all.
+  (`src/server/mcp/routes/mode-release.ts:108-115`). Ungated, and the reasoning is now its own
+  rather than a cross-reference to `tandem_resolveAnnotation`: **mode lives in `CTRL_ROOM`, which
+  Surface A deliberately never marks read-only**, so a restricted user can still toggle
+  Solo→Tandem. Gating only the RELEASE would let them reach Solo and never leave it, stranding
+  their annotations behind a Held pill while their reads stay open — worse than what gating
+  prevents. Decision F asked for the opposite; the later (2026-09-08) reasoning won because it is
+  the only one of the two that considered the user afterwards, and re-gating one row is one line.
+  **Open for Bryan** on [#1788](https://github.com/bloknayrb/tandem/issues/1788) (comment
+  5612504584). It has no MCP twin, and since
+  [#1769](https://github.com/bloknayrb/tandem/issues/1769) it no longer writes the mode key at
+  all.
 
 Whether any of the three should join the gated set is a decision, not a doc fix. Neither
 disk-writing tool is a *document content* write in the sense the gate is drawn around, but
@@ -307,7 +319,7 @@ changed. Six exist:
 
 | # | Surface | Admission point | Enforcement today |
 |---|---|---|---|
-| 1 | MCP over HTTP (`:3479`) | per-session `McpServer`, `onsessioninitialized` | per-tool: **13** `gatedTool`, 1 conditional in-handler, **19** ungated (33 registered) |
+| 1 | MCP over HTTP (`:3479`) | per-session `McpServer`, `onsessioninitialized` | per-tool: **14** `gatedTool`, 1 conditional in-handler, **18** ungated (33 registered) |
 | 2 | MCP over stdio | `src/cli/mcp-stdio.ts` | **inherits row 1** — pure JSON-RPC proxy, no handlers of its own |
 | 3 | `/api` mutating twins | Express registrars | per-route: 7 middleware mounts + 1 in-handler — **but see below: these are the *user's* surfaces** |
 | 4 | Chat | `appendClaudeChatMessage()` | **none** |
