@@ -13,14 +13,23 @@
 > of it does anything to a user today.
 >
 > **Going live is TWO constants, in two languages** ([#1785](https://github.com/bloknayrb/tandem/issues/1785)).
-> `LICENSE_GATE_ENABLED = false` in `tsup.config.ts:20` turns the run gate on, and
-> `const LICENSE_UPDATE_ENDPOINT: &str = ""` at `src-tauri/src/lib.rs:171` must be pointed at
-> the deployed Worker. While that string is empty, `resolve_update_route()` short-circuits
-> (`src-tauri/src/lib.rs:2298`) and `build_updater()` falls to `app.updater()`
-> (`:2317-2332`) — so **every build today, licensed or not, checks the PUBLIC manifest**
-> from `src-tauri/tauri.conf.json`, and the `X-Tandem-License-Id` path described in Part 2
-> is unreachable code. Flipping only the first const ships a gate whose update window is
-> not actually enforced.
+> `const LICENSE_GATE_ENABLED` in `tsup.config.ts` turns the run gate on, and
+> `const LICENSE_UPDATE_ENDPOINT: &str = ""` in `src-tauri/src/lib.rs` must be pointed at
+> the deployed Worker. While that string is empty, `resolve_update_route()` short-circuits on
+> its first line and `build_updater()` takes its `Public` arm, `app.updater()` — so **every
+> build today, licensed or not, checks the PUBLIC manifest** from `src-tauri/tauri.conf.json`,
+> and the `X-Tandem-License-Id` path described in Part 2 is unreachable code. Flipping only
+> the first const ships a gate whose update window is not actually enforced;
+> `tests/docs/license-flip-consts.test.ts` refuses that half-flip.
+>
+> **Symbol names, not line numbers, on purpose.** This banner is the flip checklist, and it
+> already sent an operator to the wrong line once: the number that used to sit here landed on
+> `LICENSE_STATUS_URL`, one const above the target — also a URL, also license-related, so
+> "point it at the Worker" repoints
+> the loopback probe instead — after which `update_route` answers
+> `NoUpdates("status-unavailable")` for *every* device, licensed and trial alike, with only a
+> `log::warn!` to show for it. A line number in a file under active edit is a pointer that
+> goes stale silently; grep the const name.
 
 ---
 
@@ -459,7 +468,7 @@ activate correctly today**.
 
 ## Updates, and the endpoint that must not lie
 
-> **None of this runs today.** `LICENSE_UPDATE_ENDPOINT` is `""` (`src-tauri/src/lib.rs:171`),
+> **None of this runs today.** `LICENSE_UPDATE_ENDPOINT` is `""` (`src-tauri/src/lib.rs`),
 > so the updater takes the `app.updater()` branch and checks the public GitHub manifest for
 > every build. Everything in this section, and the failure mode in Part 3, describes what
 > happens **after** that const is pointed at the Worker

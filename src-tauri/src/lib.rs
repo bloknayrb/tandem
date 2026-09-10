@@ -2295,6 +2295,30 @@ fn show_update_error_dialog(app: &tauri::AppHandle, error: &str) {
     builder.show(|_| {});
 }
 
+/// Tell the user no manifest is served for this device, and which of the two
+/// reasons it is.
+///
+/// **Deliberately not `show_update_error_dialog`.** That one's surrounding prose
+/// is fixed -- "Could not check for updates … Please try again later or check
+/// your internet connection" -- so routing an entitlement decision through it
+/// wraps the honest line in copy that misattributes it to a transient network
+/// fault, and the state is not transient, so "try again later" is false. The
+/// user then retries, checks their network, and files a support request about a
+/// broken updater instead of acting on the licence line. #1819 owns the final
+/// wording; the misattribution is not a wording question.
+fn show_update_withheld_dialog(app: &tauri::AppHandle, reason: WithheldReason) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+    let (title, message) = reason.dialog_copy();
+    let mut builder = app
+        .dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Warning);
+    builder = attach_main_window_or_warn(app, builder, "show_update_withheld_dialog");
+    builder.show(|_| {});
+}
+
 /// Check for updates and optionally prompt the user.
 /// `manual` controls whether the user gets feedback on "no update" / error.
 /// Subset of `GET /api/license/status` the updater needs. Keys are camelCase on
@@ -2320,6 +2344,60 @@ struct LicenseStatusResponse {
     status: Option<String>,
 }
 
+/// Why no manifest is served, and it is an ENUM rather than the `&'static str`
+/// the first draft carried.
+///
+/// The string version reached exactly one consumer -- a `log::warn!` -- and both
+/// user-facing consumers below then had to invent one fixed sentence covering
+/// both cases. That sentence was the licensing one, so a **paying** customer
+/// whose sidecar was down or mid-restart was told to activate a license: an
+/// entitlement misdiagnosis of a transient loopback failure, on a tray click
+/// that the retry-dialog path at `:1855` proves is reachable with no sidecar at
+/// all. An enum with an exhaustive `dialog_copy` is what makes a third reason
+/// impossible to add without writing its copy.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum WithheldReason {
+    /// The loopback probe could not answer AT ALL: sidecar not up yet, a
+    /// non-2xx, a body that will not deserialize, or no managed `reqwest::Client`.
+    /// **Not an entitlement fact**, and not durable either -- the next check may
+    /// well succeed.
+    StatusUnavailable,
+    /// The sidecar positively reported `restricted`. Durable until the user
+    /// activates a license.
+    NoEntitlement,
+}
+
+impl WithheldReason {
+    /// Machine-readable code. Reaches the log line and, prefixed, the
+    /// `install_update` error string the WebView receives.
+    fn code(self) -> &'static str {
+        match self {
+            Self::StatusUnavailable => "status-unavailable",
+            Self::NoEntitlement => "no-entitlement",
+        }
+    }
+
+    /// `(title, body)` for `show_update_withheld_dialog`. #1819 owns the final
+    /// wording; what is NOT wording, and must survive that rewrite, is that the
+    /// two arms say different things -- one is a licensing state, the other is a
+    /// local server that is not answering.
+    fn dialog_copy(self) -> (&'static str, &'static str) {
+        match self {
+            Self::StatusUnavailable => (
+                "Update Check Unavailable",
+                "Tandem could not reach its own local server, so it could not check for updates.\n\n\
+                 Nothing is wrong with your copy of Tandem. Try Settings -> Restart server, or \
+                 restart Tandem, then check again.",
+            ),
+            Self::NoEntitlement => (
+                "Updates Unavailable",
+                "Updates are unavailable for this installation.\n\n\
+                 Activate a license to receive new versions. Tandem keeps running without one.",
+            ),
+        }
+    }
+}
+
 /// Which manifest an update check may use. Three outcomes, not two: today's
 /// `Option<String>` collapsed "no Worker configured", "gate dark", "trial" and
 /// "not entitled" onto one `None`, and that `None` is the PUBLIC manifest (#1785).
@@ -2338,8 +2416,11 @@ enum UpdateRoute {
     /// window turns that branch into dead code in production.
     Licensed(String),
     /// Serve NO manifest -- never the public one. A restricted device, or a probe
-    /// that could not answer at all. The reason is carried for the log line only.
-    NoUpdates(&'static str),
+    /// that could not answer at all. The reason is carried all the way to the
+    /// user-facing copy, not just to the log line: the two arms are a licensing
+    /// state and a dead sidecar, and telling a licensed user the second is the
+    /// first is the support call this enum exists to prevent.
+    NoUpdates(WithheldReason),
 }
 
 /// Pure classifier for the update route (#1785). Synchronous, no `AppHandle`, so
@@ -2365,7 +2446,7 @@ fn update_route(endpoint: &str, probe: Option<&LicenseStatusResponse>) -> Update
     // 2. Fail CLOSED: this is the product's only post-purchase control, and an
     //    unreachable sidecar means Tandem is barely running anyway.
     let Some(probe) = probe else {
-        return UpdateRoute::NoUpdates("status-unavailable");
+        return UpdateRoute::NoUpdates(WithheldReason::StatusUnavailable);
     };
     // 3. A sidecar reporting a dark gate against a configured endpoint is a
     //    mismatched build, not an entitlement question.
@@ -2378,7 +2459,7 @@ fn update_route(endpoint: &str, probe: Option<&LicenseStatusResponse>) -> Update
     }
     // 5. Deny by name only.
     if probe.status.as_deref() == Some("restricted") {
-        return UpdateRoute::NoUpdates("no-entitlement");
+        return UpdateRoute::NoUpdates(WithheldReason::NoEntitlement);
     }
     // 6. Trial, scrubbed body, version skew -- today's behaviour.
     UpdateRoute::Public
@@ -2422,18 +2503,30 @@ async fn resolve_update_route(app: &tauri::AppHandle) -> UpdateRoute {
     route
 }
 
+/// What `build_updater` resolved: a manifest source, or a refusal that still
+/// says WHY.
+///
+/// The `Option<Updater>` this replaces threw the reason away at the boundary --
+/// `build_updater` logged the `&'static str` and returned a bare `None` -- so
+/// both callers could only show one fixed sentence for two unrelated states.
+/// The reason already exists in `UpdateRoute`; this just stops dropping it.
+enum UpdateOutcome {
+    /// Check this updater. Built from the `Public` or `Licensed` arm.
+    Serve(tauri_plugin_updater::Updater),
+    /// No manifest is served for this device, and why.
+    Withheld(WithheldReason),
+}
+
 /// Build the updater for this device's `UpdateRoute`. Both `check_for_update`
 /// and `install_update` go through this so check + install agree on the source
 /// (#1116, ADR-040 s7).
 ///
-/// `Ok(None)` means "serve NO manifest" -- never the public one (#1785). The
+/// `Withheld` means "serve NO manifest" -- never the public one (#1785). The
 /// `app.updater()` call below belongs to the `Public` arm ALONE; a lazy
 /// `NoUpdates(_) => app.updater()` is the filed bug, unchanged, and
 /// `tests/docs/license-flip-consts.test.ts` counts occurrences for exactly that
 /// reason.
-async fn build_updater(
-    app: &tauri::AppHandle,
-) -> Result<Option<tauri_plugin_updater::Updater>, String> {
+async fn build_updater(app: &tauri::AppHandle) -> Result<UpdateOutcome, String> {
     match resolve_update_route(app).await {
         UpdateRoute::Licensed(lid) => {
             // `Url::parse` stays INSIDE this arm, so a malformed configured
@@ -2447,34 +2540,43 @@ async fn build_updater(
                 .map_err(|e| e.to_string())?
                 .build()
                 .map_err(|e| e.to_string())
-                .map(Some)
+                .map(UpdateOutcome::Serve)
         }
-        UpdateRoute::Public => app.updater().map_err(|e| e.to_string()).map(Some),
+        // `license-flip-consts.test.ts` counts `app.updater()` across the crate
+        // and requires exactly one, pinning it as this arm's alone. It counts
+        // against a whitespace-collapsed view, so `cargo fmt` splitting this
+        // across lines is fine -- but a SECOND occurrence anywhere, most
+        // plausibly a lazy `NoUpdates(_) => app.updater()`, is #1785 itself and
+        // turns that test red.
+        UpdateRoute::Public => app.updater().map_err(|e| e.to_string()).map(UpdateOutcome::Serve),
         UpdateRoute::NoUpdates(reason) => {
             // `warn!`, not `info!`, and this is not style: lib.rs sets
             // `LevelFilter::Warn` for release builds, so an `info!` writes ZERO
             // bytes (the #1416 trap recorded at :200). This is the fail-closed
             // state on an unattended 8-hourly path.
-            log::warn!("No update manifest served: {reason}");
-            Ok(None)
+            log::warn!("No update manifest served: {}", reason.code());
+            Ok(UpdateOutcome::Withheld(reason))
         }
     }
 }
 
 async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
     let updater = match build_updater(app).await {
-        Ok(Some(u)) => u,
+        Ok(UpdateOutcome::Serve(u)) => u,
         // No manifest is served for this device (#1785). Deliberately NOT
         // `show_up_to_date_dialog` -- "You're running the latest version" is the
-        // exact lie #1786 exists to detect. Placeholder wording; #1819 owns the
-        // final copy and may split this into its own dialog.
-        Ok(None) => {
-            log::warn!("Update check skipped: no manifest served for this device");
+        // exact lie #1786 exists to detect. The dialog branches on `reason`: a
+        // `status-unavailable` here is a dead or restarting sidecar, and a
+        // licensed customer reaching this path (the tray outlives a dead
+        // sidecar -- see the retry dialog at :1855) must not be told to buy a
+        // license.
+        Ok(UpdateOutcome::Withheld(reason)) => {
+            log::warn!(
+                "Update check skipped: no manifest served for this device ({})",
+                reason.code()
+            );
             if manual {
-                show_update_error_dialog(
-                    app,
-                    "Updates are unavailable for this installation. Activate a license to receive updates.",
-                );
+                show_update_withheld_dialog(app, reason);
             }
             return;
         }
@@ -2547,13 +2649,32 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
 /// release the server advertises) and dispatches the install flow.
 #[tauri::command]
 async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
-    let updater = build_updater(&app)
+    let updater = match build_updater(&app)
         .await
         .map_err(|e| format!("Updater not configured: {e}"))?
-        // Machine-readable, because the neighbouring "No update available" means
-        // something genuinely different: there IS a manifest and it holds nothing
-        // newer. #1819 owns the user-facing wording.
-        .ok_or_else(|| "UPDATE_WITHHELD".to_string())?;
+    {
+        UpdateOutcome::Serve(u) => u,
+        UpdateOutcome::Withheld(reason) => {
+            // The dialog is fired HERE, not left to the caller. The only caller
+            // is `useUpdaterBanner.svelte.ts`'s `install()`, whose catch does
+            // nothing but `console.warn` and re-arm the CTA -- no dialog, no
+            // toast, no banner text -- so returning the code alone makes
+            // "Restart to install" a silent no-op on screen. That is the exact
+            // failure `perform_install` refuses for `SidecarShuttingDownGuard`:
+            // an explicit click must never produce nothing at all.
+            //
+            // Reachable on an entitled device: the banner is raised by a check
+            // that succeeded, and the sidecar can be mid-restart (Settings ->
+            // Restart server, or the post-update respawn) by the time the user
+            // clicks -- which is `StatusUnavailable`, not a licensing state.
+            show_update_withheld_dialog(&app, reason);
+            // Machine-readable, and now carries the reason, because the
+            // neighbouring "No update available" means something genuinely
+            // different: there IS a manifest and it holds nothing newer.
+            // #1819 owns the user-facing wording.
+            return Err(format!("UPDATE_WITHHELD:{}", reason.code()));
+        }
+    };
     let update = updater
         .check()
         .await
@@ -3092,6 +3213,26 @@ mod url_constants_tests {
         assert_eq!(WS_PORT + 1, MCP_PORT, "WS/MCP ports are adjacent by convention");
     }
 
+    /// The updater's loopback probe carries the same port literal and, until
+    /// #1785, nothing pinned it.
+    ///
+    /// The stakes changed with that PR. A stale port here used to mean
+    /// `entitled_license_id` returned `None` and the app fell back to the PUBLIC
+    /// manifest -- updates still arrived, and the drift stayed invisible but
+    /// benign. Now the probe failing is `NoUpdates(StatusUnavailable)`, which is
+    /// fail-CLOSED: after the flip every device including licensed ones is
+    /// served no manifest at all, with a `log::warn!` as the only signal on the
+    /// unattended 8-hourly path. So the same assertion HEALTH_URL already
+    /// carries, one test up, is worth more here than it is there.
+    #[test]
+    fn license_status_url_matches_mcp_port() {
+        assert!(
+            LICENSE_STATUS_URL.contains(&format!(":{MCP_PORT}/")),
+            "MCP_PORT ({MCP_PORT}) must match LICENSE_STATUS_URL ({LICENSE_STATUS_URL}) -- \
+             a stale port here is a silent, permanent update blackout after the v1.0 flip"
+        );
+    }
+
     // HEALTH_TIMEOUT times a wait that happens INSIDE the sidecar: waitForPort
     // in src/server/platform.ts polls up to 15s for the TCP port to release
     // before the server can bind and answer /health. If this drops back to 15s
@@ -3575,7 +3716,7 @@ mod update_route_tests {
         let p = probe(true, None, false, Some("restricted"));
         assert_eq!(
             update_route(CONFIGURED, Some(&p)),
-            UpdateRoute::NoUpdates("no-entitlement")
+            UpdateRoute::NoUpdates(WithheldReason::NoEntitlement)
         );
     }
 
@@ -3595,7 +3736,7 @@ mod update_route_tests {
     fn unreachable_sidecar_serves_no_manifest() {
         assert_eq!(
             update_route(CONFIGURED, None),
-            UpdateRoute::NoUpdates("status-unavailable")
+            UpdateRoute::NoUpdates(WithheldReason::StatusUnavailable)
         );
     }
 
@@ -3605,6 +3746,41 @@ mod update_route_tests {
     fn absent_status_field_is_public() {
         let p = probe(true, None, false, None);
         assert_eq!(update_route(CONFIGURED, Some(&p)), UpdateRoute::Public);
+    }
+
+    /// The reason must survive to the USER, not just to the log.
+    ///
+    /// `build_updater` used to collapse both arms to a bare `Ok(None)`, so
+    /// `check_for_update` and `install_update` each had one fixed sentence for
+    /// two unrelated states -- and the sentence chosen was the licensing one.
+    /// A paying customer whose sidecar was down (the tray outlives a dead
+    /// sidecar; see the retry dialog at `:1855`) clicked "Check for updates"
+    /// and was told their licensed install needs a license.
+    ///
+    /// The assertion is on the SUBSTANCE, not the wording, because #1819 owns
+    /// the wording: the unreachable-sidecar copy must not mention licensing at
+    /// all, and the restricted copy must.
+    #[test]
+    fn withheld_copy_separates_a_dead_sidecar_from_an_entitlement() {
+        let (unavailable_title, unavailable) = WithheldReason::StatusUnavailable.dialog_copy();
+        let (entitlement_title, entitlement) = WithheldReason::NoEntitlement.dialog_copy();
+
+        assert!(
+            !unavailable.to_lowercase().contains("licens"),
+            "an unreachable sidecar is not an entitlement fact -- this copy reaches paying \
+             customers mid-restart: {unavailable}"
+        );
+        assert!(
+            entitlement.to_lowercase().contains("licens"),
+            "the restricted arm is the one that should name licensing: {entitlement}"
+        );
+        assert_ne!(unavailable, entitlement);
+        assert_ne!(unavailable_title, entitlement_title);
+        assert_ne!(
+            WithheldReason::StatusUnavailable.code(),
+            WithheldReason::NoEntitlement.code(),
+            "the codes reach the log line and install_update's error string"
+        );
     }
 }
 

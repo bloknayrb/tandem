@@ -403,6 +403,70 @@ describe("ensureTrialStarted", () => {
     await ensureTrialStarted(dir, () => 123_000, false);
     expect(fs.existsSync(trialFilePath(dir))).toBe(false);
   });
+
+  /**
+   * The recovery route for #1788's closed path. Without it a body that parses
+   * but cannot run a clock resolves `restricted` on every boot forever, and
+   * `existsSync` guaranteed nothing ever rewrote it — the user is told their
+   * trial ended having never had one, with no in-app recovery.
+   *
+   * Each case asserts the RESOLVED STATE, not just the file bytes: rewriting
+   * the file with something still unusable would satisfy a bytes-changed
+   * assertion and leave the device exactly as stuck.
+   */
+  describe("repairs a trial.json that cannot run a clock", () => {
+    for (const [name, body] of [
+      ['firstRunAt: ""', { version: 1, firstRunAt: "" }],
+      ["firstRunAt: 0 (an epoch-ms schema revision)", { version: 1, firstRunAt: 0 }],
+      ["firstRunAt absent", { version: 1 }],
+      ["a whole-body scalar", 0],
+      ["an array body", []],
+      ["an unparseable-date string", { version: 1, firstRunAt: "yesterday" }],
+    ] as Array<[string, unknown]>) {
+      it(name, async () => {
+        const dir = tmp();
+        fs.writeFileSync(trialFilePath(dir), JSON.stringify(body));
+        const now = Date.now();
+
+        // Before: restricted, and no route out.
+        expect(
+          assertGateActive(
+            resolveLicenseState({ appDataDir: dir, now: () => now, gateEnabled: true }),
+          ).status,
+        ).toBe("restricted");
+
+        await ensureTrialStarted(dir, () => now, true);
+
+        expect(
+          assertGateActive(
+            resolveLicenseState({ appDataDir: dir, now: () => now, gateEnabled: true }),
+          ).status,
+        ).toBe("trial");
+      });
+    }
+  });
+
+  it("leaves a running clock alone (a valid firstRunAt is never rewritten)", async () => {
+    const dir = tmp();
+    const started = new Date(Date.now() - 3 * DAY).toISOString();
+    fs.writeFileSync(trialFilePath(dir), JSON.stringify({ version: 1, firstRunAt: started }));
+    await ensureTrialStarted(dir, () => Date.now(), true);
+    expect(JSON.parse(fs.readFileSync(trialFilePath(dir), "utf-8")).firstRunAt).toBe(started);
+  });
+
+  /**
+   * The errno discrimination the repair is gated on. A file this process could
+   * not PARSE is not evidence that the clock is broken — a truncated write, a
+   * Windows AV/indexer lock mid-read — and rewriting on that evidence resets a
+   * real, running clock. `readJson` already reads an unparseable body as day 0,
+   * so the device is not stuck either way.
+   */
+  it("leaves an unparseable trial.json alone rather than resetting a real clock", async () => {
+    const dir = tmp();
+    fs.writeFileSync(trialFilePath(dir), "{ truncated");
+    await ensureTrialStarted(dir, () => Date.now(), true);
+    expect(fs.readFileSync(trialFilePath(dir), "utf-8")).toBe("{ truncated");
+  });
 });
 
 describe("activateLicense", () => {

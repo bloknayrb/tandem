@@ -78,11 +78,19 @@ function envelope(result: unknown): { error?: boolean; code?: string } {
   }
 }
 
+/**
+ * Every fixture dir this file created, so `afterAll` can remove them. Tracked
+ * rather than kept as a single `let`, because `useAppDataDir` is called more
+ * than once and the second call would otherwise orphan the first.
+ */
+const createdDirs: string[] = [];
+
 /** Write a `trial.json` into a fresh app-data fixture and point the env at it. */
 function useAppDataDir(trialBody: unknown): string {
   // The `tandem-` prefix is required: `tests/server/platform.test.ts` asserts
   // `SESSION_DIR` contains "tandem".
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-license-armed-"));
+  createdDirs.push(dir);
   fs.writeFileSync(trialFilePath(dir), JSON.stringify(trialBody));
   process.env.TANDEM_APP_DATA_DIR = dir;
   return dir;
@@ -109,6 +117,14 @@ afterAll(() => {
   else process.env.TANDEM_APP_DATA_DIR = savedAppDataDir;
   if (savedGateFlag === undefined) delete process.env.TANDEM_LICENSE_GATE;
   else process.env.TANDEM_LICENSE_GATE = savedGateFlag;
+  // The env restore alone left two `tandem-license-armed-*` dirs, each holding
+  // a `trial.json`, in the OS temp dir on every `npm test` / pre-push / CI run.
+  // `force` so a dir the OS already reaped is not an error; the loop is
+  // deliberately after the env restore, which is the half a later file depends
+  // on.
+  for (const dir of createdDirs) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 describe("license gate, ARMED and RESTRICTED", () => {
