@@ -855,7 +855,7 @@ The sidecar and the response carry `heldFromExport` and `privateExcluded` as **t
 
 ### tandem_applyChanges
 
-Apply all accepted suggestions back to the `.docx` file as tracked changes. The original file is backed up before modification.
+**EXPERIMENTAL** (#1754). Apply all accepted suggestions back to the `.docx` file as tracked changes. The original file is backed up before modification. It refuses any document whose flat text it cannot reproduce from `word/document.xml` — some Word documents are a known limitation, and that refusal arrives as `INTERNAL_ERROR`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -876,7 +876,7 @@ Apply all accepted suggestions back to the `.docx` file as tracked changes. The 
 }
 ```
 
-**Errors:** `FORMAT_ERROR` (not a `.docx` file, or uploaded document), `NO_DOCUMENT` (document not found)
+**Errors:** `NO_DOCUMENT` (document not found), `NO_SUGGESTIONS`, `FORMAT_ERROR` (not a `.docx` file, an `upload://` path, **or a rejected absolute/UNC path** -- `UNSUPPORTED_FORMAT` and `INVALID_PATH` both map onto it), `BACKUP_FAILED`, `INVALID_PATH` (a symlinked `backupPath`), `READ_ONLY`, `EXTERNAL_CONFLICT`, `FILE_MODIFIED`, `SOURCE_MISSING`, `FILE_LOCKED`, `INTERNAL_ERROR` (the flat-text mismatch above -- the experimental caveat). `LICENSE_REQUIRED` is ambient to every gated tool and is never returned while the gate ships dark.
 
 **Example:**
 ```

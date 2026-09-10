@@ -25,6 +25,7 @@ import {
   importAnnotationId,
   injectCommentsAsAnnotations,
 } from "../../src/server/file-io/docx-comments.js";
+import { walkDocumentBody } from "../../src/server/file-io/docx-walker.js";
 import { unwatchFile } from "../../src/server/file-watcher.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
@@ -621,7 +622,9 @@ describe("applyTrackedChanges", () => {
 
     // s1 targets the run with footnoteReference — should be rejected
     expect(
-      output.rejectedDetails.some((r) => r.id === "s1" && r.reason.includes("complex element")),
+      output.rejectedDetails.some(
+        (r) => r.id === "s1" && r.reason.includes("Overlaps a footnote, drawing, field"),
+      ),
     ).toBe(true);
     // s2 targets the clean second run — should apply
     expect(output.applied).toBeGreaterThanOrEqual(1);
@@ -1612,4 +1615,194 @@ describe("applyChangesCore — the originating Word comment", () => {
     },
     REAL_APPLY_TIMEOUT_MS,
   );
+});
+
+// ---------------------------------------------------------------------------
+// #1754 — tabbed documents apply, and the span fence
+// ---------------------------------------------------------------------------
+
+/** Re-read `word/document.xml` out of an apply's produced buffer. */
+async function producedDocumentXml(buffer: Buffer): Promise<string> {
+  const zip = await JSZip.loadAsync(buffer);
+  const xml = await zip.file("word/document.xml")?.async("text");
+  if (!xml) throw new Error("produced buffer has no word/document.xml");
+  return xml;
+}
+
+/** Two declared tab STOPS — the shape the walker used to count as characters. */
+const TAB_STOPS =
+  `<w:pPr><w:tabs><w:tab w:val="left" w:pos="720"/>` +
+  `<w:tab w:val="right" w:pos="9000"/></w:tabs></w:pPr>`;
+
+describe("applyTrackedChanges on tab/break/symbol documents (#1754)", () => {
+  it("applies cleanly to a tabbed document and leaves the tab in the output", async () => {
+    // The issue's headline: this used to throw "Flat text mismatch" outright.
+    // `applied === 1` is NOT an acceptable assertion here — it is green on the
+    // very output that destroys the tab — so the produced bytes are re-walked.
+    const xml = wrapBody(
+      `<w:p>${TAB_STOPS}` +
+        `<w:r><w:t>Name</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>Value</w:t></w:r></w:p>`,
+    );
+    const docxBuffer = await createTestDocx(xml);
+
+    const output = await applyTrackedChanges(
+      docxBuffer,
+      [{ id: "s1", from: 0, to: 4, newText: "NEW" }],
+      { author: "Test", ydocFlatText: "Name\tValue" },
+    );
+
+    expect(output.applied).toBe(1);
+    expect(output.rejectedDetails).toEqual([]);
+    const produced = await producedDocumentXml(output.buffer);
+    expect(walkDocumentBody(produced).flatText).toBe("NEW\tValue");
+  });
+
+  it("REFUSES the single-run twin, which offset overlap alone lets through", async () => {
+    // `applySingleSuggestion` destroys whole <w:r> elements, so a suggestion
+    // over `Name` in a run that also holds the tab and `Value` would delete all
+    // three. [0,4) does not overlap the tab's [4,5) span at all — only the
+    // run-keyed predicate can see this.
+    const xml = wrapBody(
+      `<w:p>${TAB_STOPS}<w:r><w:t>Name</w:t><w:tab/><w:t>Value</w:t></w:r></w:p>`,
+    );
+    const docxBuffer = await createTestDocx(xml);
+
+    const output = await applyTrackedChanges(
+      docxBuffer,
+      [{ id: "s1", from: 0, to: 4, newText: "NEW" }],
+      { author: "Test", ydocFlatText: "Name\tValue" },
+    );
+
+    expect(output.applied).toBe(0);
+    expect(output.rejectedDetails.some((r) => r.id === "s1" && r.reason.includes("tab"))).toBe(
+      true,
+    );
+    const produced = await producedDocumentXml(output.buffer);
+    expect(produced).toContain("<w:tab/>");
+    expect(produced).toContain("Value");
+  });
+
+  it("a page-break document still throws, and the message names #1754", async () => {
+    const xml = wrapBody(`<w:p><w:r><w:t>A</w:t><w:br w:type="page"/><w:t>B</w:t></w:r></w:p>`);
+    const docxBuffer = await createTestDocx(xml);
+    await expect(
+      applyTrackedChanges(docxBuffer, [{ id: "s1", from: 0, to: 1, newText: "X" }], {
+        author: "Test",
+        ydocFlatText: "AB",
+      }),
+    ).rejects.toThrow(/#1754/);
+  });
+});
+
+describe("the special-character span fence (#1754)", () => {
+  /** Assert the fixture passes the flat-text guard, or a green means nothing. */
+  function assertGuardPasses(xml: string, expected: string): void {
+    expect(walkDocumentBody(xml).flatText).toBe(expected);
+  }
+
+  const SEPARATE_RUN_TAB = `<w:p><w:r><w:t>alpha</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>beta</w:t></w:r></w:p>`;
+  const TRACKED_INS_TAB =
+    `<w:p><w:r><w:t>alpha</w:t></w:r>` +
+    `<w:ins w:id="90" w:author="X" w:date="2020-01-01T00:00:00Z"><w:r><w:tab/></w:r></w:ins>` +
+    `<w:r><w:t>beta</w:t></w:r></w:p>`;
+  /**
+   * A second, tab-free paragraph so the sibling suggestion does not OVERLAP the
+   * spanning one — the pre-existing overlap guard would reject it first, for a
+   * reason that has nothing to do with this fence.
+   */
+  const SIBLING_PARAGRAPH = `<w:p><w:r><w:t>gamma</w:t></w:r></w:p>`;
+
+  it.each([
+    ["a tab in its own run", SEPARATE_RUN_TAB],
+    ["a tab inside <w:ins>, at depth", TRACKED_INS_TAB],
+  ])("rejects a suggestion spanning %s while a sibling still applies", async (_label, body) => {
+    const xml = wrapBody(body + SIBLING_PARAGRAPH);
+    assertGuardPasses(xml, "alpha\tbeta\ngamma");
+    const docxBuffer = await createTestDocx(xml);
+
+    const output = await applyTrackedChanges(
+      docxBuffer,
+      [
+        { id: "spanning", from: 0, to: 10, newText: "X" },
+        { id: "sibling", from: 11, to: 16, newText: "GAMMA" },
+      ],
+      { author: "Test", ydocFlatText: "alpha\tbeta\ngamma" },
+    );
+
+    expect(output.rejectedDetails.some((r) => r.id === "spanning")).toBe(true);
+    // Per-suggestion rejection is the point.
+    expect(output.rejectedDetails.some((r) => r.id === "sibling")).toBe(false);
+    expect(output.applied).toBe(1);
+  });
+
+  // The ONLY cases that discriminate the interval. A closed-interval test would
+  // pass every straddling fixture above identically while silently refusing
+  // ordinary adjacent suggestions on any tabbed document.
+  it.each([
+    ["a suggestion ending exactly at the tab", 0, 5, "ALPHA"],
+    ["a suggestion starting exactly at the tab's end", 6, 10, "BETA"],
+  ])("applies %s", async (_label, from, to, newText) => {
+    const xml = wrapBody(SEPARATE_RUN_TAB);
+    assertGuardPasses(xml, "alpha\tbeta");
+    const docxBuffer = await createTestDocx(xml);
+
+    const output = await applyTrackedChanges(docxBuffer, [{ id: "s1", from, to, newText }], {
+      author: "Test",
+      ydocFlatText: "alpha\tbeta",
+    });
+
+    expect(output.rejectedDetails).toEqual([]);
+    expect(output.applied).toBe(1);
+    expect(await producedDocumentXml(output.buffer)).toContain("<w:tab/>");
+  });
+
+  // The two elements Fix 1 itself turns ZERO-WIDTH. The flat-text guard refused
+  // their documents before; it now admits them, and a zero-length span can never
+  // satisfy `from < offsetStart + 0` for a suggestion starting at or after it.
+  it("rejects a suggestion spanning an unmapped w:sym in its own run", async () => {
+    const xml = wrapBody(
+      `<w:p><w:r><w:t>alpha</w:t></w:r>` +
+        `<w:r><w:sym w:font="Wingdings" w:char="ZZ"/></w:r>` +
+        `<w:r><w:t>beta</w:t></w:r></w:p>`,
+    );
+    assertGuardPasses(xml, "alphabeta");
+    const docxBuffer = await createTestDocx(xml);
+
+    const output = await applyTrackedChanges(
+      docxBuffer,
+      [{ id: "s1", from: 0, to: 9, newText: "X" }],
+      { author: "Test", ydocFlatText: "alphabeta" },
+    );
+
+    expect(output.applied).toBe(0);
+    expect(output.rejectedDetails.some((r) => r.id === "s1" && r.reason.includes("symbol"))).toBe(
+      true,
+    );
+  });
+
+  it("rejects a suggestion merely SHARING a run with an unmapped w:sym", async () => {
+    // Only the run-keyed predicate REACHES this one: a zero-length span at
+    // offset 5 can never satisfy `from < 5 + 0 && to > 5` for `[0,5)`. The
+    // measured code does refuse it anyway further down ("No runs found in
+    // deletion range", because `to` lands at the start of the same run) — a
+    // fail-closed accident, not the fence — so the assertion below is on the
+    // REASON, which is what discriminates the two.
+    const xml = wrapBody(
+      `<w:p><w:r><w:t>alpha</w:t><w:sym w:font="Wingdings" w:char="ZZ"/><w:t>beta</w:t></w:r></w:p>`,
+    );
+    assertGuardPasses(xml, "alphabeta");
+    const docxBuffer = await createTestDocx(xml);
+
+    const output = await applyTrackedChanges(
+      docxBuffer,
+      [{ id: "s1", from: 0, to: 5, newText: "X" }],
+      { author: "Test", ydocFlatText: "alphabeta" },
+    );
+
+    expect(output.applied).toBe(0);
+    expect(output.rejectedDetails.some((r) => r.id === "s1" && r.reason.includes("symbol"))).toBe(
+      true,
+    );
+    expect(await producedDocumentXml(output.buffer)).toContain("beta");
+  });
 });

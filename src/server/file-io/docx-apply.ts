@@ -14,6 +14,7 @@ import {
   findAllByName,
   getAttr,
   isElement,
+  type SpecialCharSpan,
   type TextHit,
   walkDocumentBody,
 } from "./docx-walker.js";
@@ -48,6 +49,13 @@ export interface OffsetMap {
   body: Element;
   /** The full parsed document (parent of body). */
   doc: ReturnType<typeof parseDocument>;
+  /**
+   * Every span the walker produced from a non-`<w:t>` element (#1754). Derived
+   * from the SAME walk that mints the offsets, so it needs no name list and no
+   * nesting rules — anything `flatTextForElement` handled is by construction
+   * something `buildRun("w:t", …)` cannot reproduce.
+   */
+  specialSpans: SpecialCharSpan[];
 }
 
 export interface SuggestionInput {
@@ -108,10 +116,14 @@ export function buildOffsetMap(xml: string, targetOffsets: Set<number>): OffsetM
 
   // Collect text hits so we can resolve offsets after the walk
   const hits: TextHit[] = [];
+  const specialSpans: SpecialCharSpan[] = [];
 
   const { totalLength, flatText } = walkDocumentBody(xml, {
     onText(hit) {
       hits.push(hit);
+    },
+    onSpecialChar(span) {
+      specialSpans.push(span);
     },
   });
 
@@ -194,7 +206,28 @@ export function buildOffsetMap(xml: string, targetOffsets: Set<number>): OffsetM
     totalLength,
     body: walkerBody,
     doc: walkerDoc,
+    specialSpans,
   };
+}
+
+/**
+ * The `<w:r>` runs a suggestion would touch: every paragraph-direct run from
+ * `fromRun` through `toRun` inclusive. This is the set `applySingleSuggestion`
+ * ultimately DESTROYS (`removeChild(run)`), which is why two separate guards
+ * below read it rather than reasoning about offsets alone.
+ */
+function collectTouchedRuns(paragraph: Element, fromRun: Element, toRun: Element): Element[] {
+  const runs: Element[] = [];
+  let collecting = false;
+  for (const child of paragraph.children) {
+    if (!isElement(child) || child.name !== "w:r") continue;
+    if (child === fromRun) collecting = true;
+    if (collecting) {
+      runs.push(child);
+      if (child === toRun) break;
+    }
+  }
+  return runs;
 }
 
 // ---------------------------------------------------------------------------
@@ -522,7 +555,11 @@ export async function applyTrackedChanges(
   if (offsetMap.flatText !== options.ydocFlatText) {
     throw new Error(
       "Flat text mismatch: the .docx content does not match the Y.Doc flat text. " +
-        "The file may have changed since it was loaded.",
+        "The file may have changed since it was loaded. " +
+        // Deliberately NOT an enumeration: decision B (#1827) defers the rest of
+        // the walker/mammoth reconciliation, so naming two causes here would
+        // misdiagnose every file that trips a third.
+        "Some documents are a known limitation (#1754).",
     );
   }
 
@@ -580,35 +617,50 @@ export async function applyTrackedChanges(
   }
 
   // Reject suggestions whose range contains complex (non-text) elements
-  // that would produce malformed XML when the run is split or wrapped.
+  // that would produce malformed XML when the run is split or wrapped, OR that
+  // would take a tab / break / symbol with them (#1754).
+  //
+  // The second half is TWO predicates, ORed, and the run-keyed one is the
+  // load-bearing half. `applySingleSuggestion` destroys whole `<w:r>` elements,
+  // not offset ranges — it rebuilds the deletion text from `findTextNode(run)`,
+  // which returns only the FIRST `<w:t>` in a run, then `removeChild(run)`s the
+  // lot. So on `<w:r><w:t>Name</w:t><w:tab/><w:t>Value</w:t></w:r>` a suggestion
+  // over `Name` alone does not overlap the tab's `[4,5)` span at all and would
+  // still silently delete the tab AND `Value` from the user's .docx. That was
+  // unreachable only because the flat-text guard threw on any tabbed document
+  // first; the tab/break/symbol fix above is precisely what makes it reachable,
+  // so this fence ships with it or not at all.
+  //
+  // Predicate 2 is also LENGTH-INDEPENDENT, which is what covers the two
+  // elements that fix turns zero-width (an unrecognised `w:br w:type`, an
+  // unmapped `w:sym`): a zero-length span can never satisfy
+  // `s.from < span.offsetStart + 0` for a suggestion starting at or after it.
   const validAfterComplexCheck: AcceptedSuggestion[] = [];
   for (const s of validAfterOverlapCheck) {
     const fromEntry = offsetMap.get(s.from)!;
     const toEntry = offsetMap.get(s.to)!;
-    const paragraph = fromEntry.paragraph;
+    const touchedRuns = collectTouchedRuns(fromEntry.paragraph, fromEntry.run, toEntry.run);
+    const touchedRunSet = new Set(touchedRuns);
 
-    // Collect runs in the range [fromEntry.run .. toEntry.run]
-    let collecting = false;
-    let hasComplex = false;
-    for (const child of paragraph.children) {
-      if (!isElement(child) || child.name !== "w:r") continue;
-      if (child === fromEntry.run) collecting = true;
-      if (collecting) {
-        for (const rc of child.children) {
-          if (isElement(rc) && COMPLEX_RUN_ELEMENTS.has(rc.name)) {
-            hasComplex = true;
-            break;
-          }
-        }
-        if (hasComplex) break;
-        if (child === toEntry.run) break;
-      }
-    }
+    const hasComplex = touchedRuns.some((run) =>
+      run.children.some((rc) => isElement(rc) && COMPLEX_RUN_ELEMENTS.has(rc.name)),
+    );
 
-    if (hasComplex) {
+    const hasSpecialChar = offsetMap.specialSpans.some(
+      (span) =>
+        // Half-open on BOTH sides, so a suggestion ending exactly at the special
+        // character, or starting exactly at its end, still applies. A
+        // closed-interval test would silently refuse ordinary adjacent
+        // suggestions on every tabbed document — the outcome #1754 exists to
+        // remove.
+        (s.from < span.offsetStart + span.length && s.to > span.offsetStart) ||
+        (span.run !== undefined && touchedRunSet.has(span.run)),
+    );
+
+    if (hasComplex || hasSpecialChar) {
       rejectedDetails.push({
         id: s.id,
-        reason: "Overlaps a complex element (footnote, drawing, or field) and couldn't be applied",
+        reason: "Overlaps a footnote, drawing, field, tab, break or symbol and couldn't be applied",
       });
     } else {
       validAfterComplexCheck.push(s);
@@ -622,19 +674,7 @@ export async function applyTrackedChanges(
   for (const s of validAfterComplexCheck) {
     const fromEntry = offsetMap.get(s.from)!;
     const toEntry = offsetMap.get(s.to)!;
-    const paragraph = fromEntry.paragraph;
-
-    // Collect all runs this suggestion touches
-    const touchedRuns: Element[] = [];
-    let collecting = false;
-    for (const child of paragraph.children) {
-      if (!isElement(child) || child.name !== "w:r") continue;
-      if (child === fromEntry.run) collecting = true;
-      if (collecting) {
-        touchedRuns.push(child);
-        if (child === toEntry.run) break;
-      }
-    }
+    const touchedRuns = collectTouchedRuns(fromEntry.paragraph, fromEntry.run, toEntry.run);
 
     let conflict = false;
     for (const run of touchedRuns) {

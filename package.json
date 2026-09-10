@@ -142,6 +142,7 @@
     "@tiptap/extension-underline": "^3.30.5",
     "@tiptap/pm": "^3.30.5",
     "@tiptap/starter-kit": "^3.30.5",
+    "dingbat-to-unicode": "^1.0.1",
     "docx": "^9.6.1",
     "dom-serializer": "^3.0.0",
     "env-paths": "^4.0.0",
