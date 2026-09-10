@@ -208,6 +208,82 @@ describe("the flip checklist points at symbols, not line numbers (#1785)", () =>
   });
 });
 
+/**
+ * `build_updater`'s body, comment-stripped and whitespace-collapsed.
+ *
+ * **Scoped to the function on purpose.** The first draft of the runbook pin
+ * below searched the WHOLE crate, and the stale claim it was written to catch
+ * — "`build_updater` returns `Ok(None)`" — passed it, because `Ok(None)` is a
+ * real arm of `updater.check()` thirty lines further down. A claim about one
+ * function has to be read against that function.
+ *
+ * Brace-matched from the signature rather than regexed: the body's only braces
+ * inside a string are `format!`'s balanced `{e}`, so the count is sound, and a
+ * `cargo fmt` reflow cannot move the end.
+ */
+function compactBuildUpdaterBody(): string {
+  const source = rustSourceDefining(/async\s+fn\s+build_updater\s*\(/, "build_updater");
+  const start = source.code.search(/async\s+fn\s+build_updater\s*\(/);
+  const open = source.code.indexOf("{", start);
+  expect(open, `${source.rel} defines build_updater with no body`).toBeGreaterThan(-1);
+  let depth = 0;
+  for (let i = open; i < source.code.length; i++) {
+    if (source.code[i] === "{") depth++;
+    else if (source.code[i] === "}" && --depth === 0) {
+      return source.code.slice(open, i + 1).replace(/\s+/g, "");
+    }
+  }
+  throw new Error(`unbalanced braces reading build_updater out of ${source.rel}`);
+}
+
+describe("the flip-day runbook describes the updater arm the crate has (#1785)", () => {
+  /**
+   * `docs/licensing-operations.md` is the RUNBOOK — the file an operator works
+   * from on flip day — and **nothing read it.** Its §8 withheld row still
+   * described the shape this work replaced: "`build_updater` returns `Ok(None)`
+   * … a manual check shows an honest placeholder line". The branch returns
+   * `Ok(UpdateOutcome::Withheld(reason))` and fires a native dialog. An operator
+   * verifying the no-manifest arm would grep `Ok(None)`, find nothing, and
+   * either call the fix absent or go verify some other surface.
+   *
+   * So the row's two load-bearing nouns are pinned against the crate rather
+   * than proofread: the return shape it names must be a construct the Rust code
+   * actually contains, and the surfacing it promises must be a function the
+   * crate defines. Both fail on a zero match — a reworded row that drops the
+   * claim disarms the pin rather than passing it, which is the same rule the
+   * const literals above are read under.
+   */
+  const OPS_DOC = readFileSync(join(REPO_ROOT, "docs", "licensing-operations.md"), "utf8");
+
+  it("the return shape §8 tells you to expect is one build_updater returns", () => {
+    const claim = /`build_updater`\s+returns\s+`([^`]+)`/.exec(OPS_DOC);
+    expect(
+      claim,
+      "docs/licensing-operations.md §8 no longer states what build_updater returns on the " +
+        "no-manifest arm — the pin is disarmed, not passing",
+    ).not.toBeNull();
+    const shape = (claim as RegExpExecArray)[1].replace(/\s+/g, "");
+    expect(
+      compactBuildUpdaterBody().includes(shape),
+      `§8 tells an operator build_updater returns ${shape}, which appears nowhere in that ` +
+        "function. A runbook that names a shape grep cannot find in the arm it describes reads " +
+        "as a missing fix.",
+    ).toBe(true);
+  });
+
+  it("the surfacing §8 promises is a function the crate defines", () => {
+    expect(
+      OPS_DOC,
+      "§8's withheld row must name the dialog the withheld arm actually shows — the earlier " +
+        '"an honest placeholder line" named no surface at all',
+    ).toContain("show_update_withheld_dialog");
+    expect(
+      COMPACT_RUST_CODE,
+      "the runbook names a dialog function the crate does not define",
+    ).toContain("fnshow_update_withheld_dialog(");
+  });
+});
+
 describe("the update route shape #1785 fixes (#1785)", () => {
   // `app.updater()` is the PUBLIC manifest. It belongs to `build_updater`'s
   // `Public` arm alone. A lazy `NoUpdates(_) => app.updater().map_err(…)` —

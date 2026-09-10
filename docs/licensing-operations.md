@@ -575,10 +575,15 @@ Then walk §5a steps 2–4 with that order number.
       (#1785). Serving that device a public manifest is the defect the route
       exists to prevent, so this is the one §8 line a passing §5a cannot cover.
 - [ ] **A restricted install receives no in-app update at all** — `update_route`
-      answers `NoUpdates("no-entitlement")`, `build_updater` returns `Ok(None)`,
-      and no request is issued. A manual check shows an honest placeholder line,
-      never "You're up to date" (#1786 owns the final surfacing, #1819 the
-      wording).
+      answers `NoUpdates("no-entitlement")`, `build_updater` returns
+      `Ok(UpdateOutcome::Withheld(reason))`, and no request is issued. Grep for
+      `UpdateOutcome::Withheld`, not `Ok(None)`: the bare `None` threw the reason
+      away and is the shape this arm was rewritten out of, so finding it would
+      mean the fix is absent. A manual check shows `show_update_withheld_dialog`
+      — a native dialog whose copy differs per `WithheldReason`, so a paying
+      customer with a dead sidecar reads "Update Check Unavailable" rather than
+      being told to buy a license — never "You're up to date" (#1786 owns the
+      final surfacing, #1819 the wording).
 
 ## 9. Quick reference
 
