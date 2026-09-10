@@ -590,8 +590,9 @@ They resolve to the same condition dismissed as won't-fix three times already on
 (#50/#51/#52, "atomicWrite is an internal helper; path validation is caller responsibility"),
 relocated because #1850's fix consolidated `atomicWrite` and `atomicWriteBuffer` into one
 `writeTempThenRename` helper. Not a new vulnerability, CodeQL is not a required check, and the
-alerts were **left open for Bryan rather than dismissed** — dismissing a security alert is his
-call. Checked while there: CLAUDE.md's rule that alert 16 must not be dismissed *as a false
+alerts were left open at merge time rather than dismissed, because dismissing a security alert
+is Bryan's call — **he gave that authorisation later the same day and they are now dismissed as
+won't-fix; see the wave narrative for the wording.** Checked while there: CLAUDE.md's rule that alert 16 must not be dismissed *as a false
 positive* is intact; it was dismissed 2026-08-28 as "True positive, not false … won't fix per
 #1654", which honours the rule.
 
@@ -638,12 +639,63 @@ the MCP tool boundary", which is now incomplete, because `mcp/annotations.ts` an
 validated. So the comment reads "won't fix", never "false positive", matching alert 16's
 own framing — and alert 16 itself was left untouched. `file-io/index.ts` now carries zero
 open alerts; the six that remain repo-wide (five in `reload-family.ts`, one in `convert.ts`)
-are pre-existing and unrelated. And #1926 stays **open** as the tracked
-measurement of the #1448 residual (27 of 30 files, all idempotent, +633/−345, four classes
-with a per-class disposition); closing it is the "accept it" decision, and that is Bryan's.
+are pre-existing and unrelated. And **#1926 is CLOSED as accepted** — Bryan took option A
+(accept the residual) on 2026-09-09 over option B (a tree-wide normalization pass). The
+measurement stands as filed: 27 of 30 files, all idempotent, +633/−345, four classes with a
+per-class disposition. The reasoning for A over B was not risk — B is low-risk, the
+doc-parsing tests are the guard — but that a normalization pass decays on the next hand-edit
+and trades a hand-authored source format for a serializer's. The disposition is recorded in
+`docs/gotchas.md` under *Files, Sessions & Lifecycle*, including an explicit do-not on
+tree-wide normalization and the note that class 3 is CommonMark lazy continuation rather than
+corruption, so nobody re-files it as data loss.
+
+### Wave 5 coda — the #1596 smoke run, and a test that was measuring nothing
+
+Two things landed after wave 5's groups closed, neither belonging to either group.
+
+**#1596 is closed as *keep — row executed*.** Bryan's PC was the hardware, so the §1 Windows
+updater row ran for the first time since it was written: **v0.24.1 → v0.25.0, PASS, no
+"Tandem may not have finished updating" banner.** That is the first hardware exercise of
+#1118's false-positive mode. Recorded in `docs/release-smoke-checklist.md` under *What the
+v0.25.0 run settled* (#1932, `7ee66a5c`), which is where the issue's criterion said the
+evidence had to live.
+
+The run produced two findings the issue did not anticipate. First, **an operator cannot
+confirm this row from the log and must watch the window**: `evaluate_pending_update_marker`
+logs `MayHaveFailed` as `warn!` but `Completed` as `info!`, and the release build's floor is
+`LevelFilter::Warn` (`src-tauri/src/lib.rs:1166-1169`), so a *successful* update writes
+nothing — and the marker is cleared unconditionally on both paths, so its absence proves
+nothing either. §1's updater row now says so in place. Second, **#1762 was caught live**: a
+code-reading claim became an observation, with `tandem.log` recording `Sidecar exe not on disk
+at ...node-sidecar-x86_64-pc-windows-msvc.exe — skipping unlock wait (packaging bug?)`.
+Bounded — the NSIS PREINSTALL hook held and the sidecar's mtime moved — but
+`wait_for_sidecar_unlock` returns `true` on a missing file, so the guard is inert on every
+Windows install. It is wave 7's E2-rust group. The half-installed path, the `MayHaveFailed`
+arm that *should* show the banner, remains untested.
+
+**#1933: a test whose stated margin does not exist.** #1932's `check` went red on a docs-only
+diff at `tests/server/search-worker.test.ts:93` — `expected undefined to be 'timeout'`.
+Green on re-run, and `coverage` passed the same commit first try, so it is a flake. But the
+comment above it claims the blowup `exec` "spins for 20-35 s — far past any deadline check",
+and measured on Node v24.2.0 it **returns on its own in ~3.07 s** against a 2000 ms
+main-thread hard timer. The margin is ~1.07 s, not ~20 s. Its two siblings in the same file
+measure 21.9 s and 78.3 s and are genuinely safe; the `x|` alternation prefix is what makes
+this one ~7x cheaper to exhaust. The obvious hypothesis — V8 bailing into its linear-time
+experimental engine — is **refuted**: `--regexp-backtracks-before-fallback=100` changes the
+timing not at all.
+
+That matters beyond one flake, because if the `exec` ever drops under 2000 ms the test fails
+*deterministically* and reads like a `truncated` regression. It joins #1862 and #1673 in wave
+6's CI-trust group as a third shape of "a red that says nothing about the diff" — but unlike
+those two it is a wrong assumption inside a test, so it is a fix rather than a gate.
+
+**The rule: a comment stating a safety margin is a measurement claim, and it expires.** Nobody
+would look at this test, because its comment says the margin is an order of magnitude wider
+than it is.
 
 Wave 6 is the H group, which #1787 has now made real — #1789 documents the env var this
-wave introduced, and it was deliberately sequenced after E1.
+wave introduced, and it was deliberately sequenced after E1 — plus D2 docx contract and
+CI-trust (#1862 #1673, now #1933).
 
 ### Wave 0 record
 
