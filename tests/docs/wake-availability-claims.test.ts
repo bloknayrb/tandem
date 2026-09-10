@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { WAKE_URL_PRODUCERS } from "../../src/server/mcp/wake-url.js";
 
 /**
  * Guards the "ask Claude to watch for updates" claim against the form it shipped
@@ -68,12 +69,33 @@ const CARRIERS = [
   "skills/tandem/SKILL.md",
 ];
 
+/**
+ * The carriers that describe WHEN the automatic attempt happens. Derived from `CARRIERS`
+ * rather than retyped: a fifth doc joining that list should join this sweep too, and a
+ * third hand-maintained literal in this file is how one gets missed. `CHANGELOG.md` is
+ * excluded because its entries are dated history — a past release's line describing the
+ * trigger as it was then is correct and must not be rewritten. `SKILL.md` is excluded
+ * because `skill-instruction-contract.test.ts` pins its trigger prose far more precisely.
+ */
+const TRIGGER_CARRIERS = [
+  ...CARRIERS.filter((f) => f !== "CHANGELOG.md" && f !== "skills/tandem/SKILL.md"),
+  "docs/workflows.md",
+];
+
 /** Phrasings that promise the watch costs nothing. Deliberately loose. */
 const PROMISE =
   /(nothing to install|needs? nothing installed|no install(ation)?( at all)?|needs no install)/i;
 
 /** The watch specifically — not the plugin, which legitimately installs things. */
 const ABOUT_THE_WATCH = /watch|wake stream|update stream/i;
+
+/**
+ * Prose about WHERE the wake address comes from and what arms on it. Wider than
+ * `ABOUT_THE_WATCH`, which the trigger sweep cannot reuse: `docs/user-guide.md`'s trigger
+ * paragraph says "wake-stream address" with a hyphen and never says "watch", so the
+ * narrower predicate matched no paragraph there and the sweep silently checked nothing.
+ */
+const ABOUT_THE_TRIGGER = /wake[-\s]?stream|wakeUrl|\bwatch\b|Monitor/i;
 
 function paragraphs(text: string): string[] {
   return text.split(/\n\s*\n/);
@@ -154,23 +176,39 @@ describe("hand-started sessions get the automatic first-use contract", () => {
   //
   // The assertion above cannot catch a carrier left behind, by construction — it accepts
   // the OLD phrasing as one of its alternatives, so a doc still describing the narrow
-  // trigger stays green there. This is the fail-closed half, and it sweeps every carrier
-  // rather than the two that test happens to read.
-  it("no user-facing doc still names read-mode tandem_status as the only trigger", () => {
-    const carriers = [
-      "README.md",
-      "docs/user-guide.md",
-      "docs/workflows.md",
-      "docs/troubleshooting.md",
-    ];
-    for (const rel of carriers) {
+  // trigger stays green there. This is the fail-closed half.
+  //
+  // It asserts the CLAIM, not a spelling. The first version of this test banned the literal
+  // /first successful read-mode/ and was green over two README sentences that said "the first
+  // successful `tandem_status`" without the words "read-mode" — a negative keyed on phrasing
+  // passes every restatement it did not anticipate, which is the failure mode it existed to
+  // prevent. Naming two or more producers is a positive fact about the prose: it cannot be
+  // satisfied by a doc that still describes a single-tool trigger, however that doc spells it.
+  it("every user-facing carrier describes the trigger as multi-producer", () => {
+    for (const rel of TRIGGER_CARRIERS) {
       const text = readFileSync(join(ROOT, rel), "utf-8");
+      // Scoped to the PARAGRAPH, like every other assertion in this file. A file-wide count
+      // is the same looseness the phrasing-negative had: `docs/workflows.md` names
+      // `tandem_open` in unrelated prose, so a trigger paragraph narrowed back to
+      // `tandem_status` alone still cleared a whole-file check. Verified by mutation.
+      const triggerParas = paragraphs(text).filter(
+        (p) => ABOUT_THE_TRIGGER.test(p) && WAKE_URL_PRODUCERS.some((tool) => p.includes(tool)),
+      );
       expect(
-        text,
-        `${rel}: still describes the arm trigger as the first read-mode tandem_status. ` +
-          "tandem_open and tandem_scratchpad return wakeUrl too — say so, or a session " +
-          "whose whole task is one call reads this and never arms.",
-      ).not.toMatch(/first successful read-mode/i);
+        triggerParas.length,
+        `${rel}: no paragraph describes the watch AND names a wakeUrl producer`,
+      ).toBeGreaterThan(0);
+
+      for (const para of triggerParas) {
+        const named = WAKE_URL_PRODUCERS.filter((tool) => para.includes(tool));
+        expect(
+          named.length,
+          `${rel}: a watch paragraph names only ${named.join(", ")}. The arm trigger is no ` +
+            "longer read-mode tandem_status alone — tandem_open and tandem_scratchpad return " +
+            "wakeUrl too. A paragraph naming one producer describes a trigger that a session " +
+            "whose whole task is one call can never reach, so it never arms.",
+        ).toBeGreaterThanOrEqual(2);
+      }
     }
   });
 

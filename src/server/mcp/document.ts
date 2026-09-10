@@ -26,7 +26,6 @@ import { generateAuthorshipId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { isStoreReadOnly } from "../annotations/store.js";
 import { type OpenSuccess, openFromDisk, openScratchpad, toWireResult } from "../documents/open.js";
-import { getWakeEndpoint } from "../events/wake-socket.js";
 import { mdParser } from "../file-io/markdown.js";
 import { appendMdast, buildListItemsFromTree } from "../file-io/mdast-ydoc.js";
 import { readModeProvenance } from "../mode.js";
@@ -72,6 +71,7 @@ import {
   saveDocumentToDisk,
   toDocListEntry,
 } from "./document-service.js";
+import { wakeUrlField } from "./wake-url.js";
 
 /**
  * `tandem_save`'s machine-readable `reason` for a save that did not reach disk
@@ -520,11 +520,10 @@ export function registerDocumentTools(server: McpServer): void {
         // /api/scratchpad (mcp/routes/send-open-result.ts), and widening it
         // there would put a transport fact into the document-open wire contract
         // with nothing to catch it (`res.json` takes `unknown`).
-        const openWakeUrl = getWakeEndpoint();
         return mcpSuccess({
           ...toWireResult(result),
           message: openResultMessage(result),
-          ...(openWakeUrl ? { wakeUrl: openWakeUrl } : {}),
+          ...wakeUrlField(),
         });
       } catch (err: unknown) {
         const e = err as NodeJS.ErrnoException;
@@ -569,12 +568,11 @@ export function registerDocumentTools(server: McpServer): void {
       // used to miss entirely: `wakeUrl` was reachable only through read-mode
       // `tandem_status`, so a session that never needed one could not arm and
       // correctly declined to guess the URL.
-      const wakeUrl = getWakeEndpoint();
       return mcpSuccess({
         documentId: result.documentId,
         fileName: result.fileName,
         format: result.format,
-        ...(wakeUrl ? { wakeUrl } : {}),
+        ...wakeUrlField(),
       });
     }),
   );
@@ -1497,8 +1495,6 @@ export function registerDocumentTools(server: McpServer): void {
           // whatever unrelated service holds 3479 and believes it is armed.
           // Absent (not a guess) when no wake transport is running: stdio mode
           // has no HTTP server to attach one to.
-          const wakeUrl = getWakeEndpoint();
-
           return mcpStructured({
             running: true,
             mode,
@@ -1506,7 +1502,7 @@ export function registerDocumentTools(server: McpServer): void {
             // origin tag, restore, or unknown), and what it read at that moment.
             modeProvenance: readModeProvenance(),
             storeReadOnly: isStoreReadOnly(),
-            ...(wakeUrl ? { wakeUrl } : {}),
+            ...wakeUrlField(),
             activeDocument: active
               ? { documentId: active.id, filePath: active.filePath, format: active.format }
               : null,

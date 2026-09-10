@@ -114,6 +114,12 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // The launcher test, stated where arming is decided rather than three paragraphs below it.
   // Mirrors SUPERVISOR_NO_ARM_CLAUSE, which rides both the bootstrap and every wake turn.
   expect(wake).toMatch(/How to tell which you are/i);
+  // The fallback is the clause that makes the producer LIST non-load-bearing: a session
+  // working on an already-open document reaches none of the three producers, and this is
+  // what tells it to go get an address rather than finish unarmed. Every other clause in
+  // the paragraph is pinned; this one carries more weight than the tool names beside it.
+  expect(wake).toMatch(/make a single read-mode `tandem_status` call to fetch it/i);
+  expect(wake).toMatch(/one such call, not one per turn/i);
   // Hard Rule 7 forbids a sub-agent the poll a wake exists to trigger, so arming has to be
   // scoped too — an unqualified "arm one watch" here is read by the sub-agent that also loads
   // this skill, and its first wake drives the poll that empties the orchestrator's inbox.
@@ -366,7 +372,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "20", bodyHash: "7a1c1701d9c7" });
+    ).toEqual({ version: "20", bodyHash: "0fcb37b8107f" });
   });
 
   // #1770: the skill is the only surface that tells Claude what it may NOT do with a card

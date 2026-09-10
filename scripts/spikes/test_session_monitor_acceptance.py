@@ -1902,7 +1902,10 @@ class NaturalDeclineTests(unittest.TestCase):
             'WAKE_URL_PRODUCERS = ("tandem_status", "tandem_open", "tandem_scratchpad")',
             source,
         )
-        self.assertIn("tool_name(event).endswith(producer)", source)
+        # One assertion pins the constant AND the suffix style, because `str.endswith`
+        # takes the tuple directly. The earlier `endswith(producer)` generator form needed
+        # two assertions to say the same thing, since `producer` named nothing.
+        self.assertIn("tool_name(event).endswith(WAKE_URL_PRODUCERS)", source)
 
     def test_a_dispatch_signal_arriving_after_stop_still_wins(self):
         subject = load_subject()

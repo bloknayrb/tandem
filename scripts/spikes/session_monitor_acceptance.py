@@ -97,6 +97,21 @@ DISPATCH_CONSEQUENT_FIELDS = (
     "subscriber_growth_proven",
     "autonomous_turn_seen",
 )
+# The MCP tools whose responses carry a `wakeUrl`, suffix-matched because MCP tool names
+# arrive prefixed (`mcp__tandem__tandem_scratchpad`). Module scope, not function-local:
+# `_evaluate_shape` reasons about these too, and a local binding forced it to restate the
+# names in prose where they could drift unnoticed.
+#
+# Narrowing this to `tandem_status` alone was measuring the OLD trigger. A session that
+# armed off `tandem_scratchpad` — the one-call shape that motivated widening the set —
+# scored `status_succeeded=False` AND `monitor_attempted=False`, landing in
+# `hard_failures` as "declined" when it had in fact armed correctly. The unit fixtures
+# hardcode `tandem_status`, so that mis-scoring never showed up in CI.
+#
+# Kept in sync with `WAKE_URL_PRODUCERS` in `src/server/mcp/wake-url.ts` by
+# `tests/scripts/acceptance-harness-wiring.test.ts` — this harness is a separate process
+# in a separate language, so nothing but that test links the two.
+WAKE_URL_PRODUCERS = ("tandem_status", "tandem_open", "tandem_scratchpad")
 # The first three preconditions are the PTY-derived health signals; the rest come from
 # the structured trace. Named rather than sliced -- this was `PRECONDITION_FIELDS[:3]`,
 # which happened to stay correct across the re-homing above only because the moved
@@ -549,18 +564,11 @@ def derive_structured_observations(
         return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
     prompt_events = [event for event in events if event_name(event) == "UserPromptSubmit"]
-    # Any tool that can PRODUCE a wakeUrl, not just `tandem_status`. Narrowing this to
-    # `tandem_status` was measuring the old trigger: a session that armed off
-    # `tandem_scratchpad` — the one-call shape that motivated widening the set — scored
-    # `status_succeeded=False` AND `monitor_attempted=False`, landing in `hard_failures`
-    # as "declined" when it had in fact armed correctly. The unit-test fixtures hardcode
-    # `tandem_status`, so that mis-scoring would not have shown up in CI at all.
-    WAKE_URL_PRODUCERS = ("tandem_status", "tandem_open", "tandem_scratchpad")
     status_events = [
         event
         for event in events
         if event_name(event) == "PostToolUse"
-        and any(tool_name(event).endswith(producer) for producer in WAKE_URL_PRODUCERS)
+        and tool_name(event).endswith(WAKE_URL_PRODUCERS)
     ]
     wake_url: str | None = None
     status_at: float | None = None

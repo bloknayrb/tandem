@@ -12,6 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { WAKE_URL_PRODUCERS } from "../../src/server/mcp/wake-url.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -525,5 +526,34 @@ describe("docs match the wiring", () => {
   it("docs/cli.md no longer calls the npm script the only runner, and names the CI job", () => {
     expect(cliDoc).not.toMatch(/this is its only runner/i);
     expect(cliDoc).toMatch(/`check` job/i);
+  });
+});
+
+describe("the harness scores against the same wakeUrl producers the server ships", () => {
+  // The harness is a separate process in a separate language, so its notion of "which
+  // tool response can carry a wakeUrl" is a hand-copied tuple. When the server's set was
+  // widened, nothing existed to tell the harness — and its own source-pinning test asserts
+  // the tuple against its OWN source, which cannot notice. A harness scoring against a
+  // stale set marks an honestly-armed session as a hard failure, silently, while CI stays
+  // green on fixtures that hardcode the same stale name. This is the only link between
+  // the two languages.
+  it("the Python tuple matches WAKE_URL_PRODUCERS in src/server/mcp/wake-url.ts", () => {
+    const harness = readFileSync(
+      path.join(ROOT, "scripts/spikes/session_monitor_acceptance.py"),
+      "utf-8",
+    );
+    const match = /^WAKE_URL_PRODUCERS = \(([^)]*)\)/m.exec(harness);
+    expect(
+      match,
+      "session_monitor_acceptance.py has no module-level WAKE_URL_PRODUCERS",
+    ).not.toBeNull();
+
+    const fromPython = [...(match?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    expect(
+      fromPython,
+      "the harness scores a different producer set than the server returns wakeUrl from. " +
+        "Adding a producer means editing both, or the harness misreads an armed session " +
+        "as a decline.",
+    ).toEqual([...WAKE_URL_PRODUCERS]);
   });
 });
