@@ -262,6 +262,37 @@ describe("licenseStore — statusUnavailable (#1789)", () => {
     expect(licenseStore.statusUnavailable).toBe(false);
   });
 
+  /**
+   * Review round 2. The try used to span `reconcileTransition`, whose
+   * `onTransition` is `yjsSync.rebuildForLicenseChange()` — `teardownAllTabs()`
+   * + `startBootstrap()`, real Y.js/provider work. A throw there landed in this
+   * catch and Settings → License then said Tandem "couldn't reach its local
+   * server", about a status it had just fetched successfully. The console line
+   * misdiagnosed it the same way, defeating the round-1 reason for binding the
+   * error at all.
+   */
+  it("a throwing onTransition is not reported as an unreachable server", async () => {
+    const onTransition = vi.fn(() => {
+      throw new Error("provider rebuild failed");
+    });
+    fetchLicenseStatus.mockResolvedValueOnce(TRIAL(5));
+    licenseStore.start({ onTransition });
+    await flush(); // baseline: no edge from the null baseline
+    expect(licenseStore.statusUnavailable).toBe(false);
+
+    fetchLicenseStatus.mockResolvedValue(RESTRICTED);
+    // The client-side defect stays visible as a rejection rather than being
+    // relabelled an outage.
+    await expect(licenseStore.refresh()).rejects.toThrow("provider rebuild failed");
+    expect(onTransition).toHaveBeenCalledTimes(1);
+
+    // The fetch SUCCEEDED, so the fresh status is stored and nothing on screen
+    // may claim the local server is unreachable.
+    expect(licenseStore.status).toEqual(RESTRICTED);
+    expect(licenseStore.statusUnavailable).toBe(false);
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes("[license]"))).toHaveLength(0);
+  });
+
   it("stop() resets it with the rest of the baseline", async () => {
     fetchLicenseStatus.mockRejectedValue(new Error("down"));
     licenseStore.start();

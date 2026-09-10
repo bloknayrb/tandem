@@ -2334,14 +2334,21 @@ fn show_update_withheld_dialog(app: &tauri::AppHandle, reason: WithheldReason) {
 ///
 /// No purchase/renewal URL literal lives here: `TANDEM_PURCHASE_URL` lives once
 /// in `src/shared/constants.ts`, and a native message dialog holds no link
-/// anyway -- so the copy points at Settings -> License, which does.
+/// anyway -- so the copy points at Settings -> License, which carries the
+/// clickable one. That is a claim about the WebView, and it is true only because
+/// `SettingsLicenseTab.svelte`'s `license-update-window-ended` warning now holds
+/// a `license-renew-link` to `TANDEM_PURCHASE_URL` (review round 2: before it,
+/// that tab offered a license HOLDER nothing but "Don't have one yet? Buy a
+/// license", so this dialog completed a loop with no exit).
+/// `tests/client/settings-license-tab.test.ts` pins that link, so deleting it
+/// turns this sentence red rather than leaving it quietly false.
 fn window_ended_copy(version: &str) -> (&'static str, String) {
     (
         "Update Window Ended",
         format!(
             "This device's license shows an update window that has ended, so new releases \
              may no longer be offered here.\n\n\
-             Tandem v{version} keeps running forever -- a license never stops working. To \
+             Tandem v{version} keeps running forever — a license never stops working. To \
              receive new releases again, renew from Settings -> License."
         ),
     )
@@ -3916,6 +3923,14 @@ mod update_route_tests {
         assert!(
             body.contains("9.9.9"),
             "the running version is what keeps working forever: {body}"
+        );
+        // Review round 2. This renders in a native message box, not a terminal,
+        // so ASCII `--` shows up literally next to the real em dash the
+        // neighbouring dialogs use (`show_update_in_progress_dialog`).
+        // `Settings -> License` is a single hyphen-arrow and stays.
+        assert!(
+            !body.contains("--"),
+            "user-facing dialog copy uses an em dash, never ASCII `--`: {body}"
         );
     }
 

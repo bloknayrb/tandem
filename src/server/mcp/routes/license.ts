@@ -162,9 +162,19 @@ export async function handleActivateLicense(req: Request, res: Response): Promis
   // TANDEM_ALLOW_UNAUTHENTICATED_LAN — internal vocabulary that reaches the
   // activation form verbatim, since the client passes `json.message` straight
   // through.
+  //
+  // The `tandem activate` clause is conditional on the SAME discriminant the
+  // Settings hint uses (review round 2). On a desktop install the sidecar reads
+  // the Tauri app-data dir while an npm-installed CLI writes `license.json`
+  // under its own env-paths root, so the command prints "✓ License activated"
+  // and changes nothing the app can see — the exact wrong-root no-op #1789
+  // removed from the hint two functions away. `npmCliSharesAppDataRoot()` is the
+  // server saying the two roots coincide; anything else, and we only say "paste
+  // the key there".
   const LOCAL_ONLY =
     "A license can only be activated on the computer running Tandem. Open Tandem on that " +
-    "computer and paste the key there, or run `tandem activate` on it.";
+    "computer and paste the key there" +
+    (npmCliSharesAppDataRoot() ? ", or run `tandem activate` on it." : ".");
   if (assertOriginAllowlisted(req, res, API_LICENSE_ACTIVATE, LOCAL_ONLY)) return;
   if (assertLoopbackForMutation(req, res, LOCAL_ONLY)) return;
 

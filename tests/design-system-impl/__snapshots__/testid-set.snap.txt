@@ -266,7 +266,9 @@ license-banner-live
 license-buy-link
 license-dark-installed-hint
 license-gate-dark-hint
+license-renew-link
 license-settings-section
+license-status-live-region
 license-status-pill
 license-status-unavailable
 license-trial-banner

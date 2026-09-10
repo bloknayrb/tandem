@@ -72,13 +72,18 @@ function createLicenseStore() {
   }
 
   async function poll(): Promise<void> {
+    let next: LicenseStatusResponse;
+    // The try wraps the FETCH ONLY (review round 2). `statusUnavailable` drives
+    // copy that names the local server as unreachable, so it must be bound to a
+    // fetch/parse failure and nothing else. Everything after the await —
+    // `reconcileTransition` in particular, whose `onTransition` is
+    // `yjsSync.rebuildForLicenseChange()`, i.e. `teardownAllTabs()` +
+    // `startBootstrap()` — is real client work that can throw on its own. Inside
+    // this try, such a throw would report a successful status refresh as "Tandem
+    // couldn't reach its local server", misdiagnosing a provider-rebuild crash
+    // as an outage in both the warning and the console line.
     try {
-      const next = await fetchLicenseStatus();
-      status = next;
-      statusUnavailable = false;
-      reconcileTransition(isRestricted(next));
-      // The build flag never flips at runtime — a dark build polls once, then rests.
-      if (!next.gateActive) stop();
+      next = await fetchLicenseStatus();
     } catch (err) {
       // Server unavailable / transient — keep last-known `status`, retry next
       // tick. What must NOT happen is the silent version: before #1789 this
@@ -100,7 +105,17 @@ function createLicenseStore() {
         );
       }
       statusUnavailable = true;
+      return;
     }
+    status = next;
+    statusUnavailable = false;
+    // Deliberately UNGUARDED: a throw here is a client-side defect, and letting
+    // it reject the returned promise keeps it visible (unhandled rejection /
+    // `refresh()`'s caller) rather than relabelling it as an outage. The interval
+    // callback discards the rejection, so the poll loop survives either way.
+    reconcileTransition(isRestricted(next));
+    // The build flag never flips at runtime — a dark build polls once, then rests.
+    if (!next.gateActive) stop();
   }
 
   return {

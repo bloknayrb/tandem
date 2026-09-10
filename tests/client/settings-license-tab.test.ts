@@ -18,6 +18,7 @@ import { render } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
 import type { LicenseStatusResponse } from "../../src/client/utils/license-ui";
+import { TANDEM_PURCHASE_URL } from "../../src/shared/constants";
 
 // Set BEFORE mount — the tab captures it once at init, which is the point of
 // the fix (the runtime never changes under a live component).
@@ -138,14 +139,37 @@ describe("Settings → License — a failed status poll is visible (#1789)", () 
    * silent staleness it exists to end. `status`, not `alert`: it is transient
    * and self-clearing on the next successful poll.
    */
-  it("the unavailability warning is a polite live region", async () => {
+  it("the live region is present and polite BEFORE the warning appears", async () => {
+    // Review round 2: the container is what must already be in the
+    // accessibility tree. NVDA/JAWS announce CHANGES to a live region they
+    // were already tracking; a node inserted with its text already present is
+    // routinely missed — and that insertion is the only case this block has.
+    fetchLicenseStatus.mockResolvedValue(TRIAL);
+    await licenseStore.refresh();
+    await flush();
+
+    const { container } = render(SettingsLicenseTab, { props: makeProps() });
+    const region = byTestId(container, "license-status-live-region");
+    expect(region).toBeTruthy();
+    // Polite, not `alert`: transient and self-clearing on the next good poll.
+    expect(region?.getAttribute("role")).toBe("status");
+    // Empty while healthy — it must occupy no space and say nothing.
+    expect(byTestId(container, "license-status-unavailable")).toBeNull();
+    expect(flat(region)).toBe("");
+  });
+
+  it("the warning renders INSIDE that same live region", async () => {
     fetchLicenseStatus.mockRejectedValue(new Error("down"));
     vi.spyOn(console, "warn").mockImplementation(() => {});
     await licenseStore.refresh();
     await flush();
 
     const { container } = render(SettingsLicenseTab, { props: makeProps() });
-    expect(byTestId(container, "license-status-unavailable")?.getAttribute("role")).toBe("status");
+    const warning = byTestId(container, "license-status-unavailable");
+    expect(warning).toBeTruthy();
+    // A warning rendered as a SIBLING of the region announces nothing, which is
+    // the pre-fix behaviour under a different shape.
+    expect(byTestId(container, "license-status-live-region")?.contains(warning)).toBe(true);
   });
 
   it("a healthy poll renders no warning", async () => {
@@ -168,6 +192,13 @@ describe("Settings → License — the CLI hint is browser/npm only (#1789)", ()
    */
   it("desktop offers no command to run", () => {
     tauri = true;
+    // Review round 2: seed the SERVER half true, so `isDesktop` is the only
+    // thing that can hide the clause. Without this the singleton still held the
+    // first describe's status, which carries no `cliActivateEffective` at all
+    // — the hint was already hidden by the other half of the `&&`, and
+    // dropping `!isDesktop &&` from the template left every test in this file
+    // green (verified by mutation).
+    licenseStore.set({ ...TRIAL, cliActivateEffective: true });
     const { container } = render(SettingsLicenseTab, { props: makeProps() });
     const section = byTestId(container, "license-settings-section");
     expect(flat(section)).not.toContain("tandem activate");
@@ -208,5 +239,46 @@ describe("Settings → License — the CLI hint is browser/npm only (#1789)", ()
     licenseStore.set({ ...TRIAL });
     const { container } = render(SettingsLicenseTab, { props: makeProps() });
     expect(flat(byTestId(container, "license-settings-section"))).not.toContain("tandem activate");
+  });
+});
+
+/**
+ * Review round 2. `window_ended_copy` (src-tauri/src/lib.rs) tells a licensed
+ * user whose window has lapsed to "renew from Settings -> License", and its
+ * docblock justifies naming that surface with the claim that the tab holds the
+ * clickable link a native message box cannot. Before this, the only outbound
+ * link on the tab was `license-buy-link`, framed "Don't have one yet? Buy a
+ * license" — an offer to buy what the reader already owns. The dialog closed a
+ * loop with no exit. This is the test that keeps the Rust docblock honest.
+ */
+describe("Settings → License — the ended update window offers a way out (#1819)", () => {
+  const LAPSED: LicenseStatusResponse = {
+    gateActive: true,
+    status: "licensed",
+    updateWindowCurrent: false,
+    license: { name: "Paying Customer", type: "paid" },
+  };
+
+  it("the ended-window warning carries a renewal link", () => {
+    licenseStore.set(LAPSED);
+    const { container } = render(SettingsLicenseTab, { props: makeProps() });
+
+    const warning = byTestId(container, "license-update-window-ended");
+    expect(warning).toBeTruthy();
+    const renew = byTestId(container, "license-renew-link") as HTMLAnchorElement | null;
+    expect(renew).toBeTruthy();
+    // Inside the warning, not somewhere else on the tab: the "Buy a license"
+    // link already existed further down and is not an answer for a holder.
+    expect(warning?.contains(renew)).toBe(true);
+    expect(renew?.getAttribute("href")).toBe(TANDEM_PURCHASE_URL);
+    expect(renew?.getAttribute("rel")).toContain("noopener");
+    expect(flat(renew).toLowerCase()).toContain("renew");
+  });
+
+  it("a current window shows neither the warning nor the renewal link", () => {
+    licenseStore.set({ ...LAPSED, updateWindowCurrent: true });
+    const { container } = render(SettingsLicenseTab, { props: makeProps() });
+    expect(byTestId(container, "license-update-window-ended")).toBeNull();
+    expect(byTestId(container, "license-renew-link")).toBeNull();
   });
 });

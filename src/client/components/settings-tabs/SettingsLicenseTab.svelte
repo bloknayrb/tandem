@@ -82,31 +82,42 @@ function onActivated(): void {
          without this line the user has no way to learn it. -->
     <div class="license-warning" data-testid="license-update-window-ended">
       Your update window has ended. Tandem keeps running exactly as it is, forever — but new
-      releases are no longer offered on this device. Renew to receive updates again.
+      releases are no longer offered on this device.
+      <a
+        data-testid="license-renew-link"
+        href={TANDEM_PURCHASE_URL}
+        target="_blank"
+        rel="noopener noreferrer">Renew to receive updates again</a
+      >.
     </div>
   {/if}
 
-  {#if statusUnavailable}
-    <!-- The 60 s poll used to swallow every failure (#1789), so this state was
-         invisible: either a frozen countdown the server may no longer agree
-         with, or — on a first-poll failure — a pill asserting the gate is off.
-         Split on whether there is a last known state at all.
+  <!-- The 60 s poll used to swallow every failure (#1789), so this state was
+       invisible: either a frozen countdown the server may no longer agree with,
+       or — on a first-poll failure — a pill asserting the gate is off. Split on
+       whether there is a last known state at all.
 
-         `role="status"` because this block is inserted and removed under a live
-         Settings tab: without it a screen-reader user goes on reading a pill and
-         countdown the page has just stopped vouching for, which is the silent
-         staleness the block exists to end. Polite rather than `role="alert"`
-         (the sibling below) — it is transient and self-clearing on the next
-         successful poll, so it must not interrupt. -->
-    <div class="license-warning" data-testid="license-status-unavailable" role="status">
-      {#if status != null}
-        Tandem couldn't reach its local server, so this is the last known state and it may be
-        out of date.
-      {:else}
-        Tandem hasn't reached its local server yet, so no license state is known on this device.
-      {/if}
-    </div>
-  {/if}
+       The `role="status"` container is rendered UNCONDITIONALLY and only its
+       TEXT is toggled (review round 2). NVDA and JAWS announce changes to a live
+       region that was already in the accessibility tree; a node inserted with its
+       text already in place is routinely missed — which is the one case this
+       block exists for, a screen-reader user sitting on an open Settings →
+       License while the poll starts failing. Empty when there is nothing to say,
+       so it occupies no space. Polite rather than `role="alert"` (the sibling
+       below): it is transient and self-clearing on the next successful poll, so
+       it must not interrupt. -->
+  <div data-testid="license-status-live-region" role="status">
+    {#if statusUnavailable}
+      <div class="license-warning" data-testid="license-status-unavailable">
+        {#if status != null}
+          Tandem couldn't reach its local server, so this is the last known state and it may be
+          out of date.
+        {:else}
+          Tandem hasn't reached its local server yet, so no license state is known on this device.
+        {/if}
+      </div>
+    {/if}
+  </div>
 
   {#if status?.licenseUnverifiable}
     <div class="license-warning" data-testid="license-unverifiable-warning" role="alert">
