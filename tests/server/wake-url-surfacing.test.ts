@@ -118,11 +118,6 @@ describe("wakeUrl surfacing — the session-opening tools", () => {
     expect(res.error).toBe(false);
     expect(Object.keys(res.data)).not.toContain("wakeUrl");
 
-    // The JSON envelope alone CANNOT prove this: `JSON.stringify` drops an undefined
-    // value, so a `{ wakeUrl: undefined }` bug reads identically there. `structuredContent`
-    // is the raw object, so it is the only surface where absent-vs-present-undefined is
-    // observable — and it is the surface a strict client validates against, where an
-    // undefined key reads as a live transport that is not running.
     // `structuredContent` is only set by `mcpStructured`, so it exists for `tandem_status` and
     // NOT for the two `mcpSuccess` producers. That is not a hole in this spec: for an
     // `mcpSuccess` tool the absent-vs-present-undefined distinction is genuinely UNOBSERVABLE
