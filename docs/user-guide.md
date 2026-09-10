@@ -439,7 +439,7 @@ Claude can check the connection with `tandem_status`, which reports open documen
 
 ### Real-Time Push (Recommended)
 
-Chat messages, annotation accepts/dismisses, and text selections can push to Claude in real time rather than waiting for it to poll. Sessions Tandem launches for you already get this and need no setup. In a session you start yourself, first Tandem use runs the bundled skill; after its first successful read-mode `tandem_status`, the skill automatically makes one persistent built-in Monitor attempt using the returned wake-stream address.
+Chat messages, annotation accepts/dismisses, and text selections can push to Claude in real time rather than waiting for it to poll. Sessions Tandem launches for you already get this and need no setup. In a session you start yourself, first Tandem use runs the bundled skill; on the first Tandem response that returns a wake-stream address — `tandem_open`, `tandem_scratchpad` or a read-mode `tandem_status` — the skill automatically makes one persistent built-in Monitor attempt using it.
 
 The **built-in Monitor watch** needs no installation or flag and lasts only for that session. It requires a Claude Code account where Monitor is enabled and, on Windows, Git Bash. Asking Claude to watch is recovery if the automatic attempt was skipped, not a required setup step.
 

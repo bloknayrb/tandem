@@ -1894,7 +1894,15 @@ class NaturalDeclineTests(unittest.TestCase):
         self.assertIn('str(event.get("tool_name", "")).lower() == "skill"', source)
         self.assertIn('str(event.get("tool_name", "")).lower() == "monitor"', source)
         # And the MCP side stays suffix-matched, because those names are prefixed.
-        self.assertIn('.endswith("tandem_status")', source)
+        # The suffix is now taken from WAKE_URL_PRODUCERS rather than a lone literal:
+        # `tandem_open` and `tandem_scratchpad` also return a wakeUrl, so a session that
+        # armed off one of them must not score as a decline. Pin the tuple AND the
+        # suffix call, so neither the set nor the matching style can be narrowed silently.
+        self.assertIn(
+            'WAKE_URL_PRODUCERS = ("tandem_status", "tandem_open", "tandem_scratchpad")',
+            source,
+        )
+        self.assertIn("tool_name(event).endswith(producer)", source)
 
     def test_a_dispatch_signal_arriving_after_stop_still_wins(self):
         subject = load_subject()

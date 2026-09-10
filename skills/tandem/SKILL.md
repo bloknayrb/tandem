@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 19
+version: 20
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -32,7 +32,7 @@ These prevent the most common failures. Follow them always.
 
 Standard workflow:
 
-1. `tandem_status` — check for already-open documents (sessions restore automatically)
+1. `tandem_status` — check for already-open documents (sessions restore automatically). Opening or creating one instead — `tandem_open`, or `tandem_scratchpad` for an ephemeral draft tab — counts as this step: those responses carry the same `wakeUrl` (see "Getting Woken While Idle"), so a task that starts by creating a document does not need a separate status call.
 2. `tandem_getOutline` — understand document structure
 3. `tandem_status({ text: "Working on [section]...", focusParagraph: N })` — show progress (use `index` from outline)
 4. `tandem_getTextContent({ section: "..." })` — read one section at a time
@@ -94,19 +94,21 @@ Polling is the reliable path and stays the authority on what you see. But betwee
 
 **In a multi-agent workflow, only the orchestrator arms a watch.** A sub-agent must not: Hard Rule 7 forbids it the `tandem_checkInbox` call a wake exists to trigger, so its watch could only wake it into the poll that empties the orchestrator's inbox. Everything below is addressed to the session that polls.
 
-In a **hand-started session**, after the first successful read-mode `tandem_status`, if your host offers a `Monitor` tool, read `wakeUrl` from that response and arm one persistent watch. **Arm it at most once per session. Do not use Tandem's process-global subscriber count to decide whether this session is covered.** Other sessions and inert channel shims appear in that count, and the plugin monitor triggered by this skill can attach after the status response, so the count is stale by construction.
+In a **hand-started session**, arm one persistent watch on the **first** `tandem_*` response that carries a `wakeUrl`. Read `wakeUrl` from that response — read-mode `tandem_status`, `tandem_open` and `tandem_scratchpad` all return it — and if your host offers a `Monitor` tool, arm then and there. If none of your first few Tandem calls returned one, make a single read-mode `tandem_status` call to fetch it; one such call, not one per turn. **Arm it at most once per session — the first watch is the only one, and a later response carrying `wakeUrl` is not a second invitation. Do not use Tandem's process-global subscriber count to decide whether this session is covered.** Other sessions and inert channel shims appear in that count, and the plugin monitor triggered by this skill can attach after your first Tandem call, so the count is stale by construction.
+
+**How to tell which you are.** A session Tandem launched is told so in the turn that started it: that turn says Tandem is already waking you directly and that you must not arm a watch, and it repeats that on every wake. If any turn in this conversation says that, you are not hand-started — do not arm. If nothing does, you are hand-started.
 
 If the Monitor tool is absent or the attempt fails, say so once and stop trying. The tool is enabled per account rather than per version, so upgrading may not add it, and Tandem's server cannot see whether you have it. On Windows, the built-in Monitor tool additionally requires Git Bash. The plugin monitor shares the same per-account feature gate, so it cannot help when that gate is off. But the plugin monitor does not require Git Bash on Windows and can fall back to PowerShell, so it can help when Git Bash is the missing precondition. Tell the user that the channel shim is the setup that does not need Monitor (`tandem setup --apply --with-channel-shim`), then keep polling. Asking Claude to watch is recovery only: if this first-use attempt was skipped, make the same attempt when asked, but never start a second watch.
 
-**Read the URL from `tandem_status`, don't assume it.** Read mode returns `wakeUrl` — the live address of the wake stream, reported by the server that is running it. It is usually `ws://127.0.0.1:3479/api/wake`, but the port is configurable and guessing it is a *silent* failure: you would open a socket to whatever unrelated service holds 3479 and sit there believing you were armed. If `wakeUrl` is absent, this Tandem has no wake transport and there is nothing to arm — keep polling.
+**Read the URL from Tandem's own response, don't assume it.** `wakeUrl` is the live address of the wake stream, reported by the server that is running it, and comes back on read-mode `tandem_status`, `tandem_open` and `tandem_scratchpad`. It is usually `ws://127.0.0.1:3479/api/wake`, but the port is configurable and guessing it is a *silent* failure: you would open a socket to whatever unrelated service holds 3479 and sit there believing you were armed. If `wakeUrl` is absent, this Tandem has no wake transport and there is nothing to arm — keep polling.
 
 ```
-Monitor({ ws: { url: <wakeUrl from tandem_status> }, persistent: true })
+Monitor({ ws: { url: <the wakeUrl Tandem returned> }, persistent: true })
 ```
 
 Three things to know before you do:
 
-- **Do not arm one if Tandem launched you.** A launcher-spawned session is already woken directly on its input, and the wake turn says so explicitly. A second watch double-wakes every message.
+- **Do not arm one if Tandem launched you.** A launcher-spawned session is already woken directly on its input, and the wake turn says so explicitly. A second watch double-wakes every message. This is the same test as "How to tell which you are" above, restated where you are about to act on it.
 - **A wake tells you *that* something happened, never *what*.** Frames carry an id, a type and a timestamp — no message text, by design. Always call `tandem_checkInbox` to find out what actually arrived. Answering from the notification is how the same item gets replied to twice: the inbox never marks it seen, so it comes back.
 - **Wakes are best-effort and can be dropped.** A burst of activity is rate-limited by the host, so some notifications never arrive even though every event reached the server. This is exactly why the point above matters — the inbox has all of them; the wake stream may not. Keep polling every 2-3 tool calls regardless (orchestrator only in a multi-agent workflow).
 - **If every wake arrives twice, you are the second consumer — stand down.** A subscriber count of zero at the moment you check is not a promise it stays zero. If the user has the Tandem plugin installed, dispatching this skill is what starts its monitor, and that takes some seconds to connect — so a count you read in your first tool call can be stale by the time your watch is open. Nothing on Tandem's side can tell the two apart; doubled wakes are the signal. Stop your watch with `TaskStop` and keep polling, rather than leaving both running. No item is lost either way: the inbox de-duplicates, so the cost is a wasted turn, not a duplicate reply.

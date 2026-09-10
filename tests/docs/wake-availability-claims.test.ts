@@ -142,9 +142,35 @@ describe("hand-started sessions get the automatic first-use contract", () => {
         /ask Claude to watch(?: Tandem)? for updates/i,
       );
       expect(text, `${rel}: does not say when the automatic attempt happens`).toMatch(
-        /first (?:successful read-mode )?`?tandem_status`?|first (?:Tandem|skill) use/i,
+        /first (?:successful read-mode )?`?tandem_status`?|first (?:Tandem|skill) use|first Tandem response/i,
       );
       expect(text, `${rel}: omits the built-in Monitor precondition`).toMatch(/built-in Monitor/i);
+    }
+  });
+
+  // The trigger is no longer read-mode `tandem_status` alone: `tandem_open` and
+  // `tandem_scratchpad` return `wakeUrl` too, because a task that fits in one call
+  // (`tandem_scratchpad({ content })`) never needed a status read and so could never arm.
+  //
+  // The assertion above cannot catch a carrier left behind, by construction — it accepts
+  // the OLD phrasing as one of its alternatives, so a doc still describing the narrow
+  // trigger stays green there. This is the fail-closed half, and it sweeps every carrier
+  // rather than the two that test happens to read.
+  it("no user-facing doc still names read-mode tandem_status as the only trigger", () => {
+    const carriers = [
+      "README.md",
+      "docs/user-guide.md",
+      "docs/workflows.md",
+      "docs/troubleshooting.md",
+    ];
+    for (const rel of carriers) {
+      const text = readFileSync(join(ROOT, rel), "utf-8");
+      expect(
+        text,
+        `${rel}: still describes the arm trigger as the first read-mode tandem_status. ` +
+          "tandem_open and tandem_scratchpad return wakeUrl too — say so, or a session " +
+          "whose whole task is one call reads this and never arms.",
+      ).not.toMatch(/first successful read-mode/i);
     }
   });
 

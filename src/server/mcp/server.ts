@@ -234,7 +234,9 @@ export const SERVER_INSTRUCTIONS = [
   "Tandem is a collaborative document editor — the user edits the same document alongside you.",
   "Always treat tandem_checkInbox as the authority on user activity, and poll it every few tool calls.",
   "Nothing polls between your turns: if your client can hold a persistent watch, arm one (at most once",
-  "per session) on the wakeUrl from tandem_status. Skip that if Tandem launched this session — it is",
+  "per session) on the wakeUrl that tandem_status, tandem_open and tandem_scratchpad return — the first",
+  "one you see is the one to use, and a later response carrying it is not a second invitation.",
+  "Skip that if Tandem launched this session — it is",
   "already woken on its input, and a second watch double-wakes every event.",
   "In solo mode, hold annotations rather than surfacing them.",
 ].join(" ");

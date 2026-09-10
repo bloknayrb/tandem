@@ -55,7 +55,7 @@ Then try:
 "Let's work on the welcome document in Tandem"
 ```
 
-Claude connects to the running Tandem server, opens the document, and starts reading. Asking for Tandem by name is what runs the bundled skill on first use. Where Claude Code offers a Monitor tool, the skill makes one automatic attempt to open a watch on Tandem's wake stream after its first successful read-mode `tandem_status`, so your comments and chat messages reach it while it is idle.
+Claude connects to the running Tandem server, opens the document, and starts reading. Asking for Tandem by name is what runs the bundled skill on first use. Where Claude Code offers a Monitor tool, the skill makes one automatic attempt to open a watch on Tandem's wake stream on the first Tandem response carrying a wake-stream address — `tandem_open`, `tandem_scratchpad` or a read-mode `tandem_status` — so your comments and chat messages reach it while it is idle.
 
 If that route is not available to you, the channel shim is the fallback — and it needs both halves, registration and the flag:
 

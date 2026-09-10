@@ -70,7 +70,19 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // bump ships to nobody. Pinning the current number forces a deliberate look here whenever
   // the version moves — including for an unrelated edit, which is the cost of the guard, not
   // a bug in it. When you land here: confirm the assertions below still describe the shipped
-  // wake instructions, then move the number. Last moved to 18 by the Gc2a position-mapping group
+  // wake instructions, then move the number. Last moved to 20 by the arm-trigger group: this
+  // one DOES change the wake contract rather than passing through it. The trigger is no longer
+  // anchored to read-mode `tandem_status` — `tandem_open` and `tandem_scratchpad` now return
+  // `wakeUrl` too, and the anchor moved to "the FIRST `tandem_*` response that carries a
+  // `wakeUrl`". The word `first` is what carries the at-most-once bound now that four moments
+  // can supply the URL, so it is pinned below in its own assertion; a reword that drops it
+  // turns a single anchored event back into a standing obligation. A launcher-detection
+  // paragraph was added directly under the trigger, because `SUPERVISOR_NO_ARM_CLAUSE`
+  // (`src/shared/launcher/contract.ts`) rides every supervisor turn and makes "hand-started"
+  // mechanically decidable — the skill previously never stated that test.
+  // (The narration below skipped 19: the bump to 19 moved the assertion without extending this
+  // chain. 19 was the Gd docx group — no wake-section change.) Before that, to 18 by the Gc2a
+  // position-mapping group
   // (#1776): the Collaboration Etiquette bullet now says `tandem_getActivity`'s `cursor` is a
   // flat UTF-16 offset and a proximity hint only. That bullet is outside the wake section; every
   // wake assertion below was re-read against the bumped file and is unchanged. Before that, to
@@ -84,13 +96,24 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // orchestrator, and the "Wakes are best-effort" bullet carries the same qualifier — so the
   // orchestrator-only assertion below is part of the wake contract, not an extra. Every wake
   // assertion here was re-read against the bumped file.
-  expect(skill).toMatch(/^version:\s*19$/m);
+  expect(skill).toMatch(/^version:\s*20$/m);
   expect(wake).toMatch(/hand-started session/i);
-  expect(wake).toMatch(/first successful read-mode `tandem_status`/i);
+  // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
+  // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
+  expect(wake).toMatch(/\*\*first\*\* `tandem_\*` response that carries a `wakeUrl`/i);
+  expect(wake).toMatch(/a later response carrying `wakeUrl` is not a second invitation/i);
+  // All three producers named, so the model never has to guess which call can supply one.
+  expect(wake).toMatch(/read-mode `tandem_status`, `tandem_open` and `tandem_scratchpad`/);
   expect(wake).toMatch(/read `wakeUrl`/i);
+  // The fence must keep the provenance instruction: a bare <wakeUrl> placeholder reads as
+  // "any URL of that shape", which is the hardcoded-port silent failure this section exists
+  // to prevent.
   expect(wake).toContain(
-    "Monitor({ ws: { url: <wakeUrl from tandem_status> }, persistent: true })",
+    "Monitor({ ws: { url: <the wakeUrl Tandem returned> }, persistent: true })",
   );
+  // The launcher test, stated where arming is decided rather than three paragraphs below it.
+  // Mirrors SUPERVISOR_NO_ARM_CLAUSE, which rides both the bootstrap and every wake turn.
+  expect(wake).toMatch(/How to tell which you are/i);
   // Hard Rule 7 forbids a sub-agent the poll a wake exists to trigger, so arming has to be
   // scoped too — an unqualified "arm one watch" here is read by the sub-agent that also loads
   // this skill, and its first wake drives the poll that empties the orchestrator's inbox.
@@ -152,8 +175,15 @@ describe("shipped Tandem skill instruction contract", () => {
   it.each([
     [
       "the once-per-session limit",
-      "Arm it at most once per session.",
-      "Arm a persistent watch for this turn.",
+      // No trailing period: the sentence now continues into the "not a second invitation"
+      // clause, which is what holds the bound once several tools can supply a `wakeUrl`.
+      "Arm it at most once per session",
+      "Arm a persistent watch for this turn",
+    ],
+    [
+      "the not-a-second-invitation clause",
+      "a later response carrying `wakeUrl` is not a second invitation",
+      "each later response carrying `wakeUrl` is a fresh invitation",
     ],
     [
       "the failed-attempt stop rule",
@@ -336,7 +366,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "19", bodyHash: "dd9eaf39affa" });
+    ).toEqual({ version: "20", bodyHash: "7a1c1701d9c7" });
   });
 
   // #1770: the skill is the only surface that tells Claude what it may NOT do with a card

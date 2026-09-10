@@ -1810,6 +1810,33 @@ This ADR records a choice that was already load-bearing in shipped code but had 
 >
 > **This risk was recorded and then written past, which is the part worth remembering.** [`connection-honesty-findings.md`](spikes/connection-honesty-findings.md) already said of the `Monitor` tool: "It is present in this one. If absent, any design keyed on A1 silently no-ops." The shipped copy was written anyway, because every measurement anyone took was taken on the one account where it works. A precondition the product cannot observe will always look satisfied from inside the room where it is satisfied. (A *session* can see whether the tool is in its list without arming — that is exactly what `SKILL.md`'s conditional does. It is the **server** that cannot know, which is why no doctor check can assert it.)
 
+> **Amendment (2026-09-10) — `wakeUrl` is no longer read-mode `tandem_status` alone.** This ADR's
+> arming invariant said to read `wakeUrl` from a read-mode `tandem_status` response, and
+> `getWakeEndpoint()` had exactly one caller to match. That made the trigger unsatisfiable for a
+> whole population, silently: `tandem_scratchpad({ content })` opens a draft tab and seeds it in
+> ONE call, so a session asked to jot something into Tandem completes its task without ever
+> needing a status read — and `SKILL.md` correctly forbids guessing the URL, because a wrong port
+> opens a socket to an unrelated service and looks armed. Such a session could not arm, and was
+> right not to. Observed 2026-09-10 in a real session, which called `tandem_scratchpad` exactly
+> once and armed nothing.
+>
+> `tandem_open` and `tandem_scratchpad` now return `wakeUrl` as well, and the skill's anchor moved
+> to **the first `tandem_*` response that carries one**. The anchor stays a single moment
+> deliberately: the bound was never the word "status", it was the word "first", and several
+> producers with no anchor would read as several standing invitations to arm.
+>
+> **`tandem_checkInbox` deliberately does NOT carry it.** It is polled every 2-3 tool calls, so it
+> would re-present the arm affordance dozens of times per session — the route to a second watch
+> that `wake-advisory.ts` documents, which also burns a `MAX_WAKE_CONSUMERS` slot and makes
+> `getSubscriberCount() === 0`, the only sound negative in the connection-honesty surface,
+> unreachable process-globally for every other session. Its marginal coverage is near zero anyway:
+> any session that reaches a poll has already called one of the three producers.
+>
+> One thing this amendment does NOT change: `wakeUrl` still names `127.0.0.1` unconditionally, so
+> under a non-loopback bind a remote MCP client receives an address on its own machine. That is
+> pre-existing and tracked in [security.md](security.md#open-findings); widening the producer set
+> multiplies its reach without altering its shape.
+
 ### Decision 1 — take the `ws` source, and drop session-bound arbitration entirely
 
 The conflict as stated: `ws` is pure JSON config with no shell, therefore no `${CLAUDE_CODE_SESSION_ID}` expansion, therefore no session id — and the arbitration rule was "unbound consumers are never arbitrated," so `ws` makes arbitration a no-op. Take the shell instead and the placeholder hazard returns: an unexpanded `${…}` passes `SESSION_ID_RE` (`cli-runtime.ts:107`) and arrives looking valid while being *identical across every session*, which is worse than no identity at all.

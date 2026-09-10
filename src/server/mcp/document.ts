@@ -515,7 +515,17 @@ export function registerDocumentTools(server: McpServer): void {
             stampClaudeAuthorshipWholeDoc(loaded.doc);
           }
         }
-        return mcpSuccess({ ...toWireResult(result), message: openResultMessage(result) });
+        // `wakeUrl` rides the TOOL payload, never `toWireResult` — that
+        // projection is shared with POST /api/open, /api/upload and
+        // /api/scratchpad (mcp/routes/send-open-result.ts), and widening it
+        // there would put a transport fact into the document-open wire contract
+        // with nothing to catch it (`res.json` takes `unknown`).
+        const openWakeUrl = getWakeEndpoint();
+        return mcpSuccess({
+          ...toWireResult(result),
+          message: openResultMessage(result),
+          ...(openWakeUrl ? { wakeUrl: openWakeUrl } : {}),
+        });
       } catch (err: unknown) {
         const e = err as NodeJS.ErrnoException;
         if (e.code === "ENOENT" || e.code === "FILE_NOT_FOUND") {
@@ -554,10 +564,17 @@ export function registerDocumentTools(server: McpServer): void {
     },
     gatedTool("tandem_scratchpad", async ({ content }) => {
       const result = await openScratchpad(content);
+      // A scratchpad seeded with content is a COMPLETE task in one call — no
+      // outline, no read, no status. That is the population the wake trigger
+      // used to miss entirely: `wakeUrl` was reachable only through read-mode
+      // `tandem_status`, so a session that never needed one could not arm and
+      // correctly declined to guess the URL.
+      const wakeUrl = getWakeEndpoint();
       return mcpSuccess({
         documentId: result.documentId,
         fileName: result.fileName,
         format: result.format,
+        ...(wakeUrl ? { wakeUrl } : {}),
       });
     }),
   );
