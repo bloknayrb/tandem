@@ -66,7 +66,9 @@ bump updates the comment itself. No experiment in
 `docs/reviews/2026-09-02-v1-review/experiments/` covers this issue.
 
 Discriminating check, one, stated once: `grep -n 'azure/login' .github/workflows/tauri-release.yml`
-must show **four lines, none containing `v2`**, with `:238`'s trailing comment reading exactly
+must show **five lines, none containing `v2`** — five, not four, because `:244`
+(`# cert profile. Standard azure/login refuses to proceed without`) mentions the action with no
+version qualifier and is deliberately untouched — with `:238`'s trailing comment reading exactly
 `# v3.0.2`. Paste that output into the PR body. `npx vitest run tests/scripts/workflow-action-pin.test.ts`
 stays green — nothing it asserts changes.
 
@@ -74,7 +76,8 @@ stays green — nothing it asserts changes.
 
 Four comment sites corrected; the pin carries a full `vX.Y.Z`; the `gh api` check run with its
 output in the PR body; the `Audited` date advanced only on that basis; `:238-241` otherwise
-byte-identical; the grep shows four `v2`-free lines; `workflow-action-pin.test.ts` green; the PR
+byte-identical; the grep shows five `v2`-free lines (`:244` is the fifth and stays as it is);
+`workflow-action-pin.test.ts` green; the PR
 body records that #1856's body was wrong about `:238`.
 
 **Group commit shape, stated here because #1856 is the first commit.** Six issues land on one
@@ -97,3 +100,13 @@ required by `CONTRIBUTING.md:250-260`, not a repo mechanism, and it is the only 
 `# v3.0.2` a fact rather than a guess. The no-test decision is unchanged.
 
 **File set:** `.github/workflows/tauri-release.yml`, comments only.
+
+## Review corrections (post-cut)
+
+**Adopted.** *"The discriminating check and Done-when say the grep shows four lines; it returns
+five, so the builder either fabricates the count or edits an out-of-scope line to reach four."*
+Measured on `origin/master`: `grep -n 'azure/login' .github/workflows/tauri-release.yml` matches
+`:125`, `:224`, `:238`, `:244`, `:280`. The Fix section names four sites because `:244`
+(`# cert profile. Standard azure/login refuses to proceed without`) carries no version qualifier
+and needs no change. Both counts now read **five**, with that reason stated. The substantive
+criterion is unchanged: none containing `v2`, and `:238`'s trailing comment exactly `# v3.0.2`.

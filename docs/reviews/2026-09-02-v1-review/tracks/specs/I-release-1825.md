@@ -48,7 +48,7 @@ non-numeric prerelease" is informational and *bounds* #1748 item 1.
   ```js
   const BUILT = path.join("dist", "client", "index.html");
   if (!fs.existsSync(BUILT)) {
-    throw new Error(`${BUILT} not found — run \`npm run build:client\` first.`);
+    throw new Error(`${BUILT} not found — run \`npm run build\` first.`);
   }
   const TARGETS = [BUILT, "index.html"];
   ```
@@ -57,7 +57,7 @@ non-numeric prerelease" is informational and *bounds* #1748 item 1.
   before this script (`package.json:46`), so the built file is always present on the path that
   matters, and the only other caller is the standalone `check:fonts`, which nothing in CI or any hook
   invokes. Update `docs/cli.md:175` in the same commit to say it requires a prior
-  `npm run build:client` — that row is the only description of the standalone contract.
+  `npm run build` — that row is the only description of the standalone contract.
 - `.husky/pre-push` — `npx biome check src/ tests/` → `npx biome check .`, making the hook and CI the
   same command. **This does NOT ship alone: `biome.json` gains two exclusions in the same commit, or
   the hook breaks every push from Bryan's checkout.** Measured 2026-09-10 from the main checkout with
@@ -142,3 +142,13 @@ PR body asserts, so it must be verified rather than assumed.
 `.husky/pre-push`, `biome.json`, `AGENTS.md`, `CONTRIBUTING.md`, `playwright.config.ts`,
 `.github/workflows/ci.yml`. Dropped from the round-2 set: `CLAUDE.md`, and any assertion in
 `tests/scripts/release-ci-hygiene.test.ts`.
+
+## Review corrections (post-cut)
+
+**Adopted.** *"The spec tells the implementer to write `npm run build:client` into a thrown error
+message and into `docs/cli.md`; no such script exists, so the fix ships a run-this-command
+instruction that fails with `Missing script`."* Measured: `package.json` has `build`, `build:server`,
+`build:reaper`, `build:tauri` and `check:fonts` — no `build:client`; the client build is
+`node scripts/build-client.mjs`, invoked from the `build` script. Both occurrences now read
+`npm run build`, which is the only script that produces `dist/client/index.html` and already runs
+`check-font-assets.mjs` immediately after `build-client.mjs`.

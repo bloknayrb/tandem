@@ -101,22 +101,32 @@ this PR makes it true, so leave it as-is rather than re-deriving it as a refutat
      one bad signature** — a `platforms` fixture with the real pairing shape where two keys share a
      `url` and carry different `signature` values, only one of which verifies. Assert **11 results
      from 7 `fetchBytes` calls**, `ok === false`, and that `failures` **names the bad key**.
-     *Kills:* the dedupe-the-verification implementation that checks 7 of 11. Then two
-     cannot-evaluate cases — an entry with no `signature`, and a rejecting `fetchBytes` — each must
-     **throw**, not resolve `{ ok: true }`.
+     *Kills:* the dedupe-the-verification implementation that checks 7 of 11. Then **three**
+     cannot-evaluate cases — an entry with no `signature`, a rejecting `fetchBytes`, and
+     **`platforms: {}` plus `platforms` absent** — each must **throw**, not resolve `{ ok: true }`.
+     The empty/absent pair is the one that kills the default implementation: a straightforward
+     `for (const [k, p] of Object.entries(platforms)) …; return { ok: failures.length === 0 }`
+     resolves `{ ok: true, results: [] }` on `{}` — a gate reporting success having verified
+     nothing, the exact #1229 shape this spec cites. Assert the throw, not a `reason`.
 2. **A describe in `tests/scripts/release-ci-hygiene.test.ts`** (the shared file #1832 lands) —
    ADR-051 wiring, since the step first executes at a `v*` tag. Find the step **by the
    `# gate:updater-sig` marker inside its own `run` body**, throw if the finder returns zero or more
    than one, pin `run` and `env` by exact equality **including the marker line**, assert `if` and
    `continue-on-error` are absent on the step, and assert the `checkout` step precedes it (without it
    the script cannot read `tauri.conf.json`). *Kills:* `|| true`, `continue-on-error`, an `if:` that
-   stops matching, and deleting the step outright.
+   stops matching, and deleting the step outright. **Plus exactly one job-level assertion:**
+   `expect(job["continue-on-error"]).toBeUndefined()` for `verify-release-manifest` — the parsed
+   field, with no `?? false` (ADR-051 rule 4). A single `continue-on-error: true` on the job greens
+   both the existing shape gate and this new signature gate at once, in a workflow no required check
+   reads; the precedent is `typecheck-tests-wiring.test.ts:145-148` ("a job-level
+   continue-on-error masks every step"). The `needs` and `if` literal pins stay deleted — those are
+   drift guards on a job this issue did not ask us to change.
 
 No experiment in `docs/reviews/2026-09-02-v1-review/experiments/` covers this issue.
 
 ## Done when
 
-Nine unit cases green (six against `verifyMinisign`, three against `verifyManifest`); the wiring
+Ten unit cases green (six against `verifyMinisign`, four against `verifyManifest`); the wiring
 describe green; `node scripts/ci/verify-updater-signatures.mjs` run **by hand against the real
 v0.25.0 release id**, printing **11 `ok` lines — one per platform key, not 7** (runnable here, and
 the only end-to-end evidence this PR can produce); the PR body states that the workflow step itself
@@ -146,3 +156,22 @@ with `main()` reduced to env-reading behind an entrypoint guard.
 `tests/scripts/verify-updater-signatures.test.ts`, one describe in
 `tests/scripts/release-ci-hygiene.test.ts`, two steps in `.github/workflows/tauri-release.yml`.
 `src-tauri/tauri.conf.json` stays read-only.
+
+## Review corrections (post-cut)
+
+**Adopted, two.**
+
+- *"The contract names a cannot-evaluate clause the Tests section allocates no case to, and the
+  natural implementation violates it."* `verifyManifest` "must throw … an empty or absent
+  `platforms` object", but the Tests bullet enumerated only the no-`signature` and rejecting-
+  `fetchBytes` cases and Done-when said three. A plain
+  `Object.entries(platforms)` walk returning `{ ok: failures.length === 0 }` resolves
+  `{ ok: true, results: [] }` for `{}` — success having verified nothing. `platforms: {}` and
+  `platforms` absent are now a required fourth case; Done-when reads **ten** unit cases (six + four).
+- *"The scope cut removed every job-level disarm pin, so a single `continue-on-error: true` on
+  `verify-release-manifest` greens both the existing shape gate and the new signature gate."*
+  Exactly one line comes back — `expect(job["continue-on-error"]).toBeUndefined()`, the parsed field
+  with no `?? false`, matching `typecheck-tests-wiring.test.ts:145-148`. It **amends** the scope-cut
+  "Removed" bullet above: the `needs` literal pin and the `if:` literal pin stay removed (the job
+  legitimately carries `if: needs.build-tauri.result == 'success'` and re-pinning it is the drift
+  guard the cut correctly dropped); only the disarm assertion is restored, and it costs one line.

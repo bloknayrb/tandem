@@ -109,10 +109,16 @@ One describe in the group's shared `tests/scripts/release-ci-hygiene.test.ts` (A
 targets sit in workflows no required check reads, or in a runbook nothing asserts).
 
 - **`tauri-release.yml`.** Find `create-release`'s `github-script` step (throw if absent); assert its
-  `with.script` contains `tag.includes('-')`, does **not** contain `prerelease: false`, contains
-  `updateRelease`, and contains `context.repo.owner` — the discriminator between the runnable reuse
-  branch and the one that throws. (Not "the literal `prerelease: tag.includes('-')` twice": a single
+  `with.script` contains `tag.includes('-')`, does **not** contain `prerelease: false`, and contains
+  `updateRelease`. (Not "the literal `prerelease: tag.includes('-')` twice": a single
   `const prerelease = tag.includes('-')` passed to both calls is correct and would go red.)
+  **The repo-argument assertion must be scoped to the `updateRelease` call, not to the whole
+  script.** A whole-script `toContain("context.repo.owner")` is already true on unmodified master —
+  `listReleases` (`:88-90`) and `createRelease` (`:109-111`) each spell the pair out — so it passes
+  green against the bare-shorthand `updateRelease({ owner, repo, … })` that `ReferenceError`s at a
+  `v*` tag, which is the one thing this assertion exists to prevent. Extract the `updateRelease(`
+  argument text out of `with.script` (throw if absent) and assert **that slice** contains
+  `owner: context.repo.owner` and `repo: context.repo.repo`.
 - **`publish.yml`.** Find the step whose `run` contains `npm publish` (throw if absent or if more
   than one); pin its `run.trim()` by **exact equality** to the block above — the `case` arms and the
   publish line are one string, so the derivation cannot be deleted or rewritten without reddening
@@ -123,8 +129,11 @@ targets sit in workflows no required check reads, or in a runbook nothing assert
   relation is item 2's whole anchor: reorder it back and both suites silently stop asserting.
 - **`.claude/skills/release/SKILL.md`.** Read it, **throw if the step-7 publish block is absent**,
   assert both branches (`--draft=false --latest` on the no-hyphen line; `--prerelease` and
-  `--latest=false` on the hyphen branch), and assert **no line in that block pairs `--latest` with
-  `--prerelease`**. Precedent: `tests/skill-instruction-contract.test.ts:257`.
+  `--latest=false` on the hyphen branch), and assert **no line in that block pairs a BARE `--latest`
+  with `--prerelease`**. Bare means `--latest` **not** followed by `=` — match
+  `/(^|\s)--latest(\s|$)/` against the line, never `line.includes("--latest")`: the substring form
+  goes red on `--draft=false --prerelease --latest=false`, which is exactly the line the fix
+  introduces. Precedent: `tests/skill-instruction-contract.test.ts:257`.
 
 Items 3 and 4 need no test. No experiment in `docs/reviews/2026-09-02-v1-review/experiments/` covers
 any of the four findings.
@@ -171,3 +180,23 @@ The call now spells `owner: context.repo.owner` / `repo: context.repo.repo`, and
 `.github/codeql/codeql-config.yml` (deleted), and a describe in the shared
 `tests/scripts/release-ci-hygiene.test.ts`. Dropped from the round-2 set:
 `tests/build/version-baked.test.ts`, `package.json`.
+
+## Review corrections (post-cut)
+
+**Adopted, two — both non-discriminating assertions in the Tests section.**
+
+- *"`with.script` contains `context.repo.owner` is non-discriminating for the thing it claims to
+  discriminate."* Measured on `origin/master`: that string is already in the script twice
+  (`:88-90` `listReleases`, `:109-111` `createRelease`), so the assertion passes green against the
+  shorthand `updateRelease({ owner, repo, … })` that throws `ReferenceError` at a `v*` tag. The
+  assertion is now scoped to the `updateRelease(` argument slice, which must contain
+  `owner: context.repo.owner` and `repo: context.repo.repo`; the whole-script `tag.includes('-')`,
+  `updateRelease` and no-`prerelease: false` assertions are unchanged. This **amends** the scope-cut
+  note above, which recorded the weaker whole-script form as the fix.
+- *"The SKILL.md assertion goes red on the correct fix."* `--latest=false` contains the substring
+  `--latest`, so `line.includes("--latest") && line.includes("--prerelease")` fails on precisely the
+  hyphen-branch line this spec tells the implementer to write. Restated as a whole-token test:
+  a **bare** `--latest` (`/(^|\s)--latest(\s|$)/`), with the substring form named as the wrong
+  implementation so it cannot be written by default.
+
+Neither correction changes the fix itself, the file set, or the `Closes #1748` condition.
