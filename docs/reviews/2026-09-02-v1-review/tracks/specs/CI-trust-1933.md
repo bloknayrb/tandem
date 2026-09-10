@@ -79,3 +79,7 @@ The round-1 and round-2 correction logs are dropped as superseded. Removed in th
 - **Tests item 3** (the bound and its three-way coverage enumeration) and the parallel enumeration in the Fix section. What survives is the single true statement they were wrapped around, which is the one a reader can be misled by.
 
 Fixed directly rather than removed: the round-2 finding that the spec instructed the implementer to write a false comment claim — deleting `hardTimeoutMs: 1000` does **not** surface as a 15 s timeout, it falls back to `DEFAULT_HARD_TIMEOUT_MS` (2000 ms) and every assertion passes unchanged at ~2 s. The required comment now says exactly that: the option is a margin widener and nothing in this file detects its deletion.
+
+## Review corrections (post-cut)
+
+No findings against this spec in the post-cut review. The two sibling specs in this group each took corrections (`CI-trust-1673.md` reinstates its ADR-051 wiring test; `CI-trust-1862.md` makes every cannot-evaluate exit end on the shared literal and pins the two new `ci.yml` step lines by exact equality); this one is unchanged. Implementation order is unaffected: #1673 → #1862 → #1933.

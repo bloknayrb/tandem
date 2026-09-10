@@ -43,6 +43,15 @@ One new script and one new `check` step. Nothing about pool sizing, timeouts or 
 
 **`.gitignore`**: add `.vitest-report.json` beside the existing `coverage/` block.
 
+**`tests/scripts/vitest-file-anchor-wiring.test.ts`** (new) — the ADR-051 half, reinstated. Being *inside* a required job is not what makes a gate safe: `check` already holds two step-level gates pinned from inside itself, `typecheck:tests` (`tests/scripts/typecheck-tests-wiring.test.ts:128-155`) and the acceptance harness (`tests/scripts/acceptance-harness-wiring.test.ts:28`), and ADR-051 names the reason directly — "the acceptance harness's step carries no `if:`, no `continue-on-error` and no `|| true`, and … `check` fails when any of that changes". `run: … || true`, `continue-on-error: true`, `if: false`, or deleting the step outright each leave `check` **green** with the anchor dead. This step is strictly weaker than its two neighbours because it is the only one carrying an `if:` — an `if:` nothing constrains. Assert against the **parsed** `check` job (ADR-051 rule 2), four things and nothing else:
+
+- **(a)** a step whose `run` includes `vitest-file-anchor` exists, and its `run.trim()` is **exactly** `node scripts/ci/vitest-file-anchor.mjs .vitest-report.json`. Exact equality, per `typecheck-tests-wiring.test.ts:137`: it subsumes the whole exit-code-masking family — `|| true`, `; true`, `|| echo …`, `set +e &&`, a trailing pipe — which a denylist covers only partly.
+- **(b)** its parsed `if` is **exactly** the string `${{ !cancelled() }}`. Literal equality, so `success()` (the bug this group is about, re-created) and `always()` both fail. ADR-051 rule 4: assert presence, never `step.if ?? "…"`.
+- **(c)** its parsed `continue-on-error` is falsy, and its `shell` is undefined.
+- **(d)** the `Test` step's `run.trim()` by **exact** equality — `npm test -- --run --reporter=default --reporter=json --outputFile.json=.vitest-report.json`. This is the correct repair for the round-2 `toContain` finding, and it keeps `acceptance-harness-wiring.test.ts`'s `/^npm test\b/` satisfied by construction. Without it the reporter flags can be dropped: the anchor then exits 3, which is loud, but the same edit that drops them can delete this step.
+
+Per ADR-051 rule 5, **name the owner in a comment and assert only the delta**: `acceptance-harness-wiring.test.ts:251-253` owns the `Test` step's *ordering* against `setup-python` and matches it with `/^npm test\b/`; this file owns that step's *exact command* and the anchor step. Do not re-assert ordering here, and do not relax that predicate there.
+
 ## Tests
 
 `tests/scripts/vitest-file-anchor.test.ts`, importing `compareFileSets` and `EXIT_CANNOT_EVALUATE` (the `coverage-gate.test.ts` pattern — synthetic inputs, no CI involved):
@@ -53,9 +62,11 @@ One new script and one new `check` step. Nothing about pool sizing, timeouts or 
 4. **Normalization**: the same file spelled absolute-with-`/` in `expected` and relative-with-`\` in `reported` → `ok:true`; two genuinely different files → `ok:false`. Also **one file listed twice in `expected` under two `projectName`s, reported once** → `ok:true` (kills the missing `Set` reduction).
 5. **CLI exit codes, subprocess** (`spawnSync(process.execPath, [script, report, "--expected=" + p])` over temp fixtures), five arms: complete pair → 0; one missing file → 1; a report path that does not exist → 3; `--expected=` at a nonexistent path → 3; `--expected=` at a file containing `not json` → 3. Without these, `main()`'s arms are covered by nothing and `process.exit(3) → process.exit(0)` survives the file.
 
+6. **The wiring block**, four assertions as specified above, each stated as the mutant it kills: `|| true` on the anchor step's `run` (killed by (a)'s exact equality — nothing else sees it, `check` stays green); `if: success()` or `if: always()` (killed by (b)'s literal equality — `toBeDefined()` passes `success()` and `toBeTruthy()` passes `always()`); `continue-on-error: true` or a non-default `shell` (killed by (c)); the reporter flags dropped from the `Test` step (killed by (d)).
+
 ## Done when
 
-`compareFileSets` refuses a collected-but-unrun file by name; the five cases pass; the `check` job runs the anchor after `Test` with `if: ${{ !cancelled() }}`; `tests/scripts/acceptance-harness-wiring.test.ts` is still green; a hand-edited report with one entry deleted turns the anchor red locally; `npm run typecheck:tests` and the suite green.
+`compareFileSets` refuses a collected-but-unrun file by name; the six cases pass; the `check` job runs the anchor after `Test` with `if: ${{ !cancelled() }}`; **`tests/scripts/vitest-file-anchor-wiring.test.ts` pins that step's `run`, `if`, `continue-on-error` and `shell` plus the `Test` step's `run`, all by exact/literal equality**; `tests/scripts/acceptance-harness-wiring.test.ts` is still green; a hand-edited report with one entry deleted turns the anchor red locally; `npm run typecheck:tests` and the suite green.
 
 **A green dry run against a real full-suite report is owed before merge.** Run `npm test -- --run --reporter=default --reporter=json --outputFile.json=.vitest-report.json`, then `node scripts/ci/vitest-file-anchor.mjs .vitest-report.json`, and record exit 0 plus the counts in the PR body. Reconcile the numbers there: `vitest list` collects **655**, `CI-trust-1862.md` records **652 files passed** from the same tree, and 652 + **3 fully-skipped files** = 655 — a fully-skipped file *is* present in `testResults` with file-level status `passed`. So 655/655 is green and 652 is a different count, not a discrepancy.
 
@@ -63,7 +74,7 @@ One new script and one new `check` step. Nothing about pool sizing, timeouts or 
 
 ## Files touched
 
-`scripts/ci/vitest-file-anchor.mjs` (new), `tests/scripts/vitest-file-anchor.test.ts` (new), `.github/workflows/ci.yml`, `.gitignore`.
+`scripts/ci/vitest-file-anchor.mjs` (new), `tests/scripts/vitest-file-anchor.test.ts` (new), `tests/scripts/vitest-file-anchor-wiring.test.ts` (new), `.github/workflows/ci.yml`, `.gitignore`.
 
 ## Not in scope
 
@@ -79,3 +90,11 @@ The round-1 and round-2 correction logs are dropped as superseded; what they set
 - **Test cases 3, 6, 7, 8** as separate items — the status-regression guard is folded into the comparator's stated contract, and the normalization and dedupe cases are merged into one case each. Nine cases became five with no verdict left undriven.
 
 Fixed directly rather than removed: the round-2 finding that `main()`'s acquisition of `expected` had no failure contract and would exit **1** on an unreadable or malformed `--expected=` file. That is the spec's own thesis broken by its own script, so the acquisition bullet now requires a named reason and exit 3 on every acquisition path, and case 5 drives both arms.
+
+## Review corrections (post-cut)
+
+One finding, reported twice from two angles, adopted directly.
+
+- **`tests/scripts/vitest-file-anchor-wiring.test.ts` is reinstated.** The scope cut removed it on the argument that "ADR-051's pattern exists because `coverage` is advisory; this anchor lives inside `check`, which is a required status check, so its own red already blocks". That premise is refuted by ADR-051's own instances table (`docs/decisions.md:1925`): `typecheck:tests` is a **step inside the required `check` job** and is pinned by `typecheck-tests-wiring.test.ts`, and so is the acceptance-harness step. Being required makes a *red* block; it does nothing about a step that never runs. `|| true` on the `run` line, `continue-on-error: true`, `if: success()`, or deleting the step each leave `check` green with the anchor dead — the #1229 shape this whole group is about, re-created by the group's own PR. This step is the weakest of the three neighbours precisely because it is the only one carrying an `if:`, and the cut left that `if:` pinned by nothing.
+- The reinstated block is deliberately minimal — four assertions, stated in the Fix section as (a)–(d) and driven as test case 6. **(d)**, the exact-equality pin on the `Test` step's `run`, is also the correct repair for the round-2 finding that a `toContain` on the reporter flag was defeatable; the cut resolved that finding by deletion instead, which removed the check rather than strengthening it. Per ADR-051 rule 5 the comment names `acceptance-harness-wiring.test.ts:251-253` as the owner of that step's *ordering* and asserts only the delta — the exact command — so the two files cannot drift into disagreeing.
+- Unchanged by this pass: the comparator contract, the acquisition fail-closed rule, the `if: ${{ !cancelled() }}` choice, the owed starvation measurement, and everything in **Not in scope**.
