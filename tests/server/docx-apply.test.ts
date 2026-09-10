@@ -1808,6 +1808,68 @@ describe("the special-character span fence (#1754)", () => {
     );
     expect(await producedDocumentXml(output.buffer)).toContain("beta");
   });
+
+  it("applies a suggestion ending at the START of a tab-bearing run", async () => {
+    // Review round 1. `buildOffsetMap` resolves an exclusive `to` into the START
+    // of the next hit, so `to = 5` lands at charIndex 0 of the run that also
+    // carries the trailing tab — a table-of-contents line's exact shape. The
+    // apply's own step 3 breaks BEFORE that run, so it was never at risk;
+    // keying the fence on the unfiltered touched-run set refused it anyway,
+    // which is the residual of the false refusal #1754 exists to remove.
+    const xml = wrapBody(
+      `<w:p><w:r><w:t>alpha</w:t></w:r>` +
+        `<w:r><w:t>beta</w:t><w:tab/></w:r>` +
+        `<w:r><w:t>gamma</w:t></w:r></w:p>`,
+    );
+    assertGuardPasses(xml, "alphabeta\tgamma");
+    const docxBuffer = await createTestDocx(xml);
+
+    const output = await applyTrackedChanges(
+      docxBuffer,
+      [{ id: "s1", from: 0, to: 5, newText: "NEW" }],
+      { author: "Test", ydocFlatText: "alphabeta\tgamma" },
+    );
+
+    expect(output.rejectedDetails).toEqual([]);
+    expect(output.applied).toBe(1);
+    // Re-walked, not asserted off `applied`: the tab and the run that holds it
+    // must both survive untouched.
+    expect(walkDocumentBody(await producedDocumentXml(output.buffer)).flatText).toBe(
+      "NEWbeta\tgamma",
+    );
+  });
+
+  it("REFUSES a suggestion whose runs are nested in a <w:hyperlink>", async () => {
+    // Review round 1, and a corruption rather than a refusal if it gets through:
+    // `collectTouchedRuns` scans paragraph-DIRECT children, so a hyperlinked run
+    // yields an EMPTY set — both halves of the fence go inert without saying so,
+    // and `splitRun`'s `indexOf(run) === -1` then splices the remainder run to
+    // the FRONT of the paragraph while truncating the hyperlink's own text.
+    // Newly reachable: before the tab fix this document died on the flat-text
+    // guard instead.
+    const xml = wrapBody(
+      `<w:p><w:r><w:tab/></w:r>` +
+        `<w:hyperlink r:id="rId4"><w:r><w:t>Example Site</w:t></w:r></w:hyperlink></w:p>`,
+    );
+    assertGuardPasses(xml, "\tExample Site");
+    const docxBuffer = await createTestDocx(xml);
+
+    const output = await applyTrackedChanges(
+      docxBuffer,
+      [{ id: "s1", from: 9, to: 13, newText: "NEW" }],
+      { author: "Test", ydocFlatText: "\tExample Site" },
+    );
+
+    expect(output.applied).toBe(0);
+    expect(output.rejectedDetails.some((r) => r.id === "s1" && r.reason.includes("nested"))).toBe(
+      true,
+    );
+    // The whole point: the paragraph is byte-for-byte intact, tab included.
+    const produced = await producedDocumentXml(output.buffer);
+    expect(walkDocumentBody(produced).flatText).toBe("\tExample Site");
+    expect(produced).toContain("<w:tab/>");
+    expect(produced).not.toContain("<w:del ");
+  });
 });
 
 // ---------------------------------------------------------------------------

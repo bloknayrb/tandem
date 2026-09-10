@@ -230,6 +230,60 @@ function collectTouchedRuns(paragraph: Element, fromRun: Element, toRun: Element
   return runs;
 }
 
+/**
+ * Is `run` a DIRECT `<w:r>` child of `paragraph`?
+ *
+ * The walker recurses into `<w:hyperlink>`, `<w:smartTag>` and friends, so
+ * `TextHit.run` can be a run nested one level below the paragraph — while every
+ * DOM operation in this file (`collectTouchedRuns`, `splitRun`, step 3's
+ * collection loop, step 6's `insertChild`) addresses runs by POSITION IN
+ * `paragraph.children`. For a nested run `indexOf` returns -1, which is not an
+ * error anywhere: the touched-run set comes back EMPTY and the apply splices
+ * runs to the FRONT of the paragraph. The fence below refuses on this rather
+ * than growing nesting support, which is a separate piece of work.
+ */
+function isParagraphDirectRun(paragraph: Element, run: Element): boolean {
+  return paragraph.children.includes(run);
+}
+
+/**
+ * The subset of `collectTouchedRuns` that `applySingleSuggestion` actually
+ * DESTROYS: it drops `toRun` when the exclusive `to` offset lands on that run's
+ * FIRST character, mirroring the `toEntry.charIndex === 0 && child ===
+ * toEntry.run` break in step 3, where the run is neither split nor removed.
+ *
+ * That shape is common, not exotic: `buildOffsetMap` resolves an exclusive `to`
+ * into the START of the next text hit whenever one begins at exactly that
+ * offset, so any suggestion ending at a run boundary resolves `toRun` to the
+ * FOLLOWING run. Keying the special-character fence on the unfiltered set
+ * therefore refused an ordinary suggestion merely ADJACENT to a run that happens
+ * to carry a trailing tab (a table-of-contents line) — the false refusal #1754
+ * exists to remove.
+ *
+ * Deliberately NOT used for the run-CLAIM check below, which must keep the
+ * conservative superset: a `toRun` this suggestion leaves alone can still be
+ * REMOVED by another suggestion applied earlier in the descending pass, and
+ * step 3's loop terminates on `child === toEntry.run` — a `toRun` no longer in
+ * the paragraph makes it collect every run to the END of the paragraph and
+ * delete them all.
+ */
+function collectDestroyedRuns(
+  paragraph: Element,
+  fromRun: Element,
+  toEntry: OffsetEntry,
+): Element[] {
+  const runs = collectTouchedRuns(paragraph, fromRun, toEntry.run);
+  // `runs.length > 1` keeps the `from` run: when the range opens and closes in
+  // the SAME run, step 3 breaks immediately, deletes nothing and answers the
+  // opaque "No runs found in deletion range". Refusing at the fence instead
+  // keeps the reason that names the tab/break/symbol — and that shape is
+  // exactly one run holding `alpha<w:sym/>beta` with a suggestion over `alpha`.
+  if (toEntry.charIndex === 0 && runs.length > 1 && runs[runs.length - 1] === toEntry.run) {
+    runs.pop();
+  }
+  return runs;
+}
+
 // ---------------------------------------------------------------------------
 // DOM helpers
 // ---------------------------------------------------------------------------
@@ -631,6 +685,12 @@ export async function applyTrackedChanges(
   // first; the tab/break/symbol fix above is precisely what makes it reachable,
   // so this fence ships with it or not at all.
   //
+  // It keys on `collectDestroyedRuns`, NOT `collectTouchedRuns`: the run holding
+  // the exclusive `to` boundary is excluded when the apply would not touch it,
+  // or every suggestion ending at a run boundary before a tab-bearing run is
+  // refused. See that function for why the run-claim check below must not follow
+  // suit.
+  //
   // Predicate 2 is also LENGTH-INDEPENDENT, which is what covers the two
   // elements that fix turns zero-width (an unrecognised `w:br w:type`, an
   // unmapped `w:sym`): a zero-length span can never satisfy
@@ -639,7 +699,26 @@ export async function applyTrackedChanges(
   for (const s of validAfterOverlapCheck) {
     const fromEntry = offsetMap.get(s.from)!;
     const toEntry = offsetMap.get(s.to)!;
-    const touchedRuns = collectTouchedRuns(fromEntry.paragraph, fromEntry.run, toEntry.run);
+
+    // Nested runs first, because every guard after this one is EXPRESSED in
+    // paragraph-direct children and goes silently inert without saying so — see
+    // `isParagraphDirectRun`. A run inside a `<w:hyperlink>` produced an empty
+    // touched-run set, passed both halves of the fence below, and then corrupted
+    // the paragraph in `applySingleSuggestion` while reporting `applied: 1`.
+    // Newly reachable: before the tab/break/symbol fix a hyperlinked, tabbed
+    // document died on the flat-text guard above instead.
+    if (
+      !isParagraphDirectRun(fromEntry.paragraph, fromEntry.run) ||
+      !isParagraphDirectRun(toEntry.paragraph, toEntry.run)
+    ) {
+      rejectedDetails.push({
+        id: s.id,
+        reason: "Spans a hyperlink or other nested run and couldn't be applied",
+      });
+      continue;
+    }
+
+    const touchedRuns = collectDestroyedRuns(fromEntry.paragraph, fromEntry.run, toEntry);
     const touchedRunSet = new Set(touchedRuns);
 
     const hasComplex = touchedRuns.some((run) =>
@@ -668,7 +747,11 @@ export async function applyTrackedChanges(
   }
 
   // Reject suggestions that target the same <w:r> run — the first split would
-  // invalidate the second suggestion's DOM references.
+  // invalidate the second suggestion's DOM references. Uses the UNFILTERED
+  // `collectTouchedRuns` on purpose (see `collectDestroyedRuns`): a `toRun` this
+  // suggestion never touches is still the run its own step-3 loop stops on, so
+  // letting another suggestion delete it turns this one into a paragraph-wide
+  // deletion.
   const validAfterRunCheck: AcceptedSuggestion[] = [];
   const claimedRuns = new Map<Element, string>(); // run -> suggestion id that claimed it
   for (const s of validAfterComplexCheck) {

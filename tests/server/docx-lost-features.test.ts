@@ -643,4 +643,47 @@ describe("countDroppedImages (#1755)", () => {
       `<ol><li id="footnote-1"><p>Note <img src="${PNG}"> body. <a href="#footnote-ref-1">↑</a></p></li></ol>`;
     expect(countDroppedImages(html, { "1": { text: "Note body.", hadFormatting: false } })).toBe(0);
   });
+
+  it("does NOT count an image inside an UNRECONCILED footnote body", () => {
+    // Review round 1, and the over-count direction: `pruneFootnoteListItems`
+    // removes only APPROVED footnote <li>s, so an orphaned definition (or any
+    // refIds/listIds/bodyIds disagreement — a mammoth-format drift, a
+    // footnotes.xml capture miss) left its `<li><p><img></p></li>` in the DOM to
+    // be counted as a dropped BODY picture. A document with no body pictures at
+    // all then became permanently unsaveable, with no override.
+    const html =
+      `<p>Body<sup><a href="#footnote-1" id="footnote-ref-1">[1]</a></sup></p>` +
+      `<ol><li id="footnote-1"><p>Note <img src="${PNG}"> body. <a href="#footnote-ref-1">↑</a></p></li></ol>`;
+    // No captured body for id 1 → reconciliation fails → the <li> survives the
+    // apply-path prune. Identical HTML to the approved case above.
+    expect(countDroppedImages(html, {})).toBe(0);
+  });
+
+  it("logs nothing: the probe walk must not double footnote reconciliation lines", () => {
+    // `reconcileFootnoteIds`'s docblock promises a discrepancy is "recorded
+    // exactly once", on the apply path. The probe runs the SAME reconciliation,
+    // so without the silencing flag every failed-reconciliation line was printed
+    // twice per document open and an operator sizing the loss double-counted.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      countDroppedImages(
+        `<p>Body<sup><a href="#footnote-1" id="footnote-ref-1">[1]</a></sup></p>`,
+        {
+          "1": { text: "Orphan", hadFormatting: false },
+        },
+      );
+      expect(spy).not.toHaveBeenCalled();
+      // The apply path still logs — this is a probe carve-out, not a deletion.
+      const doc = new Y.Doc();
+      withInternal(doc, () =>
+        htmlToYDoc(doc, `<p>Body<sup><a href="#footnote-1" id="footnote-ref-1">[1]</a></sup></p>`, {
+          "1": { text: "Orphan", hadFormatting: false },
+        }),
+      );
+      doc.destroy();
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

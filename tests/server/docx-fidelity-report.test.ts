@@ -44,6 +44,29 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
   suppressNextChange: vi.fn(),
 }));
 
+/**
+ * A seam INSIDE the binary save's write window (#1755, review round 1). Five
+ * awaits separate the `droppedImages` refusal at the top of that branch from the
+ * `Y_MAP_FIDELITY_REPORT` refresh at the bottom, and `writeImportLossReport`
+ * (the file-watcher reload path) is a second writer to that key. Passing through
+ * to the real snapshot keeps every other test in this file honest; the hook is
+ * undefined unless a test sets it.
+ */
+const { midSave } = vi.hoisted(() => ({ midSave: { run: undefined as (() => void) | undefined } }));
+vi.mock("../../src/server/file-io/doc-backup", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/server/file-io/doc-backup")>();
+  return {
+    ...original,
+    snapshotBeforeFirstWrite: async (
+      ...args: Parameters<typeof original.snapshotBeforeFirstWrite>
+    ) => {
+      const outcome = await original.snapshotBeforeFirstWrite(...args);
+      midSave.run?.();
+      return outcome;
+    },
+  };
+});
+
 import { openFromDisk } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { summarizeMammothMessages } from "../../src/server/file-io/docx.js";
@@ -52,6 +75,7 @@ import { getOpenDocs, saveDocumentToDisk } from "../../src/server/mcp/document-s
 import { resetForTesting as resetNotifications } from "../../src/server/notifications.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_DOCUMENT_META, Y_MAP_FIDELITY_REPORT } from "../../src/shared/constants.js";
+import { withInternal } from "../../src/shared/origins.js";
 import type { FidelityReport } from "../../src/shared/types.js";
 
 /** A minimal clean one-paragraph .docx (no mammoth warnings). */
@@ -133,6 +157,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // A leaked hook would fire inside every later save in this file.
+  midSave.run = undefined;
   await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
 });
 
@@ -457,6 +483,43 @@ describe("fidelity report wiring", () => {
 
     const result = await saveDocumentToDisk(opened.documentId, "manual");
     expect(result.status).toBe("saved");
+  });
+
+  it("carries droppedImages set MID-SAVE — the refusal is not erased", async () => {
+    // Review round 1. The whole-object replace at the end of the binary branch
+    // rewrites Y_MAP_FIDELITY_REPORT; omitting `droppedImages` from it is not a
+    // type error (the field is optional), and `satisfies FidelityReport` says
+    // nothing. It looks unreachable because the refusal fires first — but only
+    // for the value read BEFORE the write window. A reload landing inside that
+    // window (the file was replaced on disk by a picture-bearing version) sets
+    // it, and erasing it here disarms the #1755 gate for the rest of the
+    // session: the NEXT save regenerates the .docx image-less.
+    const filePath = path.join(tmpDir, "clean-then-pictures.docx");
+    await fs.writeFile(filePath, await buildSimpleDocx("Body text"));
+    const opened = await openFromDisk(filePath);
+    const doc = getOrCreateDocument(opened.documentId);
+
+    midSave.run = () => {
+      withInternal(doc, () => {
+        doc.getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_FIDELITY_REPORT, {
+          importLosses: ["2 picture(s) couldn't be imported"],
+          structuralLosses: 1,
+          droppedImages: 2,
+          exportDowngrades: [],
+          updatedAt: Date.now(),
+        } satisfies FidelityReport);
+      });
+    };
+
+    const first = await saveDocumentToDisk(opened.documentId, "manual");
+    expect(first.status).toBe("saved");
+    expect(reportOf(doc)?.droppedImages).toBe(2);
+
+    // The half that matters: the gate is still armed on the next save.
+    midSave.run = undefined;
+    const second = await saveDocumentToDisk(opened.documentId, "manual");
+    expect(second.status).toBe("error");
+    expect(second.errorCode).toBe("VERIFY_BLOCKED");
   });
 
   it("writes NO report for a non-docx (.md) document", async () => {

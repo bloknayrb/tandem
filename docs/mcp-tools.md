@@ -891,6 +891,7 @@ tandem_applyChanges({ author: "Claude Review" })
 - Creates a backup of the original file before modifying. Override the backup path with `backupPath`.
 - Warns if pending annotations remain (`pendingWarning`), but does not block the operation.
 - Word comments that overlap applied suggestions are marked as resolved (`commentsResolved` count).
+- Individual suggestions can be refused while the rest apply — `rejectedDetails` carries the reason per annotation id. Beyond a stale `textSnapshot` and an overlapping range, a suggestion is refused when it would take a tab, line break or symbol with it (whole `<w:r>` runs are rewritten, not offset ranges) and when its text sits inside a `<w:hyperlink>` or another nested run, which this path does not edit.
 
 ---
 

@@ -609,6 +609,19 @@ export async function saveDocumentToDisk(
         meta.set(Y_MAP_FIDELITY_REPORT, {
           importLosses: importSnapshot?.importLosses ?? [],
           structuralLosses: reportCount(importSnapshot, "structuralLosses"),
+          // Carried, and deliberately RE-READ rather than taken from
+          // `importSnapshot` (#1755) — the opposite of the pinning above,
+          // because this field is a safety gate rather than a number already
+          // delivered to the toast. It looks dead (the refusal at the top of
+          // this branch fires for exactly the documents with a non-zero value),
+          // but five awaits separate the two: a file-watcher reload landing in
+          // that window — the file was replaced on disk by a picture-bearing
+          // version — runs `writeImportLossReport` and sets it. Omitting the
+          // field from this WHOLE-OBJECT replace would then erase the refusal
+          // for the rest of the session and the next `tandem_save` would
+          // regenerate the .docx image-less. `satisfies FidelityReport` cannot
+          // catch the omission: the field is optional.
+          droppedImages: reportCount(fidelityReportOf(doc), "droppedImages"),
           exportDowngrades,
           // Post-write verify advisories (#1123 0e) — louder than downgrades;
           // `?? []` clears a prior save's advisory on a now-clean save.
