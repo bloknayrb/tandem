@@ -78,7 +78,29 @@ const M = pickModels(g.tier);
 // only (rules + tests carry the later rounds), PR review is two rounds, and one skeptic judges
 // a round's findings as a batch. L's domain effort dropped from `max` to `high` — C spent more
 // on plan refutation alone than J2 spent end to end.
-const PLAN_ROUNDS = g.tier === "S" ? 1 : g.tier === "L" ? 3 : 2;
+// Re-measured 2026-09-10 on wave 7 (G8 tier L, I-release tier M), per-agent from the run
+// journals. Plan review was 45% and 57% of group OUTPUT and 36%/54% of input — still the
+// largest line, and the wave-3 capping did not change that. What the second measurement adds
+// is a yield number the first one did not have: plan review produced NONE of the defects that
+// mattered in either group. Every real finding came from PR review, against real code — G8's
+// cold-open gap and its reply-loss REGRESSION, I-release's `make_latest`, the `realpathSync`
+// throw, the unpaginated listing and the loose `"npm ci"` substring match.
+//
+// And the rounds do not converge. Blocking counts per round across four measured groups:
+//   G8        r1 3,3,2  r2 4,1  r3 2,6  cut 3,3
+//   I-release r1 3,3,2  r2 3,2          cut 4,4
+//   H-c       r1 2,4,2  r2 4,4          cut 1,1
+//   H-b       r1 4,2,6  r2 4,4  r3 2,3  cut 2,1
+// No round ever returns zero, because an agent told to refute always refutes. The loop
+// terminates only because `revise:post-cut` is trusted to adopt; in all four groups the cut
+// round found blocking, revise adopted it, and nothing parked. So MORE ROUNDS BUY NOTHING
+// MEASURABLE — the count is a property of the prompt, not of the plan's quality.
+//
+// Therefore: L 3 -> 2, M 2 -> 1, S stays 1, and the post-cut re-refute drops from two lenses
+// to one (below). PR_ROUNDS stays at 2 and should NOT be cut to pay for anything: G8's round 2
+// is what caught the data-loss regression that round 1's own fix introduced. This moves budget
+// from the stage with no demonstrated yield to the stage that finds the bugs.
+const PLAN_ROUNDS = g.tier === "L" ? 2 : 1;
 const PR_ROUNDS = 2;
 
 // ---------------------------------------------------------------------------------------
@@ -416,11 +438,14 @@ Rewrite the affected sections of the specs in place (do not leave the old text),
   if (blocking.length === 0 && deadLenses.length === 0) break;
 }
 // Scope-cut round: findings surviving every capped round usually means the plan grew machinery
-// the issue never asked for. Cut to the minimal fix once, re-refute once, then park. An S group
-// gets one round, so its `blocking` list is the pre-revise one — it skips the cut and goes
-// straight to the two-lens re-refute, which is what checks that the revise landed.
+// the issue never asked for. Cut to the minimal fix once, re-refute once, then park.
+//
+// The cut now runs at EVERY tier (2026-09-10). It used to be skipped below two rounds, which
+// was fine while only S sat there; with M at one round that skip would have taken the cut away
+// from most of the remaining groups, and the cut is the half of this block worth keeping — it
+// makes plans smaller, where the refuters only make them longer.
 if (blocking.length > 0) {
-  const cut = PLAN_ROUNDS < 2 ? { ok: true, adopted: [], notAdopted: [] } : await run(
+  const cut = await run(
     "scope-cut",
     `You are the planning agent. ${round} adversarial rounds still leave blocking findings on the specs below, which means the plan has grown beyond the issues. CUT IT TO THE MINIMAL FIX.
 ${GROUP}
@@ -436,9 +461,14 @@ Rewrite each spec so that: it changes only the files the issue names (plus a tes
   if (cut.ok) {
     round += 1;
     result.reviewRounds = round;
+    // ONE lens, not two (2026-09-10). This re-refute exists to check the cut landed, and the
+    // park gate below is what makes it load-bearing — so it stays. But two lenses cost ~65-70k
+    // output per group and, measured across four groups, never once disagreed in a way that
+    // changed the outcome: both always returned blocking, `revise:post-cut` always adopted,
+    // nothing ever parked. Rules is the surviving lens because the cut's own failure mode is
+    // "removed a mechanism a rule required", which is what it reads for.
     const again = (await parallel([
       () => run("review", refuterPrompt(LENS_RULES), { label: `refute:rules:cut`, phase: "Review", model: M.review, effort: "high", schema: S_FINDINGS }, { blocking: [], nonBlocking: [] }),
-      () => run("review", refuterPrompt(LENS_TESTS), { label: `refute:tests:cut`, phase: "Review", model: M.review, effort: "high", schema: S_FINDINGS }, { blocking: [], nonBlocking: [] }),
     ])).filter(Boolean);
     blocking = again.flatMap((f) => f.blocking || []);
     log(`scope-cut round: ${blocking.length} blocking`);
