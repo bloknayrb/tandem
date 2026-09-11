@@ -139,7 +139,14 @@ pub(crate) const POST_KILL_PORT_RELEASE_SECS: u64 = 15;
 /// file handle so the NSIS installer can overwrite it. Same reasoning, same
 /// budget as POST_KILL_PORT_RELEASE_SECS — TerminateProcess returns before the
 /// OS drops the handle.
-#[cfg(target_os = "windows")]
+///
+/// Compiled on every platform, like `UnlockOutcome` and `unlock_warning` below
+/// and for the same reason: `unlock_warning_never_reports_a_timeout_that_did
+/// _not_run` asserts the timeout copy names *the deadline it actually waited*,
+/// which is only a real assertion against this constant rather than a literal
+/// retyped in the test. `#[cfg(target_os = "windows")]` here made that test
+/// compile on Windows alone and broke the ubuntu and macOS `rust-test` legs.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) const SIDECAR_UNLOCK_DEADLINE_SECS: u64 = 15;
 /// How long `port_holder_for_dialog` waits for `describe_port_holder`'s
 /// `netstat`/`tasklist` calls before giving up and showing the generic
