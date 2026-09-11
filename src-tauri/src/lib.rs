@@ -787,6 +787,19 @@ fn note_user_presence(app: &tauri::AppHandle) {
     });
 }
 
+/// Is the sidecar currently healthy?
+///
+/// The steady-state crash handler's second guard (#1809) — `SIDECAR_HEALTHY` is
+/// precisely "the boot loop already returned `Started`", which is what separates
+/// a crash the boot loop is still retrying from one nothing will respawn.
+///
+/// The static stays private: an unlocked *read* is already what
+/// `await_sidecar_healthy` does just below, and the doc comment on
+/// `SIDECAR_HEALTHY` narrows the `PendingOpens`-mutex requirement to writes.
+pub(crate) fn sidecar_is_healthy() -> bool {
+    SIDECAR_HEALTHY.load(Ordering::Acquire)
+}
+
 /// Bounded wait for the sidecar's HTTP server to accept requests.
 ///
 /// Polls the existing `SIDECAR_HEALTHY` flag rather than re-probing `/health` —
@@ -796,12 +809,12 @@ fn note_user_presence(app: &tauri::AppHandle) {
 async fn await_sidecar_healthy(deadline: Duration) -> bool {
     let start = std::time::Instant::now();
     while start.elapsed() < deadline {
-        if SIDECAR_HEALTHY.load(Ordering::Acquire) {
+        if sidecar_is_healthy() {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    SIDECAR_HEALTHY.load(Ordering::Acquire)
+    sidecar_is_healthy()
 }
 
 /// Fetch the auth token for a loopback POST, falling back to anonymous.
@@ -1479,6 +1492,58 @@ pub fn run() {
                 }
             }
 
+            // Rewrite the registration so its baked exe path and args stay
+            // current. Spawned off the setup thread — on Windows this is a
+            // registry write and on Linux a file write, both fast, but neither
+            // belongs on the startup critical path. Only ever refreshes an
+            // *existing* registration; `is_enabled()` inside the function is the
+            // gate, so this can never turn autostart on.
+            //
+            // Runs on every launch that passes `autostart_refresh_allowed`, not
+            // only autostart launches (#1810): a *moved* app never autostarts at
+            // all, which made an autostart-only repair unreachable for the one
+            // case it exists to fix. The guard is needed because `enable()`
+            // bakes this launch's executable path — see the predicate.
+            //
+            // The path handed to the predicate is the one the PLUGIN will bake,
+            // resolved the same way it resolves it: `$APPIMAGE` first on Linux,
+            // else `current_exe()`. Passing bare `current_exe()` would put every
+            // non-autostart AppImage launch under `/tmp/.mount_XXXXXX/` and
+            // refuse the repair forever, logging the refusal at `info` — below
+            // the release log floor, so nothing would surface it.
+            {
+                #[cfg(target_os = "linux")]
+                let baked_exe = app
+                    .env()
+                    .appimage
+                    .map(std::path::PathBuf::from)
+                    .map(Ok)
+                    .unwrap_or_else(std::env::current_exe);
+                #[cfg(not(target_os = "linux"))]
+                let baked_exe = std::env::current_exe();
+
+                match baked_exe {
+                    // A path we cannot resolve is a skip, not a refresh.
+                    Err(e) => log::info!("[autostart] refresh skipped, exe path unresolved: {e}"),
+                    Ok(exe) => {
+                        // Canonicalize BOTH sides — see
+                        // `canonical_for_refresh_check`. Uncanonicalized, the
+                        // temp arm never fires on macOS (`/var` vs
+                        // `/private/var`) and can miss on Windows (8.3 `%TEMP%`).
+                        if autostart::autostart_refresh_allowed(
+                            cfg!(debug_assertions),
+                            &autostart::canonical_for_refresh_check(&exe),
+                            &autostart::canonical_for_refresh_check(&std::env::temp_dir()),
+                        ) {
+                            let refresh_handle = app.handle().clone();
+                            tauri::async_runtime::spawn_blocking(move || {
+                                autostart::refresh_registration(&refresh_handle);
+                            });
+                        }
+                    }
+                }
+            }
+
             // --- Autostart visibility decision (#1236) ------------------------
             //
             // Deferred to here because it needs `tray_available`, which only
@@ -1513,21 +1578,6 @@ pub fn run() {
                             hide = false;
                         }
                     }
-                }
-
-                // Rewrite the registration so its baked exe path and args stay
-                // current. Spawned off the setup thread — on Windows this is a
-                // registry write and on Linux a file write, both fast, but
-                // neither belongs on the startup critical path. Only ever
-                // refreshes an *existing* registration; it can't turn autostart
-                // on. Scoped to autostart launches: a normal launch has no
-                // reason to touch it, and a user who moved the app will
-                // autostart at least once before the path matters.
-                {
-                    let refresh_handle = app.handle().clone();
-                    tauri::async_runtime::spawn_blocking(move || {
-                        autostart::refresh_registration(&refresh_handle);
-                    });
                 }
 
                 if hide {
@@ -1660,7 +1710,7 @@ pub fn run() {
                 // desktops), and the updater's restart on non-Windows.
                 //
                 // The one exit that never arrives here, by design: the Windows
-                // updater restart. `download_and_install` ends in the plugin's
+                // updater restart. `install` ends in the plugin's
                 // own `std::process::exit(0)`, so the pre-install graceful stop
                 // in `perform_install` is the only flush on that path, and that
                 // function keeps its own gate for exactly that reason.
@@ -2278,14 +2328,20 @@ fn show_update_in_progress_dialog(app: &tauri::AppHandle) {
     builder.show(|_| {});
 }
 
-/// Show an error dialog for failed update checks (manual check feedback only).
-fn show_update_error_dialog(app: &tauri::AppHandle, error: &str) {
+/// Show an error dialog for a failed update check or a failed install.
+///
+/// `lead` is the first sentence, because the two are different failures and one
+/// fixed lead misattributes the other: "Could not check for updates" on the
+/// download or install arm sends the user to look at their connection when the
+/// update was already found and fetched. The rest of the copy — the verbatim
+/// error and the retry advice — is shared.
+fn show_update_error_dialog(app: &tauri::AppHandle, lead: &str, error: &str) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
     let mut builder = app
         .dialog()
         .message(format!(
-            "Could not check for updates.\n\n\
+            "{lead}\n\n\
              Error: {error}\n\n\
              Please try again later or check your internet connection."
         ))
@@ -2686,7 +2742,11 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
         Err(e) => {
             log::debug!("Updater unavailable: {e}");
             if manual {
-                show_update_error_dialog(app, &format!("Updater not configured: {e}"));
+                show_update_error_dialog(
+                    app,
+                    "Could not check for updates.",
+                    &format!("Updater not configured: {e}"),
+                );
             }
             return;
         }
@@ -2714,7 +2774,7 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
         Err(e) => {
             log::warn!("Update check failed: {e}");
             if manual {
-                show_update_error_dialog(app, &e.to_string());
+                show_update_error_dialog(app, "Could not check for updates.", &e.to_string());
             }
             return;
         }
@@ -2811,35 +2871,51 @@ fn warn_port_still_responding(warnings: &mut Vec<String>) {
     warnings.push(msg);
 }
 
-/// Shared install flow: kill sidecar, await port + file-lock release, then
-/// download+install via the Tauri updater plugin. On success the application
-/// is restarted; on failure a native dialog surfaces the error.
+/// Shared install flow: download the update with the sidecar still running,
+/// then kill the sidecar, await port + file-lock release, and install. On
+/// success the application is restarted; on failure a native dialog surfaces
+/// the error.
+///
+/// **The download comes first deliberately (#1808).** It is the long,
+/// failure-prone step — offline, a proxy, a 403, a signature mismatch — and
+/// the sidecar is still up when it runs. Stopping the sidecar first meant a
+/// failed download left the app running with no backend and every tab
+/// "Disconnected", while the UI still said the server was up. A download
+/// failure must never be the thing that leaves the app without a backend —
+/// which is also why the failure arm releases `SIDECAR_SHUTTING_DOWN` and calls
+/// `recover_deferred_crash`: a sidecar that died *on its own* mid-download had
+/// its restart deferred by that latch, and nothing else would ever perform it.
 async fn perform_install(
     app: &tauri::AppHandle,
     update: tauri_plugin_updater::Update,
     version: &str,
 ) {
-    // Stop sidecar BEFORE install — on Windows, the NSIS installer runs during
-    // download_and_install() and needs to replace node-sidecar.exe on disk.
-    // If the process is still running, the file is locked and install fails.
-    // Graceful first (#1088): POST /api/shutdown flushes dirty docs + saves
-    // the session before the app restarts into the new version; hard kill is
-    // the fallback on POST failure or timeout.
+    // Hold `SIDECAR_SHUTTING_DOWN` across the download AND the install so the
+    // four spawn producers (Settings -> Restart server, start_sidecar's retry
+    // loop, the Retry Server Start dialog, and the #1809 crash handler) decline
+    // instead of racing a fresh child into the slot we are about to overwrite
+    // on disk.
     //
-    // Hold `SIDECAR_SHUTTING_DOWN` across the stop AND across the download so the
-    // three spawn producers (Settings -> Restart server, start_sidecar's retry
-    // loop, the Retry Server Start dialog) decline instead of racing a fresh
-    // child into the slot we are about to overwrite on disk.
+    // The latch is acquired here, before the download, rather than with the
+    // stop below: two clicks on "Restart to install" must not both download,
+    // and a Settings -> Restart server racing an imminent install is exactly
+    // what the latch exists to refuse. The accepted consequence is that a
+    // sidecar crash *during* the download is not restarted while the guard is
+    // held — the alternative is a fresh child landing in the slot the
+    // installer is about to overwrite. It is DEFERRED, not dropped: the #1809
+    // handler latches it and the download-failure arm below releases the guard
+    // and calls `recover_deferred_crash`, because "the sidecar was never
+    // stopped" does not imply it is still alive.
     //
-    // An RAII guard, not a store plus a clear on the failure arm: the flag spans
-    // `download_and_install(..).await`, so a panic or a dropped task would latch
-    // it for the process lifetime and leave `restart_sidecar` and Retry Server
-    // Start permanent silent no-ops. Its `Drop` keeps the `compare_exchange`,
-    // which is the `EXITING` interlock — an update that fails DURING an exit
-    // must not re-permit spawns. On the success arm the process exits — on
-    // Windows inside `download_and_install`'s own `std::process::exit(0)`, on
-    // other platforms inside `app.restart()` (which returns `!`) — so the guard
-    // never releases there, which is what we want. #1756.
+    // An RAII guard, not a store plus a clear on the failure arm: the flag
+    // spans `download(..).await` and `install(..)`, so a panic or a dropped
+    // task would latch it for the process lifetime and leave `restart_sidecar`
+    // and Retry Server Start permanent silent no-ops. Its `Drop` keeps the
+    // `compare_exchange`, which is the `EXITING` interlock — an update that
+    // fails DURING an exit must not re-permit spawns. On the success arm the
+    // process exits — on Windows inside `install`'s own `std::process::exit(0)`,
+    // on other platforms inside `app.restart()` (which returns `!`) — so the
+    // guard never releases there, which is what we want. #1756.
     //
     // `try_acquire`, not a bare acquire: `install_update` is a plain command
     // with no re-entrancy gate, so two clicks on "Restart to install" run two of
@@ -2858,14 +2934,97 @@ async fn perform_install(
     };
     let client = app.state::<reqwest::Client>().inner().clone();
 
+    // Download FIRST, with the sidecar still up (#1808). `download` is exactly
+    // what `download_and_install` calls before `install`, and `verify_signature`
+    // runs at the end of it — so the split is behaviour-identical except for
+    // *when* the sidecar is down.
+    let bytes = match update
+        .download(
+            |chunk_len, total| {
+                if let Some(t) = total {
+                    log::debug!("Update download: {chunk_len}/{t} bytes");
+                }
+            },
+            // #1118: the pending-update marker is written HERE, at
+            // download-finish, and neither of the two places that look obvious.
+            //
+            // NOT before the download: `build_updater` sets no timeout, so the
+            // marker would span the whole download, and any process death
+            // during it strands a marker with no `Err` arm to clean up — tray
+            // Quit, the Linux-without-tray window close, a crash, a sleep-kill.
+            // Every one of those would become a false "your update may not have
+            // completed" on the next boot.
+            //
+            // NOT on the `Ok` arm below (which is what ADR-043 §6 sketched):
+            // that arm is dead code on Windows, where the plugin's
+            // `install_inner` ends in an unconditional `std::process::exit(0)`.
+            //
+            // This closure fires two lines before `verify_signature`, so a
+            // signature failure does write a marker — that path returns `Err`
+            // from `download` on every platform and the `Err` arm just below
+            // clears it.
+            //
+            // Since #1808 the stop-and-wait (up to 15 s) sits BETWEEN this
+            // write and `install(bytes)`. A process death in that gap strands a
+            // marker exactly as a death during `install` does today; narrowing
+            // the marker to just before `install` would change #1118's
+            // semantics and is deliberately not done in a PR about ordering.
+            {
+                let app = app.clone();
+                let version = version.to_string();
+                move || {
+                    log::info!("Update downloaded -- installing");
+                    pending_update::record_pending_update(&app, &version);
+                }
+            },
+        )
+        .await
+    {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            log::error!("Update download failed: {e}");
+            // The marker must be cleared on BOTH failure arms: the finish
+            // closure above fires before `verify_signature`, so a signature
+            // failure reaches here with a marker already written.
+            pending_update::clear_pending_update(app);
+            // This path never stopped the sidecar, so in the ordinary case the
+            // app still has its backend and the user can retry from the banner.
+            // That is the whole of #1808 — but "never stopped" is not the same
+            // as "still running": the sidecar can have crashed on its own during
+            // a multi-minute download, and the latch we are about to release
+            // made the #1809 handler DEFER that restart rather than perform it.
+            // Release first, then pay the debt: `restart_sidecar` re-checks
+            // `spawn_allowed()`, so recovering while still latched would be a
+            // silent no-op and leave the app backend-less anyway.
+            drop(_shutting_down);
+            sidecar::recover_deferred_crash(app);
+            show_update_error_dialog(app, "Could not install the update.", &e.to_string());
+            return;
+        }
+    };
+
     // Collect human-readable warnings so we can thread them into the failure
-    // dialog if download_and_install later fails. Declared before the graceful
-    // stop because that stop's verdict is the first thing that can go into it,
-    // and the cfg blocks below both contribute too.
+    // dialog if the install later fails. Declared with the graceful stop rather
+    // than before the download because that stop's verdict is the first thing
+    // that can go into it, and the cfg blocks below both contribute too.
     let mut pre_install_warnings: Vec<String> = Vec::new();
 
-    // On Windows this is the ONLY flush on the update path: `download_and_install`
-    // ends in the updater plugin's own `std::process::exit(0)`, so `RunEvent::Exit`
+    // From here the sidecar being down is INTENTIONAL, so write off any crash
+    // the #1809 handler deferred during the download rather than leaving a
+    // latched debt behind. The install-failure arm below deliberately leaves the
+    // sidecar stopped (an installer may be mid-write over the binary), and that
+    // decision must not be quietly reversed by a stale flag.
+    let _ = sidecar::take_deferred_crash();
+
+    // Stop sidecar BEFORE install — on Windows, the NSIS installer runs during
+    // `install()` and needs to replace node-sidecar.exe on disk. If the process
+    // is still running, the file is locked and install fails.
+    // Graceful first (#1088): POST /api/shutdown flushes dirty docs + saves
+    // the session before the app restarts into the new version; hard kill is
+    // the fallback on POST failure or timeout.
+    //
+    // On Windows this is the ONLY flush on the update path: `install` ends in
+    // the updater plugin's own `std::process::exit(0)`, so `RunEvent::Exit`
     // never fires and `shutdown_sidecar_on_exit` never runs. A dropped verdict
     // here is an update that proceeds having discarded unsaved edits while every
     // dialog says it worked — which is why `StopReport` is `#[must_use]`.
@@ -2904,17 +3063,19 @@ async fn perform_install(
 
     #[cfg(target_os = "windows")]
     {
-        let (port_ok, file_ok) = tokio::join!(
+        let (port_ok, unlock) = tokio::join!(
             wait_for_port_release(&client, POST_KILL_PORT_RELEASE_SECS),
             wait_for_sidecar_unlock(SIDECAR_UNLOCK_DEADLINE_SECS),
         );
         if !port_ok {
             warn_port_still_responding(&mut pre_install_warnings);
         }
-        if !file_ok {
-            let msg = format!(
-                "Sidecar exe still locked after {SIDECAR_UNLOCK_DEADLINE_SECS}s -- installer may prompt for retry"
-            );
+        // The verdict carries WHICH failure it was. A missing exe returns
+        // without entering the polling loop (`unlock_verdict_when_absent`), so
+        // reusing the timeout string for it would tell the operator a 15 s wait
+        // expired when no wait ran — pointing diagnosis at a lock rather than at
+        // the packaging bug the `log::warn!` two frames up just named.
+        if let Some(msg) = crate::sidecar::unlock_warning(unlock, SIDECAR_UNLOCK_DEADLINE_SECS) {
             log::warn!("{msg}");
             pre_install_warnings.push(msg);
         }
@@ -2924,40 +3085,7 @@ async fn perform_install(
         warn_port_still_responding(&mut pre_install_warnings);
     }
 
-    match update.download_and_install(
-        |chunk_len, total| {
-            if let Some(t) = total {
-                log::debug!("Update download: {chunk_len}/{t} bytes");
-            }
-        },
-        // #1118: the pending-update marker is written HERE, at download-finish,
-        // and neither of the two places that look obvious.
-        //
-        // NOT before `download_and_install`: `build_updater` sets no timeout, so
-        // the marker would span the whole download, and any process death during
-        // it strands a marker with no `Err` arm to clean up — tray Quit, the
-        // Linux-without-tray window close, a crash, a sleep-kill. Not
-        // hypothetical: the sidecar is already dead by this point, so the WebView
-        // sits in "Server unavailable" for the entire download, actively inviting
-        // a quit. Every one of those would become a false "your update may not
-        // have completed" on the next boot.
-        //
-        // NOT on the `Ok` arm below (which is what ADR-043 §6 sketched): that arm
-        // is dead code on Windows, where the plugin's `install_inner` ends in an
-        // unconditional `std::process::exit(0)`.
-        //
-        // This closure fires two lines before `verify_signature`, so a signature
-        // failure does write a marker — that path returns `Err` on every platform
-        // and the `Err` arm below clears it.
-        {
-            let app = app.clone();
-            let version = version.to_string();
-            move || {
-                log::info!("Update downloaded -- installing");
-                pending_update::record_pending_update(&app, &version);
-            }
-        },
-    ).await {
+    match update.install(bytes) {
         Ok(()) => {
             log::info!("Update to v{version} installed — restarting");
             app.restart();
@@ -2971,6 +3099,14 @@ async fn perform_install(
             // We observed the failure in-process and are about to show a native
             // dialog about it, so a surviving marker would nag next boot about
             // something the user was just told.
+            //
+            // The sidecar stays stopped on this arm, deliberately: on Windows
+            // `install_inner` ends in `std::process::exit(0)` on success, so a
+            // failure here means the installer could not even be launched — a
+            // terminal state whose recovery is this dialog plus
+            // Settings -> Network -> Restart server. Spawning a child while an
+            // installer may be mid-write over the binary is what
+            // `SIDECAR_SHUTTING_DOWN` exists to prevent.
             pending_update::clear_pending_update(app);
             let dialog_msg = if pre_install_warnings.is_empty() {
                 e.to_string()
@@ -2980,8 +3116,87 @@ async fn perform_install(
                     pre_install_warnings.join("\n  - ")
                 )
             };
-            show_update_error_dialog(app, &dialog_msg);
+            show_update_error_dialog(app, "Could not install the update.", &dialog_msg);
         }
+    }
+}
+
+/// #1808 — the ordering inside `perform_install` IS the fix, and neither the
+/// `AppHandle` nor a `tauri_plugin_updater::Update` is constructible in a unit
+/// test. So the one discriminating check is structural, following
+/// `sidecar.rs`'s `include_str!` precedent.
+#[cfg(test)]
+mod install_order_tests {
+    /// A failed download must not be the thing that leaves the app with no
+    /// backend. Before #1808 `perform_install` stopped the sidecar, waited for
+    /// the port and the exe lock, and only then downloaded — so an offline
+    /// machine, a proxy, a 403 or a signature mismatch returned with the
+    /// sidecar dead, nothing to respawn it, and every tab "Disconnected" while
+    /// the UI still said the server was running.
+    #[test]
+    fn perform_install_downloads_before_it_stops_the_sidecar() {
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("async fn perform_install(")
+            .expect("perform_install must exist");
+        // Both offsets come from `find`, so they are char boundaries by
+        // construction — no `get`/`expect` dance is needed to slice safely
+        // through a file full of em dashes.
+        let rest = &src[start..];
+        let end = rest
+            .find("\n}\n")
+            .expect("perform_install body must be delimited");
+        let body = &rest[..end];
+
+        // Bind BOTH offsets before comparing. A bare `Option` comparison is
+        // vacuously true on the unfixed code: it calls `download_and_install`
+        // and never `.download(` at all, so the left side is `None` — and
+        // `None < Some(_)` is `true`.
+        //
+        // `.download(` rather than `update.download(`: rustfmt breaks the
+        // receiver onto its own line, and the needle must match the code as it
+        // is actually formatted. `.download_and_install(` does not match it
+        // (the `_` follows `download`), which is what keeps this discriminating.
+        let dl = body
+            .find(".download(")
+            .expect("perform_install must call update.download(");
+        let stop = body
+            .find("stop_sidecar_gracefully(")
+            .expect("perform_install must still stop the sidecar before installing");
+
+        assert!(
+            dl < stop,
+            "the download must complete before the sidecar is stopped (#1808)"
+        );
+    }
+
+    /// #1808 review — "the sidecar was never stopped" is not "the sidecar is
+    /// still alive". `SIDECAR_SHUTTING_DOWN` is held across the whole download,
+    /// so a sidecar that crashed on its own in that window is DEFERRED by the
+    /// #1809 handler and nothing else ever performs the restart. The failure
+    /// arm therefore has to release the latch and pay that debt — in that
+    /// order, since `restart_sidecar` re-checks `spawn_allowed()` and a
+    /// recovery made while still latched is a silent no-op.
+    #[test]
+    fn the_download_failure_arm_releases_the_latch_then_recovers_a_deferred_crash() {
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("Err(e) => {\n            log::error!(\"Update download failed: {e}\");")
+            .expect("the download failure arm must exist");
+        let arm = &src[start..];
+        let end = arm.find("return;").expect("the arm must return");
+        let arm = &arm[..end];
+
+        let release = arm
+            .find("drop(_shutting_down);")
+            .expect("the arm must release SIDECAR_SHUTTING_DOWN before recovering");
+        let recover = arm
+            .find("recover_deferred_crash(")
+            .expect("the arm must recover a sidecar that crashed during the download");
+        assert!(
+            release < recover,
+            "recovering while the latch is still held is a silent no-op"
+        );
     }
 }
 
@@ -3271,6 +3486,65 @@ mod pending_opens_tests {
         assert!(SIDECAR_GAVE_UP.load(Ordering::Acquire));
         begin_start_attempt(&state);
         assert!(!SIDECAR_GAVE_UP.load(Ordering::Acquire));
+
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+    }
+
+    /// #1809's breaker arm, as a behaviour. The arm itself needs an `AppHandle`
+    /// (its wiring is pinned structurally in `sidecar.rs`), but the flag pair it
+    /// performs is exactly these two calls in this order, and the order is the
+    /// subtle half: `clear_healthy_under_lock` also WITHDRAWS the give-up
+    /// verdict, so reversing them leaves the app queueing opens for a drain that
+    /// is never coming — the silent #1416 shape, reached from the one arm that
+    /// has definitively stopped trying.
+    #[test]
+    fn the_breaker_sequence_leaves_the_app_in_the_gave_up_state() {
+        let _g = FLAG_LOCK.lock().unwrap();
+        // The state the breaker inherits: healthy from the last successful boot,
+        // which is what made a permanently dead sidecar keep reading as alive.
+        SIDECAR_HEALTHY.store(true, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+
+        clear_healthy_under_lock(&state);
+        report_pending_opens_with(&state, true, |_| {});
+
+        assert!(
+            !SIDECAR_HEALTHY.load(Ordering::Acquire),
+            "a tripped breaker means there is no sidecar — await_sidecar_healthy must not \
+             answer true for it"
+        );
+        assert!(
+            SIDECAR_GAVE_UP.load(Ordering::Acquire),
+            "and nothing is coming, so the verdict must be latched"
+        );
+        assert!(
+            matches!(
+                try_queue_or_post(&state, screened(&dir, "after-breaker")),
+                OpenRoute::ServerUnavailable
+            ),
+            "an open arriving after the breaker must be refused, not POSTed at a dead :3479"
+        );
+
+        // Reversed, the clear wipes the latch it was meant to follow.
+        SIDECAR_HEALTHY.store(true, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+        report_pending_opens_with(&state, true, |_| {});
+        clear_healthy_under_lock(&state);
+        assert!(
+            !SIDECAR_GAVE_UP.load(Ordering::Acquire),
+            "this is why the order is pinned: the clear means 'a new attempt is starting'"
+        );
+        assert!(
+            matches!(
+                try_queue_or_post(&state, screened(&dir, "reversed")),
+                OpenRoute::Queued
+            ),
+            "and the reversed order leaves opens queueing for a drain that never comes"
+        );
 
         SIDECAR_HEALTHY.store(false, Ordering::Release);
         SIDECAR_GAVE_UP.store(false, Ordering::Release);

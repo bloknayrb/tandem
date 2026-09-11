@@ -127,6 +127,185 @@ pub fn autostart_set_enabled(
     }
 }
 
+/// May we re-bake this launch's executable path into the OS login item?
+///
+/// `manager.enable()` writes whatever path the plugin resolves for this launch
+/// (`$APPIMAGE` on Linux when set, else `current_exe()`); the caller resolves it
+/// the same way and passes it in as `exe`, which is what keeps this pure and
+/// testable by value.
+///
+/// **Every launch must prove its path is durable — an autostart launch
+/// included.** The first draft of this predicate short-circuited to `true` on
+/// `autostart_launch`, reasoning that such a launch "came *from* the
+/// registration, so its path is by definition the registered one". That holds
+/// only when the OS did the launching, and the flag is
+/// `has_argv_flag(args, AUTOSTART_FLAG)` — pure argv. A developer typing
+/// `target/debug/tandem.exe --tandem-autostart` to exercise the hidden-start
+/// path got the bypass and re-baked a real login item to a build-tree path,
+/// which is verbatim the regression the debug arm below exists to prevent. The
+/// short-circuit also bought nothing: a genuine OS autostart of an installed
+/// binary passes every check here. So there is no `autostart_launch` parameter.
+///
+/// Before #1810 the only thing preventing any of this was the call site sitting
+/// inside `if autostart_launch`, and hoisting the call removes that accidental
+/// guard:
+///
+/// - **Debug.** The autostart plugin is registered with no `cfg` gate, and
+///   `tauri.conf.json`'s `productName` is `Tandem` for debug and release alike —
+///   so a `cargo tauri dev` run reads the *installed* app's HKCU `Run\Tandem`
+///   value and would overwrite it with `target/debug/tandem.exe`. The next
+///   `cargo clean` would then leave a real user's login item pointing at a
+///   deleted path: #1810's own failure, newly introduced on the maintainer's
+///   machine.
+/// - **Temp dir.** A portable copy, an extracted archive, or an
+///   `--appimage-extract`ed AppImage run from a scratch dir. Note the split
+///   this makes correct: a *real* AppImage launch resolves to `$APPIMAGE`, a
+///   stable path on disk, and stays eligible even though its `current_exe()`
+///   is under `/tmp/.mount_XXXXXX/`. That is exactly why the caller must hand
+///   in the plugin's baked path rather than bare `current_exe()`.
+/// - **Build tree.** `cfg!(debug_assertions)` covers `cargo tauri dev` and
+///   nothing else, but the hazard it describes is about the *path*, not the
+///   profile: `cargo tauri build` followed by launching
+///   `src-tauri/target/release/tandem.exe` once to smoke a release candidate
+///   reads the same HKCU `Run\Tandem` value and re-bakes it into a build tree
+///   that the next `cargo clean` deletes. So a `target/{debug,release}`
+///   component pair is refused on its own.
+/// - **Network path.** A UNC (`\\host\share\...`, its `//host/share` and
+///   `\\?\UNC\...` spellings included) executable baked into HKCU `Run` makes
+///   Windows resolve and authenticate to that SMB host at **every logon**,
+///   forever, with no Tandem process involved and nothing in any UI saying so —
+///   the same NTLM-disclosure class `validate_open_candidate` refuses UNC for,
+///   reached through a persistence entry instead of a file read. Uninstalling
+///   Tandem does not remove it. Checked on every platform for the same reason
+///   `/Volumes/` is: the shape cannot occur on the others, so the case stays
+///   testable on the ubuntu leg.
+/// - **`/Volumes/`.** A `.app` run straight off a mounted DMG, whose volume is
+///   about to be ejected. Checked on every platform — a Windows path never
+///   starts with `/Volumes/`, so no `cfg` is needed and the case stays testable
+///   on the ubuntu leg. The Windows twin of this case — a launch from a USB or
+///   other removable drive — needs `GetDriveTypeW`, i.e. FFI or a `windows`
+///   crate dependency neither of which is in this graph today: #1967.
+///
+/// Both paths arrive canonicalized (see [`canonical_for_refresh_check`]), which
+/// is what makes the temp arm hold on macOS and Windows rather than only
+/// reading as though it does.
+pub(crate) fn autostart_refresh_allowed(
+    is_debug: bool,
+    exe: &std::path::Path,
+    temp_dir: &std::path::Path,
+) -> bool {
+    if is_debug {
+        log::info!("[autostart] refresh skipped: debug build");
+        return false;
+    }
+    if is_build_tree_path(exe) {
+        log::info!("[autostart] refresh skipped: executable is inside a cargo build tree");
+        return false;
+    }
+    if is_network_path(exe) {
+        log::info!("[autostart] refresh skipped: executable is on a network path");
+        return false;
+    }
+    if path_starts_with_ci(exe, temp_dir) {
+        log::info!("[autostart] refresh skipped: executable is under the temp dir");
+        return false;
+    }
+    if exe.starts_with("/Volumes/") {
+        log::info!("[autostart] refresh skipped: executable is on a mounted volume");
+        return false;
+    }
+    true
+}
+
+/// Resolve a path to the form `autostart_refresh_allowed` compares, falling back
+/// to the input when the filesystem cannot answer.
+///
+/// Canonicalizing is not tidiness, it is what makes two of the arms real:
+///
+/// - macOS `temp_dir()` is `$TMPDIR` = `/var/folders/…`, while `current_exe()`
+///   reports a Gatekeeper-translocated bundle as `/private/var/folders/…`.
+///   `Path::starts_with` is a literal component comparison, so the uncanonical
+///   pair shares no prefix and the temp arm silently passed the exact case it
+///   was written for. (`/tmp` → `/private/tmp` is the same bug.)
+/// - Windows `temp_dir()` returns the raw `%TMP%`/`%TEMP%` value, which can be
+///   an 8.3 short path (`C:\Users\BLOKN~1\AppData\Local\Temp`) while
+///   `current_exe()` is the long form from `GetModuleFileNameW`.
+///
+/// Canonicalizing BOTH sides is required — one side alone just moves the
+/// mismatch. Failure falls back to the raw path rather than refusing: this
+/// predicate only ever gates a best-effort repair, and an unresolvable path
+/// still faces every other arm.
+pub(crate) fn canonical_for_refresh_check(path: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Is `exe` inside a `target/debug` or `target/release` directory?
+///
+/// Component-wise and lowercased, so it holds for either separator and for
+/// Windows' case-insensitive filesystem.
+fn is_build_tree_path(exe: &std::path::Path) -> bool {
+    let mut previous: Option<String> = None;
+    for component in exe.components() {
+        let current = component.as_os_str().to_string_lossy().to_lowercase();
+        if previous.as_deref() == Some("target") && (current == "debug" || current == "release") {
+            return true;
+        }
+        previous = Some(current);
+    }
+    false
+}
+
+/// Is `exe` on a UNC / network path?
+///
+/// String-shaped rather than `Path::components()` + `std::path::Prefix`, because
+/// the `Prefix` variants are only ever *produced* on Windows — a components-based
+/// check would compile everywhere and be dead on the ubuntu CI leg, which is
+/// where this crate's tests actually run. Covers the three spellings that reach
+/// us: `\\host\share`, `//host/share`, and the verbatim `\\?\UNC\host\share`
+/// that `canonical_for_refresh_check` produces on Windows.
+///
+/// The two-leading-separator half **delegates to `crate::is_unc_or_network_path`**
+/// rather than spelling the prefixes again: #1417's invariant §3 is that this
+/// rule is worth one definition per language, and a second Rust copy here would
+/// be another drift site. What is *not* delegated is the `\\?\` strip that
+/// precedes it — `canonical_for_refresh_check` hands us
+/// `\\?\C:\Program Files\Tandem\tandem.exe` for a perfectly ordinary local
+/// install, and the shared predicate (correctly, for its own callers, which
+/// have no containment check) calls that a network path. Passing it through
+/// unstripped would refuse the refresh on every installed Windows build.
+fn is_network_path(exe: &std::path::Path) -> bool {
+    let raw = exe.to_string_lossy();
+    let stripped = raw.strip_prefix(r"\\?\").unwrap_or(&raw);
+    crate::is_unc_or_network_path(stripped)
+        || stripped
+            .get(..4)
+            .is_some_and(|p| p.eq_ignore_ascii_case(r"UNC\"))
+}
+
+/// `Path::starts_with`, case-insensitively.
+///
+/// Applied on every platform, not `cfg`-gated to Windows: the only thing a
+/// case collision can do here is refuse a refresh that would have been allowed,
+/// and this whole predicate fails toward "leave the registration alone". A Linux
+/// install root that differs from `$TMPDIR` only in case is not a real layout;
+/// a Windows `%TEMP%` that differs from the exe path only in case is routine.
+fn path_starts_with_ci(path: &std::path::Path, prefix: &std::path::Path) -> bool {
+    let mut path_components = path.components();
+    for expected in prefix.components() {
+        let Some(actual) = path_components.next() else {
+            return false;
+        };
+        if !actual
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&expected.as_os_str().to_string_lossy())
+        {
+            return false;
+        }
+    }
+    true
+}
+
 /// Best-effort re-write of an existing registration at launch, so the baked
 /// executable path and argument list stay current.
 ///
@@ -135,6 +314,13 @@ pub fn autostart_set_enabled(
 /// (which would otherwise boot visible and spawn Claude — the exact behavior
 /// this feature exists to avoid). Never enables autostart that wasn't already
 /// on: it only refreshes when `is_enabled()` is already true.
+///
+/// Since #1810 this runs on every launch that passes
+/// `autostart_refresh_allowed`, not only on autostart launches. The old scoping
+/// required the thing it repairs to be working: a *moved* app never autostarts
+/// at all, so the repair path was unreachable for the one case it exists for.
+/// The `Ok(false)` arm below is what keeps "every launch" from ever meaning
+/// "enable".
 pub fn refresh_registration(app: &tauri::AppHandle) {
     let manager = app.autolaunch();
     match manager.is_enabled() {
@@ -153,6 +339,197 @@ pub fn refresh_registration(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1810 — this is the invariant that makes "run the refresh on every
+    /// launch" safe. `manager.enable()` bakes this launch's executable path, and
+    /// the `if autostart_launch` the hoist removes was the only thing keeping a
+    /// `cargo tauri dev` run from repointing a real user's login item at
+    /// `target/debug/`.
+    #[test]
+    fn autostart_refresh_is_refused_for_ephemeral_binaries() {
+        use std::path::Path;
+        let temp = Path::new("/tmp");
+        let installed = Path::new("/opt/tandem/tandem");
+
+        assert!(
+            !autostart_refresh_allowed(true, installed, temp),
+            "a debug build shares productName with the installed app and must never rewrite it"
+        );
+        assert!(
+            !autostart_refresh_allowed(false, Path::new("/tmp/x/tandem"), temp),
+            "a portable or extracted copy must not become the registered path"
+        );
+        assert!(
+            !autostart_refresh_allowed(
+                false,
+                Path::new("/Volumes/Tandem/Tandem.app/Contents/MacOS/Tandem"),
+                temp
+            ),
+            "a run-from-DMG copy points at a volume about to be ejected"
+        );
+        assert!(
+            autostart_refresh_allowed(false, installed, temp),
+            "an ordinary installed launch is exactly what the repair exists for"
+        );
+        // Deliberately next to the `/tmp/x/tandem` refusal above: an INSTALLED
+        // AppImage must stay eligible even though its `current_exe()` lives
+        // under `/tmp/.mount_XXXXXX/`. The plugin bakes `$APPIMAGE`, so the call
+        // site must hand that in — an implementation that passes bare
+        // `current_exe()` collapses this case into the refusal and makes the
+        // whole fix a permanent silent no-op on the AppImage target.
+        assert!(
+            autostart_refresh_allowed(false, Path::new("/home/u/Apps/Tandem.AppImage"), temp),
+            "a real AppImage's baked path is stable and must not be refused"
+        );
+    }
+
+    /// The autostart-launch short-circuit that the first draft of the predicate
+    /// opened with. `autostart_launch` is `has_argv_flag(args, AUTOSTART_FLAG)`
+    /// — pure argv — so anyone can type it, and it returned `true` before
+    /// `is_debug` was ever consulted. There is no parameter to pass any more;
+    /// this asserts the behaviour it used to bypass, which is what a
+    /// re-introduction would have to break.
+    #[test]
+    fn a_forged_autostart_flag_cannot_buy_a_build_tree_refresh() {
+        use std::path::Path;
+        let temp = Path::new("/tmp");
+        assert!(
+            !autostart_refresh_allowed(
+                true,
+                Path::new("/home/u/tandem/src-tauri/target/debug/tandem"),
+                temp
+            ),
+            "a debug launch stays refused however it was invoked"
+        );
+    }
+
+    /// #1810 review — `cfg!(debug_assertions)` is about the PROFILE and the
+    /// hazard is about the PATH. `cargo tauri build` then launching
+    /// `target/release/tandem.exe` once to smoke a release candidate is a
+    /// release-profile binary outside the temp dir, which the profile arm
+    /// allows.
+    #[test]
+    fn autostart_refresh_is_refused_inside_a_cargo_build_tree() {
+        use std::path::Path;
+        let temp = Path::new("/tmp");
+        assert!(
+            !autostart_refresh_allowed(
+                false,
+                Path::new("/home/u/tandem/src-tauri/target/release/tandem"),
+                temp
+            ),
+            "a release-profile build-tree binary is deleted by the next cargo clean"
+        );
+        assert!(
+            !autostart_refresh_allowed(
+                false,
+                Path::new("/home/u/tandem/src-tauri/target/debug/tandem"),
+                temp
+            ),
+            "the debug build tree must be refused by path as well as by profile"
+        );
+        // The refusal is a `target/{debug,release}` PAIR, not the word
+        // anywhere: an installed app under a directory called `release` or
+        // inside someone's `~/target` is an ordinary install.
+        assert!(
+            autostart_refresh_allowed(false, Path::new("/opt/tandem/release/tandem"), temp),
+            "a lone `release` component is not a build tree"
+        );
+        assert!(
+            autostart_refresh_allowed(false, Path::new("/home/u/target/tandem"), temp),
+            "a lone `target` component is not a build tree"
+        );
+    }
+
+    /// A UNC path baked into HKCU `Run` makes Windows authenticate to that SMB
+    /// host at every logon, forever — the NTLM-disclosure class the project
+    /// already refuses UNC for at file-open time, reached through a persistence
+    /// entry. All three spellings, including the `\\?\UNC\` form that
+    /// `canonical_for_refresh_check` itself produces on Windows.
+    #[test]
+    fn autostart_refresh_is_refused_for_network_paths() {
+        use std::path::Path;
+        let temp = Path::new("/tmp");
+        for unc in [
+            r"\\fileserver\tools\Tandem\tandem.exe",
+            r"\\?\UNC\fileserver\tools\Tandem\tandem.exe",
+            "//fileserver/tools/Tandem/tandem.exe",
+        ] {
+            assert!(
+                !autostart_refresh_allowed(false, Path::new(unc), temp),
+                "{unc} must never become a login item"
+            );
+        }
+        assert!(
+            autostart_refresh_allowed(
+                false,
+                Path::new(r"\\?\C:\Program Files\Tandem\tandem.exe"),
+                temp
+            ),
+            "a canonicalized LOCAL Windows path is verbatim, not UNC, and must stay eligible"
+        );
+    }
+
+    /// #1810 review — the temp arm compared two uncanonicalized paths, and on
+    /// macOS `$TMPDIR` (`/var/folders/…`) and `current_exe()`
+    /// (`/private/var/folders/…`) share no component prefix, so the guard read
+    /// as covering the translocated-bundle case while never firing on it. This
+    /// runs against the real filesystem so it actually discriminates on the
+    /// platform it runs on — including Windows, where `%TEMP%` may be an 8.3
+    /// short path the exe path never matches.
+    #[test]
+    fn canonicalization_makes_the_temp_arm_hold_on_the_real_filesystem() {
+        let probe = std::env::temp_dir().join("tandem-autostart-refresh-probe");
+        std::fs::create_dir_all(&probe).expect("create probe dir");
+        let exe = probe.join("tandem");
+        std::fs::write(&exe, b"probe").expect("write probe exe");
+
+        // The temp dir under a spelling that only EQUALS it after
+        // canonicalization. `/private/var` vs `/var` is the macOS shape of the
+        // same mismatch and an 8.3 `%TEMP%` the Windows one; neither can be
+        // reproduced on demand from a unit test, so this stands in for both and
+        // discriminates on every platform: drop either `canonical_for_refresh_check`
+        // and `Path::starts_with` compares `…/probe/..` against `…/probe/tandem`
+        // component-wise, finds no prefix, and allows the refresh.
+        let noisy_temp = probe.join("..");
+        let allowed = autostart_refresh_allowed(
+            false,
+            &canonical_for_refresh_check(&exe),
+            &canonical_for_refresh_check(&noisy_temp),
+        );
+        let _ = std::fs::remove_dir_all(&probe);
+        assert!(
+            !allowed,
+            "an executable that really is under this machine's temp dir must be refused"
+        );
+    }
+
+    /// Windows `%TEMP%` and the exe path routinely differ in case, and
+    /// `Path::starts_with` is byte-wise on everything but the drive letter. The
+    /// helper is asserted directly: the predicate test above cannot reach this,
+    /// because on a machine whose `%TEMP%` case already matches, a
+    /// case-sensitive comparison passes it just as well.
+    #[test]
+    fn the_temp_prefix_comparison_is_case_insensitive() {
+        use std::path::Path;
+        let exe = Path::new("/Users/BLOKN/AppData/Local/TEMP/x/tandem");
+        assert!(
+            !exe.starts_with("/users/blokn/appdata/local/temp"),
+            "std's comparison is the one this helper exists to replace"
+        );
+        assert!(path_starts_with_ci(
+            exe,
+            Path::new("/users/blokn/appdata/local/temp")
+        ));
+        assert!(
+            !path_starts_with_ci(exe, Path::new("/users/blokn/appdata/local/other")),
+            "case-insensitive must not mean prefix-blind"
+        );
+        assert!(
+            !path_starts_with_ci(Path::new("/opt/t"), Path::new("/opt/t/deeper")),
+            "a prefix longer than the path is not a prefix"
+        );
+    }
 
     #[test]
     fn error_codes_are_path_free() {
