@@ -155,13 +155,15 @@ C:\Users\blokn\AppData\Local\Tandem\node-sidecar-x86_64-pc-windows-msvc.exe
   — skipping unlock wait (packaging bug?)
 ```
 
-`sidecar_exe_path` builds `node-sidecar-{TARGET_TRIPLE}.exe` while the bundler installs
+`sidecar_exe_path` built `node-sidecar-{TARGET_TRIPLE}.exe` while the bundler installs
 plain `node-sidecar.exe`, so `wait_for_sidecar_unlock` returned `true` without waiting.
-Documents were open at the time, which is exactly the condition #1762's suggested fix
+Documents were open at the time, which is exactly the condition #1762's fix
 asks a checklist line to create. **The update still succeeded and the sidecar binary
 WAS replaced** (its mtime moved), so the NSIS `PREINSTALL` kill hook held on this run —
-which bounds #1762's impact rather than dismissing it: the unlock wait is dead code, and
-the kill hook is now the only protection.
+which bounded #1762's impact rather than dismissing it: the unlock wait was dead code, and
+the kill hook was the only protection. **Fixed in #1762** — both the spawn site and
+`sidecar_exe_path` now take the installed name from one `SIDECAR_BIN_NAME` const, and a
+missing exe reports still-locked in a release build. The row above is the re-check.
 
 **Not exercised, and worth naming:** the half-install residual `classify_pending_update`
 documents — NSIS replacing `Tandem.exe` but not `node-sidecar.exe`, which classifies as

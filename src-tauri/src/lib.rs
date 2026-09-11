@@ -787,12 +787,6 @@ fn note_user_presence(app: &tauri::AppHandle) {
     });
 }
 
-/// Bounded wait for the sidecar's HTTP server to accept requests.
-///
-/// Polls the existing `SIDECAR_HEALTHY` flag rather than re-probing `/health` —
-/// the spawn path already flips it once `wait_for_health` succeeds and the
-/// pending-opens queue has drained, so this observes the same readiness the
-/// file-open path does instead of racing it with a second probe.
 /// Is the sidecar currently healthy?
 ///
 /// The steady-state crash handler's second guard (#1809) — `SIDECAR_HEALTHY` is
@@ -806,15 +800,21 @@ pub(crate) fn sidecar_is_healthy() -> bool {
     SIDECAR_HEALTHY.load(Ordering::Acquire)
 }
 
+/// Bounded wait for the sidecar's HTTP server to accept requests.
+///
+/// Polls the existing `SIDECAR_HEALTHY` flag rather than re-probing `/health` —
+/// the spawn path already flips it once `wait_for_health` succeeds and the
+/// pending-opens queue has drained, so this observes the same readiness the
+/// file-open path does instead of racing it with a second probe.
 async fn await_sidecar_healthy(deadline: Duration) -> bool {
     let start = std::time::Instant::now();
     while start.elapsed() < deadline {
-        if SIDECAR_HEALTHY.load(Ordering::Acquire) {
+        if sidecar_is_healthy() {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    SIDECAR_HEALTHY.load(Ordering::Acquire)
+    sidecar_is_healthy()
 }
 
 /// Fetch the auth token for a loopback POST, falling back to anonymous.
@@ -3112,15 +3112,14 @@ mod install_order_tests {
         let start = src
             .find("async fn perform_install(")
             .expect("perform_install must exist");
-        // Slice on char boundaries, never a raw byte range: `lib.rs` is full of
-        // em dashes and a byte slice landing mid-`—` panics.
-        let rest = src
-            .get(start..)
-            .expect("function start must be a char boundary");
+        // Both offsets come from `find`, so they are char boundaries by
+        // construction — no `get`/`expect` dance is needed to slice safely
+        // through a file full of em dashes.
+        let rest = &src[start..];
         let end = rest
             .find("\n}\n")
             .expect("perform_install body must be delimited");
-        let body = rest.get(..end).expect("function end must be a char boundary");
+        let body = &rest[..end];
 
         // Bind BOTH offsets before comparing. A bare `Option` comparison is
         // vacuously true on the unfixed code: it calls `download_and_install`
