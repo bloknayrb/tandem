@@ -684,6 +684,38 @@ describe("createDocumentWorkspace — the close funnel", () => {
     h.dispose();
   });
 
+  it("declining the source-dirty confirm after accepting the scratchpad one keeps the recovery copy", () => {
+    // cr-1: a scratchpad (format "md", so source-viewable) with unsaved
+    // scratchpad content AND unsaved source-view edits hits both guards. The
+    // first confirm accepts the scratchpad loss; the second declines and must
+    // still abort the close — and must NOT have already discarded the
+    // scratchpad's localStorage recovery copy, or a later crash loses content
+    // the user explicitly chose not to close.
+    const h = harness({
+      tabs: [
+        tab({ id: "s", filePath: "upload://scratchpad/uuid-1/Scratchpad.md", source: "upload" }),
+      ],
+      activeTabId: "s",
+      hasUnsaved: true,
+    });
+    h.ws.updateSourceDraft("s", "half-typed", true);
+    flushSync();
+    expect(h.ws.sourceDirtyTabs.has("s")).toBe(true);
+
+    h.confirmReplies.push(true, false);
+    const result = h.ws.closeTabAndRecord("s");
+
+    expect(result).toBe(false);
+    expect(h.calls.closeTab).toEqual([]);
+    expect(h.calls.onTabClosed).toEqual([]);
+    // The load-bearing assertion: the accepted-then-declined sequence must not
+    // have cleared the recovery copy.
+    expect(h.calls.scratchpadCleared).toEqual([]);
+    expect(h.ws.sourceDirtyTabs.has("s")).toBe(true);
+
+    h.dispose();
+  });
+
   it("bulk closes snapshot the id list before the loop mutates the tab list", () => {
     const h = harness({
       tabs: [tab({ id: "a" }), tab({ id: "b" }), tab({ id: "c" })],

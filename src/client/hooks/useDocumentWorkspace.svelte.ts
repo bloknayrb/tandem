@@ -330,6 +330,15 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
   // rest.
   function closeTabAndRecord(tabId: string): boolean {
     const tab = opts.getTabs().find((t) => t.id === tabId);
+    // #864 / #1021: both confirms below must be settled (and both must be
+    // accepted) BEFORE either one's side effect runs. A scratchpad with
+    // unsaved content that has also picked up unsaved source-view edits is
+    // reachable through one tab (a scratchpad's format is "md", so source
+    // view is available on it), so accepting the first confirm and then
+    // declining the second must leave the scratchpad's localStorage recovery
+    // copy intact — declining is "keep this tab open", and a copy discarded
+    // on the way to a decline is data loss the user explicitly chose against.
+    let scratchpadUuidToClear: string | null = null;
     // #864: warn before closing a scratchpad that has unsaved content. Annotations
     // are intentionally out of scope (accepted loss); only document text matters.
     if (tab && isScratchpadPath(tab.filePath)) {
@@ -339,9 +348,7 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
           "This scratchpad has unsaved content that will be lost. Close it anyway?",
         );
         if (!ok) return false;
-        // User accepted the loss — discard the recovery copy so the next
-        // scratchpad open doesn't restore the content they just dismissed.
-        opts.scratchpad.clearUnsaved(uuid);
+        scratchpadUuidToClear = uuid;
       }
     }
     // #1021: warn before closing a tab with uncommitted markdown-source edits
@@ -352,6 +359,12 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
         "This document has unsaved markdown-source edits that will be lost. Close it anyway?",
       );
       if (!ok) return false;
+    }
+    // Both confirms (whichever applied) passed — now safe to discard the
+    // scratchpad recovery copy so the next scratchpad open doesn't restore
+    // content the user just accepted losing.
+    if (scratchpadUuidToClear) {
+      opts.scratchpad.clearUnsaved(scratchpadUuidToClear);
     }
     if (tab && !isUploadPath(tab.filePath)) {
       opts.closedTabStack.push({ filePath: tab.filePath, closedAt: Date.now() });

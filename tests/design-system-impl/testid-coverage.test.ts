@@ -209,7 +209,19 @@ function scanDatasetAssignments(src: string): {
   const skippedHere: { line: number }[] = [];
   for (const m of src.matchAll(DATASET_ASSIGN)) {
     let idx = m.index + m[0].length;
-    while (idx < src.length && (src[idx] === " " || src[idx] === "\t")) idx++;
+    // Skip newlines here too, not just spaces/tabs: biome wraps a long
+    // `el.dataset.testid =` assignment onto its own line once the
+    // identifier is long enough, leaving the value on the next line while
+    // the value itself stays single-line. `parseValue`'s own multi-line
+    // rule (its docblock: "Returns null if the value spans multiple
+    // lines") still rejects a value that itself spans lines — this only
+    // widens what counts as "between `=` and the value", matching the
+    // attribute pass's tolerance for that gap.
+    while (
+      idx < src.length &&
+      (src[idx] === " " || src[idx] === "\t" || src[idx] === "\n" || src[idx] === "\r")
+    )
+      idx++;
     const open = src[idx];
     if (open === '"' || open === "'" || open === "`") {
       const raw = parseValue(src, idx);
@@ -349,6 +361,20 @@ describe("test-selector coverage — src/client/", () => {
     expect(found).toEqual([
       { testid: "error-boundary-reload-btn", raw: "ERROR_BOUNDARY_RELOAD_BTN_TESTID" },
     ]);
+    expect(skippedHere).toEqual([]);
+  });
+
+  it("scans a dataset.testid assignment biome wrapped onto the next line (review round 2, cr-5)", () => {
+    // Before the fix, only spaces/tabs were skipped between `=` and the
+    // value, so this shape — which biome produces on its own once the
+    // identifier is long enough to force a wrap — landed on the newline as
+    // `open`, matched neither a quote nor an identifier start, and fell to
+    // `skipped` with a "multi-line or unparseable value" message that
+    // points at the wrong fix (the value itself is single-line).
+    const { declarations: found, skipped: skippedHere } = scanDatasetAssignments(
+      'el.dataset.testid =\n  "synthetic-wrapped";',
+    );
+    expect(found).toEqual([{ testid: "synthetic-wrapped", raw: "synthetic-wrapped" }]);
     expect(skippedHere).toEqual([]);
   });
 });
