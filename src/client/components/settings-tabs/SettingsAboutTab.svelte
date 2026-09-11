@@ -34,7 +34,9 @@ async function handleCopyDiagnostics(): Promise<void> {
         result.reason === "unreachable"
           ? "Couldn't reach the server — is it running?"
           : // The server WAS reached — an "is it running?" message would misdirect.
-            "Diagnostics failed on the server — try `tandem doctor` in a terminal",
+            // #1824 item N: the desktop app has no `tandem` command (#1817's own
+            // precedent) — point at the in-app Open Log Folder button instead.
+            diagnosticsFailedMessage(),
       );
       return;
     }
@@ -47,7 +49,7 @@ async function handleCopyDiagnostics(): Promise<void> {
       clientLog: readClientLog(),
     });
   } catch {
-    ctx.notify("error", "Diagnostics failed on the server — try `tandem doctor` in a terminal");
+    ctx.notify("error", diagnosticsFailedMessage());
     return;
   } finally {
     diagLoading = false;
@@ -57,11 +59,27 @@ async function handleCopyDiagnostics(): Promise<void> {
     ctx.notify("info", "Diagnostics copied to clipboard");
   } catch {
     // Clipboard access denied (permissions policy / non-secure context).
+    // #1824 item N: same CLI-vocabulary gate as diagnosticsFailedMessage().
     ctx.notify(
       "error",
-      "Couldn't access the clipboard — run `tandem doctor` in a terminal instead",
+      isTauriRuntime()
+        ? "Couldn't access the clipboard — use Open Log Folder below instead"
+        : "Couldn't access the clipboard — run `tandem doctor` in a terminal instead",
     );
   }
+}
+
+/**
+ * #1824 item N: three toast messages unconditionally said "try `tandem
+ * doctor` in a terminal" — the desktop app has no `tandem` command
+ * (#1817's own precedent). Desktop points at the in-tab Open Log Folder
+ * button; the non-Tauri (npm-global, browser) build keeps the CLI wording,
+ * since the `tandem` command genuinely exists there.
+ */
+function diagnosticsFailedMessage(): string {
+  return isTauriRuntime()
+    ? "Diagnostics failed on the server — try Open Log Folder below"
+    : "Diagnostics failed on the server — try `tandem doctor` in a terminal";
 }
 
 async function handleOpenLogFolder(): Promise<void> {

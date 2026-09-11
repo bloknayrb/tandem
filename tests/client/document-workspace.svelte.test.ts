@@ -720,6 +720,30 @@ describe("createDocumentWorkspace — the close funnel", () => {
     expect([...right.calls.closeTab].sort()).toEqual(["b", "c"]);
     right.dispose();
   });
+
+  // #1824 item H: before this fix the three bulk-close loops had no `break`,
+  // so Cancel on one dirty tab still prompted for (and closed) the rest of
+  // the batch. Cancel must abort the whole remaining batch.
+  it("Cancel on the 2nd of 3 dirty tabs aborts the rest of the bulk close", () => {
+    const h = harness({
+      tabs: [tab({ id: "keep" }), tab({ id: "a" }), tab({ id: "b" }), tab({ id: "c" })],
+      activeTabId: "keep",
+    });
+    // All three drop into the source-dirty confirm branch inside
+    // closeTabAndRecord.
+    h.ws.updateSourceDraft("a", "unsaved a", true);
+    h.ws.updateSourceDraft("b", "unsaved b", true);
+    h.ws.updateSourceDraft("c", "unsaved c", true);
+    flushSync();
+
+    // accept a, decline b — c must never even prompt.
+    h.confirmReplies.push(true, false);
+    h.ws.closeOtherTabs("keep");
+
+    expect(h.calls.closeTab).toEqual(["a"]);
+    expect(h.confirmReplies).toEqual([]); // both queued replies were consumed, none left for "c"
+    h.dispose();
+  });
 });
 
 describe("createDocumentWorkspace — the beforeunload guard", () => {

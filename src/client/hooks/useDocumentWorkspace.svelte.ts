@@ -170,7 +170,11 @@ export interface DocumentWorkspace {
   requestToggleSourceViewTarget: (documentId: string) => Promise<void>;
   exitSourceView: (tabId: string) => void;
 
-  closeTabAndRecord: (tabId: string) => void;
+  // #1824 item H: `boolean` (`true` = closed, `false` = cancelled) so a bulk
+  // close loop can abort the rest of its batch on Cancel. A bare call site
+  // that ignores the return value still typechecks (assignable where `void`
+  // was expected).
+  closeTabAndRecord: (tabId: string) => boolean;
   closeOtherTabs: (keepId: string) => void;
   closeTabsToLeft: (fromId: string) => void;
   closeTabsToRight: (fromId: string) => void;
@@ -320,7 +324,11 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
 
   // ---- close / reopen ------------------------------------------------------
 
-  function closeTabAndRecord(tabId: string): void {
+  // #1824 item H: returns `false` (cancelled) rather than silently returning
+  // when a confirm is declined, so a bulk-close loop can tell "closed" from
+  // "the user stopped the batch here" and abort instead of prompting for the
+  // rest.
+  function closeTabAndRecord(tabId: string): boolean {
     const tab = opts.getTabs().find((t) => t.id === tabId);
     // #864: warn before closing a scratchpad that has unsaved content. Annotations
     // are intentionally out of scope (accepted loss); only document text matters.
@@ -330,7 +338,7 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
         const ok = opts.confirm(
           "This scratchpad has unsaved content that will be lost. Close it anyway?",
         );
-        if (!ok) return;
+        if (!ok) return false;
         // User accepted the loss — discard the recovery copy so the next
         // scratchpad open doesn't restore the content they just dismissed.
         opts.scratchpad.clearUnsaved(uuid);
@@ -343,7 +351,7 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
       const ok = opts.confirm(
         "This document has unsaved markdown-source edits that will be lost. Close it anyway?",
       );
-      if (!ok) return;
+      if (!ok) return false;
     }
     if (tab && !isUploadPath(tab.filePath)) {
       opts.closedTabStack.push({ filePath: tab.filePath, closedAt: Date.now() });
@@ -359,6 +367,7 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
     // there because it is a DOM concern; the funnel still owns the *timing*.
     opts.onTabClosed(tabId);
     opts.closeTab(tabId);
+    return true;
   }
 
   // Tab context-menu bulk closes (#923 Phase 2). The id lists are computed by
@@ -366,16 +375,24 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
   // tab) and snapshotted before the loop — closeTabAndRecord mutates the tab
   // list, so iterating live tabs would skip entries. Each close routes through
   // closeTabAndRecord so the scratchpad-unsaved guard + closed-tab stack apply.
+  // #1824 item H: Cancel on any one tab ABORTS the rest of the batch (not
+  // skip-and-continue) — `break` on the first `false`.
   function closeOtherTabs(keepId: string): void {
-    for (const id of tabIdsToCloseOthers(opts.getOrderedTabs(), keepId)) closeTabAndRecord(id);
+    for (const id of tabIdsToCloseOthers(opts.getOrderedTabs(), keepId)) {
+      if (!closeTabAndRecord(id)) break;
+    }
   }
 
   function closeTabsToLeft(fromId: string): void {
-    for (const id of tabIdsToCloseLeft(opts.getOrderedTabs(), fromId)) closeTabAndRecord(id);
+    for (const id of tabIdsToCloseLeft(opts.getOrderedTabs(), fromId)) {
+      if (!closeTabAndRecord(id)) break;
+    }
   }
 
   function closeTabsToRight(fromId: string): void {
-    for (const id of tabIdsToCloseRight(opts.getOrderedTabs(), fromId)) closeTabAndRecord(id);
+    for (const id of tabIdsToCloseRight(opts.getOrderedTabs(), fromId)) {
+      if (!closeTabAndRecord(id)) break;
+    }
   }
 
   async function reopenClosedTab(): Promise<void> {

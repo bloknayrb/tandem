@@ -240,6 +240,23 @@ $effect(() => {
   onFilterChange?.(filterType, filterAuthor, filterStatus);
 });
 
+// #1824 item G: filters silently persisted across a document switch — SidePanel
+// is mounted once (same display-toggle shape as the bulk-confirm effect
+// above), so switching tabs while "Comments only" is active hid every
+// annotation in the newly-active document with no visible reason. A SECOND,
+// INDEPENDENT effect, deliberately not folded into the reset-bulk-confirm
+// effect above: that one reads all three filter values as its own dependency
+// (#1772, so an armed bulk confirm clears on a filter change too), and
+// writing the filters from inside it would make it self-dependent —
+// every write re-triggers the same effect, and the filter bar becomes
+// permanently unsettable. This effect reads ONLY documentId.
+$effect(() => {
+  void documentId;
+  filterType = "all";
+  filterAuthor = "all";
+  filterStatus = "all";
+});
+
 // Replies: observe Y.Map(annotationReplies)
 let repliesMap = $state(new Map<string, AnnotationReply[]>());
 
@@ -736,6 +753,7 @@ function handleRailBackgroundClick(e: MouseEvent) {
         </button>
         <button
           data-testid="filter-bar-toggle"
+          aria-expanded={filterBarOpen}
           onclick={() => (filterBarOpen = !filterBarOpen)}
           style="display: flex; align-items: center; gap: 4px; background: none; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-pill); padding: 3px 10px; font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle); cursor: pointer; white-space: nowrap;"
         >

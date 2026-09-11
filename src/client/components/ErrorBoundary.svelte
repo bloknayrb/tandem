@@ -56,6 +56,9 @@ let errorSessionId = $state(0);
             ? "We weren't able to recover this time — reloading the page should get you going again."
             : "The editor ran into an unexpected hiccup."}
         </p>
+        <p class="reassurance">
+          Your document is synced to the server, so this doesn't affect your saved work.
+        </p>
         <pre class="detail">{error instanceof Error ? error.message : String(error)}</pre>
         {#if attempts < MAX_RECOVERY_ATTEMPTS}
           <button
@@ -96,6 +99,11 @@ let errorSessionId = $state(0);
 
 .message {
   color: var(--tandem-fg-muted);
+}
+
+.reassurance {
+  color: var(--tandem-fg-muted);
+  font-size: var(--tandem-text-sm);
 }
 
 .detail {

@@ -101,7 +101,7 @@ Either way, the rest is the same:
 
 - Multiple documents open in tabs, with `.md`, `.markdown`, `.txt`, `.html`, and `.docx` support (Word files are editable, and the original is only written when you explicitly save; HTML opens read-only, for reading and annotating). Markdown means CommonMark plus GitHub Flavored Markdown; `[[wikilinks]]` and `![[embeds]]` are saved as literal text, so Obsidian, Logseq and Foam vaults are not a supported input for this release.
 - Word round-trip: edit a `.docx` and save it back as a real Word file, with the comments you sent your AI written back as native Word comments. Tandem snapshots a file before its first write, so you can restore the original from inside the app.
-- A scratchpad (`Ctrl+N`) for drafts you don't want to save to disk.
+- A scratchpad (`Ctrl+N` on desktop; the **+** button in the tab bar in the browser build, where the browser itself owns `Ctrl+N`) for drafts you don't want to save to disk.
 - A command palette (`Ctrl+Shift+P`) with fuzzy search, ranked by how well each result matches.
 - Find and replace, including across all open tabs.
 - An outline panel for navigating long documents.
@@ -115,7 +115,7 @@ Either way, the rest is the same:
 <summary><b>More screenshots</b></summary>
 
 <p align="center">
-  <img src="docs/screenshots/03-side-panel.png" alt="A close-up of annotation cards beside the document, including a replacement card showing the original text in red strikethrough and the proposed text in green, with Accept and Reject buttons" width="500">
+  <img src="docs/screenshots/03-side-panel.png" alt="A close-up of annotation cards beside the document, including a replacement card showing the original text in red strikethrough and the proposed text in green, with Accept and Dismiss buttons" width="500">
 </p>
 
 *Annotations from the AI. Comments and suggestions appear as cards. For a replacement you see your current text and the proposed wording together, so you can accept the change, reject it, or reply to ask for something different.*

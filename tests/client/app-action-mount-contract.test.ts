@@ -524,3 +524,38 @@ describe("App.svelte closes an open Settings modal before the wizard mounts (#17
     expect(match?.index ?? -1).toBeGreaterThan(derivedIdx);
   });
 });
+
+// #1824 item I: same class as #1713 — the palette can stack over an open
+// Settings modal because "toggle-palette" had no guard against
+// settingsModalOpen. Same instrument as #1713 above: no test in the repo
+// mounts App.svelte, so this is a structural source-text assertion, not a
+// runtime one.
+describe("App.svelte suppresses the palette open path while Settings is open (#1824 item I)", () => {
+  const source = readFileSync(APP_SVELTE, "utf-8");
+
+  it("guards the open path inside the toggle-palette handler, before the toggle", () => {
+    const handlerIdx = source.indexOf('"toggle-palette": (e) => {');
+    expect(handlerIdx).toBeGreaterThan(-1);
+
+    const guardPattern =
+      /if\s*\(!untrack\(\(\)\s*=>\s*paletteOpen\)\s*&&\s*settingsModalOpen\)\s*return;/;
+    const guardMatch = guardPattern.exec(source);
+    expect(guardMatch, "the open-path guard must exist").not.toBeNull();
+    const guardIdx = guardMatch?.index ?? -1;
+    expect(guardIdx, "the guard must be inside the toggle-palette handler").toBeGreaterThan(
+      handlerIdx,
+    );
+
+    const toggleIdx = source.indexOf("paletteOpen = !untrack(() => paletteOpen);", handlerIdx);
+    expect(toggleIdx).toBeGreaterThan(-1);
+    // The guard must run BEFORE the toggle, or an already-suppressed open
+    // still flips the flag before returning.
+    expect(guardIdx).toBeLessThan(toggleIdx);
+  });
+
+  it("popupSuppressed reads true once settingsModalOpen does, alongside the existing three", () => {
+    const suppressedPattern =
+      /const popupSuppressed\s*=\s*[\s\S]*?slashCommandMenuOpen[\s\S]*?findBarOpen[\s\S]*?paletteOpen[\s\S]*?settingsModalOpen;/;
+    expect(suppressedPattern.test(source)).toBe(true);
+  });
+});

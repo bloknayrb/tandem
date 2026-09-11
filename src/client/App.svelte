@@ -1491,6 +1491,10 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   },
   "toggle-palette": (e) => {
     e.preventDefault();
+    // #1824 item I: same class as #1713's wizard/settings stacking bug —
+    // guard the OPEN path only, so an already-open palette still closes
+    // regardless of settingsModalOpen.
+    if (!untrack(() => paletteOpen) && settingsModalOpen) return;
     paletteOpen = !untrack(() => paletteOpen);
   },
   "new-scratchpad": (e) => {
@@ -1597,7 +1601,10 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     // read-only precisely so it can be read and annotated (decision 2). The
     // refusal here used to be a "Document is read-only" toast — a local named
     // `reviewOnly`, blocking the review action.
-    const popupSuppressed = slashCommandMenuOpen || findBarOpen || paletteOpen;
+    // #1824 item I: settingsModalOpen joins the set — the palette-open guard
+    // above means a stacked palette can no longer be the reason this reads
+    // true, but Settings itself is its own popup context.
+    const popupSuppressed = slashCommandMenuOpen || findBarOpen || paletteOpen || settingsModalOpen;
     if (popupSuppressed) {
       // Palette/find UI is the active context; user understands why.
       return;
