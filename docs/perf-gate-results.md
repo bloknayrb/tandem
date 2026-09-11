@@ -104,6 +104,10 @@ separately, on a margin *bubble*, which is a real 243 × 168 box.
 | Annotation load | 50 requested; ≥45 rendered (the render poll's floor). Exact anchored count **unverified** — seeding swallowed MCP error envelopes |
 | Margin pipeline | **not mounted** (`marginView` default off) |
 
+**Historical — "reflect after dispatch" here means the accept control's
+disappearance, the pre-#1734 definition. See Run 3 for the current one (the
+rail card's status span attaching/flipping to `accepted`).**
+
 | Condition | Threshold | Measured | Verdict |
 |---|---|---|---|
 | open-to-interactive | < 3000ms | **882ms** | PASS |
@@ -248,7 +252,15 @@ card stack — is refuted twice, on independent evidence:
    apportion that cost among individual transitions. `AnnotationCard`'s
    `lifecycleMotion` prop is the narrower knob and was not used.
 
-### What the accept measurement actually spends
+### What the accept measurement actually spends (historical — superseded by #1734)
+
+**This whole section analyzes the pre-#1734 "reflected" definition** (the
+accept control's disappearance) and the outro/entrance motion that definition
+folded into the number. #1734 implemented one of the "three ways out" this
+section itself names below — "measure the annotation's status flip rather than
+the control's disappearance" — so the analysis here is kept for the record but
+no longer describes what the gate measures. See Run 3 for the current
+definition and its number.
 
 The button is not blocked, starved, or overlaid. An in-page sampler run across
 the click window — rAF gaps, `getBoundingClientRect` per frame,
@@ -360,3 +372,44 @@ pipeline now actually mounted, time-to-clickable is ~0.5s rather than ~7.9s, so
 this is not the same magnitude of defect #1288 recorded — but it is still over
 budget, and now both halves of the split contribute. Whether it reproduces on
 the Windows workstation is exactly what run 2 has to establish.
+
+## Run 3 — 2026-09-11 — #1734: "reflected" redefined, per #1334's decision
+
+Run 2 (and every discussion since, including the "What the accept measurement
+actually spends" section above) measured **`annotation-accept` to the accept
+CONTROL disappearing**. #1334 (closed, 2026-08-09) found that number was mostly
+the resolved card's own `cardExit` outro (`cardMotion.ts`, `EXIT_MS = 260ms`),
+not real accept latency, and decided the wait should re-point at the
+annotation's *accepted state* instead — keeping the 500ms budget rather than
+raising it. That decision sat unimplemented until #1734: `annotation-accept` on
+`origin/master` still waited on the accept button reaching count 0.
+
+**New definition of "reflected": the rail card's `.ach-status` span attaching
+with `is-accepted` — a plain conditional render with no transition of its own,
+so its attachment tracks the CRDT write landing, not the card's exit motion.**
+`tests/perf/performance.spec.ts` implements this now; the accept-button
+count-zero check is retained as a separate, non-timed assertion (the control
+must still leave the DOM on both the rail and margin surfaces) rather than
+being the timing signal.
+
+Same machine and build as runs 1–2 (Windows 11 Pro 26200, developer
+workstation), same fixture (seed `20260805`, 50 annotations), margin pipeline
+mounted. One clean sample each, same build, old definition then new:
+
+| Definition | Condition | Threshold | Measured | Verdict |
+|---|---|---|---|---|
+| OLD (button count 0) | annotation-accept | < 500ms | **714ms** | **FAIL** |
+| NEW (`.ach-status.is-accepted` attach) | annotation-accept | < 500ms | **311ms** | **PASS** |
+
+The new wait resolved in 311ms — far under the 30s timeout the assertion
+carries, so this is a real reading, not a wait that timed out and reported its
+own ceiling. The full run also cleared open-to-interactive (655ms) and
+annotation-create (268ms) with room, and the scroll condition (16.8ms worst
+frame gap, 0 long tasks). No residual over-budget number and no residual
+click-dispatch motion coupling to file a follow-up issue for — #1734 closes
+clean on this run.
+
+`docs/roadmap.md` §"Performance gate" and this document's own historical rows
+above (`§Harness configuration`-adjacent table, and "What the accept
+measurement actually spends") describe the OLD definition; they are left as
+the historical record of what run 1/2 actually measured, not restated.
