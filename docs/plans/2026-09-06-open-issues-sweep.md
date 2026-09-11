@@ -124,7 +124,7 @@ any stage after `review` short-circuits on `parked` or `failed`. Side effects ar
 before creating; `args.known` lets a resumed run skip.
 
 ```
-plan → reviewLoop(S 1 / M 2 / L 3) → implement → simplify → verify(+fix ≤2) → [e2e] → manualProbes
+plan → reviewLoop(S 1 / M 1 / L 2, + scope cut at every tier) → implement → simplify → verify(+fix ≤2) → [e2e] → manualProbes
      → prReviewLoop(≤2, one batched skeptic) → ship(push, PR, auto-merge-or-record, subscribe)
 ```
 
@@ -137,6 +137,44 @@ lens speak only in round 1 (rules + tests re-check revisions), runs PR review fo
 skeptic judging the round's findings as a batch, drops L's domain effort to `high`, and has no
 post-ship stage. Expected on a J2-shaped group: ~50 agents → ~20. Stage numbers below are the
 post-cut shape; the ledger rows for wave 1–3 groups were run under the old one.
+
+**Second budget cut (2026-09-10, wave 7).** Re-measured per-agent from the run journals on G8
+(L) and I-release (M). The wave-3 cut held its shape but not its conclusion: plan review is
+still the largest line at **45% and 57% of group output** (90M and 98M cached-input of 246M /
+182M), while build, verify, probes, simplify and ship together stayed under a third.
+
+What this measurement adds is a **yield** number the first one did not have. Plan review
+produced **none** of the defects that mattered in either group. Every real finding came from PR
+review, against real code: G8's cold-open gap and the reply-loss **regression its own round-1 fix
+introduced**, and I-release's `make_latest`, the `realpathSync` throw, the unpaginated asset
+listing and the loose `"npm ci"` substring match.
+
+And the rounds do not converge. Blocking counts per round, four groups:
+
+| group | r1 | r2 | r3 | cut |
+|---|---|---|---|---|
+| G8 (L) | 3, 3, 2 | 4, 1 | 2, 6 | 3, 3 |
+| I-release (M) | 3, 3, 2 | 3, 2 | — | 4, 4 |
+| H-c (M) | 2, 4, 2 | 4, 4 | — | 1, 1 |
+| H-b (L) | 4, 2, 6 | 4, 4 | 2, 3 | 2, 1 |
+
+No round ever returns zero, because an agent told to refute always refutes. The loop terminates
+only because `revise:post-cut` is trusted to adopt whatever the last round said — in all four
+groups the cut round found blocking, revise adopted it, and **nothing ever parked**. The count is
+a property of the prompt, not of the plan's quality, so additional rounds buy nothing measurable.
+
+So: **L 3 → 2, M 2 → 1, S stays 1**, and the post-cut re-refute drops from two lenses to one
+(rules — the cut's own failure mode is "removed a mechanism a rule required"). The scope cut now
+runs at **every** tier, where it used to be skipped below two rounds; with M at one round that
+skip would have taken it away from most of the remaining groups, and the cut is the half of that
+block worth keeping — it makes plans smaller, where the refuters only make them longer.
+
+`PR_ROUNDS` stays at 2 and **must not be cut to pay for anything.** G8's PR round 2 is what caught
+the data-loss regression that round 1's own fix introduced; shipping without it would have put a
+bug in the user's `.docx` that is worse than the one the group existed to fix.
+
+Expected saving: **~15% of an L group and ~24% of an M group**, in both output and cached input,
+taken entirely from the stage with no demonstrated yield.
 
 Stages:
 
