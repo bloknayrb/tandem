@@ -3063,17 +3063,19 @@ async fn perform_install(
 
     #[cfg(target_os = "windows")]
     {
-        let (port_ok, file_ok) = tokio::join!(
+        let (port_ok, unlock) = tokio::join!(
             wait_for_port_release(&client, POST_KILL_PORT_RELEASE_SECS),
             wait_for_sidecar_unlock(SIDECAR_UNLOCK_DEADLINE_SECS),
         );
         if !port_ok {
             warn_port_still_responding(&mut pre_install_warnings);
         }
-        if !file_ok {
-            let msg = format!(
-                "Sidecar exe lock not confirmed released within {SIDECAR_UNLOCK_DEADLINE_SECS}s -- installer may prompt for retry"
-            );
+        // The verdict carries WHICH failure it was. A missing exe returns
+        // without entering the polling loop (`unlock_verdict_when_absent`), so
+        // reusing the timeout string for it would tell the operator a 15 s wait
+        // expired when no wait ran — pointing diagnosis at a lock rather than at
+        // the packaging bug the `log::warn!` two frames up just named.
+        if let Some(msg) = crate::sidecar::unlock_warning(unlock, SIDECAR_UNLOCK_DEADLINE_SECS) {
             log::warn!("{msg}");
             pre_install_warnings.push(msg);
         }
@@ -3484,6 +3486,65 @@ mod pending_opens_tests {
         assert!(SIDECAR_GAVE_UP.load(Ordering::Acquire));
         begin_start_attempt(&state);
         assert!(!SIDECAR_GAVE_UP.load(Ordering::Acquire));
+
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+    }
+
+    /// #1809's breaker arm, as a behaviour. The arm itself needs an `AppHandle`
+    /// (its wiring is pinned structurally in `sidecar.rs`), but the flag pair it
+    /// performs is exactly these two calls in this order, and the order is the
+    /// subtle half: `clear_healthy_under_lock` also WITHDRAWS the give-up
+    /// verdict, so reversing them leaves the app queueing opens for a drain that
+    /// is never coming — the silent #1416 shape, reached from the one arm that
+    /// has definitively stopped trying.
+    #[test]
+    fn the_breaker_sequence_leaves_the_app_in_the_gave_up_state() {
+        let _g = FLAG_LOCK.lock().unwrap();
+        // The state the breaker inherits: healthy from the last successful boot,
+        // which is what made a permanently dead sidecar keep reading as alive.
+        SIDECAR_HEALTHY.store(true, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+
+        clear_healthy_under_lock(&state);
+        report_pending_opens_with(&state, true, |_| {});
+
+        assert!(
+            !SIDECAR_HEALTHY.load(Ordering::Acquire),
+            "a tripped breaker means there is no sidecar — await_sidecar_healthy must not \
+             answer true for it"
+        );
+        assert!(
+            SIDECAR_GAVE_UP.load(Ordering::Acquire),
+            "and nothing is coming, so the verdict must be latched"
+        );
+        assert!(
+            matches!(
+                try_queue_or_post(&state, screened(&dir, "after-breaker")),
+                OpenRoute::ServerUnavailable
+            ),
+            "an open arriving after the breaker must be refused, not POSTed at a dead :3479"
+        );
+
+        // Reversed, the clear wipes the latch it was meant to follow.
+        SIDECAR_HEALTHY.store(true, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+        report_pending_opens_with(&state, true, |_| {});
+        clear_healthy_under_lock(&state);
+        assert!(
+            !SIDECAR_GAVE_UP.load(Ordering::Acquire),
+            "this is why the order is pinned: the clear means 'a new attempt is starting'"
+        );
+        assert!(
+            matches!(
+                try_queue_or_post(&state, screened(&dir, "reversed")),
+                OpenRoute::Queued
+            ),
+            "and the reversed order leaves opens queueing for a drain that never comes"
+        );
 
         SIDECAR_HEALTHY.store(false, Ordering::Release);
         SIDECAR_GAVE_UP.store(false, Ordering::Release);

@@ -2081,6 +2081,36 @@ pub(crate) async fn start_sidecar(
                                     "[sidecar] more than {MAX_CRASH_RESTARTS} crash restarts in {}s — giving up",
                                     CRASH_RESTART_WINDOW.as_secs()
                                 );
+                                // Make the flags agree with reality. This is the
+                                // one arm that leaves NO sidecar and none coming,
+                                // and `SIDECAR_HEALTHY` is still true from the
+                                // last successful boot — it is cleared in exactly
+                                // one place, `clear_healthy_under_lock`, which
+                                // only `restart_sidecar` calls. Without this the
+                                // app keeps believing a permanently dead sidecar
+                                // is healthy: `try_queue_or_post` takes
+                                // `OpenRoute::PostNow` and a Finder open POSTs at
+                                // a dead :3479 instead of queueing for the next
+                                // successful start (#1416's own condition), and
+                                // `await_sidecar_healthy` returns `true`
+                                // immediately, releasing the deferred launcher
+                                // against nothing.
+                                //
+                                // ORDER IS LOAD-BEARING, and it is the same order
+                                // `restart_sidecar`'s own failure arm uses:
+                                // `clear_healthy_under_lock` also CLEARS
+                                // `SIDECAR_GAVE_UP` (it means "a new attempt is
+                                // starting"), so the latch has to be set AFTER
+                                // it. `report_pending_opens_with(.., true, ..)`
+                                // is what sets it; it surfaces nothing when the
+                                // queue is empty, which is the usual case here
+                                // precisely because a healthy sidecar POSTs
+                                // rather than queues.
+                                let pending = terminated_handle.state::<PendingOpens>();
+                                clear_healthy_under_lock(&pending);
+                                report_pending_opens_with(pending.inner(), true, |code| {
+                                    surface_startup_rejection(&terminated_handle, code)
+                                });
                                 // The same event a failed manual restart emits:
                                 // `App.svelte` ignores the payload and hardcodes
                                 // its toast, so this code is a log-side
@@ -2606,24 +2636,75 @@ fn sidecar_exe_path() -> Result<std::path::PathBuf, String> {
     Ok(exe_dir.join(name))
 }
 
-/// Should `wait_for_sidecar_unlock` report "unlocked" when it cannot find or
-/// resolve the sidecar exe?
+/// What the Windows pre-install exe-lock wait actually observed.
+///
+/// Three states rather than a bool because the caller turns this into a warning
+/// the operator reads out of a failure dialog, and "we never found the file" is
+/// not "the lock outlived the deadline". A single bool collapsed them and made
+/// the missing-exe case report a 15 s timeout that never happened, pointing
+/// diagnosis at a lock instead of at the packaging bug `wait_for_sidecar_unlock`
+/// had just logged.
+///
+/// Cross-platform on purpose (outside the `#[cfg(target_os = "windows")]` gate)
+/// so the ubuntu and macOS `rust-test` legs reach the tests that pin it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) enum UnlockOutcome {
+    /// The exe's write lock was observed released (or this is a dev build with
+    /// no bundled sidecar, where proceeding is correct).
+    Released,
+    /// The exe is on disk and was still locked when the deadline expired.
+    TimedOut,
+    /// The exe could not be found or its path could not be resolved, so no wait
+    /// ran at all. A packaging bug in a release build.
+    Missing,
+}
+
+/// What `wait_for_sidecar_unlock` reports when it cannot find or resolve the
+/// sidecar exe.
 ///
 /// Dev has no bundled sidecar in some layouts and must proceed; a release build
 /// that cannot find it has a packaging bug and must NOT let that pass as
-/// unlocked — reporting "still locked" is what surfaces the bug instead of
-/// letting the NSIS kill hook be the only layer by accident (#1762).
+/// unlocked — reporting a non-`Released` outcome is what surfaces the bug
+/// instead of letting the NSIS kill hook be the only layer by accident (#1762).
 ///
-/// Cross-platform on purpose (outside the `#[cfg(target_os = "windows")]` gate)
-/// so the ubuntu and macOS `rust-test` legs reach the test that pins it.
+/// Cross-platform on purpose, same reason as [`UnlockOutcome`].
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn unlock_verdict_when_absent(is_debug: bool) -> bool {
-    is_debug
+fn unlock_verdict_when_absent(is_debug: bool) -> UnlockOutcome {
+    if is_debug {
+        UnlockOutcome::Released
+    } else {
+        UnlockOutcome::Missing
+    }
+}
+
+/// The pre-install warning an [`UnlockOutcome`] earns, or `None` when there is
+/// nothing to say.
+///
+/// The two non-`Released` strings must stay distinct: they are the only thing
+/// the operator sees in the update-failure dialog, and telling them a lock was
+/// "not confirmed released within 15s" when the exe was never on disk sends
+/// them hunting a timeout that did not occur. The `Missing` half is the
+/// dialog-side twin of the `reporting still-locked (packaging bug)` log line
+/// that `docs/release-smoke-checklist.md` greps for.
+///
+/// Pure and cross-platform so the ubuntu and macOS `rust-test` legs reach it.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn unlock_warning(outcome: UnlockOutcome, deadline_secs: u64) -> Option<String> {
+    match outcome {
+        UnlockOutcome::Released => None,
+        UnlockOutcome::TimedOut => Some(format!(
+            "Sidecar exe lock not confirmed released within {deadline_secs}s -- installer may prompt for retry"
+        )),
+        UnlockOutcome::Missing => Some(format!(
+            "{SIDECAR_BIN_NAME}.exe was not found beside the app binary, so no unlock wait ran -- packaging bug; the installer may hit a locked file"
+        )),
+    }
 }
 
 /// Poll until the sidecar exe file is writable (OS released the handle).
 #[cfg(target_os = "windows")]
-pub(crate) async fn wait_for_sidecar_unlock(deadline_secs: u64) -> bool {
+pub(crate) async fn wait_for_sidecar_unlock(deadline_secs: u64) -> UnlockOutcome {
     let sidecar_path = match sidecar_exe_path() {
         Ok(p) if p.exists() => p,
         Ok(p) => {
@@ -2648,11 +2729,11 @@ pub(crate) async fn wait_for_sidecar_unlock(deadline_secs: u64) -> bool {
     while tokio::time::Instant::now() < deadline {
         if std::fs::OpenOptions::new().write(true).open(&sidecar_path).is_ok() {
             log::info!("Sidecar exe file lock released");
-            return true;
+            return UnlockOutcome::Released;
         }
         tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
     }
-    false
+    UnlockOutcome::TimedOut
 }
 
 /// #1809 — `MAX_RESTARTS` is a boot-window budget, so a sidecar that crashed
@@ -2793,6 +2874,66 @@ mod crash_restart_tests {
         );
     }
 
+    /// The breaker arm is the only exit from the crash handler that leaves no
+    /// sidecar and none coming, so it is also where the give-up state has to be
+    /// written. `SIDECAR_HEALTHY` is cleared in exactly one place
+    /// (`clear_healthy_under_lock`, reached only from `restart_sidecar`), and
+    /// this arm does not go through it — so without the pair below the app keeps
+    /// routing opens to a dead :3479 and `await_sidecar_healthy` answers `true`
+    /// for a server that is never coming back.
+    ///
+    /// Structural for the same reason as its sibling above: the arm needs an
+    /// `AppHandle` and the flags are process-wide statics. The BEHAVIOUR of the
+    /// pair — including why the order cannot be swapped — is pinned in
+    /// `lib.rs`'s `the_breaker_sequence_leaves_the_app_in_the_gave_up_state`.
+    #[test]
+    fn the_breaker_arm_clears_healthy_before_latching_the_give_up() {
+        let src = include_str!("sidecar.rs");
+        let arm_start = src
+            .find("CrashRestartDecision::BreakerTripped => {")
+            .expect("the breaker arm must exist");
+        let arm = &src[arm_start..];
+        // The match is the last statement in the `Terminated` branch, which ends
+        // in the drain loop's `break`. Slicing to it beats counting braces and
+        // survives any re-wrap inside the arm.
+        let arm_end = arm
+            .find("break;")
+            .expect("the drain loop's break must follow the match");
+        // Comment lines dropped before any search: this arm's own docs NAME both
+        // calls, and a prose mention would otherwise satisfy the assertions and
+        // scramble the ordering check.
+        let arm: String = arm[..arm_end]
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let arm = arm.as_str();
+
+        let clear = arm
+            .find("clear_healthy_under_lock(")
+            .expect("the breaker must clear SIDECAR_HEALTHY — nothing else on this path does");
+        let latch = arm
+            .find("report_pending_opens_with(")
+            .expect("the breaker must latch SIDECAR_GAVE_UP so opens fail fast instead of queueing");
+        assert!(
+            clear < latch,
+            "clear_healthy_under_lock also CLEARS the give-up latch, so it must run FIRST — \
+             reversed, the breaker withdraws the verdict it just reached"
+        );
+
+        // ...and with `terminal = true`, which is the argument that latches.
+        // Sliced up to the surface closure rather than matched as one
+        // rustfmt-shaped literal.
+        let call = &arm[latch..];
+        let call_head = &call[..call
+            .find('|')
+            .expect("the report call must take a surface closure")];
+        assert!(
+            call_head.contains("true"),
+            "the breaker must report as TERMINAL — `false` reports the queue without latching"
+        );
+    }
+
     /// The debt is take-once. A second consumer (the install path writes it off
     /// once the deliberate stop has run) must not find it still set and respawn
     /// a child over a binary the installer may be mid-write on.
@@ -2883,13 +3024,50 @@ mod sidecar_name_tests {
     /// read as "unlocked" in a release build.
     #[test]
     fn a_missing_sidecar_exe_reports_still_locked_in_release() {
-        assert!(
+        assert_eq!(
             unlock_verdict_when_absent(true),
+            UnlockOutcome::Released,
             "dev has no bundled sidecar in some layouts and must proceed"
         );
-        assert!(
-            !unlock_verdict_when_absent(false),
+        assert_eq!(
+            unlock_verdict_when_absent(false),
+            UnlockOutcome::Missing,
             "a release build that cannot find the sidecar has a packaging bug (#1762)"
+        );
+    }
+
+    /// The missing-exe arm returns BEFORE the polling loop, so describing it as
+    /// a timeout is a false statement about what happened — and it is the only
+    /// text the operator gets, in a dialog, while the real cause (no exe beside
+    /// the app binary) is an unrelated line in the log.
+    #[test]
+    fn unlock_warning_never_reports_a_timeout_that_did_not_run() {
+        assert_eq!(
+            unlock_warning(UnlockOutcome::Released, SIDECAR_UNLOCK_DEADLINE_SECS),
+            None,
+            "a released lock is not a warning"
+        );
+
+        let timed_out = unlock_warning(UnlockOutcome::TimedOut, SIDECAR_UNLOCK_DEADLINE_SECS)
+            .expect("a lock that outlived the deadline must warn");
+        assert!(
+            timed_out.contains(&format!("within {SIDECAR_UNLOCK_DEADLINE_SECS}s")),
+            "the timeout warning must name the deadline it actually waited: {timed_out}"
+        );
+
+        let missing = unlock_warning(UnlockOutcome::Missing, SIDECAR_UNLOCK_DEADLINE_SECS)
+            .expect("a release build with no sidecar exe must warn");
+        assert!(
+            !missing.contains(&format!("within {SIDECAR_UNLOCK_DEADLINE_SECS}s")),
+            "no wait ran, so the missing-exe warning must not claim a deadline expired: {missing}"
+        );
+        assert!(
+            missing.contains("packaging bug"),
+            "the missing-exe warning must point at the packaging bug (#1762): {missing}"
+        );
+        assert!(
+            missing.contains(SIDECAR_BIN_NAME),
+            "it must name the file that was not found: {missing}"
         );
     }
 }
