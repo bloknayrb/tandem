@@ -615,7 +615,39 @@ async function loadOne(docHash: string, filePath: string): Promise<AnnotationDoc
   }
 
   const result = parseAnnotationDoc(raw);
-  if (result.ok) return result.doc;
+  if (result.ok) {
+    if (result.skipped.annotations + result.skipped.replies > 0) {
+      // #1791(a): the returned doc is a PARTIAL view — rows this build could
+      // not read were dropped. `snapshot()` rebuilds the envelope from Y.Map
+      // state, so the next debounced write erases them from the only copy.
+      // Park a copy first.
+      //
+      // CONTENT-ADDRESSED, not one fixed name. The partial file is not always
+      // healed (`queueWrite` is inert under `isReadOnly()`; file-sync origins
+      // skip the durable queue), so a `Date.now()` name would write one copy
+      // per open forever — but a single fixed name under COPYFILE_EXCL means
+      // the SECOND, *different* partial load preserves nothing, which is
+      // #1791(b)'s "second cycle destroys the only copy" in the file that
+      // fixes it. Hashing the raw bytes gives both: identical content
+      // re-opens to EEXIST (one copy), different content parks its own.
+      const digest = crypto.createHash("sha256").update(raw, "utf-8").digest("hex").slice(0, 8);
+      const partialPath = `${target}.partial.${digest}`;
+      try {
+        await fs.copyFile(target, partialPath, fs.constants.COPYFILE_EXCL);
+      } catch (copyErr) {
+        const code = (copyErr as NodeJS.ErrnoException).code;
+        if (code !== "EEXIST") {
+          console.error(
+            `[ANNOTATION-STORE] Failed to preserve partially-readable file ${target}: ${(copyErr as Error).message}`,
+          );
+        }
+      }
+      console.error(
+        `[ANNOTATION-STORE] ${target} had ${result.skipped.annotations} unreadable annotation(s) and ${result.skipped.replies} unreadable reply(ies); a full copy was kept at ${partialPath}.`,
+      );
+    }
+    return result.doc;
+  }
 
   if (result.error === "corrupt") {
     const quarantinePath = `${target}.corrupt.${Date.now()}`;
@@ -634,9 +666,15 @@ async function loadOne(docHash: string, filePath: string): Promise<AnnotationDoc
   const schemaVersion = result.schemaVersion;
   const futurePath = `${target}.future`;
   try {
-    // rename is not idempotent; unlink any existing `.future` from a prior
-    // downgrade so we always keep the most recent copy.
-    await fs.unlink(futurePath).catch(() => {});
+    // #1791(b): rename is not idempotent, so an existing `.future` from a
+    // PRIOR downgrade is in the way. It used to be unlinked — but `.future` is
+    // the sole surviving copy of that cycle's annotations, so upgrade →
+    // downgrade → upgrade → downgrade destroyed cycle 1 outright. Archive it
+    // under a unique suffix instead (the shape `atomicWrite` already uses;
+    // millisecond resolution alone can collide). `.future` stays the primary
+    // name — `annotation-store-scan.ts` and `doctor.ts` both read it.
+    const archivePath = `${futurePath}.${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+    await fs.rename(futurePath, archivePath).catch(() => {});
     await fs.rename(target, futurePath);
   } catch (renameErr) {
     console.error(

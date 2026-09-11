@@ -1160,6 +1160,11 @@ export async function cleanupStaleTombstones(
 
     const parsed = parseAnnotationDoc(raw);
     if (!parsed.ok) continue; // corrupt/future files have their own lifecycle
+    // #1791(a): a partially-tolerated envelope is not a safe base for a
+    // full-envelope clobber. `rewritten` below is built from `parsed.doc` and
+    // flushed over `<hash>.json`, so rewriting one would durably delete every
+    // row this build could not read.
+    if (parsed.skipped.annotations + parsed.skipped.replies > 0) continue;
     const doc = parsed.doc;
     if (doc.tombstones.length === 0) continue;
 

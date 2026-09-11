@@ -133,6 +133,12 @@ export async function recoverRenamedEnvelope(
       if (!raw.includes(`"contentHash":"${wantHash}"`)) continue;
       const parsed = parseAnnotationDoc(raw);
       if (!parsed.ok) continue;
+      // #1791(a): a partially-tolerated envelope is not a safe base for a
+      // full-envelope clobber. Recovery re-keys `parsed.doc` under the NEW
+      // docHash, flushes it, then unlinks the source — so recovering one would
+      // durably delete every row this build could not read. Skip this
+      // candidate (the function's existing "never fail the recovery" rule).
+      if (parsed.skipped.annotations + parsed.skipped.replies > 0) continue;
 
       const stored = parsed.doc.meta.contentHash;
       if (typeof stored !== "string" || stored !== wantHash) continue;

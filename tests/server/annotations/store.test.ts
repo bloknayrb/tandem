@@ -712,3 +712,115 @@ describe("queueWrite thunk that throws", () => {
     expect(pushNotification).toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// #1791(a) — partially-readable file on load
+// ---------------------------------------------------------------------------
+
+describe("partially-readable file on load (#1791)", () => {
+  const goodRow = {
+    id: "ann_good",
+    author: "claude",
+    type: "comment",
+    range: { from: 0, to: 5 },
+    content: "kept",
+    status: "pending",
+    timestamp: 1,
+    rev: 1,
+  };
+
+  function partialEnvelope(marker: string) {
+    return JSON.stringify({
+      schemaVersion: SCHEMA_VERSION,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A, lastUpdated: 1, marker },
+      annotations: [goodRow, { ...goodRow, id: `ann_future_${marker}`, type: "suggestion" }],
+      tombstones: [],
+      replies: [],
+    });
+  }
+
+  it("loads the readable rows, keeps the original, and parks a full copy", async () => {
+    const annotationsDir = getAnnotationsDir();
+    await fs.mkdir(annotationsDir, { recursive: true });
+    const target = path.join(annotationsDir, `${HASH_A}.json`);
+    await fs.writeFile(target, partialEnvelope("one"));
+
+    const loaded = await createStore(HASH_A, { filePath: FILE_A }).load();
+    expect(loaded.annotations.map((a) => a.id)).toEqual(["ann_good"]);
+
+    const files = await fs.readdir(annotationsDir);
+    // The original is NOT renamed away — this is not a quarantine.
+    expect(files).toContain(`${HASH_A}.json`);
+    const copies = files.filter((f) => f.startsWith(`${HASH_A}.json.partial.`));
+    expect(copies).toHaveLength(1);
+    // The parked copy holds the row the load dropped.
+    const parked = await fs.readFile(path.join(annotationsDir, copies[0] as string), "utf-8");
+    expect(parked).toContain("ann_future_one");
+  });
+
+  it("is idempotent for identical content but parks a SECOND, different partial", async () => {
+    const annotationsDir = getAnnotationsDir();
+    await fs.mkdir(annotationsDir, { recursive: true });
+    const target = path.join(annotationsDir, `${HASH_A}.json`);
+
+    await fs.writeFile(target, partialEnvelope("one"));
+    await createStore(HASH_A, { filePath: FILE_A }).load();
+    await createStore(HASH_A, { filePath: FILE_A }).load();
+    let copies = (await fs.readdir(annotationsDir)).filter((f) =>
+      f.startsWith(`${HASH_A}.json.partial.`),
+    );
+    expect(copies).toHaveLength(1);
+
+    // A different partial envelope must park its own copy — a single fixed
+    // name under COPYFILE_EXCL would preserve nothing here, which is #1791(b)
+    // reproduced inside the fix for #1791(a).
+    await fs.writeFile(target, partialEnvelope("two"));
+    await createStore(HASH_A, { filePath: FILE_A }).load();
+    copies = (await fs.readdir(annotationsDir)).filter((f) =>
+      f.startsWith(`${HASH_A}.json.partial.`),
+    );
+    expect(copies).toHaveLength(2);
+    const bodies = await Promise.all(
+      copies.map((f) => fs.readFile(path.join(annotationsDir, f), "utf-8")),
+    );
+    expect(bodies.some((b) => b.includes("ann_future_one"))).toBe(true);
+    expect(bodies.some((b) => b.includes("ann_future_two"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1791(b) — two downgrade cycles must not destroy the first park
+// ---------------------------------------------------------------------------
+
+describe("repeated future-schema parks (#1791)", () => {
+  it("archives the previous .future instead of unlinking it", async () => {
+    const annotationsDir = getAnnotationsDir();
+    await fs.mkdir(annotationsDir, { recursive: true });
+    const target = path.join(annotationsDir, `${HASH_A}.json`);
+
+    // Cycle 1: a v2 envelope carrying the user's personal note (ADR-027).
+    await fs.writeFile(target, JSON.stringify({ schemaVersion: 2, marker: "CYCLE-1" }));
+    await createStore(HASH_A, { filePath: FILE_A }).load();
+    expect(
+      await fs.readFile(path.join(annotationsDir, `${HASH_A}.json.future`), "utf-8"),
+    ).toContain("CYCLE-1");
+
+    // Cycle 2: upgrade → downgrade again. One cycle looks fine; two is what
+    // showed the old `fs.unlink(futurePath)` destroying the only copy.
+    await fs.writeFile(target, JSON.stringify({ schemaVersion: 2, marker: "CYCLE-2" }));
+    await createStore(HASH_A, { filePath: FILE_A }).load();
+
+    const files = await fs.readdir(annotationsDir);
+    expect(
+      await fs.readFile(path.join(annotationsDir, `${HASH_A}.json.future`), "utf-8"),
+    ).toContain("CYCLE-2");
+    const archives = files.filter(
+      (f) => f.startsWith(`${HASH_A}.json.future.`) && f !== `${HASH_A}.json.future`,
+    );
+    expect(archives).toHaveLength(1);
+    expect(await fs.readFile(path.join(annotationsDir, archives[0] as string), "utf-8")).toContain(
+      "CYCLE-1",
+    );
+  });
+});
