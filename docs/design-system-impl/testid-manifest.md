@@ -33,6 +33,7 @@
 - Normalises Svelte `{expr}` and JS `${expr}` to the literal `{*}` so the snapshot is stable across local variable renames
 - Resolves a small lookup of known testid constants (currently `ERROR_BOUNDARY_RECOVER_BTN_TESTID` / `ERROR_BOUNDARY_RELOAD_BTN_TESTID` → `error-boundary-recover-btn` / `error-boundary-reload-btn`) — add new entries to `CONSTANT_RESOLUTIONS` when a new constant ships
 - Filters out bare-identifier wrapper passthroughs (e.g. `{testId}`) because the literal selector arrives via the call site
+- A second pass (#1709) scans `el.dataset.testid = "..."` assignments the same way — the imperative-DOM sites the attribute scan structurally cannot see (they never write the literal string `data-testid=`) — with the same quoted-literal/bare-identifier split
 - Sorts the unique set and asserts against
   `tests/design-system-impl/__snapshots__/testid-set.snap.txt`
 
@@ -85,6 +86,11 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `decorations-row-{authorship,comments,highlights,notes}`,
   `decorations-settings-link`
 - `mode-{toggle,solo-btn,tandem-btn}`
+- `slash-command-menu` — imperative, set via `el.dataset.testid` in
+  `editor/slash-menu/extension.ts`, not a template attribute
+- `heading-chevron` — imperative, set via `el.dataset.testid` in
+  `editor/extensions/heading-collapse.ts`; backs 7 Playwright locators in
+  `tests/e2e/heading-collapse.spec.ts`
 
 ### Selection popup (audience-first, ADR-027)
 - `popup-{annotate-btn,annotation-input,note-submit,comment-submit,highlight-{*},show-formatbar-btn}`

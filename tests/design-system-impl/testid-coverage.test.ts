@@ -166,6 +166,72 @@ for (const file of walk(CLIENT_ROOT)) {
   }
 }
 
+// Second scan pass: `el.dataset.testid = "..."` assignments (imperative DOM
+// sites) are invisible to the attribute-literal scan above — they never
+// write the `data-testid=` string, so a testid assigned this way is
+// unfixably invisible to the snapshot gate. The lookahead `(?!=)` excludes
+// `===`/`!==` comparisons, which are reads, not declarations.
+const DATASET_ASSIGN = /\.dataset\.testid\s*=(?!=)/g;
+const LEADING_IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*/;
+
+/**
+ * Scan one source string for `.dataset.testid = ...` assignments (the
+ * right-hand side is raw JS/TS here, never a Svelte template attribute, so
+ * `parseValue`'s quote/`{expr}` handling only covers the quoted-literal
+ * case — a bare identifier needs its own check before falling through to
+ * "unparseable").
+ */
+function scanDatasetAssignments(src: string): {
+  declarations: { testid: string; raw: string }[];
+  skipped: { line: number }[];
+} {
+  const found: { testid: string; raw: string }[] = [];
+  const skippedHere: { line: number }[] = [];
+  for (const m of src.matchAll(DATASET_ASSIGN)) {
+    let idx = m.index + m[0].length;
+    while (idx < src.length && (src[idx] === " " || src[idx] === "\t")) idx++;
+    const open = src[idx];
+    if (open === '"' || open === "'") {
+      const raw = parseValue(src, idx);
+      if (raw === null) {
+        skippedHere.push({ line: src.slice(0, m.index).split("\n").length });
+        continue;
+      }
+      const normalised = normalise(raw);
+      if (normalised.length === 0) continue;
+      if (normalised === "{*}") continue;
+      found.push({ testid: normalised, raw });
+      continue;
+    }
+    // A bare identifier (`el.dataset.testid = someVar`) is a wrapper
+    // passthrough, mirroring the attribute pass's BARE_IDENT filter above —
+    // routing it to `skipped` instead would make a future legitimate
+    // `el.dataset.testid = someVar` permanently, unfixably red.
+    if (LEADING_IDENT.test(src.slice(idx))) continue;
+    skippedHere.push({ line: src.slice(0, m.index).split("\n").length });
+  }
+  return { declarations: found, skipped: skippedHere };
+}
+
+for (const file of walk(CLIENT_ROOT)) {
+  const src = readFileSync(file, "utf-8");
+  const { declarations: found, skipped: skippedHere } = scanDatasetAssignments(src);
+  for (const d of found) {
+    declarations.push({
+      file: relative(ROOT, file).replace(/\\/g, "/"),
+      testid: d.testid,
+      raw: d.raw,
+    });
+  }
+  for (const s of skippedHere) {
+    skipped.push({
+      file: relative(ROOT, file).replace(/\\/g, "/"),
+      line: s.line,
+      reason: "multi-line or unparseable value",
+    });
+  }
+}
+
 const sortedSet = [...new Set(declarations.map((d) => d.testid))].sort();
 
 describe("test-selector coverage — src/client/", () => {
@@ -181,5 +247,28 @@ describe("test-selector coverage — src/client/", () => {
 
   it("no testid declarations were skipped due to multi-line values", () => {
     expect(skipped).toEqual([]);
+  });
+
+  it("scans dataset.testid assignments but not comparisons, and skips bare identifiers (#1709)", () => {
+    const src = 'x.dataset.testid = someVar; y.dataset.testid === "not-an-assignment";';
+    const { declarations: found, skipped: skippedHere } = scanDatasetAssignments(src);
+    // Neither line produces a declaration or a skip: the `===` comparison is
+    // excluded by the lookahead (not a match at all, so not even attempted),
+    // and the bare-identifier assignment is a wrapper passthrough.
+    expect(found).toEqual([]);
+    expect(skippedHere).toEqual([]);
+  });
+
+  it("scans a quoted dataset.testid literal into a declaration (#1709)", () => {
+    const { declarations: found, skipped: skippedHere } = scanDatasetAssignments(
+      'el.dataset.testid = "synthetic-example";',
+    );
+    expect(found).toEqual([{ testid: "synthetic-example", raw: "synthetic-example" }]);
+    expect(skippedHere).toEqual([]);
+  });
+
+  it("finds the two live dataset.testid selectors (#1709)", () => {
+    expect(sortedSet).toContain("slash-command-menu");
+    expect(sortedSet).toContain("heading-chevron");
   });
 });
