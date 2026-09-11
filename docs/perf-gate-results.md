@@ -409,7 +409,11 @@ frame gap, 0 long tasks). No residual over-budget number and no residual
 click-dispatch motion coupling to file a follow-up issue for — #1734 closes
 clean on this run.
 
-`docs/roadmap.md` §"Performance gate" and this document's own historical rows
-above (`§Harness configuration`-adjacent table, and "What the accept
-measurement actually spends") describe the OLD definition; they are left as
-the historical record of what run 1/2 actually measured, not restated.
+This document's own historical rows above (`§Harness configuration`-adjacent
+table, and "What the accept measurement actually spends") describe the OLD
+definition; they are left as the historical record of what run 1/2 actually
+measured, not restated. `docs/roadmap.md` §"Performance gate" does not define
+"reflected" at all — its pass condition (annotation create/accept reflects in
+the editor < 500ms) is definition-agnostic — so there is no old definition
+there to leave as a record; it is corrected separately to point here now that
+runs 1–3 exist.
