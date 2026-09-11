@@ -16,6 +16,14 @@ body: `Refs #1824`, naming what remains. Ledger rows:
   (`SettingsAboutTab.svelte`).
 - **LicenseWall read-only chat copy.** Already correct; `LicenseWall.svelte`'s docblock (`:9-24`)
   narrates the fix. No recent commit touches it — filed against a stale read.
+- **`docs/troubleshooting.md:76` "Tauri app"** — the bullet's other half (alongside the SKILL.md
+  wording, filed as #1961) is already gone: `grep -n 'Tauri app' docs/troubleshooting.md` returns
+  no match on current master. Fixed by an earlier wave; not re-touched here.
+- **`EmptyState.svelte` internal CLI hints** — the issue's "Internal vocabulary in Settings /
+  About / EmptyState / toasts" bullet names this file, but its only `tandem`-CLI-shaped text is in
+  comments (`:14`, `:160`); the visible copy (`empty-state-setup-claude`,
+  `empty-state-setup-restart-anyway`) never names the CLI. The Settings/About/toasts half of the
+  same bullet is item N below. No change needed here.
 
 ## Answered, not fixed
 
@@ -31,6 +39,38 @@ body: `Refs #1824`, naming what remains. Ledger rows:
 - **`skills/tandem/SKILL.md:159` "the Tauri app"** — real gap, but outside this group's ownership
   (`skill=false`, and the file's own version/hash pair spans two test sites, not one). **Filed as
   #1961.**
+- **Three window-level Escape owners (palette / Toolbar / SettingsModal) compete.** Coordination
+  already exists and is deliberate, not accidental: `src/client/utils/escape-owner.ts`
+  (`escapeIsClaimed`/`ESCAPE_OWNER_ATTR`) lets a nested popover win against a capture-phase
+  ancestor listener, and `SettingsModal.svelte`'s Escape handler is registered on `document` (not
+  `window`) specifically so it intercepts, per its own comment, "BEFORE other window-level
+  handlers (e.g. command palette, find/replace bar) react to the same Escape." The one gap was the
+  reverse direction — the palette opening *over* an already-open Settings modal, at which point
+  its window-capture Escape listener (`CommandPalette.svelte:286-293`, unconditional on `open`,
+  no focus check) would out-race SettingsModal's document-bubble one — and that is exactly what
+  item I below closes, in this same PR, by refusing to open the palette while
+  `settingsModalOpen`. Toolbar's selection popup is not reachable at all while Settings is open:
+  `SettingsModal.svelte:617-618` renders a full-viewport `position: fixed` scrim
+  (`settings-modal-scrim`) over the editor and the modal's focus trap keeps keyboard focus inside
+  it, so there is no way to select editor text (the popup's only trigger) while it is up. With
+  item I landing here, the three named surfaces cannot be simultaneously reachable, so there is no
+  live three-way race left to fix. No change.
+- **Item J — `focus-trap.ts:27-33` skips `position: fixed` descendants.** Refuted, not fixed:
+  `focusablesWithin` has exactly two callers (`focus-trap.ts:49` via `trapTab`, and
+  `SettingsModal.svelte:355`), always scoped to a trapped dialog container. Every `position:
+  fixed` element under any of those containers is either the scrim or the dialog box itself
+  (`SettingsModal.svelte:618,830`, `HelpModal.svelte:177`, `IntegrationWizardModal.svelte:1408`,
+  `CoworkAdminDeclinedModal.svelte:262,276`, `LicenseWall.svelte:132`, `ModelEditModal.svelte:327`)
+  — every descendant of a fixed ancestor already has that ancestor as its `offsetParent`, so the
+  existing filter already includes it; `CoworkAdminDeclinedModal.svelte:137`'s `.cad-toast` is
+  fixed but sits outside `modalEl` (`:171`) and holds no focusable. The proposed filter change
+  (`el.offsetParent !== null || getComputedStyle(el).position === "fixed"`) would also **re-admit
+  hidden fixed elements**: the docblock at `focus-trap.ts:29` names `offsetParent === null` as
+  what "catches `display:none` and detached subtrees," and `getComputedStyle(el).position` on a
+  `display:none` element still reports `"fixed"` (position is not layout-resolved), so the change
+  would let `trapTab`'s wrap/recover branches try to `.focus()` an unfocusable node. No known
+  defect instance, a real regression vector, and no test at any level distinguishes the fix from a
+  no-op — `focus-trap.ts` is unchanged in this PR.
 
 ## Filed separately (cut from this PR — see header)
 
@@ -79,9 +119,28 @@ assert `getByText(/Dismiss/)` exists and `queryByText(/^Reject/)` is `null`.
 
 ### E — No paste-sanitizer regression test
 
-Schema-only safety today, unpinned. Add a test to `tests/client/plain-paste.test.ts` (or a new
-sibling) pasting `<img src=x onerror=alert(1)>` and `<a href="javascript:alert(1)">`, asserting
-neither `onerror` nor a `javascript:` href survives. No source change.
+Schema-only safety today, unpinned. **Not `tests/client/plain-paste.test.ts`** — that file drives
+`buildPlainTextSlice` (the *plain-text* paste builder) with a bare string against a 3-node toy
+schema; it never parses HTML, so pasting `<img src=x onerror=alert(1)>` through it just yields a
+paragraph whose text content is that literal string and proves nothing about sanitization. The
+real surfaces are `editor-props.ts:63-66`'s HTML paste path and `image-src-safety.ts`, over the
+**real** editor schema (`Image.configure({ allowBase64: true })` at `editor-extensions.ts:407` —
+an image node exists, so the `onerror` drop is a genuine parse-time claim; the link extension's
+`isAllowedUri`, `editor-extensions.ts:380-382`, blanks disallowed hrefs at **renderHTML**, per its
+own docblock at `:51`).
+
+Add `tests/client/paste-sanitize.test.ts`: build the real schema (`getSchema(editorExtensions)`
+or an `Editor` instance's `.schema`), parse `<img src=x onerror=alert(1)>` and
+`<a href="javascript:alert(1)">` with `DOMParser.fromSchema(schema).parseSlice(...)` (via
+`domFromHtml` / `happy-dom`), and assert against the **serialized** result
+(`DOMSerializer.fromSchema(schema).serializeFragment(...)`) — no `onerror` attribute on the
+emitted node, no `javascript:` value on an emitted `href` — never against the markup string. State
+in the test (and the PR body) which layer each assertion pins: the `onerror` case is a parse-time
+attribute drop (schema-level), the `javascript:` case is a render-time blank (`isAllowedUri`); if
+the href instead survives in the parsed *model* and is only blanked at `renderHTML`, assert on the
+`DOMSerializer` output for that case specifically and say so in the PR body — that is still "no
+`javascript:` href survives," just pinned one layer later than the parse-time case. No source
+change.
 
 ### F — Command palette shortcut rows discard the opener on Enter
 
@@ -123,17 +182,6 @@ also include `settingsModalOpen`. **Test:** same structural-assertion approach a
 `K-client-1713.md` (no runtime harness mounts `App.svelte`) — assert Ctrl+Shift+P is a no-op
 while `settingsModalOpen` is true, and `popupSuppressed` reads true once it is.
 
-### J — `focus-trap.ts` skips `position: fixed` descendants
-
-`focusablesWithin` filters on `el.offsetParent !== null`, which is `null` by spec for
-`position: fixed` elements. Change the filter to
-`el.offsetParent !== null || getComputedStyle(el).position === "fixed"` — reusing the exact idiom
-`tests/e2e/forced-colors.spec.ts:193` already proves in real Chromium (not `getClientRects()`,
-which happy-dom fakes as unconditionally non-empty). **No unit test**: both
-`tests/client/focus-trap.test.ts` and `dialog-focus-trap.test.ts` run under happy-dom, which
-doesn't implement `offsetParent` at all — every form of this fix is equally unpinnable there.
-Verified by reading + this group's `test:e2e` run only; stated explicitly, not a silent gap.
-
 ### L — ErrorBoundary shows a raw error with no saved/unsaved reassurance
 
 `ErrorBoundary.svelte`'s `failed` snippet shows `error.message` with no data-loss reassurance.
@@ -151,11 +199,13 @@ each toast, assert desktop mentions "Open Log Folder" and never "tandem doctor".
 
 ## Done when
 
-Every "Fixed here" item lands with its own test (item J excepted, stated above); every "Answered,
-not fixed" item's reasoning is in the PR body with its issue number (#1960, #1961); every "Filed
-separately" item's number (#1963, #1964, #1965) is in the PR body; every "Already done" item
-re-verified once at implementation time and not re-touched; `npm run typecheck`, `npm test`,
-`npm run test:e2e` green; Critical Rule 7 snapshot untouched (no selector renames in this batch).
+Every "Fixed here" item lands with its own test; every "Answered, not fixed" item's reasoning is
+in the PR body, with its issue number where one exists (#1960, #1961) and, for the Escape-owners
+and item-J bullets (neither filed — refuted/covered-by-item-I in place, per the post-cut review),
+the evidence enumerated above; every "Filed separately" item's number (#1963, #1964, #1965) is in
+the PR body; every "Already done" item re-verified once at implementation time and not re-touched;
+`npm run typecheck`, `npm test`, `npm run test:e2e` green; Critical Rule 7 snapshot untouched (no
+selector renames in this batch); `focus-trap.ts` untouched (item J refuted, not fixed).
 
 ## Not in scope
 
@@ -190,3 +240,39 @@ form is the only form shipped.
 **Consequence:** this PR now Refs #1824 rather than closing it, per the group's own "cross-check
 Closes against your own notes" rule — three bullets remain open under #1963/#1964/#1965 in
 addition to the two already-filed #1960/#1961 and the already-filed screenshot #1962.
+
+## Review corrections (post-cut)
+
+Three findings from a second review pass, adopted directly against current master (no new
+mechanism added):
+
+- **Item J refuted, not fixed.** The proposed `focus-trap.ts` filter change had no named defect
+  instance — every `position: fixed` element under any trapped dialog is the scrim or the dialog
+  box itself, already covered because a fixed ancestor is its descendants' `offsetParent` — and it
+  re-admits `display:none; position:fixed` elements into the tab order (`getComputedStyle(...)
+  .position` reports `"fixed"` on a hidden element too, unlike `offsetParent`), which is a live
+  regression vector with no test at any level to catch it. Item J is removed from "Fixed here" and
+  moved into "Answered, not fixed" with the full container enumeration.
+  `src/client/utils/focus-trap.ts` is untouched by this PR.
+- **The "Three window-level Escape owners… compete" bullet was unaccounted.** It is a literal
+  bullet in #1824's body that matched none of the spec's four buckets. Recorded now under
+  "Answered, not fixed": the existing `escape-owner.ts` claim mechanism plus SettingsModal's
+  deliberately-ordered `document`-level (not `window`-level) Escape handler already arbitrate the
+  named surfaces, and the one live gap — the palette opening over an already-open Settings modal —
+  is closed by item I in this same PR; Toolbar's selection popup is unreachable while Settings is
+  open (full-viewport scrim + focus trap block editor selection). Two more sub-bullets of the same
+  issue-body line the spec had silently dropped are recorded too, both already N/A on master:
+  `docs/troubleshooting.md`'s "Tauri app" text is gone (grep confirms no match), and
+  `EmptyState.svelte`'s only `tandem`-CLI-shaped text is in source comments, never visible copy.
+- **Item E's host file was wrong.** `tests/client/plain-paste.test.ts` drives the *plain-text*
+  paste builder (`buildPlainTextSlice`) with a bare string against a 3-node toy schema — it never
+  parses HTML, so the originally-specified assertion couldn't exercise the sanitizer at all. Item
+  E now specifies a new `tests/client/paste-sanitize.test.ts` built on the real editor schema, with
+  `DOMParser.fromSchema(...).parseSlice(...)` in and `DOMSerializer` out, asserting against the
+  parsed/serialized model rather than the markup string, and naming which layer (parse-time schema
+  drop vs. render-time `isAllowedUri` blank) each assertion pins.
+
+No item moved between "Filed separately" and "Fixed here"; the three already-filed issue numbers
+(#1963, #1964, #1965) and the two already-filed "Answered, not fixed" numbers (#1960, #1961) are
+unchanged. No new issue was filed by this pass — the one candidate (the Escape-owners bullet) had
+a direct, evidenced answer instead.
