@@ -15,9 +15,17 @@ import { stripRustComments, stripRustTestModules } from "./rust-sources.js";
  */
 describe("stripRustComments", () => {
   it("does not treat // inside a plain string literal as a comment", () => {
-    const src = 'const V: &str = "http://example.com";\nfn after() {}\n';
+    // `//fileserver/tools` — a `//` NOT preceded by `:` — is the actual shape
+    // of the live bug this fixed (`src-tauri/src/autostart.rs`'s
+    // `"//fileserver/tools/Tandem/tandem.exe"` UNC path). `http://example.com`
+    // would pass against the OLD regex too: its deleted `[^:]` carve-out
+    // already special-cased a `//` preceded by `:`, so that fixture pinned
+    // nothing about literal-awareness. Verified empirically against the old
+    // `src.replace(/\/\*[\s\S]*?\*\//g,"").replace(/(^|[^:])\/\/.*$/gm,"$1")`:
+    // it passes on `http://example.com` and fails on `//fileserver/tools`.
+    const src = 'const V: &str = "//fileserver/tools";\nfn after() {}\n';
     const out = stripRustComments(src);
-    expect(out).toContain('"http://example.com"');
+    expect(out).toContain('"//fileserver/tools"');
     expect(out).toContain("fn after() {}");
   });
 
