@@ -21,7 +21,7 @@
  */
 
 import type { Hocuspocus } from "@hocuspocus/server";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { MAX_SYNC_PAYLOAD_BYTES, startHocuspocus } from "../../src/server/yjs/provider.js";
 import { allocPort } from "../helpers/alloc-port.js";
@@ -77,8 +77,16 @@ describe("#1822 item 2 — Hocuspocus caps inbound WebSocket frames", () => {
     expect(wss.options.maxPayload).toBe(MAX_SYNC_PAYLOAD_BYTES);
   });
 
-  it("(b) an over-cap frame is closed with code 1009", { timeout: 60_000 }, async () => {
+  it("(b) an over-cap frame is closed with code 1009, and SAYS SO", {
+    timeout: 60_000,
+  }, async () => {
     await start();
+    // The server-side half runs in this process, so the operator log is
+    // observable here. `logOversizedFrame`'s own unit specs live in
+    // `provider.test.ts`; this is what pins the WIRING — Hocuspocus attaches
+    // its own swallowing `error` listener inside `listen()`, so the listener
+    // has to be added after that and against the live WebSocketServer.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     const ws = connect();
     const closeCode = await new Promise<number>((resolve, reject) => {
       ws.once("error", reject);
@@ -91,5 +99,11 @@ describe("#1822 item 2 — Hocuspocus caps inbound WebSocket frames", () => {
     // closed": an origin rejection, an auth failure and a crash all close the
     // socket too, and only 1009 says the frame cap is what did it.
     expect(closeCode).toBe(1009);
+    const lines = errors.mock.calls.flat().join("\n");
+    errors.mockRestore();
+    // Without this line the shipped symptom is a provider that reconnects,
+    // re-sends the identical frame and never converges, with nothing in the
+    // log to say why.
+    expect(lines).toContain(String(MAX_SYNC_PAYLOAD_BYTES));
   });
 });

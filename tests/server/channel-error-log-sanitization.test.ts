@@ -18,7 +18,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LOG_FIELD_MAX, registerChannelRoutes } from "../../src/server/mcp/channel-routes.js";
+import { LOG_FIELD_MAX } from "../../src/server/log-sanitize.js";
+import { registerChannelRoutes } from "../../src/server/mcp/channel-routes.js";
 
 type Handler = (req: unknown, res: unknown, next?: unknown) => void;
 

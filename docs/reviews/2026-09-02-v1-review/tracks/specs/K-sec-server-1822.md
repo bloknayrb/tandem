@@ -112,3 +112,71 @@ Shape: `next(err)` when `res.headersSent`; `err.status` when numeric, else 500; 
 **Adopted directly**
 
 1. **Item 3's `/mcp` arm must discriminate on `err.type`, not on the path.** As written, `req.path === "/mcp"` was the only discriminant and every error on that endpoint got `-32600` plus "Request body exceeds this endpoint's size limit." The repo is on Express 5 (`package.json:151`, installed 5.2.1), which forwards a rejected promise from an `async` route handler to `next(err)` — and all three `/mcp` handlers are `async` (`server.ts:604` `mcpApp.post`, `:639` `mcpApp.get`, `:659` `mcpApp.delete`, each awaiting `dispatchToSession` → `transport.handleRequest`). So any transport or session failure before headers are sent would have been reported to Claude Code as a size-limit error, and a malformed body (`entity.parse.failed`, `status: 400`) would have been answered `400` + `-32600` + a false size message. The spec's only `/mcp` specs exercised the 413 path, so nothing would have reddened. The Fix section's `/mcp` bullet now maps `entity.too.large` → `-32600` (413), `entity.parse.failed` → `-32700` (400), everything else → `-32603` (500), with the Express-5 forwarding stated inline; the Tests section gains a malformed-JSON `POST /mcp` spec asserting `error.code === -32700` and a message that does not mention a size limit.
+
+
+## Review corrections (PR round 1)
+
+Eight findings across three reviewers, collapsing to five distinct defects. All adopted; none
+disputed. Each is mutation-tested against a named spec (revert the line, watch it redden, restore
+from a file copy).
+
+**Adopted directly**
+
+1. **`req.path === "/mcp"` is the wrong predicate** (cr-1, security-reviewer-2). Express 5 defaults
+   to `strict: false` / `caseSensitive: false`, so `POST /mcp/` and `POST /MCP` reach the same
+   `/mcp` handlers and answer normally — but the exact compare missed them, handing those clients
+   the `/api` envelope for a parse or size failure. `src/cli/mcp-stdio.ts` classifies on
+   `error.code` and finds none in that shape, so the call surfaces as an opaque transport error.
+   Reproduced against the real server, both forms. Fixed with `isMcpPath()` —
+   `path.replace(/\/+$/, "").toLowerCase() === "/mcp"`, the same normalization `api-routes.ts`'s
+   `normalizeApiPath` already applies for this exact Express-5 behaviour. Pinned by two specs in
+   `server-security-invariants.test.ts`, one per form.
+
+2. **The handler was scoped to `mcpApp`, so the outer app still leaked** (cr-3,
+   security-reviewer-1). Express offers an error only to the handlers registered *after* the layer
+   that raised it, and every `/api` registrar is on the OUTER app. Reproduced: `DELETE
+   /api/integrations/secrets/%zz` raises a `URIError` in the router's own param decode, past every
+   `mcpApp` handler, and answered `400 text/html` carrying absolute `node_modules/router/lib/`
+   frames — the operator's username and install path, the very leak item 3 was filed for, reached
+   by a different trigger at the same reachability. The handler is now extracted as
+   `bodyErrorHandler` and registered **twice**: on `mcpApp` (which owns the body parser that raises
+   the 413) and on `app` after the last registrar. Pinned by a `%zz` spec.
+
+3. **The `MAX_SYNC_PAYLOAD_BYTES` docblock's central claim was arithmetically false**
+   (security-reviewer-4, general-purpose-1, and cr-4's framing). "No cap at or below the default
+   fits such a document" fails at its own low end: 50 MiB of text at the measured 1.02x is ~51 MiB,
+   which both this cap and ws's 100 MiB default accept. A `MAX_FILE_SIZE` document's full state
+   spans ~51–154 MiB and therefore **straddles** the cap rather than sitting above it, so the cap
+   does narrow the supported band. No code change — the cap itself is defensible and raising it
+   above ws's default would bound nothing — but the docblock now states the regressed band
+   ((66 MiB, 100 MiB], reachable from ~21 MiB of text at 3.09x and ~44 MiB at 1.51x, unreachable at
+   1.02x because the text needed exceeds `MAX_FILE_SIZE`), and records that raising the cap was
+   considered and declined.
+
+4. **The 1009 wedge had no signal** (cr-4). ws answers an over-cap frame with close 1009,
+   `HocuspocusProvider` reconnects and re-sends the identical frame, and Hocuspocus's own socket
+   `error` listener routes it to `debugger.log`, which is off — so the shipped symptom for the band
+   above was a document that silently stopped syncing. `logOversizedFrame` now turns exactly that
+   ws code (`WS_ERR_UNSUPPORTED_MESSAGE_LENGTH`) into one log line naming the constant, wired on
+   the live `WebSocketServer` after `listen()`. Three specs: the pure function logs and names the
+   number, stays silent for every other socket error, and — the wiring half — the real 66 MiB-frame
+   spec now asserts the line appears alongside the 1009.
+
+5. **`provider.ts`'s own log injection was unnoticed, not accepted** (cr-5). `token` is whatever
+   the peer put in the Yjs Auth message and `onAuthenticate` runs pre-authentication;
+   `token.slice(0, 8)` framed a complete OSC-0 sequence (`ESC ]0;x BEL` is six characters) rather
+   than truncating it. The two `assertAllowedOrigin` sites are the same class. `sanitizeForLog`
+   and `LOG_FIELD_MAX` moved out of `channel-routes.ts` into `src/server/log-sanitize.ts` —
+   `provider.ts` importing from an MCP route module would be an edge in the wrong direction, since
+   `channel-routes.ts` imports `provider.ts`. The token site is extracted as
+   `describeRejectedToken` so its hygiene is unit-testable without hand-encoding an Auth frame;
+   it sanitizes **before** slicing, so the eight-character budget is not spent on bytes about to be
+   stripped. Four specs.
+
+**Not done, and why**
+
+- **`docs/security.md` stays untouched.** The `:166` citation is stale (`server.ts:517-547`; the
+  parser block is now `:625-663`) and the JSON-413 behaviour is now worth a clause there. Both were
+  written and then reverted: the scope cut above removed *all* `docs/security.md` edits from this
+  PR by name, including this citation, and re-adding them here would overturn a recorded decision
+  on a review round that raised neither. The drift is real and belongs in a docs PR.

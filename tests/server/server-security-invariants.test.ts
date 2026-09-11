@@ -583,3 +583,61 @@ describe("#1822 item 3 — oversized and malformed bodies leak no filesystem pat
     expect(res.status).not.toBe(413);
   });
 });
+
+// ── #1822 item 3, review round 1: the envelope choice and the outer app ───────
+//
+// Two follow-ups to the block above, both reproduced against the real server.
+//
+// (1) The JSON-RPC arm used to key on `req.path === "/mcp"`. Express 5 defaults
+//     to `strict: false` / `caseSensitive: false`, so `POST /mcp/` and
+//     `POST /MCP` reach the SAME `/mcp` handlers and answer normally — but the
+//     exact compare missed them, so a parse or size failure handed those
+//     clients the `/api` envelope. `src/cli/mcp-stdio.ts` classifies on
+//     `error.code` and finds none in that shape.
+//
+// (2) The handler was registered on `mcpApp` only. Express offers an error to
+//     the handlers registered after the layer that raised it, and the OUTER app
+//     carries every `/api` registrar — so a `URIError` from the router's own
+//     param decode was past every `mcpApp` handler and reached `finalhandler`,
+//     which serves `err.stack` with absolute `node_modules` frames whenever
+//     NODE_ENV !== "production".
+
+describe("#1822 item 3 (round 1) — envelope normalization and the outer app", () => {
+  /** The three things Express's HTML error page carries and ours must not. */
+  function expectNoLeak(raw: string): void {
+    expect(raw).not.toContain("node_modules");
+    expect(raw).not.toContain("<html");
+    expect(raw).not.toContain("URIError");
+  }
+
+  // `/mcp/` and `/MCP` both route to the real /mcp handlers; an exact-string
+  // compare on req.path does not see either.
+  for (const path of ["/mcp/", "/MCP"]) {
+    it(`a malformed POST ${path} still gets the JSON-RPC envelope`, async () => {
+      const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Host: `127.0.0.1:${port}` },
+        body: '{"broken":',
+      });
+      const body = (await res.json()) as Record<string, unknown>;
+      // The discriminator: `error` as a bare string is the /api envelope.
+      expect(body.jsonrpc).toBe("2.0");
+      expect(body).toMatchObject({ error: { code: -32700 } });
+    });
+  }
+
+  it("a URIError from an OUTER-app route's param decode answers JSON, not a stack", async () => {
+    // `%zz` is not a valid percent-escape, so the router throws while decoding
+    // `:ref` on /api/integrations/secrets/:ref — a layer on the outer app,
+    // past every mcpApp error handler. This is what reddens if the outer
+    // registration is dropped and only the mcpApp copy survives.
+    const res = await fetch(`http://127.0.0.1:${port}/api/integrations/secrets/%zz`, {
+      method: "DELETE",
+      headers: { Host: `127.0.0.1:${port}` },
+    });
+    expect(res.headers.get("content-type")).toMatch(/application\/json/);
+    const raw = await res.text();
+    expectNoLeak(raw);
+    expect(JSON.parse(raw)).toMatchObject({ error: "INTERNAL_ERROR" });
+  });
+});
