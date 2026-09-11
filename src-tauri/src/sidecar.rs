@@ -150,6 +150,103 @@ pub(crate) const SIDECAR_UNLOCK_DEADLINE_SECS: u64 = 15;
 #[cfg(target_os = "windows")]
 const PORT_HOLDER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_RESTARTS: u32 = 3;
+
+/// How many steady-state crash restarts are allowed inside
+/// `CRASH_RESTART_WINDOW` before the breaker trips (#1809).
+///
+/// **The window is the point, not the count.** A lifetime counter would make a
+/// day-long session permanently unrecoverable after three unrelated crashes
+/// hours apart; a sliding window self-heals in five minutes and still refuses
+/// to spin on a sidecar that cannot stay up.
+///
+/// Two consequences are accepted rather than engineered around, recorded here
+/// so a reviewer does not re-derive them as bugs:
+///
+/// - **The window is never reset by a successful manual recovery.** Clearing
+///   the history when the user presses Restart server would put a reset on a
+///   path that has no idea whether the underlying fault is fixed.
+/// - **The budget is consumed before `restart_sidecar` reports anything.** It
+///   early-returns on a failed `RestartGate::try_acquire()` and again on
+///   `!spawn_allowed()`, and threading those verdicts back would make the
+///   decision impure and untestable.
+const MAX_CRASH_RESTARTS: usize = 3;
+/// The sliding window `MAX_CRASH_RESTARTS` is counted over. See its docblock.
+const CRASH_RESTART_WINDOW: Duration = Duration::from_secs(300);
+
+/// Timestamps of the steady-state crash restarts inside the current window.
+///
+/// A `std::sync::Mutex` (const-constructible since Rust 1.63), not a tokio one:
+/// every access is a short, non-awaiting prune-and-push, and the call site
+/// binds and DROPS the guard before its `match` for exactly that reason.
+static CRASH_RESTARTS: Mutex<Vec<std::time::Instant>> = Mutex::new(Vec::new());
+
+/// What to do about a `CommandEvent::Terminated` that arrived after boot.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CrashRestartDecision {
+    /// Not our business: a superseded child, a crash the boot loop is already
+    /// retrying, or a spawn we are deliberately not allowed to make.
+    Ignore,
+    /// Respawn through `restart_sidecar`.
+    Restart,
+    /// Too many crashes in the window — stop trying and surface it.
+    BreakerTripped,
+}
+
+/// Should a post-boot sidecar termination be restarted?
+///
+/// Pure, so `cargo test` reaches every arm without an `AppHandle`. The three
+/// guards run in this order and each one is load-bearing:
+///
+/// 1. **`!was_current_child` -> `Ignore`, history untouched. FIRST, and not
+///    optional.** `Terminated` is delivered per spawn attempt over a
+///    `channel(1)` behind `child.wait()`, drain tasks are never cancelled, and
+///    the drain loop logs every stdout/stderr line before reaching `Terminated`
+///    — so child A's event can land after child B is already in the slot and
+///    already healthy (see `terminated_clears_slot`, and the live "leaving it
+///    (newer child)" arm in `clear_terminated_slot`). Without this input the
+///    decision would see `healthy = true, spawn_allowed = true`, return
+///    `Restart`, and `restart_sidecar` would read `owns_child` off a slot still
+///    holding the live child B — POSTing `/api/shutdown` at a healthy sidecar
+///    and then hard-killing it.
+/// 2. **`!healthy` -> `Ignore`, history untouched.** During boot the same drain
+///    task fires `Terminated` while `start_sidecar`'s `0..=MAX_RESTARTS` loop is
+///    still retrying; respawning there double-spawns into the slot that loop is
+///    about to fill. `SIDECAR_HEALTHY` is precisely "the boot loop already
+///    returned `Started`". `restart_sidecar` clears it via
+///    `clear_healthy_under_lock` *before* stopping, so a user-initiated restart
+///    also lands here. The history must not be touched before this check, or
+///    the boot retries would burn the steady-state budget.
+/// 3. **`!spawn_allowed` -> `Ignore`, history untouched.** Covers `EXITING`
+///    (Quit) and `SIDECAR_SHUTTING_DOWN` — which, since #1808, is held across
+///    the update DOWNLOAD as well as the install. A crash during a long
+///    download is therefore not restarted until the guard drops; accepted,
+///    because the alternative is a fresh child landing in the slot the
+///    installer is about to overwrite on disk.
+///
+/// **Every termination past those three is treated as a crash, deliberately.**
+/// The caller binds `CommandEvent::Terminated(status)` and this function never
+/// reads `status.code`: an outside `POST /api/shutdown` and a Task-Manager kill
+/// produce the same event with `SIDECAR_HEALTHY` still true, and the desktop app
+/// owns this sidecar. The two deliberate stops that matter — Quit and an update
+/// install — are already covered by guard 3.
+fn crash_restart_decision(
+    was_current_child: bool,
+    healthy: bool,
+    spawn_allowed: bool,
+    history: &mut Vec<std::time::Instant>,
+    now: std::time::Instant,
+) -> CrashRestartDecision {
+    if !was_current_child || !healthy || !spawn_allowed {
+        return CrashRestartDecision::Ignore;
+    }
+    history.retain(|t| now.duration_since(*t) < CRASH_RESTART_WINDOW);
+    history.push(now);
+    if history.len() <= MAX_CRASH_RESTARTS {
+        CrashRestartDecision::Restart
+    } else {
+        CrashRestartDecision::BreakerTripped
+    }
+}
 /// The two TCP ports the sidecar binds. Used by the port-holder diagnostic on
 /// the exhausted-restarts path; keep in sync with the URL constants above and
 /// with DEFAULT_WS_PORT / DEFAULT_MCP_PORT in src/shared/constants.ts. Pinned
@@ -1090,13 +1187,18 @@ impl SlotPid for tauri_plugin_shell::process::CommandChild {
 
 /// The pid-keyed clear itself, generic over the slot payload so both branches
 /// are drivable from a unit test.
-fn clear_terminated_slot<T: SlotPid>(slot: &Mutex<Option<T>>, pid: u32) {
+/// Returns the `terminated_clears_slot` verdict, which is also the
+/// `was_current_child` input `crash_restart_decision` needs (#1809). Sourced
+/// from the identity test that already runs on every termination rather than a
+/// second predicate that could drift out of sync with this one.
+fn clear_terminated_slot<T: SlotPid>(slot: &Mutex<Option<T>>, pid: u32) -> bool {
     let mut guard = match slot.lock() {
         Ok(g) => g,
         Err(poisoned) => poisoned.into_inner(),
     };
     let slot_pid = guard.as_ref().map(SlotPid::slot_pid);
-    if terminated_clears_slot(slot_pid, pid) {
+    let was_current_child = terminated_clears_slot(slot_pid, pid);
+    if was_current_child {
         guard.take();
         // `warn`, not `info`: this clear is what makes the NEXT Quit read
         // "no owned child" and skip the flush, and in release the log floor is
@@ -1110,6 +1212,7 @@ fn clear_terminated_slot<T: SlotPid>(slot: &Mutex<Option<T>>, pid: u32) {
             "Sidecar pid {pid} terminated — slot holds {slot_pid:?}, leaving it (newer child)"
         );
     }
+    was_current_child
 }
 
 /// Clear the owned-child slot when the child we stored has died.
@@ -1122,17 +1225,24 @@ fn clear_terminated_slot<T: SlotPid>(slot: &Mutex<Option<T>>, pid: u32) {
 ///
 /// Deliberately does NOT kill anything — the child is already gone, and a kill
 /// attached to this aliasing window is the bug above with a weapon.
-fn on_child_terminated_in(state: &SidecarState, pid: u32) {
-    clear_terminated_slot(&state.0, pid);
+fn on_child_terminated_in(state: &SidecarState, pid: u32) -> bool {
+    clear_terminated_slot(&state.0, pid)
 }
 
 /// `AppHandle` wrapper for `on_child_terminated_in`. The drain task is
 /// `'static`, so it cannot hold a `State<'_, SidecarState>`; it holds a cloned
 /// handle and resolves the state here.
-fn on_child_terminated(handle: &tauri::AppHandle, pid: u32) {
+/// Returns whether the terminated pid was the child we currently own — the
+/// `was_current_child` input to `crash_restart_decision` (#1809). An unmanaged
+/// `SidecarState` answers `false`: we cannot show this was our live child, and
+/// the restart decision must fail toward not touching anything.
+fn on_child_terminated(handle: &tauri::AppHandle, pid: u32) -> bool {
     match handle.try_state::<SidecarState>() {
         Some(state) => on_child_terminated_in(state.inner(), pid),
-        None => log::warn!("Sidecar pid {pid} terminated — SidecarState unmanaged, nothing to clear"),
+        None => {
+            log::warn!("Sidecar pid {pid} terminated — SidecarState unmanaged, nothing to clear");
+            false
+        }
     }
 }
 
@@ -1831,7 +1941,57 @@ pub(crate) async fn start_sidecar(
                         // Clear the owned-child slot so a crashed sidecar stops
                         // reading as "we own :3479". Pid-keyed, and no kill —
                         // see `on_child_terminated_in`. #1756.
-                        on_child_terminated(&terminated_handle, child_pid);
+                        //
+                        // Its return value is the identity verdict, which is
+                        // also the first and most important input to the
+                        // steady-state crash decision below (#1809).
+                        let was_current = on_child_terminated(&terminated_handle, child_pid);
+                        // Bind and DROP the guard before the match. A
+                        // `MutexGuard` created in a match scrutinee lives to the
+                        // end of the match body, and this block sits inside a
+                        // `tauri::async_runtime::spawn` future whose loop awaits
+                        // — so a scrutinee-held `!Send` guard compiles today
+                        // only because no arm awaits, and would break with an
+                        // error naming the spawn the moment one did. Poisoning
+                        // is recovered the way `clear_terminated_slot` does it.
+                        let decision = {
+                            let mut history =
+                                CRASH_RESTARTS.lock().unwrap_or_else(|p| p.into_inner());
+                            crash_restart_decision(
+                                was_current,
+                                crate::sidecar_is_healthy(),
+                                spawn_allowed(),
+                                &mut history,
+                                std::time::Instant::now(),
+                            )
+                        };
+                        match decision {
+                            CrashRestartDecision::Ignore => {}
+                            CrashRestartDecision::Restart => {
+                                log::warn!(
+                                    "[sidecar] crashed after boot — restarting (up to {MAX_CRASH_RESTARTS} in {}s)",
+                                    CRASH_RESTART_WINDOW.as_secs()
+                                );
+                                restart_sidecar(terminated_handle.clone());
+                            }
+                            CrashRestartDecision::BreakerTripped => {
+                                log::warn!(
+                                    "[sidecar] more than {MAX_CRASH_RESTARTS} crash restarts in {}s — giving up",
+                                    CRASH_RESTART_WINDOW.as_secs()
+                                );
+                                // The same event a failed manual restart emits:
+                                // `App.svelte` ignores the payload and hardcodes
+                                // its toast, so this code is a log-side
+                                // distinction only.
+                                if let Err(emit_err) = terminated_handle
+                                    .emit("sidecar-restart-failed", "SIDECAR_CRASH_BREAKER_TRIPPED")
+                                {
+                                    log::error!(
+                                        "[sidecar] failed to emit crash-breaker event: {emit_err}"
+                                    );
+                                }
+                            }
+                        }
                         break;
                     }
                     other => {
@@ -2391,6 +2551,110 @@ pub(crate) async fn wait_for_sidecar_unlock(deadline_secs: u64) -> bool {
         tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
     }
     false
+}
+
+/// #1809 — `MAX_RESTARTS` is a boot-window budget, so a sidecar that crashed
+/// minutes in was never respawned. The decision is pure, so every arm is
+/// reachable without an `AppHandle`.
+///
+/// **Build every `Instant` forward, never backward.** `Instant - Duration`
+/// panics when the result precedes the monotonic origin, and on Windows
+/// `Instant` is QPC-since-boot — so a backward-built instant would panic on a
+/// runner with under ~301 s of uptime.
+#[cfg(test)]
+mod crash_restart_tests {
+    use super::*;
+    use std::time::Instant;
+
+    /// The worst bug this guard prevents, so it goes first: a `Terminated` from
+    /// a killed retry attempt landing after a newer child is healthy would
+    /// otherwise gracefully stop and respawn a live sidecar, because
+    /// `restart_sidecar` reads `owns_child` from the slot that still holds it.
+    #[test]
+    fn crash_restart_decision_ignores_a_terminated_event_for_a_superseded_child() {
+        let mut history = Vec::new();
+        let decision = crash_restart_decision(false, true, true, &mut history, Instant::now());
+        assert_eq!(decision, CrashRestartDecision::Ignore);
+        assert!(
+            history.is_empty(),
+            "a superseded child's event must not consume the crash budget"
+        );
+    }
+
+    /// A crash while `start_sidecar`'s own `0..=MAX_RESTARTS` loop is still
+    /// retrying belongs to that loop. Recording the attempt before checking
+    /// `healthy` would burn the boot retries out of the steady-state budget.
+    #[test]
+    fn crash_restart_decision_ignores_a_crash_before_the_first_healthy_poll() {
+        let mut history = Vec::new();
+        let decision = crash_restart_decision(true, false, true, &mut history, Instant::now());
+        assert_eq!(decision, CrashRestartDecision::Ignore);
+        assert!(history.is_empty(), "boot retries must not touch the window");
+    }
+
+    /// Quit (`EXITING`) and an update install or download
+    /// (`SIDECAR_SHUTTING_DOWN`, held across both since #1808) must never be
+    /// respawned into.
+    #[test]
+    fn crash_restart_decision_ignores_a_crash_while_a_spawn_is_disallowed() {
+        let mut history = Vec::new();
+        let decision = crash_restart_decision(true, true, false, &mut history, Instant::now());
+        assert_eq!(decision, CrashRestartDecision::Ignore);
+        assert!(
+            history.is_empty(),
+            "a refused spawn must not consume the crash budget"
+        );
+    }
+
+    /// Kills both a breaker that never trips and an off-by-one that allows a
+    /// fourth restart.
+    #[test]
+    fn crash_restart_decision_allows_three_in_the_window_then_trips() {
+        let mut history = Vec::new();
+        let start = Instant::now();
+        let outcomes: Vec<CrashRestartDecision> = (0..4)
+            .map(|i| {
+                crash_restart_decision(
+                    true,
+                    true,
+                    true,
+                    &mut history,
+                    start + Duration::from_secs(i),
+                )
+            })
+            .collect();
+        assert_eq!(
+            outcomes,
+            vec![
+                CrashRestartDecision::Restart,
+                CrashRestartDecision::Restart,
+                CrashRestartDecision::Restart,
+                CrashRestartDecision::BreakerTripped,
+            ]
+        );
+    }
+
+    /// Kills a lifetime counter and a prune that drops nothing: a day-long
+    /// session must not be permanently unrecoverable after three unrelated
+    /// crashes hours apart.
+    #[test]
+    fn crash_restart_decision_forgets_crashes_older_than_the_window() {
+        let old = Instant::now();
+        let mut history = vec![old, old, old];
+        let decision = crash_restart_decision(
+            true,
+            true,
+            true,
+            &mut history,
+            old + CRASH_RESTART_WINDOW + Duration::from_secs(1),
+        );
+        assert_eq!(decision, CrashRestartDecision::Restart);
+        assert_eq!(
+            history.len(),
+            1,
+            "the three stale entries must be pruned, leaving only this crash"
+        );
+    }
 }
 
 #[cfg(test)]

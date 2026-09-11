@@ -793,6 +793,19 @@ fn note_user_presence(app: &tauri::AppHandle) {
 /// the spawn path already flips it once `wait_for_health` succeeds and the
 /// pending-opens queue has drained, so this observes the same readiness the
 /// file-open path does instead of racing it with a second probe.
+/// Is the sidecar currently healthy?
+///
+/// The steady-state crash handler's second guard (#1809) — `SIDECAR_HEALTHY` is
+/// precisely "the boot loop already returned `Started`", which is what separates
+/// a crash the boot loop is still retrying from one nothing will respawn.
+///
+/// The static stays private: an unlocked *read* is already what
+/// `await_sidecar_healthy` does just below, and the doc comment on
+/// `SIDECAR_HEALTHY` narrows the `PendingOpens`-mutex requirement to writes.
+pub(crate) fn sidecar_is_healthy() -> bool {
+    SIDECAR_HEALTHY.load(Ordering::Acquire)
+}
+
 async fn await_sidecar_healthy(deadline: Duration) -> bool {
     let start = std::time::Instant::now();
     while start.elapsed() < deadline {
