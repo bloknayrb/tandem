@@ -377,22 +377,22 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
   // closeTabAndRecord so the scratchpad-unsaved guard + closed-tab stack apply.
   // #1824 item H: Cancel on any one tab ABORTS the rest of the batch (not
   // skip-and-continue) — `break` on the first `false`.
-  function closeOtherTabs(keepId: string): void {
-    for (const id of tabIdsToCloseOthers(opts.getOrderedTabs(), keepId)) {
+  function closeEachUntilCancelled(ids: Iterable<string>): void {
+    for (const id of ids) {
       if (!closeTabAndRecord(id)) break;
     }
+  }
+
+  function closeOtherTabs(keepId: string): void {
+    closeEachUntilCancelled(tabIdsToCloseOthers(opts.getOrderedTabs(), keepId));
   }
 
   function closeTabsToLeft(fromId: string): void {
-    for (const id of tabIdsToCloseLeft(opts.getOrderedTabs(), fromId)) {
-      if (!closeTabAndRecord(id)) break;
-    }
+    closeEachUntilCancelled(tabIdsToCloseLeft(opts.getOrderedTabs(), fromId));
   }
 
   function closeTabsToRight(fromId: string): void {
-    for (const id of tabIdsToCloseRight(opts.getOrderedTabs(), fromId)) {
-      if (!closeTabAndRecord(id)) break;
-    }
+    closeEachUntilCancelled(tabIdsToCloseRight(opts.getOrderedTabs(), fromId));
   }
 
   async function reopenClosedTab(): Promise<void> {
