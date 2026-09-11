@@ -31,7 +31,7 @@ matrix across OS versions, observer soak, accessibility) live in
 
   **Watch the window — there is no success line to grep.** `evaluate_pending_update_marker`'s two verdicts sit at different levels: `MayHaveFailed` is a `warn!` and reaches `tandem.log`, but `Completed` is an `info!`, below the release `LevelFilter::Warn` floor. The marker is then cleared unconditionally on **both** paths, so `update-pending.json` being gone proves nothing. The rule is one-sided: `Pending-update marker survived an update` present = the banner fired; absent = you still need a human to confirm the window was clean. Same trap as the quit-flush row's `info!` banners below.
 
-  **While you are here, check #1762 in the same restart.** Have a document open, and grep the post-update log for `skipping unlock wait`. Seeing `Sidecar exe not on disk at ...node-sidecar-<triple>.exe — skipping unlock wait (packaging bug?)` means the Windows exe-unlock wait is still dead code (`sidecar_exe_path` builds the triple-suffixed name; the bundler installs plain `node-sidecar.exe`), leaving the NSIS `PREINSTALL` kill hook as the only thing stopping a running sidecar from being overwritten. Observed on the v0.24.1 → v0.25.0 run.
+  **While you are here, check #1762 in the same restart.** Have a document open, and grep the post-update log for `reporting still-locked (packaging bug)`. That line means the Windows exe-unlock wait could not find `node-sidecar.exe` beside the app binary — a packaging regression, and the wait now reports still-locked rather than passing the miss off as "unlocked", so it also lands in the failure dialog's pre-install warnings. Finding **nothing** is the pass. Before #1762 the wait rebuilt the triple-suffixed name, never matched a real file, and returned `true` with a `skipping unlock wait (packaging bug?)` warning — observed on the v0.24.1 → v0.25.0 run — leaving the NSIS `PREINSTALL` kill hook as the only thing stopping a running sidecar from being overwritten.
 - [ ] **Quit flushes unsaved edits (#1756).** Edit an open `.md` and Quit from the tray **within 10 s, without saving** — autosave has not fired yet, so this is the graceful stop or nothing. Relaunch: **the edit is present**. Then **one grep** of `tandem.log` for `Exit: sidecar shutdown complete`, and the line it finds must read `verdict=Flushed`, `timed_out=false`, `owned_child=true`. Task Manager shows **no orphaned `node-sidecar` process**.
 
   **Grep that one line, not the `info!` banners.** In release the log floor is `LevelFilter::Warn`, so `Exit: stopping sidecar gracefully` and `Sidecar exited gracefully after /api/shutdown` are `info!` and never reach `tandem.log` on an installed build — a checklist that greps for them finds nothing and reads as a failure. The verdict line is a `warn!` for exactly this reason, and `verdict_line_carries_the_substrings_the_smoke_checklist_greps` in `src-tauri/src/sidecar.rs` is what keeps **this row's** four strings and the code's format agreeing — it covers the verdict line and nothing else. The row below has its own guard, `respawn_guard_lines_are_warns_and_match_the_smoke_checklist`, which pins both of that row's literals *and* their level; until it existed one of those two sat at `info!` under this same floor. A neutered attempt cannot forge them: it shows `verdict=none` with `timed_out=true` and `elapsed` in single-digit ms.
@@ -155,13 +155,15 @@ C:\Users\blokn\AppData\Local\Tandem\node-sidecar-x86_64-pc-windows-msvc.exe
   — skipping unlock wait (packaging bug?)
 ```
 
-`sidecar_exe_path` builds `node-sidecar-{TARGET_TRIPLE}.exe` while the bundler installs
+`sidecar_exe_path` built `node-sidecar-{TARGET_TRIPLE}.exe` while the bundler installs
 plain `node-sidecar.exe`, so `wait_for_sidecar_unlock` returned `true` without waiting.
-Documents were open at the time, which is exactly the condition #1762's suggested fix
+Documents were open at the time, which is exactly the condition #1762's fix
 asks a checklist line to create. **The update still succeeded and the sidecar binary
 WAS replaced** (its mtime moved), so the NSIS `PREINSTALL` kill hook held on this run —
-which bounds #1762's impact rather than dismissing it: the unlock wait is dead code, and
-the kill hook is now the only protection.
+which bounded #1762's impact rather than dismissing it: the unlock wait was dead code, and
+the kill hook was the only protection. **Fixed in #1762** — both the spawn site and
+`sidecar_exe_path` now take the installed name from one `SIDECAR_BIN_NAME` const, and a
+missing exe reports still-locked in a release build. The row above is the re-check.
 
 **Not exercised, and worth naming:** the half-install residual `classify_pending_update`
 documents — NSIS replacing `Tandem.exe` but not `node-sidecar.exe`, which classifies as
