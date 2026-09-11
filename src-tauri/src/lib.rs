@@ -1492,6 +1492,55 @@ pub fn run() {
                 }
             }
 
+            // Rewrite the registration so its baked exe path and args stay
+            // current. Spawned off the setup thread — on Windows this is a
+            // registry write and on Linux a file write, both fast, but neither
+            // belongs on the startup critical path. Only ever refreshes an
+            // *existing* registration; `is_enabled()` inside the function is the
+            // gate, so this can never turn autostart on.
+            //
+            // Runs on every launch that passes `autostart_refresh_allowed`, not
+            // only autostart launches (#1810): a *moved* app never autostarts at
+            // all, which made an autostart-only repair unreachable for the one
+            // case it exists to fix. The guard is needed because `enable()`
+            // bakes this launch's executable path — see the predicate.
+            //
+            // The path handed to the predicate is the one the PLUGIN will bake,
+            // resolved the same way it resolves it: `$APPIMAGE` first on Linux,
+            // else `current_exe()`. Passing bare `current_exe()` would put every
+            // non-autostart AppImage launch under `/tmp/.mount_XXXXXX/` and
+            // refuse the repair forever, logging the refusal at `info` — below
+            // the release log floor, so nothing would surface it.
+            {
+                #[cfg(target_os = "linux")]
+                let baked_exe = app
+                    .env()
+                    .appimage
+                    .map(std::path::PathBuf::from)
+                    .map(Ok)
+                    .unwrap_or_else(std::env::current_exe);
+                #[cfg(not(target_os = "linux"))]
+                let baked_exe = std::env::current_exe();
+
+                match baked_exe {
+                    // A path we cannot resolve is a skip, not a refresh.
+                    Err(e) => log::info!("[autostart] refresh skipped, exe path unresolved: {e}"),
+                    Ok(exe) => {
+                        if autostart::autostart_refresh_allowed(
+                            autostart_launch,
+                            cfg!(debug_assertions),
+                            &exe,
+                            &std::env::temp_dir(),
+                        ) {
+                            let refresh_handle = app.handle().clone();
+                            tauri::async_runtime::spawn_blocking(move || {
+                                autostart::refresh_registration(&refresh_handle);
+                            });
+                        }
+                    }
+                }
+            }
+
             // --- Autostart visibility decision (#1236) ------------------------
             //
             // Deferred to here because it needs `tray_available`, which only
@@ -1526,21 +1575,6 @@ pub fn run() {
                             hide = false;
                         }
                     }
-                }
-
-                // Rewrite the registration so its baked exe path and args stay
-                // current. Spawned off the setup thread — on Windows this is a
-                // registry write and on Linux a file write, both fast, but
-                // neither belongs on the startup critical path. Only ever
-                // refreshes an *existing* registration; it can't turn autostart
-                // on. Scoped to autostart launches: a normal launch has no
-                // reason to touch it, and a user who moved the app will
-                // autostart at least once before the path matters.
-                {
-                    let refresh_handle = app.handle().clone();
-                    tauri::async_runtime::spawn_blocking(move || {
-                        autostart::refresh_registration(&refresh_handle);
-                    });
                 }
 
                 if hide {

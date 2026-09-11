@@ -127,6 +127,60 @@ pub fn autostart_set_enabled(
     }
 }
 
+/// May we re-bake this launch's executable path into the OS login item?
+///
+/// `manager.enable()` writes whatever path the plugin resolves for this launch
+/// (`$APPIMAGE` on Linux when set, else `current_exe()`); the caller resolves it
+/// the same way and passes it in as `exe`, which is what keeps this pure and
+/// testable by value.
+///
+/// An autostart launch is always eligible — that launch came *from* the
+/// registration, so its path is by definition the registered one. Any other
+/// launch must prove it is not an ephemeral copy first. Before #1810 the only
+/// thing preventing that was the call site sitting inside `if autostart_launch`,
+/// and hoisting the call removes that accidental guard:
+///
+/// - **Debug.** The autostart plugin is registered with no `cfg` gate, and
+///   `tauri.conf.json`'s `productName` is `Tandem` for debug and release alike —
+///   so a `cargo tauri dev` run reads the *installed* app's HKCU `Run\Tandem`
+///   value and would overwrite it with `target/debug/tandem.exe`. The next
+///   `cargo clean` would then leave a real user's login item pointing at a
+///   deleted path: #1810's own failure, newly introduced on the maintainer's
+///   machine.
+/// - **Temp dir.** A portable copy, an extracted archive, or an
+///   `--appimage-extract`ed AppImage run from a scratch dir. Note the split
+///   this makes correct: a *real* AppImage launch resolves to `$APPIMAGE`, a
+///   stable path on disk, and stays eligible even though its `current_exe()`
+///   is under `/tmp/.mount_XXXXXX/`. That is exactly why the caller must hand
+///   in the plugin's baked path rather than bare `current_exe()`.
+/// - **`/Volumes/`.** A `.app` run straight off a mounted DMG, whose volume is
+///   about to be ejected. Checked on every platform — a Windows path never
+///   starts with `/Volumes/`, so no `cfg` is needed and the case stays testable
+///   on the ubuntu leg.
+pub(crate) fn autostart_refresh_allowed(
+    autostart_launch: bool,
+    is_debug: bool,
+    exe: &std::path::Path,
+    temp_dir: &std::path::Path,
+) -> bool {
+    if autostart_launch {
+        return true;
+    }
+    if is_debug {
+        log::info!("[autostart] refresh skipped: debug build");
+        return false;
+    }
+    if exe.starts_with(temp_dir) {
+        log::info!("[autostart] refresh skipped: executable is under the temp dir");
+        return false;
+    }
+    if exe.starts_with("/Volumes/") {
+        log::info!("[autostart] refresh skipped: executable is on a mounted volume");
+        return false;
+    }
+    true
+}
+
 /// Best-effort re-write of an existing registration at launch, so the baked
 /// executable path and argument list stay current.
 ///
@@ -135,6 +189,13 @@ pub fn autostart_set_enabled(
 /// (which would otherwise boot visible and spawn Claude — the exact behavior
 /// this feature exists to avoid). Never enables autostart that wasn't already
 /// on: it only refreshes when `is_enabled()` is already true.
+///
+/// Since #1810 this runs on every launch that passes
+/// `autostart_refresh_allowed`, not only on autostart launches. The old scoping
+/// required the thing it repairs to be working: a *moved* app never autostarts
+/// at all, so the repair path was unreachable for the one case it exists for.
+/// The `Ok(false)` arm below is what keeps "every launch" from ever meaning
+/// "enable".
 pub fn refresh_registration(app: &tauri::AppHandle) {
     let manager = app.autolaunch();
     match manager.is_enabled() {
@@ -153,6 +214,54 @@ pub fn refresh_registration(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1810 — this is the invariant that makes "run the refresh on every
+    /// launch" safe. `manager.enable()` bakes this launch's executable path, and
+    /// the `if autostart_launch` the hoist removes was the only thing keeping a
+    /// `cargo tauri dev` run from repointing a real user's login item at
+    /// `target/debug/`.
+    #[test]
+    fn autostart_refresh_is_refused_for_ephemeral_binaries() {
+        use std::path::Path;
+        let temp = Path::new("/tmp");
+        let installed = Path::new("/opt/tandem/tandem");
+
+        assert!(
+            autostart_refresh_allowed(true, true, Path::new("/tmp/x/tandem"), temp),
+            "an autostart launch came FROM the registration, so its path is the registered one"
+        );
+        assert!(
+            !autostart_refresh_allowed(false, true, installed, temp),
+            "a debug build shares productName with the installed app and must never rewrite it"
+        );
+        assert!(
+            !autostart_refresh_allowed(false, false, Path::new("/tmp/x/tandem"), temp),
+            "a portable or extracted copy must not become the registered path"
+        );
+        assert!(
+            !autostart_refresh_allowed(
+                false,
+                false,
+                Path::new("/Volumes/Tandem/Tandem.app/Contents/MacOS/Tandem"),
+                temp
+            ),
+            "a run-from-DMG copy points at a volume about to be ejected"
+        );
+        assert!(
+            autostart_refresh_allowed(false, false, installed, temp),
+            "an ordinary installed launch is exactly what the repair exists for"
+        );
+        // Deliberately next to the `/tmp/x/tandem` refusal above: an INSTALLED
+        // AppImage must stay eligible even though its `current_exe()` lives
+        // under `/tmp/.mount_XXXXXX/`. The plugin bakes `$APPIMAGE`, so the call
+        // site must hand that in — an implementation that passes bare
+        // `current_exe()` collapses this case into the refusal and makes the
+        // whole fix a permanent silent no-op on the AppImage target.
+        assert!(
+            autostart_refresh_allowed(false, false, Path::new("/home/u/Apps/Tandem.AppImage"), temp),
+            "a real AppImage's baked path is stable and must not be refused"
+        );
+    }
 
     #[test]
     fn error_codes_are_path_free() {
