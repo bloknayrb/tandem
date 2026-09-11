@@ -21,15 +21,29 @@ Measured directly on this machine before designing anything:
   value, both long-form here, so those unused aliases are inert for this bug.
 
 **Conclusion: NOT reachable on this machine** — matches the issue's own hypothesis exactly ("a
-five-character local username mints nothing"). But the issue also names the actual trigger class:
+five-character local username mints nothing"). The issue also names the actual trigger class:
 GitHub's `windows-latest` runner authenticates as `runneradmin` (11 characters), which DOES get
 shortened to `RUNNER~1`, and `%TEMP%` inherits that in its ancestry — the exact mechanism that
 already turned the sibling spec `convert-output-acl-win.test.ts` red on `windows-acl-proof`'s
 first CI run (documented in-code at `export-path-canonicalization.test.ts:416-420`, quoted below).
-That is not a hypothetical: it is the SAME code path (`convertToMarkdown`'s `fs.realpath` call) in
-the SAME file, already proven to fail this exact way once, with the fix already applied to the
-sibling spec and left undone on these five. **Verdict: fix it, using the already-proven pattern —
-not a ghost, just not reachable from THIS machine today.**
+That is the SAME code path (`convertToMarkdown`'s `fs.realpath` call) in the SAME file, already
+proven to fail this exact way once — but **that proof does not transfer to these five sites the
+way round-0 of this spec claimed.** Verified directly (round-1 review): `check` — the only job
+that runs `npm test` — is `runs-on: ubuntu-latest` (`.github/workflows/ci.yml:317`), and
+`windows-acl-proof` (`:168`) runs only `scripts/ci/windows-acl-proof.mjs`, whose
+`WINDOWS_ACL_PROOF_SPECS` (`:63-81`) is exactly three files: `doc-backup-acl-repair.test.ts`,
+`integrations/acl-win.test.ts`, `convert-output-acl-win.test.ts`. Neither
+`export-path-canonicalization.test.ts` nor `mcp-tool-integration.test.ts` — the two files holding
+all five sites below — is in that list, or run by any other Windows or macOS CI job. The sibling's
+proof is real for the sibling; it is not evidence that these five are exercised anywhere in CI.
+
+**Verdict: fix it anyway, using the already-proven pattern — but as unverified hardening, not as
+a CI-proven fix.** It is reachable only on a developer machine whose `%TEMP%` ancestry carries a
+short-named component (a long username, or a corporate imaging tool that does), or if these two
+suites are ever added to a Windows CI job — neither of which is true today or proven by anything
+in this repo's CI. The fix is still correct and cheap (both sides of each comparison now derive
+from the same `fs.realpath()` call, so they cannot disagree by construction), but the PR body must
+say plainly that it lands unverified by any green CI leg, not "proven by the sibling."
 
 ## Problem
 
@@ -82,16 +96,26 @@ the mechanism explicitly, unprompted:
 
 ## Fix
 
-Apply the same pattern already used there: canonicalize via `fs.realpath()` at the point the
-fixture directory is CREATED, so every downstream path built from it is already in the form the
-app's own `fs.realpath()` call will produce — never build the comparison from the raw
-`mkdtemp()`/`tmpdir()` string.
+Apply the same pattern already used by the sibling spec: canonicalize via `fs.realpath()` at the
+point the fixture directory is used to build an EXPECTED value, so the comparison's two sides are
+derived from the same `fs.realpath()` call the app itself makes — never compare against the raw
+`mkdtemp()`/`tmpdir()` string. **Do this additively, not by changing the shared `makeDir()`
+helper** (see the round-1 correction below for why: `makeDir()` has 14 call sites in this file, not
+3, and two of its other callers — `:326-338` and `:413-450` — depend specifically on the base it
+returns being NON-canonical, to pin the opposite direction of the same bug class).
 
-- `export-path-canonicalization.test.ts`'s `makeDir()` (`:57-60`) currently returns the raw
-  `mkdtemp()` `base`. Change it to `return fsp.realpath(base);` — one line. This fixes sites 1-3
-  (all three build their `out`/expected path from `makeDir()`'s return value), with no per-test
-  edits needed. Mirrors `symlinkedDir()`'s existing `realDir = await fsp.realpath(...)` sibling
-  three lines above it in the same file.
+- `export-path-canonicalization.test.ts`: add a second helper next to `makeDir()` (`:57-60`),
+  ```ts
+  async function makeCanonicalDir(): Promise<string> {
+    return fsp.realpath(await makeDir());
+  }
+  ```
+  and use it ONLY in the three affected tests (`:173`, `:181`, `:240` — the two "accepts…" export
+  cases and the convert "into a fresh directory" control) in place of the bare `makeDir()` call
+  when building the expected/`out` path. `makeDir()` itself is untouched, so every other call site
+  — including `:326` and `:413` — keeps depending on an ambiently non-canonical temp base exactly
+  as it does today. Mirrors `symlinkedDir()`'s existing `realDir = await fsp.realpath(...)` shape
+  three lines above `makeDir()` in the same file.
 - `mcp-tool-integration.test.ts`'s `#314` describe block: add a memoized helper
   `async function realTmpdir(): Promise<string> { return fsp.realpath(tmpdir()); }` (or a
   module-level `const REAL_TMPDIR = await fsp.realpath(tmpdir());` if the file's existing
@@ -104,33 +128,76 @@ app's own `fs.realpath()` call will produce — never build the comparison from 
 
 ## Tests
 
-The fix IS the fix to existing assertions — no new test bodies are added, matching the issue's own
-framing ("hardening five assertions" is the wrong shape; canonicalizing the fixture builder is the
-right one). What changes is provable by inspection (the comparison now derives both sides from the
-same `fs.realpath()` call, so they cannot disagree on an ancestor's casing/short-name/symlink form
-regardless of platform) and by the existing sibling spec's own proof (`:416-420`), not by a new
-local red→green transition — this machine cannot manufacture the 8.3 condition (see "Establishing
-reachability" above), so a claim of a local mutation-test pass here would be theater. State this
-plainly in the PR body rather than fabricating a passing-both-ways narrative.
+The fix to the three named `export-path-canonicalization.test.ts` sites and the two
+`mcp-tool-integration.test.ts` sites is the fix to existing assertions — no new test bodies for
+those five, matching the issue's own framing ("hardening five assertions" is the wrong shape;
+canonicalizing the comparison is the right one). What changes is provable by inspection (the
+comparison now derives both sides from the same `fs.realpath()` call, so they cannot disagree on
+an ancestor's casing/short-name/symlink form regardless of platform) and by the existing sibling
+spec's own proof (`:416-420`) for the MECHANISM — not, per the corrected reachability finding
+above, by any CI leg that actually runs these two files, which none does. State that plainly in
+the PR body: **this lands as unverified hardening, correct by construction, not proven by a green
+leg** — neither this machine nor any Windows/macOS CI job can manufacture the 8.3 condition.
+
+**One new regression pin, so the fix is not entirely unexercised anywhere `check` runs (round-1
+addition):** add one POSIX-gated test to `export-path-canonicalization.test.ts` that manufactures a
+non-canonical ancestor deliberately, using the file's own existing precedent
+(`symlinkedDir()`, `:48-55`, which already builds a symlinked base for a different test) — assert
+that a path built through `makeCanonicalDir()` equals `fsp.realpath()` of the same directory built
+through the raw, non-canonical `symlinkedDir()`-style base. This runs on `check` (ubuntu) today and
+fails if `makeCanonicalDir()` is ever reverted to returning its argument unchanged, giving the fix
+one real, CI-exercised discriminator even though it cannot reproduce the Windows 8.3 mechanism
+itself. Windows CI running an `icacls`-based equivalent is a separate, out-of-scope addition (it
+would require adding these files to `WINDOWS_ACL_PROOF_SPECS` — a new gate, not requested by #1855).
 
 **What IS verifiable locally:** run `npx vitest run tests/server/export-path-canonicalization.test.ts
-tests/server/mcp-tool-integration.test.ts` before and after — both must stay fully green (the fix
-must not change behavior where the fragility does not manifest, which is every environment this
-group can reach). Also confirm `makeDir()`'s new `fsp.realpath()` call does not change the value it
-returns on THIS machine (it shouldn't — `fsp.realpath` on an already-canonical path is a no-op) by
-diffing `out` before/after in one of the affected tests via a scratch `console.error` during
-development, removed before commit.
+tests/server/mcp-tool-integration.test.ts` before and after — all tests in both files, including
+`:326` and `:413` (which must NOT start passing vacuously — see the round-1 correction below), must
+stay fully green (the fix must not change behavior where the fragility does not manifest, which is
+every environment this group can reach). Also confirm `makeCanonicalDir()`'s `fsp.realpath()` call
+does not change the value it returns on THIS machine (it shouldn't — `fsp.realpath` on an
+already-canonical path is a no-op) by diffing the built path before/after in one of the three
+affected tests via a scratch `console.error` during development, removed before commit.
 
 ## Done when
 
-`makeDir()` returns a realpath'd `base`; the two `mcp-tool-integration.test.ts` sites use a
-realpath'd tmpdir; both files stay green locally; the PR body states the reachability finding
-(unreachable on this dev machine, reachable on `windows-latest`/`runneradmin`, proven once already
-by the sibling spec) instead of claiming a local repro; `npm run typecheck:tests` green.
+`makeCanonicalDir()` exists alongside the untouched `makeDir()` and is used at the three named
+sites; the two `mcp-tool-integration.test.ts` sites use a realpath'd tmpdir; the new POSIX-gated
+regression pin exists and passes on `check`; `:326` and `:413` are confirmed to still build from a
+NON-realpath'd base (i.e. still discriminate against a `convert.ts` that stops realpathing) after
+the change; both files stay green locally; the PR body states the corrected reachability finding —
+unreachable on this dev machine, and not exercised by ANY Windows or macOS CI leg today either (the
+sibling's proof does not transfer to these five sites) — instead of claiming CI verification;
+`npm run typecheck:tests` green.
 
 ## Not in scope
 
 The two already-realpath'd sibling assertions (`:214`, `:276`) — already correct, untouched. The
 other sidecar tests in the `#314` block that never hit the realpath branch — untouched, per above.
 Any change to `annotations.ts` / `convert.ts` (this is a test-only fragility, not a source defect —
-the app's own realpath call is correct; the TEST's comparison was the bug).
+the app's own realpath call is correct; the TEST's comparison was the bug). Adding these two spec
+files to `WINDOWS_ACL_PROOF_SPECS` or any other new Windows CI job — a real gate for this class of
+bug is worth having but is a new-gate decision outside this issue's smallest-change budget.
+
+## Review corrections (round 1)
+
+**Adopted:**
+- Editing the shared `makeDir()` directly would have silently destroyed the discriminating power
+  of two sibling tests in the same file (`:326-338`, `:413-450`), which depend on `makeDir()`
+  returning a NON-canonical base to pin the opposite direction of this same bug class (that
+  `convert.ts` still names the raw/canonical path correctly). `makeDir()` has 14 call sites, not
+  the 3 this spec originally targeted. Fixed by adding a separate `makeCanonicalDir()` helper used
+  only at the three affected sites, leaving `makeDir()` and its other 11 call sites untouched.
+- The reachability section overstated CI coverage: neither affected file runs on any Windows or
+  macOS CI leg (`check` is ubuntu-only; `windows-acl-proof` runs exactly three other files). Fixed
+  by rewriting "reachable on windows-latest, proven once already by the sibling" to state plainly
+  that this lands as unverified hardening on every leg this repo runs, correct by construction
+  rather than by a green CI leg.
+- The fix shipped with no discriminating test of any kind, verifiable on no leg at all. Added one
+  POSIX-gated regression pin using the file's own `symlinkedDir()` precedent, so `check` (ubuntu)
+  gets one real red→green discriminator even though it cannot reproduce the Windows 8.3 mechanism.
+- Added explicit "Done when" and "Tests" lines confirming `:326` and `:413` still build from a
+  non-realpath'd base after the change, so the fix's own regression tests are pinned alongside the
+  fix rather than assumed safe.
+
+**Not adopted:** none — all findings touching this spec were adopted as described above.

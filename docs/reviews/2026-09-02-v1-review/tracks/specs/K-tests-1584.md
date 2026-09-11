@@ -57,23 +57,40 @@ The remaining plan-§N sites split by WHICH plan they cite, verified by reading 
   - `src/server/local-model/ollama-client.ts:286` — `// boilerplate; see the plan §3.5b.`
   - `tests/client/integration-wizard-models.test.ts:12` — `the plan §3.8 — the constant stays...`
   - `tests/client/use-models-loading.test.ts:8` — `see the M2b plan §3.8).`
-- **A different, unrelated plan (card-density / margin-view "plan C2" / "V2 plan") — declare
-  acceptable, no tracked issue substitute exists for this UI-geometry design note (3 sites):**
+- **A different, unrelated plan (card-density "plan C2" / "plan §5 stub click") — declare
+  acceptable, no tracked document substitute exists (2 sites, re-verified round-1 — see below):**
   - `src/client/panels/cardDensity.ts:31` — `divergence from plan §5 "stub click → full in
     place"` (and `:7`, `plan C2`, same document).
   - `tests/e2e/margin-view.spec.ts:1097` — `the resolved divergence from plan §5 "stub click →`.
+
+  Verified round-1 by grepping `docs/design-system-impl/` and `docs/plans/archived/` for the
+  section this cites, before accepting: `grep -rn "stub click" docs/` returns nothing outside this
+  spec file itself. `docs/design-system-impl/3.5-coordination-handoff.md:7` names what "plan §12
+  C2"/"plan §5" actually is — `~/.claude/plans/the-current-way-we-compiled-thimble.md`, a
+  genuinely gitignored, untracked local plan file, never committed to this repo. Searched: `docs/`
+  (repo-wide grep for "stub click"), `docs/design-system-impl/`, `docs/plans/archived/`, `gh issue
+  list`/`gh issue view` for "plan C2" or "stub click" — not found in any. Declared acceptable per
+  the issue's third option, on that basis.
+
+- **The V2 plan family — RE-LABEL with a tracked document, not "declare acceptable" (1 site,
+  corrected round-1):**
   - `tests/client/MarginColumn.import-author.test.ts:9` — `Closes the gap from the V2 plan
     §4.1b —`.
 
-  These are genuinely a different, untracked internal plan from the local-model M2b one — no
-  GitHub issue names "plan C2" or "V2 plan" anywhere in this repo's history that a `gh issue
-  list`/grep could find, and inlining the rationale each stands in for is exactly the
-  disproportionate transcription-of-an-absent-document work the issue's own body and the
-  detector's docblock both warn against. Declared acceptable per the issue's third option.
+  **Round-0 of this spec wrongly declared this acceptable, asserting "no GitHub issue names … 'V2
+  plan' anywhere in this repo's history."** That is false: `docs/plans/archived/2026-05-28-stage-
+  c3-bezier-leaders-anchor-dots.md` is a TRACKED, committed file — verified by reading it — titled
+  `# Stage C-3 — Bezier leaders + anchor dots (V2)` (`:1`), explicitly self-identified as "V2" in
+  its own status line (`:3`, "Status: V2, post-adversarial-review. Replaces V1 …"), and its own
+  `### 4.1b NEW: tests/client/MarginColumn.import-author.test.ts` section header (`:232`) is a
+  byte-for-byte match to the exact test file and section number the citation names. This is not
+  the same document as the "plan C2"/"stub click" family above — that one is the gitignored thimble
+  plan; this one is a tracked, archived plan doc in this repo. Re-label rather than declare
+  acceptable.
 
 ## Fix
 
-**Inline (3 sites, small, well-understood from surrounding code):**
+**Inline (4 sites, small, well-understood from surrounding code — one added round-1):**
 
 - `license-state.ts:13` → `// an unknown major is rejected rather than silently honored — a
   future schema bump must be handled explicitly here, never fall through as if it were v1.`
@@ -83,39 +100,85 @@ The remaining plan-§N sites split by WHICH plan they cite, verified by reading 
   responds 403 to a non-loopback caller outright — wrong behavior for a route whose own next line
   is `if (isLoopback(...)) full else scrubbed`.)
 - `kv-store.ts:76` → `// Log the id only, never the email — the id is opaque and safe to log; the
-  email is PII and must never land in a server log.`
+  email is PII and must never land in a server log.` **Its verbatim twin** —
+  `docs/licensing-operations.md:116` (`> **id** only, never the email (§12 L1). The issuance
+  Worker already does this.`) — carries the same dangling `§12 L1` and is not code, so
+  `dangling-citations.ts` never scans it, but it is the same citation habit in the same repo;
+  round-1 addition, same replacement wording (adapted to the doc's own prose).
+- `sync.ts:515` (`src/server/annotations/sync.ts`) — round-1 addition, found by a repo-wide grep
+  for `plan §` this spec's original site list missed: `* Algorithm (see the Phase 1 plan
+  §"Merge rules" for background):`. Same family as the "review §N" sites (a quoted section name
+  rather than a numeral, citing an ad hoc plan pass with no tracked document) → `* Algorithm
+  (merge precedence: newest-wins per record id, with tombstones taking priority over any surviving
+  content — see the function body below for the per-field detail):`.
 
 **Re-label with `#1123` (6 sites, mechanical, matches the 2 already-correct sibling sites
 exactly):** prefix `plan` with `#1123 plan` (or `#1123's plan` for `index.ts:14`'s possessive
-phrasing) at each of the six local-model sites above. No other wording change.
+phrasing) at each of the six local-model sites above. No other wording change. **Two of these six
+sites are under `tests/client/` — `integration-wizard-models.test.ts:12`,
+`use-models-loading.test.ts:8`.** The group's coordination note carves `tests/client/**` out to
+#1966 ("touch those only if a named bullet requires it, and re-read them first"); this bullet does
+require it (comment-only, exactly matches the mechanical re-label applied to the other four
+sites), and both files were re-read against current master (`09d304e2`) before this spec was
+finalized — verify the two lines still exist at those offsets before editing.
 
-**Declare acceptable (3 sites, no code change):** update `tests/build/dangling-citations.ts`'s
-"WHAT THIS DETECTOR DOES NOT COVER" section — the `plan §N` bullet currently reads "Tracked in
-#1584 rather than half-done here." Replace with the decision outcome now that #1584 is closed:
-state plainly that the local-model M2b sites were re-labeled with `#1123` and the remaining
-card-density/margin "plan C2"/"V2 plan" sites are accepted as-is (untracked internal design note,
-no GitHub issue exists to point at, inlining costs more than the citation is worth), so a future
-reader does not re-open a closed decision. Same edit updates the `review §N` and trailing-token
-bullets to say "fixed by #1584" rather than leaving them as open scope statements.
+**Re-label with a tracked document (1 site, corrected round-1 — was "declare acceptable"):**
+- `tests/client/MarginColumn.import-author.test.ts:9` → cite
+  `docs/plans/archived/2026-05-28-stage-c3-bezier-leaders-anchor-dots.md §4.1b` in place of the
+  bare "V2 plan §4.1b" — e.g. `// Closes the gap from docs/plans/archived/2026-05-28-stage-c3-
+  bezier-leaders-anchor-dots.md §4.1b — \`leaderColorForAuthor\` is unit-tested`.
+
+**Declare acceptable (2 sites, no code change — corrected round-1 to exclude the V2-plan site
+above):** update `tests/build/dangling-citations.ts`'s "WHAT THIS DETECTOR DOES NOT COVER" section
+— the `plan §N` bullet currently reads "Tracked in #1584 rather than half-done here." Replace with
+the decision outcome now that #1584 is closed, **keeping the section's existing NOT-COVERED
+framing rather than implying the detector now covers these** (a future new site of this shape is
+still invisible to `DANGLING_CITATION_RE` by design — say so explicitly, don't just report the old
+sites as "fixed"): state that the local-model M2b sites were re-labeled with `#1123`, the
+`MarginColumn.import-author.test.ts` V2-plan site was re-labeled with its tracked archived-plan
+citation, and the remaining card-density/margin "plan C2"/"plan §5 stub click" sites are accepted
+as-is (searched `docs/design-system-impl/`, `docs/plans/archived/` and `gh issue list` for a
+tracked equivalent — not found; genuinely a gitignored, untracked local plan file, inlining costs
+more than the citation is worth). Same edit updates the `review §N` and trailing-token bullets to
+record "resolved under #1584 (inlined)" — again keeping the NOT-COVERED framing rather than
+implying regex coverage changed. **When rewriting, re-derive the `plan §N` file list by grep rather
+than editing the existing sentence** — the current docblock (`:47-50`) undercounts (says "four
+`tests/client/*` files"; a grep finds five, plus `tests/e2e/margin-view.spec.ts`, which the
+existing sentence omits entirely) and a straight edit would carry that miscount forward.
 
 ## Tests
 
 No new detector tests — `DANGLING_CITATION_RE` is unchanged, so `invariant-citations.test.ts`'s
 existing positive control and repo-wide sweep are the discriminating check: they must stay green
-before and after (proving the regex genuinely never matched any of these 11 sites, consistent with
+before and after (proving the regex genuinely never matched any of these 12 sites, consistent with
 the issue's own framing that they are OUTSIDE the detector, not failures of it). Grep-verify after
-editing that none of the 3 inlined sites still contains a bare `§12` with no document name, and
-that all 6 re-labeled sites now contain the literal substring `#1123`.
+editing that none of the 4 inlined sites still contains a bare `§12`/`§"…"` citation with no
+document name, that all 6 re-labeled-with-`#1123` sites now contain the literal substring `#1123`,
+and that the `MarginColumn.import-author.test.ts` site now contains
+`2026-05-28-stage-c3-bezier-leaders-anchor-dots.md`.
+
+**Coordination-boundary note (round-1):** this fix touches six `src/` files
+(`license-state.ts`, `license.ts`, `kv-store.ts`, `sync.ts`, `local-model/collaborator.ts`,
+`local-model/index.ts`, `local-model/ollama-client.ts`) and two `tests/client/` files, all
+comment/doc-string only, crossing the group's usual `tests/**`-only ownership deliberately. Verified
+safe against the two scanners that would otherwise object: `tests/docs/loopback-gate-claims.test.ts:79`
+requires `\s*\(` after a matched token (the proposed wording does not match its pattern) and its
+`claimsInert` regex (`:166-176`) does not match the proposed wording either;
+`tests/build/invariant-citations.test.ts` self-excludes `dangling-citations.ts` itself (`:53-56`)
+so editing that file's own docblock cannot trip its own scan.
 
 ## Done when
 
-All 3 "review"/trailing-token sites carry real inline rationale instead of a dangling `§12`
-citation; all 6 local-model "plan §N" sites are prefixed with `#1123`, matching the 2 sites that
-already were; `dangling-citations.ts`'s docblock reflects the closed decision for all three
-families instead of "tracked in #1584"; `npx vitest run tests/build/invariant-citations.test.ts`
-green; `npm run typecheck` green (touches only comments/strings, but two of the six sites are in
-`.ts` files under `src/server/local-model/`, which is behind the dark `BYO_MODELS_ENABLED` flag —
-comment-only edits, no behavior change, confirmed by re-reading each diff before commit).
+All 4 "review"/trailing-token/doc-twin sites carry real inline rationale instead of a dangling
+`§12`/`§"…"` citation; all 6 local-model "plan §N" sites are prefixed with `#1123`, matching the 2
+sites that already were; the `MarginColumn.import-author.test.ts` site cites the tracked archived
+plan doc instead of being silently declared acceptable; `dangling-citations.ts`'s docblock reflects
+the closed decision for all three families (re-derived file list, NOT-COVERED framing kept)
+instead of "tracked in #1584"; `npx vitest run tests/build/invariant-citations.test.ts` green;
+`npm run typecheck` AND `npm run typecheck:tests` green (touches only comments/strings, but two of
+the six `#1123` sites are in `.ts` files under `src/server/local-model/`, which is behind the dark
+`BYO_MODELS_ENABLED` flag, and two more are under `tests/client/`, which only `typecheck:tests`
+reaches — comment-only edits, no behavior change, confirmed by re-reading each diff before commit).
 
 ## Not in scope
 
@@ -123,5 +186,38 @@ Widening `DANGLING_CITATION_RE` to catch `review §N` or the trailing-token shap
 the issue's own menu is resolve-the-known-sites, not extend-the-scanner, and the detector's
 docblock already states why extending is not worth it. The `plan §N` sites that already cite
 `#1123` (`first-run-model-picker.test.ts`, `model-edit-modal.test.ts`) — untouched, already
-correct. Any change to `src/server/local-model/` behavior — comment/doc-string edits only, this
-group owns no `src/` behaviour.
+correct. Any change to `src/server/local-model/`, `src/server/license/` or
+`src/server/annotations/sync.ts` *behavior* — every touch in this fix is comment/doc-string only,
+this group owns no `src/` behaviour, and each edit is re-read against the current diff before
+commit to confirm it changed nothing but prose.
+
+## Review corrections (round 1)
+
+**Adopted:**
+- `MarginColumn.import-author.test.ts:9`'s "V2 plan §4.1b" was wrongly declared acceptable ("no
+  tracked document exists") — `docs/plans/archived/2026-05-28-stage-c3-bezier-leaders-anchor-
+  dots.md` is a tracked, committed file literally titled "… (V2)" whose own §4.1b section matches
+  the citation exactly. Moved from "declare acceptable" to "re-label with a tracked document."
+- Before accepting the remaining "plan C2"/"plan §5 stub click" sites, grepped
+  `docs/design-system-impl/` and `docs/plans/archived/` for the cited section — not found; the
+  citation resolves to a genuinely gitignored local plan file
+  (`~/.claude/plans/the-current-way-we-compiled-thimble.md`, named explicitly in a tracked
+  coordination doc). Recorded as "searched X, Y, Z — not found" rather than an unqualified claim.
+- Added `src/server/annotations/sync.ts:515` (`plan §"Merge rules"`) to the "review §N" family — a
+  repo-wide grep for `plan §` in round-0 missed it; it was outside both the detector and the
+  spec's own site list.
+- Added `docs/licensing-operations.md:116`, the verbatim documentation twin of `kv-store.ts:76`'s
+  `(§12 L1)` citation, to the inline-rationale list.
+- Reworded the `dangling-citations.ts` docblock instruction so it keeps the section's NOT-COVERED
+  framing rather than reading as "the detector now covers these families" — a new site of this
+  shape remains invisible to `DANGLING_CITATION_RE` by design, and the docblock must keep saying so.
+- Noted the docblock's existing `plan §N` file-list undercounts (says four `tests/client/*` files;
+  a grep finds five, plus `tests/e2e/margin-view.spec.ts` entirely omitted) and instructed
+  re-deriving the list by grep rather than editing the existing sentence in place.
+- Added an explicit coordination-boundary note acknowledging the `src/` and `tests/client/` touches
+  cross the group's usual `tests/**` ownership, with the two scanner clearances that make it safe
+  (`loopback-gate-claims.test.ts`, `invariant-citations.test.ts`'s self-exclusion).
+- "Done when" named only `npm run typecheck`, which does not reach `tests/client/`. Added
+  `npm run typecheck:tests`.
+
+**Not adopted:** none — all findings touching this spec were adopted as described above.

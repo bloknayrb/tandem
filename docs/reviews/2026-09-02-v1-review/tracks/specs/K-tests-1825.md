@@ -7,7 +7,8 @@ Tests one bullet (`perf:gate` CI runner) is deliberately left undone below, so t
 close. Ledger: `docs/plans/2026-09-06-open-issues-sweep.md:459`; area row
 `docs/reviews/2026-09-02-v1-review/areas/tests.md:20`. Probe:
 `npx vitest run tests/server/launcher/cwd-preview.test.ts tests/server/annotation-remove-seam.test.ts`
-before and after; `ls tests/fixtures/mcp-config-sample.json` before/after (absent, after).
+before and after. **No fixture deletion in this PR** — round-1 review refuted bullet 5's orphan
+claim; see below.
 
 ## Problem — nine bullets, re-verified against current master rather than the issue body
 
@@ -44,15 +45,26 @@ group instructions:
    it does not cover the reply hold, `tandem_getAnnotations`, the export filter, or the push
    hold, each a narrower predicate).
 
-Four bullets remain genuinely open and are this PR's actual work:
+Three bullets remain genuinely open and are this PR's actual work (bullet 5 below is now REFUTED,
+not fixed — see round-1 correction):
 
-5. **Orphan fixture `mcp-config-sample.json` — real, fixed here (delete).**
-   `tests/fixtures/mcp-config-sample.json` is referenced by exactly one place in the whole
-   repo: `docs/spikes/sidecar-launcher-spike.md` (a historical spike record, prose only). Zero
-   `.ts`/`.js` files read it (`grep -rln "mcp-config-sample" tests/ src/ scripts/` returns only
-   the spike doc). It was the fixture for spike-only config-rewrite probes that never landed as
-   real tests; `tests/server/integrations/apply.test.ts` and friends build their own inline
-   config JSON today.
+5. **`mcp-config-sample.json` — REFUTED, not an orphan; the bullet is stale (round-1 correction,
+   was "real, fixed here (delete)" in round 0).** Round 0's orphan claim was scoped to a grep over
+   `tests/ src/ scripts/` and missed the one real reader, which is in Rust: verified directly
+   (round-1 review) that `src-tauri/src/integrations_probe.rs:381-386` builds `fixture_path()` as
+   `<CARGO_MANIFEST_DIR>/../tests/fixtures/mcp-config-sample.json`, and `:420-431` is an
+   UNCONDITIONAL `#[test] fn rewrite_preserves_unrelated_servers_and_replaces_stale_tandem()`
+   (no `#[ignore]`) whose first line is `let raw = std::fs::read_to_string(fixture_path())
+   .expect("read fixture");` and which asserts against the fixture's pre-seeded
+   `test-token-do-not-use-tandem` marker. The module is real and wired in
+   (`src-tauri/src/lib.rs:60`, `#[cfg(test)] mod integrations_probe;`). Deleting the fixture would
+   break `cargo test` on all three `rust-test` legs, which CLAUDE.md records as required status
+   checks (`enforce_admins: true`, no bypass) — this group's `rust=false` flag means it would not
+   even be caught locally before landing red in CI. **No deletion in this PR.** The fixture has
+   exactly one reader (`integrations_probe.rs:422`), which this group cannot touch (`rust=false`,
+   not owned by K-tests) and has no reason to: the fixture is doing real work there, it is not
+   orphaned. `docs/spikes/sidecar-launcher-spike.md`'s prose reference is a second, non-code
+   reader, also fine as-is.
 6. **`helpers/css-source.test.ts` — verified NOT orphaned; the bullet is stale, recorded as
    refuted rather than fixed.** `tests/helpers/css-source.ts` (the helper this file tests) is
    imported by 8 `tests/design-system-impl/*.test.ts` gates plus itself
@@ -105,16 +117,24 @@ One bullet is deliberately left open:
    or neutered" — the same shape as `windows-acl-proof-wiring.test.ts` or
    `coverage-gate-wiring.test.ts`. That is a materially larger, ADR-051-governed addition that
    neither #1734's nor #1825's own body asks for by name (#1734 asks only to fix the
-   *measurement*, which K-tests-1734.md does). Left open here rather than built speculatively.
+   *measurement*, which K-tests-1734.md does). **Left open here, and it IS tracked**: this spec
+   keeps #1825 as `Refs`, not `Closes`, specifically so this bullet stays a live, open item under
+   #1825 itself rather than reading as an unfiled deferral — no separate issue number is needed
+   because #1825 is that tracked home and this PR deliberately does not close it.
 
 ## Fix
 
-- `git rm tests/fixtures/mcp-config-sample.json`.
+- **No fixture deletion.** Bullet 5 is refuted (see above) — `tests/fixtures/mcp-config-sample.json`
+  stays, untouched, because `src-tauri/src/integrations_probe.rs` reads it in a real, unconditional
+  Rust test.
 - `tests/server/launcher/cwd-preview.test.ts`: give the "normalizes Claude's side too..." test a
   context parameter and call `ctx.skip()` on the catch path instead of a bare `return`, so an
-  environment that cannot create the fixture reports SKIPPED (visible in every reporter and in
-  `windows-acl-proof`'s own per-describe pass/skip/fail accounting) rather than an indistinguishable
-  PASSED:
+  environment that cannot create the fixture reports SKIPPED — visible in every vitest reporter
+  (JSON, default, etc.) — rather than an indistinguishable PASSED. (Round-1 correction: this does
+  **not** additionally become visible in `windows-acl-proof`'s own per-describe accounting — that
+  job runs only the three specs named in `WINDOWS_ACL_PROOF_SPECS`
+  (`scripts/ci/windows-acl-proof.mjs:63-81`), and `cwd-preview.test.ts` is not one of them, so that
+  job never sees this file. The reporter-visibility argument stands on its own without it.)
   ```ts
   it("normalizes Claude's side too, so a symlinked home is not a permanent nudge", async (ctx) => {
     const link = path.join(home, "alpha-link");
@@ -140,8 +160,15 @@ One bullet is deliberately left open:
   only knowable by trying it, not by a synchronous predicate at collection time.)
 - `tests/server/annotation-remove-seam.test.ts`, immediately after the existing
   `toHaveLength(2)` assertion (`:428-432`), add the two parity assertions (adapted from
-  `annotation-reply-seam.test.ts:96-108`, symbol swapped):
+  `annotation-reply-seam.test.ts:96-108`, symbol swapped), **with the redundancy note living in the
+  test's own comment (round-1: was PR-body-only) so the next reader of this file sees it in place**:
   ```ts
+  // Parity with annotation-reply-seam.test.ts's two-layer guard (:96-108), added for a
+  // clearer, symbol-specific failure message. Note: for THIS symbol (removeAnnotationRecord
+  // is defined directly here, not a thin wrapper over a deeper private fn the way
+  // addUserReply is over writeReply), any alias or re-export line necessarily repeats the
+  // literal token and would already be caught by the toHaveLength(2) check above — so this
+  // is message parity, not a live coverage hole the way it is for reply-seam's structure.
   expect(lifecycle, "no alias binding of the unguarded entry").not.toMatch(
     /export\s+(?:const|let|var|function)\s+\w+\s*=?\s*removeAnnotationRecord\b/,
   );
@@ -149,8 +176,11 @@ One bullet is deliberately left open:
     /export\s*\{[^}]*\bremoveAnnotationRecord\b[^}]*\bas\b/,
   );
   ```
-- `tests/build/dangling-citations.ts`, `tests/helpers/css-source.test.ts`: no edit — bullets 2, 3,
-  6 above are evidence-only, no code change.
+- `tests/build/dangling-citations.ts`: no edit for #1825's bullets — the #1584 spec (K-tests-1584.md)
+  owns that file's docblock edit (a different citation-family decision, not this issue's scope);
+  this is not a repo-wide prohibition on ever touching the file, only a scope boundary between the
+  two specs in this same PR. `tests/helpers/css-source.test.ts`: no edit — bullets 2, 3, 6 above are
+  evidence-only, no code change.
 
 ## Tests
 
@@ -166,26 +196,57 @@ The fix IS the discriminating test for bullets 7 and 8:
   file, never `git checkout`) — `export const archiveDirect = removeAnnotationRecord;` — confirm
   the NEW regex assertion fails with "no alias binding of the unguarded entry" (and separately
   confirm the pre-existing `toHaveLength(2)` assertion ALSO already failed on this mutation, since
-  for this single-layer symbol the two checks are redundant on this exact defeat — record that
-  finding in the PR body rather than presenting the new assertions as closing a previously-open
-  hole). Restore the file copy.
+  for this single-layer symbol the two checks are redundant on this exact defeat — the test's own
+  comment above the new assertions already records this, per round-1, so the PR body only needs
+  to point at it). Restore the file copy.
 
 ## Done when
 
-The orphan fixture is deleted; `ctx.skip()` replaces the bare `return`; the two remove-seam parity
-assertions are added and pass; both mutation tests above are run and their outcomes recorded in
-the PR body (including the bullet-8 finding that the new checks are message-parity, not new
-coverage, for this particular symbol); `npm run typecheck:tests` green; the four already-done
-bullets (1, 2, 3, 4) are cited with the evidence above in the PR body rather than re-touched; the
-`perf:gate` CI-runner bullet is named explicitly as deferred with the ADR-051 reasoning, so the
-next reader does not assume this PR silently dropped it.
+Bullet 5 (`mcp-config-sample.json`) is recorded as REFUTED with the `integrations_probe.rs:422`
+evidence, not deleted; `ctx.skip()` replaces the bare `return` in `cwd-preview.test.ts`; the two
+remove-seam parity assertions (with their in-file redundancy comment) are added and pass; both
+mutation tests above are run and their outcomes recorded in the PR body; `npm run typecheck:tests`
+green; the four already-done bullets (1, 2, 3, 4) are cited with the evidence above in the PR body
+rather than re-touched; the `perf:gate` CI-runner bullet is named explicitly as deferred with the
+ADR-051 reasoning AND as tracked by #1825 itself (not an unfiled deferral), so the next reader does
+not assume this PR silently dropped it.
 
 ## Not in scope
 
 Building a `perf:gate` CI runner or its ADR-051 wiring test (bullet 9 — deliberately deferred, see
-above; file a dedicated issue if Bryan wants it built, rather than bundling it here). Any change to
-`tests/build/dangling-citations.ts` or `tests/helpers/css-source.test.ts` (both bullets are
-evidence-only). Re-touching the CI/build, Tauri, or Infra sections of #1825 — done by other groups
-per the issue's own comments. Promoting `scan-zero-assert.mjs` or `find_no_expect.py` to
-`scripts/ci/` (the K-tests-and-lows track file already marks this a "consider," not a requirement,
-and #1783's spec explicitly ruled it out of scope for the same reason).
+above; tracked by #1825 itself, which this PR deliberately does not close for that reason, rather
+than needing a separate issue number). Deleting `tests/fixtures/mcp-config-sample.json` (bullet 5
+— refuted; it has a real Rust reader, see above; deleting it is a `src-tauri/` / `rust=false`
+concern this group does not own even if Bryan later decides the Rust test itself should stop using
+it). Any change to `tests/build/dangling-citations.ts` FOR #1825's bullets (the #1584 spec owns
+that file's docblock edit for its own, unrelated citation-family decision) or to
+`tests/helpers/css-source.test.ts` (both bullets are evidence-only here). Re-touching the CI/build,
+Tauri, or Infra sections of #1825 — done by other groups per the issue's own comments. Promoting
+`scan-zero-assert.mjs` or `find_no_expect.py` to `scripts/ci/` (the K-tests-and-lows track file
+already marks this a "consider," not a requirement, and #1783's spec explicitly ruled it out of
+scope for the same reason).
+
+## Review corrections (round 1)
+
+**Adopted:**
+- Bullet 5's orphan claim was refuted: `src-tauri/src/integrations_probe.rs:422` reads
+  `tests/fixtures/mcp-config-sample.json` in a real, unconditional Rust test, and deleting it would
+  break all three required `rust-test` CI legs. Round-0's grep (`tests/ src/ scripts/`) never
+  looked at `src-tauri/`. Removed the `git rm` from Fix, removed the pre/post `ls` from the header
+  probe, and rewrote bullet 5 as REFUTED-with-evidence, matching bullet 6's existing shape.
+- Bullet 7's `ctx.skip()` justification claimed visibility in `windows-acl-proof`'s own per-describe
+  accounting; that job runs only three specs and `cwd-preview.test.ts` is not one of them. Dropped
+  that clause; the reporter-visibility argument (JSON/default reporters distinguish skipped from
+  passed) stands alone.
+- Bullet 8's redundancy note ("message parity, not new coverage for this symbol") was PR-body-only.
+  Moved into the test's own comment above the new assertions so the next reader of
+  `annotation-remove-seam.test.ts` sees it in place.
+- Bullet 9's deferral read like an unfiled deferral. Made explicit: it is tracked by #1825 itself,
+  which this PR deliberately keeps open (`Refs`, not `Closes`) for exactly that reason — no separate
+  issue number needed. Removed the "file a dedicated issue" line from "Not in scope" since it
+  implied otherwise.
+- The `dangling-citations.ts` "Not in scope" line read as a repo-wide prohibition, contradicting the
+  #1584 spec's own Done-when (which edits that file's docblock). Reworded to scope the prohibition
+  to #1825's bullets specifically.
+
+**Not adopted:** none — all findings touching this spec were adopted as described above.

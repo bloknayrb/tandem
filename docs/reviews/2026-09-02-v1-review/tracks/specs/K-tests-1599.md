@@ -19,17 +19,21 @@ Checked whether anything in this PR group's other five specs (#1861, #1855, #173
 touches `src/server/integrations/apply.ts`, `src/server/integrations/storage.ts`, or adds any new
 caller of a config writer:
 
-- #1861 — `tests/docs/rust-sources.ts` only.
+- #1861 — `tests/docs/rust-sources.ts`, `tests/docs/rust-sources.test.ts` (new) only.
 - #1855 — `tests/server/export-path-canonicalization.test.ts`,
   `tests/server/mcp-tool-integration.test.ts` only (annotation-export sidecar paths, unrelated to
   MCP-client config files).
-- #1734 — `tests/perf/performance.spec.ts` only.
-- #1584 — comment/doc-string edits in `src/server/license/*.ts` (license-state.ts, license.ts,
-  kv-store.ts) and `tests/client/*`/`src/client/panels/cardDensity.ts` (also comment-only); none
-  of these write `.claude.json` / MCP client config.
-- #1825 — `tests/fixtures/mcp-config-sample.json` (DELETED, not written-to — the fixture never
-  reached a real writer, per its own spec's evidence), `tests/server/launcher/cwd-preview.test.ts`,
-  `tests/server/annotation-remove-seam.test.ts`.
+- #1734 — `tests/perf/performance.spec.ts`, `docs/perf-gate-results.md` only.
+- #1584 (round-1 scope grew slightly, re-checked) — comment/doc-string edits in
+  `src/server/license/*.ts` (license-state.ts, license.ts, kv-store.ts),
+  `src/server/annotations/sync.ts`, `docs/licensing-operations.md`, and
+  `tests/client/*`/`src/client/panels/cardDensity.ts` (also comment-only); none of these write
+  `.claude.json` / MCP client config, and `sync.ts`'s edit is a docblock comment on the annotation
+  merge algorithm, unrelated to any config writer.
+- #1825 (round-1 correction: the fixture is NO LONGER deleted — bullet 5 was refuted, it has a real
+  Rust-test reader) — `tests/server/launcher/cwd-preview.test.ts`,
+  `tests/server/annotation-remove-seam.test.ts` only; `tests/fixtures/mcp-config-sample.json` is
+  now untouched rather than removed.
 
 **None of the six writers named in #1599's "Writers covered by this acceptance" list
 (`applyConfig`, `removeConfigEntries`, `refreshMcpEntryBinary`, `refreshAllMcpEntryBinaries`,
@@ -62,3 +66,16 @@ guard test deriving the config-writer set from source, annotating
 work, not something this group's issues ask for, and doing it here would be exactly the kind of
 unrequested scope-widening this spec exists to refuse. If Bryan wants that follow-up work done, it
 is its own group against #1599/#1671 directly, not folded into K-tests.
+
+## Review corrections (round 1)
+
+No blocking or non-blocking finding targeted this spec directly. **Adopted (housekeeping):**
+updated the per-sibling file-list summary to match the round-1 changes made to the #1584 and #1825
+specs (a new `sync.ts`/`docs/licensing-operations.md` touch on #1584; #1825's fixture is no longer
+deleted since bullet 5 was refuted) — the negative-grep conclusion (none of #1599's six named
+config writers is touched, called, or gains a new caller anywhere in this group's diff) is
+unchanged by either update, since none of the added/removed files is a config writer or a config
+writer caller. Re-verify with the same negative-grep command at PR time against the final diff, per
+this spec's own "Tests" section.
+
+**Not adopted:** none — no findings targeted this spec.
