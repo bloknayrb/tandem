@@ -453,11 +453,11 @@ literal in `tests/skill-instruction-contract.test.ts` moves with it). `Hooks arm
 | 6 | D2 docx contract | #1754 (Refs) #1755 | — | — | — | — | planned | Launched 2026-09-09 23:2x (run `wf_e8252052-c98`, probe ports 4918/4919), concurrently with CI-trust. Tier raised to **L** at launch (the wave table said M→L and the crdt + security lenses both apply). #1754 is **Refs-only** under decision B — `tandem_applyChanges` ships marked experimental, only the cheap walker fixes (tab/br/sym) land, and the deferral gets a comment on #1754 rather than a new issue. Security lens is the **export refusal** specifically; crdt lens is that any change to the walker's flat text moves the `.docx` capture and comment-IMPORT offsets, which are two of Critical Rule 4's four `surrogates: "ignore"` callers — no fifth one. Skill bump 18 → 19 with the `tests/skill-instruction-contract.test.ts:87` literal in the same commit. |
 | 6 | H the flip | #1788 → #1785 → #1793+#1786 (+#1825 infra section, same ledger row; code only, **no deploy**) → #1789 #1819 — three PRs in the ledger | — | — | — | — | planned-not-started | |
 | 6 | CI-trust | #1862 #1673 **#1933** | — | — | — | — | planned | Launched 2026-09-09 23:2x (run `wf_bb1e7e15-280`, probe ports 4928/4929), concurrently with D2. **#1933 joined the group after it was filed on 2026-09-09** — a third shape of the same failure, found by chasing #1932's red. All three are "a CI signal that reads like a finding about the diff and is not": #1673 a green that should be red (files collected vs files run), #1862 a red that evaluated nothing (vitest exits 1 before `coverage-gate.mjs` in the `&&` chain), #1933 a test whose own comment overstates its safety margin by ~20x. ADR-051 governs the design — `coverage` is advisory, so what blocks is a wiring test inside `check`. |
-| 7 | G8 docx comments | #1693 | — | — | — | — | planned-not-started | |
-| 7 | I-release | #1748 (+G) #1856 #1830 #1831 #1832 (fix halves; policy halves to Bryan) + #1825 CI section | — | — | — | — | planned-not-started | **#1748 item 3 is already done** — the `NPM_TOKEN` expired mid-release and `publish.yml` moved to npm Trusted Publishing out of band on 2026-09-06. Items 1, 2 and 4 remain. |
-| 7 | E2-rust | #1762 #1808 #1809 #1810 + #1455 pointer (Refs) + #1825 Tauri section | — | — | — | — | planned-not-started | |
-| 7 | K-client | #1824 remainder #1713 #1724 #1727-split (Refs) #1709 #1544 | — | — | — | — | planned-not-started | |
-| 7 | K-tests | #1825 Tests remainder #1855 #1861 #1734 (e2e) #1584 #1599 checkboxes (Refs) | — | — | — | — | planned-not-started | |
+| 7 | G8 docx comments | #1693 | `fix/docx-comments-the-promoted-comment-ghost-and-three-narrower-gaps-1693` | #1956 | — | armed | merged | Merged 2026-09-10 (`54495303`). **Closes nothing, deliberately** — the spec says three times that closing #1693 is "not defensible on this branch", because its own named reproducer still reproduces in the SIDEBAR after a cold open: `reconcileImportCommentIds` repairs `importSource.commentId` but cannot re-key the record, since the map key is a hash of the id it was imported under. Landed finding 1's reload half for all seven ids, its file half on a cold open via the ghost-pair collapse, 1c (`nc:`), 3 (at-cap boundary), 4 (orphaned-reply repair), and two measured in-file census defeats. Three residuals filed: **#1954** (the sidebar half), **#1950** (finding 2's repo-wide write-seam census), **#1951** (the `w:id` reuse residual — `0123` exports as `1`, non-numeric ids can never reuse). |
+| 7 | I-release | #1748 (+G) #1856 #1830 #1831 #1832 (fix halves; policy halves to Bryan) + #1825 CI section | `fix/release-and-ci-hygiene-1856` | #1955 | — | armed | merged | Merged 2026-09-10 (`018a434a`); closes #1748 #1856 #1830 #1832. **#1748 item 3 was already done** — the `NPM_TOKEN` expired mid-release and `publish.yml` moved to npm Trusted Publishing out of band on 2026-09-06. **#1831 is Refs and stays Bryan's**: only the `CONTRIBUTING.md` correction landed (it no longer claims an automated reviewer covers non-Dependabot PRs); delete-vs-repair of `claude-code-review.yml` is the decision, and the spec's gate reads "landing any part of it is landing the decision". Also landed five of #1825's CI/build fixes plus four bullets recorded refuted-or-already-done. |
+| 7 | E2-rust | #1762 #1808 #1809 #1810 + #1455 pointer (Refs) + #1825 Tauri section | `fix/desktop-sidecar-lifecycle-and-start-at-login-repair-1762` | #1968 | — | armed | merged | Merged 2026-09-11 (`cfcb10e7`); closes #1762 #1808 #1809 #1810. **Broke the ubuntu and macOS `rust-test` legs at COMPILE time on first push** — `SIDECAR_UNLOCK_DEADLINE_SECS` was `#[cfg(target_os = "windows")]` while a deliberately cross-platform test asserts against it; fixed in `7e0fd073` with `#[cfg_attr(not(target_os = "windows"), allow(dead_code))]` and a comment naming why it compiles everywhere. See lesson 2. #1825's Tauri first bullet was re-measured and found **already fixed by #1925** (`sidecar_env_pairs` exports the three vars at the spawn site); #1455 got its dangling ADR-045 pointer repaired and nothing else, so its dated 2026-10-15 gate is un-pre-empted. |
+| 7 | K-client | #1824 remainder #1713 #1724 #1727-split (Refs) #1709 #1544 | `fix/client-lows-editor-ui-a11y-and-product-copy-1709` | #1966 | — | armed | merged | Merged 2026-09-11 (`09d304e2`); closes #1713 #1724 #1709 #1544. Ten of #1824's items (B, C, D, E, F, G, H, I, L, N) landed, each re-verified against current master and mutation-tested. **#1824 stays open on six carve-outs** — #1963 (item A), #1964 (item K, also extends #1722), #1965 (item M), #1960, #1961, #1962; A/K/M were cut because each needs a cross-cutting mechanism rather than a same-file fix. **#1960 has since closed *not planned*** — shared chat "seen" state is the more correct behaviour for one user with two windows on one document. The generated body first shipped `Closes #1824`, contradicting its own For-Bryan section twelve lines down; **corrected before merge.** One testid-snapshot regeneration. |
+| 7 | K-tests | #1825 Tests remainder #1855 #1861 #1734 (e2e) #1584 #1599 checkboxes (Refs) | `fix/test-suite-integrity-silent-greens-fragile-assertions-and-an-unimplemented-perf-decision-1861` | #1973 | — | armed | merged | Merged 2026-09-11 (`3ab75719`); closes #1855 #1584. Every issue here was *a test that lies*, so the failure mode of fixing them is making a test pass that should fail. #1861's fix exposed a silent mode nobody had characterized: the old stripper truncated `autostart.rs` at len=5334 vs 6562, dropping **8 production symbols** from every `rustSources()` guard, invisible to all seven pre-existing consumers. #1855's 8.3 axis was claimed unreachable in `2411d9a2`'s message and then **reproduced directly** (corrected in `eccc1939`). #1734 implemented #1334's decision — 714ms FAIL old / 311ms PASS new — with a source-scan pin for the CSS-class locator, which carries none of Critical Rule 7's contract. **Refs #1861 (carve-out #1970), #1734 (carve-out #1974), #1825 (bullet 9), #1599 (no work).** The returned `closes[]` named four; the body named two and was right — lesson 1. |
 | 8 | E2-upgrade | #1791 #1792 (+#1722's `updateSettings` boolean, once) + smoke-lines merge | — | — | — | — | planned-not-started | |
 | 8 | K-sec-server | #1822 items 1,2,3,7,8 #1488 comment (Refs) #1609 | — | — | — | — | planned-not-started | |
 | 8 | K-sec-launcher | #1822 items 4,5,6 #1600 (fix half) | — | — | — | — | planned-not-started | |
@@ -824,6 +824,71 @@ Tauri WebView is loopback, so the block always renders on desktop, and the `auth
 npm-location-only by design — so the desktop panel reports "Auth token not yet created" for a
 token that exists and is in use, or, on a dual-install machine, shows the npm install's rotation
 time inside the desktop app.
+
+### Wave 7 closed — 2026-09-11
+
+Five PRs closing fourteen issues, plus three out-of-group documentation PRs and eleven new issues
+filed out of the work. G8 docx comments merged as **#1956** (`54495303`, #1693 Refs only),
+I-release as **#1955** (`018a434a`, #1748 #1856 #1830 #1832), E2-rust as **#1968** (`cfcb10e7`,
+#1762 #1808 #1809 #1810), K-client as **#1966** (`09d304e2`, #1713 #1724 #1709 #1544) and K-tests
+as **#1973** (`3ab75719`, #1855 #1584). **#1969**, **#1972** and **#1975** sit alongside as
+documentation corrections belonging to no group — the first two reconciling the security register
+against the tracker, the third this ledger.
+
+**Open by design, each with a reason rather than a backlog slot:** #1831 (delete-or-repair
+`claude-code-review.yml` — Bryan's, and the I-release spec records the gate in terms that make
+landing *any* part of it landing the decision), #1693 (its cold-open **sidebar** half still
+reproduces; #1954, #1950 and #1951 carry the three residuals), #1824 (six carve-outs open under
+it, of which #1960 has since closed *not planned* — shared "seen" state is the more correct
+behaviour for one user with two windows), #1825 (the Tests section's `perf:gate`-has-no-CI-runner
+bullet needs an ADR-051 wiring decision, plus the CI/build and Tauri remainders), #1861 (carve-out
+#1970), #1734 (carve-out #1974), #1455 (dated 2026-10-15, hardware-gated, Bryan's), #1727
+(deferred, Bryan's, revisit 2026-11-15) and #1599 (an accepted finding, no work by design).
+
+Five lessons, and the first is a correction to the fix the last two waves prescribed.
+
+**1. The `Closes` prose held. The machine-readable list did not, and that is the half the loop
+reads.** All five wave-7 PR bodies got `Closes`/`Refs` right — the first wave in three where that
+is true, and K-client's body was corrected from a wrong `Closes #1824` before merge, so the
+cross-check worked. But K-tests's *returned* `closes[]` named four issues (#1861 #1855 #1734
+#1584) while its own body named two. **Step 3 of this ledger's loop and the completeness critic
+both read the return value, not the body**, so a group can ship a correct PR and still hand the
+main session a wrong list. The last two waves' remedy — "cross-check the body before the merge
+button" — was aimed at the artifact that has now stopped failing. Derive both from one place, or
+check them against each other; do not check either alone.
+
+**2. A Windows-only `cargo test` cannot verify a `cfg`-gated Rust change.** #1968 passed the full
+pre-push hook here and broke the ubuntu and macOS `rust-test` legs at **compile** time: a constant
+used by a deliberately cross-platform test carried `#[cfg(target_os = "windows")]`. The failure
+signature is worth memorising, because it reads as infrastructure: **matrix fail-fast cancels the
+siblings, so three legs report `cancelled` — two of them mid-`Swatinem/rust-cache` — while an
+unrelated job stays green.** Three simultaneous cancellations with a survivor is fail-fast, not an
+outage, and the real error is one `gh run view --job <id> --log` away. Reading job-level
+conclusions alone produced a confident wrong diagnosis here before the log was opened.
+
+**3. "No unfiled deferrals" has a second failure mode: the same deferral filed twice.** Two agents
+inside one K-tests run filed #1970 (15:16Z) and #1971 (15:22Z) for the same stale `sidecar.rs`
+comment, six minutes apart, neither seeing the other. #1971 is closed as a duplicate. Nothing in
+the workflow dedupes filings, and nothing can cheaply — the agents run concurrently and neither is
+wrong to file. The cheap control is at the ship stage: **list the issues this group filed and look
+for two that describe the same site.**
+
+**4. A document can assert the absence of a thing it declined to measure.**
+`docs/perf-gate-results.md`'s new Run 3 closes with "no residual over-budget number and no residual
+click-dispatch motion coupling to file a follow-up issue for". The first clause is supported. The
+second is not: Run 3 records a single total and **no click/settle split**, while runs 1–2 are
+analysed almost entirely in terms of that split and the harness prints it on every run. The PR's
+own evidence block has the split, and it is ~98% pre-click wait. Filed as #1974. The general shape
+— a negative claim resting on a measurement the same document chose not to record — is the one a
+green suite can never catch, because there is nothing to assert against.
+
+**5. Step 3 of this ledger's own loop was skipped by four of the five groups.** "Post one comment
+on each `Refs` issue (what landed, what remains)" happened for #1825 and for nothing else: #1831,
+#1693, #1455, #1824 and #1727 all sat as open issues with a PR freshly landed against them and no
+indication of it, and the wave-7 rows below still read `planned-not-started` days after four of
+them merged. Backfilled 2026-09-11. This is the same class as the security-register drift #1969
+and #1972 corrected in the same wave — a fact that changed and did not propagate to where someone
+would read it — and the sweep's own process document was not exempt from it.
 
 ### Wave 0 record
 
