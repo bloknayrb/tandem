@@ -283,7 +283,8 @@ function baseUrl(validated: URL): string {
 // ---------------------------------------------------------------------------
 // Streaming (#1123 M1.2) — opt-in via ChatOpts.onContentDelta. Each invariant
 // below is a verified silent-failure risk from the pre-code review, not
-// boilerplate; see #1123's plan §3.5b.
+// boilerplate; see PR #1160's "Streaming transport" section (no tracked
+// #1123 plan doc covers M1.2 — #1160's own description is the record).
 // ---------------------------------------------------------------------------
 
 interface StreamAccum {

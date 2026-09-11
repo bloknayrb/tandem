@@ -50,11 +50,27 @@
  *  - `plan §N` / `the plan's §N` / `M2b plan §N` citing a plan section that
  *    lives in gitignored `.claude/plans/` — reads as labelled, and DOES
  *    resolve, but only on a machine holding the untracked plan, so it is
- *    functionally dangling to everyone else. Three different outcomes,
- *    depending on the plan: `local-model/collaborator.ts`,
- *    `local-model/index.ts`, `ollama-client.ts`, and two `tests/client/*`
- *    files were re-labeled `#1123 plan §N` (the tracked issue for that plan,
- *    matching the sibling sites that already did this). One,
+ *    functionally dangling to everyone else. Four different outcomes,
+ *    depending on the plan: two `tests/client/*` sites
+ *    (`integration-wizard-models.test.ts` §3.8,
+ *    `use-models-loading.test.ts` M2b §3.8) already cited a real section of a
+ *    real tracked doc, `docs/plans/archived/1123-m2b-models-ui-mount.md`
+ *    §3.8 ("Flag-ON test coverage"), and were left as `#1123's plan §3.8`.
+ *    Four sites in `local-model/collaborator.ts` (x2), `local-model/index.ts`
+ *    and `ollama-client.ts` cited `#1123 plan §3/§3.2/§3.5b/§3.6/§3.7` —
+ *    **no tracked #1123 plan doc exists for those numbers**: M1.1/M1.2 (the
+ *    phase these four sites describe) shipped before `docs/plans/archived/`
+ *    gained a `1123-*` file at all — the first is `1123-m1a-*`, and its own
+ *    §3.2/§3.5/§3.6/§3.7 cover unrelated M1a content (the resolver, transport
+ *    sub-decisions, client migration, out-of-scope), not M1.2's streaming /
+ *    single-flight / structural-redaction design. Re-checked against every
+ *    archived `1123-*` doc's real header list — none carries the cited
+ *    content under any section number. The actual tracked record for M1.2 is
+ *    the merged PR body, `#1160` — it has no `§`-numbered sections, so these
+ *    four were re-labeled to name **#1160's section title** in prose
+ *    (`"Streaming transport"`, `"Stays byte-identical to today when dark"`,
+ *    `"Product decisions wired in"`) rather than invent a plan section number
+ *    that would silently resolve to the wrong document. One,
  *    `tests/client/MarginColumn.import-author.test.ts`, cited a "V2 plan"
  *    that turned out to be tracked after all — re-labeled with
  *    `docs/plans/archived/2026-05-28-stage-c3-bezier-leaders-anchor-dots.md

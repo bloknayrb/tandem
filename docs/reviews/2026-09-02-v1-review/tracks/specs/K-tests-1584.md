@@ -80,6 +80,33 @@ extend-the-scanner. The two `plan §N` sites that already cite `#1123` — untou
 Any change to `src/server/local-model/`, `src/server/license/` *behavior* — every touch here is
 comment/doc-string only.
 
+## Review corrections (round 2 — code review cr-1)
+
+**The "re-label with `#1123 plan §N`" fix for the six local-model sites was wrong for four of
+them, and shipped anyway.** Round-1 verified only that `first-run-model-picker.test.ts` and
+`model-edit-modal.test.ts` (the "two sibling sites") cite real M2b §3.3/§3.4/§3.5 headers, then
+assumed the same `#1123 plan §N` shape would resolve for the six M1.2 sites without checking
+each numeral against a real doc. It doesn't: `docs/plans/archived/1123-*.md` starts at
+`1123-m1a-*` — **M1.1/M1.2 (#1159/#1160) shipped before any `1123-*` plan doc existed**, so no
+tracked plan document covers the content these four sites describe at all, at any section number.
+Checked directly: M1a's own §3/§3.2/§3.5/§3.6/§3.7 cover the resolver, transport-derivation
+sub-decisions and the one-time client migration — not M1.2's single-flight controller, streaming
+hardening or structural-redaction rule. `#1123 plan §3.5b`/`§3.2`/`§3.7`/`§3`/`§3.6` at
+`ollama-client.ts:286`, `index.ts:14`, `collaborator.ts:11,151` were therefore re-labeled from
+"dangling to everyone without `.claude/plans/`" to "dangling to everyone, period" — a strictly
+worse citation, because it now *reads* resolvable.
+
+**Corrected fix:** those four sites cite the actual tracked record for M1.2 — the merged PR body
+`#1160` — by its section *title* in prose (`"Streaming transport"`, `"Stays byte-identical to
+today when dark"`, `"Product decisions wired in"`, and `classifyFailure`'s redaction cites
+#1160's "structured-failure-no-raw-leak" test line), since PR bodies carry no `§`-numbered
+sections to cite. The two already-correct M2b §3.8 sites
+(`integration-wizard-models.test.ts`, `use-models-loading.test.ts`) are untouched — verified
+against `docs/plans/archived/1123-m2b-models-ui-mount.md`'s real §3.8 header
+("Flag-ON test coverage") and left as `#1123's plan §3.8` / `#1123's M2b plan §3.8`.
+`dangling-citations.ts`'s own docblock is corrected to describe this outcome rather than the
+wrong one.
+
 ## Review corrections (scope cut)
 
 - Kept the direct correctness fix for the blocking finding: `MarginColumn.import-author.test.ts:9`

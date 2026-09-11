@@ -8,7 +8,8 @@
  * `BYO_MODELS_ENABLED` is false (the subscriber is never registered), and even
  * if the flag flips, `config-source.ts` returns null until M1a (no loop runs).
  *
- * Design (see #1123 plan §3):
+ * Design (see PR #1160's "Product decisions wired in" table — no tracked
+ * #1123 plan doc covers M1.2; #1160's own description is the record):
  *  - ADR-039 "one active agent at a time": a single-flight controller; a new
  *    message SUPERSEDES the prior run (abort + serialize, then start) [D-B].
  *  - "Hold in Solo": the collaborator only acts in Tandem mode [D-D].
@@ -148,7 +149,8 @@ function composeTask(text: string, selection?: ChatMessagePayload["selection"]):
  * Map a failed run to a FIXED user-facing string. `metrics.errorMessage` is READ
  * to pick the bucket but NEVER embedded in the output (a third-party body /
  * V8-parse snippet must not reach the UI — it stays on stderr). Structural
- * redaction, per #1123 plan §3.6.
+ * redaction (#1123 M1.2, #1160's "structured-failure-no-raw-leak" test —
+ * no tracked #1123 plan doc covers M1.2).
  */
 export function classifyFailure(metrics: LoopMetrics): string {
   const m = metrics.errorMessage ?? "";
