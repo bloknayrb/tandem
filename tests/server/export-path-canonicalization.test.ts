@@ -170,7 +170,10 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
       // directory is unrestricted; only the leaf name is.
       const out = path.join(base, "real", "anywhere.annotations.json");
       const body = await exportTo(out);
-      expect(body.writtenPath).toBe(out);
+      // `out` is `makeDir()`'s raw, non-canonical path; the app realpath's it
+      // (annotations.ts:876-879) before returning. They coincide here, but not
+      // on macOS, where `/var/folders` is itself a symlink (#1855).
+      expect(body.writtenPath).toBe(await fsp.realpath(out));
     });
 
     it("accepts a case variant of the suffix", async () => {
@@ -178,7 +181,7 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
       const base = await makeDir();
       const out = path.join(base, "real", "Cased.Annotations.JSON");
       const body = await exportTo(out);
-      expect(body.writtenPath).toBe(out);
+      expect(body.writtenPath).toBe(await fsp.realpath(out));
     });
 
     it.runIf(POSIX)(
@@ -237,7 +240,12 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
       // #1654: `outputPath` names a DIRECTORY. The leaf is derived from the
       // source document, so the caller cannot choose the created filename.
       const result = await convertToMarkdown(id, path.join(base, "real"));
-      expect(result.outputPath).toBe(path.join(base, "real", `${id}.md`));
+      // `base` is `makeDir()`'s raw, non-canonical path; `convert.ts:189-191`
+      // realpath's the output directory before returning. They coincide here,
+      // but not on macOS, where `/var/folders` is itself a symlink (#1855).
+      expect(result.outputPath).toBe(
+        path.join(await fsp.realpath(path.join(base, "real")), `${id}.md`),
+      );
       await expect(fsp.access(result.outputPath)).resolves.toBeUndefined();
     });
 

@@ -1176,7 +1176,13 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
     });
     const parsed = parseResult(result);
     expect(parsed.error).toBe(false);
-    expect(parsed.data.writtenPath).toBe(customPath);
+    // `customPath`'s leaf does not exist yet, so `annotations.ts` realpath's
+    // its PARENT (the ENOENT branch, :874-879) and rejoins the basename. They
+    // coincide here, but not on macOS, where `/var/folders` is itself a
+    // symlink (#1855).
+    expect(parsed.data.writtenPath).toBe(
+      join(await fs.realpath(join(customPath, "..")), basename(customPath)),
+    );
     const raw = await fs.readFile(customPath, "utf-8");
     expect(raw).toContain("Custom path comment");
   });
@@ -1250,7 +1256,6 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
       `tandem-export-dir-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     );
     await fs.mkdir(targetDir, { recursive: true });
-    const expectedFile = join(targetDir, `${basename(docPath)}.annotations.json`);
 
     const ydoc = setupDocAtPath("mcp-export-dir", "Hello world", docPath);
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -1263,8 +1268,16 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
       });
       const parsed = parseResult(result);
       expect(parsed.error).toBe(false);
-      expect(parsed.data.writtenPath).toBe(expectedFile);
-      const raw = await fs.readFile(expectedFile, "utf-8");
+      // `targetDir` exists, so `annotations.ts` realpath's it directly (the
+      // existing-directory branch, :849-855) before appending the default
+      // filename. They coincide here, but not on macOS, where `/var/folders`
+      // is itself a symlink (#1855).
+      const expectedRealFile = join(
+        await fs.realpath(targetDir),
+        basename(docPath) + ".annotations.json",
+      );
+      expect(parsed.data.writtenPath).toBe(expectedRealFile);
+      const raw = await fs.readFile(expectedRealFile, "utf-8");
       expect(raw).toContain("dir-target comment");
     } finally {
       await fs.rm(targetDir, { recursive: true, force: true });
