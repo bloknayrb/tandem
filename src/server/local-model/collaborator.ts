@@ -149,8 +149,12 @@ function composeTask(text: string, selection?: ChatMessagePayload["selection"]):
  * Map a failed run to a FIXED user-facing string. `metrics.errorMessage` is READ
  * to pick the bucket but NEVER embedded in the output (a third-party body /
  * V8-parse snippet must not reach the UI — it stays on stderr). Structural
- * redaction (#1123 M1.2, #1160's "structured-failure-no-raw-leak" test —
- * no tracked #1123 plan doc covers M1.2).
+ * redaction (#1123 M1.2 — no tracked #1123 plan doc covers it). Pinned by
+ * `collaborator.test.ts`'s "surfaces an error exit as a structured
+ * notification, never the raw error text" plus the table-driven
+ * "maps … to a fixed string with no raw detail" cases; #1160's test plan
+ * calls that pair `structured-failure-no-raw-leak`, which is a PR-body
+ * label, not a name anything in `tests/` carries.
  */
 export function classifyFailure(metrics: LoopMetrics): string {
   const m = metrics.errorMessage ?? "";
