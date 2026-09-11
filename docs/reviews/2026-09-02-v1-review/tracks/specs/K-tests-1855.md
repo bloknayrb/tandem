@@ -28,8 +28,23 @@ and confirmed against current source:
   `/var/folders/…` while `fs.realpath` returns `/private/var/folders/…`, so the divergence is
   live there regardless of username length.
 
-**Not reachable on THIS machine, on either axis** (5-char username; not macOS) — but "not reachable
-here" is not "not reachable at all," and only the 8.3 axis matches the issue's own hypothesis. The
+**Corrected (ship-stage verification): the 8.3 axis IS reachable on this machine, contradicting the
+draft below.** `$env:USERNAME` being short does not stop `mktemp`'s randomized leaf directory name
+from itself minting an 8.3 alias for a long-named ancestor — measured directly with a COM
+`Scripting.FileSystemObject` short-path lookup against a freshly created long-named temp dir:
+`C:\Users\blokn\AppData\Local\Temp\tandem-shortname-probe-longdirectoryname` aliases to
+`C:\Users\blokn\AppData\Local\Temp\TA3E70~2`. Reproduced end to end: with `TEMP` pointed at that
+8.3 alias, `origin/master`'s test files fail exactly the five named sites (5 failed | 98 passed);
+the fixed files pass (2 files / 103 passed | 8 skipped) under the identical `TEMP`. **This
+supersedes both the "not reachable on THIS machine" framing directly below and commit `2411d9a2`'s
+message, which repeated that same wrong claim** ("The 8.3-short-name axis the issue names is not
+reachable on this machine or in any CI leg that runs either file... this fix targets the macOS
+axis only"). The fix is correct and sufficient on both axes regardless — this corrects only the
+scope claim, not the code.
+
+**Originally assessed not reachable on THIS machine, on either axis** (5-char username; not
+macOS) — but "not reachable here" is not "not reachable at all," and only the 8.3 axis matches the
+issue's own hypothesis. The
 issue names the Windows trigger class: GitHub's `windows-latest` runner authenticates as
 `runneradmin` (11 chars, shortened to `RUNNER~1`), which already turned the sibling spec
 `convert-output-acl-win.test.ts` red once (`export-path-canonicalization.test.ts:416-420`). **That
@@ -96,9 +111,8 @@ The five sites above wrap the expected-path side of their comparison in `fsp.rea
 `makeDir()` is untouched; `npx vitest run tests/server/export-path-canonicalization.test.ts
 tests/server/mcp-tool-integration.test.ts` passes on this machine; `npm run typecheck:tests` green.
 Mutation check (wave-7 lesson 5): revert the five `realpath()` wraps from a saved file copy,
-confirm all five assertions still pass here (the axis isn't reachable on this machine — that's
-expected, not a contradiction: this machine can't discriminate the fix, only a Mac or a
-Windows-8.3-ancestor host can), restore.
+confirm all five assertions go red under an 8.3-aliased `TEMP` (they do — see the reachability
+correction above) and pass again once restored.
 
 ## Not in scope
 
