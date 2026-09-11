@@ -125,14 +125,28 @@ probe draft) still pass unchanged; `npm run typecheck:tests` green.
 ## Not in scope
 
 Nested block-comment awareness. Any change to `src-tauri/src/sidecar.rs` — out of `rust=false`
-scope for this group, and out of a `docs(specs)`-only planning pass either way. The
-`concat!("/", "/")` workaround itself remains correct and is left as-is (it stays necessary
-regardless, for the unrelated reason #1968's `sidecar.rs:2916-2919` `.starts_with('/')` workaround
-exists — see Problem). **What is stale is the comment's own claim** ("fails loudly rather than
-silently... a landmine and not a hole") — now falsified in both halves by this fix (it stops being
-a regex at all, and the failure it warns about was already the wrong direction on `autostart.rs`).
-Filed as **#1970** rather than left as an in-PR heads-up, per wave-7 lesson 3 (no unfiled
-deferrals); a future Rust-touching PR resolves it.
+scope for this group, and out of a `docs(specs)`-only planning pass either way.
+
+**Corrected (code review, general-purpose-4): the `concat!("/", "/")` workaround is removable,
+and the "stays necessary regardless" claim above was wrong.** It named the wrong site as the
+reason to keep it. `tests/shared/unc-check-duplication.test.ts`'s `RAW_PREFIX` is
+`/\.starts_?[wW]ith\(\s*r?"(?:\\\\|\/\/)/` — it only matches a `.starts_with(`/`.startWith(` call
+whose literal argument opens with `\\` or `//`. The `concat!` site
+(`sidecar.rs:3920`, used at `:3922` as `!src[..].contains(LINE_COMMENT)`) is a `.contains(...)`
+call, not `.starts_with(...)` — rewriting `LINE_COMMENT` to a plain `"//"` literal would not match
+`RAW_PREFIX` under any reading, so it is not "the same detector, different site" as #1968's real
+`.starts_with('/')` workaround at `sidecar.rs:2919`; those two are unrelated hazards that happen
+to sit near each other in the same test module. Grepped `tests/` for every other reference to
+`sidecar.rs`: `supervisor.test.ts` and `platform.test.ts` both cite it only in doc comments,
+neither reads its raw text. So once `stripRustComments` is string-aware (this fix), nothing left
+in the repo would corrupt on a plain `"//"` at that site — the workaround's entire stated purpose
+(protecting `rustSources()`'s scan of `sidecar.rs` itself, which the `concat!` comment names
+explicitly) is gone, with no second reason standing behind it. **What is stale is therefore not
+just the comment's own claim** ("fails loudly rather than silently... a landmine and not a hole"
+— falsified in both halves by this fix, as before) **but the workaround's own necessity.** Filed as
+**#1970** rather than left as an in-PR heads-up, per wave-7 lesson 3 (no unfiled deferrals); #1970
+is corrected with this same evidence (see its follow-up comment) so a future Rust-touching PR
+reads the right answer there too.
 
 ## Review corrections (scope cut)
 
