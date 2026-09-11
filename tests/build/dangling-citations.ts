@@ -40,26 +40,39 @@
  *
  * WHAT THIS DETECTOR DOES NOT COVER — stated, not implied. It matches the
  * three shapes above and nothing else, so "no dangling citations" here means
- * "no *label-less* ones". Three families of the same habit survive it, and the
- * limit is deliberate because widening to reach them costs more than it buys.
- * All three are tracked in #1584:
+ * "no *label-less* ones". Three families of the same habit survive it, and
+ * the limit is deliberate because widening to reach them costs more than it
+ * buys. #1584 resolved all three per-site rather than by widening the
+ * pattern, so **a future site of any of these three shapes is still
+ * invisible here by design** — the outcomes below describe what happened to
+ * the sites #1584 found, not a change to what this detector matches:
  *
- *  - `plan §N` / `the plan's §N` / `M2b plan §N` — `local-model/collaborator.ts`,
- *    `local-model/index.ts`, `ollama-client.ts`, `panels/cardDensity.ts`, and
- *    four `tests/client/*` files cite plan sections that live in gitignored
- *    `.claude/plans/`. They read as labelled, and they DO resolve — but only on
- *    a machine holding the untracked plan. Inlining the rationale each one
- *    stands in for means transcribing a document that is not in the repo, which
- *    is a far larger change than #1531, and one no reviewer of this repo could
- *    check. Tracked in #1584 rather than half-done here.
- *  - `review §N` — `license-state.ts`, `mcp/routes/license.ts`. "review" names a
- *    review conversation, not a document; same defect as `invariant`, but two
- *    sites, and folding it in would put a third label-word in a pattern whose
- *    whole argument is that label-words name lists rather than documents.
+ *  - `plan §N` / `the plan's §N` / `M2b plan §N` citing a plan section that
+ *    lives in gitignored `.claude/plans/` — reads as labelled, and DOES
+ *    resolve, but only on a machine holding the untracked plan, so it is
+ *    functionally dangling to everyone else. Three different outcomes,
+ *    depending on the plan: `local-model/collaborator.ts`,
+ *    `local-model/index.ts`, `ollama-client.ts`, and two `tests/client/*`
+ *    files were re-labeled `#1123 plan §N` (the tracked issue for that plan,
+ *    matching the sibling sites that already did this). One,
+ *    `tests/client/MarginColumn.import-author.test.ts`, cited a "V2 plan"
+ *    that turned out to be tracked after all — re-labeled with
+ *    `docs/plans/archived/2026-05-28-stage-c3-bezier-leaders-anchor-dots.md
+ *    §4.1b`. Two, `panels/cardDensity.ts` and `tests/e2e/margin-view.spec.ts`,
+ *    cite a *different*, still-untracked local plan ("plan C2") with no
+ *    committed home found anywhere in the repo or the issue tracker —
+ *    declared acceptable as-is rather than invented a tracked document for.
+ *  - `review §N` — `license-state.ts`, `mcp/routes/license.ts`. "review"
+ *    names a review conversation, not a document, and no tracked doc's
+ *    numbering matches the `§12` pass either one cited. Inlined: each site
+ *    now states its own rationale in prose instead of pointing at the review.
  *  - a parenthesised citation with a trailing token — `(§12 L1)` in
- *    `kv-store.ts`. Branch 3 requires the `)` to follow the numeral, so this
- *    slips through. Allowing arbitrary trailing text inside the parens would
- *    start matching `(ADR-040 §5, see below)`-shaped legitimate text.
+ *    `kv-store.ts`, the same ad hoc `§12` review pass as above but without the
+ *    word "review" preceding it. Branch 3 requires the `)` to follow the
+ *    numeral, so this slips through too; inlined for the same reason.
+ *    Allowing arbitrary trailing text inside the parens would start matching
+ *    `(ADR-040 §5, see below)`-shaped legitimate text, so the pattern itself
+ *    is unchanged.
  *
  * One structural limit as well: `invariant-citations.test.ts` runs this pattern
  * per LINE, so a citation whose label and numeral are split across a comment

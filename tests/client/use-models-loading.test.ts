@@ -5,7 +5,7 @@
  * so this file mocks `BYO_MODELS_ENABLED=true` to exercise the lit path. This is
  * the ONLY seam used for flag-on coverage — a `vi.mock` of the constant, NOT a
  * runtime env/define override (the production const stays a literal `false`; a
- * build-define would crash the vite client bundle — see the M2b plan §3.8).
+ * build-define would crash the vite client bundle — see #1123's M2b plan §3.8).
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

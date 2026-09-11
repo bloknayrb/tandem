@@ -6,7 +6,9 @@ import MarginColumn from "../../src/client/panels/MarginColumn.svelte";
 import type { Annotation } from "../../src/shared/types";
 import { range } from "../helpers/positions";
 
-// Closes the gap from the V2 plan §4.1b — `leaderColorForAuthor` is unit-tested
+// Closes the gap from
+// docs/plans/archived/2026-05-28-stage-c3-bezier-leaders-anchor-dots.md §4.1b
+// (the "V2" plan) — `leaderColorForAuthor` is unit-tested
 // in marginLeaderGeometry.test.ts, but pure-function correctness can't prove
 // that an import-authored annotation reaches the SVG with author intact (a
 // sanitizer between the prop and the render call could silently re-bucket

@@ -9,7 +9,7 @@
  * `BYO_MODELS_ENABLED=false`). This file mocks the constant ON to exercise the
  * `{:else}` enabled row: a "Set up" button that closes the wizard and invokes
  * the `onSetupModels` callback (App wires it to `openModelsSettings`). This is
- * the thin gate-wiring seam from the plan §3.8 — the constant stays a literal
+ * the thin gate-wiring seam from #1123's plan §3.8 — the constant stays a literal
  * `false` in production; only this test flips it.
  *
  * The hook mocks mirror `integration-wizard-cowork.test.ts` so the MAIN view +

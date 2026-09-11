@@ -133,8 +133,10 @@ function loopbackLicenseWire(state: LicenseState): Record<string, unknown> {
 /**
  * GET /api/license/status — current on-device license state, recomputed fresh.
  * Loopback callers get the full state (incl. licensee name + licenseId for the
- * updater); non-loopback callers get the scrubbed subset (raw `isLoopback` check,
- * not the mutation helper — review §12 M1).
+ * updater); non-loopback callers get the scrubbed subset. This is a read-only
+ * route, so it checks `isLoopback` directly rather than going through the
+ * mutation-gating helper (`assertLoopbackForMutation`), which is for handlers
+ * that write state.
  */
 export function handleGetLicenseStatus(req: Request, res: Response): void {
   const state = resolveLiveLicenseState();

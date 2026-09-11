@@ -11,7 +11,7 @@
  * RUNS). The load-bearing dark check is now that `collaborator.ts`'s
  * `subscribe()` call is gated behind `BYO_MODELS_ENABLED` (the subscriber is
  * never registered while dark), AND that `config-source.ts` returns null (so the
- * loop is inert even if the flag flips before M1a). See the plan's §3.2/§3.7.
+ * loop is inert even if the flag flips before M1a). See #1123's plan §3.2/§3.7.
  */
 import type * as Y from "yjs";
 

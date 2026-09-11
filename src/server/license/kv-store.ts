@@ -73,7 +73,7 @@ export async function writeLicenseEntitlement(
       body: JSON.stringify(entry),
     });
     if (!resp.ok) {
-      // Log id only — never the email (§12 L1). The id is opaque.
+      // Log id only — never the email. The id is opaque.
       console.error(
         `[license] KV entitlement write failed (HTTP ${resp.status}) for license ${licenseId}`,
       );
