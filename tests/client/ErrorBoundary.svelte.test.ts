@@ -28,9 +28,12 @@ describe("ErrorBoundary failed snippet — saved-work reassurance (#1824 item L)
     expect(reassurance).toBeTruthy();
     expect(detail).toBeTruthy();
 
-    expect(reassurance?.textContent).toContain(
-      "Your document is synced to the server, so this doesn't affect your saved work.",
-    );
+    // cr-1 (v1 review round 1): the reassurance must not claim unconditional
+    // safety — a disconnected socket or an uncommitted source-view draft
+    // means reloading DOES lose work, and the boundary has no way to know
+    // which case it's in once the throwing subtree is gone.
+    expect(reassurance?.textContent).toContain("Anything that had already synced");
+    expect(reassurance?.textContent).not.toMatch(/doesn't affect your saved work/i);
 
     // Between the two, in DOM order — not just "present somewhere".
     const children = Array.from(boundary.children);

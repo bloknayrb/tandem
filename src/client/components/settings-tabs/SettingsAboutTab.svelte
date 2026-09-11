@@ -63,7 +63,7 @@ async function handleCopyDiagnostics(): Promise<void> {
     ctx.notify(
       "error",
       isTauriRuntime()
-        ? "Couldn't access the clipboard — use Open Log Folder below instead"
+        ? "Couldn't access the clipboard — use the Open Log Folder button instead"
         : "Couldn't access the clipboard — run `tandem doctor` in a terminal instead",
     );
   }
@@ -78,7 +78,7 @@ async function handleCopyDiagnostics(): Promise<void> {
  */
 function diagnosticsFailedMessage(): string {
   return isTauriRuntime()
-    ? "Diagnostics failed on the server — try Open Log Folder below"
+    ? "Diagnostics failed on the server — try the Open Log Folder button"
     : "Diagnostics failed on the server — try `tandem doctor` in a terminal";
 }
 

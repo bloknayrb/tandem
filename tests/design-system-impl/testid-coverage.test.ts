@@ -48,7 +48,12 @@ function walk(dir: string, out: string[] = []): string[] {
  */
 function parseValue(src: string, idx: number): string | null {
   const open = src[idx];
-  if (open === '"' || open === "'") {
+  // Backtick joins the quote family here (not the Svelte-attribute `{expr}`
+  // branch below): a template literal opened directly as a JS value — e.g.
+  // the RHS of `el.dataset.testid = ...` — has no wrapping `{}` of its own.
+  // Interpolations inside it are reduced to `{*}` by `normalise()`, same as
+  // everywhere else; this only has to find the matching close-backtick.
+  if (open === '"' || open === "'" || open === "`") {
     const end = src.indexOf(open, idx + 1);
     if (end === -1) return null;
     const v = src.slice(idx + 1, end);
@@ -177,9 +182,24 @@ const LEADING_IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*/;
 /**
  * Scan one source string for `.dataset.testid = ...` assignments (the
  * right-hand side is raw JS/TS here, never a Svelte template attribute, so
- * `parseValue`'s quote/`{expr}` handling only covers the quoted-literal
+ * `parseValue`'s quote/backtick/`{expr}` handling only covers the literal
  * case — a bare identifier needs its own check before falling through to
  * "unparseable").
+ *
+ * Two forms beyond a single quoted literal are handled explicitly rather
+ * than falling through to "unparseable" or, worse, silently truncating:
+ *
+ *  - A backtick-opened template literal (`` `row-${i}` ``) — the natural
+ *    form for a per-item imperative testid, and the likelier shape than a
+ *    bare identifier for a dynamic one. `parseValue` now treats backtick as
+ *    quote-like, so this reuses the same literal branch.
+ *  - String concatenation (`"row-" + id`) — `parseValue` on its own would
+ *    return only the leading quoted segment ("row-"), which would then get
+ *    committed to the snapshot as a standalone Critical-Rule-7 selector that
+ *    no element actually carries. Detecting a `+` immediately after the
+ *    closing quote folds the whole expression into the same `{*}`
+ *    convention `normalise()` already uses for interpolation, rather than
+ *    trusting a truncated prefix.
  */
 function scanDatasetAssignments(src: string): {
   declarations: { testid: string; raw: string }[];
@@ -191,23 +211,40 @@ function scanDatasetAssignments(src: string): {
     let idx = m.index + m[0].length;
     while (idx < src.length && (src[idx] === " " || src[idx] === "\t")) idx++;
     const open = src[idx];
-    if (open === '"' || open === "'") {
+    if (open === '"' || open === "'" || open === "`") {
       const raw = parseValue(src, idx);
       if (raw === null) {
         skippedHere.push({ line: src.slice(0, m.index).split("\n").length });
         continue;
       }
-      const normalised = normalise(raw);
+      let normalised = normalise(raw);
+      // Find the literal's own closing delimiter (same char `parseValue`
+      // matched) to see whether it's concatenated with something else.
+      const closeIdx = src.indexOf(open, idx + 1);
+      let after = closeIdx + 1;
+      while (after < src.length && (src[after] === " " || src[after] === "\t")) after++;
+      if (src[after] === "+") {
+        normalised = `${normalised}{*}`;
+      }
       if (normalised.length === 0) continue;
       if (normalised === "{*}") continue;
       found.push({ testid: normalised, raw });
       continue;
     }
-    // A bare identifier (`el.dataset.testid = someVar`) is a wrapper
-    // passthrough, mirroring the attribute pass's BARE_IDENT filter above —
-    // routing it to `skipped` instead would make a future legitimate
-    // `el.dataset.testid = someVar` permanently, unfixably red.
-    if (LEADING_IDENT.test(src.slice(idx))) continue;
+    const identMatch = LEADING_IDENT.exec(src.slice(idx));
+    if (identMatch) {
+      // Mirrors the attribute pass: a known testid constant resolves to its
+      // literal value instead of being treated as an opaque passthrough.
+      const resolved = CONSTANT_RESOLUTIONS[identMatch[0]];
+      if (resolved !== undefined) {
+        found.push({ testid: resolved, raw: identMatch[0] });
+        continue;
+      }
+      // An unresolved bare identifier (`el.dataset.testid = someVar`) is a
+      // wrapper passthrough — routing it to `skipped` instead would make a
+      // future legitimate one permanently, unfixably red.
+      continue;
+    }
     skippedHere.push({ line: src.slice(0, m.index).split("\n").length });
   }
   return { declarations: found, skipped: skippedHere };
@@ -270,5 +307,48 @@ describe("test-selector coverage — src/client/", () => {
   it("finds the two live dataset.testid selectors (#1709)", () => {
     expect(sortedSet).toContain("slash-command-menu");
     expect(sortedSet).toContain("heading-chevron");
+  });
+
+  it("scans a backtick-opened dataset.testid template literal, folding interpolation to {*} (review round 1)", () => {
+    const { declarations: found, skipped: skippedHere } = scanDatasetAssignments(
+      "el.dataset.testid = `row-${i}`;",
+    );
+    // Before the fix, backtick was neither a recognised quote nor an
+    // identifier start, so this fell to `skipped` — permanently and
+    // unfixably red for the natural per-item imperative-testid form.
+    expect(found).toEqual([{ testid: "row-{*}", raw: "row-${i}" }]);
+    expect(skippedHere).toEqual([]);
+  });
+
+  it("skips a backtick template with no literal context, mirroring the {expr}-only rule (review round 1)", () => {
+    const { declarations: found, skipped: skippedHere } = scanDatasetAssignments(
+      "el.dataset.testid = `${id}`;",
+    );
+    expect(found).toEqual([]);
+    expect(skippedHere).toEqual([]);
+  });
+
+  it("folds a string-concatenated dataset.testid literal into a {*}-suffixed selector, not a truncated prefix (review round 1)", () => {
+    const { declarations: found, skipped: skippedHere } = scanDatasetAssignments(
+      'el.dataset.testid = "row-" + id;',
+    );
+    // Before the fix this silently committed "row-" — the leading quoted
+    // segment only — as a standalone Critical-Rule-7 contract selector that
+    // no element actually carries.
+    expect(found).toEqual([{ testid: "row-{*}", raw: "row-" }]);
+    expect(skippedHere).toEqual([]);
+  });
+
+  it("resolves a known testid constant assigned via dataset.testid (review round 1)", () => {
+    const { declarations: found, skipped: skippedHere } = scanDatasetAssignments(
+      "el.dataset.testid = ERROR_BOUNDARY_RELOAD_BTN_TESTID;",
+    );
+    // Before the fix, CONSTANT_RESOLUTIONS was applied only on the
+    // attribute-literal pass — this bare identifier fell through as an
+    // unresolved wrapper passthrough instead of resolving to its literal.
+    expect(found).toEqual([
+      { testid: "error-boundary-reload-btn", raw: "ERROR_BOUNDARY_RELOAD_BTN_TESTID" },
+    ]);
+    expect(skippedHere).toEqual([]);
   });
 });

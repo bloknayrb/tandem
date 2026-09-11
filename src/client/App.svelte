@@ -839,6 +839,12 @@ function requestOpenFile(): Promise<void> {
 const updateAvailable = createUpdateAvailable();
 
 function openSettingsModalWithAck() {
+  // cr-3 (#1713 follow-up): the effect above only closes Settings on the
+  // false→true transition of shouldShowWizard — it does not re-fire while
+  // the wizard is already showing, so it can't stop a later Settings open
+  // from every entry point routed through here (keyboard shortcut, toolbar,
+  // command palette, the model-chip shortcut). Refuse instead.
+  if (shouldShowWizard) return;
   updateAvailable.acknowledge();
   settingsModalOpen = true;
 }
@@ -1491,10 +1497,17 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   },
   "toggle-palette": (e) => {
     e.preventDefault();
-    // #1824 item I: same class as #1713's wizard/settings stacking bug —
-    // guard the OPEN path only, so an already-open palette still closes
-    // regardless of settingsModalOpen.
-    if (!untrack(() => paletteOpen) && settingsModalOpen) return;
+    // #1824 item I / cr-2: same class as #1713's wizard/settings stacking
+    // bug — guard the OPEN path only, so an already-open palette still
+    // closes regardless of any other modal. Covers every focus-trapping or
+    // exclusive surface the palette could otherwise stack over: Settings,
+    // Help, the first-run wizard, and the file-open dialog.
+    if (
+      !untrack(() => paletteOpen) &&
+      (settingsModalOpen || showHelp || shouldShowWizard || fileOpenDialogOpen)
+    ) {
+      return;
+    }
     paletteOpen = !untrack(() => paletteOpen);
   },
   "new-scratchpad": (e) => {
@@ -1604,7 +1617,17 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     // #1824 item I: settingsModalOpen joins the set — the palette-open guard
     // above means a stacked palette can no longer be the reason this reads
     // true, but Settings itself is its own popup context.
-    const popupSuppressed = slashCommandMenuOpen || findBarOpen || paletteOpen || settingsModalOpen;
+    // cr-2: same broadening as the palette guard — Help, the first-run
+    // wizard and the file-open dialog are each their own exclusive/focus-
+    // trapping surface too.
+    const popupSuppressed =
+      slashCommandMenuOpen ||
+      findBarOpen ||
+      paletteOpen ||
+      settingsModalOpen ||
+      showHelp ||
+      shouldShowWizard ||
+      fileOpenDialogOpen;
     if (popupSuppressed) {
       // Palette/find UI is the active context; user understands why.
       return;

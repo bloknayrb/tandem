@@ -530,7 +530,17 @@ describe("App.svelte closes an open Settings modal before the wizard mounts (#17
 // settingsModalOpen. Same instrument as #1713 above: no test in the repo
 // mounts App.svelte, so this is a structural source-text assertion, not a
 // runtime one.
-describe("App.svelte suppresses the palette open path while Settings is open (#1824 item I)", () => {
+//
+// cr-2 (review round 1) broadened both guards from settingsModalOpen alone
+// to every focus-trapping or exclusive surface the palette (and the
+// comment-on-selection shortcut) could otherwise stack over: showHelp,
+// shouldShowWizard and fileOpenDialogOpen join the set. Runtime coverage for
+// the broadened set is the two "cr-2" E2E tests in
+// tests/e2e/keyboard-shortcuts.spec.ts (Help modal, file-open dialog) plus
+// the toggle-palette guard's own use of shouldShowWizard, which is exercised
+// end-to-end by the #1713 wizard-stacking E2E test in
+// tests/e2e/integration-wizard.spec.ts.
+describe("App.svelte suppresses the palette open path while Settings is open (#1824 item I, cr-2)", () => {
   const source = readFileSync(APP_SVELTE, "utf-8");
 
   it("guards the open path inside the toggle-palette handler, before the toggle", () => {
@@ -538,9 +548,9 @@ describe("App.svelte suppresses the palette open path while Settings is open (#1
     expect(handlerIdx).toBeGreaterThan(-1);
 
     const guardPattern =
-      /if\s*\(!untrack\(\(\)\s*=>\s*paletteOpen\)\s*&&\s*settingsModalOpen\)\s*return;/;
+      /if\s*\(\s*!untrack\(\(\)\s*=>\s*paletteOpen\)\s*&&\s*\(settingsModalOpen\s*\|\|\s*showHelp\s*\|\|\s*shouldShowWizard\s*\|\|\s*fileOpenDialogOpen\)\s*\)\s*\{\s*return;\s*\}/;
     const guardMatch = guardPattern.exec(source);
-    expect(guardMatch, "the open-path guard must exist").not.toBeNull();
+    expect(guardMatch, "the open-path guard must exist and cover all four surfaces").not.toBeNull();
     const guardIdx = guardMatch?.index ?? -1;
     expect(guardIdx, "the guard must be inside the toggle-palette handler").toBeGreaterThan(
       handlerIdx,
@@ -553,9 +563,38 @@ describe("App.svelte suppresses the palette open path while Settings is open (#1
     expect(guardIdx).toBeLessThan(toggleIdx);
   });
 
-  it("popupSuppressed reads true once settingsModalOpen does, alongside the existing three", () => {
+  it("popupSuppressed reads true for all four surfaces, not just settingsModalOpen", () => {
     const suppressedPattern =
-      /const popupSuppressed\s*=\s*[\s\S]*?slashCommandMenuOpen[\s\S]*?findBarOpen[\s\S]*?paletteOpen[\s\S]*?settingsModalOpen;/;
+      /const popupSuppressed\s*=\s*[\s\S]*?slashCommandMenuOpen\s*\|\|\s*[\s\S]*?findBarOpen\s*\|\|\s*[\s\S]*?paletteOpen\s*\|\|\s*[\s\S]*?settingsModalOpen\s*\|\|\s*[\s\S]*?showHelp\s*\|\|\s*[\s\S]*?shouldShowWizard\s*\|\|\s*[\s\S]*?fileOpenDialogOpen;/;
     expect(suppressedPattern.test(source)).toBe(true);
+  });
+});
+
+// cr-3 (review round 1, #1713 follow-up): the closing effect pinned by the
+// describe block above only fires on the false→true transition of
+// shouldShowWizard — it never re-fires while the wizard is already showing,
+// so it cannot stop a LATER Settings open. openSettingsModalWithAck is the
+// single choke point every real UI entry point routes through (keyboard
+// shortcut, toolbar, command palette, the model-chip shortcut — see its own
+// call-site enumeration in App.svelte), so the fix lives there instead of at
+// each call site. Runtime coverage is the E2E test in
+// tests/e2e/integration-wizard.spec.ts ("Settings shortcut does not stack
+// Settings behind an already-open wizard").
+describe("App.svelte refuses to open Settings while the wizard is already showing (cr-3)", () => {
+  const source = readFileSync(APP_SVELTE, "utf-8");
+
+  it("guards openSettingsModalWithAck before it sets settingsModalOpen", () => {
+    const fnIdx = source.indexOf("function openSettingsModalWithAck() {");
+    expect(fnIdx).toBeGreaterThan(-1);
+
+    const guardPattern = /if\s*\(shouldShowWizard\)\s*return;/;
+    const guardMatch = guardPattern.exec(source);
+    expect(guardMatch, "the wizard-open guard must exist").not.toBeNull();
+    const guardIdx = guardMatch?.index ?? -1;
+    expect(guardIdx, "the guard must be inside openSettingsModalWithAck").toBeGreaterThan(fnIdx);
+
+    const setIdx = source.indexOf("settingsModalOpen = true;", fnIdx);
+    expect(setIdx).toBeGreaterThan(-1);
+    expect(guardIdx, "the guard must run before settingsModalOpen is set").toBeLessThan(setIdx);
   });
 });
