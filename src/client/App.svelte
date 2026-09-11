@@ -729,6 +729,16 @@ const isAutoOpenFirstRun = $derived(
 );
 const shouldShowWizard = $derived(manuallyReopened || isAutoOpenFirstRun);
 
+// #1713: `manuallyReopened`'s own trigger already clears settingsModalOpen in
+// its own handler (above), but `isAutoOpenFirstRun` is derived off an async
+// first-run fetch and can flip true at any moment — including while Settings
+// is open — with nothing to close it. Reading only `shouldShowWizard` (never
+// settingsModalOpen) keeps this one-directional: no self-dependency risk, and
+// it is a no-op on the already-safe manuallyReopened path.
+$effect(() => {
+  if (shouldShowWizard) settingsModalOpen = false;
+});
+
 function closeIntegrationWizard(): void {
   // Only persist dismissal when this close ends an auto-open session.
   // A manual reopen → close where the server says `needed === false`

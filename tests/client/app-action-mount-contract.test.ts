@@ -499,3 +499,28 @@ describe("the contract matcher can actually fail", () => {
     expect(checkActionMountContract(src).ok).toBe(false);
   });
 });
+
+// #1713: the wizard can stack over an open Settings modal because
+// `isAutoOpenFirstRun` is derived off an async fetch that can flip true at
+// any moment, including while Settings is up, and nothing closed Settings
+// for that path. No test in the repo mounts App.svelte (see this file's own
+// docblock: an App-level composition fact has no runtime signature short of
+// mounting the whole app), and a scoped harness re-mounting just the two
+// modals would pass whether or not the real effect exists — it would
+// re-implement the sequencing rather than exercise it. A structural
+// source-text assertion is the right instrument here, same idiom as the
+// action-executor contract above.
+describe("App.svelte closes an open Settings modal before the wizard mounts (#1713)", () => {
+  const source = readFileSync(APP_SVELTE, "utf-8");
+
+  it("has the closing effect textually after shouldShowWizard is declared", () => {
+    const derivedIdx = source.indexOf("const shouldShowWizard = $derived(");
+    expect(derivedIdx).toBeGreaterThan(-1);
+
+    const effectPattern =
+      /\$effect\(\(\)\s*=>\s*\{\s*if\s*\(shouldShowWizard\)\s*settingsModalOpen\s*=\s*false;\s*\}\);/;
+    const match = effectPattern.exec(source);
+    expect(match).not.toBeNull();
+    expect(match?.index ?? -1).toBeGreaterThan(derivedIdx);
+  });
+});
