@@ -1,7 +1,9 @@
 # K-tests — #1861 `stripRustComments` is not string-aware
 
 Branch `fix/test-suite-integrity-silent-greens-fragile-assertions-and-an-unimplemented-perf-decision-1861`.
-Closes #1861. Ledger: `docs/plans/2026-09-06-open-issues-sweep.md:459`. Probe: run
+Refs #1861 (partial — issue stays open: this fix also files #1970 for a stale comment
+it leaves behind, see below, so per wave-7 lesson 1 #1861 itself cannot go under
+`## Closes`). Ledger: `docs/plans/2026-09-06-open-issues-sweep.md:459`. Probe: run
 `npx vitest run tests/docs/rust-sources.test.ts tests/docs/license-flip-consts.test.ts tests/docs/native-theme-claims.test.ts tests/docs/startup-open-failure-wiring-claims.test.ts tests/docs/tauri-command-registration-claims.test.ts tests/build/cowork-retry-delegates.test.ts tests/build/cowork-subnet-probe-contract.test.ts tests/build/screened-open-path.test.ts`
 before and after — the seven real callers of `rustSources()`/`rustSourceDefining`
 (`grep -rl "rust-sources" tests/`) plus the new test file this fix adds.
@@ -11,9 +13,33 @@ before and after — the seven real callers of `rustSources()`/`rustSourceDefini
 `stripRustComments` (`tests/docs/rust-sources.ts:106-108`) strips comments with one regex, with a
 narrow `[^:]` exception only for `://` in URLs — not general string-literal awareness. Any other
 `//`/`/*` inside a Rust string/raw-string/char literal is treated as a real comment, corrupting the
-literal's closing quote; `matchRustBrace` then desyncs and throws `"unbalanced #[cfg(test)] block"`.
-The real instance is already worked around in `src-tauri/src/sidecar.rs:3912-3920`
-(`concat!("/", "/")` instead of a literal `"//"`).
+literal's closing quote, and the damage downstream splits into **two directions depending on where
+in the file the corrupted quote lands**, not one:
+
+1. **Throws**, when a dangling quote leaves `matchRustBrace` running off the end of the input —
+   `"unbalanced #[cfg(test)] block"`. This is the direction the code comment at
+   `src-tauri/src/sidecar.rs:3912-3920` names, and it is real for some inputs.
+2. **Silently truncates**, when the corrupted region is followed by enough further text for the
+   brace/terminator scanners to accidentally re-synchronize on *something* before end-of-file —
+   whatever sits between the corruption and that accidental resync point vanishes from the `code`
+   view with no error. **This is the live instance today, not a hypothetical**: measured directly
+   against `src-tauri/src/autostart.rs` on current `master` (`rustSources()`'s
+   `code = stripRustTestModules(stripRustComments(text))`), the OLD `stripRustComments` yields a
+   5334-character `code` view; the fixed version below yields 6562. The 1228-character gap is
+   `use crate::has_argv_flag;`, `AUTOSTART_FLAG`, `AUTOSTART_DISABLE_ENV`, `is_autostart_launch`,
+   `resolve_autostart_launch`, `should_start_hidden`, `AUTOSTART_SEEN_MARKER` and
+   `autostart_seen_and_mark` — all absent from every `rustSources()`-based guard today, silently,
+   with no test failure pointing at it. The trigger is the literal string
+   `"//fileserver/tools/Tandem/tandem.exe"` inside `mod tests` (`autostart.rs:456`): the regex
+   treats the `//` after the opening quote as a comment start, and `stripRustTestModules`'s
+   terminator search (already literal-aware via `skipRustLiteral`, independent of this bug)
+   resynchronizes on the *next* module's closing brace instead of throwing.
+
+The real instance the sidecar.rs comment names is already worked around there
+(`concat!("/", "/")` instead of a literal `"//"`) — but that comment's own claim that this "fails
+loudly rather than silently, so this is a landmine and not a hole" is the direction-1-only framing;
+`autostart.rs` above is a live counterexample already on `master`. The comment is addressed as a
+separate, filed issue rather than edited in this PR — see Not in scope.
 
 **Not the same bug as #1968's `sidecar.rs:2916-2919` workaround** (`.starts_with('/')` instead of
 `"//"`) — that one exists because `tests/shared/unc-check-duplication.test.ts` matches raw source
@@ -98,10 +124,15 @@ probe draft) still pass unchanged; `npm run typecheck:tests` green.
 
 ## Not in scope
 
-Nested block-comment awareness. Any change to `src-tauri/src/sidecar.rs` (out of `rust=false`
-scope for this group — the `concat!("/", "/")` workaround remains correct and is left as-is; a
-future Rust-touching PR could simplify it, noted for `bryan` as a one-line, non-blocking heads-up,
-not a tracked deferral).
+Nested block-comment awareness. Any change to `src-tauri/src/sidecar.rs` — out of `rust=false`
+scope for this group, and out of a `docs(specs)`-only planning pass either way. The
+`concat!("/", "/")` workaround itself remains correct and is left as-is (it stays necessary
+regardless, for the unrelated reason #1968's `sidecar.rs:2916-2919` `.starts_with('/')` workaround
+exists — see Problem). **What is stale is the comment's own claim** ("fails loudly rather than
+silently... a landmine and not a hole") — now falsified in both halves by this fix (it stops being
+a regex at all, and the failure it warns about was already the wrong direction on `autostart.rs`).
+Filed as **#1970** rather than left as an in-PR heads-up, per wave-7 lesson 3 (no unfiled
+deferrals); a future Rust-touching PR resolves it.
 
 ## Review corrections (scope cut)
 
@@ -116,3 +147,36 @@ not a tracked deferral).
   probe line, not new machinery.
 - Findings about the probe list and Test 5's fixture are fixed directly above, not via added
   scaffolding.
+
+## Review corrections (post-cut)
+
+- **Problem statement corrected from one-directional to two-directional, with the live direction
+  verified rather than asserted.** The prior text described only the throw: a corrupted quote
+  desyncs `matchRustBrace` and raises `"unbalanced #[cfg(test)] block"`. Verified directly in this
+  worktree (`stripRustTestModules(stripRustComments(text))` run against
+  `src-tauri/src/autostart.rs` on current `master`, both with the old regex-based
+  `stripRustComments` and with the fixed character-scanning version above): the OLD code view is
+  5334 characters and silently drops eight production symbols
+  (`has_argv_flag`/`AUTOSTART_FLAG`/`AUTOSTART_DISABLE_ENV`/`is_autostart_launch`/
+  `resolve_autostart_launch`/`should_start_hidden`/`AUTOSTART_SEEN_MARKER`/`autostart_seen_and_mark`)
+  with no error raised; the fixed code view is 6562 characters and contains all eight. This is the
+  silent-truncation direction, not the throw, and it is live on `master` today — not a hypothetical
+  third case. The Problem section above now states both directions and carries these measured
+  numbers.
+- **The `src-tauri/src/sidecar.rs:3912-3920` comment is stale in both of its own claims once this
+  fix lands** ("that regex is not string-aware" — the fix isn't a regex at all; "fails loudly
+  rather than silently... a landmine and not a hole" — already false pre-fix per the measurement
+  above). Rather than leave it as an unfiled in-PR heads-up (which the round-1/scope-cut spec did,
+  and which wave-7 lesson 3 forbids), filed **#1970** to track the comment rewrite as a separate,
+  comment-only `src-tauri/` change — out of both this group's `rust=false` budget and this pass's
+  `docs(specs)`-only scope. Per wave-7 lesson 1 (mechanical, not a judgement call), filing a
+  carve-out from #1861 means #1861 itself moves from `## Closes` to
+  `## Refs (partial — issue stays open)`. The header and Not-in-scope section above are updated to
+  match.
+- Verified the fix's own no-flip claim directly rather than carrying it forward: `autostart.rs`'s
+  restored region (between its two `#[cfg(test)]` modules, where the eight symbols above surface)
+  contains no `#[tauri::command]` (the file's only two occurrences are both above line 339, well
+  before the test module that trips the bug) and no `const CODE_[A-Z_]+: &str = "…"` pattern, so
+  `tauri-command-registration-claims.test.ts` and `startup-open-failure-wiring-claims.test.ts` are
+  unaffected by the widened `code` view — consistent with all seven existing-caller probe files
+  passing unchanged against current `master` before this fix is applied.
