@@ -43,7 +43,12 @@ import { isUploadPath } from "../../shared/paths.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { extractText } from "../mcp/document-model.js";
 import { contentHash, ENVELOPE_FILENAME_RE } from "./doc-hash.js";
-import { type AnnotationDocV1, parseAnnotationDoc, SCHEMA_VERSION } from "./schema.js";
+import {
+  type AnnotationDocV1,
+  isPartialParse,
+  parseAnnotationDoc,
+  SCHEMA_VERSION,
+} from "./schema.js";
 import {
   createStore,
   getAnnotationsDir,
@@ -138,7 +143,7 @@ export async function recoverRenamedEnvelope(
       // docHash, flushes it, then unlinks the source — so recovering one would
       // durably delete every row this build could not read. Skip this
       // candidate (the function's existing "never fail the recovery" rule).
-      if (parsed.skipped.annotations + parsed.skipped.replies > 0) continue;
+      if (isPartialParse(parsed)) continue;
 
       const stored = parsed.doc.meta.contentHash;
       if (typeof stored !== "string" || stored !== wantHash) continue;

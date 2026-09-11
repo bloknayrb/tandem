@@ -294,17 +294,29 @@ export type ParseAnnotationDocResult =
   | { ok: false; error: "future"; schemaVersion: number };
 
 /**
+ * True when `parseAnnotationDoc` dropped rows, i.e. `result.doc` is a PARTIAL
+ * view of the file (#1791(a)).
+ *
+ * Exported because every caller that rewrites the whole envelope from a parsed
+ * doc — `store.ts` `loadOne`, `session/manager.ts` `cleanupStaleTombstones`,
+ * `annotations/rename-recovery.ts` — has to ask this same question, and each
+ * spelling it out is three chances to get the arithmetic wrong.
+ */
+export function isPartialParse(result: ParseAnnotationDocResult): boolean {
+  return result.ok && result.skipped.annotations + result.skipped.replies > 0;
+}
+
+/**
  * Row-level tolerance helper for `parseAnnotationDoc` (#1791(a)).
  *
- * Drops individual rows this build cannot validate, counting and logging each,
- * and returns `null` when nothing was dropped so the caller can avoid a
- * needless copy. Mirrors `migrateToV1`'s per-row skip-and-count log shape.
+ * Drops individual rows this build cannot validate, counting and logging each.
+ * Mirrors `migrateToV1`'s per-row skip-and-count log shape.
  */
 function filterUnreadableRows(
   rows: unknown[],
   schema: z.ZodTypeAny,
   kind: "annotation" | "reply",
-): { kept: unknown[]; dropped: number } | null {
+): { kept: unknown[]; dropped: number } {
   let dropped = 0;
   const kept: unknown[] = [];
   for (const row of rows) {
@@ -321,7 +333,7 @@ function filterUnreadableRows(
       String(id),
     );
   }
-  return dropped === 0 ? null : { kept, dropped };
+  return { kept, dropped };
 }
 
 /**
@@ -419,7 +431,7 @@ export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
         AnnotationRecordSchemaV1,
         "annotation",
       );
-      if (filtered) {
+      if (filtered.dropped > 0) {
         // All rows dropped stays `corrupt`: the envelope is unreadable in
         // substance, so the loud quarantine + toast is preserved rather than
         // turned into a silent empty load the next snapshot() would clobber.
@@ -439,7 +451,7 @@ export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
         AnnotationReplyRecordSchemaV1,
         "reply",
       );
-      if (filtered) {
+      if (filtered.dropped > 0) {
         // Replies of a dropped annotation are retained as orphans, matching
         // `loadAndMerge`'s existing rule; counts are reported separately.
         skipped.replies = filtered.dropped;

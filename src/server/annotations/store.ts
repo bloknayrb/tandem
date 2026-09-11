@@ -31,7 +31,12 @@ import {
   type ProcessIdentity,
   probeProcessIdentity,
 } from "./process-identity.js";
-import { type AnnotationDocV1, parseAnnotationDoc, SCHEMA_VERSION } from "./schema.js";
+import {
+  type AnnotationDocV1,
+  isPartialParse,
+  parseAnnotationDoc,
+  SCHEMA_VERSION,
+} from "./schema.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -616,7 +621,7 @@ async function loadOne(docHash: string, filePath: string): Promise<AnnotationDoc
 
   const result = parseAnnotationDoc(raw);
   if (result.ok) {
-    if (result.skipped.annotations + result.skipped.replies > 0) {
+    if (isPartialParse(result)) {
       // #1791(a): the returned doc is a PARTIAL view — rows this build could
       // not read were dropped. `snapshot()` rebuilds the envelope from Y.Map
       // state, so the next debounced write erases them from the only copy.

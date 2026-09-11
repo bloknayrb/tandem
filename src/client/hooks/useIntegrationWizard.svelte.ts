@@ -44,6 +44,7 @@ import {
   createDefaultKeychainBackend,
 } from "../keychain/keychain-backend.js";
 import { MCP_BASE_URL } from "../utils/backend-ports.js";
+import { responseErrorMessage } from "../utils/response-error.js";
 
 export type WizardStep = "connect" | "applying" | "done" | "error";
 
@@ -242,13 +243,12 @@ export function createIntegrationWizard(
         // #1792: a downgraded `integrations.json` answers 409 with an
         // actionable `message`; without this the wizard died on a bare status
         // code. Same shape as the persist path below.
-        const body = (await res.json().catch(() => null)) as { message?: unknown } | null;
-        if (myGen !== beginGen) return;
-        setError(
-          typeof body?.message === "string" && body.message.length > 0
-            ? body.message
-            : `Could not load existing entries (HTTP ${res.status}).`,
+        const message = await responseErrorMessage(
+          res,
+          `Could not load existing entries (HTTP ${res.status}).`,
         );
+        if (myGen !== beginGen) return;
+        setError(message);
         return;
       }
       const body = (await res.json()) as { installs: ExistingMcpInstall[] };
