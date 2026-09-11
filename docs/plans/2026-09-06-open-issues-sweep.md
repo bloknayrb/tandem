@@ -109,8 +109,9 @@ one wave are file-disjoint (checked against the ledgers); each is its own `Workf
 | 9 | #1603 transform audit | #1603 | M [security] | |
 | 10 | G4 typecheck-tests | #1613 → #1614 → #1615 (alone) | S/M | |
 | 10 | G11 process docs | #1602 #1604 #1605 #1606 | S | CLAUDE.md edits — last, to limit conflicts. |
+| 10 | D3 docx save override | #1941 | M [security] | **Added 2026-09-11** — was open-by-design out of wave 6 (D2 shipped the refusal; this is the escape hatch) and had no row, so it was scheduled nowhere. Wave 10, not 8/9: it adds a `/api/save` body field (collides with K-sec-server's `api-routes.ts` work) and a `tandem_save` param + `docs/mcp-tools.md` line (collides with K-server). Both surfaces — the flag AND `FidelityReportBanner.svelte`'s "Save anyway" — or a browser user with no Claude attached still has no exit. `e2e` + screenshots. Keep `blockReasonMessage` content-free; do **not** extend the override to `tandem_applyChanges`. |
 | 11 | #1689 harness refactor | #1689 | M | After G4. |
-| 11 | local-model flip blockers | #1657 #1292 | M [security] | Only after Bryan re-decides #1292's severity. |
+| 11 | local-model flip blockers | #1657 | M [security] | **Re-scoped 2026-09-11: #1292 is out — fixed and CLOSED 2026-09-08**, its severity re-decision made rather than still owed, so the "only after Bryan re-decides" gate this row carried is gone and the group is now #1657 alone. |
 | 11+ | decision rounds | the ~30 DECIDE issues, 4 at a time | per item | |
 
 ## Workflow architecture
@@ -472,8 +473,9 @@ literal in `tests/skill-instruction-contract.test.ts` moves with it). `Hooks arm
 | 9 | #1603 transform audit | #1603 | — | — | — | — | planned-not-started | |
 | 10 | G4 typecheck-tests | #1613 → #1614 → #1615 (alone) | — | — | — | — | planned-not-started | |
 | 10 | G11 process docs | #1602 #1604 #1605 #1606 | — | — | — | — | planned-not-started | |
+| 10 | D3 docx save override | #1941 | — | — | — | — | planned-not-started | Added 2026-09-11; see the wave table for why wave 10 and not 8/9. |
 | 11 | #1689 harness refactor | #1689 | — | — | — | — | planned-not-started | |
-| 11 | local-model flip blockers | #1657 #1292 | — | — | — | — | planned-not-started | |
+| 11 | local-model flip blockers | #1657 | — | — | — | — | planned-not-started | #1292 removed 2026-09-11 — closed as fixed 2026-09-08. |
 
 ### Wave 3 closed — 2026-09-08
 
@@ -778,7 +780,8 @@ half — a red that reads as a floor breach; #1937 carries the vitest exit-1-wit
 half), #1754 → decision B, #1825 (its Infra section is 2-of-3 and the CI/build `infra/` bullet is
 done; the rest of CI/build, all of Tauri and the Tests remainder are wave 7), #1941 (the `.docx`
 save override — Bryan's explicit choice of *refuse by default, add an override*, split out rather
-than stacked so the safety half shipped first),
+than stacked so the safety half shipped first; **scheduled 2026-09-11 as wave 10 group D3** — it
+sat here for a day as prose with no wave row, which is a backlog slot by another name),
 #1942 (signing-key rotation, dated), #1943 (deactivation policy, Bryan's), #1946 (the desktop
 token panel, found while fixing #1789(a)).
 
