@@ -166,6 +166,22 @@ pub(crate) const MCP_PORT: u16 = 3479;
 /// 127.0.0.1.
 pub(crate) const SIDECAR_BIND_HOST: &str = "127.0.0.1";
 
+/// The sidecar binary's name as it exists on disk at RUNTIME.
+///
+/// The `-<triple>` suffix is a **build-time** convention only:
+/// `externalBin` requires `src-tauri/binaries/node-sidecar-<triple>[.exe]`, and
+/// tauri-build strips the triple when it copies the binary into the bundle (and
+/// into `target/<profile>/` for `cargo tauri dev`). Measured on both: the
+/// installed app dir and the dev target dir hold `node-sidecar.exe`; the
+/// triple-suffixed name exists nowhere outside `src-tauri/binaries/`.
+///
+/// So this is the only name runtime code may use, and it is a const rather than
+/// two literals because divergence between the spawn name and a reconstructed
+/// path is exactly what #1762 was: `sidecar_exe_path` rebuilt the triple form,
+/// never matched a real file, and `wait_for_sidecar_unlock` reported "unlocked"
+/// having never found the file to check.
+pub(crate) const SIDECAR_BIN_NAME: &str = "node-sidecar";
+
 /// Total wall-clock budget for the graceful stop attempted from
 /// `RunEvent::Exit` (#1756), in seconds.
 ///
@@ -1709,7 +1725,7 @@ pub(crate) async fn start_sidecar(
 
         let mut cmd = handle
             .shell()
-            .sidecar("node-sidecar")
+            .sidecar(SIDECAR_BIN_NAME)
             .map_err(|e| format!("Failed to create sidecar command: {e}"))?
             // `--tauri-sidecar` is the provenance discriminant the server reads
             // (#1758, #1787). It is argv rather than an env var deliberately:
@@ -2321,12 +2337,26 @@ fn sidecar_exe_path() -> Result<std::path::PathBuf, String> {
         .parent()
         .ok_or_else(|| "exe path has no parent dir".to_string())?
         .to_path_buf();
-    let name = if cfg!(target_os = "windows") {
-        format!("node-sidecar-{}.exe", env!("TARGET_TRIPLE"))
-    } else {
-        format!("node-sidecar-{}", env!("TARGET_TRIPLE"))
-    };
+    // No inner `cfg!(target_os = ...)` split: the function already carries
+    // `#[cfg(target_os = "windows")]`, so an `else` arm is unreachable and would
+    // silently reintroduce a second naming rule if the gate were ever widened.
+    let name = format!("{SIDECAR_BIN_NAME}.exe");
     Ok(exe_dir.join(name))
+}
+
+/// Should `wait_for_sidecar_unlock` report "unlocked" when it cannot find or
+/// resolve the sidecar exe?
+///
+/// Dev has no bundled sidecar in some layouts and must proceed; a release build
+/// that cannot find it has a packaging bug and must NOT let that pass as
+/// unlocked — reporting "still locked" is what surfaces the bug instead of
+/// letting the NSIS kill hook be the only layer by accident (#1762).
+///
+/// Cross-platform on purpose (outside the `#[cfg(target_os = "windows")]` gate)
+/// so the ubuntu and macOS `rust-test` legs reach the test that pins it.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn unlock_verdict_when_absent(is_debug: bool) -> bool {
+    is_debug
 }
 
 /// Poll until the sidecar exe file is writable (OS released the handle).
@@ -2339,17 +2369,17 @@ pub(crate) async fn wait_for_sidecar_unlock(deadline_secs: u64) -> bool {
             if cfg!(debug_assertions) {
                 log::debug!("Sidecar exe not on disk at {} — skipping unlock wait (dev mode)", p.display());
             } else {
-                log::warn!("Sidecar exe not on disk at {} — skipping unlock wait (packaging bug?)", p.display());
+                log::warn!("Sidecar exe not on disk at {} — reporting still-locked (packaging bug)", p.display());
             }
-            return true;
+            return unlock_verdict_when_absent(cfg!(debug_assertions));
         }
         Err(e) => {
             if cfg!(debug_assertions) {
-                log::debug!("Could not resolve sidecar exe path: {e} — skipping unlock wait");
+                log::debug!("Could not resolve sidecar exe path: {e} — skipping unlock wait (dev mode)");
             } else {
-                log::warn!("Could not resolve sidecar exe path: {e} — skipping unlock wait");
+                log::warn!("Could not resolve sidecar exe path: {e} — reporting still-locked (packaging bug)");
             }
-            return true;
+            return unlock_verdict_when_absent(cfg!(debug_assertions));
         }
     };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(deadline_secs);
@@ -2361,6 +2391,46 @@ pub(crate) async fn wait_for_sidecar_unlock(deadline_secs: u64) -> bool {
         tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
     }
     false
+}
+
+#[cfg(test)]
+mod sidecar_name_tests {
+    use super::*;
+
+    /// tauri-build strips the `-<triple>` when it copies `externalBin` into the
+    /// bundle, so the reconstructed path must use the bare name. Before #1762
+    /// this built `node-sidecar-<triple>.exe`, which exists nowhere outside
+    /// `src-tauri/binaries/` — so the `Ok(p) if p.exists()` arm always missed
+    /// and the unlock wait reported success having checked nothing.
+    ///
+    /// Scoped to the FILE NAME, not the whole path: `sidecar_exe_path` is
+    /// `current_exe().parent().join(name)`, and a developer running
+    /// `cargo test --target x86_64-pc-windows-msvc` would false-red a
+    /// whole-path scan. (CI passes no `--target`.)
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn sidecar_exe_path_uses_the_installed_name_not_the_build_time_triple() {
+        let p = sidecar_exe_path().expect("sidecar_exe_path must resolve in a test process");
+        assert_eq!(
+            p.file_name().and_then(|n| n.to_str()),
+            Some("node-sidecar.exe"),
+            "the unlock wait must probe the name tauri-build actually ships (#1762)"
+        );
+    }
+
+    /// The half Track E's Done-when asks for: a missing sidecar path must not
+    /// read as "unlocked" in a release build.
+    #[test]
+    fn a_missing_sidecar_exe_reports_still_locked_in_release() {
+        assert!(
+            unlock_verdict_when_absent(true),
+            "dev has no bundled sidecar in some layouts and must proceed"
+        );
+        assert!(
+            !unlock_verdict_when_absent(false),
+            "a release build that cannot find the sidecar has a packaging bug (#1762)"
+        );
+    }
 }
 
 /// Resolve the bundled channel-shim JS path, injected into the sidecar as

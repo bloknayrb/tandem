@@ -2913,7 +2913,7 @@ async fn perform_install(
         }
         if !file_ok {
             let msg = format!(
-                "Sidecar exe still locked after {SIDECAR_UNLOCK_DEADLINE_SECS}s -- installer may prompt for retry"
+                "Sidecar exe lock not confirmed released within {SIDECAR_UNLOCK_DEADLINE_SECS}s -- installer may prompt for retry"
             );
             log::warn!("{msg}");
             pre_install_warnings.push(msg);
