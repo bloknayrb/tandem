@@ -666,6 +666,73 @@ export async function startMcpServerHttp(
     if (entry && res.statusCode === 200) await registry.close(entry.sessionId);
   });
 
+  /**
+   * JSON error handler for the SDK sub-app (#1822 item 3).
+   *
+   * `createMcpExpressApp` installs a bare `express.json()` (100 kB) at the
+   * sub-app root, and `app.use(mcpApp)` mounts that sub-app at the ROOT, above
+   * `registerApiRoutes` — so this parser sees every `/api` body too. Without a
+   * handler its `PayloadTooLargeError` fell through to Express's `finalhandler`,
+   * which serves an HTML page with `err.stack` in a `<pre>` whenever
+   * `NODE_ENV !== "production"`. Measured before this landed: a 200 kB
+   * `application/json` POST to `/mcp` returned `413 text/html` carrying
+   * `PayloadTooLargeError` plus absolute `…\node_modules\raw-body\index.js:163`
+   * frames — the operator's username and install path. `POST
+   * /api/channel-error` returned the same page, and that route is a
+   * `NON_LOOPBACK_ALLOWED` carve-out, so under a Cowork bind it crossed the LAN.
+   *
+   * Registered on `mcpApp` rather than on `app`: an error raised inside a
+   * mounted sub-app is offered to that sub-app's error handlers first, and the
+   * parser that raises these IS the sub-app's. A throw inside an OUTER-app
+   * `/api` route handler is past this stack and still reaches `finalhandler` —
+   * which is why `channel-routes.ts`'s `sanitizeForLog` has to be total rather
+   * than relying on this.
+   *
+   * **Both arms discriminate on `err.type`, never on the path alone.** The repo
+   * is on Express 5, which forwards a rejected promise from an `async` route
+   * handler to `next(err)`, and all three `/mcp` handlers are `async` (each
+   * awaits `dispatchToSession` → `transport.handleRequest`). So a genuine
+   * transport or session failure lands here too, and a path-only branch would
+   * report it to Claude Code as a size-limit error.
+   *
+   * No `err.message`, no `err.stack`, no path in any branch.
+   */
+  mcpApp.use(
+    (
+      err: Error & { status?: unknown; type?: unknown },
+      req: import("express").Request,
+      res: import("express").Response,
+      next: import("express").NextFunction,
+    ) => {
+      if (res.headersSent) {
+        next(err);
+        return;
+      }
+      const type = typeof err?.type === "string" ? err.type : "";
+      const status = typeof err?.status === "number" ? err.status : 500;
+      const tooLarge = "Request body exceeds this endpoint's size limit.";
+      const badJson = "Request body is not valid JSON.";
+      const generic = "Request could not be processed.";
+      if (req.path === "/mcp") {
+        // The JSON-RPC envelope the rest of this endpoint uses and
+        // `src/cli/mcp-stdio.ts` parses.
+        if (type === "entity.too.large") sendJsonRpcError(res, status, -32600, tooLarge);
+        else if (type === "entity.parse.failed") sendJsonRpcError(res, status, -32700, badJson);
+        else sendJsonRpcError(res, status, -32603, generic);
+        return;
+      }
+      if (type === "entity.too.large") {
+        res.status(status).json({ error: "PAYLOAD_TOO_LARGE", message: tooLarge });
+        return;
+      }
+      if (type === "entity.parse.failed") {
+        res.status(status).json({ error: "BAD_REQUEST", message: badJson });
+        return;
+      }
+      res.status(status).json({ error: "INTERNAL_ERROR", message: generic });
+    },
+  );
+
   // NOTE: there is deliberately NO license-webhook route here. License issuance
   // lives entirely in `infra/license-issuance-worker/` — a Cloudflare Worker that
   // Polar can actually reach. The old `/webhooks/license` handler was mounted

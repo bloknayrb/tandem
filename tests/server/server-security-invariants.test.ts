@@ -497,3 +497,89 @@ describe.skipIf(process.platform !== "linux")(
     });
   },
 );
+
+// ── #1822 item 3: body-parse failures answer JSON, never Express's HTML page ──
+//
+// `createMcpExpressApp` installs a bare `express.json()` (100 kB) at the SDK
+// sub-app's root, and `app.use(mcpApp)` mounts that sub-app at the ROOT — above
+// `registerApiRoutes` — so the parser sees every /api body too. Without an error
+// handler its PayloadTooLargeError fell through to Express's `finalhandler`,
+// which serves `err.stack` inside a <pre> whenever NODE_ENV !== "production".
+// Measured before the fix: `413 text/html` carrying `PayloadTooLargeError` plus
+// absolute `…\node_modules\raw-body\index.js:163` frames — the operator's
+// username and install path — on BOTH /mcp and /api/channel-error.
+//
+// These specs use the shared real-server beforeEach above.
+
+describe("#1822 item 3 — oversized and malformed bodies leak no filesystem path", () => {
+  // Over the SDK sub-app's 100 kB parser limit, under /api's own 70 MB one.
+  const OVERSIZE = JSON.stringify({
+    jsonrpc: "2.0",
+    method: "x",
+    params: { pad: "A".repeat(200_000) },
+  });
+
+  /** The three things Express's HTML error page carries and ours must not. */
+  function expectNoLeak(raw: string): void {
+    expect(raw).not.toContain("node_modules");
+    expect(raw).not.toContain("<html");
+    expect(raw).not.toContain("PayloadTooLargeError");
+  }
+
+  it("a >100 kB POST /mcp returns a JSON-RPC 413, not an HTML stack trace", async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Host: `127.0.0.1:${port}` },
+      body: OVERSIZE,
+    });
+    expect(res.status).toBe(413);
+    expect(res.headers.get("content-type")).toMatch(/application\/json/);
+    const raw = await res.text();
+    expectNoLeak(raw);
+    // Do NOT assert on "at " — the static copy is the implementer's to word.
+    expect(JSON.parse(raw)).toMatchObject({ jsonrpc: "2.0", error: { code: -32600 } });
+  });
+
+  it("a >100 kB POST /api/channel-error returns JSON too — the LAN-reachable path", async () => {
+    // /api/channel-* is a NON_LOOPBACK_ALLOWED carve-out, so under a Cowork bind
+    // this is the response that crosses the LAN. This spec is also what reddens
+    // if a later refactor scopes the error handler to /mcp only.
+    const res = await fetch(`http://127.0.0.1:${port}/api/channel-error`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Host: `127.0.0.1:${port}` },
+      body: OVERSIZE,
+    });
+    expect(res.status).toBe(413);
+    expect(res.headers.get("content-type")).toMatch(/application\/json/);
+    const raw = await res.text();
+    expectNoLeak(raw);
+    expect(JSON.parse(raw)).toMatchObject({ error: "PAYLOAD_TOO_LARGE" });
+  });
+
+  it("an UNDER-limit malformed POST /mcp is -32700, and never claims a size limit", async () => {
+    // The spec that reddens if the /mcp arm discriminates on the PATH rather
+    // than on err.type. Express 5 forwards a rejected promise from an async
+    // route handler to next(err), and all three /mcp handlers are async — so a
+    // transport or session failure reaches this handler too. A path-only branch
+    // would answer every one of them "-32600: exceeds the size limit".
+    const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Host: `127.0.0.1:${port}` },
+      body: '{"broken":',
+    });
+    const raw = await res.text();
+    expectNoLeak(raw);
+    const body = JSON.parse(raw) as { error: { code: number; message: string } };
+    expect(body.error.code).toBe(-32700);
+    expect(body.error.message).not.toMatch(/size limit/i);
+  });
+
+  it("positive control: a well-formed under-limit POST /mcp is not 413", async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Host: `127.0.0.1:${port}` },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list", id: 1 }),
+    });
+    expect(res.status).not.toBe(413);
+  });
+});

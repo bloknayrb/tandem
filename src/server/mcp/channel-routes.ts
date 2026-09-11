@@ -17,6 +17,57 @@ import { getOrCreateDocument } from "../yjs/provider.js";
 import type { Handler } from "./api-routes.js";
 import { appendClaudeChatMessage } from "./awareness.js";
 
+/**
+ * Characters kept from any request-supplied field written to the operator's log.
+ *
+ * Exported so the specs clamp against the real bound rather than a copy of it.
+ */
+export const LOG_FIELD_MAX = 200;
+
+/**
+ * Render an untrusted request-body field safe to interpolate into a log line.
+ *
+ * Every channel route below is reachable without a loopback source address —
+ * the whole `/api/channel-*` family is carved out of `enforceLoopbackMutation`
+ * in `NON_LOOPBACK_ALLOWED` (`api-routes.ts`), because the shim and the plugin
+ * monitor run against a non-loopback `TANDEM_URL`. Under a Cowork bind a
+ * bearer-authenticated LAN peer therefore writes straight into the operator's
+ * terminal, and `console.error` is the only sink there is (stdout is the MCP
+ * wire — Critical Rule 3 redirects every `console.*` to stderr). Unstripped, an
+ * ESC/OSC-0 sequence retitles that terminal and a bare LF forges a whole log
+ * line.
+ *
+ * **Total before it strips.** Two of the call sites pass a field with no type
+ * guard at all (`message` and `error` on `/api/channel-error`), and
+ * `String(value)` *throws* on a JSON-craftable object: `String(JSON.parse(
+ * '{"toString":1,"valueOf":2}'))` is a `TypeError`. That throw would happen in
+ * an outer-app route handler, past every sub-app error handler, so it would
+ * land on Express's HTML error page complete with the install path. The
+ * `try`/`catch` is what stops that; it is not defensive decoration.
+ *
+ * Modelled on `stripControlChars` (`src/client/utils/diagnostics.ts`) and
+ * deliberately NOT imported from it: `src/server` imports nothing from
+ * `src/client` today, and this copy also strips LF, CR and TAB, which that one
+ * keeps — a bare LF is the line-forging half of this finding.
+ */
+function sanitizeForLog(value: unknown): string {
+  let s: string;
+  try {
+    s = typeof value === "string" ? value : String(value);
+  } catch {
+    // A body object whose `toString` and `valueOf` are both non-callable.
+    return "[unstringifiable]";
+  }
+  const stripped = s
+    // C0 (LF, CR and TAB included), DEL and C1 — the escape-sequence introducers.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point
+    .replace(/[\x00-\x1f\x7f-\x9f]/g, "")
+    // Trojan-Source bidi overrides. Not control characters, so the strip above
+    // does not see them, and they reorder the rendered line all the same.
+    .replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069\u061c]/g, "");
+  return stripped.length > LOG_FIELD_MAX ? `${stripped.slice(0, LOG_FIELD_MAX)}\u2026` : stripped;
+}
+
 const pendingPermissions = new Map<
   string,
   {
@@ -103,15 +154,23 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     // Validate the code so a future caller can't smuggle a free-form string
     // through unfiltered logs. Out-of-schema codes are logged as UNKNOWN_CODE
     // (keeps the diagnostic trail) and reported as 400 so the caller notices.
+    //
+    // The rejected value IS logged, before the 400 — deliberately, because that
+    // diagnostic trail is the only reason this branch logs at all. What makes
+    // it safe is `sanitizeForLog`, not the rejection: `error` and `message` are
+    // both unvalidated body fields here, so each is stripped of control
+    // characters and clamped to LOG_FIELD_MAX before it reaches the line.
     const parsed = ChannelErrorCodeSchema.safeParse(error);
     if (!parsed.success) {
-      console.error(`[Channel] Error: UNKNOWN_CODE (${String(error)}) — ${message}`);
+      console.error(
+        `[Channel] Error: UNKNOWN_CODE (${sanitizeForLog(error)}) — ${sanitizeForLog(message)}`,
+      );
       res
         .status(400)
         .json({ error: "BAD_REQUEST", message: "error must be a known ChannelErrorCode" });
       return;
     }
-    console.error(`[Channel] Error: ${parsed.data} — ${message}`);
+    console.error(`[Channel] Error: ${parsed.data} — ${sanitizeForLog(message)}`);
     // Could broadcast to browser via Y.Map in the future
     res.json({ ok: true });
   });
@@ -157,7 +216,12 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
       description: (description as string) ?? "",
       createdAt: Date.now(),
     });
-    console.error(`[Channel] Permission request: ${toolName} (id: ${requestId})`);
+    // `toolName`/`requestId` are `typeof … === "string"`-guarded above, so the
+    // residue here is control characters and unbounded length only — which is
+    // exactly what `sanitizeForLog` is for.
+    console.error(
+      `[Channel] Permission request: ${sanitizeForLog(toolName)} (id: ${sanitizeForLog(requestId)})`,
+    );
     res.json({ ok: true });
   });
 
@@ -179,7 +243,9 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     // Deletion is the only effect: no return leg — see docs/architecture.md and
     // ADR-047 §3. The verdict is echoed to the browser that submitted it and
     // never reaches Claude Code.
-    console.error(`[Channel] Permission verdict: ${requestId} → ${approved ? "allow" : "deny"}`);
+    console.error(
+      `[Channel] Permission verdict: ${sanitizeForLog(requestId)} → ${approved ? "allow" : "deny"}`,
+    );
     res.json({ ok: true, requestId, behavior: approved ? "allow" : "deny" });
   });
 

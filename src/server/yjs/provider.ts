@@ -1,6 +1,6 @@
 import { Hocuspocus } from "@hocuspocus/server";
 import * as Y from "yjs";
-import { TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../shared/constants.js";
+import { MAX_FILE_SIZE, TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../shared/constants.js";
 import { applyConnectionGate } from "../license/connection-gate.js";
 import { GATE_ENABLED } from "../license/gate-flag.js";
 import { resolveLiveLicenseState } from "../license/license-state.js";
@@ -97,6 +97,48 @@ export function assertAllowedOrigin(origin: string | undefined): void {
     throw new Error("Connection rejected: invalid origin");
   }
 }
+
+/**
+ * Largest inbound WebSocket frame Hocuspocus will accept (#1822 item 2).
+ *
+ * Without it `ws` keeps its 100 MiB default, and a peer that never authenticates
+ * can make the process buffer that much: a measured 90 MiB frame moved RSS from
+ * 179 MB to 331 MB before any hook ran. `events/wake-socket.ts` already caps its
+ * own upgrade at 1024 bytes for exactly this reason; this is the same control on
+ * the collaboration socket.
+ *
+ * **Rejection happens at the frame header**, on the declared `_payloadLength`,
+ * which is structurally before `onConnect`/`onAuthenticate` — so an
+ * unauthenticated peer is refused without the bytes ever being read. ws answers
+ * close code 1009.
+ *
+ * Derivation: `MAX_FILE_SIZE` (the on-disk / upload ceiling for a document) plus
+ * 16 MiB of headroom. The cap bounds INBOUND frames only — server→client is
+ * unbounded — and the repo has no client-side Yjs persistence (no
+ * `y-indexeddb` anywhere in `src/` or `package.json`), so a browser's
+ * first-connect `syncStep2` is empty and every later frame carries only what
+ * that client typed or pasted. Ordinary editing frames are bytes, not megabytes.
+ *
+ * **Measured, and the measurement is why this is a bound on the frame rather
+ * than a guarantee about documents.** A whole-document Yjs update is 1.02x–3.09x
+ * the text it carries, the ratio driven by BLOCK COUNT rather than text volume
+ * (2 MB of text: 1.02x at 2000 chars/paragraph, 1.51x at 80, 3.09x at 20). So a
+ * `MAX_FILE_SIZE` document's full state is ~51–154 MiB — above this cap, and
+ * above `ws`'s own 100 MiB default as well. **No cap at or below the default
+ * fits such a document**, which means this constant does not introduce that
+ * failure class; it lowers the size at which it bites, from ~32–98 MB of text to
+ * ~21–65 MB depending on block shape.
+ *
+ * Reaching it still needs an inbound frame carrying whole-document state, which
+ * normal use does not produce: a reconnect after the server dropped the room, or
+ * one enormous paste. ws answers 1009, the provider reconnects and re-sends, so
+ * the symptom is a wedged sync loop rather than a dropped message. Tracked
+ * separately — see the PR body.
+ *
+ * This closes the PER-FRAME bound only. N connections each just under the cap
+ * remain unbounded — a connection ceiling was considered and declined.
+ */
+export const MAX_SYNC_PAYLOAD_BYTES = MAX_FILE_SIZE + 16 * 1024 * 1024; // 66 MiB
 
 export async function startHocuspocus(port: number): Promise<Hocuspocus> {
   hocuspocusInstance = new Hocuspocus({
@@ -209,7 +251,13 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
   // NOTE: Hocuspocus creates .server (and .server.httpServer) inside listen(),
   // so it's not available before the call. We call listen() first, then attach
   // the error listener on the next tick if the internal is available.
-  await hocuspocusInstance.listen();
+  // The websocket options are `listen`'s THIRD positional argument — they reach
+  // `new Server(this, websocketOptions)` → `new WebSocketServer({ noServer: true,
+  // ...websocketOptions })`. `typeof null !== "number"`, so passing null for the
+  // port leaves the constructor's `port` in place. A `maxPayload` put on the
+  // Hocuspocus config object instead is silently ignored, which is why
+  // `hocuspocus-max-payload.test.ts` reads it back off the live WebSocketServer.
+  await hocuspocusInstance.listen(null, null, { maxPayload: MAX_SYNC_PAYLOAD_BYTES });
 
   // Post-listen: attach an error handler for runtime bind errors (e.g., port stolen)
   const internal = (hocuspocusInstance as any).server?.httpServer;
