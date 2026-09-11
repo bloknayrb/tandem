@@ -729,6 +729,16 @@ const isAutoOpenFirstRun = $derived(
 );
 const shouldShowWizard = $derived(manuallyReopened || isAutoOpenFirstRun);
 
+// #1713: `manuallyReopened`'s own trigger already clears settingsModalOpen in
+// its own handler (above), but `isAutoOpenFirstRun` is derived off an async
+// first-run fetch and can flip true at any moment — including while Settings
+// is open — with nothing to close it. Reading only `shouldShowWizard` (never
+// settingsModalOpen) keeps this one-directional: no self-dependency risk, and
+// it is a no-op on the already-safe manuallyReopened path.
+$effect(() => {
+  if (shouldShowWizard) settingsModalOpen = false;
+});
+
 function closeIntegrationWizard(): void {
   // Only persist dismissal when this close ends an auto-open session.
   // A manual reopen → close where the server says `needed === false`
@@ -829,6 +839,12 @@ function requestOpenFile(): Promise<void> {
 const updateAvailable = createUpdateAvailable();
 
 function openSettingsModalWithAck() {
+  // cr-3 (#1713 follow-up): the effect above only closes Settings on the
+  // false→true transition of shouldShowWizard — it does not re-fire while
+  // the wizard is already showing, so it can't stop a later Settings open
+  // from every entry point routed through here (keyboard shortcut, toolbar,
+  // command palette, the model-chip shortcut). Refuse instead.
+  if (shouldShowWizard) return;
   updateAvailable.acknowledge();
   settingsModalOpen = true;
 }
@@ -1481,6 +1497,17 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   },
   "toggle-palette": (e) => {
     e.preventDefault();
+    // #1824 item I / cr-2: same class as #1713's wizard/settings stacking
+    // bug — guard the OPEN path only, so an already-open palette still
+    // closes regardless of any other modal. Covers every focus-trapping or
+    // exclusive surface the palette could otherwise stack over: Settings,
+    // Help, the first-run wizard, and the file-open dialog.
+    if (
+      !untrack(() => paletteOpen) &&
+      (settingsModalOpen || showHelp || shouldShowWizard || fileOpenDialogOpen)
+    ) {
+      return;
+    }
     paletteOpen = !untrack(() => paletteOpen);
   },
   "new-scratchpad": (e) => {
@@ -1587,7 +1614,20 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     // read-only precisely so it can be read and annotated (decision 2). The
     // refusal here used to be a "Document is read-only" toast — a local named
     // `reviewOnly`, blocking the review action.
-    const popupSuppressed = slashCommandMenuOpen || findBarOpen || paletteOpen;
+    // #1824 item I: settingsModalOpen joins the set — the palette-open guard
+    // above means a stacked palette can no longer be the reason this reads
+    // true, but Settings itself is its own popup context.
+    // cr-2: same broadening as the palette guard — Help, the first-run
+    // wizard and the file-open dialog are each their own exclusive/focus-
+    // trapping surface too.
+    const popupSuppressed =
+      slashCommandMenuOpen ||
+      findBarOpen ||
+      paletteOpen ||
+      settingsModalOpen ||
+      showHelp ||
+      shouldShowWizard ||
+      fileOpenDialogOpen;
     if (popupSuppressed) {
       // Palette/find UI is the active context; user understands why.
       return;

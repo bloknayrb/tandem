@@ -100,7 +100,7 @@ describe("ErrorBoundary", () => {
     expect(container.textContent).toContain("weren't able to recover");
   });
 
-  it("Reload button calls window.location.reload()", async () => {
+  it("Reload button confirms, then calls window.location.reload() (cr-1)", async () => {
     // happy-dom's window.location is non-configurable; replace via
     // Object.defineProperty so the reload spy is observable.
     const originalLocation = window.location;
@@ -109,6 +109,11 @@ describe("ErrorBoundary", () => {
       configurable: true,
       value: { reload: reloadSpy },
     });
+    // happy-dom doesn't implement window.confirm, so there is no existing
+    // function for vi.spyOn to wrap — install one directly.
+    const originalConfirm = window.confirm;
+    const confirmSpy = vi.fn().mockReturnValue(true);
+    window.confirm = confirmSpy;
 
     try {
       const { container } = render(ErrorBoundaryHarness, {
@@ -121,12 +126,50 @@ describe("ErrorBoundary", () => {
       reloadBtn!.click();
       await tick();
 
+      expect(confirmSpy).toHaveBeenCalledOnce();
       expect(reloadSpy).toHaveBeenCalledOnce();
     } finally {
       Object.defineProperty(window, "location", {
         configurable: true,
         value: originalLocation,
       });
+      window.confirm = originalConfirm;
+    }
+  });
+
+  it("Reload button does not reload when the confirm is cancelled (cr-1)", async () => {
+    // The torn-down beforeunload guard (see ErrorBoundary.svelte) means this
+    // confirm is the only remaining chance to back out of discarding unsynced
+    // or uncommitted work — cancelling it must not reload the page.
+    const originalLocation = window.location;
+    const reloadSpy = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { reload: reloadSpy },
+    });
+    const originalConfirm = window.confirm;
+    const confirmSpy = vi.fn().mockReturnValue(false);
+    window.confirm = confirmSpy;
+
+    try {
+      const { container } = render(ErrorBoundaryHarness, {
+        props: { shouldThrow: true },
+      });
+      await tick();
+
+      const reloadBtn = container.querySelector<HTMLButtonElement>(RELOAD_SELECTOR);
+      expect(reloadBtn).toBeTruthy();
+      reloadBtn!.click();
+      await tick();
+
+      expect(confirmSpy).toHaveBeenCalledOnce();
+      expect(reloadSpy).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: originalLocation,
+      });
+      window.confirm = originalConfirm;
     }
   });
 });

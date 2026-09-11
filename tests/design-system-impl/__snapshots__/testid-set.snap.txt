@@ -205,6 +205,7 @@ harness-acknowledge
 harness-banner-dismiss
 harness-banner-version
 harness-version
+heading-chevron
 help-modal
 help-modal-close
 help-modal-content
@@ -433,6 +434,7 @@ shortcut-recording-{*}
 shortcut-reset-{*}
 shortcut-row-{*}
 shortcuts-reset-all
+slash-command-menu
 source-view-annotation-warning
 source-view-container
 source-view-copy-btn

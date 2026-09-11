@@ -48,7 +48,12 @@ function walk(dir: string, out: string[] = []): string[] {
  */
 function parseValue(src: string, idx: number): string | null {
   const open = src[idx];
-  if (open === '"' || open === "'") {
+  // Backtick joins the quote family here (not the Svelte-attribute `{expr}`
+  // branch below): a template literal opened directly as a JS value — e.g.
+  // the RHS of `el.dataset.testid = ...` — has no wrapping `{}` of its own.
+  // Interpolations inside it are reduced to `{*}` by `normalise()`, same as
+  // everywhere else; this only has to find the matching close-backtick.
+  if (open === '"' || open === "'" || open === "`") {
     const end = src.indexOf(open, idx + 1);
     if (end === -1) return null;
     const v = src.slice(idx + 1, end);
@@ -166,6 +171,116 @@ for (const file of walk(CLIENT_ROOT)) {
   }
 }
 
+// Second scan pass: `el.dataset.testid = "..."` assignments (imperative DOM
+// sites) are invisible to the attribute-literal scan above — they never
+// write the `data-testid=` string, so a testid assigned this way is
+// unfixably invisible to the snapshot gate. The lookahead `(?!=)` excludes
+// `===`/`!==` comparisons, which are reads, not declarations.
+const DATASET_ASSIGN = /\.dataset\.testid\s*=(?!=)/g;
+const LEADING_IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*/;
+
+/**
+ * Scan one source string for `.dataset.testid = ...` assignments (the
+ * right-hand side is raw JS/TS here, never a Svelte template attribute, so
+ * `parseValue`'s quote/backtick/`{expr}` handling only covers the literal
+ * case — a bare identifier needs its own check before falling through to
+ * "unparseable").
+ *
+ * Two forms beyond a single quoted literal are handled explicitly rather
+ * than falling through to "unparseable" or, worse, silently truncating:
+ *
+ *  - A backtick-opened template literal (`` `row-${i}` ``) — the natural
+ *    form for a per-item imperative testid, and the likelier shape than a
+ *    bare identifier for a dynamic one. `parseValue` now treats backtick as
+ *    quote-like, so this reuses the same literal branch.
+ *  - String concatenation (`"row-" + id`) — `parseValue` on its own would
+ *    return only the leading quoted segment ("row-"), which would then get
+ *    committed to the snapshot as a standalone Critical-Rule-7 selector that
+ *    no element actually carries. Detecting a `+` immediately after the
+ *    closing quote folds the whole expression into the same `{*}`
+ *    convention `normalise()` already uses for interpolation, rather than
+ *    trusting a truncated prefix.
+ */
+function scanDatasetAssignments(src: string): {
+  declarations: { testid: string; raw: string }[];
+  skipped: { line: number }[];
+} {
+  const found: { testid: string; raw: string }[] = [];
+  const skippedHere: { line: number }[] = [];
+  for (const m of src.matchAll(DATASET_ASSIGN)) {
+    let idx = m.index + m[0].length;
+    // Skip newlines here too, not just spaces/tabs: biome wraps a long
+    // `el.dataset.testid =` assignment onto its own line once the
+    // identifier is long enough, leaving the value on the next line while
+    // the value itself stays single-line. `parseValue`'s own multi-line
+    // rule (its docblock: "Returns null if the value spans multiple
+    // lines") still rejects a value that itself spans lines — this only
+    // widens what counts as "between `=` and the value", matching the
+    // attribute pass's tolerance for that gap.
+    while (
+      idx < src.length &&
+      (src[idx] === " " || src[idx] === "\t" || src[idx] === "\n" || src[idx] === "\r")
+    )
+      idx++;
+    const open = src[idx];
+    if (open === '"' || open === "'" || open === "`") {
+      const raw = parseValue(src, idx);
+      if (raw === null) {
+        skippedHere.push({ line: src.slice(0, m.index).split("\n").length });
+        continue;
+      }
+      let normalised = normalise(raw);
+      // Find the literal's own closing delimiter (same char `parseValue`
+      // matched) to see whether it's concatenated with something else.
+      const closeIdx = src.indexOf(open, idx + 1);
+      let after = closeIdx + 1;
+      while (after < src.length && (src[after] === " " || src[after] === "\t")) after++;
+      if (src[after] === "+") {
+        normalised = `${normalised}{*}`;
+      }
+      if (normalised.length === 0) continue;
+      if (normalised === "{*}") continue;
+      found.push({ testid: normalised, raw });
+      continue;
+    }
+    const identMatch = LEADING_IDENT.exec(src.slice(idx));
+    if (identMatch) {
+      // Mirrors the attribute pass: a known testid constant resolves to its
+      // literal value instead of being treated as an opaque passthrough.
+      const resolved = CONSTANT_RESOLUTIONS[identMatch[0]];
+      if (resolved !== undefined) {
+        found.push({ testid: resolved, raw: identMatch[0] });
+        continue;
+      }
+      // An unresolved bare identifier (`el.dataset.testid = someVar`) is a
+      // wrapper passthrough — routing it to `skipped` instead would make a
+      // future legitimate one permanently, unfixably red.
+      continue;
+    }
+    skippedHere.push({ line: src.slice(0, m.index).split("\n").length });
+  }
+  return { declarations: found, skipped: skippedHere };
+}
+
+for (const file of walk(CLIENT_ROOT)) {
+  const src = readFileSync(file, "utf-8");
+  const { declarations: found, skipped: skippedHere } = scanDatasetAssignments(src);
+  for (const d of found) {
+    declarations.push({
+      file: relative(ROOT, file).replace(/\\/g, "/"),
+      testid: d.testid,
+      raw: d.raw,
+    });
+  }
+  for (const s of skippedHere) {
+    skipped.push({
+      file: relative(ROOT, file).replace(/\\/g, "/"),
+      line: s.line,
+      reason: "multi-line or unparseable value",
+    });
+  }
+}
+
 const sortedSet = [...new Set(declarations.map((d) => d.testid))].sort();
 
 describe("test-selector coverage — src/client/", () => {
@@ -181,5 +296,85 @@ describe("test-selector coverage — src/client/", () => {
 
   it("no testid declarations were skipped due to multi-line values", () => {
     expect(skipped).toEqual([]);
+  });
+
+  it("scans dataset.testid assignments but not comparisons, and skips bare identifiers (#1709)", () => {
+    const src = 'x.dataset.testid = someVar; y.dataset.testid === "not-an-assignment";';
+    const { declarations: found, skipped: skippedHere } = scanDatasetAssignments(src);
+    // Neither line produces a declaration or a skip: the `===` comparison is
+    // excluded by the lookahead (not a match at all, so not even attempted),
+    // and the bare-identifier assignment is a wrapper passthrough.
+    expect(found).toEqual([]);
+    expect(skippedHere).toEqual([]);
+  });
+
+  it("scans a quoted dataset.testid literal into a declaration (#1709)", () => {
+    const { declarations: found, skipped: skippedHere } = scanDatasetAssignments(
+      'el.dataset.testid = "synthetic-example";',
+    );
+    expect(found).toEqual([{ testid: "synthetic-example", raw: "synthetic-example" }]);
+    expect(skippedHere).toEqual([]);
+  });
+
+  it("finds the two live dataset.testid selectors (#1709)", () => {
+    expect(sortedSet).toContain("slash-command-menu");
+    expect(sortedSet).toContain("heading-chevron");
+  });
+
+  it("scans a backtick-opened dataset.testid template literal, folding interpolation to {*} (review round 1)", () => {
+    const { declarations: found, skipped: skippedHere } = scanDatasetAssignments(
+      "el.dataset.testid = `row-${i}`;",
+    );
+    // Before the fix, backtick was neither a recognised quote nor an
+    // identifier start, so this fell to `skipped` — permanently and
+    // unfixably red for the natural per-item imperative-testid form.
+    expect(found).toEqual([{ testid: "row-{*}", raw: "row-${i}" }]);
+    expect(skippedHere).toEqual([]);
+  });
+
+  it("skips a backtick template with no literal context, mirroring the {expr}-only rule (review round 1)", () => {
+    const { declarations: found, skipped: skippedHere } = scanDatasetAssignments(
+      "el.dataset.testid = `${id}`;",
+    );
+    expect(found).toEqual([]);
+    expect(skippedHere).toEqual([]);
+  });
+
+  it("folds a string-concatenated dataset.testid literal into a {*}-suffixed selector, not a truncated prefix (review round 1)", () => {
+    const { declarations: found, skipped: skippedHere } = scanDatasetAssignments(
+      'el.dataset.testid = "row-" + id;',
+    );
+    // Before the fix this silently committed "row-" — the leading quoted
+    // segment only — as a standalone Critical-Rule-7 contract selector that
+    // no element actually carries.
+    expect(found).toEqual([{ testid: "row-{*}", raw: "row-" }]);
+    expect(skippedHere).toEqual([]);
+  });
+
+  it("resolves a known testid constant assigned via dataset.testid (review round 1)", () => {
+    const { declarations: found, skipped: skippedHere } = scanDatasetAssignments(
+      "el.dataset.testid = ERROR_BOUNDARY_RELOAD_BTN_TESTID;",
+    );
+    // Before the fix, CONSTANT_RESOLUTIONS was applied only on the
+    // attribute-literal pass — this bare identifier fell through as an
+    // unresolved wrapper passthrough instead of resolving to its literal.
+    expect(found).toEqual([
+      { testid: "error-boundary-reload-btn", raw: "ERROR_BOUNDARY_RELOAD_BTN_TESTID" },
+    ]);
+    expect(skippedHere).toEqual([]);
+  });
+
+  it("scans a dataset.testid assignment biome wrapped onto the next line (review round 2, cr-5)", () => {
+    // Before the fix, only spaces/tabs were skipped between `=` and the
+    // value, so this shape — which biome produces on its own once the
+    // identifier is long enough to force a wrap — landed on the newline as
+    // `open`, matched neither a quote nor an identifier start, and fell to
+    // `skipped` with a "multi-line or unparseable value" message that
+    // points at the wrong fix (the value itself is single-line).
+    const { declarations: found, skipped: skippedHere } = scanDatasetAssignments(
+      'el.dataset.testid =\n  "synthetic-wrapped";',
+    );
+    expect(found).toEqual([{ testid: "synthetic-wrapped", raw: "synthetic-wrapped" }]);
+    expect(skippedHere).toEqual([]);
   });
 });

@@ -456,6 +456,32 @@ describe("slash command plugin state", () => {
     expect(state?.active).toBeNull();
   });
 
+  it("still runs the meta check on an inactive, non-typed transaction (#1824 item B)", () => {
+    // #1824 item B skips resolveActiveSlashCommand's DOM probes when the menu
+    // is already inactive AND the transaction isn't a typed insertion at the
+    // caret, returning the plugin's previous state object unchanged. That
+    // skip is placed AFTER the applySlashCommandMeta check specifically so a
+    // meta transaction arriving in this same inactive/non-typed shape is
+    // never swallowed by it. A meta-only transaction here has no way to
+    // change `active`/`dismissedKey`'s VALUES when already inactive (every
+    // current meta type is a no-op on an inactive menu) — so this pins the
+    // ordering via object identity: applySlashCommandMeta always constructs a
+    // fresh state object, while the new skip returns the same reference. If
+    // the skip check were hoisted ahead of the meta check, this transaction
+    // would fall through untouched and `after` would be the SAME object as
+    // `before` instead of a new one.
+    editor.chain().focus().run();
+    const before = slashCommandPluginKey.getState(editor.state);
+    expect(before?.active).toBeNull();
+
+    const tr = editor.state.tr.setMeta(slashCommandPluginKey, { type: "close" });
+    editor.view.dispatch(tr);
+
+    const after = slashCommandPluginKey.getState(editor.state);
+    expect(after?.active).toBeNull();
+    expect(after).not.toBe(before);
+  });
+
   it("updates selectedIndex on select meta", () => {
     editor.chain().focus().insertContent("/").run();
     const before = slashCommandPluginKey.getState(editor.state);

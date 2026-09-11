@@ -56,6 +56,11 @@ let errorSessionId = $state(0);
             ? "We weren't able to recover this time — reloading the page should get you going again."
             : "The editor ran into an unexpected hiccup."}
         </p>
+        <p class="reassurance">
+          Anything that had already synced to the server is safe — but reloading discards
+          whatever hadn't, including an in-progress markdown-source edit or a change made while
+          disconnected.
+        </p>
         <pre class="detail">{error instanceof Error ? error.message : String(error)}</pre>
         {#if attempts < MAX_RECOVERY_ATTEMPTS}
           <button
@@ -72,7 +77,19 @@ let errorSessionId = $state(0);
         <button
           data-testid={ERROR_BOUNDARY_RELOAD_BTN_TESTID}
           class="btn btn-secondary"
-          onclick={() => window.location.reload()}
+          onclick={() => {
+            // The subtree's own beforeunload guard (useDocumentWorkspace.svelte.ts)
+            // was torn down along with the rest of the children when this failed
+            // snippet mounted, so it can no longer warn about unsynced or
+            // uncommitted work. Ask here instead of reloading unconditionally.
+            if (
+              window.confirm(
+                "Reload will discard anything that hasn't finished syncing to the server. Continue?",
+              )
+            ) {
+              window.location.reload();
+            }
+          }}
         >
           Reload
         </button>
@@ -96,6 +113,11 @@ let errorSessionId = $state(0);
 
 .message {
   color: var(--tandem-fg-muted);
+}
+
+.reassurance {
+  color: var(--tandem-fg-muted);
+  font-size: var(--tandem-text-sm);
 }
 
 .detail {

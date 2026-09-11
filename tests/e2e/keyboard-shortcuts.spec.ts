@@ -561,6 +561,52 @@ test("Escape closes the command palette even when focus is outside it", async ({
   await expect(palette).toHaveCount(0);
 });
 
+test("Ctrl+Shift+P does not stack the command palette over the Help modal (cr-2)", async ({
+  page,
+}) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  // Brand menu, not the "?" / Ctrl+/ shortcut — both are suppressed while
+  // focus sits inside the contenteditable editor (see the Help modal test
+  // above), so this is the reliable way to open it.
+  await page.locator("[data-testid='titlebar-brand-menu']").click();
+  await page.locator("[data-testid='brand-menu-shortcuts']").click();
+  const helpModal = page.locator("[data-testid='help-modal']");
+  await expect(helpModal).toBeVisible({ timeout: 3_000 });
+
+  // The Help modal's own dialog onkeydown stopPropagation()s every non-
+  // Escape key while it holds focus, which already blocks the shortcut from
+  // reaching the window-level dispatcher in the common case (same shape as
+  // the "Escape closes the command palette" test above). The gap this
+  // guards is focus landing outside the dialog — blur to reproduce it, so
+  // this test actually exercises the toggle-palette guard rather than the
+  // dialog's own local trap.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  const palette = page.locator("[data-testid='command-palette']");
+  await page.keyboard.press("Control+Shift+P");
+  await expect(palette).toHaveCount(0);
+  await expect(helpModal).toBeVisible();
+});
+
+test("Ctrl+Shift+P does not stack the command palette over the file-open dialog (cr-2)", async ({
+  page,
+}) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  await page.keyboard.press("Control+o");
+  const fileDialog = page.locator("[data-testid='file-open-dialog']");
+  await expect(fileDialog).toBeVisible({ timeout: 3_000 });
+
+  const palette = page.locator("[data-testid='command-palette']");
+  await page.keyboard.press("Control+Shift+P");
+  await expect(palette).toHaveCount(0);
+  await expect(fileDialog).toBeVisible();
+});
+
 test("command palette Accept action resolves the first pending annotation from empty selection", async ({
   page,
 }) => {

@@ -166,6 +166,34 @@ test("More integrations section shows models coming-soon; Cowork row hidden in b
   await expect(page.locator("[data-testid='integration-wizard-cowork-step']")).toHaveCount(0);
 });
 
+// cr-3 (#1713 follow-up): the wizard-open effect only closes Settings on the
+// false→true transition of shouldShowWizard — it never re-fires while the
+// wizard stays open, so nothing stopped a later Ctrl+, from opening Settings
+// behind it (SettingsModal renders before the wizard in the DOM, so it was
+// invisibly stacked rather than absent). openSettingsModalWithAck now
+// refuses outright while shouldShowWizard is true.
+test("Settings shortcut does not stack Settings behind an already-open wizard", async ({
+  page,
+}) => {
+  await openSettingsModal(page);
+  await page.locator(AI_TAB).click();
+  await page.locator(OPEN_WIZARD_BTN).click();
+  await expect(page.locator(WIZARD)).toBeVisible();
+  await expect(page.locator(SETTINGS_MODAL)).toHaveCount(0);
+
+  // The wizard dialog's own onkeydown stopPropagation()s every non-Tab/
+  // Escape key while focus is inside it, which already blocks the shortcut
+  // from reaching the window-level dispatcher in the common case. The gap
+  // this guards is focus landing outside the dialog (e.g. between step
+  // transitions) — reproduced the same way the command-palette Escape test
+  // above does, by blurring the active element first.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press("Control+Comma");
+
+  await expect(page.locator(SETTINGS_MODAL)).toHaveCount(0);
+  await expect(page.locator(WIZARD)).toBeVisible();
+});
+
 // The pre-3c-ii-b preview toggle has been removed (the wizard now
 // auto-opens via server-side first-run detection). Pin its absence so a
 // future Settings tab refactor doesn't accidentally resurrect it.
