@@ -430,5 +430,18 @@ describe("who may reach the unguarded mechanism", () => {
       lifecycle.match(/removeAnnotationRecord/g) ?? [],
       "the declaration and removeForClaude's call — a third is a wrapper around the guard",
     ).toHaveLength(2);
+
+    // Redundant with the occurrence count above for a direct declaration
+    // (`removeAnnotationRecord` isn't a wrapper over a deeper private fn, so
+    // any alias line already repeats the literal token and would already fail
+    // `toHaveLength(2)`) — added for a clearer, symbol-specific failure
+    // message, matching the parity guards `annotation-reply-seam.test.ts`
+    // carries for `addUserReply` (#1825).
+    expect(lifecycle, "no alias binding of the unguarded entry").not.toMatch(
+      /export\s+(?:const|let|var|function)\s+\w+\s*=?\s*removeAnnotationRecord\b/,
+    );
+    expect(lifecycle, "no aliased re-export of the unguarded entry").not.toMatch(
+      /export\s*\{[^}]*\bremoveAnnotationRecord\b[^}]*\bas\b/,
+    );
   });
 });
