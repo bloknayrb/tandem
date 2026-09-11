@@ -647,7 +647,7 @@ associations, orphaned-sidecar-after-quit, the AppImage — is still unobserved.
 - Fixture: a ~50-page markdown document produced by a checked-in generator script (to be added with the gate's first run; until then, generate ad hoc and note the seed).
 - Pass conditions on the smoke-checklist machines (the same hardware set as §1–§3 of [release-smoke-checklist.md](release-smoke-checklist.md)): open-to-interactive < 3s; annotation create/accept reflects in the editor < 500ms; no frame stall > 100ms during a scripted top-to-bottom scroll (DevTools performance trace).
 - Existing partial coverage acknowledged: annotation-store perf is pinned by `tests/server/annotations/perf.test.ts` (#335) and the #609 atomic-update freeze fix has a regression pin — this gate covers the *render/scroll/interaction* path those don't.
-- Risk, stated: this gate is **unvalidated until RC** (no measurement has been run against it yet); if the fixture fails today, that is a finding to fix, not a reason to relax the numbers. Verifies the "~50 pages" Known-Limitations envelope.
+- Risk, stated: measurements now exist — see [docs/perf-gate-results.md](perf-gate-results.md) (runs 1–3, the last of which is #1734's post-fix run); if a future run's fixture fails, that is a finding to fix, not a reason to relax the numbers. Verifies the "~50 pages" Known-Limitations envelope.
 
 **Commercial readiness (added 2026-06-11; gates the license flag flip — see #1116/#1117):**
 - ADR-040 §5 (BUSL re-scope) **Accepted** — counsel-drafted text landed in `LICENSE` + `docs/decisions.md`

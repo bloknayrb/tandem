@@ -457,24 +457,35 @@ test.describe("v1.0 performance gate", () => {
       // the number.
       await rail.getByTestId(`accept-btn-${annotationId}`).click();
       const clickMs = Date.now() - acceptStart;
-      // Measure to the accept being REFLECTED, which is the disappearance of the
-      // accept control — the card itself may persist in a resolved state, so
-      // waiting on the card to vanish would either never settle or measure
-      // something else entirely. In the margin column the whole bubble leaves
-      // once the annotation is no longer `pending`, so counting the accept
-      // control to zero ACROSS BOTH surfaces is still exactly "the accept was
-      // reflected".
-      // `toHaveCount` retries on a tight fixed cadence. `expect.poll` backs off
-      // (100/250/500/1000ms...), which would inflate a multi-second reading by
-      // up to a whole interval and make the instrument part of the number.
-      await expect(page.getByTestId(`accept-btn-${annotationId}`)).toHaveCount(0, {
-        timeout: 30_000,
-      });
+      // Measure to the accept being REFLECTED — #1334's decision, implemented
+      // here (#1734). #1334 found the OLD wait below (accept-button count to
+      // 0) was mostly measuring the resolved card's own #798 exit/settle
+      // motion (cardMotion.ts, EXIT_MS = 260ms), not real accept latency, and
+      // asked for the wait to re-point at the annotation's accepted state
+      // instead. `.ach-status.is-accepted` (AnnotationCardHeader.svelte) is a
+      // plain conditional render with no `transition:`/`in:`/`out:` of its
+      // own, so its ATTACHMENT reflects the CRDT write landing, not a motion
+      // finishing. Not asserted VISIBLE: the resolved card renders inside
+      // SidePanel's collapsed <details> (no `open` attribute), so it has no
+      // layout box there. Scoped to this annotation, not the bare accept-btn
+      // testid, so a resolved card left behind by a prior test can't resolve
+      // this locator instead.
+      await expect(
+        rail.locator(`[data-testid="annotation-card-${annotationId}"] .ach-status.is-accepted`),
+      ).toHaveCount(1, { timeout: 30_000 });
       const acceptMs = Date.now() - acceptStart;
       console.log(
         `  accept breakdown: click-dispatch ${clickMs}ms, post-click settle ${acceptMs - clickMs}ms`,
       );
       report("annotation-accept", acceptMs, THRESHOLD_ANNOTATION_MS);
+      // Retained: the accept control must still leave the DOM on both the
+      // rail and margin surfaces (partner of the double-count pin above),
+      // independent of the timing measurement — dropping this would leave the
+      // spec unable to catch a future change that silently keeps the button
+      // mounted after accept.
+      await expect(page.getByTestId(`accept-btn-${annotationId}`)).toHaveCount(0, {
+        timeout: 30_000,
+      });
 
       // ======================================================================
       // 3. Frame stalls during a scripted top-to-bottom scroll
