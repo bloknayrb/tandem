@@ -38,6 +38,35 @@ import {
   IntegrationsFileSchema,
 } from "./schema.js";
 
+/**
+ * `integrations.json` was written by a NEWER Tandem than this build (#1792).
+ *
+ * A typed error rather than a bare `Error` because every `/api/integrations/*`
+ * handler funnels its rejections through `sendInternal`, which flattens them to
+ * `{"error":"INTERNAL"}` — so after a downgrade the wizard was dead with no
+ * hint of why. The route layer branches on this class to answer 409 with a
+ * message the user can act on.
+ *
+ * `filePath` is carried for the server-side log line ONLY. It must never reach
+ * the wire: `GET /api/integrations/*` is LAN-reachable, so a resolved path in a
+ * response body is out (see CLAUDE.md's MCP/Server gotcha).
+ */
+export class IntegrationsFutureSchemaError extends Error {
+  readonly found: number;
+  readonly supported: number;
+  readonly filePath: string;
+
+  constructor(found: number, supported: number, filePath: string) {
+    super(
+      `integrations.json schemaVersion ${found} is newer than this Tandem build supports (${supported}). Update Tandem or remove ${filePath}.`,
+    );
+    this.name = "IntegrationsFutureSchemaError";
+    this.found = found;
+    this.supported = supported;
+    this.filePath = filePath;
+  }
+}
+
 export const INTEGRATIONS_FILE_NAME = "integrations.json";
 
 /** Subdirectory under appDataDir that holds malformed-JSON backups. */
@@ -102,9 +131,7 @@ async function readIntegrationsFile(filePath: string): Promise<IntegrationsFile>
     return emptyIntegrationsFile();
   }
   if (version > INTEGRATIONS_SCHEMA_VERSION) {
-    throw new Error(
-      `integrations.json schemaVersion ${version} is newer than this Tandem build supports (${INTEGRATIONS_SCHEMA_VERSION}). Update Tandem or remove ${filePath}.`,
-    );
+    throw new IntegrationsFutureSchemaError(version, INTEGRATIONS_SCHEMA_VERSION, filePath);
   }
 
   const migrated = migrateUp(parsed, version, INTEGRATIONS_SCHEMA_VERSION);

@@ -271,3 +271,30 @@ describe("SettingsModelsTab — readOnly gating", () => {
     );
   });
 });
+
+/**
+ * #1722 / #1792 item 1 — the OTHER half. The banner above covers only the
+ * Settings modal; every settings-backed control outside it (theme picker, rail
+ * toggles, formatting-bar hide, decoration toggles) goes through
+ * `updateSettings` and had no surface at all.
+ *
+ * A SOURCE-CONTRACT assertion rather than an App.svelte mount test:
+ * `settings-write-refused.test.ts` registers its own handler, so without this
+ * a fix that exports the setter and never wires it passes everything while the
+ * user still gets the silent no-op both issues describe.
+ */
+describe("App.svelte — settings write-refused wiring (#1722/#1792)", () => {
+  it("registers a settings-write-refused handler", async () => {
+    const fs = await import("node:fs/promises");
+    const url = await import("node:url");
+    const path = await import("node:path");
+    const here = path.dirname(url.fileURLToPath(import.meta.url));
+    const source = await fs.readFile(path.join(here, "../../src/client/App.svelte"), "utf-8");
+
+    expect(source).toContain("setSettingsWriteRefusedHandler");
+    // …and it must actually CALL it, not merely import the symbol.
+    expect(source).toMatch(/setSettingsWriteRefusedHandler\s*\(/);
+    // The refusal reaches the user once per condition, not once per click.
+    expect(source).toContain('dedupKey: "settings-readonly"');
+  });
+});

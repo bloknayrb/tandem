@@ -218,6 +218,12 @@ export interface ExistingMcpInstall {
 
 /** Returned in JSON body when the wizard should surface env-var fallback UX. */
 export const ERROR_CODE_KEYCHAIN_UNAVAILABLE = "KEYCHAIN_UNAVAILABLE";
+/**
+ * Returned when `integrations.json` on disk carries a schemaVersion this build
+ * does not support — a downgrade (#1792). Distinguished from a generic 500 so
+ * the wizard and Settings tab can tell the user what to do about it.
+ */
+export const ERROR_CODE_INTEGRATIONS_FUTURE_SCHEMA = "INTEGRATIONS_FUTURE_SCHEMA";
 /** Returned when POST /api/integrations payload fails Zod validation. */
 export const ERROR_CODE_INVALID_INTEGRATIONS_FILE = "INVALID_INTEGRATIONS_FILE";
 /** Returned when POST /api/integrations/secrets/:ref payload is malformed. */

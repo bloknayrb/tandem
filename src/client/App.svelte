@@ -91,7 +91,12 @@ import {
 } from "./hooks/useTabKeyboardShortcuts.js";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
 import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte";
-import { createTandemSettings, resolveFont, TEXT_SIZE_PX } from "./hooks/useTandemSettings.svelte";
+import {
+  createTandemSettings,
+  resolveFont,
+  setSettingsWriteRefusedHandler,
+  TEXT_SIZE_PX,
+} from "./hooks/useTandemSettings.svelte";
 import { initTauriFileDrop, tauriFileDrop } from "./hooks/useTauriFileDrop.svelte";
 import { createTheme } from "./hooks/useTheme.svelte";
 import { createTutorial } from "./hooks/useTutorial.svelte";
@@ -269,6 +274,23 @@ createWebViewZoom();
 const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileName })));
 
 const notifications = createNotifications();
+
+// #1722/#1792: a settings blob written by a NEWER Tandem makes every
+// `updateSettings` call a silent no-op — the theme picker, rail toggles,
+// formatting-bar hide and decoration toggles all snap back with nothing said,
+// because only SettingsModal renders the read-only banner. One registration
+// covers all eleven call sites; `dedupKey` collapses repeated clicks.
+setSettingsWriteRefusedHandler(() => {
+  notifications.push({
+    id: crypto.randomUUID(),
+    timestamp: Date.now(),
+    type: "general-error",
+    severity: "warning",
+    message:
+      "That setting was not changed: your settings were written by a newer version of Tandem, so this version will not overwrite them. Update Tandem to change settings again.",
+    dedupKey: "settings-readonly",
+  });
+});
 let activityOpen = $state(false);
 const fileDrop = createFileDrop();
 initTauriFileDrop(notifications.push);

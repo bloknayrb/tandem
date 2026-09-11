@@ -239,7 +239,16 @@ export function createIntegrationWizard(
       const res = await fetchFn(`${baseUrl}${API_INTEGRATIONS_EXISTING}`);
       if (myGen !== beginGen) return; // a newer begin() ran; drop this response
       if (!res.ok) {
-        setError(`Could not load existing entries (HTTP ${res.status}).`);
+        // #1792: a downgraded `integrations.json` answers 409 with an
+        // actionable `message`; without this the wizard died on a bare status
+        // code. Same shape as the persist path below.
+        const body = (await res.json().catch(() => null)) as { message?: unknown } | null;
+        if (myGen !== beginGen) return;
+        setError(
+          typeof body?.message === "string" && body.message.length > 0
+            ? body.message
+            : `Could not load existing entries (HTTP ${res.status}).`,
+        );
         return;
       }
       const body = (await res.json()) as { installs: ExistingMcpInstall[] };

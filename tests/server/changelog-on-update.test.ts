@@ -1,7 +1,7 @@
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkVersionChange } from "../../src/server/version-check.js";
 
 let tmpDir: string | null = null;
@@ -82,5 +82,60 @@ describe("checkVersionChange", () => {
     const result = await checkVersionChange("0.2.7", versionFile);
 
     expect(result).toBe("upgraded");
+  });
+});
+
+describe("checkVersionChange — onUpgrade hook (#1792)", () => {
+  it("writes the stamp only after the hook resolves", async () => {
+    const dir = await makeTmpDir();
+    const versionFile = path.join(dir, "last-seen-version");
+    await fs.writeFile(versionFile, "0.2.6");
+
+    const stamps: string[] = [];
+    const onUpgrade = vi.fn(async () => {
+      stamps.push(await fs.readFile(versionFile, "utf-8"));
+    });
+
+    const result = await checkVersionChange("0.2.7", versionFile, { onUpgrade });
+
+    expect(result).toBe("upgraded");
+    expect(onUpgrade).toHaveBeenCalledTimes(1);
+    // The hook ran BEFORE the stamp — it still saw the old version.
+    expect(stamps[0]?.trim()).toBe("0.2.6");
+    expect((await fs.readFile(versionFile, "utf-8")).trim()).toBe("0.2.7");
+  });
+
+  it("leaves the stamp unwritten when the hook rejects, so the next start retries", async () => {
+    const dir = await makeTmpDir();
+    const versionFile = path.join(dir, "last-seen-version");
+    await fs.writeFile(versionFile, "0.2.6");
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const failing = await checkVersionChange("0.2.7", versionFile, {
+      onUpgrade: async () => {
+        throw new Error("CHANGELOG.md open failed");
+      },
+    });
+    errorSpy.mockRestore();
+
+    expect(failing).toBe("upgraded");
+    // Unstamped — otherwise that release's notes would never open at all.
+    expect((await fs.readFile(versionFile, "utf-8")).trim()).toBe("0.2.6");
+
+    const retried = await checkVersionChange("0.2.7", versionFile, { onUpgrade: async () => {} });
+    expect(retried).toBe("upgraded");
+    expect((await fs.readFile(versionFile, "utf-8")).trim()).toBe("0.2.7");
+  });
+
+  it("never calls the hook on first-install, and still stamps", async () => {
+    const dir = await makeTmpDir();
+    const versionFile = path.join(dir, "last-seen-version");
+    const onUpgrade = vi.fn(async () => {});
+
+    const result = await checkVersionChange("0.2.7", versionFile, { onUpgrade });
+
+    expect(result).toBe("first-install");
+    expect(onUpgrade).not.toHaveBeenCalled();
+    expect((await fs.readFile(versionFile, "utf-8")).trim()).toBe("0.2.7");
   });
 });

@@ -97,7 +97,16 @@ async function loadWorkingDirectory() {
     const res = await fetch(`${API_BASE}/api/integrations`);
     if (!mounted) return;
     if (!res.ok) {
-      lastLoadError = `Failed to load integrations (HTTP ${res.status}).`;
+      // #1792: the server answers a downgraded `integrations.json` with a 409
+      // carrying an actionable `message`. Rendering only the status code left
+      // the user with a dead tab and no hint, so prefer the body when it has
+      // one; a body that will not parse falls back to the status line.
+      const body = (await res.json().catch(() => null)) as { message?: unknown } | null;
+      if (!mounted) return;
+      lastLoadError =
+        typeof body?.message === "string" && body.message.length > 0
+          ? body.message
+          : `Failed to load integrations (HTTP ${res.status}).`;
       return;
     }
     const file = (await res.json()) as {

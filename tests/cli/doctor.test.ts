@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ANNOTATION_SCAN_MAX_FILES } from "../../src/cli/annotation-store-scan.js";
+import { INTEGRATIONS_SCHEMA_VERSION } from "../../src/shared/integrations/contract.js";
 
 // The file-cap spec writes ANNOTATION_SCAN_MAX_FILES + 1 (513) files
 // synchronously and then scans them, so its cost scales with that constant and
@@ -183,6 +184,38 @@ describe("runDoctor", () => {
     // Schema version is surfaced from the sampled file.
     const schemaResult = storeResults.find((r) => r.data && "schemaVersion" in r.data);
     expect(schemaResult?.data?.schemaVersion).toBe(3);
+  });
+
+  /**
+   * #1792 item 2 — `doctor` had no `integrations.json` counterpart to
+   * `checkAnnotationStore`, so the one diagnostic a user is told to run was
+   * silent about the exact downgrade that kills the integrations wizard.
+   */
+  it("warns when integrations.json carries a future schemaVersion", async () => {
+    writeFileSync(
+      join(dataDir, "integrations.json"),
+      JSON.stringify({ schemaVersion: 9999, integrations: [] }),
+    );
+
+    const report = await runDoctor();
+    const rows = report.results.filter((r) => r.check === "integrations-file");
+    expect(rows.length).toBeGreaterThan(0);
+    const warned = rows.find((r) => r.status === "warn");
+    expect(warned).toBeDefined();
+    expect(warned?.data?.schemaVersion).toBe(9999);
+    expect(warned?.message).toContain("9999");
+  });
+
+  it("does not warn on a current-schema integrations.json", async () => {
+    writeFileSync(
+      join(dataDir, "integrations.json"),
+      JSON.stringify({ schemaVersion: INTEGRATIONS_SCHEMA_VERSION, integrations: [] }),
+    );
+
+    const report = await runDoctor();
+    const rows = report.results.filter((r) => r.check === "integrations-file");
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.status === "pass")).toBe(true);
   });
 
   /**

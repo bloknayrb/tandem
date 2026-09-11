@@ -41,7 +41,10 @@ import {
   claudeCodeConfigPath,
   claudeDesktopConfigTarget,
 } from "../shared/integrations/client-config-paths.js";
-import type { ClaudeCliPresence } from "../shared/integrations/contract.js";
+import {
+  type ClaudeCliPresence,
+  INTEGRATIONS_SCHEMA_VERSION,
+} from "../shared/integrations/contract.js";
 import { detectClaudeCli, isBareNameLaunchable } from "../shared/integrations/detect-claude-cli.js";
 import { isOnPath, resolveManyOnPath } from "../shared/integrations/path-lookup.js";
 import { rejectUnsafeWindowsPrefix } from "../shared/windows-path-safety.js";
@@ -2763,6 +2766,67 @@ const UNSAFE_APP_DATA_FIX =
  * `annotation-store-scan.ts` for why a bounded full scan is not a regression on
  * the request-led work this unit is also asked to cap.
  */
+/**
+ * `integrations.json` counterpart to {@link checkAnnotationStore} (#1792).
+ *
+ * A downgrade leaves a file this build cannot read, and every
+ * `/api/integrations/*` route then rejects — so the wizard and the Settings
+ * Claude Code tab are dead. `doctor` had no check for it at all, which made the
+ * one diagnostic a user is told to run silent on the cause.
+ *
+ * Read-only and total: an absent file is a pass, and an unreadable or
+ * unparseable one is a pass too — this check answers ONE question (is the
+ * schema from the future?), and the other failure modes are recovered silently
+ * by `readIntegrationsFile` rather than being conditions to report here.
+ */
+async function checkIntegrationsFile(r: Recorder): Promise<void> {
+  const { dir: base, inputs } = resolveAppDataDir();
+  // Screen the raw inputs BEFORE deriving a path or touching the filesystem —
+  // same order as checkAnnotationStore.
+  for (const input of inputs) {
+    if (input !== "" && rejectUnsafeWindowsPrefix(input) !== null) {
+      r.fail(
+        "Integrations file location resolves to a network or extended-length path; refusing to read it",
+        UNSAFE_APP_DATA_FIX,
+        { unsafePath: true },
+      );
+      return;
+    }
+  }
+
+  const filePath = join(base, "integrations.json");
+  let raw: string;
+  try {
+    raw = readFileSync(filePath, "utf-8");
+  } catch {
+    r.pass("No integrations.json yet — nothing to check", undefined, { exists: false });
+    return;
+  }
+
+  let found: unknown;
+  try {
+    found = (JSON.parse(raw) as { schemaVersion?: unknown }).schemaVersion;
+  } catch {
+    r.pass("integrations.json is not valid JSON — the server recovers it on read", undefined, {
+      parsed: false,
+    });
+    return;
+  }
+
+  if (typeof found === "number" && Number.isInteger(found) && found > INTEGRATIONS_SCHEMA_VERSION) {
+    r.warn(
+      `integrations.json carries schemaVersion ${found}, newer than this build supports (${INTEGRATIONS_SCHEMA_VERSION})`,
+      "Written by a newer Tandem. Update Tandem, or remove the integrations file; until then the integrations wizard and the Settings Claude Code tab will not load.",
+      { schemaVersion: found, supported: INTEGRATIONS_SCHEMA_VERSION },
+    );
+    return;
+  }
+
+  r.pass(`Integrations schema version: ${String(found ?? "unset")}`, undefined, {
+    schemaVersion: typeof found === "number" ? found : null,
+  });
+}
+
 async function checkAnnotationStore(r: Recorder): Promise<void> {
   const { dir: base, inputs } = resolveAppDataDir();
   // Screen the raw inputs BEFORE deriving a path or touching the filesystem.
@@ -3150,6 +3214,7 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   await r.check("claude-cli", () => checkClaudeCli(r));
   await r.check("tandem-plugin", () => checkTandemPlugin(r));
   await r.check("annotation-store", () => checkAnnotationStore(r));
+  await r.check("integrations-file", () => checkIntegrationsFile(r));
   await r.check("stale-global", () => checkStaleGlobal(r));
 
   // `check` returns undefined when the check crashed (it records its own
