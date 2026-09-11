@@ -183,9 +183,13 @@ static CRASH_RESTARTS: Mutex<Vec<std::time::Instant>> = Mutex::new(Vec::new());
 /// What to do about a `CommandEvent::Terminated` that arrived after boot.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CrashRestartDecision {
-    /// Not our business: a superseded child, a crash the boot loop is already
-    /// retrying, or a spawn we are deliberately not allowed to make.
+    /// Not our business: a superseded child, or a crash the boot loop is
+    /// already retrying.
     Ignore,
+    /// A real post-boot crash that arrived while spawns are suppressed. Not a
+    /// spawn now, but a debt: `DEFERRED_CRASH` is latched and the code that
+    /// releases the suppression owes a `recover_deferred_crash`.
+    Deferred,
     /// Respawn through `restart_sidecar`.
     Restart,
     /// Too many crashes in the window — stop trying and surface it.
@@ -216,12 +220,18 @@ pub(crate) enum CrashRestartDecision {
 ///    `clear_healthy_under_lock` *before* stopping, so a user-initiated restart
 ///    also lands here. The history must not be touched before this check, or
 ///    the boot retries would burn the steady-state budget.
-/// 3. **`!spawn_allowed` -> `Ignore`, history untouched.** Covers `EXITING`
+/// 3. **`!spawn_allowed` -> `Deferred`, history untouched.** Covers `EXITING`
 ///    (Quit) and `SIDECAR_SHUTTING_DOWN` — which, since #1808, is held across
-///    the update DOWNLOAD as well as the install. A crash during a long
-///    download is therefore not restarted until the guard drops; accepted,
-///    because the alternative is a fresh child landing in the slot the
-///    installer is about to overwrite on disk.
+///    the update DOWNLOAD as well as the install. No spawn happens now: a fresh
+///    child must not land in the slot the installer is about to overwrite on
+///    disk. But `Terminated` is one-shot per spawn and there is no health
+///    watchdog anywhere in this crate, so returning `Ignore` here *discarded*
+///    the crash — and a download that then failed returned to an app whose
+///    backend was gone, which is the very state #1808 exists to prevent,
+///    reached through a narrower door. So the verdict is a debt rather than a
+///    dismissal: it latches `DEFERRED_CRASH`, and whoever releases the
+///    suppression calls [`recover_deferred_crash`]. The history is still
+///    untouched — nothing was spawned, so nothing was spent.
 ///
 /// **Every termination past those three is treated as a crash, deliberately.**
 /// The caller binds `CommandEvent::Terminated(status)` and this function never
@@ -236,8 +246,11 @@ fn crash_restart_decision(
     history: &mut Vec<std::time::Instant>,
     now: std::time::Instant,
 ) -> CrashRestartDecision {
-    if !was_current_child || !healthy || !spawn_allowed {
+    if !was_current_child || !healthy {
         return CrashRestartDecision::Ignore;
+    }
+    if !spawn_allowed {
+        return CrashRestartDecision::Deferred;
     }
     history.retain(|t| now.duration_since(*t) < CRASH_RESTART_WINDOW);
     history.push(now);
@@ -247,6 +260,49 @@ fn crash_restart_decision(
         CrashRestartDecision::BreakerTripped
     }
 }
+
+/// A post-boot crash arrived while `spawn_allowed()` was false and still owes a
+/// restart. Set by the `Deferred` arm of the drain loop, consumed exactly once
+/// by [`take_deferred_crash`].
+///
+/// Why a latch rather than "nothing, the crash was during an install anyway":
+/// `CommandEvent::Terminated` is delivered once per spawn and the drain loop
+/// `break`s straight after handling it, and this crate has no periodic health
+/// watchdog (`UPDATE_CHECK_INTERVAL` and `COWORK_HEAL_INTERVAL` are the only
+/// timers). So nothing ever re-examined the dropped crash, and the update
+/// download's `Err` arm — offline, a proxy, a 403, a signature mismatch —
+/// returned to an app with no backend, every tab Disconnected and no toast.
+static DEFERRED_CRASH: AtomicBool = AtomicBool::new(false);
+
+/// Take the deferred-crash debt, clearing it. `true` means a post-boot crash was
+/// observed while spawns were suppressed and has not been acted on yet.
+///
+/// Public to the crate because the update path both *pays* the debt (the
+/// download-failure arm, via [`recover_deferred_crash`]) and *writes it off*
+/// (once the install's deliberate stop has run, the sidecar being down is
+/// intentional and no longer this latch's business).
+pub(crate) fn take_deferred_crash() -> bool {
+    DEFERRED_CRASH.swap(false, Ordering::AcqRel)
+}
+
+/// Restart the sidecar if it crashed while spawns were suppressed.
+///
+/// Call after releasing `SIDECAR_SHUTTING_DOWN` on any path where the app keeps
+/// running. A no-op when no crash was deferred, and `restart_sidecar` re-checks
+/// `spawn_allowed()` itself, so a racing exit or a second install still
+/// declines. `RestartCause::PostBootCrash`: the user did not ask for this, so a
+/// buffered cold-start rejection must survive it (see `clear_startup_rejection`).
+pub(crate) fn recover_deferred_crash(app: &tauri::AppHandle) {
+    if !take_deferred_crash() {
+        return;
+    }
+    // `warn`, not `info`: on an installed build `info` is below the release
+    // `LevelFilter::Warn` floor, and this is the only trace that the backend
+    // went away and came back on its own.
+    log::warn!("[sidecar] restarting a sidecar that crashed while spawns were suppressed");
+    restart_sidecar_for(app.clone(), RestartCause::PostBootCrash);
+}
+
 /// The two TCP ports the sidecar binds. Used by the port-holder diagnostic on
 /// the exhausted-restarts path; keep in sync with the URL constants above and
 /// with DEFAULT_WS_PORT / DEFAULT_MCP_PORT in src/shared/constants.ts. Pinned
@@ -419,10 +475,30 @@ impl Drop for RestartGate {
     }
 }
 
+/// Who asked for this restart.
+///
+/// The only thing it decides is whether a buffered cold-start rejection is
+/// dropped — see the `clear_startup_rejection` call below. An enum rather than a
+/// bool so the two callers read as what they are at the call site.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RestartCause {
+    /// The user pressed Restart server (or the Retry Server Start dialog).
+    UserInitiated,
+    /// The #1809 crash handler, or the deferred-crash recovery that pays its
+    /// debt. No user action to attribute anything to.
+    PostBootCrash,
+}
+
 /// Gracefully stop the sidecar (flush dirty docs + save session, #1088),
 /// hard-kill as fallback, then spawn it again.
 #[tauri::command]
 pub(crate) fn restart_sidecar(app: tauri::AppHandle) {
+    restart_sidecar_for(app, RestartCause::UserInitiated);
+}
+
+/// `restart_sidecar` with its cause made explicit. The Tauri command above is
+/// the user-initiated entry point; #1809's crash handler is the other caller.
+pub(crate) fn restart_sidecar_for(app: tauri::AppHandle, cause: RestartCause) {
     let Some(gate) = RestartGate::try_acquire() else {
         log::warn!("restart_sidecar ignored — a restart is already in flight");
         return;
@@ -438,7 +514,18 @@ pub(crate) fn restart_sidecar(app: tauri::AppHandle) {
     // Drop any buffered cold-start rejection so a stale reason from the previous
     // launch can't be replayed against the freshly restarted sidecar on the next
     // init-time drain. See the STARTUP_REJECTION doc comment (#630 risk note).
-    clear_startup_rejection();
+    //
+    // USER-INITIATED ONLY. That note accepts discarding a still-undrained LIVE
+    // rejection because it "needs the user to hit Relaunch in the same breath as
+    // a rejected open" — an action they performed and can reason about. #1809's
+    // automatic crash restart has no such alibi: a sidecar crashing in the few
+    // hundred ms between `surface_startup_rejection` and `App.svelte`'s
+    // take-once drain would silently eat the only surface that explains why the
+    // file the user double-clicked never opened, because the nudge event is
+    // payload-free by design and resolves to `None` on its own.
+    if cause == RestartCause::UserInitiated {
+        clear_startup_rejection();
+    }
     let client = app.state::<reqwest::Client>().inner().clone();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -473,7 +560,8 @@ pub(crate) fn restart_sidecar(app: tauri::AppHandle) {
         match start_sidecar(&handle, &client, None).await {
             Ok(SpawnOutcome::Started) => {}
             // A decline is not a restart. By this point the command body has
-            // already run `clear_healthy_under_lock` and `clear_startup_rejection`,
+            // already run `clear_healthy_under_lock` (and, on a user-initiated
+            // restart, `clear_startup_rejection`),
             // so `SIDECAR_HEALTHY` is false with no sidecar coming back: exactly
             // #1416's condition (opens queue into a queue with no consumer) with
             // a Restart button that looks like it worked — `NetworkSettings.svelte`
@@ -1967,12 +2055,26 @@ pub(crate) async fn start_sidecar(
                         };
                         match decision {
                             CrashRestartDecision::Ignore => {}
+                            CrashRestartDecision::Deferred => {
+                                // `warn`: on an installed build `info` is below
+                                // the release log floor, and a backend that went
+                                // away mid-install is exactly what an operator
+                                // reading `tandem.log` after a failed update
+                                // needs to find.
+                                log::warn!(
+                                    "[sidecar] crashed while spawns are suppressed — deferring the restart"
+                                );
+                                DEFERRED_CRASH.store(true, Ordering::Release);
+                            }
                             CrashRestartDecision::Restart => {
                                 log::warn!(
                                     "[sidecar] crashed after boot — restarting (up to {MAX_CRASH_RESTARTS} in {}s)",
                                     CRASH_RESTART_WINDOW.as_secs()
                                 );
-                                restart_sidecar(terminated_handle.clone());
+                                restart_sidecar_for(
+                                    terminated_handle.clone(),
+                                    RestartCause::PostBootCrash,
+                                );
                             }
                             CrashRestartDecision::BreakerTripped => {
                                 log::warn!(
@@ -2594,16 +2696,111 @@ mod crash_restart_tests {
 
     /// Quit (`EXITING`) and an update install or download
     /// (`SIDECAR_SHUTTING_DOWN`, held across both since #1808) must never be
-    /// respawned into.
+    /// respawned into — but the crash must not be thrown away either.
+    /// `Terminated` is one-shot per spawn, the drain loop `break`s right after,
+    /// and nothing in this crate polls the sidecar's health, so an `Ignore` here
+    /// was permanent: the download-failure arm returned to an app with no
+    /// backend, no toast and no `warn` line, which is #1808's own broken state
+    /// reached through a narrower door.
     #[test]
-    fn crash_restart_decision_ignores_a_crash_while_a_spawn_is_disallowed() {
+    fn crash_restart_decision_defers_a_crash_while_a_spawn_is_disallowed() {
         let mut history = Vec::new();
         let decision = crash_restart_decision(true, true, false, &mut history, Instant::now());
-        assert_eq!(decision, CrashRestartDecision::Ignore);
+        assert_eq!(decision, CrashRestartDecision::Deferred);
         assert!(
             history.is_empty(),
             "a refused spawn must not consume the crash budget"
         );
+    }
+
+    /// The deferral must lose to the two guards above it, both of which mean
+    /// "this event is not evidence that the backend is gone": a superseded
+    /// child's `Terminated` belongs to a process another child already
+    /// replaced, and a pre-healthy crash belongs to `start_sidecar`'s own retry
+    /// loop. Latching a debt for either would restart a live sidecar (or
+    /// double-spawn into the boot loop's slot) the moment an install released
+    /// the latch.
+    #[test]
+    fn crash_restart_decision_does_not_defer_events_the_earlier_guards_own() {
+        let mut history = Vec::new();
+        assert_eq!(
+            crash_restart_decision(false, true, false, &mut history, Instant::now()),
+            CrashRestartDecision::Ignore,
+            "a superseded child is not a debt"
+        );
+        assert_eq!(
+            crash_restart_decision(true, false, false, &mut history, Instant::now()),
+            CrashRestartDecision::Ignore,
+            "a crash the boot loop is already retrying is not a debt"
+        );
+        assert!(history.is_empty());
+    }
+
+    /// #1809 review — the automatic crash restart must not discard a buffered
+    /// cold-start rejection. `clear_startup_rejection`'s docblock accepts
+    /// discarding a LIVE one only because that "needs the user to hit Relaunch
+    /// in the same breath as a rejected open"; a crash landing in the window
+    /// between `surface_startup_rejection` and `App.svelte`'s take-once drain
+    /// has no such alibi, and the `startup-file-rejected` nudge is payload-free,
+    /// so the listener that fires next resolves `None` and renders nothing.
+    ///
+    /// Structural because `restart_sidecar_for` needs an `AppHandle` and the
+    /// buffer lives behind a process-wide static — the same reason
+    /// `perform_install`'s ordering is pinned this way.
+    #[test]
+    fn only_a_user_initiated_restart_clears_the_startup_rejection() {
+        let src = include_str!("sidecar.rs");
+        let start = src
+            .find("pub(crate) fn restart_sidecar_for(")
+            .expect("restart_sidecar_for must exist");
+        let body = &src[start..];
+        let end = body
+            .find("\n}\n")
+            .expect("restart_sidecar_for's body must be delimited");
+        let body = &body[..end];
+
+        let clear = body
+            .find("clear_startup_rejection();")
+            .expect("a user-initiated restart must still drop a stale rejection");
+        let guard = body
+            .find("if cause == RestartCause::UserInitiated {")
+            .expect("the clear must be gated on the cause");
+        assert!(
+            guard < clear,
+            "the clear must sit INSIDE the user-initiated branch, not before it"
+        );
+
+        // And the crash handler must be passing the other cause — a call site
+        // that reverts to `RestartCause::UserInitiated` would leave the gate in
+        // place and still eat the rejection. Sliced from the match arm rather
+        // than matched as one rustfmt-shaped literal, so a re-wrap of the call
+        // does not false-red it.
+        let arm_start = src
+            .find("CrashRestartDecision::Restart => {")
+            .expect("the crash arm must exist");
+        let arm = &src[arm_start..];
+        let arm_end = arm
+            .find("CrashRestartDecision::BreakerTripped =>")
+            .expect("the breaker arm must follow it");
+        let arm = &arm[..arm_end];
+        assert!(
+            arm.contains("restart_sidecar_for("),
+            "the crash arm must go through the cause-carrying entry point"
+        );
+        assert!(
+            arm.contains("RestartCause::PostBootCrash"),
+            "the #1809 crash arm must restart with PostBootCrash"
+        );
+    }
+
+    /// The debt is take-once. A second consumer (the install path writes it off
+    /// once the deliberate stop has run) must not find it still set and respawn
+    /// a child over a binary the installer may be mid-write on.
+    #[test]
+    fn take_deferred_crash_is_one_shot() {
+        DEFERRED_CRASH.store(true, Ordering::Release);
+        assert!(take_deferred_crash(), "the first taker gets the debt");
+        assert!(!take_deferred_crash(), "and it is gone afterwards");
     }
 
     /// Kills both a breaker that never trips and an off-by-one that allows a

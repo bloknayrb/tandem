@@ -1526,11 +1526,14 @@ pub fn run() {
                     // A path we cannot resolve is a skip, not a refresh.
                     Err(e) => log::info!("[autostart] refresh skipped, exe path unresolved: {e}"),
                     Ok(exe) => {
+                        // Canonicalize BOTH sides — see
+                        // `canonical_for_refresh_check`. Uncanonicalized, the
+                        // temp arm never fires on macOS (`/var` vs
+                        // `/private/var`) and can miss on Windows (8.3 `%TEMP%`).
                         if autostart::autostart_refresh_allowed(
-                            autostart_launch,
                             cfg!(debug_assertions),
-                            &exe,
-                            &std::env::temp_dir(),
+                            &autostart::canonical_for_refresh_check(&exe),
+                            &autostart::canonical_for_refresh_check(&std::env::temp_dir()),
                         ) {
                             let refresh_handle = app.handle().clone();
                             tauri::async_runtime::spawn_blocking(move || {
@@ -2875,10 +2878,13 @@ fn warn_port_still_responding(warnings: &mut Vec<String>) {
 ///
 /// **The download comes first deliberately (#1808).** It is the long,
 /// failure-prone step — offline, a proxy, a 403, a signature mismatch — and
-/// nothing on its failure arm respawns the sidecar. Stopping the sidecar first
-/// meant a failed download left the app running with no backend and every tab
+/// the sidecar is still up when it runs. Stopping the sidecar first meant a
+/// failed download left the app running with no backend and every tab
 /// "Disconnected", while the UI still said the server was up. A download
-/// failure must never be the thing that leaves the app without a backend.
+/// failure must never be the thing that leaves the app without a backend —
+/// which is also why the failure arm releases `SIDECAR_SHUTTING_DOWN` and calls
+/// `recover_deferred_crash`: a sidecar that died *on its own* mid-download had
+/// its restart deferred by that latch, and nothing else would ever perform it.
 async fn perform_install(
     app: &tauri::AppHandle,
     update: tauri_plugin_updater::Update,
@@ -2894,9 +2900,12 @@ async fn perform_install(
     // stop below: two clicks on "Restart to install" must not both download,
     // and a Settings -> Restart server racing an imminent install is exactly
     // what the latch exists to refuse. The accepted consequence is that a
-    // sidecar crash *during* the download is not restarted until the guard
-    // drops — the alternative is a fresh child landing in the slot the
-    // installer is about to overwrite.
+    // sidecar crash *during* the download is not restarted while the guard is
+    // held — the alternative is a fresh child landing in the slot the
+    // installer is about to overwrite. It is DEFERRED, not dropped: the #1809
+    // handler latches it and the download-failure arm below releases the guard
+    // and calls `recover_deferred_crash`, because "the sidecar was never
+    // stopped" does not imply it is still alive.
     //
     // An RAII guard, not a store plus a clear on the failure arm: the flag
     // spans `download(..).await` and `install(..)`, so a panic or a dropped
@@ -2978,9 +2987,18 @@ async fn perform_install(
             // closure above fires before `verify_signature`, so a signature
             // failure reaches here with a marker already written.
             pending_update::clear_pending_update(app);
+            // This path never stopped the sidecar, so in the ordinary case the
+            // app still has its backend and the user can retry from the banner.
+            // That is the whole of #1808 — but "never stopped" is not the same
+            // as "still running": the sidecar can have crashed on its own during
+            // a multi-minute download, and the latch we are about to release
+            // made the #1809 handler DEFER that restart rather than perform it.
+            // Release first, then pay the debt: `restart_sidecar` re-checks
+            // `spawn_allowed()`, so recovering while still latched would be a
+            // silent no-op and leave the app backend-less anyway.
+            drop(_shutting_down);
+            sidecar::recover_deferred_crash(app);
             show_update_error_dialog(app, "Could not install the update.", &e.to_string());
-            // The sidecar was never stopped, so the app keeps its backend and
-            // the user can retry from the banner. That is the whole of #1808.
             return;
         }
     };
@@ -2990,6 +3008,13 @@ async fn perform_install(
     // than before the download because that stop's verdict is the first thing
     // that can go into it, and the cfg blocks below both contribute too.
     let mut pre_install_warnings: Vec<String> = Vec::new();
+
+    // From here the sidecar being down is INTENTIONAL, so write off any crash
+    // the #1809 handler deferred during the download rather than leaving a
+    // latched debt behind. The install-failure arm below deliberately leaves the
+    // sidecar stopped (an installer may be mid-write over the binary), and that
+    // decision must not be quietly reversed by a stale flag.
+    let _ = sidecar::take_deferred_crash();
 
     // Stop sidecar BEFORE install — on Windows, the NSIS installer runs during
     // `install()` and needs to replace node-sidecar.exe on disk. If the process
@@ -3140,6 +3165,35 @@ mod install_order_tests {
         assert!(
             dl < stop,
             "the download must complete before the sidecar is stopped (#1808)"
+        );
+    }
+
+    /// #1808 review — "the sidecar was never stopped" is not "the sidecar is
+    /// still alive". `SIDECAR_SHUTTING_DOWN` is held across the whole download,
+    /// so a sidecar that crashed on its own in that window is DEFERRED by the
+    /// #1809 handler and nothing else ever performs the restart. The failure
+    /// arm therefore has to release the latch and pay that debt — in that
+    /// order, since `restart_sidecar` re-checks `spawn_allowed()` and a
+    /// recovery made while still latched is a silent no-op.
+    #[test]
+    fn the_download_failure_arm_releases_the_latch_then_recovers_a_deferred_crash() {
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("Err(e) => {\n            log::error!(\"Update download failed: {e}\");")
+            .expect("the download failure arm must exist");
+        let arm = &src[start..];
+        let end = arm.find("return;").expect("the arm must return");
+        let arm = &arm[..end];
+
+        let release = arm
+            .find("drop(_shutting_down);")
+            .expect("the arm must release SIDECAR_SHUTTING_DOWN before recovering");
+        let recover = arm
+            .find("recover_deferred_crash(")
+            .expect("the arm must recover a sidecar that crashed during the download");
+        assert!(
+            release < recover,
+            "recovering while the latch is still held is a silent no-op"
         );
     }
 }
