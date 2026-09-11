@@ -309,6 +309,30 @@ function sendJsonRpcError(
 }
 
 /**
+ * How a body-parse failure is reported, keyed by `err.type` from body-parser.
+ * `default` also covers the rejected promises Express 5 forwards here from the
+ * three `async` /mcp handlers — see the note below on discriminating on
+ * `err.type` rather than on the path.
+ */
+const BODY_ERROR_KINDS: Record<string, { rpcCode: number; apiError: string; message: string }> = {
+  "entity.too.large": {
+    rpcCode: -32600,
+    apiError: "PAYLOAD_TOO_LARGE",
+    message: "Request body exceeds this endpoint's size limit.",
+  },
+  "entity.parse.failed": {
+    rpcCode: -32700,
+    apiError: "BAD_REQUEST",
+    message: "Request body is not valid JSON.",
+  },
+  default: {
+    rpcCode: -32603,
+    apiError: "INTERNAL_ERROR",
+    message: "Request could not be processed.",
+  },
+};
+
+/**
  * Build a server + transport for one new client session, connect them, and run
  * the initialize request through it.
  *
@@ -688,7 +712,8 @@ export async function startMcpServerHttp(
    * which is why `channel-routes.ts`'s `sanitizeForLog` has to be total rather
    * than relying on this.
    *
-   * **Both arms discriminate on `err.type`, never on the path alone.** The repo
+   * **Classification discriminates on `err.type`, never on the path** — the
+   * path picks only the response envelope. The repo
    * is on Express 5, which forwards a rejected promise from an `async` route
    * handler to `next(err)`, and all three `/mcp` handlers are `async` (each
    * awaits `dispatchToSession` → `transport.handleRequest`). So a genuine
@@ -710,26 +735,16 @@ export async function startMcpServerHttp(
       }
       const type = typeof err?.type === "string" ? err.type : "";
       const status = typeof err?.status === "number" ? err.status : 500;
-      const tooLarge = "Request body exceeds this endpoint's size limit.";
-      const badJson = "Request body is not valid JSON.";
-      const generic = "Request could not be processed.";
+      // Classify once; the path then picks only the ENVELOPE. Splitting the
+      // classification across the two arms is what lets them drift apart.
+      const { rpcCode, apiError, message } = BODY_ERROR_KINDS[type] ?? BODY_ERROR_KINDS.default;
       if (req.path === "/mcp") {
         // The JSON-RPC envelope the rest of this endpoint uses and
         // `src/cli/mcp-stdio.ts` parses.
-        if (type === "entity.too.large") sendJsonRpcError(res, status, -32600, tooLarge);
-        else if (type === "entity.parse.failed") sendJsonRpcError(res, status, -32700, badJson);
-        else sendJsonRpcError(res, status, -32603, generic);
+        sendJsonRpcError(res, status, rpcCode, message);
         return;
       }
-      if (type === "entity.too.large") {
-        res.status(status).json({ error: "PAYLOAD_TOO_LARGE", message: tooLarge });
-        return;
-      }
-      if (type === "entity.parse.failed") {
-        res.status(status).json({ error: "BAD_REQUEST", message: badJson });
-        return;
-      }
-      res.status(status).json({ error: "INTERNAL_ERROR", message: generic });
+      res.status(status).json({ error: apiError, message });
     },
   );
 
