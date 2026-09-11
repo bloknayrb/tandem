@@ -1,8 +1,8 @@
 # K-client — #1544 Tab unsaved indicator's only content is `aria-hidden`
 
 Branch `fix/client-lows-editor-ui-a11y-and-product-copy-1709`. Closes #1544. No area-ledger row
-(filed standalone). Probe: mount a dirty tab and assert the indicator carries a text node a
-screen reader can reach.
+(filed standalone). Probe: mount a dirty tab and assert the tab's own accessible name changes to
+reflect it — not the indicator's DOM text.
 
 ## Problem
 
@@ -21,59 +21,84 @@ state. The unsaved indicator itself (`:271-281`):
 
 toggles the wrapper's `aria-hidden` to `false` when dirty, but its only child is itself
 `aria-hidden="true"` — unhiding an element with no accessible content announces nothing. Verified
-unchanged on current master. No E2E or unit test references `unsaved-indicator` today
-(`grep unsaved-indicator tests/` hits only the testid snapshot), so nothing regresses by fixing
-this and nothing was pinning the broken state either.
+unchanged on current master. Existing references to `unsaved-indicator` are
+`tests/client/TabItem.svelte.test.ts:68`, `tests/e2e/open-does-not-dirty.spec.ts:85,113`, and
+`tests/e2e/tab-dirty-preattach.spec.ts:67` — all three select the `.dot` child, which this fix
+does not remove or rename, so none of them regress.
+
+**Round-1 review correction:** the fix below no longer routes the announcement through a
+visually-hidden span inside the indicator. `role="tab"` gives the whole tab row an explicit
+`aria-label`, and per the accname computation an explicit `aria-label` **overrides all descendant
+content** — a sibling sr-only span inside that same element would never reach the accessible-name
+computation at all, so it would land, pass a same-shaped test, and leave the reported defect
+exactly as it is. The tab's own `aria-label` is the only channel that actually reaches assistive
+tech here, so the state has to be carried there.
 
 ## Fix
 
-Reuse the codebase's existing visually-hidden recipe rather than inventing a new one —
-`SR_ONLY_STYLE` in `src/client/components/live-region.ts` (an inline `style` string, deliberately
-not a CSS class per its own docblock: it must never cross the lightningcss pipeline, matching this
-group's "two CSS pipelines" gotcha). This is the issue's own Option 2 ("visually-hidden text, drop
-the `aria-hidden` toggle on the wrapper") — picked over Option 1 (changing `tab.fileName`'s
-`aria-label` to append "(unsaved)") because it is the smaller, more isolated diff: it touches only
-the indicator span the bug lives in, not the tab row's own label (read by other consumers), and it
-keeps the tab's accessible name stable rather than chatty on every dirty/clean flip, which the
-issue itself flags as a downside of Option 1.
+Carry the dirty state in the tab's own accessible name, the issue's Option 1, reversing this
+spec's original preference for Option 2 (see "Review corrections" below for why Option 2 doesn't
+work on this element):
 
 `src/client/tabs/TabItem.svelte`:
-- Import `SR_ONLY_STYLE` from `../components/live-region`.
-- Drop `aria-hidden={!dirty}` from the wrapper `<span>` entirely — with no toggle, the wrapper is
-  simply present-but-empty when neither `dirty` nor `justSaved`, which is harmless (an empty span
-  announces nothing regardless of `aria-hidden`).
-- Inside the `{#if dirty}` branch, add a sibling `<span style={SR_ONLY_STYLE}>Unsaved changes</span>`
-  after the existing `aria-hidden="true"` dot glyph.
-- Leave the `{:else if justSaved}` branch (the `✓` flash) untouched — the issue explicitly notes it
-  is "arguably the case where announcing IS unwanted" (a transient reassurance, not a state) and
-  should be decided together with #798 rather than folded into this fix.
+- `:264` — change `aria-label={tab.fileName}` to
+  `aria-label={dirty ? \`${tab.fileName}, unsaved changes\` : tab.fileName}`.
+- Simplify the indicator wrapper now that it carries no accessibility burden of its own: change
+  `aria-hidden={!dirty}` to a constant `aria-hidden="true"` — the dot/check glyphs become purely
+  decorative (the real announcement is the tab's `aria-label`), which is also a smaller diff than
+  adding a new sibling span and a `SR_ONLY_STYLE` import.
+- Leave the `{:else if justSaved}` branch (the `✓` flash) untouched — the issue explicitly notes
+  it is "arguably the case where announcing IS unwanted" (a transient reassurance, not a state)
+  and should be decided together with #798 rather than folded into this fix. `justSaved` does not
+  feed the new `aria-label` expression.
 
 ## Tests
 
 Extend the existing `tests/client/TabItem.svelte.test.ts` (already built for #1447's dot, with a
 `mount()` harness exposing `hasDot()`/`hasCheck()` off a `[data-testid="unsaved-indicator-{id}"]`
-query, `syncContent()` + `setMirror()` to drive the dirty state, and `afterArm()` to wait past the
-arm window) rather than inventing a new render pattern:
+query, plus a way to reach the tab row itself for its `aria-label`; `syncContent()` + `setMirror()`
+drive the dirty state, `afterArm()` waits past the arm window) rather than inventing a new render
+pattern:
 
-- Add `hasSrText: () => (indicator()?.textContent ?? "").trim() === "Unsaved changes"` to the
-  `mount()` return, alongside the existing `hasDot`/`hasCheck`.
+- Add `tabAriaLabel: () => tabPill()?.getAttribute("aria-label") ?? null` to the `mount()` return
+  (querying `[data-testid="tab-{id}"]`, the tab row itself — not the indicator span).
 - New `describe("TabItem unsaved dot — a11y announcement (#1544)")`:
   1. Drive the tab dirty (`syncContent` + `setMirror(ydoc, true)` + `afterArm()`, mirroring C1) and
-     assert `hasSrText()` is `true` — kills a fix that puts the visually-hidden text in the wrong
-     branch or leaves the outer `aria-hidden` toggle in place (which would still hide it from the
-     accessibility tree even with the text node present, since `textContent` reads DOM text
-     regardless of `aria-hidden` — so this alone doesn't distinguish that failure; pair it with an
-     explicit check that the wrapper span carries no `aria-hidden` attribute at all).
-  2. Same setup then `setMirror(ydoc, false)` (a save, mirroring C6) and assert `hasSrText()` is
-     `false` — kills a fix that always renders the text regardless of dirty state.
+     assert `tabAriaLabel()` matches `/unsaved changes/i` — kills a fix that puts the state
+     anywhere but the tab's own accessible name.
+  2. Same setup then `setMirror(ydoc, false)` (a save, mirroring C6) and assert `tabAriaLabel()`
+     equals the plain `tab.fileName` again — kills a fix that always announces the state
+     regardless of dirty state.
+  3. Assert `indicator()?.getAttribute("aria-hidden") === "true"` unconditionally (both dirty and
+     clean) — pins that the indicator span stays decorative-only and isn't the thing doing the
+     announcing.
 
 ## Done when
 
-The two new cases pass alongside the existing C1–C8 suite; `data-testid` `unsaved-indicator-{*}`
+The three new cases pass alongside the existing C1–C8 suite; `data-testid` `unsaved-indicator-{*}`
 is unchanged (Critical Rule 7 — no snapshot regeneration needed, since no selector is added,
 renamed or removed); `npm run typecheck` and `npm test` green.
 
 ## Not in scope
 
 The `✓` save-confirmation flash (#798) — left as-is per the issue's own note that its right
-treatment is a separate design decision. No change to `tab.fileName`'s `aria-label`.
+treatment is a separate design decision.
+
+## Review corrections (round 1)
+
+**Adopted:**
+- Rewrote the Fix from Option 2 (visually-hidden sibling span) to Option 1 (the tab's own
+  `aria-label` carries dirty state) — an explicit `aria-label` on `role="tab"` overrides all
+  descendant content per the accname computation, so the sibling-span approach was inert by
+  construction. This also drops the `SR_ONLY_STYLE` import and simplifies the wrapper to a
+  constant `aria-hidden="true"`, a smaller diff than originally proposed.
+- Rewrote the Tests section to assert on the tab's `aria-label` rather than the indicator's
+  `textContent`. The original `hasSrText` assertion (`textContent === "Unsaved changes"`) could
+  never pass even with a correct implementation of the old approach, because the dot glyph
+  (`<span class="dot" aria-hidden="true">●</span>`) shares the same wrapper and contributes to
+  `textContent` — the equality would read `"●Unsaved changes"` and always fail.
+- Corrected the false claim that no test references `unsaved-indicator` today — three test files
+  do, all via the `.dot` child selector, which this fix's revised approach leaves untouched.
+
+**Not adopted:** none — every finding against this spec pointed at the same underlying defect
+(Option 2 doesn't reach the accessible-name computation) and is resolved by switching to Option 1.

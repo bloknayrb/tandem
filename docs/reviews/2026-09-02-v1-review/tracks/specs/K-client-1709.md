@@ -26,13 +26,29 @@ exact failure Critical Rule 7 exists to prevent.
 
 `tests/design-system-impl/testid-coverage.test.ts`: add a second scan pass, run after the existing
 `ATTR = "data-testid="` loop over the same `walk(CLIENT_ROOT)` file list, matching
-`.dataset.testid\s*=` followed by a quoted string literal (both live sites are plain string
-literals; a `{expr}`-style JS assignment isn't syntactically valid here, so `parseValue`'s brace
-branch isn't needed — reuse only its quote-handling half, or a small dedicated literal parser).
-Push matches into the same `declarations` array with the same `{file, testid, raw}` shape so they
-flow through the existing `normalise` → dedupe → `sortedSet` → `toMatchFileSnapshot` pipeline
-unchanged. Skip (push to `skipped`, same as today) a `.dataset.testid =` whose value isn't a
-simple quoted literal, so a future dynamic assignment fails legible rather than silently.
+`/\.dataset\.testid\s*=(?!=)/g` — the negative lookahead excludes `===`/`!==` comparisons, which
+would otherwise be misread as an assignment (no such comparison exists in `src/client/` today, but
+`tests/client/ActivityTray.svelte.test.ts:60` and `tests/e2e/settings-and-filters.spec.ts:987`
+show the shape occurs in test code, so the guard is cheap insurance against a future `src/client/`
+site).
+
+After a match, skip leading whitespace and parse the value:
+- Both live sites are plain quoted string literals (`"slash-command-menu"`,
+  `"heading-chevron"`) — reuse `parseValue`'s quote-handling branch only (its `{expr}` brace
+  branch isn't reachable here: `el.dataset.testid = {...}` isn't valid JS, so a bare identifier or
+  a template literal are the only other shapes a real site could take).
+- **Mirror the existing attribute pass's asymmetry, not its own new one.** The attribute loop
+  already treats a bare identifier (`{testId}`) as a wrapper passthrough and silently
+  `continue`s — it does not land in `declarations` OR `skipped`. Do the same here: a bare
+  identifier value (`el.dataset.testid = someVar;`) is a wrapper reading a testid computed
+  elsewhere, so `continue` past it. Only a value that is neither a quoted literal nor a bare
+  identifier (multi-line, or some other unparseable expression) goes to `skipped`. Getting this
+  backwards — routing every non-literal dataset assignment to `skipped` — would turn a future
+  legitimate `el.dataset.testid = someVar` into a permanent, unfixable red on the "no testid
+  declarations were skipped" assertion (see Review corrections below).
+- Push a quoted-literal match into the same `declarations` array with the same
+  `{file, testid, raw}` shape so it flows through the existing `normalise` → dedupe →
+  `sortedSet` → `toMatchFileSnapshot` pipeline unchanged.
 
 Regenerate `tests/design-system-impl/__snapshots__/testid-set.snap.txt` in the same commit
 (`vitest -u` on this file only) — this is the one sanctioned regeneration in this group per
@@ -58,19 +74,46 @@ them costs one line each and keeps the drift from starting on day one).
 3. No change needed to `tests/e2e/heading-collapse.spec.ts` — its seven locators already reference
    `[data-testid="heading-chevron"]`; they are what the fix makes visible to the contract, not
    something the fix has to touch.
+4. New unit case: a synthetic source string containing
+   `x.dataset.testid = someVar; y.dataset.testid === "not-an-assignment";` parsed through the
+   new pass in isolation — assert the bare identifier produces neither a `declarations` nor a
+   `skipped` entry, and the `===` comparison is not treated as an assignment at all (no entry
+   either way). This is the regression net for the two asymmetry bugs the round-1 review found.
 
 ## Done when
 
 Scanner fix + regenerated snapshot land in one commit; `heading-chevron` and `slash-command-menu`
 both appear in `__snapshots__/testid-set.snap.txt`; the mutation test in step 2 above is run once
-by hand during implementation and its red result recorded in the PR body; `npm run typecheck` and
-`npm test` green.
+by hand during implementation and its red result recorded in the PR body; test 4 above passes;
+`npm run typecheck` and `npm test` green.
 
 ## Not in scope
 
 Converting the two imperative sites to real `data-testid` attributes (the issue's Option 2) —
-Option 1 (widen the scanner) is the more complete fix per the issue body, closing the class rather
-than the two instances, and is smaller (one file changed vs. two DOM-construction call sites
-rewritten). A future third `dataset.testid` site needs no code change to be covered. No new
-drift-guard, CI job, or frozen list — the existing snapshot mechanism is the guard; this fix only
-widens what it can see.
+Option 1 (widen the scanner) is the more complete fix per the issue body, closing the class of
+`.dataset.testid = "literal"` assignments rather than the two instances, and is smaller (one file
+changed vs. two DOM-construction call sites rewritten). A future third `dataset.testid` site with
+a quoted-literal value needs no code change to be covered. Two sibling forms stay uncovered by
+design, since neither has a current instance and both are outside this issue's named class:
+`el.setAttribute("data-testid", "x")` (the scanner keys on the literal `data-testid=` substring,
+which a `setAttribute` call never contains) and `el.dataset["testid"] = "x"` (bracket-property
+form). No new drift-guard, CI job, or frozen list — the existing snapshot mechanism is the guard;
+this fix only widens what it can see.
+
+## Review corrections (round 1)
+
+**Adopted:**
+- Excluded `===`/`!==` from the match regex (`(?!=)` lookahead) — the originally-specified
+  `\.dataset\.testid\s*=` would also match an equality comparison and misroute it to `skipped`,
+  reddening the "no testid declarations were skipped" assertion with a confusing message.
+- Made the new pass symmetric with the existing attribute pass: a bare-identifier value is a
+  silent `continue` (wrapper passthrough), not a push to `skipped`. The original spec text routed
+  every non-literal `.dataset.testid =` to `skipped`, which would make a future legitimate
+  `el.dataset.testid = someVar` permanently red with no way to write it that passes.
+- Added a new unit test (Tests item 4) pinning both asymmetry fixes directly, since the mutation
+  test in item 2 only exercises the two literal sites and wouldn't catch either regression.
+- Narrowed the "closes the class" claim in Not-in-scope: named the two sibling forms
+  (`setAttribute("data-testid", ...)` and bracket-property `dataset["testid"]`) that remain
+  uncovered, rather than implying full closure of every imperative-assignment shape.
+
+**Not adopted:** none.
