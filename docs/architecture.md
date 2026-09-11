@@ -985,6 +985,14 @@ Auto-check → tandem://update-available banner → "Restart to install"
       with a native "Update In Progress" dialog, never a bare return: the
       banner's 30s watchdog re-arms the CTA, and useUpdaterBanner's catch only
       console.warns, so a silent Err has no user-visible surface either
+    → update.download() — WITH THE SIDECAR STILL RUNNING (#1808). The download is
+      the long, failure-prone step (offline, a proxy, a 403, a signature
+      mismatch), and nothing on its failure arm respawns a sidecar. The guard is
+      held across it, so a spawn cannot race the install onto the binary
+        → on download finish: write update-pending.json to the app-data dir (#1118)
+        → on download error: clear the marker, show a native error dialog, and
+          THE SIDECAR KEEPS RUNNING — the app still has a backend and the user
+          can retry (#1808)
     → stop_sidecar_gracefully() — POST /api/shutdown, hard kill on timeout
       (its verdict is NOT dropped, and BOTH outcomes log at warn: anything but
        Flushed joins pre_install_warnings and reaches the failure dialog, and
@@ -995,12 +1003,16 @@ Auto-check → tandem://update-available banner → "Restart to install"
        verdict line here at all)
     → Poll /health until server stops responding (POST_KILL_PORT_RELEASE_SECS = 15s)
       + on Windows, concurrently poll until the sidecar exe unlocks (15s)
-    → download_and_install()
-        → on download finish: write update-pending.json to the app-data dir (#1118)
+    → update.install(bytes)
         → macOS / Linux: install, then app.restart()
         → Windows: install_inner() ends in std::process::exit(0) — app.restart()
           is NEVER reached there
-    → on install error: clear the marker, then show a native error dialog
+    → on install error: clear the marker, then show a native error dialog. The
+      sidecar stays stopped here, deliberately: a failure at this point means the
+      installer could not even be launched, and spawning a child while an
+      installer may be mid-write over the binary is what SIDECAR_SHUTTING_DOWN
+      exists to prevent. Recovery is the dialog plus Settings → Network →
+      Restart server
 ```
 
 Next boot, in `setup()` and before the sidecar spawn: read `update-pending.json`, compare its

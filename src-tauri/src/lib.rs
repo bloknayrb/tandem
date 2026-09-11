@@ -1660,7 +1660,7 @@ pub fn run() {
                 // desktops), and the updater's restart on non-Windows.
                 //
                 // The one exit that never arrives here, by design: the Windows
-                // updater restart. `download_and_install` ends in the plugin's
+                // updater restart. `install` ends in the plugin's
                 // own `std::process::exit(0)`, so the pre-install graceful stop
                 // in `perform_install` is the only flush on that path, and that
                 // function keeps its own gate for exactly that reason.
@@ -2278,14 +2278,20 @@ fn show_update_in_progress_dialog(app: &tauri::AppHandle) {
     builder.show(|_| {});
 }
 
-/// Show an error dialog for failed update checks (manual check feedback only).
-fn show_update_error_dialog(app: &tauri::AppHandle, error: &str) {
+/// Show an error dialog for a failed update check or a failed install.
+///
+/// `lead` is the first sentence, because the two are different failures and one
+/// fixed lead misattributes the other: "Could not check for updates" on the
+/// download or install arm sends the user to look at their connection when the
+/// update was already found and fetched. The rest of the copy — the verbatim
+/// error and the retry advice — is shared.
+fn show_update_error_dialog(app: &tauri::AppHandle, lead: &str, error: &str) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
     let mut builder = app
         .dialog()
         .message(format!(
-            "Could not check for updates.\n\n\
+            "{lead}\n\n\
              Error: {error}\n\n\
              Please try again later or check your internet connection."
         ))
@@ -2686,7 +2692,11 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
         Err(e) => {
             log::debug!("Updater unavailable: {e}");
             if manual {
-                show_update_error_dialog(app, &format!("Updater not configured: {e}"));
+                show_update_error_dialog(
+                    app,
+                    "Could not check for updates.",
+                    &format!("Updater not configured: {e}"),
+                );
             }
             return;
         }
@@ -2714,7 +2724,7 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
         Err(e) => {
             log::warn!("Update check failed: {e}");
             if manual {
-                show_update_error_dialog(app, &e.to_string());
+                show_update_error_dialog(app, "Could not check for updates.", &e.to_string());
             }
             return;
         }
@@ -2811,35 +2821,45 @@ fn warn_port_still_responding(warnings: &mut Vec<String>) {
     warnings.push(msg);
 }
 
-/// Shared install flow: kill sidecar, await port + file-lock release, then
-/// download+install via the Tauri updater plugin. On success the application
-/// is restarted; on failure a native dialog surfaces the error.
+/// Shared install flow: download the update with the sidecar still running,
+/// then kill the sidecar, await port + file-lock release, and install. On
+/// success the application is restarted; on failure a native dialog surfaces
+/// the error.
+///
+/// **The download comes first deliberately (#1808).** It is the long,
+/// failure-prone step — offline, a proxy, a 403, a signature mismatch — and
+/// nothing on its failure arm respawns the sidecar. Stopping the sidecar first
+/// meant a failed download left the app running with no backend and every tab
+/// "Disconnected", while the UI still said the server was up. A download
+/// failure must never be the thing that leaves the app without a backend.
 async fn perform_install(
     app: &tauri::AppHandle,
     update: tauri_plugin_updater::Update,
     version: &str,
 ) {
-    // Stop sidecar BEFORE install — on Windows, the NSIS installer runs during
-    // download_and_install() and needs to replace node-sidecar.exe on disk.
-    // If the process is still running, the file is locked and install fails.
-    // Graceful first (#1088): POST /api/shutdown flushes dirty docs + saves
-    // the session before the app restarts into the new version; hard kill is
-    // the fallback on POST failure or timeout.
+    // Hold `SIDECAR_SHUTTING_DOWN` across the download AND the install so the
+    // four spawn producers (Settings -> Restart server, start_sidecar's retry
+    // loop, the Retry Server Start dialog, and the #1809 crash handler) decline
+    // instead of racing a fresh child into the slot we are about to overwrite
+    // on disk.
     //
-    // Hold `SIDECAR_SHUTTING_DOWN` across the stop AND across the download so the
-    // three spawn producers (Settings -> Restart server, start_sidecar's retry
-    // loop, the Retry Server Start dialog) decline instead of racing a fresh
-    // child into the slot we are about to overwrite on disk.
+    // The latch is acquired here, before the download, rather than with the
+    // stop below: two clicks on "Restart to install" must not both download,
+    // and a Settings -> Restart server racing an imminent install is exactly
+    // what the latch exists to refuse. The accepted consequence is that a
+    // sidecar crash *during* the download is not restarted until the guard
+    // drops — the alternative is a fresh child landing in the slot the
+    // installer is about to overwrite.
     //
-    // An RAII guard, not a store plus a clear on the failure arm: the flag spans
-    // `download_and_install(..).await`, so a panic or a dropped task would latch
-    // it for the process lifetime and leave `restart_sidecar` and Retry Server
-    // Start permanent silent no-ops. Its `Drop` keeps the `compare_exchange`,
-    // which is the `EXITING` interlock — an update that fails DURING an exit
-    // must not re-permit spawns. On the success arm the process exits — on
-    // Windows inside `download_and_install`'s own `std::process::exit(0)`, on
-    // other platforms inside `app.restart()` (which returns `!`) — so the guard
-    // never releases there, which is what we want. #1756.
+    // An RAII guard, not a store plus a clear on the failure arm: the flag
+    // spans `download(..).await` and `install(..)`, so a panic or a dropped
+    // task would latch it for the process lifetime and leave `restart_sidecar`
+    // and Retry Server Start permanent silent no-ops. Its `Drop` keeps the
+    // `compare_exchange`, which is the `EXITING` interlock — an update that
+    // fails DURING an exit must not re-permit spawns. On the success arm the
+    // process exits — on Windows inside `install`'s own `std::process::exit(0)`,
+    // on other platforms inside `app.restart()` (which returns `!`) — so the
+    // guard never releases there, which is what we want. #1756.
     //
     // `try_acquire`, not a bare acquire: `install_update` is a plain command
     // with no re-entrancy gate, so two clicks on "Restart to install" run two of
@@ -2858,14 +2878,81 @@ async fn perform_install(
     };
     let client = app.state::<reqwest::Client>().inner().clone();
 
+    // Download FIRST, with the sidecar still up (#1808). `download` is exactly
+    // what `download_and_install` calls before `install`, and `verify_signature`
+    // runs at the end of it — so the split is behaviour-identical except for
+    // *when* the sidecar is down.
+    let bytes = match update
+        .download(
+            |chunk_len, total| {
+                if let Some(t) = total {
+                    log::debug!("Update download: {chunk_len}/{t} bytes");
+                }
+            },
+            // #1118: the pending-update marker is written HERE, at
+            // download-finish, and neither of the two places that look obvious.
+            //
+            // NOT before the download: `build_updater` sets no timeout, so the
+            // marker would span the whole download, and any process death
+            // during it strands a marker with no `Err` arm to clean up — tray
+            // Quit, the Linux-without-tray window close, a crash, a sleep-kill.
+            // Every one of those would become a false "your update may not have
+            // completed" on the next boot.
+            //
+            // NOT on the `Ok` arm below (which is what ADR-043 §6 sketched):
+            // that arm is dead code on Windows, where the plugin's
+            // `install_inner` ends in an unconditional `std::process::exit(0)`.
+            //
+            // This closure fires two lines before `verify_signature`, so a
+            // signature failure does write a marker — that path returns `Err`
+            // from `download` on every platform and the `Err` arm just below
+            // clears it.
+            //
+            // Since #1808 the stop-and-wait (up to 15 s) sits BETWEEN this
+            // write and `install(bytes)`. A process death in that gap strands a
+            // marker exactly as a death during `install` does today; narrowing
+            // the marker to just before `install` would change #1118's
+            // semantics and is deliberately not done in a PR about ordering.
+            {
+                let app = app.clone();
+                let version = version.to_string();
+                move || {
+                    log::info!("Update downloaded -- installing");
+                    pending_update::record_pending_update(&app, &version);
+                }
+            },
+        )
+        .await
+    {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            log::error!("Update download failed: {e}");
+            // The marker must be cleared on BOTH failure arms: the finish
+            // closure above fires before `verify_signature`, so a signature
+            // failure reaches here with a marker already written.
+            pending_update::clear_pending_update(app);
+            show_update_error_dialog(app, "Could not install the update.", &e.to_string());
+            // The sidecar was never stopped, so the app keeps its backend and
+            // the user can retry from the banner. That is the whole of #1808.
+            return;
+        }
+    };
+
     // Collect human-readable warnings so we can thread them into the failure
-    // dialog if download_and_install later fails. Declared before the graceful
-    // stop because that stop's verdict is the first thing that can go into it,
-    // and the cfg blocks below both contribute too.
+    // dialog if the install later fails. Declared with the graceful stop rather
+    // than before the download because that stop's verdict is the first thing
+    // that can go into it, and the cfg blocks below both contribute too.
     let mut pre_install_warnings: Vec<String> = Vec::new();
 
-    // On Windows this is the ONLY flush on the update path: `download_and_install`
-    // ends in the updater plugin's own `std::process::exit(0)`, so `RunEvent::Exit`
+    // Stop sidecar BEFORE install — on Windows, the NSIS installer runs during
+    // `install()` and needs to replace node-sidecar.exe on disk. If the process
+    // is still running, the file is locked and install fails.
+    // Graceful first (#1088): POST /api/shutdown flushes dirty docs + saves
+    // the session before the app restarts into the new version; hard kill is
+    // the fallback on POST failure or timeout.
+    //
+    // On Windows this is the ONLY flush on the update path: `install` ends in
+    // the updater plugin's own `std::process::exit(0)`, so `RunEvent::Exit`
     // never fires and `shutdown_sidecar_on_exit` never runs. A dropped verdict
     // here is an update that proceeds having discarded unsaved edits while every
     // dialog says it worked — which is why `StopReport` is `#[must_use]`.
@@ -2924,40 +3011,7 @@ async fn perform_install(
         warn_port_still_responding(&mut pre_install_warnings);
     }
 
-    match update.download_and_install(
-        |chunk_len, total| {
-            if let Some(t) = total {
-                log::debug!("Update download: {chunk_len}/{t} bytes");
-            }
-        },
-        // #1118: the pending-update marker is written HERE, at download-finish,
-        // and neither of the two places that look obvious.
-        //
-        // NOT before `download_and_install`: `build_updater` sets no timeout, so
-        // the marker would span the whole download, and any process death during
-        // it strands a marker with no `Err` arm to clean up — tray Quit, the
-        // Linux-without-tray window close, a crash, a sleep-kill. Not
-        // hypothetical: the sidecar is already dead by this point, so the WebView
-        // sits in "Server unavailable" for the entire download, actively inviting
-        // a quit. Every one of those would become a false "your update may not
-        // have completed" on the next boot.
-        //
-        // NOT on the `Ok` arm below (which is what ADR-043 §6 sketched): that arm
-        // is dead code on Windows, where the plugin's `install_inner` ends in an
-        // unconditional `std::process::exit(0)`.
-        //
-        // This closure fires two lines before `verify_signature`, so a signature
-        // failure does write a marker — that path returns `Err` on every platform
-        // and the `Err` arm below clears it.
-        {
-            let app = app.clone();
-            let version = version.to_string();
-            move || {
-                log::info!("Update downloaded -- installing");
-                pending_update::record_pending_update(&app, &version);
-            }
-        },
-    ).await {
+    match update.install(bytes) {
         Ok(()) => {
             log::info!("Update to v{version} installed — restarting");
             app.restart();
@@ -2971,6 +3025,14 @@ async fn perform_install(
             // We observed the failure in-process and are about to show a native
             // dialog about it, so a surviving marker would nag next boot about
             // something the user was just told.
+            //
+            // The sidecar stays stopped on this arm, deliberately: on Windows
+            // `install_inner` ends in `std::process::exit(0)` on success, so a
+            // failure here means the installer could not even be launched — a
+            // terminal state whose recovery is this dialog plus
+            // Settings -> Network -> Restart server. Spawning a child while an
+            // installer may be mid-write over the binary is what
+            // `SIDECAR_SHUTTING_DOWN` exists to prevent.
             pending_update::clear_pending_update(app);
             let dialog_msg = if pre_install_warnings.is_empty() {
                 e.to_string()
@@ -2980,8 +3042,59 @@ async fn perform_install(
                     pre_install_warnings.join("\n  - ")
                 )
             };
-            show_update_error_dialog(app, &dialog_msg);
+            show_update_error_dialog(app, "Could not install the update.", &dialog_msg);
         }
+    }
+}
+
+/// #1808 — the ordering inside `perform_install` IS the fix, and neither the
+/// `AppHandle` nor a `tauri_plugin_updater::Update` is constructible in a unit
+/// test. So the one discriminating check is structural, following
+/// `sidecar.rs`'s `include_str!` precedent.
+#[cfg(test)]
+mod install_order_tests {
+    /// A failed download must not be the thing that leaves the app with no
+    /// backend. Before #1808 `perform_install` stopped the sidecar, waited for
+    /// the port and the exe lock, and only then downloaded — so an offline
+    /// machine, a proxy, a 403 or a signature mismatch returned with the
+    /// sidecar dead, nothing to respawn it, and every tab "Disconnected" while
+    /// the UI still said the server was running.
+    #[test]
+    fn perform_install_downloads_before_it_stops_the_sidecar() {
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("async fn perform_install(")
+            .expect("perform_install must exist");
+        // Slice on char boundaries, never a raw byte range: `lib.rs` is full of
+        // em dashes and a byte slice landing mid-`—` panics.
+        let rest = src
+            .get(start..)
+            .expect("function start must be a char boundary");
+        let end = rest
+            .find("\n}\n")
+            .expect("perform_install body must be delimited");
+        let body = rest.get(..end).expect("function end must be a char boundary");
+
+        // Bind BOTH offsets before comparing. A bare `Option` comparison is
+        // vacuously true on the unfixed code: it calls `download_and_install`
+        // and never `.download(` at all, so the left side is `None` — and
+        // `None < Some(_)` is `true`.
+        //
+        // `.download(` rather than `update.download(`: rustfmt breaks the
+        // receiver onto its own line, and the needle must match the code as it
+        // is actually formatted. `.download_and_install(` does not match it
+        // (the `_` follows `download`), which is what keeps this discriminating.
+        let dl = body
+            .find(".download(")
+            .expect("perform_install must call update.download(");
+        let stop = body
+            .find("stop_sidecar_gracefully(")
+            .expect("perform_install must still stop the sidecar before installing");
+
+        assert!(
+            dl < stop,
+            "the download must complete before the sidecar is stopped (#1808)"
+        );
     }
 }
 

@@ -213,7 +213,7 @@ static EXITING: AtomicBool = AtomicBool::new(false);
 /// Set by `perform_install` around its pre-install graceful stop and released by
 /// `ShuttingDownGuard`'s `Drop`. Unlike `EXITING` this one is meant to be
 /// bounded — **and only the guard makes that true.** Held across
-/// `download_and_install().await`, a panic or a dropped task would otherwise
+/// `download(..).await` and `install(..)`, a panic or a dropped task would otherwise
 /// latch it for the process lifetime, leaving `restart_sidecar` and "Retry
 /// Server Start" permanent silent no-ops.
 pub(crate) static SIDECAR_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
@@ -222,8 +222,8 @@ pub(crate) static SIDECAR_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 ///
 /// `Drop` runs on the normal return, on an unwind, and when the enclosing future
 /// is dropped mid-await — which is the whole point: the flag is held across
-/// `download_and_install().await`, and the failure arm's explicit clear covered
-/// only the path that reaches it.
+/// `download(..).await` and `install(..)`, and the failure arm's explicit clear
+/// covered only the path that reaches it.
 ///
 /// `Drop` keeps the `compare_exchange(true, false)` rather than a bare store,
 /// and that CAS is the `EXITING` interlock: if an exit began while the install
@@ -238,7 +238,7 @@ pub(crate) static SIDECAR_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 /// `perform_install` futures. Under a bare store the first to finish would
 /// `Drop` its guard, that `Drop`'s CAS would succeed, and
 /// `SIDECAR_SHUTTING_DOWN` would go false while the second is still inside
-/// `download_and_install().await` — re-permitting Restart-server and Retry
+/// `download(..).await` — re-permitting Restart-server and Retry
 /// Server Start to spawn a child into a slot whose binary is being overwritten
 /// on disk. A `None` here means an install already holds the latch, and the
 /// second caller must bail rather than proceed unguarded.
@@ -539,7 +539,7 @@ impl GracefulStop {
 /// **`#[must_use]`, because two of the three call sites are not the exit path.**
 /// `restart_sidecar` and `perform_install` both stop the sidecar for their own
 /// reasons and neither reaches `exit_verdict_line`; `perform_install`'s stop is
-/// the *only* flush on the Windows update path (`download_and_install` ends in
+/// the *only* flush on the Windows update path (`install` ends in
 /// `std::process::exit(0)`, so `RunEvent::Exit` never fires). A dropped report
 /// there means the update proceeds having discarded unsaved edits while the
 /// dialogs say it worked.
@@ -3090,7 +3090,7 @@ mod shutdown_guard_tests {
         );
     }
 
-    /// `SIDECAR_SHUTTING_DOWN` is held across `download_and_install(..).await`.
+    /// `SIDECAR_SHUTTING_DOWN` is held across `download(..).await` and `install(..)`.
     /// Before the guard, only the explicit clear on the `Err` arm released it, so
     /// a panic or a dropped task latched it for the process lifetime and made
     /// `spawn_allowed()` false forever.
@@ -3126,7 +3126,7 @@ mod shutdown_guard_tests {
 
     /// Two concurrent `perform_install` futures. Under the old bare store the
     /// first to finish released the latch out from under the second, which was
-    /// still inside `download_and_install(..).await` — re-permitting a spawn
+    /// still inside `download(..).await` — re-permitting a spawn
     /// into a slot whose binary was being overwritten.
     #[test]
     fn shutting_down_guard_refuses_a_second_concurrent_install() {
