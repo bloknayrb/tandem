@@ -44,11 +44,26 @@ vi.mock("../../src/client/utils/diagnostics-fetch", () => ({
   fetchDiagnostics: () => fetchDiagnosticsMock(),
 }));
 
-import type { SettingsTabContext } from "../../src/client/components/SettingsModal.svelte";
 import SettingsAboutTab from "../../src/client/components/settings-tabs/SettingsAboutTab.svelte";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
 
-function makeProps(notify: (severity: string, message: string) => void) {
+// `SettingsTabContext` lives in `SettingsModal.svelte` (a real component, not
+// a `.svelte.ts` module) — `tsconfig.tests.client.json`'s ambient `.svelte`
+// declaration only exports a default, so a named type import from it fails
+// `typecheck:tests` even though it resolves fine under the app's own
+// svelte-check. A local shape covering only what this test drives sidesteps
+// that without weakening the assertion.
+interface AboutTabProps {
+  open: boolean;
+  settings: TandemSettings;
+  onUpdate: (partial: Partial<TandemSettings>) => void;
+  connected: boolean;
+  reconnectAttempts: number;
+  readOnly: boolean;
+  notify: (severity: "info" | "warning" | "error", message: string) => void;
+}
+
+function makeProps(notify: (severity: string, message: string) => void): AboutTabProps {
   return {
     open: true,
     settings: {} as TandemSettings,
@@ -56,8 +71,8 @@ function makeProps(notify: (severity: string, message: string) => void) {
     connected: true,
     reconnectAttempts: 0,
     readOnly: false,
-    notify: notify as unknown as SettingsTabContext["notify"],
-  } as unknown as SettingsTabContext;
+    notify: notify as unknown as AboutTabProps["notify"],
+  };
 }
 
 afterEach(() => {
