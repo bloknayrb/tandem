@@ -29,6 +29,7 @@ product's 3478/3479 and not the E2E harness pair in `scripts/test-ports.ts`.
 | `probe-redos.mts` | #1795: `(a+)+$` on 29 characters blocks for ~20 s; the 2 s guard never fires. | `elapsed ms` above 2000. |
 | `probe-tools.mts` | In-memory MCP client against the real tool registrations: #1752 (`edit(6, 99999)` deletes to end), #1768 (no-arg `restoreBackup` on `.docx`), #1796, #1797, and the error-code inconsistencies in #1823. | Each case prints its own PASS/FAIL line. |
 | `upgrade-envelope-probe.ts` | #1791: a new enum value in a stored annotation fails the whole envelope to `.corrupt`; passthrough covers new fields only. | Parse throws on the unknown `type` case. |
+| `future-park-probe.ts` (`TANDEM_APP_DATA_DIR=$(mktemp -d -t tandem-XXXXXX) npx tsx <file>`) | #1791 second half: drives the real `createStore(...).load()` through TWO downgrade cycles; the `fs.unlink` before the `fs.rename` deletes the parked copy holding the only annotations. One cycle looks fine. | `CYCLE-1 PARKED COPY DESTROYED`, and one `.future*` file where there should be two. |
 | `yjs-race.ts` | #1826: concurrent `map.set` on one key resolves by clientID. | Documents the ordering; no failure line. |
 
 ## Client harness (`npx vitest run --config docs/reviews/2026-09-02-v1-review/experiments/harness/vitest.config.ts`)
