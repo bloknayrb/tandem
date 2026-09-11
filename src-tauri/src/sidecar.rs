@@ -2904,7 +2904,12 @@ mod crash_restart_tests {
         // scramble the ordering check.
         let arm: String = arm[..arm_end]
             .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
+            // A single `'/'` rather than the two-character literal: every line
+            // in this arm that begins with a slash is a comment, and the
+            // two-slash spelling is a false positive for the UNC-duplication
+            // detector in `tests/shared/unc-check-duplication.test.ts`, which
+            // matches a spelling rather than a semantic.
+            .filter(|l| !l.trim_start().starts_with('/'))
             .collect::<Vec<_>>()
             .join("\n");
         let arm = arm.as_str();

@@ -263,11 +263,20 @@ fn is_build_tree_path(exe: &std::path::Path) -> bool {
 /// where this crate's tests actually run. Covers the three spellings that reach
 /// us: `\\host\share`, `//host/share`, and the verbatim `\\?\UNC\host\share`
 /// that `canonical_for_refresh_check` produces on Windows.
+///
+/// The two-leading-separator half **delegates to `crate::is_unc_or_network_path`**
+/// rather than spelling the prefixes again: #1417's invariant §3 is that this
+/// rule is worth one definition per language, and a second Rust copy here would
+/// be another drift site. What is *not* delegated is the `\\?\` strip that
+/// precedes it — `canonical_for_refresh_check` hands us
+/// `\\?\C:\Program Files\Tandem\tandem.exe` for a perfectly ordinary local
+/// install, and the shared predicate (correctly, for its own callers, which
+/// have no containment check) calls that a network path. Passing it through
+/// unstripped would refuse the refresh on every installed Windows build.
 fn is_network_path(exe: &std::path::Path) -> bool {
     let raw = exe.to_string_lossy();
     let stripped = raw.strip_prefix(r"\\?\").unwrap_or(&raw);
-    stripped.starts_with(r"\\")
-        || stripped.starts_with("//")
+    crate::is_unc_or_network_path(stripped)
         || stripped
             .get(..4)
             .is_some_and(|p| p.eq_ignore_ascii_case(r"UNC\"))
