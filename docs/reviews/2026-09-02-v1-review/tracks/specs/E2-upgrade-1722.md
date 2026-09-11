@@ -1,6 +1,6 @@
 # E2-upgrade — #1722 rail toggles are silent no-ops on a read-only settings blob (partial: the `updateSettings` boolean only)
 
-Branch `fix/upgrade-and-downgrade-paths-annotation-envelope-compatibility-and-settings-that-go-silently-inert-1791`. **Refs #1722 — this PR must NOT close it.** Ledger: the wave-8 row in `docs/plans/2026-09-06-open-issues-sweep.md:461` scopes this group to "#1722's `updateSettings` boolean, once"; the wave-9 row at `:470` assigns the rest to **G6 rail seam**. No probe — the condition is source-confirmed and the issue's own reviewer battery could not reach it.
+Branch `fix/upgrade-and-downgrade-paths-annotation-envelope-compatibility-and-settings-that-go-silently-inert-1791`. **Refs #1722 — this PR must NOT close it.** Ledger: the wave-8 row in `docs/plans/2026-09-06-open-issues-sweep.md:461` scopes this group to "#1722's `updateSettings` boolean, once"; the wave-9 row at `:470` assigns the rest to **G6 rail seam**. No probe — the condition is source-confirmed.
 
 ## Problem
 
@@ -8,15 +8,15 @@ Branch `fix/upgrade-and-downgrade-paths-annotation-envelope-compatibility-and-se
 
 ## Fix
 
-**Exactly the piece #1792 item 1 already needs, and no more** — the full design, including the central refusal surface, the `App.svelte` wiring, the `_resetTandemSettingsSingletonForTests()` reset of the new module-level handler, and the Settings-modal suppression decision, is in `E2-upgrade-1792.md` under "Item 1". In summary: `updateSettings` returns `boolean`, and the `_readOnly` short-circuit invokes a module-level handler that `App.svelte` registers once against `notifications.push`. That makes the refusal legible everywhere at once, which is the half #1792 closes.
+**Exactly the piece #1792 item 1 already needs, and no more.** The full design — the boolean return, the module-level `setSettingsWriteRefusedHandler`, the one-line `App.svelte` wiring beside `createNotifications()` (`:271`), and the `_resetTandemSettingsSingletonForTests()` reset of that handler — is in `E2-upgrade-1792.md` under "Item 1". In summary: `updateSettings` returns `boolean`, and the `_readOnly` short-circuit invokes a handler `App.svelte` registers once against `notifications.push` with `dedupKey: "settings-readonly"`. That makes the refusal legible at all eleven call sites at once.
 
 **Deliberately not done here:** consuming the boolean in `toggleLeft`/`toggleRight`, and skipping the `focusToggleTarget` call on a refusal. That is the rail seam, it is the same file as **#1719** and **#1716**, and doing it on this branch would collide with G6 in wave 9.
 
 ## Tests
 
-Covered by `E2-upgrade-1792.md` tests 1 **and 2**. Test 1 (return value + handler-fired-once + handler-not-fired) exercises the hook with a handler the test registers itself, so on its own it cannot tell a wired fix from an unwired one. **Test 2 is the discriminator this issue's Done-when depends on**: it pins the `App.svelte` registration (a mount assertion in `tests/client/settings-readonly-ui.test.ts` that a control click under `_readOnly: true` produces exactly one `notifications.push` with `dedupKey: "settings-readonly"`, or a source-contract assertion that `App.svelte` calls `setSettingsWriteRefusedHandler`), plus the modal case where the banner is the surface and no toast fires. Without test 2, a fix that exports the setter and never calls it passes everything while the user still gets the silent no-op both issues describe.
+Covered by `E2-upgrade-1792.md` tests 1 and 2. Test 1 (return value + handler-fired-once + handler-not-fired) exercises the hook with a handler the test registers itself, so on its own it cannot tell a wired fix from an unwired one. **Test 2 is the discriminator this issue's Done-when depends on**: a source-contract assertion in `tests/client/settings-readonly-ui.test.ts` that `App.svelte` calls `setSettingsWriteRefusedHandler`. Without it, a fix that exports the setter and never calls it passes everything while the user still gets the silent no-op both issues describe.
 
-No new rail-model spec here: `tests/client/layout-model.svelte.test.ts`'s `makeSettingsState` has no `_readOnly` path, and building that harness is G6's half of the work — adding it here without the consuming change would be a harness with nothing to discriminate.
+No new rail-model spec here: `tests/client/layout-model.svelte.test.ts`'s `makeSettingsState` has no `_readOnly` path, and building that harness is G6's half — adding it here without the consuming change would be a harness with nothing to discriminate.
 
 ## Done when
 
@@ -26,15 +26,13 @@ No new rail-model spec here: `tests/client/layout-model.svelte.test.ts`'s `makeS
 
 `toggleLeft`/`toggleRight` returning a boolean; the `focusToggleTarget` guard; a `_readOnly` axis in `tests/client/layout-model.svelte.test.ts`; #1964's radiogroup migration; #1719 and #1716.
 
-## Review corrections (round 1)
+## Review corrections (scope cut)
 
-**Adopted**
+**Removed, not repaired**
 
-- **Blocking — nothing pinned the `App.svelte` registration, so this issue's entire user-facing half was unasserted.** Verified: `E2-upgrade-1792.md`'s test 1 registers its own handler against the hook, and no spec touched `App.svelte:271` or `tests/client/settings-readonly-ui.test.ts` (which exists and is the natural home). The Tests section now names test 2 as the discriminator and the Done-when requires it, rather than claiming "the refusal reaches the user" with no test behind it.
-- **Non-blocking (inherited from `E2-upgrade-1792.md`) — the eleventh call site and the modal double-surface.** `App.svelte:2584` passes `updateSettings` into `SettingsModal`, which already renders `SettingsReadonlyBanner`; the Fix summary now points at the suppression decision rather than implying the toast fires everywhere.
-- **Non-blocking — the reset hook.** The Fix summary now names `_resetTandemSettingsSingletonForTests()` nulling `onWriteRefused` as part of the shared design, so this spec does not read as though the handler is stateless.
-- **#1964 state re-measured** (`gh issue view 1964`): OPEN as of 2026-09-11, so the "at least two open carve-outs" claim holds and `## Closes` remains forbidden.
+- **The Settings-modal toast-suppression decision**, which this spec inherited by reference from `E2-upgrade-1792.md`. The mount/destroy handshake on the module-level handler was a mechanism neither issue asks for; the banner and a deduped tray entry co-existing is not a defect. Its removal takes the modal case out of test 2.
 
-**Not adopted**
+**Fixed directly (kept from round 1)**
 
-- Nothing. Every finding touching this spec verified against the source on this branch.
+- The `App.svelte` registration pin — without it this issue's entire user-facing half was unasserted — now in its cheapest form: a source-contract assertion rather than an `App.svelte` mount test.
+- The `_resetTandemSettingsSingletonForTests()` handler reset stays named here, so the summary does not read as though the handler is stateless.
