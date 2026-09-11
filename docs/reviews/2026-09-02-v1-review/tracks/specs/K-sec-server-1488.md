@@ -30,7 +30,7 @@ If a reviewer believes the acceptance is wrong, the place to say so is the PR bo
 
 ## Done when
 
-The PR body states, in one short paragraph, that #1488 was read, that it is an accepted finding, and that no code changed for it — so the next reader of this branch does not re-open it, and adds the sentence that the ordering guard's behavioural half is Linux-only and therefore ran in CI rather than locally. `docs/security.md`'s accepted-findings entry is **not** edited (it was rewritten hours before this work; re-editing it is how a reconciliation date drifts). Note that #1822 item 3 **does** edit `docs/security.md:166`, which is a different subsection — that is the Privacy body-limit line, not the accepted-findings register, and the two must not be conflated.
+The PR body states, in one short paragraph, that #1488 was read, that it is an accepted finding, and that no code changed for it — so the next reader of this branch does not re-open it, and adds the sentence that the ordering guard's behavioural half is Linux-only and therefore ran in CI rather than locally. `docs/security.md` is **not edited at all by this branch** — neither its accepted-findings entry (rewritten hours before this work; re-editing it is how a reconciliation date drifts) nor any other line. The scope cut removed #1822 item 3's `docs/security.md:166` edit as well, so there is no PR-mate exception to keep straight.
 
 ## Not in scope
 
@@ -42,7 +42,15 @@ Any change to the two `/.well-known` handlers, their wildcard CORS header, or th
 
 1. **The test citation attributed behavioural coverage to a source-text guard** (two findings). `:286-340` is the `readFileSync` describe whose specs are `(a)` and `(a2)`; the behavioural `401`-before-`403` cases live in a separate `describe.skipIf(process.platform !== "linux")` at `:379`. Both the citation and the "pins it behaviourally … not by string match" phrasing are corrected, and the Linux-only gate is now stated as this spec's cross-platform sentence and carried into the Done-when.
 2. **"The Invariant 6 specs passing unchanged is the evidence" was non-evidence.** Those specs are bodiless GETs that never raise an error, so they cannot discriminate whether an error handler sits in front of the two routes. Replaced with the structural argument — registration on the outer `app` at `:737-758`, above the `app.use(mcpApp)` mount at `:761` — and the Invariant 6 specs are now described as a regression check on the routes rather than as proof of the reach claim.
-3. **Route registration line range** corrected from `:736-760` to `:737-758`, and a line added noting that #1822 item 3 edits a *different* subsection of `docs/security.md` (`:166`, the Privacy body-limit line) so "do not edit `docs/security.md`" is not read as covering that PR-mate.
+3. **Route registration line range** corrected from `:736-760` to `:737-758`.
+
+## Review corrections (scope cut)
+
+**Removed, not repaired**
+
+- **The PR-mate caveat about `docs/security.md:166`.** The scope cut dropped every `docs/security.md` edit from `K-sec-server-1822.md`, so this branch now touches that file nowhere and the "different subsection" distinction has nothing left to protect against.
+
+**Otherwise unchanged.** This spec already changes no files and adds no tests; there was nothing to cut. No blocking finding was raised against it.
 
 **Not adopted**
 
