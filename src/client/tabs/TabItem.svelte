@@ -261,7 +261,7 @@ function handleMouseLeaveClose() {
   role="tab"
   tabindex={0}
   aria-selected={isActive}
-  aria-label={tab.fileName}
+  aria-label={dirty ? `${tab.fileName}, unsaved changes` : tab.fileName}
   style={tabStyle}
   onclick={() => onswitch(tab.id)}
   onpointerdown={(e) => onpointerdown(e, tab.id)}
@@ -269,11 +269,7 @@ function handleMouseLeaveClose() {
 >
   <!-- Stable fixed-width slot: always in layout so dot/check/empty never shift the
        tab. dirty → ● (warning); just-saved → ✓ (success, A2 morph); else empty. -->
-  <span
-    data-testid={`unsaved-indicator-${tab.id}`}
-    class="save-indicator"
-    aria-hidden={!dirty}
-  >
+  <span data-testid={`unsaved-indicator-${tab.id}`} class="save-indicator" aria-hidden="true">
     {#if dirty}
       <span class="dot" aria-hidden="true">●</span>
     {:else if justSaved}
