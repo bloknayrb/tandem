@@ -507,9 +507,9 @@ export async function openFromDisk(
 
   // Inject tutorial annotations whenever the sample welcome document is opened,
   // regardless of whether TANDEM_NO_SAMPLE skipped the server startup auto-open.
-  // injectTutorialAnnotations is idempotent — safe to call on session-restored docs.
+  // After finalizeDocOpen, which seeds the tombstone ledger the injector reads (#1696).
   if (resolved.endsWith(path.join("sample", "welcome.md"))) {
-    injectTutorialAnnotations(doc);
+    injectTutorialAnnotations(doc, resolved);
   }
 
   return {

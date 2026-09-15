@@ -16,11 +16,15 @@
  * influence the result.
  */
 
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
+import { docHash } from "../../src/server/annotations/doc-hash.js";
+import { recordTombstone, resetForTesting } from "../../src/server/annotations/sync.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import {
   injectTutorialAnnotations,
@@ -32,17 +36,48 @@ import { getAnnotationsMap, makeMarkdownDoc } from "../helpers/ydoc-factory.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.join(__dirname, "..", "fixtures", "welcome-snapshot.md");
 
+/** A never-written path: the injector only hashes it to key the tombstone ledger. */
+function freshWelcomePath(): string {
+  return path.join(os.tmpdir(), `tandem-tutorial-${randomUUID()}`, "sample", "welcome.md");
+}
+
+afterEach(() => {
+  resetForTesting();
+});
+
 // Derived from the production definitions so a `targetText` VALUE edit (not
 // just an add/remove) is caught — a hand-mirrored list would silently validate
 // stale strings.
 const EXPECTED_TARGETS = TUTORIAL_ANNOTATIONS.map((d) => d.targetText);
+
+describe("tutorial-annotations tombstone guard (#1696)", () => {
+  it("does not re-create a seed whose id is tombstoned for this path", () => {
+    const p = freshWelcomePath();
+    recordTombstone(docHash(p), "tutorial-comment-1", 1);
+    const doc = makeMarkdownDoc(readFileSync(FIXTURE_PATH, "utf8"));
+    try {
+      injectTutorialAnnotations(doc, p);
+      const map = getAnnotationsMap(doc);
+      expect(map.has("tutorial-comment-1")).toBe(false);
+      const others = TUTORIAL_ANNOTATIONS.map((d) => d.id).filter(
+        (id) => id !== "tutorial-comment-1",
+      );
+      // Guard the guard: the three untombstoned seeds still inject, so the
+      // absence above is the tombstone's doing and not a failed injection.
+      expect(others).toHaveLength(3);
+      for (const id of others) expect(map.has(id), id).toBe(true);
+    } finally {
+      doc.destroy();
+    }
+  });
+});
 
 describe("tutorial-annotations anchor drift", () => {
   it("injects every defined annotation against the welcome.md snapshot", () => {
     const markdown = readFileSync(FIXTURE_PATH, "utf8");
     const doc = makeMarkdownDoc(markdown);
     try {
-      injectTutorialAnnotations(doc);
+      injectTutorialAnnotations(doc, freshWelcomePath());
 
       const injected = Array.from(getAnnotationsMap(doc).values()) as Annotation[];
 
@@ -106,7 +141,7 @@ describe("tutorial-annotations anchor drift", () => {
       // clamps, block splits) that still breaks anchoredRange — injecting and
       // slicing the produced ranges catches it, because the offsets come from
       // production's indexOf, not from the test.
-      injectTutorialAnnotations(liveDoc);
+      injectTutorialAnnotations(liveDoc, freshWelcomePath());
       const injected = Array.from(getAnnotationsMap(liveDoc).values()) as Annotation[];
       expect(injected.length).toBe(TUTORIAL_ANNOTATIONS.length);
       for (const target of EXPECTED_TARGETS) {

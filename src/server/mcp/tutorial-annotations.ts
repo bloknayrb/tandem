@@ -4,7 +4,9 @@ import { TUTORIAL_ANNOTATION_PREFIX, Y_MAP_ANNOTATIONS } from "../../shared/cons
 import { withInternal } from "../../shared/origins.js";
 import type { Annotation, AnnotationType, HighlightColor } from "../../shared/types.js";
 import { toFlatOffset } from "../../shared/types.js";
+import { docHash } from "../annotations/doc-hash.js";
 import { nextRev } from "../annotations/schema.js";
+import { getTombstones } from "../annotations/sync.js";
 import { anchoredRange, describeRangeFailure } from "../positions.js";
 import { extractText } from "./document-model.js";
 
@@ -47,9 +49,20 @@ export const TUTORIAL_ANNOTATIONS: readonly TutorialAnnotationDef[] = [
   },
 ];
 
-/** Idempotent — skips annotations that already exist in the Y.Map. */
-export function injectTutorialAnnotations(doc: Y.Doc): void {
+/**
+ * Idempotent — skips a seed already in the Y.Map, and a seed the user deleted:
+ * an id tombstoned in the ledger for `filePath` is not re-created (#1696). Call
+ * after `wireAnnotationStore`, whose merge seeds that ledger from the envelope —
+ * `map.has` alone reads a merged-away deletion as absence and re-mints it.
+ *
+ * The tombstone check relies on bulk clears (`clearDocMaps` in
+ * `documents/populate.ts`) running with the annotation observer detached, since
+ * the observer tombstones deletes from every origin and would otherwise suppress
+ * every seed a clear removed.
+ */
+export function injectTutorialAnnotations(doc: Y.Doc, filePath: string): void {
   const map = doc.getMap(Y_MAP_ANNOTATIONS);
+  const deleted = new Set(getTombstones(docHash(filePath)).map((t) => t.id));
 
   const fullText = extractText(doc);
   if (!fullText) {
@@ -60,7 +73,7 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
   let injected = 0;
   withInternal(doc, () => {
     for (const def of TUTORIAL_ANNOTATIONS) {
-      if (map.has(def.id)) continue;
+      if (map.has(def.id) || deleted.has(def.id)) continue;
       const idx = fullText.indexOf(def.targetText);
       if (idx === -1) {
         console.error(`[tutorial] Target text "${def.targetText}" not found — skipping ${def.id}`);

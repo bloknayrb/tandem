@@ -445,7 +445,7 @@ describe("create-family write paths that stay OUTSIDE the lifecycle", () => {
     const origins: unknown[] = [];
     tutorialDoc.on("afterTransaction", (txn: Y.Transaction) => origins.push(txn.origin));
 
-    injectTutorialAnnotations(tutorialDoc);
+    injectTutorialAnnotations(tutorialDoc, "/tandem-tutorial-origin-probe/sample/welcome.md");
 
     // Guard the guard: if nothing was injected there is no transaction to
     // inspect and the origin assertion would be vacuous.

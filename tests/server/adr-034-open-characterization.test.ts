@@ -66,7 +66,13 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
 }));
 
 import { docHash } from "../../src/server/annotations/doc-hash.js";
-import { createStore, resetForTesting as storeReset } from "../../src/server/annotations/store.js";
+import { removeAnnotationRecord } from "../../src/server/annotations/lifecycle.js";
+import {
+  closeStore,
+  createStore,
+  resetForTesting as storeReset,
+} from "../../src/server/annotations/store.js";
+import { getTombstones } from "../../src/server/annotations/sync.js";
 import {
   openFromDisk,
   openFromUpload,
@@ -78,7 +84,8 @@ import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-t
 import { MAX_DOCX_PART_BYTES } from "../../src/server/file-io/docx-size-gate.js";
 import { watchFile } from "../../src/server/file-watcher.js";
 import { extractText, restoreOpenDocuments } from "../../src/server/mcp/document.js";
-import { getOpenDocs } from "../../src/server/mcp/document-service.js";
+import { closeDocumentById, getOpenDocs } from "../../src/server/mcp/document-service.js";
+import { TUTORIAL_ANNOTATIONS } from "../../src/server/mcp/tutorial-annotations.js";
 import {
   getBuffer,
   resetForTesting as notificationsReset,
@@ -319,6 +326,41 @@ describe("durable annotations survive an open", () => {
       text.slice(loaded.range.from, loaded.range.to),
       "the annotation still covers the words it was anchored to",
     ).toBe("quick brown fox");
+  });
+});
+
+describe("tutorial seeds across a reopen (#1696)", () => {
+  it("a deleted tutorial annotation stays deleted after a close and reopen", async () => {
+    // The injector only runs for a path ending in sample/welcome.md, so copy
+    // the real file under that name rather than hand-writing a fixture.
+    const sampleDir = path.join(tmpDir, "sample");
+    await fs.mkdir(sampleDir, { recursive: true });
+    const filePath = path.join(sampleDir, "welcome.md");
+    await fs.copyFile(path.join(import.meta.dirname, "..", "..", "sample", "welcome.md"), filePath);
+    // openFromDisk realpaths before hashing; key the ledger read the same way.
+    const resolved = await fs.realpath(filePath);
+    const ids = TUTORIAL_ANNOTATIONS.map((d) => d.id);
+
+    const first = await openFromDisk(filePath);
+    const doc = getOrCreateDocument(first.documentId);
+    for (const id of ids) {
+      expect(doc.getMap(Y_MAP_ANNOTATIONS).has(id), `first open injects ${id}`).toBe(true);
+    }
+
+    expect(removeAnnotationRecord(doc, "tutorial-comment-1", "browser").kind).toBe("ok");
+    await closeStore(docHash(resolved));
+    expect((await closeDocumentById(first.documentId)).success).toBe(true);
+
+    // The "close" phase dropped the in-memory ledger, so whatever suppresses
+    // the seed on the reopen must have come back through the durable envelope.
+    expect(getTombstones(docHash(resolved))).toEqual([]);
+
+    const second = await openFromDisk(filePath);
+    const reopened = getOrCreateDocument(second.documentId).getMap(Y_MAP_ANNOTATIONS);
+    expect(reopened.has("tutorial-comment-1"), "the deleted seed is not re-injected").toBe(false);
+    for (const id of ids.filter((i) => i !== "tutorial-comment-1")) {
+      expect(reopened.has(id), `reopen keeps ${id}`).toBe(true);
+    }
   });
 });
 
