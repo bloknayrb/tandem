@@ -440,10 +440,14 @@ mod lock_interop_tests {
 
         // The first two backoff sleeps sum to 700 ms: a writer that treated 32
         // as a hard failure would have returned by now.
-        assert!(
-            done_rx.recv_timeout(Duration::from_millis(700)).is_err(),
-            "with_locked_json returned while Node held the lockfile"
-        );
+        if done_rx.recv_timeout(Duration::from_millis(700)).is_ok() {
+            let node_status = child.try_wait();
+            let result = writer.join().unwrap();
+            panic!(
+                "with_locked_json returned while Node held the lockfile: {result:?} \
+                 (node child status: {node_status:?})"
+            );
+        }
 
         drop(child.stdin.take());
         child.wait().unwrap();
