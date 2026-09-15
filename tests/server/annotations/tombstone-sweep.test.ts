@@ -119,3 +119,32 @@ describe("cleanupStaleTombstones", () => {
     expect(compacted).toBe(0);
   });
 });
+
+describe("cleanupStaleTombstones — partially-readable envelope (#1791)", () => {
+  it("leaves a partially-tolerated envelope byte-for-byte untouched", async () => {
+    // Since #1791(a) an envelope with one unreadable row parses `ok` with a
+    // PARTIAL doc. `cleanupStaleTombstones` rebuilds and flushes the whole
+    // envelope, so rewriting one would durably delete the unreadable row.
+    const dir = annotationsDir();
+    await fs.mkdir(dir, { recursive: true });
+    const target = path.join(dir, `${HASH}.json`);
+    const envelope = {
+      ...envelopeWithTombstones(HASH, FILE, [
+        { id: "stale", rev: 2, deletedAt: NOW - SESSION_MAX_AGE - 60_000 },
+      ]),
+      annotations: [
+        annRecord({ id: "ann_alive", rev: 1 }),
+        { ...annRecord({ id: "ann_future", rev: 1 }), type: "suggestion" },
+      ],
+    };
+    const bytes = JSON.stringify(envelope);
+    await fs.writeFile(target, bytes, "utf-8");
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const compacted = await cleanupStaleTombstones(new Set());
+    errorSpy.mockRestore();
+
+    expect(compacted).toBe(0);
+    expect(await fs.readFile(target, "utf-8")).toBe(bytes);
+  });
+});

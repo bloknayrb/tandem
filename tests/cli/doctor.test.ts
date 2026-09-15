@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ANNOTATION_SCAN_MAX_FILES } from "../../src/cli/annotation-store-scan.js";
+import { INTEGRATIONS_SCHEMA_VERSION } from "../../src/shared/integrations/contract.js";
 
 // The file-cap spec writes ANNOTATION_SCAN_MAX_FILES + 1 (513) files
 // synchronously and then scans them, so its cost scales with that constant and
@@ -186,6 +187,67 @@ describe("runDoctor", () => {
   });
 
   /**
+   * #1792 item 2 — `doctor` had no `integrations.json` counterpart to
+   * `checkAnnotationStore`, so the one diagnostic a user is told to run was
+   * silent about the exact downgrade that kills the integrations wizard.
+   */
+  it("warns when integrations.json carries a future schemaVersion", async () => {
+    writeFileSync(
+      join(dataDir, "integrations.json"),
+      JSON.stringify({ schemaVersion: 9999, integrations: [] }),
+    );
+
+    const report = await runDoctor();
+    const rows = report.results.filter((r) => r.check === "integrations-file");
+    expect(rows.length).toBeGreaterThan(0);
+    const warned = rows.find((r) => r.status === "warn");
+    expect(warned).toBeDefined();
+    expect(warned?.data?.schemaVersion).toBe(9999);
+    expect(warned?.message).toContain("9999");
+  });
+
+  it("warns on a non-integer future schemaVersion, matching the server's predicate", async () => {
+    // The server refuses any number above the supported version; an
+    // integer-only check here passed a file every integrations route 409s on.
+    const found = INTEGRATIONS_SCHEMA_VERSION + 0.5;
+    writeFileSync(
+      join(dataDir, "integrations.json"),
+      JSON.stringify({ schemaVersion: found, integrations: [] }),
+    );
+
+    const report = await runDoctor();
+    const warned = report.results.find(
+      (r) => r.check === "integrations-file" && r.status === "warn",
+    );
+    expect(warned?.data?.schemaVersion).toBe(found);
+  });
+
+  it("warns — never 'no file yet' — when integrations.json exists but cannot be read", async () => {
+    // EISDIR stands in for EACCES portably. The server rethrows every errno but
+    // ENOENT, so the integrations routes 500; an absence claim points away.
+    mkdirSync(join(dataDir, "integrations.json"));
+
+    const report = await runDoctor();
+    const rows = report.results.filter((r) => r.check === "integrations-file");
+    expect(rows.some((r) => r.data?.exists === false)).toBe(false);
+    const warned = rows.find((r) => r.status === "warn");
+    expect(warned?.data).toMatchObject({ exists: true });
+    expect(typeof warned?.data?.code).toBe("string");
+  });
+
+  it("does not warn on a current-schema integrations.json", async () => {
+    writeFileSync(
+      join(dataDir, "integrations.json"),
+      JSON.stringify({ schemaVersion: INTEGRATIONS_SCHEMA_VERSION, integrations: [] }),
+    );
+
+    const report = await runDoctor();
+    const rows = report.results.filter((r) => r.check === "integrations-file");
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.status === "pass")).toBe(true);
+  });
+
+  /**
    * The headline result must carry the verdict.
    *
    * Before this, an annotation store whose active files were all unparseable
@@ -273,6 +335,22 @@ describe("runDoctor", () => {
     );
     expect(parked?.status).toBe("warn");
     expect(parked?.data?.parkedFuture).toBe(1);
+  });
+
+  it("warns on a .partial copy left by a partial load (#1791)", async () => {
+    // Row-level tolerance made a partially-readable envelope parse `ok`, and
+    // the active file loses the dropped rows on its next write — the copy is
+    // the only evidence left, so its presence alone must not read as healthy.
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    writeFileSync(join(annDir, "abc.json.partial.0123abcd"), "{}");
+
+    const report = await runDoctor();
+    const partial = report.results.find(
+      (r) => r.check === "annotation-store" && r.data && "partialCopies" in r.data,
+    );
+    expect(partial?.status).toBe("warn");
+    expect(partial?.data?.partialCopies).toBe(1);
   });
 
   it("reports a zeroed data block when the store dir does not exist", async () => {

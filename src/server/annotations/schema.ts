@@ -277,9 +277,64 @@ function migrateFlagAndDirectedAt(ann: Record<string, unknown>, docHash?: string
  * invariant, outside the schema's namespace, so narrowing is unambiguous.
  */
 export type ParseAnnotationDocResult =
-  | { ok: true; doc: AnnotationDocV1 }
+  | {
+      ok: true;
+      doc: AnnotationDocV1;
+      /**
+       * #1791(a): rows this build could not read and therefore dropped from
+       * `doc`. Non-zero means the returned doc is a PARTIAL view of the file:
+       * anything that rewrites the whole envelope from it destroys the dropped
+       * rows, so the two persisting call sites
+       * (`session/manager.ts` `cleanupStaleTombstones`,
+       * `annotations/rename-recovery.ts`) must bail rather than clobber.
+       */
+      skipped: { annotations: number; replies: number };
+    }
   | { ok: false; error: "corrupt" }
   | { ok: false; error: "future"; schemaVersion: number };
+
+/**
+ * True when `parseAnnotationDoc` dropped rows, i.e. `result.doc` is a PARTIAL
+ * view of the file (#1791(a)).
+ *
+ * Exported because every caller that rewrites the whole envelope from a parsed
+ * doc — `store.ts` `loadOne`, `session/manager.ts` `cleanupStaleTombstones`,
+ * `annotations/rename-recovery.ts` — has to ask this same question, and each
+ * spelling it out is three chances to get the arithmetic wrong.
+ */
+export function isPartialParse(result: ParseAnnotationDocResult): boolean {
+  return result.ok && result.skipped.annotations + result.skipped.replies > 0;
+}
+
+/**
+ * Row-level tolerance helper for `parseAnnotationDoc` (#1791(a)).
+ *
+ * Drops individual rows this build cannot validate, counting and logging each.
+ * Mirrors `migrateToV1`'s per-row skip-and-count log shape.
+ */
+function filterUnreadableRows(
+  rows: unknown[],
+  schema: z.ZodTypeAny,
+  kind: "annotation" | "reply",
+): { kept: unknown[]; dropped: number } {
+  let dropped = 0;
+  const kept: unknown[] = [];
+  for (const row of rows) {
+    if (schema.safeParse(row).success) {
+      kept.push(row);
+      continue;
+    }
+    dropped++;
+    const id = (row as { id?: unknown } | null)?.id ?? "<missing>";
+    // The id is file-supplied: it goes in as a `%s` ARGUMENT, never as part of
+    // the format string (CodeQL js/tainted-format-string).
+    console.error(
+      `[parseAnnotationDoc] dropping unreadable ${kind} id=%s (unknown to this build)`,
+      String(id),
+    );
+  }
+  return { kept, dropped };
+}
 
 /**
  * Validate an on-disk annotation doc.
@@ -338,15 +393,81 @@ export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
     }
   }
 
+  const fromVersion =
+    typeof schemaVersion === "number" && Number.isInteger(schemaVersion) ? schemaVersion : 1;
+
+  // #1791(a): row-level tolerance. `.passthrough()` buys forward compatibility
+  // for new FIELDS but not for new ENUM VALUES — one unknown `type`/`status`/
+  // `author` failed its row, `z.array` failed the whole envelope, and the older
+  // build quarantined the file and loaded ZERO annotations, personal notes
+  // (ADR-027) included. Drop the unreadable rows instead and keep the rest.
+  //
+  // PLACEMENT IS BOUNDED ON BOTH SIDES:
+  //   - AFTER the legacy per-record loop above, because until
+  //     `migrateFlagAndDirectedAt` has run a `flag` row fails
+  //     `AnnotationTypeSchema` and a `directedAt` row fails this schema's own
+  //     `.refine()` — a filter placed above it would DELETE the user's legacy
+  //     personal notes, the exact ADR-027 loss this fix exists to prevent.
+  //   - BEFORE `migrateUp` below, because `migrations/v1_to_v2.ts` `.parse()`s
+  //     every record with a THROWING input schema that the catch there turns
+  //     into `corrupt` — a filter after it would evaporate at the version bump.
+  //     These two are a pair; see the matching comment at `migrateUp`.
+  //
+  // Gated on `fromVersion === SCHEMA_VERSION`: the V1-named schemas track the
+  // CURRENT version, so after a bump an unguarded filter would judge a genuine
+  // v1 file's rows against the v2 row contract, drop every one, and hand
+  // `migrateUp` an empty envelope — total silent loss on the one load a
+  // migration exists to protect. Cross-version envelopes go to `migrateUp`
+  // untouched, which owns cross-version row contracts.
+  const skipped = { annotations: 0, replies: 0 };
+  if (fromVersion === SCHEMA_VERSION) {
+    const rowsHost = candidate as { annotations?: unknown; replies?: unknown };
+    // `tombstones` is deliberately NOT filtered: dropping a tombstone
+    // resurrects a deleted annotation (#700/#695), and `TombstoneRecordSchemaV1`
+    // carries no enum, so no additive change can reach it.
+    if (Array.isArray(rowsHost.annotations)) {
+      const filtered = filterUnreadableRows(
+        rowsHost.annotations,
+        AnnotationRecordSchemaV1,
+        "annotation",
+      );
+      if (filtered.dropped > 0) {
+        // All rows dropped stays `corrupt`: the envelope is unreadable in
+        // substance, so the loud quarantine + toast is preserved rather than
+        // turned into a silent empty load the next snapshot() would clobber.
+        if (filtered.kept.length === 0) return { ok: false, error: "corrupt" };
+        skipped.annotations = filtered.dropped;
+        // Spread, so `.passthrough()` keys on the envelope survive.
+        candidate = { ...(candidate as object), annotations: filtered.kept };
+      }
+    }
+    // A non-array `annotations`/`replies` is left untouched and still fails
+    // `AnnotationDocSchemaV1` below as `corrupt`. NEVER coerce it to `[]` —
+    // that reports a successful load of zero annotations, which `loadAndMerge`
+    // reads as `fileEmpty` and clobbers the envelope with.
+    if (Array.isArray(rowsHost.replies)) {
+      const filtered = filterUnreadableRows(
+        rowsHost.replies,
+        AnnotationReplyRecordSchemaV1,
+        "reply",
+      );
+      if (filtered.dropped > 0) {
+        // Replies of a dropped annotation are retained as orphans, matching
+        // `loadAndMerge`'s existing rule; counts are reported separately.
+        skipped.replies = filtered.dropped;
+        candidate = { ...(candidate as object), replies: filtered.kept };
+      }
+    }
+  }
+
   // Run the versioned migration framework forward to the current schema
   // version. Today `SCHEMA_VERSION` is 1, so any well-formed file is already
   // at-or-below current and `migrateUp` returns the input unchanged — the
   // wiring is dormant but live. When `SCHEMA_VERSION` is bumped to 2, the
   // registered v1 → v2 migration begins running here with no further changes.
   // A migration that throws (e.g. a record that fails the v_n input contract)
-  // is treated as corruption rather than crashing the load path.
-  const fromVersion =
-    typeof schemaVersion === "number" && Number.isInteger(schemaVersion) ? schemaVersion : 1;
+  // is treated as corruption rather than crashing the load path. That throw is
+  // why the #1791(a) row filter above must stay ABOVE this call — the pair.
   let migrated: unknown;
   try {
     migrated = migrateUp(candidate, fromVersion, SCHEMA_VERSION);
@@ -360,7 +481,7 @@ export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
     console.error("[parseAnnotationDoc] schema validation failed:", result.error.issues);
     return { ok: false, error: "corrupt" };
   }
-  return { ok: true, doc: result.data };
+  return { ok: true, doc: result.data, skipped };
 }
 
 /** Result of `migrateToV1`. Drop counts let callers surface lossy upgrades. */

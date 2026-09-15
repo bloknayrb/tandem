@@ -29,11 +29,34 @@ export {
 
 export interface TandemSettingsState {
   readonly settings: TandemSettings;
-  updateSettings: (partial: Partial<TandemSettings>) => void;
+  /**
+   * Applies `partial` and returns whether it was WRITTEN. `false` means the
+   * read-only short-circuit refused it — the settings blob on disk was written
+   * by a newer Tandem (#659). Before #1722/#1792 this returned `void`, so none
+   * of the eleven call sites could tell a refusal from a success and every
+   * settings-backed control outside the modal was a silent no-op.
+   */
+  updateSettings: (partial: Partial<TandemSettings>) => boolean;
 }
 
 // Module-level singleton — see createTandemSettings doc-comment.
 let _instance: TandemSettingsState | null = null;
+
+/**
+ * Registered once by `App.svelte`; invoked whenever `updateSettings` refuses a
+ * write. Central rather than per-call-site: one wiring line makes the refusal
+ * legible at all eleven call sites at once, and `useNotifications`' dedup
+ * collapses repeated clicks into a single count badge.
+ *
+ * A module-level setter rather than an import because `createNotifications` is
+ * not a singleton.
+ */
+let onWriteRefused: (() => void) | null = null;
+
+/** Register (or clear, with `null`) the settings-write-refused handler. */
+export function setSettingsWriteRefusedHandler(fn: (() => void) | null): void {
+  onWriteRefused = fn;
+}
 
 /**
  * Mirror the *effective* decoration visibility (master mute folded in) to the
@@ -88,8 +111,11 @@ export function createTandemSettings(): TandemSettingsState {
   // References `loaded` (not the $state) — this is a deliberate one-time seed.
   mirrorDecorationKeys(loaded);
 
-  const updateSettings = (partial: Partial<TandemSettings>) => {
-    if (settings._readOnly) return;
+  const updateSettings = (partial: Partial<TandemSettings>): boolean => {
+    if (settings._readOnly) {
+      onWriteRefused?.();
+      return false;
+    }
     const next = mergeAndClampSettings(settings, partial);
     try {
       localStorage.setItem(TANDEM_SETTINGS_KEY, JSON.stringify(next));
@@ -99,6 +125,7 @@ export function createTandemSettings(): TandemSettingsState {
     // Mirror the effective decoration keys for ProseMirror plugin init.
     mirrorDecorationKeys(next);
     settings = next;
+    return true;
   };
 
   _instance = {
@@ -119,6 +146,10 @@ export function createTandemSettings(): TandemSettingsState {
  */
 export function _resetTandemSettingsSingletonForTests(): void {
   _instance = null;
+  // The refused handler is module state too. Without this reset a handler
+  // registered by an earlier test survives into the next one, and the
+  // "handler does not fire" assertion is decided by test ordering.
+  onWriteRefused = null;
 }
 
 // HMR safety: a hot-replace of this module would reset `_instance` to

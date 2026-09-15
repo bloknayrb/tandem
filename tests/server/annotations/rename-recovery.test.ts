@@ -237,3 +237,42 @@ describe("recoverRenamedEnvelope", () => {
     expect(persisted?.tombstones.find((t) => t.id === "ann_dead")?.rev).toBe(3);
   });
 });
+
+describe("recoverRenamedEnvelope — partially-readable source (#1791)", () => {
+  it("does NOT recover an envelope holding a row this build cannot read", async () => {
+    // Since #1791(a) such an envelope parses `ok` with a PARTIAL doc. Recovery
+    // re-keys it under the new hash, flushes it, then unlinks the source — so
+    // recovering one would durably delete the unreadable row.
+    const body = "Renamed while carrying a future annotation type.";
+    const oldPath = path.join(env.tmpRoot, "partial-old.md");
+    await writeEnvelope(
+      buildEnvelope(oldPath, body, {
+        annotations: [
+          annRecord({ id: "ann_alive", rev: 2 }),
+          { ...annRecord({ id: "ann_future", rev: 2 }), type: "suggestion" } as never,
+        ],
+      }),
+    );
+
+    const newPath = path.join(env.tmpRoot, "partial-new.md");
+    const newHash = docHash(newPath);
+    const doc = makeDoc(body);
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const recovered = await recoverRenamedEnvelope(doc, newHash, newPath);
+    errorSpy.mockRestore();
+
+    expect(recovered).toBe(false);
+    expect(await readEnvelope(newHash)).toBeNull();
+    expect(await readEnvelope(docHash(oldPath))).not.toBeNull();
+    expect(doc.getMap(Y_MAP_ANNOTATIONS).size).toBe(0);
+    // The skipped source is an orphan the 30-day GC will unlink, so a
+    // `.partial.` copy — a shape no sweeper matches — must hold the rows.
+    const copies = (await fs.readdir(annotationsDir())).filter((f) =>
+      f.startsWith(`${docHash(oldPath)}.json.partial.`),
+    );
+    expect(copies).toHaveLength(1);
+    const parked = await fs.readFile(path.join(annotationsDir(), copies[0] as string), "utf-8");
+    expect(parked).toContain("ann_future");
+  });
+});

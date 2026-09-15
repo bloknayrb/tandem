@@ -41,7 +41,10 @@ import {
   claudeCodeConfigPath,
   claudeDesktopConfigTarget,
 } from "../shared/integrations/client-config-paths.js";
-import type { ClaudeCliPresence } from "../shared/integrations/contract.js";
+import {
+  type ClaudeCliPresence,
+  INTEGRATIONS_SCHEMA_VERSION,
+} from "../shared/integrations/contract.js";
 import { detectClaudeCli, isBareNameLaunchable } from "../shared/integrations/detect-claude-cli.js";
 import { isOnPath, resolveManyOnPath } from "../shared/integrations/path-lookup.js";
 import { rejectUnsafeWindowsPrefix } from "../shared/windows-path-safety.js";
@@ -2747,6 +2750,27 @@ const UNSAFE_APP_DATA_FIX =
   "at a local drive.";
 
 /**
+ * Resolve the app-data dir, screening the raw inputs BEFORE deriving a path or
+ * touching the filesystem — reading a UNC path can leak a Windows credential
+ * hash, and `dir` is already a derived join. Records the refusal against
+ * `label` and returns `null` when the caller must not proceed.
+ */
+function resolveSafeAppDataDir(r: Recorder, label: string): string | null {
+  const { dir, inputs } = resolveAppDataDir();
+  for (const input of inputs) {
+    if (input !== "" && rejectUnsafeWindowsPrefix(input) !== null) {
+      r.fail(
+        `${label} resolves to a network or extended-length path; refusing to read it`,
+        UNSAFE_APP_DATA_FIX,
+        { unsafePath: true },
+      );
+      return null;
+    }
+  }
+  return dir;
+}
+
+/**
  * Annotation-store health.
  *
  * **This check reports what it actually examined.** Its predecessor emitted a
@@ -2764,18 +2788,8 @@ const UNSAFE_APP_DATA_FIX =
  * the request-led work this unit is also asked to cap.
  */
 async function checkAnnotationStore(r: Recorder): Promise<void> {
-  const { dir: base, inputs } = resolveAppDataDir();
-  // Screen the raw inputs BEFORE deriving a path or touching the filesystem.
-  for (const input of inputs) {
-    if (input !== "" && rejectUnsafeWindowsPrefix(input) !== null) {
-      r.fail(
-        "Annotation store location resolves to a network or extended-length path; refusing to read it",
-        UNSAFE_APP_DATA_FIX,
-        { unsafePath: true },
-      );
-      return;
-    }
-  }
+  const base = resolveSafeAppDataDir(r, "Annotation store location");
+  if (base === null) return;
 
   const dir = join(base, "annotations");
   const scan = await scanAnnotationStore(dir);
@@ -2864,6 +2878,17 @@ async function checkAnnotationStore(r: Recorder): Promise<void> {
     );
   }
 
+  // #1791(a): a partial load keeps the readable rows and parks the rest in a
+  // `.partial.<hex>` copy. The active count goes to zero at the next write, so
+  // the copies are the durable evidence and either one is enough to warn.
+  if (scan.partialActive > 0 || scan.partialCopies > 0) {
+    r.warn(
+      `${scan.partialActive} annotation file(s) hold rows this build cannot read; ${scan.partialCopies} .partial copy(ies) in ${dir}`,
+      "Written by a newer Tandem. The readable annotations load; the rest are dropped from the active file on its next write and survive only in the .partial.<hex> copy beside it. Update Tandem before editing those documents.",
+      { partialActive: scan.partialActive, partialCopies: scan.partialCopies, dir },
+    );
+  }
+
   if (scan.newest) {
     const ageMs = Date.now() - scan.newest.mtimeMs;
     const ageStr =
@@ -2938,6 +2963,69 @@ async function checkAnnotationStore(r: Recorder): Promise<void> {
   } catch (err) {
     r.warn(`Could not read annotation store lock: ${errMsg(err)}`);
   }
+}
+
+/**
+ * `integrations.json` counterpart to {@link checkAnnotationStore} (#1792).
+ *
+ * A downgrade leaves a file this build cannot read, and every
+ * `/api/integrations/*` route then rejects — so the wizard and the Settings
+ * Claude Code tab are dead. `doctor` had no check for it at all, which made the
+ * one diagnostic a user is told to run silent on the cause.
+ *
+ * Read-only and total. An absent file is a pass, and so is an unparseable one,
+ * which `readIntegrationsFile` backs up and recovers on read. An UNREADABLE one
+ * (EACCES, EISDIR…) warns: the server rethrows every errno but ENOENT, so every
+ * integrations route fails exactly as it does for a future schema. The schema
+ * predicate is the server's own — any number above the supported version.
+ */
+async function checkIntegrationsFile(r: Recorder): Promise<void> {
+  const base = resolveSafeAppDataDir(r, "Integrations file location");
+  if (base === null) return;
+
+  const filePath = join(base, "integrations.json");
+  let raw: string;
+  try {
+    raw = readFileSync(filePath, "utf-8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      r.pass("No integrations.json yet — nothing to check", undefined, { exists: false });
+    } else {
+      r.warn(
+        `integrations.json could not be read (${code ?? errMsg(err)})`,
+        `Until it is readable the integrations wizard and the Settings Claude Code tab will not load. Check the file's permissions: ${filePath}`,
+        { exists: true, code: code ?? null },
+      );
+    }
+    return;
+  }
+
+  let found: unknown;
+  try {
+    found = (JSON.parse(raw) as { schemaVersion?: unknown }).schemaVersion;
+  } catch {
+    r.pass("integrations.json is not valid JSON — the server recovers it on read", undefined, {
+      parsed: false,
+    });
+    return;
+  }
+
+  // Mirrors `readSchemaVersion` + `version > INTEGRATIONS_SCHEMA_VERSION` in
+  // `integrations/storage.ts` — narrower (e.g. `Number.isInteger`) passes a
+  // `3.5` the server refuses.
+  if (typeof found === "number" && found > INTEGRATIONS_SCHEMA_VERSION) {
+    r.warn(
+      `integrations.json carries schemaVersion ${found}, newer than this build supports (${INTEGRATIONS_SCHEMA_VERSION})`,
+      "Written by a newer Tandem. Update Tandem, or remove the integrations file; until then the integrations wizard and the Settings Claude Code tab will not load.",
+      { schemaVersion: found, supported: INTEGRATIONS_SCHEMA_VERSION },
+    );
+    return;
+  }
+
+  r.pass(`Integrations schema version: ${String(found ?? "unset")}`, undefined, {
+    schemaVersion: typeof found === "number" ? found : null,
+  });
 }
 
 function errMsg(err: unknown): string {
@@ -3150,6 +3238,7 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   await r.check("claude-cli", () => checkClaudeCli(r));
   await r.check("tandem-plugin", () => checkTandemPlugin(r));
   await r.check("annotation-store", () => checkAnnotationStore(r));
+  await r.check("integrations-file", () => checkIntegrationsFile(r));
   await r.check("stale-global", () => checkStaleGlobal(r));
 
   // `check` returns undefined when the check crashed (it records its own

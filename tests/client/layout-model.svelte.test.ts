@@ -68,8 +68,12 @@ function makeSettingsState(initial: Partial<TandemSettings>): TandemSettingsStat
     get settings() {
       return settings;
     },
-    updateSettings(partial: Partial<TandemSettings>) {
+    // #1722/#1792: `updateSettings` reports whether the write landed. This
+    // harness has no `_readOnly` axis (that is G6's half), so it always
+    // applies and always reports true.
+    updateSettings(partial: Partial<TandemSettings>): boolean {
       settings = { ...settings, ...partial };
+      return true;
     },
   };
 }
