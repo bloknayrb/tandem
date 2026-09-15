@@ -330,15 +330,31 @@ describe("durable annotations survive an open", () => {
 });
 
 describe("tutorial seeds across a reopen (#1696)", () => {
-  it("a deleted tutorial annotation stays deleted after a close and reopen", async () => {
-    // The injector only runs for a path ending in sample/welcome.md, so copy
-    // the real file under that name rather than hand-writing a fixture.
+  /**
+   * Copy the real welcome.md under a `sample/` dir: the injector only runs for
+   * a path ending in sample/welcome.md, so no hand-written fixture.
+   *
+   * A unique trailing paragraph keeps each case's content hash distinct. The
+   * annotations dir is shared across the file while `tmpDir` is removed after
+   * each case, so an identical copy reads to rename recovery as the previous
+   * case's file, moved: it adopts that envelope, tombstones included, and the
+   * new case's first open injects nothing.
+   */
+  async function copyWelcome(): Promise<{ filePath: string; resolved: string }> {
     const sampleDir = path.join(tmpDir, "sample");
     await fs.mkdir(sampleDir, { recursive: true });
     const filePath = path.join(sampleDir, "welcome.md");
-    await fs.copyFile(path.join(import.meta.dirname, "..", "..", "sample", "welcome.md"), filePath);
+    const source = await fs.readFile(
+      path.join(import.meta.dirname, "..", "..", "sample", "welcome.md"),
+      "utf8",
+    );
+    await fs.writeFile(filePath, `${source}\nCase ${path.basename(tmpDir)}.\n`);
     // openFromDisk realpaths before hashing; key the ledger read the same way.
-    const resolved = await fs.realpath(filePath);
+    return { filePath, resolved: await fs.realpath(filePath) };
+  }
+
+  it("a deleted tutorial annotation stays deleted after a close and reopen", async () => {
+    const { filePath, resolved } = await copyWelcome();
     const ids = TUTORIAL_ANNOTATIONS.map((d) => d.id);
 
     const first = await openFromDisk(filePath);
@@ -360,6 +376,47 @@ describe("tutorial seeds across a reopen (#1696)", () => {
     expect(reopened.has("tutorial-comment-1"), "the deleted seed is not re-injected").toBe(false);
     for (const id of ids.filter((i) => i !== "tutorial-comment-1")) {
       expect(reopened.has(id), `reopen keeps ${id}`).toBe(true);
+    }
+  });
+
+  /** Open a fresh welcome.md copy and delete every seed. */
+  async function openWelcomeAndDeleteSeeds(): Promise<{
+    filePath: string;
+    resolved: string;
+    documentId: string;
+  }> {
+    const { filePath, resolved } = await copyWelcome();
+    const first = await openFromDisk(filePath);
+    const doc = getOrCreateDocument(first.documentId);
+    for (const { id } of TUTORIAL_ANNOTATIONS) {
+      expect(removeAnnotationRecord(doc, id, "browser").kind, `delete ${id}`).toBe("ok");
+    }
+    return { filePath, resolved, documentId: first.documentId };
+  }
+
+  // Settings > Replay tutorial opens welcome.md with `force: true`; its step-0
+  // effect has nothing to show without seeds, so the tombstone guard must not
+  // swallow the explicit replay.
+  it("Replay tutorial (force) brings deleted seeds back when welcome.md was closed", async () => {
+    const { filePath, resolved, documentId } = await openWelcomeAndDeleteSeeds();
+    await closeStore(docHash(resolved));
+    expect((await closeDocumentById(documentId)).success).toBe(true);
+
+    const replayed = await openFromDisk(filePath, { force: true });
+    const map = getOrCreateDocument(replayed.documentId).getMap(Y_MAP_ANNOTATIONS);
+    for (const { id } of TUTORIAL_ANNOTATIONS) {
+      expect(map.has(id), `replay re-injects ${id}`).toBe(true);
+    }
+  });
+
+  it("Replay tutorial (force) brings deleted seeds back when welcome.md is still open", async () => {
+    const { filePath } = await openWelcomeAndDeleteSeeds();
+
+    const replayed = await openFromDisk(filePath, { force: true });
+    expect(replayed.kind).toBe("force-reloaded");
+    const map = getOrCreateDocument(replayed.documentId).getMap(Y_MAP_ANNOTATIONS);
+    for (const { id } of TUTORIAL_ANNOTATIONS) {
+      expect(map.has(id), `replay re-injects ${id}`).toBe(true);
     }
   });
 });

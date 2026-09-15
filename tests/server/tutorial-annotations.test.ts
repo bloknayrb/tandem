@@ -24,7 +24,11 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { docHash } from "../../src/server/annotations/doc-hash.js";
-import { recordTombstone, resetForTesting } from "../../src/server/annotations/sync.js";
+import {
+  getTombstones,
+  recordTombstone,
+  resetForTesting,
+} from "../../src/server/annotations/sync.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import {
   injectTutorialAnnotations,
@@ -66,6 +70,26 @@ describe("tutorial-annotations tombstone guard (#1696)", () => {
       // absence above is the tombstone's doing and not a failed injection.
       expect(others).toHaveLength(3);
       for (const id of others) expect(map.has(id), id).toBe(true);
+    } finally {
+      doc.destroy();
+    }
+  });
+
+  it("replay re-creates a tombstoned seed at a rev above its tombstone", () => {
+    const p = freshWelcomePath();
+    recordTombstone(docHash(p), "tutorial-comment-1", 1);
+    const doc = makeMarkdownDoc(readFileSync(FIXTURE_PATH, "utf8"));
+    try {
+      injectTutorialAnnotations(doc, p, { replay: true });
+      const map = getAnnotationsMap(doc);
+      const seed = map.get("tutorial-comment-1") as Annotation | undefined;
+      expect(seed, "replay brings the deleted seed back").toBeDefined();
+      // The tombstone sits at rev 2. A seed at rev 1 would lose every later
+      // merge (`stone.rev > record.rev` deletes it); rev 3 is a resurrection.
+      const [stone] = getTombstones(docHash(p));
+      expect(seed!.rev).toBeGreaterThan(stone!.rev);
+      // An untombstoned seed keeps the ordinary first rev.
+      expect((map.get("tutorial-highlight-1") as Annotation).rev).toBe(1);
     } finally {
       doc.destroy();
     }

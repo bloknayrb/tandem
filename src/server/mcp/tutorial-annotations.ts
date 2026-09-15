@@ -59,8 +59,20 @@ export const TUTORIAL_ANNOTATIONS: readonly TutorialAnnotationDef[] = [
  * `documents/populate.ts`) running with the annotation observer detached, since
  * the observer tombstones deletes from every origin and would otherwise suppress
  * every seed a clear removed.
+ *
+ * `replay` is the explicit "bring the seeds back" request (Settings > Replay
+ * tutorial, which opens welcome.md with `force: true`). It re-creates a
+ * tombstoned seed instead of skipping it, minted at a `rev` ABOVE its tombstone
+ * so a later merge reads it as a resurrection rather than deleting it again.
+ * The tombstone itself is left in the ledger: the replayed seed is
+ * `withInternal` (not durable), so a later ordinary reopen still honours the
+ * user's deletion.
  */
-export function injectTutorialAnnotations(doc: Y.Doc, filePath: string): void {
+export function injectTutorialAnnotations(
+  doc: Y.Doc,
+  filePath: string,
+  options?: { replay?: boolean },
+): void {
   const map = doc.getMap(Y_MAP_ANNOTATIONS);
 
   const fullText = extractText(doc);
@@ -69,12 +81,14 @@ export function injectTutorialAnnotations(doc: Y.Doc, filePath: string): void {
     return;
   }
 
-  const deleted = new Set(getTombstones(docHash(filePath)).map((t) => t.id));
+  const deleted = new Map(getTombstones(docHash(filePath)).map((t) => [t.id, t]));
+  const replay = options?.replay === true;
 
   let injected = 0;
   withInternal(doc, () => {
     for (const def of TUTORIAL_ANNOTATIONS) {
-      if (map.has(def.id) || deleted.has(def.id)) continue;
+      const tombstone = deleted.get(def.id);
+      if (map.has(def.id) || (tombstone !== undefined && !replay)) continue;
       const idx = fullText.indexOf(def.targetText);
       if (idx === -1) {
         console.error(`[tutorial] Target text "${def.targetText}" not found — skipping ${def.id}`);
@@ -133,7 +147,7 @@ export function injectTutorialAnnotations(doc: Y.Doc, filePath: string): void {
         status: "pending" as const,
         timestamp: Date.now(),
         textSnapshot: def.targetText,
-        rev: nextRev(),
+        rev: nextRev(tombstone),
         ...(def.color !== undefined ? { color: def.color } : {}),
         ...(def.suggestedText !== undefined ? { suggestedText: def.suggestedText } : {}),
       } as Annotation;

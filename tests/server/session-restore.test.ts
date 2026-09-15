@@ -1468,14 +1468,25 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     });
   }
 
+  // `cloneBreaks` covers both halves of the overlay's set-or-delete for
+  // `textSnapshotBreaks`: the envelope always carries break offsets from ITS
+  // capture, and the overlaid record must carry the clone's (or none), never
+  // the envelope's, because the breaks describe the snapshot that moved with it.
+  const ENV_BREAKS = [{ at: 1, kind: "block" }] as const;
   it.each([
-    ["no snapshot", undefined],
-    ["snapshot beta", "beta"],
-  ] as const)("fallback restore overlays the session's anchor and keeps the envelope's record (#1863), envelope with %s", async (_label, envSnapshot) => {
+    ["no snapshot", undefined, undefined],
+    ["snapshot beta", "beta", [{ at: 2, kind: "hard" }]],
+  ] as const)("fallback restore overlays the session's anchor and keeps the envelope's record (#1863), envelope with %s", async (_label, envSnapshot, cloneBreaks) => {
     const { resolved } = await writeDocFile(`overlay-${envSnapshot ?? "none"}.md`, DISK_TEXT);
     // ann-W is the session's ONLY id, so mergeMap queues no write of its own:
     // the envelope can only change through the overlay's observer write.
-    await writeFallbackSessions(resolved, (older) => seedSessionAnnW(older));
+    await writeFallbackSessions(resolved, (older) =>
+      seedHighlight(older.getMap(Y_MAP_ANNOTATIONS), "ann-W", 6, 10, {
+        textSnapshot: "beta",
+        relRange: liveRelRange(older, 6, 10),
+        ...(cloneBreaks !== undefined ? { textSnapshotBreaks: cloneBreaks } : {}),
+      }),
+    );
     // The envelope's record is newer (rev 2) and carries newer content and
     // status, but its offsets are those of "alpha XX beta gamma", text the
     // fallback does not hold.
@@ -1490,6 +1501,7 @@ describe("corrupt ydocState quarantine (#1800)", () => {
         timestamp: 1700000000000,
         color: "yellow",
         rev: 2,
+        textSnapshotBreaks: [...ENV_BREAKS],
         ...(envSnapshot !== undefined ? { textSnapshot: envSnapshot } : {}),
       },
     ]);
@@ -1512,6 +1524,8 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     expect(live.content).toBe("newer text");
     expect(live.status).toBe("dismissed");
     expect(live.rev).toBe(2);
+    // The break offsets are the clone's, like the snapshot they describe.
+    expect(live.textSnapshotBreaks).toEqual(cloneBreaks);
 
     const env = (await readEnvelopeAnnotations(resolved)).find((a) => a["id"] === "ann-W");
     expect(env).toBeDefined();
@@ -1521,6 +1535,7 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     expect(relPosToFlatOffset(doc, envRel.toRel)).toBe(10);
     expect(env!["content"]).toBe("newer text");
     expect(env!["rev"] as number).toBeGreaterThanOrEqual(2);
+    expect(env!["textSnapshotBreaks"]).toEqual(cloneBreaks);
   });
 
   it("a suggestion whose snapshot differs is not overlaid (#1863)", async () => {

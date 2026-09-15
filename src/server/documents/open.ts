@@ -396,6 +396,13 @@ export async function openFromDisk(
           reanchorAnnotations(doc, resolved);
         },
       );
+      // Settings > Replay tutorial force-opens welcome.md. The clear above took
+      // every seed the envelope did not hold (seeds are `withInternal`, never
+      // durable) and nothing else re-creates them, so replay here too, past
+      // any tombstone the user's deletions left (#1696).
+      if (isWelcomeDoc(resolved)) {
+        injectTutorialAnnotations(doc, resolved, { replay: true });
+      }
       ensureAutoSave();
       return {
         ...buildResult(doc, {
@@ -510,8 +517,11 @@ export async function openFromDisk(
   // Inject tutorial annotations whenever the sample welcome document is opened,
   // regardless of whether TANDEM_NO_SAMPLE skipped the server startup auto-open.
   // After finalizeDocOpen, which seeds the tombstone ledger the injector reads (#1696).
-  if (resolved.endsWith(path.join("sample", "welcome.md"))) {
-    injectTutorialAnnotations(doc, resolved);
+  // `force` on a doc that was not open lands here, and is Settings > Replay
+  // tutorial's request to bring deleted seeds back, so it replays past the
+  // tombstones.
+  if (isWelcomeDoc(resolved)) {
+    injectTutorialAnnotations(doc, resolved, { replay: options?.force === true });
   }
 
   return {
@@ -1049,6 +1059,11 @@ function cloneFallbackIntoDoc(
   return annotationsById(doc.getMap(Y_MAP_ANNOTATIONS), resolved);
 }
 
+/** The bundled tutorial document, the only file tutorial seeds are injected into. */
+function isWelcomeDoc(resolved: string): boolean {
+  return resolved.endsWith(path.join("sample", "welcome.md"));
+}
+
 /**
  * Site (b) of the fallback-anchor repair (#1800), as an anchor overlay (#1863).
  *
@@ -1073,8 +1088,10 @@ function cloneFallbackIntoDoc(
  *     span verbatim, so the span must hold the text the suggestion was written
  *     for.
  *
- * `textSnapshotTruncated` travels with `textSnapshot`, because it describes
- * that snapshot and the envelope's flag would misdescribe the clone's.
+ * `textSnapshotTruncated` and `textSnapshotBreaks` travel with `textSnapshot`,
+ * because both describe that snapshot: the envelope's flag or break offsets
+ * would misdescribe the clone's (undo-of-accept reads the breaks, #1486; the
+ * `.docx` path strips the three together for the same reason).
  *
  * ONE `withMcp` transaction, with the repair inside it under `skipTransact`:
  * the durable observer is attached by now and `withMcp` is not
@@ -1111,6 +1128,8 @@ function overlayFallbackAnchors(
       else overlaid.textSnapshot = fallback.textSnapshot;
       if (fallback.textSnapshotTruncated === undefined) delete overlaid.textSnapshotTruncated;
       else overlaid.textSnapshotTruncated = fallback.textSnapshotTruncated;
+      if (fallback.textSnapshotBreaks === undefined) delete overlaid.textSnapshotBreaks;
+      else overlaid.textSnapshotBreaks = fallback.textSnapshotBreaks;
       map.set(id, overlaid);
     }
     repairClonedAnchors(doc, map, resolved, { skipTransact: true });
