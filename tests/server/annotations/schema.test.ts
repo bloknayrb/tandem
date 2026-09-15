@@ -857,3 +857,166 @@ describe("migrateFlagAndDirectedAt — dedup via parseAnnotationDoc", () => {
     errorSpy.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// #1791(a) — row-level tolerance: one unreadable row must not quarantine the
+// whole envelope (personal notes, ADR-027, live in it).
+// ---------------------------------------------------------------------------
+
+describe("parseAnnotationDoc — row-level tolerance (#1791)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("keeps the good row and drops a future annotation `type`", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const envelope = {
+      ...validDoc,
+      annotations: [baseAnnotation, { ...baseAnnotation, id: "ann_future", type: "suggestion" }],
+    };
+    const result = parseAnnotationDoc(envelope);
+    if (!result.ok) throw new Error(`expected ok, got ${result.error}`);
+    // Exactly one kept — a fix that merely widens the enums keeps TWO.
+    expect(result.doc.annotations).toHaveLength(1);
+    expect(result.doc.annotations[0]?.id).toBe("ann_1_abc");
+    expect(result.skipped).toEqual({ annotations: 1, replies: 0 });
+  });
+
+  it("keeps the good row and drops a future annotation `status`", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const envelope = {
+      ...validDoc,
+      annotations: [baseAnnotation, { ...baseAnnotation, id: "ann_sup", status: "superseded" }],
+    };
+    const result = parseAnnotationDoc(envelope);
+    if (!result.ok) throw new Error(`expected ok, got ${result.error}`);
+    expect(result.doc.annotations).toHaveLength(1);
+    expect(result.skipped.annotations).toBe(1);
+  });
+
+  it("keeps the good row and drops a future annotation `author`", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const envelope = {
+      ...validDoc,
+      annotations: [baseAnnotation, { ...baseAnnotation, id: "ann_bot", author: "local-model" }],
+    };
+    const result = parseAnnotationDoc(envelope);
+    if (!result.ok) throw new Error(`expected ok, got ${result.error}`);
+    expect(result.doc.annotations).toHaveLength(1);
+    expect(result.skipped.annotations).toBe(1);
+  });
+
+  it("drops a bad reply row and leaves a dropped annotation's replies in place", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const envelope = {
+      ...validDoc,
+      annotations: [baseAnnotation, { ...baseAnnotation, id: "ann_future", type: "suggestion" }],
+      replies: [
+        ...validDoc.replies,
+        // Orphan of the dropped annotation: retained, matching loadAndMerge.
+        {
+          id: "rep_orphan",
+          annotationId: "ann_future",
+          author: "user" as const,
+          text: "still here",
+          timestamp: 1,
+          rev: 0,
+        },
+        // Unreadable reply row (future `author`).
+        {
+          id: "rep_bad",
+          annotationId: "ann_1_abc",
+          author: "robot",
+          text: "x",
+          timestamp: 1,
+          rev: 0,
+        },
+      ],
+    };
+    const result = parseAnnotationDoc(envelope);
+    if (!result.ok) throw new Error(`expected ok, got ${result.error}`);
+    expect(result.skipped).toEqual({ annotations: 1, replies: 1 });
+    expect(result.doc.replies.map((r) => r.id)).toEqual(["rep_1", "rep_orphan"]);
+  });
+
+  it("still returns corrupt for a malformed tombstone row", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // Tombstones are NOT filtered: dropping one resurrects a deleted
+    // annotation (#700/#695).
+    const envelope = {
+      ...validDoc,
+      tombstones: [...validDoc.tombstones, { id: "bad", rev: "not a number", deletedAt: 1 }],
+    };
+    expect(parseAnnotationDoc(envelope)).toEqual({ ok: false, error: "corrupt" });
+  });
+
+  it("normalizes a legacy flag/directedAt row BEFORE judging it (ADR-027)", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // Kills a filter placed ABOVE the legacy per-record loop: there, a `flag`
+    // row fails AnnotationTypeSchema and `directedAt` fails the record's own
+    // .refine(), so the user's legacy personal note would be DELETED.
+    const envelope = {
+      ...validDoc,
+      annotations: [
+        {
+          id: "ann_legacy",
+          author: "user",
+          type: "flag",
+          range: { from: 0, to: 3 },
+          content: "my private note",
+          status: "pending",
+          timestamp: 1,
+          rev: 1,
+          directedAt: "claude",
+        },
+      ],
+    };
+    const result = parseAnnotationDoc(envelope);
+    if (!result.ok) throw new Error(`expected ok, got ${result.error}`);
+    expect(result.doc.annotations).toHaveLength(1);
+    expect(result.doc.annotations[0]?.type).toBe("note");
+    expect(result.skipped.annotations).toBe(0);
+  });
+
+  it("returns corrupt when EVERY annotation row is dropped", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // The envelope is unreadable in substance, so the loud quarantine + toast
+    // is preserved rather than becoming a silent empty load that the next
+    // debounced snapshot() would clobber.
+    const envelope = {
+      ...validDoc,
+      annotations: [{ ...baseAnnotation, status: "superseded" }],
+    };
+    expect(parseAnnotationDoc(envelope)).toEqual({ ok: false, error: "corrupt" });
+  });
+
+  it("leaves a non-array `annotations` as an envelope-level corrupt", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // NEVER coerce to []: that reports a successful load of zero annotations,
+    // which loadAndMerge reads as `fileEmpty` and clobbers the envelope with.
+    expect(parseAnnotationDoc({ ...validDoc, annotations: "not an array" })).toEqual({
+      ok: false,
+      error: "corrupt",
+    });
+  });
+
+  it("reports skipped: 0 on a fully-readable envelope", () => {
+    const result = parseAnnotationDoc(validDoc);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.skipped).toEqual({ annotations: 0, replies: 0 });
+  });
+
+  it("tolerates a rev-less row alongside a good one", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // The pinned "missing rev => corrupt" contract above survives unchanged
+    // because its fixture has exactly ONE row, which the all-rows-dropped arm
+    // keeps as `corrupt`. With a readable row beside it, the same bad row is
+    // now skipped rather than taking the whole file down.
+    const noRev = { ...baseAnnotation, id: "ann_norev" } as Record<string, unknown>;
+    delete noRev.rev;
+    const result = parseAnnotationDoc({ ...validDoc, annotations: [baseAnnotation, noRev] });
+    if (!result.ok) throw new Error(`expected ok, got ${result.error}`);
+    expect(result.doc.annotations).toHaveLength(1);
+    expect(result.skipped.annotations).toBe(1);
+  });
+});
