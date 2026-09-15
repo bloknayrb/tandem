@@ -46,7 +46,9 @@ vi.mock("../../src/server/integrations/acl-win.js", () => ({
 const { addDoc, removeDoc, setActiveDocId } = await import(
   "../../src/server/documents/registry-testing.js"
 );
-const { populateYDoc, registerDocumentTools } = await import("../../src/server/mcp/document.js");
+const { isFullyQualifiedPath, populateYDoc, registerDocumentTools } = await import(
+  "../../src/server/mcp/document.js"
+);
 const { getOpenDocs } = await import("../../src/server/mcp/document-service.js");
 const { registerApplyTools } = await import("../../src/server/mcp/docx-apply.js");
 const { getOrCreateDocument } = await import("../../src/server/yjs/provider.js");
@@ -225,6 +227,52 @@ describe("tandem_open refuses a relative path (#1823 §F)", () => {
     expect(parsed.error).toBe(true);
     expect(parsed.code).toBe("FILE_NOT_FOUND");
   });
+
+  // `path.isAbsolute` is true on win32 for a drive-less root-relative path,
+  // and `path.resolve` then borrows the cwd's drive. The platform is stubbed
+  // so this row pins the HANDLER's use of the stricter check on every CI leg,
+  // not only on a Windows runner.
+  it("a drive-less root-relative path on a win32 server → INVALID_PATH", async () => {
+    const real = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!real) throw new Error("process.platform has no own descriptor");
+    Object.defineProperty(process, "platform", { ...real, value: "win32" });
+    try {
+      const sizeBefore = getOpenDocs().size;
+      const parsed = await call("tandem_open", { filePath: "/tandem-no-drive/x.md" });
+      expect(parsed.error).toBe(true);
+      expect(parsed.code).toBe("INVALID_PATH");
+      expect(parsed.message).toContain("absolute");
+      expect(getOpenDocs().size).toBe(sizeBefore);
+    } finally {
+      Object.defineProperty(process, "platform", real);
+    }
+  });
+});
+
+describe("isFullyQualifiedPath", () => {
+  it.each([
+    ["C:\\docs\\a.md", true],
+    ["c:/docs/a.md", true],
+    ["\\\\server\\share\\a.md", true],
+    ["//server/share/a.md", true],
+    ["\\docs\\a.md", false],
+    ["/Users/me/a.md", false],
+    ["C:docs\\a.md", false],
+    ["docs\\a.md", false],
+    ["", false],
+  ])("win32: %j → %s", (p, expected) => {
+    expect(isFullyQualifiedPath(p, "win32")).toBe(expected);
+  });
+
+  it.each([
+    ["/home/me/a.md", true],
+    ["//server/share/a.md", true],
+    ["docs/a.md", false],
+    ["C:\\docs\\a.md", false],
+    ["", false],
+  ])("linux: %j → %s", (p, expected) => {
+    expect(isFullyQualifiedPath(p, "linux")).toBe(expected);
+  });
 });
 
 describe("tandem_status with a documentId that is not open (#1823 §G)", () => {
@@ -234,5 +282,15 @@ describe("tandem_status with a documentId that is not open (#1823 §G)", () => {
     expect(parsed.error).toBe(false);
     expect(parsed.data.warning).toContain("nope");
     expect(parsed.data.warning).not.toContain("No document open");
+  });
+
+  // Twin: `getCurrentDoc("")` returns null without looking "" up, so an empty
+  // id is no id. Naming it would print a sentence with a hole in it.
+  it('documentId: "" gets the no-document text, not "Document  is not open"', async () => {
+    registerDoc("status-open-empty", "Hello");
+    const parsed = await call("tandem_status", { text: "working", documentId: "" });
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.warning).toBe("No document open — status not broadcast to editor.");
+    expect(parsed.data.warning, "a hole where the id should be").not.toMatch(/ {2}/);
   });
 });

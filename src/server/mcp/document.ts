@@ -74,6 +74,24 @@ import {
 import { wakeUrlField } from "./wake-url.js";
 
 /**
+ * Whether `p` names a location without reference to the server's working
+ * directory (#1823). `path.isAbsolute` alone is not that on win32: a
+ * root-relative path with no drive (`\docs\a.md`, `/Users/me/a.md`) counts as
+ * absolute there, yet `path.resolve` prefixes the drive of the process cwd. So
+ * on win32 the path must also carry a drive root (`C:\` / `C:/`) or be a
+ * two-separator UNC-shaped path, which is left for `assertSafePathPrefix` to
+ * refuse with its own message. `platform` is a parameter so the win32 half is
+ * testable on a POSIX runner.
+ */
+export function isFullyQualifiedPath(
+  p: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (platform !== "win32") return path.posix.isAbsolute(p);
+  return /^[A-Za-z]:[\\/]/.test(p) || /^[\\/]{2}/.test(p);
+}
+
+/**
  * `tandem_save`'s machine-readable `reason` for a save that did not reach disk
  * (#1798). Tethered to `SkipCode` so the skip branch — the one branch where the
  * two can drift — cannot pass a code this union does not name. `"upload"` and
@@ -494,7 +512,9 @@ export function registerDocumentTools(server: McpServer): void {
       // not the caller's, and the desktop sidecar sets none (#1823). This is a
       // string check on the argument, not root confinement — that is #1666, and
       // this does not decide it. `/api/open` and startup opens are unchanged.
-      if (!path.isAbsolute(filePath)) {
+      // Not `path.isAbsolute`: on win32 that accepts a drive-less root-relative
+      // path, which still resolves against the cwd's drive.
+      if (!isFullyQualifiedPath(filePath)) {
         return mcpError("INVALID_PATH", "filePath must be an absolute path.");
       }
       // License gate (#1116) — ONLY the destructive force-reload sub-path. Plain
@@ -1467,11 +1487,12 @@ export function registerDocumentTools(server: McpServer): void {
               return mcpStructured({
                 status: text,
                 // A named id that is not open is not "no document open" — other
-                // documents may well be (#1823).
-                warning:
-                  documentId !== undefined
-                    ? `Document ${documentId} is not open — status not broadcast to editor.`
-                    : "No document open — status not broadcast to editor.",
+                // documents may well be (#1823). Truthy, not `!== undefined`:
+                // `getCurrentDoc("")` returns null without looking "" up, so
+                // an empty id is no id and must not print `Document  is`.
+                warning: documentId
+                  ? `Document ${documentId} is not open — status not broadcast to editor.`
+                  : "No document open — status not broadcast to editor.",
               });
             }
             const doc = getOrCreateDocument(current.docName);

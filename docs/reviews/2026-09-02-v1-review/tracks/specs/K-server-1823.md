@@ -50,11 +50,13 @@ The PR body lists each rename as a documented-contract change. It also notes tha
   - Only handlers change; `reload-family.ts` is untouched.
   - Docs `:45`, `:140`, `:885`, `:893-894`, `:931`.
 - **E. `applyChanges` missing backup dir → `FILE_NOT_FOUND`.** The core already throws it (`docx-apply.ts:348-352`). The handler has no arm, so it rethrows as `INTERNAL_ERROR`. Add the arm. Docs `:885`.
-- **F. `tandem_open` refuses a relative path.** Before `openFromDisk` in the handler: `if (!path.isAbsolute(filePath)) return mcpError("INVALID_PATH", "filePath must be an absolute path.")`.
+- **F. `tandem_open` refuses a relative path.** Before `openFromDisk` in the handler: `if (!isFullyQualifiedPath(filePath)) return mcpError("INVALID_PATH", "filePath must be an absolute path.")`.
+  - **Not `path.isAbsolute` (PR-review round 1).** On win32 `path.isAbsolute` is true for a drive-less root-relative path (`\docs\a.md`, `/Users/me/a.md`), and `path.resolve` then prefixes the drive of the process cwd. `isFullyQualifiedPath` requires a drive root or a two-separator UNC shape on win32, where the UNC shape is left for `assertSafePathPrefix` to refuse. It takes `platform` as a parameter so the win32 half runs on the ubuntu `check` leg.
   - A string check, not containment; it does not decide #1666.
+  - **`docs/security.md` drift is filed as #2005, not fixed here.** Its #1654 bound says `docx-apply.ts` still folds `INVALID_PATH` onto `FORMAT_ERROR`, and §D removes that fold. The file belongs to K-sec-launcher.
   - `resolveAndValidatePath` is untouched, so `/api/open`, restore and startup opens are unchanged. The Tauri caller already asserts `is_absolute`.
   - Docs `:140` and `:115`. Rewrite the `filePath` row at `:115`: a relative path is refused with `INVALID_PATH`, matching the table's own `INVALID_PATH` row. Keep the sentence "There is no root confinement either (#1666, open)", so the edit cannot be read as deciding #1666. Drop the stale `open.ts:678` citation.
-- **G. `tandem_status`** (`document.ts:1458`): when `documentId` is given, the warning becomes `` `Document ${documentId} is not open — status not broadcast to editor.` ``. The no-id case is unchanged.
+- **G. `tandem_status`** (`document.ts:1458`): when `documentId` is given, the warning becomes `` `Document ${documentId} is not open — status not broadcast to editor.` ``. The no-id case is unchanged. An empty-string `documentId` counts as no id (a truthy check, PR-review round 1): `getCurrentDoc("")` returns null without looking it up, so naming it would print `Document  is not open`.
 - **H. Section offsets: fix the description, not the return.**
   - The description (`document.ts:581-587`) says offsets "line up exactly" and then offers `section`. Add: "A `section` read returns that section's text only, and its offsets are not document offsets. Read without `section`, or use `tandem_search`/`tandem_resolveRange`, before anchoring."
   - Make the same change in `docs/mcp-tools.md:194` and `:227`.

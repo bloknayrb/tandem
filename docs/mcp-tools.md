@@ -111,7 +111,7 @@ Open a file in the Tandem editor. Returns a `documentId` for multi-document work
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `filePath` | string | yes | Absolute path to the file to open. A relative path is refused with `INVALID_PATH` rather than resolved against the *server's* working directory. That is a check on the argument, not containment. There is no root confinement either ([#1666](https://github.com/bloknayrb/tandem/issues/1666), open). |
+| `filePath` | string | yes | Absolute path to the file to open. A relative path is refused with `INVALID_PATH` rather than resolved against the *server's* working directory. On a Windows server that includes a root-relative path with no drive letter (`\docs\a.md`, `/Users/me/a.md`), which would otherwise pick up the working directory's drive. That is a check on the argument, not containment. There is no root confinement either ([#1666](https://github.com/bloknayrb/tandem/issues/1666), open). |
 | `force` | boolean | no | Force reload from disk even if already open. Clears the in-memory annotations and the session; the durable annotation envelope survives and is re-merged on the same open, re-anchored where each record's `textSnapshot` still matches (#1813). |
 | `authoredBy` | `"claude"` | no | Pass when you wrote the file wholesale before opening it, to stamp Claude authorship across its content. Idempotent, and only ever stamps Claude — it cannot forge user attribution. |
 
@@ -136,7 +136,7 @@ Open a file in the Tandem editor. Returns a `documentId` for multi-document work
 
 `wakeUrl` is omitted when no wake transport is running (stdio mode). It is on the tool response only -- `POST /api/open` does not carry it.
 
-**Errors:** `FILE_NOT_FOUND` (doesn't exist), `INVALID_PATH` (relative path; UNC / extended-length / device-namespace path), `FILE_LOCKED` (open in Word), `PERMISSION_DENIED` (`EACCES`), `FORMAT_ERROR` (unsupported format, >50MB)
+**Errors:** `FILE_NOT_FOUND` (doesn't exist), `INVALID_PATH` (relative path, including a drive-less root-relative path on Windows; UNC / extended-length / device-namespace path), `FILE_LOCKED` (open in Word), `PERMISSION_DENIED` (`EACCES`), `FORMAT_ERROR` (unsupported format, >50MB)
 
 **Example:**
 ```
