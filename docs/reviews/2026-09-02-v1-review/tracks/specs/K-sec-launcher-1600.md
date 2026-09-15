@@ -1,154 +1,120 @@
-# K-sec-launcher — #1600 the npm uninstall scrub rewrites Cowork JSON without the Rust `with_locked_json` lock
+# K-sec-launcher — #1600: the npm uninstall scrub rewrites Cowork JSON without the Rust `with_locked_json` lock
 
-Branch `fix/security-lows-launcher-half-confined-launcher-cwd-no-tandem-secrets-in-the-launched-env-no-plaintext-keychain-read-production-sidecar-and-a-locked-cowork-scrub-1822`. **Closes #1600.**
-
-- **Both halves are settled.** The fix half: a real, interoperating lock lands, CI checks it on a required Windows leg, and no work is left against it. The policy half: the sweep ledger lists a "#1600 policy half" in its DECIDE bucket (`docs/plans/2026-09-06-open-issues-sweep.md:54`), whose options were accept-and-document versus fix. The measured interoperating lock settles it as **fix**, so nothing is owed to Bryan on #1600.
-- **Ledger:** `docs/security.md:485` ("What is NOT accepted here", item (i)).
-- **Probe:** a standalone fs2 0.4.3 program replicating `with_locked_json`'s open and lock, run against a Node probe on Windows (scratchpad; results below). It becomes a CI test here.
+**Closes #1600**, provided R2 (below) passes on the Windows `rust-test` leg. If R2 cannot be made green, ship nothing for #1600: move the options into `bryan` and list it as Refs.
 
 **Files:**
-- `src/cli/uninstall-scrub.ts`: `rewriteJson`, a new `ScrubLockError`, and a new exported `scrubCoworkWorkspace` extracted from `runUninstallScrub`.
-- `src-tauri/src/cowork_atomic_json.rs`: lock acquisition, plus unit and Windows interop tests.
-- `tests/cli/uninstall-scrub.test.ts`, `tests/docs/config-writer-set-claims.test.ts` and `docs/security.md`.
+- `src/cli/uninstall-scrub.ts` (`rewriteJson`)
+- `src-tauri/src/cowork_atomic_json.rs` (the lock-open loop)
+- `tests/cli/uninstall-scrub.test.ts`
+- `docs/security.md:485`
+- the `why` string at `tests/docs/config-writer-set-claims.test.ts:182`
 
 ## Problem
 
-`rewriteJson` (`src/cli/uninstall-scrub.ts:336`) does read → parse → mutate → tmp → rename with no lock. `runUninstallScrub` calls it inside `if (isWindows)` at `:662`, `:667` and `:672` on `installed_plugins.json`, `known_marketplaces.json` and `cowork_settings.json`, one try/catch around all three per workspace.
+`rewriteJson` (`src/cli/uninstall-scrub.ts:336`) reads, mutates, writes a tmp file and renames it, all with no lock. It is called inside `if (isWindows)` at `:662/:667/:672`, for `installed_plugins.json`, `known_marketplaces.json` and `cowork_settings.json`, under one try/catch per workspace.
 
-The Rust writers of those files all go through `with_locked_json` (`src-tauri/src/cowork_atomic_json.rs:130`). It opens a SIBLING `.<file_name>.tandem-lock` read+write+create, then takes `try_lock_exclusive` with a 200/500/1500/5000 ms backoff inside a 30 s budget.
+Every Rust writer of those files goes through `with_locked_json` (`cowork_atomic_json.rs:130`). That function opens a sibling `.<file>.tandem-lock` and takes fs2's `try_lock_exclusive` with backoff inside a 30 s budget. The desktop uninstaller's Rust scrub is locked too. The npm `tandem --uninstall-scrub` is therefore the only unlocked writer, and a scrub racing a desktop Cowork install silently loses one of the two updates.
 
-**The desktop uninstaller's scrub is already locked** (`uninstall_scrub.rs` → `uninstall_tandem_plugin_from_workspace` → `with_locked_json`). The npm CLI's `tandem --uninstall-scrub` (`src/cli/index.ts:108`) is the only unlocked writer. A scrub racing a Cowork install or remove in a running desktop app silently loses one of the two updates.
+## Measurement (Windows, scratchpad probe; R2 makes it a CI test)
 
-## Measurement
-
-fs2's Windows lock is `LockFileEx(handle, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, !0, !0)` (`fs2-0.4.3/src/windows.rs:94,111`). Node has no API that takes it. `fs.constants` does not export `UV_FS_O_EXLOCK` (checked on Node v24.2.0), but libuv still honours the raw flag `0x10000000` (`UV_FS_O_EXLOCK` in `uv/win.h`), which opens the file with share mode 0. **This is an undocumented libuv flag.** Probe results:
+fs2 on Windows calls `LockFileEx(EXCLUSIVE | FAIL_IMMEDIATELY)` (`fs2-0.4.3/src/windows.rs`). Node exposes no such call. libuv does honour the **undocumented** raw open flag `0x10000000` (`UV_FS_O_EXLOCK`, which opens with share mode 0). Node v24.2.0 does not export it in `fs.constants`.
 
 | Holder | Contender | Result |
 |---|---|---|
-| Rust (`open` + `try_lock_exclusive`) | Node `open(O_RDWR\|O_CREAT\|0x10000000)` | **`EBUSY`** |
-| Rust | Node plain `open("r+")`, then `write` | open OK, write `EBUSY` (so a marker-file lock would not exclude) |
-| Node EXLOCK handle | Rust `with_locked_json`-style `open` | **fails, `raw_os_error = 32`** (sharing violation) |
-| Nobody | Node EXLOCK / Rust lock | acquired |
+| Rust lock | Node `open(O_RDWR\|O_CREAT\|0x10000000)` | `EBUSY` |
+| Rust lock | Node plain `open` + `write` | the write fails with `EBUSY`, but a marker-file lock would still not exclude |
+| Node EXLOCK handle | Rust `OpenOptions::open` | `raw_os_error = 32` |
 
-So an exclusive-share open of the same sibling file excludes in both directions, with no native addon. That is option 1 of the plan.
+The exclusion works in both directions with no native addon. That makes this option 1.
+
+**Option 2 (drop the npm Cowork writes) is rejected on evidence.** `tauri.conf.json` has `"targets": "all"`, so Windows also ships an MSI, and an MSI uninstall never runs the NSIS hook. `docs/data-locations.md:173` promises that `tandem --uninstall-scrub` removes the Cowork registration.
 
 ## Fix
 
-**`src/cli/uninstall-scrub.ts`.**
+**`rewriteJson`. The minimum that locks without changing behaviour in untouched workspaces:**
+1. **An unlocked pre-check that creates nothing.** Keep today's code: `readFile` (ENOENT returns `false` silently), parse (the path-only warns) and `mutate`. If `mutate` returns `false`, return `false`. **No `open` call and no lockfile happens before this point**, so a workspace without a Tandem entry gets no residue and no new warnings. This is race-safe: an entry Rust adds afterwards is install-after-scrub, not a lost update.
+2. **Lock.**
+   - Call `fsPromises.open(lockPath, O_RDWR | O_CREAT | UV_FS_O_EXLOCK)`.
+   - Build `lockPath` as `path.join(dirname, \`.${basename}.tandem-lock\`)`, byte-identical to Rust's `format!(".{file_name}.tandem-lock")`.
+   - `const UV_FS_O_EXLOCK = 0x10000000`, commented as undocumented and checked by R2.
+   - The function is Windows-only (its only caller is inside `if (isWindows)`). Say so in its docblock rather than adding a platform branch.
+   - **`EBUSY`:** sleep on Rust's schedule (200, 500, 1500, then 5000 ms) through an injectable `opts.sleep`, until the sleeps sum to 30 000 ms, then `throw new Error(\`cannot lock ${filePath} — skipped\`)`.
+   - **`ENOENT`** (the directory vanished since the pre-check): return `false` silently.
+   - **Any other error** (`EPERM`, `EACCES`, …): throw the same path-only error. **Never write without the lock.**
+   - The throw lands in the existing per-workspace catch (`:676`), which logs and counts `failures++`.
+3. **Under the lock:** re-read, re-parse and re-`mutate`, with the same handling as step 1. Then write the tmp file and rename it. `close()` the handle in a `finally`. The lockfile stays in place, as Rust leaves it.
+4. Replace the docblock's "trusts its callers (consistent with `with_locked_json`)" with the cross-language contract: the same sibling name, a share-mode exclusion against fs2's `LockFileEx`, and the undocumented flag.
 
-`rewriteJson(filePath, mutate, logger, opts = {})`:
-1. **Unlocked pre-check, which creates nothing.** `readFile` the data file.
-   - ENOENT → `return false` silently, exactly as today. No `open`, no lockfile, no warn.
-   - Parse or shape failure → today's path-only warn and `return false`.
-   - Otherwise run `mutate` on this pre-read copy. If it returns `false`, `return false` with no lock taken.
-   - **Why:** a workspace where Tandem was never installed, or whose files hold no Tandem entry, gets no `.<file>.tandem-lock` residue and no new warnings. The pre-check is race-safe: an entry Rust adds after it is an install-after-scrub ordering, not a lost update. It matches Rust's own uninstall, which skips an absent file before locking (`cowork_installer.rs:413-436`, `if !path.exists()`).
-2. **Acquire the lock.**
-   - Path: `lockPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.tandem-lock`)`, byte-identical to Rust's `format!(".{file_name}.tandem-lock")`.
-   - Open it with `fsPromises.open(lockPath, O_RDWR | O_CREAT | exlock)`, where **`exlock` is computed at call time inside `rewriteJson`**: `const exlock = process.platform === "win32" ? UV_FS_O_EXLOCK : 0`. The module-level constant is only the literal `const UV_FS_O_EXLOCK = 0x10000000`, with a comment: not exported by Node, undocumented, measured, and checked in CI by the Rust Windows test below. A module-scope platform test would be baked in at the test file's first import and would defeat the per-case platform stub.
-   - On POSIX the flag is `0`, since it means something else to POSIX libuv. All callers are Windows-only anyway.
-   - **EBUSY:** retry on Rust's schedule (200, 500, 1500, then 5000 ms repeated) through `opts.sleep ?? realSleep`, until the cumulative sleep reaches 30000 ms. Summing the sleeps instead of reading a wall clock keeps the tests deterministic.
-   - **ENOENT on the lock open** (the directory vanished after the pre-check) → `return false` silently.
-   - **Timeout, or any other open error** (`EACCES`, `EPERM`, …) → `throw new ScrubLockError(filePath)`. The message is `cannot lock <path> — skipped`, with the path only and no errno text. **Never write without the lock.** It throws rather than returning `false` because `false` already means "absent or unchanged". A skipped scrub can leave a token-bearing `installed_plugins.json` entry behind (the #1599 credential-remanence shape), so it must count as a failure.
-3. **Under the lock:** re-read, re-parse and re-`mutate` the data file, using the same ENOENT, invalid-JSON and not-an-object handling. Then tmp write and rename. `close()` the handle in a `finally` wrapped around all of step 3. The tmp and rename target the data file, not the lockfile, so the sibling design keeps the rename legal (the Rust docblock's os error 33 rationale).
-4. The lockfile is left in place, as Rust leaves it.
-5. Replace the docblock sentence "trusts its callers (consistent with `with_locked_json` on the Rust side)". Keep the path-trust meaning, and add the cross-language lock contract: the same sibling name, and a share-mode exclusion that interoperates with fs2's `LockFileEx`, relying on an undocumented libuv flag.
-
-**`scrubCoworkWorkspace(ws, logger, opts = {}): Promise<number>`**, extracted from `runUninstallScrub`'s per-workspace body and exported for tests:
-- It loops over the three `[file, mutator]` pairs with **one try/catch per file**, so a locked `installed_plugins.json` no longer skips the other two files.
-- Each catch runs `logger.error(`scrub failed for ${file}: ${message}`)` and counts one failure.
-- It returns the count, and `runUninstallScrub` adds it to `failures`.
-- Exit code: `runUninstallScrub` already returns 1 when `failures > 0` (`:714`). This is the npm CLI's own exit code. NSIS runs the desktop exe's Rust scrub (`installer-hook.nsi:58`), not this one.
-
-**`src-tauri/src/cowork_atomic_json.rs`: the Rust side now waits instead of failing.**
-- Today `.open(&lock_path)?` (`:153-158`) sits outside the backoff loop, and only `WouldBlock` is retried (`:165-189`). While Node holds its share-mode handle, Rust's open fails with os error 32 and surfaces as `WriteStatus::Failed` (`write_status_from`, `cowork_installer.rs:883-890`). The install and remove flows write the three files in separate `with_locked_json` calls (`cowork_installer.rs:336/353/362`, `:416/425/434`), and nothing rolls back. So a mid-sequence `Failed` would leave a partial registration, which is the inconsistent state #1600 describes, only reported this time.
-- Move the lockfile open **into** the loop. Add `fn is_lock_contention(e: &io::Error) -> bool`, true for `e.kind() == io::ErrorKind::WouldBlock || (cfg!(windows) && e.raw_os_error() == Some(32))`, and apply it to both the open error and the `try_lock_exclusive` error.
-- Contention runs through the same backoff and 30 s budget and ends as `CoworkError::LockTimeout` → `WriteStatus::Locked`. The `cfg!(windows)` term matters: raw 32 is `EPIPE` on Linux.
-- Factor the open into `fn open_lock_file(lock_path: &Path) -> io::Result<File>` so the Windows test can call it directly.
-- Docblock beside the sibling-lock comment: the npm scrub's `rewriteJson` takes the same file by exclusive-share open, and **renaming the lockfile on either side silently removes that exclusion**. Explain why os error 32 counts as contention.
+**`cowork_atomic_json.rs`. This change is required, not polish.**
+- **Why:** `.open(&lock_path)?` sits outside the backoff loop (`:153-158`). While Node holds its handle, Rust fails immediately with os error 32 (`WriteStatus::Failed`) instead of waiting. The install flow writes the three files in separate calls with no rollback, so that failure would leave a partial registration.
+- **Change:** move the open into the loop, and add `fn is_lock_contention(e: &io::Error) -> bool`.
+  - It is true for `WouldBlock`, or for `cfg!(windows) && raw_os_error() == Some(32)`. Raw 32 is `EPIPE` on Linux, hence the `cfg!`.
+  - Apply it to both the open error and the lock error, so contention ends as `LockTimeout` within the same budget.
+  - Comment beside the lock name that renaming the lockfile on either side silently removes the exclusion.
 
 **Docs.**
-- `docs/security.md:485`: take (i) out of "What is NOT accepted here" and state #1600 as fixed. Name the mechanism: the same sibling lockfile, fs2 `LockFileEx` on the Rust side, and an exclusive-share open on the Node side.
-- In the same entry, state the contention outcome in both directions: Rust waits in its budget; Node throws and the scrub counts a failure.
-- Also record **the named residual**: the Node half depends on the undocumented libuv flag `0x10000000`. The Rust Windows test checks it, but only against the Node preinstalled on the GitHub `windows-latest` image. A user's own Node version is not checked.
-- `tests/docs/config-writer-set-claims.test.ts:182`: rewrite the `why` string, which says the writer does not take the lock. Keep `sites: 2`. The rewritten `why` must **name the lockfile open explicitly**: it is `fsPromises.open(lockPath, …)`, never written to, and the census skips it only because the site regex `\b(?:fs|promises)\.open\s*\(` is case-sensitive (capital `P`, no word boundary). A refactor to `fs.promises.open` would take the count to 3, and that is a lockfile open, not a new config writer. **Run the test to confirm the count rather than trusting this.** #1599's accepted set is not widened.
+- `docs/security.md:485`: remove (i) from "What is NOT accepted here". State #1600 as fixed and name the mechanism. Name the residual: the Node half rests on an undocumented libuv flag, checked only against the Node on the `windows-latest` image.
+- The config-writer `why` string: the writer now takes the lock. Keep `sites: 2`, and run the test to confirm the new `fsPromises.open` does not change the count.
 
 ## Tests
 
-**vitest, `tests/cli/uninstall-scrub.test.ts`.**
+**vitest, `tests/cli/uninstall-scrub.test.ts` (runs on ubuntu `check`).** Add `open: _openSpy` to the `node:fs` promises mock, defaulting to resolve `{ close: _closeSpy }`, and pass `{ sleep: vi.fn() }`. The existing `rewriteJson` cases stay green.
+1. **Lock name and flags.** The `open` call receives `path.join("/fake", ".installed_plugins.json.tandem-lock")` and `O_RDWR | O_CREAT | 0x10000000`.
+2. **Order** (`invocationCallOrder`): pre-check `readFile` < `open` < locked `readFile` < `writeFile` < `rename` < `close`.
+3. **`EBUSY`, `EBUSY`, then success.** It writes, and `sleep` is called with `200` and then `500`.
+4. **`EBUSY` forever.** It rejects with a message containing the path. `readFile` runs exactly once, `writeFile` and `rename` never run, and the sleeps sum to at least 30 000.
+5. **`EPERM` on the lock open** (`_openSpy.mockRejectedValueOnce(Object.assign(new Error("EPERM"), { code: "EPERM" }))`). It rejects, `readFile` runs exactly once, and `writeFile`, `rename` and `sleep` are never called. This kills a fail-open fall-through and a best-effort try around the lock.
+6. **`ENOENT` on the lock open.** It resolves `false`, with no `warn`, no `writeFile` and no `rename`.
+7. **The data file is absent.** It returns `false` with **zero `open` calls** and no `warn`.
+8. **`mutate` returns `false`.** It returns `false` with zero `open` calls.
 
-Add `open: _openSpy` to the `node:fs` `promises` mock. In `rewriteJson`'s `beforeEach`, reset it to resolve `{ close: _closeSpy }`. The existing three cases stay green: ENOENT still returns `false` with no open, malformed JSON still warns once, and the write case reads the same content twice. Stub `process.platform` to `"win32"` per case (unless stated otherwise) and restore it afterwards. Pass `{ sleep }`, a `vi.fn` resolving immediately.
+**Rust, `cowork_atomic_json.rs` `#[cfg(test)]`.**
+- **R1 (all three `rust-test` legs):** `WouldBlock` → `true`; `from_raw_os_error(32)` → `cfg!(windows)`; `NotFound` → `false`.
+- **R2, `#[cfg(windows)]`** (the required `windows-latest` `rust-test` leg). It spawns `node -e` with the literal `0x10000000`. **If `node` cannot be spawned it panics and names the binary. It never skips.**
+  - *Node holds:* Rust's `OpenOptions` open fails with 32. `with_locked_json` started on a thread returns `Ok` once the child releases.
+  - *Rust holds* (`mutate` blocks on a channel): the Node child's open prints `EBUSY`.
+  - The windows leg has no `setup-node` step, so the first CI run is also the first proof that `node` is on PATH. If it is missing, the fix is a `setup-node` step, never a skip.
 
-1. **Name and flags.** The first `open` call gets `path.join("/fake", ".installed_plugins.json.tandem-lock")` and `O_RDWR | O_CREAT | 0x10000000`. Kills: no lock, a wrong name, a missing EXLOCK bit.
-2. **Call-time platform.** With `process.platform` stubbed to `"linux"`, the flags are `O_RDWR | O_CREAT` without the bit. Together with case 1 on the same module instance, this kills a module-scope constant on any host.
-3. **Order** (`invocationCallOrder`): pre-check `readFile` < `open` < locked `readFile` < `writeFile` < `rename` < `close`. Kills: releasing before the write, and writing from the unlocked read.
-4. **EBUSY, EBUSY, then success** writes and renames, with `sleep` called with `200` then `500`. Kills: no retry.
-5. **EBUSY forever** rejects with `ScrubLockError`, whose message contains the path. `readFile` is called exactly once (the pre-check); `writeFile`, `rename` and `close` never are; the sleeps sum to at least 30000. Kills: proceeding unlocked after a timeout, and returning `false`.
-6. **Non-EBUSY lock error.** `_openSpy.mockRejectedValueOnce(Object.assign(new Error("EPERM"), { code: "EPERM" }))` rejects with `ScrubLockError`. `readFile` is called exactly once, and `writeFile`, `rename` and `sleep` never are. Kills: the fail-open fall-through (`catch { warn }` then carrying on), and a best-effort try around the lock.
-7. **ENOENT on the lock open** resolves `false` with no `warn`, no `writeFile` and no `rename`.
-8. **Absent data file.** Pre-check `readFile` ENOENT → `false`, **zero `open` calls**, no `warn`. Kills: locking before the existence check (lockfile residue).
-9. **Nothing to remove.** The data file parses but `mutate` returns `false` → `false`, zero `open` calls. Kills: creating a lockfile in a workspace Tandem never touched.
-10. **A rejecting `rename`** still calls `close` (the `finally`).
-11. **`scrubCoworkWorkspace` per-file accounting.** The first file's lock times out; the other two files parse, change and succeed. The result is `1`; `logger.error` is called once and names the first file; `rename` runs twice. Kills: the old all-three try/catch, and not counting the failure.
-12. **Rust name pin.** `src-tauri/src/cowork_atomic_json.rs` still contains `format!(".{file_name}.tandem-lock")`, and `uninstall-scrub.ts` still contains `.tandem-lock`. Without this, a rename on either side leaves both suites green.
-
-**Rust, `src-tauri/src/cowork_atomic_json.rs` `#[cfg(test)]`.**
-
-- **R1, `is_lock_contention` (all three `rust-test` legs):**
-  - `io::ErrorKind::WouldBlock` → `true`;
-  - `io::Error::from_raw_os_error(32)` → `cfg!(windows)`;
-  - `io::ErrorKind::NotFound` → `false`.
-- **R2, `#[cfg(windows)] node_exclusive_share_open_interoperates_with_with_locked_json`** (the `windows-latest` `rust-test` leg, a required check). It spawns `node -e` with a script using the literal `0x10000000`. If `node` cannot be spawned, **the test panics**, naming the missing binary: it must never skip, per the Windows-gated-spec gotcha.
-  - *Node holds, Rust waits.* The Node child opens the lockfile with `O_RDWR | O_CREAT | 0x10000000`, prints `held`, and waits on stdin. Rust asserts `open_lock_file(&lock)` fails with `raw_os_error() == Some(32)`. It then starts `with_locked_json` on a thread, closes the child's stdin after ~300 ms, and asserts the thread returns `Ok`.
-  - *Rust holds, Node is refused.* `with_locked_json` runs on a thread whose `mutate` blocks on a channel. A Node child attempts the same open and prints `err.code`. Rust asserts `EBUSY`, then releases the channel.
-  - This is the CI form of the probe table. It checks both the libuv flag and the fs2 interop, against the image's Node.
-
-**Mutation-test**, restoring from a file copy and never with `git checkout`:
+**Mutation-test**, restoring from a file copy and never `git checkout`:
 
 | Mutation | Must go red |
 |---|---|
-| The EXLOCK bit | Case 1 |
-| A module-scope platform test | Case 2 |
-| The lock name | Cases 1, 12 |
-| The retry | Case 4 |
-| The timeout throw, changed to `return false` | Case 5 |
-| The non-EBUSY fall-through | Case 6 |
-| The pre-check ordering | Cases 8, 9 |
-| The per-file try/catch | Case 11 |
-| The raw-32 arm of `is_lock_contention` | R1, and R2's "Rust waits" half |
+| the EXLOCK bit, or the lock name | 1 |
+| writing from the unlocked read | 2 |
+| the retry | 3 |
+| the timeout throw changed to `return false` | 4 |
+| the non-EBUSY fall-through | 5 |
+| `open` moved before the pre-check | 7, 8 |
+| the raw-32 arm | R1, and R2's "Node holds" half |
 
-## CI coverage, stated honestly
+## CI legs, stated honestly
 
-- The vitest cases run on ubuntu `check`.
+- The vitest cases run on ubuntu `check`, against mocks only.
 - R1 runs on all three `rust-test` legs.
-- **R2 is the only execution of the real `LockFileEx`-versus-share-mode interop**, and it runs on the `windows-latest` `rust-test` leg only. That leg has no `setup-node` step (`ci.yml:54-109`), so R2 uses whatever Node the runner image preinstalls. It proves the flag on that Node version, not on the user's. The first CI run is also the first proof that `node` is on that leg's PATH. If it is not, R2 goes red by design, and the fix is a `setup-node` step, never a skip.
-- A local Windows run of R2 is the builder's pre-push evidence and does not verify anything cross-platform.
-- The PR body reproduces the probe table and names these legs.
+- **R2 is the only execution of the real interop**, on `windows-latest`, against that image's Node and not the user's.
+- A local Windows run of R2 is pre-push evidence only.
 
 ## Done when
 
-- Cases 1-12, R1 and R2 are green and mutation-checked.
-- `security.md` and the config-writer `why` are updated.
-- `tests/docs/config-writer-set-claims.test.ts` and `security-findings-claims.test.ts` pass.
-- The PR body carries the probe table, the libuv-flag residual and the CI legs above.
+- Cases 1-8, R1 and R2 are green and mutation-checked.
+- `config-writer-set-claims` and `security-findings-claims` pass.
+- The PR body carries the probe table, the libuv-flag residual and the legs above.
+- **Build `## Closes` last.** It includes #1600 only if R2 ran green on CI and no remaining work against #1600 is named anywhere.
 
 ## Not in scope
 
-- **Not pursued: option 2, dropping the npm scrub's Cowork writes.** It became unnecessary once option 1 measured real, and it would change what `tandem --uninstall-scrub` cleans.
-- The MCP-config writers under #1599 (accepted).
-- The `rotate-token.ts:160-169` Cowork re-walk gap.
+The MCP-config writers under #1599 (accepted). The `rotate-token.ts:160-169` Cowork re-walk gap. Per-file failure accounting within a workspace.
 
-## Review corrections (round 1)
+## Review corrections (scope cut)
 
-**Adopted**
-- **BLOCKING: taking the lock before the read changed behaviour in untouched workspaces** (lockfile residue, new warnings); raised three times. Fix: an unlocked pre-check with a silent ENOENT and a no-change early return before any `open`; ENOENT on the lock open is silent; Rust uninstall parity is cited. Cases 7-9 were added.
-- **BLOCKING: nothing tested "never write without the lock".** Case 6 (EPERM) now asserts no write, no rename and no sleep, and the fall-through is in the mutation list. The result is a `ScrubLockError` rejection rather than `false` plus a warn, per the adopted counted-failure finding below.
-- **Lock timeout reported as success.** Timeouts and non-ENOENT lock errors now throw `ScrubLockError`. `scrubCoworkWorkspace` counts them per file with `logger.error`, the exit code becomes 1, and case 11 was added.
-- **Declined Rust retry on os error 32** (raised twice, with the partial-install consequence). The decline is reversed: the open moves into the backoff loop behind `is_lock_contention`, with R1. This also supersedes the "loud, not lost untested" finding, because contention now waits instead of failing.
-- **The libuv flag was proven only by a scratchpad probe** (raised twice). R2 now runs on the required Windows `rust-test` leg, fails closed without `node`, and the flag dependency is a named residual in `security.md`. The "no Windows job runs it" sentence was wrong and has been removed.
-- **EXLOCK was not specified as call-time** (raised twice). It is now specified, and case 2 kills a module-scope constant on any host.
-- **The config-writer census relied on regex case-sensitivity.** The `why` string now names the lockfile open and the blind spot.
-- **Policy half.** The Closes derivation now states that the DECIDE-bucket "#1600 policy half" is settled as fix.
-
-**Not adopted**
-- **The Node-only Windows spec in the `windows-acl-proof` job.** R2 covers it instead. That job's gate script and wiring drift guard are scoped to real-`icacls` specs (`scripts/ci/windows-acl-proof.mjs` header), and a Node-only spec would test the libuv flag without fs2. R2 tests both directions against the real `with_locked_json` on a required leg.
-- **Case 7 as written ("result false, one warn").** The test is adopted, but it now expects a `ScrubLockError` rejection, because the counted-failure finding changed what a non-ENOENT lock error does. A `false` plus warn would make the skipped scrub report success.
+- **Removed:**
+  - the `scrubCoworkWorkspace` extraction and per-file try/catch, with its test. The existing per-workspace catch already counts the thrown lock failure.
+  - the `ScrubLockError` class. A plain path-only `Error` does the same job.
+  - the call-time platform computation of the EXLOCK bit, with its test. The function is Windows-only by its sole caller, so the flag is constant.
+  - the Rust/TS lock-name source pin (a drift guard). Case 1 and R2's hard-coded name cover the name.
+  - the rejecting-`rename`-still-closes case.
+  - the census regex blind-spot essay in the `why` string.
+- **Kept, because the fix is unsafe without them:** the Rust open-inside-loop (without it, the Node lock turns a Rust install into a partial registration), and R2 (the only proof of an undocumented flag).
+- **Blocking finding 2** (lock before read leaves residue and adds warnings): fixed directly by the pre-check, with cases 6-8.
+- **Blocking finding 3** (nothing tests "never write without the lock"): fixed directly by case 5, which is in the mutation table.
+- **Option 2 re-examined and rejected on evidence:** the MSI target skips the NSIS hook, and `data-locations.md:173` promises the npm scrub removes Cowork registration.
