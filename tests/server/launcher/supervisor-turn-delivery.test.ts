@@ -380,6 +380,19 @@ describe("#1866 — a failed-write callback that lands after teardown", () => {
     expect(texts(child2)).toEqual([]);
   });
 
+  it("user stop after a crash: a callback landing after the stop carries nothing", async () => {
+    const { sup, emit } = makeSupervisor({ restartBackoffsMs: [5_000] });
+    const { child1, w1 } = await freshChildWithHeldWake(sup, emit);
+    exitChild(child1, 1);
+
+    await sup.stop();
+    failCallbacksOnly([w1]);
+    await sup.start();
+
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([]);
+  });
+
   it("relaunch keeps a wake owed by a crash", async () => {
     const { sup, emit } = makeSupervisor({ restartBackoffsMs: [5_000] });
     const { child1, w1 } = await freshChildWithHeldWake(sup, emit);
@@ -638,6 +651,32 @@ describe("#1867 — an alive child that has stopped reading its input", () => {
     expect(child1.kills).toEqual([]);
     expect(texts(child1)).toEqual([SUPERVISOR_INITIAL_PROMPT, SUPERVISOR_WAKE_PROMPT]);
   });
+
+  it("the first of two outstanding turns resolving does not re-arm the receipt check", async () => {
+    const { sup, emit } = makeSupervisor({ turnReceiptMs: RECEIPT_MS, wakeLatchMs: 300 });
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, INIT);
+    await settle();
+    emit(annotationEvent());
+    await waitFor(() => texts(child1).length === 2, "the latch-expiry flush", 2_000);
+
+    // Turn 1 resolves while the flushed turn may still be in a silent tool call.
+    pushJson(child1, RESULT_OK);
+    await settle();
+    emit(annotationEvent());
+    expect(texts(child1)).toHaveLength(3);
+    await sleep(1_000);
+    expect(child1.kills).toEqual([]);
+
+    // Once every outstanding turn has resolved, the next write is checked again.
+    pushJson(child1, RESULT_OK);
+    pushJson(child1, RESULT_OK);
+    await settle();
+    emit(annotationEvent());
+    expect(texts(child1)).toHaveLength(4);
+    await waitFor(() => child1.kills.includes("SIGTERM"), "the receipt kill", 2_000);
+  });
 });
 
 // --- #1780 --------------------------------------------------------------------
@@ -709,6 +748,37 @@ describe("#1780 — a Claude Code that is not signed in", () => {
     const child1 = children[0];
     pushJson(child1, INIT);
     pushJson(child1, { ...NOT_SIGNED_IN, result: "Tool failed: gh says you are not logged in" });
+    await settle();
+
+    expect(child1.kills).toEqual([]);
+    expect(sup.status().running).toBe(true);
+  });
+
+  it("does not trip on the exact refusal text inside a longer result", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, INIT);
+    pushJson(child1, {
+      ...NOT_SIGNED_IN,
+      result: "Tool failed: Not logged in · Please run /login",
+    });
+    await settle();
+
+    expect(child1.kills).toEqual([]);
+    expect(sup.status().running).toBe(true);
+  });
+
+  it("does not trip on a successful answer that starts with the refusal text", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, INIT);
+    pushJson(child1, {
+      ...NOT_SIGNED_IN,
+      is_error: false,
+      result: "Not logged in to GitHub — run gh auth login",
+    });
     await settle();
 
     expect(child1.kills).toEqual([]);

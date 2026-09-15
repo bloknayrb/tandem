@@ -184,8 +184,12 @@ const WAKE_LATCH_MAX_MS = 10 * 60_000;
  *     empty config dir): +0.43 s for turn 1, +0.02 s for turn 2.
  *   - A child that has not read a turn emits nothing on stdout.
  * Not measured: `init` latency for a large `--resume` conversation, and
- * whether `init` is emitted for a turn written while another is still running
- * (the known-idle gate in `sendTurn` makes the second moot).
+ * whether `init` is emitted for a turn written while another is still running.
+ * The second is why such a write is never receipt-checked: `sendTurn` checks a
+ * write only when every earlier turn on the spawn has had its `result`. It
+ * counts turns rather than flagging one, because the latch-expiry flush can
+ * leave two outstanding, and the first `result` must not re-arm the check while
+ * the flushed turn may still be running a silent tool call.
  *
  * The value is policy, not measurement: about 14x the slowest first turn seen.
  */
@@ -716,6 +720,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * unannounced until some unrelated later event happened to wake the session.
    */
   let wakeOwedAcrossSpawns = false;
+  /** Bumped by every user `stop()`. A spawn records it at teardown, so a
+   * failed-write callback that lands after a LATER stop cannot re-raise the
+   * `wakeOwedAcrossSpawns` that stop cleared (#1866). */
+  let userStopCount = 0;
 
   /**
    * The last session answered "Not logged in" (#1780), so the next spawn owes
@@ -1204,14 +1212,22 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
      * than read live, because a callback can land after `start()` has already
      * lowered `userStopped` again. */
     let carryOwedWake = true;
+    /** `userStopCount` at this spawn's first teardown; see `carryOwedWake`. */
+    let stopCountAtTeardown = 0;
     /** Armed by a write to a known-idle child; cleared by ANY parsed envelope
      * (#1867). If it fires, the child accepted the write into its pipe and never
      * read it. */
     let receiptTimer: NodeJS.Timeout | null = null;
-    /** A turn was written on this spawn and no `result` has closed it. While
-     * true, a further write (only the latch-expiry flush can make one) goes to
-     * a child that may be mid-turn, so it is not receipt-checked. */
-    let unresolvedTurn = false;
+    /** Turns written on this spawn that no `result` has closed yet. While
+     * above zero, a further write goes to a child that may be mid-turn, so it is
+     * not receipt-checked. A count, not a flag: the latch-expiry flush writes a
+     * second turn while the first is open, and the first one's `result` must
+     * not make the child read as idle while the second may still be running.
+     * If the CLI instead folds such a write into the running turn and answers
+     * both with one `result`, the count stays above zero and receipt checks stop
+     * for the rest of this spawn. The latch still recovers that spawn, so the
+     * error is toward the pre-#1867 behaviour, never toward killing a live turn. */
+    let unresolvedTurns = 0;
 
     function clearLatch(): void {
       turnInFlight = false;
@@ -1256,8 +1272,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
      * the owed wake crosses to the next spawn via `wakeOwedAcrossSpawns`. The
      * failure callback can land on either side of `teardownTurnDelivery`:
      * before it, it re-arms `pendingWake` and teardown promotes that; after it,
-     * it promotes directly, gated by the spawn's `carryOwedWake` latch so a
-     * user `stop()` still carries nothing (#1866). Either way it touches only
+     * it promotes directly, gated by the spawn's `carryOwedWake` latch and by
+     * `userStopCount`. A user `stop()` still carries nothing, whether it ended
+     * this spawn or came after a crash had already ended it (#1866). Either way it touches only
      * this closure and one supervisor-level boolean — never `child`, never a
      * stdin — so a stale callback cannot reach a successor. The bounded cost: a
      * callback that lands after a successor already consumed the flag sets it
@@ -1268,12 +1285,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         console.error("[Launcher] Claude stdin not writable — turn not delivered");
         return false;
       }
-      // Receipt-check only a write to a child known to be idle: `turnInFlight`
-      // blocks writes until a `result`, so the one write that can find a turn
-      // unresolved is the latch-expiry flush, and that child may legitimately
-      // be deep in a silent tool call (#1867).
-      const receiptCheckable = !unresolvedTurn;
-      unresolvedTurn = true;
+      // Receipt-check only a write to a child known to be idle. `turnInFlight`
+      // blocks writes until a `result`, so a write can find a turn unresolved
+      // only after the latch-expiry flush: the flush itself, or any write after
+      // the FIRST of the two outstanding turns resolves. That child may
+      // legitimately be deep in a silent tool call (#1867).
+      const receiptCheckable = unresolvedTurns === 0;
+      unresolvedTurns += 1;
       turnInFlight = true;
       if (latchTimer) clearTimeout(latchTimer);
       latchTimer = setTimeout(() => {
@@ -1294,9 +1312,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         clearLatch();
         if (tornDown) {
           // Teardown already ran, so `pendingWake` is a dead flag nobody will
-          // promote. Carry the wake across directly — unless a user stop ended
-          // this spawn (#1866).
-          if (carryOwedWake) wakeOwedAcrossSpawns = true;
+          // promote. Carry the wake across directly, unless a user stop ended
+          // this spawn, or came after its teardown and already cleared what a
+          // crash owed (#1866).
+          if (carryOwedWake && userStopCount === stopCountAtTeardown) {
+            wakeOwedAcrossSpawns = true;
+          }
         } else {
           pendingWake = true;
         }
@@ -1351,6 +1372,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       if (!tornDown) {
         tornDown = true;
         carryOwedWake = !userStopped;
+        stopCountAtTeardown = userStopCount;
       }
       unsubscribeFromEvents();
       // Hand an undelivered wake to the next spawn rather than dropping it —
@@ -1456,7 +1478,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         // wake-delivery kill streak (#1868). Deliberately `result` only: `init`
         // proves the turn was read, not that the session can finish one.
         deliveryKillStreak = 0;
-        unresolvedTurn = false;
+        unresolvedTurns = Math.max(0, unresolvedTurns - 1);
 
         // A Claude Code that is not signed in answers every turn with this
         // refusal and never exits (#1780; see `NOT_SIGNED_IN_RESULT`). Stop:
@@ -1911,6 +1933,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   async function stop(): Promise<void> {
     return withLock(async () => {
       userStopped = true;
+      userStopCount += 1;
       wakeOwedAcrossSpawns = false;
       await stopInternal();
     });
