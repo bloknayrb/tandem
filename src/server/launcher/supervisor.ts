@@ -1557,12 +1557,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         // Same guarded, fail-open probe as `scheduleRestart`'s trip: a missing
         // CLI (exit 127) can have its stdin error land before Node records the
         // exit, and that user needs Setup, not Restart.
-        let cliUsable = true;
-        try {
-          cliUsable = probeCliUsable();
-        } catch (err) {
-          console.error("[Launcher] CLI probe failed; reporting a wake-delivery failure:", err);
-        }
+        const cliUsable = probeCliUsableFailOpen("a wake-delivery failure");
         lastError = cliUsable ? "wake-delivery-failed" : "cli-unusable";
         console.error(
           cliUsable
@@ -1629,6 +1624,19 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     });
   }
 
+  /** `probeCliUsable`, total and failing OPEN (a probe that could not run is
+   * not evidence the CLI is missing). Both breaker trips call it from inside a
+   * child `error`/`exit` emit, where a throw is an uncaughtException — see
+   * `scheduleRestart`. `fallback` names what is reported instead. */
+  function probeCliUsableFailOpen(fallback: string): boolean {
+    try {
+      return probeCliUsable();
+    } catch (err) {
+      console.error(`[Launcher] CLI probe failed; reporting ${fallback}:`, err);
+      return true;
+    }
+  }
+
   function scheduleRestart(): void {
     // Already given up — nothing to schedule, and re-entering would re-run the
     // trip branch's probe. One failed spawn can reach here TWICE: the "error"
@@ -1668,12 +1676,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // evidence the CLI is missing, and "go install Claude Code" is the more
       // alarming and less recoverable of the two claims to make wrongly. This
       // is exactly the pre-change behaviour.
-      let cliUsable = true;
-      try {
-        cliUsable = probeCliUsable();
-      } catch (err) {
-        console.error("[Launcher] CLI probe failed; reporting a plain crash loop:", err);
-      }
+      const cliUsable = probeCliUsableFailOpen("a plain crash loop");
       lastError = cliUsable ? "circuit-open" : "cli-unusable";
       console.error(
         `[Launcher] Circuit breaker tripped: ${recentAttempts.length} restart attempts in ${CIRCUIT_BREAKER_WINDOW_MS}ms — giving up. ${
