@@ -143,9 +143,10 @@ function makeScrubLogger(
 async function openLogger(): Promise<ScrubLogger> {
   // Stderr sink first, so it can carry the reason `%LOCALAPPDATA%` was refused.
   // Passing no logger here dropped that reason entirely — and this is the one
-  // branch where it matters most: NSIS runs the scrub detached, so if the
-  // rejection is what stopped the log file from existing, stderr is the only
-  // surface left and "no log, no reason" is the whole failure report.
+  // branch where it matters most: if the rejection is what stopped the log
+  // file from existing, stderr is the only surface left and "no log, no
+  // reason" is the whole failure report. (NSIS does not run this file — see
+  // the header — so that stderr is the terminal of whoever ran it by hand.)
   const stderrWrite = (level: string, msg: string): void => {
     process.stderr.write(`[tandem uninstall-scrub ${level}] ${msg}\n`);
   };
