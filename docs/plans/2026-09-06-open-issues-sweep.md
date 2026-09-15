@@ -458,11 +458,11 @@ literal in `tests/skill-instruction-contract.test.ts` moves with it). `Hooks arm
 | 7 | E2-rust | #1762 #1808 #1809 #1810 + #1455 pointer (Refs) + #1825 Tauri section | `fix/desktop-sidecar-lifecycle-and-start-at-login-repair-1762` | #1968 | — | armed | merged | Merged 2026-09-11 (`cfcb10e7`); closes #1762 #1808 #1809 #1810. **Broke the ubuntu and macOS `rust-test` legs at COMPILE time on first push** — `SIDECAR_UNLOCK_DEADLINE_SECS` was `#[cfg(target_os = "windows")]` while a deliberately cross-platform test asserts against it; fixed in `7e0fd073` with `#[cfg_attr(not(target_os = "windows"), allow(dead_code))]` and a comment naming why it compiles everywhere. See lesson 2. #1825's Tauri first bullet was re-measured and found **already fixed by #1925** (`sidecar_env_pairs` exports the three vars at the spawn site); #1455 got its dangling ADR-045 pointer repaired and nothing else, so its dated 2026-10-15 gate is un-pre-empted. |
 | 7 | K-client | #1824 remainder #1713 #1724 #1727-split (Refs) #1709 #1544 | `fix/client-lows-editor-ui-a11y-and-product-copy-1709` | #1966 | — | armed | merged | Merged 2026-09-11 (`09d304e2`); closes #1713 #1724 #1709 #1544. Ten of #1824's items (B, C, D, E, F, G, H, I, L, N) landed, each re-verified against current master and mutation-tested. **#1824 stays open on six carve-outs** — #1963 (item A), #1964 (item K, also extends #1722), #1965 (item M), #1960, #1961, #1962; A/K/M were cut because each needs a cross-cutting mechanism rather than a same-file fix. **#1960 has since closed *not planned*** — shared chat "seen" state is the more correct behaviour for one user with two windows on one document. The generated body first shipped `Closes #1824`, contradicting its own For-Bryan section twelve lines down; **corrected before merge.** One testid-snapshot regeneration. |
 | 7 | K-tests | #1825 Tests remainder #1855 #1861 #1734 (e2e) #1584 #1599 checkboxes (Refs) | `fix/test-suite-integrity-silent-greens-fragile-assertions-and-an-unimplemented-perf-decision-1861` | #1973 | — | armed | merged | Merged 2026-09-11 (`3ab75719`); closes #1855 #1584. Every issue here was *a test that lies*, so the failure mode of fixing them is making a test pass that should fail. #1861's fix exposed a silent mode nobody had characterized: the old stripper truncated `autostart.rs` at len=5334 vs 6562, dropping **8 production symbols** from every `rustSources()` guard, invisible to all seven pre-existing consumers. #1855's 8.3 axis was claimed unreachable in `2411d9a2`'s message and then **reproduced directly** (corrected in `eccc1939`). #1734 implemented #1334's decision — 714ms FAIL old / 311ms PASS new — with a source-scan pin for the CSS-class locator, which carries none of Critical Rule 7's contract. **Refs #1861 (carve-out #1970), #1734 (carve-out #1974), #1825 (bullet 9), #1599 (no work).** The returned `closes[]` named four; the body named two and was right — lesson 1. |
-| 8 | E2-upgrade | #1791 #1792 (+#1722's `updateSettings` boolean, once) + smoke-lines merge | — | — | — | — | planned-not-started | |
-| 8 | K-sec-server | #1822 items 1,2,3,7,8 (+#1488 comment, Refs) | — | — | — | — | planned-not-started | **Re-scoped 2026-09-11: #1609 removed** — closed *not planned* 2026-09-08 as an accepted finding, not work. #1488 also closed; its entry is a cross-reference comment only. See the wave table row. |
+| 8 | E2-upgrade | #1791 #1792 (+#1722's `updateSettings` boolean, once) + smoke-lines merge | `fix/upgrade-and-downgrade-paths-annotation-envelope-compatibility-and-settings-that-go-silently-inert-1791` | #1985 | — | armed | merged | Merged 2026-09-15 (`7e5d0f26`); closes #1791. **#1792 stays open on item 3**, the `welcome.md` refresh: the spec's measurement refutes the premise, and options (a)/(b)/(c) are Bryan's. #1722 is Refs: the `updateSettings` boolean landed, and the rail half belongs to G6 (wave 9). Filed #1980: doctor now counts parked and quarantined envelopes, but nothing reads them back. The run's fix and ship stages were finished by hand from its journal. The round-1 PR-review fixes were not re-reviewed by an agent, and the PR body says so. **The smoke-lines merge was not carried by this group**; it is #1989. |
+| 8 | K-sec-server | #1822 items 1,2,3,7,8 (+#1488 comment, Refs) | `fix/security-lows-server-half-log-injection-unbounded-frames-a-leaking-413-and-two-presence-status-oracles-1822` | #1987 | — | armed | merged | Merged 2026-09-15 (`c1a4df93`) and closes nothing. **#1822 is Refs:** items 1, 2 and 3 are fixed, item 7 needed no change, item 8 carries two decisions for Bryan, and items 4-6 belong to K-sec-launcher. #1488 got a cross-reference comment only; its acceptance is untouched. Re-scoped 2026-09-11: #1609 removed as an accepted finding. Filed #1981 (the SDK sub-app's parser caps every `/api` body at 100 kB, so browser upload over ~100 kB is broken; not bundled, because every fix moves security middleware) and #1982 (`MAX_FILE_SIZE` vs the new frame cap). The round-1 fix agent died on the spend limit after committing, so its fixes were read by hand rather than re-reviewed. The `docs/security.md` drift it left (a 70 MB claim that #1981 refutes, plus a stale citation) is corrected in a separate PR. |
 | 8 | K-sec-launcher | #1822 items 4,5,6 #1600 (fix half) | — | — | — | — | planned-not-started | Spot-checked 2026-09-11: items 5 and 6 still present on master; item 4's `supervisor.ts:723-739` line range is stale (file now 1700+ lines). See the wave table row. |
-| 8 | G1 launcher stdin | #1866 #1868 #1867 #1780 | — | — | — | — | planned-not-started | |
-| 8 | G10 awareness hygiene | #1624 #1702 | — | — | — | — | planned-not-started | |
+| 8 | G1 launcher stdin | #1866 #1868 #1867 #1780 | `fix/launcher-stdin-wake-delivery-and-the-logged-out-claude-code-dead-end-1866` | — | — | — | planned | Launched 2026-09-15 (run `wf_3d1266c0-877`, probe ports 4970/4971), concurrently with G10, after #1986 merged. #1869 is excluded because it is Windows-blocked. The launch notes route two choices to `bryan` rather than letting the group decide them: #1867's delivery-proof policy, if the protocol offers no signal separating not-reading from thinking, and any #1868 telemetry that would send something new off-machine. #1780's logged-out exit is to be reproduced with an isolated config dir before the classifier is written. Runs before K-sec-launcher, because both edit `supervisor.ts`. |
+| 8 | G10 awareness hygiene | #1624 #1702 | `fix/awareness-hygiene-selection-staleness-and-one-inbox-poll-context-1702` | — | — | — | planned | Launched 2026-09-15 (run `wf_e91e2015-00e`, probe ports 4972/4973, e2e on), concurrently with G1. Expected to bump SKILL.md from v21, whose line 84 calls `activity.selectedText` "the current selection" (the misreading #1624 describes). #1702's acceptance requires a *failing* case when a fourth shared value reaches one collector and not the other, not merely a shared interface. |
 | 9 | K-server | #1823 MCP-surface remainder #1851; then #1823 runtime as a second PR | — | — | — | — | planned-not-started | **Re-scope before starting (2026-09-08): the #1823 item `anchor` on `tandem_getAnnotations` ALREADY LANDED in wave 4 group B (#1916, `7989261d`)** — #1764 needed it to make a degraded re-anchor legible on the wire for the first time. Do not plan it twice; check the rest of #1823 against master before sizing this group. |
 | 9 | G9a watcher/reload silence | #1662 #1663 #1695 | — | — | — | — | planned-not-started | |
 | 9 | G9b open/restore | #1863 #1696 + #1700 audit guard (Refs) | — | — | — | — | planned-not-started | |
@@ -889,6 +889,33 @@ indication of it, and the wave-7 rows below still read `planned-not-started` day
 them merged. Backfilled 2026-09-11. This is the same class as the security-register drift #1969
 and #1972 corrected in the same wave — a fact that changed and did not propagate to where someone
 would read it — and the sweep's own process document was not exempt from it.
+
+### Wave 8 in progress — 2026-09-15
+
+E2-upgrade merged as **#1985** and K-sec-server as **#1987**; G1 and G10 are running.
+Out-of-group PRs:
+- **#1986** (`4f112aa4`), the #1957 root cause;
+- **#1989**, the smoke-lines merge E2-upgrade did not carry;
+- **#1990**, recording that the uninstall log belongs to the npm scrub;
+- **#1992**, a `docs/security.md` correction for what #1981 refuted.
+
+Filed out of the work: #1980, #1981, #1982 and #1988 (macOS/Linux force-quit leaves the sidecar
+alive: the #800 reaper never landed, and a merged PR was named as its tracker).
+
+**Lesson: `core.bare=true` was never a stray command. It was the pre-push hook running the test
+suite from a linked worktree.** `git push` from a worktree exports
+`GIT_DIR=<repo>/.git/worktrees/<name>` to the hook. `tests/scripts/biome-worktree-scope.test.ts`'s
+`plantRepo` ran `git init` in a temp dir with that environment inherited. With `GIT_DIR` set,
+`git init` ignores its `cwd`, re-initialises the real repository and writes `core.bare=true` into
+the shared `.git/config`. The repo flipped twelve times, and each flip was repaired by hand and
+read as a one-off until the mechanism was reproduced. The general rule: **a test that shells out
+to git must scrub `GIT_*` from the child's environment**, because the hook running it is itself
+inside a git process. #1986 does that and pins it with a decoy-repo spec. The claim is refuted if
+the repo flips again after a worktree push whose tree contains `4f112aa4`.
+
+Also: 23 zero-byte ref locks dated 2026-05-29 under `.git/refs/remotes/` had been silently failing
+every `git fetch --prune` since then. They were removed 2026-09-15, after confirming that no git
+process was running.
 
 ### Wave 0 record
 
