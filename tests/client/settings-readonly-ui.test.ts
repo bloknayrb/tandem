@@ -125,6 +125,12 @@ const CASES: ControlCase[] = [
     innerInput: true,
   },
   {
+    name: "EditorSettings source-view line-wrap checkbox",
+    component: EditorSettings,
+    testid: "editor-source-line-wrap",
+    innerInput: true,
+  },
+  {
     name: "AccessibilitySettings high-contrast checkbox",
     component: AccessibilitySettings,
     testid: "high-contrast-toggle",

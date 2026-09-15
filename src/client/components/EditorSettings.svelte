@@ -370,4 +370,26 @@ const activeHint = $derived(PRESETS.find((p) => p.value === settings.editorMeasu
       hidden.
     </div>
   </div>
+
+  <!-- Source-view line wrap (#1738). Sits beside the raw-markdown toggle, its
+       precedent; both are about how Markdown source is shown. -->
+  <div style="margin-top: var(--tandem-space-5);">
+    <label
+      data-testid="editor-source-line-wrap"
+      style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: var(--tandem-text-sm); color: var(--tandem-fg); min-height: var(--tandem-space-5);"
+    >
+      <input
+        type="checkbox"
+        checked={settings.sourceViewLineWrap}
+        disabled={readOnly}
+        onchange={(e) => onUpdate({ sourceViewLineWrap: (e.target as HTMLInputElement).checked })}
+        style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
+      />
+      <span>Wrap long lines in Markdown source</span>
+    </label>
+    <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
+      Long paragraphs wrap to the width of the source view instead of scrolling sideways.
+      The file itself is unchanged.
+    </div>
+  </div>
 </div>

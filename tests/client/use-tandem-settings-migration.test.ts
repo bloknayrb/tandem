@@ -79,6 +79,20 @@ describe("loadSettings — migration chain", () => {
     expect(loadSettings().showRawMarkdown).toBe(true);
   });
 
+  // #1738: sourceViewLineWrap follows the showRawMarkdown precedent — a pure
+  // read with no version bump — but defaults OFF, and only a literal `true`
+  // turns it on.
+  it("sourceViewLineWrap defaults to false and only a literal true enables it", () => {
+    writeRaw({ schemaVersion: CURRENT_SCHEMA_VERSION });
+    expect(loadSettings().sourceViewLineWrap).toBe(false);
+
+    writeRaw({ schemaVersion: CURRENT_SCHEMA_VERSION, sourceViewLineWrap: true });
+    expect(loadSettings().sourceViewLineWrap).toBe(true);
+
+    writeRaw({ schemaVersion: CURRENT_SCHEMA_VERSION, sourceViewLineWrap: "yes" });
+    expect(loadSettings().sourceViewLineWrap).toBe(false);
+  });
+
   it("v1 blob (panelHidden=true) migrates fully with both panels hidden", () => {
     writeRaw({ schemaVersion: 1, panelHidden: true });
     const s = loadSettings();

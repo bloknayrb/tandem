@@ -2987,6 +2987,7 @@ const shouldShowModelPicker = $derived(
             documentWorkspace.saveDocumentTargetAfterSourceCommit(documentId, intent, ydoc)}
           onCommandsChange={documentWorkspace.updateSourceViewCommands}
           onExit={documentWorkspace.exitSourceView}
+          lineWrap={settingsState.settings.sourceViewLineWrap}
         />
       {/key}
     {:else}

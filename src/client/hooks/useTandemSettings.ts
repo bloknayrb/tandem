@@ -175,6 +175,10 @@ export interface TandemSettings {
   // inline HTML) in the editor. Display-only — the source is always preserved in
   // the Y.Doc and round-trips to disk regardless of this toggle. Default on.
   showRawMarkdown: boolean;
+  // #1738: wrap long lines in the Markdown source view's textarea
+  // (`white-space: pre-wrap`) instead of scrolling horizontally. Display-only.
+  // Default off, so every existing source view renders exactly as before.
+  sourceViewLineWrap: boolean;
   // 1.13: transient master "mute all decorations" overlay (clean reading view).
   // Suppresses all decoration rendering without clobbering the per-type prefs,
   // so restoring returns exactly the prior set. Editing a per-type row auto-unmutes.
@@ -282,6 +286,7 @@ const DEFAULTS: TandemSettings = {
   showHighlights: true,
   showNotes: true,
   showRawMarkdown: true,
+  sourceViewLineWrap: false,
   decorationsMuted: false,
   models: [],
   defaultModelId: null,
@@ -624,6 +629,7 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
     showHighlights: parsed.showHighlights === false ? false : DEFAULTS.showHighlights,
     showNotes: parsed.showNotes === false ? false : DEFAULTS.showNotes,
     showRawMarkdown: parsed.showRawMarkdown === false ? false : DEFAULTS.showRawMarkdown,
+    sourceViewLineWrap: parsed.sourceViewLineWrap === true,
     decorationsMuted: parsed.decorationsMuted === true,
     models: parseModels(parsed.models),
     defaultModelId:
