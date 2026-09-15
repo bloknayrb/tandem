@@ -214,9 +214,9 @@ export async function previewCwdDrift(deps: CwdPreviewDeps): Promise<LauncherCwd
   // `resolveSafeCwd(os.homedir()) ?? os.homedir()` — so a merely symlinked home
   // is NOT the case this guards; realpath is exactly what resolves that. What is
   // left is `homeCwd()`'s own fallback (home unresolvable at spawn time, raw
-  // string kept) and a cwd that reached the supervisor from a hand-edited
-  // `integrations.json`. Falling back to the raw value keeps a since-deleted cwd
-  // comparable rather than silently reporting "no drift".
+  // string kept) and a cwd deleted since the spawn resolved it. Falling back to
+  // the raw value keeps a since-deleted cwd comparable rather than silently
+  // reporting "no drift".
   const claude = (await resolveSafeCwdAsync(deps.claudeCwd)) ?? deps.claudeCwd;
 
   if (samePath(suggested, claude, platform)) return noDrift;

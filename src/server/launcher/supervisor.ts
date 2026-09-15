@@ -50,6 +50,8 @@ import {
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { subscribe, unsubscribe } from "../events/queue.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
+import { sanitizeForLog } from "../log-sanitize.js";
+import { isTauriSidecar } from "../platform.js";
 
 interface SupervisorOpts {
   /** Directory containing `integrations.json` (typically `resolveAppDataDir()`). */
@@ -118,6 +120,14 @@ interface SupervisorOpts {
    * silent failure that no test can reach is itself unverified.
    */
   turnReceiptMs?: number;
+  /**
+   * Test-only stand-in for `os.homedir()` when confining the spawn cwd
+   * (#1822 item 4). `index.ts` never passes it. It exists because vitest's
+   * temp dirs sit outside `$HOME` on ubuntu (`/tmp`) but inside it on Windows,
+   * so without the seam a fixture spawning in a temp dir passes on one OS and
+   * falls back to home on the other. Mirrors `resolveRouteCwd`'s seam.
+   */
+  homeOverride?: string;
 }
 
 /**
@@ -602,15 +612,54 @@ export function buildClaudeArgs(plan: { sessionId: string; resuming: boolean }):
 export const DESKTOP_ONLY_ENV_KEYS = ["TANDEM_APP_DATA_DIR", "TANDEM_DATA_DIR"] as const;
 
 /**
- * The environment the launched Claude Code is spawned with: ours, minus
- * {@link DESKTOP_ONLY_ENV_KEYS}.
+ * Tandem's own secrets, which must not reach the launched Claude Code or any
+ * shell command it runs (#1822 item 4).
  *
- * A copy, never a mutation of `process.env` — this server still needs both
- * variables for its own `resolveAppDataDir()`.
+ * **A denylist, never an allowlist.** An allowlist would silently drop what
+ * Claude Code itself needs from the user's environment — `PATH`,
+ * `HOME`/`USERPROFILE`, proxy variables, `ANTHROPIC_*`, `CLAUDE_*` — and break
+ * launches in ways no Tandem test would see.
+ *
+ * - `TANDEM_AUTH_TOKEN` — the sidecar's bearer token (`sidecar.rs` sets it).
+ * - `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` — the same token under the plugin-option
+ *   name, which `resolveAuthTokenCandidate` ranks above `TANDEM_AUTH_TOKEN`.
+ * - `TANDEM_SENTRY_DSN` — the operator's crash-reporting DSN.
+ *
+ * Nothing the launched session starts needs the env copy on the desktop's
+ * loopback bind: loopback requests skip bearer auth (`auth/middleware.ts`),
+ * and every config-spawned bridge or shim carries the token in its OWN config
+ * `env` (`integrations/apply.ts`, `cowork_installer.rs`), which is not this
+ * inheritance.
  */
-export function childEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export const TANDEM_SECRET_ENV_KEYS = [
+  "TANDEM_AUTH_TOKEN",
+  "CLAUDE_PLUGIN_OPTION_AUTH_TOKEN",
+  "TANDEM_SENTRY_DSN",
+] as const;
+
+/**
+ * The environment the launched Claude Code is spawned with: ours, minus
+ * {@link DESKTOP_ONLY_ENV_KEYS} and {@link TANDEM_SECRET_ENV_KEYS} — and, for
+ * the Tauri sidecar only, minus `NODE_ENV`.
+ *
+ * `NODE_ENV` is set to `production` on the packaged sidecar by `sidecar.rs`
+ * (#1822 item 6) for the server's OWN sake. Inherited by the launched Claude,
+ * it would make an `npm install` run in the user's project skip
+ * devDependencies. The strip keys on argv ({@link isTauriSidecar}), never on
+ * the inherited `TANDEM_TAURI_SIDECAR`, so an npm `tandem` keeps the user's
+ * own `NODE_ENV` untouched.
+ *
+ * A copy, never a mutation of `process.env` — this server still needs the
+ * data-dir variables for its own `resolveAppDataDir()`, and the token.
+ */
+export function childEnv(
+  base: NodeJS.ProcessEnv = process.env,
+  argv: readonly string[] = process.argv,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base };
   for (const key of DESKTOP_ONLY_ENV_KEYS) delete env[key];
+  for (const key of TANDEM_SECRET_ENV_KEYS) delete env[key];
+  if (isTauriSidecar(argv)) delete env.NODE_ENV;
   return env;
 }
 
@@ -971,14 +1020,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * rather than merely tolerating, a future change to `resolveCwd`'s fallback
    * order. `plan.cwd` is therefore byte-identical to what the spawn runs in.
    *
-   * Residual TOCTOU: a symlink swap between the route's `resolveRouteCwd`
-   * (which home-confines) and `buildPlan`'s `safeCwd` (which does not) lands
-   * the SPAWN outside home, and a `persistCwd` request then records that
-   * escaped path durably. Persisting `plan.cwd` does not close that — the
-   * durable write is still only as confined as the permissive resolver — it
-   * closes only the divergence between the persisted and the spawned value.
-   * Home-confining here would move an HTTP-boundary policy into a
-   * process-level API that has non-route callers.
+   * Residual TOCTOU: `buildPlan`'s `safeCwd` now home-confines too (#1822
+   * item 4), so the route's check and the spawn's check agree — but both are a
+   * realpath taken BEFORE `spawn` `chdir`s by path string. A symlink swap
+   * after `buildPlan` still lands the spawn outside home, and a `persistCwd`
+   * request records `plan.cwd`, the pre-swap canonical path. That narrows the
+   * window; it does not close it. Persisting `plan.cwd` closes only the
+   * divergence between the persisted and the resolved value.
    *
    * Note the write lands BEFORE `spawnOnce`, so a spawn that then throws leaves
    * the setting already moved. Deliberate: the user asked to move, and the next
@@ -1017,11 +1065,30 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // routes, but not by this function) would read as "no override".
       if (normalized) return { cwd: normalized, fromOverride: override !== undefined };
     }
-    return { cwd: homeCwd(), fromOverride: false };
+    const cwd = opts.homeOverride
+      ? (resolveSafeCwd(opts.homeOverride) ?? opts.homeOverride)
+      : homeCwd();
+    // Logged only for the saved `workingDirectory`: an OVERRIDE that failed is
+    // already reported by `persistRequestedCwd`, and one event gets one line.
+    // The launch never fails on this — it falls back to home, as an
+    // unresolvable directory always has.
+    if (override === undefined && typeof candidate === "string") {
+      console.error(
+        `[Launcher] workingDirectory ${sanitizeForLog(candidate)} is not a directory inside home — spawning in ${cwd}`,
+      );
+    }
+    return { cwd, fromOverride: false };
   }
 
+  /**
+   * Home-confined, like the HTTP routes (#1822 item 4). The saved
+   * `workingDirectory` is writable through `POST /api/integrations`, so the
+   * permissive resolver here let a loopback page point the next spawn at any
+   * directory on disk. The check is a realpath taken before `spawn` `chdir`s
+   * by path string, so it narrows a symlink swap rather than closing it.
+   */
   function safeCwd(candidate: string): string | null {
-    return resolveSafeCwd(candidate);
+    return resolveRouteCwd(candidate, { homeOverride: opts.homeOverride });
   }
 
   function reaperPath(): string {
@@ -1970,10 +2037,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
  * paths, and anything that does not canonicalize to a real directory.
  * Returns null on any rejection so callers can fall back to a safe default.
  *
- * This is the *permissive* resolver used by integration-file reads — a user
- * who edits `integrations.json` directly can point the launcher at any
- * canonical directory on disk. HTTP-driven mutations must use
- * `resolveRouteCwd()` below, which additionally home-confines. */
+ * This is the *permissive* half. Every cwd a spawn or a route acts on goes
+ * through `resolveRouteCwd()` below, which additionally home-confines — the
+ * launcher's own `safeCwd` included since #1822 item 4, so a hand-edited
+ * `integrations.json` no longer widens the scope. */
 export function resolveSafeCwd(candidate: string): string | null {
   if (rejectedSyntactically(candidate)) return null;
   try {
@@ -2064,9 +2131,9 @@ function homeConfines(homeReal: string, candidate: string): boolean {
 /** HTTP-surface variant of `resolveSafeCwd`. Adds: the canonical path must
  * be under `os.homedir()` (also canonicalized) so a malicious loopback page
  * can't pivot Claude into system directories via a junction/symlink the user
- * happens to have under their home tree. The integration-file path bypasses
- * this — advanced users who hand-edit `integrations.json` opt into wider
- * scope.
+ * happens to have under their home tree. The launcher's spawn path uses it
+ * too (#1822 item 4): a saved `workingDirectory` outside home falls back to
+ * home with a log line rather than widening the scope.
  *
  * `opts.homeOverride` is a test-only seam: passing an explicit "home" lets
  * cross-platform unit tests stand up a tmpdir, treat it as $HOME, and

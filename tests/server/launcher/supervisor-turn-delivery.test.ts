@@ -259,6 +259,10 @@ function makeSupervisor(extra: ExtraOpts = {}): {
   const sup = createSupervisor({
     probeCliUsable: () => true,
     restartBackoffsMs: [0],
+    // The spawn cwd is home-confined (#1822 item 4), and `cwdDir` is a temp
+    // dir: inside home on Windows, outside it (`/tmp`) on ubuntu. Treating the
+    // temp root as home keeps the fixture meaning the same on both.
+    homeOverride: fs.realpathSync(os.tmpdir()),
     ...extra,
     integrationsBase: baseDir,
     subscribeToEvents: (cb) => {
