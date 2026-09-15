@@ -112,6 +112,12 @@ interface SupervisorOpts {
    * `TANDEM_SENTRY_DSN` — so by default nothing leaves the machine.
    */
   reportDeliveryTrip?: (message: string) => void;
+  /**
+   * Override for `TURN_RECEIPT_MS`, so the not-reading detector can be tested
+   * in milliseconds. Same justification as `wakeLatchMs`: a safeguard against a
+   * silent failure that no test can reach is itself unverified.
+   */
+  turnReceiptMs?: number;
 }
 
 /**
@@ -158,9 +164,36 @@ export function defaultSubscribeToEvents(cb: (event: TandemEvent) => void): () =
  *    Claude: `write()` succeeds into the reaper's pipe, no `result` ever
  *    returns, and the latch simply expires every window. `result` is the only
  *    liveness signal available, so that state is indistinguishable from a very
- *    long turn. It is why the expiry logs at all.
+ *    long turn. It is why the expiry logs at all. For a write to an IDLE
+ *    child, `TURN_RECEIPT_MS` now catches that case sooner (#1867); a write
+ *    made while a turn may still be running is left to this latch.
  */
 const WAKE_LATCH_MAX_MS = 10 * 60_000;
+
+/**
+ * How long a write to an IDLE child may go without any stream-json envelope
+ * before the child is treated as alive-but-not-reading and ended (#1867).
+ *
+ * A receipt check, not a completion timeout: any parsed envelope clears it, so
+ * a turn that has started — however long it then runs — is never ended by it.
+ * What the protocol offers, measured rather than assumed:
+ *   - The CLI emits `system/init` once per turn, promptly after reading a turn
+ *     written to an idle session: 0.87 s after a held-back write, and 12.7 s for
+ *     the slowest first turn (docs/spikes/channel-push-stream-json.md,
+ *     2026-08-04). Re-probed 2026-09-15 on claude 2.1.272 (Windows, isolated
+ *     empty config dir): +0.43 s for turn 1, +0.02 s for turn 2.
+ *   - A child that has not read a turn emits nothing on stdout.
+ * Not measured: `init` latency for a large `--resume` conversation, and
+ * whether `init` is emitted for a turn written while another is still running
+ * (the known-idle gate in `sendTurn` makes the second moot).
+ *
+ * The value is policy, not measurement: about 14x the slowest first turn seen.
+ */
+const TURN_RECEIPT_MS = 180_000;
+/** Handed to the stdin-gone handler by a receipt timeout, which ignores it. */
+const RECEIPT_TIMEOUT: NodeJS.ErrnoException = Object.assign(new Error("no turn receipt"), {
+  code: "ETURNRECEIPT",
+});
 
 interface SpawnPlan {
   integration: ClaudeCodeIntegration;
@@ -589,6 +622,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const wakeLatchMs = opts.wakeLatchMs ?? WAKE_LATCH_MAX_MS;
   const probeCliUsable = opts.probeCliUsable ?? defaultProbeCliUsable;
   const reportDeliveryTrip = opts.reportDeliveryTrip ?? (() => {});
+  const turnReceiptMs = opts.turnReceiptMs ?? TURN_RECEIPT_MS;
   const restartBackoffs = opts.restartBackoffsMs?.length
     ? opts.restartBackoffsMs
     : RESTART_BACKOFFS_MS;
@@ -1087,6 +1121,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
      * than read live, because a callback can land after `start()` has already
      * lowered `userStopped` again. */
     let carryOwedWake = true;
+    /** Armed by a write to a known-idle child; cleared by ANY parsed envelope
+     * (#1867). If it fires, the child accepted the write into its pipe and never
+     * read it. */
+    let receiptTimer: NodeJS.Timeout | null = null;
+    /** A turn was written on this spawn and no `result` has closed it. While
+     * true, a further write (only the latch-expiry flush can make one) goes to
+     * a child that may be mid-turn, so it is not receipt-checked. */
+    let unresolvedTurn = false;
 
     function clearLatch(): void {
       turnInFlight = false;
@@ -1094,6 +1136,26 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         clearTimeout(latchTimer);
         latchTimer = null;
       }
+      if (receiptTimer) {
+        clearTimeout(receiptTimer);
+        receiptTimer = null;
+      }
+    }
+
+    /** No envelope followed a write to an idle child within `turnReceiptMs`
+     * (#1867). Nothing errored — a small write fits in the pipe buffer — so
+     * without this the wake would wait out the 10-minute latch. End the child
+     * through the stdin-gone handler, which carries its identity and liveness
+     * guards and counts toward the `wake-delivery-failed` streak (#1868), and
+     * re-arm the wake so teardown carries it to the successor (#1866). */
+    function onNoReceipt(): void {
+      receiptTimer = null;
+      console.error(
+        `[Launcher] No turn receipt within ${turnReceiptMs}ms — Claude is alive but not reading its input; ending the session so the wake is retried`,
+      );
+      clearLatch();
+      pendingWake = true;
+      onStdinGone(RECEIPT_TIMEOUT);
     }
 
     /** Write one user turn. Targets `spawned`, not `child`.
@@ -1123,6 +1185,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         console.error("[Launcher] Claude stdin not writable — turn not delivered");
         return false;
       }
+      // Receipt-check only a write to a child known to be idle: `turnInFlight`
+      // blocks writes until a `result`, so the one write that can find a turn
+      // unresolved is the latch-expiry flush, and that child may legitimately
+      // be deep in a silent tool call (#1867).
+      const receiptCheckable = !unresolvedTurn;
+      unresolvedTurn = true;
       turnInFlight = true;
       if (latchTimer) clearTimeout(latchTimer);
       latchTimer = setTimeout(() => {
@@ -1150,6 +1218,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
           pendingWake = true;
         }
       });
+      if (receiptCheckable) {
+        if (receiptTimer) clearTimeout(receiptTimer);
+        receiptTimer = setTimeout(onNoReceipt, turnReceiptMs);
+      }
       return true;
     }
 
@@ -1267,6 +1339,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         return;
       }
 
+      // Any parsed envelope proves the child read what it was sent (#1867).
+      // Not only `init`: if a future CLI stops re-emitting it, this fails soft to
+      // the latch rather than into a kill loop. A banner or a `{`-prefixed
+      // non-JSON line above never reaches here, so it does not count.
+      if (receiptTimer) {
+        clearTimeout(receiptTimer);
+        receiptTimer = null;
+      }
+
       // A `result` envelope ends a turn, whatever its subtype — that is the
       // idleness signal wake coalescing runs on. Confirmed against a real
       // binary (spike, 2026-08-04): `result` follows every turn, and `init` is
@@ -1277,6 +1358,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         // wake-delivery kill streak (#1868). Deliberately `result` only: `init`
         // proves the turn was read, not that the session can finish one.
         deliveryKillStreak = 0;
+        unresolvedTurn = false;
 
         // NOTE (#1267): `errors` is NOT confirmed to exist on the CLI's
         // `result` envelope — it can only be settled against a running `claude`

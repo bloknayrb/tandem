@@ -560,6 +560,86 @@ describe("#1868 — consecutive stdin-error kills trip their own breaker", () =>
   });
 });
 
+// --- #1867 --------------------------------------------------------------------
+
+describe("#1867 — an alive child that has stopped reading its input", () => {
+  const RECEIPT_MS = 200;
+
+  /** Child 1 answers its bootstrap turn, so it is idle and the next write is
+   * receipt-checked. */
+  async function idleFreshChild(sup: Supervisor): Promise<FakeChild> {
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    succeedWrites(held(child1));
+    pushJson(child1, INIT);
+    pushJson(child1, RESULT_OK);
+    await settle();
+    return child1;
+  }
+
+  it("is ended, and one wake is carried to a successor that does read", async () => {
+    const { sup, emit } = makeSupervisor({ turnReceiptMs: RECEIPT_MS });
+    const child1 = await idleFreshChild(sup);
+    emit(annotationEvent());
+    expect(texts(child1)).toEqual([SUPERVISOR_INITIAL_PROMPT, SUPERVISOR_WAKE_PROMPT]);
+    succeedWrites(held(child1));
+
+    await waitFor(() => child1.kills.includes("SIGTERM"), "the receipt kill", 2_000);
+    expect(logText()).toContain("No turn receipt within");
+
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+    pushJson(child2, INIT);
+    await sleep(2 * RECEIPT_MS);
+    expect(child2.kills).toEqual([]);
+  });
+
+  it("a long turn that acknowledged receipt is not ended", async () => {
+    const { sup, emit } = makeSupervisor({ turnReceiptMs: RECEIPT_MS, wakeLatchMs: 5_000 });
+    const child1 = await idleFreshChild(sup);
+    emit(annotationEvent());
+    await sleep(50);
+    pushJson(child1, INIT);
+
+    await sleep(1_000);
+    expect(child1.kills).toEqual([]);
+  });
+
+  it("coalesces events during the stall instead of queueing writes", async () => {
+    const { sup, emit } = makeSupervisor({ turnReceiptMs: RECEIPT_MS });
+    const child1 = await idleFreshChild(sup);
+    emit(annotationEvent());
+    for (let i = 0; i < 5; i++) emit(annotationEvent());
+
+    await waitFor(() => child1.kills.includes("SIGTERM"), "the receipt kill", 2_000);
+    expect(texts(child1)).toEqual([SUPERVISOR_INITIAL_PROMPT, SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  it("stdout noise is not receipt", async () => {
+    const { sup } = makeSupervisor({ turnReceiptMs: RECEIPT_MS });
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushLine(child1, "banner text");
+    pushLine(child1, "{not json");
+
+    await waitFor(() => child1.kills.includes("SIGTERM"), "the receipt kill", 2_000);
+  });
+
+  it("does not receipt-check the flush after the latch expires on an unresolved turn", async () => {
+    const { sup, emit } = makeSupervisor({ turnReceiptMs: RECEIPT_MS, wakeLatchMs: 300 });
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, INIT);
+    await settle();
+    emit(annotationEvent());
+
+    await waitFor(() => texts(child1).length === 2, "the latch-expiry flush", 2_000);
+    await sleep(1_000);
+    expect(child1.kills).toEqual([]);
+    expect(texts(child1)).toEqual([SUPERVISOR_INITIAL_PROMPT, SUPERVISOR_WAKE_PROMPT]);
+  });
+});
+
 // Referenced by later groups in this file; kept exported-in-scope so an unused
 // helper does not trip `noUnusedLocals` between commits.
 void [failWrite, succeedWrites, pushLine, INIT, logText];
