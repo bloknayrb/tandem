@@ -260,9 +260,7 @@ describe("the Claude-facing reads honour audience (#1619, #1710)", () => {
       "Hello world here",
       ledger,
       (anns) => anns,
-      DOC_ID,
-      "tandem",
-      () => false,
+      { modeState: "tandem", documentId: DOC_ID, wasChannelEmitted: () => false },
     );
 
     expect(userActions.map((a) => a.id)).toEqual([]);

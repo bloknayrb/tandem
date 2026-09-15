@@ -230,9 +230,7 @@ describe("checkInbox does not choke on a legacy note", () => {
       "Hello world",
       new Map(),
       (anns) => anns,
-      "doc-guards",
-      "tandem",
-      () => false,
+      { modeState: "tandem", documentId: "doc-guards", wasChannelEmitted: () => false },
     );
 
     expect(

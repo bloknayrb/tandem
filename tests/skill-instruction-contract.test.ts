@@ -71,7 +71,11 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // bump ships to nobody. Pinning the current number forces a deliberate look here whenever
   // the version moves — including for an unrelated edit, which is the cost of the guard, not
   // a bug in it. When you land here: confirm the assertions below still describe the shipped
-  // wake instructions, then move the number. Last moved to 21 by the arm-trigger REVIEW group,
+  // wake instructions, then move the number. Last moved to 22 by the G10 awareness-hygiene group
+  // (#1624): the Reacting to Document Events paragraph now says `activity.selectedText` is
+  // the most recent selection rather than the current one and names `activity.selectionAt`.
+  // That paragraph is outside the wake section; every wake assertion below was re-read
+  // against the bumped file and is unchanged. Before that, to 21 by the arm-trigger REVIEW group,
   // which changed the wake contract again in two ways. (a) The launcher test now FAILS CLOSED:
   // "if you cannot see the start of this conversation, do not arm". Concluding hand-started from
   // ABSENCE was wrong because a compaction drops exactly the turn that would have said otherwise
@@ -106,7 +110,7 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // orchestrator, and the "Wakes are best-effort" bullet carries the same qualifier — so the
   // orchestrator-only assertion below is part of the wake contract, not an extra. Every wake
   // assertion here was re-read against the bumped file.
-  expect(skill).toMatch(/^version:\s*21$/m);
+  expect(skill).toMatch(/^version:\s*22$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
   // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
@@ -427,7 +431,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "21", bodyHash: "6d0e67ccac3a" });
+    ).toEqual({ version: "22", bodyHash: "7aa00785e17d" });
   });
 
   // #1770: the skill is the only surface that tells Claude what it may NOT do with a card
