@@ -3,6 +3,7 @@
  * Eliminates the 3-line wrapper pattern repeated ~40 times across tool files.
  */
 
+import type { ToolErrorCode } from "../../shared/types.js";
 import { getSubscriberCount } from "../events/queue.js";
 import { takeWakeAdvisory } from "./wake-advisory.js";
 
@@ -73,9 +74,14 @@ export function isErrorEnvelope(result: McpToolResult): boolean {
   return errorEnvelopes.has(result);
 }
 
-/** Wrap an error response in the MCP content envelope */
+/**
+ * Wrap an error response in the MCP content envelope. `code` is the typed wire
+ * vocabulary (#1851): a code not in `ToolErrorCodeSchema` does not compile, and
+ * a non-literal string must be narrowed with `ToolErrorCodeSchema.safeParse`,
+ * never cast.
+ */
 export function mcpError(
-  code: string,
+  code: ToolErrorCode,
   message: string,
   details?: Record<string, unknown>,
 ): McpToolResult {

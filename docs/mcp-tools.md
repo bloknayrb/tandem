@@ -66,7 +66,7 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `BACKUP_FAILED` | `tandem_applyChanges` could not write its backup, so it refused to touch the original. |
 | `INVALID_NAME` | `tandem_rename` was given a name that is empty, path-separated, or otherwise unusable. |
 | `BAD_REQUEST` | **`tandem_rename` only, on the MCP surface.** The supplied `documentId` has no basename (`src/server/mcp/document.ts:1427`). `/api` routes use this code far more widely -- see [HTTP API](#http-api). |
-| `RENAME_FAILED` | `tandem_rename`'s residual arm: the rename failed carrying no more specific code (`src/server/mcp/document.ts:1433`). Every anticipated refusal has its own code, so this one means something unclassified went wrong. |
+| `RENAME_FAILED` | `tandem_rename`'s residual arm: the rename failed carrying no more specific code, including a raw errno from the filesystem, which arrives in `details.errorCode`. Every anticipated refusal has its own code, so this one means something unclassified went wrong. |
 | `INVALID_PATH` | A supplied path was relative where an absolute one is required, or used a UNC / extended-length / device-namespace prefix. |
 | `NOT_OWNED` | `tandem_editAnnotation` or `tandem_annotationReply` was aimed at an annotation Claude did not author. Authority over a user's own card belongs to the user; answer it with `tandem_reply` or a fresh `tandem_comment` ([#1770](https://github.com/bloknayrb/tandem/issues/1770)). |
 | `ANNOTATION_NOT_PENDING` | **`tandem_resolveAnnotation` only.** The annotation is already accepted or dismissed. |
@@ -527,7 +527,7 @@ Rename an open on-disk document's file, keeping the same directory and extension
 
 **Notes:** Only on-disk files (`source: "file"`) are renamable — scratchpads/uploads use Save As, and read-only docs (uploads, `readOnly` opens) are rejected. A disk-opened `.docx` is renamable (#576). The basename is validated against path separators, `..`, Windows-illegal characters (`< > : " | ? *`, the `:` NTFS alternate-data-stream vector), reserved device names (`CON`/`NUL`/`COM1`…), trailing dots/spaces, and UNC/symlink targets.
 
-**Errors:** `NOT_FOUND`, `READ_ONLY`, `NOT_RENAMABLE`, `INVALID_NAME`, `EXTENSION_MISMATCH`, `ALREADY_EXISTS`, `RENAME_IN_PROGRESS`, `INVALID_PATH`, `PATH_REJECTED`
+**Errors:** `NOT_FOUND`, `READ_ONLY`, `NOT_RENAMABLE`, `INVALID_NAME`, `EXTENSION_MISMATCH`, `ALREADY_EXISTS`, `RENAME_IN_PROGRESS`, `INVALID_PATH`, `PATH_REJECTED`, `RENAME_FAILED` (an unclassified failure; the raw errno, when there is one, is in `details.errorCode`)
 
 ---
 

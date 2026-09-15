@@ -21,7 +21,7 @@ import { isTopLevel, sameTextblock } from "../../shared/positions/types.js";
 import { elementAtPath, resolveToTextblock } from "../../shared/positions/ydoc.js";
 import { snapshotContradicts } from "../../shared/snapshot.js";
 import type { Annotation, AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
-import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
+import { TandemModeSchema, ToolErrorCodeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { isStoreReadOnly } from "../annotations/store.js";
@@ -1571,7 +1571,14 @@ export function registerDocumentTools(server: McpServer): void {
 
       const result = await renameDocument(id, newName);
       if (result.status === "error") {
-        return mcpError(result.errorCode ?? "RENAME_FAILED", result.reason ?? "Rename failed.");
+        const reason = result.reason ?? "Rename failed.";
+        // `errorCode` is an open string: `renameDocument`'s catches pass a raw
+        // errno (`EXDEV`, `EACCES`, `UNKNOWN`) through it. Narrow against the
+        // wire vocabulary rather than casting, and carry an unlisted one in
+        // `details.errorCode`, the shape `tandem_save` uses (#1851).
+        const parsed = ToolErrorCodeSchema.safeParse(result.errorCode);
+        if (parsed.success) return mcpError(parsed.data, reason);
+        return mcpError("RENAME_FAILED", reason, { errorCode: result.errorCode });
       }
 
       return mcpSuccess({
