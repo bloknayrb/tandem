@@ -49,7 +49,8 @@
 
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { type Dirent, promises as fsPromises } from "node:fs";
+import { type Dirent, constants as fsConstants, promises as fsPromises } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -325,28 +326,40 @@ export async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[
 }
 
 /**
- * Atomically rewrite a JSON file, invoking `mutate` on the parsed object.
- *
- * Precondition: `filePath` has already been validated by the path guard.
- * This function trusts its callers (consistent with `with_locked_json` on the Rust side).
- *
- * Returns true if the mutation changed something and was written, false if
- * the file was absent or unchanged.
+ * libuv's raw open flag for an exclusive-share open (`UV_FS_O_EXLOCK`): on
+ * Windows the lockfile is opened with share mode 0, so no other handle — Rust's
+ * included — can open it while this one is held. **Undocumented, and not
+ * exported in `fs.constants`** (measured on Node v24.2.0). The Rust interop
+ * tests in `src-tauri/src/cowork_atomic_json.rs` are the only thing that checks
+ * it still means this; a libuv that dropped or renumbered it would turn this
+ * lock into one that excludes nothing.
  */
-export async function rewriteJson(
+const UV_FS_O_EXLOCK = 0x10000000;
+
+/** Mirrors `BACKOFF_DELAYS_MS` / `LOCK_BUDGET` in `cowork_atomic_json.rs`. */
+const LOCK_BACKOFF_MS = [200, 500, 1_500, 5_000] as const;
+const LOCK_BUDGET_MS = 30_000;
+
+export interface RewriteJsonOptions {
+  /** Injectable for tests; defaults to a real timer. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** Read and parse `filePath` as a JSON object. `null` means "skip": absent
+ * (silently), unreadable, malformed or not an object (each warned, path only). */
+async function readJsonObject(
   filePath: string,
-  mutate: (obj: Record<string, unknown>) => boolean,
   logger: ScrubLogger,
-): Promise<boolean> {
+): Promise<Record<string, unknown> | null> {
   let content: string;
   try {
     content = await fsPromises.readFile(filePath, "utf8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
+      return null;
     }
     logger.warn(`cannot read ${filePath}: ${(err as Error).message}`);
-    return false;
+    return null;
   }
 
   let parsed: unknown;
@@ -357,32 +370,124 @@ export async function rewriteJson(
     // source snippet, and these files can hold bearer tokens that would
     // land in uninstall.log.
     logger.warn(`invalid JSON in ${filePath} — skipping`);
-    return false;
+    return null;
   }
 
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     logger.warn(`${filePath} is not a JSON object — skipping`);
+    return null;
+  }
+  return parsed as Record<string, unknown>;
+}
+
+/**
+ * Take the cross-language Cowork lock on `filePath`'s sibling lockfile.
+ *
+ * Resolves the held handle, or `null` when the directory vanished (`ENOENT`).
+ * `EBUSY` — Rust holding the lockfile open — is retried on Rust's own backoff
+ * schedule; past the budget, or on any other error, this THROWS, so the caller
+ * never writes without the lock.
+ */
+async function acquireCoworkLock(
+  filePath: string,
+  sleep: (ms: number) => Promise<void>,
+): Promise<FileHandle | null> {
+  // Byte-identical to Rust's `format!(".{file_name}.tandem-lock")`. Renaming
+  // it on either side silently removes the exclusion.
+  const lockPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.tandem-lock`);
+  let slept = 0;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fsPromises.open(
+        lockPath,
+        fsConstants.O_RDWR | fsConstants.O_CREAT | UV_FS_O_EXLOCK,
+      );
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return null;
+      if (code !== "EBUSY" || slept >= LOCK_BUDGET_MS) {
+        throw new Error(`cannot lock ${filePath} — skipped`);
+      }
+      const delay = LOCK_BACKOFF_MS[Math.min(attempt, LOCK_BACKOFF_MS.length - 1)];
+      await sleep(delay);
+      slept += delay;
+    }
+  }
+}
+
+/**
+ * Atomically rewrite a Cowork JSON file, invoking `mutate` on the parsed object,
+ * under the same lock every Rust writer of these files takes (#1600).
+ *
+ * **Windows-only**, by its only caller (`runUninstallScrub`'s `if (isWindows)`),
+ * which is why the share-mode lock below needs no platform branch.
+ *
+ * **The cross-language lock contract.** Rust's `with_locked_json`
+ * (`src-tauri/src/cowork_atomic_json.rs`) takes an fs2 `LockFileEx` lock on the
+ * sibling `.<file>.tandem-lock`, holding the lockfile open for the whole
+ * read-modify-write. Node has no `LockFileEx`, and a marker file or `O_EXCL`
+ * lock would not interoperate with it. What does: opening that same sibling
+ * with libuv's `UV_FS_O_EXLOCK` (share mode 0). While Rust holds its handle this
+ * open fails with `EBUSY`; while this handle is held, Rust's open fails with
+ * sharing violation 32, which `with_locked_json` retries as contention.
+ *
+ * Shape:
+ * 1. An unlocked pre-check that creates nothing — no lockfile, no new warning —
+ *    in a workspace with no Tandem entry. Race-safe: an entry Rust adds after it
+ *    is an install-after-scrub, not a lost update.
+ * 2. The lock (see `acquireCoworkLock`). A lock failure throws into the
+ *    caller's per-workspace catch, which logs and counts it.
+ * 3. Under the lock: re-read, re-parse, re-`mutate`, write a tmp file, rename.
+ *    The lockfile is left in place, as Rust leaves it.
+ *
+ * Precondition: `filePath` has already been validated by the path guard.
+ *
+ * Returns true if the mutation changed something and was written, false if
+ * the file was absent or unchanged.
+ */
+export async function rewriteJson(
+  filePath: string,
+  mutate: (obj: Record<string, unknown>) => boolean,
+  logger: ScrubLogger,
+  opts: RewriteJsonOptions = {},
+): Promise<boolean> {
+  const sleep =
+    opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+
+  const preview = await readJsonObject(filePath, logger);
+  if (preview === null || !mutate(preview)) {
     return false;
   }
 
-  const changed = mutate(parsed as Record<string, unknown>);
-  if (!changed) {
+  const lock = await acquireCoworkLock(filePath, sleep);
+  if (lock === null) {
     return false;
   }
-
-  const dir = path.dirname(filePath);
-  // randomUUID, not Math.random: same path-prediction rationale as
-  // apply.ts#atomicWrite — these files can hold bearer tokens.
-  const tmpPath = path.join(dir, `.tandem-scrub-tmp-${randomUUID()}`);
 
   try {
-    await fsPromises.writeFile(tmpPath, JSON.stringify(parsed, null, 2), "utf8");
-    await fsPromises.rename(tmpPath, filePath);
-  } catch (err) {
-    await fsPromises.unlink(tmpPath).catch(() => {});
-    throw err;
+    // Re-read under the lock: the pre-check's copy may predate a Rust write,
+    // and writing it back would be exactly the lost update this lock prevents.
+    const parsed = await readJsonObject(filePath, logger);
+    if (parsed === null || !mutate(parsed)) {
+      return false;
+    }
+
+    const dir = path.dirname(filePath);
+    // randomUUID, not Math.random: same path-prediction rationale as
+    // apply.ts#atomicWrite — these files can hold bearer tokens.
+    const tmpPath = path.join(dir, `.tandem-scrub-tmp-${randomUUID()}`);
+
+    try {
+      await fsPromises.writeFile(tmpPath, JSON.stringify(parsed, null, 2), "utf8");
+      await fsPromises.rename(tmpPath, filePath);
+    } catch (err) {
+      await fsPromises.unlink(tmpPath).catch(() => {});
+      throw err;
+    }
+    return true;
+  } finally {
+    await lock.close();
   }
-  return true;
 }
 
 /**

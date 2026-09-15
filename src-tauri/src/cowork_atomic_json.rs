@@ -147,23 +147,32 @@ where
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("unknown");
+    //
+    // **This name is a cross-language contract (#1600).** The npm CLI's
+    // `rewriteJson` (`src/cli/uninstall-scrub.ts`) builds the same sibling name
+    // and excludes this function by opening it with share mode 0. Renaming the
+    // lockfile on either side silently removes the exclusion.
     let lock_path = dir.join(format!(".{file_name}.tandem-lock"));
 
-    // Open/create the sibling lock file.
-    let lock_file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)?;
-
-    // Acquire exclusive lock with exponential backoff.
+    // Open/create the sibling lock file AND acquire the exclusive lock, both
+    // inside the backoff loop. The open is inside deliberately: while the npm
+    // scrub holds its share-mode-0 handle, `open` itself fails with sharing
+    // violation 32. Outside the loop that was an immediate hard failure, and
+    // the Cowork install writes its three files in separate calls with no
+    // rollback, so one such failure left a partial registration.
     let start = Instant::now();
     let mut delay_idx = 0usize;
-    loop {
-        match lock_file.try_lock_exclusive() {
-            Ok(()) => break,
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+    let lock_file = loop {
+        let attempt = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .and_then(|file| file.try_lock_exclusive().map(|()| file));
+        match attempt {
+            Ok(file) => break file,
+            Err(e) if is_lock_contention(&e) => {
                 let elapsed = start.elapsed();
                 if elapsed >= LOCK_BUDGET {
                     return Err(CoworkError::LockTimeout {
@@ -188,7 +197,7 @@ where
             }
             Err(e) => return Err(e.into()),
         }
-    }
+    };
 
     // --- Critical section: read → mutate → atomic write ---
     let result = (|| -> Result<T, CoworkError> {
@@ -266,6 +275,24 @@ where
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Is `e` another writer holding the lock, rather than a real failure?
+///
+/// - `WouldBlock`: fs2's `try_lock_exclusive` contention on Unix.
+/// - Raw 33 (`ERROR_LOCK_VIOLATION`), Windows only: fs2's contention on
+///   Windows. **Measured, not assumed** (`a_real_fs2_contention_error_is_contention`):
+///   `LockFileEx` returns it with `ErrorKind::Uncategorized`, NOT `WouldBlock`,
+///   so before #1600 a second Rust writer on Windows failed at once with an I/O
+///   error instead of waiting.
+/// - Raw 32 (`ERROR_SHARING_VIOLATION`), Windows only: the npm scrub holding the
+///   lockfile open with share mode 0 (#1600).
+///
+/// Both raw codes are Windows-only (32 is `EPIPE` and 33 is `EDOM` on Linux),
+/// hence the `cfg!`.
+fn is_lock_contention(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::WouldBlock
+        || (cfg!(windows) && matches!(e.raw_os_error(), Some(32) | Some(33)))
+}
+
 /// Return a human-readable JSON type name for diagnostic messages.
 fn json_value_type_name(v: &Value) -> &'static str {
     match v {
@@ -292,4 +319,178 @@ pub(crate) fn unique_suffix() -> String {
         .unwrap_or(0);
     let count = COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{:x}-{:x}-{:x}", std::process::id(), nanos, count)
+}
+
+#[cfg(test)]
+mod lock_interop_tests {
+    //! The cross-language Cowork lock (#1600). This whole module is
+    //! `#![cfg(target_os = "windows")]`, so every case here runs on the
+    //! `windows-latest` `rust-test` leg only.
+
+    use super::*;
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+
+    /// Mirrors `rewriteJson`'s open in `src/cli/uninstall-scrub.ts`, with the
+    /// undocumented libuv flag spelled as the literal on purpose: these tests
+    /// are the only check that the flag still means share mode 0.
+    const NODE_HOLD: &str = r#"const fs=require('fs');const h=fs.openSync(process.env.TANDEM_LOCK_PROBE,fs.constants.O_RDWR|fs.constants.O_CREAT|0x10000000);process.stdout.write('HELD\n');process.stdin.resume();process.stdin.on('end',()=>{fs.closeSync(h);process.exit(0);});"#;
+    const NODE_CONTEND: &str = r#"const fs=require('fs');try{const h=fs.openSync(process.env.TANDEM_LOCK_PROBE,fs.constants.O_RDWR|fs.constants.O_CREAT|0x10000000);fs.closeSync(h);console.log('opened');}catch(e){console.log(e.code);}"#;
+
+    fn node(script: &str, lock: &Path) -> Command {
+        let mut cmd = Command::new("node");
+        cmd.arg("-e").arg(script).env("TANDEM_LOCK_PROBE", lock);
+        cmd
+    }
+
+    /// Never a skip: a missing `node` must fail this leg, not quietly pass it.
+    fn spawn_failed(e: io::Error) -> ! {
+        panic!(
+            "could not spawn `node` ({e}); the #1600 interop check needs node on PATH — \
+             add a setup-node step to the windows rust-test leg rather than skipping"
+        )
+    }
+
+    fn scratch_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("tandem-lock-interop-{}", unique_suffix()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn open_lockfile(lock: &Path) -> io::Result<std::fs::File> {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock)
+    }
+
+    #[test]
+    fn lock_contention_classifies_would_block_and_windows_sharing_violation() {
+        assert!(is_lock_contention(&io::Error::from(io::ErrorKind::WouldBlock)));
+        assert_eq!(
+            is_lock_contention(&io::Error::from_raw_os_error(32)),
+            cfg!(windows)
+        );
+        assert_eq!(
+            is_lock_contention(&io::Error::from_raw_os_error(33)),
+            cfg!(windows)
+        );
+        assert!(!is_lock_contention(&io::Error::from(io::ErrorKind::NotFound)));
+    }
+
+    /// Measured, not assumed: whatever error fs2 really returns when a second
+    /// handle contends must be classified as contention, or Rust-vs-Rust
+    /// writers would stop waiting for each other.
+    #[test]
+    fn a_real_fs2_contention_error_is_contention() {
+        let dir = scratch_dir();
+        let lock = dir.join(".x.json.tandem-lock");
+        let holder = open_lockfile(&lock).unwrap();
+        holder.try_lock_exclusive().unwrap();
+        let contender = open_lockfile(&lock).unwrap();
+        let err = contender
+            .try_lock_exclusive()
+            .expect_err("a second exclusive lock succeeded");
+        assert!(
+            is_lock_contention(&err),
+            "fs2 contention not classified: {err:?} (raw {:?})",
+            err.raw_os_error()
+        );
+        FileExt::unlock(&holder).unwrap();
+        drop((holder, contender));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Node holds the lockfile → Rust's open fails with 32, and
+    /// `with_locked_json` WAITS (rather than failing) until Node releases.
+    #[test]
+    fn with_locked_json_waits_while_node_holds_the_lockfile() {
+        let dir = scratch_dir();
+        let data = dir.join("installed_plugins.json");
+        std::fs::write(&data, "{}").unwrap();
+        let lock = dir.join(".installed_plugins.json.tandem-lock");
+
+        let mut child = node(NODE_HOLD, &lock)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap_or_else(|e| spawn_failed(e));
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert_eq!(line.trim(), "HELD", "node did not take the lockfile");
+
+        let err = open_lockfile(&lock).expect_err("Rust opened a lockfile Node holds");
+        assert_eq!(err.raw_os_error(), Some(32), "got {err:?}");
+
+        let (done_tx, done_rx) = mpsc::channel();
+        let writer_data = data.clone();
+        let writer = std::thread::spawn(move || {
+            let result = with_locked_json(&writer_data, |v| {
+                v["written"] = Value::from(true);
+                Ok(())
+            });
+            let _ = done_tx.send(());
+            result
+        });
+
+        // The first two backoff sleeps sum to 700 ms: a writer that treated 32
+        // as a hard failure would have returned by now.
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(700)).is_err(),
+            "with_locked_json returned while Node held the lockfile"
+        );
+
+        drop(child.stdin.take());
+        child.wait().unwrap();
+        writer
+            .join()
+            .unwrap()
+            .expect("with_locked_json must succeed once Node releases");
+        let written: Value = serde_json::from_str(&std::fs::read_to_string(&data).unwrap()).unwrap();
+        assert_eq!(written["written"], Value::from(true));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Rust holds (inside `with_locked_json`'s critical section) → Node's
+    /// share-mode-0 open fails with `EBUSY`. The after-release control proves the
+    /// probe is not failing for some other reason.
+    #[test]
+    fn node_exlock_open_is_refused_while_with_locked_json_holds() {
+        let dir = scratch_dir();
+        let data = dir.join("known_marketplaces.json");
+        std::fs::write(&data, "{}").unwrap();
+        let lock = dir.join(".known_marketplaces.json.tandem-lock");
+
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let writer_data = data.clone();
+        let writer = std::thread::spawn(move || {
+            with_locked_json(&writer_data, move |_v| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the writer never entered its critical section");
+
+        let held = node(NODE_CONTEND, &lock)
+            .output()
+            .unwrap_or_else(|e| spawn_failed(e));
+        release_tx.send(()).unwrap();
+        writer.join().unwrap().unwrap();
+
+        let after = node(NODE_CONTEND, &lock)
+            .output()
+            .unwrap_or_else(|e| spawn_failed(e));
+        assert_eq!(String::from_utf8_lossy(&held.stdout).trim(), "EBUSY");
+        assert_eq!(String::from_utf8_lossy(&after.stdout).trim(), "opened");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
