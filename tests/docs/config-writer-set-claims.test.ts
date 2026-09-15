@@ -245,7 +245,13 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   "src/server/app-data-owner.ts": 4,
   "src/cli/uninstall-scrub.ts": 2,
   "src/client/tabs/TabItem.svelte": 1,
-  "src/server/annotations/store.ts": 5,
+  // 7 since #1791: `loadOne` gained a `fs.copyFile` that preserves a
+  // partially-readable envelope before returning the partial doc, and a
+  // second `fs.rename` that archives the previous `.future` park instead of
+  // unlinking it. Both destinations are inside Tandem's OWN annotations dir —
+  // no Claude config file is reachable from either — so this is a census
+  // update, not a widening of the accepted scope in docs/security.md.
+  "src/server/annotations/store.ts": 7,
   "src/server/auth/token-store.ts": 3,
   "src/server/file-io/doc-backup.ts": 2,
   "src/server/file-io/index.ts": 3,

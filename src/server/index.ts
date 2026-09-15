@@ -689,11 +689,18 @@ async function main() {
     // artifact (users shouldn't accidentally edit it) and read-only also
     // guards against any future regression in the serializer.
     try {
-      const versionStatus = await checkVersionChange(APP_VERSION, LAST_SEEN_VERSION_FILE);
-      if (versionStatus === "upgraded") {
-        await openFromDisk(path.join(projectRoot, "CHANGELOG.md"), { readOnly: true });
-        console.error(`[Tandem] Opened CHANGELOG.md (upgraded to v${APP_VERSION})`);
-      }
+      // #1792: the open is the version-change HOOK, not a step after the
+      // check — the stamp is written only once it resolves. Stamping first
+      // meant a failed open lost that release's notes for good: the next
+      // start reads `current`.
+      await checkVersionChange(APP_VERSION, LAST_SEEN_VERSION_FILE, {
+        onUpgrade: async () => {
+          await openFromDisk(path.join(projectRoot, "CHANGELOG.md"), { readOnly: true });
+          // Version-change-neutral wording: a downgrade takes this arm too and
+          // correctly opens the running build's own CHANGELOG.
+          console.error(`[Tandem] Opened CHANGELOG.md (now running v${APP_VERSION})`);
+        },
+      });
     } catch (err) {
       console.error("[Tandem] Version check / changelog open failed (non-fatal):", err);
     }
