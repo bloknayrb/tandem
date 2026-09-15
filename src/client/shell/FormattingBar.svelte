@@ -9,7 +9,7 @@ import { toggleHighlight } from "../editor/toolbar/highlight-toggle";
 import { pmPosToFlatOffset } from "../positions";
 import { createCoalescingTick } from "../utils/coalescing-tick";
 import "../editor/toolbar/toolbar-chrome.css";
-import type { EditorMeasure, TextSize } from "../hooks/useTandemSettings";
+import type { DisplayPrefsUpdate, EditorMeasure, TextSize } from "../hooks/useTandemSettings";
 import DecorationsMenu from "./DecorationsMenu.svelte";
 import DisplayMenu from "./DisplayMenu.svelte";
 
@@ -43,7 +43,7 @@ interface Props {
    */
   textSize?: TextSize;
   editorMeasure?: EditorMeasure;
-  onUpdateDisplay?: (partial: { textSize?: TextSize; editorMeasure?: EditorMeasure }) => void;
+  onUpdateDisplay?: (partial: DisplayPrefsUpdate) => void;
   /** Whether the active document is displaying its raw Markdown source. */
   sourceViewActive?: boolean;
   /** Toggle source view. Omitted for formats/read-only documents that cannot use it. */

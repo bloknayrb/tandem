@@ -1,7 +1,11 @@
 <script lang="ts">
 import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { createRadioGroup } from "../hooks/useRadioGroup.svelte";
-import type { EditorFont, EditorMeasure } from "../hooks/useTandemSettings";
+import {
+  EDITOR_MEASURE_LABEL,
+  type EditorFont,
+  type EditorMeasure,
+} from "../hooks/useTandemSettings";
 import { disabledControlStyle } from "../utils/colors";
 import "./settings-card.css";
 import type { SettingsTabContext } from "./SettingsModal.svelte";
@@ -128,10 +132,10 @@ async function pickSaveFolder() {
 }
 
 const PRESETS: { value: EditorMeasure; label: string; hint: string }[] = [
-  { value: "narrow", label: "Narrow", hint: "58 characters" },
-  { value: "comfortable", label: "Comfortable", hint: "68 characters" },
-  { value: "wide", label: "Wide", hint: "82 characters" },
-  { value: "full", label: "Full", hint: "Fills the editor" },
+  { value: "narrow", label: EDITOR_MEASURE_LABEL.narrow, hint: "58 characters" },
+  { value: "comfortable", label: EDITOR_MEASURE_LABEL.comfortable, hint: "68 characters" },
+  { value: "wide", label: EDITOR_MEASURE_LABEL.wide, hint: "82 characters" },
+  { value: "full", label: EDITOR_MEASURE_LABEL.full, hint: "Fills the editor" },
 ];
 
 const measureRg = createRadioGroup<EditorMeasure>(

@@ -1,7 +1,15 @@
 <script lang="ts">
 import "../editor/toolbar/toolbar-chrome.css";
 import { clickOutside } from "../actions/clickOutside.svelte";
-import { EDITOR_MEASURES, type EditorMeasure, type TextSize } from "../hooks/useTandemSettings";
+import {
+  type DisplayPrefsUpdate,
+  EDITOR_MEASURE_LABEL,
+  EDITOR_MEASURES,
+  type EditorMeasure,
+  TEXT_SIZE_LABEL,
+  TEXT_SIZES,
+  type TextSize,
+} from "../hooks/useTandemSettings";
 import { ESCAPE_OWNER_ATTR } from "../utils/escape-owner";
 import { focusMenuEntryPoint, handleMenuArrowKeys } from "../utils/menuKeys";
 
@@ -24,22 +32,13 @@ import { focusMenuEntryPoint, handleMenuArrowKeys } from "../utils/menuKeys";
 interface Props {
   textSize: TextSize;
   editorMeasure: EditorMeasure;
-  onUpdate: (partial: { textSize?: TextSize; editorMeasure?: EditorMeasure }) => void;
+  onUpdate: (partial: DisplayPrefsUpdate) => void;
 }
 
 let { textSize, editorMeasure, onUpdate }: Props = $props();
 
-const TEXT_SIZES: readonly TextSize[] = ["s", "m", "l"];
-const TEXT_SIZE_LABEL: Record<TextSize, string> = { s: "Small", m: "Medium", l: "Large" };
-const MEASURE_LABEL: Record<EditorMeasure, string> = {
-  narrow: "Narrow",
-  comfortable: "Comfortable",
-  wide: "Wide",
-  full: "Full",
-};
-
 const triggerLabel = $derived(
-  `Display options: text ${TEXT_SIZE_LABEL[textSize]}, measure ${MEASURE_LABEL[editorMeasure]}`,
+  `Display options: text ${TEXT_SIZE_LABEL[textSize]}, measure ${EDITOR_MEASURE_LABEL[editorMeasure]}`,
 );
 
 let menuOpen = $state(false);
@@ -72,18 +71,18 @@ function handleKey(e: KeyboardEvent) {
   }
 }
 
-function pickTextSize(size: TextSize) {
-  onUpdate({ textSize: size });
-  closeMenu();
-}
-
-// The measure writes ONLY `editorMeasure` — never rail visibility or width —
-// and `mergeAndClampSettings`' `isEditorMeasure` clamp is its write guard.
-function pickMeasure(measure: EditorMeasure) {
-  onUpdate({ editorMeasure: measure });
+// A measure pick writes ONLY `editorMeasure` — never rail visibility or
+// width — and `mergeAndClampSettings`' `isEditorMeasure` clamp is its write
+// guard.
+function pick(partial: DisplayPrefsUpdate) {
+  onUpdate(partial);
   closeMenu();
 }
 </script>
+
+{#snippet check()}
+  <svg class="dm-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
+{/snippet}
 
 <!-- One clickOutside node around trigger AND menu (node.contains), exactly as
      DecorationsMenu does — a separate wrapper would read a trigger click as
@@ -122,10 +121,10 @@ function pickMeasure(measure: EditorMeasure) {
               role="menuitemradio"
               aria-checked={textSize === size}
               data-testid={`display-menu-text-size-${size}`}
-              onclick={() => pickTextSize(size)}
+              onclick={() => pick({ textSize: size })}
             >
               <span class="dm-label">{TEXT_SIZE_LABEL[size]}</span>
-              <svg class="dm-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
+              {@render check()}
             </button>
           {/each}
         </div>
@@ -141,10 +140,10 @@ function pickMeasure(measure: EditorMeasure) {
               role="menuitemradio"
               aria-checked={editorMeasure === measure}
               data-testid={`display-menu-measure-${measure}`}
-              onclick={() => pickMeasure(measure)}
+              onclick={() => pick({ editorMeasure: measure })}
             >
-              <span class="dm-label">{MEASURE_LABEL[measure]}</span>
-              <svg class="dm-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
+              <span class="dm-label">{EDITOR_MEASURE_LABEL[measure]}</span>
+              {@render check()}
             </button>
           {/each}
         </div>

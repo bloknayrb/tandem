@@ -21,7 +21,7 @@ import type {
 import { generateAnnotationId } from "../../../shared/utils";
 import { isMacPlatform } from "../../actions/keybindings";
 import { createAgentLabel } from "../../hooks/useAgentLabel.svelte";
-import type { EditorMeasure, TextSize } from "../../hooks/useTandemSettings";
+import type { DisplayPrefsUpdate, EditorMeasure, TextSize } from "../../hooks/useTandemSettings";
 import { heldInSoloOnCreate } from "../../panels/annotation-actions";
 import { ENTER_POPUP_MS, motionOff, popupEnter, registerFlySource } from "../../panels/cardMotion";
 import { pmPosToFlatOffset } from "../../positions";
@@ -80,7 +80,7 @@ interface Props {
   // the same reachability reason as Decorations (the bar can be hidden).
   textSize?: TextSize;
   editorMeasure?: EditorMeasure;
-  onUpdateDisplay?: (partial: { textSize?: TextSize; editorMeasure?: EditorMeasure }) => void;
+  onUpdateDisplay?: (partial: DisplayPrefsUpdate) => void;
   // 1.11 / A8: whether the persistent formatting bar is currently shown. The
   // popup always surfaces a swap control that toggles it (hide when shown, show
   // when hidden) — so the bar is reachable without the command palette /

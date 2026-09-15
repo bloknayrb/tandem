@@ -13,6 +13,13 @@ export type Density = "compact" | "cozy" | "spacious";
 export type PrimaryTab = "chat" | "annotations";
 export type PanelOrder = "chat-editor-annotations" | "annotations-editor-chat";
 export type TextSize = "s" | "m" | "l";
+export const TEXT_SIZES: readonly TextSize[] = ["s", "m", "l"];
+/** User-facing preset names, shared by Settings and the Display menu. */
+export const TEXT_SIZE_LABEL: Readonly<Record<TextSize, string>> = {
+  s: "Small",
+  m: "Medium",
+  l: "Large",
+};
 
 /**
  * Reading-measure preset for the editor content track (Phase 3.5 Stage B).
@@ -36,6 +43,14 @@ export const EDITOR_MEASURE_CH: Readonly<Record<EditorMeasure, string>> = {
   comfortable: "68ch",
   wide: "82ch",
   full: "100%",
+};
+
+/** User-facing preset names, shared by Settings and the Display menu. */
+export const EDITOR_MEASURE_LABEL: Readonly<Record<EditorMeasure, string>> = {
+  narrow: "Narrow",
+  comfortable: "Comfortable",
+  wide: "Wide",
+  full: "Full",
 };
 
 function isEditorMeasure(value: unknown): value is EditorMeasure {
@@ -241,6 +256,9 @@ export interface TandemSettings {
    */
   _readOnly?: boolean;
 }
+
+/** The two reading presets the Display menu writes (#1705/#1706). */
+export type DisplayPrefsUpdate = Partial<Pick<TandemSettings, "textSize" | "editorMeasure">>;
 
 export const TEXT_SIZE_PX: Record<TextSize, number> = { s: 14, m: 16, l: 18 };
 
