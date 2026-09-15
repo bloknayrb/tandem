@@ -577,6 +577,18 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let currentSessionId: string | undefined;
   let currentResuming = false;
   let stopRequested = false;
+  /**
+   * True only while the most recent stop was the public `stop()` — the user
+   * turning Claude off — as opposed to the `stopInternal` that `relaunch` /
+   * `startFresh` run on their way to a new spawn (#1866).
+   *
+   * Distinct from `stopRequested` on purpose: that flag is raised by EVERY
+   * stop, including the recovery ones, and a recovery restart must carry an
+   * owed wake (dropping it there is #1866's own symptom). Each spawn latches
+   * this at teardown (`carryOwedWake`), so a later `start()` lowering it cannot
+   * resurrect a wake a user stop already discarded.
+   */
+  let userStopped = false;
   let restartIndex = 0;
   let restartTimer: NodeJS.Timeout | null = null;
   /** Confirmation timer for the active spawn. Set in spawnOnce, cancelled in
@@ -1028,6 +1040,16 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     /** An event arrived mid-turn; wake once the current turn finishes. */
     let pendingWake = false;
     let latchTimer: NodeJS.Timeout | null = null;
+    /** `teardownTurnDelivery` has run for this spawn. A write callback that
+     * lands after it cannot re-arm `pendingWake` — nothing reads this closure's
+     * flag any more — so it must hand the wake to `wakeOwedAcrossSpawns`
+     * directly (#1866). */
+    let tornDown = false;
+    /** Latched at the FIRST teardown: may a wake owed by this spawn cross to the
+     * next one? False when the teardown came from a user `stop()`. Latched rather
+     * than read live, because a callback can land after `start()` has already
+     * lowered `userStopped` again. */
+    let carryOwedWake = true;
 
     function clearLatch(): void {
       turnInFlight = false;
@@ -1049,9 +1071,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
      * carrying design would have to buffer here instead.
      *
      * A write that fails while the child is still alive ends the child, and
-     * the owed wake crosses to the next spawn via `wakeOwedAcrossSpawns`; a
-     * callback that lands after `teardownTurnDelivery` already ran strands it
-     * (pre-existing, #1866 follow-up). */
+     * the owed wake crosses to the next spawn via `wakeOwedAcrossSpawns`. The
+     * failure callback can land on either side of `teardownTurnDelivery`:
+     * before it, it re-arms `pendingWake` and teardown promotes that; after it,
+     * it promotes directly, gated by the spawn's `carryOwedWake` latch so a
+     * user `stop()` still carries nothing (#1866). Either way it touches only
+     * this closure and one supervisor-level boolean — never `child`, never a
+     * stdin — so a stale callback cannot reach a successor. The bounded cost: a
+     * callback that lands after a successor already consumed the flag sets it
+     * again, which costs at most one extra payload-free wake, never a lost one. */
     function sendTurn(text: string): boolean {
       const stdin = spawned.stdin;
       if (!stdin?.writable) {
@@ -1076,7 +1104,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         // wake so the intent survives into the next spawn rather than dying
         // with this one. Do NOT retry against this stdin — it just refused.
         clearLatch();
-        pendingWake = true;
+        if (tornDown) {
+          // Teardown already ran, so `pendingWake` is a dead flag nobody will
+          // promote. Carry the wake across directly — unless a user stop ended
+          // this spawn (#1866).
+          if (carryOwedWake) wakeOwedAcrossSpawns = true;
+        } else {
+          pendingWake = true;
+        }
       });
       return true;
     }
@@ -1119,10 +1154,17 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
      * and `error` can both fire.
      */
     function teardownTurnDelivery(): void {
+      // Latch once: `exit` and `error` can both reach here, and a user stop's
+      // decision must not be re-read after `start()` lowers `userStopped`.
+      if (!tornDown) {
+        tornDown = true;
+        carryOwedWake = !userStopped;
+      }
       unsubscribeFromEvents();
       // Hand an undelivered wake to the next spawn rather than dropping it —
-      // this runs on crash-restart, not just on a deliberate stop.
-      if (pendingWake) wakeOwedAcrossSpawns = true;
+      // this runs on crash-restart and on relaunch, not just on a deliberate
+      // stop. A user `stop()` carries nothing (#1866).
+      if (pendingWake && carryOwedWake) wakeOwedAcrossSpawns = true;
       pendingWake = false;
       clearLatch();
       // Identity-guarded: only drop the shared handle if it still points at
@@ -1420,6 +1462,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     if (child) return;
     if (breakerTripped) return;
     stopRequested = false;
+    userStopped = false;
     const plan = await buildPlan();
     if (!plan) {
       console.error("[Launcher] No claude-code integration with apply != skip — skipping");
@@ -1488,6 +1531,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // new spawn, or the exit handler treats the *next* crash as a deliberate
     // stop and silently declines to restart — the supervisor stays dead.
     stopRequested = false;
+    userStopped = false;
     const plan = await buildPlan(cwdOverride);
     if (!plan) return;
     await persistRequestedCwd(plan, cwdOverride, opts?.persistCwd);
@@ -1563,8 +1607,16 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     currentResuming = false;
   }
 
+  /** The user turning Claude off. Carries no owed wake to a later spawn
+   * (#1866): the clear lives HERE, not in `stopInternal`, because `respawn`
+   * runs `stopInternal` too, and a Restart after a crash must keep the wake the
+   * crash owed. */
   async function stop(): Promise<void> {
-    return withLock(() => stopInternal());
+    return withLock(async () => {
+      userStopped = true;
+      wakeOwedAcrossSpawns = false;
+      await stopInternal();
+    });
   }
 
   async function startFresh(cwdOverride?: string, opts?: RelocateOpts): Promise<void> {
