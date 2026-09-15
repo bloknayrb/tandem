@@ -11,15 +11,13 @@
 import * as Y from "yjs";
 import type { DocStore } from "../annotations/store.js";
 import {
+  type ObserverCleanup,
   type ObserverCleanupPhase,
   registerAnnotationObserver,
   type SyncContext,
 } from "../annotations/sync.js";
 
-const fileSyncContexts = new Map<
-  string,
-  { ctx: SyncContext; cleanup: (phase: ObserverCleanupPhase) => void }
->();
+const fileSyncContexts = new Map<string, { ctx: SyncContext; cleanup: ObserverCleanup }>();
 
 /**
  * Run a file-sync observer cleanup in a try/catch with a uniform log line.
@@ -29,7 +27,7 @@ const fileSyncContexts = new Map<
  */
 function safeCleanup(
   docName: string,
-  cleanup: (phase: ObserverCleanupPhase) => void,
+  cleanup: ObserverCleanup,
   phase: ObserverCleanupPhase,
   logTag: string,
 ): void {
@@ -60,7 +58,7 @@ function safeCleanup(
 export function setFileSyncContext(
   docName: string,
   ctx: SyncContext,
-  cleanup: (phase: ObserverCleanupPhase) => void,
+  cleanup: ObserverCleanup,
 ): void {
   // Dispose any prior entry first so we never leak observers on duplicate
   // registration (e.g., forceReload paths that re-run loadAndMerge). Normal

@@ -116,9 +116,8 @@ export function releaseReloadGuard(id: string): void {
  * the file-watcher and external-conflict callers suppress their success toast
  * on a skip (the external-conflict caller, a user's button, reports the skip
  * instead — #1663; the watcher stays silent), and the backup-restore caller
- * turns a skip into
- * RELOAD_IN_PROGRESS so it never reports success while the Y.Doc still holds
- * pre-restore content.
+ * turns a skip into RELOAD_IN_PROGRESS so it never reports success while the
+ * Y.Doc still holds pre-restore content.
  */
 export async function reloadFromDisk(
   id: string,
