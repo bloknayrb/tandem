@@ -102,6 +102,12 @@ export function isTransientlyUnavailable(reason: LauncherUnavailableReason | und
  * installed afterwards will not update it. That is acceptable because the
  * supervisor spawns from the PATH the *process* started with, so such a user
  * needs a Tandem restart regardless of what the enum says.
+ *
+ * `wake-delivery-failed` (#1868): the supervisor ended three successive
+ * children in a row because each stopped accepting turns on stdin, with no
+ * completed turn in between, and gave up. The CLI itself probed as usable, so
+ * the remedy is a restart — which is why the client folds it into the same
+ * `restart` chip as `circuit-open`, with no client change.
  */
 export type LauncherErrorCode =
   | "spawn-failed"
@@ -109,7 +115,8 @@ export type LauncherErrorCode =
   | "cli-unusable"
   | "stop-failed"
   | "circuit-open"
-  | "status-check-failed";
+  | "status-check-failed"
+  | "wake-delivery-failed";
 
 /** Loopback-only side-channel for bundled-skill refresh failures. The user
  * has no other signal that the skill is stale, so `/status` surfaces this

@@ -18,8 +18,10 @@
  * ## PII scrubbing
  *
  * A `beforeSend` hook scrubs absolute home-dir paths and obvious secrets from
- * messages/exception values before egress. We only ever capture `Error`s from
- * the fatal-error path — never document content or annotation bodies.
+ * messages/exception values before egress. We capture `Error`s from the
+ * fatal-error path, plus one fixed-string warning (`captureWarning`) when the
+ * launcher gives up on a Claude session that stopped accepting turns (#1868) —
+ * never document content or annotation bodies.
  */
 
 import { redactPaths, redactSecrets } from "../shared/scrub-text.js";
@@ -131,5 +133,20 @@ export async function captureFatal(value: unknown, flushMs = 2000): Promise<void
     await sentry.flush(flushMs);
   } catch {
     // Never let telemetry throw inside the fatal-error path.
+  }
+}
+
+/**
+ * Ship a non-fatal warning. No-op when reporting is disabled, so with
+ * `TANDEM_SENTRY_DSN` unset nothing leaves the machine. The only caller is the
+ * launcher's wake-delivery trip, which passes a fixed string (#1868); `scrub`
+ * runs anyway so a future caller cannot bypass it.
+ */
+export function captureWarning(message: string): void {
+  if (!sentry) return;
+  try {
+    sentry.captureMessage(scrub(message), "warning");
+  } catch {
+    // Telemetry must never throw into the caller.
   }
 }

@@ -992,6 +992,41 @@ describe("attachChildStreamErrorHandlers — a child-stdin write error is a chil
     expect(kill).not.toHaveBeenCalled();
   });
 
+  // #1868: `onKill` is how the supervisor counts a wake-delivery kill, so it
+  // must fire exactly when THIS handler ends the child, and never past a guard.
+  it("makeStdinGoneHandler tells onKill before it kills a current live child", () => {
+    const order: string[] = [];
+    const kill = vi.fn(() => {
+      order.push("kill");
+      return true;
+    });
+    const onKill = vi.fn(() => {
+      order.push("onKill");
+    });
+    const handler = makeStdinGoneHandler(
+      { exitCode: null, signalCode: null, kill },
+      () => true,
+      onKill,
+    );
+    handler(makeErr("EPIPE"));
+    expect(order).toEqual(["onKill", "kill"]);
+  });
+
+  it("makeStdinGoneHandler does not tell onKill for a superseded or already-exited child", () => {
+    const onKill = vi.fn();
+    makeStdinGoneHandler(
+      { exitCode: null, signalCode: null, kill: vi.fn() },
+      () => false,
+      onKill,
+    )(makeErr("EPIPE"));
+    makeStdinGoneHandler(
+      { exitCode: 127, signalCode: null, kill: vi.fn() },
+      () => true,
+      onKill,
+    )(makeErr("EPIPE"));
+    expect(onKill).not.toHaveBeenCalled();
+  });
+
   it("makeStdinGoneHandler survives a throwing kill — a throw inside a stream error emit is uncaughtException (#1757 with the fix nominally present)", () => {
     const kill = vi.fn().mockImplementationOnce(() => {
       throw new Error("boom");
@@ -1065,7 +1100,7 @@ describe("attachChildStreamErrorHandlers — a child-stdin write error is a chil
     const childIndent = lines.find((l) => /^\s*child = spawned;/.test(l))!.match(/^\s*/)![0];
     expect(lines[bindIdx].match(/^\s*/)![0]).toBe(childIndent);
     expect(lines[bindIdx].trim()).toBe(
-      "const onStdinGone = makeStdinGoneHandler(spawned, () => child === spawned);",
+      "const onStdinGone = makeStdinGoneHandler(spawned, () => child === spawned, markDeliveryKill);",
     );
     expect(lines[callIdx].trim()).toBe("attachChildStreamErrorHandlers(spawned, onStdinGone);");
     // Even an exact text pin cannot see a thunk forged behind an alias; the

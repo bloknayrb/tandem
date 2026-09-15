@@ -101,6 +101,17 @@ interface SupervisorOpts {
    * `scheduleRestart` rather than the function itself would verify the mirror.
    */
   restartBackoffsMs?: number[];
+  /**
+   * Called once, with a fixed string, when the supervisor gives up on a
+   * Claude that kept refusing turns (`wake-delivery-failed`, #1868). Defaults
+   * to a no-op.
+   *
+   * A seam rather than a direct `sentry.ts` import because that module imports
+   * `./mcp/server.js`, which this file must not pull in. `index.ts` wires it to
+   * `captureWarning`, which is inert unless the user opted in with
+   * `TANDEM_SENTRY_DSN` — so by default nothing leaves the machine.
+   */
+  reportDeliveryTrip?: (message: string) => void;
 }
 
 /**
@@ -207,6 +218,9 @@ const RESTART_BACKOFFS_MS = [1_000, 5_000, 30_000];
  * Avoids unbounded restart-loop spam from a permanently-broken Claude binary. */
 const CIRCUIT_BREAKER_MAX_ATTEMPTS = 10;
 const CIRCUIT_BREAKER_WINDOW_MS = 5 * 60_000;
+/** The only text `reportDeliveryTrip` is ever handed: no path, id, count or
+ * content, so the opt-in report carries nothing about the user (#1868). */
+const DELIVERY_TRIP_REPORT = "launcher: wake delivery failed on consecutive sessions";
 /** RFC-4122 v4-shape UUID, accepted for `--session-id` / `--resume`.
  * Defense-in-depth: even though `launcher-session.json` is mode 0o600,
  * an attacker-controlled value flowing into `--resume` could hijack
@@ -439,6 +453,10 @@ export function attachChildStreamErrorHandlers(
 export function makeStdinGoneHandler(
   spawned: Pick<ChildProcess, "exitCode" | "signalCode" | "kill">,
   isCurrent: () => boolean,
+  /** Told that THIS handler is about to end the child, after both guards
+   * passed. The caller counts it (#1868); it may be called more than once for
+   * one child, because `signalCode` is only set at exit. */
+  onKill?: () => void,
 ): (err: NodeJS.ErrnoException) => void {
   return () => {
     // A child whose stdin refuses writes can never be woken again, alive or
@@ -457,6 +475,7 @@ export function makeStdinGoneHandler(
     // nobody attacked the PARAMETER.
     if (!isCurrent()) return;
     if (spawned.exitCode !== null || spawned.signalCode !== null) return;
+    onKill?.();
     try {
       spawned.kill("SIGTERM");
     } catch {
@@ -569,6 +588,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const subscribeToEvents = opts.subscribeToEvents ?? defaultSubscribeToEvents;
   const wakeLatchMs = opts.wakeLatchMs ?? WAKE_LATCH_MAX_MS;
   const probeCliUsable = opts.probeCliUsable ?? defaultProbeCliUsable;
+  const reportDeliveryTrip = opts.reportDeliveryTrip ?? (() => {});
   const restartBackoffs = opts.restartBackoffsMs?.length
     ? opts.restartBackoffsMs
     : RESTART_BACKOFFS_MS;
@@ -636,6 +656,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let recentAttempts: number[] = [];
   /** True once the breaker has tripped — supervisor refuses further restarts. */
   let breakerTripped = false;
+  /**
+   * Consecutive spawns this supervisor ended because the child stopped
+   * accepting turns (#1868). No time window, unlike `recentAttempts`: 3 means
+   * the same failure on three successive children, however slowly they came.
+   * Reset only by a `result` envelope (proof of healthy delivery) or a user
+   * relaunch/startFresh.
+   */
+  let deliveryKillStreak = 0;
+  const DELIVERY_KILL_LIMIT = 3;
   /** Serializes start / stop / relaunch so concurrent callers don't race the
    * child handle. Each public method takes this lock; reentrant calls within
    * the same task chain (e.g. relaunch → stop → spawn) sequence naturally
@@ -986,7 +1015,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // object + KILL_ON_JOB_CLOSE) and Linux (PR_SET_PDEATHSIG, and the reaper
     // execvps in place so `spawned` IS Claude) are safe. stopInternal has the
     // same hole once per deliberate stop; this fix makes it error-triggered.
-    const onStdinGone = makeStdinGoneHandler(spawned, () => child === spawned);
+    //
+    // `killedForDelivery` marks that THIS spawn was ended for refusing turns.
+    // A boolean, counted once in the exit handler, because one broken child
+    // can call `onKill` more than once before it exits (#1868).
+    let killedForDelivery = false;
+    function markDeliveryKill(): void {
+      killedForDelivery = true;
+    }
+    const onStdinGone = makeStdinGoneHandler(spawned, () => child === spawned, markDeliveryKill);
     attachChildStreamErrorHandlers(spawned, onStdinGone);
 
     // A spawn that reached this point supersedes whatever went wrong before it;
@@ -1236,6 +1273,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // re-emitted per turn rather than per session.
       if (parsed.type === "result") {
         clearLatch();
+        // A completed turn is the proof of healthy delivery that ends a
+        // wake-delivery kill streak (#1868). Deliberately `result` only: `init`
+        // proves the turn was read, not that the session can finish one.
+        deliveryKillStreak = 0;
 
         // NOTE (#1267): `errors` is NOT confirmed to exist on the CLI's
         // `result` envelope — it can only be settled against a running `claude`
@@ -1342,6 +1383,40 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       }
 
       if (stopRequested) return;
+
+      // A child we ended because it stopped accepting turns (#1868). The
+      // windowed breaker in `scheduleRestart` cannot see this loop at a human
+      // cadence — one wake every 30 s or slower never fills its window, and
+      // `restartIndex` resets once a child has lived 30 s — so it has its own
+      // count, with no time window.
+      if (killedForDelivery && ++deliveryKillStreak >= DELIVERY_KILL_LIMIT) {
+        breakerTripped = true;
+        // Same guarded, fail-open probe as `scheduleRestart`'s trip: a missing
+        // CLI (exit 127) can have its stdin error land before Node records the
+        // exit, and that user needs Setup, not Restart.
+        let cliUsable = true;
+        try {
+          cliUsable = probeCliUsable();
+        } catch (err) {
+          console.error("[Launcher] CLI probe failed; reporting a wake-delivery failure:", err);
+        }
+        lastError = cliUsable ? "wake-delivery-failed" : "cli-unusable";
+        console.error(
+          cliUsable
+            ? `[Launcher] Claude was ended ${deliveryKillStreak} times in a row because it stopped accepting turns — giving up. Restart Claude Code to retry.`
+            : "[Launcher] Claude kept failing to accept turns and the Claude CLI is missing or cannot be started — check the integration setup.",
+        );
+        if (cliUsable) {
+          // Guarded for the same reason as the probe: this runs inside an
+          // `exit` emit, where a throw is an uncaughtException.
+          try {
+            reportDeliveryTrip(DELIVERY_TRIP_REPORT);
+          } catch (err) {
+            console.error("[Launcher] Wake-delivery report failed:", err);
+          }
+        }
+        return;
+      }
 
       scheduleRestart();
     });
@@ -1527,6 +1602,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // relaunch/startFresh always mean "user is actively asking" → clear breaker.
     breakerTripped = false;
     recentAttempts = [];
+    deliveryKillStreak = 0;
     // stopInternal() raised the stop flag on the way in. Lower it before the
     // new spawn, or the exit handler treats the *next* crash as a deliberate
     // stop and silently declines to restart — the supervisor stays dead.

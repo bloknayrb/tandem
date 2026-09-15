@@ -202,6 +202,7 @@ beforeEach(async () => {
   onSpawn = null;
   sups = [];
   let pid = 40_000;
+  vi.mocked(spawn).mockClear();
   vi.mocked(spawn).mockImplementation(() => {
     const child = new FakeChild(pid++);
     children.push(child);
@@ -400,6 +401,162 @@ describe("#1866 — a failed-write callback that lands after teardown", () => {
 
     const child2 = await nthChild(2);
     expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+});
+
+// --- #1868 --------------------------------------------------------------------
+
+const DELIVERY_TRIP_REPORT = "launcher: wake delivery failed on consecutive sessions";
+
+describe("#1868 — consecutive stdin-error kills trip their own breaker", () => {
+  /** Delivery-kill children `from`..`to` in turn: each fails its held writes
+   * the real way, is ended by the supervisor, and its successor comes back. */
+  async function deliveryKill(from: number, to: number, between?: () => void): Promise<void> {
+    for (let i = from; i <= to; i++) {
+      const c = await nthChild(i);
+      expect(held(c).length, `child ${i} has a turn to fail`).toBeGreaterThan(0);
+      failWrite(c);
+      await waitFor(() => c.exitCode !== null || c.signalCode !== null, `child ${i} to exit`);
+      between?.();
+    }
+  }
+
+  async function expectStableSpawnCount(n: number): Promise<void> {
+    await sleep(50);
+    await settle();
+    expect(children).toHaveLength(n);
+  }
+
+  it("trips at a slow cadence that the windowed breaker and the latch never see", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const reportDeliveryTrip = vi.fn();
+    const { sup } = makeSupervisor({ reportDeliveryTrip });
+    await sup.startFresh(cwdDir);
+
+    await deliveryKill(1, 3, () => vi.setSystemTime(Date.now() + 11 * 60_000));
+
+    await waitFor(() => sup.status().lastError === "wake-delivery-failed", "the trip");
+    expect(sup.status()).toEqual({ running: false, lastError: "wake-delivery-failed" });
+    await expectStableSpawnCount(3);
+    expect(reportDeliveryTrip).toHaveBeenCalledExactlyOnceWith(DELIVERY_TRIP_REPORT);
+    expect(logText()).toContain("stopped accepting turns — giving up");
+  });
+
+  it("trips at the same count at a fast cadence", async () => {
+    const reportDeliveryTrip = vi.fn();
+    const { sup } = makeSupervisor({ reportDeliveryTrip });
+    await sup.startFresh(cwdDir);
+
+    await deliveryKill(1, 3);
+
+    await waitFor(() => sup.status().lastError === "wake-delivery-failed", "the trip");
+    await expectStableSpawnCount(3);
+    expect(reportDeliveryTrip).toHaveBeenCalledOnce();
+  });
+
+  it("a completed turn resets the streak", async () => {
+    const reportDeliveryTrip = vi.fn();
+    const { sup } = makeSupervisor({ reportDeliveryTrip });
+    await sup.startFresh(cwdDir);
+    await deliveryKill(1, 2);
+
+    const child3 = await nthChild(3);
+    expect(texts(child3)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+    pushJson(child3, INIT);
+    pushJson(child3, RESULT_OK);
+    await settle();
+    exitChild(child3, 1);
+
+    const child4 = await nthChild(4);
+    expect(texts(child4)).toEqual([SUPERVISOR_INITIAL_PROMPT]);
+    await deliveryKill(4, 5);
+
+    await nthChild(6);
+    await expectStableSpawnCount(6);
+    const status = sup.status();
+    expect(status.running).toBe(true);
+    expect(status.lastError).toBeUndefined();
+    expect(reportDeliveryTrip).not.toHaveBeenCalled();
+  });
+
+  it("init alone is not proof of delivery", async () => {
+    const { sup } = makeSupervisor({ reportDeliveryTrip: vi.fn() });
+    await sup.startFresh(cwdDir);
+    await deliveryKill(1, 2);
+
+    const child3 = await nthChild(3);
+    pushJson(child3, INIT);
+    await settle();
+    await deliveryKill(3, 3);
+
+    await waitFor(() => sup.status().lastError === "wake-delivery-failed", "the trip at child 3");
+    await expectStableSpawnCount(3);
+  });
+
+  it("counts one spawn once, however many times its stdin errors before it exits", async () => {
+    const { sup } = makeSupervisor({ reportDeliveryTrip: vi.fn() });
+    await sup.startFresh(cwdDir);
+
+    for (const i of [1, 2]) {
+      const c = await nthChild(i);
+      failCallbacksOnly(held(c));
+      c.stdin.writable = false;
+      c.stdin.emit("error", EPIPE());
+      c.stdin.emit("error", EPIPE());
+      await waitFor(() => c.signalCode !== null, `child ${i} to exit`);
+    }
+
+    const child3 = await nthChild(3);
+    expect(texts(child3)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+    await expectStableSpawnCount(3);
+    const status = sup.status();
+    expect(status.running).toBe(true);
+    expect(status.lastError).toBeUndefined();
+  });
+
+  it("ordinary exits are not delivery kills", async () => {
+    const { sup } = makeSupervisor({ reportDeliveryTrip: vi.fn() });
+    await sup.startFresh(cwdDir);
+    for (const i of [1, 2, 3]) exitChild(await nthChild(i), 1);
+
+    await nthChild(4);
+    expect(sup.status().lastError).not.toBe("wake-delivery-failed");
+    expect(sup.status().running).toBe(true);
+  });
+
+  it("a missing CLI whose stdin error beats its exit routes to Setup, and reports nothing", async () => {
+    const reportDeliveryTrip = vi.fn();
+    const { sup } = makeSupervisor({ reportDeliveryTrip, probeCliUsable: () => false });
+    await sup.startFresh(cwdDir);
+
+    for (const i of [1, 2, 3]) {
+      const c = await nthChild(i);
+      failCallbacksOnly(held(c));
+      c.stdin.writable = false;
+      c.stdin.emit("error", EPIPE());
+      expect(c.kills, `child ${i} was ended by the handler`).toEqual(["SIGTERM"]);
+      exitChild(c, 127);
+    }
+
+    await waitFor(() => sup.status().lastError === "cli-unusable", "the setup trip");
+    await expectStableSpawnCount(3);
+    expect(reportDeliveryTrip).not.toHaveBeenCalled();
+  });
+
+  it("a user relaunch resets the streak", async () => {
+    const { sup } = makeSupervisor({ reportDeliveryTrip: vi.fn() });
+    await sup.startFresh(cwdDir);
+    await deliveryKill(1, 3);
+    await waitFor(() => sup.status().lastError === "wake-delivery-failed", "the trip");
+
+    await sup.relaunch(cwdDir);
+    await deliveryKill(4, 4);
+
+    await nthChild(5);
+    await expectStableSpawnCount(5);
+    const status = sup.status();
+    expect(status.running).toBe(true);
+    expect(status.lastError).toBeUndefined();
   });
 });
 
