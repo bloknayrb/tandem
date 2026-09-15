@@ -19,6 +19,7 @@ import {
   collectInboxUserReplies,
   type InboxPollContext,
   isUserActive,
+  type ProcessUnsurfacedInboxAnnotationsParameters,
   processInboxAnnotations,
   registerAwarenessTools,
   resetInbox,
@@ -27,6 +28,7 @@ import {
 import { extractText, populateYDoc } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { checkInboxOutputShape } from "../../src/server/mcp/output-schemas.js";
+import type { ModeState } from "../../src/server/mode.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
@@ -1088,6 +1090,26 @@ describe("InboxPollContext (#1702)", () => {
         InboxPollContext,
       ]
     >();
+    // The private helper is where `modeState` and `wasChannelEmitted` are read
+    // for userActions/userResponses. Its one caller would compile unchanged
+    // against a defaulted trailing parameter, so the two pins above cannot see
+    // one added here.
+    expectTypeOf<ProcessUnsurfacedInboxAnnotationsParameters>().toEqualTypeOf<
+      [Annotation[], string, Map<string, number>, InboxPollContext]
+    >();
+  });
+
+  it("pins InboxPollContext's exact shape: every field required", () => {
+    // The tuple pins above name `InboxPollContext` on both sides, so they are
+    // blind to any change INSIDE it. An optional field read with a `??`
+    // fallback and left out of the handler's literal compiles everywhere — the
+    // 8j-2 default under a new name. Written out literally so a new field of
+    // ANY kind turns `typecheck:tests` red and has to be added here on purpose.
+    expectTypeOf<InboxPollContext>().toEqualTypeOf<{
+      modeState: ModeState;
+      documentId: string;
+      wasChannelEmitted: (payloadId: string) => boolean;
+    }>();
   });
 
   // Every existing `alreadyPushed` / Solo pin calls the collectors directly with
@@ -1127,8 +1149,11 @@ describe("InboxPollContext (#1702)", () => {
     const client = new Client({ name: "test-client", version: "0.0.1" });
     await server.connect(serverTransport);
     await client.connect(clientTransport);
-    const poll = async () => {
-      const result = await client.callTool({ name: "tandem_checkInbox", arguments: {} });
+    const poll = async (documentId?: string) => {
+      const result = await client.callTool({
+        name: "tandem_checkInbox",
+        arguments: documentId === undefined ? {} : { documentId },
+      });
       return result.structuredContent as {
         userActions: Array<{ id: string; alreadyPushed?: true }>;
         userReplies: Array<{ id: string; alreadyPushed?: true }>;
@@ -1182,6 +1207,48 @@ describe("InboxPollContext (#1702)", () => {
       const released = await poll();
       expect(released.userActions.map((a) => a.id)).toContain(PARENT_ID);
       expect(released.userReplies.map((r) => r.id)).toContain(REPLY_ID);
+    } finally {
+      await client.close();
+    }
+  });
+
+  // The `inbox ledgers are document-scoped` rows build `ctx({ documentId })`
+  // by hand, so they never see the id the HANDLER puts in the context. A wrong
+  // STRING there compiles: `""`, or the active document's id when the
+  // `documentId` argument names another. Both collapse the two documents onto
+  // one ledger key, and the second poll then skips the shared ids as already
+  // surfaced — the imported-Word-comment collision document scoping exists for.
+  it("the handler scopes BOTH ledgers by the polled document, not the active one", async () => {
+    setCtrlMode("tandem");
+    // Same annotation id and reply id in two files (one imported .docx comment).
+    const docA = setupDoc("inbox-ctx-doc-a", "Hello world");
+    writeCommentAndReply(docA);
+    const docB = setupDoc("inbox-ctx-doc-b", "Hello world");
+    writeCommentAndReply(docB);
+    // `setupDoc` made B active. Polling A FIRST, by argument, is what separates
+    // "the polled document" from "the active one": an active-id key would file
+    // A's surfacing under B and B's own poll would then return nothing.
+    const { client, poll } = await connectInbox();
+    try {
+      for (const docId of ["inbox-ctx-doc-a", "inbox-ctx-doc-b"]) {
+        const data = await poll(docId);
+        expect(
+          data.userActions.map((a) => a.id),
+          docId,
+        ).toEqual([PARENT_ID]);
+        expect(
+          data.userReplies.map((r) => r.id),
+          docId,
+        ).toEqual([REPLY_ID]);
+      }
+      // Positive control on the dedup itself: a re-poll of each is empty, so
+      // the passes above are the ledger scoping and not a ledger that never
+      // records anything.
+      for (const docId of ["inbox-ctx-doc-a", "inbox-ctx-doc-b"]) {
+        const again = await poll(docId);
+        expect(again.userActions, docId).toEqual([]);
+        expect(again.userReplies, docId).toEqual([]);
+      }
     } finally {
       await client.close();
     }

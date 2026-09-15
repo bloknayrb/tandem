@@ -515,9 +515,12 @@ export function registerAwarenessTools(server: McpServer): void {
         // #1624: the selection record's own timestamp. `cursor`/`lastEdit` come
         // from a DIFFERENT record (`Y_MAP_ACTIVITY`), so without this the two
         // halves of `activity` read as one snapshot while having independent
-        // ages. Null exactly when `selectedText` is. The `typeof` guard is not
-        // defensive: an `undefined` here fails the SDK's structured-output
-        // validation for the WHOLE response, not just this field.
+        // ages. Null whenever `selectedText` is null, but NOT only then: a record
+        // with no numeric `timestamp` yields a real `selectedText` beside a null
+        // `selectionAt`, so a null here must never be read as "no selection".
+        // The `typeof` guard is not defensive: an `undefined` here fails the
+        // SDK's structured-output validation for the WHOLE response, not just
+        // this field.
         const selectionAt =
           hasSelection && typeof selection!.timestamp === "number" ? selection!.timestamp : null;
 
@@ -716,6 +719,18 @@ export function processInboxAnnotations(
   return processUnsurfacedInboxAnnotations(unsurfaced, fullText, surfaced, ctx);
 }
 
+/**
+ * The private helper's parameter tuple, exported as a TYPE only so
+ * `awareness-tools.test.ts` can pin it (#1702). This function is where
+ * `modeState` and `wasChannelEmitted` are actually read for userActions and
+ * userResponses, and its one caller would compile unchanged against a new
+ * defaulted trailing parameter — the 8j-2 shape again, one call deeper than the
+ * exported pins reach.
+ */
+export type ProcessUnsurfacedInboxAnnotationsParameters = Parameters<
+  typeof processUnsurfacedInboxAnnotations
+>;
+
 function processUnsurfacedInboxAnnotations(
   unsurfaced: Annotation[],
   fullText: string,
@@ -829,10 +844,14 @@ function processUnsurfacedInboxAnnotations(
  *
  * Every field is required: an optional field would be the Unit 8j-2 default
  * under a new name. A new value both buckets need goes HERE, never as a
- * positional parameter on one collector — the `expectTypeOf` tuple pin in
- * `tests/server/awareness-tools.test.ts` turns `typecheck:tests` red if one
- * collector's signature grows on its own. Values that belong to one collector
- * (`surfaced`, `refreshAll`, `loadReplies`, `replySurfaced`) stay positional.
+ * positional parameter on one collector. `tests/server/awareness-tools.test.ts`
+ * holds three `expectTypeOf` pins that turn `typecheck:tests` red: the exact
+ * shape of this interface (so a new OPTIONAL field fails, as does any field
+ * added without updating the pin), and the parameter tuples of both exported
+ * collectors plus the private `processUnsurfacedInboxAnnotations` (so a
+ * defaulted positional parameter on any of them fails). Values that belong to
+ * one collector (`surfaced`, `refreshAll`, `loadReplies`, `replySurfaced`) stay
+ * positional.
  */
 export interface InboxPollContext {
   /**
