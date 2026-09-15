@@ -126,6 +126,7 @@ default-tab-chat-btn
 density-{*}-btn
 dismiss-btn-{*}
 display-menu
+display-menu-measure-{*}
 display-menu-text-size-{*}
 display-menu-trigger
 edit-btn-{*}

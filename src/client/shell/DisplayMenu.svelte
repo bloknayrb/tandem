@@ -1,13 +1,14 @@
 <script lang="ts">
 import "../editor/toolbar/toolbar-chrome.css";
 import { clickOutside } from "../actions/clickOutside.svelte";
-import type { EditorMeasure, TextSize } from "../hooks/useTandemSettings";
+import { EDITOR_MEASURES, type EditorMeasure, type TextSize } from "../hooks/useTandemSettings";
 import { ESCAPE_OWNER_ATTR } from "../utils/escape-owner";
 import { focusMenuEntryPoint, handleMenuArrowKeys } from "../utils/menuKeys";
 
 /**
- * Display menu (#1705): a quick, point-of-use home for the editor's reading
- * presets, which otherwise live only in the Settings modal.
+ * Display menu (#1705 text size, #1706 reading measure): a quick, point-of-use
+ * home for the editor's reading presets, which otherwise live only in the
+ * Settings modal.
  *
  * It keeps NO copy of either value. Both props are read straight from the
  * settings store by the parent and every pick goes back through `onUpdate`,
@@ -75,6 +76,13 @@ function pickTextSize(size: TextSize) {
   onUpdate({ textSize: size });
   closeMenu();
 }
+
+// The measure writes ONLY `editorMeasure` — never rail visibility or width —
+// and `mergeAndClampSettings`' `isEditorMeasure` clamp is its write guard.
+function pickMeasure(measure: EditorMeasure) {
+  onUpdate({ editorMeasure: measure });
+  closeMenu();
+}
 </script>
 
 <!-- One clickOutside node around trigger AND menu (node.contains), exactly as
@@ -117,6 +125,25 @@ function pickTextSize(size: TextSize) {
               onclick={() => pickTextSize(size)}
             >
               <span class="dm-label">{TEXT_SIZE_LABEL[size]}</span>
+              <svg class="dm-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
+            </button>
+          {/each}
+        </div>
+        <div class="dm-div" role="separator"></div>
+        <!-- Iterated from EDITOR_MEASURES, the union's source of truth, so a
+             new preset cannot be settable in Settings and missing here. -->
+        <div role="group" aria-label="Reading measure">
+          <div class="dm-head" aria-hidden="true">Reading measure</div>
+          {#each EDITOR_MEASURES as measure (measure)}
+            <button
+              type="button"
+              class="dm-item"
+              role="menuitemradio"
+              aria-checked={editorMeasure === measure}
+              data-testid={`display-menu-measure-${measure}`}
+              onclick={() => pickMeasure(measure)}
+            >
+              <span class="dm-label">{MEASURE_LABEL[measure]}</span>
               <svg class="dm-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
             </button>
           {/each}
@@ -224,5 +251,10 @@ function pickTextSize(size: TextSize) {
   }
   .dm-item[aria-checked="true"] .dm-check {
     visibility: visible;
+  }
+  .dm-div {
+    height: 1px;
+    background: var(--tandem-border);
+    margin: 4px 6px;
   }
 </style>

@@ -56,7 +56,7 @@ Select text to reveal formatting buttons: **Bold**, **Italic**, **Strikethrough*
 
 The persistent formatting bar (Settings → Appearance → **Show formatting bar**) carries two extra controls the selection popup deliberately leaves out: **Undo** / **Redo**, and **Horizontal Rule** — inserting a rule while text is selected makes little sense.
 
-The bar's **Display** menu (the `Aa` button) sets the text size for the formatted editor without opening Settings. It changes the same setting as Settings → Appearance, so the two always agree. The Markdown source view keeps its own fixed size.
+The bar's **Display** menu (the `Aa` button) sets the text size and reading measure for the formatted editor without opening Settings. It changes the same settings as Settings → Appearance and Settings → Editor, so the two always agree. The Markdown source view keeps its own fixed size and width.
 
 ### Selection Popup
 
@@ -363,7 +363,7 @@ Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
 
 Most of what shapes the reading surface lives here.
 
-- **Reading measure** — The line length of the text: Narrow (58 characters), Comfortable (68), Wide (82), or Full (fills the editor). A fixed measure keeps lines readable no matter which panels are open.
+- **Reading measure** — The line length of the text: Narrow (58 characters), Comfortable (68), Wide (82), or Full (fills the editor). A fixed measure keeps lines readable no matter which panels are open. The formatting bar's **Display** menu sets it too.
 - **Editor font** — Sans-serif, Serif, or Monospace for the document text.
 - **Default font by file type** — Overrides the editor font per format (`.md`, `.docx`, `.html`, `.txt`). Anything you don't set falls back to the editor font; **Reset to defaults** clears every override at once.
 - **Default save folder** — Where **Save As** puts new files. Leave it empty to fall back to your AI's working directory, then your home folder. In the desktop app a **Choose…** button opens a native folder picker; in the browser you type the path, and browser Save As is a download that ignores this setting.

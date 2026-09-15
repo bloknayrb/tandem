@@ -19,7 +19,9 @@ import {
   cleanupFixtureDir,
   createFixtureDir,
   McpTestClient,
+  RAIL_HANDLE_TESTID,
   selectTextStable,
+  setRailVisible,
 } from "./helpers";
 
 let mcp: McpTestClient;
@@ -198,4 +200,143 @@ test("bar hidden: the popup's Display menu writes text size on its own", async (
   // Small is not the default, so this passes only if the popup's write landed.
   await expect.poll(() => editorFontSize(page)).toBe("14px");
   await expect(page.locator(".selection-popup")).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// #1706 — reading measure
+// ---------------------------------------------------------------------------
+
+const measureVar = (page: Page) =>
+  page
+    .locator("[data-testid='editor-stage']")
+    .evaluate((el) => getComputedStyle(el).getPropertyValue("--editor-measure").trim());
+
+test("measure quick → Settings: picking Wide applies, persists and shows in Settings", async ({
+  page,
+}) => {
+  await boot(page);
+  const menu = await openMenu(page, BAR);
+  await menu.locator("[data-testid='display-menu-measure-wide']").click();
+
+  await expect.poll(() => measureVar(page)).toBe("82ch");
+  await expect.poll(async () => (await storedSettings(page)).editorMeasure).toBe("wide");
+
+  await openSettingsModal(page);
+  await page.locator("[data-testid='settings-modal-tab-editor']").click();
+  await expect(page.locator("[data-testid='editor-measure-wide']")).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+});
+
+test("measure Settings → quick: a modal pick is what the menu shows", async ({ page }) => {
+  await boot(page);
+  await openSettingsModal(page);
+  await page.locator("[data-testid='settings-modal-tab-editor']").click();
+  await page.locator("[data-testid='editor-measure-narrow']").click();
+  await closeSettingsModal(page);
+
+  const menu = await openMenu(page, BAR);
+  await expect(menu.locator("[data-testid='display-menu-measure-narrow']")).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await expect(page.locator(`${BAR} [data-testid='display-menu-trigger']`)).toHaveAttribute(
+    "aria-label",
+    /measure Narrow/,
+  );
+});
+
+test("a measure pick keeps the editor view, the scroll position and the document", async ({
+  page,
+}) => {
+  await boot(page);
+  const docId = await markDocumentState(page);
+  expect(docId).not.toBeNull();
+
+  const menu = await openMenu(page, BAR);
+  await menu.locator("[data-testid='display-menu-measure-wide']").click();
+  await expect.poll(() => measureVar(page)).toBe("82ch");
+
+  await expectDocumentStatePreserved(page, docId);
+});
+
+/**
+ * A rail handle's box once it has stopped moving. Opening a rail slides it in,
+ * so a single `boundingBox()` straight after `setRailVisible` can read a frame
+ * of that animation; this polls until two reads 100ms apart agree.
+ */
+async function settledBox(
+  locator: Locator,
+): Promise<{ x: number; y: number; width: number; height: number }> {
+  let last: { x: number; y: number; width: number; height: number } | null = null;
+  await expect
+    .poll(
+      async () => {
+        const box = await locator.boundingBox();
+        const stable =
+          !!box &&
+          !!last &&
+          Math.abs(box.x - last.x) < 0.5 &&
+          Math.abs(box.width - last.width) < 0.5;
+        last = box;
+        return stable;
+      },
+      { intervals: [100], timeout: 5_000, message: "rail handle never stopped moving" },
+    )
+    .toBe(true);
+  return last!;
+}
+
+test("rails open: measure picks move neither rail handle", async ({ page }) => {
+  await boot(page);
+  await setRailVisible(page, "left", true);
+  await setRailVisible(page, "right", true);
+  const handle = (side: "left" | "right") =>
+    page.locator(`[data-testid='${RAIL_HANDLE_TESTID[side]}']`);
+  const before = {
+    left: await settledBox(handle("left")),
+    right: await settledBox(handle("right")),
+  };
+
+  for (const [preset, expected] of [
+    ["full", "100%"],
+    ["narrow", "58ch"],
+  ] as const) {
+    const menu = await openMenu(page, BAR);
+    await menu.locator(`[data-testid='display-menu-measure-${preset}']`).click();
+    await expect.poll(() => measureVar(page)).toBe(expected);
+    for (const side of ["left", "right"] as const) {
+      const box = await settledBox(handle(side));
+      const was = before[side];
+      expect(Math.abs(box.x - was.x), `${side} handle x moved (${preset})`).toBeLessThanOrEqual(1);
+      expect(
+        Math.abs(box.width - was.width),
+        `${side} handle width (${preset})`,
+      ).toBeLessThanOrEqual(1);
+    }
+  }
+});
+
+test("rails closed: a measure pick does not open either rail", async ({ page }) => {
+  await boot(page);
+  await setRailVisible(page, "left", false);
+  await setRailVisible(page, "right", false);
+
+  const menu = await openMenu(page, BAR);
+  await menu.locator("[data-testid='display-menu-measure-wide']").click();
+  await expect.poll(() => measureVar(page)).toBe("82ch");
+
+  await expect(page.locator(`[data-testid='${RAIL_HANDLE_TESTID.left}']`)).toHaveCount(0);
+  await expect(page.locator(`[data-testid='${RAIL_HANDLE_TESTID.right}']`)).toHaveCount(0);
+});
+
+test("narrow viewport: the trigger stays reachable and a pick applies", async ({ page }) => {
+  await page.setViewportSize({ width: 640, height: 800 });
+  await boot(page);
+  await expect(page.locator(`${BAR} [data-testid='display-menu-trigger']`)).toBeVisible();
+
+  const menu = await openMenu(page, BAR);
+  await menu.locator("[data-testid='display-menu-measure-wide']").click();
+  await expect.poll(() => measureVar(page)).toBe("82ch");
 });
