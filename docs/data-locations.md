@@ -78,8 +78,15 @@ delete, and never appear in your own document folders.
 | Desktop app (Windows) | `%LOCALAPPDATA%\com.tandem.editor\logs\tandem.log` |
 | Desktop app (macOS) | `~/Library/Logs/com.tandem.editor/tandem.log` |
 | Desktop app (Linux) | `~/.local/share/com.tandem.editor/logs/tandem.log` |
-| Uninstall scrub (Windows) | `%LOCALAPPDATA%\tandem\Logs\uninstall.log` |
+| `tandem --uninstall-scrub` (Windows) | `%LOCALAPPDATA%\tandem\Logs\uninstall.log` |
 | npm install | stderr only (no log file) |
+
+The uninstall log belongs to the npm CLI's scrub, the command under
+[Uninstalling cleanly](#uninstalling-cleanly). The Windows desktop uninstaller's
+automatic scrub is a different program: it runs inside the desktop binary
+(`src-tauri/src/uninstall_scrub.rs`) and writes **no log file**, only a stderr
+that the installer does not keep. The installer's details pane shows its exit
+code and nothing else.
 
 The desktop app's **Settings → About → Open Log Folder** button opens the
 right directory for you.
