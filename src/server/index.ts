@@ -60,7 +60,7 @@ import {
   SESSION_DIR,
   waitForPort,
 } from "./platform.js";
-import { captureFatal, initSidecarCrashReporting } from "./sentry.js";
+import { captureFatal, captureWarning, initSidecarCrashReporting } from "./sentry.js";
 import {
   cleanupOrphanedAnnotationFiles,
   cleanupSessions,
@@ -137,6 +137,7 @@ async function startLauncherSupervisor(): Promise<void> {
     // `spawn-failed` reason is the pre-existing shape here.
     launcherSupervisor = createSupervisor({
       integrationsBase: resolveAppDataDir(),
+      reportDeliveryTrip: captureWarning,
     });
     await launcherSupervisor.start();
   } catch (err) {

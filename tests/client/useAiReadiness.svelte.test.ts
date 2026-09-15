@@ -241,6 +241,20 @@ describe("createAiReadiness", () => {
     expect(h.get().chip).toBe("restart");
   });
 
+  // #1780: the supervisor classifies a CLI that answers "Not logged in", and the
+  // chip — the single source of truth views render from — must carry it.
+  it("shows the sign-in chip when lastError is needs-login", async () => {
+    globalThis.fetch = routedFetch({
+      launcher: mkResponse({ available: true, running: false, lastError: "needs-login" }),
+      health: mkResponse({ status: "ok", hasSession: false }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().state).toBe("stopped");
+    expect(h.get().lastError).toBe("needs-login");
+    expect(h.get().chip).toBe("sign-in");
+  });
+
   it("#1054: an active MCP session promotes a stopped launcher to ready (no restart chip)", async () => {
     globalThis.fetch = routedFetch({
       launcher: mkResponse({ available: true, running: false }),
@@ -938,7 +952,7 @@ describe("createAiReadiness", () => {
  * to stop, so the wrong branch is actively harmful, not merely mislabelled.
  */
 describe("AI_CTA", () => {
-  const CHIPS: Exclude<AiChip, null>[] = ["connect", "setup", "restart"];
+  const CHIPS: Exclude<AiChip, null>[] = ["connect", "setup", "sign-in", "restart"];
 
   it("covers every non-null chip with non-empty copy", () => {
     // Guards against a future union member landing with no entry: the type
@@ -962,6 +976,11 @@ describe("AI_CTA", () => {
   it("routes 'connect' and 'restart' to their own flows", () => {
     expect(AI_CTA.connect.action).toBe("connect");
     expect(AI_CTA.restart.action).toBe("restart");
+  });
+
+  // #1780: Check again is a restart — the supervisor re-sends a turn on it.
+  it("routes 'sign-in' to the restart flow", () => {
+    expect(AI_CTA["sign-in"].action).toBe("restart");
   });
 });
 
