@@ -12,6 +12,7 @@ interface Props {
    * let this component's CTA drift out of sync with StatusBar's (#1268).
    *   `"connect"` → never configured.
    *   `"setup"`   → configured but stopped with the CLI apparently missing.
+   *   `"sign-in"` → configured but stopped because the CLI is not signed in.
    *   `"restart"` → configured but stopped for any other reason.
    *   `null`      → ready / booting / Solo (no CTA, falls back to the
    *                 product-positioning line).
@@ -168,6 +169,25 @@ $effect(() => {
           onclick={onRestartClaude}
         >
           Restart Claude anyway
+        </button>
+      </div>
+    {:else if connected && aiChip === "sign-in"}
+      <!-- #1780: the CLI runs but answered "Not logged in". The one action is a
+           restart, which IS the re-check — the supervisor sends the resumed
+           session a turn. No Start Fresh here: the conversation is not what is
+           wrong, and dropping it is irreversible (#1268). -->
+      <p class="empty-sub empty-sub-secondary">
+        Claude Code needs to be signed in. Open a terminal, run <code>claude</code>, and finish
+        signing in.
+      </p>
+      <div class="empty-actions">
+        <button
+          class="empty-cta"
+          data-testid="empty-state-sign-in-recheck"
+          data-ai-chip="sign-in"
+          onclick={onRestartClaude}
+        >
+          Check again
         </button>
       </div>
     {:else if connected && aiChip === "restart"}

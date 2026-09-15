@@ -147,6 +147,7 @@ empty-state-restart-claude
 empty-state-retry
 empty-state-setup-claude
 empty-state-setup-restart-anyway
+empty-state-sign-in-recheck
 empty-state-start-fresh
 error-boundary-recover-btn
 error-boundary-reload-btn

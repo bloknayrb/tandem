@@ -131,15 +131,22 @@ empty-state screen, or run **Relaunch Claude in this folder** from the command p
 (`Ctrl+Shift+P`). If you installed it *after* opening Tandem, restart Tandem — a running process
 cannot see a PATH change made after it launched.
 
-If Claude keeps stopping with a healthy install, the CTA says "Restart Claude Code" instead. Two
-causes account for nearly all of these, and Tandem cannot yet tell them apart:
+If Claude keeps stopping with a healthy install, the CTA says "Restart Claude Code" instead —
+except for one cause Tandem now recognises and names:
 
-- **You have never signed in to Claude Code.** A Claude Code that has not completed `claude login`
-  exits immediately with an auth message. Tandem's supervisor counts that as a crash like any
-  other, retries until the breaker trips, and then shows the same generic restart prompt — it
-  never says "sign in" (#1780). Open a terminal, run `claude` once, finish the login, then use
-  **Restart Claude anyway**. If this is your first time running both programs, try this before
-  anything else.
+- **You have never signed in to Claude Code.** A Claude Code that has not signed in does *not*
+  exit: it stays running and answers every turn with "Not logged in · Please run /login". Tandem
+  recognises that answer, stops retrying, and asks you to sign in — **Check again** on the
+  empty-state screen, and the same re-check behind the status bar's Claude indicator and the
+  "no AI connected" notice (#1780). Open a terminal, run `claude`, finish signing in, then click
+  it. Clicking it before you have signed in just
+  shows the prompt again. For a moment after launch Claude can read as ready before the prompt
+  appears, while the refused session's connection closes. An *expired* login has not been
+  checked against this; if it answers differently it still looks like an ordinary stop, and the
+  same fix applies.
+
+The other common cause looks like any other crash, so it still gets the generic prompt:
+
 - **A saved conversation Claude can no longer resume.** **Start a fresh conversation** (the
   secondary action beside Restart, or the palette command) drops it and starts clean —
   irreversible, so it is never the default.

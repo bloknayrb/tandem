@@ -254,6 +254,28 @@ const CIRCUIT_BREAKER_WINDOW_MS = 5 * 60_000;
 /** The only text `reportDeliveryTrip` is ever handed: no path, id, count or
  * content, so the opt-in report carries nothing about the user (#1868). */
 const DELIVERY_TRIP_REPORT = "launcher: wake delivery failed on consecutive sessions";
+
+/**
+ * The `result` text a Claude Code that has never signed in answers EVERY turn
+ * with (#1780). Measured 2026-09-15 against claude 2.1.272 on Windows 11, with
+ * HOME, USERPROFILE, APPDATA, LOCALAPPDATA and CLAUDE_CONFIG_DIR pointed at an
+ * empty temp dir, the stream-json flags, and stdin held open (fields elided):
+ *
+ *   {"type":"system","subtype":"init",...}
+ *   {"type":"assistant",...}
+ *   {"type":"result","subtype":"success","is_error":true,
+ *    "result":"Not logged in · Please run /login","terminal_reason":"api_error",...}
+ *
+ * A second turn got the identical three envelopes. stderr stayed empty, and the
+ * process exited (code 1) only once stdin was closed. So this is not a crash:
+ * under the supervisor the CLI stays running and each wake earns another
+ * refusal, which is why it is classified here and not in the exit handler.
+ *
+ * Anchored and case-sensitive, so a tool's own "you are not logged in" inside a
+ * normal answer cannot match. An EXPIRED login was not measured; if it answers
+ * differently this does not match, which fails soft to the old behaviour.
+ */
+const NOT_SIGNED_IN_RESULT = /^Not logged in\b/;
 /** RFC-4122 v4-shape UUID, accepted for `--session-id` / `--resume`.
  * Defense-in-depth: even though `launcher-session.json` is mode 0o600,
  * an attacker-controlled value flowing into `--resume` could hijack
@@ -685,6 +707,22 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * unannounced until some unrelated later event happened to wake the session.
    */
   let wakeOwedAcrossSpawns = false;
+
+  /**
+   * The last session answered "Not logged in" (#1780), so the next spawn owes
+   * it a turn, whether or not any wake is owed.
+   *
+   * Needed because Check again is a relaunch, and the trip's SIGTERM keeps the
+   * saved session (`shouldClearSession` needs an exit code), so the relaunch
+   * RESUMES — and a resumed spawn writes no turn, while the CLI is silent until
+   * it gets one. Without this, Check again could never learn the user has since
+   * signed in.
+   *
+   * Set only by the sign-in trip; cleared only by a `result` that is not a
+   * sign-in refusal. Deliberately untouched by `stop()`, `stopInternal` and
+   * `respawn`: a stop between the trip and Check again must not disarm it.
+   */
+  let loginRecheckOwed = false;
 
   /** Circuit-breaker timestamps of recent restart attempts. */
   let recentAttempts: number[] = [];
@@ -1309,7 +1347,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // so it discharges any owed wake by itself.
       sendTurn(SUPERVISOR_INITIAL_PROMPT);
       wakeOwedAcrossSpawns = false;
-    } else if (wakeOwedAcrossSpawns) {
+    } else if (wakeOwedAcrossSpawns || loginRecheckOwed) {
+      // `loginRecheckOwed` (#1780): a resumed CLI is silent until it is sent a
+      // turn, so Check again after a sign-in refusal must send one. A fresh
+      // spawn's bootstrap turn above already is that re-check.
       if (sendTurn(SUPERVISOR_WAKE_PROMPT)) wakeOwedAcrossSpawns = false;
     }
 
@@ -1330,7 +1371,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // a foreign process's stdin.
       if (!trimmed.startsWith("{")) return;
 
-      let parsed: { type?: string; subtype?: string; is_error?: boolean; errors?: string[] };
+      let parsed: {
+        type?: string;
+        subtype?: string;
+        is_error?: boolean;
+        errors?: string[];
+        result?: unknown;
+      };
       try {
         parsed = JSON.parse(trimmed);
       } catch {
@@ -1359,6 +1406,34 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         // proves the turn was read, not that the session can finish one.
         deliveryKillStreak = 0;
         unresolvedTurn = false;
+
+        // A Claude Code that is not signed in answers every turn with this
+        // refusal and never exits (#1780; see `NOT_SIGNED_IN_RESULT`). Stop:
+        // retrying cannot help, and the pending wake's write would only earn
+        // another refusal, so return before `flushPendingWake`. The kill does
+        // not go through `onStdinGone`, so it never counts toward the
+        // wake-delivery streak.
+        if (
+          parsed.is_error === true &&
+          typeof parsed.result === "string" &&
+          NOT_SIGNED_IN_RESULT.test(parsed.result)
+        ) {
+          if (child === spawned) {
+            lastError = "needs-login";
+            breakerTripped = true;
+            loginRecheckOwed = true;
+            console.error(
+              "[Launcher] Claude Code is not signed in — not retrying. Run `claude` in a terminal to sign in, then use Check again.",
+            );
+            try {
+              spawned.kill("SIGTERM");
+            } catch {
+              // best-effort, same as stopInternal
+            }
+          }
+          return;
+        }
+        if (child === spawned) loginRecheckOwed = false;
 
         // NOTE (#1267): `errors` is NOT confirmed to exist on the CLI's
         // `result` envelope — it can only be settled against a running `claude`
@@ -1445,7 +1520,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       const ranFor = Date.now() - spawnedAt;
       console.error(`[Launcher] Reaper exited (code=${code} signal=${signal} after ${ranFor}ms)`);
       // Identity-guarded for the same reason as the error handler above.
-      if (child === spawned) child = null;
+      const wasCurrent = child === spawned;
+      if (wasCurrent) child = null;
 
       // Cancel the confirmation timer — the process has already exited.
       if (confirmTimer) {
@@ -1464,7 +1540,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         clearSavedSession();
       }
 
-      if (stopRequested) return;
+      // Only the CURRENT spawn's exit may restart anything. A superseded one has
+      // already been replaced: `stopInternal` does not wait for a handle that is
+      // already `killed` (the stdin-gone, receipt and sign-in kills all leave
+      // one), and `respawn` then lowers `stopRequested` and the breaker, so this
+      // late exit would otherwise schedule a restart behind the relaunch.
+      if (stopRequested || !wasCurrent) return;
 
       // A child we ended because it stopped accepting turns (#1868). The
       // windowed breaker in `scheduleRestart` cannot see this loop at a human

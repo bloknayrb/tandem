@@ -640,6 +640,174 @@ describe("#1867 — an alive child that has stopped reading its input", () => {
   });
 });
 
-// Referenced by later groups in this file; kept exported-in-scope so an unused
-// helper does not trip `noUnusedLocals` between commits.
-void [failWrite, succeedWrites, pushLine, INIT, logText];
+// --- #1780 --------------------------------------------------------------------
+
+/** Verbatim from a real claude 2.1.272 with an empty config dir (2026-09-15). */
+const NOT_SIGNED_IN = {
+  type: "result",
+  subtype: "success",
+  is_error: true,
+  result: "Not logged in · Please run /login",
+  terminal_reason: "api_error",
+};
+
+describe("#1780 — a Claude Code that is not signed in", () => {
+  /** A fresh child refuses its bootstrap turn, with no event emitted, so no
+   * wake is pending and `wakeOwedAcrossSpawns` cannot explain what follows. */
+  async function tripFresh(sup: Supervisor): Promise<FakeChild> {
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, INIT);
+    pushJson(child1, NOT_SIGNED_IN);
+    await waitFor(() => sup.status().lastError === "needs-login", "the sign-in trip");
+    expect(texts(child1)).toEqual([SUPERVISOR_INITIAL_PROMPT]);
+    return child1;
+  }
+
+  async function expectNoMoreSpawns(n: number): Promise<void> {
+    await sleep(50);
+    await settle();
+    expect(children.length, `launcher log:\n${logText()}`).toBe(n);
+  }
+
+  it("trips on the measured envelope, ends the child and stops retrying", async () => {
+    const { sup, emit } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    // Mid-bootstrap, so a wake is pending: the refusal must not be followed by
+    // its doomed write. (That wake is carried across by teardown, #1866; it is
+    // not the re-check — see the Check again cases below.)
+    emit(annotationEvent());
+    pushJson(child1, INIT);
+    pushJson(child1, NOT_SIGNED_IN);
+
+    await waitFor(() => sup.status().lastError === "needs-login", "the sign-in trip");
+    expect(sup.status()).toEqual({ running: false, lastError: "needs-login" });
+    expect(child1.kills).toEqual(["SIGTERM"]);
+    expect(texts(child1)).toEqual([SUPERVISOR_INITIAL_PROMPT]);
+    expect(logText()).toContain("Claude Code is not signed in");
+    await expectNoMoreSpawns(1);
+  });
+
+  it("does not trip on another error result", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, INIT);
+    pushJson(child1, { ...NOT_SIGNED_IN, result: "API Error: 529 overloaded" });
+    await settle();
+
+    expect(child1.kills).toEqual([]);
+    const status = sup.status();
+    expect(status.running).toBe(true);
+    expect(status.lastError).toBeUndefined();
+  });
+
+  it("does not trip on a tool's own 'not logged in' inside a result", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, INIT);
+    pushJson(child1, { ...NOT_SIGNED_IN, result: "Tool failed: gh says you are not logged in" });
+    await settle();
+
+    expect(child1.kills).toEqual([]);
+    expect(sup.status().running).toBe(true);
+  });
+
+  it("ignores a sign-in refusal from a superseded child", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    exitChild(child1, 1);
+    const child2 = await nthChild(2);
+
+    pushJson(child1, NOT_SIGNED_IN);
+    await settle();
+    expect(child1.kills).toEqual([]);
+    expect(child2.kills).toEqual([]);
+
+    // Nothing was tripped behind the live child's back: its crash still restarts.
+    exitChild(child2, 1);
+    await nthChild(3);
+    const status = sup.status();
+    expect(status.running).toBe(true);
+    expect(status.lastError).toBeUndefined();
+  });
+
+  it("Check again sends the resumed session a turn, and a second refusal trips again", async () => {
+    const { sup } = makeSupervisor();
+    await tripFresh(sup);
+
+    await sup.relaunch(cwdDir);
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+
+    pushJson(child2, INIT);
+    pushJson(child2, NOT_SIGNED_IN);
+    await waitFor(() => sup.status().lastError === "needs-login", "the second trip");
+    await expectNoMoreSpawns(2);
+  });
+
+  it("a signed-in answer clears the owed re-check", async () => {
+    const { sup } = makeSupervisor();
+    await tripFresh(sup);
+    await sup.relaunch(cwdDir);
+    const child2 = await nthChild(2);
+
+    pushJson(child2, INIT);
+    pushJson(child2, RESULT_OK);
+    await settle();
+    const status = sup.status();
+    expect(status.running).toBe(true);
+    expect(status.lastError).toBeUndefined();
+
+    exitChild(child2, null, "SIGTERM");
+    const child3 = await nthChild(3);
+    expect(texts(child3)).toEqual([]);
+  });
+
+  it("a stop between the trip and Check again does not disarm the re-check", async () => {
+    const { sup } = makeSupervisor();
+    await tripFresh(sup);
+    await sup.stop();
+    await sup.relaunch(cwdDir);
+
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+});
+
+// --- A superseded spawn's late exit -----------------------------------------------
+
+describe("a killed child whose exit lands after a relaunch replaced it", () => {
+  // Found while writing the #1780 Check again cases: the sign-in trip kills the
+  // child, `stopInternal` skips waiting for an already-`killed` handle, and
+  // `respawn` lowers `stopRequested` and the breaker — so the old child's exit,
+  // arriving during the relaunch, scheduled a restart of its own. Measured in
+  // this file: a third spawn behind a tripped breaker.
+  it("does not schedule a restart of its own", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    // A reaper that takes its time to exit: killed now, exit only when released.
+    child1.kill = (sig: NodeJS.Signals = "SIGTERM") => {
+      child1.kills.push(sig);
+      child1.killed = true;
+      return true;
+    };
+    pushJson(child1, INIT);
+    pushJson(child1, NOT_SIGNED_IN);
+    await waitFor(() => child1.killed, "the sign-in kill");
+
+    await sup.relaunch(cwdDir);
+    await nthChild(2);
+    exitChild(child1, null, "SIGTERM");
+    await sleep(50);
+    await settle();
+
+    expect(logText()).not.toContain("Restarting Claude in");
+    expect(children).toHaveLength(2);
+    expect(sup.status().running).toBe(true);
+  });
+});

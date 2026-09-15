@@ -108,6 +108,11 @@ export function isTransientlyUnavailable(reason: LauncherUnavailableReason | und
  * completed turn in between, and gave up. The CLI itself probed as usable, so
  * the remedy is a restart — which is why the client folds it into the same
  * `restart` chip as `circuit-open`, with no client change.
+ *
+ * `needs-login` (#1780): the Claude CLI runs but is not signed in — it answered
+ * a turn with its "Not logged in" refusal, so the supervisor stopped retrying.
+ * The remedy is to sign in (`claude` in a terminal) and re-check, which the
+ * client offers as its own `sign-in` chip rather than a bare restart.
  */
 export type LauncherErrorCode =
   | "spawn-failed"
@@ -116,7 +121,8 @@ export type LauncherErrorCode =
   | "stop-failed"
   | "circuit-open"
   | "status-check-failed"
-  | "wake-delivery-failed";
+  | "wake-delivery-failed"
+  | "needs-login";
 
 /** Loopback-only side-channel for bundled-skill refresh failures. The user
  * has no other signal that the skill is stale, so `/status` surfaces this
