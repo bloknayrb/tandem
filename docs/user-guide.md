@@ -56,6 +56,8 @@ Select text to reveal formatting buttons: **Bold**, **Italic**, **Strikethrough*
 
 The persistent formatting bar (Settings → Appearance → **Show formatting bar**) carries two extra controls the selection popup deliberately leaves out: **Undo** / **Redo**, and **Horizontal Rule** — inserting a rule while text is selected makes little sense.
 
+The bar's **Display** menu (the `Aa` button) sets the text size and reading measure for the formatted editor without opening Settings. It changes the same settings as Settings → Appearance and Settings → Editor, so the two always agree. The Markdown source view keeps its own fixed size and width.
+
 ### Selection Popup
 
 When text is selected, a floating popup appears with two parts:
@@ -65,7 +67,7 @@ When text is selected, a floating popup appears with two parts:
   - **Note to self** (`Alt+Enter`) — A private note. Never sent to the AI. `Alt+Enter` always files a note, whichever button is primary.
   - **Send to your AI** (`Ctrl+Enter`) — An outbound comment. The AI sees the selected passage and your text, and can respond with annotations, chat messages, or both. The button is labelled with your configured assistant's name. `Ctrl+Enter` sends the *primary* action, which is the outbound comment by default.
 
-The popup also includes a toggle to show or hide the formatting bar.
+The popup also includes a toggle to show or hide the formatting bar, and mirrors the bar's **Decorations** and **Display** menus so both stay reachable while the bar is hidden.
 
 ### Slash Menu
 
@@ -348,7 +350,7 @@ Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
 | Tab | What's in it |
 |-----|--------------|
 | **Appearance** | Theme (light / warm / dark / system), which panel opens by default, text size, accent hue, spacing density, which decorations are shown (authorship, comments, highlights, notes), reduce motion, the optional formatting bar, reveal-rails-on-hover, uniform tab width, and the scroll pill |
-| **Editor** | Reading measure, editor font, default font by file type, default save folder, smart typography, spellcheck, and raw-markdown view — see [Editor settings](#editor-settings) below |
+| **Editor** | Reading measure, editor font, default font by file type, default save folder, smart typography, spellcheck, raw-markdown view, and source-view line wrap — see [Editor settings](#editor-settings) below |
 | **Network** | Connection details, start-at-login (desktop app only), and the advanced retry/delay controls |
 | **Accessibility** | High contrast, and pattern fills for annotations (**Reduce motion** lives under Appearance) |
 | **Collaboration** | Your display name, and whether the side panel hides itself in Solo mode |
@@ -361,7 +363,7 @@ Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
 
 Most of what shapes the reading surface lives here.
 
-- **Reading measure** — The line length of the text: Narrow (58 characters), Comfortable (68), Wide (82), or Full (fills the editor). A fixed measure keeps lines readable no matter which panels are open.
+- **Reading measure** — The line length of the text: Narrow (58 characters), Comfortable (68), Wide (82), or Full (fills the editor). A fixed measure keeps lines readable no matter which panels are open. The formatting bar's **Display** menu sets it too.
 - **Editor font** — Sans-serif, Serif, or Monospace for the document text.
 - **Default font by file type** — Overrides the editor font per format (`.md`, `.docx`, `.html`, `.txt`). Anything you don't set falls back to the editor font; **Reset to defaults** clears every override at once.
 - **Default save folder** — Where **Save As** puts new files. Leave it empty to fall back to your AI's working directory, then your home folder. In the desktop app a **Choose…** button opens a native folder picker; in the browser you type the path, and browser Save As is a download that ignores this setting.

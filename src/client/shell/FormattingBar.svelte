@@ -9,7 +9,9 @@ import { toggleHighlight } from "../editor/toolbar/highlight-toggle";
 import { pmPosToFlatOffset } from "../positions";
 import { createCoalescingTick } from "../utils/coalescing-tick";
 import "../editor/toolbar/toolbar-chrome.css";
+import type { DisplayPrefsUpdate, EditorMeasure, TextSize } from "../hooks/useTandemSettings";
 import DecorationsMenu from "./DecorationsMenu.svelte";
+import DisplayMenu from "./DisplayMenu.svelte";
 
 interface Props {
   editor: TiptapEditor | null;
@@ -34,6 +36,14 @@ interface Props {
   }) => void;
   /** Open Settings → Appearance (the canonical home for these toggles). */
   onOpenSettings?: () => void;
+  /**
+   * #1705/#1706: the Display menu's two presets, read from settings by App.
+   * The menu renders only when `onUpdateDisplay` is provided, and writes back
+   * through it — never through a local copy.
+   */
+  textSize?: TextSize;
+  editorMeasure?: EditorMeasure;
+  onUpdateDisplay?: (partial: DisplayPrefsUpdate) => void;
   /** Whether the active document is displaying its raw Markdown source. */
   sourceViewActive?: boolean;
   /** Toggle source view. Omitted for formats/read-only documents that cannot use it. */
@@ -59,6 +69,9 @@ const {
   decorationsMuted = false,
   onUpdateDecorations,
   onOpenSettings,
+  textSize = "m",
+  editorMeasure = "comfortable",
+  onUpdateDisplay,
   sourceViewActive = false,
   onToggleSourceView = null,
   onHide,
@@ -211,6 +224,12 @@ function handleHighlight(color: HighlightColor) {
         onUpdate={onUpdateDecorations}
         {onOpenSettings}
       />
+    {/if}
+    {#if onUpdateDisplay}
+      <!-- Outside the clipped track, like Decorations, so the reading presets
+           stay reachable when a narrow window truncates the format buttons. -->
+      <div class="tandem-toolbar-sep"></div>
+      <DisplayMenu {textSize} {editorMeasure} onUpdate={onUpdateDisplay} />
     {/if}
     {#if onToggleSourceView}
       <div class="tandem-toolbar-sep"></div>

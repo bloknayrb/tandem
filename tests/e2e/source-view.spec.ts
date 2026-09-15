@@ -146,3 +146,64 @@ test("closing a tab with uncommitted source edits prompts before discarding", as
   expect(dialogMessage).toContain("unsaved markdown-source edits");
   await expect(page.getByTestId("source-view-textarea")).toBeVisible();
 });
+
+test("the line-wrap setting switches the source textarea from pre to pre-wrap (#1738)", async ({
+  page,
+}) => {
+  // One long ordinary paragraph plus one unbroken ~300-char token. The token is
+  // what separates `pre` from `pre-wrap` even for a browser that would not
+  // break it: under `pre` both lines overflow.
+  const longParagraph = Array.from({ length: 60 }, (_, i) => `word${i}`).join(" ");
+  const unbroken = `https://example.com/${"a".repeat(300)}`;
+  const wrapPath = path.join(tmpDir, "wrap.md");
+  fs.writeFileSync(
+    wrapPath,
+    `# Wrap\n\n${longParagraph} ${longParagraph}\n\n${unbroken}\n`,
+    "utf-8",
+  );
+  await mcp.callTool("tandem_open", { filePath: wrapPath });
+
+  await page.goto("/");
+  await page.waitForSelector(".tandem-editor", { timeout: 10_000 });
+  await page.getByTestId("formatbar-source-toggle").click();
+  const textarea = page.getByTestId("source-view-textarea");
+  await expect(textarea).toHaveValue(/example\.com\/a{300}/);
+
+  const metrics = () =>
+    textarea.evaluate((el) => ({
+      whiteSpace: getComputedStyle(el).whiteSpace,
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+    }));
+
+  // Setting off (the default): no wrap, so the long lines overflow sideways.
+  const off = await metrics();
+  expect(off.whiteSpace).toBe("pre");
+  expect(off.scrollWidth).toBeGreaterThan(off.clientWidth + 1);
+
+  await page.evaluate(() => {
+    const w = window as unknown as { __tandemTest?: { openSettingsModal: () => void } };
+    if (!w.__tandemTest?.openSettingsModal) {
+      throw new Error("__tandemTest.openSettingsModal is not installed");
+    }
+    w.__tandemTest.openSettingsModal();
+  });
+  const modal = page.getByTestId("settings-modal");
+  await expect(modal).toBeVisible({ timeout: 5_000 });
+  await page.getByTestId("settings-modal-tab-editor").click();
+  await page.locator("[data-testid='editor-source-line-wrap'] input").check();
+  await modal.press("Escape");
+  await expect(modal).toHaveCount(0);
+
+  // Setting on: wraps to the pane, with no horizontal overflow left.
+  await expect.poll(async () => (await metrics()).whiteSpace).toBe("pre-wrap");
+  const on = await metrics();
+  expect(on.scrollWidth).toBeLessThanOrEqual(on.clientWidth + 1);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => JSON.parse(localStorage.getItem("tandem:settings") ?? "{}").sourceViewLineWrap,
+      ),
+    )
+    .toBe(true);
+});

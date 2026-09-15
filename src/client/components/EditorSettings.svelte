@@ -1,7 +1,11 @@
 <script lang="ts">
 import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { createRadioGroup } from "../hooks/useRadioGroup.svelte";
-import type { EditorFont, EditorMeasure } from "../hooks/useTandemSettings";
+import {
+  EDITOR_MEASURE_LABEL,
+  type EditorFont,
+  type EditorMeasure,
+} from "../hooks/useTandemSettings";
 import { disabledControlStyle } from "../utils/colors";
 import "./settings-card.css";
 import type { SettingsTabContext } from "./SettingsModal.svelte";
@@ -128,10 +132,10 @@ async function pickSaveFolder() {
 }
 
 const PRESETS: { value: EditorMeasure; label: string; hint: string }[] = [
-  { value: "narrow", label: "Narrow", hint: "58 characters" },
-  { value: "comfortable", label: "Comfortable", hint: "68 characters" },
-  { value: "wide", label: "Wide", hint: "82 characters" },
-  { value: "full", label: "Full", hint: "Fills the editor" },
+  { value: "narrow", label: EDITOR_MEASURE_LABEL.narrow, hint: "58 characters" },
+  { value: "comfortable", label: EDITOR_MEASURE_LABEL.comfortable, hint: "68 characters" },
+  { value: "wide", label: EDITOR_MEASURE_LABEL.wide, hint: "82 characters" },
+  { value: "full", label: EDITOR_MEASURE_LABEL.full, hint: "Fills the editor" },
 ];
 
 const measureRg = createRadioGroup<EditorMeasure>(
@@ -368,6 +372,28 @@ const activeHint = $derived(PRESETS.find((p) => p.value === settings.editorMeasu
       Footnotes, reference-style links, and inline HTML that Tandem keeps as raw source.
       When hidden they stay in the file and always save — only the on-screen markers are
       hidden.
+    </div>
+  </div>
+
+  <!-- Source-view line wrap (#1738). Sits beside the raw-markdown toggle, its
+       precedent; both are about how Markdown source is shown. -->
+  <div style="margin-top: var(--tandem-space-5);">
+    <label
+      data-testid="editor-source-line-wrap"
+      style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: var(--tandem-text-sm); color: var(--tandem-fg); min-height: var(--tandem-space-5);"
+    >
+      <input
+        type="checkbox"
+        checked={settings.sourceViewLineWrap}
+        disabled={readOnly}
+        onchange={(e) => onUpdate({ sourceViewLineWrap: (e.target as HTMLInputElement).checked })}
+        style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
+      />
+      <span>Wrap long lines in Markdown source</span>
+    </label>
+    <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
+      Long paragraphs wrap to the width of the source view instead of scrolling sideways.
+      The file itself is unchanged.
     </div>
   </div>
 </div>
