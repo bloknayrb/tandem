@@ -33,7 +33,7 @@ connects them.
 | [decisions.md](decisions.md) | Taken and open decisions, with the context to answer each. |
 | [refuted.md](refuted.md) | Nine claims that did not hold and the leads closed as fine. Read before re-raising anything. |
 | [release-gate.md](release-gate.md) | The next-minor verdict. |
-| [smoke-lines.md](smoke-lines.md) | Eleven hardware-gated checks drafted for `docs/release-smoke-checklist.md`; not yet merged there. |
+| [smoke-lines.md](smoke-lines.md) | Twelve hardware-gated checks drafted for `docs/release-smoke-checklist.md`. Eleven were merged there on 2026-09-15, and the file says where each went. |
 | [experiments/](experiments/README.md) | The reproduction scripts, rewritten to run from the repo root. Each names the issue it reproduces and the output that means "still broken". |
 | [raw/](raw/) | The agent reports as returned (`findings-*.txt`, `gapfill-*.txt`, `report-*.md`), the per-area file manifests, and the Playwright lane's log. Unvetted; the area ledgers are the vetted reading. |
 
