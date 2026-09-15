@@ -709,6 +709,12 @@ describe("watcher error listeners and handle identity", () => {
 
     handles[0].errorHandler!(new Error("EBADF"));
     expect(watchedCount()).toBe(0);
+    // …and says so (#1662). Unwatching silently made "unwatched" look like
+    // "unchanged": on win32, deleting a watched file's parent directory
+    // throws nothing at `fs.watch` and arrives only as this async `error`.
+    const lost = lostWatchNotifications(file);
+    expect(lost).toHaveLength(1);
+    expect(lost[0].severity).toBe("warning");
   });
 
   it("a stale error from handle #1 (the INITIAL arm) is ignored after a re-arm", async () => {
@@ -729,6 +735,9 @@ describe("watcher error listeners and handle identity", () => {
 
       handles[0].errorHandler!(new Error("EBADF"));
       expect(watchedCount()).toBe(1);
+      expect(lostWatchNotifications(file), "a stale handle's error is silent (#1662)").toHaveLength(
+        0,
+      );
     } finally {
       restorePlatform();
     }
@@ -752,6 +761,9 @@ describe("watcher error listeners and handle identity", () => {
 
       handles[1].errorHandler!(new Error("EBADF"));
       expect(watchedCount()).toBe(1);
+      expect(lostWatchNotifications(file), "a stale handle's error is silent (#1662)").toHaveLength(
+        0,
+      );
     } finally {
       restorePlatform();
     }

@@ -151,6 +151,12 @@ function attachWatcher(filePath: string, cb: fs.WatchListener<string>): fs.FSWat
   handle.on("error", (err) => {
     if (watched.get(filePath)?.watcher !== handle) return;
     console.error("[FileWatcher] Watcher error for %s:", filePath, err);
+    // A live handle that dies asynchronously leaves the document unwatched
+    // exactly like a failed arm does, so it tells the user the same way
+    // (#1662). Measured on win32 / Node 24: deleting a watched file's parent
+    // directory throws nothing at `fs.watch` and arrives here as `EPERM`. The
+    // identity check above stays first, so a stale handle's error is silent.
+    notifyNotWatching(filePath);
     unwatchFile(filePath);
   });
   return handle;
@@ -159,9 +165,10 @@ function attachWatcher(filePath: string, cb: fs.WatchListener<string>): fs.FSWat
 /**
  * Tell the user this path is not being watched.
  *
- * Shared by the two ways that happens — a re-arm that could not reattach
- * (`notifyWatchLost`) and an INITIAL arm that never attached at all
- * (`watchFile`) — because the consequence is identical and so is what the user
+ * Shared by the three ways that happens — a re-arm that could not reattach
+ * (`notifyWatchLost`), an INITIAL arm that never attached at all
+ * (`watchFile`), and a live handle that emitted `error` (`attachWatcher`,
+ * #1662) — because the consequence is identical and so is what the user
  * has to do about it: reopen the document. The initial arm used to be a bare
  * `console.error`, which meant a save-as onto a network share or an
  * `fs.watch`-unsupported filesystem (EPERM/ENOSPC/EMFILE, SMB) left the
