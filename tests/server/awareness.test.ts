@@ -149,15 +149,11 @@ describe("surfacedIds deduplication", () => {
     const text = extractText(doc);
     const ledger = new Map<string, number>();
     const run = () =>
-      processInboxAnnotations(
-        [ann],
-        text,
-        ledger,
-        (anns) => anns,
-        "doc1",
-        "tandem",
-        () => false,
-      );
+      processInboxAnnotations([ann], text, ledger, (anns) => anns, {
+        modeState: "tandem",
+        documentId: "doc1",
+        wasChannelEmitted: () => false,
+      });
 
     expect(run().userActions.map((a) => a.id)).toEqual([ann.id]);
     expect(run().userActions).toEqual([]);
