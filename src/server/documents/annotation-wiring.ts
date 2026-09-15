@@ -9,6 +9,7 @@
 
 import path from "path";
 import type * as Y from "yjs";
+import type { Annotation } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { recoverRenamedEnvelope } from "../annotations/rename-recovery.js";
@@ -78,10 +79,10 @@ export function repairClonedAnchors(
  * compares against) (#1863). It lives here so `documents/open.ts` gains no
  * `mcp/annotations.ts` edge.
  */
-export function collectClonedAnnotations(
+export function annotationsById(
   map: Y.Map<unknown>,
   filePath: string,
-): ReadonlyMap<string, ReturnType<typeof collectAnnotations>[number]> {
+): ReadonlyMap<string, Annotation> {
   return new Map(collectAnnotations(map, docHash(filePath)).map((a) => [a.id, a]));
 }
 

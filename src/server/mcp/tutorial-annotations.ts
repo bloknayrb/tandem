@@ -62,13 +62,14 @@ export const TUTORIAL_ANNOTATIONS: readonly TutorialAnnotationDef[] = [
  */
 export function injectTutorialAnnotations(doc: Y.Doc, filePath: string): void {
   const map = doc.getMap(Y_MAP_ANNOTATIONS);
-  const deleted = new Set(getTombstones(docHash(filePath)).map((t) => t.id));
 
   const fullText = extractText(doc);
   if (!fullText) {
     console.error("[tutorial] Y.Doc has no text content — cannot inject tutorial annotations");
     return;
   }
+
+  const deleted = new Set(getTombstones(docHash(filePath)).map((t) => t.id));
 
   let injected = 0;
   withInternal(doc, () => {

@@ -111,11 +111,7 @@ import {
   sourceFileChanged,
 } from "../session/manager.js";
 import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
-import {
-  collectClonedAnnotations,
-  repairClonedAnchors,
-  wireAnnotationStore,
-} from "./annotation-wiring.js";
+import { annotationsById, repairClonedAnchors, wireAnnotationStore } from "./annotation-wiring.js";
 import { ensureAutoSave } from "./autosave.js";
 import { flagExternalConflict } from "./conflict.js";
 import { markDirty, registerDirtyObserver } from "./dirty.js";
@@ -1050,7 +1046,7 @@ function cloneFallbackIntoDoc(
         `that could not be anchored to the recovered content.`,
     );
   }
-  return collectClonedAnnotations(doc.getMap(Y_MAP_ANNOTATIONS), resolved);
+  return annotationsById(doc.getMap(Y_MAP_ANNOTATIONS), resolved);
 }
 
 /**
@@ -1092,7 +1088,7 @@ function overlayFallbackAnchors(
 ): void {
   const map = doc.getMap(Y_MAP_ANNOTATIONS);
   withMcp(doc, () => {
-    const live = collectClonedAnnotations(map, resolved);
+    const live = annotationsById(map, resolved);
     const docText = extractText(doc);
     for (const [id, fallback] of cloned) {
       const current = live.get(id);
