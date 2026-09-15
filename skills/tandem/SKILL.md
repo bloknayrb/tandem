@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 21
+version: 22
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -81,7 +81,7 @@ Check `mode` from `tandem_status` or `tandem_checkInbox` and adapt:
 
 ## Reacting to Document Events
 
-Selections are **not** sent as standalone events. Instead, when the user sends a chat message, any buffered selection is attached as a `selection` field on the `chat:message` payload. This gives you context about what text the user was looking at when they wrote their message. When polling via `tandem_checkInbox`, the current selection shows up under `activity.selectedText`. Use `tandem_reply` for any document-context reaction (chat messages, question annotations); reserve terminal output for non-document work the user explicitly requests. In Solo mode, hold reactions until the user sends a chat message.
+Selections are **not** sent as standalone events. Instead, when the user sends a chat message, any buffered selection is attached as a `selection` field on the `chat:message` payload. This gives you context about what text the user was looking at when they wrote their message. When polling via `tandem_checkInbox`, the most recent non-empty selection shows up under `activity.selectedText` (including one made by clicking an annotation card or chat anchor); it is not cleared when focus moves to chat. `activity.selectionAt` is when the editor last wrote it: any edit that moves the selection re-stamps it, including yours, so a recent value does not prove a recent selection, but an old one proves it is old. Use `tandem_reply` for any document-context reaction (chat messages, question annotations); reserve terminal output for non-document work the user explicitly requests. In Solo mode, hold reactions until the user sends a chat message.
 
 ## Collaboration Etiquette
 

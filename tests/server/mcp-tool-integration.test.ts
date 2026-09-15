@@ -1608,22 +1608,61 @@ describe("MCP tool integration — awareness tools", () => {
     ]);
   });
 
-  it("tandem_checkInbox reports the user's live selection", async () => {
+  it("tandem_checkInbox reports the user's selection WITH its own timestamp (#1624)", async () => {
     // `getUserAwareness()`'s `selection` half is written by this unit and was
     // read by nothing in the suite: swapping its key for `Y_MAP_ACTIVITY`, or
     // returning `undefined` outright, stayed green everywhere while
     // `tandem_checkInbox` silently stopped telling Claude what the user has
     // highlighted.
+    //
+    // #1624: the two halves of `activity` come from two records with
+    // independent ages. The timestamps are distinct so that `selectionAt`
+    // echoing `lastEdit` (the wrong record) cannot pass.
+    const T_SEL = 1_700_000_000_111;
+    const T_EDIT = 1_700_000_999_999;
     const ydoc = setupDoc("mcp-inbox-selection", "Hello world");
+    withInternal(ydoc, () => {
+      const awareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
+      awareness.set(Y_MAP_SELECTION, { from: 6, to: 11, timestamp: T_SEL });
+      awareness.set(Y_MAP_ACTIVITY, { isTyping: false, cursor: 11, lastEdit: T_EDIT });
+    });
+
+    const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.activity.selectedText).toBe("world");
+    expect(parsed.data.activity.selectionAt).toBe(T_SEL);
+    expect(parsed.data.activity.lastEdit).toBe(T_EDIT);
+  });
+
+  it("tandem_checkInbox nulls selectionAt with selectedText on a collapsed record (#1624)", async () => {
+    // A collapse is written as `{from, to: from}` with a FRESH timestamp, so a
+    // `selectionAt` read without the `hasSelection` term would report a time
+    // for a selection that no longer exists.
+    const ydoc = setupDoc("mcp-inbox-selection-collapsed", "Hello world");
     withInternal(ydoc, () =>
       ydoc
         .getMap(Y_MAP_USER_AWARENESS)
-        .set(Y_MAP_SELECTION, { from: 6, to: 11, timestamp: Date.now() }),
+        .set(Y_MAP_SELECTION, { from: 6, to: 6, timestamp: 1_700_000_000_111 }),
+    );
+
+    const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.activity.selectedText).toBeNull();
+    expect(parsed.data.activity.selectionAt).toBeNull();
+  });
+
+  it("tandem_checkInbox survives a selection record with no timestamp (#1624)", async () => {
+    // `undefined` is not `null` to the SDK's structured-output validation: it
+    // fails the WHOLE inbox response. The handler's `typeof` guard is the pin.
+    const ydoc = setupDoc("mcp-inbox-selection-untimed", "Hello world");
+    withInternal(ydoc, () =>
+      ydoc.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_SELECTION, { from: 6, to: 11 }),
     );
 
     const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
     expect(parsed.error).toBe(false);
     expect(parsed.data.activity.selectedText).toBe("world");
+    expect(parsed.data.activity.selectionAt).toBeNull();
   });
 
   it("tandem_reply sends a chat message", async () => {

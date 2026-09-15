@@ -9,7 +9,12 @@ import { AwarenessExtension } from "../../src/client/editor/extensions/awareness
 import { flatOffsetToPmPos, pmPosToFlatOffset } from "../../src/client/positions";
 import { loadMarkdown } from "../../src/server/file-io/markdown";
 import { extractText } from "../../src/server/mcp/document-model";
-import { TYPING_DEBOUNCE, Y_MAP_ACTIVITY, Y_MAP_USER_AWARENESS } from "../../src/shared/constants";
+import {
+  TYPING_DEBOUNCE,
+  Y_MAP_ACTIVITY,
+  Y_MAP_SELECTION,
+  Y_MAP_USER_AWARENESS,
+} from "../../src/shared/constants";
 import { toFlatOffset, toPmPos } from "../../src/shared/positions/types";
 
 /**
@@ -160,5 +165,115 @@ describe("activity.cursor is a flat text offset (#1776)", () => {
     await vi.advanceTimersByTimeAsync(TYPING_DEBOUNCE + 250);
 
     expect(activity()).toBeUndefined();
+  });
+});
+
+/**
+ * What `tandem_checkInbox`'s `activity.selectedText` / `activity.selectionAt`
+ * are documented to mean (#1624) — the schema `.describe`, both tool
+ * descriptions, docs/mcp-tools.md and skills/tandem/SKILL.md all rest on these
+ * five client facts, so each is pinned by its own row. Remote changes arrive
+ * the way a server edit does: an update applied from a second `Y.Doc`.
+ */
+describe("Y_MAP_SELECTION lifetime (#1624)", () => {
+  type SelectionRecord = { from: number; to: number; timestamp?: number; selectedText?: string };
+
+  function selectionRecord(ydoc: Y.Doc): SelectionRecord | undefined {
+    return ydoc.getMap(Y_MAP_USER_AWARENESS).get(Y_MAP_SELECTION) as SelectionRecord | undefined;
+  }
+
+  /** The first Y.XmlText under `node` whose content contains `needle`. */
+  function findText(node: Y.XmlFragment | Y.XmlElement, needle: string): Y.XmlText | null {
+    for (const child of node.toArray()) {
+      if (child instanceof Y.XmlText) {
+        if (child.toString().includes(needle)) return child;
+      } else if (child instanceof Y.XmlElement) {
+        const hit = findText(child, needle);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  }
+
+  /** Apply `mutate` on a peer doc and deliver the delta, as a server edit arrives. */
+  function remoteChange(ydoc: Y.Doc, mutate: (fragment: Y.XmlFragment) => void): void {
+    const peer = new Y.Doc();
+    Y.applyUpdate(peer, Y.encodeStateAsUpdate(ydoc));
+    mutate(peer.getXmlFragment("default"));
+    Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(peer, Y.encodeStateVector(ydoc)));
+    peer.destroy();
+  }
+
+  /** (a)'s state: `three` selected and its debounced write landed. */
+  async function selectThree() {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    const { ydoc, editor } = boundEditor(MARKDOWN);
+    const from = toFlatOffset(extractText(ydoc).indexOf("three"));
+    const to = toFlatOffset(from + "three".length);
+    editor.commands.setTextSelection({
+      from: flatOffsetToPmPos(editor.state.doc, from),
+      to: flatOffsetToPmPos(editor.state.doc, to),
+    });
+    await vi.advanceTimersByTimeAsync(200);
+    return { ydoc, editor };
+  }
+
+  it("(a) a non-empty selection is written after the 150ms debounce, with a timestamp", async () => {
+    const { ydoc } = await selectThree();
+    const rec = selectionRecord(ydoc);
+    expect(rec?.selectedText).toBe("three");
+    expect(extractText(ydoc).slice(rec?.from, rec?.to)).toBe("three");
+    expect(typeof rec?.timestamp).toBe("number");
+  });
+
+  it("(b) a collapse is written immediately, clearing the selection", async () => {
+    const { ydoc, editor } = await selectThree();
+    editor.commands.setTextSelection(editor.state.selection.from);
+    // No timer advance: the collapsed write is synchronous, not debounced.
+    const rec = selectionRecord(ydoc);
+    expect(rec?.from).toBe(rec?.to);
+  });
+
+  it("(c) a remote edit that shifts a lingering selection RE-STAMPS it", async () => {
+    // Pins #1991's current behaviour; when #1991 lands, remove the re-stamp
+    // caveat from the schema, both descriptions, docs/mcp-tools.md and SKILL.md
+    // in the same change.
+    const { ydoc } = await selectThree();
+    const before = selectionRecord(ydoc) as SelectionRecord;
+    const t0 = before.timestamp as number;
+
+    await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+    remoteChange(ydoc, (fragment) => {
+      const leading = findText(fragment, "Some text here");
+      expect(leading, "fixture: the leading paragraph precedes the selection").not.toBeNull();
+      leading?.insert(0, "AB");
+    });
+    await vi.advanceTimersByTimeAsync(300);
+
+    const after = selectionRecord(ydoc) as SelectionRecord;
+    expect(after.from).toBe(before.from + 2);
+    expect(after.timestamp).toBeGreaterThan(t0);
+  });
+
+  it("(d) a remote deletion of the selected text clears the selection", async () => {
+    const { ydoc } = await selectThree();
+    remoteChange(ydoc, (fragment) => {
+      const item = findText(fragment, "two three");
+      expect(item, "fixture: the list item holds the selection").not.toBeNull();
+      item?.delete(item.toString().indexOf("three"), "three".length);
+    });
+    await vi.advanceTimersByTimeAsync(300);
+
+    const rec = selectionRecord(ydoc);
+    expect(rec?.from).toBe(rec?.to);
+  });
+
+  it("(e) blurring the editor writes nothing", async () => {
+    const { ydoc, editor } = await selectThree();
+    const before = selectionRecord(ydoc);
+    editor.commands.blur();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(selectionRecord(ydoc)).toStrictEqual(before);
   });
 });
