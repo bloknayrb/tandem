@@ -34,7 +34,8 @@ Rust path with no automated reproduction; the smoke lines are the verification.
 4. #1762, #1808, #1809, #1810: the updater and restart paths; then the Windows smoke run.
 5. #1791 and #1792 last; #1791's second half is dormant until `SCHEMA_VERSION` > 1.
 6. Merge [smoke-lines.md](../smoke-lines.md) into `docs/release-smoke-checklist.md` in this track,
-   whichever issue lands first.
+   whichever issue lands first. **Done 2026-09-15**, in its own PR, since E2-upgrade (#1985) did
+   not carry it.
 
 ## Rules that bite here
 
