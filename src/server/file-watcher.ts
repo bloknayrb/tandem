@@ -176,8 +176,8 @@ function attachWatcher(filePath: string, cb: fs.WatchListener<string>): fs.FSWat
  * had wired it up. Nothing re-arms after an open, so there is no later chance
  * to notice.
  *
- * One `dedupKey` for both, keyed by path: the two cases are the same fact
- * about the same file, and a user who hits both wants one line about it.
+ * One `dedupKey` for all three, keyed by path: they are the same fact about
+ * the same file, and a user who hits more than one wants one line about it.
  */
 function notifyNotWatching(filePath: string): void {
   pushNotification({
@@ -205,7 +205,7 @@ function notifyNotWatching(filePath: string): void {
  * whose `fs.watch` is REFUSED notifies without minting anything, so a caller
  * retrying a permanently unwatchable path (an SMB share that stays down) can
  * push repeatedly. The shared `dedupKey` is what makes that acceptable, and it
- * is the reason the two sites deliberately share one — so if you ever split
+ * is the reason the three sites deliberately share one — so if you ever split
  * them, the latch this paragraph declines becomes necessary.
  */
 function notifyWatchLost(filePath: string, err: unknown): void {
