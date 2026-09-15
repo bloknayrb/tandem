@@ -94,7 +94,7 @@ async function measureLoadAndMerge(count: number): Promise<number> {
     meta: { filePath: FILE_PATH },
   });
   const elapsedMs = performance.now() - start;
-  cleanup();
+  cleanup("close");
 
   return elapsedMs;
 }
@@ -117,7 +117,7 @@ async function measureLoadAndMergeWithConflicts(count: number): Promise<number> 
   const start = performance.now();
   const cleanup = await loadAndMerge({ ydoc, store, docHash: HASH, meta: { filePath: FILE_PATH } });
   const elapsedMs = performance.now() - start;
-  cleanup();
+  cleanup("close");
   return elapsedMs;
 }
 

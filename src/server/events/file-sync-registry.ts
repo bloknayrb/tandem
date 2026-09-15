@@ -18,7 +18,7 @@ import {
 
 const fileSyncContexts = new Map<
   string,
-  { ctx: SyncContext; cleanup: (phase?: ObserverCleanupPhase) => void }
+  { ctx: SyncContext; cleanup: (phase: ObserverCleanupPhase) => void }
 >();
 
 /**
@@ -29,7 +29,7 @@ const fileSyncContexts = new Map<
  */
 function safeCleanup(
   docName: string,
-  cleanup: (phase?: ObserverCleanupPhase) => void,
+  cleanup: (phase: ObserverCleanupPhase) => void,
   phase: ObserverCleanupPhase,
   logTag: string,
 ): void {
@@ -60,7 +60,7 @@ function safeCleanup(
 export function setFileSyncContext(
   docName: string,
   ctx: SyncContext,
-  cleanup: (phase?: ObserverCleanupPhase) => void,
+  cleanup: (phase: ObserverCleanupPhase) => void,
 ): void {
   // Dispose any prior entry first so we never leak observers on duplicate
   // registration (e.g., forceReload paths that re-run loadAndMerge). Normal

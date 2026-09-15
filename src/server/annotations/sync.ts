@@ -249,10 +249,15 @@ export type ObserverCleanupPhase = "swap" | "close";
  * Callers (the open pipeline and the reload family, via the queue
  * indirection) invoke cleanup with the appropriate phase on doc close or
  * Y.Doc swap.
+ *
+ * The phase is REQUIRED, with no default (#1695). A wrong phase fails
+ * silently — `"close"` on a swap drops tombstones an in-flight debounced
+ * write still needs (#333), and `"swap"` on a close leaks the ledger — so a
+ * caller must name it rather than inherit one.
  */
 export function registerAnnotationObserver(
   ctx: SyncContext,
-): (phase?: ObserverCleanupPhase) => void {
+): (phase: ObserverCleanupPhase) => void {
   const { ydoc, store, docHash, meta } = ctx;
 
   const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -300,7 +305,7 @@ export function registerAnnotationObserver(
   annMap.observe(onAnnMutation);
   repMap.observe(onRepMutation);
 
-  return (phase: ObserverCleanupPhase = "close") => {
+  return (phase: ObserverCleanupPhase) => {
     annMap.unobserve(onAnnMutation);
     repMap.unobserve(onRepMutation);
     if (phase === "close") {
@@ -545,7 +550,7 @@ function mergeMap<T extends { rev: number; editedAt?: number }>(
 export async function loadAndMerge(
   ctx: SyncContext,
   opts?: { migrateTombstonesFrom?: string },
-): Promise<(phase?: ObserverCleanupPhase) => void> {
+): Promise<(phase: ObserverCleanupPhase) => void> {
   const { ydoc, store, docHash, meta } = ctx;
   const file = await store.load();
 
