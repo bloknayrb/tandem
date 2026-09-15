@@ -1,6 +1,6 @@
 # K-sec-launcher — #1600: the npm uninstall scrub rewrites Cowork JSON without the Rust `with_locked_json` lock
 
-**Closes #1600**, provided R2 (below) passes on the Windows `rust-test` leg. If R2 cannot be made green, ship nothing for #1600: move the options into `bryan` and list it as Refs.
+**Refs #1600 by default. Closes #1600 only if R2 (below) passes on the Windows `rust-test` leg AND Bryan confirms, in the `bryan` item below, that this PR resolves the #1600 policy half.** If R2 cannot be made green, ship nothing for #1600: move the options into `bryan` and list it as Refs.
 
 **Files:**
 - `src/cli/uninstall-scrub.ts` (`rewriteJson`)
@@ -99,7 +99,13 @@ The exclusion works in both directions with no native addon. That makes this opt
 - Cases 1-8, R1 and R2 are green and mutation-checked.
 - `config-writer-set-claims` and `security-findings-claims` pass.
 - The PR body carries the probe table, the libuv-flag residual and the legs above.
-- **Build `## Closes` last.** It includes #1600 only if R2 ran green on CI and no remaining work against #1600 is named anywhere.
+- **Build `## Closes` last.** It includes #1600 only if R2 ran green on CI, the `bryan` note records that the #1600 policy half is resolved by this PR (Bryan confirmed lock-over-accept-or-route-through-Rust and accepted the undocumented-flag residual), and no remaining work against #1600 is named anywhere. Otherwise #1600 is Refs, and the ledger's `#1600 policy half` DECIDE entry (`docs/plans/2026-09-06-open-issues-sweep.md:54`) stays in place.
+
+## bryan
+
+- **The #1600 policy half.** The sweep ledger (`docs/plans/2026-09-06-open-issues-sweep.md:54`) holds `#1600 policy half` as an open DECIDE item, and scopes this group to the fix half only (`:99`). The issue offered three routes: take the lock, route the npm scrub's writes through Rust, or document an acceptance next to #1599. Landing option 1 **picks the first route**, so it resolves the policy half only if Bryan agrees with that pick.
+  - **Residual to accept:** the Node side of the lock rests on libuv's **undocumented** raw open flag `0x10000000` (`UV_FS_O_EXLOCK`, share mode 0), not exported in `fs.constants`. It is checked only by R2, against the Node on the `windows-latest` image, not the user's Node. A future libuv that drops or renumbers the flag would turn the lock into one that excludes nothing; R2 is the only thing that would notice.
+  - **Ask:** confirm lock-over-accept-or-route-through-Rust, and accept the residual. With that confirmation recorded here, #1600 may go in `## Closes`. Without it, #1600 is Refs and the ledger's DECIDE entry stays.
 
 ## Not in scope
 
@@ -118,3 +124,7 @@ The MCP-config writers under #1599 (accepted). The `rotate-token.ts:160-169` Cow
 - **Blocking finding 2** (lock before read leaves residue and adds warnings): fixed directly by the pre-check, with cases 6-8.
 - **Blocking finding 3** (nothing tests "never write without the lock"): fixed directly by case 5, which is in the mutation table.
 - **Option 2 re-examined and rejected on evidence:** the MSI target skips the NSIS hook, and `data-locations.md:173` promises the npm scrub removes Cowork registration.
+
+## Review corrections (post-cut)
+
+- **Finding: `Closes #1600` silently dropped the ledger's `#1600 policy half` DECIDE item.** Adopted as given. The header now defaults to Refs; a `bryan` item states that option 1 resolves the policy half by picking the lock route, names the undocumented-`0x10000000` residual, and asks Bryan to confirm; `Done when` puts #1600 in `## Closes` only if that note records the confirmation, otherwise Refs with the ledger entry left in place. No mechanism, test or file list changed.
