@@ -1001,7 +1001,7 @@ Auto-check → tandem://update-available banner → "Restart to install"
       (its verdict is NOT dropped, and BOTH outcomes log at warn: anything but
        Flushed joins pre_install_warnings and reaches the failure dialog, and
        Flushed logs "Pre-install: graceful sidecar shutdown complete" so
-       smoke-lines.md row 3 has something to read. On Windows this is the ONLY
+       the smoke checklist's §1 updater row has a line to read. On Windows this is the ONLY
        flush on the update path, because install_inner ends in
        std::process::exit(0) and RunEvent::Exit never fires — so there is no
        verdict line here at all)
