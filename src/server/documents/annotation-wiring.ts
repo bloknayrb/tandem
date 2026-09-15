@@ -56,9 +56,10 @@ import { pushNotification } from "../notifications.js";
  * `skipTransact: true` (the default would re-tag with `withMcp`, the wrong
  * origin here and a nested re-tag) — persisted because `loadAndMerge` runs
  * later and reads the Y.Maps directly, origin-blind; (b) after the merge,
- * gated on `fallbackRestored`, with the DEFAULT transact — by then the
- * durable observer is attached and only a non-`DURABLE_SKIP` origin queues
- * the repaired state to disk.
+ * gated on the restore result carrying the cloned records, inside the anchor
+ * overlay's single `withMcp` transaction (so `skipTransact: true` there too) —
+ * by then the durable observer is attached and only a non-`DURABLE_SKIP`
+ * origin queues the repaired state to disk (#1863).
  */
 export function repairClonedAnchors(
   doc: Y.Doc,
@@ -67,6 +68,21 @@ export function repairClonedAnchors(
   opts: { skipTransact: boolean },
 ): void {
   refreshAllRanges(collectAnnotations(map, docHash(filePath)), doc, map, opts);
+}
+
+/**
+ * The live map's annotation records keyed by id, normalized through
+ * `collectAnnotations` under `docHash(filePath)` — the key `repairClonedAnchors`
+ * uses. The fallback restore reads it once after the clone-time repair (the
+ * cloned records) and once after the merge (the records the anchor overlay
+ * compares against) (#1863). It lives here so `documents/open.ts` gains no
+ * `mcp/annotations.ts` edge.
+ */
+export function collectClonedAnnotations(
+  map: Y.Map<unknown>,
+  filePath: string,
+): ReadonlyMap<string, ReturnType<typeof collectAnnotations>[number]> {
+  return new Map(collectAnnotations(map, docHash(filePath)).map((a) => [a.id, a]));
 }
 
 /**

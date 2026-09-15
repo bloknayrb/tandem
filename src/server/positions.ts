@@ -773,7 +773,7 @@ export function remapRangeAcrossReplacement(
  * An out-of-bounds stored range slices to `""` and therefore contradicts, which
  * is the clamp #1765's body asks for.
  */
-function storedRangeStillMatches(ann: Annotation, text: string): boolean {
+export function storedRangeStillMatches(ann: Annotation, text: string): boolean {
   return (
     ann.textSnapshot === undefined ||
     !snapshotContradicts(ann, text.slice(ann.range.from, ann.range.to))
