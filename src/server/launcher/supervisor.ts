@@ -50,6 +50,8 @@ import {
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { subscribe, unsubscribe } from "../events/queue.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
+import { sanitizeForLog } from "../log-sanitize.js";
+import { isTauriSidecar } from "../platform.js";
 
 interface SupervisorOpts {
   /** Directory containing `integrations.json` (typically `resolveAppDataDir()`). */
@@ -602,15 +604,54 @@ export function buildClaudeArgs(plan: { sessionId: string; resuming: boolean }):
 export const DESKTOP_ONLY_ENV_KEYS = ["TANDEM_APP_DATA_DIR", "TANDEM_DATA_DIR"] as const;
 
 /**
- * The environment the launched Claude Code is spawned with: ours, minus
- * {@link DESKTOP_ONLY_ENV_KEYS}.
+ * Tandem's own secrets, which must not reach the launched Claude Code or any
+ * shell command it runs (#1822 item 4).
  *
- * A copy, never a mutation of `process.env` — this server still needs both
- * variables for its own `resolveAppDataDir()`.
+ * **A denylist, never an allowlist.** An allowlist would silently drop what
+ * Claude Code itself needs from the user's environment — `PATH`,
+ * `HOME`/`USERPROFILE`, proxy variables, `ANTHROPIC_*`, `CLAUDE_*` — and break
+ * launches in ways no Tandem test would see.
+ *
+ * - `TANDEM_AUTH_TOKEN` — the sidecar's bearer token (`sidecar.rs` sets it).
+ * - `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` — the same token under the plugin-option
+ *   name, which `resolveAuthTokenCandidate` ranks above `TANDEM_AUTH_TOKEN`.
+ * - `TANDEM_SENTRY_DSN` — the operator's crash-reporting DSN.
+ *
+ * Nothing the launched session starts needs the env copy on the desktop's
+ * loopback bind: loopback requests skip bearer auth (`auth/middleware.ts`),
+ * and every config-spawned bridge or shim carries the token in its OWN config
+ * `env` (`integrations/apply.ts`, `cowork_installer.rs`), which is not this
+ * inheritance.
  */
-export function childEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export const TANDEM_SECRET_ENV_KEYS = [
+  "TANDEM_AUTH_TOKEN",
+  "CLAUDE_PLUGIN_OPTION_AUTH_TOKEN",
+  "TANDEM_SENTRY_DSN",
+] as const;
+
+/**
+ * The environment the launched Claude Code is spawned with: ours, minus
+ * {@link DESKTOP_ONLY_ENV_KEYS} and {@link TANDEM_SECRET_ENV_KEYS} — and, for
+ * the Tauri sidecar only, minus `NODE_ENV`.
+ *
+ * `NODE_ENV` is set to `production` on the packaged sidecar by `sidecar.rs`
+ * (#1822 item 6) for the server's OWN sake. Inherited by the launched Claude,
+ * it would make an `npm install` run in the user's project skip
+ * devDependencies. The strip keys on argv ({@link isTauriSidecar}), never on
+ * the inherited `TANDEM_TAURI_SIDECAR`, so an npm `tandem` keeps the user's
+ * own `NODE_ENV` untouched.
+ *
+ * A copy, never a mutation of `process.env` — this server still needs the
+ * data-dir variables for its own `resolveAppDataDir()`, and the token.
+ */
+export function childEnv(
+  base: NodeJS.ProcessEnv = process.env,
+  argv: readonly string[] = process.argv,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base };
   for (const key of DESKTOP_ONLY_ENV_KEYS) delete env[key];
+  for (const key of TANDEM_SECRET_ENV_KEYS) delete env[key];
+  if (isTauriSidecar(argv)) delete env.NODE_ENV;
   return env;
 }
 
@@ -998,7 +1039,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // this was the only untraced branch in a change whose purpose is
       // removing exactly that.
       console.error(
-        `[Launcher] Requested working directory ${requested} could not be resolved — spawning in ${plan.cwd}, workingDirectory left unchanged`,
+        `[Launcher] Requested working directory ${sanitizeForLog(requested)} could not be resolved — spawning in ${plan.cwd}, workingDirectory left unchanged`,
       );
       return;
     }

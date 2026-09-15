@@ -179,10 +179,10 @@ const WRITER_SITES: Record<
     sites: 2,
     disposition: "out-of-scope",
     why:
-      "rewriteJson mutates the three Cowork workspace JSON files, which the Rust " +
-      "side mutates under a real cross-process lockfile (with_locked_json). Tracked " +
-      "separately as #1600 and deliberately NOT part of this acceptance: it is " +
-      "strictly worse, being the one place a lock exists and a writer does not take it.",
+      "rewriteJson mutates the three Cowork workspace JSON files, never a Claude " +
+      "config. Since #1600 it takes the same cross-process lock as the Rust side's " +
+      "with_locked_json (a share-mode-0 open of the sibling .tandem-lock file), so " +
+      "it is neither part of this acceptance nor an unlocked writer.",
   },
 };
 

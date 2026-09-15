@@ -1805,15 +1805,27 @@ pub(crate) enum SpawnOutcome {
 /// discriminant — it reaches every descendant. The `--tauri-sidecar` argv flag
 /// beside `server_js_str` is (#1758, #1787); this variable is kept unchanged
 /// for its existing consumers.
-fn sidecar_env_pairs(app_data_dir: &str) -> Vec<(&'static str, String)> {
-    vec![
+///
+/// **`NODE_ENV=production` on release builds only (#1822 item 6).** Without it
+/// Express and `finalhandler` default to `development` and put `err.stack` in
+/// their HTML error pages. A debug / `cargo tauri dev` build gets no `NODE_ENV`
+/// from here, so the server's dev-only paths (`supervisor.ts`'s
+/// `reaper/target/release` fallback) keep working there. The server's
+/// `childEnv` strips it again before spawning the launched Claude Code, where
+/// it would make an `npm install` skip devDependencies.
+fn sidecar_env_pairs(app_data_dir: &str, release_build: bool) -> Vec<(&'static str, String)> {
+    let mut pairs = vec![
         ("TANDEM_TAURI_SIDECAR", "1".to_string()),
         ("TANDEM_DATA_DIR", app_data_dir.to_string()),
         ("TANDEM_APP_DATA_DIR", app_data_dir.to_string()),
         ("TANDEM_PORT", WS_PORT.to_string()),
         ("TANDEM_MCP_PORT", MCP_PORT.to_string()),
         ("TANDEM_BIND_HOST", SIDECAR_BIND_HOST.to_string()),
-    ]
+    ];
+    if release_build {
+        pairs.push(("NODE_ENV", "production".to_string()));
+    }
+    pairs
 }
 
 /// Spawn the Node.js sidecar and wait for the health endpoint.
@@ -1939,7 +1951,8 @@ pub(crate) async fn start_sidecar(
             // Code session's own shell would otherwise claim the sidecar's
             // carve-outs. Argv is not inherited by grandchildren.
             .args([server_js_str.as_str(), "--tauri-sidecar"]);
-        for (key, value) in sidecar_env_pairs(app_data_dir_str.as_str()) {
+        let release_build = !cfg!(debug_assertions);
+        for (key, value) in sidecar_env_pairs(app_data_dir_str.as_str(), release_build) {
             cmd = cmd.env(key, value);
         }
 
@@ -4795,7 +4808,7 @@ mod sidecar_env_tests {
     /// guard, not a hygiene one.
     #[test]
     fn sidecar_env_pairs_exports_both_data_dir_variables() {
-        let pairs = sidecar_env_pairs("/tmp/x");
+        let pairs = sidecar_env_pairs("/tmp/x", true);
         let get = |key: &str| {
             pairs
                 .iter()
@@ -4814,6 +4827,23 @@ mod sidecar_env_tests {
         assert!(get("TANDEM_PORT").is_some());
         assert!(get("TANDEM_MCP_PORT").is_some());
         assert!(get("TANDEM_BIND_HOST").is_some());
+        assert_eq!(
+            get("NODE_ENV"),
+            Some("production"),
+            "a release sidecar must run Express in production mode, or its error \
+             pages carry err.stack (#1822 item 6)"
+        );
+    }
+
+    /// A debug / `cargo tauri dev` build must NOT get `NODE_ENV=production`:
+    /// the server gates dev-only paths on `NODE_ENV !== "production"`.
+    #[test]
+    fn sidecar_env_pairs_sets_no_node_env_on_a_debug_build() {
+        let pairs = sidecar_env_pairs("/tmp/x", false);
+        assert!(
+            pairs.iter().all(|(k, _)| *k != "NODE_ENV"),
+            "a debug build must leave NODE_ENV unset"
+        );
     }
 
     /// The half the value assertion above cannot make: that `start_sidecar`
@@ -4842,8 +4872,10 @@ mod sidecar_env_tests {
             .unwrap_or(tail.len());
         let body = &tail[..end];
         assert!(
-            body.contains("sidecar_env_pairs("),
-            "start_sidecar must fold sidecar_env_pairs onto the command builder"
+            body.contains("let release_build = !cfg!(debug_assertions);")
+                && body.contains("sidecar_env_pairs(app_data_dir_str.as_str(), release_build)"),
+            "start_sidecar must fold sidecar_env_pairs onto the command builder, \
+             with release_build derived from debug_assertions"
         );
 
         let needle = format!("\"{APP_DATA_KEY}\"");

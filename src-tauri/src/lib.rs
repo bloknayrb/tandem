@@ -1693,7 +1693,6 @@ pub fn run() {
             context_menu::show_tab_context_menu,
             context_menu::show_annotation_context_menu,
             install_update,
-            keychain::keychain_get,
             keychain::keychain_set,
             keychain::keychain_delete,
             autostart::autostart_get_status,

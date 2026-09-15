@@ -217,8 +217,8 @@ export const TAURI_SIDECAR_ARGV_FLAG = "--tauri-sidecar";
  *
  * **Derived from argv, never from `TANDEM_TAURI_SIDECAR`.** That variable is
  * inherited by every descendant of the sidecar — `tauri-plugin-shell`'s
- * `Command::new` never calls `env_clear()`, and `supervisor.ts` spawns the
- * auto-launched Claude Code with `env: process.env` — so keying the carve-out
+ * `Command::new` never calls `env_clear()`, and `supervisor.ts`'s `childEnv`
+ * strips only secrets and data-dir keys, not this one — so keying the carve-out
  * on it means an npm `tandem` run from an auto-launched session's own shell
  * reads `"1"`, takes the sidecar's carve-out and SIGKILLs the desktop's server:
  * #1758's own bug, surviving on the path the product's auto-launch creates.
