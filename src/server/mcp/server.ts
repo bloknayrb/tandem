@@ -309,6 +309,109 @@ function sendJsonRpcError(
 }
 
 /**
+ * How a body-parse failure is reported, keyed by `err.type` from body-parser.
+ * `default` also covers the rejected promises Express 5 forwards here from the
+ * three `async` /mcp handlers — see the note below on discriminating on
+ * `err.type` rather than on the path.
+ */
+const BODY_ERROR_KINDS: Record<string, { rpcCode: number; apiError: string; message: string }> = {
+  "entity.too.large": {
+    rpcCode: -32600,
+    apiError: "PAYLOAD_TOO_LARGE",
+    message: "Request body exceeds this endpoint's size limit.",
+  },
+  "entity.parse.failed": {
+    rpcCode: -32700,
+    apiError: "BAD_REQUEST",
+    message: "Request body is not valid JSON.",
+  },
+  default: {
+    rpcCode: -32603,
+    apiError: "INTERNAL_ERROR",
+    message: "Request could not be processed.",
+  },
+};
+
+/**
+ * Is this request one the JSON-RPC envelope belongs on?
+ *
+ * `req.path === "/mcp"` is NOT the same question. Express 5 routes with
+ * `strict: false` and `caseSensitive: false` by default, so `POST /mcp/` and
+ * `POST /MCP` both reach `mcpApp.post("/mcp", …)` and answer normally — but an
+ * exact string compare misses them, and a client configured with a trailing
+ * slash (`http://127.0.0.1:3479/mcp/`) would get the `/api` envelope for a
+ * parse or size failure. `src/cli/mcp-stdio.ts` classifies on `error.code`,
+ * finds none in that shape, and surfaces an opaque transport error instead of
+ * the intended -32600/-32700. `api-routes.ts`'s `normalizeApiPath` already
+ * strips the trailing slash and lowercases for exactly this Express-5
+ * behaviour; this is the same normalization.
+ */
+function isMcpPath(path: string): boolean {
+  return path.replace(/\/+$/, "").toLowerCase() === "/mcp";
+}
+
+/**
+ * JSON error handler (#1822 item 3).
+ *
+ * `createMcpExpressApp` installs a bare `express.json()` (100 kB) at the SDK
+ * sub-app root, and `app.use(mcpApp)` mounts that sub-app at the ROOT, above
+ * `registerApiRoutes` — so this parser sees every `/api` body too. Without a
+ * handler its `PayloadTooLargeError` fell through to Express's `finalhandler`,
+ * which serves an HTML page with `err.stack` in a `<pre>` whenever
+ * `NODE_ENV !== "production"`. Measured before this landed: a 200 kB
+ * `application/json` POST to `/mcp` returned `413 text/html` carrying
+ * `PayloadTooLargeError` plus absolute `node_modules/raw-body/index.js:163`
+ * frames — the operator's username and install path. `POST /api/channel-error`
+ * returned the same page, and that route is a `NON_LOOPBACK_ALLOWED` carve-out,
+ * so under a Cowork bind it crossed the LAN.
+ *
+ * **Registered TWICE, on `mcpApp` and again on the outer `app`, and both are
+ * load-bearing.** An error raised inside a mounted sub-app is offered to that
+ * sub-app's error handlers first, and the parser that raises the body errors IS
+ * the sub-app's — so the `mcpApp` copy is what answers those. But Express 5
+ * forwards a rejected promise from ANY `async` route handler to `next(err)`,
+ * and `registerApiRoutes` / `registerModelsRoutes` / `registerIntegrationsRoutes`
+ * attach many async handlers to the OUTER app, past every `mcpApp` handler.
+ * Reproduced at the same reachability as the 413 this closes: `GET
+ * /api/models/secrets/%zz` raises a `URIError` in the outer app's own router
+ * param decode and used to answer `400 text/html` carrying
+ * `node_modules/router/lib/layer.js` frames. The outer copy is registered
+ * after the last registrar, so it closes the CLASS rather than one trigger of
+ * it.
+ *
+ * **Classification discriminates on `err.type`, never on the path** — the path
+ * picks only the response envelope. All three `/mcp` handlers are `async` (each
+ * awaits `dispatchToSession` → `transport.handleRequest`), so a genuine
+ * transport or session failure lands here too, and a path-only branch would
+ * report it to Claude Code as a size-limit error.
+ *
+ * No `err.message`, no `err.stack`, no path in any branch.
+ */
+function bodyErrorHandler(
+  err: Error & { status?: unknown; type?: unknown },
+  req: import("express").Request,
+  res: import("express").Response,
+  next: import("express").NextFunction,
+): void {
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+  const type = typeof err?.type === "string" ? err.type : "";
+  const status = typeof err?.status === "number" ? err.status : 500;
+  // Classify once; the path then picks only the ENVELOPE. Splitting the
+  // classification across the two arms is what lets them drift apart.
+  const { rpcCode, apiError, message } = BODY_ERROR_KINDS[type] ?? BODY_ERROR_KINDS.default;
+  if (isMcpPath(req.path)) {
+    // The JSON-RPC envelope the rest of this endpoint uses and
+    // `src/cli/mcp-stdio.ts` parses.
+    sendJsonRpcError(res, status, rpcCode, message);
+    return;
+  }
+  res.status(status).json({ error: apiError, message });
+}
+
+/**
  * Build a server + transport for one new client session, connect them, and run
  * the initialize request through it.
  *
@@ -666,6 +769,8 @@ export async function startMcpServerHttp(
     if (entry && res.statusCode === 200) await registry.close(entry.sessionId);
   });
 
+  mcpApp.use(bodyErrorHandler);
+
   // NOTE: there is deliberately NO license-webhook route here. License issuance
   // lives entirely in `infra/license-issuance-worker/` — a Cloudflare Worker that
   // Polar can actually reach. The old `/webhooks/license` handler was mounted
@@ -859,6 +964,17 @@ export async function startMcpServerHttp(
   } else {
     console.error(`[Tandem] No client dist at ${CLIENT_DIST} — run 'npm run build' first`);
   }
+
+  // The OUTER-app half of the JSON error handler (#1822 item 3). Registered
+  // LAST, because Express offers an error to the handlers registered after the
+  // layer that raised it — anything above this line can throw into it, nothing
+  // below could. Without it a rejected promise from any `/api` route handler,
+  // or a `URIError` from the router's own param decode (`GET
+  // /api/models/secrets/%zz`), still reached `finalhandler` and served
+  // `err.stack` with absolute `node_modules` frames. See the docblock on
+  // `bodyErrorHandler`; the `mcpApp` copy above answers the sub-app's own body
+  // parser and is not a substitute for this one.
+  app.use(bodyErrorHandler);
 
   return new Promise<Server>((resolve, reject) => {
     const httpServer = app.listen(port, host, () => {
