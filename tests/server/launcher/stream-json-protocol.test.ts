@@ -26,26 +26,13 @@ import type { TandemEvent } from "../../../src/server/events/types.js";
 import type { IntegrationsFile } from "../../../src/server/integrations/schema.js";
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
 import type { Supervisor } from "../../../src/server/launcher/supervisor.js";
-import {
-  buildClaudeArgs,
-  createSupervisor as createRealSupervisor,
-} from "../../../src/server/launcher/supervisor.js";
+import { buildClaudeArgs, createSupervisor } from "../../../src/server/launcher/supervisor.js";
 import {
   CLAUDE_STREAM_JSON_FLAGS,
   SUPERVISOR_INITIAL_PROMPT,
   SUPERVISOR_NO_ARM_CLAUSE,
   SUPERVISOR_WAKE_PROMPT,
 } from "../../../src/shared/launcher/contract.js";
-
-/**
- * Every fixture here spawns in an `os.tmpdir()` folder, and the spawn cwd is
- * home-confined (#1822 item 4). The temp root is inside home on Windows and
- * outside it (`/tmp`) on ubuntu, so without this seam the whole file means one
- * thing locally and another on `check`. A caller's own `homeOverride` wins.
- */
-function createSupervisor(opts: Parameters<typeof createRealSupervisor>[0]): Supervisor {
-  return createRealSupervisor({ homeOverride: fs.realpathSync(os.tmpdir()), ...opts });
-}
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STUB_SOURCE = path.join(HERE, "stub-claude-cli.cjs");
@@ -1103,13 +1090,30 @@ describe("launcher — relocating Claude to a different folder", () => {
         // persist is awaited first.
         await sup.relaunch(gone, { persistCwd: true });
         expect((await readClaudeEntry())?.workingDirectory).toBe(spawnDir);
-        const lines = errSpy.mock.calls.flat().filter((a): a is string => typeof a === "string");
-        expect(lines.some((l) => l.includes(gone) && l.includes("could not be resolved"))).toBe(
-          true,
-        );
-        // One event, one line: the spawn-side "not inside home" line is for the
-        // saved workingDirectory only, so a failed override must not add it.
-        expect(lines.some((l) => l.includes("not a directory inside home"))).toBe(false);
+        expect(
+          errSpy.mock.calls.some((c) => c.some((a) => typeof a === "string" && a.includes(gone))),
+        ).toBe(true);
+      } finally {
+        errSpy.mockRestore();
+        await sup.stop();
+      }
+    }, 30_000);
+
+    it("an unresolvable override is logged with its control characters stripped", async () => {
+      // The requested path is caller-supplied, so a raw newline in it would
+      // forge a second `[Launcher]` line in the log.
+      await writeClaudeIntegration();
+      const forged = `${path.join(os.tmpdir(), `tandem-gone-${Date.now()}`)}\n[Launcher] forged`;
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const sup = createSupervisor({ integrationsBase: tmpDir });
+      try {
+        await sup.relaunch(forged, { persistCwd: true });
+        const lines = errSpy.mock.calls
+          .flat()
+          .filter((a): a is string => typeof a === "string" && a.includes("could not be resolved"));
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toContain("[Launcher] forged");
+        expect(lines[0]).not.toContain("\n");
       } finally {
         errSpy.mockRestore();
         await sup.stop();
@@ -1208,85 +1212,6 @@ describe("launcher — relocating Claude to a different folder", () => {
  * constant it came from, so all of them stay green if the constant is emptied.
  * These pin the CONTENT, which is the part that has to reach a model.
  */
-/**
- * #1822 item 4. The saved `workingDirectory` is writable through
- * `POST /api/integrations`, which the HTTP routes' home confinement never saw,
- * so the spawn used to go wherever that file pointed. It is now confined like
- * the routes, and an out-of-home value falls back to home with one log line —
- * the launch itself never fails.
- *
- * Asserted on the spawn record's `cwd` (what the child actually ran in), not on
- * `status().cwd`, which races the spawn.
- */
-describe("launcher — the saved working directory is home-confined", () => {
-  let fakeHome: string;
-
-  /** A realpath'd temp dir carrying the stub under the pid-name trick. */
-  function stubDir(dir: string): string {
-    fs.copyFileSync(STUB_SOURCE, path.join(dir, String(process.pid)));
-    return fs.realpathSync(dir);
-  }
-
-  beforeEach(() => {
-    fakeHome = stubDir(fs.mkdtempSync(path.join(os.tmpdir(), "stream-json-home-")));
-    extraDirs.push(fakeHome);
-  });
-
-  async function firstSpawn(): Promise<SpawnRecord> {
-    const [rec] = await waitFor(() => {
-      const recs = recordsWithPrefix<SpawnRecord>("spawn-");
-      return recs.length >= 1 ? recs : null;
-    }, "a spawn record");
-    return rec;
-  }
-
-  const homeLines = (spy: { mock: { calls: unknown[][] } }): string[] =>
-    spy.mock.calls
-      .flat()
-      .filter(
-        (a): a is string => typeof a === "string" && a.includes("not a directory inside home"),
-      );
-
-  it("falls back to home, with one log line, for a directory outside home", async () => {
-    const outsideDir = stubDir(fs.mkdtempSync(path.join(os.tmpdir(), "stream-json-outside-")));
-    extraDirs.push(outsideDir);
-    await writeClaudeIntegration(outsideDir);
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const sup = createSupervisor({ integrationsBase: tmpDir, homeOverride: fakeHome });
-    try {
-      await sup.startFresh();
-      const rec = await firstSpawn();
-      expect(rec.cwd).toBe(fakeHome);
-      expect(homeLines(errSpy)).toHaveLength(1);
-      // The review finding: a log line is not a user signal. `status()` is what
-      // Settings reads, and it must say the saved folder was not honoured.
-      expect(sup.status().workingDirectoryIgnored).toBe(true);
-    } finally {
-      errSpy.mockRestore();
-      await sup.stop();
-    }
-  }, 30_000);
-
-  it("spawns in a directory inside home, silently", async () => {
-    const insideDir = path.join(fakeHome, "project");
-    fs.mkdirSync(insideDir);
-    const inside = stubDir(insideDir);
-    await writeClaudeIntegration(inside);
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const sup = createSupervisor({ integrationsBase: tmpDir, homeOverride: fakeHome });
-    try {
-      await sup.startFresh();
-      const rec = await firstSpawn();
-      expect(rec.cwd).toBe(fs.realpathSync(insideDir));
-      expect(homeLines(errSpy)).toHaveLength(0);
-      expect(sup.status().workingDirectoryIgnored).toBeUndefined();
-    } finally {
-      errSpy.mockRestore();
-      await sup.stop();
-    }
-  }, 30_000);
-});
-
 describe("the supervisor's turns tell a launched session not to self-arm", () => {
   it("carries the clause on the bootstrap turn", () => {
     expect(SUPERVISOR_INITIAL_PROMPT).toContain(SUPERVISOR_NO_ARM_CLAUSE);

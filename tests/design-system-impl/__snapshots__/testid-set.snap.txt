@@ -423,7 +423,6 @@ settings-modal-tab-{*}
 settings-modal-view-changelog-btn
 settings-modal-view-documentation-btn
 settings-modal-working-directory
-settings-modal-working-directory-ignored
 settings-modal-working-directory-input
 settings-modal-working-directory-load-error
 settings-modal-working-directory-pick

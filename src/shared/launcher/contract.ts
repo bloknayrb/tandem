@@ -35,8 +35,6 @@ export type LauncherStatus =
       lastError?: LauncherErrorCode;
       /** Loopback-only. `null` when last refresh succeeded. */
       skillRefresh?: SkillRefreshError | null;
-      /** Loopback-only; see the `running: true` arm. */
-      workingDirectoryIgnored?: true;
     }
   | {
       available: true;
@@ -48,13 +46,6 @@ export type LauncherStatus =
       resuming: boolean;
       /** Loopback-only. `null` when last refresh succeeded. */
       skillRefresh?: SkillRefreshError | null;
-      /**
-       * Loopback-only, present only when true (#1822 item 4). The last spawn
-       * found the saved `workingDirectory` outside home or unresolvable and ran
-       * in home instead. Settings reads it so it does not display the saved
-       * folder as though Claude were running there.
-       */
-      workingDirectoryIgnored?: true;
     };
 
 /**

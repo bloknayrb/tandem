@@ -241,9 +241,6 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
       res.json(body);
       return;
     }
-    // Loopback-only, like `cwd`: it says where the user's configured folder is
-    // NOT being used, which is a fact about their disk layout.
-    const ignored = raw.workingDirectoryIgnored ? { workingDirectoryIgnored: true as const } : {};
     if (raw.running) {
       if (!loopback) {
         res.json({ available: true, running: true });
@@ -257,13 +254,12 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
         sessionId: "<set>",
         resuming: raw.resuming,
         skillRefresh,
-        ...ignored,
       };
       res.json(body);
       return;
     }
     const body: LauncherStatus = loopback
-      ? { available: true, running: false, lastError: raw.lastError, skillRefresh, ...ignored }
+      ? { available: true, running: false, lastError: raw.lastError, skillRefresh }
       : { available: true, running: false };
     res.json(body);
   };
