@@ -224,7 +224,7 @@ describe("rewriteJson", () => {
  * Every Rust writer of the three Cowork files takes `with_locked_json`'s lock on
  * a sibling `.<file>.tandem-lock`; the npm scrub was the one writer that did
  * not. These pin the Node half against mocks. The real interop — that libuv's
- * undocumented `0x10000000` open actually excludes fs2 and vice versa — is
+ * `UV_FS_O_EXLOCK` (`0x10000000`) open actually excludes fs2 and vice versa — is
  * `src-tauri/src/cowork_atomic_json.rs`'s `lock_interop_tests`, on the windows
  * `rust-test` leg.
  */

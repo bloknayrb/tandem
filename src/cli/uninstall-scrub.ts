@@ -328,11 +328,13 @@ export async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[
 /**
  * libuv's raw open flag for an exclusive-share open (`UV_FS_O_EXLOCK`): on
  * Windows the lockfile is opened with share mode 0, so no other handle — Rust's
- * included — can open it while this one is held. **Undocumented, and not
- * exported in `fs.constants`** (measured on Node v24.2.0). The Rust interop
- * tests in `src-tauri/src/cowork_atomic_json.rs` are the only thing that checks
- * it still means this; a libuv that dropped or renumbered it would turn this
- * lock into one that excludes nothing.
+ * included — can open it while this one is held. It is public libuv API
+ * (`include/uv/win.h`, documented in libuv's `fs.rst` as supported on macOS and
+ * Windows), but **Node does not export it in `fs.constants`** (measured on Node
+ * v24.2.0), so it is spelled as the literal. The Rust interop tests in
+ * `src-tauri/src/cowork_atomic_json.rs` are the only thing that checks Node's
+ * libuv still honours it; one that stopped would turn this lock into one that
+ * excludes nothing.
  */
 const UV_FS_O_EXLOCK = 0x10000000;
 

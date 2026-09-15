@@ -337,8 +337,9 @@ mod lock_interop_tests {
     use std::sync::mpsc;
 
     /// Mirrors `rewriteJson`'s open in `src/cli/uninstall-scrub.ts`, with the
-    /// undocumented libuv flag spelled as the literal on purpose: these tests
-    /// are the only check that the flag still means share mode 0.
+    /// libuv's `UV_FS_O_EXLOCK` spelled as the literal on purpose (Node does not
+    /// export it in `fs.constants`): these tests are the only check that Node's
+    /// libuv still honours it as share mode 0.
     const NODE_HOLD: &str = r#"const fs=require('fs');const h=fs.openSync(process.env.TANDEM_LOCK_PROBE,fs.constants.O_RDWR|fs.constants.O_CREAT|0x10000000);process.stdout.write('HELD\n');process.stdin.resume();process.stdin.on('end',()=>{fs.closeSync(h);process.exit(0);});"#;
     const NODE_CONTEND: &str = r#"const fs=require('fs');try{const h=fs.openSync(process.env.TANDEM_LOCK_PROBE,fs.constants.O_RDWR|fs.constants.O_CREAT|0x10000000);fs.closeSync(h);console.log('opened');}catch(e){console.log(e.code);}"#;
 

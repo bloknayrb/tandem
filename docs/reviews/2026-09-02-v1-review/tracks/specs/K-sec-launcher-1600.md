@@ -128,3 +128,8 @@ The MCP-config writers under #1599 (accepted). The `rotate-token.ts:160-169` Cow
 ## Review corrections (post-cut)
 
 - **Finding: `Closes #1600` silently dropped the ledger's `#1600 policy half` DECIDE item.** Adopted as given. The header now defaults to Refs; a `bryan` item states that option 1 resolves the policy half by picking the lock route, names the undocumented-`0x10000000` residual, and asks Bryan to confirm; `Done when` puts #1600 in `## Closes` only if that note records the confirmation, otherwise Refs with the ledger entry left in place. No mechanism, test or file list changed.
+
+## Orchestrator correction (2026-09-15, after PR #2006 opened)
+
+- **`UV_FS_O_EXLOCK` is not undocumented.** It is public libuv API: `include/uv/win.h` defines it as `0x10000000`, and libuv's `docs/src/fs.rst` documents it as supported on macOS and Windows. What is true is narrower: Node does not export it in `fs.constants`. The comments and `docs/security.md` now say that.
+- **The policy half is resolved in this PR, not left to Bryan.** Real interop was measured in both directions and a hand security review found it sound. That was the condition the launch notes set for keeping the decision off Bryan's list. Of the issue's three routes, sending the npm scrub's writes through Rust is impossible for an npm-only install, which has no desktop binary. An acceptance next to #1599 would keep a lost-update race that a working fix now closes. The lock route dominates both, and with the flag being public API, its residual is ordinary dependency risk. `Closes #1600` is gated on the required windows `rust-test` leg running `lock_interop_tests` green.
