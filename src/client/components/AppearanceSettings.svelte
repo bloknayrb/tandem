@@ -1,5 +1,6 @@
 <script lang="ts">
 import { createRadioGroup } from "../hooks/useRadioGroup.svelte";
+import { TEXT_SIZE_LABEL, TEXT_SIZES } from "../hooks/useTandemSettings";
 import type {
   Density,
   PrimaryTab,
@@ -56,7 +57,7 @@ const primaryTabRg = createRadioGroup<PrimaryTab>(
 );
 const textSizeRg = createRadioGroup<TextSize>(
   () => settings.textSize,
-  ["s", "m", "l"] as const,
+  TEXT_SIZES,
   (t) => onUpdate({ textSize: t }),
 );
 const densityRg = createRadioGroup<Density>(
@@ -168,7 +169,7 @@ const densityRg = createRadioGroup<Density>(
     onkeydown={textSizeRg.handleKeyDown}
     style="display: flex; gap: var(--tandem-space-2);"
   >
-    {#each (["s", "m", "l"] as const) as size (size)}
+    {#each TEXT_SIZES as size (size)}
       <button
         data-testid={`text-size-${size}-btn`}
         role="radio"
@@ -179,7 +180,7 @@ const densityRg = createRadioGroup<Density>(
         class="settings-card"
         style={cardStyle(settings.textSize === size, readOnly)}
       >
-        {size === "s" ? "Small" : size === "m" ? "Medium" : "Large"}
+        {TEXT_SIZE_LABEL[size]}
       </button>
     {/each}
   </div>

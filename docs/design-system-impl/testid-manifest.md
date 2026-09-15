@@ -85,6 +85,10 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `decorations-menu`, `decorations-mute-toggle`, `decorations-menu-caret`,
   `decorations-row-{authorship,comments,highlights,notes}`,
   `decorations-settings-link`
+- Display menu (#1705, #1706) — lives in the formatting bar and is mirrored in
+  the selection popup's format row; quick home for the text-size and
+  reading-measure presets: `display-menu-trigger`, `display-menu`,
+  `display-menu-text-size-{*}`, `display-menu-measure-{*}`
 - `mode-{toggle,solo-btn,tandem-btn}`
 - `slash-command-menu` — imperative, set via `el.dataset.testid` in
   `editor/slash-menu/extension.ts`, not a template attribute
@@ -242,6 +246,8 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   property of the document surface, not app chrome)
 - `appearance-show-raw-markdown` (#981, moved #1262 — testid keeps its
   historical `appearance-` prefix; Critical Rule 7 forbids renaming it)
+- `editor-source-line-wrap` (#1738 — source-view line wrap; the label wrapper,
+  descend to its `<input>`)
 - `high-contrast-toggle`, `annotation-patterns-toggle`
 - `network-{restart-sidecar,degraded-delay-slider,retry-strategy}`
 

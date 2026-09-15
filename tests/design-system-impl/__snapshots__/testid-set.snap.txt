@@ -125,6 +125,10 @@ default-tab-annotations-btn
 default-tab-chat-btn
 density-{*}-btn
 dismiss-btn-{*}
+display-menu
+display-menu-measure-{*}
+display-menu-text-size-{*}
+display-menu-trigger
 edit-btn-{*}
 edit-cancel-btn-{*}
 edit-newtext-{*}
@@ -138,6 +142,7 @@ editor-scroll-container
 editor-scroll-pill
 editor-scroll-pill-thumb
 editor-smart-typography
+editor-source-line-wrap
 editor-spellcheck-toggle
 editor-stage
 empty-state-connect-ai

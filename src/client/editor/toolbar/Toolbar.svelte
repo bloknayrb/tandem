@@ -21,10 +21,12 @@ import type {
 import { generateAnnotationId } from "../../../shared/utils";
 import { isMacPlatform } from "../../actions/keybindings";
 import { createAgentLabel } from "../../hooks/useAgentLabel.svelte";
+import type { DisplayPrefsUpdate, EditorMeasure, TextSize } from "../../hooks/useTandemSettings";
 import { heldInSoloOnCreate } from "../../panels/annotation-actions";
 import { ENTER_POPUP_MS, motionOff, popupEnter, registerFlySource } from "../../panels/cardMotion";
 import { pmPosToFlatOffset } from "../../positions";
 import DecorationsMenu from "../../shell/DecorationsMenu.svelte";
+import DisplayMenu from "../../shell/DisplayMenu.svelte";
 import { onOutsideEvent } from "../../utils/dismiss-outside";
 import { escapeIsClaimed } from "../../utils/escape-owner";
 import {
@@ -74,6 +76,11 @@ interface Props {
     decorationsMuted?: boolean;
   }) => void;
   onOpenSettings?: () => void;
+  // #1705/#1706: the formatting bar's Display menu, mirrored in the popup for
+  // the same reachability reason as Decorations (the bar can be hidden).
+  textSize?: TextSize;
+  editorMeasure?: EditorMeasure;
+  onUpdateDisplay?: (partial: DisplayPrefsUpdate) => void;
   // 1.11 / A8: whether the persistent formatting bar is currently shown. The
   // popup always surfaces a swap control that toggles it (hide when shown, show
   // when hidden) — so the bar is reachable without the command palette /
@@ -109,6 +116,9 @@ let {
   decorationsMuted = false,
   onUpdateDecorations,
   onOpenSettings,
+  textSize = "m",
+  editorMeasure = "comfortable",
+  onUpdateDisplay,
   formattingBarVisible = true,
   onToggleFormattingBar,
   reduceMotion = false,
@@ -1060,7 +1070,7 @@ function handleComposerKeyDown(e: KeyboardEvent) {
   <!-- Selection popup (A8 two-pill, #798). FORMAT state: the outer shell is
        chrome-less and hosts a column of TWO .tandem-floating-pill capsules — a
        format-controls capsule (FormattingToolbar variant="popup" + the mirrored
-       Decorations control + a hide/show-bar swap) over an annotate capsule
+       Decorations and Display controls + a hide/show-bar swap) over an annotate capsule
        (highlight swatches + Annotate) — separated by a 5px gap the editor shows
        through. ANNOTATE state: the shell itself becomes the note-popover card
        (re-acquiring the .tandem-floating-pill chrome, P1-tweened) around the
@@ -1100,7 +1110,8 @@ function handleComposerKeyDown(e: KeyboardEvent) {
            click can't blur → collapse the selection → drop capturedRange. -->
       <div class="popup-format-col" onmousedown={(e) => e.preventDefault()} role="presentation">
         <!-- Capsule 1: full mark/block control set (no Undo/Redo — those stay on
-             the bar + Ctrl+Z/Y) + the mirrored Decorations control + bar-swap. -->
+             the bar + Ctrl+Z/Y) + the mirrored Decorations and Display controls +
+             bar-swap. -->
         <div class="pill-row tandem-floating-pill" data-testid="popup-format-row">
           <FormattingToolbar {editor} variant="popup" {onNotify} />
           {#if onUpdateDecorations}
@@ -1124,6 +1135,18 @@ function handleComposerKeyDown(e: KeyboardEvent) {
                 onUpdate={onUpdateDecorations}
                 {onOpenSettings}
               />
+            </div>
+          {/if}
+          {#if onUpdateDisplay}
+            <div class="tandem-toolbar-sep"></div>
+            <!-- Same mousedown guard as Decorations: a pick must not blur the
+                 editor and collapse the selection the popup is anchored to. -->
+            <div
+              style="display: inline-flex; align-items: center;"
+              onmousedown={(e) => e.preventDefault()}
+              role="presentation"
+            >
+              <DisplayMenu {textSize} {editorMeasure} onUpdate={onUpdateDisplay} />
             </div>
           {/if}
           {#if onToggleFormattingBar}

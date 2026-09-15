@@ -2317,6 +2317,9 @@ const shouldShowModelPicker = $derived(
       decorationsMuted={settingsState.settings.decorationsMuted}
       onUpdateDecorations={(partial) => settingsState.updateSettings(partial)}
       onOpenSettings={openSettingsModalWithAck}
+      textSize={settingsState.settings.textSize}
+      editorMeasure={settingsState.settings.editorMeasure}
+      onUpdateDisplay={(partial) => settingsState.updateSettings(partial)}
       formattingBarVisible={settingsState.settings.formattingBarVisible}
       onToggleFormattingBar={() =>
         settingsState.updateSettings({
@@ -2338,6 +2341,9 @@ const shouldShowModelPicker = $derived(
         decorationsMuted={settingsState.settings.decorationsMuted}
         onUpdateDecorations={(partial) => settingsState.updateSettings(partial)}
         onOpenSettings={openSettingsModalWithAck}
+        textSize={settingsState.settings.textSize}
+        editorMeasure={settingsState.settings.editorMeasure}
+        onUpdateDisplay={(partial) => settingsState.updateSettings(partial)}
         sourceViewActive={documentWorkspace.inSourceView}
         onToggleSourceView={documentWorkspace.canSourceView || documentWorkspace.inSourceView
           ? () => void documentWorkspace.requestToggleSourceView()
@@ -2981,6 +2987,7 @@ const shouldShowModelPicker = $derived(
             documentWorkspace.saveDocumentTargetAfterSourceCommit(documentId, intent, ydoc)}
           onCommandsChange={documentWorkspace.updateSourceViewCommands}
           onExit={documentWorkspace.exitSourceView}
+          lineWrap={settingsState.settings.sourceViewLineWrap}
         />
       {/key}
     {:else}
