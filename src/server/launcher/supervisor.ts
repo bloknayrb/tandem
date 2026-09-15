@@ -207,6 +207,9 @@ interface SpawnPlan {
   cwdFromOverride: boolean;
   sessionId: string;
   resuming: boolean;
+  /** The resumed session was left owing a sign-in re-check (#1780) by an
+   * earlier supervisor — see `loginRecheckOwed`. Always false when fresh. */
+  loginRecheckOwed: boolean;
 }
 
 /** The claude-code entry the supervisor will actually launch. `apply: "skip"`
@@ -390,6 +393,12 @@ interface SavedSession {
    * can tell that case from a real relocation, which is why the file should
    * eventually be written atomically. */
   cwd?: string;
+  /** Present (and `true`) only while this session owes a sign-in re-check
+   * (#1780). Persisted rather than held in memory alone because the sign-in
+   * trip's SIGTERM keeps this file, so after a Tandem restart the next launch
+   * RESUMES — and a resumed spawn writes no turn unless something says it owes
+   * one. Anything but a literal `true` reads as not owed. */
+  loginRecheckOwed?: boolean;
 }
 
 /**
@@ -721,6 +730,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * Set only by the sign-in trip; cleared only by a `result` that is not a
    * sign-in refusal. Deliberately untouched by `stop()`, `stopInternal` and
    * `respawn`: a stop between the trip and Check again must not disarm it.
+   *
+   * Mirrored into the saved session file (`persistLoginRecheck`) and read back
+   * by `buildPlan`, because this closure does not outlive Tandem: quit before
+   * signing in, and the next launch's supervisor would otherwise resume the
+   * kept session with the flag false, write nothing, and read as ready with no
+   * sign-in prompt until some unrelated wake finally drew the refusal.
    */
   let loginRecheckOwed = false;
 
@@ -767,7 +782,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   function readSavedSession(): SavedSession | undefined {
     try {
       const raw = fs.readFileSync(sessionFilePath(), "utf8");
-      const parsed = JSON.parse(raw) as { sessionId?: unknown; cwd?: unknown };
+      const parsed = JSON.parse(raw) as {
+        sessionId?: unknown;
+        cwd?: unknown;
+        loginRecheckOwed?: unknown;
+      };
       if (typeof parsed.sessionId !== "string") return undefined;
       // UUID-shape gate: anything else is either corruption or tampering.
       if (!UUID_V4_PATTERN.test(parsed.sessionId)) {
@@ -788,6 +807,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         // Deliberately `undefined` rather than defaulted — `sessionCwdMatches`
         // decides what an unknown origin means, in one place.
         cwd: typeof parsed.cwd === "string" ? parsed.cwd : undefined,
+        loginRecheckOwed: parsed.loginRecheckOwed === true,
       };
     } catch (err) {
       // ENOENT is the normal "no session yet" path and must stay silent.
@@ -803,15 +823,31 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
   /** `cwd` is written alongside the id because a Claude Code session is only
    * resumable from the directory it was created in — see `sessionCwdMatches`. */
-  function writeSavedSession(sessionId: string, cwd: string): void {
+  function writeSavedSession(
+    sessionId: string,
+    cwd: string | undefined,
+    loginRecheck = false,
+  ): void {
+    const record: SavedSession = { sessionId, cwd };
+    if (loginRecheck) record.loginRecheckOwed = true;
     try {
-      fs.writeFileSync(sessionFilePath(), JSON.stringify({ sessionId, cwd }, null, 2), {
+      fs.writeFileSync(sessionFilePath(), JSON.stringify(record, null, 2), {
         encoding: "utf8",
         mode: 0o600,
       });
     } catch (err) {
       console.error("[Launcher] Failed to persist session id:", err);
     }
+  }
+
+  /** Record or drop `loginRecheckOwed` on the saved session (#1780), keeping
+   * its id and its CREATED cwd as they are. A no-op when the file no longer
+   * names `sessionId` — it was cleared or replaced, so the next spawn is fresh
+   * and its bootstrap turn is the re-check anyway. */
+  function persistLoginRecheck(sessionId: string, owed: boolean): void {
+    const saved = readSavedSession();
+    if (saved?.sessionId !== sessionId || saved.loginRecheckOwed === owed) return;
+    writeSavedSession(saved.sessionId, saved.cwd, owed);
   }
 
   function clearSavedSession(): void {
@@ -1026,9 +1062,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // file whenever `resuming` is false, so a mismatch self-heals.
     let sessionId: string;
     let resuming: boolean;
+    let loginRecheck = false;
     if (saved !== undefined && sessionCwdMatches(saved.cwd, cwd)) {
       sessionId = saved.sessionId;
       resuming = true;
+      loginRecheck = saved.loginRecheckOwed === true;
     } else {
       if (saved !== undefined) {
         console.error(
@@ -1039,7 +1077,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       resuming = false;
     }
 
-    return { integration, cwd, cwdFromOverride: fromOverride, sessionId, resuming };
+    return {
+      integration,
+      cwd,
+      cwdFromOverride: fromOverride,
+      sessionId,
+      resuming,
+      loginRecheckOwed: loginRecheck,
+    };
   }
 
   async function spawnOnce(plan: SpawnPlan): Promise<void> {
@@ -1347,7 +1392,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // so it discharges any owed wake by itself.
       sendTurn(SUPERVISOR_INITIAL_PROMPT);
       wakeOwedAcrossSpawns = false;
-    } else if (wakeOwedAcrossSpawns || loginRecheckOwed) {
+    } else {
+      // A re-check owed by a previous Tandem run (see
+      // `SavedSession.loginRecheckOwed`), adopted so a signed-in `result`
+      // clears the persisted copy too.
+      if (plan.loginRecheckOwed) loginRecheckOwed = true;
+    }
+    if (plan.resuming && (wakeOwedAcrossSpawns || loginRecheckOwed)) {
       // `loginRecheckOwed` (#1780): a resumed CLI is silent until it is sent a
       // turn, so Check again after a sign-in refusal must send one. A fresh
       // spawn's bootstrap turn above already is that re-check.
@@ -1422,6 +1473,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
             lastError = "needs-login";
             breakerTripped = true;
             loginRecheckOwed = true;
+            persistLoginRecheck(plan.sessionId, true);
             console.error(
               "[Launcher] Claude Code is not signed in — not retrying. Run `claude` in a terminal to sign in, then use Check again.",
             );
@@ -1433,7 +1485,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
           }
           return;
         }
-        if (child === spawned) loginRecheckOwed = false;
+        if (child === spawned && loginRecheckOwed) {
+          loginRecheckOwed = false;
+          persistLoginRecheck(plan.sessionId, false);
+        }
 
         // NOTE (#1267): `errors` is NOT confirmed to exist on the CLI's
         // `result` envelope — it can only be settled against a running `claude`

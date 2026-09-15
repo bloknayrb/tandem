@@ -776,6 +776,50 @@ describe("#1780 — a Claude Code that is not signed in", () => {
     const child2 = await nthChild(2);
     expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
   });
+
+  function savedSession(): Record<string, unknown> {
+    return JSON.parse(fs.readFileSync(path.join(baseDir, "launcher-session.json"), "utf8"));
+  }
+
+  // Review finding: the flag lived only in the supervisor's closure, while the
+  // trip's SIGTERM keeps the saved session — so quitting Tandem before signing
+  // in made the next launch resume silently and read as ready.
+  it("the owed re-check survives a Tandem restart", async () => {
+    const first = makeSupervisor().sup;
+    await tripFresh(first);
+    await first.stop();
+    expect(savedSession()).toMatchObject({ cwd: cwdDir, loginRecheckOwed: true });
+
+    const { sup } = makeSupervisor();
+    await sup.start();
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+
+    pushJson(child2, INIT);
+    pushJson(child2, NOT_SIGNED_IN);
+    await waitFor(() => sup.status().lastError === "needs-login", "the trip after restart");
+    await expectNoMoreSpawns(2);
+  });
+
+  it("a signed-in answer after a restart drops the persisted re-check", async () => {
+    const first = makeSupervisor().sup;
+    await tripFresh(first);
+    await first.stop();
+
+    const second = makeSupervisor().sup;
+    await second.start();
+    const child2 = await nthChild(2);
+    pushJson(child2, INIT);
+    pushJson(child2, RESULT_OK);
+    await settle();
+    expect(savedSession()).not.toHaveProperty("loginRecheckOwed");
+    await second.stop();
+
+    const third = makeSupervisor().sup;
+    await third.start();
+    const child3 = await nthChild(3);
+    expect(texts(child3)).toEqual([]);
+  });
 });
 
 // --- A superseded spawn's late exit -----------------------------------------------
