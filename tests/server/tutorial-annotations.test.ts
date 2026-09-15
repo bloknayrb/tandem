@@ -60,7 +60,7 @@ describe("tutorial-annotations tombstone guard (#1696)", () => {
     recordTombstone(docHash(p), "tutorial-comment-1", 1);
     const doc = makeMarkdownDoc(readFileSync(FIXTURE_PATH, "utf8"));
     try {
-      injectTutorialAnnotations(doc, p);
+      expect(injectTutorialAnnotations(doc, p), "a skipped seed is not a re-creation").toBe(0);
       const map = getAnnotationsMap(doc);
       expect(map.has("tutorial-comment-1")).toBe(false);
       const others = TUTORIAL_ANNOTATIONS.map((d) => d.id).filter(
@@ -80,7 +80,9 @@ describe("tutorial-annotations tombstone guard (#1696)", () => {
     recordTombstone(docHash(p), "tutorial-comment-1", 1);
     const doc = makeMarkdownDoc(readFileSync(FIXTURE_PATH, "utf8"));
     try {
-      injectTutorialAnnotations(doc, p, { replay: true });
+      // The count of re-created TOMBSTONED seeds, which the open path uses to
+      // decide whether to persist the replay: one tombstone, so one.
+      expect(injectTutorialAnnotations(doc, p, { replay: true })).toBe(1);
       const map = getAnnotationsMap(doc);
       const seed = map.get("tutorial-comment-1") as Annotation | undefined;
       expect(seed, "replay brings the deleted seed back").toBeDefined();

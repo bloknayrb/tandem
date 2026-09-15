@@ -70,6 +70,7 @@ import { removeAnnotationRecord } from "../../src/server/annotations/lifecycle.j
 import {
   closeStore,
   createStore,
+  envelopePath,
   resetForTesting as storeReset,
 } from "../../src/server/annotations/store.js";
 import { getTombstones } from "../../src/server/annotations/sync.js";
@@ -407,10 +408,11 @@ describe("tutorial seeds across a reopen (#1696)", () => {
     for (const { id } of TUTORIAL_ANNOTATIONS) {
       expect(map.has(id), `replay re-injects ${id}`).toBe(true);
     }
+    await expectReplaySurvivesWithoutSession(filePath, resolved, replayed.documentId);
   });
 
   it("Replay tutorial (force) brings deleted seeds back when welcome.md is still open", async () => {
-    const { filePath } = await openWelcomeAndDeleteSeeds();
+    const { filePath, resolved } = await openWelcomeAndDeleteSeeds();
 
     const replayed = await openFromDisk(filePath, { force: true });
     expect(replayed.kind).toBe("force-reloaded");
@@ -418,7 +420,44 @@ describe("tutorial seeds across a reopen (#1696)", () => {
     for (const { id } of TUTORIAL_ANNOTATIONS) {
       expect(map.has(id), `replay re-injects ${id}`).toBe(true);
     }
+    await expectReplaySurvivesWithoutSession(filePath, resolved, replayed.documentId);
   });
+
+  /**
+   * The replay is durable, not carried by the session file alone. The seeds
+   * are `withInternal`, so without an explicit snapshot the envelope holds only
+   * the four tombstones; the session file then carries the rev-above-tombstone
+   * seeds, and a reopen with that session gone (source edited, or expired)
+   * deleted the replayed seeds again. Measured before the fix: envelope
+   * `annotations: []` after the replayed doc closed.
+   */
+  async function expectReplaySurvivesWithoutSession(
+    filePath: string,
+    resolved: string,
+    documentId: string,
+  ): Promise<void> {
+    await closeStore(docHash(resolved));
+    expect((await closeDocumentById(documentId)).success).toBe(true);
+
+    const env = JSON.parse(await fs.readFile(envelopePath(docHash(resolved)), "utf8")) as {
+      annotations: { id: string; rev: number }[];
+      tombstones: { id: string; rev: number }[];
+    };
+    for (const { id } of TUTORIAL_ANNOTATIONS) {
+      const alive = env.annotations.find((a) => a.id === id);
+      const stone = env.tombstones.find((t) => t.id === id);
+      expect(alive, `the envelope holds the replayed ${id}`).toBeDefined();
+      expect(stone, `the envelope still holds ${id}'s tombstone`).toBeDefined();
+      expect(alive!.rev, `${id} outranks its tombstone`).toBeGreaterThan(stone!.rev);
+    }
+
+    await fs.rm(SESSION_DIR, { recursive: true, force: true });
+    const reopened = await openFromDisk(filePath);
+    const map = getOrCreateDocument(reopened.documentId).getMap(Y_MAP_ANNOTATIONS);
+    for (const { id } of TUTORIAL_ANNOTATIONS) {
+      expect(map.has(id), `a session-less reopen keeps the replayed ${id}`).toBe(true);
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------

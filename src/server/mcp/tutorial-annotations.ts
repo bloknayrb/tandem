@@ -64,27 +64,33 @@ export const TUTORIAL_ANNOTATIONS: readonly TutorialAnnotationDef[] = [
  * tutorial, which opens welcome.md with `force: true`). It re-creates a
  * tombstoned seed instead of skipping it, minted at a `rev` ABOVE its tombstone
  * so a later merge reads it as a resurrection rather than deleting it again.
- * The tombstone itself is left in the ledger: the replayed seed is
- * `withInternal` (not durable), so a later ordinary reopen still honours the
- * user's deletion.
+ *
+ * Returns how many TOMBSTONED seeds it re-created. The write is `withInternal`
+ * (`DURABLE_SKIP`), so nothing queues the resurrection to disk, and the
+ * envelope keeps the tombstone as the newest record for that id. The only other
+ * carrier is the session file, which a changed source file or session expiry
+ * discards; a reopen after that deleted the replayed seeds again. So a caller
+ * that gets a non-zero count must persist a snapshot (`persistEnvelopeNow`)
+ * for the replay to outlive the session.
  */
 export function injectTutorialAnnotations(
   doc: Y.Doc,
   filePath: string,
   options?: { replay?: boolean },
-): void {
+): number {
   const map = doc.getMap(Y_MAP_ANNOTATIONS);
 
   const fullText = extractText(doc);
   if (!fullText) {
     console.error("[tutorial] Y.Doc has no text content — cannot inject tutorial annotations");
-    return;
+    return 0;
   }
 
   const deleted = new Map(getTombstones(docHash(filePath)).map((t) => [t.id, t]));
   const replay = options?.replay === true;
 
   let injected = 0;
+  let resurrected = 0;
   withInternal(doc, () => {
     for (const def of TUTORIAL_ANNOTATIONS) {
       const tombstone = deleted.get(def.id);
@@ -154,10 +160,12 @@ export function injectTutorialAnnotations(
 
       map.set(def.id, annotation);
       injected++;
+      if (tombstone !== undefined) resurrected++;
     }
   });
 
   console.error(
     `[tutorial] Injected ${injected}/${TUTORIAL_ANNOTATIONS.length} tutorial annotations`,
   );
+  return resurrected;
 }

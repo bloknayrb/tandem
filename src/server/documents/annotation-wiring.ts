@@ -14,8 +14,8 @@ import { generateNotificationId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { recoverRenamedEnvelope } from "../annotations/rename-recovery.js";
 import { annotationFileExists, createStore } from "../annotations/store.js";
-import { loadAndMerge } from "../annotations/sync.js";
-import { setFileSyncContext } from "../events/queue.js";
+import { loadAndMerge, persistSnapshot } from "../annotations/sync.js";
+import { getFileSyncContext, setFileSyncContext } from "../events/queue.js";
 import { collectAnnotations, refreshAllRanges } from "../mcp/annotations.js";
 import { pushNotification } from "../notifications.js";
 
@@ -84,6 +84,27 @@ export function annotationsById(
   filePath: string,
 ): ReadonlyMap<string, Annotation> {
   return new Map(collectAnnotations(map, docHash(filePath)).map((a) => [a.id, a]));
+}
+
+/**
+ * Write the document's current annotation state to its durable envelope now,
+ * for a write whose origin the durable observer skips (#1696: Settings > Replay
+ * tutorial re-creates tombstoned seeds under `withInternal`, and without this
+ * the resurrection lives only in the session file).
+ *
+ * A no-op when the document has no file-sync context (the store feature is off,
+ * or `wireAnnotationStore` failed). A failed write is logged, never thrown: the
+ * store has already recorded and surfaced it, and an open must not fail on
+ * annotation durability.
+ */
+export async function persistEnvelopeNow(id: string, doc: Y.Doc, filePath: string): Promise<void> {
+  const ctx = getFileSyncContext(id);
+  if (ctx === undefined) return;
+  try {
+    await persistSnapshot(ctx.store, doc, ctx.docHash, filePath);
+  } catch (err) {
+    console.error("[Tandem] persistEnvelopeNow failed for %s (%s):", id, filePath, err);
+  }
 }
 
 /**

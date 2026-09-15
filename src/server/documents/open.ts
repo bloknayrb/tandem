@@ -111,7 +111,12 @@ import {
   sourceFileChanged,
 } from "../session/manager.js";
 import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
-import { annotationsById, repairClonedAnchors, wireAnnotationStore } from "./annotation-wiring.js";
+import {
+  annotationsById,
+  persistEnvelopeNow,
+  repairClonedAnchors,
+  wireAnnotationStore,
+} from "./annotation-wiring.js";
 import { ensureAutoSave } from "./autosave.js";
 import { flagExternalConflict } from "./conflict.js";
 import { markDirty, registerDirtyObserver } from "./dirty.js";
@@ -399,9 +404,14 @@ export async function openFromDisk(
       // Settings > Replay tutorial force-opens welcome.md. The clear above took
       // every seed the envelope did not hold (seeds are `withInternal`, never
       // durable) and nothing else re-creates them, so replay here too, past
-      // any tombstone the user's deletions left (#1696).
-      if (isWelcomeDoc(resolved)) {
-        injectTutorialAnnotations(doc, resolved, { replay: true });
+      // any tombstone the user's deletions left (#1696). A re-created
+      // tombstoned seed is persisted, or the envelope's tombstone deletes it
+      // again on the first reopen that has no session file to carry it.
+      if (
+        isWelcomeDoc(resolved) &&
+        injectTutorialAnnotations(doc, resolved, { replay: true }) > 0
+      ) {
+        await persistEnvelopeNow(existingId, doc, resolved);
       }
       ensureAutoSave();
       return {
@@ -520,8 +530,13 @@ export async function openFromDisk(
   // `force` on a doc that was not open lands here, and is Settings > Replay
   // tutorial's request to bring deleted seeds back, so it replays past the
   // tombstones.
-  if (isWelcomeDoc(resolved)) {
-    injectTutorialAnnotations(doc, resolved, { replay: options?.force === true });
+  // A replay that re-created a tombstoned seed is persisted, as in the
+  // force-reload branch above.
+  if (
+    isWelcomeDoc(resolved) &&
+    injectTutorialAnnotations(doc, resolved, { replay: options?.force === true }) > 0
+  ) {
+    await persistEnvelopeNow(id, doc, resolved);
   }
 
   return {
