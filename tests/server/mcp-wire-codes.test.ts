@@ -12,9 +12,12 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import JSZip from "jszip";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as Y from "yjs";
+import {
+  createMinimalDocx,
+  parseResult,
+  seedAcceptedSuggestion,
+} from "../helpers/wire-code-fixtures.js";
 
 // vi.mock factories are hoisted above module-level code. The app-data dir name
 // carries the literal `tandem` (platform.test.ts keys on it), and it keeps the
@@ -47,16 +50,9 @@ const { populateYDoc, registerDocumentTools } = await import("../../src/server/m
 const { getOpenDocs } = await import("../../src/server/mcp/document-service.js");
 const { registerApplyTools } = await import("../../src/server/mcp/docx-apply.js");
 const { getOrCreateDocument } = await import("../../src/server/yjs/provider.js");
-const { Y_MAP_ANNOTATIONS } = await import("../../src/shared/constants.js");
 const { timeoutMs } = await import("../helpers/timing.js");
 
 const REAL_APPLY_TIMEOUT_MS = timeoutMs(60_000, 300_000);
-
-function parseResult(result: Awaited<ReturnType<Client["callTool"]>>) {
-  const content = result.content as Array<{ type: string; text?: string }>;
-  const text = content.find((c) => c.type === "text")?.text;
-  return text ? JSON.parse(text) : null;
-}
 
 async function setupClient(): Promise<Client> {
   const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
@@ -88,28 +84,6 @@ function registerDoc(id: string, text: string, opts: DocOpts = {}) {
   });
   setActiveDocId(id);
   return ydoc;
-}
-
-/** A minimal, structurally valid .docx with one body paragraph (docx-apply.test.ts). */
-async function createTestDocx(text: string): Promise<Buffer> {
-  const zip = new JSZip();
-  zip.file(
-    "word/document.xml",
-    `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`,
-  );
-  zip.file(
-    "[Content_Types].xml",
-    `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/></Types>`,
-  );
-  zip.file(
-    "_rels/.rels",
-    `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`,
-  );
-  zip.file(
-    "word/_rels/document.xml.rels",
-    `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>`,
-  );
-  return Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));
 }
 
 let client: Client;
@@ -206,26 +180,9 @@ describe("tandem_applyChanges missing backup directory → FILE_NOT_FOUND (#1823
     "answers FILE_NOT_FOUND, not INTERNAL_ERROR, and leaves the file alone",
     async () => {
       const docPath = path.join(tmpDir, "doc.docx");
-      await fsp.writeFile(docPath, await createTestDocx("Hello world"));
-      const doc = getOrCreateDocument("apply-missing-dir");
-      const paragraph = new Y.XmlElement("paragraph");
-      const text = new Y.XmlText();
-      paragraph.insert(0, [text]);
-      doc.getXmlFragment("default").insert(0, [paragraph]);
-      text.insert(0, "Hello world");
-      // One accepted suggestion, so the backup directory is the only thing that
-      // can stop the write (not NO_SUGGESTIONS).
-      doc.getMap(Y_MAP_ANNOTATIONS).set("a1", {
-        id: "a1",
-        type: "comment",
-        author: "claude",
-        status: "accepted",
-        range: { from: 0, to: 5 },
-        content: "swap it",
-        suggestedText: "Howdy",
-        textSnapshot: "Hello",
-        timestamp: Date.now(),
-      });
+      await fsp.writeFile(docPath, await createMinimalDocx("Hello world"));
+      // The backup directory is the only thing that can stop the write.
+      seedAcceptedSuggestion(getOrCreateDocument("apply-missing-dir"));
       addDoc("apply-missing-dir", {
         id: "apply-missing-dir",
         filePath: docPath,

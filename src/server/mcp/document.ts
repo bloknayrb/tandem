@@ -1424,19 +1424,13 @@ export function registerDocumentTools(server: McpServer): void {
       // One code per condition, matching `tandem_open` and `tandem_applyChanges`
       // (#1823): EACCES is a permission refusal; EBUSY/EPERM are the shapes a
       // file held open by another program (Word, on Windows) takes.
-      if (result.errorCode === "EACCES") {
-        return mcpError("PERMISSION_DENIED", result.reason ?? "Save failed", {
-          errorCode: result.errorCode,
-        });
-      }
-      if (result.errorCode === "EBUSY" || result.errorCode === "EPERM") {
-        return mcpError("FILE_LOCKED", result.reason ?? "Save failed", {
-          errorCode: result.errorCode,
-        });
-      }
-      return mcpError("FORMAT_ERROR", result.reason ?? "Save failed", {
-        errorCode: result.errorCode,
-      });
+      const code =
+        result.errorCode === "EACCES"
+          ? "PERMISSION_DENIED"
+          : result.errorCode === "EBUSY" || result.errorCode === "EPERM"
+            ? "FILE_LOCKED"
+            : "FORMAT_ERROR";
+      return mcpError(code, result.reason ?? "Save failed", { errorCode: result.errorCode });
     }),
   );
 
