@@ -21,6 +21,8 @@ const _unlinkSpy = vi.fn().mockResolvedValue(undefined);
 const _lstatSpy = vi.fn();
 const _realpathSpy = vi.fn();
 const _statSpy = vi.fn();
+const _closeSpy = vi.fn().mockResolvedValue(undefined);
+const _openSpy = vi.fn().mockResolvedValue({ close: _closeSpy });
 
 // ── Module mocks ─────────────────────────────────────────────────────────────
 
@@ -38,6 +40,7 @@ vi.mock("node:fs", async (importOriginal) => {
       lstat: _lstatSpy,
       realpath: _realpathSpy,
       stat: _statSpy,
+      open: _openSpy,
     },
   };
 });
@@ -212,6 +215,137 @@ describe("rewriteJson", () => {
     expect(result).toBe(true);
     expect(_writeFileSpy).toHaveBeenCalledOnce();
     expect(_renameSpy).toHaveBeenCalledOnce();
+  });
+});
+
+// ── rewriteJson: the cross-language Cowork lock (#1600) ─────────────────────
+
+/**
+ * Every Rust writer of the three Cowork files takes `with_locked_json`'s lock on
+ * a sibling `.<file>.tandem-lock`; the npm scrub was the one writer that did
+ * not. These pin the Node half against mocks. The real interop — that libuv's
+ * `UV_FS_O_EXLOCK` (`0x10000000`) open actually excludes fs2 and vice versa — is
+ * `src-tauri/src/cowork_atomic_json.rs`'s `lock_interop_tests`, on the windows
+ * `rust-test` leg.
+ */
+describe("rewriteJson — takes the Cowork lock (#1600)", () => {
+  const FILE = "/fake/installed_plugins.json";
+  const LOCK = path.join("/fake", ".installed_plugins.json.tandem-lock");
+  const UV_FS_O_EXLOCK = 0x10000000;
+  const withTandem = JSON.stringify({ mcpServers: { tandem: {} } });
+
+  const makeLogger = () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    warnings: vi.fn(() => 0),
+    close: async () => {},
+  });
+  const dropTandem = (obj: Record<string, unknown>) => {
+    const servers = obj.mcpServers as Record<string, unknown> | undefined;
+    if (!servers || !("tandem" in servers)) return false;
+    delete servers.tandem;
+    return true;
+  };
+  const errno = (code: string) => Object.assign(new Error(code), { code });
+
+  let fsConstants: typeof import("node:fs").constants;
+
+  beforeEach(async () => {
+    fsConstants = (await vi.importActual<typeof import("node:fs")>("node:fs")).constants;
+    _readFileSpy.mockReset().mockResolvedValue(withTandem);
+    _writeFileSpy.mockReset().mockResolvedValue(undefined);
+    _renameSpy.mockReset().mockResolvedValue(undefined);
+    _unlinkSpy.mockReset().mockResolvedValue(undefined);
+    _closeSpy.mockReset().mockResolvedValue(undefined);
+    _openSpy.mockReset().mockResolvedValue({ close: _closeSpy });
+  });
+
+  it("opens the sibling lockfile with share-mode-0 flags", async () => {
+    const { rewriteJson } = await import("../../src/cli/uninstall-scrub.js");
+    await rewriteJson(FILE, dropTandem, makeLogger(), { sleep: vi.fn() });
+    expect(_openSpy).toHaveBeenCalledOnce();
+    expect(_openSpy).toHaveBeenCalledWith(
+      LOCK,
+      fsConstants.O_RDWR | fsConstants.O_CREAT | UV_FS_O_EXLOCK,
+    );
+  });
+
+  it("pre-checks unlocked, then re-reads and writes under the lock", async () => {
+    const { rewriteJson } = await import("../../src/cli/uninstall-scrub.js");
+    expect(await rewriteJson(FILE, dropTandem, makeLogger(), { sleep: vi.fn() })).toBe(true);
+    expect(_readFileSpy).toHaveBeenCalledTimes(2);
+    const [preRead, lockedRead] = _readFileSpy.mock.invocationCallOrder;
+    const order = [
+      preRead,
+      _openSpy.mock.invocationCallOrder[0],
+      lockedRead,
+      _writeFileSpy.mock.invocationCallOrder[0],
+      _renameSpy.mock.invocationCallOrder[0],
+      _closeSpy.mock.invocationCallOrder[0],
+    ];
+    expect(order.every((n) => typeof n === "number")).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  it("waits on Rust's backoff schedule while the lockfile is busy", async () => {
+    _openSpy
+      .mockRejectedValueOnce(errno("EBUSY"))
+      .mockRejectedValueOnce(errno("EBUSY"))
+      .mockResolvedValueOnce({ close: _closeSpy });
+    const sleep = vi.fn();
+    const { rewriteJson } = await import("../../src/cli/uninstall-scrub.js");
+    expect(await rewriteJson(FILE, dropTandem, makeLogger(), { sleep })).toBe(true);
+    expect(sleep.mock.calls.map((c) => c[0])).toEqual([200, 500]);
+    expect(_writeFileSpy).toHaveBeenCalledOnce();
+  });
+
+  it("gives up with a thrown, path-only error when the lock stays busy", async () => {
+    _openSpy.mockRejectedValue(errno("EBUSY"));
+    const sleep = vi.fn();
+    const { rewriteJson } = await import("../../src/cli/uninstall-scrub.js");
+    await expect(rewriteJson(FILE, dropTandem, makeLogger(), { sleep })).rejects.toThrow(FILE);
+    expect(_readFileSpy).toHaveBeenCalledOnce();
+    expect(_writeFileSpy).not.toHaveBeenCalled();
+    expect(_renameSpy).not.toHaveBeenCalled();
+    const total = sleep.mock.calls.reduce((sum, c) => sum + (c[0] as number), 0);
+    expect(total).toBeGreaterThanOrEqual(30_000);
+  });
+
+  it("never writes without the lock when the lock open fails otherwise", async () => {
+    _openSpy.mockRejectedValueOnce(errno("EPERM"));
+    const sleep = vi.fn();
+    const { rewriteJson } = await import("../../src/cli/uninstall-scrub.js");
+    await expect(rewriteJson(FILE, dropTandem, makeLogger(), { sleep })).rejects.toThrow(FILE);
+    expect(_readFileSpy).toHaveBeenCalledOnce();
+    expect(_writeFileSpy).not.toHaveBeenCalled();
+    expect(_renameSpy).not.toHaveBeenCalled();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("returns false silently when the directory vanished before the lock", async () => {
+    _openSpy.mockRejectedValueOnce(errno("ENOENT"));
+    const logger = makeLogger();
+    const { rewriteJson } = await import("../../src/cli/uninstall-scrub.js");
+    expect(await rewriteJson(FILE, dropTandem, logger, { sleep: vi.fn() })).toBe(false);
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(_writeFileSpy).not.toHaveBeenCalled();
+    expect(_renameSpy).not.toHaveBeenCalled();
+  });
+
+  it("creates no lockfile when the data file is absent", async () => {
+    _readFileSpy.mockReset().mockRejectedValue(makeNotFoundError());
+    const logger = makeLogger();
+    const { rewriteJson } = await import("../../src/cli/uninstall-scrub.js");
+    expect(await rewriteJson(FILE, dropTandem, logger, { sleep: vi.fn() })).toBe(false);
+    expect(_openSpy).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("creates no lockfile when there is no Tandem entry to remove", async () => {
+    const { rewriteJson } = await import("../../src/cli/uninstall-scrub.js");
+    expect(await rewriteJson(FILE, () => false, makeLogger(), { sleep: vi.fn() })).toBe(false);
+    expect(_openSpy).not.toHaveBeenCalled();
   });
 });
 
