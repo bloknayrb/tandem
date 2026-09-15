@@ -51,6 +51,11 @@ const DOC_HASH = "sha256:awareness-tools";
 // unless they are specifically exercising the cross-document collision.
 const DOC_KEY = "doc-awareness-tests";
 
+/** A Tandem-mode poll context for `DOC_KEY` with nothing channel-emitted; override per test. */
+function ctx(overrides: Partial<InboxPollContext> = {}): InboxPollContext {
+  return { modeState: "tandem", documentId: DOC_KEY, wasChannelEmitted: () => false, ...overrides };
+}
+
 function setupDoc(id: string, text: string) {
   const ydoc = getOrCreateDocument(id);
   populateYDoc(ydoc, text);
@@ -136,11 +141,7 @@ describe("processInboxAnnotations", () => {
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, {
-      modeState: "tandem",
-      documentId: DOC_KEY,
-      wasChannelEmitted: () => false,
-    });
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, ctx());
     // Only comments are surfaced; highlights and notes are excluded
     expect(result.userActions).toHaveLength(1);
     expect(result.userActions.find((a) => a.type === "comment")).toBeTruthy();
@@ -161,11 +162,7 @@ describe("processInboxAnnotations", () => {
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, {
-      modeState: "tandem",
-      documentId: DOC_KEY,
-      wasChannelEmitted: () => false,
-    });
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, ctx());
     expect(result.userResponses).toHaveLength(1);
     expect(result.userResponses[0].status).toBe("accepted");
   });
@@ -179,11 +176,7 @@ describe("processInboxAnnotations", () => {
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, {
-      modeState: "tandem",
-      documentId: DOC_KEY,
-      wasChannelEmitted: () => false,
-    });
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, ctx());
     expect(result.userActions).toHaveLength(0);
     expect(result.userResponses).toHaveLength(0);
   });
@@ -197,18 +190,10 @@ describe("processInboxAnnotations", () => {
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const first = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, {
-      modeState: "tandem",
-      documentId: DOC_KEY,
-      wasChannelEmitted: () => false,
-    });
+    const first = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, ctx());
     expect(first.userActions).toHaveLength(1);
 
-    const second = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, {
-      modeState: "tandem",
-      documentId: DOC_KEY,
-      wasChannelEmitted: () => false,
-    });
+    const second = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, ctx());
     expect(second.userActions).toHaveLength(0);
   });
 
@@ -231,7 +216,7 @@ describe("processInboxAnnotations", () => {
       extractText(ydoc),
       surfaced,
       (anns) => anns,
-      { modeState: "tandem", documentId: DOC_KEY, wasChannelEmitted: () => false },
+      ctx(),
     );
     expect(first.userActions).toHaveLength(1);
 
@@ -243,11 +228,9 @@ describe("processInboxAnnotations", () => {
       extractText(ydoc),
       surfaced,
       (anns) => anns,
-      {
-        modeState: "tandem",
-        documentId: DOC_KEY,
+      ctx({
         wasChannelEmitted: (payloadId) => payloadId === getAnnotationEditedChannelKey(id, 2000),
-      },
+      }),
     );
 
     expect(second.userActions).toHaveLength(1);
@@ -296,7 +279,7 @@ describe("processInboxAnnotations", () => {
       extractText(ydoc),
       new Map<string, number>(),
       (anns) => anns,
-      { modeState: "tandem", documentId: DOC_KEY, wasChannelEmitted: wasEmittedViaChannel },
+      ctx({ wasChannelEmitted: wasEmittedViaChannel }),
     );
 
     expect(out.userActions).toHaveLength(1);
@@ -334,7 +317,7 @@ describe("processInboxAnnotations", () => {
       extractText(ydoc),
       new Map<string, number>(),
       (anns) => anns,
-      { modeState: "tandem", documentId: DOC_KEY, wasChannelEmitted: wasEmittedViaChannel },
+      ctx({ wasChannelEmitted: wasEmittedViaChannel }),
     );
 
     expect(out.userActions).toHaveLength(1);
@@ -369,7 +352,7 @@ describe("processInboxAnnotations", () => {
       extractText(ydoc),
       surfaced,
       (anns) => anns,
-      { modeState: "tandem", documentId: DOC_KEY, wasChannelEmitted: () => false },
+      ctx(),
     );
 
     const ann = map.get(id) as Annotation;
@@ -380,7 +363,7 @@ describe("processInboxAnnotations", () => {
       extractText(ydoc),
       surfaced,
       (anns) => anns,
-      { modeState: "tandem", documentId: DOC_KEY, wasChannelEmitted: () => false },
+      ctx(),
     );
 
     expect(second.userActions).toHaveLength(1);
@@ -420,7 +403,7 @@ describe("processInboxAnnotations", () => {
       // The defeating implementation, verbatim in spirit: ignore the argument,
       // return everything.
       () => allAnns,
-      { modeState: "tandem", documentId: DOC_KEY, wasChannelEmitted: () => false },
+      ctx(),
     );
 
     expect(
@@ -474,7 +457,7 @@ describe("processInboxAnnotations", () => {
         batches.push(anns.map((a) => a.id));
         return anns;
       },
-      { modeState: "tandem", documentId: DOC_KEY, wasChannelEmitted: () => false },
+      ctx(),
     );
     expect(batches).toHaveLength(1);
     expect(batches[0], "the ledgered annotation is not a candidate").toStrictEqual([first, second]);
@@ -489,11 +472,7 @@ describe("processInboxAnnotations", () => {
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, {
-      modeState: "tandem",
-      documentId: DOC_KEY,
-      wasChannelEmitted: () => false,
-    });
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, ctx());
     expect(result.userActions[0].textSnippet).toBe("quick");
   });
 });
@@ -515,11 +494,13 @@ describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () =
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, {
-      modeState: "solo",
-      documentId: DOC_KEY,
-      wasChannelEmitted: () => false,
-    });
+    const result = processInboxAnnotations(
+      allAnns,
+      fullText,
+      surfaced,
+      (anns) => anns,
+      ctx({ modeState: "solo" }),
+    );
     expect(result.userActions).toHaveLength(0);
     // Ledger must be untouched — the item stays "unsurfaced" for release.
     expect(surfaced.has(`${DOC_KEY}:${id}`)).toBe(false);
@@ -537,29 +518,23 @@ describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () =
     const surfaced = new Map<string, number>();
 
     // Solo poll: held.
-    const solo = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, {
-      modeState: "solo",
-      documentId: DOC_KEY,
-      wasChannelEmitted: () => false,
-    });
+    const solo = processInboxAnnotations(
+      allAnns,
+      fullText,
+      surfaced,
+      (anns) => anns,
+      ctx({ modeState: "solo" }),
+    );
     expect(solo.userActions).toHaveLength(0);
 
     // Flip to Tandem: same annotation, same ledger — must now surface exactly once.
-    const released = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, {
-      modeState: "tandem",
-      documentId: DOC_KEY,
-      wasChannelEmitted: () => false,
-    });
+    const released = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, ctx());
     expect(released.userActions).toHaveLength(1);
     expect(released.userActions[0].id).toBe(id);
     expect(surfaced.get(`${DOC_KEY}:${id}`)).toBe(0);
 
     // A subsequent Tandem poll dedups normally (proves the release wrote the ledger).
-    const again = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, {
-      modeState: "tandem",
-      documentId: DOC_KEY,
-      wasChannelEmitted: () => false,
-    });
+    const again = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, ctx());
     expect(again.userActions).toHaveLength(0);
   });
 
@@ -576,11 +551,13 @@ describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () =
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, {
-      modeState: "solo",
-      documentId: DOC_KEY,
-      wasChannelEmitted: () => false,
-    });
+    const result = processInboxAnnotations(
+      allAnns,
+      fullText,
+      surfaced,
+      (anns) => anns,
+      ctx({ modeState: "solo" }),
+    );
     expect(result.userResponses).toHaveLength(1);
   });
 
@@ -599,11 +576,13 @@ describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () =
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (anns) => anns, {
-      modeState: "indeterminate",
-      documentId: DOC_KEY,
-      wasChannelEmitted: () => false,
-    });
+    const result = processInboxAnnotations(
+      allAnns,
+      fullText,
+      surfaced,
+      (anns) => anns,
+      ctx({ modeState: "indeterminate" }),
+    );
     // Marked-held stays held; the unmarked user comment surfaces normally.
     const surfacedIds = result.userActions.map((a) => a.id);
     expect(surfacedIds).toContain(freshId);
@@ -651,70 +630,54 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
   it("surfaces a user reply once in Tandem, then dedups", () => {
     const replies = [reply({})];
     const ledger = new Set<string>();
-    const first = collectInboxUserReplies([commentParent], fullText, () => replies, ledger, {
-      modeState: "tandem",
-      documentId: DOC_KEY,
-      wasChannelEmitted: () => false,
-    });
+    const first = collectInboxUserReplies([commentParent], fullText, () => replies, ledger, ctx());
     expect(first).toHaveLength(1);
     expect(first[0].id).toBe("r1");
     expect(first[0].textSnippet).toBe("Hello");
 
-    const second = collectInboxUserReplies([commentParent], fullText, () => replies, ledger, {
-      modeState: "tandem",
-      documentId: DOC_KEY,
-      wasChannelEmitted: () => false,
-    });
+    const second = collectInboxUserReplies([commentParent], fullText, () => replies, ledger, ctx());
     expect(second).toHaveLength(0);
   });
 
   it("holds a user reply in Solo (no surface, no ledger write) and releases on flip", () => {
     const replies = [reply({})];
     const ledger = new Set<string>();
-    const solo = collectInboxUserReplies([commentParent], fullText, () => replies, ledger, {
-      modeState: "solo",
-      documentId: DOC_KEY,
-      wasChannelEmitted: () => false,
-    });
+    const solo = collectInboxUserReplies(
+      [commentParent],
+      fullText,
+      () => replies,
+      ledger,
+      ctx({ modeState: "solo" }),
+    );
     expect(solo).toHaveLength(0);
     expect(ledger.has(`${DOC_KEY}:r1`)).toBe(false);
 
-    const released = collectInboxUserReplies([commentParent], fullText, () => replies, ledger, {
-      modeState: "tandem",
-      documentId: DOC_KEY,
-      wasChannelEmitted: () => false,
-    });
+    const released = collectInboxUserReplies(
+      [commentParent],
+      fullText,
+      () => replies,
+      ledger,
+      ctx(),
+    );
     expect(released).toHaveLength(1);
   });
 
   it("never surfaces a Claude reply (Claude doesn't need its own replies echoed)", () => {
     const replies = [reply({ id: "rc", author: "claude" })];
-    const out = collectInboxUserReplies([commentParent], fullText, () => replies, new Set(), {
-      modeState: "tandem",
-      documentId: DOC_KEY,
-      wasChannelEmitted: () => false,
-    });
+    const out = collectInboxUserReplies([commentParent], fullText, () => replies, new Set(), ctx());
     expect(out).toHaveLength(0);
   });
 
   it("never surfaces a private reply or a note-thread reply (ADR-027)", () => {
     const privateOnComment = [reply({ id: "rp", private: true })];
     expect(
-      collectInboxUserReplies([commentParent], fullText, () => privateOnComment, new Set(), {
-        modeState: "tandem",
-        documentId: DOC_KEY,
-        wasChannelEmitted: () => false,
-      }),
+      collectInboxUserReplies([commentParent], fullText, () => privateOnComment, new Set(), ctx()),
     ).toHaveLength(0);
 
     // A reply on a note parent must never surface even without the private flag.
     const noteReply = [reply({ id: "rn", annotationId: "parent-note" })];
     expect(
-      collectInboxUserReplies([noteParent], fullText, () => noteReply, new Set(), {
-        modeState: "tandem",
-        documentId: DOC_KEY,
-        wasChannelEmitted: () => false,
-      }),
+      collectInboxUserReplies([noteParent], fullText, () => noteReply, new Set(), ctx()),
     ).toHaveLength(0);
   });
 
@@ -725,11 +688,13 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
   it("discloses rather than suppresses a reply already pushed via the channel", () => {
     const replies = [reply({})];
     const ledger = new Set<string>();
-    const out = collectInboxUserReplies([commentParent], fullText, () => replies, ledger, {
-      modeState: "tandem",
-      documentId: DOC_KEY,
-      wasChannelEmitted: (id) => id === "r1",
-    });
+    const out = collectInboxUserReplies(
+      [commentParent],
+      fullText,
+      () => replies,
+      ledger,
+      ctx({ wasChannelEmitted: (id) => id === "r1" }),
+    );
     expect(out).toHaveLength(1);
     expect(out[0].alreadyPushed).toBe(true);
     expect(ledger.has(`${DOC_KEY}:r1`)).toBe(true); // still deduped against future polls
@@ -776,7 +741,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
       extractText(ydoc),
       () => [reply({ id: "r_queue" })],
       new Set<string>(),
-      { modeState: "tandem", documentId: DOC_KEY, wasChannelEmitted: wasEmittedViaChannel },
+      ctx({ wasChannelEmitted: wasEmittedViaChannel }),
     );
 
     expect(out).toHaveLength(1);
@@ -788,11 +753,13 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
 
   it("indeterminate mode holds only replies carrying the persisted marker", () => {
     const replies = [reply({ id: "held", heldInSolo: true }), reply({ id: "fresh" })];
-    const out = collectInboxUserReplies([commentParent], fullText, () => replies, new Set(), {
-      modeState: "indeterminate",
-      documentId: DOC_KEY,
-      wasChannelEmitted: () => false,
-    });
+    const out = collectInboxUserReplies(
+      [commentParent],
+      fullText,
+      () => replies,
+      new Set(),
+      ctx({ modeState: "indeterminate" }),
+    );
     const ids = out.map((r) => r.id);
     expect(ids).toContain("fresh");
     expect(ids).not.toContain("held");
@@ -1044,7 +1011,7 @@ describe("inbox ledgers are document-scoped", () => {
         extractText(ydoc),
         surfaced,
         (anns) => anns,
-        { modeState: "tandem", documentId: docKey, wasChannelEmitted: () => false },
+        ctx({ documentId: docKey }),
       );
       // Without document scoping the second document returns 0 here.
       expect(out.userActions.map((a) => a.id)).toContain(SHARED_ID);
@@ -1079,11 +1046,13 @@ describe("inbox ledgers are document-scoped", () => {
     const ledger = new Set<string>();
 
     for (const docKey of ["ledger-doc-a", "ledger-doc-b"]) {
-      const out = collectInboxUserReplies([parent], "Hello world", () => [sharedReply], ledger, {
-        modeState: "tandem",
-        documentId: docKey,
-        wasChannelEmitted: () => false,
-      });
+      const out = collectInboxUserReplies(
+        [parent],
+        "Hello world",
+        () => [sharedReply],
+        ledger,
+        ctx({ documentId: docKey }),
+      );
       expect(out.map((r) => r.id)).toContain(sharedReply.id);
     }
   });
@@ -1160,11 +1129,10 @@ describe("InboxPollContext (#1702)", () => {
     await client.connect(clientTransport);
     const poll = async () => {
       const result = await client.callTool({ name: "tandem_checkInbox", arguments: {} });
-      const data = result.structuredContent as {
+      return result.structuredContent as {
         userActions: Array<{ id: string; alreadyPushed?: true }>;
         userReplies: Array<{ id: string; alreadyPushed?: true }>;
       };
-      return data;
     };
     return { client, poll };
   }
