@@ -163,13 +163,8 @@ where
     let start = Instant::now();
     let mut delay_idx = 0usize;
     let lock_file = loop {
-        let attempt = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)
-            .and_then(|file| file.try_lock_exclusive().map(|()| file));
+        let attempt =
+            open_lockfile(&lock_path).and_then(|file| file.try_lock_exclusive().map(|()| file));
         match attempt {
             Ok(file) => break file,
             Err(e) if is_lock_contention(&e) => {
@@ -180,10 +175,7 @@ where
                         elapsed,
                     });
                 }
-                let delay_ms = BACKOFF_DELAYS_MS
-                    .get(delay_idx)
-                    .copied()
-                    .unwrap_or(5_000);
+                let delay_ms = BACKOFF_DELAYS_MS.get(delay_idx).copied().unwrap_or(5_000);
                 log::debug!(
                     "[cowork] waiting for lock on {} (elapsed={:.1}s, backoff={}ms)",
                     lock_path.display(),
@@ -207,9 +199,7 @@ where
         let mut json_value: Value = match std::fs::read_to_string(path) {
             Ok(s) if s.is_empty() => Value::Object(serde_json::Map::new()),
             Ok(s) => serde_json::from_str(&s)?,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                Value::Object(serde_json::Map::new())
-            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Value::Object(serde_json::Map::new()),
             Err(e) => return Err(e.into()),
         };
 
@@ -278,19 +268,28 @@ where
 /// Is `e` another writer holding the lock, rather than a real failure?
 ///
 /// - `WouldBlock`: fs2's `try_lock_exclusive` contention on Unix.
-/// - Raw 33 (`ERROR_LOCK_VIOLATION`), Windows only: fs2's contention on
-///   Windows. **Measured, not assumed** (`a_real_fs2_contention_error_is_contention`):
+/// - Raw 33 (`ERROR_LOCK_VIOLATION`): fs2's contention on Windows. **Measured, not assumed** (`a_real_fs2_contention_error_is_contention`):
 ///   `LockFileEx` returns it with `ErrorKind::Uncategorized`, NOT `WouldBlock`,
 ///   so before #1600 a second Rust writer on Windows failed at once with an I/O
 ///   error instead of waiting.
-/// - Raw 32 (`ERROR_SHARING_VIOLATION`), Windows only: the npm scrub holding the
+/// - Raw 32 (`ERROR_SHARING_VIOLATION`): the npm scrub holding the
 ///   lockfile open with share mode 0 (#1600).
 ///
-/// Both raw codes are Windows-only (32 is `EPIPE` and 33 is `EDOM` on Linux),
-/// hence the `cfg!`.
+/// Both raw codes are Windows error numbers (32 is `EPIPE` and 33 is `EDOM` on
+/// Linux); this whole module is `#![cfg(target_os = "windows")]`, so no
+/// platform check is needed here.
 fn is_lock_contention(e: &io::Error) -> bool {
-    e.kind() == io::ErrorKind::WouldBlock
-        || (cfg!(windows) && matches!(e.raw_os_error(), Some(32) | Some(33)))
+    e.kind() == io::ErrorKind::WouldBlock || matches!(e.raw_os_error(), Some(32) | Some(33))
+}
+
+/// Open (creating if absent) the sibling lockfile, without truncating it.
+fn open_lockfile(lock: &Path) -> io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock)
 }
 
 /// Return a human-readable JSON type name for diagnostic messages.
@@ -358,27 +357,16 @@ mod lock_interop_tests {
         dir
     }
 
-    fn open_lockfile(lock: &Path) -> io::Result<std::fs::File> {
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(lock)
-    }
-
     #[test]
     fn lock_contention_classifies_would_block_and_windows_sharing_violation() {
-        assert!(is_lock_contention(&io::Error::from(io::ErrorKind::WouldBlock)));
-        assert_eq!(
-            is_lock_contention(&io::Error::from_raw_os_error(32)),
-            cfg!(windows)
-        );
-        assert_eq!(
-            is_lock_contention(&io::Error::from_raw_os_error(33)),
-            cfg!(windows)
-        );
-        assert!(!is_lock_contention(&io::Error::from(io::ErrorKind::NotFound)));
+        assert!(is_lock_contention(&io::Error::from(
+            io::ErrorKind::WouldBlock
+        )));
+        assert!(is_lock_contention(&io::Error::from_raw_os_error(32)));
+        assert!(is_lock_contention(&io::Error::from_raw_os_error(33)));
+        assert!(!is_lock_contention(&io::Error::from(
+            io::ErrorKind::NotFound
+        )));
     }
 
     /// Measured, not assumed: whatever error fs2 really returns when a second
@@ -455,7 +443,8 @@ mod lock_interop_tests {
             .join()
             .unwrap()
             .expect("with_locked_json must succeed once Node releases");
-        let written: Value = serde_json::from_str(&std::fs::read_to_string(&data).unwrap()).unwrap();
+        let written: Value =
+            serde_json::from_str(&std::fs::read_to_string(&data).unwrap()).unwrap();
         assert_eq!(written["written"], Value::from(true));
         let _ = std::fs::remove_dir_all(&dir);
     }
