@@ -490,6 +490,13 @@ export function registerDocumentTools(server: McpServer): void {
         ),
     },
     withErrorBoundary("tandem_open", async ({ filePath, force, authoredBy }) => {
+      // A relative path would resolve against the SERVER's working directory,
+      // not the caller's, and the desktop sidecar sets none (#1823). This is a
+      // string check on the argument, not root confinement — that is #1666, and
+      // this does not decide it. `/api/open` and startup opens are unchanged.
+      if (!path.isAbsolute(filePath)) {
+        return mcpError("INVALID_PATH", "filePath must be an absolute path.");
+      }
       // License gate (#1116) — ONLY the destructive force-reload sub-path. Plain
       // open stays ungated (the read/export escape hatch), but force=true runs
       // clearAndReload, which discards the in-memory annotation, awareness and
@@ -531,7 +538,7 @@ export function registerDocumentTools(server: McpServer): void {
           return mcpError("FILE_NOT_FOUND", e.message);
         }
         if (e.code === "INVALID_PATH") {
-          return mcpError("FILE_NOT_FOUND", e.message);
+          return mcpError("INVALID_PATH", e.message);
         }
         if (e.code === "UNSUPPORTED_FORMAT" || e.code === "FILE_TOO_LARGE") {
           return mcpError("FORMAT_ERROR", e.message);
@@ -585,7 +592,9 @@ export function registerDocumentTools(server: McpServer): void {
         "range-taking tool uses (tandem_edit, tandem_comment, tandem_resolveRange). This is the " +
         'read to use before anchoring: the text includes heading prefixes such as "## " and ' +
         "joins blocks with newlines, so offsets taken from it line up exactly. Pass `section` " +
-        "with a heading's text (case-insensitive) to read just that section. It never returns " +
+        "with a heading's text (case-insensitive) to read just that section; a `section` read " +
+        "returns that section's text only, and its offsets are not document offsets — read " +
+        "without `section`, or use tandem_search/tandem_resolveRange, before anchoring. It never returns " +
         "Markdown, even for .md files — Markdown syntax would shift offsets out of this " +
         "coordinate system; call tandem_save and read the file if you need real Markdown.",
       inputSchema: {
@@ -693,7 +702,7 @@ export function registerDocumentTools(server: McpServer): void {
           const docState = getCurrentDoc(documentId);
           if (docState?.readOnly) {
             return mcpError(
-              "FORMAT_ERROR",
+              "READ_ONLY",
               readOnlyToolMessage(docState.format, "Use annotations instead."),
             );
           }
@@ -1092,7 +1101,7 @@ export function registerDocumentTools(server: McpServer): void {
 
         const docState = getCurrentDoc(documentId);
         if (docState?.readOnly) {
-          return mcpError("FORMAT_ERROR", "Document is read-only — cannot edit lists.");
+          return mcpError("READ_ONLY", "Document is read-only — cannot edit lists.");
         }
         const refusal = listFormatRefusal(docState?.format);
         if (refusal) return mcpError("FORMAT_ERROR", refusal);
@@ -1232,7 +1241,7 @@ export function registerDocumentTools(server: McpServer): void {
         const docState = getCurrentDoc(documentId);
         if (docState?.readOnly) {
           return mcpError(
-            "FORMAT_ERROR",
+            "READ_ONLY",
             readOnlyToolMessage(docState.format, "Cannot append content."),
           );
         }
@@ -1412,7 +1421,15 @@ export function registerDocumentTools(server: McpServer): void {
         });
       }
       // result.status === "error"
-      if (result.errorCode === "EACCES" || result.errorCode === "EPERM") {
+      // One code per condition, matching `tandem_open` and `tandem_applyChanges`
+      // (#1823): EACCES is a permission refusal; EBUSY/EPERM are the shapes a
+      // file held open by another program (Word, on Windows) takes.
+      if (result.errorCode === "EACCES") {
+        return mcpError("PERMISSION_DENIED", result.reason ?? "Save failed", {
+          errorCode: result.errorCode,
+        });
+      }
+      if (result.errorCode === "EBUSY" || result.errorCode === "EPERM") {
         return mcpError("FILE_LOCKED", result.reason ?? "Save failed", {
           errorCode: result.errorCode,
         });
@@ -1455,7 +1472,12 @@ export function registerDocumentTools(server: McpServer): void {
             if (!current) {
               return mcpStructured({
                 status: text,
-                warning: "No document open — status not broadcast to editor.",
+                // A named id that is not open is not "no document open" — other
+                // documents may well be (#1823).
+                warning:
+                  documentId !== undefined
+                    ? `Document ${documentId} is not open — status not broadcast to editor.`
+                    : "No document open — status not broadcast to editor.",
               });
             }
             const doc = getOrCreateDocument(current.docName);

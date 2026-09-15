@@ -550,8 +550,10 @@ export function registerAnnotationTools(server: McpServer): void {
             `Annotation ${id} is user-private (a note, a private comment or a user highlight) and cannot be resolved by Claude`,
           );
         case "not-pending":
+          // The same code edit and reply use for this condition (#1823); it
+          // was `ANNOTATION_NOT_PENDING` here alone.
           return mcpError(
-            "ANNOTATION_NOT_PENDING",
+            "ANNOTATION_RESOLVED",
             `Annotation ${id} is already ${result.currentStatus}`,
           );
         case "accept-refused":

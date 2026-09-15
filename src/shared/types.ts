@@ -69,7 +69,6 @@ export const DocumentFormatSchema = z.enum(["md", "txt", "html", "docx"]);
 export const ToolErrorCodeSchema = z.enum([
   "ACCEPT_REFUSED",
   "ALREADY_EXISTS",
-  "ANNOTATION_NOT_PENDING",
   "ANNOTATION_RESOLVED",
   "BACKUP_FAILED",
   "BAD_REQUEST",
