@@ -125,6 +125,9 @@ default-tab-annotations-btn
 default-tab-chat-btn
 density-{*}-btn
 dismiss-btn-{*}
+display-menu
+display-menu-text-size-{*}
+display-menu-trigger
 edit-btn-{*}
 edit-cancel-btn-{*}
 edit-newtext-{*}

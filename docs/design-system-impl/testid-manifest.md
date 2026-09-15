@@ -85,6 +85,9 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `decorations-menu`, `decorations-mute-toggle`, `decorations-menu-caret`,
   `decorations-row-{authorship,comments,highlights,notes}`,
   `decorations-settings-link`
+- Display menu (#1705) — lives in the formatting bar and is mirrored in the
+  selection popup's format row; quick home for the editor text-size preset:
+  `display-menu-trigger`, `display-menu`, `display-menu-text-size-{*}`
 - `mode-{toggle,solo-btn,tandem-btn}`
 - `slash-command-menu` — imperative, set via `el.dataset.testid` in
   `editor/slash-menu/extension.ts`, not a template attribute

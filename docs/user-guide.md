@@ -56,6 +56,8 @@ Select text to reveal formatting buttons: **Bold**, **Italic**, **Strikethrough*
 
 The persistent formatting bar (Settings → Appearance → **Show formatting bar**) carries two extra controls the selection popup deliberately leaves out: **Undo** / **Redo**, and **Horizontal Rule** — inserting a rule while text is selected makes little sense.
 
+The bar's **Display** menu (the `Aa` button) sets the text size for the formatted editor without opening Settings. It changes the same setting as Settings → Appearance, so the two always agree. The Markdown source view keeps its own fixed size.
+
 ### Selection Popup
 
 When text is selected, a floating popup appears with two parts:
@@ -65,7 +67,7 @@ When text is selected, a floating popup appears with two parts:
   - **Note to self** (`Alt+Enter`) — A private note. Never sent to the AI. `Alt+Enter` always files a note, whichever button is primary.
   - **Send to your AI** (`Ctrl+Enter`) — An outbound comment. The AI sees the selected passage and your text, and can respond with annotations, chat messages, or both. The button is labelled with your configured assistant's name. `Ctrl+Enter` sends the *primary* action, which is the outbound comment by default.
 
-The popup also includes a toggle to show or hide the formatting bar.
+The popup also includes a toggle to show or hide the formatting bar, and mirrors the bar's **Decorations** and **Display** menus so both stay reachable while the bar is hidden.
 
 ### Slash Menu
 
