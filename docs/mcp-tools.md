@@ -43,7 +43,7 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `NO_DOCUMENT` | Tool called before `tandem_open`, or specified `documentId` not found. |
 | `NOT_FOUND` | The named **annotation** does not exist (`tandem_resolveAnnotation`, `tandem_removeAnnotation`, `tandem_editAnnotation`, `tandem_annotationReply`), or `tandem_rename` was given a document id that is not open. Distinct from `NO_DOCUMENT`, which is about the document. |
 | `FILE_NOT_FOUND` | File doesn't exist, or (`tandem_applyChanges`) the backup directory doesn't. A UNC path is `INVALID_PATH`. |
-| `FILE_LOCKED` | File is open in another program (e.g., Word): `EBUSY` or `EPERM`. Close it first. `tandem_open`, `tandem_save` and `tandem_applyChanges` all use it for exactly these two errnos. |
+| `FILE_LOCKED` | File is open in another program (e.g., Word): `EBUSY`, or `EPERM` from any syscall but `open`. Close it first. On Windows, an `EPERM` on the atomic write's `rename` can also be a file with the read-only attribute, which the errno cannot tell apart from a lock. `tandem_open`, `tandem_save` and `tandem_applyChanges` all draw this split the same way. |
 | `FORMAT_ERROR` | Unsupported format, file too large (>50MB), invalid regex, or a `tandem_save` write failure no more specific code covers (the errno is in `details.errorCode`). A read-only document is `READ_ONLY`, not this. |
 | `FILE_TOO_LARGE` | Inline content exceeds the tool's size cap (e.g. `tandem_appendContent`). |
 | `INVALID_RANGE` | Offset out of bounds, non-integer, inverted, zero-length, splitting a surrogate pair, text not found, or a range overlapping heading markup. **Usually — not always — carries `details.reason`** (see `tandem_edit`): the two rejections that come from somewhere other than the range validator carry none, namely `tandem_resolveRange`'s "pattern not found" and `tandem_edit`'s heading-markup overlap. Treat `details.reason` as optional. |
@@ -54,7 +54,7 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `CONFLICT` | `tandem_convertToMarkdown` could not find a free output filename after exhausting its numbered-suffix attempts. |
 | `RANGE_MOVED` | Target text has moved. Response includes `resolvedFrom`/`resolvedTo` with relocated coordinates. |
 | `RANGE_GONE` | Target text was deleted from the document. |
-| `PERMISSION_DENIED` | File path is not accessible (OS-level permission denied, `EACCES`). `tandem_open`, `tandem_save` and `tandem_applyChanges` all answer `EACCES` with it. |
+| `PERMISSION_DENIED` | File path is not accessible (OS-level permission denied): `EACCES`, or on Windows `EPERM` from `open`, which is how a folder you can read but not write, or a file you cannot read, fails there. `tandem_open`, `tandem_save` and `tandem_applyChanges` all answer these with it. |
 | `DEPRECATED` | A removed tool or parameter was used — the deprecated stubs (`tandem_highlight`, `tandem_suggest`, `tandem_flag`) and `tandem_comment`'s `directedAt`. |
 | `READ_ONLY` | The document is read-only, so the mutation was refused: `tandem_edit`, `tandem_editList`, `tandem_appendContent`, `tandem_applyChanges`, `tandem_restoreBackup` and `tandem_rename`. `tandem_save` instead succeeds session-only with `saved: false` and `reason: "read-only"`, and the annotation tools do not check `readOnly` at all -- annotations are not document content and never reach the file. |
 | `EXTERNAL_CONFLICT` | The file changed on disk since Tandem loaded it. Saving is blocked until the user answers the keep-vs-reload banner, so a save reports this rather than claiming success. |
@@ -141,7 +141,7 @@ Open a file in the Tandem editor. Returns a `documentId` for multi-document work
 
 `wakeUrl` is omitted when no wake transport is running (stdio mode). It is on the tool response only -- `POST /api/open` does not carry it.
 
-**Errors:** `FILE_NOT_FOUND` (doesn't exist), `INVALID_PATH` (relative path, including a drive-less root-relative path on Windows; UNC / extended-length / device-namespace path), `FILE_LOCKED` (open in Word), `PERMISSION_DENIED` (`EACCES`), `FORMAT_ERROR` (unsupported format, >50MB)
+**Errors:** `FILE_NOT_FOUND` (doesn't exist), `INVALID_PATH` (relative path, including a drive-less root-relative path on Windows; UNC / extended-length / device-namespace path), `FILE_LOCKED` (open in Word: `EBUSY`, or `EPERM` from a syscall other than `open`), `PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`), `FORMAT_ERROR` (unsupported format, >50MB)
 
 **Example:**
 ```
@@ -441,7 +441,7 @@ Three further skip codes exist on `SaveResult` but **cannot reach `tandem_save`'
 - Read-only documents save their session only (annotations persist), not the source file, and answer `saved: false`.
 - Writable `.docx` documents save on **explicit save only** (never auto-save). The save writes the document body **plus pending `comment`-type annotations as Word comments** (`comments.xml` + range markers), anchored to their current ranges (#1068). `note` and `highlight` annotations are never written to the file (ADR-027), so un-promoted imported Word comments — which live as private notes until batch-promoted — are dropped from the saved file. Accepted/dismissed comments are dropped too (Word has no resolved-state channel we can write). Threaded replies flatten into the comment body with attribution lines; private replies (including imported Word reply threads) are never written.
 
-**Errors:** `FILE_LOCKED` (file open in another program: `EBUSY`/`EPERM`), `PERMISSION_DENIED` (`EACCES`), `FORMAT_ERROR` (any other write failure; the errno is in `details.errorCode`). A save refused before touching the file -- the regenerated `.docx` failed post-write verification, or the import dropped body pictures the export would strip (#1755) -- is also `FORMAT_ERROR`, with `details.errorCode: "VERIFY_BLOCKED"`; it is not a top-level code ([#2004](https://github.com/bloknayrb/tandem/issues/2004))
+**Errors:** `FILE_LOCKED` (file open in another program: `EBUSY`, or `EPERM` from the atomic write's `rename`, which on Windows is also what a read-only file gives), `PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`: on Windows, a folder you can read but not write), `FORMAT_ERROR` (any other write failure; the errno is in `details.errorCode`). A save refused before touching the file -- the regenerated `.docx` failed post-write verification, or the import dropped body pictures the export would strip (#1755) -- is also `FORMAT_ERROR`, with `details.errorCode: "VERIFY_BLOCKED"`; it is not a top-level code ([#2004](https://github.com/bloknayrb/tandem/issues/2004))
 
 ---
 
@@ -886,7 +886,7 @@ The sidecar and the response carry `heldFromExport` and `privateExcluded` as **t
 }
 ```
 
-**Errors:** `NO_DOCUMENT` (document not found), `NO_SUGGESTIONS`, `FORMAT_ERROR` (not a `.docx` file), `INVALID_PATH` (an upload or scratchpad source, a UNC `backupPath`, or a symlinked `backupPath`), `FILE_NOT_FOUND` (the `backupPath` directory does not exist), `BACKUP_FAILED`, `READ_ONLY`, `EXTERNAL_CONFLICT`, `FILE_MODIFIED`, `SOURCE_MISSING`, `FILE_LOCKED` (`EBUSY`/`EPERM`), `PERMISSION_DENIED` (`EACCES`), `INTERNAL_ERROR` (the flat-text mismatch above -- the experimental caveat). `LICENSE_REQUIRED` is ambient to every gated tool and is never returned while the gate ships dark.
+**Errors:** `NO_DOCUMENT` (document not found), `NO_SUGGESTIONS`, `FORMAT_ERROR` (not a `.docx` file), `INVALID_PATH` (an upload or scratchpad source, a UNC `backupPath`, or a symlinked `backupPath`), `FILE_NOT_FOUND` (the `backupPath` directory does not exist), `BACKUP_FAILED`, `READ_ONLY`, `EXTERNAL_CONFLICT`, `FILE_MODIFIED`, `SOURCE_MISSING`, `FILE_LOCKED` (`EBUSY`, or `EPERM` from a syscall other than `open`), `PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`), `INTERNAL_ERROR` (the flat-text mismatch above -- the experimental caveat). `LICENSE_REQUIRED` is ambient to every gated tool and is never returned while the gate ships dark.
 
 **Example:**
 ```

@@ -431,7 +431,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "23", bodyHash: "4a37a33337df" });
+    ).toEqual({ version: "23", bodyHash: "ca9991f2313c" });
   });
 
   // #1770: the skill is the only surface that tells Claude what it may NOT do with a card

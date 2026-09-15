@@ -23,7 +23,9 @@ const mocks = vi.hoisted(() => ({
   renameDocument: vi.fn(),
   saveDocumentToDisk: vi.fn(),
   /** When set, `atomicWriteBuffer` rejects with this errno for exactly this path. */
-  failWrite: null as { path: string; code: string } | null,
+  failWrite: null as { path: string; code: string; syscall?: string } | null,
+  /** When set, `openFromDisk` rejects with this errno. */
+  failOpen: null as { code: string; syscall?: string } | null,
 }));
 
 vi.mock("../../src/server/platform", async (importOriginal) => {
@@ -43,6 +45,17 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
 vi.mock("../../src/server/integrations/acl-win.js", () => ({
   setRestrictiveAcl: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("../../src/server/documents/open.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/server/documents/open.js")>();
+  return {
+    ...original,
+    openFromDisk: async (...args: Parameters<typeof original.openFromDisk>) => {
+      const fail = mocks.failOpen;
+      if (fail) throw Object.assign(new Error(`${fail.code}: refused`), fail);
+      return original.openFromDisk(...args);
+    },
+  };
+});
 vi.mock("../../src/server/mcp/document-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/mcp/document-service.js")>()),
   renameDocument: mocks.renameDocument,
@@ -55,7 +68,10 @@ vi.mock("../../src/server/file-io/index.js", async (importOriginal) => {
     atomicWriteBuffer: async (...args: Parameters<typeof original.atomicWriteBuffer>) => {
       const fail = mocks.failWrite;
       if (fail && path.resolve(String(args[0])) === path.resolve(fail.path)) {
-        throw Object.assign(new Error(`${fail.code}: refused`), { code: fail.code });
+        throw Object.assign(new Error(`${fail.code}: refused`), {
+          code: fail.code,
+          syscall: fail.syscall,
+        });
       }
       return original.atomicWriteBuffer(...args);
     },
@@ -90,6 +106,7 @@ let tmpDir: string;
 beforeEach(async () => {
   vi.clearAllMocks();
   mocks.failWrite = null;
+  mocks.failOpen = null;
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   setActiveDocId(null);
   tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "tandem-wire-mocked-"));
@@ -145,13 +162,19 @@ describe("tandem_rename narrows renameDocument's open errorCode (#1851)", () => 
 
 describe("tandem_save errno → one code per condition (#1823 §C)", () => {
   it.each([
-    ["EACCES", "PERMISSION_DENIED"],
-    ["EBUSY", "FILE_LOCKED"],
+    ["EACCES", undefined, "PERMISSION_DENIED"],
+    ["EBUSY", "open", "FILE_LOCKED"],
+    // Windows: a folder the caller can read but not write fails the temp
+    // sibling's `open` with EPERM. That is a refusal, not a lock.
+    ["EPERM", "open", "PERMISSION_DENIED"],
+    // Windows: the `rename` over a file another program holds open.
+    ["EPERM", "rename", "FILE_LOCKED"],
+    ["EPERM", undefined, "FILE_LOCKED"],
     // Not its own wire code yet (#2004): the doc line says FORMAT_ERROR with
     // details.errorCode "VERIFY_BLOCKED", and this row pins that.
-    ["VERIFY_BLOCKED", "FORMAT_ERROR"],
-    ["ENOSPC", "FORMAT_ERROR"],
-  ])("save failing with %s answers %s, keeping details.errorCode", async (errno, expected) => {
+    ["VERIFY_BLOCKED", undefined, "FORMAT_ERROR"],
+    ["ENOSPC", "write", "FORMAT_ERROR"],
+  ])("save failing with %s on %s answers %s, keeping details.errorCode", async (errno, syscall, expected) => {
     const ydoc = getOrCreateDocument(`save-${errno}`);
     populateYDoc(ydoc, "Hello");
     addDoc(`save-${errno}`, {
@@ -166,6 +189,7 @@ describe("tandem_save errno → one code per condition (#1823 §C)", () => {
       status: "error",
       reason: "The document could not be saved.",
       errorCode: errno,
+      errorSyscall: syscall,
     });
 
     const parsed = parseResult(await client.callTool({ name: "tandem_save", arguments: {} }));
@@ -175,31 +199,53 @@ describe("tandem_save errno → one code per condition (#1823 §C)", () => {
   });
 });
 
-describe("tandem_applyChanges EACCES on the write-back (#1823 §C)", () => {
-  it(
-    "answers PERMISSION_DENIED, not FILE_LOCKED",
-    async () => {
-      const docPath = path.join(tmpDir, "doc.docx");
+describe("tandem_applyChanges lock-or-permission on the write-back (#1823 §C)", () => {
+  it.each([
+    ["EACCES", undefined, "PERMISSION_DENIED"],
+    // Windows: the folder is readable but not writable, so the temp sibling's
+    // `open` fails. A refusal, not a lock.
+    ["EPERM", "open", "PERMISSION_DENIED"],
+    // Windows: Word holds the target, so the `rename` over it fails.
+    ["EPERM", "rename", "FILE_LOCKED"],
+  ])(
+    "a write-back failing with %s on %s answers %s",
+    async (errno, syscall, expected) => {
+      const id = `apply-${errno}-${syscall}`;
+      const docPath = path.join(tmpDir, `${id}.docx`);
       await fsp.writeFile(docPath, await createMinimalDocx("Hello world"));
-      seedAcceptedSuggestion(getOrCreateDocument("apply-eacces"));
-      addDoc("apply-eacces", {
-        id: "apply-eacces",
-        filePath: docPath,
-        format: "docx",
-        readOnly: false,
-        source: "file",
-      });
-      setActiveDocId("apply-eacces");
+      seedAcceptedSuggestion(getOrCreateDocument(id));
+      addDoc(id, { id, filePath: docPath, format: "docx", readOnly: false, source: "file" });
+      setActiveDocId(id);
       // The backup directory (the document's own) exists, so the write-back is
       // the first thing that can fail.
-      mocks.failWrite = { path: docPath, code: "EACCES" };
+      mocks.failWrite = { path: docPath, code: errno, syscall };
 
       const parsed = parseResult(
         await client.callTool({ name: "tandem_applyChanges", arguments: {} }),
       );
       expect(parsed.error).toBe(true);
-      expect(parsed.code).toBe("PERMISSION_DENIED");
+      expect(parsed.code).toBe(expected);
     },
     REAL_APPLY_TIMEOUT_MS,
   );
+});
+
+describe("tandem_open lock-or-permission on the read (#1823 §C)", () => {
+  it.each([
+    ["EACCES", undefined, "PERMISSION_DENIED"],
+    // Windows: a file whose read is denied fails its `open` with EPERM.
+    ["EPERM", "open", "PERMISSION_DENIED"],
+    ["EBUSY", "open", "FILE_LOCKED"],
+    ["EPERM", undefined, "FILE_LOCKED"],
+  ])("an open failing with %s on %s answers %s", async (errno, syscall, expected) => {
+    mocks.failOpen = { code: errno, syscall };
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_open",
+        arguments: { filePath: path.join(tmpDir, "held.md") },
+      }),
+    );
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe(expected);
+  });
 });

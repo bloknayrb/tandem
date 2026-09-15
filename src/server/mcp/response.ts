@@ -97,6 +97,37 @@ export function mcpError(
   return result;
 }
 
+/**
+ * The wire code for a lock-or-permission errno, or null for any other (#1823).
+ * `tandem_open`, `tandem_save` and `tandem_applyChanges` all answer through it.
+ *
+ * POSIX reports a permission refusal as `EACCES`. Windows does not: libuv maps
+ * `ERROR_ACCESS_DENIED` to `EPERM` and `ERROR_SHARING_VIOLATION` to `EBUSY`, so
+ * `EPERM` alone is ambiguous there and the failing syscall is what separates
+ * it. Measured on Windows 11 (26200), Node 24, unprivileged:
+ *
+ * - a directory the caller can read but not write: `EPERM` on `open` (the
+ *   atomic write's temp sibling);
+ * - a file whose read is denied: `EPERM` on `open`;
+ * - a file another program holds open: `EPERM` on the `rename` over it, and
+ *   `EBUSY` on a direct `open`;
+ * - a file with the read-only attribute: `EPERM` on the `rename` too.
+ *
+ * So `EPERM` on `open` is always a refusal, never a lock, and answers
+ * `PERMISSION_DENIED`. `EPERM` on `rename` is a lock OR a read-only file, and
+ * keeps `FILE_LOCKED`. So does an `EPERM` with no syscall, which was the answer
+ * before this split.
+ */
+export function lockOrPermissionCode(err: {
+  code?: string;
+  syscall?: string;
+}): "FILE_LOCKED" | "PERMISSION_DENIED" | null {
+  if (err.code === "EACCES") return "PERMISSION_DENIED";
+  if (err.code === "EPERM") return err.syscall === "open" ? "PERMISSION_DENIED" : "FILE_LOCKED";
+  if (err.code === "EBUSY") return "FILE_LOCKED";
+  return null;
+}
+
 /** Standard NO_DOCUMENT error — returned when a tool requires an open document */
 export function noDocumentError(): McpToolResult {
   return mcpError("NO_DOCUMENT", "No document is open. Call tandem_open first.");

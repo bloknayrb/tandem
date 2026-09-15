@@ -34,7 +34,7 @@ import { extractText } from "./document-model.js";
 import { getCurrentDoc, requireDocument } from "./document-service.js";
 import { YDocStore } from "./document-store.js";
 import { gatedTool } from "./license-gate.js";
-import { mcpError, mcpSuccess, noDocumentError } from "./response.js";
+import { lockOrPermissionCode, mcpError, mcpSuccess, noDocumentError } from "./response.js";
 
 // ---------------------------------------------------------------------------
 // Shared core logic (used by both MCP tool and API endpoint)
@@ -527,10 +527,10 @@ export function registerApplyTools(server: McpServer): void {
         if (e.code === "SOURCE_MISSING") return mcpError("SOURCE_MISSING", e.message);
         // A locked or unreadable source keeps its own errno rather than a code of
         // ours, so it is matched by code here too — same reasoning as the stat guard.
-        // EACCES is a permission refusal, not a lock (#1823), the same split
-        // `tandem_open` and `tandem_save` draw.
-        if (e.code === "EACCES") return mcpError("PERMISSION_DENIED", e.message);
-        if (e.code === "EBUSY" || e.code === "EPERM") return mcpError("FILE_LOCKED", e.message);
+        // A permission refusal is not a lock (#1823), the same split `tandem_open`
+        // and `tandem_save` draw; see `lockOrPermissionCode` for Windows' EPERM.
+        const lockOrPermission = lockOrPermissionCode(e as NodeJS.ErrnoException);
+        if (lockOrPermission) return mcpError(lockOrPermission, e.message);
         throw err;
       }
     }),

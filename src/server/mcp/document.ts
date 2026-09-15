@@ -135,6 +135,7 @@ import {
 import { noteClaudeActivity } from "./presence-expiry.js";
 import {
   getErrorMessage,
+  lockOrPermissionCode,
   mcpError,
   mcpStructured,
   mcpSuccess,
@@ -563,13 +564,16 @@ export function registerDocumentTools(server: McpServer): void {
         if (e.code === "UNSUPPORTED_FORMAT" || e.code === "FILE_TOO_LARGE") {
           return mcpError("FORMAT_ERROR", e.message);
         }
-        if (e.code === "EBUSY" || e.code === "EPERM") {
+        // A read that is refused is not a lock (#1823): on Windows both arrive
+        // as EPERM and only the syscall differs (`lockOrPermissionCode`).
+        const lockOrPermission = lockOrPermissionCode(e);
+        if (lockOrPermission === "FILE_LOCKED") {
           return mcpError(
             "FILE_LOCKED",
             `File is locked — another program (likely Microsoft Word) has it open. Close it and try again.`,
           );
         }
-        if (e.code === "EACCES") {
+        if (lockOrPermission === "PERMISSION_DENIED") {
           return mcpError("PERMISSION_DENIED", e.message);
         }
         return mcpError("FORMAT_ERROR", getErrorMessage(err));
@@ -1442,16 +1446,13 @@ export function registerDocumentTools(server: McpServer): void {
       }
       // result.status === "error"
       // One code per condition, matching `tandem_open` and `tandem_applyChanges`
-      // (#1823): EACCES is a permission refusal; EBUSY/EPERM are the shapes a
-      // file held open by another program (Word, on Windows) takes.
-      // VERIFY_BLOCKED still falls through to FORMAT_ERROR, carried in
-      // `details.errorCode`; giving it its own wire code is #2004.
+      // (#1823): a permission refusal is not a lock, and on Windows the syscall
+      // is what tells them apart (`lockOrPermissionCode`). VERIFY_BLOCKED still
+      // falls through to FORMAT_ERROR, carried in `details.errorCode`; giving it
+      // its own wire code is #2004.
       const code =
-        result.errorCode === "EACCES"
-          ? "PERMISSION_DENIED"
-          : result.errorCode === "EBUSY" || result.errorCode === "EPERM"
-            ? "FILE_LOCKED"
-            : "FORMAT_ERROR";
+        lockOrPermissionCode({ code: result.errorCode, syscall: result.errorSyscall }) ??
+        "FORMAT_ERROR";
       return mcpError(code, result.reason ?? "Save failed", { errorCode: result.errorCode });
     }),
   );

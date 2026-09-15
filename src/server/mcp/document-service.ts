@@ -209,6 +209,12 @@ export interface SaveResult {
   skipCode?: SkipCode;
   errorCode?: string;
   /**
+   * The failing syscall of an `error` result's errno, when there was one. On
+   * Windows it is what separates a permission refusal from a lock, since both
+   * arrive as `EPERM` (see `lockOrPermissionCode`, #1823).
+   */
+  errorSyscall?: string;
+  /**
    * Body-export fidelity warnings (#576, `.docx` only) — content the export
    * downgraded (unsupported blocks, non-embedded images). Present on a
    * successful binary save so the caller can surface a post-save notice. The
@@ -770,6 +776,7 @@ export async function saveDocumentToDisk(
       // be saved to that location." shape instead.
       reason: verificationBlock ? verificationBlock.message : "The document could not be saved.",
       errorCode: (err as NodeJS.ErrnoException).code,
+      errorSyscall: (err as NodeJS.ErrnoException).syscall,
     };
   } finally {
     savingDocs.delete(safeDocId);
