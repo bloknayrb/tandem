@@ -688,7 +688,12 @@ describe("file-watcher reload notification", () => {
       const toasts = getBuffer().filter(
         (n) => n.type === "file-reloaded" && n.documentId === opened.documentId,
       ).length;
-      return { toasts, docWrites: docWrites() };
+      // The user-initiated "Reload from file" reports a guard-held skip
+      // (#1663); the watcher's own skip must stay silent, because the
+      // in-flight holder reports its reload. Counted here so a push moved into
+      // `reloadFromDisk`'s guard-fail branch turns `pair` red.
+      const skipped = getBuffer().filter((n) => n.dedupKey?.startsWith("reload-skipped:")).length;
+      return { toasts, skipped, docWrites: docWrites() };
     }
 
     // Baseline: what exactly one reload costs in document-room transactions.
@@ -701,6 +706,8 @@ describe("file-watcher reload notification", () => {
       single.docWrites,
     );
     expect(pair.toasts, "…and now exactly one toast to match it").toBe(1);
+    expect(single.skipped, "the watcher reports no skip (#1663)").toBe(0);
+    expect(pair.skipped, "…not even when its second callback IS skipped").toBe(0);
   });
 
   it("still toasts twice for two reloads that do not overlap", async () => {

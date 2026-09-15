@@ -1137,12 +1137,9 @@ describe("reattachObservers — file-sync context rebind", () => {
   // test in the suite — the wipe only shows up as per-process memory growth
   // across many opens, which no unit test otherwise exercises.
   //
-  // This spec does NOT cover a flipped DEFAULT, though an earlier version of
-  // this comment claimed it did: it passes an explicit `"close"` below, so
-  // `= "close"` in the signature could become `= "swap"` underneath it and
-  // this would still pass. That case is pinned separately, in
-  // tests/server/annotations/sync.test.ts — "cleanup with no argument
-  // defaults to the close phase".
+  // There is no default phase to flip: the cleanup's `phase` parameter is
+  // required (#1695), so a caller that omits it is a compile error rather than
+  // a silent `"close"` or `"swap"`.
   it("close-phase cleanup drops the tombstone ledger (#333)", async () => {
     const { recordTombstone, registerAnnotationObserver, getTombstones } = await import(
       "../../src/server/annotations/sync.js"
