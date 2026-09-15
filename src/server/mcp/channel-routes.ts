@@ -12,6 +12,7 @@ import { CTRL_ROOM } from "../../shared/constants.js";
 import { ChannelErrorCodeSchema } from "../../shared/types.js";
 import { recordPushConsumerEvent } from "../events/push-liveness.js";
 import { sseHandler } from "../events/sse.js";
+import { sanitizeForLog } from "../log-sanitize.js";
 import { clearCtrlChatDurably } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import type { Handler } from "./api-routes.js";
@@ -103,15 +104,23 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     // Validate the code so a future caller can't smuggle a free-form string
     // through unfiltered logs. Out-of-schema codes are logged as UNKNOWN_CODE
     // (keeps the diagnostic trail) and reported as 400 so the caller notices.
+    //
+    // The rejected value IS logged, before the 400 — deliberately, because that
+    // diagnostic trail is the only reason this branch logs at all. What makes
+    // it safe is `sanitizeForLog`, not the rejection: `error` and `message` are
+    // both unvalidated body fields here, so each is stripped of control
+    // characters and clamped to LOG_FIELD_MAX before it reaches the line.
     const parsed = ChannelErrorCodeSchema.safeParse(error);
     if (!parsed.success) {
-      console.error(`[Channel] Error: UNKNOWN_CODE (${String(error)}) — ${message}`);
+      console.error(
+        `[Channel] Error: UNKNOWN_CODE (${sanitizeForLog(error)}) — ${sanitizeForLog(message)}`,
+      );
       res
         .status(400)
         .json({ error: "BAD_REQUEST", message: "error must be a known ChannelErrorCode" });
       return;
     }
-    console.error(`[Channel] Error: ${parsed.data} — ${message}`);
+    console.error(`[Channel] Error: ${parsed.data} — ${sanitizeForLog(message)}`);
     // Could broadcast to browser via Y.Map in the future
     res.json({ ok: true });
   });
@@ -157,7 +166,12 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
       description: (description as string) ?? "",
       createdAt: Date.now(),
     });
-    console.error(`[Channel] Permission request: ${toolName} (id: ${requestId})`);
+    // `toolName`/`requestId` are `typeof … === "string"`-guarded above, so the
+    // residue here is control characters and unbounded length only — which is
+    // exactly what `sanitizeForLog` is for.
+    console.error(
+      `[Channel] Permission request: ${sanitizeForLog(toolName)} (id: ${sanitizeForLog(requestId)})`,
+    );
     res.json({ ok: true });
   });
 
@@ -179,7 +193,9 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     // Deletion is the only effect: no return leg — see docs/architecture.md and
     // ADR-047 §3. The verdict is echoed to the browser that submitted it and
     // never reaches Claude Code.
-    console.error(`[Channel] Permission verdict: ${requestId} → ${approved ? "allow" : "deny"}`);
+    console.error(
+      `[Channel] Permission verdict: ${sanitizeForLog(requestId)} → ${approved ? "allow" : "deny"}`,
+    );
     res.json({ ok: true, requestId, behavior: approved ? "allow" : "deny" });
   });
 
