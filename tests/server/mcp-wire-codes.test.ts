@@ -208,18 +208,24 @@ describe("tandem_applyChanges missing backup directory → FILE_NOT_FOUND (#1823
 
 describe("tandem_open refuses a relative path (#1823 §F)", () => {
   it("a relative path to a real file → INVALID_PATH, and nothing opens", async () => {
-    const file = path.join(tmpDir, "rel.md");
-    await fsp.writeFile(file, "# Rel\n\nbody\n");
-    const rel = path.relative(process.cwd(), file);
-    // Precondition: on a machine where tmp and cwd sit on different drives,
-    // `path.relative` returns an absolute path and this row would test nothing.
-    expect(path.isAbsolute(rel)).toBe(false);
-    const sizeBefore = getOpenDocs().size;
+    // The file lives under the cwd, not os.tmpdir(): on a Windows checkout
+    // whose drive differs from %TEMP%, `path.relative` across drives returns an
+    // absolute path and the row would fail its own precondition.
+    const relDir = await fsp.mkdtemp(path.join(process.cwd(), ".tandem-wire-rel-"));
+    try {
+      const file = path.join(relDir, "rel.md");
+      await fsp.writeFile(file, "# Rel\n\nbody\n");
+      const rel = path.relative(process.cwd(), file);
+      expect(path.isAbsolute(rel)).toBe(false);
+      const sizeBefore = getOpenDocs().size;
 
-    const parsed = await call("tandem_open", { filePath: rel });
-    expect(parsed.error).toBe(true);
-    expect(parsed.code).toBe("INVALID_PATH");
-    expect(getOpenDocs().size).toBe(sizeBefore);
+      const parsed = await call("tandem_open", { filePath: rel });
+      expect(parsed.error).toBe(true);
+      expect(parsed.code).toBe("INVALID_PATH");
+      expect(getOpenDocs().size).toBe(sizeBefore);
+    } finally {
+      await fsp.rm(relDir, { recursive: true, force: true });
+    }
   });
 
   it("twin: a missing absolute path is still FILE_NOT_FOUND", async () => {

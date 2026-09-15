@@ -44,7 +44,7 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `NOT_FOUND` | The named **annotation** does not exist (`tandem_resolveAnnotation`, `tandem_removeAnnotation`, `tandem_editAnnotation`, `tandem_annotationReply`), or `tandem_rename` was given a document id that is not open. Distinct from `NO_DOCUMENT`, which is about the document. |
 | `FILE_NOT_FOUND` | File doesn't exist, or (`tandem_applyChanges`) the backup directory doesn't. A UNC path is `INVALID_PATH`. |
 | `FILE_LOCKED` | File is open in another program (e.g., Word): `EBUSY` or `EPERM`. Close it first. `tandem_open`, `tandem_save` and `tandem_applyChanges` all use it for exactly these two errnos. |
-| `FORMAT_ERROR` | Unsupported format, file too large (>50MB), invalid regex. A read-only document is `READ_ONLY`, not this. |
+| `FORMAT_ERROR` | Unsupported format, file too large (>50MB), invalid regex, or a `tandem_save` write failure no more specific code covers (the errno is in `details.errorCode`). A read-only document is `READ_ONLY`, not this. |
 | `FILE_TOO_LARGE` | Inline content exceeds the tool's size cap (e.g. `tandem_appendContent`). |
 | `INVALID_RANGE` | Offset out of bounds, non-integer, inverted, zero-length, splitting a surrogate pair, text not found, or a range overlapping heading markup. **Usually — not always — carries `details.reason`** (see `tandem_edit`): the two rejections that come from somewhere other than the range validator carry none, namely `tandem_resolveRange`'s "pattern not found" and `tandem_edit`'s heading-markup overlap. Treat `details.reason` as optional. |
 | `EMPTY_DOCUMENT` | `tandem_edit` called on an empty document — seed content with `tandem_appendContent` / `tandem_scratchpad({ content })` first. |
@@ -65,6 +65,11 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `NO_SUGGESTIONS` | `tandem_applyChanges` found no accepted suggestions to write. |
 | `BACKUP_FAILED` | `tandem_applyChanges` could not write its backup, so it refused to touch the original. |
 | `INVALID_NAME` | `tandem_rename` was given a name that is empty, path-separated, or otherwise unusable. |
+| `NOT_RENAMABLE` | `tandem_rename` on a document with no on-disk file (a scratchpad or upload). Use Save As instead. |
+| `EXTENSION_MISMATCH` | `tandem_rename` was given a name with a different extension. Renaming does not convert formats. |
+| `ALREADY_EXISTS` | `tandem_rename`'s destination name is already taken by a file in that directory. |
+| `PATH_REJECTED` | `tandem_rename`'s destination path failed its path-safety checks (see that tool's notes). |
+| `RENAME_IN_PROGRESS` | `tandem_rename` was called while a save of that document was in progress. Retry. |
 | `BAD_REQUEST` | **`tandem_rename` only, on the MCP surface.** The supplied `documentId` has no basename (`src/server/mcp/document.ts:1427`). `/api` routes use this code far more widely -- see [HTTP API](#http-api). |
 | `RENAME_FAILED` | `tandem_rename`'s residual arm: the rename failed carrying no more specific code, including a raw errno from the filesystem, which arrives in `details.errorCode`. Every anticipated refusal has its own code, so this one means something unclassified went wrong. |
 | `INVALID_PATH` | A supplied path was relative where an absolute one is required (including `tandem_open`'s `filePath`), or used a UNC / extended-length / device-namespace prefix -- or the document has no on-disk location to act on: `tandem_applyChanges` or `tandem_restoreBackup` on an upload or scratchpad. |
@@ -436,7 +441,7 @@ Three further skip codes exist on `SaveResult` but **cannot reach `tandem_save`'
 - Read-only documents save their session only (annotations persist), not the source file, and answer `saved: false`.
 - Writable `.docx` documents save on **explicit save only** (never auto-save). The save writes the document body **plus pending `comment`-type annotations as Word comments** (`comments.xml` + range markers), anchored to their current ranges (#1068). `note` and `highlight` annotations are never written to the file (ADR-027), so un-promoted imported Word comments — which live as private notes until batch-promoted — are dropped from the saved file. Accepted/dismissed comments are dropped too (Word has no resolved-state channel we can write). Threaded replies flatten into the comment body with attribution lines; private replies (including imported Word reply threads) are never written.
 
-**Errors:** `FILE_LOCKED` (file open in another program: `EBUSY`/`EPERM`), `PERMISSION_DENIED` (`EACCES`), `FORMAT_ERROR` (any other write failure; the errno is in `details.errorCode`), `VERIFY_BLOCKED` (the save was refused before touching the file -- the regenerated `.docx` failed post-write verification, or the import dropped body pictures the export would strip, #1755)
+**Errors:** `FILE_LOCKED` (file open in another program: `EBUSY`/`EPERM`), `PERMISSION_DENIED` (`EACCES`), `FORMAT_ERROR` (any other write failure; the errno is in `details.errorCode`). A save refused before touching the file -- the regenerated `.docx` failed post-write verification, or the import dropped body pictures the export would strip (#1755) -- is also `FORMAT_ERROR`, with `details.errorCode: "VERIFY_BLOCKED"`; it is not a top-level code ([#2004](https://github.com/bloknayrb/tandem/issues/2004))
 
 ---
 

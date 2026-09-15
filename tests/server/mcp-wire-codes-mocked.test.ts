@@ -147,6 +147,9 @@ describe("tandem_save errno → one code per condition (#1823 §C)", () => {
   it.each([
     ["EACCES", "PERMISSION_DENIED"],
     ["EBUSY", "FILE_LOCKED"],
+    // Not its own wire code yet (#2004): the doc line says FORMAT_ERROR with
+    // details.errorCode "VERIFY_BLOCKED", and this row pins that.
+    ["VERIFY_BLOCKED", "FORMAT_ERROR"],
     ["ENOSPC", "FORMAT_ERROR"],
   ])("save failing with %s answers %s, keeping details.errorCode", async (errno, expected) => {
     const ydoc = getOrCreateDocument(`save-${errno}`);

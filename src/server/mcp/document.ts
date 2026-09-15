@@ -1444,6 +1444,8 @@ export function registerDocumentTools(server: McpServer): void {
       // One code per condition, matching `tandem_open` and `tandem_applyChanges`
       // (#1823): EACCES is a permission refusal; EBUSY/EPERM are the shapes a
       // file held open by another program (Word, on Windows) takes.
+      // VERIFY_BLOCKED still falls through to FORMAT_ERROR, carried in
+      // `details.errorCode`; giving it its own wire code is #2004.
       const code =
         result.errorCode === "EACCES"
           ? "PERMISSION_DENIED"
