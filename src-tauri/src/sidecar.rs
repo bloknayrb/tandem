@@ -3797,7 +3797,7 @@ mod shutdown_guard_tests {
 
     /// Every "grep this literal" a smoke row makes, and the LEVEL it is emitted
     /// at. Three pairs today: the respawn-guard row's two strings, and the
-    /// pre-install flush line that `smoke-lines.md` row 3 reads.
+    /// pre-install flush line that the §1 updater row reads.
     ///
     /// The respawn-guard row asserts "Both are `warn!`, so both clear the
     /// release log floor" and nothing pinned that: the first sat at `info!`
@@ -3837,8 +3837,6 @@ mod shutdown_guard_tests {
         let sidecar_src = include_str!("sidecar.rs");
         let lib_src = include_str!("lib.rs");
         let checklist = include_str!("../../docs/release-smoke-checklist.md");
-        let smoke_lines =
-            include_str!("../../docs/reviews/2026-09-02-v1-review/smoke-lines.md");
 
         // (literal, doc name, doc text, source name, source text)
         let pairs: [(&str, &str, &str, &str, &str); 3] = [
@@ -3861,8 +3859,8 @@ mod shutdown_guard_tests {
             ),
             (
                 concat!("Pre-install: graceful sidecar", " shutdown complete"),
-                "smoke-lines.md",
-                smoke_lines,
+                "release-smoke-checklist.md",
+                checklist,
                 "lib.rs",
                 lib_src,
             ),

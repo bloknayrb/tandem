@@ -12,7 +12,7 @@ release process itself is the risk.
 | [#1746](https://github.com/bloknayrb/tandem/issues/1746) | The macOS signing gate exits 0 on empty secrets, so a misconfigured secret ships an unsigned, un-notarized build silently. Make the gate fail, or confirm the secrets are set before tagging. | 15 min |
 | [#1745](https://github.com/bloknayrb/tandem/issues/1745) | Signing secrets are exposed to floating action tags on every release run. SHA-pin them. | 30 min |
 | [#1747](https://github.com/bloknayrb/tandem/issues/1747) | The bundled Node is five security releases behind and a release is the only vehicle that fixes it. Bump to 22.23.2. | 10 min plus a build |
-| Windows update smoke ([smoke-lines.md](smoke-lines.md), first three lines) | §1 of the smoke checklist has gone two releases unrun, the exe-unlock wait is dead code (#1762), and there is an unverified lead that a silent auto-update scrubs app data. One real 0.24.1 → next upgrade on a Windows machine settles all three. | 20 min of Bryan's time |
+| Windows update smoke ([release-smoke-checklist.md](../../release-smoke-checklist.md) §1 updater row; drafted as [smoke-lines.md](smoke-lines.md) rows 1–3) | §1 of the smoke checklist has gone two releases unrun, the exe-unlock wait is dead code (#1762), and there is an unverified lead that a silent auto-update scrubs app data. One real 0.24.1 → next upgrade on a Windows machine settles all three. | 20 min of Bryan's time |
 
 If the Windows run shows the app-data scrub is real, it moves to the top of this table and becomes a
 fix before tagging.
