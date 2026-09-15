@@ -360,8 +360,9 @@ export function recordTombstone(docHash: string, annotationId: string, prevRev: 
 }
 
 /**
- * Read-only accessor for tests and (future) diagnostic tools. Returns a
- * defensive copy so callers can't mutate the module-internal array.
+ * Read-only accessor for tests and for `injectTutorialAnnotations`, which
+ * skips a seed whose id is tombstoned here (#1696). Returns a defensive copy
+ * so callers can't mutate the module-internal array.
  */
 export function getTombstones(docHash: string): TombstoneRecordV1[] {
   const entries = tombstonesByDoc.get(docHash);
