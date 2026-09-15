@@ -11,6 +11,7 @@ import {
 } from "../../src/server/annotations/store.js";
 import {
   getTombstones,
+  type ObserverCleanup,
   registerAnnotationObserver,
   resetForTesting,
 } from "../../src/server/annotations/sync.js";
@@ -22,7 +23,7 @@ import { createAnnotation, noRelay } from "../helpers/ydoc-factory.js";
 
 useTmpAnnotationsEnvWithFlag("tandem-remove-annotation-test-");
 
-const observerCleanups: Array<() => void> = [];
+const observerCleanups: ObserverCleanup[] = [];
 
 /** Mirror the production wiring: register the sync observer so the tombstone
  * ledger is updated automatically on Y.Map deletes (see #695). */
@@ -45,7 +46,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  while (observerCleanups.length) observerCleanups.pop()?.();
+  while (observerCleanups.length) observerCleanups.pop()?.("close");
 });
 
 describe("removeAnnotationRecord", () => {
