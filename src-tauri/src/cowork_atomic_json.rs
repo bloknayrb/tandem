@@ -160,6 +160,11 @@ where
     // violation 32. Outside the loop that was an immediate hard failure, and
     // the Cowork install writes its three files in separate calls with no
     // rollback, so one such failure left a partial registration.
+    //
+    // Only builds that contain this change get that protection. A desktop app
+    // released before #1600 still hard-fails here while a newer npm scrub holds
+    // the lockfile, and the two ship separately. That version-skew residual is
+    // recorded in `docs/security.md`.
     let start = Instant::now();
     let mut delay_idx = 0usize;
     let lock_file = loop {

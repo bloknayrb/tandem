@@ -431,6 +431,15 @@ async function acquireCoworkLock(
  * open fails with `EBUSY`; while this handle is held, Rust's open fails with
  * sharing violation 32, which `with_locked_json` retries as contention.
  *
+ * **Version skew bounds that second half.** Only a desktop build that contains
+ * #1600 retries on 32. An older one (v0.25.0 and earlier) opens the lockfile
+ * once, outside its backoff loop, so while this handle is held its write fails
+ * at once instead of waiting. The npm CLI and the desktop app update separately,
+ * and this scrub does not check the desktop version. Against such a build a
+ * Cowork install racing the scrub can end in a partial registration, reported as
+ * a failed write rather than a silent lost update. The residual is recorded
+ * next to #1599 in `docs/security.md`.
+ *
  * Shape:
  * 1. An unlocked pre-check that creates nothing — no lockfile, no new warning —
  *    in a workspace with no Tandem entry. Race-safe: an entry Rust adds after it
