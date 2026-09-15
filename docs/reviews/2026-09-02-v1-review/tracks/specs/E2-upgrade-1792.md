@@ -81,3 +81,9 @@ The rail-toggle boolean consumption and `focusToggleTarget` (#1722 rail half →
 - The client half of item 2 (`SettingsClaudeCodeTab.svelte:100`, `useIntegrationWizard.svelte.ts:242` both render only `res.status`) — verified, kept, with test 4.
 - The `App.svelte` registration pin, in its cheapest form (source-contract assertion, test 2).
 - The `_resetTandemSettingsSingletonForTests()` handler reset, the typecheck-valid `notifications.push` literal, and the `path` + `path.dirname` scrub assertion.
+
+## PR review, round 1 (fixed by hand after the workflow's fix agent hit the spend limit)
+
+- **Item 1's toast id used `crypto.randomUUID()`** (cr-1, general-purpose-4) — secure-context-only, so over plain http to a LAN IP the handler threw before the toast and `updateSettings` never returned `false`. Now `generateNotificationId()`, pinned in `settings-readonly-ui.test.ts`'s source contract.
+- **Item 2's doctor check was narrower than the server** (cr-3): `Number.isInteger` passed a `3.5` every integrations route refuses. It now mirrors `readSchemaVersion` + `>`.
+- **Item 2's doctor check reported an unreadable file as absent** (cr-6, general-purpose-2). The server rethrows every errno but ENOENT, so EACCES/EISDIR kill the routes; doctor now warns with the code instead of "No integrations.json yet".

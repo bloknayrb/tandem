@@ -296,5 +296,11 @@ describe("App.svelte — settings write-refused wiring (#1722/#1792)", () => {
     expect(source).toMatch(/setSettingsWriteRefusedHandler\s*\(/);
     // The refusal reaches the user once per condition, not once per click.
     expect(source).toContain('dedupKey: "settings-readonly"');
+    // The id must come from the project helper: `crypto.randomUUID` is
+    // secure-context-only, so over plain http to a LAN IP the handler would
+    // throw before the toast — the silent no-op again, on the Cowork surface.
+    const start = source.indexOf("setSettingsWriteRefusedHandler(");
+    const block = source.slice(start, source.indexOf("});", start));
+    expect(block).toMatch(/\bid:\s*generateNotificationId\(\)/);
   });
 });

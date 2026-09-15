@@ -282,7 +282,10 @@ const notifications = createNotifications();
 // covers all eleven call sites; `dedupKey` collapses repeated clicks.
 setSettingsWriteRefusedHandler(() => {
   notifications.push({
-    id: crypto.randomUUID(),
+    // `generateNotificationId()`, never `crypto.randomUUID()`: the latter is
+    // secure-context-only and `undefined` over plain http to a LAN IP, which
+    // is exactly the Cowork surface this refusal has to stay legible on.
+    id: generateNotificationId(),
     timestamp: Date.now(),
     type: "general-error",
     severity: "warning",

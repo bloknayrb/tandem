@@ -35,7 +35,7 @@
 
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { parseAnnotationDoc } from "../server/annotations/schema.js";
+import { isPartialParse, parseAnnotationDoc } from "../server/annotations/schema.js";
 import { rejectUnsafeWindowsPrefix } from "../shared/windows-path-safety.js";
 
 /**
@@ -110,8 +110,20 @@ export interface AnnotationStoreCounts {
   oversize: number;
   /** Already-quarantined `<hash>.json.corrupt.<ts>` files (filename filter, no read). */
   quarantined: number;
-  /** Already-parked `<hash>.json.future` files (filename filter, no read). */
+  /**
+   * Already-parked future-schema files (filename filter, no read): the primary
+   * `<hash>.json.future` AND the `<hash>.json.future.<ts>-<hex>` archives a
+   * later park moves it to (#1791(b)) — each is the only copy of one cycle.
+   */
   parkedFuture: number;
+  /**
+   * Examined active files that LOAD, but with rows this build cannot read
+   * dropped (#1791(a)). Not unreadable — the loader keeps the rest — and not
+   * healthy either: the next write removes the dropped rows from this file.
+   */
+  partialActive: number;
+  /** `<hash>.json.partial.<hex>` copies holding rows a partial load dropped (filename filter, no read). */
+  partialCopies: number;
   /** Up to {@link ANNOTATION_SCAN_MAX_SAMPLE_NAMES} unreadable active files, with reasons. */
   unreadableSample: UnreadableFile[];
   /**
@@ -226,7 +238,9 @@ export async function scanAnnotationStore(
     futureActive: 0,
     oversize: 0,
     quarantined: entries.filter((f) => f.includes(".corrupt.")).length,
-    parkedFuture: entries.filter((f) => f.endsWith(".json.future")).length,
+    parkedFuture: entries.filter((f) => /\.json\.future(\.|$)/.test(f)).length,
+    partialActive: 0,
+    partialCopies: entries.filter((f) => f.includes(".json.partial.")).length,
     unreadableSample: [],
     vanished: 0,
     schemaVersion: null,
@@ -313,7 +327,13 @@ export async function scanAnnotationStore(
       recordUnreadable(counts, name, "validator-threw");
       continue;
     }
-    if (result.ok) continue;
+    if (result.ok) {
+      // Before #1791(a) this envelope failed validation and was counted
+      // unreadable; row-level tolerance makes it parse `ok`, so without this
+      // branch doctor reports the one condition that is losing rows as healthy.
+      if (isPartialParse(result)) counts.partialActive++;
+      continue;
+    }
     if (result.error === "future") counts.futureActive++;
     else recordUnreadable(counts, name, "invalid-envelope");
   }

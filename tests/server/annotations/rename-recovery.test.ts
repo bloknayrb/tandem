@@ -266,5 +266,13 @@ describe("recoverRenamedEnvelope — partially-readable source (#1791)", () => {
     expect(await readEnvelope(newHash)).toBeNull();
     expect(await readEnvelope(docHash(oldPath))).not.toBeNull();
     expect(doc.getMap(Y_MAP_ANNOTATIONS).size).toBe(0);
+    // The skipped source is an orphan the 30-day GC will unlink, so a
+    // `.partial.` copy — a shape no sweeper matches — must hold the rows.
+    const copies = (await fs.readdir(annotationsDir())).filter((f) =>
+      f.startsWith(`${docHash(oldPath)}.json.partial.`),
+    );
+    expect(copies).toHaveLength(1);
+    const parked = await fs.readFile(path.join(annotationsDir(), copies[0] as string), "utf-8");
+    expect(parked).toContain("ann_future");
   });
 });

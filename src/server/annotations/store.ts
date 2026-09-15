@@ -602,6 +602,28 @@ async function flushOne(docHash: string): Promise<void> {
   }
 }
 
+/**
+ * Copy a partially-readable envelope to `<file>.partial.<8 hex of sha256(raw)>`
+ * (#1791(a)). Returns the copy's path — including when an identical copy
+ * already exists — or `null` when nothing was preserved. Every destructive
+ * sweeper refuses the `.partial.` shape, so the copy outlives the envelope.
+ */
+export async function preservePartialEnvelope(file: string, raw: string): Promise<string | null> {
+  const digest = crypto.createHash("sha256").update(raw, "utf-8").digest("hex").slice(0, 8);
+  const partialPath = `${file}.partial.${digest}`;
+  try {
+    await fs.copyFile(file, partialPath, fs.constants.COPYFILE_EXCL);
+  } catch (copyErr) {
+    if ((copyErr as NodeJS.ErrnoException).code !== "EEXIST") {
+      console.error(
+        `[ANNOTATION-STORE] Failed to preserve partially-readable file ${file}: ${(copyErr as Error).message}`,
+      );
+      return null;
+    }
+  }
+  return partialPath;
+}
+
 async function loadOne(docHash: string, filePath: string): Promise<AnnotationDocV1> {
   if (isFeatureDisabled()) return emptyDoc(docHash, filePath);
 
@@ -635,20 +657,16 @@ async function loadOne(docHash: string, filePath: string): Promise<AnnotationDoc
       // #1791(b)'s "second cycle destroys the only copy" in the file that
       // fixes it. Hashing the raw bytes gives both: identical content
       // re-opens to EEXIST (one copy), different content parks its own.
-      const digest = crypto.createHash("sha256").update(raw, "utf-8").digest("hex").slice(0, 8);
-      const partialPath = `${target}.partial.${digest}`;
-      try {
-        await fs.copyFile(target, partialPath, fs.constants.COPYFILE_EXCL);
-      } catch (copyErr) {
-        const code = (copyErr as NodeJS.ErrnoException).code;
-        if (code !== "EEXIST") {
-          console.error(
-            `[ANNOTATION-STORE] Failed to preserve partially-readable file ${target}: ${(copyErr as Error).message}`,
-          );
-        }
-      }
+      const partialPath = await preservePartialEnvelope(target, raw);
+      // Only claim the copy exists when it does: this line is the partial
+      // branch's one surface, and a reader who believes the rows are safe on
+      // disk lets the next snapshot clobber the only copy (#1791 review).
       console.error(
-        `[ANNOTATION-STORE] ${target} had ${result.skipped.annotations} unreadable annotation(s) and ${result.skipped.replies} unreadable reply(ies); a full copy was kept at ${partialPath}.`,
+        `[ANNOTATION-STORE] ${target} had ${result.skipped.annotations} unreadable annotation(s) and ${result.skipped.replies} unreadable reply(ies); ${
+          partialPath === null
+            ? "those rows were NOT preserved and the next write will drop them."
+            : `a full copy was kept at ${partialPath}.`
+        }`,
       );
     }
     return result.doc;

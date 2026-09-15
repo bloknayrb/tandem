@@ -759,6 +759,27 @@ describe("partially-readable file on load (#1791)", () => {
     expect(parked).toContain("ann_future_one");
   });
 
+  it("does not claim a copy was kept when the copy failed", async () => {
+    // The partial branch's only surface is this stderr line; claiming a copy
+    // that does not exist tells a reader the dropped rows are safe on disk.
+    const annotationsDir = getAnnotationsDir();
+    await fs.mkdir(annotationsDir, { recursive: true });
+    await fs.writeFile(path.join(annotationsDir, `${HASH_A}.json`), partialEnvelope("one"));
+    const copySpy = vi
+      .spyOn(fs, "copyFile")
+      .mockRejectedValueOnce(Object.assign(new Error("no space"), { code: "ENOSPC" }));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await createStore(HASH_A, { filePath: FILE_A }).load();
+      const lines = errorSpy.mock.calls.map((c) => c.map(String).join(" "));
+      expect(lines.some((l) => l.includes("a full copy was kept"))).toBe(false);
+      expect(lines.some((l) => l.includes("NOT preserved"))).toBe(true);
+    } finally {
+      copySpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
   it("is idempotent for identical content but parks a SECOND, different partial", async () => {
     const annotationsDir = getAnnotationsDir();
     await fs.mkdir(annotationsDir, { recursive: true });

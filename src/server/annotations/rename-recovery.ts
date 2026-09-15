@@ -54,6 +54,7 @@ import {
   getAnnotationsDir,
   isStoreFeatureDisabled,
   isStoreReadOnly,
+  preservePartialEnvelope,
 } from "./store.js";
 import { recordTombstone } from "./sync.js";
 
@@ -138,12 +139,6 @@ export async function recoverRenamedEnvelope(
       if (!raw.includes(`"contentHash":"${wantHash}"`)) continue;
       const parsed = parseAnnotationDoc(raw);
       if (!parsed.ok) continue;
-      // #1791(a): a partially-tolerated envelope is not a safe base for a
-      // full-envelope clobber. Recovery re-keys `parsed.doc` under the NEW
-      // docHash, flushes it, then unlinks the source — so recovering one would
-      // durably delete every row this build could not read. Skip this
-      // candidate (the function's existing "never fail the recovery" rule).
-      if (isPartialParse(parsed)) continue;
 
       const stored = parsed.doc.meta.contentHash;
       if (typeof stored !== "string" || stored !== wantHash) continue;
@@ -185,6 +180,20 @@ export async function recoverRenamedEnvelope(
         oldStillExists = false;
       }
       if (oldStillExists) continue;
+
+      // #1791(a): a partially-tolerated envelope is not a safe base for a
+      // full-envelope clobber. Recovery re-keys `parsed.doc` under the NEW
+      // docHash, flushes it, then unlinks the source — so recovering one would
+      // durably delete every row this build could not read. Skip this
+      // candidate (the function's existing "never fail the recovery" rule).
+      // Skipping alone is not enough: the source is now an orphan whose old
+      // path is gone, and `cleanupOrphanedAnnotationFiles` unlinks it after 30
+      // days. Park the same `.partial.` copy `loadOne` keeps, which no sweeper
+      // matches. Checked last so only a genuine rename source gets one.
+      if (isPartialParse(parsed)) {
+        await preservePartialEnvelope(path.join(dir, file), raw);
+        continue;
+      }
 
       candidates.push({ doc: parsed.doc, file });
     }
