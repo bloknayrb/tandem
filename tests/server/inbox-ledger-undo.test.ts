@@ -77,7 +77,11 @@ function poll(
   refreshAll: (anns: Annotation[]) => Annotation[] = (a) => a,
 ) {
   const all = [...map().values()] as Annotation[];
-  return processInboxAnnotations(all, TEXT, surfaced, refreshAll, DOC_ID, "tandem", () => false);
+  return processInboxAnnotations(all, TEXT, surfaced, refreshAll, {
+    modeState: "tandem",
+    documentId: DOC_ID,
+    wasChannelEmitted: () => false,
+  });
 }
 
 beforeEach(() => {
