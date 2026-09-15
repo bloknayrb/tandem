@@ -219,6 +219,11 @@ interface SpawnPlan {
    * that decided it (`resolveCwd`) rather than reconstructed by a second
    * resolution of the same string. */
   cwdFromOverride: boolean;
+  /** The saved `workingDirectory` was consulted and REJECTED (outside home, or
+   * unresolvable), so `cwd` is home instead. Carried to `status()` so Settings
+   * can say the saved directory is not being honoured rather than display it as
+   * though it were (#1822 item 4). */
+  workingDirectoryIgnored: boolean;
   sessionId: string;
   resuming: boolean;
   /** The resumed session was left owing a sign-in re-check (#1780) by an
@@ -355,9 +360,13 @@ export interface Supervisor {
  * perfectly healthy supervisor. The explicit `lastError?: undefined` below
  * encodes that invariant instead of leaving it to the reader. */
 export type SupervisorStatus =
-  | { running: false; lastError?: LauncherErrorCode }
+  | { running: false; lastError?: LauncherErrorCode; workingDirectoryIgnored?: true }
   | {
       running: true;
+      /** The LAST spawn rejected the saved `workingDirectory` and ran in home.
+       * Present only when true. Deliberately not cleared on exit or stop: it
+       * describes the last launch, and a later spawn recomputes it. */
+      workingDirectoryIgnored?: true;
       /** PID of the reaper process. Claude's own PID is intentionally not
        * exposed — the reaper is the lifecycle owner. */
       reaperPid: number;
@@ -714,6 +723,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let currentCwd: string | undefined;
   let currentSessionId: string | undefined;
   let currentResuming = false;
+  /** See `SpawnPlan.workingDirectoryIgnored`. Set per spawn in `spawnOnce`. */
+  let lastSpawnIgnoredWorkingDirectory = false;
   let stopRequested = false;
   /**
    * True only while the most recent stop was the public `stop()` — the user
@@ -1056,14 +1067,20 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   function resolveCwd(
     integration: ClaudeCodeIntegration,
     override?: string,
-  ): { cwd: string; fromOverride: boolean } {
+  ): { cwd: string; fromOverride: boolean; workingDirectoryIgnored: boolean } {
     const candidate = override ?? (integration as { workingDirectory?: unknown }).workingDirectory;
     if (typeof candidate === "string") {
       const normalized = safeCwd(candidate);
       // `override !== undefined`, not truthiness: this must report which INPUT
       // was honored, and an empty-string override (rejected upstream by the
       // routes, but not by this function) would read as "no override".
-      if (normalized) return { cwd: normalized, fromOverride: override !== undefined };
+      if (normalized) {
+        return {
+          cwd: normalized,
+          fromOverride: override !== undefined,
+          workingDirectoryIgnored: false,
+        };
+      }
     }
     const cwd = opts.homeOverride
       ? (resolveSafeCwd(opts.homeOverride) ?? opts.homeOverride)
@@ -1071,13 +1088,16 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // Logged only for the saved `workingDirectory`: an OVERRIDE that failed is
     // already reported by `persistRequestedCwd`, and one event gets one line.
     // The launch never fails on this — it falls back to home, as an
-    // unresolvable directory always has.
-    if (override === undefined && typeof candidate === "string") {
+    // unresolvable directory always has. The log line is for triage; the user's
+    // signal is `workingDirectoryIgnored`, which `GET /api/launcher/status`
+    // carries to Settings so the saved value is not shown as though it applied.
+    const workingDirectoryIgnored = override === undefined && typeof candidate === "string";
+    if (workingDirectoryIgnored) {
       console.error(
         `[Launcher] workingDirectory ${sanitizeForLog(candidate)} is not a directory inside home — spawning in ${cwd}`,
       );
     }
-    return { cwd, fromOverride: false };
+    return { cwd, fromOverride: false, workingDirectoryIgnored };
   }
 
   /**
@@ -1129,7 +1149,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     const integration = await readIntegration();
     if (!integration) return null;
 
-    const { cwd, fromOverride } = resolveCwd(integration, cwdOverride);
+    const { cwd, fromOverride, workingDirectoryIgnored } = resolveCwd(integration, cwdOverride);
     const saved = readSavedSession();
 
     // The resume decision is made HERE, against the planned cwd, rather than at
@@ -1156,6 +1176,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       integration,
       cwd,
       cwdFromOverride: fromOverride,
+      workingDirectoryIgnored,
       sessionId,
       resuming,
       loginRecheckOwed: loginRecheck,
@@ -1226,6 +1247,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     currentCwd = plan.cwd;
     currentSessionId = plan.sessionId;
     currentResuming = plan.resuming;
+    lastSpawnIgnoredWorkingDirectory = plan.workingDirectoryIgnored;
 
     // Persist the session id on first successful spawn. We mark it as
     // "current" immediately; if Claude crashes during the resume window we'll
@@ -2011,6 +2033,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   }
 
   function status(): SupervisorStatus {
+    const ignored = lastSpawnIgnoredWorkingDirectory
+      ? { workingDirectoryIgnored: true as const }
+      : {};
     if (
       child &&
       !child.killed &&
@@ -2024,9 +2049,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         cwd: currentCwd,
         sessionId: currentSessionId,
         resuming: currentResuming,
+        ...ignored,
       };
     }
-    return lastError ? { running: false, lastError } : { running: false };
+    return lastError ? { running: false, lastError, ...ignored } : { running: false, ...ignored };
   }
 
   return { start, relaunch, stop, startFresh, status };

@@ -1,6 +1,6 @@
 <script lang="ts">
 import { onDestroy } from "svelte";
-import { API_LAUNCHER_WORKING_DIRECTORY } from "../../../shared/api-paths";
+import { API_LAUNCHER_STATUS, API_LAUNCHER_WORKING_DIRECTORY } from "../../../shared/api-paths";
 import { SELECTION_DWELL_MAX_MS, SELECTION_DWELL_MIN_MS } from "../../../shared/constants";
 import {
   API_INTEGRATIONS_EXISTING,
@@ -12,6 +12,7 @@ import {
   LAUNCHER_ERROR_NO_INTEGRATION,
   LAUNCHER_ERROR_NOT_AVAILABLE,
   LAUNCHER_ERROR_PATH_REJECTED,
+  type LauncherStatus,
 } from "../../../shared/launcher/contract";
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
 import { disabledControlStyle } from "../../utils/colors";
@@ -71,6 +72,15 @@ let hasIntegration = $state(false);
  * no claude-code integration was returned" — both pre-existing states.
  */
 let lastLoadError = $state<string | null>(null);
+/**
+ * #1822 item 4: the launcher home-confines the saved `workingDirectory` and
+ * falls back to home when it is outside. Without this the input below kept
+ * showing the saved folder while Claude ran in home. Read from
+ * `GET /api/launcher/status` (loopback-only field), so it describes the LAST
+ * spawn; a successful save or reset here clears it locally, because the route
+ * accepts only folders inside home.
+ */
+let wdIgnored = $state(false);
 
 /**
  * #1022 discoverability: a user with Claude credentials but no configured
@@ -118,6 +128,7 @@ async function loadWorkingDirectory() {
     if (entry) {
       hasIntegration = true;
       workingDirectory = entry.workingDirectory ?? null;
+      if (workingDirectory !== null) void loadWorkingDirectoryIgnored();
     }
   } catch (err) {
     if (!mounted) return;
@@ -132,6 +143,22 @@ async function loadWorkingDirectory() {
 }
 
 void loadWorkingDirectory();
+
+/** Best-effort: a failed or unparseable status read leaves the warning hidden,
+ * which is the pre-#1822 display rather than a new claim. */
+async function loadWorkingDirectoryIgnored() {
+  try {
+    const res = await fetch(`${API_BASE}${API_LAUNCHER_STATUS}`);
+    if (!mounted || !res.ok) return;
+    const body = (await res.json()) as Partial<LauncherStatus> & {
+      workingDirectoryIgnored?: unknown;
+    };
+    if (!mounted) return;
+    wdIgnored = body.workingDirectoryIgnored === true;
+  } catch (err) {
+    console.warn("[Settings] Failed to read launcher status:", err);
+  }
+}
 
 /**
  * #1432: is the channel shim already registered for Claude Code?
@@ -192,6 +219,7 @@ async function persistWorkingDirectory(value: string | null) {
     const body = (await res.json()) as { workingDirectory?: string | null };
     if (!mounted) return;
     workingDirectory = body.workingDirectory ?? null;
+    wdIgnored = false;
     // Fixed-string success toast (E5). Never include `err.message` or the
     // resolved path — the toast surface is shared with other warnings and
     // path leakage isn't appropriate there.
@@ -398,6 +426,17 @@ function handleReset() {
         style="font-size: 12px; padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: transparent; color: var(--tandem-fg-muted); cursor: pointer;"
       >Reset to default</button>
     </div>
+    {#if wdIgnored && workingDirectory !== null}
+      <!-- Fixed string: never interpolate the path (see workingDirErrorForCode). -->
+      <div
+        role="status"
+        data-testid="settings-modal-working-directory-ignored"
+        style="font-size: 11px; color: var(--tandem-warning-fg-strong); background: var(--tandem-warning-bg); border: 1px solid var(--tandem-warning-border); border-radius: var(--tandem-r-2); padding: var(--tandem-space-2);"
+      >
+        This folder is not inside your home directory, so Claude last launched in your home
+        directory instead. Choose a folder inside home, or reset to default.
+      </div>
+    {/if}
     {#if wdError}
       <div role="alert" style="font-size: 11px; color: var(--tandem-error-fg-strong);">
         {wdError}

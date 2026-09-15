@@ -36,6 +36,7 @@ type WrittenIntegrationsFile = { integrations: Array<{ workingDirectory?: string
 interface FakeSupervisorOpts {
   running?: boolean;
   cwd?: string;
+  workingDirectoryIgnored?: true;
   relaunchHook?: (cwd?: string) => Promise<void>;
   startFreshHook?: (cwd?: string) => Promise<void>;
 }
@@ -50,16 +51,21 @@ function makeFakeSupervisor(opts: FakeSupervisorOpts = {}): Supervisor {
     startFresh: async (cwd?: string) => {
       await opts.startFreshHook?.(cwd);
     },
-    status: () =>
-      opts.running
+    status: () => {
+      const ignored = opts.workingDirectoryIgnored
+        ? { workingDirectoryIgnored: true as const }
+        : {};
+      return opts.running
         ? {
             running: true,
             reaperPid: 12345,
             cwd: opts.cwd ?? os.homedir(),
             sessionId: "11111111-1111-4111-8111-111111111111",
             resuming: false,
+            ...ignored,
           }
-        : { running: false },
+        : { running: false, ...ignored };
+    },
   };
 }
 
@@ -198,6 +204,33 @@ describe("GET /api/launcher/status", () => {
     const res = await request(app, "GET", "/api/launcher/status");
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ available: true, running: true });
+  });
+
+  /**
+   * #1822 item 4 review: the saved workingDirectory can be silently rejected
+   * at spawn, and Settings needs a signal. Loopback only, like `cwd`.
+   */
+  it.each([
+    true,
+    false,
+  ])("carries workingDirectoryIgnored to loopback only (running=%s)", async (running) => {
+    const sup = makeFakeSupervisor({ running, workingDirectoryIgnored: true });
+    const { app: loopbackApp } = makeApp(baseDeps(sup));
+    const loopback = await request(loopbackApp, "GET", "/api/launcher/status");
+    expect((loopback.body as { workingDirectoryIgnored?: unknown }).workingDirectoryIgnored).toBe(
+      true,
+    );
+
+    const { app: lanApp } = makeApp(baseDeps(sup), { remoteAddress: "192.168.1.50" });
+    const lan = await request(lanApp, "GET", "/api/launcher/status");
+    expect(lan.body).toEqual({ available: true, running });
+  });
+
+  it("omits workingDirectoryIgnored when the saved directory was honoured", async () => {
+    const sup = makeFakeSupervisor({ running: true });
+    const { app } = makeApp(baseDeps(sup));
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect("workingDirectoryIgnored" in (res.body as object)).toBe(false);
   });
 });
 

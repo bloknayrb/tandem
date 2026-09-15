@@ -1258,6 +1258,9 @@ describe("launcher — the saved working directory is home-confined", () => {
       const rec = await firstSpawn();
       expect(rec.cwd).toBe(fakeHome);
       expect(homeLines(errSpy)).toHaveLength(1);
+      // The review finding: a log line is not a user signal. `status()` is what
+      // Settings reads, and it must say the saved folder was not honoured.
+      expect(sup.status().workingDirectoryIgnored).toBe(true);
     } finally {
       errSpy.mockRestore();
       await sup.stop();
@@ -1276,6 +1279,7 @@ describe("launcher — the saved working directory is home-confined", () => {
       const rec = await firstSpawn();
       expect(rec.cwd).toBe(fs.realpathSync(insideDir));
       expect(homeLines(errSpy)).toHaveLength(0);
+      expect(sup.status().workingDirectoryIgnored).toBeUndefined();
     } finally {
       errSpy.mockRestore();
       await sup.stop();

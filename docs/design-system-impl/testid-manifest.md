@@ -217,6 +217,9 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `settings-modal-margin-view-toggle`,
   `settings-modal-cowork-suspense-fallback`,
   `settings-modal-open-integration-wizard`,
+  `settings-modal-working-directory-ignored` (#1822 item 4 — the saved folder
+  is outside home, so the last launch ran in home; driven by the loopback-only
+  `workingDirectoryIgnored` on `GET /api/launcher/status`),
   `settings-modal-push-routes`, `settings-modal-push-routes-shim` (#1432 — the
   persistent "Real-time updates" section; the `-shim` paragraph is route three,
   whose two arms are the honesty-critical copy),
