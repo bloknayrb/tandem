@@ -1815,7 +1815,7 @@ describe("MCP tool integration — tandem_appendContent (#979)", () => {
       await client.callTool({ name: "tandem_appendContent", arguments: { content: "# nope" } }),
     );
     expect(parsed.error).toBe(true);
-    expect(parsed.code).toBe("FORMAT_ERROR");
+    expect(parsed.code).toBe("READ_ONLY");
   });
 
   it("rejects non-markdown documents", async () => {

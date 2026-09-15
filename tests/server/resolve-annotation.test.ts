@@ -104,7 +104,7 @@ describe("tandem_resolveAnnotation precondition (issue #694)", () => {
       arguments: { id, action: "accept" },
     });
     const parsed = parseResult(result as { content: Array<{ type: string; text?: string }> });
-    expect(parsed.code).toBe("ANNOTATION_NOT_PENDING");
+    expect(parsed.code).toBe("ANNOTATION_RESOLVED");
     expect(parsed.message).toContain("already accepted");
 
     const after = map.get(id) as Annotation;
@@ -126,7 +126,7 @@ describe("tandem_resolveAnnotation precondition (issue #694)", () => {
       arguments: { id, action: "dismiss" },
     });
     const parsed = parseResult(result as { content: Array<{ type: string; text?: string }> });
-    expect(parsed.code).toBe("ANNOTATION_NOT_PENDING");
+    expect(parsed.code).toBe("ANNOTATION_RESOLVED");
     expect(parsed.message).toContain("already dismissed");
 
     const after = map.get(id) as Annotation;
@@ -147,7 +147,7 @@ describe("tandem_resolveAnnotation precondition (issue #694)", () => {
       arguments: { id, action: "accept" },
     });
     const parsed = parseResult(result as { content: Array<{ type: string; text?: string }> });
-    expect(parsed.code).toBe("ANNOTATION_NOT_PENDING");
+    expect(parsed.code).toBe("ANNOTATION_RESOLVED");
 
     const after = map.get(id) as Annotation;
     expect(after.status).toBe("dismissed");

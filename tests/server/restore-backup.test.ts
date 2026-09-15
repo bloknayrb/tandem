@@ -952,7 +952,7 @@ describe("tandem_restoreBackup tool", () => {
 
     const parsed = parseResult(await restoreTool({}));
     expect(parsed.error).toBe(true);
-    expect(parsed.code).toBe("FORMAT_ERROR");
+    expect(parsed.code).toBe("INVALID_PATH");
   });
 
   it("lists .docx snapshots when they exist (omit `backup`)", async () => {

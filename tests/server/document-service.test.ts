@@ -701,7 +701,10 @@ describe("saveDocumentToDisk", () => {
     addDoc("save-fail-1816", makeOpenDoc("save-fail-1816", target));
     editBody("save-fail-1816", "content");
     vi.mocked(atomicWrite).mockRejectedValueOnce(
-      Object.assign(new Error(`EACCES: permission denied, open '${target}'`), { code: "EACCES" }),
+      Object.assign(new Error(`EACCES: permission denied, open '${target}'`), {
+        code: "EACCES",
+        syscall: "open",
+      }),
     );
 
     const result = await saveDocumentToDisk("save-fail-1816", "manual");
@@ -716,6 +719,9 @@ describe("saveDocumentToDisk", () => {
     // failed." itself.
     expect(result.reason).toBe("The document could not be saved.");
     expect(result.errorCode).toBe("EACCES");
+    // The syscall travels with the errno: on Windows it is what separates a
+    // refusal from a lock (`lockOrPermissionCode`, #1823).
+    expect(result.errorSyscall).toBe("open");
 
     const { pushNotification } = await import("../../src/server/notifications.js");
     expect(pushNotification).toHaveBeenCalledWith(

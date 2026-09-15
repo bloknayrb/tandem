@@ -1,0 +1,302 @@
+/**
+ * One wire code per condition, driven through the REAL tools (#1823).
+ *
+ * Each row asserts `code` exactly, because a wire code is client-visible:
+ * `skills/tandem/SKILL.md` and `docs/mcp-tools.md` both tell Claude what to
+ * match on. The rows that need a mocked seam (errno mapping) live in
+ * `mcp-wire-codes-mocked.test.ts`.
+ */
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createMinimalDocx,
+  parseResult,
+  seedAcceptedSuggestion,
+} from "../helpers/wire-code-fixtures.js";
+
+// vi.mock factories are hoisted above module-level code. The app-data dir name
+// carries the literal `tandem` (platform.test.ts keys on it), and it keeps the
+// pre-overwrite snapshot and annotation envelope of a real open out of the
+// user's real app data.
+vi.mock("../../src/server/platform", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/server/platform")>();
+  const osMod = await import("os");
+  const pathMod = await import("path");
+  const cryptoMod = await import("crypto");
+  const appDataDir = pathMod.join(
+    osMod.tmpdir(),
+    `tandem-test-wire-codes-${cryptoMod.randomUUID()}`,
+  );
+  process.env.TANDEM_APP_DATA_DIR = appDataDir;
+  return { ...original, SESSION_DIR: pathMod.join(appDataDir, "sessions") };
+});
+vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
+  watchFile: vi.fn(),
+}));
+vi.mock("../../src/server/integrations/acl-win.js", () => ({
+  setRestrictiveAcl: vi.fn().mockResolvedValue(undefined),
+}));
+
+const { addDoc, removeDoc, setActiveDocId } = await import(
+  "../../src/server/documents/registry-testing.js"
+);
+const { isFullyQualifiedPath, populateYDoc, registerDocumentTools } = await import(
+  "../../src/server/mcp/document.js"
+);
+const { getOpenDocs } = await import("../../src/server/mcp/document-service.js");
+const { registerApplyTools } = await import("../../src/server/mcp/docx-apply.js");
+const { getOrCreateDocument } = await import("../../src/server/yjs/provider.js");
+const { timeoutMs } = await import("../helpers/timing.js");
+
+const REAL_APPLY_TIMEOUT_MS = timeoutMs(60_000, 300_000);
+
+async function setupClient(): Promise<Client> {
+  const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
+  registerDocumentTools(server);
+  registerApplyTools(server);
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "test-client", version: "0.0.1" });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  return client;
+}
+
+type DocOpts = {
+  format?: "md" | "txt" | "html" | "docx";
+  readOnly?: boolean;
+  source?: "file" | "upload";
+  filePath?: string;
+};
+
+function registerDoc(id: string, text: string, opts: DocOpts = {}) {
+  const ydoc = getOrCreateDocument(id);
+  populateYDoc(ydoc, text);
+  addDoc(id, {
+    id,
+    filePath: opts.filePath ?? `/tmp/${id}.${opts.format ?? "md"}`,
+    format: opts.format ?? "md",
+    readOnly: opts.readOnly ?? false,
+    source: opts.source ?? "file",
+  });
+  setActiveDocId(id);
+  return ydoc;
+}
+
+let client: Client;
+let tmpDir: string;
+
+beforeEach(async () => {
+  for (const id of [...getOpenDocs().keys()]) removeDoc(id);
+  setActiveDocId(null);
+  tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "tandem-wire-codes-"));
+  client = await setupClient();
+});
+
+afterEach(async () => {
+  for (const id of [...getOpenDocs().keys()]) removeDoc(id);
+  await fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+});
+
+afterAll(async () => {
+  const appData = process.env.TANDEM_APP_DATA_DIR;
+  if (appData?.includes("tandem-test-wire-codes-")) {
+    await fsp.rm(appData, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+async function call(name: string, args: Record<string, unknown>) {
+  return parseResult(await client.callTool({ name, arguments: args }));
+}
+
+describe("read-only → READ_ONLY (#1823 §B)", () => {
+  it("tandem_edit on a read-only document", async () => {
+    registerDoc("ro-edit", "Hello world", { readOnly: true });
+    const parsed = await call("tandem_edit", { from: 0, to: 5, newText: "Howdy" });
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("READ_ONLY");
+  });
+
+  it("tandem_editList on a read-only document", async () => {
+    registerDoc("ro-list", "- one\n- two", { readOnly: true });
+    const parsed = await call("tandem_editList", { at: 2, op: "remove" });
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("READ_ONLY");
+  });
+});
+
+describe("rejected or unusable path → INVALID_PATH (#1823 §D)", () => {
+  it("tandem_open on a UNC path", async () => {
+    // Absolute on both POSIX and win32, so it gets past the relative-path
+    // refusal; `assertSafePathPrefix` refuses the RAW input before any fs call,
+    // so it reaches the handler's INVALID_PATH arm on every platform.
+    const unc = "//server/share/x.md";
+    expect(path.isAbsolute(unc)).toBe(true);
+    const parsed = await call("tandem_open", { filePath: unc });
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_PATH");
+    expect(parsed.message).toContain("UNC");
+    expect(parsed.message).not.toContain("absolute");
+  });
+
+  it("tandem_applyChanges with a UNC backupPath", async () => {
+    const parsed = await call("tandem_applyChanges", { backupPath: "//server/share/b.docx" });
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_PATH");
+  });
+
+  it("tandem_applyChanges on an upload", async () => {
+    registerDoc("apply-upload", "Hello", {
+      format: "docx",
+      source: "upload",
+      filePath: "upload://abc/pasted.docx",
+    });
+    const parsed = await call("tandem_applyChanges", {});
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_PATH");
+  });
+
+  it("tandem_restoreBackup restore mode on an upload", async () => {
+    registerDoc("restore-upload", "Hello", { source: "upload", filePath: "upload://abc/p.md" });
+    const parsed = await call("tandem_restoreBackup", { backup: "x" });
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_PATH");
+  });
+
+  it("twin: tandem_restoreBackup restore mode on a writable .html stays FORMAT_ERROR", async () => {
+    // Kills folding UNSUPPORTED_FORMAT into the INVALID_PATH arm.
+    registerDoc("restore-html", "Hello", { format: "html", filePath: path.join(tmpDir, "p.html") });
+    const parsed = await call("tandem_restoreBackup", { backup: "x" });
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("FORMAT_ERROR");
+  });
+});
+
+describe("tandem_applyChanges missing backup directory → FILE_NOT_FOUND (#1823 §E)", () => {
+  it(
+    "answers FILE_NOT_FOUND, not INTERNAL_ERROR, and leaves the file alone",
+    async () => {
+      const docPath = path.join(tmpDir, "doc.docx");
+      await fsp.writeFile(docPath, await createMinimalDocx("Hello world"));
+      // The backup directory is the only thing that can stop the write.
+      seedAcceptedSuggestion(getOrCreateDocument("apply-missing-dir"));
+      addDoc("apply-missing-dir", {
+        id: "apply-missing-dir",
+        filePath: docPath,
+        format: "docx",
+        readOnly: false,
+        source: "file",
+      });
+      setActiveDocId("apply-missing-dir");
+      const before = await fsp.readFile(docPath);
+
+      const parsed = await call("tandem_applyChanges", {
+        backupPath: path.join(tmpDir, "no-such-dir", "b.docx"),
+      });
+      expect(parsed.error).toBe(true);
+      expect(parsed.code).toBe("FILE_NOT_FOUND");
+      expect(await fsp.readFile(docPath)).toEqual(before);
+    },
+    REAL_APPLY_TIMEOUT_MS,
+  );
+});
+
+describe("tandem_open refuses a relative path (#1823 §F)", () => {
+  it("a relative path to a real file → INVALID_PATH, and nothing opens", async () => {
+    // The file lives under the cwd, not os.tmpdir(): on a Windows checkout
+    // whose drive differs from %TEMP%, `path.relative` across drives returns an
+    // absolute path and the row would fail its own precondition.
+    const relDir = await fsp.mkdtemp(path.join(process.cwd(), ".tandem-wire-rel-"));
+    try {
+      const file = path.join(relDir, "rel.md");
+      await fsp.writeFile(file, "# Rel\n\nbody\n");
+      const rel = path.relative(process.cwd(), file);
+      expect(path.isAbsolute(rel)).toBe(false);
+      const sizeBefore = getOpenDocs().size;
+
+      const parsed = await call("tandem_open", { filePath: rel });
+      expect(parsed.error).toBe(true);
+      expect(parsed.code).toBe("INVALID_PATH");
+      expect(getOpenDocs().size).toBe(sizeBefore);
+    } finally {
+      await fsp.rm(relDir, { recursive: true, force: true });
+    }
+  });
+
+  it("twin: a missing absolute path is still FILE_NOT_FOUND", async () => {
+    const parsed = await call("tandem_open", { filePath: path.join(tmpDir, "missing.md") });
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("FILE_NOT_FOUND");
+  });
+
+  // `path.isAbsolute` is true on win32 for a drive-less root-relative path,
+  // and `path.resolve` then borrows the cwd's drive. The platform is stubbed
+  // so this row pins the HANDLER's use of the stricter check on every CI leg,
+  // not only on a Windows runner.
+  it("a drive-less root-relative path on a win32 server → INVALID_PATH", async () => {
+    const real = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!real) throw new Error("process.platform has no own descriptor");
+    Object.defineProperty(process, "platform", { ...real, value: "win32" });
+    try {
+      const sizeBefore = getOpenDocs().size;
+      const parsed = await call("tandem_open", { filePath: "/tandem-no-drive/x.md" });
+      expect(parsed.error).toBe(true);
+      expect(parsed.code).toBe("INVALID_PATH");
+      expect(parsed.message).toContain("absolute");
+      expect(getOpenDocs().size).toBe(sizeBefore);
+    } finally {
+      Object.defineProperty(process, "platform", real);
+    }
+  });
+});
+
+describe("isFullyQualifiedPath", () => {
+  it.each([
+    ["C:\\docs\\a.md", true],
+    ["c:/docs/a.md", true],
+    ["\\\\server\\share\\a.md", true],
+    ["//server/share/a.md", true],
+    ["\\docs\\a.md", false],
+    ["/Users/me/a.md", false],
+    ["C:docs\\a.md", false],
+    ["docs\\a.md", false],
+    ["", false],
+  ])("win32: %j → %s", (p, expected) => {
+    expect(isFullyQualifiedPath(p, "win32")).toBe(expected);
+  });
+
+  it.each([
+    ["/home/me/a.md", true],
+    ["//server/share/a.md", true],
+    ["docs/a.md", false],
+    ["C:\\docs\\a.md", false],
+    ["", false],
+  ])("linux: %j → %s", (p, expected) => {
+    expect(isFullyQualifiedPath(p, "linux")).toBe(expected);
+  });
+});
+
+describe("tandem_status with a documentId that is not open (#1823 §G)", () => {
+  it("names the id instead of saying no document is open", async () => {
+    registerDoc("status-open", "Hello");
+    const parsed = await call("tandem_status", { text: "working", documentId: "nope" });
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.warning).toContain("nope");
+    expect(parsed.data.warning).not.toContain("No document open");
+  });
+
+  // Twin: `getCurrentDoc("")` returns null without looking "" up, so an empty
+  // id is no id. Naming it would print a sentence with a hole in it.
+  it('documentId: "" gets the no-document text, not "Document  is not open"', async () => {
+    registerDoc("status-open-empty", "Hello");
+    const parsed = await call("tandem_status", { text: "working", documentId: "" });
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.warning).toBe("No document open — status not broadcast to editor.");
+    expect(parsed.data.warning, "a hole where the id should be").not.toMatch(/ {2}/);
+  });
+});
