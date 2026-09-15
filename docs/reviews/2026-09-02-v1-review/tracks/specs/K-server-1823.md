@@ -53,7 +53,7 @@ The PR body lists each rename as a documented-contract change. It also notes tha
 - **F. `tandem_open` refuses a relative path.** Before `openFromDisk` in the handler: `if (!path.isAbsolute(filePath)) return mcpError("INVALID_PATH", "filePath must be an absolute path.")`.
   - A string check, not containment; it does not decide #1666.
   - `resolveAndValidatePath` is untouched, so `/api/open`, restore and startup opens are unchanged. The Tauri caller already asserts `is_absolute`.
-  - Docs `:140`.
+  - Docs `:140` and `:115`. Rewrite the `filePath` row at `:115`: a relative path is refused with `INVALID_PATH`, matching the table's own `INVALID_PATH` row. Keep the sentence "There is no root confinement either (#1666, open)", so the edit cannot be read as deciding #1666. Drop the stale `open.ts:678` citation.
 - **G. `tandem_status`** (`document.ts:1458`): when `documentId` is given, the warning becomes `` `Document ${documentId} is not open — status not broadcast to editor.` ``. The no-id case is unchanged.
 - **H. Section offsets: fix the description, not the return.**
   - The description (`document.ts:581-587`) says offsets "line up exactly" and then offers `section`. Add: "A `section` read returns that section's text only, and its offsets are not document offsets. Read without `section`, or use `tandem_search`/`tandem_resolveRange`, before anchoring."
@@ -133,3 +133,7 @@ Restore each from a file copy; each must turn a named row red.
 - **Removed: the `tandem_rename` errno arms and rows.** Rename errnos arrive as `RENAME_FAILED` with `details.errorCode`, via #1851.
 - **Removed, because each pinned behaviour this PR does not change or was already pinned:** `openFromDisk` errno rows; `EPERM` rows; the dismissed-note privacy twin; new A table rows (the updated `resolve-annotation` literals pin A); the `.txt` twins (`:1837` already is one).
 - Dropped the round-1 corrections log.
+
+## Review corrections (post-cut)
+
+- **§F's docs list gains `docs/mcp-tools.md:115`.** The `filePath` row there says in bold that an absolute path is "**not enforced**" and cites `open.ts:678`; §F makes it enforced. The row is rewritten to say a relative path is refused with `INVALID_PATH`, keeps the #1666 no-confinement sentence, and drops the stale citation. `:140` still carries both the §D and §F changes.
