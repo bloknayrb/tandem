@@ -1626,6 +1626,80 @@ describe("WS-A2 Solo privacy hold (pushEvent)", () => {
     expect(events[0].type).toBe("annotation:accepted");
     cleanup();
   });
+
+  // ── #1823 item 7: tracking ran BEFORE the forward decision was bound ──────
+  //
+  // `isUserPrivacyHeld` deliberately does NOT drop accept/dismiss or a
+  // Claude-authored reply, so in Solo they reach the tracking line. With an
+  // external consumer attached, the old order tracked them even though the
+  // fan-out skips every external subscriber — so `wasEmittedViaChannel`
+  // answered true and `tandem_checkInbox` stamped `alreadyPushed: true` on an
+  // item nothing outside this process ever received.
+  function seedClaudeAnnotation(id: string) {
+    doc.transact(() => {
+      doc.getMap(Y_MAP_ANNOTATIONS).set(id, {
+        id,
+        type: "comment",
+        author: "claude",
+        content: "suggestion",
+        status: "pending",
+        textSnapshot: "hello",
+        range: { from: 0, to: 5 },
+      });
+    }, MCP_ORIGIN);
+  }
+
+  function accept(id: string) {
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    const ann = map.get(id) as Record<string, unknown>;
+    map.set(id, { ...ann, status: "accepted" });
+  }
+
+  it("does not stamp a Solo-withheld accept, with an external consumer attached", () => {
+    setMode("solo");
+    seedClaudeAnnotation("ann_gate_solo");
+    const { events, cleanup } = collectEvents("external");
+
+    accept("ann_gate_solo");
+
+    // Nothing left the process...
+    expect(events).toHaveLength(0);
+    // ...so the delivery hint must not claim otherwise.
+    expect(wasEmittedViaChannel("ann_gate_solo")).toBe(false);
+    cleanup();
+  });
+
+  it("still stamps the same accept in Tandem (kills a fix that never tracks)", () => {
+    setMode("tandem");
+    seedClaudeAnnotation("ann_gate_tandem");
+    const { events, cleanup } = collectEvents("external");
+
+    accept("ann_gate_tandem");
+
+    expect(events).toHaveLength(1);
+    expect(wasEmittedViaChannel("ann_gate_tandem")).toBe(true);
+    cleanup();
+  });
+
+  it("stamps a chat:message even in Solo — chat forwards unconditionally", () => {
+    // The carve-out the whole rationale leans on. Every other
+    // `wasEmittedViaChannel` assertion in this file uses an annotation or reply
+    // id, so a gate written as `readModeState() === "tandem" && …` would pass
+    // both cases above and break only here.
+    setMode("solo");
+    const { events, cleanup } = collectEvents("external");
+
+    _pushEventForTests({
+      id: "evt_chat_gate",
+      timestamp: Date.now(),
+      type: "chat:message",
+      payload: { messageId: "msg_gate", text: "hi", replyTo: null, anchor: null },
+    });
+
+    expect(events).toHaveLength(1);
+    expect(wasEmittedViaChannel("msg_gate")).toBe(true);
+    cleanup();
+  });
 });
 
 // ── WS-A2 Phase 7: server-side Solo gate for EXTERNAL consumers ─────────────
