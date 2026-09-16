@@ -74,8 +74,8 @@ repeat the same loop on the fixes.
 **A finding inside an adversarial reviewer's own stated blocking set stops the change (#1602)**
 — for the orchestrating session too, not just the subagent that raised it. No shipping past it
 on a likelihood judgment or by calling it a pre-existing class of problem: fix it, withdraw it
-on the merits, or — the one standing exception — point to it as an already-accepted, bounded,
-dated entry in [docs/security.md](docs/security.md#open-findings)'s register; a *new* acceptance
+on the merits, or — the one standing exception — point to it as an already-accepted, bounded
+entry in [docs/security.md](docs/security.md#open-findings)'s register; a *new* acceptance
 made mid-review does not count. Full study:
 [docs/spikes/ai-debugging-blind-spots-audit.md](docs/spikes/ai-debugging-blind-spots-audit.md).
 
