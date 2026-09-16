@@ -17,12 +17,13 @@
 
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ModelRegistryEntry } from "../../src/client/hooks/useTandemSettings";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
 
 const reload = vi.fn(async () => {});
 
 interface StoreState {
-  models?: Array<Record<string, unknown>>;
+  models?: ModelRegistryEntry[];
   defaultModelId?: string | null;
   saveError?: string | null;
   loading?: boolean;
@@ -30,7 +31,7 @@ interface StoreState {
 }
 let storeState: StoreState = {};
 
-vi.mock("../../src/client/hooks/useModels.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useModels.svelte"), () => ({
   createModels: () => ({
     get models() {
       return storeState.models ?? [];

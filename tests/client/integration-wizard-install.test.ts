@@ -31,8 +31,8 @@ const cliStub: {
   error: string | null;
   installing: boolean;
   installError: string | null;
-  install: ReturnType<typeof vi.fn>;
-  refetch: ReturnType<typeof vi.fn>;
+  install: ReturnType<typeof vi.fn<() => Promise<ClaudeCliPresence | null>>>;
+  refetch: ReturnType<typeof vi.fn<() => Promise<void>>>;
 } = {
   presence: null,
   bareNameLaunchable: null,
@@ -44,44 +44,47 @@ const cliStub: {
   refetch: vi.fn(async () => {}),
 };
 
-vi.mock("../../src/client/hooks/useClaudeCliStatus.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useClaudeCliStatus.svelte"), () => ({
   createClaudeCliStatus: () => cliStub,
 }));
 
 // Detected Claude installs. Empty by default (the connect empty state, which
 // the install CTA lives in); the shim-warning tests push an entry to reach the
 // NON-empty branch, where that empty state never renders.
-const wizardExisting: unknown[] = [];
+const wizardExisting: import("../../src/client/hooks/useIntegrationWizard.svelte").IntegrationWizardState["existing"] =
+  [];
 
 // Only the stateful hook is replaced — the module's other exports are pure
 // helpers the rendered cards call (`isSelectable`, `tandemEntryValidationFailed`,
 // …), and stubbing them one failure at a time replaces real logic with guesses.
-vi.mock("../../src/client/hooks/useIntegrationWizard.svelte", async (importOriginal) => ({
-  ...(await importOriginal<object>()),
+vi.mock(import("../../src/client/hooks/useIntegrationWizard.svelte"), async (importOriginal) => ({
+  ...(await importOriginal()),
   createIntegrationWizard: () => ({
-    step: "connect",
+    step: "connect" as const,
     detecting: false,
     existing: wizardExisting,
     picked: [],
     applyResults: [],
     errorMessage: null,
+    channelRegistered: null,
     keychainUnavailable: false,
     begin: vi.fn(async () => {}),
     save: vi.fn(async () => {}),
     reset: vi.fn(),
     setPicked: vi.fn(),
     submitSecret: vi.fn(async () => {}),
+    cleanupUnsavedSecrets: vi.fn(async () => {}),
   }),
   detectedToPicked: vi.fn(() => null),
 }));
 
 // Browser (non-Tauri) cowork stub so the Cowork row stays out of the way.
-vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useCoworkStatus.svelte"), () => ({
   createCoworkStatus: () => ({
     status: null,
     loading: false,
     error: null,
-    refetch: vi.fn(async () => {}),
+    refetch: vi.fn(async () => true),
   }),
 }));
 

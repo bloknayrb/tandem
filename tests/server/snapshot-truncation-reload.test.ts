@@ -26,7 +26,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
 
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("node:os");
   const pathMod = await import("node:path");
@@ -42,12 +42,12 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
 // Capturing the watcher callback is what lets the test drive `reloadFromDisk`
 // synchronously instead of racing real `fs.watch` delivery.
 const watcherMocks = vi.hoisted(() => ({ watchFile: vi.fn() }));
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: watcherMocks.watchFile,
 }));
 
-vi.mock("../../src/server/notifications.js", async (importOriginal) => {
+vi.mock(import("../../src/server/notifications.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/notifications.js")>();
   return { ...actual, pushNotification: vi.fn() };
 });

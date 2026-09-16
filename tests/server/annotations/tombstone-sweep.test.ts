@@ -9,8 +9,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../../src/server/notifications.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../../src/server/notifications.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return { ...actual, pushNotification: vi.fn() };
 });
 

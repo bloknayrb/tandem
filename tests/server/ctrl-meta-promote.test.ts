@@ -20,7 +20,7 @@ import { Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
 
 // Mutable open-docs map the observer consults to decide upload-suppression.
 const openDocsMock = new Map<string, OpenDoc>();
-vi.mock("../../src/server/documents/registry.js", async (importOriginal) => ({
+vi.mock(import("../../src/server/documents/registry.js"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/documents/registry.js")>()),
   getOpenDocs: () => openDocsMock,
 }));

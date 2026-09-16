@@ -31,7 +31,7 @@ import { wizardStepCell } from "../helpers/wizard-step-cell.svelte";
 
 // Mutable stubs the mocked hooks return; each test sets them BEFORE render.
 const wizardStub: {
-  picked: unknown[];
+  picked: import("../../src/client/hooks/useIntegrationWizard.svelte").IntegrationWizardState["picked"];
   applyResults: ApplyItemResult[];
   channelRegistered: boolean | null;
   /**
@@ -40,21 +40,21 @@ const wizardStub: {
    * changing it would re-render nothing — see `wizard-step-cell.svelte.ts` for
    * what that hid.
    */
-  step: string;
+  step: import("../../src/client/hooks/useIntegrationWizard.svelte").WizardStep;
 } = {
   picked: [],
   applyResults: [],
   channelRegistered: null,
-  get step() {
-    return wizardStepCell.value;
+  get step(): import("../../src/client/hooks/useIntegrationWizard.svelte").WizardStep {
+    return wizardStepCell.value as import("../../src/client/hooks/useIntegrationWizard.svelte").WizardStep;
   },
-  set step(next: string) {
+  set step(next: import("../../src/client/hooks/useIntegrationWizard.svelte").WizardStep) {
     wizardStepCell.set(next);
   },
 };
 
-vi.mock("../../src/client/hooks/useIntegrationWizard.svelte", async (importOriginal) => ({
-  ...(await importOriginal<object>()),
+vi.mock(import("../../src/client/hooks/useIntegrationWizard.svelte"), async (importOriginal) => ({
+  ...(await importOriginal()),
   createIntegrationWizard: () => ({
     // A GETTER, not a frozen literal (#1432). It was `step: "done"` while the
     // retry test below wrote `wizardStub.step` — a field nothing read, which
@@ -94,7 +94,7 @@ vi.mock("../../src/client/hooks/useIntegrationWizard.svelte", async (importOrigi
 // `not-applicable` is what the real hook reports for an stdio target — no
 // server to probe. Using the honest value keeps the row in the same shape the
 // production Done screen renders for Claude Desktop.
-vi.mock("../../src/client/hooks/useReachabilityCheck.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useReachabilityCheck.svelte"), () => ({
   createReachabilityCheck: () => ({
     phase: "done",
     serverUp: null,
@@ -106,7 +106,7 @@ vi.mock("../../src/client/hooks/useReachabilityCheck.svelte", () => ({
   }),
 }));
 
-vi.mock("../../src/client/hooks/useClaudeCliStatus.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useClaudeCliStatus.svelte"), () => ({
   createClaudeCliStatus: () => ({
     presence: null,
     bareNameLaunchable: null,
@@ -123,16 +123,18 @@ vi.mock("../../src/client/hooks/useClaudeCliStatus.svelte", () => ({
 // below see the layout they were written against. One test flips it to reach
 // the Cowork sub-view, which is the only way to unmount and remount the
 // push-routes block.
-const coworkStub: { status: unknown } = { status: null };
+const coworkStub: {
+  status: import("../../src/client/hooks/useCoworkStatus.svelte").CoworkStatusState["status"];
+} = { status: null };
 
-vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useCoworkStatus.svelte"), () => ({
   createCoworkStatus: () => ({
     get status() {
       return coworkStub.status;
     },
     loading: false,
     error: null,
-    refetch: vi.fn(async () => {}),
+    refetch: vi.fn(async () => true),
   }),
 }));
 
@@ -143,7 +145,7 @@ vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
 // defaulting to `false`. `afterEach` resets this to `null` so those two keep
 // their `coworkStub.status`-derived behavior.
 let tauriOverride: boolean | null = null;
-vi.mock("../../src/client/cowork/cowork-helpers", async (importOriginal) => {
+vi.mock(import("../../src/client/cowork/cowork-helpers"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/client/cowork/cowork-helpers")>();
   return {
     ...actual,
@@ -158,7 +160,7 @@ vi.mock("../../src/client/cowork/cowork-helpers", async (importOriginal) => {
 // the wizard's other three imports from this module (`autostartWizardDefault`,
 // `readAutostartDecided`, `writeAutostartDecided`) stay real; only
 // `createAutostart`'s live status/toggle are stubbed.
-vi.mock("../../src/client/hooks/useAutostart.svelte.js", async (importOriginal) => {
+vi.mock(import("../../src/client/hooks/useAutostart.svelte.js"), async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../src/client/hooks/useAutostart.svelte.js")>();
   return {
@@ -174,16 +176,18 @@ vi.mock("../../src/client/hooks/useAutostart.svelte.js", async (importOriginal) 
 
 // Spread, not re-declare — see `cowork-settings-mounted.test.ts` for the
 // subset-drift this avoids.
-vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
+vi.mock(import("../../src/client/cowork/cowork-invoke"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/client/cowork/cowork-invoke")>()),
   loadInvoke: vi.fn(async () => vi.fn()),
-  coworkToggleIntegration: vi.fn(async () => ({ ok: true })),
-  coworkPreflightSubnet: vi.fn(async () => ({ status: "unavailable" })),
+  coworkToggleIntegration: vi.fn(async () => ({ message: "Cowork enabled" })),
+  coworkPreflightSubnet: vi.fn(async () => ({ status: "unavailable" as const })),
 }));
 
 import IntegrationWizardModal from "../../src/client/components/IntegrationWizardModal.svelte";
 
-function pickedDesktop(id = "claude-desktop-1") {
+function pickedDesktop(
+  id = "claude-desktop-1",
+): import("../../src/client/hooks/useIntegrationWizard.svelte").PickedIntegration {
   return {
     id,
     config: {
@@ -198,7 +202,9 @@ function pickedDesktop(id = "claude-desktop-1") {
   };
 }
 
-function pickedCode(id = "claude-code-1") {
+function pickedCode(
+  id = "claude-code-1",
+): import("../../src/client/hooks/useIntegrationWizard.svelte").PickedIntegration {
   return {
     id,
     config: {
@@ -216,7 +222,10 @@ function pickedCode(id = "claude-code-1") {
 
 const applied = (id: string): ApplyItemResult => ({ id, status: "applied" });
 
-function mountDone(picked: unknown[], results: ApplyItemResult[]) {
+function mountDone(
+  picked: import("../../src/client/hooks/useIntegrationWizard.svelte").IntegrationWizardState["picked"],
+  results: ApplyItemResult[],
+) {
   wizardStub.picked = picked;
   wizardStub.applyResults = results;
   return render(IntegrationWizardModal, { props: { open: true, onClose: vi.fn() } });

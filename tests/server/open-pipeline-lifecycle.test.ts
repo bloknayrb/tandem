@@ -9,7 +9,7 @@ import { makeEmptyDoc } from "../helpers/ydoc-factory.js";
 // are not accessible inside them. All paths must be computed inline using
 // dynamic import() inside the factory.
 
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -29,7 +29,7 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
 });
 
 // Mock file-watcher so tests can assert watchFile calls without starting real fs.watch.
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: vi.fn(),
 }));

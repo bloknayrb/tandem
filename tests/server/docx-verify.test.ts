@@ -37,7 +37,7 @@ import { buildComment, buildFootnote, buildHeadings } from "../helpers/docx-corp
 // "verifier-confused → advisory" half of the asymmetry). Delegates to the real
 // impl while the flag is off, so every other test runs the genuine path.
 const ctl = vi.hoisted(() => ({ failCapture: false }));
-vi.mock("../../src/server/file-io/docx-capture.js", async (importOriginal) => {
+vi.mock(import("../../src/server/file-io/docx-capture.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/file-io/docx-capture.js")>();
   return {
     ...actual,

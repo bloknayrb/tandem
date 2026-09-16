@@ -35,7 +35,7 @@ import os from "os";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -49,7 +49,7 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
 });
 
 // The real watcher would leave fs handles open across the suite.
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: vi.fn(),
   suppressNextChange: vi.fn(),

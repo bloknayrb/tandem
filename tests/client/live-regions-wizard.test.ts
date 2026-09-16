@@ -25,8 +25,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
 import { wizardProgressCell } from "../helpers/wizard-progress-cell.svelte";
 
-vi.mock("../../src/client/hooks/useIntegrationWizard.svelte", async (importOriginal) => ({
-  ...(await importOriginal<object>()),
+vi.mock(import("../../src/client/hooks/useIntegrationWizard.svelte"), async (importOriginal) => ({
+  ...(await importOriginal()),
   createIntegrationWizard: () => ({
     get step() {
       return wizardProgressCell.step;
@@ -49,7 +49,7 @@ vi.mock("../../src/client/hooks/useIntegrationWizard.svelte", async (importOrigi
   }),
 }));
 
-vi.mock("../../src/client/hooks/useReachabilityCheck.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useReachabilityCheck.svelte"), () => ({
   createReachabilityCheck: () => ({
     get phase() {
       return wizardProgressCell.phase;
@@ -60,7 +60,7 @@ vi.mock("../../src/client/hooks/useReachabilityCheck.svelte", () => ({
   }),
 }));
 
-vi.mock("../../src/client/hooks/useClaudeCliStatus.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useClaudeCliStatus.svelte"), () => ({
   createClaudeCliStatus: () => ({
     presence: null,
     bareNameLaunchable: null,
@@ -73,20 +73,24 @@ vi.mock("../../src/client/hooks/useClaudeCliStatus.svelte", () => ({
   }),
 }));
 
-vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useCoworkStatus.svelte"), () => ({
   createCoworkStatus: () => ({
     status: coworkStatusFixture(),
     loading: false,
     error: null,
-    refetch: vi.fn(async () => {}),
+    refetch: vi.fn(async () => true),
   }),
 }));
 
-vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
+vi.mock(import("../../src/client/cowork/cowork-invoke"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/client/cowork/cowork-invoke")>()),
   loadInvoke: vi.fn(async () => vi.fn()),
-  coworkToggleIntegration: vi.fn(async () => ({ ok: true })),
-  coworkPreflightSubnet: vi.fn(async () => ({ status: "unknown" })),
+  coworkToggleIntegration: vi.fn(async () => ({ message: "Cowork enabled" })),
+  // `SubnetPreflight` has no "unknown" arm -- ok | blocked | unavailable |
+  // failed. This double named a status production never had, which the
+  // string-form mock could not see (#1615). "unavailable" is the
+  // probe-cannot-run-here arm, which is what a wizard unit test models.
+  coworkPreflightSubnet: vi.fn(async () => ({ status: "unavailable" as const })),
 }));
 
 import IntegrationWizardModal from "../../src/client/components/IntegrationWizardModal.svelte";

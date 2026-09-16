@@ -21,7 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LicenseStatusResponse } from "../../src/client/utils/license-ui";
 
 const fetchLicenseStatus = vi.fn<() => Promise<LicenseStatusResponse>>();
-vi.mock("../../src/client/hooks/useLicense", () => ({
+vi.mock(import("../../src/client/hooks/useLicense"), () => ({
   fetchLicenseStatus: () => fetchLicenseStatus(),
   activateLicenseClient: vi.fn(),
 }));

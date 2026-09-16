@@ -27,7 +27,7 @@ const _openSpy = vi.fn().mockResolvedValue({ close: _closeSpy });
 // ── Module mocks ─────────────────────────────────────────────────────────────
 
 vi.mock("node:fs", async (importOriginal) => {
-  const actual = (await importOriginal()) as typeof import("node:fs");
+  const actual = (await importOriginal<typeof import("node:fs")>()) as typeof import("node:fs");
   return {
     ...actual,
     promises: {

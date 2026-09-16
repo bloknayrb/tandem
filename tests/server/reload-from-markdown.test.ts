@@ -14,7 +14,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("node:os");
   const pathMod = await import("node:path");
@@ -28,7 +28,7 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
 });
 
 const watcherMocks = vi.hoisted(() => ({ watchFile: vi.fn() }));
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: watcherMocks.watchFile,
 }));
@@ -51,12 +51,12 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
 // while the binding `reload-family.ts` had already captured reported as the
 // real function, so the spy recorded nothing and the spec failed against
 // working code. That half is asserted through the observable effect instead.
-vi.mock("../../src/server/documents/registry.js", async (importOriginal) => {
+vi.mock(import("../../src/server/documents/registry.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/documents/registry.js")>();
   return { ...actual, broadcastOpenDocs: vi.fn(actual.broadcastOpenDocs) };
 });
 
-vi.mock("../../src/server/notifications.js", async (importOriginal) => {
+vi.mock(import("../../src/server/notifications.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/notifications.js")>();
   return { ...actual, pushNotification: vi.fn() };
 });

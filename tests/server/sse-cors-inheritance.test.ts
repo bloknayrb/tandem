@@ -25,7 +25,7 @@ import express from "express";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 // The event queue is irrelevant here — stub it so no real observers are wired.
-vi.mock("../../src/server/events/queue.js", () => ({
+vi.mock(import("../../src/server/events/queue.js"), () => ({
   subscribe: vi.fn(),
   unsubscribe: vi.fn(),
   replaySince: vi.fn(() => []),

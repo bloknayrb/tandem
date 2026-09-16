@@ -13,15 +13,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // file-wide, and `setup.test.ts` deliberately exercises the REAL apply.js
 // helpers (buildMcpEntries/applyConfig/detectTargets/installSkill suites).
 // Mocking apply.js there would gut that coverage.
-vi.mock("../../src/server/integrations/apply.js", async (importActual) => {
+vi.mock(import("../../src/server/integrations/apply.js"), async (importActual) => {
   const actual = await importActual<typeof import("../../src/server/integrations/apply.js")>();
   return {
     ...actual,
     detectTargets: vi.fn(),
     applyConfig: vi.fn(),
     installSkill: vi.fn(),
-    buildMcpEntries: vi.fn(() => ({})),
-    applyOpsForCli: vi.fn(() => ({})),
+    buildMcpEntries: vi.fn(
+      () => ({}),
+    ) as unknown as typeof import("../../src/server/integrations/apply.js").buildMcpEntries,
+    // `ApplyOps` is `{ create: McpEntries; remove: RemovableEntry[] }`; the
+    // bare `{}` double predates the typed mock overload and matched nothing.
+    applyOpsForCli: vi.fn(() => ({
+      create: {},
+      remove: [],
+    })) as unknown as typeof import("../../src/server/integrations/apply.js").applyOpsForCli,
     // `resolveChannelShimIntent`, not `resolveChannelShimIntent` — `setup`
     // moved to the former so an omitted flag preserves rather than deletes.
     // Left unmocked it does a REAL config read against these fake paths,
@@ -40,7 +47,7 @@ vi.mock("../../src/server/integrations/apply.js", async (importActual) => {
 const { _readTokenFromFile } = vi.hoisted(() => ({
   _readTokenFromFile: vi.fn(async (): Promise<string | null> => null),
 }));
-vi.mock("../../src/shared/auth/token-file.js", () => ({
+vi.mock(import("../../src/shared/auth/token-file.js"), () => ({
   readTokenFromFile: _readTokenFromFile,
   getTokenFilePath: vi.fn(() => "/tmp/tandem-auth-token"),
 }));

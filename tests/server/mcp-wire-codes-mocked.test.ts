@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => ({
   failOpen: null as { code: string; syscall?: string } | null,
 }));
 
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -42,10 +42,10 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
   process.env.TANDEM_APP_DATA_DIR = appDataDir;
   return { ...original, SESSION_DIR: pathMod.join(appDataDir, "sessions") };
 });
-vi.mock("../../src/server/integrations/acl-win.js", () => ({
+vi.mock(import("../../src/server/integrations/acl-win.js"), () => ({
   setRestrictiveAcl: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock("../../src/server/documents/open.js", async (importOriginal) => {
+vi.mock(import("../../src/server/documents/open.js"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/documents/open.js")>();
   return {
     ...original,
@@ -56,12 +56,12 @@ vi.mock("../../src/server/documents/open.js", async (importOriginal) => {
     },
   };
 });
-vi.mock("../../src/server/mcp/document-service.js", async (importOriginal) => ({
+vi.mock(import("../../src/server/mcp/document-service.js"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/mcp/document-service.js")>()),
   renameDocument: mocks.renameDocument,
   saveDocumentToDisk: mocks.saveDocumentToDisk,
 }));
-vi.mock("../../src/server/file-io/index.js", async (importOriginal) => {
+vi.mock(import("../../src/server/file-io/index.js"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/file-io/index.js")>();
   return {
     ...original,

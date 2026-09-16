@@ -20,7 +20,7 @@ const persistSkippedSaveSession = vi.fn();
 const getActiveDocId = vi.fn(() => "d1");
 const saveDocumentAsToDisk = vi.fn();
 const serializeDocument = vi.fn();
-vi.mock("../../../src/server/mcp/document-service.js", () => ({
+vi.mock(import("../../../src/server/mcp/document-service.js"), () => ({
   closeDocumentById,
   saveDocumentToDisk,
   persistSkippedSaveSession,
@@ -30,10 +30,10 @@ vi.mock("../../../src/server/mcp/document-service.js", () => ({
 }));
 
 const convertToMarkdown = vi.fn();
-vi.mock("../../../src/server/mcp/convert.js", () => ({ convertToMarkdown }));
+vi.mock(import("../../../src/server/mcp/convert.js"), () => ({ convertToMarkdown }));
 
 const applyChangesCore = vi.fn();
-vi.mock("../../../src/server/mcp/docx-apply.js", () => ({ applyChangesCore }));
+vi.mock(import("../../../src/server/mcp/docx-apply.js"), () => ({ applyChangesCore }));
 
 const { handleClose } = await import("../../../src/server/mcp/routes/close.js");
 const { handleConvert } = await import("../../../src/server/mcp/routes/convert.js");

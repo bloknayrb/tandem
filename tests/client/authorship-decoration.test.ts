@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { Y_MAP_AUTHORSHIP } from "../../src/shared/constants";
+import type { PmPos } from "../../src/shared/positions/types";
 
 /**
  * Tests for buildAuthorshipDecorations — verifies that decorations emit
@@ -51,10 +52,11 @@ vi.mock("@tiptap/core", () => ({
 }));
 
 // Mock positions so ranges resolve to simple flat values
-vi.mock("../../src/client/positions", () => ({
+vi.mock(import("../../src/client/positions"), () => ({
   relRangeToPmPositions: () => null,
+  // `PmPos` is a branded number; the double hands back a plain one.
   flatOffsetToPmPos: (_doc: unknown, offset: { value: number } | number) =>
-    typeof offset === "object" ? offset.value : offset,
+    (typeof offset === "object" ? offset.value : offset) as PmPos,
 }));
 
 // Import AFTER mocks

@@ -17,8 +17,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 
 // Notifications are a shared singleton buffer; mock to silence.
-vi.mock("../../src/server/notifications.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/notifications.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     pushNotification: vi.fn(),

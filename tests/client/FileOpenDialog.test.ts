@@ -13,15 +13,15 @@ import {
 } from "../../src/shared/api-paths.js";
 import { RECENT_FILES_KEY } from "../../src/shared/constants.js";
 
-vi.mock("../../src/client/cowork/cowork-helpers.js", () => ({
+vi.mock(import("../../src/client/cowork/cowork-helpers.js"), () => ({
   isTauriRuntime: vi.fn(() => false),
 }));
 
-vi.mock("../../src/client/utils/server-paths.js", () => ({
+vi.mock(import("../../src/client/utils/server-paths.js"), () => ({
   openServerPath: vi.fn(),
 }));
 
-vi.mock("../../src/client/utils/default-directory.js", () => ({
+vi.mock(import("../../src/client/utils/default-directory.js"), () => ({
   resolveDefaultDirectory: vi.fn(async () => null),
 }));
 
@@ -29,7 +29,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
 }));
 
-vi.mock("../../src/client/utils/fileUpload.js", () => ({
+vi.mock(import("../../src/client/utils/fileUpload.js"), () => ({
   API_BASE: "",
   readFileForUpload: vi.fn(async () => "file-contents"),
 }));

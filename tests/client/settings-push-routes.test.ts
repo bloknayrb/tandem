@@ -37,23 +37,23 @@ import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
 // true)` holds a live `$effect` and a real `invoke` call, so those two are
 // mocked alongside it (copied from that same file, `:25-47`).
 let tauri = false;
-vi.mock("../../src/client/cowork/cowork-helpers", async (importOriginal) => {
+vi.mock(import("../../src/client/cowork/cowork-helpers"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/client/cowork/cowork-helpers")>();
   return { ...actual, isTauriRuntime: () => tauri };
 });
-vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useCoworkStatus.svelte"), () => ({
   createCoworkStatus: () => ({
     status: coworkStatusFixture({ vethernetCidr: null }),
     loading: false,
     error: null,
-    refetch: vi.fn(async () => {}),
+    refetch: vi.fn(async () => true),
   }),
 }));
-vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
+vi.mock(import("../../src/client/cowork/cowork-invoke"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/client/cowork/cowork-invoke")>()),
   loadInvoke: vi.fn(async () => vi.fn()),
-  coworkToggleIntegration: vi.fn(async () => ({ ok: true })),
-  coworkPreflightSubnet: vi.fn(async () => ({ status: "unavailable" })),
+  coworkToggleIntegration: vi.fn(async () => ({ message: "Cowork enabled" })),
+  coworkPreflightSubnet: vi.fn(async () => ({ status: "unavailable" as const })),
 }));
 
 import SettingsClaudeCodeTab from "../../src/client/components/settings-tabs/SettingsClaudeCodeTab.svelte";
