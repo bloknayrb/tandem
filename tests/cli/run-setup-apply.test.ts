@@ -258,7 +258,48 @@ describe("runSetup({ apply: true }) orchestration", () => {
     const out = stderr();
     expect(out).toContain("refused the config path");
     expect(out).toContain("symlink");
+    expect(out).toContain("replace the symlink with a real file");
     expect(out).not.toContain("Check file permissions");
+  });
+
+  // Review round 1: naming the reason and then printing ONE hardcoded symlink
+  // remedy underneath it merely relocates the dead end — a redirected
+  // `%APPDATA%` (outside-home) or a UNC `%USERPROFILE%` (#1417) was told to
+  // replace a symlink that does not exist. `assertPathSafe` reaches three of
+  // the four reasons, so each needs its own remedy.
+  it("names the outside-home remedy, not a symlink the user does not have", async () => {
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockRejectedValue(
+      new PathRejectedError("/home/u/.claude.json", "outside-home", "Refusing path outside roots"),
+    );
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await expect(runSetup({ apply: true })).rejects.toThrow("process.exit called");
+
+    const out = stderr();
+    expect(out).toContain("outside-home");
+    expect(out).toContain("resolves outside your home");
+    expect(out).not.toContain("replace the symlink");
+    expect(out).not.toContain("Check file permissions");
+  });
+
+  it("names the UNC remedy and says --force will not help", async () => {
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockRejectedValue(
+      new PathRejectedError("//server/share/.claude.json", "unc", "UNC path"),
+    );
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await expect(runSetup({ apply: true })).rejects.toThrow("process.exit called");
+
+    const out = stderr();
+    expect(out).toContain("unc");
+    expect(out).toContain("--force will not help");
+    expect(out).not.toContain("replace the symlink");
   });
 
   it("avoids the dead end on a MIXED all-failed run (refusal + path rejection)", async () => {
@@ -335,6 +376,36 @@ describe("runSetup({ apply: true }) orchestration", () => {
       await runSetup({ apply: true });
 
       expect(lastOpts()?.token).toBeUndefined();
+    });
+
+    // Review round 1. `readTokenFromFile` answers null only for ENOENT and
+    // rethrows every other errno; the read sits above the per-target `try` and
+    // nothing up to `src/cli/index.ts` wraps it, so an unreadable token file
+    // aborted the whole command having written NOTHING. The header is bounded
+    // to off-loopback clients, so an unusable file must degrade exactly as an
+    // absent one does.
+    it("writes every config when the token file is unreadable", async () => {
+      // `Once`: the hoisted mock survives `restoreAllMocks`, so a persistent
+      // rejection would leak its warning line into every later spec.
+      _readTokenFromFile.mockRejectedValueOnce(
+        Object.assign(new Error("EACCES: permission denied, open '/x/auth-token'"), {
+          code: "EACCES",
+        }),
+      );
+      vi.mocked(buildMcpEntries).mockClear();
+      vi.mocked(applyConfig).mockClear();
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      const exit = noExit();
+
+      await runSetup({ apply: true });
+
+      expect(vi.mocked(applyConfig)).toHaveBeenCalledTimes(1);
+      expect(lastOpts()?.token).toBeUndefined();
+      expect(exit).not.toHaveBeenCalled();
+      const out = stderr();
+      expect(out).toContain("Could not read the auth token file");
+      expect(out).toContain("Setup complete!");
     });
   });
 

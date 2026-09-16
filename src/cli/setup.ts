@@ -310,17 +310,53 @@ function refusalSummary(reasons: readonly ConfigRefusalError["reason"][]): strin
  * same string the exported `pathRejectionReason` yields for this class, read
  * off the stored reason rather than by retaining the error object — so the line
  * names the real refusal instead of guessing at one.
+ *
+ * **The remedy branches on the reason too** (review round 1). Naming the enum
+ * value and then printing one hardcoded symlink remedy underneath it merely
+ * relocates the dead end this item exists to remove: the reason set is four
+ * wide and `assertPathSafe` reaches three of them — `unc` (:618),
+ * `symlink` (:631) and `outside-home` (:652) — so a Windows box with a
+ * redirected `%APPDATA%` was told to replace a symlink it does not have, and a
+ * UNC `%USERPROFILE%` (#1417) likewise. Only `symlink` and `outside-home` are
+ * safe to call "not a permissions problem"; `unreadable` is constructed
+ * nowhere in `src/` today but is part of the exported union, so it gets the
+ * one remedy that IS about permissions rather than inheriting a false denial.
  */
+const PATH_REJECTION_REMEDIES: Record<PathRejectedError["reason"], string> = {
+  symlink:
+    "This is not a permissions problem. A symlinked config is refused\n" +
+    "deliberately, because writing through it would land outside your home\n" +
+    "directory; replace the symlink with a real file, or point Tandem at the\n" +
+    "real path, then re-run:\n" +
+    "  tandem setup --apply",
+  "outside-home":
+    "This is not a permissions problem. The path resolves outside your home\n" +
+    "directory, which Tandem will not write to — a redirected profile folder is\n" +
+    "the usual cause. Register Tandem by hand in that file, or point Tandem at a\n" +
+    "config under your home directory, then re-run:\n" +
+    "  tandem setup --apply",
+  unc:
+    "This is not a permissions problem. A UNC or device-namespace path is\n" +
+    "refused deliberately, and --force will not help — it derives the same paths\n" +
+    "from the same root. Run Tandem from a local profile, or register it by hand\n" +
+    "in that file.",
+  unreadable:
+    "Tandem could not read the path to check it, so it wrote nothing. Check that\n" +
+    "the file and every directory above it are readable by this user, then\n" +
+    "re-run:\n" +
+    "  tandem setup --apply",
+};
+
 function pathRejectionSummary(reasons: readonly PathRejectedError["reason"][]): string {
-  const kinds = [...new Set(reasons)].join(", ");
-  return (
+  const kinds = [...new Set(reasons)];
+  const lead =
     "\nSetup failed — Tandem refused the config path(s) above and left them\n" +
-    `untouched. Reason: ${kinds}. This is not a permissions problem. A symlinked\n` +
-    "config is refused deliberately, because writing through it would land\n" +
-    "outside your home directory; replace the symlink with a real file, or point\n" +
-    "Tandem at the real path, then re-run:\n" +
-    "  tandem setup --apply"
-  );
+    `untouched. Reason: ${kinds.join(", ")}. `;
+  // Mixed reasons across several targets: no single remedy is true of all of
+  // them, so point at the per-target lines rather than prescribing one — the
+  // same shape `refusalSummary` uses for its own mixed case.
+  if (kinds.length !== 1) return `${lead}Each line above says what its path needs.`;
+  return lead + PATH_REJECTION_REMEDIES[kinds[0] as PathRejectedError["reason"]];
 }
 
 interface WriteOutcome {
@@ -342,6 +378,38 @@ interface WriteOutcome {
    *  returns false for every Claude Desktop target, so a run that registered no
    *  shim anywhere was still announcing push as enabled. */
   shimRegisteredFor: string[];
+}
+
+/**
+ * The token-file read for {@link writeTargets}, with the failure mode the raw
+ * reader does not have (review round 1).
+ *
+ * `readTokenFromFile` answers null ONLY for ENOENT and rethrows every other
+ * errno: EACCES on a token file left root-owned by one `sudo tandem` run,
+ * EPERM/EBUSY on Windows while antivirus or a concurrent `rotate-token` holds
+ * it, EISDIR on a mangled data dir. The read sits ABOVE the per-target `try`,
+ * and neither `applySetup`, `runSetup` nor `src/cli/index.ts`'s dispatch wraps
+ * it — so an unguarded throw escaped to the CLI's top-level catch and
+ * `tandem setup --apply` exited 1 having written ZERO configs for ANY target,
+ * blaming the token file rather than naming the configs it never touched.
+ *
+ * The header is a convenience bounded to off-loopback clients (the auth
+ * middleware exempts loopback), so an UNUSABLE token file must degrade to
+ * today's no-header behaviour exactly as an ABSENT one does. Warn, and let the
+ * configure path finish.
+ */
+async function readTokenOrWarn(): Promise<string | undefined> {
+  try {
+    return (await readTokenFromFile()) ?? undefined;
+  } catch (err) {
+    console.error(
+      `  \x1b[33m⚠\x1b[0m Could not read the auth token file ` +
+        `(${err instanceof Error ? err.message : String(err)}) — writing entries\n` +
+        "    without an Authorization header. Loopback clients are unaffected; an\n" +
+        "    off-loopback (Cowork/LAN) client will 401 until this is fixed.",
+    );
+    return undefined;
+  }
 }
 
 async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Promise<WriteOutcome> {
@@ -366,7 +434,7 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
   // Called with no override, so `resolveAuthTokenCandidate` reports a source
   // only for those two env vars — presence of the token IS the refusal test.
   const { token: envToken } = resolveAuthTokenCandidate();
-  const token = envToken !== undefined ? undefined : ((await readTokenFromFile()) ?? undefined);
+  const token = envToken !== undefined ? undefined : await readTokenOrWarn();
 
   for (const t of targets) {
     try {
