@@ -404,6 +404,13 @@ export function readSchemaVersion(parsed: unknown): number | null {
   return null;
 }
 
+/** The JSON-object shape both guards in `normalizeLocalhostUrls` want, or `null`. */
+function asJsonObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 /**
  * Replace `http://localhost` with `http://127.0.0.1` at `integrations[].url` —
  * scoped to the one `url` position the schema has rather than walked at every
@@ -421,20 +428,19 @@ export function readSchemaVersion(parsed: unknown): number | null {
  * `readSchemaVersion` above); it gains no other `src/` caller.
  */
 export function normalizeLocalhostUrls(data: unknown): unknown {
-  if (data === null || typeof data !== "object" || Array.isArray(data)) return data;
-  const file = data as Record<string, unknown>;
-  if (!Array.isArray(file.integrations)) return data;
+  const file = asJsonObject(data);
+  if (!file || !Array.isArray(file.integrations)) return data;
   return {
     ...file,
     integrations: file.integrations.map((entry) => {
-      if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return entry;
-      const record = entry as Record<string, unknown>;
-      if (typeof record.url !== "string") return entry;
+      const record = asJsonObject(entry);
+      if (!record || typeof record.url !== "string") return entry;
+      // Lookahead, so the separator it anchors on is matched but not consumed —
+      // the host is then a plain literal replacement rather than a callback
+      // re-running `.replace` over the matched text to put the separator back.
       return {
         ...record,
-        url: record.url.replace(/^http:\/\/localhost([:\/]|$)/, (m) =>
-          m.replace("localhost", "127.0.0.1"),
-        ),
+        url: record.url.replace(/^http:\/\/localhost(?=[:/]|$)/, "http://127.0.0.1"),
       };
     }),
   };
