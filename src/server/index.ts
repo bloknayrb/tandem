@@ -191,9 +191,29 @@ process.on("exit", (code) => {
   console.error(`[Tandem] Process exiting with code ${code}`);
 });
 
+/**
+ * Has `main()` finished restoring the session and the open documents?
+ *
+ * The stdin-EOF handler below is armed at MODULE scope, while
+ * `restoreCtrlSession()` / `restoreOpenDocuments()` are awaited inside
+ * `main()`. The gate is not optional and is invisible at the call site: an EOF
+ * arriving during boot would reach `shutdown()` → `saveCurrentSession()` →
+ * `saveCtrlSession`, which `session/manager.ts` persists with NO restore guard
+ * — cloning a freshly-created, still-empty CTRL doc over the user's real chat
+ * history. So before the restore completes the process leaves immediately and
+ * writes nothing.
+ */
+let startupComplete = false;
+
 if (transportMode === "stdio") {
   process.stdin.on("end", () => {
     console.error("[Tandem] stdin ended (MCP transport closed)");
+    // `StdioServerTransport` registers only `data`/`error` on stdin, never
+    // `end`, so before #1823 item 3 the server simply logged this and outlived
+    // its MCP client forever. Accepted scope change: a stdio run whose stdin is
+    // already closed at spawn now exits instead of surviving.
+    if (startupComplete) void shutdown("stdin EOF");
+    else process.exit(0);
   });
 }
 
@@ -565,6 +585,11 @@ async function main() {
   await restoreOpenDocuments(previousActiveDocId).catch((err) => {
     console.error("[Tandem] Failed to restore open documents:", err);
   });
+
+  // From here a stdin EOF may take the graceful shutdown path: the CTRL doc now
+  // holds the restored chat history, so saving it can no longer clobber it.
+  // Deliberately OUTSIDE the transport branch — see `startupComplete`.
+  startupComplete = true;
 
   // Write a unique ID so clients can detect when the server process has restarted
   writeGenerationId();
