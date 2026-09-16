@@ -28,7 +28,6 @@ export interface ChatState {
   readonly initialSyncComplete: boolean;
   readonly unreadCount: number;
   send(text: string, documentId?: string, anchor?: CapturedAnchor | null): boolean;
-  acknowledgeVisible(): void;
   clear(): Promise<number>;
 }
 
@@ -228,12 +227,6 @@ export function createChatState(options: {
         doc.getMap(Y_MAP_CHAT).set(message.id, message);
       });
       return true;
-    },
-    acknowledgeVisible() {
-      const doc = options.getCtrlYdoc();
-      if (doc && options.getInitialSyncComplete() && options.getVisible()) {
-        acknowledgeVisibleMessages(doc);
-      }
     },
     async clear() {
       const response = await fetch(`${MCP_BASE_URL}${API_CHAT}`, {

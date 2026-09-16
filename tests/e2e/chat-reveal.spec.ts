@@ -197,30 +197,31 @@ test("switching document closes the reveal", async ({ page }) => {
   await expect(reveal).toHaveCount(0);
 });
 
-test("#1719: selecting Annotations from inside the reveal collapses the whole rail", async ({
+test("#1719: selecting Annotations from inside the reveal keeps the reveal open", async ({
   page,
 }) => {
-  // A CHARACTERIZATION of a known defect, not an endorsement. Selecting the
-  // Annotations tab runs `selectRailTab`, which tears the reveal down — and the
-  // reveal was the only thing rendering the rail, so the user gets neither tab
-  // and no message. Filed as #1719; **delete this spec when it is fixed.**
+  // The positive twin of the characterization spec this replaces (which
+  // instructed its own deletion once #1719 was fixed). `selectRailTab` no
+  // longer tears the reveal down, so the float the user is clicking inside
+  // survives the click and shows the Annotations panel.
   //
-  // The assertion is the positive post-state, not the symptom: "the composer is
-  // hidden" is equally true once #1719 is fixed, which would leave a pin that
-  // stays green through its own repair. A fix leaves the rail OPEN on
-  // Annotations, so asserting the rail is fully collapsed is what fails then.
+  // This is the ONLY discriminating pin for #1719: the deleted closer leaves no
+  // unit-layer instrument, so the layout-model spec cannot see it.
   await bootWithSample(page);
 
   const reveal = await openReveal(page);
   await page.locator("[data-testid='annotations-tab']").click();
 
-  await expect(reveal).toHaveCount(0);
-  // The rail handle is the discriminator: it is how every spec detects rail
-  // visibility, and a #1719 fix leaves the rail open, which puts it back.
+  await expect(reveal).toHaveCount(1);
+  // VISIBILITY, not presence: the rail tabs are always mounted and the shell
+  // collapses by CSS, so presence alone stays true even in the old behaviour.
+  await expect(page.locator("[data-testid='annotations-tab']")).toBeVisible();
+  // The tab really switched -- the reveal is showing the annotation list, not
+  // still the composer.
+  await expect(page.locator("[data-testid='annotation-list-scroll-container']")).toBeVisible();
+  // The rail is STILL not pinned, and this is the assertion with teeth: a fix
+  // that pinned the rail from the tab click would leave the tab visible too,
+  // while writing persisted visibility the user never asked to change (and
+  // which #1722 says can be refused outright, collapsing the rail anyway).
   await expect(page.locator(RIGHT_HANDLE)).toHaveCount(0);
-  // VISIBILITY, not presence. The rail tabs are always mounted and the shell
-  // collapses by CSS, so `annotations-tab` still resolves to one element with
-  // the rail shut -- a `toHaveCount(0)` here fails against today's behaviour
-  // and would have read as the defect being absent.
-  await expect(page.locator("[data-testid='annotations-tab']")).not.toBeVisible();
 });
