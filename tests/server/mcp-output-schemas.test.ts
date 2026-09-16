@@ -28,10 +28,8 @@
  *     even admit `type: "note"`.
  */
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type ZodRawShape, z } from "zod";
 import type { DoctorReport } from "../../src/cli/doctor.js";
 import { dismissPending } from "../../src/server/annotations/lifecycle.js";
@@ -58,9 +56,11 @@ import { CTRL_ROOM, Y_MAP_ANNOTATIONS, Y_MAP_CHAT } from "../../src/shared/const
 import { withInternal } from "../../src/shared/origins.js";
 import type { Annotation, ChatMessage } from "../../src/shared/types.js";
 import { toFlatOffset } from "../../src/shared/types.js";
+import { setupMcpServer } from "../helpers/mcp-harness.js";
 import { createAnnotation, rangeOf } from "../helpers/ydoc-factory.js";
 
 let client: Client;
+let close: () => Promise<void>;
 
 /** Deterministic doctor report so diagnostics tests never touch real ports. */
 const STUB_DOCTOR_REPORT: DoctorReport = {
@@ -85,25 +85,6 @@ const STUB_DOCTOR_REPORT: DoctorReport = {
     },
   ],
 };
-
-async function setupMcpClient(): Promise<Client> {
-  const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
-  registerDocumentTools(server);
-  registerAnnotationTools(server);
-  registerNavigationTools(server);
-  registerAwarenessTools(server);
-  registerDiagnosticsTools(server, {
-    version: "9.9.9-test",
-    transport: "http",
-    collect: async () => STUB_DOCTOR_REPORT,
-  });
-
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const mcpClient = new Client({ name: "test-client", version: "0.0.1" });
-  await server.connect(serverTransport);
-  await mcpClient.connect(clientTransport);
-  return mcpClient;
-}
 
 type ToolResult = {
   content: Array<{ type: string; text?: string }>;
@@ -148,7 +129,22 @@ beforeEach(async () => {
   resetInbox();
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   setActiveDocId(null);
-  client = await setupMcpClient();
+  ({ client, close } = await setupMcpServer([
+    registerDocumentTools,
+    registerAnnotationTools,
+    registerNavigationTools,
+    registerAwarenessTools,
+    (s) =>
+      registerDiagnosticsTools(s, {
+        version: "9.9.9-test",
+        transport: "http",
+        collect: async () => STUB_DOCTOR_REPORT,
+      }),
+  ]));
+});
+
+afterEach(async () => {
+  await close();
 });
 
 // The `regex: true` cases below spawn the #1795 search worker. Hygiene: the
@@ -199,39 +195,41 @@ describe("tandem_diagnostics structured output (#1174 gap #2)", () => {
     // `node-modules` since its sibling fix — so this is noise-suppression, not
     // failure-suppression: a desktop/global install's cwd is someone else's
     // directory, and answers about it do not belong in the report at all.
-    const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
-    registerDiagnosticsTools(server, {
-      version: "9.9.9-test",
-      transport: "http",
-      collect: async () => ({
-        ok: false,
-        crashed: false,
-        failures: 1,
-        warnings: 0,
-        summary: "1 issue(s) found.",
-        error: null,
-        results: [
-          { check: "node-modules", status: "fail", message: "deps missing" },
-          { check: "mcp-json", status: "fail", message: "no .mcp.json" },
-          { check: "health", status: "pass", message: "ok" },
-        ],
-      }),
-    });
-    const [ct, st] = InMemoryTransport.createLinkedPair();
-    const c = new Client({ name: "test-client", version: "0.0.1" });
-    await server.connect(st);
-    await c.connect(ct);
+    const { client: c, close: closeC } = await setupMcpServer([
+      (s) =>
+        registerDiagnosticsTools(s, {
+          version: "9.9.9-test",
+          transport: "http",
+          collect: async () => ({
+            ok: false,
+            crashed: false,
+            failures: 1,
+            warnings: 0,
+            summary: "1 issue(s) found.",
+            error: null,
+            results: [
+              { check: "node-modules", status: "fail", message: "deps missing" },
+              { check: "mcp-json", status: "fail", message: "no .mcp.json" },
+              { check: "health", status: "pass", message: "ok" },
+            ],
+          }),
+        }),
+    ]);
 
-    const result = (await c.callTool({
-      name: "tandem_diagnostics",
-      arguments: {},
-    })) as ToolResult;
-    const sc = expectStructuredMatch(result, diagnosticsOutputShape);
-    const results = sc.results as Array<Record<string, unknown>>;
-    expect(results.map((r) => r.check)).toEqual(["health"]);
-    // Aggregates recomputed after filtering: the two dev-repo failures are gone.
-    expect(sc.failures).toBe(0);
-    expect(sc.ok).toBe(true);
+    try {
+      const result = (await c.callTool({
+        name: "tandem_diagnostics",
+        arguments: {},
+      })) as ToolResult;
+      const sc = expectStructuredMatch(result, diagnosticsOutputShape);
+      const results = sc.results as Array<Record<string, unknown>>;
+      expect(results.map((r) => r.check)).toEqual(["health"]);
+      // Aggregates recomputed after filtering: the two dev-repo failures are gone.
+      expect(sc.failures).toBe(0);
+      expect(sc.ok).toBe(true);
+    } finally {
+      await closeC();
+    }
   });
 });
 
