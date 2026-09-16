@@ -1185,6 +1185,25 @@ through the same CSS classes but is rail *chrome*, and moving four timers, two
 rAF dances and a `transitionend` filter with no behavioural net is how a
 behaviour-preserving refactor stops preserving behaviour.
 
+**#1719 amendment (2026-09-15):** The injected `closeTransientChat` and its Unit
+10c ordering are **removed**. `LayoutModelOptions` no longer carries the closer,
+`selectRailTab` is the single statement `activeRailTab = tab`, and `App.svelte`
+passes no closer — so `createLayoutModel` references `createRailContentModel`
+nowhere. A tab switch made from *inside* a chat reveal is not a reason to tear
+the reveal down: the reveal's precondition is a collapsed rail, not a Chat tab,
+and tearing it down on the Annotations click removed the tab buttons the user
+had just used, leaving a fully collapsed rail with no message (#1719). So the
+Unit 10c amendment's resolution of the `showAnnotations`-vs-`selectRailTab`
+difference — that a closer firing on a non-Chat tab "is one this project no
+longer wants" in the *other* direction — is settled the other way here: the
+difference is resolved by there being no closer. The "writes the tab before
+invoking the closer" claim retires with the call it describes, and the two specs
+that amendment credits (the one recording what the closer OBSERVES and the
+throwing-closer one) are deleted with the option they instrument. The reveal
+stays bounded by its other teardowns — outside `pointerdown`, Escape, document
+switch, `toggleRightPanel`, `sendChatMessage`, and since #1716 the rail becoming
+effectively visible.
+
 **Wave I amendment (2026-05-18):** The cross-rail tab picker is retired entirely. The left rail is hard-coded to the outline; the right rail is hard-coded to Annotations + Chat. The `leftRailTabs` / `rightRailTabs` settings fields are removed from the schema (v4→v5 migration strips them), the `RailTab` type is gone, and `LayoutModel.moveTabs` + the `leftTabs` / `rightTabs` getters are deleted. Layout-model surface narrows to visibility helpers (`leftVisible`, `rightVisible`, `toggleLeft`, `toggleRight`). The orphan-rail rule from §3 no longer applies; neither rail can empty because its tab set is fixed.
 
 ## ADR-038: MCP-First Integration Policy; Claude as Default Integration

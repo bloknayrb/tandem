@@ -234,23 +234,14 @@ const layoutModel = createLayoutModel({
   settingsState,
   modeState,
   getAnnotations: () => visibleAnnotations,
-  // Arrow, not a bare reference: defers the binding read to call time, so a
-  // future `function` -> `const arrow` conversion of the closer cannot turn
-  // this into a TDZ error.
-  closeTransientChat: () => railContent.closeReveal(),
 });
 // What the rail SHOWS, next to the model for whether it is shown (ADR-035 Unit
-// 10c). The two reference each other -- `selectRailTab` tears down a reveal, and
-// the reveal reads the selected tab -- so whichever is built first holds a thunk
-// over a `const` still in its temporal dead zone.
-//
-// **What makes that safe is not the thunks; it is that neither factory calls the
-// other during construction.** Master's closer closed over a HOISTED
-// `function closeTransientChat`, live from the top of the script, where this one
-// closes over `railContent` -- so the margin that used to make ordering a
-// non-question is gone. Nothing may run between these two statements that can
-// reach `selectRailTab`: no event dispatch, no eager read, no effect flush, or
-// this is a `ReferenceError` at startup rather than a stale reveal.
+// 10c). **Since #1719 the reference runs one way only**: this model reads
+// `layoutModel.activeRailTab` through a thunk, and `createLayoutModel` no
+// longer references `railContent` at all -- the injected `closeTransientChat`
+// is gone, because a tab switch made from inside a chat reveal is not a reason
+// to tear the reveal down. Built second, after the `const` it reads, so there
+// is no temporal-dead-zone question left in either direction.
 const railContent = createRailContentModel({
   getActiveRailTab: () => layoutModel.activeRailTab,
   getEffectiveRightVisible: () => effectiveRightVisible,
@@ -1198,7 +1189,13 @@ const toggleLeftPanel = () => {
   pinFromFloat("left");
   railFloat.left = false;
   const nextVisible = !layoutModel.leftVisible;
-  layoutModel.toggleLeft();
+  // A refused write (read-only settings blob, #659) means the rail does not
+  // move, so there is no replacement element to chase focus into. **A
+  // defensive skip of a state change that did not happen, not a focus fix**:
+  // both ids `focusToggleTarget` can build are always mounted and merely
+  // hidden, so the unguarded call resolved a hidden element and did nothing.
+  // #1985's deduplicated refusal notification is the user-visible signal.
+  if (!layoutModel.toggleLeft()) return;
   focusToggleTarget("left", nextVisible);
 };
 const toggleRightPanel = () => {
@@ -1214,7 +1211,12 @@ const toggleRightPanel = () => {
   pinFromFloat("right");
   railFloat.right = false;
   const nextVisible = !layoutModel.rightVisible;
-  layoutModel.toggleRight();
+  // See `toggleLeftPanel`. The float-clearing writes and the reveal teardown
+  // above deliberately stay ahead of this: re-ordering them to chase a rare
+  // refusal risks the `.collapsed.floating` frame `toggleLeftPanel`'s opening
+  // comment exists to prevent. So a refused pin still dismisses a hover float
+  // and an open reveal, and the refusal notification explains the rest.
+  if (!layoutModel.toggleRight()) return;
   focusToggleTarget("right", nextVisible);
 };
 // Pinning a floated rail: snap the shell to the float's width (no 14→full open
@@ -1475,15 +1477,25 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   save: (e) => {
     e.preventDefault();
     // In source view, SourceView owns Ctrl+S (it commits the edit) and
-    // stopPropagations — this is belt-and-suspenders against that invariant
-    // being broken later: the global save must never write the stale Y.Doc to
-    // disk underneath an open source edit (#1021 review must-fix).
+    // stopPropagations, so this handler normally never runs while the source
+    // editor holds focus.
+    //
+    // `sourceCommandsForEvent` is scoped to the EVENT TARGET, so it resolves
+    // nothing the moment focus sits anywhere else — the chat composer, the
+    // rail, a toolbar button. A bare `if (inSourceView) return;` used to follow,
+    // which made Ctrl+S a permanent dead key there: `preventDefault()` above had
+    // already suppressed the browser's own Save dialog, and nothing saved and
+    // nothing said why, on every press for as long as source view stayed open.
+    //
+    // The fallthrough is the one `save-as` below has always used, and it is NOT
+    // the stale-Y.Doc write the removed guard was defending against (#1021
+    // review must-fix): `saveExactTarget` routes a source-view tab through its
+    // registered commands, which commit the draft before anything persists, and
+    // reports `no-source-commands` when none is registered. The funnel is the
+    // guarantor of that invariant now — this early return was not.
     const sourceCommands = documentWorkspace.sourceCommandsForEvent(e);
     if (sourceCommands) {
       void sourceCommands.save("save");
-      return;
-    }
-    if (documentWorkspace.inSourceView) {
       return;
     }
     void documentWorkspace.saveDocumentTarget(yjsSync.activeTabId, "save");

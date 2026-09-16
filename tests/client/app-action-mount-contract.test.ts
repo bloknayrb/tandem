@@ -598,3 +598,35 @@ describe("App.svelte refuses to open Settings while the wizard is already showin
     expect(guardIdx, "the guard must run before settingsModalOpen is set").toBeLessThan(setIdx);
   });
 });
+
+// #1708 (review round 1): the `save` shortcut had a third branch nobody had
+// walked — the active tab IS in source view but focus sits outside the source
+// container (chat, the rail, a toolbar button). `sourceCommandsForEvent` keys
+// off the EVENT TARGET, so it resolved nothing there, and a bare
+// `if (documentWorkspace.inSourceView) return;` ran AFTER `preventDefault()`:
+// no save, no message, and the browser's own Save dialog suppressed too, on
+// every press for as long as source view stayed open. Same instrument as the
+// describes above — no test in the repo mounts App.svelte — with the runtime
+// half in tests/e2e/source-view.spec.ts ("Ctrl+S from outside the source pane").
+describe("App.svelte's Ctrl+S is never a dead key in source view (#1708)", () => {
+  const source = readFileSync(APP_SVELTE, "utf-8");
+
+  it("falls through to the save funnel instead of returning on inSourceView", () => {
+    const from = source.indexOf("  save: (e) => {");
+    expect(from, "the save shortcut handler must exist").toBeGreaterThan(-1);
+    const to = source.indexOf('\n  "save-as": (e) => {', from);
+    expect(to, "the save handler must be followed by the save-as handler").toBeGreaterThan(from);
+
+    // `prepare()` preserves offsets, so the RAW indices above address the same
+    // span of the comment-blanked source. Blanking is what makes this honest:
+    // the handler's own comment explains the guard that was removed, and a raw
+    // scan would read that explanation as the violation.
+    const handler = prepare(source).slice(from, to);
+
+    // The fallthrough `save-as` has always had. Source view is not a special
+    // case for it: `saveExactTarget` routes a source-view tab through its
+    // registered commands, which commit the draft before anything persists.
+    expect(handler).toMatch(/documentWorkspace\.saveDocumentTarget\(\s*yjsSync\.activeTabId\s*,/);
+    expect(handler).not.toMatch(/if\s*\(\s*documentWorkspace\.inSourceView\s*\)/);
+  });
+});

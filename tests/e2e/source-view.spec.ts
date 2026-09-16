@@ -97,6 +97,50 @@ test("Ctrl+S in source view commits the edit and does not write stale content to
   expect(fs.readFileSync(filePath, "utf-8")).not.toContain("The original paragraph body.");
 });
 
+test("Ctrl+S from outside the source pane still commits — not a dead key (#1708)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.waitForSelector(".tandem-editor", { timeout: 10_000 });
+
+  await page.getByTestId("formatbar-source-toggle").click();
+  const textarea = page.getByTestId("source-view-textarea");
+  await expect(textarea).toBeVisible();
+  await textarea.fill("# Source Title\n\nCommitted from outside the pane.\n");
+
+  // Move focus OUT of the source container without leaving source view — what
+  // happens the moment the user clicks the chat input, the rail, a toolbar
+  // button, or any non-focusable chrome. `sourceCommandsForEvent` resolves off
+  // the EVENT TARGET, so from here it finds nothing, and the handler used to
+  // fall into a bare `if (inSourceView) return;` AFTER `preventDefault()`: no
+  // save, no message, and the browser's own Save dialog suppressed too, on
+  // every press for as long as source view stayed open.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+
+  // Measured, not assumed. If focus were still inside the pane this test would
+  // be exercising the ordinary in-pane path covered above and would pass
+  // against the unfixed code.
+  const focusOutside = await page.evaluate(
+    () => !document.activeElement?.closest('[data-testid="source-view-container"]'),
+  );
+  expect(focusOutside).toBe(true);
+  await expect(textarea).toBeVisible();
+
+  await page.keyboard.press("ControlOrMeta+s");
+
+  // Saving from outside the pane must not exit source view. Asserted for its own
+  // sake, and because it is the tell that separates a real failure here from a
+  // dev-server full reload — that unmounts SourceView and discards the draft,
+  // which otherwise produces an identical "disk still holds the old body".
+  await expect(textarea).toBeVisible();
+
+  // The funnel activates the target, commits the draft through the registered
+  // source-view commands, and only then persists — so the NEW body reaches disk.
+  await expect
+    .poll(() => fs.readFileSync(filePath, "utf-8"), { timeout: 10_000 })
+    .toContain("Committed from outside the pane.");
+});
+
 test("uncommitted source edits survive a tab switch and back", async ({ page }) => {
   // Second doc so we can switch away from the source-view tab and back.
   const filePath2 = path.join(tmpDir, "doc2.md");
