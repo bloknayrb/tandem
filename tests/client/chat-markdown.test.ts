@@ -594,4 +594,48 @@ describe("renderMarkdown — balanced block assembly", () => {
     // visible to a reader; recorded because it is a value change.
     expect(renderMarkdown("   ")).toBe("");
   });
+
+  it("case 13: splits paragraphs on a CRLF blank line, not just an LF one", () => {
+    // PR-review round 1. The chunk split and the per-line loop are both written
+    // against `\n`, so without the CRLF normalisation in `renderMarkdown` a
+    // `\r\n\r\n` blank line arrives here as a `\r`-only line, which
+    // `line.trim() === ""` DROPS — merging the two paragraphs into one `<p>`
+    // holding a single `<br>`. That is reachable: `tandem_reply` and
+    // `tandem_comment` take a bare `z.string()` and nothing on the wire
+    // normalises line endings, so a Claude message composed with CRLF endings
+    // lost every paragraph break on all four markdown surfaces.
+    const host = parse(renderMarkdown("a\r\n\r\nb"));
+
+    expect(host.querySelectorAll("p")).toHaveLength(2);
+    expect(host.querySelectorAll("br")).toHaveLength(0);
+    expect(Array.from(host.querySelectorAll("p")).map((p) => p.textContent)).toEqual(["a", "b"]);
+  });
+
+  it("case 14: keeps a CRLF soft newline as a <br> inside one paragraph", () => {
+    // The other half of case 13: normalisation must not eat a single line break.
+    // Pins that `\r\n` behaves exactly as `\n` does in case 10, and that no
+    // stray CR survives into the rendered text.
+    const host = parse(renderMarkdown("a\r\nb"));
+
+    expect(host.querySelectorAll("p")).toHaveLength(1);
+    expect(host.querySelectorAll("br")).toHaveLength(1);
+    expect(host.textContent).toBe("ab");
+  });
+
+  it("case 15: recognises a heading and a list item written with CRLF endings", () => {
+    // NOT mutation-sensitive, and kept deliberately rather than sold as a pin:
+    // measured, this case still passes with the normalisation removed, because
+    // the HTML parser normalises a stray CR out of the markup stream before
+    // `textContent` ever sees it. So it records that the line-oriented passes
+    // (heading anchor, list-item anchor, one `<ul>` per run) behave under CRLF —
+    // cases 13 and 14 are the two that go red when the normalisation is removed.
+    const host = parse(renderMarkdown("# H\r\n\r\n- one\r\n- two"));
+
+    expect(host.querySelector("h1")?.textContent).toBe("H");
+    expect(host.querySelectorAll("ul")).toHaveLength(1);
+    expect(Array.from(host.querySelectorAll("li")).map((li) => li.textContent)).toEqual([
+      "one",
+      "two",
+    ]);
+  });
 });

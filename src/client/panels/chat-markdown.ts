@@ -61,7 +61,18 @@ export function renderMarkdown(text: string): string {
   // strips control characters. A forged `\x00BLOCK0\x00` in the input would
   // otherwise capture a real code block's restoration and leave the genuine
   // placeholder rendered on screen as a literal.
-  const escaped = escapeHtml(text.replace(/\x00/g, ""));
+  //
+  // Normalise CRLF to LF in the same pass, before anything reads a newline. Every line-oriented
+  // pass below — the `^…$` header and list anchors, the `/\n{2,}/` chunk split
+  // in `assembleBlocks`, its per-line `split("\n")` — is written against `\n`
+  // alone, so CRLF text arriving over MCP (a `tandem_reply` or `tandem_comment`
+  // body composed on Windows; nothing on the wire normalises it) would otherwise
+  // leave a `\r`-only line where a blank line was, which `line.trim() === ""`
+  // then DROPS — collapsing every paragraph break in the message into a single
+  // `<br>`. Measured on a review round: `a\r\n\r\nb` rendered one `<br>` rather
+  // than two paragraphs. Normalising here rather than in each pass is what keeps
+  // the fix from having to be repeated by every future line-oriented rule.
+  const escaped = escapeHtml(text.replace(/\x00/g, "").replace(/\r\n/g, "\n"));
 
   // Pull fenced code blocks out first so the inline-code and newline passes
   // don't mangle their content. Each is swapped for a placeholder that, given
@@ -204,7 +215,7 @@ export function renderMarkdown(text: string): string {
  *    a fenced block used to leave behind, and what let `p:empty` be deleted from
  *    `markdown-body.css`.
  *
- * **Three recorded bounds of the subset, none of them introduced here** — each
+ * **Two recorded bounds of the subset, neither of them introduced here** — each
  * renders identically before and after this function existed:
  *
  * 1. **A mid-line fence on a plain prose line.** `see ```x``` here` matches no
@@ -215,10 +226,13 @@ export function renderMarkdown(text: string): string {
  *    `<h1>`, `<strong>` or `<a>`.** `# head ```x``` tail` leaves `<pre>`
  *    parented by `H1` — an invalid content model the parser tolerates rather
  *    than repairs.
- * 3. **The chunk split is CRLF-blind.** `/\n{2,}/` does not break on
- *    `\r\n\r\n`, so a blank line in text arriving over MCP with CRLF endings
- *    becomes a `<br>` inside one `<p>`. The `/\n\n/g` pass this replaced had the
- *    identical blind spot.
+ *
+ * **The split is CRLF-blind and is allowed to be**: `renderMarkdown` normalises
+ * `\r\n` to `\n` before any pass runs, so nothing here ever sees a CR. That
+ * normalisation is load-bearing for this function specifically — a `\r`-only
+ * line is whitespace to `line.trim()` and would be dropped, taking the paragraph
+ * break with it. Do not remove it on the reasoning that the split "handles
+ * newlines".
  *
  * Ordered lists, nested lists, blockquotes and tables are outside the subset.
  */
