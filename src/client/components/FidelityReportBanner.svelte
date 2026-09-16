@@ -2,6 +2,7 @@
 import type * as Y from "yjs";
 import { Y_MAP_DOCUMENT_META, Y_MAP_FIDELITY_REPORT } from "../../shared/constants";
 import type { FidelityReport } from "../../shared/types";
+import { triggerSave } from "../actions/builtin.svelte.js";
 import LiveRegion from "./LiveRegion.svelte";
 import { SR_ONLY_STYLE } from "./live-region";
 import "./tandem-banner.css";
@@ -15,8 +16,13 @@ import "./tandem-banner.css";
  *
  * Self-erasing: hidden when both lists are empty, so as real round-trip fidelity
  * lands (roadmap phases 2–4) the banner disappears on its own. Read-only over
- * Y.js — no CTA mutates server state; the notice reflects a true property of the
- * document, so it is collapsible (Details) but not dismissible.
+ * Y.js, with ONE carve-out (#1941): the "Save anyway without pictures" CTA
+ * writes the user's FILE (POST /api/save with `allowImageLoss`), never the
+ * Y.Doc. It lives here because this is where the dropped pictures are already
+ * being reported, and it is the only exit a browser user with no Claude
+ * attached has from the #1755 refusal. The notice still reflects a true
+ * property of the document, so it remains collapsible (Details) but not
+ * dismissible.
  */
 
 interface Props {
@@ -25,9 +31,7 @@ interface Props {
   fileName: string;
 }
 
-// documentId is part of the mount contract (mirrors ExternalConflictBanner); the
-// banner keys off the active tab's ydoc, so it isn't read directly here.
-const { ydoc, fileName }: Props = $props();
+const { ydoc, documentId, fileName }: Props = $props();
 
 let report = $state<FidelityReport | null>(null);
 let expanded = $state(false);
@@ -48,6 +52,11 @@ $effect(() => {
           exportDowngrades: Array.isArray(raw.exportDowngrades) ? raw.exportDowngrades : [],
           // Optional/forward-compat (#1123 0e): pre-0e reports lack this field.
           integrityWarnings: Array.isArray(raw.integrityWarnings) ? raw.integrityWarnings : [],
+          // #1941: carried through normalize-on-read, or the save-anyway CTA
+          // would never render — the literal built here is what the rest of the
+          // component sees, and `droppedImages` is optional on the type, so
+          // dropping it is not a type error.
+          droppedImages: typeof raw.droppedImages === "number" ? raw.droppedImages : 0,
           updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : 0,
         }
       : null;
@@ -73,9 +82,20 @@ $effect(() => {
 // persisted before 0e existed.
 const integrityWarnings = $derived(report?.integrityWarnings ?? []);
 const hasIntegrity = $derived(integrityWarnings.length > 0);
+/**
+ * #1941. A fourth term, not a fifth list: `droppedImages > 0` with an EMPTY
+ * `importLosses` is reachable — `document-service.ts` pins `importLosses` from a
+ * pre-write snapshot while re-reading `droppedImages` off the live doc — and
+ * that is exactly the report whose next save is refused. Without this term the
+ * banner (and so the only exit) would be hidden for it.
+ */
+const droppedImages = $derived(report?.droppedImages ?? 0);
 const hasLosses = $derived(
   !!report &&
-    (report.importLosses.length > 0 || report.exportDowngrades.length > 0 || hasIntegrity),
+    (report.importLosses.length > 0 ||
+      report.exportDowngrades.length > 0 ||
+      droppedImages > 0 ||
+      hasIntegrity),
 );
 
 /**
@@ -163,6 +183,34 @@ const lossesMessage = $derived(
           </ul>
         </section>
       {/if}
+      <!-- #1941 — its OWN block, keyed on `droppedImages` alone rather than
+           nested in the import-losses section above, which can be empty for a
+           report that still refuses the save. Inside the collapsed-by-default
+           panel on purpose: the chain is refusal → Details → what is lost →
+           button, so the loss is stated before the click. No local pending or
+           error state — `announceBusy` routes every outcome to the activity
+           tray, as the tray's own Retry does. -->
+      {#if droppedImages > 0}
+        <section>
+          <h4>Save without the pictures</h4>
+          <p class="fidelity-report-save-anyway-hint">
+            {droppedImages} picture(s) couldn't be imported, so saving is refused by default. Saving
+            anyway overwrites {fileName} without them — your original is backed up and can be
+            restored from the command palette. To keep the pictures, ask Claude to convert this
+            document to Markdown instead.
+          </p>
+          <button
+            type="button"
+            class="fidelity-report-save-anyway"
+            data-testid="fidelity-report-save-anyway"
+            onclick={() => {
+              void triggerSave(documentId, { allowImageLoss: true, announceBusy: true });
+            }}
+          >
+            Save anyway without pictures
+          </button>
+        </section>
+      {/if}
       {#if report.exportDowngrades.length > 0}
         <section data-testid="fidelity-report-export-downgrades">
           <h4>Simplified on the last save</h4>
@@ -211,6 +259,24 @@ const lossesMessage = $derived(
     background: var(--tandem-warning-bg);
     border-color: var(--tandem-warning-border);
     color: var(--tandem-warning-fg-strong);
+  }
+
+  .fidelity-report-save-anyway-hint {
+    margin: 0 0 var(--tandem-space-2);
+  }
+
+  .fidelity-report-save-anyway {
+    font: inherit;
+    padding: var(--tandem-space-1) var(--tandem-space-3);
+    border: 1px solid var(--tandem-warning-border);
+    border-radius: var(--tandem-r-1);
+    background: var(--tandem-warning-bg);
+    color: var(--tandem-warning-fg-strong);
+    cursor: pointer;
+  }
+
+  .fidelity-report-save-anyway:hover {
+    border-color: var(--tandem-warning-fg);
   }
 
   .fidelity-report-restore-hint {

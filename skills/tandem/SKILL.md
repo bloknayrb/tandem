@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 23
+version: 24
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -132,7 +132,7 @@ If `ws` is unavailable, the equivalent stream is `GET /api/events?filter=wake` o
 Then pick an ending, and say which one you're doing:
 
 - **Leave it to the user.** Annotations stay in the session; the file is untouched until someone saves.
-- **`tandem_save`** — writes your edits back into the original `.docx`, and writes shared comments back as native Word comments. Check `fidelityWarnings` in the response and pass anything it reports on to the user — a `.docx` whose pictures couldn't be imported refuses the save; offer `tandem_convertToMarkdown` instead.
+- **`tandem_save`** — writes your edits back into the original `.docx`, and writes shared comments back as native Word comments. Check `fidelityWarnings` in the response and pass anything it reports on to the user — a `.docx` whose pictures couldn't be imported refuses the save. There are two ways past it and the safe one is first: offer `tandem_convertToMarkdown`, which keeps the edits *and* the pictures. `tandem_save({ allowImageLoss: true })` saves the `.docx` without those pictures — **ask the user first and say what is lost**; it overwrites their file, and the pictures are gone from it. Never pass it to get past a save that failed for any other reason.
 - **`tandem_applyChanges`** — **experimental**: it refuses any document whose flat text it can't reproduce, and some Word documents are a known limitation. Writes accepted suggestions into the `.docx` as Word **tracked changes** (`w:del` + `w:ins`), so the recipient reviews them in Word. Takes an optional `author` (default `"Tandem Review"`). Only works on a `.docx` opened from disk, and returns `NO_SUGGESTIONS` if nothing was accepted.
 - **`tandem_convertToMarkdown`** — still the right call if the user wants a Markdown copy rather than a Word file.
 

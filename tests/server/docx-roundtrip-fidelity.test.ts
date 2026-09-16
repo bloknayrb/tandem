@@ -252,17 +252,20 @@ const CORPUS: Fixture[] = [
     status: "breaks",
     reason:
       "mammoth wraps images in <p>; htmlToYDoc drops inline images (no top-level <img>) — " +
-      "now REPORTED, and the save is refused rather than silently overwriting them away (#1755)",
+      "now REPORTED, and the save is refused BY DEFAULT rather than silently overwriting them " +
+      "away (#1755); since #1941 the user can override that from the banner (#1941)",
     check(rt) {
       // CURRENT LOSS — no image node survives the import. #1755 makes the loss
       // LEGIBLE; it does not preserve images.
       expect(hasNode(rt.gen1, "image")).toBe(false);
       const line = rt.importWarnings.find((w) => /picture/i.test(w));
       expect(line, "the picture loss must be reported").toBeDefined();
-      // The copy describes a REFUSAL, not a lossy save...
-      expect(line).toContain("can't be saved");
+      // The copy describes a REFUSAL that is the DEFAULT, not a lossy save...
+      expect(line).toMatch(/refused by default/i);
       expect(line).not.toMatch(/won'?t be in the saved file/i);
-      // ...and names an exit reachable from THIS document.
+      // ...and names BOTH exits, the first reachable without any Claude at all
+      // (#1941 — the line sits directly above that button in the banner).
+      expect(line).toMatch(/save anyway without pictures/i);
       expect(line).toMatch(/ask claude to convert it to markdown/i);
     },
   },

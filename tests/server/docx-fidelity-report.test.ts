@@ -485,6 +485,39 @@ describe("fidelity report wiring", () => {
     expect(result.status).toBe("saved");
   });
 
+  it("saves an image-bearing .docx when allowImageLoss is set (#1941)", async () => {
+    // The override half of the decision #1939 shipped the first half of: refuse
+    // by default, proceed when the caller explicitly accepts the loss. The
+    // fixture carries TEXT beside the picture on purpose — a picture-only
+    // document regenerates blank and trips the degenerate-model check for an
+    // unrelated reason, which would make this pass for the wrong one.
+    const corpus = await import("../helpers/docx-corpus.js");
+    const filePath = path.join(tmpDir, "picture-override.docx");
+    const original = await corpus.buildEmbeddedImageWithText();
+    await fs.writeFile(filePath, original);
+
+    const opened = await openFromDisk(filePath);
+    expect(reportOf(getOrCreateDocument(opened.documentId))?.droppedImages).toBe(1);
+
+    // Default is unchanged — the refusal still fires for the same document.
+    const refused = await saveDocumentToDisk(opened.documentId, "manual");
+    expect(refused.status).toBe("error");
+    expect(refused.errorCode).toBe("VERIFY_BLOCKED");
+
+    const result = await saveDocumentToDisk(opened.documentId, "manual", {
+      allowImageLoss: true,
+    });
+    expect(result.status).toBe("saved");
+
+    // The bytes actually moved, and the text survived the regeneration — this
+    // is the half that fails if the override short-circuits the write instead
+    // of proceeding through it.
+    const after = await fs.readFile(filePath);
+    expect(after.equals(original)).toBe(false);
+    const { loadDocx } = await import("../../src/server/file-io/docx.js");
+    expect(await loadDocx(after)).toContain("Hello World");
+  });
+
   it("carries droppedImages set MID-SAVE — the refusal is not erased", async () => {
     // Review round 1. The whole-object replace at the end of the binary branch
     // rewrites Y_MAP_FIDELITY_REPORT; omitting `droppedImages` from it is not a
