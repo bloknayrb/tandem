@@ -363,11 +363,10 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
   // and Claude Code's plugin host) we deliberately write none: env wins at
   // runtime, so writing the FILE's token would put a superseded header on disk
   // that nothing later heals. No token file = today's behaviour, no header.
-  const { source: envTokenSource } = resolveAuthTokenCandidate();
-  const token =
-    envTokenSource === "TANDEM_AUTH_TOKEN" || envTokenSource === "CLAUDE_PLUGIN_OPTION_AUTH_TOKEN"
-      ? undefined
-      : ((await readTokenFromFile()) ?? undefined);
+  // Called with no override, so `resolveAuthTokenCandidate` reports a source
+  // only for those two env vars — presence of the token IS the refusal test.
+  const { token: envToken } = resolveAuthTokenCandidate();
+  const token = envToken !== undefined ? undefined : ((await readTokenFromFile()) ?? undefined);
 
   for (const t of targets) {
     try {
