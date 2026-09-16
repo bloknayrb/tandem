@@ -20,7 +20,18 @@ vi.mock(import("../../src/server/integrations/apply.js"), async (importActual) =
     detectTargets: vi.fn(),
     applyConfig: vi.fn(),
     installSkill: vi.fn(),
-    buildMcpEntries: vi.fn(() => ({})) as unknown as typeof actual.buildMcpEntries,
+    // Widened to a real `McpEntries`, and deliberately NOT asserted through
+    // `unknown`: the typed `vi.mock(import(...))` overload checks this factory
+    // against `Partial<T>`, and a cast here would void exactly the check the
+    // conversion buys (review round 1). The bare `{}` it replaces was a stale
+    // double -- production returns `{ tandem: McpEntry }` -- preserved by the
+    // cast rather than fixed. The return type is taken from the production
+    // signature so a change to `McpEntries` lands here as an error.
+    buildMcpEntries: vi.fn(
+      (): ReturnType<typeof actual.buildMcpEntries> => ({
+        tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" },
+      }),
+    ),
     // `ApplyOps` is `{ create: McpEntries; remove: RemovableEntry[] }`; the
     // bare `{}` double predates the typed mock overload and matched nothing.
     applyOpsForCli: vi.fn(() => ({
