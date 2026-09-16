@@ -136,9 +136,12 @@ async function readIntegrationsFile(filePath: string): Promise<IntegrationsFile>
 
   const migrated = migrateUp(parsed, version, INTEGRATIONS_SCHEMA_VERSION);
   // Normalize legacy http://localhost URLs to http://127.0.0.1 before schema
-  // validation. The LoopbackUrl validator accepts only 127.0.0.1; files written
-  // before this tightening may carry localhost URLs (auto-config always wrote
-  // 127.0.0.1, but manual edits could differ). Normalize silently here; the
+  // validation. The LoopbackUrl validator accepts only 127.0.0.1; a v3 file on
+  // disk may carry localhost URLs (auto-config always wrote 127.0.0.1, but
+  // manual edits could differ). v1/v2 files cannot reach here carrying one:
+  // migrateUp runs first and parses each step through IntegrationsFileV1Schema
+  // / IntegrationsFileV2Schema, whose `url` fields are already LoopbackUrl, so
+  // such a file throws before normalization. Normalize silently here; the
   // corrected value is persisted on the next write.
   const normalized = normalizeLocalhostUrls(migrated);
   const result = IntegrationsFileSchema.safeParse(normalized);
@@ -402,26 +405,39 @@ export function readSchemaVersion(parsed: unknown): number | null {
 }
 
 /**
- * Replace `http://localhost` with `http://127.0.0.1` in any `url` field across
- * all integration records. Operates on the raw unknown post-migration shape so
- * it runs before Zod validation (which now rejects localhost). Safe to call on
- * any value — non-object / non-array inputs are returned unchanged.
+ * Replace `http://localhost` with `http://127.0.0.1` at `integrations[].url` —
+ * scoped to the one `url` position the schema has rather than walked at every
+ * depth, because it runs on the raw post-disk blob before Zod and a
+ * depth-agnostic rewrite would rest on the schema staying closed (#1603).
+ * Operates on the raw unknown post-migration shape so it runs before Zod
+ * validation (which now rejects localhost). Safe to call on any value —
+ * non-object / non-array inputs are returned unchanged.
+ *
+ * The one structural position is derived from the existing v3 schema, which is
+ * not widened here: `ClaudeCodeIntegration.url` (required) and
+ * `OtherMcpIntegration.url` (optional) both sit directly on an integration
+ * record. The scoping deliberately does not key on `kind` — `other-mcp`'s
+ * optional `url` must still be normalized. Exported for unit specs (precedent:
+ * `readSchemaVersion` above); it gains no other `src/` caller.
  */
-function normalizeLocalhostUrls(data: unknown): unknown {
-  if (Array.isArray(data)) return data.map(normalizeLocalhostUrls);
-  if (data === null || typeof data !== "object") return data;
-  const obj = data as Record<string, unknown>;
-  const result: Record<string, unknown> = {};
-  for (const key of Object.keys(obj)) {
-    if (key === "url" && typeof obj[key] === "string") {
-      result[key] = (obj[key] as string).replace(/^http:\/\/localhost([:\/]|$)/, (m) =>
-        m.replace("localhost", "127.0.0.1"),
-      );
-    } else {
-      result[key] = normalizeLocalhostUrls(obj[key]);
-    }
-  }
-  return result;
+export function normalizeLocalhostUrls(data: unknown): unknown {
+  if (data === null || typeof data !== "object" || Array.isArray(data)) return data;
+  const file = data as Record<string, unknown>;
+  if (!Array.isArray(file.integrations)) return data;
+  return {
+    ...file,
+    integrations: file.integrations.map((entry) => {
+      if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return entry;
+      const record = entry as Record<string, unknown>;
+      if (typeof record.url !== "string") return entry;
+      return {
+        ...record,
+        url: record.url.replace(/^http:\/\/localhost([:\/]|$)/, (m) =>
+          m.replace("localhost", "127.0.0.1"),
+        ),
+      };
+    }),
+  };
 }
 
 function enforceReferentialIntegrity(file: IntegrationsFile): IntegrationsFile {
