@@ -47,7 +47,16 @@ describe("tandem --help (#1823)", () => {
     expect(code).toBe(0);
 
     for (const cmd of dispatched) {
-      expect(stdout, `\`${cmd}\` is dispatched but missing from --help`).toContain(cmd);
+      // Match the DOCUMENTED FORM (`  tandem <cmd>`), not a bare substring.
+      // Measured: a plain `toContain("start")` passes even with the `start`
+      // line deleted, because the monitor entry's prose says "…starts it when
+      // the tandem skill is first used". That made this spec non-discriminating
+      // for the one command it was written for.
+      const documented = new RegExp(
+        `^\\s*tandem ${cmd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+        "m",
+      );
+      expect(stdout, `\`tandem ${cmd}\` is dispatched but missing from --help`).toMatch(documented);
     }
   }, 30_000);
 });
