@@ -224,30 +224,28 @@ export function renderMarkdown(text: string): string {
  */
 function assembleBlocks(input: string): string {
   const out: string[] = [];
+  let para: string[] = [];
+  let items: string[] = [];
+
+  const flushPara = () => {
+    if (para.length) out.push(`<p>${para.join("<br>")}</p>`);
+    para = [];
+  };
+  const flushList = () => {
+    if (items.length) out.push(`<ul>${items.join("")}</ul>`);
+    items = [];
+  };
 
   for (const chunk of input.split(/\n{2,}/)) {
-    let para: string[] = [];
-    let items: string[] = [];
-
-    const flushPara = () => {
-      if (para.length) out.push(`<p>${para.join("<br>")}</p>`);
-      para = [];
-    };
-    const flushList = () => {
-      if (items.length) out.push(`<ul>${items.join("")}</ul>`);
-      items = [];
-    };
-
     for (const line of chunk.split("\n")) {
       if (line.trim() === "") continue;
       if (line.startsWith("<li>")) {
         flushPara();
         items.push(line);
-      } else if (/^<h[123]>/.test(line)) {
-        flushPara();
-        flushList();
-        out.push(line);
-      } else if (/\x00BLOCK\d+\x00/.test(line)) {
+      } else if (/^<h[123]>/.test(line) || /\x00BLOCK\d+\x00/.test(line)) {
+        // Already a standalone block: a heading this function emitted, or a line
+        // carrying a fenced-block placeholder. Both close the runs before them,
+        // which is what preserves document order.
         flushPara();
         flushList();
         out.push(line);
@@ -257,6 +255,7 @@ function assembleBlocks(input: string): string {
       }
     }
 
+    // The blank-line chunk boundary closes both runs; nothing carries across it.
     flushList();
     flushPara();
   }
