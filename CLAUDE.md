@@ -97,6 +97,16 @@ already produced a wrong verdict:
 At review time the outcome must be keep, replace or retire. "Wait and see again" is not one of
 them: a gate that can be deferred indefinitely is not a gate.
 
+**Route new work by whether it's answerable from tracked files, not by apparent difficulty
+(#1606).** The same test as above applies before you start, not only at gate review: work
+derivable from the code and the ticket — coordinate math, range invariants, schema/migration,
+anything with an in-repo signpost — is worth trusting a model on. Work whose correctness depends
+on the world — what users put in their documents, what a real upgrade does, what a specific OS or
+Claude Code build does — needs the missing fact landed in the repo first, or needs Bryan; no
+amount of investigation inside the repo substitutes. `needs-human-evidence` marks the second
+bucket — `gh issue list --label needs-human-evidence` is the current membership; release urgency
+is independent of the bucket, so the label is not a priority signal.
+
 This is a two-person project (Bryan + Claude). Scope gates are minimal — if you find something
 broken while working, fix it rather than filing it. Bundle small tangential fixes in; for
 larger detours, note them and finish the current task first.
