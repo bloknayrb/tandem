@@ -72,7 +72,7 @@ const HTML =
 const ANCHORS = ["simplify the onboarding flow", "dashboard needs a refresh"] as const;
 
 let client: Client;
-let close: () => Promise<void>;
+let close: (() => Promise<void>) | undefined;
 
 /**
  * A registered document holding two imported Word comments, both private notes.
@@ -134,7 +134,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await close();
+  await close?.();
+  close = undefined;
   setCtrlMode(null);
   while (seededDocIds.length > 0) removeDocument(seededDocIds.pop() as string);
 });

@@ -56,7 +56,7 @@ import { off, range } from "../helpers/positions.js";
 import { createAnnotation, rangeOf } from "../helpers/ydoc-factory.js";
 
 let client: Client;
-let close: () => Promise<void>;
+let close: (() => Promise<void>) | undefined;
 const sidecarTempFiles: string[] = [];
 
 /** Still used by `rawErrorText` below, which reads the raw envelope text. */
@@ -103,7 +103,8 @@ beforeEach(async () => {
 // File-level, beside `afterAll` below. The describe-scoped `afterEach`s further
 // down cover one describe each and none of them touches the client.
 afterEach(async () => {
-  await close();
+  await close?.();
+  close = undefined;
 });
 
 // The `regex: true` cases spawn the #1795 search worker. Hygiene: the forks

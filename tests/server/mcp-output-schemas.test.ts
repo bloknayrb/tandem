@@ -60,7 +60,7 @@ import { setupMcpServer } from "../helpers/mcp-harness.js";
 import { createAnnotation, rangeOf } from "../helpers/ydoc-factory.js";
 
 let client: Client;
-let close: () => Promise<void>;
+let close: (() => Promise<void>) | undefined;
 
 /** Deterministic doctor report so diagnostics tests never touch real ports. */
 const STUB_DOCTOR_REPORT: DoctorReport = {
@@ -144,7 +144,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await close();
+  await close?.();
+  close = undefined;
 });
 
 // The `regex: true` cases below spawn the #1795 search worker. Hygiene: the
