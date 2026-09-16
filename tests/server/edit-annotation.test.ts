@@ -17,7 +17,7 @@ import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { createAnnotation, rangeOf } from "../helpers/ydoc-factory.js";
 
 let client: Client;
-let close: () => Promise<void>;
+let close: (() => Promise<void>) | undefined;
 
 function setupDoc(id: string, text: string) {
   const ydoc = getOrCreateDocument(id);
@@ -34,7 +34,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await close();
+  await close?.();
+  close = undefined;
 });
 
 describe("tandem_editAnnotation", () => {

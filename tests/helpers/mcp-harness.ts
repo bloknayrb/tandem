@@ -35,6 +35,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
  * leak fix: `InMemoryTransport` holds only a message queue and a reference to
  * its peer — no timer, socket or fd — and its own `close()` already awaits the
  * other side. Call it in the scope that created the client.
+ *
+ * From a file-level `afterEach`, call it as `await close?.()` off an
+ * `(() => Promise<void>) | undefined` binding and clear that binding after —
+ * vitest runs `afterEach` even when `beforeEach` threw, so an unguarded call on
+ * a never-assigned binding reports `close is not a function` ON TOP OF the real
+ * cause, and on any later test the same path re-closes the PREVIOUS test's
+ * client instead.
  */
 export async function setupMcpServer(
   registrars: Array<(server: McpServer) => void>,
