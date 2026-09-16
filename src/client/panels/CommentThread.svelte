@@ -14,12 +14,14 @@ interface Props {
    */
   annotation: Annotation;
   isPending: boolean;
-  /** Whether this card's accept affordance is offered at all (SidePanel's gate). */
-  canAccept: boolean;
+  /**
+   * Presence IS the gate: SidePanel passes it only when its own `canAccept`
+   * says so, so a separate boolean prop would be the same fact spelled twice.
+   */
   onAcceptReplySuggestion?: (annotationId: string, replyId: string) => void;
 }
 
-let { replies, annotation, isPending, canAccept, onAcceptReplySuggestion }: Props = $props();
+let { replies, annotation, isPending, onAcceptReplySuggestion }: Props = $props();
 
 const agentLabel = createAgentLabel();
 </script>
@@ -82,7 +84,7 @@ const agentLabel = createAgentLabel();
           <div class="ct-suggestion" data-testid="reply-suggestion-{reply.id}">
             {reply.suggestedText}
           </div>
-          {#if isPending && canAccept && onAcceptReplySuggestion}
+          {#if isPending && onAcceptReplySuggestion}
             <button
               type="button"
               class="ct-accept"

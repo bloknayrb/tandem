@@ -139,7 +139,6 @@ async function handleSendReply() {
           replies={visibleReplies}
           {annotation}
           {isPending}
-          canAccept={onAcceptReplySuggestion !== undefined}
           {onAcceptReplySuggestion}
         />
       </div>
