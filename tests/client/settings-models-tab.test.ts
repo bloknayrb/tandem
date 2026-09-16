@@ -17,6 +17,7 @@
 
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
 
 const reload = vi.fn(async () => {});
 
@@ -60,8 +61,28 @@ const { default: SettingsModelsTab } = await import(
   "../../src/client/components/settings-tabs/SettingsModelsTab.svelte"
 );
 
+// The full `SettingsTabContext` (`SettingsModal.svelte`), not just the field
+// this file exercises: the tab takes the whole context as props, and until
+// #1614 put components in a typechecked program a partial one was silent.
+// Same shape as `SettingsClaudeCodeTab.test.ts`'s `makeProps`.
+function makeProps() {
+  return {
+    open: true,
+    settings: {
+      selectionDwellMs: 1000,
+      selectionToolbar: true,
+      marginView: false,
+    } as TandemSettings,
+    onUpdate: vi.fn(),
+    connected: true,
+    reconnectAttempts: 0,
+    readOnly: false,
+    notify: vi.fn(),
+  };
+}
+
 function mount() {
-  return render(SettingsModelsTab, { props: { readOnly: false } });
+  return render(SettingsModelsTab, { props: makeProps() });
 }
 
 afterEach(() => {
