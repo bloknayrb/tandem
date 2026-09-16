@@ -282,6 +282,19 @@ class SaveVerificationError extends Error {
 export async function saveDocumentToDisk(
   docId: string,
   source: "auto-save" | "manual" | "mcp" = "auto-save",
+  /**
+   * `allowImageLoss` (#1941) — the explicit override for the #1755 refusal, and
+   * the ONLY thing this bag carries. A third OPTIONAL parameter by design: every
+   * existing caller (`reload-family.ts`, `autoSaveAllToDisk`, the auto-save
+   * timer) is unchanged by construction and keeps refusing.
+   *
+   * It changes WHETHER a save proceeds, never WHERE it lands — the destination
+   * is still `docState.filePath`, so #1654's bound on caller-named write
+   * destinations is untouched. Scoped to `import-image-loss` alone: the
+   * post-write verdict block below is a different claim (*the regenerated file
+   * is broken*) and is not overridable.
+   */
+  opts?: { allowImageLoss?: boolean },
 ): Promise<SaveResult> {
   // path.basename eliminates directory components so CodeQL does not trace
   // user input through Map.get(id) to docState.filePath FS sinks
@@ -493,7 +506,13 @@ export async function saveDocumentToDisk(
       // ORIGINAL `word/document.xml` in place and re-zips, so the pictures
       // survive it. Adding this "for consistency" would break the one write path
       // that preserves them.
-      if (reportCount(fidelityReportOf(doc), "droppedImages") > 0) {
+      //
+      // `opts.allowImageLoss` (#1941) is the explicit override: refuse by
+      // default, proceed when a caller has said, in so many words, that it
+      // accepts losing the pictures. Both surfaces default to FALSE on any
+      // parse failure (`tandem_save` omits the param, `POST /api/save` tests
+      // `=== true`), so a malformed or bodyless request still refuses.
+      if (!opts?.allowImageLoss && reportCount(fidelityReportOf(doc), "droppedImages") > 0) {
         throw new SaveVerificationError(
           blockReasonMessage("import-image-loss"),
           "import-image-loss",

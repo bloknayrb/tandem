@@ -295,4 +295,21 @@ describe("blockReasonMessage", () => {
       expect(msg).not.toMatch(/[A-Z]:\\/); // no Windows absolute path
     }
   });
+
+  it("names the override on the one reason that has one (#1941)", () => {
+    // The refusal is the only place a user or an agent meets this wall, so the
+    // way out has to be legible FROM IT rather than from docs. Both surfaces
+    // read this exact string: it is the pushed save-error notification and
+    // `tandem_save`'s returned `reason`.
+    const msg = blockReasonMessage("import-image-loss");
+    expect(msg).toMatch(/save anyway/i);
+    expect(msg).toContain("allowImageLoss");
+    // Still content-free — a parameter name is not content.
+    expect(msg).not.toMatch(/[A-Z]:\\/);
+    expect(msg).not.toMatch(/\.docx\b/);
+    // The three non-overridable reasons must NOT advertise one.
+    for (const reason of ["reimport-failed", "degenerate-model", "gross-text-loss"] as const) {
+      expect(blockReasonMessage(reason)).not.toMatch(/save anyway/i);
+    }
+  });
 });
