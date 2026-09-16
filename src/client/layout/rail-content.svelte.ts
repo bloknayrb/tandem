@@ -179,9 +179,16 @@ export function createRailContentModel(opts: RailContentOptions): RailContentMod
   // lives in `CTRL_ROOM` and broadcasts, so a Solo -> Tandem flip clears the
   // `soloRailHidden` suppression from elsewhere, and the Settings modal can
   // write `rightPanelVisible` directly. A pinned rail carrying a live reveal
-  // renders float chrome and `data-testid="rail-float-right"`, which is how
-  // E2E identifies a FLOATING rail -- so the stale state hands a wrong answer
-  // with nothing failing.
+  // renders float chrome and the `rail-float-right` test selector, which is
+  // how E2E identifies a FLOATING rail -- so the stale state hands a wrong
+  // answer with nothing failing.
+  //
+  // That selector is named bare, without the attribute spelling that would
+  // normally precede it. `testid-coverage.test.ts` scans `src/client/**` as
+  // raw text with a literal `indexOf` on that attribute token and parses
+  // whatever follows as a value, comments included -- so writing it in full
+  // here mints a phantom selector and breaks the committed snapshot. Measured
+  // twice while writing this comment.
   //
   // **Both reads are unconditional**, matching the document-switch effect
   // above: the short-circuited `if (chatReveal && opts.get...())` form never
