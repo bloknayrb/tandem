@@ -287,6 +287,13 @@ const TOKEN_FILE_REFERENCES = [
   // row exists.
   "src/server/app-data-owner.ts",
   "src/cli/rotate-token.ts",
+  // #1823 item 10: `setup --apply` after `rotate-token` used to drop the token
+  // from the entries it wrote, because `writeTargets` called `buildMcpEntries`
+  // with no `token` while `applyConfigWithToken` passed one. It now reads the
+  // token file — behind the same env-token refusal `rotate-token.ts` encodes.
+  // It is NOT a config writer: `setup.ts` is not a `WRITER_SITES` key and holds
+  // no durable-write idiom, so the #1599 accepted scope is unchanged.
+  "src/cli/setup.ts",
   "src/server/auth/token-store.ts",
   "src/server/index.ts",
   "src/server/mcp/routes/info.ts",

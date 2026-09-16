@@ -12,10 +12,13 @@ import {
   detectTargets,
   installSkill,
   PACKAGE_ROOT,
+  PathRejectedError,
   resolveChannelShimIntent,
   type TargetKind,
   validateChannelShimPrereq,
 } from "../server/integrations/apply.js";
+import { readTokenFromFile } from "../shared/auth/token-file.js";
+import { resolveAuthTokenCandidate } from "../shared/cli-runtime.js";
 import { CLAUDE_PLUGIN_INSTALL_COMMANDS } from "../shared/constants.js";
 import {
   ERROR_CODE_CONFIG_MALFORMED,
@@ -144,7 +147,12 @@ async function applySetup(opts: SetupOptions): Promise<void> {
     }
   }
 
-  let outcome: WriteOutcome = { failures: 0, refusals: [], shimRegisteredFor: [] };
+  let outcome: WriteOutcome = {
+    failures: 0,
+    refusals: [],
+    pathRejections: [],
+    shimRegisteredFor: [],
+  };
   if (targets.length === 0) {
     // `detectTargets` returns an empty list for two very different reasons, and
     // the generic hint is actively wrong for one of them: when the home
@@ -179,11 +187,27 @@ async function applySetup(opts: SetupOptions): Promise<void> {
       // throws `ConfigRefusalError` out of `applyConfig`, lands here, and the
       // user goes and checks permissions that were fine all along. `doctor` and
       // the wizard both name the real remedy; this was the third surface.
-      console.error(
-        outcome.refusals.length === outcome.failures
-          ? refusalSummary(outcome.refusals)
-          : "\nSetup failed — could not write any configuration. Check file permissions.",
-      );
+      // Branch over the UNION of the two declined-to-write classes (#1823
+      // item 9). `assertPathSafe` throws `PathRejectedError`, which is NOT a
+      // `ConfigRefusalError`, so a symlinked `~/.claude.json` failed the
+      // single-class equality and fell through to "Check file permissions" —
+      // the very dead end #1802 removed for the other two classes, on a file
+      // whose permissions are fine.
+      //
+      // The union rather than a third single-class arm: one symlinked file
+      // plus one malformed file is 1 + 1 = 2, which both single-class
+      // equalities miss, sending a mixed run back to the generic dead end.
+      const declined = outcome.refusals.length + outcome.pathRejections.length;
+      if (declined === outcome.failures) {
+        if (outcome.refusals.length > 0) console.error(refusalSummary(outcome.refusals));
+        if (outcome.pathRejections.length > 0) {
+          console.error(pathRejectionSummary(outcome.pathRejections));
+        }
+      } else {
+        console.error(
+          "\nSetup failed — could not write any configuration. Check file permissions.",
+        );
+      }
     } else if (outcome.failures > 0) {
       console.error(
         `\nSetup partially complete (${outcome.failures} target(s) failed). Start Tandem with: tandem`,
@@ -274,6 +298,31 @@ function refusalSummary(reasons: readonly ConfigRefusalError["reason"][]): strin
   return `${lead} Each line above says what its file needs.`;
 }
 
+/**
+ * The all-failed summary for a run whose failures were PATH rejections (#1823
+ * item 9).
+ *
+ * `assertPathSafe` refuses a config path that is a symlink, resolves outside
+ * `$HOME`, is unreadable, or is UNC. None of those is fixed by changing
+ * permissions, which is exactly what the generic branch used to prescribe.
+ *
+ * The reasons are the `PathRejectedError["reason"]` values themselves — the
+ * same string the exported `pathRejectionReason` yields for this class, read
+ * off the stored reason rather than by retaining the error object — so the line
+ * names the real refusal instead of guessing at one.
+ */
+function pathRejectionSummary(reasons: readonly PathRejectedError["reason"][]): string {
+  const kinds = [...new Set(reasons)].join(", ");
+  return (
+    "\nSetup failed — Tandem refused the config path(s) above and left them\n" +
+    `untouched. Reason: ${kinds}. This is not a permissions problem. A symlinked\n` +
+    "config is refused deliberately, because writing through it would land\n" +
+    "outside your home directory; replace the symlink with a real file, or point\n" +
+    "Tandem at the real path, then re-run:\n" +
+    "  tandem setup --apply"
+  );
+}
+
 interface WriteOutcome {
   failures: number;
   /** The `reason` of each failure that was a `ConfigRefusalError` — Tandem
@@ -282,6 +331,12 @@ interface WriteOutcome {
    *  user to check permissions on a file whose permissions are fine, nor to fix
    *  JSON in a file that parses. */
   refusals: ConfigRefusalError["reason"][];
+  /** The `reason` of each failure that was a `PathRejectedError` — the target
+   *  path failed realpath/symlink validation, so nothing was written. Kept
+   *  SEPARATE from `refusals` because it is a different class with a different
+   *  remedy; the all-failed branch then tests their UNION against the failure
+   *  count, which is what a mixed run needs (#1823 item 9). */
+  pathRejections: PathRejectedError["reason"][];
   /** Targets that actually got a channel-shim entry written. `printPushStatus`
    *  reports off THIS, not off a file-existence check — `shouldRegisterChannelShim`
    *  returns false for every Claude Desktop target, so a run that registered no
@@ -292,7 +347,28 @@ interface WriteOutcome {
 async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Promise<WriteOutcome> {
   let failures = 0;
   const refusals: ConfigRefusalError["reason"][] = [];
+  const pathRejections: PathRejectedError["reason"][] = [];
   const shimRegisteredFor: string[] = [];
+
+  // #1823 item 10. `writeTargets` called `buildMcpEntries` with NO token, while
+  // `applyConfigWithToken` (the `rotate-token` path) passes one. The builder
+  // emits the `Authorization` header / `TANDEM_AUTH_TOKEN` env only
+  // `if (opts.token)`, and `applyConfig` merges WHOLE-ENTRY at the `tandem`
+  // key — so `setup --apply` after a `rotate-token` replaced the authenticated
+  // entry with an unauthenticated one. Bounded: the auth middleware exempts
+  // loopback, so only an off-loopback (Cowork/LAN) client then 401s.
+  //
+  // Behind the SAME env-token refusal `rotate-token.ts` encodes. When the token
+  // comes from `TANDEM_AUTH_TOKEN` or `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` (Tauri,
+  // and Claude Code's plugin host) we deliberately write none: env wins at
+  // runtime, so writing the FILE's token would put a superseded header on disk
+  // that nothing later heals. No token file = today's behaviour, no header.
+  const { source: envTokenSource } = resolveAuthTokenCandidate();
+  const token =
+    envTokenSource === "TANDEM_AUTH_TOKEN" || envTokenSource === "CLAUDE_PLUGIN_OPTION_AUTH_TOKEN"
+      ? undefined
+      : ((await readTokenFromFile()) ?? undefined);
+
   for (const t of targets) {
     try {
       // Opt-in since Track E: absent the flag this writes the tandem HTTP entry
@@ -330,6 +406,7 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
       const entries = buildMcpEntries(CHANNEL_DIST, {
         withChannelShim: writeShim,
         targetKind: t.kind,
+        token,
       });
       await applyConfig(t.configPath, applyOpsForCli(entries, { withChannelShim: preserveShim }));
       console.error(`  \x1b[32m✓\x1b[0m ${t.label}`);
@@ -339,12 +416,13 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
     } catch (err) {
       failures++;
       if (err instanceof ConfigRefusalError) refusals.push(err.reason);
+      else if (err instanceof PathRejectedError) pathRejections.push(err.reason);
       console.error(
         `  \x1b[31m✗\x1b[0m ${t.label}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
-  return { failures, refusals, shimRegisteredFor };
+  return { failures, refusals, pathRejections, shimRegisteredFor };
 }
 
 /**

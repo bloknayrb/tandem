@@ -32,13 +32,28 @@ vi.mock("../../src/server/integrations/apply.js", async (importActual) => {
   };
 });
 
+// `getTokenFilePath()` resolves through `envPaths`, which this file's
+// `vi.stubEnv("HOME"/"USERPROFILE")` does NOT redirect on Windows — so without
+// this mock the token cases below would read the developer's (or the CI
+// runner's) real token file and pass or fail by machine. Precedent:
+// tests/cli/rotate-token.test.ts.
+const { _readTokenFromFile } = vi.hoisted(() => ({
+  _readTokenFromFile: vi.fn(async (): Promise<string | null> => null),
+}));
+vi.mock("../../src/shared/auth/token-file.js", () => ({
+  readTokenFromFile: _readTokenFromFile,
+  getTokenFilePath: vi.fn(() => "/tmp/tandem-auth-token"),
+}));
+
 import { runSetup } from "../../src/cli/setup.js";
 import {
   applyConfig,
+  buildMcpEntries,
   ConfigRefusalError,
   type DetectedTarget,
   detectTargets,
   installSkill,
+  PathRejectedError,
   resolveChannelShimIntent,
 } from "../../src/server/integrations/apply.js";
 import {
@@ -221,6 +236,106 @@ describe("runSetup({ apply: true }) orchestration", () => {
     await expect(runSetup({ apply: true })).rejects.toThrow("process.exit called");
 
     expect(stderr()).toContain("Check file permissions");
+  });
+
+  // ── #1823 item 9 ─────────────────────────────────────────────────────────
+  // `assertPathSafe` throws `PathRejectedError`, which is NOT a
+  // `ConfigRefusalError`, so a symlinked `~/.claude.json` failed the
+  // single-class equality and fell through to "Check file permissions" — the
+  // same dead end #1802 removed for the other two classes, on a file whose
+  // permissions are fine.
+  it("names a symlink refusal instead of sending the user to check permissions", async () => {
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockRejectedValue(
+      new PathRejectedError("/home/u/.claude.json", "symlink", "refusing to follow a symlink"),
+    );
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await expect(runSetup({ apply: true })).rejects.toThrow("process.exit called");
+
+    const out = stderr();
+    expect(out).toContain("refused the config path");
+    expect(out).toContain("symlink");
+    expect(out).not.toContain("Check file permissions");
+  });
+
+  it("avoids the dead end on a MIXED all-failed run (refusal + path rejection)", async () => {
+    // Why the branch tests the UNION rather than adding a third single-class
+    // arm: one malformed file plus one symlinked file is 1 + 1 = 2, and both
+    // single-class equalities miss it.
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_CODE_PROJECT]);
+    vi.mocked(applyConfig)
+      .mockRejectedValueOnce(
+        new ConfigRefusalError(ERROR_CODE_CONFIG_MALFORMED, "is not valid JSON — refusing"),
+      )
+      .mockRejectedValueOnce(
+        new PathRejectedError("/home/u/proj/.mcp.json", "symlink", "refusing to follow a symlink"),
+      );
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await expect(runSetup({ apply: true })).rejects.toThrow("process.exit called");
+
+    const out = stderr();
+    expect(out).not.toContain("Check file permissions");
+    expect(out).toContain("refused to rewrite");
+    expect(out).toContain("refused the config path");
+  });
+
+  // ── #1823 item 10 ────────────────────────────────────────────────────────
+  describe("auth token threading", () => {
+    const noExit = () =>
+      vi.spyOn(process, "exit").mockImplementation((() => {
+        throw new Error("process.exit called");
+      }) as never);
+    // `buildMcpEntries` is the one mock this file's `beforeEach` never resets
+    // (it is created in the hoisted factory), so each case clears it and reads
+    // the LAST call.
+    const lastOpts = () =>
+      vi.mocked(buildMcpEntries).mock.calls.at(-1)?.[1] as { token?: string } | undefined;
+
+    it("threads the token file's token into the written entries", async () => {
+      _readTokenFromFile.mockResolvedValue("tok_from_file");
+      vi.mocked(buildMcpEntries).mockClear();
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      noExit();
+
+      await runSetup({ apply: true });
+
+      expect(lastOpts()?.token).toBe("tok_from_file");
+    });
+
+    it("passes no token when there is no token file (unchanged behaviour)", async () => {
+      _readTokenFromFile.mockResolvedValue(null);
+      vi.mocked(buildMcpEntries).mockClear();
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      noExit();
+
+      await runSetup({ apply: true });
+
+      expect(lastOpts()?.token).toBeUndefined();
+    });
+
+    it("refuses to write an env-sourced token (Tauri / plugin host)", async () => {
+      // The same refusal `rotate-token.ts` encodes. Env wins at runtime, so
+      // writing the FILE's token would put a superseded header on disk that
+      // nothing later heals.
+      _readTokenFromFile.mockResolvedValue("tok_from_file");
+      vi.stubEnv("TANDEM_AUTH_TOKEN", "tok_from_env");
+      vi.mocked(buildMcpEntries).mockClear();
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      noExit();
+
+      await runSetup({ apply: true });
+
+      expect(lastOpts()?.token).toBeUndefined();
+    });
   });
 
   it("partial failure (some targets succeed, some fail) does not exit", async () => {
