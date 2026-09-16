@@ -101,9 +101,20 @@ const hasLosses = $derived(
 /**
  * The banner's sentence, once, so the visible copy and the sr-only announcers
  * cannot drift (#1431).
+ *
+ * It POINTS AT a backup rather than promising one. `snapshotBeforeFirstWrite`
+ * is best-effort by contract: "skipped-size-cap" once the doc-backups tree
+ * reaches `MAX_DOC_BACKUP_BYTES` (500 MB), "failed" on any IO/ACL error, and
+ * the save proceeds in both cases — "a snapshot failure must not block the
+ * disk write" (`file-io/doc-backup.ts:467`). This message fires AFTER a save
+ * that verification already flagged, which makes it the worst place in the
+ * component to assert a recovery the user cannot check: a user past the cap
+ * who reads "your original is backed up" is told "No backups exist for this
+ * document yet" when they go looking. Same defect the save-anyway hint below
+ * carries, in the more consequential position.
  */
 const integrityMessage = $derived(
-  `This save of ${fileName} may have changed more than expected — your original is backed up and can be restored.`,
+  `This save of ${fileName} may have changed more than expected — look for a backup of your original in the command palette.`,
 );
 const lossesMessage = $derived(
   `Some Word features in ${fileName} aren't fully supported. Tandem imported the text and structure, but the items below won't survive a save back to .docx.`,

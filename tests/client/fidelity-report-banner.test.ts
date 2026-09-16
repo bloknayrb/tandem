@@ -108,6 +108,31 @@ describe("FidelityReportBanner", () => {
     // Disclosure reset — the left-open panel from doc A must not bleed into doc B.
     expect(container.querySelector("[data-testid='fidelity-report-details']")).toBeNull();
   });
+
+  it("points the integrity advisory at a backup rather than promising one", async () => {
+    // The same unverifiable promise the save-anyway hint carries, in the more
+    // consequential position: this fires AFTER a save verification already
+    // flagged, so it is the sentence a worried user acts on. The backup is
+    // best-effort — `snapshotBeforeFirstWrite` returns "skipped-size-cap" past
+    // MAX_DOC_BACKUP_BYTES (500 MB) and "failed" on any IO/ACL error, and the
+    // save proceeds either way (doc-backup.ts:467).
+    const ydoc = new Y.Doc();
+    setReport(ydoc, {
+      importLosses: [],
+      exportDowngrades: [],
+      integrityWarnings: ["Paragraph count changed"],
+      updatedAt: 1,
+    });
+    const { container } = render(FidelityReportBanner, baseProps(ydoc, "thesis.docx"));
+    await tick();
+
+    const banner = container.querySelector("[data-testid='fidelity-report-banner']");
+    // The head clause `live-regions.test.ts` pins must survive the rewording.
+    expect(banner?.textContent).toContain("may have changed more than expected");
+    expect(banner?.textContent).toMatch(/look for a backup/i);
+    // The exact promise that was there before, so a revert to it fails here.
+    expect(banner?.textContent).not.toMatch(/your original is backed up/i);
+  });
 });
 
 /**
