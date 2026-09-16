@@ -30,6 +30,7 @@ import {
   startLocalModelCollaborator,
   stopLocalModelCollaborator,
 } from "./local-model/collaborator.js";
+import { formatLogLine } from "./log-filter.js";
 import {
   restoreCtrlSession,
   restoreOpenDocuments,
@@ -78,15 +79,20 @@ import { startHocuspocus } from "./yjs/provider.js";
 
 // In production (Tauri sidecar, TANDEM_TAURI_SIDECAR=1), suppress known noisy
 // warnings from dependencies (mammoth, Y.js). In dev mode, show everything.
+// The pattern set and the formatting both live in `./log-filter.ts` — a pure
+// module, because this file cannot be imported by a test (importing it runs
+// `main()`, which calls `freePort()`).
 const isProduction = process.env.TANDEM_TAURI_SIDECAR === "1";
-const SUPPRESSED_PATTERNS = [/^\[mammoth\]/, /Invalid access/i, /^\s*add yjs type/i];
 
 const originalStderrWrite = process.stderr.write.bind(process.stderr);
 if (isProduction) {
   const filteredError = (...args: Parameters<typeof console.error>) => {
-    const msg = args.map(String).join(" ");
-    if (SUPPRESSED_PATTERNS.some((p) => p.test(msg))) return;
-    originalStderrWrite(msg + "\n");
+    // `formatLogLine`, not `args.map(String).join(" ")`: the old shape printed
+    // every `%s`/`%d` placeholder literally and truncated Errors to
+    // `name: message`, dropping the stack (#1823 item 1).
+    const line = formatLogLine(args);
+    if (line === null) return;
+    originalStderrWrite(line + "\n");
   };
   console.log = filteredError;
   console.warn = filteredError;
