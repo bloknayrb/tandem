@@ -9,9 +9,7 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
@@ -53,38 +51,16 @@ import {
 import { MCP_ORIGIN, withInternal } from "../../src/shared/origins.js";
 import { SNAPSHOT_CAP } from "../../src/shared/snapshot.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { off, range } from "../helpers/positions.js";
 import { createAnnotation, rangeOf } from "../helpers/ydoc-factory.js";
 
 let client: Client;
+let close: () => Promise<void>;
 const sidecarTempFiles: string[] = [];
 
+/** Still used by `rawErrorText` below, which reads the raw envelope text. */
 type CallToolResponse = Awaited<ReturnType<Client["callTool"]>>;
-
-async function setupMcpClient(): Promise<Client> {
-  const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
-  registerDocumentTools(server);
-  registerAnnotationTools(server);
-  registerNavigationTools(server);
-  registerAwarenessTools(server);
-
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-
-  const mcpClient = new Client({ name: "test-client", version: "0.0.1" });
-  await server.connect(serverTransport);
-  await mcpClient.connect(clientTransport);
-  return mcpClient;
-}
-
-function parseResult(result: CallToolResponse) {
-  // `result.content` is fine to read directly, but TS's deep Zod-inferred
-  // union type for it blows up ("is of type 'unknown'") the moment it's
-  // iterated (`.find`, `for...of`, etc.) — casting once to a plain shape
-  // sidesteps that without changing what's actually in the array.
-  const content = result.content as Array<{ type: string; text?: string }>;
-  const textContent = content.find((c) => c.type === "text");
-  return textContent?.text ? JSON.parse(textContent.text) : null;
-}
 
 function setupDoc(id: string, text: string) {
   const ydoc = getOrCreateDocument(id);
@@ -116,7 +92,18 @@ beforeEach(async () => {
   // Clear CTRL_ROOM mode so a Solo-hold test can't bleed into the next test.
   const ctrl = getOrCreateDocument(CTRL_ROOM);
   withInternal(ctrl, () => ctrl.getMap(Y_MAP_USER_AWARENESS).delete(Y_MAP_MODE));
-  client = await setupMcpClient();
+  ({ client, close } = await setupMcpServer([
+    registerDocumentTools,
+    registerAnnotationTools,
+    registerNavigationTools,
+    registerAwarenessTools,
+  ]));
+});
+
+// File-level, beside `afterAll` below. The describe-scoped `afterEach`s further
+// down cover one describe each and none of them touches the client.
+afterEach(async () => {
+  await close();
 });
 
 // The `regex: true` cases spawn the #1795 search worker. Hygiene: the forks

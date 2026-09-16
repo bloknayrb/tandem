@@ -43,9 +43,7 @@
  * If a reference here has gone stale, search for the name.
  */
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type * as Y from "yjs";
 
@@ -64,6 +62,7 @@ import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provid
 import type { Annotation } from "../../src/shared/types.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { clearOpenDocs } from "../helpers/doc-service.js";
+import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { getAnnotationsMap, noRelay } from "../helpers/ydoc-factory.js";
 
 const HTML =
@@ -73,25 +72,7 @@ const HTML =
 const ANCHORS = ["simplify the onboarding flow", "dashboard needs a refresh"] as const;
 
 let client: Client;
-
-type CallToolResponse = Awaited<ReturnType<Client["callTool"]>>;
-
-async function setupMcpClient(): Promise<Client> {
-  const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
-  registerAnnotationTools(server);
-  registerAwarenessTools(server);
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const mcpClient = new Client({ name: "test-client", version: "0.0.1" });
-  await server.connect(serverTransport);
-  await mcpClient.connect(clientTransport);
-  return mcpClient;
-}
-
-function parseResult(result: CallToolResponse) {
-  const content = result.content as Array<{ type: string; text?: string }>;
-  const text = content.find((c) => c.type === "text");
-  return text?.text ? JSON.parse(text.text) : null;
-}
+let close: () => Promise<void>;
 
 /**
  * A registered document holding two imported Word comments, both private notes.
@@ -149,11 +130,11 @@ beforeEach(async () => {
   clearOpenDocs();
   resetInbox();
   setCtrlMode("tandem");
-  client = await setupMcpClient();
+  ({ client, close } = await setupMcpServer([registerAnnotationTools, registerAwarenessTools]));
 });
 
 afterEach(async () => {
-  await client.close();
+  await close();
   setCtrlMode(null);
   while (seededDocIds.length > 0) removeDocument(seededDocIds.pop() as string);
 });
