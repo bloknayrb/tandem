@@ -22,6 +22,7 @@ vi.mock(import("../../../src/server/notifications.js"), async (importOriginal) =
   };
 });
 
+import { systemBootMs } from "../../../src/server/annotations/lockfile.js";
 import { SCHEMA_VERSION } from "../../../src/server/annotations/schema.js";
 import {
   acquireStoreLock,
@@ -541,7 +542,15 @@ describe("acquireStoreLock — reused PID after reboot (#2038)", () => {
   });
 
   it("refuses a live, current-boot lock without ever calling the probe", async () => {
-    await writeLock(Date.now() - 60_000);
+    // cr-1 / annotation-model-reviewer-1: derive the fixture from
+    // systemBootMs(), not a fixed wall-clock offset from Date.now(). A
+    // hard-coded "60s ago" is only current-boot when the machine has been up
+    // for over 60s at test time — false on a CI VM or a freshly rebooted box
+    // still inside its first minute of uptime, which would flip
+    // isLockFromPriorBoot to true and invert this test's premise.
+    // systemBootMs() + 1s is current-boot by construction, matching the
+    // sibling lockfile.test.ts fixture style.
+    await writeLock(systemBootMs() + 1_000);
     const probe = vi.fn().mockResolvedValue({ kind: "name", name: "explorer.exe" });
     expect(await acquireStoreLock(probe)).toBe("readonly");
     expect(probe).not.toHaveBeenCalled();

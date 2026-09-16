@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ANNOTATION_SCAN_MAX_FILES } from "../../src/cli/annotation-store-scan.js";
+import { probeProcessIdentity } from "../../src/server/annotations/process-identity.js";
 import { INTEGRATIONS_SCHEMA_VERSION } from "../../src/shared/integrations/contract.js";
 
 // The file-cap spec writes ANNOTATION_SCAN_MAX_FILES + 1 (513) files
@@ -104,6 +105,17 @@ async function fakeViteServer({
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return { ...actual, execFile: vi.fn() };
+});
+
+// cr-2 / annotation-model-reviewer-2: checkAnnotationStore's prior-boot warn
+// arm now corroborates with probeProcessIdentity (#2038) before it warns, the
+// same way acquireStoreLock does. The real probe would otherwise route
+// through the node:child_process mock above (tasklist/ps) and hang forever
+// waiting on a callback that's never invoked, so it's mocked directly —
+// isTandemLikeProcessName stays real since it's pure string matching.
+vi.mock(import("../../src/server/annotations/process-identity.js"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, probeProcessIdentity: vi.fn() };
 });
 
 // Doctor reads the annotation store from TANDEM_APP_DATA_DIR (env override in
@@ -389,7 +401,13 @@ describe("runDoctor", () => {
     });
   }
 
-  it("warns (not passes) a live-PID JSON lock whose startedAtMs predates this boot (#2038)", async () => {
+  it("warns (not passes) a live-PID JSON lock whose startedAtMs predates this boot AND probes as non-Tandem (#2038)", async () => {
+    // cr-2 / annotation-model-reviewer-2: prior-boot evidence alone must not
+    // warn — doctor now corroborates with the same process-identity probe
+    // acquireStoreLock uses, so this test pins the "corroborated as reused"
+    // half by mocking the probe to report a non-Tandem process.
+    vi.mocked(probeProcessIdentity).mockResolvedValue({ kind: "name", name: "explorer.exe" });
+
     const annDir = join(dataDir, "annotations");
     mkdirSync(annDir, { recursive: true });
     // startedAtMs: 1 predates any real boot.
@@ -403,8 +421,62 @@ describe("runDoctor", () => {
 
     expect(result?.status).toBe("warn");
     expect(result?.message).toContain(`PID ${process.pid}`);
-    expect(result?.message).toContain("predates this boot");
-    expect(result?.data).toMatchObject({ lockHeld: true, pid: process.pid, pidLive: true });
+    expect(result?.message).toContain("reused after a reboot");
+    expect(result?.data).toMatchObject({
+      lockHeld: true,
+      pid: process.pid,
+      pidLive: true,
+      reused: true,
+    });
+    expect(probeProcessIdentity).toHaveBeenCalledWith(process.pid);
+  });
+
+  it("passes (not warns) a live-PID lock that predates this boot but probes as Tandem-like (cr-2)", async () => {
+    // The evidence-only half: isLockFromPriorBoot alone must never be read
+    // as a verdict. A forward clock step (NTP correcting a wrong RTC, a
+    // resumed VM) can make a live, correctly-held Tandem lock look like it
+    // predates the boot — the probe corroborates and doctor must not warn
+    // about a lock the next server start will in fact refuse to reclaim.
+    vi.mocked(probeProcessIdentity).mockResolvedValue({ kind: "name", name: "node" });
+
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    writeFileSync(
+      join(annDir, "store.lock"),
+      JSON.stringify({ pid: process.pid, startedAtMs: 1, app: "tandem" }),
+    );
+
+    const report = await runDoctor();
+    const result = report.results.find(
+      (r) => r.check === "annotation-store" && r.data?.pid === process.pid,
+    );
+
+    expect(result?.status).toBe("pass");
+    expect(result?.message).toContain(`live PID ${process.pid}`);
+    expect(result?.data).not.toHaveProperty("priorBoot");
+  });
+
+  it("passes (not warns) a prior-boot lock when the probe is indeterminate (cr-2)", async () => {
+    // Indeterminate is the fail-safe default (unsupported platform, timeout,
+    // permission denied) — the store treats it as "do not reclaim", and
+    // doctor's corroborated pass must agree rather than warning off a single
+    // uncorroborated boot-time estimate.
+    vi.mocked(probeProcessIdentity).mockResolvedValue({ kind: "indeterminate" });
+
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    writeFileSync(
+      join(annDir, "store.lock"),
+      JSON.stringify({ pid: process.pid, startedAtMs: 1, app: "tandem" }),
+    );
+
+    const report = await runDoctor();
+    const result = report.results.find(
+      (r) => r.check === "annotation-store" && r.data?.pid === process.pid,
+    );
+
+    expect(result?.status).toBe("pass");
+    expect(result?.data).not.toHaveProperty("priorBoot");
   });
 
   it('still warns "unparseable" when the lock is genuinely non-numeric', async () => {
