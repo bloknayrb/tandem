@@ -86,9 +86,10 @@ describe("ChatPanel per-agent author color (#1123 M4)", () => {
 });
 
 /**
- * `ChatPanel.svelte:367` is the ONLY `{@html}` in the entire client, and
- * `renderMarkdown` exists solely to make it safe. Nothing else pins that the
- * sink still routes through it — a refactor to `{@html msg.text}` keeps every
+ * `ChatPanel.svelte:372` is one of the two `{@html}` sinks in the client — the
+ * other is `AnnotationBody.svelte:73`, added by #1626 — and `renderMarkdown`
+ * exists solely to make them safe. Nothing else pins that this one still routes
+ * through it — a refactor to `{@html msg.text}` keeps every
  * test in `chat-markdown.test.ts` green while shipping an XSS, because those
  * tests exercise the function directly and never assert that anyone calls it.
  *
