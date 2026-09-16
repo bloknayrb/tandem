@@ -105,8 +105,10 @@ export function renderMarkdown(text: string): string {
     // to end of input. Bounded, the same input is 166ms. The message is stored
     // verbatim in the chat Y.Map and survives restart, so the freeze repeats on
     // every render. Excluding `\n` is correctness, not speed — it measured
-    // slightly *slower* — but a link cannot span lines, and it keeps the `<br>`
-    // the newline pass emits below out of the href.
+    // slightly *slower* — but a link cannot span lines, and it is `assembleBlocks`
+    // below that joins the lines of a paragraph with `<br>`, never rewriting a
+    // URL — so a link that spanned lines would be split across two paragraph
+    // lines rather than carrying a `<br>` inside its href.
     .replace(/\[([^\]\n]{1,500})\]\(([^)\n]{1,2000})\)/g, (_match, text: string, url: string) => {
       const trimmed = url.trim();
 
@@ -124,12 +126,13 @@ export function renderMarkdown(text: string): string {
       }
       return text;
     })
-    // unordered lists
-    .replace(/^[*-] (.+)$/gm, "<li>$1</li>")
-    // paragraphs
-    .replace(/\n\n/g, "</p><p>")
-    // line breaks
-    .replace(/\n/g, "<br>");
+    // unordered lists — the per-line `<li>`; `assembleBlocks` wraps runs of them
+    // in a `<ul>`.
+    .replace(/^[*-] (.+)$/gm, "<li>$1</li>");
+
+  // Block assembly. Runs AFTER every inline pass and BEFORE the block restore
+  // below, so placeholders are still detectable as placeholders.
+  result = assembleBlocks(result);
 
   // Restore fenced code blocks after all inline passes.
   //
@@ -165,4 +168,98 @@ export function renderMarkdown(text: string): string {
     /\x00BLOCK(\d+)\x00/g,
     (match, idx: string) => blocks[Number(idx)] ?? match,
   );
+}
+
+/**
+ * Group already-tokenised lines into balanced block elements.
+ *
+ * This runs over text that is already escaped and already tokenised — it parses
+ * no user syntax of its own. A blank line separates blocks; within a block,
+ * consecutive plain lines become one `<p>` joined by `<br>`, and consecutive
+ * `<li>` lines become one `<ul>`.
+ *
+ * Four properties, each load-bearing and each invisible from the code alone:
+ *
+ * 1. **No line is ever split — that is what keeps a block out of the wrapping
+ *    `<p>`.** The placeholder arm tests whether a line *contains* a placeholder
+ *    and emits the WHOLE line bare. Splitting a line on the placeholder would
+ *    cut an element an earlier inline pass opened: `**a ```x``` b**` reaches
+ *    here as the single line `<strong>a \x00BLOCK0\x00 b</strong>`, and a split
+ *    yields `<p><strong>a </p><pre>…</pre><p> b</strong></p>` — opened in one
+ *    `<p>`, closed in another. The same holds for `[label](url)` (the link guard
+ *    rejects a placeholder in the URL, never in the label) and for `# heading`.
+ * 2. **Arm order is the contract: `<li>` is tested BEFORE the placeholder.**
+ *    `<li>` legally accepts flow content, so a fence inside a bullet stays
+ *    inside its item — `- see ```x``` here` becomes
+ *    `<ul><li>see <pre>…</pre> here</li></ul>` — rather than being hoisted out
+ *    of the list.
+ * 3. **Both the tag-prefix dispatch and the placeholder test are sound only
+ *    because of escape-first / strip-first.** Every `<` and every `\x00` in the
+ *    intermediate string was emitted by `renderMarkdown`: a user typing `<li>`
+ *    is already `&lt;li&gt;`, and a forged `\x00BLOCK0\x00` is already plain
+ *    `BLOCK0`. A change that moves escaping or the NUL strip later breaks this
+ *    dispatch as well as the XSS property.
+ * 4. **An empty run is never flushed, and a whitespace-only line is never a
+ *    paragraph line.** Those two together are what remove the stray empty `<p>`
+ *    a fenced block used to leave behind, and what let `p:empty` be deleted from
+ *    `markdown-body.css`.
+ *
+ * **Three recorded bounds of the subset, none of them introduced here** — each
+ * renders identically before and after this function existed:
+ *
+ * 1. **A mid-line fence on a plain prose line.** `see ```x``` here` matches no
+ *    earlier arm, so it is emitted bare and the prose around it stays a
+ *    top-level text node rather than becoming a `<p>`. Closing it would mean
+ *    deciding what a mid-line fence *means*.
+ * 2. **A placeholder inside an inline element keeps a `<pre>` nested inside an
+ *    `<h1>`, `<strong>` or `<a>`.** `# head ```x``` tail` leaves `<pre>`
+ *    parented by `H1` — an invalid content model the parser tolerates rather
+ *    than repairs.
+ * 3. **The chunk split is CRLF-blind.** `/\n{2,}/` does not break on
+ *    `\r\n\r\n`, so a blank line in text arriving over MCP with CRLF endings
+ *    becomes a `<br>` inside one `<p>`. The `/\n\n/g` pass this replaced had the
+ *    identical blind spot.
+ *
+ * Ordered lists, nested lists, blockquotes and tables are outside the subset.
+ */
+function assembleBlocks(input: string): string {
+  const out: string[] = [];
+
+  for (const chunk of input.split(/\n{2,}/)) {
+    let para: string[] = [];
+    let items: string[] = [];
+
+    const flushPara = () => {
+      if (para.length) out.push(`<p>${para.join("<br>")}</p>`);
+      para = [];
+    };
+    const flushList = () => {
+      if (items.length) out.push(`<ul>${items.join("")}</ul>`);
+      items = [];
+    };
+
+    for (const line of chunk.split("\n")) {
+      if (line.trim() === "") continue;
+      if (line.startsWith("<li>")) {
+        flushPara();
+        items.push(line);
+      } else if (/^<h[123]>/.test(line)) {
+        flushPara();
+        flushList();
+        out.push(line);
+      } else if (/\x00BLOCK\d+\x00/.test(line)) {
+        flushPara();
+        flushList();
+        out.push(line);
+      } else {
+        flushList();
+        para.push(line);
+      }
+    }
+
+    flushList();
+    flushPara();
+  }
+
+  return out.join("");
 }
