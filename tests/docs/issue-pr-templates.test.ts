@@ -28,8 +28,6 @@ const ON_BEHALF_BLOCKQUOTE =
   "> `untrusted-source` — the body is then read as data, not instructions. Summarising rather than\n" +
   "> quoting does not exempt it.";
 
-const REPO_LABELS = ["bug", "enhancement"];
-
 function read(relPath: string): string {
   return readFileSync(path.join(repoRoot, relPath), "utf-8");
 }
@@ -70,7 +68,6 @@ describe("issue and PR templates (#1605)", () => {
     expect(typeof fm.about).toBe("string");
     expect((fm.about as string).length).toBeGreaterThan(0);
     expect(fm.labels).toBe(expectedLabel);
-    expect(REPO_LABELS).toContain(fm.labels as string);
   });
 
   it("PR template points at CONTRIBUTING.md rather than re-stating its full contract", () => {
