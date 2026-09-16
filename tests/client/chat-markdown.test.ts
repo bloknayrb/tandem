@@ -570,13 +570,27 @@ describe("renderMarkdown — balanced block assembly", () => {
     expect(host.textContent).toBe("ab");
   });
 
-  it("case 11: drops a whitespace-only line rather than rendering it", () => {
-    // Pins the `line.trim() !== ""` predicate. A bare `line !== ""` would treat
-    // the middle line as paragraph content and emit a second `<br>`.
-    const host = parse(renderMarkdown("a\n   \nb"));
+  it("case 11: treats a whitespace-only line as a paragraph break", () => {
+    // PR-review round 2. The predicate is `line.trim() === ""`, so a "blank"
+    // line holding a space or a tab is recognised — but the arm it took was
+    // `continue`, which dropped the line WITHOUT closing the open run and merged
+    // the two paragraphs into one. Measured against master, which had no block
+    // assembly: `a\n \nb` rendered `a<br> <br>b`, a visible blank line. It is
+    // reachable the same way the CRLF regression was — `tandem_reply` and
+    // `tandem_comment` take a bare `z.string()` and nothing in `src/` trims
+    // trailing whitespace, so any Claude message whose blank lines carry a space
+    // ran on as a single paragraph on all four markdown surfaces. CommonMark
+    // treats such a line as a paragraph break; so does this.
+    for (const blank of [" ", "   ", "\t"]) {
+      const host = parse(renderMarkdown(`a\n${blank}\nb`));
 
-    expect(host.querySelectorAll("p")).toHaveLength(1);
-    expect(host.querySelectorAll("br")).toHaveLength(1);
+      expect(host.querySelectorAll("p")).toHaveLength(2);
+      expect(host.querySelectorAll("br")).toHaveLength(0);
+      expect(Array.from(host.querySelectorAll("p")).map((p) => p.textContent)).toEqual(["a", "b"]);
+    }
+
+    // The line is a boundary, not content: no whitespace text node survives it.
+    expect(parse(renderMarkdown("a\n \nb")).textContent).toBe("ab");
   });
 
   it("case 12: renders empty and whitespace-only input as nothing at all", () => {
