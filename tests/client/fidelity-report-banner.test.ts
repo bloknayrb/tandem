@@ -182,6 +182,25 @@ describe("FidelityReportBanner — save anyway (#1941)", () => {
     expect(panel?.textContent).toContain("pics.docx");
   });
 
+  it("hedges the backup rather than promising it", async () => {
+    // The consent this hint collects is for an IRREVERSIBLE write, so it must
+    // not rest on a guarantee the user cannot check. `snapshotBeforeFirstWrite`
+    // is best-effort by contract: it returns "skipped-size-cap" once the
+    // doc-backups tree reaches MAX_DOC_BACKUP_BYTES (500 MB) and "failed" on any
+    // IO/ACL error, and in both cases the destructive save still proceeds —
+    // "a snapshot failure must not block the disk write". A user past the cap
+    // who reads "your original is backed up" and clicks is then told "No backups
+    // exist for this document yet" when they go looking.
+    const ydoc = new Y.Doc();
+    setReport(ydoc, { importLosses: [], exportDowngrades: [], droppedImages: 1, updatedAt: 1 });
+    const { panel } = await openDetails(ydoc);
+
+    expect(panel?.textContent).toMatch(/can't be undone/i);
+    expect(panel?.textContent).toMatch(/isn't guaranteed/i);
+    // The exact promise that was there before, so a revert to it fails here.
+    expect(panel?.textContent).not.toMatch(/your original is backed up and can be/i);
+  });
+
   it("renders for droppedImages > 0 with an EMPTY importLosses", async () => {
     // Reachable and already pinned server-side: the save path takes
     // `importLosses` from a pre-write snapshot while re-reading `droppedImages`

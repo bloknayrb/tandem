@@ -195,9 +195,10 @@ const lossesMessage = $derived(
           <h4>Save without the pictures</h4>
           <p class="fidelity-report-save-anyway-hint">
             {droppedImages} picture(s) couldn't be imported, so saving is refused by default. Saving
-            anyway overwrites {fileName} without them — your original is backed up and can be
-            restored from the command palette. To keep the pictures, ask Claude to convert this
-            document to Markdown instead.
+            anyway overwrites {fileName} without them, and that can't be undone. Tandem tries to
+            back up the original first — when that works you can restore it from the command
+            palette, but the backup isn't guaranteed. To keep the pictures, ask Claude to convert
+            this document to Markdown instead.
           </p>
           <button
             type="button"
