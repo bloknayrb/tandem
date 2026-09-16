@@ -1320,8 +1320,19 @@ export function registerDocumentTools(server: McpServer): void {
         .string()
         .optional()
         .describe("Target document ID (defaults to active document)"),
+      allowImageLoss: z
+        .boolean()
+        .optional()
+        .describe(
+          "DESTRUCTIVE. A .docx whose body pictures Tandem couldn't import refuses to save, " +
+            "because the regenerated file would drop them. Pass true to save anyway, " +
+            "permanently removing those pictures from the file on disk. Ask the user first — " +
+            "tandem_convertToMarkdown keeps both the pictures and the edits. Ignored for " +
+            "documents with no dropped pictures, and never overrides a failed post-write " +
+            "verification.",
+        ),
     },
-    withErrorBoundary("tandem_save", async ({ documentId }) => {
+    withErrorBoundary("tandem_save", async ({ documentId, allowImageLoss }) => {
       // path.basename eliminates directory components so CodeQL does not trace
       // user input through Map.get(id) to existing.filePath (js/path-injection).
       const safeDocId = documentId !== undefined ? path.basename(documentId) : undefined;
@@ -1377,7 +1388,7 @@ export function registerDocumentTools(server: McpServer): void {
       }
 
       // Delegate to shared save function (handles .docx body export back to disk)
-      const result = await saveDocumentToDisk(r.docId, "mcp");
+      const result = await saveDocumentToDisk(r.docId, "mcp", { allowImageLoss });
       if (result.status === "saved") {
         // Surface .docx body-export fidelity warnings (#576) so the agent knows
         // what the round-trip downgraded (e.g. unsupported blocks → plain text).

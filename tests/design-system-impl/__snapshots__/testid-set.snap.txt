@@ -168,6 +168,7 @@ fidelity-report-import-losses
 fidelity-report-integrity-warnings
 fidelity-report-live-assertive
 fidelity-report-live-polite
+fidelity-report-save-anyway
 file-open-browse
 file-open-dialog
 file-open-error

@@ -52,6 +52,15 @@ export async function handleSave(req: Request, res: Response): Promise<void> {
 
   const body = (req.body ?? {}) as Record<string, unknown>;
   const { documentId, targetPath, format, serialize } = body;
+  // #1941. Strict `=== true`, and read off the same `?? {}` fallback as every
+  // other field: `express.json()` is mounted with no `type` option, so a
+  // `text/plain` POST leaves `req.body` undefined and `body` is `{}` here. A
+  // truthiness test would turn `"false"`, `0`-vs-`1` and a dropped field into a
+  // destructive default on the one route that overwrites the user's open
+  // document. Every parse failure lands on `false` = refuse. Branches 2 and 3
+  // never read it: serialize-only touches no disk, and save-as writes a NEW
+  // file rather than overwriting the picture-bearing original.
+  const allowImageLoss = body.allowImageLoss === true;
 
   if (documentId !== undefined && typeof documentId !== "string") {
     res.status(400).json({ error: "BAD_REQUEST", message: "documentId must be a string" });
@@ -129,7 +138,7 @@ export async function handleSave(req: Request, res: Response): Promise<void> {
 
   // Branch 1: ordinary save (existing behavior)
   try {
-    const result = await saveDocumentToDisk(targetId, "manual");
+    const result = await saveDocumentToDisk(targetId, "manual", { allowImageLoss });
     if (result.status === "skipped") {
       // The disk save did NOT happen — persist the dirty flag (#1069) and any
       // pending conflict (#1238) so a restart doesn't discard the only copy of

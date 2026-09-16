@@ -440,7 +440,10 @@ async function runBrowserSaveAs(
  */
 export async function triggerSave(
   activeDocId: string | null,
-  { announceBusy = false }: { announceBusy?: boolean } = {},
+  {
+    announceBusy = false,
+    allowImageLoss = false,
+  }: { announceBusy?: boolean; allowImageLoss?: boolean } = {},
 ): Promise<boolean> {
   if (!activeDocId) return false;
   if (inflight) {
@@ -459,7 +462,14 @@ export async function triggerSave(
     const resp = await fetch(`${API_BASE}${API_SAVE}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ documentId: activeDocId }),
+      // `allowImageLoss` (#1941) is OMITTED unless asked for, rather than sent
+      // as `false`: the server tests `=== true`, so the two are identical on
+      // the wire, and an absent field keeps every ordinary save's body exactly
+      // what it was.
+      body: JSON.stringify({
+        documentId: activeDocId,
+        ...(allowImageLoss ? { allowImageLoss: true } : {}),
+      }),
     });
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}));

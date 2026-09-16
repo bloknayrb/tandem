@@ -408,6 +408,7 @@ Save the current document back to disk. Uses atomic write (temp file + rename).
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `documentId` | string | no | Target document ID (defaults to active document) |
+| `allowImageLoss` | boolean | no | **Destructive.** Save a `.docx` whose body pictures the import dropped, permanently removing them from the file on disk. Defaults to `false` — the save is refused (#1755, #1941). Ask the user first; `tandem_convertToMarkdown` keeps both the pictures and the edits |
 
 **Returns:**
 ```json
@@ -441,7 +442,7 @@ Three further skip codes exist on `SaveResult` but **cannot reach `tandem_save`'
 - Read-only documents save their session only (annotations persist), not the source file, and answer `saved: false`.
 - Writable `.docx` documents save on **explicit save only** (never auto-save). The save writes the document body **plus pending `comment`-type annotations as Word comments** (`comments.xml` + range markers), anchored to their current ranges (#1068). `note` and `highlight` annotations are never written to the file (ADR-027), so un-promoted imported Word comments — which live as private notes until batch-promoted — are dropped from the saved file. Accepted/dismissed comments are dropped too (Word has no resolved-state channel we can write). Threaded replies flatten into the comment body with attribution lines; private replies (including imported Word reply threads) are never written.
 
-**Errors:** `FILE_LOCKED` (file open in another program: `EBUSY`, or `EPERM` from the atomic write's `rename`, which on Windows is also what a read-only file gives), `PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`: on Windows, a folder you can read but not write), `FORMAT_ERROR` (any other write failure; the errno is in `details.errorCode`). A save refused before touching the file -- the regenerated `.docx` failed post-write verification, or the import dropped body pictures the export would strip (#1755) -- is also `FORMAT_ERROR`, with `details.errorCode: "VERIFY_BLOCKED"`; it is not a top-level code ([#2004](https://github.com/bloknayrb/tandem/issues/2004))
+**Errors:** `FILE_LOCKED` (file open in another program: `EBUSY`, or `EPERM` from the atomic write's `rename`, which on Windows is also what a read-only file gives), `PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`: on Windows, a folder you can read but not write), `FORMAT_ERROR` (any other write failure; the errno is in `details.errorCode`). A save refused before touching the file -- the regenerated `.docx` failed post-write verification, or the import dropped body pictures the export would strip (#1755) -- is also `FORMAT_ERROR`, with `details.errorCode: "VERIFY_BLOCKED"`; it is not a top-level code ([#2004](https://github.com/bloknayrb/tandem/issues/2004)). Of the two, only the **dropped-pictures** refusal is overridable: re-calling with `allowImageLoss: true` saves the document without those pictures (#1941). A failed post-write verification is not overridable at all — that verdict says the regenerated file is broken, a different claim — and the browser has its own exit, the **Save anyway without pictures** button in the document's fidelity notice.
 
 ---
 

@@ -446,6 +446,14 @@ export function blockReasonMessage(reason: BlockReason): string {
     case "gross-text-loss":
       return `the regenerated file was missing a large amount of text${tail}`;
     case "import-image-loss":
-      return `this file's pictures couldn't be imported, so saving would remove them${tail}`;
+      // The one reason with an EXIT (#1941), so the message names it: the same
+      // string is the pushed notification a browser user reads and the `reason`
+      // `tandem_save` returns, and a refusal whose override is documented
+      // elsewhere is a dead end for whoever hit it. Still content-free — a
+      // parameter name and a button phrase, never a path, filename or count.
+      return (
+        "this file's pictures couldn't be imported, so saving would remove them — save anyway " +
+        `if you accept that (allowImageLoss), or convert it to Markdown instead${tail}`
+      );
   }
 }
