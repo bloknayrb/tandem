@@ -50,6 +50,7 @@ if (args.includes("--help") || args.includes("-h")) {
 
 Usage:
   tandem                            Start Tandem server and open the editor
+  tandem start                      Explicit alias for bare \`tandem\`
   tandem setup                      Print first-run setup guidance (setup is wizard-driven)
   tandem setup --apply              Write MCP config to detected AI clients non-interactively
   tandem setup --apply --force      Apply to default paths regardless of detection

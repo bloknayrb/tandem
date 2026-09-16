@@ -250,7 +250,24 @@ function pushEvent(event: TandemEvent): void {
   if (isUserPrivacyHeld(event) && readModeState() !== "tandem") return;
 
   buffer.push(event);
-  // Track only when the fan-out below is non-empty. "Pushed to nobody" is a fact
+
+  // Bound ONCE and reused, rather than re-read per site: `pushEvent` is
+  // synchronous so two reads cannot currently disagree, but binding it is the
+  // difference between correct and correct-by-accident. It sits HERE, above the
+  // tracking, because tracking is one of its consumers (#1823 item 7).
+  const forwardExternally = shouldForwardExternally(event);
+
+  // Track only when the fan-out below is non-empty AND this event actually
+  // forwards externally. The forward term is #1823 item 7: tracking used to run
+  // BEFORE the forward decision was bound, so in SOLO with an external consumer
+  // attached, the events `isUserPrivacyHeld` does not drop — `annotation:accepted`,
+  // `annotation:dismissed`, a Claude-authored `annotation:reply` — were tracked
+  // even though the loop below skips every external subscriber. That made
+  // `wasEmittedViaChannel` answer true and `tandem_checkInbox` stamp
+  // `alreadyPushed: true` on an item nothing outside this process ever received.
+  // `chat:message` forwards unconditionally, so it is unaffected.
+  //
+  // "Pushed to nobody" is a fact
   // the server CAN establish, and asserting otherwise made `alreadyPushed` false
   // on every comment in the default install (no channel shim, no monitor, no SSE
   // consumer). What stays unknowable is whether an ATTACHED consumer's host did
@@ -270,7 +287,9 @@ function pushEvent(event: TandemEvent): void {
   // EXTERNAL subscribers only. An in-process listener receiving the event says
   // nothing about whether it left this machine, and `alreadyPushed` exists to hint
   // that a model may already have seen it.
-  if (externalSubscribers.size > 0 && trackPayloadId(event)) trackedEvents.add(event);
+  if (forwardExternally && externalSubscribers.size > 0 && trackPayloadId(event)) {
+    trackedEvents.add(event);
+  }
 
   while (buffer.length > CHANNEL_EVENT_BUFFER_SIZE) {
     const evicted = buffer.shift();
@@ -282,11 +301,6 @@ function pushEvent(event: TandemEvent): void {
     const evicted = buffer.shift();
     if (evicted && trackedEvents.delete(evicted)) untrackPayloadId(evicted);
   }
-
-  // Bound ONCE and reused, rather than re-read per subscriber: `pushEvent` is
-  // synchronous so two reads cannot currently disagree, but binding it is the
-  // difference between correct and correct-by-accident.
-  const forwardExternally = shouldForwardExternally(event);
 
   // The delivery-state join's push half. Each conjunct is load-bearing and none
   // is redundant with the tracking above:
@@ -438,6 +452,15 @@ export function replaySince(lastEventId: string): TandemEvent[] {
  * collaborator holds a permanent subscription with no external consumer attached,
  * and `pushEvent`'s gate above would stamp every comment — so the gate needs to
  * count external subscribers only, not `subscribers.size`.
+ *
+ * Counting the right SUBSCRIBERS is only half of it: the event must also have
+ * been forwarded (#1823 item 7). In SOLO the fan-out skips every external
+ * subscriber, and the events `isUserPrivacyHeld` does not drop —
+ * `annotation:accepted`, `annotation:dismissed`, a Claude-authored
+ * `annotation:reply` — still reach the tracking line with a consumer attached.
+ * Tracking them there made this answer true for something no external consumer
+ * received, so `pushEvent`'s gate carries `forwardExternally` as a conjunct.
+ * `chat:message` forwards unconditionally and is unaffected.
  */
 export function wasEmittedViaChannel(payloadId: string): boolean {
   return emittedPayloadIds.has(payloadId);
