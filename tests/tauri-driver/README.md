@@ -155,10 +155,15 @@ last publish, from 2020. It enters at `@wdio/cli` → `@wdio/utils` →
 `@puppeteer/browsers@2` → `extract-zip`, and is used only by
 `@puppeteer/browsers`' `unpackArchive`, i.e. unpacking a browser/driver archive
 that WebdriverIO downloaded itself. **This harness never takes that path**: it
-sets `host`/`port` to the `tauri-driver` proxy on 127.0.0.1:4444, so
+sets `hostname`/`port` to the `tauri-driver` proxy on 127.0.0.1:4444, so
 `@wdio/utils`' `startWebDriver` short-circuits on `definesRemoteDriver()`
 ("Connecting to existing driver at …") and never imports the `./node.js` module
-where `@puppeteer/browsers` lives. Nothing here extracts an archive at all,
+where `@puppeteer/browsers` lives. **Until #1613 only `port` carried that
+short-circuit**: `definesRemoteDriver` (`@wdio/utils/build/index.js:324-328`)
+reads `options.hostname` — never `options.host` — OR `Boolean(options.port)`,
+and this file spelled the key `host`, the WebdriverIO v4 name dropped in v5. The
+acceptance below held on `port` alone, which is sufficient on its own; naming
+both keys is what makes that sentence true rather than lucky. Nothing here extracts an archive at all,
 attacker-influenced or otherwise, and `tests/` is excluded from the published
 npm package. `@puppeteer/browsers@3` did drop `extract-zip` (native
 `unzip`/`tar.exe`/PowerShell plus an optional `yauzl` path), but `@wdio/utils`

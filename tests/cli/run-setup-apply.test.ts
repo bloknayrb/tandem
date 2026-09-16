@@ -13,15 +13,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // file-wide, and `setup.test.ts` deliberately exercises the REAL apply.js
 // helpers (buildMcpEntries/applyConfig/detectTargets/installSkill suites).
 // Mocking apply.js there would gut that coverage.
-vi.mock("../../src/server/integrations/apply.js", async (importActual) => {
+vi.mock(import("../../src/server/integrations/apply.js"), async (importActual) => {
   const actual = await importActual<typeof import("../../src/server/integrations/apply.js")>();
   return {
     ...actual,
     detectTargets: vi.fn(),
     applyConfig: vi.fn(),
     installSkill: vi.fn(),
-    buildMcpEntries: vi.fn(() => ({})),
-    applyOpsForCli: vi.fn(() => ({})),
+    // Widened to a real `McpEntries`, and deliberately NOT asserted through
+    // `unknown`: the typed `vi.mock(import(...))` overload checks this factory
+    // against `Partial<T>`, and a cast here would void exactly the check the
+    // conversion buys (review round 1). The bare `{}` it replaces was a stale
+    // double -- production returns `{ tandem: McpEntry }` -- preserved by the
+    // cast rather than fixed. The return type is taken from the production
+    // signature so a change to `McpEntries` lands here as an error.
+    buildMcpEntries: vi.fn(
+      (): ReturnType<typeof actual.buildMcpEntries> => ({
+        tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" },
+      }),
+    ),
+    // `ApplyOps` is `{ create: McpEntries; remove: RemovableEntry[] }`; the
+    // bare `{}` double predates the typed mock overload and matched nothing.
+    applyOpsForCli: vi.fn(() => ({
+      create: {},
+      remove: [],
+    })) as unknown as typeof actual.applyOpsForCli,
     // `resolveChannelShimIntent`, not `resolveChannelShimIntent` — `setup`
     // moved to the former so an omitted flag preserves rather than deletes.
     // Left unmocked it does a REAL config read against these fake paths,
@@ -40,7 +56,7 @@ vi.mock("../../src/server/integrations/apply.js", async (importActual) => {
 const { _readTokenFromFile } = vi.hoisted(() => ({
   _readTokenFromFile: vi.fn(async (): Promise<string | null> => null),
 }));
-vi.mock("../../src/shared/auth/token-file.js", () => ({
+vi.mock(import("../../src/shared/auth/token-file.js"), () => ({
   readTokenFromFile: _readTokenFromFile,
   getTokenFilePath: vi.fn(() => "/tmp/tandem-auth-token"),
 }));

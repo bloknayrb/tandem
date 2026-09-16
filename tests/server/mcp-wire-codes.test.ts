@@ -23,7 +23,7 @@ import {
 // carries the literal `tandem` (platform.test.ts keys on it), and it keeps the
 // pre-overwrite snapshot and annotation envelope of a real open out of the
 // user's real app data.
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -35,11 +35,11 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
   process.env.TANDEM_APP_DATA_DIR = appDataDir;
   return { ...original, SESSION_DIR: pathMod.join(appDataDir, "sessions") };
 });
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: vi.fn(),
 }));
-vi.mock("../../src/server/integrations/acl-win.js", () => ({
+vi.mock(import("../../src/server/integrations/acl-win.js"), () => ({
   setRestrictiveAcl: vi.fn().mockResolvedValue(undefined),
 }));
 

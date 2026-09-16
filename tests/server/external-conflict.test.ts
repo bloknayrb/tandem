@@ -30,7 +30,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import * as Y from "yjs";
 
 // vi.mock factories are hoisted before module-level code; compute paths inline.
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -49,7 +49,7 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
 // Mock the watcher seam: capture the per-path onChanged callback so tests can
 // deliver "external change" events deterministically, and spy on
 // suppressNextChange to assert the own-save pre-arm.
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: vi.fn(),
   suppressNextChange: vi.fn(),

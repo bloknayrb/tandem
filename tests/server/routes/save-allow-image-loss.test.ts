@@ -26,7 +26,7 @@ const getActiveDocId = vi.fn(() => "d1");
 const saveDocumentAsToDisk = vi.fn();
 const serializeDocument = vi.fn();
 const closeDocumentById = vi.fn();
-vi.mock("../../../src/server/mcp/document-service.js", () => ({
+vi.mock(import("../../../src/server/mcp/document-service.js"), () => ({
   closeDocumentById,
   saveDocumentToDisk,
   persistSkippedSaveSession,

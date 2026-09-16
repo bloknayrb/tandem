@@ -16,7 +16,7 @@ import { systemTheme } from "../../src/client/hooks/useTheme.svelte.js";
 // `vi.doUnmock` is not an alternative -- it restores the real, unmocked
 // module, silently breaking every Tauri-path test instead.
 const { isTauri } = vi.hoisted(() => ({ isTauri: vi.fn(() => false) }));
-vi.mock("../../src/client/cowork/cowork-helpers.js", () => ({ isTauriRuntime: isTauri }));
+vi.mock(import("../../src/client/cowork/cowork-helpers.js"), () => ({ isTauriRuntime: isTauri }));
 
 // Captures the `onThemeChanged` callback so tests can drive OS read-backs
 // directly. The previous mock discarded the callback entirely (returned an

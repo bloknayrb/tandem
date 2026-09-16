@@ -24,7 +24,7 @@ const openScratchpad = vi.hoisted(() =>
 // made it `undefined`, so every success turned into a 500 the route reported
 // as INTERNAL. Re-stating the projector here instead would be a second copy of
 // the one thing Unit 7b exists to keep single.
-vi.mock("../../src/server/documents/open.js", async (importOriginal) => ({
+vi.mock(import("../../src/server/documents/open.js"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/documents/open.js")>()),
   openScratchpad,
 }));

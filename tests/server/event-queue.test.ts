@@ -1187,7 +1187,7 @@ let _ctrlTestDoc: Y.Doc = new Y.Doc();
 // in this file. This is currently safe because only attachCtrlObservers() calls
 // getOrCreateDocument() -- attachObservers/reattachObservers take a Y.Doc parameter
 // directly and are unaffected. If that changes, move CTRL_ROOM tests to a separate file.
-vi.mock("../../src/server/yjs/provider.js", () => ({
+vi.mock(import("../../src/server/yjs/provider.js"), () => ({
   getOrCreateDocument: () => _ctrlTestDoc,
   // #1447: registerDirtyObserver publishes its mirror through getDocument, which
   // resolves the LIVE room doc rather than the one it was handed. These tests
@@ -1196,7 +1196,7 @@ vi.mock("../../src/server/yjs/provider.js", () => ({
   getDocument: () => undefined,
 }));
 
-vi.mock("../../src/server/documents/registry.js", async (importOriginal) => ({
+vi.mock(import("../../src/server/documents/registry.js"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/documents/registry.js")>()),
   getOpenDocs: () => new Map(),
 }));
@@ -1210,12 +1210,14 @@ vi.mock("../../src/server/documents/registry.js", async (importOriginal) => ({
 // observer threw — and it also meant no spec here could exercise the actual
 // bounds logic, only the mock's own return value.
 let _validateRangeResult: { ok: boolean } | null = { ok: true };
-vi.mock("../../src/server/positions.js", async (importOriginal) => {
+vi.mock(import("../../src/server/positions.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/positions.js")>();
   return {
     ...actual,
     validateRange: (...args: Parameters<typeof actual.validateRange>) =>
-      _validateRangeResult ?? actual.validateRange(...args),
+      (_validateRangeResult ?? actual.validateRange(...args)) as ReturnType<
+        typeof actual.validateRange
+      >,
   };
 });
 

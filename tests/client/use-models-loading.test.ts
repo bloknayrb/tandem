@@ -10,9 +10,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../src/shared/constants.js", async (importOriginal) => ({
+vi.mock(import("../../src/shared/constants.js"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/shared/constants.js")>()),
-  BYO_MODELS_ENABLED: true,
+  // The production const is a literal `false` (ships dark), so a test that
+  // deliberately flips it must say so rather than widen the export type.
+  BYO_MODELS_ENABLED: true as false,
 }));
 
 const { _resetModelsStoreForTests, createModels, loadFromServer } = await import(

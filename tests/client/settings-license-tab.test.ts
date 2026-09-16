@@ -23,13 +23,13 @@ import { TANDEM_PURCHASE_URL } from "../../src/shared/constants";
 // Set BEFORE mount — the tab captures it once at init, which is the point of
 // the fix (the runtime never changes under a live component).
 let tauri = false;
-vi.mock("../../src/client/cowork/cowork-helpers", async (importOriginal) => {
+vi.mock(import("../../src/client/cowork/cowork-helpers"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/client/cowork/cowork-helpers")>();
   return { ...actual, isTauriRuntime: () => tauri };
 });
 
 const fetchLicenseStatus = vi.fn<() => Promise<LicenseStatusResponse>>();
-vi.mock("../../src/client/hooks/useLicense", () => ({
+vi.mock(import("../../src/client/hooks/useLicense"), () => ({
   fetchLicenseStatus: () => fetchLicenseStatus(),
   activateLicenseClient: vi.fn(),
 }));

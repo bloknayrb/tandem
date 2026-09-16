@@ -47,7 +47,7 @@ import { off } from "../helpers/positions.js";
 
 // The clamp notification is asserted by what it PUSHES, so the sink is mocked
 // rather than the real notification queue inspected.
-vi.mock("../../src/server/notifications.js", async (importOriginal) => ({
+vi.mock(import("../../src/server/notifications.js"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/notifications.js")>()),
   pushNotification: vi.fn(),
 }));

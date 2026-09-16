@@ -40,8 +40,8 @@ import {
 import { BROWSER_ORIGIN, INTERNAL_ORIGIN } from "../../src/shared/origins.js";
 
 // Mock session manager to avoid filesystem side effects
-vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/session/manager.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     saveSession: vi.fn().mockResolvedValue(undefined),
@@ -54,8 +54,8 @@ vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
 // durable-annotation round-trip test (save-as promote) actually writes the
 // annotation envelope to disk; the spy wrapper still lets save tests assert it
 // was called. Doc saves in these tests target /tmp paths (harmless real writes).
-vi.mock("../../src/server/file-io/index.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/file-io/index.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   const realAtomicWrite = actual.atomicWrite as (p: string, c: string) => Promise<void>;
   const realAtomicWriteBuffer = actual.atomicWriteBuffer as (p: string, b: Buffer) => Promise<void>;
   return {
@@ -73,7 +73,7 @@ vi.mock("../../src/server/file-io/index.js", async (importOriginal) => {
 // above wires a genuine `fs.watch` against a temp directory, which is the only
 // way to see the #1749 fix rather than a spy that was called.
 const unwatchFileReal = vi.hoisted(() => ({ fn: (_p: string) => {} }));
-vi.mock("../../src/server/file-watcher.js", async (importOriginal) => {
+vi.mock(import("../../src/server/file-watcher.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/file-watcher.js")>();
   unwatchFileReal.fn = actual.unwatchFile;
   return {
@@ -86,8 +86,8 @@ vi.mock("../../src/server/file-watcher.js", async (importOriginal) => {
 // Partial mock of the event queue: `attachObservers` stays REAL (save-as and
 // rename wire it), only `clearFileSyncContext` becomes a spy so the close specs
 // can see WHICH id the per-doc file-sync observer was torn down under (#1797).
-vi.mock("../../src/server/events/queue.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/events/queue.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     clearFileSyncContext: vi.fn(),
@@ -95,8 +95,8 @@ vi.mock("../../src/server/events/queue.js", async (importOriginal) => {
 });
 
 // Mock notifications
-vi.mock("../../src/server/notifications.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/notifications.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     pushNotification: vi.fn(),
@@ -106,8 +106,8 @@ vi.mock("../../src/server/notifications.js", async (importOriginal) => {
 // Mock pre-overwrite snapshots — the real impl would write into the actual
 // app-data dir as a save side effect. The spy also lets the save test assert
 // the call-site contract (path + documentId).
-vi.mock("../../src/server/file-io/doc-backup.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/file-io/doc-backup.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     snapshotBeforeFirstWrite: vi.fn().mockResolvedValue("written"),
@@ -116,7 +116,9 @@ vi.mock("../../src/server/file-io/doc-backup.js", async (importOriginal) => {
 
 // Mock fs/promises for stat checks
 vi.mock("fs/promises", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+  const actual = await importOriginal<
+    typeof import("fs/promises") & { default: Record<string, unknown> }
+  >();
   return {
     ...actual,
     default: {

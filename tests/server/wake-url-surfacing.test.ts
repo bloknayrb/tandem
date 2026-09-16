@@ -29,7 +29,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../src/server/events/wake-socket.js", () => ({
+vi.mock(import("../../src/server/events/wake-socket.js"), () => ({
   getWakeEndpoint: vi.fn(() => null as string | null),
 }));
 

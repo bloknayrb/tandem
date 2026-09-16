@@ -20,7 +20,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import * as Y from "yjs";
 
 // vi.mock factories are hoisted before module-level code; compute paths inline.
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -38,7 +38,7 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
 
 // Capture the per-path onChanged callback so tests can deliver an "external
 // change" event deterministically (drives reloadFromDisk on a clean doc).
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: vi.fn(),
   suppressNextChange: vi.fn(),
@@ -53,7 +53,7 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
  * undefined unless a test sets it.
  */
 const { midSave } = vi.hoisted(() => ({ midSave: { run: undefined as (() => void) | undefined } }));
-vi.mock("../../src/server/file-io/doc-backup", async (importOriginal) => {
+vi.mock(import("../../src/server/file-io/doc-backup"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/file-io/doc-backup")>();
   return {
     ...original,

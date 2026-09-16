@@ -22,10 +22,13 @@ import {
   COWORK_PREFLIGHT_CHECKING,
   COWORK_PREFLIGHT_FAILED,
 } from "../../src/client/cowork/cowork-helpers";
-import type { SubnetPreflight } from "../../src/client/cowork/cowork-invoke";
+import type {
+  coworkToggleIntegration,
+  SubnetPreflight,
+} from "../../src/client/cowork/cowork-invoke";
 import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
 
-const toggleIntegration = vi.fn(async (..._args: unknown[]) => ({ ok: true as const }));
+const toggleIntegration = vi.fn(async (..._args: unknown[]) => ({ message: "Cowork enabled" }));
 const fakeInvoke = vi.fn();
 
 const preflightSubnet = vi.fn(async (): Promise<SubnetPreflight> => ({ status: "unavailable" }));
@@ -34,10 +37,15 @@ const preflightSubnet = vi.fn(async (): Promise<SubnetPreflight> => ({ status: "
 // exports nine symbols and each suite's mock used to name a different subset,
 // so a component reaching for an un-named one failed as `undefined is not a
 // function` — a component-shaped error, discovered one file at a time.
-vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
+vi.mock(import("../../src/client/cowork/cowork-invoke"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/client/cowork/cowork-invoke")>()),
   loadInvoke: vi.fn(async () => fakeInvoke),
-  coworkToggleIntegration: (...args: unknown[]) => toggleIntegration(...args),
+  // Wrapper, NOT a bare reference: a `vi.mock` factory is hoisted, so naming the
+  // top-level spy directly throws "Cannot access before initialization". The
+  // cast rides on the wrapper -- production is `(invoke, enabled)` while the
+  // spy takes `...unknown[]` so call assertions stay simple.
+  coworkToggleIntegration: ((...args: unknown[]) =>
+    toggleIntegration(...args)) as unknown as typeof coworkToggleIntegration,
   coworkPreflightSubnet: () => preflightSubnet(),
 }));
 
@@ -84,7 +92,7 @@ async function probeCount(n: number): Promise<void> {
 // test ordering, which the next added test silently breaks.
 beforeEach(() => {
   toggleIntegration.mockClear();
-  toggleIntegration.mockImplementation(async () => ({ ok: true as const }));
+  toggleIntegration.mockImplementation(async () => ({ message: "Cowork enabled" }));
   fakeInvoke.mockClear();
   preflightSubnet.mockClear();
   preflightSubnet.mockResolvedValue({ status: "unavailable" });

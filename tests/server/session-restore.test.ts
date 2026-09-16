@@ -6,7 +6,7 @@ import * as Y from "yjs";
 import { CTRL_ROOM } from "../../src/shared/constants";
 
 // Isolate session tests in a unique temp directory to avoid races with other test files
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -19,7 +19,7 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
 
 // Real fs.watch leaks handles and races the tests' own writes. The open paths
 // only need this to be callable.
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: vi.fn(),
   unwatchFile: vi.fn(),
@@ -28,7 +28,7 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
 // Failure-isolation twin (#1800): the open-path recovery must survive a
 // throwing eviction. Flag-gated so every other case gets the real helper.
 let evictShouldThrow = false;
-vi.mock("../../src/server/documents/populate.js", async (importOriginal) => {
+vi.mock(import("../../src/server/documents/populate.js"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/documents/populate.js")>();
   return {
     ...original,

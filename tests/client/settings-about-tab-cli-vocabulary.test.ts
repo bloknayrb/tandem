@@ -16,31 +16,34 @@
 
 import { fireEvent, render, waitFor } from "@testing-library/svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { DiagnosticsPayload } from "../../src/client/utils/diagnostics";
 
 let tauri = true;
 
-vi.mock("../../src/client/cowork/cowork-helpers", async (importOriginal) => {
+vi.mock(import("../../src/client/cowork/cowork-helpers"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/client/cowork/cowork-helpers")>();
   return { ...actual, isTauriRuntime: () => tauri };
 });
 
-vi.mock("../../src/client/hooks/useAppInfo.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useAppInfo.svelte"), () => ({
   createAppInfo: () => ({ info: null, loading: false }),
 }));
 
-vi.mock("../../src/client/utils/diagnostics", async (importOriginal) => ({
+vi.mock(import("../../src/client/utils/diagnostics"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/client/utils/diagnostics")>()),
   formatDiagnostics: () => "fake diagnostics text",
   summarizeUserAgent: () => "Test Browser",
 }));
 
-vi.mock("../../src/client/utils/client-log", () => ({
+vi.mock(import("../../src/client/utils/client-log"), () => ({
   readClientLog: () => [],
 }));
 
 const fetchDiagnosticsMock =
-  vi.fn<() => Promise<{ ok: true; payload: unknown } | { ok: false; reason: "server" }>>();
-vi.mock("../../src/client/utils/diagnostics-fetch", () => ({
+  vi.fn<
+    () => Promise<{ ok: true; payload: DiagnosticsPayload } | { ok: false; reason: "server" }>
+  >();
+vi.mock(import("../../src/client/utils/diagnostics-fetch"), () => ({
   fetchDiagnostics: () => fetchDiagnosticsMock(),
 }));
 
@@ -130,7 +133,9 @@ describe("SettingsAboutTab — internal CLI vocabulary gated on isTauriRuntime (
   });
 
   it("clipboard-denied toast: desktop says Open Log Folder, browser says tandem doctor", async () => {
-    fetchDiagnosticsMock.mockResolvedValue({ ok: true, payload: {} });
+    // This spec exercises the clipboard-denied toast, not the payload; the cast
+    // keeps it from carrying a full `DiagnosticsPayload` literal it never reads.
+    fetchDiagnosticsMock.mockResolvedValue({ ok: true, payload: {} as DiagnosticsPayload });
     const writeText = vi.fn().mockRejectedValue(new Error("denied"));
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText },

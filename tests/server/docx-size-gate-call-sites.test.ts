@@ -23,7 +23,7 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.mock factories are hoisted above module-level code, so they build their own paths inline.
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -36,15 +36,15 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
   return { ...original, SESSION_DIR: pathMod.join(appDataDir, "sessions") };
 });
 
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: vi.fn(),
   suppressNextChange: vi.fn(),
 }));
 
-vi.mock("../../src/server/notifications.js", () => ({ pushNotification: vi.fn() }));
+vi.mock(import("../../src/server/notifications.js"), () => ({ pushNotification: vi.fn() }));
 
-vi.mock("../../src/server/integrations/acl-win.js", () => ({
+vi.mock(import("../../src/server/integrations/acl-win.js"), () => ({
   setRestrictiveAcl: vi.fn().mockResolvedValue(undefined),
 }));
 

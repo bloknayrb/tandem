@@ -20,7 +20,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const convertToMarkdown = vi.fn();
-vi.mock("../../src/server/mcp/convert.js", () => ({ convertToMarkdown }));
+vi.mock(import("../../src/server/mcp/convert.js"), () => ({ convertToMarkdown }));
 
 const { registerDocumentTools } = await import("../../src/server/mcp/document.js");
 

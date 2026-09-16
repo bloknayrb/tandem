@@ -25,7 +25,7 @@ import * as Y from "yjs";
 // the call — but here the effect IS the call, and the thing under test is
 // whether the shell hands its own relay down or quietly substitutes something
 // else. `importOriginal` is spread so the real implementation still runs.
-vi.mock("../../src/server/annotations/migration-log.js", async (importOriginal) => {
+vi.mock(import("../../src/server/annotations/migration-log.js"), async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../src/server/annotations/migration-log.js")>();
   return { ...actual, relaySanitizationEvent: vi.fn(actual.relaySanitizationEvent) };

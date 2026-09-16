@@ -47,7 +47,7 @@ import path from "path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
 
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -59,7 +59,7 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
 
 // Real fs.watch leaks handles and races the tests' own writes. The open paths
 // only need this to be callable.
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: vi.fn(),
   unwatchFile: vi.fn(),
