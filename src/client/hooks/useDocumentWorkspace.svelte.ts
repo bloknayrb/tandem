@@ -306,21 +306,21 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
     sourceViewTabs = next;
   }
 
-  async function requestToggleSourceViewTarget(documentId: string): Promise<void> {
-    const tab = opts.getTabs().find((candidate) => candidate.id === documentId);
-    if (!tab || tab.format !== "md" || tab.readOnly) return;
-    opts.setActiveTabId(documentId);
-    if (!sourceViewTabs.has(documentId)) {
-      enterSourceViewTarget(documentId);
-      return;
-    }
-    // An inactive SourceView is unmounted. Activate first, then wait for its
-    // command registration so a dirty draft is committed before exit.
+  /**
+   * Leave source view through the tab's own registered commands, so a dirty
+   * draft is committed first. The caller must have activated the tab: an
+   * inactive SourceView is unmounted, and `App.svelte` keys it on
+   * `{#key activeTab.id}`, so a lookup taken in the same turn as a remount can
+   * miss a registration that is one microtask away — hence the `tick()`.
+   *
+   * #1708 item 4: both toggles used to optional-chain `…get(id)?.exit()`, so an
+   * unregistered id resolved normally and left the user in source view with
+   * nothing said.
+   */
+  async function exitViaSourceCommands(documentId: string): Promise<void> {
     await tick();
-    const commands = sourceViewCommands.get(documentId) ?? null;
+    const commands = sourceViewCommands.get(documentId);
     if (!commands) {
-      // #1708 item 4: the optional chain used to resolve normally here, leaving
-      // the user in source view with nothing said.
       pushWorkspaceNotification(
         "warning",
         "Couldn't leave source view — the Markdown source editor was still loading.",
@@ -331,25 +331,25 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
     await commands.exit();
   }
 
+  async function requestToggleSourceViewTarget(documentId: string): Promise<void> {
+    const tab = opts.getTabs().find((candidate) => candidate.id === documentId);
+    if (!tab || tab.format !== "md" || tab.readOnly) return;
+    opts.setActiveTabId(documentId);
+    if (!sourceViewTabs.has(documentId)) {
+      enterSourceViewTarget(documentId);
+      return;
+    }
+    await exitViaSourceCommands(documentId);
+  }
+
   async function requestToggleSourceView(): Promise<void> {
     const documentId = opts.getActiveTabId();
     if (!documentId) return;
     if (sourceViewTabs.has(documentId)) {
-      // `App.svelte` keys SourceView on `{#key activeTab.id}`, so a lookup
-      // taken in the same turn as a remount can miss a registration that is one
-      // microtask away. The target twin already waited; this one did not
-      // (#1708 item 4).
-      await tick();
-      const commands = sourceViewCommands.get(documentId) ?? null;
-      if (!commands) {
-        pushWorkspaceNotification(
-          "warning",
-          "Couldn't leave source view — the Markdown source editor was still loading.",
-          `source-view-exit:${documentId}`,
-        );
-        return;
-      }
-      await commands.exit();
+      // The target twin already waited a tick for a remounting SourceView to
+      // register; this one did not (#1708 item 4). Both go through the shared
+      // helper so neither can drift back to a silent optional chain.
+      await exitViaSourceCommands(documentId);
       return;
     }
     // #1708 item 5. Every VISIBLE affordance is gated on `canSourceView`, but
@@ -543,17 +543,23 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
       return;
     }
     inflightReopens.add(rec.filePath);
-    const handleFailure = (reason: string) => {
+    // `kind` keys BOTH the notification id and the dedupKey, so the two
+    // outcomes never coalesce onto one tray row (#1708 item 6).
+    const handleFailure = (
+      reason: string,
+      kind: "failed" | "no-tab" = "failed",
+      severity: SaveSeverity = "error",
+    ) => {
       // Restore the record so the user can retry with another Ctrl+Alt+T;
       // silent drop would also surprise users who expect LIFO to be retryable.
       opts.closedTabStack.push(rec);
       const basename = crossBasename(rec.filePath) || rec.filePath;
       opts.pushNotification({
-        id: `reopen-failed-${Date.now()}`,
+        id: `reopen-${kind}-${Date.now()}`,
         type: "general-error",
-        severity: "error",
+        severity,
         message: `Couldn't reopen ${basename}: ${reason}`,
-        dedupKey: `reopen-failed:${rec.filePath}`,
+        dedupKey: `reopen-${kind}:${rec.filePath}`,
         timestamp: Date.now(),
       });
     };
@@ -567,19 +573,10 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
         // record was popped at the top and restored only inside
         // `handleFailure`, so without this a server-side no-op loses it for
         // good. The wait sits inside the `try` so `inflightReopens` holds
-        // across it. One severity BELOW `handleFailure`: the open was accepted
+        // across it. One severity BELOW the rejection arm: the open was accepted
         // and the tab may still land, in which case the next Ctrl+Alt+T finds
         // it open and activates instead of opening twice.
-        opts.closedTabStack.push(rec);
-        const basename = crossBasename(rec.filePath) || rec.filePath;
-        opts.pushNotification({
-          id: `reopen-no-tab-${Date.now()}`,
-          type: "general-error",
-          severity: "warning",
-          message: `Couldn't reopen ${basename}: the server accepted it but no tab appeared.`,
-          dedupKey: `reopen-no-tab:${rec.filePath}`,
-          timestamp: Date.now(),
-        });
+        handleFailure("the server accepted it but no tab appeared.", "no-tab", "warning");
       }
     } catch (err) {
       // The injected implementation catches internally today, so its type says
@@ -621,6 +618,19 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
     });
   }
 
+  /**
+   * One message and one dedupKey per refusal reason (#1708 items 1 and 2), so
+   * the two sites that can report the same reason cannot drift apart: two sites
+   * emitting the SAME sentence may share a key, two different messages may not.
+   */
+  function reportSaveRefusal(reason: TargetSaveRefusal, tabId: string): void {
+    pushWorkspaceNotification(
+      "warning",
+      SAVE_REFUSAL_MESSAGES[reason],
+      `save-target:${reason}:${tabId}`,
+    );
+  }
+
   async function saveDocumentTargetAfterSourceCommit(
     tabId: string,
     intent: "save" | "save-as",
@@ -635,11 +645,7 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
     // that reports lost work. No reassurance about surviving edits: `commit()`
     // clears the draft before `onSave`, and the remount drops it.
     if (!tab) {
-      pushWorkspaceNotification(
-        "warning",
-        SAVE_REFUSAL_MESSAGES["no-such-tab"],
-        `save-target:no-such-tab:${tabId}`,
-      );
+      reportSaveRefusal("no-such-tab", tabId);
       return false;
     }
     if (expectedYdoc && tab.ydoc !== expectedYdoc) {
@@ -704,13 +710,7 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
       // reports only ITS OWN refusals — a `false` from the source-view command
       // or from the post-commit helper is already reported by that callee, so a
       // toast here would double-report one refusal.
-      onRefused: (reason) => {
-        pushWorkspaceNotification(
-          "warning",
-          SAVE_REFUSAL_MESSAGES[reason],
-          `save-target:${reason}:${tabId}`,
-        );
-      },
+      onRefused: (reason) => reportSaveRefusal(reason, tabId),
     });
   }
 
