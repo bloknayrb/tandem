@@ -86,6 +86,7 @@ import {
   type EditResult,
   type LifecycleResult,
   type RemoveResult,
+  type ReplySuggestion,
 } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { exportAnnotations } from "../file-io/docx.js";
@@ -405,8 +406,8 @@ export class YDocStore {
    * uninteresting and nothing would warn the next editor off re-adding the
    * parameter.
    */
-  addReply(annotationId: string, text: string): ClaudeReplyResult {
-    return this.lifecycle.reply(annotationId, text, (e) => this.onLossy(e));
+  addReply(annotationId: string, text: string, suggestion: ReplySuggestion): ClaudeReplyResult {
+    return this.lifecycle.reply(annotationId, text, suggestion, (e) => this.onLossy(e));
   }
 
   /**

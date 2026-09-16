@@ -176,6 +176,12 @@ export const AnnotationReplyRecordSchemaV1 = z
     heldInSolo: z.boolean().optional(),
     // #1123 M3: authoring agent identity (local-model collaborator replies only).
     agentIdentity: AgentIdentitySchema.optional(),
+    // #1626: a Claude-authored reply's replacement proposal, over the PARENT's
+    // range. Declared explicitly rather than left to `.passthrough()`, which
+    // would carry the key with no bound at all: the declaration is what makes
+    // `normalizeReply` apply the same per-field cap the reply seam enforces at
+    // write, so nothing accepted at write is silently dropped at load (#1295 L3).
+    suggestedText: z.string().max(REPLY_TEXT_MAX).optional(),
   })
   .passthrough();
 

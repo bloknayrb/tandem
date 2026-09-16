@@ -120,6 +120,18 @@ const VisibleReplySchema = z.object({
   timestamp: z.number(),
   editedAt: z.number().optional(),
   rev: z.number().optional(),
+  // #1626. `collectRepliesForAnnotation` pushes the RAW Y.Map record and
+  // `mcpStructured` ships it, so an undeclared key is stripped by
+  // `mcp-output-schemas.test.ts`' strip-mode parse and turns `check` red —
+  // Claude would be able to write a proposal it could not read back. Privacy is
+  // unchanged: this is Claude's own text on a Claude-authored reply, and
+  // `channelVisibleReplies` does the filtering as before.
+  suggestedText: z
+    .string()
+    .optional()
+    .describe(
+      "Replacement proposal carried by a Claude-authored reply, over the parent annotation's range",
+    ),
 });
 
 // ---------------------------------------------------------------------------
