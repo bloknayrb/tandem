@@ -173,6 +173,33 @@ export function createRailContentModel(opts: RailContentOptions): RailContentMod
     if (chatReveal && activeId !== chatRevealDocumentId) closeReveal();
   });
 
+  // The reveal exists to show Chat over a COLLAPSED rail, so its precondition
+  // failing ends it (#1716). A derived rule rather than a fifth manual clear
+  // site, because the rail can become visible without any local action: mode
+  // lives in `CTRL_ROOM` and broadcasts, so a Solo -> Tandem flip clears the
+  // `soloRailHidden` suppression from elsewhere, and the Settings modal can
+  // write `rightPanelVisible` directly. A pinned rail carrying a live reveal
+  // renders float chrome and `data-testid="rail-float-right"`, which is how
+  // E2E identifies a FLOATING rail -- so the stale state hands a wrong answer
+  // with nothing failing.
+  //
+  // **Both reads are unconditional**, matching the document-switch effect
+  // above: the short-circuited `if (chatReveal && opts.get...())` form never
+  // calls the thunk while the reveal is closed, so the visibility dependency
+  // drops out of the effect between reveals.
+  //
+  // It writes one of its own dependencies, which is fine and has precedent one
+  // effect up: `closeReveal` is guarded, so the second pass is a no-op.
+  //
+  // This does NOT replace `toggleRightPanel`'s explicit `closeReveal()`. That
+  // one is the synchronous half -- it lands the close in the same commit as
+  // `railPinSnap.right = true`, whose whole job is a single frame. An effect
+  // flushing afterwards would let that frame paint a still-floating shell.
+  $effect(() => {
+    const visible = opts.getEffectiveRightVisible();
+    if (chatReveal && visible) closeReveal();
+  });
+
   // Escape deselects the focused annotation.
   //
   // NOT capture-phase, and not merged with the reveal's Escape handler: this one
