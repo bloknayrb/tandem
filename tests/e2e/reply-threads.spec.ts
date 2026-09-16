@@ -154,10 +154,14 @@ test("#1626: a reply's suggestion renders and Accept writes it into the document
 
   // Waits on the RENDERED card, never on a channel event: `narrowReplyForChannel`
   // refuses `author !== "user"`, so a Claude-authored reply never projects.
+  //
+  // **No click fallback.** The first version of this spec clicked the reply
+  // toggle when the box was not already visible, which made it pass under the
+  // exact regression the auto-open exists to prevent — a proposal the user
+  // cannot see. The disclosure opens itself for a suggestion-bearing thread
+  // (ReplyThread's latched `$effect`), so asserting visibility directly is what
+  // pins the behaviour.
   const box = page.locator(`[data-testid='reply-suggestion-${replyId}']`);
-  if (!(await box.isVisible())) {
-    await page.locator(`[data-testid='reply-toggle-${commentId}']`).click();
-  }
   await expect(box).toBeVisible({ timeout: 5_000 });
   await expect(box).toContainText("Refined Proposal");
 

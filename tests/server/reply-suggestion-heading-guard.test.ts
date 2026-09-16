@@ -29,7 +29,10 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import type * as Y from "yjs";
-import { createAnnotationLifecycle } from "../../src/server/annotations/lifecycle.js";
+import {
+  createAnnotationLifecycle,
+  describeReplyWriteRefusal,
+} from "../../src/server/annotations/lifecycle.js";
 import { getOrCreateXmlText } from "../../src/server/mcp/document-model.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { withInternal } from "../../src/shared/origins.js";
@@ -70,7 +73,7 @@ describe("#1626: a suggestion-bearing reply is screened for heading markup", () 
 
     const result = createAnnotationLifecycle(ydoc).reply(parent, "how about", REPLACEMENT, noRelay);
 
-    expect(result).toStrictEqual({ kind: "invalid-suggestion-range" });
+    expect(result).toStrictEqual({ kind: "invalid-suggestion-range", cause: "heading" });
     // Refused means refused: nothing was written.
     expect(replyCount(ydoc)).toBe(0);
   });
@@ -146,5 +149,112 @@ describe("#1626: a suggestion-bearing reply is screened for heading markup", () 
 
     assertReplyOk(result);
     expect(replyCount(ydoc)).toBe(1);
+  });
+});
+
+/**
+ * #1626 review — **the refusal must name the cause it actually has.**
+ *
+ * `screenSuggestionSpan` calls `anchoredRange`, which fails five ways on a
+ * stored span; the first implementation collapsed all of them into one arm
+ * whose message asserted heading markup. So a parent whose paragraph the user
+ * deleted — CRDT anchors dead, stored range now past the end of the document —
+ * was refused with *"The parent annotation spans heading markup…, or comment on
+ * the text content only"*: a cause that is false, and a remedy that cannot be
+ * followed because the text it names no longer exists. An unbounded retry loop
+ * on a wrong diagnosis is the failure; the `cause` discriminant is the fix.
+ */
+describe("#1626: a refusal on an unresolvable parent does not blame a heading", () => {
+  it("answers cause `unresolvable`, not `heading`, when the parent's text is gone", () => {
+    const ydoc = setupDoc("rsh-gone", FIXTURE);
+    // "next" — the third top-level element, flat [13, 17). No heading anywhere
+    // in the span, so the only thing that can refuse this is resolution.
+    const parent = seedParent(ydoc, 13, 17);
+
+    // The user deletes the heading block and the paragraph the parent sits on.
+    // Both RelativePositions die, `refreshRange` degrades, and the fallback is
+    // the stored [13, 17) against a document that is now 4 characters long.
+    withInternal(ydoc, () => ydoc.getXmlFragment("default").delete(1, 2));
+
+    const result = createAnnotationLifecycle(ydoc).reply(parent, "refined", REPLACEMENT, noRelay);
+
+    expect(result).toStrictEqual({ kind: "invalid-suggestion-range", cause: "unresolvable" });
+    expect(replyCount(ydoc)).toBe(0);
+  });
+
+  it("renders a message that mentions no heading for that cause", () => {
+    // The assertion that would have failed before the fix: the wire message is
+    // the whole user-visible effect of the arm, and a `cause` the message
+    // ignores is a `cause` that changed nothing.
+    const { code, message } = describeReplyWriteRefusal({
+      kind: "invalid-suggestion-range",
+      cause: "unresolvable",
+    });
+
+    expect(code).toBe("INVALID_ARGUMENT");
+    expect(message).not.toMatch(/heading|## /i);
+    expect(message).toMatch(/no longer resolves/i);
+
+    // The heading cause still says heading — the discriminant must not have
+    // simply softened every message into one that names nothing.
+    expect(
+      describeReplyWriteRefusal({ kind: "invalid-suggestion-range", cause: "heading" }).message,
+    ).toMatch(/heading markup/);
+  });
+});
+
+/**
+ * #1626 review — **`tandem_editAnnotation` is the FOURTH carrier of Critical
+ * Rule 6's interior term**, and it had no range screen at all.
+ *
+ * The reachable sequence is two calls, both legal on their own: the
+ * plain-comment arm is endpoint-only by design, so a comment spanning
+ * `"para\n## Head\nnext"` end to end is accepted with the `"## "` prefix in its
+ * INTERIOR; an edit then hangs a `suggestedText` on exactly that span. Accept
+ * replaces the stored flat span verbatim and `snapshotContradicts` cannot
+ * object (the snapshot was captured over that span and still matches), so the
+ * heading disappears with no refusal anywhere in the sequence.
+ */
+describe("#1626 review: the edit path screens a suggestion it did not create", () => {
+  /** A plain comment over the whole fixture — accepted by the endpoint-only arm. */
+  function seedSpanningParent(ydoc: Y.Doc) {
+    return seedParent(ydoc, 0, FIXTURE.length);
+  }
+
+  it("refuses a suggestedText whose span steps over a heading prefix", () => {
+    const ydoc = setupDoc("edit-interior", FIXTURE);
+    const id = seedSpanningParent(ydoc);
+
+    const result = createAnnotationLifecycle(ydoc).editPending(id, { suggestedText: "X" }, noRelay);
+
+    expect(result).toStrictEqual({ kind: "invalid-suggestion-range", cause: "heading" });
+    // Refused means refused: nothing was stored, so Accept has nothing to apply.
+    const stored = ydoc.getMap(Y_MAP_ANNOTATIONS).get(id) as { suggestedText?: string };
+    expect(stored.suggestedText).toBeUndefined();
+  });
+
+  it("still accepts a body-only edit on that same parent", () => {
+    // The control that keeps the screen on the suggestion. A content edit
+    // rewrites no text, and a comment spanning a section is exactly what the
+    // plain arm permits — screening it would refuse ordinary body edits.
+    const ydoc = setupDoc("edit-body", FIXTURE);
+    const id = seedSpanningParent(ydoc);
+
+    const result = createAnnotationLifecycle(ydoc).editPending(id, { content: "revised" }, noRelay);
+
+    expect(result.kind).toBe("ok");
+  });
+
+  it("accepts a suggestedText on a parent clear of heading markup", () => {
+    // The other control: the screen must not refuse every edit that carries a
+    // replacement. [0, 4) is "para", one block, no prefix.
+    const ydoc = setupDoc("edit-clear", FIXTURE);
+    const id = seedParent(ydoc, 0, 4);
+
+    const result = createAnnotationLifecycle(ydoc).editPending(id, { suggestedText: "X" }, noRelay);
+
+    expect(result.kind).toBe("ok");
+    const stored = ydoc.getMap(Y_MAP_ANNOTATIONS).get(id) as { suggestedText?: string };
+    expect(stored.suggestedText).toBe("X");
   });
 });

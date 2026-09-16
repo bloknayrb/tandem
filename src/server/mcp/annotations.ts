@@ -19,7 +19,10 @@ import {
 } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
-import { describeReplyWriteRefusal } from "../annotations/lifecycle.js";
+import {
+  describeReplyWriteRefusal,
+  describeSuggestionRangeRefusal,
+} from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { isClaudeFacing } from "../annotations/projection.js";
 import { atomicWrite } from "../file-io/index.js";
@@ -690,6 +693,12 @@ export function registerAnnotationTools(server: McpServer): void {
             "INVALID_ARGUMENT",
             `Cannot set replacement text on a ${result.annotationType} annotation. Only comments support suggestedText.`,
           );
+        case "invalid-suggestion-range":
+          // Critical Rule 6's interior term reaches this tool too (#1626
+          // review): a `newText` on a comment whose live span steps over a
+          // heading prefix is a deferred rewrite that would delete the heading.
+          // The body-only edit (`content` / `reason`) is unaffected.
+          return mcpError("INVALID_ARGUMENT", describeSuggestionRangeRefusal(result.cause));
         case "ok":
           return mcpSuccess({
             id,

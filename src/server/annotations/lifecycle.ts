@@ -321,14 +321,59 @@ export type ClaudeReplyResult =
   | { kind: "invalid-note" }
   // #1770: Claude may only reply in a thread on an annotation it authored.
   | { kind: "not-owned"; author: Annotation["author"] }
-  // #1626: the reply carried a `suggestedText` and the parent's LIVE span
-  // overlaps heading markup, so accepting it would delete the heading.
+  // #1626: the reply carried a `suggestedText` and the parent's LIVE span did
+  // not survive the screen, so the deferred rewrite must not be stored.
   //
-  // **Deliberately flat — no `failure: RangeValidation`, no `resolvedFrom` /
-  // `resolvedTo`.** A reply refusal is not a range-resolution surface, and the
-  // payload is the only mechanism by which one could ever describe a record's
-  // geometry to a caller. Keeping the arm bare removes that channel entirely.
-  | { kind: "invalid-suggestion-range" };
+  // **Carries a `cause`, and deliberately nothing else — no
+  // `failure: RangeValidation`, no `resolvedFrom` / `resolvedTo`.** A reply
+  // refusal is not a range-resolution surface, and a geometry payload is the
+  // only mechanism by which one could ever describe a record's offsets to a
+  // caller; the two-value {@link SuggestionRangeCause} carries no offsets, so
+  // that channel stays closed. What it does buy is a message that is TRUE: see
+  // that type's docblock for the wrong diagnosis it replaced.
+  | { kind: "invalid-suggestion-range"; cause: SuggestionRangeCause };
+
+/**
+ * Why a suggestion's screen refused the parent's live span (#1626).
+ *
+ * **Two values, because the single flat arm asserted a cause it could not
+ * know.** `screenSuggestionSpan` calls `anchoredRange`, which fails five ways
+ * here, and the refusal used to render ONE message for all of them: *"The
+ * parent annotation spans heading markup…, or comment on the text content
+ * only."* Only `HEADING_OVERLAP` makes that true. A parent whose paragraph the
+ * user deleted resolves both RelativePositions to null, falls back to a stored
+ * range past the new end and answers `out-of-bounds`; a parent collapsed onto
+ * one offset by a block join answers `empty`. In both cases Claude was told a
+ * heading was involved when none was, and handed a remedy — "comment on the
+ * text content only" — that no retry can satisfy, because the text it names is
+ * gone. An unbounded retry loop on a false diagnosis is worse than a refusal.
+ *
+ * `"unresolvable"` deliberately does NOT name which of the four reasons fired.
+ * The remedy is identical for all of them (re-read the document and comment on
+ * the current text), and the distinctions — empty vs. out-of-bounds vs.
+ * surrogate — are exactly the geometry this arm exists not to describe.
+ */
+export type SuggestionRangeCause = "heading" | "unresolvable";
+
+/**
+ * The message for an {@link SuggestionRangeCause}, shared by the reply and edit
+ * families.
+ *
+ * **One function, because two copies of a refusal message is how the reply arm
+ * and the edit arm start telling a caller different things about the same
+ * screen.** The wire CODE differs between the families only in where it is
+ * assembled (`describeReplyWriteRefusal` vs. the `tandem_editAnnotation`
+ * switch); the sentence is the same fact either way.
+ */
+export function describeSuggestionRangeRefusal(cause: SuggestionRangeCause): string {
+  return cause === "heading"
+    ? 'The annotation\'s range spans heading markup (e.g. "## "), so a replacement proposed on ' +
+        "it would delete the heading. Send it without a replacement, or annotate the text " +
+        "content only."
+    : "The annotation's range no longer resolves in the current document, so a replacement " +
+        "proposed on it cannot be placed. Re-read the document and annotate the text as it " +
+        "stands now.";
+}
 
 /**
  * Does this reply carry a replacement proposal? (#1626)
@@ -410,10 +455,12 @@ export function describeReplyWriteRefusal(result: Exclude<ClaudeReplyResult, { k
     case "invalid-suggestion-range":
       return {
         code: "INVALID_ARGUMENT",
-        message:
-          'The parent annotation spans heading markup (e.g. "## "), so a replacement proposed on ' +
-          "its range would delete the heading. Leave the reply without suggestedText, or comment " +
-          "on the text content only.",
+        // The cause is what keeps this sentence honest: before #1626's review
+        // every `anchoredRange` failure rendered the heading sentence, so a
+        // parent whose text the user had deleted was refused with a heading it
+        // did not have and a remedy it could not follow. See
+        // {@link SuggestionRangeCause}.
+        message: `${describeSuggestionRangeRefusal(result.cause)} The parent annotation's range is the one a reply proposes over; a reply without suggestedText is still accepted.`,
       };
     case "not-owned":
       return {
@@ -501,7 +548,13 @@ export type EditResult =
   | { kind: "not-owned"; author: Annotation["author"] }
   | { kind: "not-pending"; currentStatus: Annotation["status"] }
   | { kind: "empty-patch" }
-  | { kind: "invalid-suggestion-target"; annotationType: AnnotationType };
+  | { kind: "invalid-suggestion-target"; annotationType: AnnotationType }
+  // #1626 review: `tandem_editAnnotation` is the FOURTH carrier of Critical
+  // Rule 6's interior term. It can put a `suggestedText` on a comment created
+  // through the PLAIN arm — endpoint-only by design, so `tandem_comment(0, 17)`
+  // over "para\n## Head\nnext" is accepted — and the stored replacement is then
+  // a deferred rewrite of a span whose interior is a heading prefix.
+  | { kind: "invalid-suggestion-range"; cause: SuggestionRangeCause };
 
 /**
  * The mutable fields an edit may set.
@@ -1077,6 +1130,28 @@ function editPendingAnnotation(
     return { kind: "invalid-suggestion-target", annotationType: ann.type };
   }
 
+  // Critical Rule 6 (#1766), fourth carrier — found by the #1626 review.
+  //
+  // **A `suggestedText` arriving by EDIT is the same deferred rewrite as one
+  // arriving by create or reply, and this path had no range screen at all.**
+  // The two-call sequence is the reachable one: the plain-comment arm is
+  // endpoint-only by design, so `tandem_comment(0, 17)` over
+  // `"para\n## Head\nnext"` is accepted with the `"## "` prefix in its INTERIOR;
+  // `tandem_editAnnotation(id, newText)` then stores a replacement over exactly
+  // that span, Accept replaces it verbatim, and `snapshotContradicts` cannot
+  // object because the snapshot was captured over that span and still matches.
+  // The heading disappears silently.
+  //
+  // **AFTER `invalid-suggestion-target`**, for the reason that ordering holds
+  // in the reply family too: a highlight parent must answer the arm that names
+  // the real rule, not one about geometry. And only when the patch actually
+  // carries a suggestion — a content-only edit rewrites no text, so screening
+  // it would refuse ordinary body edits on any comment spanning a section.
+  if (patch.suggestedText !== undefined) {
+    const cause = screenSuggestionSpan(ann, ydoc);
+    if (cause) return { kind: "invalid-suggestion-range", cause };
+  }
+
   const updated = {
     ...ann,
     // Field-by-field, never `...patch` — see {@link EditPatch}. This literal is
@@ -1435,6 +1510,53 @@ export function addUserReply(
 }
 
 /**
+ * Screen an annotation's LIVE span for Critical Rule 6's heading terms, on
+ * behalf of a `suggestedText` about to be stored against it (#1626).
+ *
+ * **One screen, shared by every carrier in this file** — the reply seam and the
+ * edit path. Two copies would be two chances to pass a different option set,
+ * and the option set IS the rule: `rejectHeadingOverlap` alone is the
+ * endpoint-only test a plain comment is held to, and the interior term is what
+ * a deferred rewrite additionally needs.
+ *
+ * **The CURRENT offsets, not the stored ones.** `anchoredRange` validates
+ * exactly what it is handed, and at accept time the client resolves through
+ * `relRange` (`annotationToPmRange`) — so on a document edited since the record
+ * was anchored, screening `ann.range` checks a span that is not the one Accept
+ * rewrites. `refreshRange` is the existing resolver for that, called WITHOUT
+ * `map` so these write paths persist no re-anchor (the read path
+ * `listAnnotationsRefreshed` owns that). A dead or unverifiable anchor falls
+ * back to the stored range, which is the same "all there is" position the
+ * client's accept lands in.
+ *
+ * **The fourth argument is `undefined` — never `ann.textSnapshot`.** The
+ * staleness gate compares by exact equality while `captureSnapshot` caps a
+ * stored snapshot at SNAPSHOT_CAP (200), so passing it would refuse every
+ * suggestion on a record spanning more than 200 characters, on an untouched
+ * document, with RANGE_MOVED. Drift detection belongs to `snapshotContradicts`
+ * at accept time, which prefix-matches correctly.
+ *
+ * Returns `null` when the span is clear. The two refusal values are
+ * distinguished because `anchoredRange` fails five ways and only one of them is
+ * a heading — see {@link SuggestionRangeCause} for the false diagnosis that
+ * shipped while this collapsed to a single arm.
+ */
+function screenSuggestionSpan(ann: Annotation, ydoc: Y.Doc): SuggestionRangeCause | null {
+  const refreshed = refreshRange(ann, ydoc);
+  const live =
+    refreshed.kind === "degraded" || refreshed.kind === "failed"
+      ? ann.range
+      : refreshed.annotation.range;
+  const screened = anchoredRange(ydoc, live.from, live.to, undefined, {
+    rejectHeadingOverlap: true,
+    rejectHeadingInterior: true,
+    normalizeSpaceClass: true,
+  });
+  if (screened.ok) return null;
+  return screened.code === "HEADING_OVERLAP" ? "heading" : "unresolvable";
+}
+
+/**
  * Claude's reply, and **the only place the ADR-027 rule for replies lives**.
  *
  * Two conditions, and the second is new. The note rule is the one #1000 relaxed
@@ -1519,33 +1641,8 @@ function replyForClaude(
     // moving a check up. Claude cannot mint a highlight today, so the first is a
     // corner; it is still a refusal that must not change its mind.
     if (suggestion.kind === "replacement" && ann.type === "comment" && ann.status === "pending") {
-      // **The CURRENT offsets, not the stored ones.** `anchoredRange` validates
-      // exactly what it is handed, and at accept time the client resolves
-      // through `relRange` (`annotationToPmRange`) — so on a document edited
-      // since the parent was anchored, screening `ann.range` checks a span that
-      // is not the one Accept rewrites. `refreshRange` is the existing resolver
-      // for that, called WITHOUT `map` so this write path persists no
-      // re-anchor (the read path `listAnnotationsRefreshed` owns that). A dead
-      // or unverifiable anchor falls back to the stored range, which is the
-      // same "all there is" position the client's accept lands in.
-      const refreshed = refreshRange(ann, ydoc);
-      const live =
-        refreshed.kind === "degraded" || refreshed.kind === "failed"
-          ? ann.range
-          : refreshed.annotation.range;
-      // **The fourth argument is `undefined` — never `ann.textSnapshot`.** The
-      // staleness gate compares by exact equality while `captureSnapshot` caps a
-      // stored snapshot at SNAPSHOT_CAP (200), so passing it would refuse every
-      // suggestion on a parent spanning more than 200 characters, on an
-      // untouched document, with RANGE_MOVED. Drift detection belongs to
-      // `snapshotContradicts` at accept time, which prefix-matches correctly.
-      // This call's only job is the heading screen.
-      const screened = anchoredRange(ydoc, live.from, live.to, undefined, {
-        rejectHeadingOverlap: true,
-        rejectHeadingInterior: true,
-        normalizeSpaceClass: true,
-      });
-      if (!screened.ok) return { kind: "invalid-suggestion-range" };
+      const cause = screenSuggestionSpan(ann, ydoc);
+      if (cause) return { kind: "invalid-suggestion-range", cause };
     }
   }
   // A missing record falls through to `writeReply`, which answers `not-found` —

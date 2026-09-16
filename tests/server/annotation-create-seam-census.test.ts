@@ -192,10 +192,20 @@ describe("annotation create seam — who may mint", () => {
       // #1626: the reply seam's required suggestion discriminant. Exported because
       // `YDocStore.addReply` and the MCP handler both name the arm.
       "ReplySuggestion",
+      // #1626 review: why a suggestion's range screen refused. Exported because
+      // the refusal is rendered in two places — `describeReplyWriteRefusal` here
+      // and the `tandem_editAnnotation` switch in `mcp/annotations.ts` — and a
+      // flat arm was what let one wrong message (heading) stand in for five
+      // different `anchoredRange` failures.
+      "SuggestionRangeCause",
       "acceptPending",
       "addUserReply",
       "createAnnotationLifecycle",
       "describeReplyWriteRefusal",
+      // #1626 review: the one renderer for {@link SuggestionRangeCause}, shared
+      // by the reply family and `tandem_editAnnotation`, so the two cannot drift
+      // into telling a caller different things about the same screen.
+      "describeSuggestionRangeRefusal",
       "dismissPending",
       "mintAnnotation",
       "removeAnnotationRecord",

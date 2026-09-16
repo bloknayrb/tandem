@@ -50,17 +50,33 @@ const annotationId = $derived(annotation.id);
 // always-visible inline thread). Replaces the former portaled "Expand thread"
 // overlay as the reply reader (Bryan decision 2026-06-01). Local view state
 // only — never persisted, never read by Claude.
-// #1626: a thread holding a replacement proposal opens at mount, because a
-// proposal the user cannot see is a proposal they cannot accept. A mount-time
-// SEED via `untrack`, deliberately not an `$effect` — an effect would reopen a
-// thread the user just closed every time the reply list re-renders.
-let open = $state(
-  untrack(
-    () =>
-      annotation.type === "comment" &&
-      getVisibleReplies(annotation, replies).some((r) => r.suggestedText !== undefined),
-  ),
-);
+// #1626: a thread holding a replacement proposal opens itself, because a
+// proposal the user cannot see is a proposal they cannot accept.
+//
+// **A LATCHED `$effect`, not a mount-time `untrack` seed.** The seed shipped
+// first and covered only the fresh-mount case — page load, filter change. The
+// live path is the other one: SidePanel's `{#each filteredData.pending as ann
+// (ann.id)}` is KEYED, so when the Y.Map observer rebuilds `repliesMap` an
+// already-rendered card is UPDATED, never remounted. A suggestion arriving at a
+// card the user is looking at therefore never ran the initializer, `open`
+// stayed false, and the proposal plus its Accept button rendered nowhere — the
+// exact condition the seed was added to prevent.
+//
+// The latch is what makes the effect safe: a bare one would re-open a thread
+// the user just closed on every reply-list re-render. `seeded` is a plain
+// `let`, not `$state`, so writing it inside the effect creates no reactive
+// dependency and no loop, and it is set BEFORE the write so the auto-open
+// happens exactly once per component instance.
+let open = $state(false);
+let seeded = false;
+$effect(() => {
+  const proposed =
+    annotation.type === "comment" &&
+    getVisibleReplies(annotation, replies).some((r) => r.suggestedText !== undefined);
+  if (!proposed || seeded) return;
+  seeded = true;
+  open = true;
+});
 
 let isReplying = $state(false);
 let replyText = $state("");

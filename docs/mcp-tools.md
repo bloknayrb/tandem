@@ -774,7 +774,11 @@ Edit the content of an annotation Claude authored. Only pending annotations can 
 ```
 
 **Errors:** `NO_DOCUMENT` (document not found), `NOT_OWNED` (the annotation was
-authored by the user), error if annotation not found or not pending.
+authored by the user), error if annotation not found or not pending. `newText` additionally
+carries Critical Rule 6's heading screen (#1626): a replacement is refused with
+`INVALID_ARGUMENT` when the annotation's **live** span overlaps heading markup — including in its
+interior, which the plain-comment arm legally allows at creation — or when that span no longer
+resolves in the document. A body-only edit (`content` / `reason`) is never screened.
 
 **Example:**
 ```
