@@ -10,6 +10,11 @@
 > **This file states rules; the linked docs hold the detail.** A rule stays inline when violating
 > it fails *silently* — no type error, no test, no hook. Everything else is one link away. If you
 > are about to work in an area, read its doc first.
+>
+> **The absence of a rule is not evidence of safety (#1604).** This file and `docs/gotchas.md`
+> record failures already survived — they are not a specification of what's safe. Finding no rule
+> for your change means nobody has been bitten there yet, not that nothing can go wrong; reason
+> from what actually reaches the code, not from what these docs happen to name.
 
 ## Critical Rules
 
