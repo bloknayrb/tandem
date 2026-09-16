@@ -288,10 +288,21 @@ async function shutdown(signal: string) {
     console.error("[Tandem] search worker shutdown failed:", err);
   }
   // Stop the launcher BEFORE we tear down everything else — supervisor.stop()
-  // sends SIGTERM to the reaper which gracefully reaps Claude. If we skip this
-  // and just process.exit(0), the OS-level Job Object (Windows) / PDEATHSIG
-  // (Linux) / kqueue (macOS) still kills Claude — but cleanly going through
-  // SIGTERM gives Claude a chance to flush.
+  // signals the reaper, which reaps Claude. If we skip this and just
+  // process.exit(0), the OS-level Job Object (Windows) / PDEATHSIG (Linux) /
+  // kqueue (macOS) still kills Claude.
+  //
+  // The flush window is POSIX-ONLY, and this comment used to claim it
+  // unconditionally (#1823 item 4). On Unix the reaper installs SIGTERM/SIGINT
+  // handlers that relay to Claude and escalate after `GRACE_PERIOD_SECS`
+  // (`reaper/src/linux.rs`, `reaper/src/macos.rs`), so the SIGTERM really does
+  // buy a flush. On Windows there are no POSIX signals: `kill("SIGTERM")` is
+  // `TerminateProcess`, `reaper/src/windows.rs` installs no signal handler at
+  // all, and the reaper's death closes the job handle so KILL_ON_JOB_CLOSE
+  // kills Claude outright — no flush window. `SIGTERM_GRACE_MS`
+  // (`launcher/supervisor.ts`) is NOT dead code there; the reaper exits at once
+  // so the wait resolves immediately, and only the SIGKILL escalation below it
+  // is unreachable on Windows.
   if (launcherSupervisor) {
     try {
       await launcherSupervisor.stop();

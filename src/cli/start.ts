@@ -54,10 +54,15 @@ export function runStart(): void {
     process.exit(code ?? 0);
   });
 
-  // Forward signals — proc.kill() with no argument uses SIGTERM on Unix
-  // and TerminateProcess on Windows (correct cross-platform behavior).
-  // On Windows SIGTERM is not emitted by the OS, but SIGINT (Ctrl+C) works.
-  // Both are listed for Unix compatibility.
+  // Forward signals. `proc.kill()` with no argument sends SIGTERM on Unix,
+  // where the server's own handler runs the graceful shutdown (session save,
+  // dirty-doc flush, lockfile release). On Windows there are no POSIX signals:
+  // it becomes `TerminateProcess`, so the child dies outright and none of that
+  // shutdown runs — the previous "(correct cross-platform behavior)" overstated
+  // it, because the two platforms do materially different things (#1823 item
+  // 4). Windows still works in practice because SIGINT (Ctrl+C) is delivered by
+  // the OS to the whole console process group, reaching the child directly;
+  // the SIGTERM listener is here for Unix.
   for (const sig of ["SIGINT", "SIGTERM"] as const) {
     process.once(sig, () => proc.kill());
   }
