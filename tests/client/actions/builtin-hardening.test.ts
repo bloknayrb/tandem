@@ -16,6 +16,7 @@ import {
   relaunchClaudeHere,
   startFreshClaudeCode,
   triggerSave,
+  triggerSaveAs,
 } from "../../../src/client/actions/builtin.svelte.js";
 import {
   type ActionDeps,
@@ -309,6 +310,26 @@ describe("in-flight announcements", () => {
       "info",
       expect.stringContaining("already in progress"),
       expect.objectContaining({ dedupKey: "save-inflight" }),
+    );
+    release();
+    await first;
+  });
+
+  it("tells a second Save As that one is already running", async () => {
+    // #1708 item 3. `triggerSaveAs` had no announce option at all, and unlike
+    // `triggerSave` it needs no flag to gate one: its single caller is a user
+    // gesture, so a silent re-entry is always a dead Ctrl+Shift+S.
+    const notify = vi.fn();
+    mount({ notify });
+    const { release } = pending(API_SAVE);
+
+    const first = triggerSaveAs({ activeDocId: "doc-1", notify });
+    await triggerSaveAs({ activeDocId: "doc-1", notify });
+
+    expect(notify).toHaveBeenCalledWith(
+      "info",
+      expect.stringContaining("already in progress"),
+      expect.objectContaining({ dedupKey: "save-as-inflight" }),
     );
     release();
     await first;
