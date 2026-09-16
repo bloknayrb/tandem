@@ -60,6 +60,15 @@ export async function handleSave(req: Request, res: Response): Promise<void> {
   // document. Every parse failure lands on `false` = refuse. Branches 2 and 3
   // never read it: serialize-only touches no disk, and save-as writes a NEW
   // file rather than overwriting the picture-bearing original.
+  //
+  // What the parse does NOT establish is user INTENT (#2027, open). The gate in
+  // front of this field is `assertOriginAllowlisted`, and its allowlist is any
+  // `http(s)://127.0.0.1:<any port>` origin — so a page on another loopback
+  // port can send this as JSON (preflight answered, socket loopback, omitted
+  // `documentId` falling through to the active doc) and destroy the pictures
+  // with no interaction. Before #1941 that request was refused outright. Do not
+  // read the strictness below as a control on WHO may set the flag; it only
+  // fixes what an absent or malformed body means.
   const allowImageLoss = body.allowImageLoss === true;
 
   if (documentId !== undefined && typeof documentId !== "string") {
