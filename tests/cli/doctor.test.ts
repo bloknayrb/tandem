@@ -367,7 +367,10 @@ describe("runDoctor", () => {
   // as "unparseable content". process.pid is the live doctor process.
   const lockCases: Array<[string, string]> = [
     ["bare-PID format", String(process.pid)],
-    ["JSON-object format", JSON.stringify({ pid: process.pid, startedAtMs: 123, app: "tandem" })],
+    [
+      "JSON-object format",
+      JSON.stringify({ pid: process.pid, startedAtMs: Date.now(), app: "tandem" }),
+    ],
   ];
   for (const [label, content] of lockCases) {
     it(`reads a live-PID store.lock in ${label} without warning "unparseable"`, async () => {
@@ -385,6 +388,24 @@ describe("runDoctor", () => {
       expect(messages.some((m) => m.includes(`live PID ${process.pid}`))).toBe(true);
     });
   }
+
+  it("warns (not passes) a live-PID JSON lock whose startedAtMs predates this boot (#2038)", async () => {
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    // startedAtMs: 1 predates any real boot.
+    writeFileSync(
+      join(annDir, "store.lock"),
+      JSON.stringify({ pid: process.pid, startedAtMs: 1, app: "tandem" }),
+    );
+
+    const report = await runDoctor();
+    const result = report.results.find((r) => r.check === "annotation-store" && r.data?.priorBoot);
+
+    expect(result?.status).toBe("warn");
+    expect(result?.message).toContain(`PID ${process.pid}`);
+    expect(result?.message).toContain("predates this boot");
+    expect(result?.data).toMatchObject({ lockHeld: true, pid: process.pid, pidLive: true });
+  });
 
   it('still warns "unparseable" when the lock is genuinely non-numeric', async () => {
     const annDir = join(dataDir, "annotations");

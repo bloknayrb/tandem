@@ -29,7 +29,7 @@ import { request } from "node:http";
 import { createConnection } from "node:net";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
-import { parseLockfile } from "../server/annotations/lockfile.js";
+import { isLockFromPriorBoot, parseLockfile } from "../server/annotations/lockfile.js";
 import {
   isRecordedPathAbsolute,
   isRecordedPathGone,
@@ -2948,11 +2948,19 @@ async function checkAnnotationStore(r: Recorder): Promise<void> {
     }
     const { pid } = lock;
     if (isPidLive(pid)) {
-      r.pass(`Annotation store lock held by live PID ${pid}`, undefined, {
-        lockHeld: true,
-        pid,
-        pidLive: true,
-      });
+      if (isLockFromPriorBoot(lock)) {
+        r.warn(
+          `Annotation store lock at ${lockPath} is held by PID ${pid}, but its startedAtMs predates this boot`,
+          "This PID was likely reused after a reboot. The next server start will probe the process identity and reclaim the lock automatically if it is not Tandem.",
+          { lockHeld: true, pid, pidLive: true, priorBoot: true },
+        );
+      } else {
+        r.pass(`Annotation store lock held by live PID ${pid}`, undefined, {
+          lockHeld: true,
+          pid,
+          pidLive: true,
+        });
+      }
     } else {
       r.warn(
         `Annotation store lock at ${lockPath} points to dead PID ${pid}`,
