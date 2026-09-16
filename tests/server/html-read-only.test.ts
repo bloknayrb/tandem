@@ -27,9 +27,7 @@
  * `document-service.test.ts` — see the note on each there.
  */
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
@@ -71,26 +69,14 @@ import {
 import { withInternal } from "../../src/shared/origins.js";
 import { clearOpenDocs } from "../helpers/doc-service.js";
 import { buildDocxWithComments } from "../helpers/docx-fixtures.js";
+import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 
 let tmpDir: string;
 let client: Client;
-
-async function setupMcpClient(): Promise<Client> {
-  const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
-  registerDocumentTools(server);
-  registerAnnotationTools(server);
-  const [ct, st] = InMemoryTransport.createLinkedPair();
-  const c = new Client({ name: "test-client", version: "0.0.1" });
-  await server.connect(st);
-  await c.connect(ct);
-  return c;
-}
+let close: (() => Promise<void>) | undefined;
 
 async function call(name: string, args: Record<string, unknown> = {}) {
-  const res = await client.callTool({ name, arguments: args });
-  const content = res.content as Array<{ type: string; text?: string }>;
-  const text = content.find((c) => c.type === "text")?.text;
-  return text ? JSON.parse(text) : null;
+  return parseResult(await client.callTool({ name, arguments: args }));
 }
 
 async function writeFixture(name: string, body: string): Promise<string> {
@@ -127,10 +113,12 @@ beforeEach(async () => {
   vi.clearAllMocks();
   await fs.mkdir(SESSION_DIR, { recursive: true });
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tandem-html-readonly-"));
-  client = await setupMcpClient();
+  ({ client, close } = await setupMcpServer([registerDocumentTools, registerAnnotationTools]));
 });
 
 afterEach(async () => {
+  await close?.();
+  close = undefined;
   clearOpenDocs();
   await fs.rm(SESSION_DIR, { recursive: true, force: true }).catch(() => {});
   await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});

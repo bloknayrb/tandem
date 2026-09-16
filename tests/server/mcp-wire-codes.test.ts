@@ -9,15 +9,10 @@
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createMinimalDocx,
-  parseResult,
-  seedAcceptedSuggestion,
-} from "../helpers/wire-code-fixtures.js";
+import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
+import { createMinimalDocx, seedAcceptedSuggestion } from "../helpers/wire-code-fixtures.js";
 
 // vi.mock factories are hoisted above module-level code. The app-data dir name
 // carries the literal `tandem` (platform.test.ts keys on it), and it keeps the
@@ -56,17 +51,6 @@ const { timeoutMs } = await import("../helpers/timing.js");
 
 const REAL_APPLY_TIMEOUT_MS = timeoutMs(60_000, 300_000);
 
-async function setupClient(): Promise<Client> {
-  const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
-  registerDocumentTools(server);
-  registerApplyTools(server);
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test-client", version: "0.0.1" });
-  await server.connect(serverTransport);
-  await client.connect(clientTransport);
-  return client;
-}
-
 type DocOpts = {
   format?: "md" | "txt" | "html" | "docx";
   readOnly?: boolean;
@@ -89,16 +73,19 @@ function registerDoc(id: string, text: string, opts: DocOpts = {}) {
 }
 
 let client: Client;
+let close: (() => Promise<void>) | undefined;
 let tmpDir: string;
 
 beforeEach(async () => {
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   setActiveDocId(null);
   tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "tandem-wire-codes-"));
-  client = await setupClient();
+  ({ client, close } = await setupMcpServer([registerDocumentTools, registerApplyTools]));
 });
 
 afterEach(async () => {
+  await close?.();
+  close = undefined;
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   await fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
 });

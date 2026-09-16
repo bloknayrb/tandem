@@ -5,16 +5,9 @@
  * Deliberately imports no `src/server` module, so a suite's `vi.mock` factories
  * and hoisted dynamic imports decide the module graph, not this file.
  */
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import JSZip from "jszip";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
-
-export function parseResult(result: Awaited<ReturnType<Client["callTool"]>>) {
-  const content = result.content as Array<{ type: string; text?: string }>;
-  const text = content.find((c) => c.type === "text")?.text;
-  return text ? JSON.parse(text) : null;
-}
 
 /** A minimal, structurally valid .docx with one body paragraph (docx-apply.test.ts). */
 export async function createMinimalDocx(text: string): Promise<Buffer> {
