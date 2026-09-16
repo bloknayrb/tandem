@@ -679,8 +679,13 @@ describe("collaborator — mid-turn doc swap (#1657)", () => {
   // correct code. The gate promise is released from the same microtask chain —
   // never `await` a timer here.
 
-  it("drops the terminal reply when the Y.Doc is swapped mid-turn", async () => {
-    setupDoc("doc-swap-terminal", "Body");
+  /**
+   * Park a turn just after its delta is pushed, swap the room's Y.Doc, then let
+   * the turn finish. Encodes the TIMING RULE above: the only thing awaited
+   * between the push and the swap is a microtask.
+   */
+  async function swapMidTurn(id: string, result: LoopResult) {
+    setupDoc(id, "Body");
     let release!: () => void;
     const gate = new Promise<void>((res) => {
       release = res;
@@ -692,18 +697,22 @@ describe("collaborator — mid-turn doc swap (#1657)", () => {
           opts.onContentDelta?.("partial answer");
           opts.onTurnEnd?.({ hadToolCalls: false });
           await gate;
-          return cleanResult("the full reply");
+          return result;
         },
       }),
     );
     collab.__setConfigForTests(CONFIG);
 
-    collab.onEvent(chatEvent("go", { documentId: "doc-swap-terminal" }));
+    collab.onEvent(chatEvent("go", { documentId: id }));
     await Promise.resolve(); // run() → executeRun → runTurn → push → parked on `gate`
 
-    swapDoc("doc-swap-terminal", "Body");
+    swapDoc(id, "Body");
     release();
     await drain(collab);
+  }
+
+  it("drops the terminal reply when the Y.Doc is swapped mid-turn", async () => {
+    await swapMidTurn("doc-swap-terminal", cleanResult("the full reply"));
 
     // This arm discriminates BECAUSE the sink's `isOwner()` is deliberately left
     // on presence: if `stillOwner()` let the terminal path through, the sink
@@ -712,30 +721,7 @@ describe("collaborator — mid-turn doc swap (#1657)", () => {
   });
 
   it("suppresses the budget-exhausted notification when the Y.Doc is swapped mid-turn", async () => {
-    setupDoc("doc-swap-notify", "Body");
-    let release!: () => void;
-    const gate = new Promise<void>((res) => {
-      release = res;
-    });
-
-    const collab = createLocalModelCollaborator(
-      makeDeps({
-        runTurn: async (opts) => {
-          opts.onContentDelta?.("partial answer");
-          opts.onTurnEnd?.({ hadToolCalls: false });
-          await gate;
-          return limitResult("max_turns");
-        },
-      }),
-    );
-    collab.__setConfigForTests(CONFIG);
-
-    collab.onEvent(chatEvent("go", { documentId: "doc-swap-notify" }));
-    await Promise.resolve();
-
-    swapDoc("doc-swap-notify", "Body");
-    release();
-    await drain(collab);
+    await swapMidTurn("doc-swap-notify", limitResult("max_turns"));
 
     // A sink-independent second pin: `pushNotification` bypasses the sink
     // entirely, so this stays red under the mutation even if the sink changes.
