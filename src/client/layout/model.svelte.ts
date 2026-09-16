@@ -96,10 +96,28 @@ export interface LayoutModel {
   /** Badge value for the Annotations tab: pending review targets, or 0 while that tab is
    *  active. Not a count of pending annotations — see the note at the derivation. */
   readonly pendingAnnotationBadge: number;
-  /** Toggle the left panel's persisted visibility. */
-  toggleLeft(): void;
-  /** Toggle the right panel; on show, also clears `soloRailHidden` in solo mode. */
-  toggleRight(): void;
+  /**
+   * Toggle the left panel's persisted visibility.
+   *
+   * Returns whether the write was **APPLIED** — i.e. not refused by
+   * `updateSettings`' read-only short-circuit, which fires when the settings
+   * blob on disk was written by a newer Tandem (#659). A refusal also raises
+   * the one deduplicated user-facing warning registered in `App.svelte`
+   * (#1985); this return value is what lets a caller skip work that assumed
+   * the state changed.
+   *
+   * **It is not a persistence signal, and the difference matters (#1722).**
+   * `updateSettings` wraps its `localStorage.setItem` in a `try`/`catch` that
+   * swallows the failure, then assigns and returns `true` — so `true` means
+   * "this session applied it", never "it reached disk".
+   */
+  toggleLeft(): boolean;
+  /**
+   * Toggle the right panel; on show, also clears `soloRailHidden` in solo mode.
+   * Returns whether the write was applied — see `toggleLeft` for what that
+   * boolean does and does not promise. Both branches report their own write.
+   */
+  toggleRight(): boolean;
   /** Select which of the right rail's two fixed tabs is showing. Writes nothing else. */
   selectRailTab(tab: RailTab): void;
 }
@@ -153,18 +171,19 @@ export function createLayoutModel(opts: LayoutModelOptions): LayoutModel {
       : opts.getAnnotations().filter(isPendingReviewTarget).length,
   );
 
-  function toggleLeft(): void {
-    settingsState.updateSettings({
+  function toggleLeft(): boolean {
+    return settingsState.updateSettings({
       leftPanelVisible: !settingsState.settings.leftPanelVisible,
     });
   }
 
-  function toggleRight(): void {
+  function toggleRight(): boolean {
+    // Each branch reports its OWN write. Returning only the second one's
+    // result would report every hide as a success, refused or not.
     if (rightVisible) {
-      settingsState.updateSettings({ rightPanelVisible: false });
-      return;
+      return settingsState.updateSettings({ rightPanelVisible: false });
     }
-    settingsState.updateSettings({
+    return settingsState.updateSettings({
       rightPanelVisible: true,
       ...(modeState.tandemMode === "solo" ? { soloRailHidden: false } : {}),
     });

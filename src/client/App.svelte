@@ -1189,7 +1189,13 @@ const toggleLeftPanel = () => {
   pinFromFloat("left");
   railFloat.left = false;
   const nextVisible = !layoutModel.leftVisible;
-  layoutModel.toggleLeft();
+  // A refused write (read-only settings blob, #659) means the rail does not
+  // move, so there is no replacement element to chase focus into. **This is a
+  // defensive skip of a state change that did not happen, not a focus fix**:
+  // both ids `focusToggleTarget` can build are always-mounted and merely
+  // hidden, so the unguarded call resolved a hidden element and did nothing.
+  // The user-visible signal is #1985's deduplicated refusal notification.
+  if (!layoutModel.toggleLeft()) return;
   focusToggleTarget("left", nextVisible);
 };
 const toggleRightPanel = () => {
@@ -1205,7 +1211,13 @@ const toggleRightPanel = () => {
   pinFromFloat("right");
   railFloat.right = false;
   const nextVisible = !layoutModel.rightVisible;
-  layoutModel.toggleRight();
+  // See `toggleLeftPanel`. The float-clearing writes and the reveal teardown
+  // above deliberately stay ahead of this: re-ordering them to chase a rare
+  // refusal risks the `.collapsed.floating` frame the comment at the top of
+  // `toggleLeftPanel` exists to prevent, so a refused pin still dismisses a
+  // hover float and an open reveal, and the refusal notification is what
+  // explains why the rail did not move.
+  if (!layoutModel.toggleRight()) return;
   focusToggleTarget("right", nextVisible);
 };
 // Pinning a floated rail: snap the shell to the float's width (no 14→full open
