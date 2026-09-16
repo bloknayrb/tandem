@@ -29,7 +29,10 @@ import {
   COWORK_PREFLIGHT_CHECKING,
   COWORK_PREFLIGHT_FAILED,
 } from "../../src/client/cowork/cowork-helpers";
-import type { SubnetPreflight } from "../../src/client/cowork/cowork-invoke";
+import type {
+  coworkToggleIntegration,
+  SubnetPreflight,
+} from "../../src/client/cowork/cowork-invoke";
 import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
 
 const toggleIntegration = vi.fn(async (..._args: unknown[]) => ({ message: "Cowork enabled" }));
@@ -61,9 +64,7 @@ vi.mock(import("../../src/client/cowork/cowork-invoke"), async (importOriginal) 
   // cast rides on the wrapper -- production is `(invoke, enabled)` while the
   // spy takes `...unknown[]` so call assertions stay simple.
   coworkToggleIntegration: ((...args: unknown[]) =>
-    toggleIntegration(
-      ...args,
-    )) as unknown as typeof import("../../src/client/cowork/cowork-invoke").coworkToggleIntegration,
+    toggleIntegration(...args)) as unknown as typeof coworkToggleIntegration,
   coworkPreflightSubnet: () => preflightSubnet(),
 }));
 

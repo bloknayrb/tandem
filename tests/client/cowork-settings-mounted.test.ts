@@ -24,7 +24,11 @@ import {
   COWORK_PREFLIGHT_CHECKING,
   COWORK_PREFLIGHT_FAILED,
 } from "../../src/client/cowork/cowork-helpers";
-import type { SubnetPreflight } from "../../src/client/cowork/cowork-invoke";
+import type {
+  coworkSetLanIpOverride,
+  coworkToggleIntegration,
+  SubnetPreflight,
+} from "../../src/client/cowork/cowork-invoke";
 import { coworkErrorCell, coworkStatusCell } from "../helpers/cowork-fixtures.svelte";
 
 // The real command's Ok payload (#1438): a message plus zero or more
@@ -54,14 +58,10 @@ vi.mock(import("../../src/client/cowork/cowork-invoke"), async (importOriginal) 
   // cast rides on the wrapper -- production is `(invoke, enabled)` while the
   // spy takes `...unknown[]` so call assertions stay simple.
   coworkToggleIntegration: ((...args: unknown[]) =>
-    toggleIntegration(
-      ...args,
-    )) as unknown as typeof import("../../src/client/cowork/cowork-invoke").coworkToggleIntegration,
+    toggleIntegration(...args)) as unknown as typeof coworkToggleIntegration,
   coworkPreflightSubnet: () => preflightSubnet(),
   coworkSetLanIpOverride: ((...args: unknown[]) =>
-    setLanIpOverride(
-      ...args,
-    )) as unknown as typeof import("../../src/client/cowork/cowork-invoke").coworkSetLanIpOverride,
+    setLanIpOverride(...args)) as unknown as typeof coworkSetLanIpOverride,
 }));
 
 /**

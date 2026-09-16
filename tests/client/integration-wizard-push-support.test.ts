@@ -22,8 +22,12 @@
 import { cleanup, render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  IntegrationWizardState,
+  PickedIntegration,
+  WizardStep,
+} from "../../src/client/hooks/useIntegrationWizard.svelte";
 import { _resetClientLog, readClientLog } from "../../src/client/utils/client-log";
-
 import { CLAUDE_PLUGIN_INSTALL_COMMANDS } from "../../src/shared/constants.js";
 import type { ApplyItemResult } from "../../src/shared/integrations/contract.js";
 import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
@@ -31,7 +35,7 @@ import { wizardStepCell } from "../helpers/wizard-step-cell.svelte";
 
 // Mutable stubs the mocked hooks return; each test sets them BEFORE render.
 const wizardStub: {
-  picked: import("../../src/client/hooks/useIntegrationWizard.svelte").IntegrationWizardState["picked"];
+  picked: IntegrationWizardState["picked"];
   applyResults: ApplyItemResult[];
   channelRegistered: boolean | null;
   /**
@@ -40,15 +44,15 @@ const wizardStub: {
    * changing it would re-render nothing — see `wizard-step-cell.svelte.ts` for
    * what that hid.
    */
-  step: import("../../src/client/hooks/useIntegrationWizard.svelte").WizardStep;
+  step: WizardStep;
 } = {
   picked: [],
   applyResults: [],
   channelRegistered: null,
-  get step(): import("../../src/client/hooks/useIntegrationWizard.svelte").WizardStep {
-    return wizardStepCell.value as import("../../src/client/hooks/useIntegrationWizard.svelte").WizardStep;
+  get step(): WizardStep {
+    return wizardStepCell.value as WizardStep;
   },
-  set step(next: import("../../src/client/hooks/useIntegrationWizard.svelte").WizardStep) {
+  set step(next: WizardStep) {
     wizardStepCell.set(next);
   },
 };
@@ -185,9 +189,7 @@ vi.mock(import("../../src/client/cowork/cowork-invoke"), async (importOriginal) 
 
 import IntegrationWizardModal from "../../src/client/components/IntegrationWizardModal.svelte";
 
-function pickedDesktop(
-  id = "claude-desktop-1",
-): import("../../src/client/hooks/useIntegrationWizard.svelte").PickedIntegration {
+function pickedDesktop(id = "claude-desktop-1"): PickedIntegration {
   return {
     id,
     config: {
@@ -202,9 +204,7 @@ function pickedDesktop(
   };
 }
 
-function pickedCode(
-  id = "claude-code-1",
-): import("../../src/client/hooks/useIntegrationWizard.svelte").PickedIntegration {
+function pickedCode(id = "claude-code-1"): PickedIntegration {
   return {
     id,
     config: {
@@ -222,10 +222,7 @@ function pickedCode(
 
 const applied = (id: string): ApplyItemResult => ({ id, status: "applied" });
 
-function mountDone(
-  picked: import("../../src/client/hooks/useIntegrationWizard.svelte").IntegrationWizardState["picked"],
-  results: ApplyItemResult[],
-) {
+function mountDone(picked: IntegrationWizardState["picked"], results: ApplyItemResult[]) {
   wizardStub.picked = picked;
   wizardStub.applyResults = results;
   return render(IntegrationWizardModal, { props: { open: true, onClose: vi.fn() } });

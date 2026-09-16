@@ -48,11 +48,12 @@ vi.mock(import("../../src/client/hooks/useClaudeCliStatus.svelte"), () => ({
   createClaudeCliStatus: () => cliStub,
 }));
 
+import type { IntegrationWizardState } from "../../src/client/hooks/useIntegrationWizard.svelte";
+
 // Detected Claude installs. Empty by default (the connect empty state, which
 // the install CTA lives in); the shim-warning tests push an entry to reach the
 // NON-empty branch, where that empty state never renders.
-const wizardExisting: import("../../src/client/hooks/useIntegrationWizard.svelte").IntegrationWizardState["existing"] =
-  [];
+const wizardExisting: IntegrationWizardState["existing"] = [];
 
 // Only the stateful hook is replaced — the module's other exports are pure
 // helpers the rendered cards call (`isSelectable`, `tandemEntryValidationFailed`,

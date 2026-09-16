@@ -20,15 +20,13 @@ vi.mock(import("../../src/server/integrations/apply.js"), async (importActual) =
     detectTargets: vi.fn(),
     applyConfig: vi.fn(),
     installSkill: vi.fn(),
-    buildMcpEntries: vi.fn(
-      () => ({}),
-    ) as unknown as typeof import("../../src/server/integrations/apply.js").buildMcpEntries,
+    buildMcpEntries: vi.fn(() => ({})) as unknown as typeof actual.buildMcpEntries,
     // `ApplyOps` is `{ create: McpEntries; remove: RemovableEntry[] }`; the
     // bare `{}` double predates the typed mock overload and matched nothing.
     applyOpsForCli: vi.fn(() => ({
       create: {},
       remove: [],
-    })) as unknown as typeof import("../../src/server/integrations/apply.js").applyOpsForCli,
+    })) as unknown as typeof actual.applyOpsForCli,
     // `resolveChannelShimIntent`, not `resolveChannelShimIntent` — `setup`
     // moved to the former so an omitted flag preserves rather than deletes.
     // Left unmocked it does a REAL config read against these fake paths,
