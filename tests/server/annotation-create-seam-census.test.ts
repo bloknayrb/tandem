@@ -189,6 +189,9 @@ describe("annotation create seam — who may mint", () => {
       "RemoveResult",
       "ReplyRefusalCode",
       "ReplyResult",
+      // #1626: the reply seam's required suggestion discriminant. Exported because
+      // `YDocStore.addReply` and the MCP handler both name the arm.
+      "ReplySuggestion",
       "acceptPending",
       "addUserReply",
       "createAnnotationLifecycle",

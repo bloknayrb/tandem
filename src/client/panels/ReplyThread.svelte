@@ -19,6 +19,12 @@ interface Props {
    * AnnotationCard). A bump opens the composer; the mount value is ignored.
    */
   openNonce?: number;
+  /**
+   * #1626: accept the replacement a reply proposes over the parent's range.
+   * Absent ⇒ the card offers no accept affordance (the resolved list, the
+   * margin view, and any card SidePanel's `canAccept` gate declines).
+   */
+  onAcceptReplySuggestion?: (annotationId: string, replyId: string) => void;
 }
 
 let {
@@ -29,6 +35,7 @@ let {
   onReply,
   reduceMotion = false,
   openNonce = 0,
+  onAcceptReplySuggestion,
 }: Props = $props();
 
 // Single client-display fan-out point. Notes show their (private) reply
@@ -43,7 +50,17 @@ const annotationId = $derived(annotation.id);
 // always-visible inline thread). Replaces the former portaled "Expand thread"
 // overlay as the reply reader (Bryan decision 2026-06-01). Local view state
 // only — never persisted, never read by Claude.
-let open = $state(false);
+// #1626: a thread holding a replacement proposal opens at mount, because a
+// proposal the user cannot see is a proposal they cannot accept. A mount-time
+// SEED via `untrack`, deliberately not an `$effect` — an effect would reopen a
+// thread the user just closed every time the reply list re-renders.
+let open = $state(
+  untrack(
+    () =>
+      annotation.type === "comment" &&
+      getVisibleReplies(annotation, replies).some((r) => r.suggestedText !== undefined),
+  ),
+);
 
 let isReplying = $state(false);
 let replyText = $state("");
@@ -118,7 +135,13 @@ async function handleSendReply() {
          disclosure is open would trigger an uninvited closing animation. -->
     {#if open}
       <div class="art-replies" transition:discloseUnfold={{ reduceMotion }}>
-        <CommentThread replies={visibleReplies} />
+        <CommentThread
+          replies={visibleReplies}
+          {annotation}
+          {isPending}
+          canAccept={onAcceptReplySuggestion !== undefined}
+          {onAcceptReplySuggestion}
+        />
       </div>
     {/if}
   {/if}

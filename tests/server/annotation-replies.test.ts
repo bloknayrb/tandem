@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type * as Y from "yjs";
 import { addUserReply, createAnnotationLifecycle } from "../../src/server/annotations/lifecycle.js";
-import { collectRepliesForAnnotation } from "../../src/server/mcp/annotations.js";
+import {
+  AnnotationReplyRecordSchemaV1,
+  REPLY_TEXT_MAX,
+} from "../../src/server/annotations/schema.js";
+import {
+  collectRepliesForAnnotation,
+  registerAnnotationTools,
+} from "../../src/server/mcp/annotations.js";
 import { hideFromAI } from "../../src/server/mode.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
@@ -19,6 +26,7 @@ import {
 } from "../../src/shared/origins.js";
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
+import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { assertReplyOk } from "../helpers/reply-results.js";
 import { createAnnotation, noRelay, rangeOf } from "../helpers/ydoc-factory.js";
 
@@ -84,7 +92,12 @@ describe("the reply seam — addUserReply and lifecycle.reply", () => {
     const ann = map.get(annId) as Annotation;
     map.set(annId, { ...ann, status: "dismissed" });
 
-    const result = createAnnotationLifecycle(ydoc).reply(annId, "too late", noRelay);
+    const result = createAnnotationLifecycle(ydoc).reply(
+      annId,
+      "too late",
+      { kind: "none" },
+      noRelay,
+    );
     // `dismissed`, not just "some non-pending status" — the accepted case above
     // asserts `accepted`, so together they pin that the arm reports the real
     // status rather than a constant.
@@ -141,7 +154,7 @@ describe("event emission on reply", () => {
     });
 
     // Claude reply — MCP_ORIGIN, observer filters these out
-    createAnnotationLifecycle(ydoc).reply(annId, "claude says hi", noRelay);
+    createAnnotationLifecycle(ydoc).reply(annId, "claude says hi", { kind: "none" }, noRelay);
     // The transaction IS tagged with MCP_ORIGIN, so the real event queue would skip it
     expect(mcpEvents).toHaveLength(1);
     expect(mcpEvents[0].origin).toBe(MCP_ORIGIN);
@@ -207,7 +220,12 @@ describe("WS-A2 Solo-hold marker on replies (AM-F1)", () => {
     const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "parent comment");
     setMode("solo");
 
-    const result = createAnnotationLifecycle(ydoc).reply(annId, "claude reply", noRelay);
+    const result = createAnnotationLifecycle(ydoc).reply(
+      annId,
+      "claude reply",
+      { kind: "none" },
+      noRelay,
+    );
     assertReplyOk(result);
 
     const stored = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get(result.replyId) as AnnotationReply & {
@@ -257,7 +275,7 @@ describe("collectRepliesForAnnotation", () => {
     const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "test");
 
     addUserReply(ydoc, annId, "first", noRelay);
-    createAnnotationLifecycle(ydoc).reply(annId, "second", noRelay);
+    createAnnotationLifecycle(ydoc).reply(annId, "second", { kind: "none" }, noRelay);
     addUserReply(ydoc, annId, "third", noRelay);
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
@@ -287,7 +305,7 @@ describe("tandem_removeAnnotation cleans up replies", () => {
 
     // Add replies to the annotation
     addUserReply(ydoc, annId, "reply 1", noRelay);
-    createAnnotationLifecycle(ydoc).reply(annId, "reply 2", noRelay);
+    createAnnotationLifecycle(ydoc).reply(annId, "reply 2", { kind: "none" }, noRelay);
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     expect(repliesMap.size).toBe(2);
@@ -362,7 +380,9 @@ describe("lifecycle.reply is scoped to annotations Claude authored (#1770)", () 
     const ydoc = setupDoc("reply-own-user", "Hello world");
     const id = seedParent(ydoc, { author: "user", audience: "outbound" });
 
-    expect(createAnnotationLifecycle(ydoc).reply(id, "hi", noRelay)).toStrictEqual({
+    expect(
+      createAnnotationLifecycle(ydoc).reply(id, "hi", { kind: "none" }, noRelay),
+    ).toStrictEqual({
       kind: "not-owned",
       author: "user",
     });
@@ -373,7 +393,9 @@ describe("lifecycle.reply is scoped to annotations Claude authored (#1770)", () 
     const ydoc = setupDoc("reply-own-import", "Hello world");
     const id = seedParent(ydoc, { author: "import" }, "note");
 
-    expect(createAnnotationLifecycle(ydoc).reply(id, "hi", noRelay).kind).toBe("invalid-note");
+    expect(createAnnotationLifecycle(ydoc).reply(id, "hi", { kind: "none" }, noRelay).kind).toBe(
+      "invalid-note",
+    );
   });
 
   it("answers not-owned for a USER highlight, never not-repliable", () => {
@@ -382,7 +404,9 @@ describe("lifecycle.reply is scoped to annotations Claude authored (#1770)", () 
     const ydoc = setupDoc("reply-own-highlight", "Hello world");
     const id = seedParent(ydoc, { author: "import", audience: "outbound" }, "highlight");
 
-    expect(createAnnotationLifecycle(ydoc).reply(id, "hi", noRelay)).toStrictEqual({
+    expect(
+      createAnnotationLifecycle(ydoc).reply(id, "hi", { kind: "none" }, noRelay),
+    ).toStrictEqual({
       kind: "not-owned",
       author: "import",
     });
@@ -392,7 +416,7 @@ describe("lifecycle.reply is scoped to annotations Claude authored (#1770)", () 
     const ydoc = setupDoc("reply-own-claude", "Hello world");
     const id = seedParent(ydoc, {});
 
-    assertReplyOk(createAnnotationLifecycle(ydoc).reply(id, "on it", noRelay));
+    assertReplyOk(createAnnotationLifecycle(ydoc).reply(id, "on it", { kind: "none" }, noRelay));
   });
 
   it("the browser's own path is deliberately unguarded on the same record", () => {
@@ -403,5 +427,110 @@ describe("lifecycle.reply is scoped to annotations Claude authored (#1770)", () 
     const id = seedParent(ydoc, { author: "user", audience: "outbound" });
 
     assertReplyOk(addUserReply(ydoc, id, "my own thread", noRelay));
+  });
+});
+
+/**
+ * #1626 — a reply may carry a refined `suggestedText`, proposed over the
+ * PARENT's range.
+ *
+ * Three declarations have to agree or the field is lost somewhere between the
+ * write and the read, and each fails differently: the wire type, the DURABLE
+ * schema (where `.passthrough()` would otherwise carry the key with no bound at
+ * all), and the MCP output schema (where an undeclared key is stripped, so
+ * Claude could write a proposal it could not read back).
+ */
+describe("#1626: a reply's replacement proposal", () => {
+  it("round-trips onto the Y.Map record", () => {
+    const ydoc = setupDoc("reply-sugg-write", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "parent");
+
+    const result = createAnnotationLifecycle(ydoc).reply(
+      annId,
+      "how about this",
+      { kind: "replacement", suggestedText: "Goodbye" },
+      noRelay,
+    );
+    assertReplyOk(result);
+
+    const stored = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get(result.replyId) as AnnotationReply;
+    expect(stored.suggestedText).toBe("Goodbye");
+    expect(stored.author).toBe("claude");
+  });
+
+  it("omits the key entirely on the `none` arm", () => {
+    // `{suggestedText: undefined}` is not the same document state as `{}` — the
+    // record reaches the durable serializer and every observing browser.
+    const ydoc = setupDoc("reply-sugg-none", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "parent");
+
+    const result = createAnnotationLifecycle(ydoc).reply(annId, "plain", { kind: "none" }, noRelay);
+    assertReplyOk(result);
+
+    const stored = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get(result.replyId) as object;
+    expect(Object.hasOwn(stored, "suggestedText")).toBe(false);
+  });
+
+  it("is BOUNDED by the durable schema, which is what the explicit declaration buys", () => {
+    // Without the declaration, `.passthrough()` carries an arbitrarily long
+    // string onto disk and this test passes on an implementation that skipped
+    // the schema half — so the over-cap case is the discriminating one.
+    const base = {
+      id: "rpl_x",
+      annotationId: "a1",
+      author: "claude" as const,
+      text: "t",
+      timestamp: 1,
+      rev: 1,
+    };
+
+    expect(
+      AnnotationReplyRecordSchemaV1.safeParse({
+        ...base,
+        suggestedText: "x".repeat(REPLY_TEXT_MAX),
+      }).success,
+    ).toBe(true);
+    expect(
+      AnnotationReplyRecordSchemaV1.safeParse({
+        ...base,
+        suggestedText: "x".repeat(REPLY_TEXT_MAX + 1),
+      }).success,
+    ).toBe(false);
+  });
+
+  it("survives the tandem_getAnnotations round trip (the MCP read surface)", async () => {
+    // `collectRepliesForAnnotation` pushes the RAW record and `mcpStructured`
+    // ships it, so an undeclared `VisibleReplySchema` key is stripped by the
+    // output-schema suite's deep-equal — and Claude could not read back its own
+    // proposal. This is the behavioural half of that.
+    setMode("tandem");
+    const ydoc = setupDoc("reply-sugg-read", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "parent");
+    assertReplyOk(
+      createAnnotationLifecycle(ydoc).reply(
+        annId,
+        "how about this",
+        { kind: "replacement", suggestedText: "Goodbye" },
+        noRelay,
+      ),
+    );
+
+    const { client, close } = await setupMcpServer([registerAnnotationTools]);
+    try {
+      const raw = await client.callTool({ name: "tandem_getAnnotations", arguments: {} });
+      const data = (
+        parseResult(raw) as {
+          data: { annotations: Array<{ id: string; replies: Array<{ suggestedText?: string }> }> };
+        }
+      ).data;
+      const parent = data.annotations.find((a) => a.id === annId);
+      expect(parent?.replies).toHaveLength(1);
+      expect(parent?.replies[0].suggestedText).toBe("Goodbye");
+    } finally {
+      await close();
+    }
   });
 });

@@ -124,3 +124,47 @@ test("A13 + #1000: note cards surface reply-toggle (private from Claude, shown t
   await expect(thread).toBeVisible();
   await expect(thread).toContainText("private reply text");
 });
+
+test("#1626: a reply's suggestion renders and Accept writes it into the document", async ({
+  page,
+}) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  const created = (await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM,
+    to: TITLE_TO,
+    text: "Initial comment",
+    textSnapshot: TITLE_TEXT,
+    suggestedText: "First Proposal",
+  })) as { error: false; data: { annotationId: string } } | { error: true };
+  if (created.error !== false) throw new Error("tandem_comment failed");
+  const commentId = created.data.annotationId;
+
+  const replied = (await mcp.callTool("tandem_annotationReply", {
+    annotationId: commentId,
+    text: "On reflection, this reads better",
+    suggestedText: "Refined Proposal",
+  })) as { error: false; data: { replyId: string } } | { error: true };
+  if (replied.error !== false) throw new Error("tandem_annotationReply failed");
+  const replyId = replied.data.replyId;
+
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+  const card = page.locator(`[data-testid='annotation-card-${commentId}']`);
+  await expect(card).toBeVisible({ timeout: 10_000 });
+
+  // Waits on the RENDERED card, never on a channel event: `narrowReplyForChannel`
+  // refuses `author !== "user"`, so a Claude-authored reply never projects.
+  const box = page.locator(`[data-testid='reply-suggestion-${replyId}']`);
+  if (!(await box.isVisible())) {
+    await page.locator(`[data-testid='reply-toggle-${commentId}']`).click();
+  }
+  await expect(box).toBeVisible({ timeout: 5_000 });
+  await expect(box).toContainText("Refined Proposal");
+
+  await page.locator(`[data-testid='accept-reply-btn-${replyId}']`).click();
+
+  // The reply's text lands in the document — not the parent's first proposal —
+  // and the parent leaves the pending list.
+  await expect(page.locator(".tiptap")).toContainText("Refined Proposal", { timeout: 5_000 });
+  await expect(page.locator(".tiptap")).not.toContainText("First Proposal");
+});

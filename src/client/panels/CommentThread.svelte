@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { AnnotationReply } from "../../shared/types";
+import type { Annotation, AnnotationReply } from "../../shared/types";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { agentTintColor } from "../utils/agent-color";
 import AnnotationBody from "./AnnotationBody.svelte";
@@ -7,9 +7,19 @@ import { formatRelativeTime } from "./annotation-card-helpers";
 
 interface Props {
   replies: AnnotationReply[];
+  /**
+   * The parent. #1626 needs it for two things: the `type === "comment"` gate on
+   * the suggestion box, and the id the accept callback takes (a reply's
+   * proposal is over the PARENT's range).
+   */
+  annotation: Annotation;
+  isPending: boolean;
+  /** Whether this card's accept affordance is offered at all (SidePanel's gate). */
+  canAccept: boolean;
+  onAcceptReplySuggestion?: (annotationId: string, replyId: string) => void;
 }
 
-let { replies }: Props = $props();
+let { replies, annotation, isPending, canAccept, onAcceptReplySuggestion }: Props = $props();
 
 const agentLabel = createAgentLabel();
 </script>
@@ -59,6 +69,33 @@ const agentLabel = createAgentLabel();
           </span>
         </div>
         <div class="ct-body"><AnnotationBody text={reply.text} author={reply.author} /></div>
+        <!--
+          #1626: a reply may carry a refined replacement proposal over the
+          PARENT's range. Gated on `type === "comment"` in ADDITION to the field
+          being present: `getVisibleReplies` empties only highlights, so this
+          component is the shared renderer for NOTE threads too. No reply written
+          through today's guarded seam can be a note's, but reply records arrive
+          over a Y.Map any connected client can write — without the gate a future
+          writer would surface an Accept button inside a private note thread.
+        -->
+        {#if annotation.type === "comment" && reply.suggestedText !== undefined}
+          <div class="ct-suggestion" data-testid="reply-suggestion-{reply.id}">
+            {reply.suggestedText}
+          </div>
+          {#if isPending && canAccept && onAcceptReplySuggestion}
+            <button
+              type="button"
+              class="ct-accept"
+              data-testid="accept-reply-btn-{reply.id}"
+              onclick={(e) => {
+                e.stopPropagation();
+                onAcceptReplySuggestion?.(annotation.id, reply.id);
+              }}
+            >
+              Accept replacement
+            </button>
+          {/if}
+        {/if}
       </div>
     {/each}
   </div>
@@ -126,5 +163,29 @@ const agentLabel = createAgentLabel();
   .ct-body {
     margin: 0;
     color: var(--tandem-fg);
+  }
+  /* #1626: the proposed replacement, shown as text rather than a word-diff.
+     Sharing SuggestionCard's diff box would mean extracting it, and a
+     prop-built testid prefix there collapses two snapshot entries into one —
+     a Critical Rule 7 removal. The parent card already shows the original span
+     via AnnotationSnippet. */
+  .ct-suggestion {
+    margin-top: 4px;
+    padding: 4px 8px;
+    border-radius: var(--tandem-r-2);
+    background: var(--tandem-suggestion-bg);
+    border: 1px solid var(--tandem-suggestion-border);
+    color: var(--tandem-suggestion-fg-strong);
+    white-space: pre-wrap;
+  }
+  .ct-accept {
+    margin-top: 4px;
+    padding: 2px 8px;
+    font-size: var(--tandem-text-xs);
+    border: 1px solid var(--tandem-border-strong);
+    border-radius: var(--tandem-r-1);
+    background: var(--tandem-accent-bg);
+    color: var(--tandem-accent-fg-strong);
+    cursor: pointer;
   }
 </style>

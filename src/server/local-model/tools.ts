@@ -373,6 +373,12 @@ export function dispatch(
       const reply = creator.reply(
         annotationId,
         asString(args.text),
+        // #1626: the local-model loop has no reply-suggestion tool, so it takes
+        // the `none` arm explicitly. Required and positioned before the
+        // optionals for the same reason `anchorRange`'s `purpose` is: a bare
+        // optional would let this producer acquire the eventual-rewrite
+        // capability silently, with no compile error to notice it.
+        { kind: "none" },
         (event) => relaySanitizationEvent(undefined, event),
         ctx.agentIdentity,
       );

@@ -37,6 +37,7 @@ import SidePanelHarness from "./fixtures/SidePanelHarness.svelte";
 function makeReview(): UseAnnotationReviewReturn {
   return {
     resolveAnnotation: vi.fn(),
+    acceptReplySuggestion: vi.fn(),
     undoResolveAnnotation: vi.fn(() => false),
     handleAccept: vi.fn(),
     handleDismiss: vi.fn(),

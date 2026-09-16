@@ -111,6 +111,10 @@ import {
 } from "../../shared/utils.js";
 import { readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
+// #1626: the reply seam screens a suggestion-bearing reply against the PARENT's
+// live span. No cycle — `positions.ts` reaches only `shared/*` and
+// `mcp/document-model.ts`, neither of which imports this module.
+import { anchoredRange, refreshRange } from "../positions.js";
 import { isClaudeFacing } from "./projection.js";
 import { nextRev, REPLY_TEXT_MAX } from "./schema.js";
 
@@ -316,7 +320,31 @@ export type ClaudeReplyResult =
   | ReplyResult
   | { kind: "invalid-note" }
   // #1770: Claude may only reply in a thread on an annotation it authored.
-  | { kind: "not-owned"; author: Annotation["author"] };
+  | { kind: "not-owned"; author: Annotation["author"] }
+  // #1626: the reply carried a `suggestedText` and the parent's LIVE span
+  // overlaps heading markup, so accepting it would delete the heading.
+  //
+  // **Deliberately flat — no `failure: RangeValidation`, no `resolvedFrom` /
+  // `resolvedTo`.** A reply refusal is not a range-resolution surface, and the
+  // payload is the only mechanism by which one could ever describe a record's
+  // geometry to a caller. Keeping the arm bare removes that channel entirely.
+  | { kind: "invalid-suggestion-range" };
+
+/**
+ * Does this reply carry a replacement proposal? (#1626)
+ *
+ * **A required discriminant, positioned ahead of the optionals**, exactly as
+ * `YDocStore.anchorRange`'s `purpose` is and for the same reason: a stored
+ * `suggestedText` is a text rewrite DEFERRED to Accept, so a reply carrying one
+ * is the THIRD consumer of Critical Rule 6's `rejectHeadingInterior` term
+ * (#1766). A bare optional field would let a new producer — `local-model`'s
+ * `reply_to_annotation` is the live example — acquire that capability with no
+ * compile error, which is the one property the discriminant exists to keep.
+ *
+ * `addUserReply` deliberately does NOT take it: a suggestion is a Claude
+ * capability, and widening the user's entry is the #1000 asymmetry in reverse.
+ */
+export type ReplySuggestion = { kind: "none" } | { kind: "replacement"; suggestedText: string };
 
 /** The wire codes a reply refusal can carry. Closed. */
 export type ReplyRefusalCode =
@@ -378,6 +406,14 @@ export function describeReplyWriteRefusal(result: Exclude<ClaudeReplyResult, { k
       return {
         code: "INVALID_ARGUMENT",
         message: "Claude can only reply to comments that are shared with it",
+      };
+    case "invalid-suggestion-range":
+      return {
+        code: "INVALID_ARGUMENT",
+        message:
+          'The parent annotation spans heading markup (e.g. "## "), so a replacement proposed on ' +
+          "its range would delete the heading. Leave the reply without suggestedText, or comment " +
+          "on the text content only.",
       };
     case "not-owned":
       return {
@@ -670,6 +706,7 @@ export interface AnnotationLifecycle {
   reply(
     annotationId: string,
     text: string,
+    suggestion: ReplySuggestion,
     onLossy: OnLossy,
     agentIdentity?: AgentIdentity,
   ): ClaudeReplyResult;
@@ -730,8 +767,8 @@ export function createAnnotationLifecycle(ydoc: Y.Doc): AnnotationLifecycle {
     accept: (id, onLossy) => transitionPending(id, ydoc, map, "accepted", onLossy),
     dismiss: (id, onLossy) => transitionPending(id, ydoc, map, "dismissed", onLossy),
     remove: (id, onLossy) => removeForClaude(id, ydoc, map, onLossy),
-    reply: (annotationId, text, onLossy, agentIdentity) =>
-      replyForClaude(ydoc, annotationId, text, onLossy, agentIdentity),
+    reply: (annotationId, text, suggestion, onLossy, agentIdentity) =>
+      replyForClaude(ydoc, annotationId, text, suggestion, onLossy, agentIdentity),
   };
 }
 
@@ -1266,6 +1303,7 @@ function writeReply(
   onLossy: OnLossy,
   actor: "browser" | "mcp",
   agentIdentity?: AgentIdentity,
+  suggestedText?: string,
 ): ReplyResult {
   // #1295 L3: bound the text at the model layer rather than at one caller. All
   // three production callers left it unbounded while the DURABLE schema caps it
@@ -1278,6 +1316,13 @@ function writeReply(
   // still right — the failure being fixed is precisely a value accepted at write
   // and rejected at load, so they must be the same number.
   if (text.length > REPLY_TEXT_MAX) return { kind: "too-long", max: REPLY_TEXT_MAX };
+  // #1626: PER FIELD, at the same bound, reusing the same arm. Exact parity with
+  // the durable schema, which caps each field independently — a separate
+  // `suggestion-too-long` arm would be a second spelling of one rule and would
+  // widen `ReplyRefusalCode`'s closed set for no wire-visible difference.
+  if (suggestedText !== undefined && suggestedText.length > REPLY_TEXT_MAX) {
+    return { kind: "too-long", max: REPLY_TEXT_MAX };
+  }
 
   const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
   const raw = map.get(annotationId) as RawAnnotation | undefined;
@@ -1328,6 +1373,10 @@ function writeReply(
       : {}),
     // #1123 M3: agent byline, local-model collaborator only. Absent ⇒ omitted.
     ...(agentIdentity ? { agentIdentity } : {}),
+    // #1626: the refined proposal, over the PARENT's range. Only reachable from
+    // `replyForClaude`, which screens that range first; `addUserReply` passes
+    // nothing, so the key is omitted entirely on the user path.
+    ...(suggestedText !== undefined ? { suggestedText } : {}),
   };
 
   const wrap = actor === "mcp" ? withMcp : withBrowser;
@@ -1409,6 +1458,7 @@ function replyForClaude(
   ydoc: Y.Doc,
   annotationId: string,
   text: string,
+  suggestion: ReplySuggestion,
   onLossy: OnLossy,
   agentIdentity?: AgentIdentity,
 ): ClaudeReplyResult {
@@ -1444,11 +1494,73 @@ function replyForClaude(
     if (ann.author !== "claude") {
       return { kind: "not-owned", author: ann.author };
     }
+    // #1626 + Critical Rule 6 (#1766): a stored `suggestedText` is a rewrite
+    // DEFERRED to Accept, and both consumers replace the parent's flat span
+    // verbatim — so without the interior term a reply stepping over a "## "
+    // prefix deletes the heading, and `snapshotContradicts` cannot object (the
+    // snapshot was captured over that exact span and still matches).
+    //
+    // **AFTER the two guards above, and the order is the contract.** Validating
+    // ahead of them would answer from the range layer on records Claude was
+    // never allowed to touch — a note, a private comment, or a promoted
+    // note / imported Word comment stored as `author: "user"`, all of which
+    // Claude legitimately holds ids for via `tandem_checkInbox`. Here they are
+    // unreachable by construction. Running it inside the seam rather than in
+    // the MCP handler is what also covers the local-model producer, which never
+    // passes through that handler.
+    //
+    // **Screened only for a record that would otherwise be WRITTEN**, which is
+    // why the type and status are re-read here rather than left to
+    // `writeReply`. A highlight has no body to thread and a resolved parent
+    // accepts nothing, and both carry their own refusal — `not-repliable`
+    // (naming the real parent type) and `not-pending` (naming the status). A
+    // range answer ahead of either names a rule that has nothing to do with the
+    // case, which is the masking this file already records as the hazard of
+    // moving a check up. Claude cannot mint a highlight today, so the first is a
+    // corner; it is still a refusal that must not change its mind.
+    if (suggestion.kind === "replacement" && ann.type === "comment" && ann.status === "pending") {
+      // **The CURRENT offsets, not the stored ones.** `anchoredRange` validates
+      // exactly what it is handed, and at accept time the client resolves
+      // through `relRange` (`annotationToPmRange`) — so on a document edited
+      // since the parent was anchored, screening `ann.range` checks a span that
+      // is not the one Accept rewrites. `refreshRange` is the existing resolver
+      // for that, called WITHOUT `map` so this write path persists no
+      // re-anchor (the read path `listAnnotationsRefreshed` owns that). A dead
+      // or unverifiable anchor falls back to the stored range, which is the
+      // same "all there is" position the client's accept lands in.
+      const refreshed = refreshRange(ann, ydoc);
+      const live =
+        refreshed.kind === "degraded" || refreshed.kind === "failed"
+          ? ann.range
+          : refreshed.annotation.range;
+      // **The fourth argument is `undefined` — never `ann.textSnapshot`.** The
+      // staleness gate compares by exact equality while `captureSnapshot` caps a
+      // stored snapshot at SNAPSHOT_CAP (200), so passing it would refuse every
+      // suggestion on a parent spanning more than 200 characters, on an
+      // untouched document, with RANGE_MOVED. Drift detection belongs to
+      // `snapshotContradicts` at accept time, which prefix-matches correctly.
+      // This call's only job is the heading screen.
+      const screened = anchoredRange(ydoc, live.from, live.to, undefined, {
+        rejectHeadingOverlap: true,
+        rejectHeadingInterior: true,
+        normalizeSpaceClass: true,
+      });
+      if (!screened.ok) return { kind: "invalid-suggestion-range" };
+    }
   }
   // A missing record falls through to `writeReply`, which answers `not-found` —
   // the guard has nothing to protect when there is no parent, and duplicating
   // the arm here would let the two spellings drift.
-  return writeReply(ydoc, annotationId, text, "claude", onLossy, "mcp", agentIdentity);
+  return writeReply(
+    ydoc,
+    annotationId,
+    text,
+    "claude",
+    onLossy,
+    "mcp",
+    agentIdentity,
+    suggestion.kind === "replacement" ? suggestion.suggestedText : undefined,
+  );
 }
 
 function removeForClaude(
