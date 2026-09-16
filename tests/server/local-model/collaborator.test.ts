@@ -30,7 +30,7 @@ import {
   getBuffer,
   resetForTesting as resetNotifications,
 } from "../../../src/server/notifications.js";
-import { getOrCreateDocument } from "../../../src/server/yjs/provider.js";
+import { getOrCreateDocument, removeDocument } from "../../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
   Y_MAP_CHAT,
@@ -137,6 +137,24 @@ function setupDoc(id: string, text: string) {
   addDoc(id, { id, filePath: `/tmp/${id}.md`, format: "md", readOnly: false, source: "file" });
   setActiveDocId(id);
   return ydoc;
+}
+
+/**
+ * Replace a room's Y.Doc the way Hocuspocus's `onLoadDocument` does (#1657):
+ * a NEW instance under the SAME room name, with the old one destroyed.
+ *
+ * It must SWAP, not close. The registry entry `setupDoc` added is left in
+ * place, so `requireDocument()` keeps returning non-null throughout — that is
+ * the discriminating condition. A close is already caught by the presence test
+ * that predates the fix and would stay green against the old code.
+ */
+function swapDoc(id: string, text: string) {
+  const old = getOrCreateDocument(id);
+  removeDocument(id); // provider map entry only — the registry row survives
+  const fresh = getOrCreateDocument(id); // new instance, same room name
+  populateYDoc(fresh, text);
+  old.destroy();
+  return fresh;
 }
 
 function chatMap() {
@@ -644,6 +662,84 @@ describe("collaborator — lifecycle aborts", () => {
     });
     await collab.__awaitCurrent();
     expect(aborted).toBe(false);
+  });
+});
+
+describe("collaborator — mid-turn doc swap (#1657)", () => {
+  // `executeRun` captures `open.doc` once and holds it across the whole model
+  // turn. Hocuspocus can replace that instance mid-turn, and the ownership gate
+  // used to test only that the room was still PRESENT — which a swap leaves
+  // true. Both arms below swap the doc while the turn is parked and assert the
+  // run's terminal effects are suppressed.
+  //
+  // TIMING RULE for both arms: the swap must happen with only MICROTASKS
+  // awaited since the delta was pushed. A sub-STREAM_FLUSH_CHARS delta arms
+  // `setTimeout(write, STREAM_FLUSH_MS)`; if a macrotask ran first the flush
+  // would mint the bubble on its own and the assertion would fail against
+  // correct code. The gate promise is released from the same microtask chain —
+  // never `await` a timer here.
+
+  it("drops the terminal reply when the Y.Doc is swapped mid-turn", async () => {
+    setupDoc("doc-swap-terminal", "Body");
+    let release!: () => void;
+    const gate = new Promise<void>((res) => {
+      release = res;
+    });
+
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          opts.onContentDelta?.("partial answer");
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          await gate;
+          return cleanResult("the full reply");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+
+    collab.onEvent(chatEvent("go", { documentId: "doc-swap-terminal" }));
+    await Promise.resolve(); // run() → executeRun → runTurn → push → parked on `gate`
+
+    swapDoc("doc-swap-terminal", "Body");
+    release();
+    await drain(collab);
+
+    // This arm discriminates BECAUSE the sink's `isOwner()` is deliberately left
+    // on presence: if `stillOwner()` let the terminal path through, the sink
+    // would happily mint the bubble.
+    expect(chatMessages()).toHaveLength(0);
+  });
+
+  it("suppresses the budget-exhausted notification when the Y.Doc is swapped mid-turn", async () => {
+    setupDoc("doc-swap-notify", "Body");
+    let release!: () => void;
+    const gate = new Promise<void>((res) => {
+      release = res;
+    });
+
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          opts.onContentDelta?.("partial answer");
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          await gate;
+          return limitResult("max_turns");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+
+    collab.onEvent(chatEvent("go", { documentId: "doc-swap-notify" }));
+    await Promise.resolve();
+
+    swapDoc("doc-swap-notify", "Body");
+    release();
+    await drain(collab);
+
+    // A sink-independent second pin: `pushNotification` bypasses the sink
+    // entirely, so this stays red under the mutation even if the sink changes.
+    expect(getBuffer().filter((n) => n.documentId === "doc-swap-notify")).toEqual([]);
   });
 });
 
