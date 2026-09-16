@@ -110,39 +110,36 @@ function railTabStubs() {
   const annotations = $state<Annotation[]>([]);
   return {
     getAnnotations: () => annotations,
-    closeTransientChat: () => {},
   };
 }
 
 /** A rail-tab harness whose annotation list is genuinely reactive. */
 function makeRailHarness(
-  initial: { primaryTab?: "annotations" | "chat"; annotations?: Annotation[] } = {},
+  initial: {
+    primaryTab?: "annotations" | "chat";
+    annotations?: Annotation[];
+    rightPanelVisible?: boolean;
+  } = {},
 ) {
-  const settings = makeSettingsState({ primaryTab: initial.primaryTab ?? "annotations" });
+  const settings = makeSettingsState({
+    primaryTab: initial.primaryTab ?? "annotations",
+    // Defaulted to `true` so every pre-existing spec is unchanged. The one spec
+    // that overrides it needs a COLLAPSED rail, and that is not decoration: the
+    // mutant it exists to kill writes `rightPanelVisible: true`, which a
+    // whole-object comparison cannot see against a harness where it is already
+    // true. Measured — the mutant survived until this axis existed.
+    rightPanelVisible: initial.rightPanelVisible ?? true,
+  });
   // `$state`, not a plain array: see harness rule 1 in the file header.
   let annotations = $state<Annotation[]>(initial.annotations ?? []);
-  const closeCalls: string[] = [];
-  // What the closer SEES when it runs, one entry per call. Unit 10c reordered
-  // `selectRailTab` to write the tab before invoking the closer, and a bare
-  // call counter cannot tell the two orders apart.
-  const tabAtCloseTime: (string | undefined)[] = [];
   const model: LayoutModel = createLayoutModel({
     settingsState: settings,
     modeState: makeModeState(),
     getAnnotations: () => annotations,
-    closeTransientChat: () => {
-      closeCalls.push("close");
-      // Reads `model` through the closure rather than a captured value: the
-      // closer runs at call time, long after construction, and reading the
-      // live model is the whole instrument.
-      tabAtCloseTime.push(model.activeRailTab);
-    },
   });
   return {
     model,
     settings,
-    closeCalls,
-    tabAtCloseTime,
     setAnnotations(next: Annotation[]) {
       annotations = next;
     },
@@ -535,47 +532,26 @@ describe("LayoutModel rail-tab selection", () => {
     }
   });
 
-  it("closes a transient chat reveal when selecting Annotations", () => {
-    const h = makeRailHarness({ primaryTab: "chat" });
+  it("selecting Annotations switches the tab and writes no settings", () => {
+    // #1719 deleted the injected `closeTransientChat` and its Unit 10c
+    // ordering; the tab write is now the whole of `selectRailTab`. The
+    // assertion is over the WHOLE settings object, not the one or two keys that
+    // come to mind, because the fix this has to exclude is "pin the rail from
+    // the tab click" — that writes `rightPanelVisible` (and, in solo,
+    // `soloRailHidden`) behind the user's back. Precedent: the whole-object
+    // comparison in `toggleRight`'s "touching nothing else" spec above.
+    //
+    // **Stated honestly: this spec cannot see the deletion.** A removed
+    // callback leaves no unit-layer instrument, so the discriminating pin for
+    // #1719 is the E2E spec in `tests/e2e/chat-reveal.spec.ts` — do not read
+    // this one as pinning the reveal's survival.
+    // The rail starts COLLAPSED, which is the only state a chat reveal exists
+    // in and the only one where the pin mutant is observable.
+    const h = makeRailHarness({ primaryTab: "chat", rightPanelVisible: false });
+    const before: Record<string, unknown> = { ...h.settings.settings };
     h.model.selectRailTab("annotations");
     expect(h.model.activeRailTab).toBe("annotations");
-    expect(h.closeCalls).toEqual(["close"]);
-  });
-
-  it("does NOT close a transient chat reveal when selecting Chat", () => {
-    // `App.svelte`'s guard is `if (tab !== "chat")`, so selecting Chat leaves a
-    // reveal open — the caller is usually about to open one. This is why there
-    // is no separate `showChat()`: it would be a byte-identical alias.
-    const h = makeRailHarness({ primaryTab: "annotations" });
-    h.model.selectRailTab("chat");
-    expect(h.model.activeRailTab).toBe("chat");
-    expect(h.closeCalls).toEqual([]);
-  });
-
-  it("writes the tab BEFORE calling the closer", () => {
-    // Unit 10c reversed master order. The closer used to run first, so a closer
-    // that threw ate the click entirely -- no tab switch, no toast, no warn.
-    // Asserting the call COUNT cannot see this: both orders call it once. The
-    // instrument is what the closer observes when it runs.
-    const h = makeRailHarness({ primaryTab: "chat" });
-    h.model.selectRailTab("annotations");
-    expect(h.tabAtCloseTime).toEqual(["annotations"]);
-  });
-
-  it("a throwing closer still leaves the tab switched", () => {
-    // The consequence the reorder exists for, asserted directly rather than
-    // inferred from the ordering spec above.
-    const settings = makeSettingsState({ primaryTab: "chat" });
-    const model = createLayoutModel({
-      settingsState: settings,
-      modeState: makeModeState(),
-      getAnnotations: () => [],
-      closeTransientChat: () => {
-        throw new Error("closer exploded");
-      },
-    });
-    expect(() => model.selectRailTab("annotations")).toThrow("closer exploded");
-    expect(model.activeRailTab).toBe("annotations");
+    expect({ ...h.settings.settings }).toEqual(before);
   });
 });
 
