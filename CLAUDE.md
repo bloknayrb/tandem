@@ -10,6 +10,11 @@
 > **This file states rules; the linked docs hold the detail.** A rule stays inline when violating
 > it fails *silently* — no type error, no test, no hook. Everything else is one link away. If you
 > are about to work in an area, read its doc first.
+>
+> **The absence of a rule is not evidence of safety (#1604).** This file and `docs/gotchas.md`
+> record failures already survived — they are not a specification of what's safe. Finding no rule
+> for your change means nobody has been bitten there yet, not that nothing can go wrong; reason
+> from what actually reaches the code, not from what these docs happen to name.
 
 ## Critical Rules
 
@@ -66,6 +71,14 @@ anything needing human interaction before continuing. Then
 `/commit-commands:commit-push-pr`. After `/pr-review-toolkit:review-pr` surfaces findings,
 repeat the same loop on the fixes.
 
+**A finding inside an adversarial reviewer's own stated blocking set stops the change (#1602)**
+— for the orchestrating session too, not just the subagent that raised it. No shipping past it
+on a likelihood judgment or by calling it a pre-existing class of problem: fix it, withdraw it
+on the merits, or — the one standing exception — point to it as an already-accepted, bounded
+entry in [docs/security.md](docs/security.md#open-findings)'s register; a *new* acceptance
+made mid-review does not count. Full study:
+[docs/spikes/ai-debugging-blind-spots-audit.md](docs/spikes/ai-debugging-blind-spots-audit.md).
+
 **`/diverge`** is an optional step *before* `/plan`, for genuinely open-ended design problems where the
 right shape isn't obvious (~16 `Agent` calls, 60–180s). Invoke only when the next artifact
 would be `/plan`, there is no confident one-sentence answer, and the problem is design-shaped
@@ -83,6 +96,16 @@ already produced a wrong verdict:
 
 At review time the outcome must be keep, replace or retire. "Wait and see again" is not one of
 them: a gate that can be deferred indefinitely is not a gate.
+
+**Route new work by whether it's answerable from tracked files, not by apparent difficulty
+(#1606).** The same test as above applies before you start, not only at gate review: work
+derivable from the code and the ticket — coordinate math, range invariants, schema/migration,
+anything with an in-repo signpost — is worth trusting a model on. Work whose correctness depends
+on the world — what users put in their documents, what a real upgrade does, what a specific OS or
+Claude Code build does — needs the missing fact landed in the repo first, or needs Bryan; no
+amount of investigation inside the repo substitutes. `needs-human-evidence` marks the second
+bucket — `gh issue list --label needs-human-evidence` is the current membership; release urgency
+is independent of the bucket, so the label is not a priority signal.
 
 This is a two-person project (Bryan + Claude). Scope gates are minimal — if you find something
 broken while working, fix it rather than filing it. Bundle small tangential fixes in; for
