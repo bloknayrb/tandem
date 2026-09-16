@@ -102,14 +102,14 @@ export interface LayoutModel {
    * Returns whether the write was **APPLIED** — i.e. not refused by
    * `updateSettings`' read-only short-circuit, which fires when the settings
    * blob on disk was written by a newer Tandem (#659). A refusal also raises
-   * the one deduplicated user-facing warning registered in `App.svelte`
-   * (#1985); this return value is what lets a caller skip work that assumed
-   * the state changed.
+   * the one deduplicated user-facing warning `App.svelte` registers (#1985);
+   * this return value is what lets a caller skip work that assumed the state
+   * changed.
    *
-   * **It is not a persistence signal, and the difference matters (#1722).**
-   * `updateSettings` wraps its `localStorage.setItem` in a `try`/`catch` that
-   * swallows the failure, then assigns and returns `true` — so `true` means
-   * "this session applied it", never "it reached disk".
+   * **It is not a persistence signal (#1722).** `updateSettings` swallows a
+   * failing `localStorage.setItem` in a `try`/`catch`, then assigns and
+   * returns `true` — so `true` means "this session applied it", never "it
+   * reached disk".
    */
   toggleLeft(): boolean;
   /**
