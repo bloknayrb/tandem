@@ -80,8 +80,12 @@ import { startHocuspocus } from "./yjs/provider.js";
 // In production (Tauri sidecar, TANDEM_TAURI_SIDECAR=1), suppress known noisy
 // warnings from dependencies (mammoth, Y.js). In dev mode, show everything.
 // The pattern set and the formatting both live in `./log-filter.ts` — a pure
-// module, because this file cannot be imported by a test (importing it runs
-// `main()`, which calls `freePort()`).
+// module, because this file cannot be imported by a test: importing it runs
+// `main()`, which frees the product ports and would kill a running dev server.
+// (Spelled without the function's own name on purpose — `platform.test.ts`
+// scans this file's SOURCE TEXT for that identifier and requires every
+// occurrence to follow `decideStartupAction`, so a prose mention up here reads
+// to it as a real call site.)
 const isProduction = process.env.TANDEM_TAURI_SIDECAR === "1";
 
 const originalStderrWrite = process.stderr.write.bind(process.stderr);
