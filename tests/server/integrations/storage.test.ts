@@ -12,6 +12,7 @@ import {
   createIntegrationsStore,
   INTEGRATIONS_FILE_NAME,
   MAX_BROKEN_BACKUPS,
+  normalizeLocalhostUrls,
   sweepBrokenIntegrationsBackupsOnStartup,
 } from "../../../src/server/integrations/storage.js";
 
@@ -376,5 +377,148 @@ describe("sweepBrokenIntegrationsBackupsOnStartup", () => {
     expect(body).not.toMatch(/setRestrictiveAcl\(backupPath\)/);
     // Sanity: the dir-level hardening call IS present.
     expect(body).toMatch(/setRestrictiveAcl\(dir\)/);
+  });
+});
+
+/**
+ * #1603 — the rewrite is scoped to `integrations[].url`, the one structural
+ * position the v3 schema has, rather than walked at every depth. It runs on the
+ * raw post-disk blob BEFORE `IntegrationsFileSchema.safeParse`, so the closed
+ * `.strict()` schema is not what protects it at the moment it runs.
+ *
+ * The function is `(data: unknown) => unknown`, so these compare whole objects
+ * against fully-written expected literals rather than casting — that also pins
+ * that no other key at any depth was touched.
+ */
+describe("normalizeLocalhostUrls", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-integ-"));
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  // The only spec that goes through read(): IntegrationsFileSchema is .strict(),
+  // so the nested-key blobs below cannot survive Zod to be observed there.
+  // Written with fs.writeFile rather than store.write(), because
+  // writeIntegrationsFile Zod-parses first and LoopbackUrl rejects the value
+  // under test. The other-mcp record kills a scoping keyed on `kind`.
+  it("read() still normalizes a legacy http://localhost url on an integration record", async () => {
+    const store = createIntegrationsStore(tmpDir);
+    const onDisk = {
+      schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+      integrations: [
+        {
+          kind: "claude-code",
+          id: "cc-1",
+          label: "Claude Code",
+          configPath: "/home/user/.claude.json",
+          transport: "http",
+          url: "http://localhost:3479",
+        },
+        {
+          kind: "other-mcp",
+          id: "o-1",
+          label: "Cursor",
+          transport: "http",
+          url: "http://localhost:3479",
+        },
+      ],
+    };
+    await fs.promises.writeFile(store.filePath, JSON.stringify(onDisk), "utf8");
+
+    const result = await store.read();
+    expect(result.integrations).toEqual([
+      {
+        kind: "claude-code",
+        id: "cc-1",
+        label: "Claude Code",
+        configPath: "/home/user/.claude.json",
+        transport: "http",
+        url: "http://127.0.0.1:3479",
+      },
+      {
+        kind: "other-mcp",
+        id: "o-1",
+        label: "Cursor",
+        transport: "http",
+        url: "http://127.0.0.1:3479",
+      },
+    ]);
+  });
+
+  // The discriminating spec. The nested object is structurally INDISTINGUISHABLE
+  // from an integration record, so a content-sniffing fix that still walks every
+  // depth (`key === "url" && "kind" in obj`) passes every other spec here and
+  // fails only this one. Only a body that indexes `data.integrations[i].url`
+  // positionally passes it.
+  it("leaves a nested caller-named url key untouched (#1603)", () => {
+    const result = normalizeLocalhostUrls({
+      schemaVersion: 3,
+      integrations: [
+        {
+          kind: "claude-code",
+          id: "a",
+          url: "http://localhost:3479",
+          nested: { kind: "claude-code", id: "b", url: "http://localhost:9/x" },
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      schemaVersion: 3,
+      integrations: [
+        {
+          kind: "claude-code",
+          id: "a",
+          url: "http://127.0.0.1:3479",
+          nested: { kind: "claude-code", id: "b", url: "http://localhost:9/x" },
+        },
+      ],
+    });
+  });
+
+  // Regression coverage only — the scoped shape passes this by construction, so
+  // it does not kill a class of fix the way the spec above does.
+  it("leaves a url key at the file root untouched", () => {
+    const result = normalizeLocalhostUrls({
+      schemaVersion: 3,
+      integrations: [],
+      url: "http://localhost:1",
+    });
+
+    expect(result).toEqual({ schemaVersion: 3, integrations: [], url: "http://localhost:1" });
+  });
+
+  // Pins the doc comment's "safe to call on any value" sentence, and kills a
+  // scoping that narrows the input guard into throwing on the malformed files
+  // read() must hand to Zod for a proper error.
+  it("returns non-file-shaped and malformed inputs unchanged", () => {
+    expect(normalizeLocalhostUrls(null)).toBeNull();
+    expect(normalizeLocalhostUrls("http://localhost:1")).toBe("http://localhost:1");
+    expect(normalizeLocalhostUrls(42)).toBe(42);
+    expect(normalizeLocalhostUrls({ schemaVersion: 3 })).toEqual({ schemaVersion: 3 });
+    expect(normalizeLocalhostUrls({ schemaVersion: 3, integrations: "nope" })).toEqual({
+      schemaVersion: 3,
+      integrations: "nope",
+    });
+    expect(
+      normalizeLocalhostUrls({ schemaVersion: 3, integrations: ["str", { url: 7 }, null] }),
+    ).toEqual({ schemaVersion: 3, integrations: ["str", { url: 7 }, null] });
+  });
+
+  // Behaviour change vs the pre-#1603 depth-walking body, and the loud direction
+  // is the intended one. The old body assigned into a `{}` literal, so a literal
+  // `__proto__` own key from JSON.parse hit the inherited setter and was silently
+  // dropped, after which .strict() never saw it. Spread uses CreateDataProperty,
+  // so it survives as an own key and .strict() rejects the file.
+  it("keeps a literal __proto__ own key as an own key", () => {
+    const parsed: unknown = JSON.parse('{"schemaVersion":3,"integrations":[],"__proto__":{"x":1}}');
+    const result = normalizeLocalhostUrls(parsed);
+
+    expect(Object.hasOwn(result as object, "__proto__")).toBe(true);
   });
 });
