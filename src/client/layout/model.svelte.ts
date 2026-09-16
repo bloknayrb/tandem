@@ -84,15 +84,6 @@ export interface LayoutModelOptions {
    * unit's point. Revisit when Unit 10c reshapes review coordination.
    */
   getAnnotations: () => Annotation[];
-  /**
-   * Tear down a transient chat reveal. Owned by `App.svelte` today, by Unit
-   * 10c later — which is why it is injected rather than moved.
-   *
-   * REQUIRED, not optional. On master the close was an unconditional call
-   * inside `selectRailTab`, so an optional callback would let a future
-   * consumer drop a reveal teardown with no signal.
-   */
-  closeTransientChat: () => void;
 }
 
 export interface LayoutModel {
@@ -105,11 +96,29 @@ export interface LayoutModel {
   /** Badge value for the Annotations tab: pending review targets, or 0 while that tab is
    *  active. Not a count of pending annotations — see the note at the derivation. */
   readonly pendingAnnotationBadge: number;
-  /** Toggle the left panel's persisted visibility. */
-  toggleLeft(): void;
-  /** Toggle the right panel; on show, also clears `soloRailHidden` in solo mode. */
-  toggleRight(): void;
-  /** Select a rail tab, tearing down a transient chat reveal unless the target is Chat. */
+  /**
+   * Toggle the left panel's persisted visibility.
+   *
+   * Returns whether the write was **APPLIED** — i.e. not refused by
+   * `updateSettings`' read-only short-circuit, which fires when the settings
+   * blob on disk was written by a newer Tandem (#659). A refusal also raises
+   * the one deduplicated user-facing warning `App.svelte` registers (#1985);
+   * this return value is what lets a caller skip work that assumed the state
+   * changed.
+   *
+   * **It is not a persistence signal (#1722).** `updateSettings` swallows a
+   * failing `localStorage.setItem` in a `try`/`catch`, then assigns and
+   * returns `true` — so `true` means "this session applied it", never "it
+   * reached disk".
+   */
+  toggleLeft(): boolean;
+  /**
+   * Toggle the right panel; on show, also clears `soloRailHidden` in solo mode.
+   * Returns whether the write was applied — see `toggleLeft` for what that
+   * boolean does and does not promise. Both branches report their own write.
+   */
+  toggleRight(): boolean;
+  /** Select which of the right rail's two fixed tabs is showing. Writes nothing else. */
   selectRailTab(tab: RailTab): void;
 }
 
@@ -162,48 +171,33 @@ export function createLayoutModel(opts: LayoutModelOptions): LayoutModel {
       : opts.getAnnotations().filter(isPendingReviewTarget).length,
   );
 
-  function toggleLeft(): void {
-    settingsState.updateSettings({
+  function toggleLeft(): boolean {
+    return settingsState.updateSettings({
       leftPanelVisible: !settingsState.settings.leftPanelVisible,
     });
   }
 
-  function toggleRight(): void {
+  function toggleRight(): boolean {
+    // Each branch reports its OWN write. Returning only the second one's
+    // result would report every hide as a success, refused or not.
     if (rightVisible) {
-      settingsState.updateSettings({ rightPanelVisible: false });
-      return;
+      return settingsState.updateSettings({ rightPanelVisible: false });
     }
-    settingsState.updateSettings({
+    return settingsState.updateSettings({
       rightPanelVisible: true,
       ...(modeState.tandemMode === "solo" ? { soloRailHidden: false } : {}),
     });
   }
 
   /**
-   * Select a rail tab, then tear down any transient chat reveal.
-   *
-   * **The order is the point, and it changed in Unit 10c.** 10b preserved
-   * master byte-for-byte, where the closer ran FIRST — so a closer that threw
-   * ate the user's click entirely: no tab switch, no toast, no warn. The tab
-   * write is the user's intent and the teardown is bookkeeping, so the intent
-   * lands first now.
-   *
-   * **The improvement is bounded, and an earlier draft of this comment
-   * overstated it.** The reorder does not reduce a throwing closer to a stale
-   * reveal — it still re-throws, so any statement the CALLER runs after this one
-   * is skipped. `onAnnotationClick` in `App.svelte` is exactly that shape: it
-   * selects the tab and then sets the active annotation, so a throwing closer
-   * would leave the rail switched to Annotations with nothing selected. What the
-   * reorder buys is the tab write, not the caller's whole interaction.
-   *
-   * It is also latent rather than live: the only closer wired in is
-   * `railContent.closeReveal()`, plain assignments behind a guard, which cannot
-   * throw. This is defence against a future fallible closer — and if one
-   * arrives, the fix is a `try`/`finally` here, not another reordering.
+   * Select a rail tab. A transient chat reveal is deliberately NOT torn down
+   * here — the reveal's precondition is that the rail is collapsed, not that
+   * the tab is Chat, so a tab switch made from inside the reveal is not a
+   * reason to destroy the panel the user is clicking in (#1719). The injected
+   * `closeTransientChat` and the Unit 10c ordering around it are gone with it.
    */
   function selectRailTab(tab: RailTab): void {
     activeRailTab = tab;
-    if (tab !== "chat") opts.closeTransientChat();
   }
 
   return {
