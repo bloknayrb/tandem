@@ -17,9 +17,7 @@
  * touching a range), so it is the case that discriminates.
  */
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
@@ -43,6 +41,7 @@ import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { withInternal } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/index.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { off } from "../helpers/positions.js";
 
 // The clamp notification is asserted by what it PUSHES, so the sink is mocked
@@ -56,28 +55,9 @@ vi.mock(import("../../src/server/notifications.js"), async (importOriginal) => (
 // MCP tool boundary
 // ---------------------------------------------------------------------------
 
-type CallToolResponse = Awaited<ReturnType<Client["callTool"]>>;
-
 let client: Client;
+let close: (() => Promise<void>) | undefined;
 const registered: string[] = [];
-
-async function setupMcpClient(): Promise<Client> {
-  const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
-  registerDocumentTools(server);
-  registerAnnotationTools(server);
-  registerNavigationTools(server);
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const mcpClient = new Client({ name: "test-client", version: "0.0.1" });
-  await server.connect(serverTransport);
-  await mcpClient.connect(clientTransport);
-  return mcpClient;
-}
-
-function parseResult(result: CallToolResponse) {
-  const content = result.content as Array<{ type: string; text?: string }>;
-  const textContent = content.find((c) => c.type === "text");
-  return textContent?.text ? JSON.parse(textContent.text) : null;
-}
 
 function setupDoc(id: string, text: string) {
   const ydoc = getOrCreateDocument(id);
@@ -90,12 +70,17 @@ function setupDoc(id: string, text: string) {
 
 describe("MCP tool boundary rejects out-of-range offsets", () => {
   beforeEach(async () => {
-    client = await setupMcpClient();
+    ({ client, close } = await setupMcpServer([
+      registerDocumentTools,
+      registerAnnotationTools,
+      registerNavigationTools,
+    ]));
   });
 
   afterEach(async () => {
     for (const id of registered.splice(0)) removeDoc(id);
-    await client?.close();
+    await close?.();
+    close = undefined;
   });
 
   it("tandem_edit(6, 99999) is refused and the document is unchanged", async () => {
