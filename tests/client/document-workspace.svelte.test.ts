@@ -1115,6 +1115,85 @@ describe("createDocumentWorkspace — reopen", () => {
     h.dispose();
   });
 
+  it("says the reopen is already running when a second press lands during the wait", async () => {
+    const h = harness({ tabs: [], activeTabId: null });
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    h.setOpenServerPathResult(async (filePath) => {
+      await gate;
+      h.state.tabs = [...h.state.tabs, tab({ id: filePath, filePath })];
+      return { ok: true };
+    });
+    h.stack.push({ filePath: "/docs/x.md", closedAt: 1 });
+    h.stack.push({ filePath: "/docs/x.md", closedAt: 2 });
+
+    const first = h.ws.reopenClosedTab();
+    const second = h.ws.reopenClosedTab();
+    release?.();
+    await Promise.all([first, second]);
+
+    // Review round 1. Item 6's post-condition poll holds `inflightReopens` for
+    // as long as the reopen ceiling rather than just the HTTP round trip, so
+    // this branch is what the user's second Ctrl+Alt+T hits while nothing has
+    // appeared yet. It restored the record and returned in SILENCE — the same
+    // dead key the rest of #1708 exists to remove, inside #1708's own new code.
+    // The end-of-wait warning cannot cover it: that reports the first attempt,
+    // and a user who gives up before the ceiling never sees anything at all.
+    expect(h.calls.notifications).toHaveLength(1);
+    expect(h.calls.notifications[0]).toMatchObject({
+      type: "launcher",
+      // `info`, not `warning`: the reopen really is running.
+      severity: "info",
+      message: "Still reopening x.md…",
+      // Its own key. The end-of-wait arm uses `reopen-no-tab:`, and the tray
+      // coalesces on the key — a shared one would drop one of the two reports.
+      dedupKey: "reopen-inflight:/docs/x.md",
+    });
+    h.dispose();
+  });
+
+  // Review round 1: the poll is the one await in this module long enough to
+  // straddle an ErrorBoundary recovery (`Root.svelte` wraps `<App/>`, and its
+  // "Try to recover" is a real production remount). Every collaborator the
+  // failure arm touches belongs to the instance that just died.
+  it("stops polling and writes nothing once the workspace is torn down", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const h = harness({
+      tabs: [],
+      activeTabId: null,
+      reopenPollMs: 1,
+      // A ceiling this spec must never reach. It is what makes the teardown
+      // bail testable at all: drop it and the await below runs for a minute and
+      // fails on the test timeout. Without it, a poll that simply ran to
+      // completion would be silenced by the `disposed` guard on `handleFailure`
+      // and look identical to a pass.
+      reopenTimeoutMs: 60_000,
+    });
+    // Accepted, but no tab ever arrives — the arm that waits out the ceiling.
+    h.setOpenServerPathResult(async () => ({ ok: true }));
+    h.stack.push({ filePath: "/docs/gone.md", closedAt: 1 });
+    // The latch is an `$effect` teardown, so the effect must have RUN before
+    // disposing the root can fire it.
+    flushSync();
+
+    const pending = h.ws.reopenClosedTab();
+    h.dispose();
+    await pending;
+
+    expect(h.calls.notifications).toEqual([]);
+    // Not restored either: an ErrorBoundary remount has already recreated the
+    // stack empty (`useClosedTabStack` — "lifetime is the app session"), so the
+    // push would land on a destroyed instance nobody can see.
+    expect(h.stack).toEqual([]);
+    // Presence, not absence: this is what proves the failure arm was REACHED
+    // and chose a console trace, rather than the spec passing because the wait
+    // silently never finished.
+    expect(warn.mock.calls.map((args) => args.join(" ")).join("\n")).toContain("/docs/gone.md");
+    warn.mockRestore();
+  });
+
   it("a thrown openServerPath is handled like a returned failure", async () => {
     const h = harness({ tabs: [], activeTabId: null });
     h.setOpenServerPathResult(async () => {

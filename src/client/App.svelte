@@ -1475,15 +1475,25 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   save: (e) => {
     e.preventDefault();
     // In source view, SourceView owns Ctrl+S (it commits the edit) and
-    // stopPropagations — this is belt-and-suspenders against that invariant
-    // being broken later: the global save must never write the stale Y.Doc to
-    // disk underneath an open source edit (#1021 review must-fix).
+    // stopPropagations, so this handler normally never runs while the source
+    // editor holds focus.
+    //
+    // `sourceCommandsForEvent` is scoped to the EVENT TARGET, so it resolves
+    // nothing the moment focus sits anywhere else — the chat composer, the
+    // rail, a toolbar button. A bare `if (inSourceView) return;` used to follow,
+    // which made Ctrl+S a permanent dead key there: `preventDefault()` above had
+    // already suppressed the browser's own Save dialog, and nothing saved and
+    // nothing said why, on every press for as long as source view stayed open.
+    //
+    // The fallthrough is the one `save-as` below has always used, and it is NOT
+    // the stale-Y.Doc write the removed guard was defending against (#1021
+    // review must-fix): `saveExactTarget` routes a source-view tab through its
+    // registered commands, which commit the draft before anything persists, and
+    // reports `no-source-commands` when none is registered. The funnel is the
+    // guarantor of that invariant now — this early return was not.
     const sourceCommands = documentWorkspace.sourceCommandsForEvent(e);
     if (sourceCommands) {
       void sourceCommands.save("save");
-      return;
-    }
-    if (documentWorkspace.inSourceView) {
       return;
     }
     void documentWorkspace.saveDocumentTarget(yjsSync.activeTabId, "save");

@@ -507,6 +507,27 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
   }
 
   /**
+   * Teardown latch (review round 1).
+   *
+   * Every `opts.*` collaborator is bound to ONE `App.svelte` instance, and
+   * `Root.svelte` wraps `<App/>` in `ErrorBoundary` whose `reset()` is a real
+   * production remount — the same fact `mountActionExecutor`'s `onDestroy`
+   * release exists for. The reopen poll below is the only await in this module
+   * long enough to straddle one, so without this a "Try to recover" during the
+   * wait leaves work still writing into the destroyed instance's closures.
+   *
+   * Its own `$effect` with an EMPTY body, deliberately: the body reads nothing
+   * reactive, so the effect never re-runs and its teardown therefore fires on
+   * destruction only. Hanging this off the `beforeunload` effect instead would
+   * latch `disposed` permanently the first time anyone added a reactive read
+   * there — a failure that looks exactly like a working latch.
+   */
+  let disposed = false;
+  $effect(() => () => {
+    disposed = true;
+  });
+
+  /**
    * Wait for a reopened path to actually appear in the tab list (#1708 item 6).
    * A poll rather than a subscription: the tab arrives over Yjs and this module
    * deliberately holds no provider handle.
@@ -518,7 +539,10 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
       // The first check runs before any wait, so an open that lands
       // synchronously costs nothing.
       if (opts.getTabs().some((t) => t.filePath === filePath)) return true;
-      if (Date.now() >= deadline) return false;
+      // `disposed` first: a torn-down workspace must stop polling now rather
+      // than burn the rest of an 8-second ceiling against `getTabs` closures
+      // that no longer describe any mounted app.
+      if (disposed || Date.now() >= deadline) return false;
       await new Promise((resolve) => setTimeout(resolve, pollMs));
     }
   }
@@ -540,6 +564,21 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
       // twice; dropping the popped record here would make the user's next
       // Ctrl+Alt+T a silent no-op with the entry gone for good.
       opts.closedTabStack.push(rec);
+      // ...and say so (review round 1). Item 6's post-condition poll widened
+      // this window from one HTTP round trip to as long as the reopen ceiling,
+      // so a user who presses Ctrl+Alt+T again while nothing has appeared yet
+      // lands here — and a branch that restores the record and returns in
+      // silence is the same dead key the rest of this issue removes. The
+      // end-of-wait warning cannot cover it: that one reports the FIRST
+      // attempt, and a user who gives up before the ceiling never sees it.
+      //
+      // `info`, not `warning`: the reopen really is running. Its own dedupKey,
+      // because two DIFFERENT messages must never share one.
+      pushWorkspaceNotification(
+        "info",
+        `Still reopening ${crossBasename(rec.filePath) || rec.filePath}…`,
+        `reopen-inflight:${rec.filePath}`,
+      );
       return;
     }
     inflightReopens.add(rec.filePath);
@@ -550,6 +589,16 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
       kind: "failed" | "no-tab" = "failed",
       severity: SaveSeverity = "error",
     ) => {
+      if (disposed) {
+        // Both writes below reach ONE App instance: the stack is that
+        // instance's (`useClosedTabStack` — "lifetime is the app session"), and
+        // so is the tray. After an ErrorBoundary remount both have already been
+        // recreated empty, so pushing is a ghost write whose toast nobody can
+        // ever see. A console line instead, the same choice `closeTabAndRecord`
+        // makes for a state the user cannot act on.
+        console.warn(`[Tandem] reopen ${kind} after teardown: ${rec.filePath} — ${reason}`);
+        return;
+      }
       // Restore the record so the user can retry with another Ctrl+Alt+T;
       // silent drop would also surprise users who expect LIFO to be retryable.
       opts.closedTabStack.push(rec);
