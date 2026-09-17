@@ -120,6 +120,18 @@ const VisibleReplySchema = z.object({
   timestamp: z.number(),
   editedAt: z.number().optional(),
   rev: z.number().optional(),
+  // #1626. `collectRepliesForAnnotation` pushes the RAW Y.Map record and
+  // `mcpStructured` ships it, so an undeclared key is stripped by
+  // `mcp-output-schemas.test.ts`' strip-mode parse and turns `check` red —
+  // Claude would be able to write a proposal it could not read back. Privacy is
+  // unchanged: this is Claude's own text on a Claude-authored reply, and
+  // `channelVisibleReplies` does the filtering as before.
+  suggestedText: z
+    .string()
+    .optional()
+    .describe(
+      "Replacement proposal carried by a Claude-authored reply, over the parent annotation's range",
+    ),
 });
 
 // ---------------------------------------------------------------------------
@@ -305,7 +317,18 @@ export const checkInboxOutputShape = {
     isTyping: z.boolean(),
     cursor: z.number().nullable(),
     lastEdit: z.number().nullable(),
-    selectedText: z.string().nullable(),
+    selectedText: z
+      .string()
+      .nullable()
+      .describe(
+        "The most recent non-empty selection in the editor for this document, including one made by clicking an annotation card or chat anchor (≤100 chars). While this document is the active editor tab, it is cleared when the selection collapses, including by a remote edit that deletes it; not cleared when focus leaves the editor, so not necessarily what the user is looking at now. For a document not shown in an editor (a background tab, or no browser open) nothing updates the record, so after an edit it can be sliced from stale offsets: text the user never selected (#1997).",
+      ),
+    selectionAt: z
+      .number()
+      .nullable()
+      .describe(
+        "Epoch ms when the editor last wrote the selection record; null when selectedText is null. While this document is the active editor tab, any document change that moves the selection re-stamps it, including your own edits (#1991), so a recent value does not prove the user just selected this; an old value does prove it is old.",
+      ),
   }),
 };
 

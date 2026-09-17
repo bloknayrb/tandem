@@ -23,7 +23,7 @@ const { _readTokenFromFileSpy } = vi.hoisted(() => ({
   _readTokenFromFileSpy: vi.fn(),
 }));
 
-vi.mock("../../src/server/auth/token-store.js", async (importOriginal) => {
+vi.mock(import("../../src/server/auth/token-store.js"), async (importOriginal) => {
   const actual = (await importOriginal()) as typeof import("../../src/server/auth/token-store.js");
   return {
     ...actual,

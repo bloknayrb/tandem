@@ -27,7 +27,7 @@ One thing you need, though: an AI client running on your own computer, plus the 
   <img src="docs/screenshots/01-editor-overview.png" alt="The Tandem editor with a document open on the left and a panel of AI annotation cards on the right" width="820">
 </p>
 
-*Your document on the left, the AI's comments and suggested rewrites as cards on the right. Accept, reject, or reply to ask for something different.*
+*Your document on the left, the AI's comments and suggested rewrites as cards on the right. Accept, dismiss, or reply to ask for something different.*
 
 ## Who Tandem is for
 
@@ -62,9 +62,9 @@ Windows 10 version 22H2 or Windows 11; macOS 12 (Monterey) or later; Linux with 
 <details>
 <summary><b>Real-time updates for hand-started sessions</b></summary>
 
-**How Claude starts matters.** Tandem talks to Claude over two independent connections: one lets Claude read and edit your document, the other tells it the moment you comment or send a chat message. Sessions Tandem launches for you, including the desktop app's **Relaunch Claude** button, get both and need no setup from you. A session you start yourself by typing `claude` begins with only the first. On its first successful read-mode `tandem_status`, Tandem's bundled skill tells it to attempt the second with the built-in Monitor, where that tool is available.
+**How Claude starts matters.** Tandem talks to Claude over two independent connections: one lets Claude read and edit your document, the other tells it the moment you comment or send a chat message. Sessions Tandem launches for you, including the desktop app's **Relaunch Claude** button, get both and need no setup from you. A session you start yourself by typing `claude` begins with only the first. On the first Tandem response that carries a wake-stream address — opening a document (`tandem_open`), creating a scratchpad (`tandem_scratchpad`), or a read-mode `tandem_status` — Tandem's bundled skill tells it to attempt the second with the built-in Monitor, where that tool is available.
 
-The simplest route needs no installation at all: **the built-in Monitor watch starts automatically on first Tandem use.** The bundled skill reads the live wake-stream address from that first successful `tandem_status` and makes one persistent attempt for the session. If the attempt got skipped, asking Claude to watch is a recovery step rather than normal setup. It does need a Claude Code that offers a built-in Monitor tool. That's enabled per account rather than per version, so upgrading won't add it, and on Windows it also needs Git Bash. The plugin monitor shares that same per-account gate, so it can't help when that gate is off. But the plugin monitor does not require Git Bash on Windows and can fall back to PowerShell, so it may help when Git Bash is the missing precondition. The third option below, the channel shim, avoids both requirements.
+The simplest route needs no installation at all: **the built-in Monitor watch starts automatically on first Tandem use.** The bundled skill reads the live wake-stream address from the first Tandem response that carries one — `tandem_open`, `tandem_scratchpad` or a read-mode `tandem_status` — and makes one persistent attempt for the session. If the attempt got skipped, asking Claude to watch is a recovery step rather than normal setup. It does need a Claude Code that offers a built-in Monitor tool. That's enabled per account rather than per version, so upgrading won't add it, and on Windows it also needs Git Bash. The plugin monitor shares that same per-account gate, so it can't help when that gate is off. But the plugin monitor does not require Git Bash on Windows and can fall back to PowerShell, so it may help when Git Bash is the missing precondition. The third option below, the channel shim, avoids both requirements.
 
 The second route is to install the Tandem plugin, which also needs no flag. See [Real-time updates](#real-time-updates) below. It starts watching the first time Claude uses Tandem's skill in a session, so ask for Tandem by name ("let's work on this in Tandem") rather than expecting it to be listening before you've mentioned it. Start `claude` from a terminal window if you install it: the plugin's monitor uses whatever program path that shell has, and a Claude Code started from a desktop icon may not have one it can use.
 
@@ -99,9 +99,9 @@ Either way, the rest is the same:
 
 ## What you get
 
-- Multiple documents open in tabs, with `.md`, `.markdown`, `.txt`, `.html`, and `.docx` support (Word files are editable, and the original is only written when you explicitly save; HTML opens read-only, for reading and annotating).
+- Multiple documents open in tabs, with `.md`, `.markdown`, `.txt`, `.html`, and `.docx` support (Word files are editable, and the original is only written when you explicitly save; HTML opens read-only, for reading and annotating). Markdown means CommonMark plus GitHub Flavored Markdown; `[[wikilinks]]` and `![[embeds]]` are saved as literal text, so Obsidian, Logseq and Foam vaults are not a supported input for this release.
 - Word round-trip: edit a `.docx` and save it back as a real Word file, with the comments you sent your AI written back as native Word comments. Tandem snapshots a file before its first write, so you can restore the original from inside the app.
-- A scratchpad (`Ctrl+N`) for drafts you don't want to save to disk.
+- A scratchpad (`Ctrl+N` on desktop; the **+** button in the tab bar in the browser build, where the browser itself owns `Ctrl+N`) for drafts you don't want to save to disk.
 - A command palette (`Ctrl+Shift+P`) with fuzzy search, ranked by how well each result matches.
 - Find and replace, including across all open tabs.
 - An outline panel for navigating long documents.
@@ -109,16 +109,16 @@ Either way, the rest is the same:
 - Suggestions shown as word-level diffs, so you can see exactly which words change.
 - Optional smart typography (curly quotes, em dashes) and a spellcheck toggle, in Settings (`Ctrl+,`).
 - Light and dark themes.
-- Keyboard navigation through pending suggestions: `Alt+]` and `Alt+[` to move between them, `Ctrl+Enter` to accept, `Ctrl+Shift+Enter` to reject.
+- Keyboard navigation through pending suggestions: `Alt+]` and `Alt+[` to move between them, `Ctrl+Enter` to accept, `Ctrl+Shift+Enter` to dismiss.
 
 <details>
 <summary><b>More screenshots</b></summary>
 
 <p align="center">
-  <img src="docs/screenshots/03-side-panel.png" alt="A close-up of annotation cards beside the document, including a replacement card showing the original text in red strikethrough and the proposed text in green, with Accept and Reject buttons" width="500">
+  <img src="docs/screenshots/03-side-panel.png" alt="A close-up of annotation cards beside the document, including a replacement card showing the original text in red strikethrough and the proposed text in green, with Accept and Dismiss buttons" width="500">
 </p>
 
-*Annotations from the AI. Comments and suggestions appear as cards. For a replacement you see your current text and the proposed wording together, so you can accept the change, reject it, or reply to ask for something different.*
+*Annotations from the AI. Comments and suggestions appear as cards. For a replacement you see your current text and the proposed wording together, so you can accept the change, dismiss it, or reply to ask for something different.*
 
 <p align="center">
   <img src="docs/screenshots/02-chat-sidebar.png" alt="The chat panel showing a question from the user and a reply from the AI assistant about the document" width="460">
@@ -218,7 +218,7 @@ Real-time delivery gets events (annotation actions, chat messages) to the AI the
 
 None of them is needed for a session Tandem launches for you. Those get woken directly by Tandem over the session's own input and use none of the three; everything below is about sessions you start by hand.
 
-**A self-armed watch** needs nothing installed and no flag. On first Tandem use, the bundled skill reads the wake-stream address from the first successful `tandem_status` and makes one persistent built-in Monitor attempt. It lasts for that session and disappears with it, which is also the point: nothing is left configured on your machine. Asking Claude to watch is the recovery path if the automatic attempt got skipped. Two limits. It needs a Claude Code that offers a built-in Monitor tool, and the wake stream is **loopback-only**, so it doesn't reach a session running anywhere but this machine, Cowork included.
+**A self-armed watch** needs nothing installed and no flag. On first Tandem use, the bundled skill reads the wake-stream address from the first Tandem response that carries one — `tandem_open`, `tandem_scratchpad` or a read-mode `tandem_status` — and makes one persistent built-in Monitor attempt. It lasts for that session and disappears with it, which is also the point: nothing is left configured on your machine. Asking Claude to watch is the recovery path if the automatic attempt got skipped. Two limits. It needs a Claude Code that offers a built-in Monitor tool, and the wake stream is **loopback-only**, so it doesn't reach a session running anywhere but this machine, Cowork included.
 
 **The plugin monitor** needs no flag either, and once installed it applies to every session. But it starts watching only when Claude first uses Tandem's skill in that session, not the moment the session opens. In practice that means asking for Tandem by name; a Claude that has never been told about Tandem isn't listening yet. That's deliberate. It used to start in every session including ones with nothing to do with Tandem, so when it couldn't run it reported a failure in all of them. Two more conditions: it needs **Claude Code 2.1.212 or newer** (on older versions the install still succeeds and the monitor simply never runs, with nothing to tell you so), and you should start `claude` from a terminal, because the monitor runs with whatever program path that session was given and a desktop-icon launch may not include Node. If it reports `exit 127`, that's this.
 

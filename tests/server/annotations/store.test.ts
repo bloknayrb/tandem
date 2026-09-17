@@ -14,14 +14,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Notifications are a shared singleton buffer; reset between tests and spy
 // on pushNotification so we can assert on failure-mode behaviour.
-vi.mock("../../../src/server/notifications.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../../src/server/notifications.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     pushNotification: vi.fn(),
   };
 });
 
+import { systemBootMs } from "../../../src/server/annotations/lockfile.js";
 import { SCHEMA_VERSION } from "../../../src/server/annotations/schema.js";
 import {
   acquireStoreLock,
@@ -445,7 +446,9 @@ describe("reclaimStoreLock", () => {
   });
 
   it("reclaims a live-PID v2 lockfile when identity is non-Tandem", async () => {
-    await enterReadOnly(JSON.stringify({ pid: process.pid, startedAtMs: 1, app: "tandem" }));
+    await enterReadOnly(
+      JSON.stringify({ pid: process.pid, startedAtMs: Date.now(), app: "tandem" }),
+    );
 
     const probe = vi.fn().mockResolvedValue({ kind: "name", name: "explorer.exe" });
     const result = await reclaimStoreLock(probe);
@@ -497,6 +500,60 @@ describe("reclaimStoreLock", () => {
     expect(await first).toEqual({ ok: true, reclaimed: true });
     expect(await second).toEqual({ ok: true, reclaimed: true });
     expect(probe).toHaveBeenCalledTimes(1);
+    await releaseStoreLock();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2038 acquireStoreLock reused-PID-after-reboot corroboration
+// ---------------------------------------------------------------------------
+
+describe("acquireStoreLock — reused PID after reboot (#2038)", () => {
+  async function writeLock(startedAtMs: number): Promise<void> {
+    await fs.mkdir(getAnnotationsDir(), { recursive: true });
+    await fs.writeFile(
+      path.join(getAnnotationsDir(), "store.lock"),
+      JSON.stringify({ pid: process.pid, startedAtMs, app: "tandem" }),
+    );
+  }
+
+  it("reclaims a live-PID lock that predates this boot AND probes as non-Tandem", async () => {
+    await writeLock(1); // startedAtMs: 1 predates any real boot
+    const probe = vi.fn().mockResolvedValue({ kind: "name", name: "explorer.exe" });
+    expect(await acquireStoreLock(probe)).toBe("locked");
+    expect(probe).toHaveBeenCalledWith(process.pid);
+    await releaseStoreLock();
+  });
+
+  it("refuses when the probe reports a Tandem-like identity", async () => {
+    await writeLock(1);
+    expect(await acquireStoreLock(vi.fn().mockResolvedValue({ kind: "name", name: "node" }))).toBe(
+      "readonly",
+    );
+    await releaseStoreLock();
+  });
+
+  it("refuses when the probe is indeterminate", async () => {
+    await writeLock(1);
+    expect(await acquireStoreLock(vi.fn().mockResolvedValue({ kind: "indeterminate" }))).toBe(
+      "readonly",
+    );
+    await releaseStoreLock();
+  });
+
+  it("refuses a live, current-boot lock without ever calling the probe", async () => {
+    // cr-1 / annotation-model-reviewer-1: derive the fixture from
+    // systemBootMs(), not a fixed wall-clock offset from Date.now(). A
+    // hard-coded "60s ago" is only current-boot when the machine has been up
+    // for over 60s at test time — false on a CI VM or a freshly rebooted box
+    // still inside its first minute of uptime, which would flip
+    // isLockFromPriorBoot to true and invert this test's premise.
+    // systemBootMs() + 1s is current-boot by construction, matching the
+    // sibling lockfile.test.ts fixture style.
+    await writeLock(systemBootMs() + 1_000);
+    const probe = vi.fn().mockResolvedValue({ kind: "name", name: "explorer.exe" });
+    expect(await acquireStoreLock(probe)).toBe("readonly");
+    expect(probe).not.toHaveBeenCalled();
     await releaseStoreLock();
   });
 });
@@ -710,5 +767,138 @@ describe("queueWrite thunk that throws", () => {
     await expect(store.flush()).rejects.toThrow("simulated flush-time failure");
     // recordFailure was hit, so pushNotification fired once.
     expect(pushNotification).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1791(a) — partially-readable file on load
+// ---------------------------------------------------------------------------
+
+describe("partially-readable file on load (#1791)", () => {
+  const goodRow = {
+    id: "ann_good",
+    author: "claude",
+    type: "comment",
+    range: { from: 0, to: 5 },
+    content: "kept",
+    status: "pending",
+    timestamp: 1,
+    rev: 1,
+  };
+
+  function partialEnvelope(marker: string) {
+    return JSON.stringify({
+      schemaVersion: SCHEMA_VERSION,
+      docHash: HASH_A,
+      meta: { filePath: FILE_A, lastUpdated: 1, marker },
+      annotations: [goodRow, { ...goodRow, id: `ann_future_${marker}`, type: "suggestion" }],
+      tombstones: [],
+      replies: [],
+    });
+  }
+
+  it("loads the readable rows, keeps the original, and parks a full copy", async () => {
+    const annotationsDir = getAnnotationsDir();
+    await fs.mkdir(annotationsDir, { recursive: true });
+    const target = path.join(annotationsDir, `${HASH_A}.json`);
+    await fs.writeFile(target, partialEnvelope("one"));
+
+    const loaded = await createStore(HASH_A, { filePath: FILE_A }).load();
+    expect(loaded.annotations.map((a) => a.id)).toEqual(["ann_good"]);
+
+    const files = await fs.readdir(annotationsDir);
+    // The original is NOT renamed away — this is not a quarantine.
+    expect(files).toContain(`${HASH_A}.json`);
+    const copies = files.filter((f) => f.startsWith(`${HASH_A}.json.partial.`));
+    expect(copies).toHaveLength(1);
+    // The parked copy holds the row the load dropped.
+    const parked = await fs.readFile(path.join(annotationsDir, copies[0] as string), "utf-8");
+    expect(parked).toContain("ann_future_one");
+  });
+
+  it("does not claim a copy was kept when the copy failed", async () => {
+    // The partial branch's only surface is this stderr line; claiming a copy
+    // that does not exist tells a reader the dropped rows are safe on disk.
+    const annotationsDir = getAnnotationsDir();
+    await fs.mkdir(annotationsDir, { recursive: true });
+    await fs.writeFile(path.join(annotationsDir, `${HASH_A}.json`), partialEnvelope("one"));
+    const copySpy = vi
+      .spyOn(fs, "copyFile")
+      .mockRejectedValueOnce(Object.assign(new Error("no space"), { code: "ENOSPC" }));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await createStore(HASH_A, { filePath: FILE_A }).load();
+      const lines = errorSpy.mock.calls.map((c) => c.map(String).join(" "));
+      expect(lines.some((l) => l.includes("a full copy was kept"))).toBe(false);
+      expect(lines.some((l) => l.includes("NOT preserved"))).toBe(true);
+    } finally {
+      copySpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("is idempotent for identical content but parks a SECOND, different partial", async () => {
+    const annotationsDir = getAnnotationsDir();
+    await fs.mkdir(annotationsDir, { recursive: true });
+    const target = path.join(annotationsDir, `${HASH_A}.json`);
+
+    await fs.writeFile(target, partialEnvelope("one"));
+    await createStore(HASH_A, { filePath: FILE_A }).load();
+    await createStore(HASH_A, { filePath: FILE_A }).load();
+    let copies = (await fs.readdir(annotationsDir)).filter((f) =>
+      f.startsWith(`${HASH_A}.json.partial.`),
+    );
+    expect(copies).toHaveLength(1);
+
+    // A different partial envelope must park its own copy — a single fixed
+    // name under COPYFILE_EXCL would preserve nothing here, which is #1791(b)
+    // reproduced inside the fix for #1791(a).
+    await fs.writeFile(target, partialEnvelope("two"));
+    await createStore(HASH_A, { filePath: FILE_A }).load();
+    copies = (await fs.readdir(annotationsDir)).filter((f) =>
+      f.startsWith(`${HASH_A}.json.partial.`),
+    );
+    expect(copies).toHaveLength(2);
+    const bodies = await Promise.all(
+      copies.map((f) => fs.readFile(path.join(annotationsDir, f), "utf-8")),
+    );
+    expect(bodies.some((b) => b.includes("ann_future_one"))).toBe(true);
+    expect(bodies.some((b) => b.includes("ann_future_two"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1791(b) — two downgrade cycles must not destroy the first park
+// ---------------------------------------------------------------------------
+
+describe("repeated future-schema parks (#1791)", () => {
+  it("archives the previous .future instead of unlinking it", async () => {
+    const annotationsDir = getAnnotationsDir();
+    await fs.mkdir(annotationsDir, { recursive: true });
+    const target = path.join(annotationsDir, `${HASH_A}.json`);
+
+    // Cycle 1: a v2 envelope carrying the user's personal note (ADR-027).
+    await fs.writeFile(target, JSON.stringify({ schemaVersion: 2, marker: "CYCLE-1" }));
+    await createStore(HASH_A, { filePath: FILE_A }).load();
+    expect(
+      await fs.readFile(path.join(annotationsDir, `${HASH_A}.json.future`), "utf-8"),
+    ).toContain("CYCLE-1");
+
+    // Cycle 2: upgrade → downgrade again. One cycle looks fine; two is what
+    // showed the old `fs.unlink(futurePath)` destroying the only copy.
+    await fs.writeFile(target, JSON.stringify({ schemaVersion: 2, marker: "CYCLE-2" }));
+    await createStore(HASH_A, { filePath: FILE_A }).load();
+
+    const files = await fs.readdir(annotationsDir);
+    expect(
+      await fs.readFile(path.join(annotationsDir, `${HASH_A}.json.future`), "utf-8"),
+    ).toContain("CYCLE-2");
+    const archives = files.filter(
+      (f) => f.startsWith(`${HASH_A}.json.future.`) && f !== `${HASH_A}.json.future`,
+    );
+    expect(archives).toHaveLength(1);
+    expect(await fs.readFile(path.join(annotationsDir, archives[0] as string), "utf-8")).toContain(
+      "CYCLE-1",
+    );
   });
 });

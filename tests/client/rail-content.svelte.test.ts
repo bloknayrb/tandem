@@ -256,6 +256,56 @@ describe("createRailContentModel — reveal lifecycle", () => {
     expect(seen).toEqual([false, true]);
     stop();
   });
+
+  it("a reveal closes when the rail becomes pinned", () => {
+    // #1716. The rail can become visible without the user pinning it here:
+    // mode lives in `CTRL_ROOM` and broadcasts, so a Solo -> Tandem flip
+    // clears the `soloRailHidden` suppression from outside this session, and
+    // the Settings modal writes `rightPanelVisible` directly. Either way a
+    // pinned rail was left carrying a live reveal, rendering float chrome and
+    // `rail-float-right`.
+    //
+    // This kills today's code and any fix that only clears inside
+    // `toggleRightPanel`. It does NOT kill an inverted or dropped condition --
+    // that is the third spec's job.
+    const h = mount();
+    h.model.openReveal();
+    flushSync();
+    expect(h.model.revealOpen).toBe(true);
+
+    h.setRightVisible(true);
+    expect(h.model.revealOpen).toBe(false);
+  });
+
+  it("the reveal is not resurrected when the rail unpins again", () => {
+    // A one-way teardown, not a `$derived` mirror of visibility. A mirror
+    // (`revealOpen = chatReveal && !visible`) passes the spec above and then
+    // floats Chat back over the rail the moment the user collapses it again.
+    const h = mount();
+    h.model.openReveal();
+    flushSync();
+    h.setRightVisible(true);
+    expect(h.model.revealOpen).toBe(false);
+
+    h.setRightVisible(false);
+    expect(h.model.revealOpen).toBe(false);
+  });
+
+  it("a collapsed rail leaves the reveal alone", () => {
+    // The inversion killer, and the surviving-open assertion after the FIRST
+    // flush is the whole instrument: an inverted (`chatReveal && !visible`) or
+    // dropped condition closes the reveal at open time, over a rail that is
+    // collapsed throughout -- which the first spec cannot see, because it only
+    // ever asserts `false` after making the rail visible.
+    const h = mount();
+    h.model.openReveal();
+    flushSync();
+    expect(h.model.revealOpen).toBe(true);
+
+    // A second flush with nothing changed: a converging effect must not drift.
+    flushSync();
+    expect(h.model.revealOpen).toBe(true);
+  });
 });
 
 describe("createRailContentModel — captured anchor", () => {

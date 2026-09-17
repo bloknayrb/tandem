@@ -1099,6 +1099,27 @@ describe("launcher — relocating Claude to a different folder", () => {
       }
     }, 30_000);
 
+    it("an unresolvable override is logged with its control characters stripped", async () => {
+      // The requested path is caller-supplied, so a raw newline in it would
+      // forge a second `[Launcher]` line in the log.
+      await writeClaudeIntegration();
+      const forged = `${path.join(os.tmpdir(), `tandem-gone-${Date.now()}`)}\n[Launcher] forged`;
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const sup = createSupervisor({ integrationsBase: tmpDir });
+      try {
+        await sup.relaunch(forged, { persistCwd: true });
+        const lines = errSpy.mock.calls
+          .flat()
+          .filter((a): a is string => typeof a === "string" && a.includes("could not be resolved"));
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toContain("[Launcher] forged");
+        expect(lines[0]).not.toContain("\n");
+      } finally {
+        errSpy.mockRestore();
+        await sup.stop();
+      }
+    }, 30_000);
+
     it("a bare relaunch leaves an unset working directory unset", async () => {
       // Needs the key absent: with it set to spawnDir, a bare relaunch resolves
       // to spawnDir and the unchanged-value early return makes the write a

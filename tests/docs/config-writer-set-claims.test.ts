@@ -179,10 +179,10 @@ const WRITER_SITES: Record<
     sites: 2,
     disposition: "out-of-scope",
     why:
-      "rewriteJson mutates the three Cowork workspace JSON files, which the Rust " +
-      "side mutates under a real cross-process lockfile (with_locked_json). Tracked " +
-      "separately as #1600 and deliberately NOT part of this acceptance: it is " +
-      "strictly worse, being the one place a lock exists and a writer does not take it.",
+      "rewriteJson mutates the three Cowork workspace JSON files, never a Claude " +
+      "config. Since #1600 it takes the same cross-process lock as the Rust side's " +
+      "with_locked_json (a share-mode-0 open of the sibling .tandem-lock file), so " +
+      "it is neither part of this acceptance nor an unlocked writer.",
   },
 };
 
@@ -229,9 +229,29 @@ const CONFIG_API_REFERENCES = [
  */
 const DURABLE_WRITER_FILES: Record<string, number> = {
   "src/cli/rotate-token.ts": 4,
+  // #1787: the app-data ownership stamp. THREE durable writes, not one — the
+  // `fs.cp` one-time legacy migration is in the counted idiom set alongside the
+  // stamp's own `atomicWrite`, and the review added a third: the migration's
+  // completion marker (`npm-migration-complete`), which is what stops the
+  // desktop refusal message's "delete owner.json" advice from re-importing the
+  // whole legacy npm tree. All three write Tandem's own state root, never a
+  // Claude config file, so `docs/security.md`'s accepted #1599 scope is
+  // unchanged.
+  // 4 since review round 2: the legacy migration copies entry by entry through
+  // a temp-then-rename (`copyFileAtomically`) instead of one `fs.cp`. Its
+  // destinations are all inside Tandem's OWN app-data root — no Claude config
+  // file is reachable from it — so this is a census update, not a widening of
+  // the accepted scope in docs/security.md.
+  "src/server/app-data-owner.ts": 4,
   "src/cli/uninstall-scrub.ts": 2,
   "src/client/tabs/TabItem.svelte": 1,
-  "src/server/annotations/store.ts": 5,
+  // 7 since #1791: `loadOne` gained a `fs.copyFile` that preserves a
+  // partially-readable envelope before returning the partial doc, and a
+  // second `fs.rename` that archives the previous `.future` park instead of
+  // unlinking it. Both destinations are inside Tandem's OWN annotations dir —
+  // no Claude config file is reachable from either — so this is a census
+  // update, not a widening of the accepted scope in docs/security.md.
+  "src/server/annotations/store.ts": 7,
   "src/server/auth/token-store.ts": 3,
   "src/server/file-io/doc-backup.ts": 2,
   "src/server/file-io/index.ts": 3,
@@ -252,7 +272,10 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   // the O_NOFOLLOW sidecar READ the idiom list counts conservatively (#1768).
   "src/server/documents/reload-family.ts": 3,
   "src/server/models/store.ts": 1,
-  "src/server/session/manager.ts": 3,
+  // 4th is `touchSession`, which rewrites one metadata field of a session
+  // record in SESSION_DIR. Not a config writer, so the accepted scope in
+  // docs/security.md is unchanged.
+  "src/server/session/manager.ts": 4,
   "src/server/version-check.ts": 1,
 };
 
@@ -261,7 +284,19 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
  * module. Not one of them may be a config writer.
  */
 const TOKEN_FILE_REFERENCES = [
+  // #1787: references `TOKEN_FILE_NAME` to EXCLUDE it from the legacy
+  // migration. The constant is imported rather than re-spelled as a literal,
+  // which is what keeps the exclusion pinned to the writer — and is why this
+  // row exists.
+  "src/server/app-data-owner.ts",
   "src/cli/rotate-token.ts",
+  // #1823 item 10: `setup --apply` after `rotate-token` used to drop the token
+  // from the entries it wrote, because `writeTargets` called `buildMcpEntries`
+  // with no `token` while `applyConfigWithToken` passed one. It now reads the
+  // token file — behind the same env-token refusal `rotate-token.ts` encodes.
+  // It is NOT a config writer: `setup.ts` is not a `WRITER_SITES` key and holds
+  // no durable-write idiom, so the #1599 accepted scope is unchanged.
+  "src/cli/setup.ts",
   "src/server/auth/token-store.ts",
   "src/server/index.ts",
   "src/server/mcp/routes/info.ts",

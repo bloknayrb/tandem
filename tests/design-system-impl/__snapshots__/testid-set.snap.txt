@@ -1,5 +1,6 @@
 accent-hue-slider
 accept-btn-{*}
+accept-reply-btn-{*}
 activity-action-{*}
 activity-clear-all
 activity-dismiss-{*}
@@ -125,6 +126,10 @@ default-tab-annotations-btn
 default-tab-chat-btn
 density-{*}-btn
 dismiss-btn-{*}
+display-menu
+display-menu-measure-{*}
+display-menu-text-size-{*}
+display-menu-trigger
 edit-btn-{*}
 edit-cancel-btn-{*}
 edit-newtext-{*}
@@ -138,6 +143,7 @@ editor-scroll-container
 editor-scroll-pill
 editor-scroll-pill-thumb
 editor-smart-typography
+editor-source-line-wrap
 editor-spellcheck-toggle
 editor-stage
 empty-state-connect-ai
@@ -147,6 +153,7 @@ empty-state-restart-claude
 empty-state-retry
 empty-state-setup-claude
 empty-state-setup-restart-anyway
+empty-state-sign-in-recheck
 empty-state-start-fresh
 error-boundary-recover-btn
 error-boundary-reload-btn
@@ -162,6 +169,7 @@ fidelity-report-import-losses
 fidelity-report-integrity-warnings
 fidelity-report-live-assertive
 fidelity-report-live-polite
+fidelity-report-save-anyway
 file-open-browse
 file-open-dialog
 file-open-error
@@ -205,6 +213,7 @@ harness-acknowledge
 harness-banner-dismiss
 harness-banner-version
 harness-version
+heading-chevron
 help-modal
 help-modal-close
 help-modal-content
@@ -266,8 +275,11 @@ license-banner-live
 license-buy-link
 license-dark-installed-hint
 license-gate-dark-hint
+license-renew-link
 license-settings-section
+license-status-live-region
 license-status-pill
+license-status-unavailable
 license-trial-banner
 license-trial-buy
 license-trial-days
@@ -361,6 +373,7 @@ reply-cancel-btn-{*}
 reply-import-byline-{*}
 reply-input-{*}
 reply-send-btn-{*}
+reply-suggestion-{*}
 reply-toggle-{*}
 reply-{*}
 review-only-banner
@@ -430,6 +443,7 @@ shortcut-recording-{*}
 shortcut-reset-{*}
 shortcut-row-{*}
 shortcuts-reset-all
+slash-command-menu
 source-view-annotation-warning
 source-view-container
 source-view-copy-btn

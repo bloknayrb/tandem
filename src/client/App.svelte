@@ -91,7 +91,12 @@ import {
 } from "./hooks/useTabKeyboardShortcuts.js";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
 import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte";
-import { createTandemSettings, resolveFont, TEXT_SIZE_PX } from "./hooks/useTandemSettings.svelte";
+import {
+  createTandemSettings,
+  resolveFont,
+  setSettingsWriteRefusedHandler,
+  TEXT_SIZE_PX,
+} from "./hooks/useTandemSettings.svelte";
 import { initTauriFileDrop, tauriFileDrop } from "./hooks/useTauriFileDrop.svelte";
 import { createTheme } from "./hooks/useTheme.svelte";
 import { createTutorial } from "./hooks/useTutorial.svelte";
@@ -229,23 +234,14 @@ const layoutModel = createLayoutModel({
   settingsState,
   modeState,
   getAnnotations: () => visibleAnnotations,
-  // Arrow, not a bare reference: defers the binding read to call time, so a
-  // future `function` -> `const arrow` conversion of the closer cannot turn
-  // this into a TDZ error.
-  closeTransientChat: () => railContent.closeReveal(),
 });
 // What the rail SHOWS, next to the model for whether it is shown (ADR-035 Unit
-// 10c). The two reference each other -- `selectRailTab` tears down a reveal, and
-// the reveal reads the selected tab -- so whichever is built first holds a thunk
-// over a `const` still in its temporal dead zone.
-//
-// **What makes that safe is not the thunks; it is that neither factory calls the
-// other during construction.** Master's closer closed over a HOISTED
-// `function closeTransientChat`, live from the top of the script, where this one
-// closes over `railContent` -- so the margin that used to make ordering a
-// non-question is gone. Nothing may run between these two statements that can
-// reach `selectRailTab`: no event dispatch, no eager read, no effect flush, or
-// this is a `ReferenceError` at startup rather than a stale reveal.
+// 10c). **Since #1719 the reference runs one way only**: this model reads
+// `layoutModel.activeRailTab` through a thunk, and `createLayoutModel` no
+// longer references `railContent` at all -- the injected `closeTransientChat`
+// is gone, because a tab switch made from inside a chat reveal is not a reason
+// to tear the reveal down. Built second, after the `const` it reads, so there
+// is no temporal-dead-zone question left in either direction.
 const railContent = createRailContentModel({
   getActiveRailTab: () => layoutModel.activeRailTab,
   getEffectiveRightVisible: () => effectiveRightVisible,
@@ -269,6 +265,26 @@ createWebViewZoom();
 const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileName })));
 
 const notifications = createNotifications();
+
+// #1722/#1792: a settings blob written by a NEWER Tandem makes every
+// `updateSettings` call a silent no-op — the theme picker, rail toggles,
+// formatting-bar hide and decoration toggles all snap back with nothing said,
+// because only SettingsModal renders the read-only banner. One registration
+// covers all eleven call sites; `dedupKey` collapses repeated clicks.
+setSettingsWriteRefusedHandler(() => {
+  notifications.push({
+    // `generateNotificationId()`, never `crypto.randomUUID()`: the latter is
+    // secure-context-only and `undefined` over plain http to a LAN IP, which
+    // is exactly the Cowork surface this refusal has to stay legible on.
+    id: generateNotificationId(),
+    timestamp: Date.now(),
+    type: "general-error",
+    severity: "warning",
+    message:
+      "That setting was not changed: your settings were written by a newer version of Tandem, so this version will not overwrite them. Update Tandem to change settings again.",
+    dedupKey: "settings-readonly",
+  });
+});
 let activityOpen = $state(false);
 const fileDrop = createFileDrop();
 initTauriFileDrop(notifications.push);
@@ -729,6 +745,16 @@ const isAutoOpenFirstRun = $derived(
 );
 const shouldShowWizard = $derived(manuallyReopened || isAutoOpenFirstRun);
 
+// #1713: `manuallyReopened`'s own trigger already clears settingsModalOpen in
+// its own handler (above), but `isAutoOpenFirstRun` is derived off an async
+// first-run fetch and can flip true at any moment — including while Settings
+// is open — with nothing to close it. Reading only `shouldShowWizard` (never
+// settingsModalOpen) keeps this one-directional: no self-dependency risk, and
+// it is a no-op on the already-safe manuallyReopened path.
+$effect(() => {
+  if (shouldShowWizard) settingsModalOpen = false;
+});
+
 function closeIntegrationWizard(): void {
   // Only persist dismissal when this close ends an auto-open session.
   // A manual reopen → close where the server says `needed === false`
@@ -829,6 +855,12 @@ function requestOpenFile(): Promise<void> {
 const updateAvailable = createUpdateAvailable();
 
 function openSettingsModalWithAck() {
+  // cr-3 (#1713 follow-up): the effect above only closes Settings on the
+  // false→true transition of shouldShowWizard — it does not re-fire while
+  // the wizard is already showing, so it can't stop a later Settings open
+  // from every entry point routed through here (keyboard shortcut, toolbar,
+  // command palette, the model-chip shortcut). Refuse instead.
+  if (shouldShowWizard) return;
   updateAvailable.acknowledge();
   settingsModalOpen = true;
 }
@@ -1157,7 +1189,13 @@ const toggleLeftPanel = () => {
   pinFromFloat("left");
   railFloat.left = false;
   const nextVisible = !layoutModel.leftVisible;
-  layoutModel.toggleLeft();
+  // A refused write (read-only settings blob, #659) means the rail does not
+  // move, so there is no replacement element to chase focus into. **A
+  // defensive skip of a state change that did not happen, not a focus fix**:
+  // both ids `focusToggleTarget` can build are always mounted and merely
+  // hidden, so the unguarded call resolved a hidden element and did nothing.
+  // #1985's deduplicated refusal notification is the user-visible signal.
+  if (!layoutModel.toggleLeft()) return;
   focusToggleTarget("left", nextVisible);
 };
 const toggleRightPanel = () => {
@@ -1173,7 +1211,12 @@ const toggleRightPanel = () => {
   pinFromFloat("right");
   railFloat.right = false;
   const nextVisible = !layoutModel.rightVisible;
-  layoutModel.toggleRight();
+  // See `toggleLeftPanel`. The float-clearing writes and the reveal teardown
+  // above deliberately stay ahead of this: re-ordering them to chase a rare
+  // refusal risks the `.collapsed.floating` frame `toggleLeftPanel`'s opening
+  // comment exists to prevent. So a refused pin still dismisses a hover float
+  // and an open reveal, and the refusal notification explains the rest.
+  if (!layoutModel.toggleRight()) return;
   focusToggleTarget("right", nextVisible);
 };
 // Pinning a floated rail: snap the shell to the float's width (no 14→full open
@@ -1434,15 +1477,25 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   save: (e) => {
     e.preventDefault();
     // In source view, SourceView owns Ctrl+S (it commits the edit) and
-    // stopPropagations — this is belt-and-suspenders against that invariant
-    // being broken later: the global save must never write the stale Y.Doc to
-    // disk underneath an open source edit (#1021 review must-fix).
+    // stopPropagations, so this handler normally never runs while the source
+    // editor holds focus.
+    //
+    // `sourceCommandsForEvent` is scoped to the EVENT TARGET, so it resolves
+    // nothing the moment focus sits anywhere else — the chat composer, the
+    // rail, a toolbar button. A bare `if (inSourceView) return;` used to follow,
+    // which made Ctrl+S a permanent dead key there: `preventDefault()` above had
+    // already suppressed the browser's own Save dialog, and nothing saved and
+    // nothing said why, on every press for as long as source view stayed open.
+    //
+    // The fallthrough is the one `save-as` below has always used, and it is NOT
+    // the stale-Y.Doc write the removed guard was defending against (#1021
+    // review must-fix): `saveExactTarget` routes a source-view tab through its
+    // registered commands, which commit the draft before anything persists, and
+    // reports `no-source-commands` when none is registered. The funnel is the
+    // guarantor of that invariant now — this early return was not.
     const sourceCommands = documentWorkspace.sourceCommandsForEvent(e);
     if (sourceCommands) {
       void sourceCommands.save("save");
-      return;
-    }
-    if (documentWorkspace.inSourceView) {
       return;
     }
     void documentWorkspace.saveDocumentTarget(yjsSync.activeTabId, "save");
@@ -1481,6 +1534,17 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   },
   "toggle-palette": (e) => {
     e.preventDefault();
+    // #1824 item I / cr-2: same class as #1713's wizard/settings stacking
+    // bug — guard the OPEN path only, so an already-open palette still
+    // closes regardless of any other modal. Covers every focus-trapping or
+    // exclusive surface the palette could otherwise stack over: Settings,
+    // Help, the first-run wizard, and the file-open dialog.
+    if (
+      !untrack(() => paletteOpen) &&
+      (settingsModalOpen || showHelp || shouldShowWizard || fileOpenDialogOpen)
+    ) {
+      return;
+    }
     paletteOpen = !untrack(() => paletteOpen);
   },
   "new-scratchpad": (e) => {
@@ -1587,7 +1651,20 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     // read-only precisely so it can be read and annotated (decision 2). The
     // refusal here used to be a "Document is read-only" toast — a local named
     // `reviewOnly`, blocking the review action.
-    const popupSuppressed = slashCommandMenuOpen || findBarOpen || paletteOpen;
+    // #1824 item I: settingsModalOpen joins the set — the palette-open guard
+    // above means a stacked palette can no longer be the reason this reads
+    // true, but Settings itself is its own popup context.
+    // cr-2: same broadening as the palette guard — Help, the first-run
+    // wizard and the file-open dialog are each their own exclusive/focus-
+    // trapping surface too.
+    const popupSuppressed =
+      slashCommandMenuOpen ||
+      findBarOpen ||
+      paletteOpen ||
+      settingsModalOpen ||
+      showHelp ||
+      shouldShowWizard ||
+      fileOpenDialogOpen;
     if (popupSuppressed) {
       // Palette/find UI is the active context; user understands why.
       return;
@@ -1991,7 +2068,7 @@ const review = useAnnotationReview({
   // Lets the hook's auto-set effect avoid clobbering externally-set ids
   // (e.g., from Alt+]/Alt+[ keyboard navigation).
   getActiveAnnotationId: () => railContent.activeAnnotationId,
-  onApplyFailed: (ann) =>
+  onApplyFailed: (ann, reason) =>
     notifications.push({
       // Keyed by ann.id (matches dedupKey below), not Date.now() — two
       // different annotations failing in the same millisecond must not
@@ -2003,8 +2080,16 @@ const review = useAnnotationReview({
       // "was left pending", not "is still pending" — the annotation can be
       // accepted or dismissed later while this `warning` stays in the tray.
       // See `TandemNotification.severity`.
+      // Two causes, two messages. "The text has changed" is a diagnosis, and
+      // it is the wrong one for `no-editor` — that arm fires with the document
+      // untouched, most reachably from source view, where the editor is
+      // unmounted while this rail stays live. Telling the user their text moved
+      // sends them hunting for an edit nobody made; naming the view they are in
+      // gives them the one action that works.
       message:
-        "Couldn't apply the suggestion — the text has changed. The annotation was left pending.",
+        reason === "no-editor"
+          ? "Couldn't apply the suggestion — the editor isn't open. Switch out of source view and try again. The annotation was left pending."
+          : "Couldn't apply the suggestion — the text has changed. The annotation was left pending.",
       dedupKey: `suggestion-apply-failed:${ann.id}`,
       timestamp: Date.now(),
     }),
@@ -2244,6 +2329,9 @@ const shouldShowModelPicker = $derived(
       decorationsMuted={settingsState.settings.decorationsMuted}
       onUpdateDecorations={(partial) => settingsState.updateSettings(partial)}
       onOpenSettings={openSettingsModalWithAck}
+      textSize={settingsState.settings.textSize}
+      editorMeasure={settingsState.settings.editorMeasure}
+      onUpdateDisplay={(partial) => settingsState.updateSettings(partial)}
       formattingBarVisible={settingsState.settings.formattingBarVisible}
       onToggleFormattingBar={() =>
         settingsState.updateSettings({
@@ -2265,6 +2353,9 @@ const shouldShowModelPicker = $derived(
         decorationsMuted={settingsState.settings.decorationsMuted}
         onUpdateDecorations={(partial) => settingsState.updateSettings(partial)}
         onOpenSettings={openSettingsModalWithAck}
+        textSize={settingsState.settings.textSize}
+        editorMeasure={settingsState.settings.editorMeasure}
+        onUpdateDisplay={(partial) => settingsState.updateSettings(partial)}
         sourceViewActive={documentWorkspace.inSourceView}
         onToggleSourceView={documentWorkspace.canSourceView || documentWorkspace.inSourceView
           ? () => void documentWorkspace.requestToggleSourceView()
@@ -2908,6 +2999,7 @@ const shouldShowModelPicker = $derived(
             documentWorkspace.saveDocumentTargetAfterSourceCommit(documentId, intent, ydoc)}
           onCommandsChange={documentWorkspace.updateSourceViewCommands}
           onExit={documentWorkspace.exitSourceView}
+          lineWrap={settingsState.settings.sourceViewLineWrap}
         />
       {/key}
     {:else}

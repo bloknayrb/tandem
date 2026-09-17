@@ -333,6 +333,12 @@ function dismiss() {
 }
 
 function runResult(result: PaletteResult) {
+  // #1824 item F: a "shortcut" row is display-only — there is no kind-specific
+  // branch for it below, so the unconditional `opener = null` next would
+  // still discard the pre-open focus target on Enter even though nothing ran.
+  // Return before that reset so highlighting a shortcut row and pressing
+  // Enter (or Escape right after) restores focus to the real opener.
+  if (result.kind === "shortcut") return;
   // Drop the reference on the run path too — it is not restored from here, and
   // holding it keeps a detached node alive until the next open.
   opener = null;

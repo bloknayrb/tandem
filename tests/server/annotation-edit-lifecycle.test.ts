@@ -25,7 +25,7 @@ import * as Y from "yjs";
 // the call — but here the effect IS the call, and the thing under test is
 // whether the shell hands its own relay down or quietly substitutes something
 // else. `importOriginal` is spread so the real implementation still runs.
-vi.mock("../../src/server/annotations/migration-log.js", async (importOriginal) => {
+vi.mock(import("../../src/server/annotations/migration-log.js"), async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../src/server/annotations/migration-log.js")>();
   return { ...actual, relaySanitizationEvent: vi.fn(actual.relaySanitizationEvent) };
@@ -37,7 +37,7 @@ import { YDocStore } from "../../src/server/mcp/document-store.js";
 import { BROWSER_ORIGIN, MCP_ORIGIN, withBrowser } from "../../src/shared/origins.js";
 import type { OnLossy } from "../../src/shared/sanitize.js";
 import type { Annotation } from "../../src/shared/types.js";
-import { getAnnotationsMap } from "../helpers/ydoc-factory.js";
+import { getAnnotationsMap, makeDoc } from "../helpers/ydoc-factory.js";
 import { asChangedKey } from "../helpers/yjs-transactions.js";
 
 let doc: Y.Doc;
@@ -78,7 +78,16 @@ function seed(id: string, extra: Record<string, unknown> = {}): void {
 }
 
 beforeEach(() => {
-  doc = new Y.Doc();
+  // **Populated, not a bare `new Y.Doc()` (#1626 review).** Every record `seed`
+  // writes carries `range: {from: 0, to: 4}` and the seeded `textSnapshot`
+  // "orig", so the document has to actually contain that span: since the edit
+  // path became the fourth carrier of Critical Rule 6's interior term, a patch
+  // carrying `suggestedText` is screened against the record's live span, and an
+  // empty document answers `invalid-suggestion-range` for every one of them.
+  // The first four characters are "orig" deliberately — the specs below are
+  // about rev, relay and field-carry-through, and a span that matches its own
+  // snapshot keeps all of them clear of the range layer.
+  doc = makeDoc("orig text, no heading anywhere in it");
   map = getAnnotationsMap(doc);
   lifecycle = createAnnotationLifecycle(doc);
 });

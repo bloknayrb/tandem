@@ -21,12 +21,11 @@ import { isTopLevel, sameTextblock } from "../../shared/positions/types.js";
 import { elementAtPath, resolveToTextblock } from "../../shared/positions/ydoc.js";
 import { snapshotContradicts } from "../../shared/snapshot.js";
 import type { Annotation, AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
-import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
+import { TandemModeSchema, ToolErrorCodeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { isStoreReadOnly } from "../annotations/store.js";
 import { type OpenSuccess, openFromDisk, openScratchpad, toWireResult } from "../documents/open.js";
-import { getWakeEndpoint } from "../events/wake-socket.js";
 import { mdParser } from "../file-io/markdown.js";
 import { appendMdast, buildListItemsFromTree } from "../file-io/mdast-ydoc.js";
 import { readModeProvenance } from "../mode.js";
@@ -72,6 +71,25 @@ import {
   saveDocumentToDisk,
   toDocListEntry,
 } from "./document-service.js";
+import { wakeUrlField } from "./wake-url.js";
+
+/**
+ * Whether `p` names a location without reference to the server's working
+ * directory (#1823). `path.isAbsolute` alone is not that on win32: a
+ * root-relative path with no drive (`\docs\a.md`, `/Users/me/a.md`) counts as
+ * absolute there, yet `path.resolve` prefixes the drive of the process cwd. So
+ * on win32 the path must also carry a drive root (`C:\` / `C:/`) or be a
+ * two-separator UNC-shaped path, which is left for `assertSafePathPrefix` to
+ * refuse with its own message. `platform` is a parameter so the win32 half is
+ * testable on a POSIX runner.
+ */
+export function isFullyQualifiedPath(
+  p: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (platform !== "win32") return path.posix.isAbsolute(p);
+  return /^[A-Za-z]:[\\/]/.test(p) || /^[\\/]{2}/.test(p);
+}
 
 /**
  * `tandem_save`'s machine-readable `reason` for a save that did not reach disk
@@ -117,6 +135,7 @@ import {
 import { noteClaudeActivity } from "./presence-expiry.js";
 import {
   getErrorMessage,
+  lockOrPermissionCode,
   mcpError,
   mcpStructured,
   mcpSuccess,
@@ -490,11 +509,22 @@ export function registerDocumentTools(server: McpServer): void {
         ),
     },
     withErrorBoundary("tandem_open", async ({ filePath, force, authoredBy }) => {
+      // A relative path would resolve against the SERVER's working directory,
+      // not the caller's, and the desktop sidecar sets none (#1823). This is a
+      // string check on the argument, not root confinement — that is #1666, and
+      // this does not decide it. `/api/open` and startup opens are unchanged.
+      // Not `path.isAbsolute`: on win32 that accepts a drive-less root-relative
+      // path, which still resolves against the cwd's drive.
+      if (!isFullyQualifiedPath(filePath)) {
+        return mcpError("INVALID_PATH", "filePath must be an absolute path.");
+      }
       // License gate (#1116) — ONLY the destructive force-reload sub-path. Plain
       // open stays ungated (the read/export escape hatch), but force=true runs
-      // clearAndReload, which wipes the durable annotation file — an editing-class
-      // operation a restricted user must not reach. Gate sits OUTSIDE the inner
-      // try so a (post-flip) open throw keeps its own error categorization.
+      // clearAndReload, which discards the in-memory annotation, awareness and
+      // content maps and rebuilds the document from disk — an editing-class
+      // operation a restricted user must not reach. (It no longer unlinks the
+      // durable envelope; that was #1813.) Gate sits OUTSIDE the inner try so a
+      // (post-flip) open throw keeps its own error categorization.
       if (force === true) {
         const blocked = licenseGate();
         if (blocked) return blocked;
@@ -513,25 +543,37 @@ export function registerDocumentTools(server: McpServer): void {
             stampClaudeAuthorshipWholeDoc(loaded.doc);
           }
         }
-        return mcpSuccess({ ...toWireResult(result), message: openResultMessage(result) });
+        // `wakeUrl` rides the TOOL payload, never `toWireResult` — that
+        // projection is shared with POST /api/open, /api/upload and
+        // /api/scratchpad (mcp/routes/send-open-result.ts), and widening it
+        // there would put a transport fact into the document-open wire contract
+        // with nothing to catch it (`res.json` takes `unknown`).
+        return mcpSuccess({
+          ...toWireResult(result),
+          message: openResultMessage(result),
+          ...wakeUrlField(),
+        });
       } catch (err: unknown) {
         const e = err as NodeJS.ErrnoException;
         if (e.code === "ENOENT" || e.code === "FILE_NOT_FOUND") {
           return mcpError("FILE_NOT_FOUND", e.message);
         }
         if (e.code === "INVALID_PATH") {
-          return mcpError("FILE_NOT_FOUND", e.message);
+          return mcpError("INVALID_PATH", e.message);
         }
         if (e.code === "UNSUPPORTED_FORMAT" || e.code === "FILE_TOO_LARGE") {
           return mcpError("FORMAT_ERROR", e.message);
         }
-        if (e.code === "EBUSY" || e.code === "EPERM") {
+        // A read that is refused is not a lock (#1823): on Windows both arrive
+        // as EPERM and only the syscall differs (`lockOrPermissionCode`).
+        const lockOrPermission = lockOrPermissionCode(e);
+        if (lockOrPermission === "FILE_LOCKED") {
           return mcpError(
             "FILE_LOCKED",
             `File is locked — another program (likely Microsoft Word) has it open. Close it and try again.`,
           );
         }
-        if (e.code === "EACCES") {
+        if (lockOrPermission === "PERMISSION_DENIED") {
           return mcpError("PERMISSION_DENIED", e.message);
         }
         return mcpError("FORMAT_ERROR", getErrorMessage(err));
@@ -552,10 +594,16 @@ export function registerDocumentTools(server: McpServer): void {
     },
     gatedTool("tandem_scratchpad", async ({ content }) => {
       const result = await openScratchpad(content);
+      // A scratchpad seeded with content is a COMPLETE task in one call — no
+      // outline, no read, no status. That is the population the wake trigger
+      // used to miss entirely: `wakeUrl` was reachable only through read-mode
+      // `tandem_status`, so a session that never needed one could not arm and
+      // correctly declined to guess the URL.
       return mcpSuccess({
         documentId: result.documentId,
         fileName: result.fileName,
         format: result.format,
+        ...wakeUrlField(),
       });
     }),
   );
@@ -568,7 +616,9 @@ export function registerDocumentTools(server: McpServer): void {
         "range-taking tool uses (tandem_edit, tandem_comment, tandem_resolveRange). This is the " +
         'read to use before anchoring: the text includes heading prefixes such as "## " and ' +
         "joins blocks with newlines, so offsets taken from it line up exactly. Pass `section` " +
-        "with a heading's text (case-insensitive) to read just that section. It never returns " +
+        "with a heading's text (case-insensitive) to read just that section; a `section` read " +
+        "returns that section's text only, and its offsets are not document offsets — read " +
+        "without `section`, or use tandem_search/tandem_resolveRange, before anchoring. It never returns " +
         "Markdown, even for .md files — Markdown syntax would shift offsets out of this " +
         "coordinate system; call tandem_save and read the file if you need real Markdown.",
       inputSchema: {
@@ -676,7 +726,7 @@ export function registerDocumentTools(server: McpServer): void {
           const docState = getCurrentDoc(documentId);
           if (docState?.readOnly) {
             return mcpError(
-              "FORMAT_ERROR",
+              "READ_ONLY",
               readOnlyToolMessage(docState.format, "Use annotations instead."),
             );
           }
@@ -1075,7 +1125,7 @@ export function registerDocumentTools(server: McpServer): void {
 
         const docState = getCurrentDoc(documentId);
         if (docState?.readOnly) {
-          return mcpError("FORMAT_ERROR", "Document is read-only — cannot edit lists.");
+          return mcpError("READ_ONLY", "Document is read-only — cannot edit lists.");
         }
         const refusal = listFormatRefusal(docState?.format);
         if (refusal) return mcpError("FORMAT_ERROR", refusal);
@@ -1215,7 +1265,7 @@ export function registerDocumentTools(server: McpServer): void {
         const docState = getCurrentDoc(documentId);
         if (docState?.readOnly) {
           return mcpError(
-            "FORMAT_ERROR",
+            "READ_ONLY",
             readOnlyToolMessage(docState.format, "Cannot append content."),
           );
         }
@@ -1270,8 +1320,19 @@ export function registerDocumentTools(server: McpServer): void {
         .string()
         .optional()
         .describe("Target document ID (defaults to active document)"),
+      allowImageLoss: z
+        .boolean()
+        .optional()
+        .describe(
+          "DESTRUCTIVE. A .docx whose body pictures Tandem couldn't import refuses to save, " +
+            "because the regenerated file would drop them. Pass true to save anyway, " +
+            "permanently removing those pictures from the file on disk. Ask the user first — " +
+            "tandem_convertToMarkdown keeps both the pictures and the edits. Ignored for " +
+            "documents with no dropped pictures, and never overrides a failed post-write " +
+            "verification.",
+        ),
     },
-    withErrorBoundary("tandem_save", async ({ documentId }) => {
+    withErrorBoundary("tandem_save", async ({ documentId, allowImageLoss }) => {
       // path.basename eliminates directory components so CodeQL does not trace
       // user input through Map.get(id) to existing.filePath (js/path-injection).
       const safeDocId = documentId !== undefined ? path.basename(documentId) : undefined;
@@ -1327,7 +1388,7 @@ export function registerDocumentTools(server: McpServer): void {
       }
 
       // Delegate to shared save function (handles .docx body export back to disk)
-      const result = await saveDocumentToDisk(r.docId, "mcp");
+      const result = await saveDocumentToDisk(r.docId, "mcp", { allowImageLoss });
       if (result.status === "saved") {
         // Surface .docx body-export fidelity warnings (#576) so the agent knows
         // what the round-trip downgraded (e.g. unsupported blocks → plain text).
@@ -1395,14 +1456,15 @@ export function registerDocumentTools(server: McpServer): void {
         });
       }
       // result.status === "error"
-      if (result.errorCode === "EACCES" || result.errorCode === "EPERM") {
-        return mcpError("FILE_LOCKED", result.reason ?? "Save failed", {
-          errorCode: result.errorCode,
-        });
-      }
-      return mcpError("FORMAT_ERROR", result.reason ?? "Save failed", {
-        errorCode: result.errorCode,
-      });
+      // One code per condition, matching `tandem_open` and `tandem_applyChanges`
+      // (#1823): a permission refusal is not a lock, and on Windows the syscall
+      // is what tells them apart (`lockOrPermissionCode`). VERIFY_BLOCKED still
+      // falls through to FORMAT_ERROR, carried in `details.errorCode`; giving it
+      // its own wire code is #2004.
+      const code =
+        lockOrPermissionCode({ code: result.errorCode, syscall: result.errorSyscall }) ??
+        "FORMAT_ERROR";
+      return mcpError(code, result.reason ?? "Save failed", { errorCode: result.errorCode });
     }),
   );
 
@@ -1438,7 +1500,13 @@ export function registerDocumentTools(server: McpServer): void {
             if (!current) {
               return mcpStructured({
                 status: text,
-                warning: "No document open — status not broadcast to editor.",
+                // A named id that is not open is not "no document open" — other
+                // documents may well be (#1823). Truthy, not `!== undefined`:
+                // `getCurrentDoc("")` returns null without looking "" up, so
+                // an empty id is no id and must not print `Document  is`.
+                warning: documentId
+                  ? `Document ${documentId} is not open — status not broadcast to editor.`
+                  : "No document open — status not broadcast to editor.",
               });
             }
             const doc = getOrCreateDocument(current.docName);
@@ -1478,8 +1546,6 @@ export function registerDocumentTools(server: McpServer): void {
           // whatever unrelated service holds 3479 and believes it is armed.
           // Absent (not a guess) when no wake transport is running: stdio mode
           // has no HTTP server to attach one to.
-          const wakeUrl = getWakeEndpoint();
-
           return mcpStructured({
             running: true,
             mode,
@@ -1487,7 +1553,7 @@ export function registerDocumentTools(server: McpServer): void {
             // origin tag, restore, or unknown), and what it read at that moment.
             modeProvenance: readModeProvenance(),
             storeReadOnly: isStoreReadOnly(),
-            ...(wakeUrl ? { wakeUrl } : {}),
+            ...wakeUrlField(),
             activeDocument: active
               ? { documentId: active.id, filePath: active.filePath, format: active.format }
               : null,
@@ -1556,7 +1622,14 @@ export function registerDocumentTools(server: McpServer): void {
 
       const result = await renameDocument(id, newName);
       if (result.status === "error") {
-        return mcpError(result.errorCode ?? "RENAME_FAILED", result.reason ?? "Rename failed.");
+        const reason = result.reason ?? "Rename failed.";
+        // `errorCode` is an open string: `renameDocument`'s catches pass a raw
+        // errno (`EXDEV`, `EACCES`, `UNKNOWN`) through it. Narrow against the
+        // wire vocabulary rather than casting, and carry an unlisted one in
+        // `details.errorCode`, the shape `tandem_save` uses (#1851).
+        const parsed = ToolErrorCodeSchema.safeParse(result.errorCode);
+        if (parsed.success) return mcpError(parsed.data, reason);
+        return mcpError("RENAME_FAILED", reason, { errorCode: result.errorCode });
       }
 
       return mcpSuccess({

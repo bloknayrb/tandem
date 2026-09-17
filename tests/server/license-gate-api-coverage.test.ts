@@ -81,7 +81,7 @@ const ROUTE_GATES: RouteGate[] = [
   {
     constant: "API_OPEN",
     gate: "ungated",
-    why: "plain open is the read/export escape hatch — but it carries an IN-HANDLER gate on the `force === true` sub-path (`mcp/routes/open.ts`), which wipes the durable annotation store. The chain regex cannot see that; IN_HANDLER_GATED below asserts it directly, and `license-force-open-gate.test.ts` covers it behaviourally",
+    why: "plain open is the read/export escape hatch — but it carries an IN-HANDLER gate on the `force === true` sub-path (`mcp/routes/open.ts`), which discards the in-memory annotation, awareness and content maps and rebuilds the document from disk. The chain regex cannot see that; IN_HANDLER_GATED below asserts it directly, and `license-force-open-gate.test.ts` covers it behaviourally",
   },
   {
     constant: "API_SAVE",
@@ -107,7 +107,7 @@ const ROUTE_GATES: RouteGate[] = [
   {
     constant: "API_MODE_RELEASE",
     gate: "ungated",
-    why: "clears `heldInSolo` markers after a Solo→Tandem toggle the user can already perform: mode lives in CTRL_ROOM, which Surface A deliberately never marks read-only. Gating it would strand a restricted user's held annotations behind a Held pill with no way to release them, while their reads stay open — worse than what gating would prevent. Reviewed 2026-09-08; it had never been reviewed before, being absent from the prose list",
+    why: "clears `heldInSolo` markers after a Solo→Tandem toggle the user can already perform: mode lives in CTRL_ROOM, which Surface A deliberately never marks read-only. Gating it would strand a restricted user's held annotations behind a Held pill with no way to release them, while their reads stay open — worse than what gating would prevent. Reviewed 2026-09-08; it had never been reviewed before, being absent from the prose list. Decision F (#1788, #1827, taken 2026-09-06) asked for the OPPOSITE — that this route join the gated /api list — but it did not reason about what happens to the restricted user afterwards: because CTRL_ROOM is exempt from Surface A they can still toggle Solo→Tandem, so gating only the RELEASE lets them reach Solo and never leave it. The later reasoning wins, and re-gating this one row is one line if Bryan decides otherwise; the question is open on #1788 (comment 5612504584)",
   },
   {
     constant: "API_LICENSE_ACTIVATE",

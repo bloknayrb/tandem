@@ -1,4 +1,9 @@
 {
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
   "formatter": {
     "enabled": true,
     "indentStyle": "space",
@@ -19,6 +24,7 @@
   "files": {
     "includes": [
       "src/**/*.{ts,tsx,svelte,css,json}",
+      "infra/**/*.{ts,json}",
       "tests/**/*.{ts,tsx,mjs}",
       "scripts/**/*.{ts,tsx,mjs}",
       "packages/**/*.{ts,tsx,mjs}",

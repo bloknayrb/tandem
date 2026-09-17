@@ -174,8 +174,15 @@ export const SESSION_MAX_AGE = 30 * 24 * 60 * 60 * 1000; // 30 days
  *   1 — pre-#1448 (implicit; absent field reads as 0, which is also stale)
  *   2 — #1448: whitespace/hardBreak, frontmatter, table alignment, list spread,
  *       code-span fences, line endings
+ *   3 — #1754/#1755: markdown images keep their source verbatim (a `file:` or
+ *       SVG-data `src` used to be replaced by its alt text on save), and a
+ *       `.docx` import now stamps `droppedImages` into the fidelity report,
+ *       which is what REFUSES a save that would strip the user's pictures.
+ *       Both live on the load path and neither reaches a restored session, so
+ *       without this bump the build that shipped the fix would have gone on
+ *       destroying exactly the data it fixes for up to `SESSION_MAX_AGE`.
  */
-export const DOCUMENT_MODEL_REVISION = 2;
+export const DOCUMENT_MODEL_REVISION = 3;
 export const TYPING_DEBOUNCE = 3000; // 3 seconds
 export const DISCONNECT_DEBOUNCE_MS = 3000; // 3 seconds before showing "server not reachable"
 export const PROLONGED_DISCONNECT_MS = 30_000; // 30 seconds before showing App-level disconnect banner
@@ -341,6 +348,21 @@ export const Y_MAP_FOOTNOTE_BODIES = "footnoteBodies";
  * client/Claude-invisible.
  */
 export const Y_MAP_LINE_ENDING = "lineEnding";
+/**
+ * Whether this document's file began with a UTF-8 BOM (U+FEFF) (#1823).
+ *
+ * Stripped before the parser sees the text and re-prepended at save, exactly
+ * like Y_MAP_LINE_ENDING. A BOM left in the parsed text becomes a character in
+ * the first text node and shifts EVERY flat offset by one — an annotation-
+ * coordinate bug, not a formatting one — which is why it is recorded
+ * off-fragment rather than carried in the body.
+ *
+ * Same inertness as Y_MAP_LINE_ENDING for the channel and durable-sync
+ * subsystems: there is no observer on per-document documentMeta. Not
+ * client-invisible, though — that map syncs to every connected browser over
+ * Hocuspocus, and the client reads `readOnly` / `fileName` / `format` from it.
+ */
+export const Y_MAP_BOM = "bom";
 /**
  * Per-document mirror of the server's authoritative unsaved-edits flag (#1447).
  * `true` while the Y.Doc body holds edits that are not yet on disk.

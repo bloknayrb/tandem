@@ -53,6 +53,11 @@ const MARKDOWN_BODY = [
   // A bare unbroken token as well: it overflows for a different reason than the
   // fenced block (no break opportunity, rather than `white-space: pre`).
   "https://example.test/another/extremely/long/unbroken/token/with/no/spaces/in/it",
+  "",
+  // A bullet list, so the rail-fit gate below also covers the `<ul>` indent
+  // added in #1639 — markers paint OUTSIDE the content box without it.
+  "- first finding",
+  "- second finding",
 ].join("\n");
 
 test.beforeEach(async () => {
@@ -91,11 +96,38 @@ test("a claude comment renders markdown and still fits its column", async ({ pag
   //    signature; 1px absorbs sub-pixel rounding. Asserted on the card, not on
   //    the `<pre>` — the block is allowed to scroll inside itself
   //    (`overflow-x: auto`), it just must not widen the card.
-  const fit = await card.evaluate((el) => ({
-    scrollWidth: (el as HTMLElement).scrollWidth,
-    clientWidth: (el as HTMLElement).clientWidth,
-  }));
+  await expect(card.locator(".tandem-markdown ul li")).toHaveCount(2);
+
+  const fit = await card.evaluate((el) => {
+    const host = el.querySelector(".tandem-markdown") as HTMLElement;
+    const firstElement = host.firstElementChild as HTMLElement;
+    return {
+      scrollWidth: (el as HTMLElement).scrollWidth,
+      clientWidth: (el as HTMLElement).clientWidth,
+      firstChildNodeType: host.firstChild?.nodeType,
+      firstChildMarginTop: getComputedStyle(firstElement).marginTop,
+      clamped: el.classList.contains("is-density-clamped"),
+      compact: el.classList.contains("is-density-compact"),
+    };
+  });
   expect(fit.scrollWidth).toBeLessThanOrEqual(fit.clientWidth + 1);
+
+  // 2b. Acceptance items 1 and 5, in a REAL browser — happy-dom has no layout,
+  //     so "and correct" is a claim only this can make. The first child is an
+  //     ELEMENT (node type 1), not the bare text node the unbalanced markup used
+  //     to leave, and `> :first-child { margin-top: 0 }` therefore reaches it.
+  //
+  //     The density guard is what keeps this from going vacuous: the assertion
+  //     discriminates only at `full` density, which is what the side panel uses
+  //     (`marginView` defaults false). Under margin view the card would be
+  //     compact or clamped, and the flatten rule in `AnnotationCard.svelte`
+  //     (0,3,0) zeroes the margin on EVERY descendant — beating `> :first-child`
+  //     (0,2,0) — so this would pass with the rule deleted. If a later change to
+  //     the E2E default flips the density, this turns red rather than quiet.
+  expect(fit.clamped).toBe(false);
+  expect(fit.compact).toBe(false);
+  expect(fit.firstChildNodeType).toBe(1);
+  expect(fit.firstChildMarginTop).toBe("0px");
 
   // 3. The link takes its colour from the intended TOKEN. `markdown-body.css`
   //    had no `a` rule at all before #1626 — a defect that was live in chat too.

@@ -45,6 +45,13 @@ Read these before reviewing changes:
 - **Client fallback path:** `annotationToPmRange()` must prefer `relRange` resolution. When `relRange` fails, fall back to `flatOffsetToPmPos()` and emit `console.warn` so CRDT degradation is visible in browser devtools. Verify the `method` field in the result is set to `'rel'` or `'flat'` correctly.
 - **Transaction origin tagging (ADR-031):** Every Y.Doc write goes through one of `withMcp` / `withFileSync` / `withInternal` / `withReload` / `withBrowser` / `withModeRelease` from `src/shared/origins.ts`. Raw `doc.transact(...)` is forbidden outside the helpers file. MCP tools use `withMcp`; the file-watcher reload path uses `withReload`; server-internal setup writes (file population, tutorial seeding, metadata broadcasts, cleanup-after-failure) use `withInternal`; durable-annotation file-writer echoes use `withFileSync`; browser edits use `withBrowser`. Channel observers skip mcp / file-sync / internal / reload (only browser emits). Picking the wrong helper is a silent bug — see the skip-set matrix in ADR-031.
 
+## Disposition
+
+A finding blocks the change when it is a range/coordinate invariant violation that can desync an
+annotation from the text it anchors to, or a wrong origin-tag helper from `src/shared/origins.ts`
+(Critical Rule 2). No weighing of how rare the triggering input shape is, no "pre-existing class
+of problem" — fix it, or withdraw the finding on the merits.
+
 ## Output Format
 For each finding:
 - **Severity**: Critical / High / Medium / Low / Info

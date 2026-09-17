@@ -153,6 +153,13 @@ const OPEN_URL: &str = "http://127.0.0.1:3479/api/open";
 /// in src/shared/api-paths.ts.
 const LAUNCHER_NONCE_URL: &str = "http://127.0.0.1:3479/api/launcher/nonce";
 const LAUNCHER_START_URL: &str = "http://127.0.0.1:3479/api/launcher/start";
+/// Origin header for the launcher hops (#1763). Both routes call
+/// `assertOriginAllowlisted`, which fails CLOSED on a missing header, so a
+/// header-less reqwest call 403s at the *nonce* GET and the deferred launcher
+/// can never be released. This is the actual origin of the URLs being
+/// requested — a same-origin declaration rather than a claim to be the WebView,
+/// which also keeps the raw `"tauri.localhost"` literal out of Rust.
+const LOOPBACK_ORIGIN: &str = "http://127.0.0.1:3479";
 /// How long a presence signal waits for the sidecar before giving up and
 /// re-arming the latch. Generous: the user has already shown up, so a slow boot
 /// should still get Claude launched rather than silently skipping it.
@@ -670,24 +677,34 @@ fn handle_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
 /// route: fetch a single-use nonce, then spend it. Best-effort — a failure means
 /// the user simply doesn't get Claude auto-launched this session, which is the
 /// same outcome as before this feature existed, so it logs and moves on.
+/// Apply the headers both launcher hops need: the allowlisted `Origin` the
+/// server's CSRF gate requires, and `Authorization` when a token was minted.
+///
+/// A named function rather than a closure so a test can build a request through
+/// it without a live server (`RequestBuilder::build()` performs no I/O).
+fn launcher_request(
+    req: reqwest::RequestBuilder,
+    auth_token: Option<&str>,
+) -> reqwest::RequestBuilder {
+    let req = req.header("Origin", LOOPBACK_ORIGIN);
+    match auth_token {
+        Some(token) => req.header("Authorization", format!("Bearer {token}")),
+        None => req,
+    }
+}
+
 async fn request_launcher_start(
     client: &reqwest::Client,
     auth_token: Option<&str>,
+    nonce_url: &str,
+    start_url: &str,
 ) -> Result<(), String> {
-    let with_auth = |req: reqwest::RequestBuilder| match auth_token {
-        Some(token) => req.header("Authorization", format!("Bearer {token}")),
-        None => req,
-    };
-
-    let nonce_resp = with_auth(client.get(LAUNCHER_NONCE_URL))
+    let nonce_resp = launcher_request(client.get(nonce_url), auth_token)
         .send()
         .await
-        .map_err(|e| format!("GET {LAUNCHER_NONCE_URL} failed: {e}"))?;
+        .map_err(|e| format!("GET {nonce_url} failed: {e}"))?;
     if !nonce_resp.status().is_success() {
-        return Err(format!(
-            "GET {LAUNCHER_NONCE_URL} returned {}",
-            nonce_resp.status()
-        ));
+        return Err(format!("GET {nonce_url} returned {}", nonce_resp.status()));
     }
     let nonce: serde_json::Value = nonce_resp
         .json()
@@ -699,14 +716,14 @@ async fn request_launcher_start(
         .ok_or_else(|| "nonce body missing `nonce`".to_string())?;
 
     let body = serde_json::json!({ "nonce": nonce });
-    let resp = with_auth(client.post(LAUNCHER_START_URL).json(&body))
+    let resp = launcher_request(client.post(start_url).json(&body), auth_token)
         .send()
         .await
-        .map_err(|e| format!("POST {LAUNCHER_START_URL} failed: {e}"))?;
+        .map_err(|e| format!("POST {start_url} failed: {e}"))?;
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!("POST {LAUNCHER_START_URL} returned {status}: {text}"));
+        return Err(format!("POST {start_url} returned {status}: {text}"));
     }
     Ok(())
 }
@@ -753,7 +770,14 @@ fn note_user_presence(app: &tauri::AppHandle) {
         }
         let client = app.state::<reqwest::Client>().inner().clone();
         let token = best_effort_token("deferred launcher start");
-        if let Err(e) = request_launcher_start(&client, token.as_deref()).await {
+        if let Err(e) = request_launcher_start(
+            &client,
+            token.as_deref(),
+            LAUNCHER_NONCE_URL,
+            LAUNCHER_START_URL,
+        )
+        .await
+        {
             // Restore the latch so a later presence signal retries. The `swap`
             // above is a claim, not a commitment — without this a transient
             // failure would permanently strand the launcher.
@@ -761,6 +785,19 @@ fn note_user_presence(app: &tauri::AppHandle) {
             LAUNCHER_DEFERRED.store(true, Ordering::Release);
         }
     });
+}
+
+/// Is the sidecar currently healthy?
+///
+/// The steady-state crash handler's second guard (#1809) — `SIDECAR_HEALTHY` is
+/// precisely "the boot loop already returned `Started`", which is what separates
+/// a crash the boot loop is still retrying from one nothing will respawn.
+///
+/// The static stays private: an unlocked *read* is already what
+/// `await_sidecar_healthy` does just below, and the doc comment on
+/// `SIDECAR_HEALTHY` narrows the `PendingOpens`-mutex requirement to writes.
+pub(crate) fn sidecar_is_healthy() -> bool {
+    SIDECAR_HEALTHY.load(Ordering::Acquire)
 }
 
 /// Bounded wait for the sidecar's HTTP server to accept requests.
@@ -772,12 +809,12 @@ fn note_user_presence(app: &tauri::AppHandle) {
 async fn await_sidecar_healthy(deadline: Duration) -> bool {
     let start = std::time::Instant::now();
     while start.elapsed() < deadline {
-        if SIDECAR_HEALTHY.load(Ordering::Acquire) {
+        if sidecar_is_healthy() {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    SIDECAR_HEALTHY.load(Ordering::Acquire)
+    sidecar_is_healthy()
 }
 
 /// Fetch the auth token for a loopback POST, falling back to anonymous.
@@ -1455,6 +1492,58 @@ pub fn run() {
                 }
             }
 
+            // Rewrite the registration so its baked exe path and args stay
+            // current. Spawned off the setup thread — on Windows this is a
+            // registry write and on Linux a file write, both fast, but neither
+            // belongs on the startup critical path. Only ever refreshes an
+            // *existing* registration; `is_enabled()` inside the function is the
+            // gate, so this can never turn autostart on.
+            //
+            // Runs on every launch that passes `autostart_refresh_allowed`, not
+            // only autostart launches (#1810): a *moved* app never autostarts at
+            // all, which made an autostart-only repair unreachable for the one
+            // case it exists to fix. The guard is needed because `enable()`
+            // bakes this launch's executable path — see the predicate.
+            //
+            // The path handed to the predicate is the one the PLUGIN will bake,
+            // resolved the same way it resolves it: `$APPIMAGE` first on Linux,
+            // else `current_exe()`. Passing bare `current_exe()` would put every
+            // non-autostart AppImage launch under `/tmp/.mount_XXXXXX/` and
+            // refuse the repair forever, logging the refusal at `info` — below
+            // the release log floor, so nothing would surface it.
+            {
+                #[cfg(target_os = "linux")]
+                let baked_exe = app
+                    .env()
+                    .appimage
+                    .map(std::path::PathBuf::from)
+                    .map(Ok)
+                    .unwrap_or_else(std::env::current_exe);
+                #[cfg(not(target_os = "linux"))]
+                let baked_exe = std::env::current_exe();
+
+                match baked_exe {
+                    // A path we cannot resolve is a skip, not a refresh.
+                    Err(e) => log::info!("[autostart] refresh skipped, exe path unresolved: {e}"),
+                    Ok(exe) => {
+                        // Canonicalize BOTH sides — see
+                        // `canonical_for_refresh_check`. Uncanonicalized, the
+                        // temp arm never fires on macOS (`/var` vs
+                        // `/private/var`) and can miss on Windows (8.3 `%TEMP%`).
+                        if autostart::autostart_refresh_allowed(
+                            cfg!(debug_assertions),
+                            &autostart::canonical_for_refresh_check(&exe),
+                            &autostart::canonical_for_refresh_check(&std::env::temp_dir()),
+                        ) {
+                            let refresh_handle = app.handle().clone();
+                            tauri::async_runtime::spawn_blocking(move || {
+                                autostart::refresh_registration(&refresh_handle);
+                            });
+                        }
+                    }
+                }
+            }
+
             // --- Autostart visibility decision (#1236) ------------------------
             //
             // Deferred to here because it needs `tray_available`, which only
@@ -1489,21 +1578,6 @@ pub fn run() {
                             hide = false;
                         }
                     }
-                }
-
-                // Rewrite the registration so its baked exe path and args stay
-                // current. Spawned off the setup thread — on Windows this is a
-                // registry write and on Linux a file write, both fast, but
-                // neither belongs on the startup critical path. Only ever
-                // refreshes an *existing* registration; it can't turn autostart
-                // on. Scoped to autostart launches: a normal launch has no
-                // reason to touch it, and a user who moved the app will
-                // autostart at least once before the path matters.
-                {
-                    let refresh_handle = app.handle().clone();
-                    tauri::async_runtime::spawn_blocking(move || {
-                        autostart::refresh_registration(&refresh_handle);
-                    });
                 }
 
                 if hide {
@@ -1619,7 +1693,6 @@ pub fn run() {
             context_menu::show_tab_context_menu,
             context_menu::show_annotation_context_menu,
             install_update,
-            keychain::keychain_get,
             keychain::keychain_set,
             keychain::keychain_delete,
             autostart::autostart_get_status,
@@ -1636,7 +1709,7 @@ pub fn run() {
                 // desktops), and the updater's restart on non-Windows.
                 //
                 // The one exit that never arrives here, by design: the Windows
-                // updater restart. `download_and_install` ends in the plugin's
+                // updater restart. `install` ends in the plugin's
                 // own `std::process::exit(0)`, so the pre-install graceful stop
                 // in `perform_install` is the only flush on that path, and that
                 // function keeps its own gate for exactly that reason.
@@ -2254,20 +2327,102 @@ fn show_update_in_progress_dialog(app: &tauri::AppHandle) {
     builder.show(|_| {});
 }
 
-/// Show an error dialog for failed update checks (manual check feedback only).
-fn show_update_error_dialog(app: &tauri::AppHandle, error: &str) {
+/// Show an error dialog for a failed update check or a failed install.
+///
+/// `lead` is the first sentence, because the two are different failures and one
+/// fixed lead misattributes the other: "Could not check for updates" on the
+/// download or install arm sends the user to look at their connection when the
+/// update was already found and fetched. The rest of the copy — the verbatim
+/// error and the retry advice — is shared.
+fn show_update_error_dialog(app: &tauri::AppHandle, lead: &str, error: &str) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
     let mut builder = app
         .dialog()
         .message(format!(
-            "Could not check for updates.\n\n\
+            "{lead}\n\n\
              Error: {error}\n\n\
              Please try again later or check your internet connection."
         ))
         .title("Update Error")
         .kind(MessageDialogKind::Error);
     builder = attach_main_window_or_warn(app, builder, "show_update_error_dialog");
+    builder.show(|_| {});
+}
+
+/// Tell the user no manifest is served for this device, and which of the two
+/// reasons it is.
+///
+/// **Deliberately not `show_update_error_dialog`.** That one's surrounding prose
+/// is fixed -- "Could not check for updates … Please try again later or check
+/// your internet connection" -- so routing an entitlement decision through it
+/// wraps the honest line in copy that misattributes it to a transient network
+/// fault, and the state is not transient, so "try again later" is false. The
+/// user then retries, checks their network, and files a support request about a
+/// broken updater instead of acting on the licence line. The wording was settled
+/// in #1819 and the two arms below stand as written; the misattribution is not a
+/// wording question, so what must survive any later rewrite is that the two arms
+/// say different things.
+fn show_update_withheld_dialog(app: &tauri::AppHandle, reason: WithheldReason) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+    let (title, message) = reason.dialog_copy();
+    let mut builder = app
+        .dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Warning);
+    builder = attach_main_window_or_warn(app, builder, "show_update_withheld_dialog");
+    builder.show(|_| {});
+}
+
+/// `(title, body)` for `show_update_window_ended_dialog` -- pure, so `cargo
+/// test` reaches the copy without an `AppHandle`.
+///
+/// The body reports THIS DEVICE'S OWN VIEW, never a verdict. `expiresAt` is
+/// read out of the locally stored license, so after a KV-only renewal the
+/// Worker may still consider the device entitled while this flag says the
+/// window ended. That is accepted rather than papered over: `SettingsLicenseTab`
+/// already asserts the same thing from the same field, and the authoritative
+/// detector is the Worker's `reason` (#1786), which is invisible through the
+/// `Ok(None)` this branch fires on.
+///
+/// No purchase/renewal URL literal lives here: `TANDEM_PURCHASE_URL` lives once
+/// in `src/shared/constants.ts`, and a native message dialog holds no link
+/// anyway -- so the copy points at Settings -> License, which carries the
+/// clickable one. That is a claim about the WebView, and it is true only because
+/// `SettingsLicenseTab.svelte`'s `license-update-window-ended` warning now holds
+/// a `license-renew-link` to `TANDEM_PURCHASE_URL` (review round 2: before it,
+/// that tab offered a license HOLDER nothing but "Don't have one yet? Buy a
+/// license", so this dialog completed a loop with no exit).
+/// `tests/client/settings-license-tab.test.ts` pins that link, so deleting it
+/// turns this sentence red rather than leaving it quietly false.
+fn window_ended_copy(version: &str) -> (&'static str, String) {
+    (
+        "Update Window Ended",
+        format!(
+            "This device's license shows an update window that has ended, so new releases \
+             may no longer be offered here.\n\n\
+             Tandem v{version} keeps running forever — a license never stops working. To \
+             receive new releases again, renew from Settings -> License."
+        ),
+    )
+}
+
+/// Tell a licensed user whose LOCAL update window has ended that this is why
+/// the check found nothing -- instead of "You're running the latest version",
+/// which is the same silent-starvation lie #1786 exists to detect, reached by a
+/// different route (a lapsed entitlement arrives as a 204, i.e. `Ok(None)`).
+fn show_update_window_ended_dialog(app: &tauri::AppHandle) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+    let (title, message) = window_ended_copy(env!("CARGO_PKG_VERSION"));
+    let mut builder = app
+        .dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Warning);
+    builder = attach_main_window_or_warn(app, builder, "show_update_window_ended_dialog");
     builder.show(|_| {});
 }
 
@@ -2285,39 +2440,243 @@ struct LicenseStatusResponse {
     license_id: Option<String>,
     #[serde(default)]
     update_window_current: bool,
+    /// Without this field trial and restricted are INDISTINGUISHABLE in Rust --
+    /// both report `update_window_current: false` (license-state.ts:136, :150) --
+    /// so any "not entitled => no manifest" rule would freeze every evaluator on
+    /// the day the gate flips (#1785). The wire already carries it:
+    /// `toLicenseStatusWire` returns the active `LicenseState` arms verbatim
+    /// (src/server/mcp/routes/license.ts:22-52) and the updater probes loopback,
+    /// so it gets the unscrubbed shape.
+    #[serde(default)]
+    status: Option<String>,
 }
 
-/// Ask the sidecar (loopback) whether update checks should route through the
-/// license-gated Worker. Returns `Some(license_id)` ONLY when a Worker endpoint
-/// is configured AND the gate is active AND the license's update window is
-/// current. Every other case (no endpoint, gate dark, trial, restricted,
-/// expired window, sidecar unreachable, scrubbed body) falls back to `None` ⇒
-/// the default public endpoint. Never errors — update checks must not depend on
-/// the license probe succeeding.
-async fn entitled_license_id(app: &tauri::AppHandle) -> Option<String> {
+/// Why no manifest is served, and it is an ENUM rather than the `&'static str`
+/// the first draft carried.
+///
+/// The string version reached exactly one consumer -- a `log::warn!` -- and both
+/// user-facing consumers below then had to invent one fixed sentence covering
+/// both cases. That sentence was the licensing one, so a **paying** customer
+/// whose sidecar was down or mid-restart was told to activate a license: an
+/// entitlement misdiagnosis of a transient loopback failure, on a tray click
+/// that the retry-dialog path at `:1855` proves is reachable with no sidecar at
+/// all. An enum with an exhaustive `dialog_copy` is what makes a third reason
+/// impossible to add without writing its copy.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum WithheldReason {
+    /// The loopback probe could not answer AT ALL: sidecar not up yet, a
+    /// non-2xx, a body that will not deserialize, or no managed `reqwest::Client`.
+    /// **Not an entitlement fact**, and not durable either -- the next check may
+    /// well succeed.
+    StatusUnavailable,
+    /// The sidecar positively reported `restricted`. Durable until the user
+    /// activates a license.
+    NoEntitlement,
+}
+
+impl WithheldReason {
+    /// Machine-readable code. Reaches the log line and, prefixed, the
+    /// `install_update` error string the WebView receives.
+    fn code(self) -> &'static str {
+        match self {
+            Self::StatusUnavailable => "status-unavailable",
+            Self::NoEntitlement => "no-entitlement",
+        }
+    }
+
+    /// `(title, body)` for `show_update_withheld_dialog`. Wording settled in
+    /// #1819: both pairs stand as written, because neither overlaps the
+    /// ended-window copy this crate now also carries. What is NOT wording, and
+    /// must survive any later rewrite, is that the two arms say different things
+    /// -- one is a licensing state, the other is a local server that is not
+    /// answering.
+    fn dialog_copy(self) -> (&'static str, &'static str) {
+        match self {
+            Self::StatusUnavailable => (
+                "Update Check Unavailable",
+                "Tandem could not reach its own local server, so it could not check for updates.\n\n\
+                 Nothing is wrong with your copy of Tandem. Try Settings -> Restart server, or \
+                 restart Tandem, then check again.",
+            ),
+            Self::NoEntitlement => (
+                "Updates Unavailable",
+                "Updates are unavailable for this installation.\n\n\
+                 Activate a license to receive new versions. Tandem keeps running without one.",
+            ),
+        }
+    }
+}
+
+/// Which manifest an update check may use. Three outcomes, not two: today's
+/// `Option<String>` collapsed "no Worker configured", "gate dark", "trial" and
+/// "not entitled" onto one `None`, and that `None` is the PUBLIC manifest (#1785).
+#[derive(Debug, PartialEq)]
+enum UpdateRoute {
+    /// The public manifest from `tauri.conf.json`. Reached while no endpoint is
+    /// compiled in (pre-v1.0, byte-identical to shipped behaviour), when the
+    /// sidecar reports the gate dark, for a TRIAL device, and for any probe body
+    /// that does not positively say `restricted` -- an evaluator, and an older or
+    /// scrubbed sidecar, keep receiving builds exactly as today.
+    Public,
+    /// This device holds a license id: the Worker, with the opaque
+    /// `X-Tandem-License-Id`. Sent even when the LOCAL update window has ended --
+    /// the Worker's KV is the authority, and its `expired` reason is what makes
+    /// that decision readable in the retained log. `expired` is deliberately NOT
+    /// alerted on (it is every out-of-window customer, forever); the alerting
+    /// detector #1786 built is `unknown-id`. A client that short-circuits on its
+    /// own copy of the window turns that branch into dead code in production.
+    Licensed(String),
+    /// Serve NO manifest -- never the public one. A restricted device, or a probe
+    /// that could not answer at all. The reason is carried all the way to the
+    /// user-facing copy, not just to the log line: the two arms are a licensing
+    /// state and a dead sidecar, and telling a licensed user the second is the
+    /// first is the support call this enum exists to prevent.
+    NoUpdates(WithheldReason),
+}
+
+/// Pure classifier for the update route (#1785). Synchronous, no `AppHandle`, so
+/// every arm is reachable from `cargo test`.
+///
+/// The parameter is `probe`, never `status`: `LicenseStatusResponse` has a
+/// `status` FIELD, and a parameter of the same name would make step 2 (no
+/// response at all) and step 5 (the response's `status` field) read as the same
+/// test.
+///
+/// Steps 5 and 6 are deliberately DENY-BY-NAME rather than allow-by-name: a
+/// trial device, a scrubbed body and an older sidecar that predates the `status`
+/// field all land on `Public`, which is today's behaviour and no regression,
+/// whereas the opposite default freezes every evaluator the day the gate flips.
+/// `update_window_current` stops being the routing discriminant -- that was the
+/// bug: an expired-window customer was offered the public manifest -- and is
+/// carried into the `Licensed` arm's log line instead.
+fn update_route(endpoint: &str, probe: Option<&LicenseStatusResponse>) -> UpdateRoute {
+    // 1. The shipped path, byte-identical: no endpoint compiled in.
+    if endpoint.is_empty() {
+        return UpdateRoute::Public;
+    }
+    // 2. Fail CLOSED: this is the product's only post-purchase control, and an
+    //    unreachable sidecar means Tandem is barely running anyway.
+    let Some(probe) = probe else {
+        return UpdateRoute::NoUpdates(WithheldReason::StatusUnavailable);
+    };
+    // 3. A sidecar reporting a dark gate against a configured endpoint is a
+    //    mismatched build, not an entitlement question.
+    if !probe.gate_active {
+        return UpdateRoute::Public;
+    }
+    // 4. Regardless of `update_window_current` -- see the `Licensed` docblock.
+    if let Some(id) = probe.license_id.as_deref() {
+        return UpdateRoute::Licensed(id.to_string());
+    }
+    // 5. Deny by name only.
+    if probe.status.as_deref() == Some("restricted") {
+        return UpdateRoute::NoUpdates(WithheldReason::NoEntitlement);
+    }
+    // 6. Trial, scrubbed body, version skew -- today's behaviour.
+    UpdateRoute::Public
+}
+
+/// Does THIS DEVICE'S OWN copy of the license say its update window has ended?
+///
+/// The conjunction `resolve_update_route` already evaluates for its
+/// `log::warn!`, hoisted so the log line and the dialog cannot diverge. No new
+/// probe and no new request: it reads the response already in hand.
+///
+/// **This is the LOCAL view, never a verdict** (#1819). `update_window_current`
+/// is computed from the `expiresAt` inside the stored license, so after a
+/// KV-only renewal the Worker may still consider the device entitled while this
+/// says the window ended. That disagreement is accepted rather than papered
+/// over: `SettingsLicenseTab`'s `license-update-window-ended` line already
+/// asserts the same thing from the same field, and the authoritative detector
+/// stays the Worker's `reason` (#1786), which a 204 -- `Ok(None)` in Rust --
+/// makes invisible here.
+///
+/// Gated on `Licensed` and not on the probe alone, which is the discriminating
+/// half: every TRIAL device reports `update_window_current: false`, so a
+/// probe-only flag would tell each evaluator their update window had ended.
+fn local_window_ended(route: &UpdateRoute, probe: Option<&LicenseStatusResponse>) -> bool {
+    matches!(route, UpdateRoute::Licensed(_)) && !probe.is_some_and(|p| p.update_window_current)
+}
+
+/// Ask the sidecar (loopback) which manifest this device may use, then classify
+/// with `update_route`. Never errors -- update checks must not depend on the
+/// license probe succeeding.
+///
+/// The endpoint check stays FIRST, so while `LICENSE_UPDATE_ENDPOINT` is empty
+/// this returns `Public` without probing at all. That early return is the
+/// byte-identity argument for the whole change.
+///
+/// The second tuple element is `local_window_ended` -- the device's own view,
+/// carried to the dialog rather than only to the `log::warn!` below (#1819).
+/// It is bound ONCE and used for both, so the log and the screen cannot say
+/// different things. The empty-endpoint early return answers `false`: no probe
+/// happened, so there is no local view to report.
+async fn resolve_update_route(app: &tauri::AppHandle) -> (UpdateRoute, bool) {
     if LICENSE_UPDATE_ENDPOINT.is_empty() {
-        return None;
+        return (UpdateRoute::Public, false);
     }
-    let client = app.try_state::<reqwest::Client>()?.inner().clone();
-    let resp = client.get(LICENSE_STATUS_URL).send().await.ok()?;
-    if !resp.status().is_success() {
-        return None;
+    let probe: Option<LicenseStatusResponse> = async {
+        let client = app.try_state::<reqwest::Client>()?.inner().clone();
+        let resp = client.get(LICENSE_STATUS_URL).send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        resp.json::<LicenseStatusResponse>().await.ok()
     }
-    let status: LicenseStatusResponse = resp.json().await.ok()?;
-    if status.gate_active && status.update_window_current {
-        status.license_id
-    } else {
-        None
+    .await;
+    let route = update_route(LICENSE_UPDATE_ENDPOINT, probe.as_ref());
+    // `update_window_current` is no longer the routing discriminant -- the
+    // Worker's KV is the authority -- but the LOCAL view is what lets an
+    // operator correlate a silent 204 with the Worker's own `reason` (#1786).
+    // Logged only when the local window has ended, which is the only
+    // correlatable case, and at `warn!` because release builds filter at
+    // `LevelFilter::Warn` (the #1416 trap at :200).
+    let local_window_ended = local_window_ended(&route, probe.as_ref());
+    if local_window_ended {
+        log::warn!(
+            "Routing to the licensed update endpoint with a LOCALLY expired update window -- \
+             the Worker decides; expect a 204 with reason `expired` if it agrees"
+        );
     }
+    (route, local_window_ended)
 }
 
-/// Build the updater, routing through the license-gated Worker (with the opaque
-/// license-id header) when the device is entitled, else the default public
-/// endpoint from `tauri.conf.json`. Both `check_for_update` and `install_update`
-/// go through this so check + install agree on the source (#1116, ADR-040 §7).
-async fn build_updater(app: &tauri::AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
-    match entitled_license_id(app).await {
-        Some(lid) => {
+/// What `build_updater` resolved: a manifest source, or a refusal that still
+/// says WHY.
+///
+/// The `Option<Updater>` this replaces threw the reason away at the boundary --
+/// `build_updater` logged the `&'static str` and returned a bare `None` -- so
+/// both callers could only show one fixed sentence for two unrelated states.
+/// The reason already exists in `UpdateRoute`; this just stops dropping it.
+enum UpdateOutcome {
+    /// Check this updater. Built from the `Public` or `Licensed` arm.
+    ///
+    /// `local_window_ended` rides along so `check_for_update`'s `Ok(None)` arm
+    /// can tell a lapsed entitlement apart from a genuinely current install
+    /// (#1819). It is the LOCAL view -- see `local_window_ended`.
+    Serve {
+        updater: tauri_plugin_updater::Updater,
+        local_window_ended: bool,
+    },
+    /// No manifest is served for this device, and why.
+    Withheld(WithheldReason),
+}
+
+/// Build the updater for this device's `UpdateRoute`. Both `check_for_update`
+/// and `install_update` go through this so check + install agree on the source
+/// (#1116, ADR-040 s7).
+///
+/// `Withheld` means "serve NO manifest" -- never the public one (#1785). The
+/// `app.updater()` call below belongs to the `Public` arm ALONE; a lazy
+/// `NoUpdates(_) => app.updater()` is the filed bug, unchanged, and
+/// `tests/docs/license-flip-consts.test.ts` counts occurrences for exactly that
+/// reason.
+async fn build_updater(app: &tauri::AppHandle) -> Result<UpdateOutcome, String> {
+    let (route, local_window_ended) = resolve_update_route(app).await;
+    match route {
+        UpdateRoute::Licensed(lid) => {
+            // `Url::parse` stays INSIDE this arm, so a malformed configured
+            // endpoint is still `Err` rather than a silent fall-through to public.
             let endpoint = Url::parse(LICENSE_UPDATE_ENDPOINT)
                 .map_err(|e| format!("Invalid license update endpoint: {e}"))?;
             app.updater_builder()
@@ -2327,18 +2686,66 @@ async fn build_updater(app: &tauri::AppHandle) -> Result<tauri_plugin_updater::U
                 .map_err(|e| e.to_string())?
                 .build()
                 .map_err(|e| e.to_string())
+                .map(|updater| UpdateOutcome::Serve {
+                    updater,
+                    local_window_ended,
+                })
         }
-        None => app.updater().map_err(|e| e.to_string()),
+        // `license-flip-consts.test.ts` counts `app.updater()` across the crate
+        // and requires exactly one, pinning it as this arm's alone. It counts
+        // against a whitespace-collapsed view, so `cargo fmt` splitting this
+        // across lines is fine -- but a SECOND occurrence anywhere, most
+        // plausibly a lazy `NoUpdates(_) => app.updater()`, is #1785 itself and
+        // turns that test red.
+        UpdateRoute::Public => app
+            .updater()
+            .map_err(|e| e.to_string())
+            .map(|updater| UpdateOutcome::Serve {
+                updater,
+                local_window_ended,
+            }),
+        UpdateRoute::NoUpdates(reason) => {
+            // `warn!`, not `info!`, and this is not style: lib.rs sets
+            // `LevelFilter::Warn` for release builds, so an `info!` writes ZERO
+            // bytes (the #1416 trap recorded at :200). This is the fail-closed
+            // state on an unattended 8-hourly path.
+            log::warn!("No update manifest served: {}", reason.code());
+            Ok(UpdateOutcome::Withheld(reason))
+        }
     }
 }
 
 async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
-    let updater = match build_updater(app).await {
-        Ok(u) => u,
+    let (updater, local_window_ended) = match build_updater(app).await {
+        Ok(UpdateOutcome::Serve {
+            updater,
+            local_window_ended,
+        }) => (updater, local_window_ended),
+        // No manifest is served for this device (#1785). Deliberately NOT
+        // `show_up_to_date_dialog` -- "You're running the latest version" is the
+        // exact lie #1786 exists to detect. The dialog branches on `reason`: a
+        // `status-unavailable` here is a dead or restarting sidecar, and a
+        // licensed customer reaching this path (the tray outlives a dead
+        // sidecar -- see the retry dialog at :1855) must not be told to buy a
+        // license.
+        Ok(UpdateOutcome::Withheld(reason)) => {
+            log::warn!(
+                "Update check skipped: no manifest served for this device ({})",
+                reason.code()
+            );
+            if manual {
+                show_update_withheld_dialog(app, reason);
+            }
+            return;
+        }
         Err(e) => {
             log::debug!("Updater unavailable: {e}");
             if manual {
-                show_update_error_dialog(app, &format!("Updater not configured: {e}"));
+                show_update_error_dialog(
+                    app,
+                    "Could not check for updates.",
+                    &format!("Updater not configured: {e}"),
+                );
             }
             return;
         }
@@ -2349,14 +2756,24 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
         Ok(None) => {
             log::info!("No update available");
             if manual {
-                show_up_to_date_dialog(app);
+                // A lapsed entitlement arrives here as `Ok(None)`: the Worker
+                // answers 204 and the updater reports "nothing newer". Telling
+                // that user "You're running the latest version" is the same
+                // silent-starvation lie #1786 detects Worker-side, reached by a
+                // different route -- so the LOCAL view names itself instead
+                // (#1819). Everyone else sees byte-identical copy.
+                if local_window_ended {
+                    show_update_window_ended_dialog(app);
+                } else {
+                    show_up_to_date_dialog(app);
+                }
             }
             return;
         }
         Err(e) => {
             log::warn!("Update check failed: {e}");
             if manual {
-                show_update_error_dialog(app, &e.to_string());
+                show_update_error_dialog(app, "Could not check for updates.", &e.to_string());
             }
             return;
         }
@@ -2404,9 +2821,33 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
 /// release the server advertises) and dispatches the install flow.
 #[tauri::command]
 async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
-    let updater = build_updater(&app)
+    let updater = match build_updater(&app)
         .await
-        .map_err(|e| format!("Updater not configured: {e}"))?;
+        .map_err(|e| format!("Updater not configured: {e}"))?
+    {
+        UpdateOutcome::Serve { updater, .. } => updater,
+        UpdateOutcome::Withheld(reason) => {
+            // The dialog is fired HERE, not left to the caller. The only caller
+            // is `useUpdaterBanner.svelte.ts`'s `install()`, whose catch does
+            // nothing but `console.warn` and re-arm the CTA -- no dialog, no
+            // toast, no banner text -- so returning the code alone makes
+            // "Restart to install" a silent no-op on screen. That is the exact
+            // failure `perform_install` refuses for `SidecarShuttingDownGuard`:
+            // an explicit click must never produce nothing at all.
+            //
+            // Reachable on an entitled device: the banner is raised by a check
+            // that succeeded, and the sidecar can be mid-restart (Settings ->
+            // Restart server, or the post-update respawn) by the time the user
+            // clicks -- which is `StatusUnavailable`, not a licensing state.
+            show_update_withheld_dialog(&app, reason);
+            // Machine-readable, and now carries the reason, because the
+            // neighbouring "No update available" means something genuinely
+            // different: there IS a manifest and it holds nothing newer.
+            // The user-facing wording is the dialog's, settled in #1819; this
+            // string is machine-readable and never reaches the screen.
+            return Err(format!("UPDATE_WITHHELD:{}", reason.code()));
+        }
+    };
     let update = updater
         .check()
         .await
@@ -2429,35 +2870,51 @@ fn warn_port_still_responding(warnings: &mut Vec<String>) {
     warnings.push(msg);
 }
 
-/// Shared install flow: kill sidecar, await port + file-lock release, then
-/// download+install via the Tauri updater plugin. On success the application
-/// is restarted; on failure a native dialog surfaces the error.
+/// Shared install flow: download the update with the sidecar still running,
+/// then kill the sidecar, await port + file-lock release, and install. On
+/// success the application is restarted; on failure a native dialog surfaces
+/// the error.
+///
+/// **The download comes first deliberately (#1808).** It is the long,
+/// failure-prone step — offline, a proxy, a 403, a signature mismatch — and
+/// the sidecar is still up when it runs. Stopping the sidecar first meant a
+/// failed download left the app running with no backend and every tab
+/// "Disconnected", while the UI still said the server was up. A download
+/// failure must never be the thing that leaves the app without a backend —
+/// which is also why the failure arm releases `SIDECAR_SHUTTING_DOWN` and calls
+/// `recover_deferred_crash`: a sidecar that died *on its own* mid-download had
+/// its restart deferred by that latch, and nothing else would ever perform it.
 async fn perform_install(
     app: &tauri::AppHandle,
     update: tauri_plugin_updater::Update,
     version: &str,
 ) {
-    // Stop sidecar BEFORE install — on Windows, the NSIS installer runs during
-    // download_and_install() and needs to replace node-sidecar.exe on disk.
-    // If the process is still running, the file is locked and install fails.
-    // Graceful first (#1088): POST /api/shutdown flushes dirty docs + saves
-    // the session before the app restarts into the new version; hard kill is
-    // the fallback on POST failure or timeout.
+    // Hold `SIDECAR_SHUTTING_DOWN` across the download AND the install so the
+    // four spawn producers (Settings -> Restart server, start_sidecar's retry
+    // loop, the Retry Server Start dialog, and the #1809 crash handler) decline
+    // instead of racing a fresh child into the slot we are about to overwrite
+    // on disk.
     //
-    // Hold `SIDECAR_SHUTTING_DOWN` across the stop AND across the download so the
-    // three spawn producers (Settings -> Restart server, start_sidecar's retry
-    // loop, the Retry Server Start dialog) decline instead of racing a fresh
-    // child into the slot we are about to overwrite on disk.
+    // The latch is acquired here, before the download, rather than with the
+    // stop below: two clicks on "Restart to install" must not both download,
+    // and a Settings -> Restart server racing an imminent install is exactly
+    // what the latch exists to refuse. The accepted consequence is that a
+    // sidecar crash *during* the download is not restarted while the guard is
+    // held — the alternative is a fresh child landing in the slot the
+    // installer is about to overwrite. It is DEFERRED, not dropped: the #1809
+    // handler latches it and the download-failure arm below releases the guard
+    // and calls `recover_deferred_crash`, because "the sidecar was never
+    // stopped" does not imply it is still alive.
     //
-    // An RAII guard, not a store plus a clear on the failure arm: the flag spans
-    // `download_and_install(..).await`, so a panic or a dropped task would latch
-    // it for the process lifetime and leave `restart_sidecar` and Retry Server
-    // Start permanent silent no-ops. Its `Drop` keeps the `compare_exchange`,
-    // which is the `EXITING` interlock — an update that fails DURING an exit
-    // must not re-permit spawns. On the success arm the process exits — on
-    // Windows inside `download_and_install`'s own `std::process::exit(0)`, on
-    // other platforms inside `app.restart()` (which returns `!`) — so the guard
-    // never releases there, which is what we want. #1756.
+    // An RAII guard, not a store plus a clear on the failure arm: the flag
+    // spans `download(..).await` and `install(..)`, so a panic or a dropped
+    // task would latch it for the process lifetime and leave `restart_sidecar`
+    // and Retry Server Start permanent silent no-ops. Its `Drop` keeps the
+    // `compare_exchange`, which is the `EXITING` interlock — an update that
+    // fails DURING an exit must not re-permit spawns. On the success arm the
+    // process exits — on Windows inside `install`'s own `std::process::exit(0)`,
+    // on other platforms inside `app.restart()` (which returns `!`) — so the
+    // guard never releases there, which is what we want. #1756.
     //
     // `try_acquire`, not a bare acquire: `install_update` is a plain command
     // with no re-entrancy gate, so two clicks on "Restart to install" run two of
@@ -2476,20 +2933,103 @@ async fn perform_install(
     };
     let client = app.state::<reqwest::Client>().inner().clone();
 
+    // Download FIRST, with the sidecar still up (#1808). `download` is exactly
+    // what `download_and_install` calls before `install`, and `verify_signature`
+    // runs at the end of it — so the split is behaviour-identical except for
+    // *when* the sidecar is down.
+    let bytes = match update
+        .download(
+            |chunk_len, total| {
+                if let Some(t) = total {
+                    log::debug!("Update download: {chunk_len}/{t} bytes");
+                }
+            },
+            // #1118: the pending-update marker is written HERE, at
+            // download-finish, and neither of the two places that look obvious.
+            //
+            // NOT before the download: `build_updater` sets no timeout, so the
+            // marker would span the whole download, and any process death
+            // during it strands a marker with no `Err` arm to clean up — tray
+            // Quit, the Linux-without-tray window close, a crash, a sleep-kill.
+            // Every one of those would become a false "your update may not have
+            // completed" on the next boot.
+            //
+            // NOT on the `Ok` arm below (which is what ADR-043 §6 sketched):
+            // that arm is dead code on Windows, where the plugin's
+            // `install_inner` ends in an unconditional `std::process::exit(0)`.
+            //
+            // This closure fires two lines before `verify_signature`, so a
+            // signature failure does write a marker — that path returns `Err`
+            // from `download` on every platform and the `Err` arm just below
+            // clears it.
+            //
+            // Since #1808 the stop-and-wait (up to 15 s) sits BETWEEN this
+            // write and `install(bytes)`. A process death in that gap strands a
+            // marker exactly as a death during `install` does today; narrowing
+            // the marker to just before `install` would change #1118's
+            // semantics and is deliberately not done in a PR about ordering.
+            {
+                let app = app.clone();
+                let version = version.to_string();
+                move || {
+                    log::info!("Update downloaded -- installing");
+                    pending_update::record_pending_update(&app, &version);
+                }
+            },
+        )
+        .await
+    {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            log::error!("Update download failed: {e}");
+            // The marker must be cleared on BOTH failure arms: the finish
+            // closure above fires before `verify_signature`, so a signature
+            // failure reaches here with a marker already written.
+            pending_update::clear_pending_update(app);
+            // This path never stopped the sidecar, so in the ordinary case the
+            // app still has its backend and the user can retry from the banner.
+            // That is the whole of #1808 — but "never stopped" is not the same
+            // as "still running": the sidecar can have crashed on its own during
+            // a multi-minute download, and the latch we are about to release
+            // made the #1809 handler DEFER that restart rather than perform it.
+            // Release first, then pay the debt: `restart_sidecar` re-checks
+            // `spawn_allowed()`, so recovering while still latched would be a
+            // silent no-op and leave the app backend-less anyway.
+            drop(_shutting_down);
+            sidecar::recover_deferred_crash(app);
+            show_update_error_dialog(app, "Could not install the update.", &e.to_string());
+            return;
+        }
+    };
+
     // Collect human-readable warnings so we can thread them into the failure
-    // dialog if download_and_install later fails. Declared before the graceful
-    // stop because that stop's verdict is the first thing that can go into it,
-    // and the cfg blocks below both contribute too.
+    // dialog if the install later fails. Declared with the graceful stop rather
+    // than before the download because that stop's verdict is the first thing
+    // that can go into it, and the cfg blocks below both contribute too.
     let mut pre_install_warnings: Vec<String> = Vec::new();
 
-    // On Windows this is the ONLY flush on the update path: `download_and_install`
-    // ends in the updater plugin's own `std::process::exit(0)`, so `RunEvent::Exit`
+    // From here the sidecar being down is INTENTIONAL, so write off any crash
+    // the #1809 handler deferred during the download rather than leaving a
+    // latched debt behind. The install-failure arm below deliberately leaves the
+    // sidecar stopped (an installer may be mid-write over the binary), and that
+    // decision must not be quietly reversed by a stale flag.
+    let _ = sidecar::take_deferred_crash();
+
+    // Stop sidecar BEFORE install — on Windows, the NSIS installer runs during
+    // `install()` and needs to replace node-sidecar.exe on disk. If the process
+    // is still running, the file is locked and install fails.
+    // Graceful first (#1088): POST /api/shutdown flushes dirty docs + saves
+    // the session before the app restarts into the new version; hard kill is
+    // the fallback on POST failure or timeout.
+    //
+    // On Windows this is the ONLY flush on the update path: `install` ends in
+    // the updater plugin's own `std::process::exit(0)`, so `RunEvent::Exit`
     // never fires and `shutdown_sidecar_on_exit` never runs. A dropped verdict
     // here is an update that proceeds having discarded unsaved edits while every
     // dialog says it worked — which is why `StopReport` is `#[must_use]`.
     //
     // BOTH outcomes are logged at `warn`, and the success half is not
-    // decoration. `smoke-lines.md` row 3 asks the tester to grep `tandem.log`
+    // decoration. The smoke checklist's §1 updater row has the tester grep `tandem.log`
     // for an update run with unsaved edits — and on Windows there is no verdict
     // line to read, because `RunEvent::Exit` never fires. Every other line on
     // this path is `info!`, below the release floor, so without this the row's
@@ -2500,9 +3040,10 @@ async fn perform_install(
     // so it is pinned like one: `respawn_guard_lines_are_warns_and_match_the
     // _smoke_checklist` in `sidecar.rs` requires it to appear exactly once here,
     // as the first argument of an uncommented `log::warn!(`, and to be present
-    // in `smoke-lines.md`. Row 3 was prose when this string was added, which
-    // meant the commit whose subject was "add a guard for exactly this" created
-    // an unguarded instance of exactly this; the row now carries the literal.
+    // in `release-smoke-checklist.md`, where the row moved from `smoke-lines.md`
+    // row 3. That row was prose when this string was added, which meant the
+    // commit whose subject was "add a guard for exactly this" created an
+    // unguarded instance of exactly this; the row now carries the literal.
     match stop_sidecar_gracefully(app, &client, GRACEFUL_SHUTDOWN_DEADLINE_SECS)
         .await
         .unflushed_warning("Pre-install")
@@ -2522,17 +3063,19 @@ async fn perform_install(
 
     #[cfg(target_os = "windows")]
     {
-        let (port_ok, file_ok) = tokio::join!(
+        let (port_ok, unlock) = tokio::join!(
             wait_for_port_release(&client, POST_KILL_PORT_RELEASE_SECS),
             wait_for_sidecar_unlock(SIDECAR_UNLOCK_DEADLINE_SECS),
         );
         if !port_ok {
             warn_port_still_responding(&mut pre_install_warnings);
         }
-        if !file_ok {
-            let msg = format!(
-                "Sidecar exe still locked after {SIDECAR_UNLOCK_DEADLINE_SECS}s -- installer may prompt for retry"
-            );
+        // The verdict carries WHICH failure it was. A missing exe returns
+        // without entering the polling loop (`unlock_verdict_when_absent`), so
+        // reusing the timeout string for it would tell the operator a 15 s wait
+        // expired when no wait ran — pointing diagnosis at a lock rather than at
+        // the packaging bug the `log::warn!` two frames up just named.
+        if let Some(msg) = crate::sidecar::unlock_warning(unlock, SIDECAR_UNLOCK_DEADLINE_SECS) {
             log::warn!("{msg}");
             pre_install_warnings.push(msg);
         }
@@ -2542,40 +3085,7 @@ async fn perform_install(
         warn_port_still_responding(&mut pre_install_warnings);
     }
 
-    match update.download_and_install(
-        |chunk_len, total| {
-            if let Some(t) = total {
-                log::debug!("Update download: {chunk_len}/{t} bytes");
-            }
-        },
-        // #1118: the pending-update marker is written HERE, at download-finish,
-        // and neither of the two places that look obvious.
-        //
-        // NOT before `download_and_install`: `build_updater` sets no timeout, so
-        // the marker would span the whole download, and any process death during
-        // it strands a marker with no `Err` arm to clean up — tray Quit, the
-        // Linux-without-tray window close, a crash, a sleep-kill. Not
-        // hypothetical: the sidecar is already dead by this point, so the WebView
-        // sits in "Server unavailable" for the entire download, actively inviting
-        // a quit. Every one of those would become a false "your update may not
-        // have completed" on the next boot.
-        //
-        // NOT on the `Ok` arm below (which is what ADR-043 §6 sketched): that arm
-        // is dead code on Windows, where the plugin's `install_inner` ends in an
-        // unconditional `std::process::exit(0)`.
-        //
-        // This closure fires two lines before `verify_signature`, so a signature
-        // failure does write a marker — that path returns `Err` on every platform
-        // and the `Err` arm below clears it.
-        {
-            let app = app.clone();
-            let version = version.to_string();
-            move || {
-                log::info!("Update downloaded -- installing");
-                pending_update::record_pending_update(&app, &version);
-            }
-        },
-    ).await {
+    match update.install(bytes) {
         Ok(()) => {
             log::info!("Update to v{version} installed — restarting");
             app.restart();
@@ -2589,6 +3099,14 @@ async fn perform_install(
             // We observed the failure in-process and are about to show a native
             // dialog about it, so a surviving marker would nag next boot about
             // something the user was just told.
+            //
+            // The sidecar stays stopped on this arm, deliberately: on Windows
+            // `install_inner` ends in `std::process::exit(0)` on success, so a
+            // failure here means the installer could not even be launched — a
+            // terminal state whose recovery is this dialog plus
+            // Settings -> Network -> Restart server. Spawning a child while an
+            // installer may be mid-write over the binary is what
+            // `SIDECAR_SHUTTING_DOWN` exists to prevent.
             pending_update::clear_pending_update(app);
             let dialog_msg = if pre_install_warnings.is_empty() {
                 e.to_string()
@@ -2598,8 +3116,87 @@ async fn perform_install(
                     pre_install_warnings.join("\n  - ")
                 )
             };
-            show_update_error_dialog(app, &dialog_msg);
+            show_update_error_dialog(app, "Could not install the update.", &dialog_msg);
         }
+    }
+}
+
+/// #1808 — the ordering inside `perform_install` IS the fix, and neither the
+/// `AppHandle` nor a `tauri_plugin_updater::Update` is constructible in a unit
+/// test. So the one discriminating check is structural, following
+/// `sidecar.rs`'s `include_str!` precedent.
+#[cfg(test)]
+mod install_order_tests {
+    /// A failed download must not be the thing that leaves the app with no
+    /// backend. Before #1808 `perform_install` stopped the sidecar, waited for
+    /// the port and the exe lock, and only then downloaded — so an offline
+    /// machine, a proxy, a 403 or a signature mismatch returned with the
+    /// sidecar dead, nothing to respawn it, and every tab "Disconnected" while
+    /// the UI still said the server was running.
+    #[test]
+    fn perform_install_downloads_before_it_stops_the_sidecar() {
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("async fn perform_install(")
+            .expect("perform_install must exist");
+        // Both offsets come from `find`, so they are char boundaries by
+        // construction — no `get`/`expect` dance is needed to slice safely
+        // through a file full of em dashes.
+        let rest = &src[start..];
+        let end = rest
+            .find("\n}\n")
+            .expect("perform_install body must be delimited");
+        let body = &rest[..end];
+
+        // Bind BOTH offsets before comparing. A bare `Option` comparison is
+        // vacuously true on the unfixed code: it calls `download_and_install`
+        // and never `.download(` at all, so the left side is `None` — and
+        // `None < Some(_)` is `true`.
+        //
+        // `.download(` rather than `update.download(`: rustfmt breaks the
+        // receiver onto its own line, and the needle must match the code as it
+        // is actually formatted. `.download_and_install(` does not match it
+        // (the `_` follows `download`), which is what keeps this discriminating.
+        let dl = body
+            .find(".download(")
+            .expect("perform_install must call update.download(");
+        let stop = body
+            .find("stop_sidecar_gracefully(")
+            .expect("perform_install must still stop the sidecar before installing");
+
+        assert!(
+            dl < stop,
+            "the download must complete before the sidecar is stopped (#1808)"
+        );
+    }
+
+    /// #1808 review — "the sidecar was never stopped" is not "the sidecar is
+    /// still alive". `SIDECAR_SHUTTING_DOWN` is held across the whole download,
+    /// so a sidecar that crashed on its own in that window is DEFERRED by the
+    /// #1809 handler and nothing else ever performs the restart. The failure
+    /// arm therefore has to release the latch and pay that debt — in that
+    /// order, since `restart_sidecar` re-checks `spawn_allowed()` and a
+    /// recovery made while still latched is a silent no-op.
+    #[test]
+    fn the_download_failure_arm_releases_the_latch_then_recovers_a_deferred_crash() {
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("Err(e) => {\n            log::error!(\"Update download failed: {e}\");")
+            .expect("the download failure arm must exist");
+        let arm = &src[start..];
+        let end = arm.find("return;").expect("the arm must return");
+        let arm = &arm[..end];
+
+        let release = arm
+            .find("drop(_shutting_down);")
+            .expect("the arm must release SIDECAR_SHUTTING_DOWN before recovering");
+        let recover = arm
+            .find("recover_deferred_crash(")
+            .expect("the arm must recover a sidecar that crashed during the download");
+        assert!(
+            release < recover,
+            "recovering while the latch is still held is a silent no-op"
+        );
     }
 }
 
@@ -2894,6 +3491,65 @@ mod pending_opens_tests {
         SIDECAR_GAVE_UP.store(false, Ordering::Release);
     }
 
+    /// #1809's breaker arm, as a behaviour. The arm itself needs an `AppHandle`
+    /// (its wiring is pinned structurally in `sidecar.rs`), but the flag pair it
+    /// performs is exactly these two calls in this order, and the order is the
+    /// subtle half: `clear_healthy_under_lock` also WITHDRAWS the give-up
+    /// verdict, so reversing them leaves the app queueing opens for a drain that
+    /// is never coming — the silent #1416 shape, reached from the one arm that
+    /// has definitively stopped trying.
+    #[test]
+    fn the_breaker_sequence_leaves_the_app_in_the_gave_up_state() {
+        let _g = FLAG_LOCK.lock().unwrap();
+        // The state the breaker inherits: healthy from the last successful boot,
+        // which is what made a permanently dead sidecar keep reading as alive.
+        SIDECAR_HEALTHY.store(true, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+
+        let state = fresh_state();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+
+        clear_healthy_under_lock(&state);
+        report_pending_opens_with(&state, true, |_| {});
+
+        assert!(
+            !SIDECAR_HEALTHY.load(Ordering::Acquire),
+            "a tripped breaker means there is no sidecar — await_sidecar_healthy must not \
+             answer true for it"
+        );
+        assert!(
+            SIDECAR_GAVE_UP.load(Ordering::Acquire),
+            "and nothing is coming, so the verdict must be latched"
+        );
+        assert!(
+            matches!(
+                try_queue_or_post(&state, screened(&dir, "after-breaker")),
+                OpenRoute::ServerUnavailable
+            ),
+            "an open arriving after the breaker must be refused, not POSTed at a dead :3479"
+        );
+
+        // Reversed, the clear wipes the latch it was meant to follow.
+        SIDECAR_HEALTHY.store(true, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+        report_pending_opens_with(&state, true, |_| {});
+        clear_healthy_under_lock(&state);
+        assert!(
+            !SIDECAR_GAVE_UP.load(Ordering::Acquire),
+            "this is why the order is pinned: the clear means 'a new attempt is starting'"
+        );
+        assert!(
+            matches!(
+                try_queue_or_post(&state, screened(&dir, "reversed")),
+                OpenRoute::Queued
+            ),
+            "and the reversed order leaves opens queueing for a drain that never comes"
+        );
+
+        SIDECAR_HEALTHY.store(false, Ordering::Release);
+        SIDECAR_GAVE_UP.store(false, Ordering::Release);
+    }
+
     #[test]
     fn try_queue_or_post_fails_fast_after_give_up() {
         // #1416's second half: without the latch, file 1 gets a dialog and a
@@ -2943,6 +3599,26 @@ mod url_constants_tests {
             "MCP_PORT ({MCP_PORT}) must match HEALTH_URL ({HEALTH_URL})"
         );
         assert_eq!(WS_PORT + 1, MCP_PORT, "WS/MCP ports are adjacent by convention");
+    }
+
+    /// The updater's loopback probe carries the same port literal and, until
+    /// #1785, nothing pinned it.
+    ///
+    /// The stakes changed with that PR. A stale port here used to mean
+    /// `entitled_license_id` returned `None` and the app fell back to the PUBLIC
+    /// manifest -- updates still arrived, and the drift stayed invisible but
+    /// benign. Now the probe failing is `NoUpdates(StatusUnavailable)`, which is
+    /// fail-CLOSED: after the flip every device including licensed ones is
+    /// served no manifest at all, with a `log::warn!` as the only signal on the
+    /// unattended 8-hourly path. So the same assertion HEALTH_URL already
+    /// carries, one test up, is worth more here than it is there.
+    #[test]
+    fn license_status_url_matches_mcp_port() {
+        assert!(
+            LICENSE_STATUS_URL.contains(&format!(":{MCP_PORT}/")),
+            "MCP_PORT ({MCP_PORT}) must match LICENSE_STATUS_URL ({LICENSE_STATUS_URL}) -- \
+             a stale port here is a silent, permanent update blackout after the v1.0 flip"
+        );
     }
 
     // HEALTH_TIMEOUT times a wait that happens INSIDE the sidecar: waitForPort
@@ -3360,4 +4036,379 @@ mod classify_opened_url_tests {
         );
     }
 
+}
+
+#[cfg(test)]
+mod update_route_tests {
+    use super::*;
+
+    /// Every case spells `status` explicitly -- never `..Default::default()` for
+    /// it -- because step 5 of `update_route` branches on exactly that field.
+    fn probe(
+        gate_active: bool,
+        license_id: Option<&str>,
+        update_window_current: bool,
+        status: Option<&str>,
+    ) -> LicenseStatusResponse {
+        LicenseStatusResponse {
+            gate_active,
+            license_id: license_id.map(str::to_string),
+            update_window_current,
+            status: status.map(str::to_string),
+        }
+    }
+
+    const CONFIGURED: &str = "https://updates.example.com/v1";
+
+    /// The shipped path and the byte-identity guarantee. Kills a "fix" that
+    /// makes a DARK build stop checking for updates.
+    #[test]
+    fn empty_endpoint_is_public_even_with_no_probe() {
+        assert_eq!(update_route("", None), UpdateRoute::Public);
+    }
+
+    #[test]
+    fn entitled_licence_routes_to_the_worker() {
+        let p = probe(true, Some("lic-1"), true, Some("licensed"));
+        assert_eq!(
+            update_route(CONFIGURED, Some(&p)),
+            UpdateRoute::Licensed("lic-1".to_string())
+        );
+    }
+
+    /// THE CASE #1785 NAMES, and the one that is `app.updater()` today: a
+    /// customer whose update window has ended was offered exactly the builds
+    /// everyone else gets. It now routes to the Worker WITH the header, so the
+    /// Worker returns its 204 and logs `expired` -- the branch #1786 hangs off.
+    #[test]
+    fn expired_window_still_routes_licensed_not_public() {
+        let p = probe(true, Some("lic-1"), false, Some("licensed"));
+        assert_eq!(
+            update_route(CONFIGURED, Some(&p)),
+            UpdateRoute::Licensed("lic-1".to_string()),
+            "an expired LOCAL window must not fall back to the public manifest"
+        );
+    }
+
+    /// Named for the POPULATION: every trialing device reports
+    /// `update_window_current: false`, so folding trial in with restricted would
+    /// silently stop shipping builds to every evaluator on flip day.
+    #[test]
+    fn trial_keeps_the_public_manifest() {
+        let p = probe(true, None, false, Some("trial"));
+        assert_eq!(update_route(CONFIGURED, Some(&p)), UpdateRoute::Public);
+    }
+
+    #[test]
+    fn restricted_serves_no_manifest() {
+        let p = probe(true, None, false, Some("restricted"));
+        assert_eq!(
+            update_route(CONFIGURED, Some(&p)),
+            UpdateRoute::NoUpdates(WithheldReason::NoEntitlement)
+        );
+    }
+
+    /// A sidecar reporting a dark gate against a configured endpoint is a
+    /// mismatched build, not an entitlement question.
+    #[test]
+    fn dark_gate_is_public() {
+        let p = probe(false, None, false, Some("licensed"));
+        assert_eq!(update_route(CONFIGURED, Some(&p)), UpdateRoute::Public);
+    }
+
+    /// Pins FAIL-CLOSED, so a later "be forgiving when the sidecar is slow" edit
+    /// is a visible diff. Asserting this AND the `status: None` case below is
+    /// what proves the implementation reads the outer `Option` and the field
+    /// separately.
+    #[test]
+    fn unreachable_sidecar_serves_no_manifest() {
+        assert_eq!(
+            update_route(CONFIGURED, None),
+            UpdateRoute::NoUpdates(WithheldReason::StatusUnavailable)
+        );
+    }
+
+    /// Version skew / scrubbed body: a response that arrived but does not
+    /// positively say `restricted` keeps today's behaviour.
+    #[test]
+    fn absent_status_field_is_public() {
+        let p = probe(true, None, false, None);
+        assert_eq!(update_route(CONFIGURED, Some(&p)), UpdateRoute::Public);
+    }
+
+    /// The reason must survive to the USER, not just to the log.
+    ///
+    /// `build_updater` used to collapse both arms to a bare `Ok(None)`, so
+    /// `check_for_update` and `install_update` each had one fixed sentence for
+    /// two unrelated states -- and the sentence chosen was the licensing one.
+    /// A paying customer whose sidecar was down (the tray outlives a dead
+    /// sidecar; see the retry dialog at `:1855`) clicked "Check for updates"
+    /// and was told their licensed install needs a license.
+    ///
+    /// The assertion is on the SUBSTANCE, not the wording, and stays that way
+    /// now that #1819 has settled the wording: the unreachable-sidecar copy must
+    /// not mention licensing at all, and the restricted copy must.
+    #[test]
+    fn withheld_copy_separates_a_dead_sidecar_from_an_entitlement() {
+        let (unavailable_title, unavailable) = WithheldReason::StatusUnavailable.dialog_copy();
+        let (entitlement_title, entitlement) = WithheldReason::NoEntitlement.dialog_copy();
+
+        assert!(
+            !unavailable.to_lowercase().contains("licens"),
+            "an unreachable sidecar is not an entitlement fact -- this copy reaches paying \
+             customers mid-restart: {unavailable}"
+        );
+        assert!(
+            entitlement.to_lowercase().contains("licens"),
+            "the restricted arm is the one that should name licensing: {entitlement}"
+        );
+        assert_ne!(unavailable, entitlement);
+        assert_ne!(unavailable_title, entitlement_title);
+        assert_ne!(
+            WithheldReason::StatusUnavailable.code(),
+            WithheldReason::NoEntitlement.code(),
+            "the codes reach the log line and install_update's error string"
+        );
+    }
+
+    /// The ended-window copy must not be the up-to-date copy (#1819). A
+    /// licensed device whose window has lapsed gets a 204, which the updater
+    /// reports as `Ok(None)` -- and "You're running the latest version" is the
+    /// exact silent starvation #1786 exists to detect, reached from a different
+    /// direction.
+    ///
+    /// Asserted on substance, not phrasing: it must name the window, must point
+    /// at the surface that can renew (Settings), and must not claim the install
+    /// is current.
+    #[test]
+    fn window_ended_copy_names_the_window_and_points_at_settings() {
+        let (title, body) = window_ended_copy("9.9.9");
+        assert_eq!(title, "Update Window Ended");
+        assert!(
+            body.to_lowercase().contains("update window"),
+            "the body must name the update window, which is the whole diagnosis: {body}"
+        );
+        assert!(
+            body.contains("Settings"),
+            "a native dialog holds no link, so it must name the surface that can renew: {body}"
+        );
+        assert!(
+            !body.contains("latest version"),
+            "this arm exists precisely because \"latest version\" is false here: {body}"
+        );
+        assert!(
+            body.contains("9.9.9"),
+            "the running version is what keeps working forever: {body}"
+        );
+        // Review round 2. This renders in a native message box, not a terminal,
+        // so ASCII `--` shows up literally next to the real em dash the
+        // neighbouring dialogs use (`show_update_in_progress_dialog`).
+        // `Settings -> License` is a single hyphen-arrow and stays.
+        assert!(
+            !body.contains("--"),
+            "user-facing dialog copy uses an em dash, never ASCII `--`: {body}"
+        );
+    }
+
+    /// `local_window_ended`'s truth table.
+    ///
+    /// The `Public` row is the discriminating one: every TRIAL device reports
+    /// `update_window_current: false`, so a flag read off the probe ALONE would
+    /// tell each evaluator their update window had ended, on a dialog they
+    /// reach by clicking "Check for updates".
+    #[test]
+    fn local_window_ended_is_licensed_and_not_current() {
+        let licensed = UpdateRoute::Licensed("lic-1".to_string());
+
+        let lapsed = probe(true, Some("lic-1"), false, Some("licensed"));
+        assert!(local_window_ended(&licensed, Some(&lapsed)));
+
+        let current = probe(true, Some("lic-1"), true, Some("licensed"));
+        assert!(!local_window_ended(&licensed, Some(&current)));
+
+        let trial = probe(true, None, false, Some("trial"));
+        assert!(
+            !local_window_ended(&UpdateRoute::Public, Some(&trial)),
+            "a trial device reports update_window_current: false and must NOT be told its \
+             window ended"
+        );
+
+        assert!(!local_window_ended(
+            &UpdateRoute::NoUpdates(WithheldReason::StatusUnavailable),
+            None
+        ));
+
+        // Unreachable from `resolve_update_route` -- step 2 of `update_route`
+        // answers `NoUpdates(StatusUnavailable)` when the probe is absent, so a
+        // `Licensed` route always carries one. Pinned anyway so the fail
+        // direction is a decision rather than an accident.
+        assert!(local_window_ended(&licensed, None));
+    }
+}
+
+#[cfg(test)]
+mod launcher_request_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    /// The cheap unit: the helper applies `Origin` unconditionally and
+    /// `Authorization` only when a token exists. `RequestBuilder::build()`
+    /// performs no I/O, so this needs no server.
+    ///
+    /// What it does NOT cover: whether `request_launcher_start`'s two hops
+    /// actually go through the helper. That is
+    /// `sends_loopback_origin_on_both_launcher_hops` below.
+    #[test]
+    fn launcher_request_applies_origin_and_auth() {
+        // A port change to one constant alone would turn the header into a
+        // cross-origin claim the server then 403s — today's failure with no
+        // new symptom.
+        assert!(
+            LAUNCHER_NONCE_URL.starts_with(LOOPBACK_ORIGIN),
+            "LAUNCHER_NONCE_URL ({LAUNCHER_NONCE_URL}) must be same-origin with {LOOPBACK_ORIGIN}"
+        );
+        assert!(
+            LAUNCHER_START_URL.starts_with(LOOPBACK_ORIGIN),
+            "LAUNCHER_START_URL ({LAUNCHER_START_URL}) must be same-origin with {LOOPBACK_ORIGIN}"
+        );
+
+        tauri::async_runtime::block_on(async {
+            let client = reqwest::Client::new();
+            for url in [LAUNCHER_NONCE_URL, LAUNCHER_START_URL] {
+                for post in [false, true] {
+                    let builder = if post { client.post(url) } else { client.get(url) };
+                    let authed = launcher_request(builder, Some("t"))
+                        .build()
+                        .expect("build with a token");
+                    assert_eq!(
+                        authed.headers().get("origin").and_then(|v| v.to_str().ok()),
+                        Some(LOOPBACK_ORIGIN),
+                        "Origin must be applied to {url}"
+                    );
+                    assert_eq!(
+                        authed
+                            .headers()
+                            .get("authorization")
+                            .and_then(|v| v.to_str().ok()),
+                        Some("Bearer t")
+                    );
+
+                    let builder = if post { client.post(url) } else { client.get(url) };
+                    // The login-launch shape: no token was minted, and the
+                    // Origin header must survive that arm.
+                    let anon = launcher_request(builder, None)
+                        .build()
+                        .expect("build without a token");
+                    assert_eq!(
+                        anon.headers().get("origin").and_then(|v| v.to_str().ok()),
+                        Some(LOOPBACK_ORIGIN),
+                        "Origin must be applied to {url} with no auth token"
+                    );
+                    assert!(anon.headers().get("authorization").is_none());
+                }
+            }
+        });
+    }
+
+    /// A recording loopback stand-in for `/api/launcher/nonce` +
+    /// `/api/launcher/start`: answers the nonce GET with a nonce, accepts the
+    /// POST, and yields both request heads.
+    ///
+    /// Each response closes its connection so the POST opens a fresh one and
+    /// the two heads stay separable. Accepts are deadlined, so a regression
+    /// that stops issuing a hop turns the test RED rather than hanging the
+    /// suite on `join()`.
+    fn stub_launcher_endpoints() -> (std::net::SocketAddr, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("local_addr");
+        listener.set_nonblocking(true).expect("set_nonblocking");
+        let server = std::thread::spawn(move || {
+            let nonce_body: &[u8] = b"{\"nonce\":\"n\"}";
+            let ok_body: &[u8] = b"{\"ok\":true}";
+            let mut heads: Vec<String> = Vec::new();
+            for body in [nonce_body, ok_body] {
+                let accept_by = std::time::Instant::now() + Duration::from_secs(5);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            if std::time::Instant::now() >= accept_by {
+                                heads.push("<no connection within 5s>".to_string());
+                                return heads;
+                            }
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(e) => {
+                            heads.push(format!("<accept failed: {e}>"));
+                            return heads;
+                        }
+                    }
+                };
+                stream.set_nonblocking(false).expect("blocking stream");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .expect("read timeout");
+                let mut buf = [0u8; 4096];
+                let n = match stream.read(&mut buf) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        heads.push(format!("<read failed: {e}>"));
+                        return heads;
+                    }
+                };
+                heads.push(String::from_utf8_lossy(&buf[..n]).to_string());
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.write_all(body);
+                let _ = stream.flush();
+            }
+            heads
+        });
+        (addr, server)
+    }
+
+    /// The discriminating test: drive the real `request_launcher_start` against
+    /// a recording stub and assert BOTH received requests carry the Origin.
+    ///
+    /// Kills wiring the header onto only one hop, and adding `launcher_request`
+    /// while leaving either `with_auth(...)` call in place — both of which pass
+    /// `launcher_request_applies_origin_and_auth`.
+    #[test]
+    fn sends_loopback_origin_on_both_launcher_hops() {
+        for auth_token in [None, Some("t")] {
+            let (addr, server) = stub_launcher_endpoints();
+            let nonce_url = format!("http://{addr}/api/launcher/nonce");
+            let start_url = format!("http://{addr}/api/launcher/start");
+
+            let result = tauri::async_runtime::block_on(async {
+                let client = reqwest::Client::new();
+                request_launcher_start(&client, auth_token, &nonce_url, &start_url).await
+            });
+            let heads = server.join().expect("stub thread must not panic");
+
+            result.expect("the launcher flow should succeed against the stub");
+            assert_eq!(heads.len(), 2, "both hops must reach the server: {heads:?}");
+            for head in &heads {
+                let lower = head.to_lowercase();
+                assert!(
+                    lower.contains(&format!("origin: {}", LOOPBACK_ORIGIN.to_lowercase())),
+                    "every launcher hop must carry the allowlisted Origin, got: {head}"
+                );
+                match auth_token {
+                    Some(token) => assert!(
+                        lower.contains(&format!("authorization: bearer {token}")),
+                        "expected a bearer token on this hop, got: {head}"
+                    ),
+                    None => assert!(
+                        !lower.contains("authorization:"),
+                        "no token was minted, so no Authorization header belongs here: {head}"
+                    ),
+                }
+            }
+        }
+    }
 }

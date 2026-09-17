@@ -12,8 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 
 // Notifications are a shared singleton buffer; mock to silence.
-vi.mock("../../../src/server/notifications.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../../src/server/notifications.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     pushNotification: vi.fn(),
@@ -122,7 +122,7 @@ describe("registerAnnotationObserver", () => {
     expect(onDisk.annotations).toHaveLength(1);
     expect(onDisk.annotations[0].id).toBe("ann_1");
 
-    cleanup();
+    cleanup("close");
   });
 
   it("#2 writes on browser-origin (null origin) mutation", async () => {
@@ -139,7 +139,7 @@ describe("registerAnnotationObserver", () => {
     const raw = await fs.readFile(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
     const onDisk = JSON.parse(raw);
     expect(onDisk.annotations).toHaveLength(1);
-    cleanup();
+    cleanup("close");
   });
 
   it("#3 skips FILE_SYNC_ORIGIN mutations (no write queued)", async () => {
@@ -158,7 +158,7 @@ describe("registerAnnotationObserver", () => {
     await expect(
       fs.access(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`)),
     ).rejects.toMatchObject({ code: "ENOENT" });
-    cleanup();
+    cleanup("close");
   });
 
   it("#4 does NOT bump rev (preserves the caller-set rev)", async () => {
@@ -174,7 +174,7 @@ describe("registerAnnotationObserver", () => {
     const raw = await fs.readFile(path.join(env.tmpRoot, "annotations", `${HASH_A}.json`), "utf-8");
     const onDisk = JSON.parse(raw);
     expect(onDisk.annotations[0].rev).toBe(3);
-    cleanup();
+    cleanup("close");
   });
 
   it("#5 serializes a missing rev as rev:0 (pre-plan migration)", async () => {
@@ -195,7 +195,7 @@ describe("registerAnnotationObserver", () => {
     const onDisk = JSON.parse(raw);
     expect(onDisk.annotations).toHaveLength(1);
     expect(onDisk.annotations[0].rev).toBe(0);
-    cleanup();
+    cleanup("close");
   });
 
   it("lazy snapshot: 5 rapid mutations produce 1 serialization (snapshot thunk runs once)", async () => {
@@ -241,7 +241,7 @@ describe("registerAnnotationObserver", () => {
     expect(invokeCount).toBe(1);
 
     await store.flush();
-    cleanup();
+    cleanup("close");
   });
 
   it("snapshot logs console.error when normalizeAnnotation drops a non-object entry", async () => {
@@ -264,7 +264,7 @@ describe("registerAnnotationObserver", () => {
     expect(dropCalls).toHaveLength(1);
     expect(dropCalls[0][0]).toMatch(/dropped 1 annotation\(s\), 0 reply\(ies\)/);
 
-    cleanup();
+    cleanup("close");
     errorSpy.mockRestore();
   });
 
@@ -289,7 +289,7 @@ describe("registerAnnotationObserver", () => {
     expect(dropCalls).toHaveLength(1);
     expect(dropCalls[0][0]).toMatch(/dropped 0 annotation\(s\), 1 reply\(ies\)/);
 
-    cleanup();
+    cleanup("close");
     errorSpy.mockRestore();
   });
 
@@ -297,7 +297,7 @@ describe("registerAnnotationObserver", () => {
     const ydoc = new Y.Doc();
     const store = createStore(HASH_A, { filePath: FILE_A });
     const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
-    cleanup();
+    cleanup("close");
 
     const queueSpy = vi.spyOn(store, "queueWrite");
     const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -346,7 +346,7 @@ describe("legacy-type sanitize on write", () => {
     expect(parsed.ok).toBe(true);
 
     expect(legacyTypeLogs(errorSpy)).toHaveLength(1);
-    cleanup();
+    cleanup("close");
     errorSpy.mockRestore();
   });
 
@@ -379,7 +379,7 @@ describe("legacy-type sanitize on write", () => {
     const parsed = parseAnnotationDoc(raw);
     expect(parsed.ok).toBe(true);
 
-    cleanup();
+    cleanup("close");
     errorSpy.mockRestore();
   });
 
@@ -411,7 +411,7 @@ describe("legacy-type sanitize on write", () => {
     const parsed = parseAnnotationDoc(raw);
     expect(parsed.ok).toBe(true);
 
-    cleanup();
+    cleanup("close");
   });
 
   it("fast-path directedAt strip logs the migration once per doc", async () => {
@@ -440,7 +440,7 @@ describe("legacy-type sanitize on write", () => {
     );
     expect(directedAtLogs).toHaveLength(1);
 
-    cleanup();
+    cleanup("close");
     errorSpy.mockRestore();
   });
 
@@ -466,7 +466,7 @@ describe("legacy-type sanitize on write", () => {
     );
     expect(dropLogs.length).toBeGreaterThanOrEqual(1);
 
-    cleanup();
+    cleanup("close");
     errorSpy.mockRestore();
   });
 
@@ -486,7 +486,7 @@ describe("legacy-type sanitize on write", () => {
     // Two legacy records, one docHash → exactly one legacy-type warning
     // (sanitize-derived events are counted separately).
     expect(legacyTypeLogs(errorSpy)).toHaveLength(1);
-    cleanup();
+    cleanup("close");
     errorSpy.mockRestore();
   });
 
@@ -570,7 +570,7 @@ describe("legacy-type sanitize on write", () => {
     const onDisk = JSON.parse(raw);
     expect(onDisk.annotations[0].rev).toBe(7);
 
-    cleanup();
+    cleanup("close");
     errorSpy.mockRestore();
   });
 
@@ -606,8 +606,8 @@ describe("legacy-type sanitize on write", () => {
     // If dedupe collapsed to a single boolean, the second would be suppressed.
     expect(legacyTypeLogs(errorSpy)).toHaveLength(2);
 
-    cleanupA();
-    cleanupB();
+    cleanupA("close");
+    cleanupB("close");
     errorSpy.mockRestore();
   });
 
@@ -647,7 +647,7 @@ describe("legacy-type sanitize on write", () => {
     // With the fix, docHash is passed and the log fires → 1.
     expect(legacyTypeLogs(errorSpy)).toHaveLength(1);
 
-    cleanup();
+    cleanup("close");
     errorSpy.mockRestore();
   });
 });
@@ -672,7 +672,7 @@ describe("loadAndMerge", () => {
     ydoc.transact(() => annMap.set("ann_1", annRecord({ id: "ann_1" })), MCP_ORIGIN);
     expect(queueSpy).toHaveBeenCalled();
 
-    cleanup();
+    cleanup("close");
   });
 
   it("#7 empty file + Y.Map has annotations → writes one snapshot (first-upgrade)", async () => {
@@ -698,7 +698,7 @@ describe("loadAndMerge", () => {
     expect(onDisk.annotations[0].id).toBe("ann_legacy");
     expect(onDisk.annotations[0].rev).toBe(0);
 
-    cleanup();
+    cleanup("close");
   });
 
   it("#8 file has annotations + Y.Map empty → Y.Map populated from file", async () => {
@@ -718,7 +718,7 @@ describe("loadAndMerge", () => {
     const loaded = annMap.get("ann_disk") as AnnotationRecordV1 | undefined;
     expect(loaded).toBeDefined();
     expect(loaded?.rev).toBe(5);
-    cleanup();
+    cleanup("close");
   });
 
   it("#9 merge: file rev > Y.Map rev → file wins", async () => {
@@ -743,7 +743,7 @@ describe("loadAndMerge", () => {
     const winner = annMap.get("ann_1") as AnnotationRecordV1;
     expect(winner.rev).toBe(5);
     expect(winner.content).toBe("from-disk");
-    cleanup();
+    cleanup("close");
   });
 
   it("#10 merge: Y.Map rev > file rev → Y.Map wins (unchanged)", async () => {
@@ -768,7 +768,7 @@ describe("loadAndMerge", () => {
     const winner = annMap.get("ann_1") as AnnotationRecordV1;
     expect(winner.rev).toBe(4);
     expect(winner.content).toBe("from-ymap");
-    cleanup();
+    cleanup("close");
   });
 
   it("#11 merge: rev tie, file has editedAt, Y.Map doesn't → file wins", async () => {
@@ -793,7 +793,7 @@ describe("loadAndMerge", () => {
     const winner = annMap.get("ann_1") as AnnotationRecordV1;
     expect(winner.content).toBe("from-disk");
     expect(winner.editedAt).toBe(111);
-    cleanup();
+    cleanup("close");
   });
 
   it("#12 merge: rev tie, both have editedAt, higher editedAt wins", async () => {
@@ -816,7 +816,7 @@ describe("loadAndMerge", () => {
     const winner = annMap.get("ann_1") as AnnotationRecordV1;
     expect(winner.content).toBe("from-ymap");
     expect(winner.editedAt).toBe(200);
-    cleanup();
+    cleanup("close");
   });
 
   it("#13 merge: tombstone rev > Y.Map rev → annotation deleted from Y.Map", async () => {
@@ -841,7 +841,7 @@ describe("loadAndMerge", () => {
 
     // Tombstones should be available via accessor.
     expect(getTombstones(HASH_A)).toEqual([{ id: "ann_1", rev: 5, deletedAt: 9999 }]);
-    cleanup();
+    cleanup("close");
   });
 
   it("#14 merge: tombstone rev < Y.Map rev → Y.Map annotation preserved (resurrection)", async () => {
@@ -866,7 +866,7 @@ describe("loadAndMerge", () => {
     expect(survivor).toBeDefined();
     expect(survivor?.rev).toBe(7);
     expect(survivor?.content).toBe("reborn");
-    cleanup();
+    cleanup("close");
   });
 
   it("#15 merge: alive in Y.Map, absent from file, not tombstoned → kept + queueWrite fires", async () => {
@@ -895,7 +895,7 @@ describe("loadAndMerge", () => {
     expect(onDisk.annotations).toHaveLength(1);
     expect(onDisk.annotations[0].id).toBe("ann_new");
 
-    cleanup();
+    cleanup("close");
   });
 
   it("#18 merge: file has alive ann AND winning tombstone for same id, Y.Map empty → insert suppressed", async () => {
@@ -922,7 +922,7 @@ describe("loadAndMerge", () => {
 
     expect(annMap.get("ann_1")).toBeUndefined();
     expect(getTombstones(HASH_A)).toEqual([{ id: "ann_1", rev: 5, deletedAt: 9999 }]);
-    cleanup();
+    cleanup("close");
   });
 
   it("#18b merge: file has alive ann AND tombstone at equal rev → insert proceeds (strict-> contract)", async () => {
@@ -948,7 +948,7 @@ describe("loadAndMerge", () => {
     const inserted = annMap.get("ann_1") as AnnotationRecordV1 | undefined;
     expect(inserted).toBeDefined();
     expect(inserted?.rev).toBe(5);
-    cleanup();
+    cleanup("close");
   });
 
   it("#19 merge: tombstone loses to Y.Map (resurrection) — no spurious queueWrite", async () => {
@@ -977,7 +977,7 @@ describe("loadAndMerge", () => {
     expect(survivor).toBeDefined();
     expect(survivor?.rev).toBe(7);
     expect(queueSpy).not.toHaveBeenCalled();
-    cleanup();
+    cleanup("close");
   });
 });
 
@@ -1038,12 +1038,14 @@ describe("loadAndMerge — rename tombstone union (#1040)", () => {
       expect(parsed.doc.tombstones.map((t) => t.id)).toContain("A");
       expect(parsed.doc.annotations.map((a) => a.id)).not.toContain("A");
     }
-    cleanup();
+    cleanup("close");
   });
 
   // Force-reload safety: clearAndReload clears the in-memory ledger (via
-  // clearFileSyncContext's "close" phase -> tombstonesByDoc.delete) AND the store
-  // BEFORE loadAndMerge runs, so the union degenerates to the (empty) file seed.
+  // clearFileSyncContext's "close" phase -> tombstonesByDoc.delete) BEFORE
+  // loadAndMerge runs, so the union degenerates to the file seed. (Since #1813
+  // the envelope itself survives the reload — only the in-memory half is
+  // emptied — which is what this spec models: the file is the authority.)
   // A stale ledger entry must NOT survive a legitimate reload to eat a freshly
   // resurrected annotation. We emulate that ordering: seed a stale tombstone,
   // clear the ledger (migrateTombstoneLedger from an empty source is a no-op; the
@@ -1086,7 +1088,7 @@ describe("loadAndMerge — rename tombstone union (#1040)", () => {
     expect(survivor).toBeDefined();
     expect(survivor?.rev).toBe(5);
     expect(getTombstones(HASH_A).map((t) => t.id)).not.toContain("A");
-    cleanup();
+    cleanup("close");
   });
 
   it("migrateTombstoneLedger folds into a populated destination without clobbering it", async () => {
@@ -1174,7 +1176,7 @@ describe("loadAndMerge — rename tombstone union (#1040)", () => {
     // teardown is the caller's "close" phase, not this function.
     expect(getTombstones(HASH_B)).toHaveLength(4);
 
-    cleanup();
+    cleanup("close");
   });
 
   it("the load-time seed unions file tombstones with the in-memory ledger, highest rev winning", async () => {
@@ -1224,7 +1226,7 @@ describe("loadAndMerge — rename tombstone union (#1040)", () => {
     expect(byId.get("ann_tie")?.rev).toBe(3);
     expect(byId.get("ann_tie")?.deletedAt).not.toBe(103);
 
-    cleanup();
+    cleanup("close");
   });
 });
 
@@ -1254,7 +1256,7 @@ describe("recordTombstone + getTombstones", () => {
     // expected to follow with a Y.Map.delete, which the observer will pick up.
     expect(queueSpy).not.toHaveBeenCalled();
 
-    cleanup();
+    cleanup("close");
   });
 
   it("#16b recordTombstone + paired Y.Map.delete produces a durable write including the tombstone", async () => {
@@ -1280,7 +1282,7 @@ describe("recordTombstone + getTombstones", () => {
     expect(onDisk.tombstones[0].id).toBe("ann_dead");
     expect(onDisk.tombstones[0].rev).toBe(4);
 
-    cleanup();
+    cleanup("close");
   });
 
   it("is idempotent: duplicate tombstone at same rev is a no-op", () => {
@@ -1336,7 +1338,7 @@ describe("observer-driven tombstones (#695)", () => {
     expect(stones[0].id).toBe("ann_dead");
     expect(stones[0].rev).toBe(4); // prevRev (3) + 1
 
-    cleanup();
+    cleanup("close");
   });
 
   it("browser-origin Y.Map.delete produces a tombstone via the observer", () => {
@@ -1357,7 +1359,7 @@ describe("observer-driven tombstones (#695)", () => {
     expect(stones[0].id).toBe("ann_dead");
     expect(stones[0].rev).toBe(8);
 
-    cleanup();
+    cleanup("close");
   });
 
   it("simulated stale-tab CRDT merge delete is captured by the observer", () => {
@@ -1385,7 +1387,7 @@ describe("observer-driven tombstones (#695)", () => {
     const stones = getTombstones(HASH_A);
     expect(stones.map((t) => t.id)).toContain("ann_remote");
 
-    cleanup();
+    cleanup("close");
   });
 
   it("FILE_SYNC-origin Y.Map.delete records a tombstone but does NOT queue a write", () => {
@@ -1412,7 +1414,7 @@ describe("observer-driven tombstones (#695)", () => {
     expect(stones[0].rev).toBe(2); // prevRev=1 + 1
     expect(queueSpy).not.toHaveBeenCalled();
 
-    cleanup();
+    cleanup("close");
   });
 
   it("INTERNAL-origin Y.Map.delete records a tombstone but does NOT queue a write", () => {
@@ -1439,7 +1441,7 @@ describe("observer-driven tombstones (#695)", () => {
     expect(stones[0].rev).toBe(2); // prevRev=1 + 1
     expect(queueSpy).not.toHaveBeenCalled();
 
-    cleanup();
+    cleanup("close");
   });
 
   it("FILE_SYNC-origin delete records tombstone even without loadAndMerge seed (#700 partial-load invariant)", () => {
@@ -1463,7 +1465,7 @@ describe("observer-driven tombstones (#695)", () => {
     expect(stones.map((t) => t.id)).toContain("ann_orphan");
     expect(stones.find((t) => t.id === "ann_orphan")?.rev).toBe(4);
 
-    cleanup();
+    cleanup("close");
   });
 
   it("a delete whose old value has no rev tombstones at rev 1, warns, and loses to a live rev-1 copy", async () => {
@@ -1531,7 +1533,7 @@ describe("observer-driven tombstones (#695)", () => {
 
     const cleanup3 = await loadAndMerge(syncCtx(ydoc, store));
     expect(annMap.get("ann_legacy")).toBeUndefined();
-    cleanup3();
+    cleanup3("close");
   });
 
   it("a delete whose old value HAS a rev tombstones at rev+1 and does not warn", () => {
@@ -1553,7 +1555,7 @@ describe("observer-driven tombstones (#695)", () => {
     expect(stones[0].rev).toBe(6);
     expect(warnSpy).not.toHaveBeenCalled();
 
-    cleanup();
+    cleanup("close");
   });
 });
 
@@ -1582,7 +1584,7 @@ describe("replies merge", () => {
     const winner = repMap.get("rep_1") as AnnotationReplyRecordV1;
     expect(winner.rev).toBe(5);
     expect(winner.text).toBe("disk");
-    cleanup();
+    cleanup("close");
   });
 
   it("replies also survive via observer on browser-origin mutation", async () => {
@@ -1598,7 +1600,7 @@ describe("replies merge", () => {
     const onDisk = JSON.parse(raw);
     expect(onDisk.replies).toHaveLength(1);
     expect(onDisk.replies[0].id).toBe("rep_1");
-    cleanup();
+    cleanup("close");
   });
 
   it("#20 reply: file has reply, Y.Map empty → reply inserted", async () => {
@@ -1621,7 +1623,7 @@ describe("replies merge", () => {
     expect(inserted).toBeDefined();
     expect(inserted?.rev).toBe(3);
     expect(inserted?.text).toBe("from-disk");
-    cleanup();
+    cleanup("close");
   });
 
   it("#21 reply: Y.Map has reply, file has no replies → queueWrite fires", async () => {
@@ -1648,7 +1650,7 @@ describe("replies merge", () => {
 
     expect(repMap.get("rep_3")).toBeDefined();
     expect(queueSpy).toHaveBeenCalled();
-    cleanup();
+    cleanup("close");
   });
 
   it("#22 reply: Y.Map rev > file rev → Y.Map wins (unchanged)", async () => {
@@ -1671,7 +1673,7 @@ describe("replies merge", () => {
     const winner = repMap.get("rep_1") as AnnotationReplyRecordV1;
     expect(winner.rev).toBe(4);
     expect(winner.text).toBe("from-ymap");
-    cleanup();
+    cleanup("close");
   });
 });
 
@@ -1700,39 +1702,6 @@ describe("observer cleanup — tombstone survival (#333)", () => {
     expect(getTombstones(HASH_A)).toHaveLength(1);
 
     cleanup("close");
-    expect(getTombstones(HASH_A)).toHaveLength(0);
-  });
-
-  it("cleanup with no argument defaults to the close phase", () => {
-    // The two specs above always pass an explicit phase, so neither can see
-    // the DEFAULT in `(phase: ObserverCleanupPhase = "close")` being flipped.
-    // Nothing else in the suite can either: dozens of specs in this file call a
-    // bare `cleanup()` as teardown, but none asserts ledger state afterwards,
-    // and `resetForTesting()` runs on both sides of every spec — so a default
-    // of `"swap"` would leak nothing and the whole suite would stay green.
-    //
-    // The ledger assertion covers both halves of the branch: the
-    // `tombstonesByDoc.delete` and the `forgetDoc` share one conditional, so a
-    // flipped default skips them together. The narrower mutant that moves only
-    // `forgetDoc` out of the `if` dies on the migration-log dedup specs above.
-    //
-    // Scope, stated honestly: the default is dead in production today. The one
-    // consumer of this cleanup reaches it through `safeCleanup`, which forwards
-    // an explicit phase at all four of its call sites. This pins the contract
-    // for a future caller and for the optional `phase?` in the returned type.
-    //
-    // A required parameter would be the stronger form — it refuses that future
-    // caller rather than describing what happens to it — and this spec would
-    // then be deleted rather than kept alongside it. The trade is ~100
-    // mechanical test edits against a three-spec PR; it is #1695, not a defect.
-    const ydoc = new Y.Doc();
-    const store = createStore(HASH_A, { filePath: FILE_A });
-    const cleanup = registerAnnotationObserver(syncCtx(ydoc, store));
-
-    recordTombstone(HASH_A, "ann_deleted", 3);
-    expect(getTombstones(HASH_A)).toHaveLength(1);
-
-    cleanup();
     expect(getTombstones(HASH_A)).toHaveLength(0);
   });
 });

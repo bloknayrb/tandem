@@ -82,13 +82,52 @@ describe("searchRegexInWorker — the event loop stays free", () => {
 
 describe("searchRegexInWorker — partial results", () => {
   it("keeps the batches that arrived before a terminate, and loses the tail", async () => {
-    // 300 cheap `x` matches, then one `exec` that spins for 20-35 s — far past
-    // any deadline check, which only runs BETWEEN matches. So this is the hard
-    // timer + terminate path by construction, and with batchSize 256 exactly
-    // one batch was flushed: the 44 matches still in the worker's accumulator
-    // are gone. That loss is the honest contract, and this pins it.
-    const text = "x".repeat(300) + "a".repeat(28) + "!";
-    const result = await searchRegexInWorker(text, "x|(a+)+$", { batchSize: 256 });
+    // 300 cheap `x` matches, then one `exec` that never finishes inside the
+    // budget — the deadline check only runs BETWEEN matches, so this is the
+    // hard timer + terminate path, and with batchSize 256 exactly one batch was
+    // flushed: the 44 matches still in the worker's accumulator are gone. That
+    // loss is the honest contract, and this pins it.
+    //
+    // **This comment used to claim the blowup "spins for 20-35 s", and it was
+    // the reason nobody looked here when the spec flaked on a docs-only PR
+    // (#1933, run 34425689896).** Measured on Node v24.2.0: at a-run 28 the
+    // `x|(a+)+$` exec RETURNS ON ITS OWN in ~3.07 s (3069/3063/3060 ms over
+    // three runs) against the 2000 ms main-thread DEFAULT_HARD_TIMEOUT_MS — a
+    // ~1.07 s upper margin, 1.65x, not the ~20x claimed. Either side closing
+    // flips WHICH of two paths ran, which is the thing under test, so widening
+    // a timeout only moves the coin-flip. The V8-experimental-engine-fallback
+    // hypothesis is refuted: `--regexp-backtracks-before-fallback=100` changes
+    // the timing not at all.
+    //
+    // Both margins are an order of magnitude again at the shipping values:
+    //   - UPPER: a-run 30 measures 22 937 ms against hardTimeoutMs 1000 — ~23x.
+    //     (28 → 3298 ms, 30 → 22 937 ms, 31 → 50 312 ms.) This is the side no
+    //     timeout choice protects: if V8 ever gets faster on this alternation
+    //     the spec fails DETERMINISTICALLY, reading as an `undefined` regression
+    //     in `truncated` rather than as an obsolete assumption.
+    //   - LOWER: `pump()` arms the hard timer at DISPATCH, before the worker
+    //     thread has evaluated WORKER_SOURCE, and the preceding spec terminated
+    //     the worker — so the budget covers a COLD boot plus the 300 cheap
+    //     matches plus the round trip, measured at 26/27/28 ms against 1000 ms,
+    //     ~36x. **If this spec ever fails with `matches` length 0 rather than a
+    //     wrong `truncated`, that is the lower margin: raise hardTimeoutMs, do
+    //     not touch the a-run.** The 36x was measured on an idle Windows box
+    //     while #1932 failed on a loaded 2-core ubuntu runner.
+    //
+    // **`hardTimeoutMs` is a margin widener, not a correctness knob, and
+    // nothing in this file detects its deletion.** `search-worker.ts` falls back
+    // to DEFAULT_HARD_TIMEOUT_MS (2000), which still fires ~11x before a 22.9 s
+    // blowup ends: `truncated` stays `"timeout"` and `matches` stays 256 (the
+    // flushed count is a function of batchSize 256 and the 300 cheap `x`
+    // matches, not of the timer), and the spec passes unchanged at ~2 s.
+    // Passing the option at all is what removes the dependence on that default
+    // staying 2000. `deadlineMs` is left at its default: 1000 < 1800, so the
+    // hard timer wins by construction.
+    const text = "x".repeat(300) + "a".repeat(30) + "!";
+    const result = await searchRegexInWorker(text, "x|(a+)+$", {
+      batchSize: 256,
+      hardTimeoutMs: 1000,
+    });
 
     expect(result.truncated).toBe("timeout");
     expect(result.matches).toHaveLength(256);

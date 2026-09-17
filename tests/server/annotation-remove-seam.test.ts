@@ -422,10 +422,31 @@ describe("who may reach the unguarded mechanism", () => {
     // and every assertion above stays green — the new caller never mentions the
     // pinned symbol, and the wrapper lives in a file already on the list.
     //
-    // So pin the call sites too. Exactly two occurrences of the name in
-    // `lifecycle.ts`: the declaration, and the one call inside `removeForClaude`
-    // (the guarded path). A wrapper is a third, and reds this.
+    // So pin the call sites too. The two symbol-specific alias/re-export
+    // guards run FIRST and the blanket occurrence count LAST — ordering is
+    // load-bearing here, not stylistic (#1825/general-purpose-3): an alias
+    // line (`export const removeRec = removeAnnotationRecord;`) makes the
+    // occurrence count 3, and `expect(...).toHaveLength(2)` throws on the
+    // first failure it hits, aborting the `it()` before any assertion below
+    // it runs. With the count first, the two alias-specific `not.toMatch`
+    // checks were provably unreachable in the one state where they could
+    // ever fail (mutation-verified: adding the alias export fails the count
+    // line and neither `not.toMatch` executes) — so put them first, where
+    // they get to report their own symbol-specific message instead of the
+    // generic count one. Matching the parity guards
+    // `annotation-reply-seam.test.ts` carries for `addUserReply` (#1825),
+    // and fixed there in the same ordering.
     const lifecycle = stripComments(SRC_FILES.get("src/server/annotations/lifecycle.ts") ?? "");
+    expect(lifecycle, "no alias binding of the unguarded entry").not.toMatch(
+      /export\s+(?:const|let|var|function)\s+\w+\s*=?\s*removeAnnotationRecord\b/,
+    );
+    expect(lifecycle, "no aliased re-export of the unguarded entry").not.toMatch(
+      /export\s*\{[^}]*\bremoveAnnotationRecord\b[^}]*\bas\b/,
+    );
+    // Exactly two occurrences of the name in `lifecycle.ts`: the declaration,
+    // and the one call inside `removeForClaude` (the guarded path). A wrapper
+    // is a third, and reds this — the general backstop for any other shape of
+    // wrapper the two regexes above don't name.
     expect(
       lifecycle.match(/removeAnnotationRecord/g) ?? [],
       "the declaration and removeForClaude's call — a third is a wrapper around the guard",

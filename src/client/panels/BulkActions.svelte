@@ -48,7 +48,7 @@ const smallBtnBase =
   >
     {#if bulkConfirm}
       <span style="font-size: var(--tandem-text-xs); color: var(--tandem-fg);">
-        {isAccept ? "Accept" : "Reject"}
+        {isAccept ? "Accept" : "Dismiss"}
         {countLabel}
       </span>
       <button
@@ -83,7 +83,7 @@ const smallBtnBase =
         onclick={onRequestDismiss}
         style="{smallBtnBase} background: var(--tandem-error-bg); color: var(--tandem-error-fg-strong);"
       >
-        Reject All
+        Dismiss All
       </button>
     {/if}
   </div>

@@ -55,7 +55,7 @@ Then try:
 "Let's work on the welcome document in Tandem"
 ```
 
-Claude connects to the running Tandem server, opens the document, and starts reading. Asking for Tandem by name is what runs the bundled skill on first use. Where Claude Code offers a Monitor tool, the skill makes one automatic attempt to open a watch on Tandem's wake stream after its first successful read-mode `tandem_status`, so your comments and chat messages reach it while it is idle.
+Claude connects to the running Tandem server, opens the document, and starts reading. Asking for Tandem by name is what runs the bundled skill on first use. Where Claude Code offers a Monitor tool, the skill makes one automatic attempt to open a watch on Tandem's wake stream on the first Tandem response carrying a wake-stream address — `tandem_open`, `tandem_scratchpad` or a read-mode `tandem_status` — so your comments and chat messages reach it while it is idle.
 
 If that route is not available to you, the channel shim is the fallback — and it needs both halves, registration and the flag:
 
@@ -459,7 +459,8 @@ Scratchpads are ephemeral documents with no file on disk — useful for brainsto
 
 ```
 tandem_scratchpad()
-→ { documentId: "abc123", fileName: "Scratchpad.md", format: "md" }
+→ { documentId: "abc123", fileName: "Scratchpad.md", format: "md",
+    wakeUrl: "ws://127.0.0.1:3479/api/wake" }   // wakeUrl omitted in stdio mode
 
 tandem_edit({ from: 0, to: 0, newText: "# Draft Outline\n\n1. Introduction\n2. Analysis\n3. Conclusion" })
 → Content appears in the scratchpad tab

@@ -173,6 +173,38 @@ describe("open security-findings claims (CLAUDE.md vs docs/security.md)", () => 
     expect(claimBullet()).toContain(`**${word} security findings are open`);
   });
 
+  it("CLAUDE.md's ACCEPTED count word matches the register's Accepted subsection", () => {
+    // The sibling of the open-count spec above, and it did not exist until
+    // 2026-09-11 — which is how #1488 sat as a fourth accepted finding,
+    // decided 2026-09-08, while this bullet said "three" and every spec here
+    // stayed green. Demonstrated rather than imagined: reverting the count
+    // word from "four" to "three" with four entries filed under Accepted
+    // reddened nothing. The open half was pinned; the accepted half was not,
+    // and an accepted finding is still a live code condition, so an
+    // undercount reads as "there is one fewer bound to respect here".
+    //
+    // Counts the register's ENTRIES, not CLAUDE.md's own refs, for the same
+    // reason the open spec counts CLAUDE.md's: each direction has a spec that
+    // treats the other file as the authority, so agreement is checked rather
+    // than assumed. `acceptedOpenings`-style top-level bullets are the entry
+    // discriminator — indented continuations start with two spaces.
+    const openings = acceptedSubsection()
+      .split("\n")
+      .filter((line) => line.startsWith("- "));
+    expect(
+      openings.length,
+      "derived no accepted entries — the parser found nothing",
+    ).toBeGreaterThan(0);
+
+    const word = NUMBER_WORDS[openings.length];
+    expect(word, `no number word for ${openings.length} accepted findings`).toBeTruthy();
+    expect(
+      claimBullet().toLowerCase(),
+      `the register files ${openings.length} entries under \`### Accepted (bounded)\`, so ` +
+        `CLAUDE.md's bullet must read "${word} are accepted rather than fixed"`,
+    ).toContain(`${word.toLowerCase()} are accepted rather than fixed`);
+  });
+
   it("every finding CLAUDE.md calls open has its OWN entry in the register", () => {
     // "The number appears somewhere in the section" is not the claim, and
     // testing it that way was a real hole: deleting #1609's entry outright
@@ -238,6 +270,50 @@ describe("open security-findings claims (CLAUDE.md vs docs/security.md)", () => 
     expect(
       contradicted,
       "CLAUDE.md calls these findings open, but docs/security.md files them under Accepted",
+    ).toEqual([]);
+  });
+});
+
+/**
+ * The REVERSE direction. Every spec above reads CLAUDE.md and asks the register to agree;
+ * nothing asked the register's own entries to be accounted for. That is how a new entry (the
+ * `wakeUrl` finding, 2026-09-10) made the real count five while CLAUDE.md still said Four and
+ * every spec here stayed green.
+ *
+ * Keyed on the ISSUE REF, not on a status word. The register has no uniform status token —
+ * #1609, #1884 and #1292 carry none, and #1420 reads "not open" — so a "contains the word open"
+ * predicate is wrong in both directions. It is also why "every entry appears in CLAUDE.md or
+ * carries a not-counted marker" is unbuildable here: the `## Open findings` section holds ~27
+ * top-level bullets of which only ~10 are entries, the rest being unindented PROSE bullets
+ * inside entry bodies. Those prose bullets carry no issue ref, which is exactly what makes
+ * "has a top-level ref" a clean entry discriminator.
+ *
+ * Its bound, stated plainly: a new entry with NO issue number escapes this guard. That is
+ * acceptable only because this section's own rule is that an open finding is filed as well as
+ * recorded here — the exemption and the rule are the same sentence.
+ */
+const CLOSED_NOT_IN_CLAUDE_MD = [
+  // Retained under the closed-findings heading because the mechanism is load-bearing for the
+  // entry above it; closed findings are deliberately not carried in CLAUDE.md's bullet at all.
+  { issue: 1537, why: "hyphenated-scheme render bypass — CLOSED, kept for the mechanism" },
+];
+
+describe("the register does not outgrow CLAUDE.md's enumeration", () => {
+  it("every issue the register files an entry for is accounted for in CLAUDE.md", () => {
+    const allowed = new Set(CLOSED_NOT_IN_CLAUDE_MD.map((r) => r.issue));
+    const bullet = claimBullet();
+    const refs = entryOpenings().flatMap(issueRefsAtTopLevel);
+
+    expect(refs.length, "control: derived no register entries at all").toBeGreaterThan(5);
+
+    const unaccounted = [...new Set(refs)].filter(
+      (n) => !allowed.has(n) && !new RegExp(`#${n}(?!\\d)`).test(bullet),
+    );
+    expect(
+      unaccounted,
+      "register entries whose issue CLAUDE.md's findings bullet never mentions. Add them to " +
+        "the enumeration (and move the count word), or add a row to CLOSED_NOT_IN_CLAUDE_MD " +
+        "with a written reason if the finding is closed.",
     ).toEqual([]);
   });
 });

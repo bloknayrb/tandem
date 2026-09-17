@@ -62,6 +62,7 @@ import {
   ERROR_CODE_BAD_ORIGIN,
   ERROR_CODE_INSTALL_FAILED,
   ERROR_CODE_INSTALL_IN_PROGRESS,
+  ERROR_CODE_INTEGRATIONS_FUTURE_SCHEMA,
   ERROR_CODE_INVALID_APPLY_REQUEST,
   ERROR_CODE_INVALID_INTEGRATIONS_FILE,
   ERROR_CODE_INVALID_NONCE,
@@ -114,7 +115,7 @@ import {
 } from "./install-claude-cli.js";
 import { type Keychain, KeychainUnavailableError } from "./keychain.js";
 import { type IntegrationConfig, IntegrationsFileSchema } from "./schema.js";
-import type { IntegrationsStore } from "./storage.js";
+import { IntegrationsFutureSchemaError, type IntegrationsStore } from "./storage.js";
 
 export {
   API_INTEGRATIONS,
@@ -1198,6 +1199,22 @@ function makePostInstallClaudeCodeHandler(deps: IntegrationsRoutesDeps): Handler
  */
 function sendInternal(res: Response, err: unknown, label: string): void {
   console.error(`[Tandem] ${label}:`, err);
+  // #1792: a downgrade makes every integrations route reject with the SAME
+  // precise error, and flattening it to `{"error":"INTERNAL"}` left the wizard
+  // dead with no hint. Branched here rather than at the seven call sites so a
+  // new one cannot forget it. The response message is BUILT HERE — the thrown
+  // message carries the resolved `filePath`, and these routes are
+  // LAN-reachable, so the path stays in the `console.error` line above.
+  if (err instanceof IntegrationsFutureSchemaError) {
+    res.status(409).json({
+      error: "CONFLICT",
+      code: ERROR_CODE_INTEGRATIONS_FUTURE_SCHEMA,
+      message:
+        `integrations.json was written by a newer Tandem (schemaVersion ${err.found}; ` +
+        `this build supports ${err.supported}). Update Tandem, or remove the integrations file.`,
+    });
+    return;
+  }
   res.status(500).json({
     error: "INTERNAL",
     message: "Internal server error",

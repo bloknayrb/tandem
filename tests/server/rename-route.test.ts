@@ -7,7 +7,7 @@ import { TAURI_HOSTNAME } from "../../src/shared/constants.js";
 // param validation + error-code → HTTP-status mapping. The migration itself is
 // covered by rename-document.test.ts.
 const renameDocument = vi.fn();
-vi.mock("../../src/server/mcp/document-service.js", () => ({ renameDocument }));
+vi.mock(import("../../src/server/mcp/document-service.js"), () => ({ renameDocument }));
 
 const { handleRename } = await import("../../src/server/mcp/routes/rename.js");
 

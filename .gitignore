@@ -122,6 +122,12 @@ __pycache__/
 # nothing to notice, which is the same trap as the testid manifest.
 coverage/
 
+# The vitest JSON run report the file anchor reads (#1673). Written by
+# `npm test -- --run --reporter=json --outputFile.json=.vitest-report.json`,
+# which is what CI's `check` job runs; a local full-suite run produces one too.
+# Never committed: it is a record of one machine's run, not a fact about the code.
+.vitest-report.json
+
 # UI element inspector store (`cargo tauri dev --features ui-inspector`).
 # Holds one directory per `@ui_<ULID>` reference: reference.json plus a full
 # native window screenshot and an element crop. TREAT AS SENSITIVE -- the

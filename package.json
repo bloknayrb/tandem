@@ -47,13 +47,15 @@
     "build:server": "tsup",
     "check:fonts": "node scripts/check-font-assets.mjs",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc --noEmit && svelte-check --tsconfig ./tsconfig.client.json --fail-on-warnings",
-    "typecheck:tests": "tsc -p tsconfig.tests.node.json --noEmit && tsc -p tsconfig.tests.client.json --noEmit && tsc -p tsconfig.tests.e2e.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.tests.node.json --noEmit && tsc -p tsconfig.tests.client.json --noEmit && tsc -p tsconfig.tests.e2e.json --noEmit && svelte-check --tsconfig ./tsconfig.tests.client.json --fail-on-warnings",
     "server": "tsx src/server/index.ts",
     "start:server": "node dist/server/index.js",
     "channel": "tsx src/channel/index.ts",
     "start:channel": "node dist/channel/index.js",
     "test": "vitest",
-    "test:coverage": "cross-env TANDEM_COVERAGE=1 vitest run --coverage --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=html --testTimeout=120000 --hookTimeout=300000 && node scripts/ci/coverage-manifest.mjs && node scripts/ci/coverage-gate.mjs",
+    "test:coverage": "cross-env TANDEM_COVERAGE=1 vitest run --coverage --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=html --testTimeout=120000 --hookTimeout=300000",
+    "coverage:manifest": "node scripts/ci/coverage-manifest.mjs",
+    "coverage:gate": "node scripts/ci/coverage-gate.mjs",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "perf:gate": "tsx scripts/perf-build.ts && playwright test --config=tests/perf/playwright.config.ts",
@@ -91,7 +93,7 @@
       "eslint --fix",
       "biome check --write --no-errors-on-unmatched"
     ],
-    "**/*.json !package-lock.json": [
+    "**/*.json": [
       "biome check --write --no-errors-on-unmatched"
     ],
     "src/client/**/*.{ts,tsx,svelte,css,html}": [
@@ -142,6 +144,7 @@
     "@tiptap/extension-underline": "^3.30.5",
     "@tiptap/pm": "^3.30.5",
     "@tiptap/starter-kit": "^3.30.5",
+    "dingbat-to-unicode": "^1.0.1",
     "docx": "^9.6.1",
     "dom-serializer": "^3.0.0",
     "env-paths": "^4.0.0",

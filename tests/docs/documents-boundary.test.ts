@@ -385,6 +385,8 @@ const FAN_OUT = [
   // shared/constants.ts row is added for it.
   "server/documents/annotation-wiring.ts -> server/mcp/annotations.ts (value) x1",
   "server/documents/annotation-wiring.ts -> server/notifications.ts (value) x1",
+  // #1863: `annotationsById` names `Annotation` in its return type.
+  "server/documents/annotation-wiring.ts -> shared/types.ts (type) x1",
   "server/documents/annotation-wiring.ts -> shared/utils.ts (value) x1",
   "server/documents/conflict.ts -> server/notifications.ts (value) x1",
   "server/documents/conflict.ts -> server/session/manager.ts (value) x1",
@@ -412,6 +414,7 @@ const FAN_OUT = [
   "server/documents/reload-family.ts -> server/file-io/doc-backup.ts (value) x1",
   "server/documents/reload-family.ts -> server/file-io/docx-size-gate.ts (value) x1",
   "server/documents/reload-family.ts -> server/file-io/index.ts (value) x1",
+  "server/documents/reload-family.ts -> server/file-io/line-endings.ts (value) x1",
   "server/documents/reload-family.ts -> server/file-watcher.ts (value) x1",
   "server/documents/reload-family.ts -> server/mcp/document-service.ts (value) x1",
   "server/documents/reload-family.ts -> server/notifications.ts (value) x1",

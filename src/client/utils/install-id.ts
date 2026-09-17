@@ -25,10 +25,14 @@
  * `webServer` verbatim, so it shares E2E's dir and id.) It is already exposed,
  * so this needs no new durable server state.
  *
- * Separation is by app-data root, not by binary: an npm-global install and the
- * desktop app both resolve the default root, so they share one id. That is the
- * intended reading — same user, same data — but it does mean "install" here is
- * shorthand for "app-data root".
+ * Separation is by app-data root, not by binary — and since #1787 the desktop
+ * app and an npm-global install no longer resolve the SAME root, so they no
+ * longer share one id. (They did until then; the sidecar set `TANDEM_DATA_DIR`
+ * while the resolver reads `TANDEM_APP_DATA_DIR`, which nobody set.) One
+ * bounded consequence, recorded rather than mechanised: unsaved scratchpad
+ * drafts held under the old id become unreachable once, at the first desktop
+ * launch after that change. "Install" here is still shorthand for "app-data
+ * root".
  *
  * Deliberately NOT derived from the auth token: `shared/auth/token-file.ts`
  * resolves via `envPaths("tandem", { suffix: "" }).data` directly and ignores

@@ -17,7 +17,7 @@ import type { ExternalConflictState, SessionData } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { docHash, ENVELOPE_FILENAME_RE } from "../annotations/doc-hash.js";
-import { parseAnnotationDoc } from "../annotations/schema.js";
+import { isPartialParse, parseAnnotationDoc } from "../annotations/schema.js";
 import { createStore, getAnnotationsDir, isStoreReadOnly } from "../annotations/store.js";
 import { reconcileStreamSidecars } from "../chat-stream-staleness.js";
 import { atomicWrite } from "../file-io/index.js";
@@ -587,6 +587,60 @@ async function mtimeOf(p: string): Promise<number | null> {
 }
 
 /**
+ * Set a session's `lastAccessed` to `stamp`, leaving every other field alone.
+ *
+ * Exists for one caller: `restoreOpenDocuments`, when reopening a document
+ * fails for a reason that could clear on its own — an antivirus lock, an
+ * unmounted network drive, a file held by another process. Without this the
+ * record is frozen at its old timestamp while every session that DID reopen is
+ * autosaved forward, so one transient failure pushes the document outside the
+ * restore window permanently and it is never retried. Moving the stamp says
+ * "this was part of the working set even though it would not open", which is
+ * true.
+ *
+ * **The caller supplies `stamp`, and passes the window anchor rather than
+ * `Date.now()`.** This document did not open, so it must not become the anchor
+ * the NEXT boot measures every other session against: a restored document
+ * writes no session file until `ensureAutoSave`'s first 60s tick, so a crash
+ * inside that first minute would otherwise leave the failed session holding the
+ * newest stamp on disk and drop the genuinely-restored ones. Taking the value
+ * as a parameter also keeps this function free of a clock the tests would have
+ * to fake.
+ *
+ * Three things here are load-bearing and none is obvious:
+ *
+ * 1. **The path comes from `loadSessionWithPath`, never from `sessionPathFor`.**
+ *    Inside the #1750 migration window a document can have a file under BOTH
+ *    the hashed and the `encodeURIComponent` name, and `listSessionFilePaths`
+ *    picks between them by newer MTIME (`dedupeByFilePath`). `loadSessionWithPath`
+ *    applies the same MTIME criterion, so routing through it is what keeps this
+ *    bump on the record the restore list actually read. Re-deriving the path
+ *    would write the new-key file while the legacy file is the live one — the
+ *    bump lands nowhere and the failure this function exists to prevent
+ *    recurs, silently.
+ * 2. **`atomicWrite`, not `fs.writeFile`.** Every other whole-record session
+ *    write in this module is atomic; a torn write here would leave unparseable
+ *    JSON where a recoverable document used to be.
+ * 3. **It never throws.** The only call site is inside the `catch` of
+ *    `restoreOpenDocuments`'s loop, whose sole outer handler is a bare
+ *    `.catch` in `index.ts`. A throw escaping here would abandon every session
+ *    later in the iteration — one bad file silently costing all the tabs after
+ *    it, which is far worse than the single-tab loss this is fixing.
+ */
+export async function touchSession(filePath: string, stamp: number): Promise<void> {
+  try {
+    const loaded = await loadSessionWithPath(filePath);
+    if (loaded === null) return;
+    // Never move a stamp BACKWARDS: `stamp` is the window anchor, and a record
+    // already newer than it is one this call has no business aging.
+    if (loaded.session.lastAccessed >= stamp) return;
+    await atomicWrite(loaded.path, JSON.stringify({ ...loaded.session, lastAccessed: stamp }));
+  } catch (err) {
+    console.error("[Tandem] Failed to refresh session timestamp for %s:", filePath, err);
+  }
+}
+
+/**
  * Delete a session file.
  *
  * Unlinks BOTH names unconditionally, ENOENT-tolerant on each (#1750). A
@@ -847,6 +901,23 @@ export interface SessionFileEntry {
   filePath: string;
   lastAccessed: number;
   readOnly: boolean;
+  /**
+   * True when this session is the only copy of something the user has not
+   * written to disk — `dirty` body edits, or an unresolved external conflict
+   * carried across the restart.
+   *
+   * Exposed here because `restoreOpenDocuments` bounds which sessions it
+   * reopens, and this is the carve-out that bound must never apply to. Both
+   * facts live in `SessionData` and were read by the scan already; before this
+   * they were dropped on the floor here, so the bound had no way to see them
+   * and would have silently discarded exactly the session `closeDocumentById`
+   * deliberately KEEPS for holding unsaved work.
+   *
+   * One flag rather than re-exporting `dirty` and `conflict` separately: every
+   * consumer wants the same question answered — must this be restored
+   * regardless of anything else — and two fields invite a caller to check one.
+   */
+  holdsUnsavedWork: boolean;
 }
 
 /** A `SessionFileEntry` still carrying the filename it came from, for the
@@ -890,7 +961,19 @@ export async function listSessionFilePaths(): Promise<SessionFileEntry[]> {
         results.push({
           file,
           filePath: data.filePath,
-          lastAccessed: data.lastAccessed ?? 0,
+          // Narrowed like the two fields below, and for a sharper reason than
+          // either: `partitionByRestoreWindow` folds this across every session
+          // with `Math.max`, so ONE record holding `{}`, `[1,2]` or `"never"`
+          // makes `newest` NaN — and every `newest - lastAccessed <= WINDOW`
+          // comparison against NaN is false. The whole working set silently
+          // fails to reopen and only `holdsUnsavedWork` records survive: the
+          // exact "one tab back instead of eight" failure the reduce and the
+          // clamp were written to prevent, reached through the operand instead.
+          // `?? 0` alone does not catch it — only `null`/`undefined` are.
+          lastAccessed:
+            typeof data.lastAccessed === "number" && Number.isFinite(data.lastAccessed)
+              ? data.lastAccessed
+              : 0,
           // Strict `=== true`, same don't-trust-a-bare-`JSON.parse` rule as
           // `narrowConflict`: this value comes off disk and decides whether the
           // restored tab is writable, so `"true"`, `1` or `{}` must all restore
@@ -898,6 +981,16 @@ export async function listSessionFilePaths(): Promise<SessionFileEntry[]> {
           // Absent → false, which is every record written before this field
           // existed, and every writable document today.
           readOnly: data.readOnly === true,
+          // Both halves are narrowed, for the same don't-trust-a-bare-
+          // `JSON.parse` reason as `readOnly` above — and here the cost of
+          // being loose is specific: this flag is the ONE exemption from
+          // `restoreOpenDocuments`'s window, so a record that satisfies it
+          // is reopened and re-autosaved on every boot forever, which is the
+          // immortal-session cycle that bound exists to break. `!= null`
+          // would hand that exemption to `{}`, `0` or `"resolved"`, so
+          // `conflict` goes through `narrowConflict` — the same predicate
+          // `sessionModelIsStale` already uses — and `dirty` gets `=== true`.
+          holdsUnsavedWork: data.dirty === true || narrowConflict(data.conflict) !== undefined,
         });
       } catch (err) {
         // The boot sweep never reaches loadSession for an unparseable file —
@@ -1160,6 +1253,11 @@ export async function cleanupStaleTombstones(
 
     const parsed = parseAnnotationDoc(raw);
     if (!parsed.ok) continue; // corrupt/future files have their own lifecycle
+    // #1791(a): a partially-tolerated envelope is not a safe base for a
+    // full-envelope clobber. `rewritten` below is built from `parsed.doc` and
+    // flushed over `<hash>.json`, so rewriting one would durably delete every
+    // row this build could not read.
+    if (isPartialParse(parsed)) continue;
     const doc = parsed.doc;
     if (doc.tombstones.length === 0) continue;
 

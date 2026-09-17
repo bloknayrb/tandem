@@ -19,7 +19,14 @@
  *
  * Three directions, asserted separately because they fail separately:
  *
- * 1. **Every write funnels through the two writers.** Rev 1 of this guard
+ * Since #1693 there are THREE writers, not two: `writeReconciledCommentId`
+ * joins them for the one annotation write a `.docx` SAVE owes the map — pointing
+ * a stored `importSource.commentId` at the `w:id` the export actually wrote. It
+ * is inside this module rather than in `docx-comment-export.ts`, which is where
+ * the id was allocated, precisely so it lands inside this census instead of in
+ * the sibling-module blind spot direction 1 admits to below (#1950).
+ *
+ * 1. **Every write funnels through the three writers.** Rev 1 of this guard
  *    censused the literal `author: "import"` instead — and three of the four
  *    annotation write sites SPREAD an existing record rather than restating the
  *    tag, so against the pre-8h shape that census saw one of the four (two
@@ -75,17 +82,41 @@ describe("ADR-035 Unit 8h: who may write an imported annotation", () => {
     // deleting one legitimate write and adding one illegitimate one.
     const directWrites = [...body.matchAll(/\b(?:map|repliesMap)\.set\(/g)];
 
-    // Exactly two: the bodies of the writers themselves.
+    // Exactly three: the bodies of the writers themselves. The third
+    // (`writeReconciledCommentId`, #1693) is not an injection — it rewrites
+    // `importSource.commentId` on a record that already exists, after the
+    // `.docx` save has written a freshly minted `w:id` for it — and it could not
+    // route through `writeImportAnnotation`, whose stamp would set
+    // `author: "import"` on the PROMOTED (`author: "user"`) records that are its
+    // main population and silently un-promote them.
     expect(
       directWrites.length,
-      "every import write goes through writeImportAnnotation/writeImportReply; " +
-        "the only direct .set calls left are the two inside them",
-    ).toBe(2);
+      "every import write goes through writeImportAnnotation/writeImportReply/" +
+        "writeReconciledCommentId; the only direct .set calls left are the three inside them",
+    ).toBe(3);
 
     // And they really are inside the writers, not somewhere else that happens
-    // to total two.
+    // to total three.
     expect(body).toMatch(/function writeImportAnnotation\([^)]*\)[^{]*\{\s*map\.set\(/);
     expect(body).toMatch(/function writeImportReply\([^)]*\)[^{]*\{\s*repliesMap\.set\(/);
+    expect(body).toMatch(/function writeReconciledCommentId\([\s\S]{0,400}?map\.set\(/);
+  });
+
+  it("gives the third writer no caller-supplied record to smuggle a field through", () => {
+    // Direction 3 for `writeReconciledCommentId`, and it is a STRONGER property
+    // than the stamp rather than a weaker one: the two injecting writers accept
+    // a whole record and defend one field of it, while this one accepts no
+    // record at all — it reads the stored annotation itself and replaces exactly
+    // `importSource.commentId` (plus the `rev` bump every durable write owes).
+    // So no call site can express a different author, range, body or type,
+    // whatever it happens to be holding.
+    const body = stripComments(source());
+    const signature = body.match(/function writeReconciledCommentId\(([^)]*)\)/);
+    expect(signature, "writeReconciledCommentId is present").not.toBeNull();
+    // `Annotation` never appears in the parameter list — the record is READ, not
+    // passed. A parameter typed `Annotation` is exactly the smuggling route.
+    expect(signature?.[1]).not.toMatch(/Annotation/);
+    expect(body).toMatch(/function writeReconciledCommentId[\s\S]{0,400}?map\.get\(id\)/);
   });
 
   it("keeps both writers module-private and unaliased", () => {
@@ -95,6 +126,7 @@ describe("ADR-035 Unit 8h: who may write an imported annotation", () => {
     // is the same capability spread one level out.
     expect(body).not.toMatch(/export\s+(?:async\s+)?function\s+writeImportAnnotation\b/);
     expect(body).not.toMatch(/export\s+(?:async\s+)?function\s+writeImportReply\b/);
+    expect(body).not.toMatch(/export\s+(?:async\s+)?function\s+writeReconciledCommentId\b/);
 
     // Nor re-exported under another name, which an export-scan alone misses.
     expect(body).not.toMatch(
@@ -108,6 +140,7 @@ describe("ADR-035 Unit 8h: who may write an imported annotation", () => {
     // empty result cannot pass.
     expect(filesMentioning("writeImportAnnotation")).toStrictEqual([DOCX_COMMENTS]);
     expect(filesMentioning("writeImportReply")).toStrictEqual([DOCX_COMMENTS]);
+    expect(filesMentioning("writeReconciledCommentId")).toStrictEqual([DOCX_COMMENTS]);
   });
 
   it("keeps the stamp in the writer, where a call site cannot opt out of it", () => {

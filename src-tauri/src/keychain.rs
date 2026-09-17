@@ -8,19 +8,24 @@
 // as an env var" guidance — usable but clunky.
 //
 // This module exposes the Rust `keyring` crate (already a dep, used by
-// `token_store.rs` for the auth token) as three Tauri commands the WebView
-// can invoke directly. The client routes around the sidecar entirely when
-// `isTauriRuntime()` is true, so secrets never traverse the
+// `token_store.rs` for the auth token) as two WRITE-side Tauri commands the
+// WebView can invoke directly. The client routes around the sidecar entirely
+// when `isTauriRuntime()` is true, so secrets never traverse the
 // `localhost:3479` HTTP boundary at all on the desktop app.
+//
+// **There is deliberately no read command (#1822 item 5).** `keychain_get`
+// returned the plaintext secret to the WebView and had no consumer, so any
+// script running in the WebView could read every integration credential for
+// no product benefit. A future reader must keep the secret in Rust and inject
+// it where it is used, never hand it back over IPC.
 //
 // Service namespace: `tandem-integrations` (matches `KEYCHAIN_SERVICE`
 // from `src/server/integrations/keychain.ts` so the npm CLI path and the
 // Tauri path can share keychain entries when a user runs both).
 //
 // Errors are wrapped as `String` per Tauri command convention. Distinct
-// error prefixes (`keychain-init`, `keychain-get`, `keychain-set`,
-// `keychain-delete`) let the client surface different UX without parsing
-// the underlying OS error.
+// error prefixes (`keychain-init`, `keychain-set`, `keychain-delete`) let the
+// client surface different UX without parsing the underlying OS error.
 
 use keyring::Entry;
 
@@ -44,20 +49,13 @@ fn make_entry(account: &str) -> Result<Entry, String> {
             "keychain-init: account exceeds {ACCOUNT_MAX_LENGTH}-char limit"
         ));
     }
-    Entry::new(SERVICE, account).map_err(|e| format!("keychain-init: {e}"))
-}
-
-/// Read the secret stored under `account`. Returns `None` if no entry exists.
-/// `null` distinguishes "no secret" from "keychain unavailable" — only the
-/// latter throws an error.
-#[tauri::command]
-pub fn keychain_get(account: String) -> Result<Option<String>, String> {
-    let entry = make_entry(&account)?;
-    match entry.get_password() {
-        Ok(secret) => Ok(Some(secret)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("keychain-get: {e}")),
-    }
+    // Keep the `keychain-init:` prefix byte-identical — the client keys on the
+    // prefixes — and name *why* the store is unavailable when it is
+    // (`Entry::store_status()` carries the one-time init error, #1761).
+    Entry::new(SERVICE, account).map_err(|e| match Entry::store_status() {
+        Err(s) => format!("keychain-init: credential store unavailable: {s}"),
+        Ok(()) => format!("keychain-init: {e}"),
+    })
 }
 
 /// Store or overwrite a secret under `account`. The `secret` must be

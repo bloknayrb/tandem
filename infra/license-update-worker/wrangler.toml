@@ -34,3 +34,29 @@ id = "REPLACE_WITH_LICENSE_KV_NAMESPACE_ID"
 # The public, signed release manifest the Worker proxies to entitled callers.
 # Same artifact the public (unlicensed) updater path uses.
 PUBLIC_LATEST_JSON_URL = "https://github.com/REPLACE_OWNER/REPLACE_REPO/releases/latest/download/latest.json"
+
+# Operator alerting for the reasons worth waking someone for: `unknown-id` (an
+# entitlement NOBODY REMOVED is gone, so those installs are told "up to date"
+# forever while starved) and `unparseable`. `expired` and `revoked` are
+# deliberately not alerted on -- the expected case, and the operator's own
+# action.
+#
+#   ALERT_WEBHOOK_URL -- any incoming webhook (Slack/Discord/ntfy). An
+#     incoming-webhook URL is a BEARER CREDENTIAL: anyone holding it can post to
+#     the channel, so `npx wrangler secret put ALERT_WEBHOOK_URL` is the safer
+#     form. It is offered here as a [vars] line only to match the issuance
+#     Worker's precedent.
+# ALERT_WEBHOOK_URL = "REPLACE_WITH_INCOMING_WEBHOOK_URL"
+
+# Retention. Without this the `{ result, reason, ts }` lines are kept NOWHERE --
+# `wrangler tail` is a live stream that dies with the terminal session -- so the
+# `reason` enum was readable only by someone already watching. Alerting is the
+# half that reaches a human unprompted; this is the half that lets them see the
+# history once they look.
+#
+# What Tandem's OWN log line carries is pinned by the Worker's header comment:
+# `{ result, reason, ts }`, never the license id. What Cloudflare's platform
+# invocation record holds is a separate, unverified question -- see the
+# docs/licensing-operations.md §8 checklist line.
+[observability]
+enabled = true

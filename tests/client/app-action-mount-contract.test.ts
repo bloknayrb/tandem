@@ -499,3 +499,134 @@ describe("the contract matcher can actually fail", () => {
     expect(checkActionMountContract(src).ok).toBe(false);
   });
 });
+
+// #1713: the wizard can stack over an open Settings modal because
+// `isAutoOpenFirstRun` is derived off an async fetch that can flip true at
+// any moment, including while Settings is up, and nothing closed Settings
+// for that path. No test in the repo mounts App.svelte (see this file's own
+// docblock: an App-level composition fact has no runtime signature short of
+// mounting the whole app), and a scoped harness re-mounting just the two
+// modals would pass whether or not the real effect exists — it would
+// re-implement the sequencing rather than exercise it. A structural
+// source-text assertion is the right instrument here, same idiom as the
+// action-executor contract above.
+describe("App.svelte closes an open Settings modal before the wizard mounts (#1713)", () => {
+  const source = readFileSync(APP_SVELTE, "utf-8");
+
+  it("has the closing effect textually after shouldShowWizard is declared", () => {
+    const derivedIdx = source.indexOf("const shouldShowWizard = $derived(");
+    expect(derivedIdx).toBeGreaterThan(-1);
+
+    const effectPattern =
+      /\$effect\(\(\)\s*=>\s*\{\s*if\s*\(shouldShowWizard\)\s*settingsModalOpen\s*=\s*false;\s*\}\);/;
+    const match = effectPattern.exec(source);
+    expect(match).not.toBeNull();
+    expect(match?.index ?? -1).toBeGreaterThan(derivedIdx);
+  });
+});
+
+// #1824 item I: same class as #1713 — the palette can stack over an open
+// Settings modal because "toggle-palette" had no guard against
+// settingsModalOpen. Same instrument as #1713 above: no test in the repo
+// mounts App.svelte, so this is a structural source-text assertion, not a
+// runtime one.
+//
+// cr-2 (review round 1) broadened both guards from settingsModalOpen alone
+// to every focus-trapping or exclusive surface the palette (and the
+// comment-on-selection shortcut) could otherwise stack over: showHelp,
+// shouldShowWizard and fileOpenDialogOpen join the set. Runtime coverage for
+// the broadened set is the two "cr-2" E2E tests in
+// tests/e2e/keyboard-shortcuts.spec.ts (Help modal, file-open dialog) plus
+// the toggle-palette guard's own use of shouldShowWizard, which is exercised
+// end-to-end by the #1713 wizard-stacking E2E test in
+// tests/e2e/integration-wizard.spec.ts.
+describe("App.svelte suppresses the palette open path while Settings is open (#1824 item I, cr-2)", () => {
+  const source = readFileSync(APP_SVELTE, "utf-8");
+
+  it("guards the open path inside the toggle-palette handler, before the toggle", () => {
+    const handlerIdx = source.indexOf('"toggle-palette": (e) => {');
+    expect(handlerIdx).toBeGreaterThan(-1);
+
+    const guardPattern =
+      /if\s*\(\s*!untrack\(\(\)\s*=>\s*paletteOpen\)\s*&&\s*\(settingsModalOpen\s*\|\|\s*showHelp\s*\|\|\s*shouldShowWizard\s*\|\|\s*fileOpenDialogOpen\)\s*\)\s*\{\s*return;\s*\}/;
+    const guardMatch = guardPattern.exec(source);
+    expect(guardMatch, "the open-path guard must exist and cover all four surfaces").not.toBeNull();
+    const guardIdx = guardMatch?.index ?? -1;
+    expect(guardIdx, "the guard must be inside the toggle-palette handler").toBeGreaterThan(
+      handlerIdx,
+    );
+
+    const toggleIdx = source.indexOf("paletteOpen = !untrack(() => paletteOpen);", handlerIdx);
+    expect(toggleIdx).toBeGreaterThan(-1);
+    // The guard must run BEFORE the toggle, or an already-suppressed open
+    // still flips the flag before returning.
+    expect(guardIdx).toBeLessThan(toggleIdx);
+  });
+
+  it("popupSuppressed reads true for all four surfaces, not just settingsModalOpen", () => {
+    const suppressedPattern =
+      /const popupSuppressed\s*=\s*[\s\S]*?slashCommandMenuOpen\s*\|\|\s*[\s\S]*?findBarOpen\s*\|\|\s*[\s\S]*?paletteOpen\s*\|\|\s*[\s\S]*?settingsModalOpen\s*\|\|\s*[\s\S]*?showHelp\s*\|\|\s*[\s\S]*?shouldShowWizard\s*\|\|\s*[\s\S]*?fileOpenDialogOpen;/;
+    expect(suppressedPattern.test(source)).toBe(true);
+  });
+});
+
+// cr-3 (review round 1, #1713 follow-up): the closing effect pinned by the
+// describe block above only fires on the false→true transition of
+// shouldShowWizard — it never re-fires while the wizard is already showing,
+// so it cannot stop a LATER Settings open. openSettingsModalWithAck is the
+// single choke point every real UI entry point routes through (keyboard
+// shortcut, toolbar, command palette, the model-chip shortcut — see its own
+// call-site enumeration in App.svelte), so the fix lives there instead of at
+// each call site. Runtime coverage is the E2E test in
+// tests/e2e/integration-wizard.spec.ts ("Settings shortcut does not stack
+// Settings behind an already-open wizard").
+describe("App.svelte refuses to open Settings while the wizard is already showing (cr-3)", () => {
+  const source = readFileSync(APP_SVELTE, "utf-8");
+
+  it("guards openSettingsModalWithAck before it sets settingsModalOpen", () => {
+    const fnIdx = source.indexOf("function openSettingsModalWithAck() {");
+    expect(fnIdx).toBeGreaterThan(-1);
+
+    const guardPattern = /if\s*\(shouldShowWizard\)\s*return;/;
+    const guardMatch = guardPattern.exec(source);
+    expect(guardMatch, "the wizard-open guard must exist").not.toBeNull();
+    const guardIdx = guardMatch?.index ?? -1;
+    expect(guardIdx, "the guard must be inside openSettingsModalWithAck").toBeGreaterThan(fnIdx);
+
+    const setIdx = source.indexOf("settingsModalOpen = true;", fnIdx);
+    expect(setIdx).toBeGreaterThan(-1);
+    expect(guardIdx, "the guard must run before settingsModalOpen is set").toBeLessThan(setIdx);
+  });
+});
+
+// #1708 (review round 1): the `save` shortcut had a third branch nobody had
+// walked — the active tab IS in source view but focus sits outside the source
+// container (chat, the rail, a toolbar button). `sourceCommandsForEvent` keys
+// off the EVENT TARGET, so it resolved nothing there, and a bare
+// `if (documentWorkspace.inSourceView) return;` ran AFTER `preventDefault()`:
+// no save, no message, and the browser's own Save dialog suppressed too, on
+// every press for as long as source view stayed open. Same instrument as the
+// describes above — no test in the repo mounts App.svelte — with the runtime
+// half in tests/e2e/source-view.spec.ts ("Ctrl+S from outside the source pane").
+describe("App.svelte's Ctrl+S is never a dead key in source view (#1708)", () => {
+  const source = readFileSync(APP_SVELTE, "utf-8");
+
+  it("falls through to the save funnel instead of returning on inSourceView", () => {
+    const from = source.indexOf("  save: (e) => {");
+    expect(from, "the save shortcut handler must exist").toBeGreaterThan(-1);
+    const to = source.indexOf('\n  "save-as": (e) => {', from);
+    expect(to, "the save handler must be followed by the save-as handler").toBeGreaterThan(from);
+
+    // `prepare()` preserves offsets, so the RAW indices above address the same
+    // span of the comment-blanked source. Blanking is what makes this honest:
+    // the handler's own comment explains the guard that was removed, and a raw
+    // scan would read that explanation as the violation.
+    const handler = prepare(source).slice(from, to);
+
+    // The fallthrough `save-as` has always had. Source view is not a special
+    // case for it: `saveExactTarget` routes a source-view tab through its
+    // registered commands, which commit the draft before anything persists.
+    expect(handler).toMatch(/documentWorkspace\.saveDocumentTarget\(\s*yjsSync\.activeTabId\s*,/);
+    expect(handler).not.toMatch(/if\s*\(\s*documentWorkspace\.inSourceView\s*\)/);
+  });
+});

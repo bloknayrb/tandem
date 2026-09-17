@@ -1185,6 +1185,25 @@ through the same CSS classes but is rail *chrome*, and moving four timers, two
 rAF dances and a `transitionend` filter with no behavioural net is how a
 behaviour-preserving refactor stops preserving behaviour.
 
+**#1719 amendment (2026-09-15):** The injected `closeTransientChat` and its Unit
+10c ordering are **removed**. `LayoutModelOptions` no longer carries the closer,
+`selectRailTab` is the single statement `activeRailTab = tab`, and `App.svelte`
+passes no closer — so `createLayoutModel` references `createRailContentModel`
+nowhere. A tab switch made from *inside* a chat reveal is not a reason to tear
+the reveal down: the reveal's precondition is a collapsed rail, not a Chat tab,
+and tearing it down on the Annotations click removed the tab buttons the user
+had just used, leaving a fully collapsed rail with no message (#1719). So the
+Unit 10c amendment's resolution of the `showAnnotations`-vs-`selectRailTab`
+difference — that a closer firing on a non-Chat tab "is one this project no
+longer wants" in the *other* direction — is settled the other way here: the
+difference is resolved by there being no closer. The "writes the tab before
+invoking the closer" claim retires with the call it describes, and the two specs
+that amendment credits (the one recording what the closer OBSERVES and the
+throwing-closer one) are deleted with the option they instrument. The reveal
+stays bounded by its other teardowns — outside `pointerdown`, Escape, document
+switch, `toggleRightPanel`, `sendChatMessage`, and since #1716 the rail becoming
+effectively visible.
+
 **Wave I amendment (2026-05-18):** The cross-rail tab picker is retired entirely. The left rail is hard-coded to the outline; the right rail is hard-coded to Annotations + Chat. The `leftRailTabs` / `rightRailTabs` settings fields are removed from the schema (v4→v5 migration strips them), the `RailTab` type is gone, and `LayoutModel.moveTabs` + the `leftTabs` / `rightTabs` getters are deleted. Layout-model surface narrows to visibility helpers (`leftVisible`, `rightVisible`, `toggleLeft`, `toggleRight`). The orphan-rail rule from §3 no longer applies; neither rail can empty because its tab set is fixed.
 
 ## ADR-038: MCP-First Integration Policy; Claude as Default Integration
@@ -1857,6 +1876,43 @@ Three reasons, in ascending order of force:
 >
 > **`when: "always"` stays rejected — decided by Bryan, 2026-08-11: "i dont want the monitor to always be armed."** This closes the question #1354 left open. The 3-of-6 measurement above was new input to it and did not change the answer, so the one *model-independent* arming option is off the table for good: #1354's `on-skill-invoke` trigger stands, and first-use arming remains a matter of raising the probability that the model chooses to arm (this amendment, plus the skill description) rather than removing the judgment. Do not re-propose `always` on the strength of a low dispatch rate — that argument has been made, with data, and declined.
 
+> **Amendment (2026-09-10) — `wakeUrl` is no longer read-mode `tandem_status` alone.** This ADR
+> never named a producer itself; the "read `wakeUrl` from a read-mode `tandem_status` response"
+> invariant lived in `SKILL.md`, `SERVER_INSTRUCTIONS` and the Track-D plan docs, with
+> `getWakeEndpoint()` having exactly one caller to match. It is recorded here because this is the
+> decision those surfaces implement, and because a reader who trusts the ADR should not have to
+> reconstruct the trigger from three prose copies. That made the trigger unsatisfiable for a
+> whole population, silently: `tandem_scratchpad({ content })` opens a draft tab and seeds it in
+> ONE call, so a session asked to jot something into Tandem completes its task without ever
+> needing a status read — and `SKILL.md` correctly forbids guessing the URL, because a wrong port
+> opens a socket to an unrelated service and looks armed. Such a session could not arm, and was
+> right not to. Observed 2026-09-10 in a real session, which called `tandem_scratchpad` exactly
+> once and armed nothing.
+>
+> `tandem_open` and `tandem_scratchpad` now return `wakeUrl` as well, and the skill's anchor moved
+> to **the first `tandem_*` response that carries one**. The anchor stays a single moment
+> deliberately: the bound was never the word "status", it was the word "first", and several
+> producers with no anchor would read as several standing invitations to arm.
+>
+> **`tandem_checkInbox` deliberately does NOT carry it.** It is polled every 2-3 tool calls, so it
+> would re-present the arm affordance dozens of times per session — the route to a second watch
+> that `wake-advisory.ts` documents, which also burns a `MAX_WAKE_CONSUMERS` slot and makes
+> `getSubscriberCount() === 0`, the only sound negative in the connection-honesty surface,
+> unreachable process-globally for every other session. Its marginal coverage is near zero anyway:
+> any session that reaches a poll has already called one of the three producers.
+>
+> One thing this amendment does NOT change: `wakeUrl` still names `127.0.0.1` unconditionally, so
+> under a non-loopback bind a remote MCP client receives an address on its own machine. That is
+> pre-existing and tracked in [security.md](security.md#open-findings); widening the producer set
+> multiplies its reach without altering its shape.
+>
+> One consequence worth stating, because no commit message does: for the common
+> `tandem_open`-first flow the arm moment now lands on the session's FIRST tool call rather than
+> after a status read. That widens the window in which the plugin monitor has not yet connected
+> and a self-armed watch reads a stale zero subscriber count, so the doubled-wake stand-down in
+> `SKILL.md` should be expected to fire more often than before. It is the recovery, and it works
+> — but a rise in its rate is a consequence of this change, not evidence of a new fault.
+
 **Cross-references:** [ADR-045](#adr-045-mcp-transport-multiplexing--one-mcpserver-per-session-keyed-by-mcp-session-id) (why neither session id is a usable key), ADR-027 (the Solo/privacy contract the strip reinforces), #1266 (the supervisor's payload-free wake), `docs/spikes/monitor-self-arm-probe.md` (P-A2, P4, and the burst measurement).
 
 ---
@@ -1879,6 +1935,8 @@ Inverting the default fixes all three at once: deny is structural, and the hand-
 **Why "non-GET" and not "mutating".** `GET /api/channel-permission` evicts TTL-expired entries, so it mutates. A rule phrased over mutation would need a per-route inventory of what counts — precisely the artifact this ADR abolishes. Method is a property of the request; mutation is a property of the handler, and only one of those is knowable at the mount.
 
 **Why reads are exempt.** `document/raw` and `diagnostics` refuse a non-loopback caller; `info`, `sessions`, `backups`, `launcher/status`, `models` and `integrations` scrub their payload instead. Those scrubs were designed and reviewed for LAN callers, and the `resolvedLanIP` Host accommodation exists to let them work. Extending the invariant to GET would strand both. The result is now coherent rather than accidental: **LAN peers may read `/api`; their writes are refused.**
+
+**That conclusion is scoped to `/api` on purpose.** This ADR inverted the default for one route prefix; it did not make write-refusal a property of the server. `enforceLoopbackMutation` is mounted on `/api` and nowhere else, so `POST /mcp` reaches the same mutations through the MCP tool surface with no loopback check — [#1906](https://github.com/bloknayrb/tandem/issues/1906).
 
 **Consequences:**
 
@@ -1913,7 +1971,7 @@ three times (#1229), which is why the acceptance harness's step carries no `if:`
 no `continue-on-error` and no `|| true`, and why `check` fails when any of that
 changes.
 
-**Decision.** The pattern, now used seven times, is: **the job does the work; a
+**Decision.** The pattern, now used nine times, is: **the job does the work; a
 wiring test inside `check` pins the job's shape and the inputs it reads.** The
 work stays where it is cheap. The disarming becomes expensive, because disarming
 it means editing something a required check reads.
@@ -1929,8 +1987,24 @@ Instances:
 | Every workflow's actions are SHA-pinned | `tests/scripts/workflow-action-pin.test.ts` |
 | `tauri-release.yml`'s signing gates | `tests/scripts/release-signing-gates.test.ts` |
 | `node-sidecar-pin` | `tests/scripts/node-sidecar-pin-wiring.test.ts` |
+| `check`'s vitest file anchor | `tests/scripts/vitest-file-anchor-wiring.test.ts` |
+| Release/CI hygiene: `npm ci --ignore-scripts`, the updater-signature gate | `tests/scripts/release-ci-hygiene.test.ts` |
 
-The last three (#1745–#1747) stretch the pattern in a direction worth naming,
+**The eighth (#1673) is the first instance INSIDE a required job, and it is the
+one that shows what "required" does and does not buy.** The anchor step runs in
+`check`, so the obvious reading is that it needs no wiring test at all — being
+required is the protection. That reading is wrong and this PR's own first draft
+held it: **required makes a RED block; it does nothing about a step that never
+runs.** `run: … || true`, `continue-on-error: true`, an `if:` that stops
+matching, or deleting the step outright each leave `check` green with the anchor
+dead — the #1229 shape, re-created inside the very group that exists to fix it.
+`check` already carried two step-level gates pinned from inside itself for
+exactly this reason (`typecheck:tests` and the acceptance harness), so the
+anchor is the third, not a new category. It is also the weakest of the three,
+because it is the only one carrying an `if:` — a condition nothing else
+constrains.
+
+The last three of the first seven (#1745–#1747) stretch the pattern in a direction worth naming,
 because two of them pin something that is not a *job*. `tauri-release.yml` and
 `dependabot.yml` run on a `v*` tag and on Dependabot's own schedule; neither is
 reachable from any required check, and neither has ever been read by anything

@@ -67,6 +67,13 @@ interface HarnessInit {
    * for `getTabs` in the source and every bulk-close spec stayed green.
    */
   orderedTabs?: OpenTab[];
+  /**
+   * Reopen post-condition poll (#1708 item 6). Forwarded into the opts literal
+   * so a spec can reach the timeout path in milliseconds instead of the real
+   * 8-second ceiling.
+   */
+  reopenPollMs?: number;
+  reopenTimeoutMs?: number;
 }
 
 interface Harness {
@@ -90,12 +97,18 @@ interface Harness {
     onTabClosed: string[];
     openServerPath: string[];
     triggerSave: string[];
+    /**
+     * `triggerSave`'s SECOND argument, kept in its own array (#1708 item 3).
+     * Six specs assert `calls.triggerSave` is a bare `string[]`, so pushing a
+     * tuple into that one fails all of them.
+     */
+    triggerSaveOpts: unknown[];
     closeEditorOverlays: number;
     notifications: Record<string, unknown>[];
     scratchpadCleared: string[];
   };
   setOpenServerPathResult: (
-    next: () => Promise<{ ok: true } | { ok: false; error: string }>,
+    next: (filePath: string) => Promise<{ ok: true } | { ok: false; error: string }>,
   ) => void;
   dispose: () => void;
 }
@@ -149,12 +162,21 @@ function harness(init: HarnessInit = {}): Harness {
     onTabClosed: [],
     openServerPath: [],
     triggerSave: [],
+    triggerSaveOpts: [],
     closeEditorOverlays: 0,
     notifications: [],
     scratchpadCleared: [],
   };
-  let openServerPathResult: () => Promise<{ ok: true } | { ok: false; error: string }> = async () =>
-    ({ ok: true }) as const;
+  let openServerPathResult: (
+    filePath: string,
+  ) => Promise<{ ok: true } | { ok: false; error: string }> = async (filePath) => {
+    // The default must DELIVER a tab, not merely accept the open (#1708 item
+    // 6): production's `{ ok: true }` is followed by the tab arriving over Yjs,
+    // and the workspace now waits for it. A stub that never delivers one puts
+    // every pre-existing reopen spec on the new timeout path.
+    state.tabs = [...state.tabs, tab({ id: filePath, filePath })];
+    return { ok: true } as const;
+  };
 
   const opts: CreateDocumentWorkspaceOpts = {
     getTabs: () => state.tabs,
@@ -183,10 +205,11 @@ function harness(init: HarnessInit = {}): Harness {
     },
     openServerPath: (filePath) => {
       calls.openServerPath.push(filePath);
-      return openServerPathResult();
+      return openServerPathResult(filePath);
     },
-    triggerSave: async (id) => {
+    triggerSave: async (id, saveOpts) => {
       calls.triggerSave.push(id);
+      calls.triggerSaveOpts.push(saveOpts);
       return true;
     },
     triggerSaveAs: async (args) => {
@@ -215,6 +238,8 @@ function harness(init: HarnessInit = {}): Harness {
       calls.log.push(`onTabClosed:${id}`);
       calls.onTabClosed.push(id);
     },
+    reopenPollMs: init.reopenPollMs,
+    reopenTimeoutMs: init.reopenTimeoutMs,
   };
 
   let ws!: DocumentWorkspace;
@@ -459,6 +484,11 @@ describe("createDocumentWorkspace — canSourceView / inSourceView", () => {
     flushSync();
     expect(h.ws.sourceViewTabs.has("a")).toBe(false);
     expect(h.calls.closeEditorOverlays).toBe(0);
+    // #1708 item 5 notifies from `requestToggleSourceView` — the ungated
+    // shortcut path — and NOT from this private step, which every visible
+    // affordance already gates on `canSourceView`. Silence here is what proves
+    // the message lives in the toggle rather than in the entry itself.
+    expect(h.calls.notifications).toEqual([]);
     h.dispose();
   });
 
@@ -474,6 +504,8 @@ describe("createDocumentWorkspace — canSourceView / inSourceView", () => {
     expect(h.ws.sourceViewTabs.size).toBe(0);
     // A refused target must not steal activation either.
     expect(h.calls.setActiveTabId).toEqual([]);
+    // Deliberately silent: this one is behind a gated menu item (#1708 item 5).
+    expect(h.calls.notifications).toEqual([]);
     h.dispose();
   });
 });
@@ -518,6 +550,9 @@ describe("createDocumentWorkspace — source view commands", () => {
     flushSync();
     expect(h.calls.setActiveTabId).toEqual([]);
     expect(h.ws.isTabInSourceView("ro")).toBe(false);
+    // Silent by design: the target twin is reached from a gated menu, so only
+    // the keyboard-driven active-tab toggle explains the rule (#1708 item 5).
+    expect(h.calls.notifications).toEqual([]);
 
     h.dispose();
   });
@@ -580,6 +615,116 @@ describe("createDocumentWorkspace — source view commands", () => {
 
     container.remove();
     stray.remove();
+    h.dispose();
+  });
+
+  // #1708 item 4. Both toggles optional-chained `…get(id)?.exit()`, so an
+  // unregistered id resolved normally and left the user in source view with
+  // nothing said.
+  it("says so when an exit finds no registered source-view commands", async () => {
+    const h = harness();
+    h.ws.enterSourceView();
+    flushSync();
+
+    await h.ws.requestToggleSourceView();
+    flushSync();
+
+    expect(h.ws.isTabInSourceView("a")).toBe(true);
+    expect(h.calls.notifications).toHaveLength(1);
+    expect(h.calls.notifications[0]).toMatchObject({
+      severity: "warning",
+      message: "Couldn't leave source view — the Markdown source editor was still loading.",
+      dedupKey: "source-view-exit:a",
+    });
+    h.dispose();
+  });
+
+  it("waits a tick for a remounting SourceView to register before giving up", async () => {
+    // The discriminating spec for the added `await tick()`. `App.svelte` keys
+    // SourceView on `{#key activeTab.id}`, so registration can land one
+    // microtask after the toggle; without the wait the lookup returns null and
+    // a perfectly healthy exit reports "still loading" instead of exiting.
+    const h = harness();
+    const exit = vi.fn(async () => {
+      h.ws.exitSourceView("a");
+    });
+    h.ws.enterSourceView();
+    flushSync();
+    void Promise.resolve().then(() => {
+      h.ws.updateSourceViewCommands("a", { documentId: "a", save: async () => true, exit });
+    });
+
+    await h.ws.requestToggleSourceView();
+    flushSync();
+
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(h.calls.notifications).toEqual([]);
+    h.dispose();
+  });
+
+  // #1708 item 5: every VISIBLE affordance is gated on `canSourceView`, but
+  // Ctrl+Shift+E is not, so the shortcut was a dead key on a document that can
+  // never show source view.
+  it("explains that source view is Markdown-only when the shortcut is pressed", async () => {
+    const h = harness({ tabs: [tab({ id: "d", format: "docx" })], activeTabId: "d" });
+
+    await h.ws.requestToggleSourceView();
+    await h.ws.requestToggleSourceView();
+    flushSync();
+
+    expect(h.ws.sourceViewTabs.size).toBe(0);
+    expect(h.calls.notifications).toHaveLength(2);
+    expect(h.calls.notifications[0]).toMatchObject({
+      severity: "info",
+      message: "Source view is only available for Markdown documents.",
+      dedupKey: "source-view-unavailable:not-markdown:d",
+    });
+    // Both presses carry ONE key, which is what makes a held shortcut a single
+    // tray row. The stub records every push — dedup itself lives in
+    // `useNotifications`, so asserting a count of 1 would assert something this
+    // harness cannot deliver.
+    expect(h.calls.notifications.map((n) => n.dedupKey)).toEqual([
+      "source-view-unavailable:not-markdown:d",
+      "source-view-unavailable:not-markdown:d",
+    ]);
+    h.dispose();
+  });
+
+  it("explains that a read-only Markdown document has no source view", async () => {
+    // `harness({ readOnly: true })`, not `tab({ readOnly: true })`:
+    // `canSourceView` reads `getIsReadOnly()`, which the harness decouples from
+    // the tab's own flag, so the tab-level version never fires.
+    const h = harness({ readOnly: true });
+
+    await h.ws.requestToggleSourceView();
+    flushSync();
+
+    expect(h.ws.sourceViewTabs.size).toBe(0);
+    expect(h.calls.notifications).toHaveLength(1);
+    expect(h.calls.notifications[0]).toMatchObject({
+      severity: "info",
+      message: "Source view isn't available — this document is read-only.",
+      dedupKey: "source-view-unavailable:read-only:a",
+    });
+    h.dispose();
+  });
+
+  it("tells a read-only NON-markdown tab the rule it can never satisfy", async () => {
+    // The only case that can fail on a wrong guard order: both conditions hold.
+    // Read-only-first answers "this document is read-only", implying that
+    // making the file writable would enable source view — which the format gate
+    // never will. The other two cases pass under either ordering.
+    const h = harness({ readOnly: true, tabs: [tab({ id: "a", format: "docx" })] });
+
+    await h.ws.requestToggleSourceView();
+    flushSync();
+
+    expect(h.calls.notifications).toHaveLength(1);
+    expect(h.calls.notifications[0]).toMatchObject({
+      severity: "info",
+      message: "Source view is only available for Markdown documents.",
+      dedupKey: "source-view-unavailable:not-markdown:a",
+    });
     h.dispose();
   });
 });
@@ -684,6 +829,38 @@ describe("createDocumentWorkspace — the close funnel", () => {
     h.dispose();
   });
 
+  it("declining the source-dirty confirm after accepting the scratchpad one keeps the recovery copy", () => {
+    // cr-1: a scratchpad (format "md", so source-viewable) with unsaved
+    // scratchpad content AND unsaved source-view edits hits both guards. The
+    // first confirm accepts the scratchpad loss; the second declines and must
+    // still abort the close — and must NOT have already discarded the
+    // scratchpad's localStorage recovery copy, or a later crash loses content
+    // the user explicitly chose not to close.
+    const h = harness({
+      tabs: [
+        tab({ id: "s", filePath: "upload://scratchpad/uuid-1/Scratchpad.md", source: "upload" }),
+      ],
+      activeTabId: "s",
+      hasUnsaved: true,
+    });
+    h.ws.updateSourceDraft("s", "half-typed", true);
+    flushSync();
+    expect(h.ws.sourceDirtyTabs.has("s")).toBe(true);
+
+    h.confirmReplies.push(true, false);
+    const result = h.ws.closeTabAndRecord("s");
+
+    expect(result).toBe(false);
+    expect(h.calls.closeTab).toEqual([]);
+    expect(h.calls.onTabClosed).toEqual([]);
+    // The load-bearing assertion: the accepted-then-declined sequence must not
+    // have cleared the recovery copy.
+    expect(h.calls.scratchpadCleared).toEqual([]);
+    expect(h.ws.sourceDirtyTabs.has("s")).toBe(true);
+
+    h.dispose();
+  });
+
   it("bulk closes snapshot the id list before the loop mutates the tab list", () => {
     const h = harness({
       tabs: [tab({ id: "a" }), tab({ id: "b" }), tab({ id: "c" })],
@@ -719,6 +896,83 @@ describe("createDocumentWorkspace — the close funnel", () => {
     right.ws.closeTabsToRight("a");
     expect([...right.calls.closeTab].sort()).toEqual(["b", "c"]);
     right.dispose();
+  });
+
+  // #1824 item H: before this fix the three bulk-close loops had no `break`,
+  // so Cancel on one dirty tab still prompted for (and closed) the rest of
+  // the batch. Cancel must abort the whole remaining batch.
+  it("Cancel on the 2nd of 3 dirty tabs aborts the rest of the bulk close", () => {
+    const h = harness({
+      tabs: [tab({ id: "keep" }), tab({ id: "a" }), tab({ id: "b" }), tab({ id: "c" })],
+      activeTabId: "keep",
+    });
+    // All three drop into the source-dirty confirm branch inside
+    // closeTabAndRecord.
+    h.ws.updateSourceDraft("a", "unsaved a", true);
+    h.ws.updateSourceDraft("b", "unsaved b", true);
+    h.ws.updateSourceDraft("c", "unsaved c", true);
+    flushSync();
+
+    // accept a, decline b — c must never even prompt.
+    h.confirmReplies.push(true, false);
+    h.ws.closeOtherTabs("keep");
+
+    expect(h.calls.closeTab).toEqual(["a"]);
+    expect(h.confirmReplies).toEqual([]); // both queued replies were consumed, none left for "c"
+    h.dispose();
+  });
+
+  // #1708 item 7: an unresolvable id used to skip both confirms and the stack
+  // push and then run the rest of the funnel anyway — draft cleanup,
+  // `onTabClosed` and `closeTab`, all on a tab that was not there.
+  it("a tab id that no longer resolves runs NO part of the funnel", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const h = harness();
+    // Keyed by the GHOST id on purpose: `clearSourceDraft(tabId)` was the first
+    // side effect to run, so this is what fails when the guard is placed after
+    // the side effects rather than before them.
+    h.ws.updateSourceDraft("ghost", "half-typed", true);
+    flushSync();
+
+    // `true`, not `false`: `false` means "the user cancelled" and
+    // `closeEachUntilCancelled` breaks on it.
+    expect(h.ws.closeTabAndRecord("ghost")).toBe(true);
+
+    expect(h.calls.closeTab).toEqual([]);
+    expect(h.calls.onTabClosed).toEqual([]);
+    expect(h.stack).toEqual([]);
+    expect(h.ws.sourceDrafts.has("ghost")).toBe(true);
+    // The log is the only evidence a developer gets. It does not notify: a
+    // ghost id is not a state the user can cause, so a toast would name one
+    // that does not exist.
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain("ghost");
+    expect(h.calls.notifications).toEqual([]);
+
+    warn.mockRestore();
+    h.dispose();
+  });
+
+  it("a ghost id in the middle of a bulk close does not truncate the batch", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const keep = tab({ id: "keep" });
+    const a = tab({ id: "a" });
+    const c = tab({ id: "c" });
+    // `orderedTabs` is what the bulk closes iterate and `getTabs()` is what the
+    // funnel resolves against; only the harness lets them diverge, which is
+    // what makes the guard reachable at all. Returning `false` for the ghost
+    // would `break` the batch there and leave "c" open.
+    const h = harness({
+      tabs: [keep, a, c],
+      orderedTabs: [keep, a, tab({ id: "ghost" }), c],
+      activeTabId: "keep",
+    });
+
+    h.ws.closeOtherTabs("keep");
+
+    expect(h.calls.closeTab).toEqual(["a", "c"]);
+    warn.mockRestore();
+    h.dispose();
   });
 });
 
@@ -816,8 +1070,9 @@ describe("createDocumentWorkspace — reopen", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    h.setOpenServerPathResult(async () => {
+    h.setOpenServerPathResult(async (filePath) => {
       await gate;
+      h.state.tabs = [...h.state.tabs, tab({ id: filePath, filePath })];
       return { ok: true };
     });
     h.stack.push({ filePath: "/docs/x.md", closedAt: 1 });
@@ -840,8 +1095,9 @@ describe("createDocumentWorkspace — reopen", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    h.setOpenServerPathResult(async () => {
+    h.setOpenServerPathResult(async (filePath) => {
       await gate;
+      h.state.tabs = [...h.state.tabs, tab({ id: filePath, filePath })];
       return { ok: true };
     });
     h.stack.push({ filePath: "/docs/x.md", closedAt: 1 });
@@ -857,6 +1113,85 @@ describe("createDocumentWorkspace — reopen", () => {
     // made the user's next Ctrl+Alt+T a silent no-op with the entry gone.
     expect(h.stack).toEqual([{ filePath: "/docs/x.md", closedAt: 1 }]);
     h.dispose();
+  });
+
+  it("says the reopen is already running when a second press lands during the wait", async () => {
+    const h = harness({ tabs: [], activeTabId: null });
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    h.setOpenServerPathResult(async (filePath) => {
+      await gate;
+      h.state.tabs = [...h.state.tabs, tab({ id: filePath, filePath })];
+      return { ok: true };
+    });
+    h.stack.push({ filePath: "/docs/x.md", closedAt: 1 });
+    h.stack.push({ filePath: "/docs/x.md", closedAt: 2 });
+
+    const first = h.ws.reopenClosedTab();
+    const second = h.ws.reopenClosedTab();
+    release?.();
+    await Promise.all([first, second]);
+
+    // Review round 1. Item 6's post-condition poll holds `inflightReopens` for
+    // as long as the reopen ceiling rather than just the HTTP round trip, so
+    // this branch is what the user's second Ctrl+Alt+T hits while nothing has
+    // appeared yet. It restored the record and returned in SILENCE — the same
+    // dead key the rest of #1708 exists to remove, inside #1708's own new code.
+    // The end-of-wait warning cannot cover it: that reports the first attempt,
+    // and a user who gives up before the ceiling never sees anything at all.
+    expect(h.calls.notifications).toHaveLength(1);
+    expect(h.calls.notifications[0]).toMatchObject({
+      type: "launcher",
+      // `info`, not `warning`: the reopen really is running.
+      severity: "info",
+      message: "Still reopening x.md…",
+      // Its own key. The end-of-wait arm uses `reopen-no-tab:`, and the tray
+      // coalesces on the key — a shared one would drop one of the two reports.
+      dedupKey: "reopen-inflight:/docs/x.md",
+    });
+    h.dispose();
+  });
+
+  // Review round 1: the poll is the one await in this module long enough to
+  // straddle an ErrorBoundary recovery (`Root.svelte` wraps `<App/>`, and its
+  // "Try to recover" is a real production remount). Every collaborator the
+  // failure arm touches belongs to the instance that just died.
+  it("stops polling and writes nothing once the workspace is torn down", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const h = harness({
+      tabs: [],
+      activeTabId: null,
+      reopenPollMs: 1,
+      // A ceiling this spec must never reach. It is what makes the teardown
+      // bail testable at all: drop it and the await below runs for a minute and
+      // fails on the test timeout. Without it, a poll that simply ran to
+      // completion would be silenced by the `disposed` guard on `handleFailure`
+      // and look identical to a pass.
+      reopenTimeoutMs: 60_000,
+    });
+    // Accepted, but no tab ever arrives — the arm that waits out the ceiling.
+    h.setOpenServerPathResult(async () => ({ ok: true }));
+    h.stack.push({ filePath: "/docs/gone.md", closedAt: 1 });
+    // The latch is an `$effect` teardown, so the effect must have RUN before
+    // disposing the root can fire it.
+    flushSync();
+
+    const pending = h.ws.reopenClosedTab();
+    h.dispose();
+    await pending;
+
+    expect(h.calls.notifications).toEqual([]);
+    // Not restored either: an ErrorBoundary remount has already recreated the
+    // stack empty (`useClosedTabStack` — "lifetime is the app session"), so the
+    // push would land on a destroyed instance nobody can see.
+    expect(h.stack).toEqual([]);
+    // Presence, not absence: this is what proves the failure arm was REACHED
+    // and chose a console trace, rather than the spec passing because the wait
+    // silently never finished.
+    expect(warn.mock.calls.map((args) => args.join(" ")).join("\n")).toContain("/docs/gone.md");
+    warn.mockRestore();
   });
 
   it("a thrown openServerPath is handled like a returned failure", async () => {
@@ -885,6 +1220,52 @@ describe("createDocumentWorkspace — reopen", () => {
     await h.ws.reopenClosedTab();
     expect(h.calls.openServerPath).toEqual([]);
     expect(h.calls.setActiveTabId).toEqual([]);
+    h.dispose();
+  });
+
+  // #1708 item 6: `{ ok: true }` means the server ACCEPTED the open, not that a
+  // tab arrived. The record was already popped, so a server-side no-op used to
+  // take the user's next Ctrl+Alt+T with it, silently.
+  it("reports an accepted reopen that never produced a tab, and keeps the record", async () => {
+    const h = harness({
+      tabs: [],
+      activeTabId: null,
+      reopenPollMs: 1,
+      reopenTimeoutMs: 5,
+    });
+    h.setOpenServerPathResult(async () => ({ ok: true }));
+    h.stack.push({ filePath: "/docs/gone.md", closedAt: 1 });
+
+    await h.ws.reopenClosedTab();
+
+    expect(h.stack).toEqual([{ filePath: "/docs/gone.md", closedAt: 1 }]);
+    expect(h.calls.notifications).toHaveLength(1);
+    expect(h.calls.notifications[0]).toMatchObject({
+      type: "general-error",
+      // One severity BELOW the two failure specs above, which assert "error":
+      // the server took the open and the tab may still land, so a late arrival
+      // turns the restored record into an activate rather than a second open.
+      // A byte-copy of `handleFailure` lands "error" with nothing objecting.
+      severity: "warning",
+      message: "Couldn't reopen gone.md: the server accepted it but no tab appeared.",
+      dedupKey: "reopen-no-tab:/docs/gone.md",
+    });
+    h.dispose();
+  });
+
+  it("stays silent when the reopened tab does arrive", async () => {
+    const h = harness({
+      tabs: [],
+      activeTabId: null,
+      reopenPollMs: 1,
+      reopenTimeoutMs: 5,
+    });
+    h.stack.push({ filePath: "/docs/gone.md", closedAt: 1 });
+
+    await h.ws.reopenClosedTab();
+
+    expect(h.calls.notifications).toEqual([]);
+    expect(h.stack).toEqual([]);
     h.dispose();
   });
 });
@@ -932,7 +1313,7 @@ describe("createDocumentWorkspace — save entry points", () => {
     h.dispose();
   });
 
-  it("refuses to save a tab whose ydoc was swapped out from under it", async () => {
+  it("refuses to save a tab whose ydoc was swapped out from under it, and says so", async () => {
     const h = harness();
     const staleYdoc = { id: "stale" } as unknown as OpenTab["ydoc"];
     const ok = await h.ws.saveDocumentTargetAfterSourceCommit("a", "save", staleYdoc);
@@ -940,6 +1321,20 @@ describe("createDocumentWorkspace — save entry points", () => {
     // write one document's content over another's file.
     expect(ok).toBe(false);
     expect(h.calls.triggerSave).toEqual([]);
+    // #1708 item 2: this was the one refusal in the function that said nothing,
+    // while its three siblings all notified.
+    expect(h.calls.notifications).toHaveLength(1);
+    expect(h.calls.notifications[0]).toMatchObject({
+      severity: "warning",
+      message:
+        "Not saved — the document reloaded while saving; your last edit was not written to the file.",
+      // Asserted as an EXACT string, because this is the half that pins the
+      // split from item 1's `save-target:tab-changed:a`. The tray coalesces on
+      // the key and keeps the newer message, so a copy-paste of item 1's key
+      // would let the milder copy overwrite the only message reporting lost
+      // work — and a message-only assertion cannot see that.
+      dedupKey: "save-commit:ydoc-swapped:a",
+    });
     h.dispose();
   });
 
@@ -1008,11 +1403,107 @@ describe("createDocumentWorkspace — save entry points", () => {
     h.dispose();
   });
 
-  it("refuses a tab id that no longer resolves", async () => {
+  it("refuses a tab id that no longer resolves, and says so", async () => {
     const h = harness();
     const ok = await h.ws.saveDocumentTargetAfterSourceCommit("missing", "save");
     expect(ok).toBe(false);
     expect(h.calls.triggerSave).toEqual([]);
+    // The other half of the split guard (#1708 item 2). Same sentence and same
+    // key as item 1's `no-such-tab` refusal — two sites emitting the SAME
+    // message may share a key; two different messages may not.
+    expect(h.calls.notifications).toHaveLength(1);
+    expect(h.calls.notifications[0]).toMatchObject({
+      severity: "warning",
+      message: "Not saved — that document is no longer open.",
+      dedupKey: "save-target:no-such-tab:missing",
+    });
+    h.dispose();
+  });
+
+  // #1708 item 1: `saveDocumentTarget` awaited `saveExactTarget` and dropped its
+  // boolean, so all four of its refusals were silent. One message per reason.
+  it("names a save target that no longer resolves", async () => {
+    const h = harness();
+    await h.ws.saveDocumentTarget("ghost", "save");
+    expect(h.calls.triggerSave).toEqual([]);
+    expect(h.calls.notifications).toHaveLength(1);
+    expect(h.calls.notifications[0]).toMatchObject({
+      severity: "warning",
+      message: "Not saved — that document is no longer open.",
+      dedupKey: "save-target:no-such-tab:ghost",
+    });
+    h.dispose();
+  });
+
+  it("names a tab replaced across the source-view activation hop", async () => {
+    const h = harness();
+    h.ws.enterSourceView();
+    flushSync();
+
+    // The activation `tick()` is the window: the save suspends there, and the
+    // tab list is rebuilt with a new ydoc while it waits. Swapping BEFORE the
+    // call would make the pre-activation snapshot read the new tab and the
+    // guard would never fire.
+    const saving = h.ws.saveDocumentTarget("a", "save");
+    h.state.tabs = [tab({ id: "a", ydoc: { id: "reborn" } as unknown as OpenTab["ydoc"] })];
+    await saving;
+
+    expect(h.calls.triggerSave).toEqual([]);
+    expect(h.calls.notifications).toHaveLength(1);
+    expect(h.calls.notifications[0]).toMatchObject({
+      severity: "warning",
+      message: "Not saved — the document reloaded while saving.",
+      dedupKey: "save-target:tab-changed:a",
+    });
+    h.dispose();
+  });
+
+  it("names an unmounted source editor rather than saving nothing", async () => {
+    const h = harness();
+    h.ws.enterSourceView();
+    flushSync();
+    // No `updateSourceViewCommands`: the SourceView never registered, so the
+    // draft cannot be committed and the save must not proceed — nor be silent.
+    await h.ws.saveDocumentTarget("a", "save");
+
+    expect(h.calls.triggerSave).toEqual([]);
+    expect(h.calls.notifications).toHaveLength(1);
+    expect(h.calls.notifications[0]).toMatchObject({
+      severity: "warning",
+      message: "Not saved — the Markdown source editor wasn't ready yet.",
+      dedupKey: "save-target:no-source-commands:a",
+    });
+    h.dispose();
+  });
+
+  it("stays silent when the source view's own save declines", async () => {
+    const h = harness();
+    h.ws.enterSourceView();
+    h.ws.updateSourceViewCommands("a", {
+      documentId: "a",
+      save: async () => false,
+      exit: async () => {},
+    });
+    flushSync();
+
+    await h.ws.saveDocumentTarget("a", "save");
+
+    // SourceView reports its own refusals (an on-screen error strip, or a save
+    // that is already visibly running). The issue's weaker suggestion — "at
+    // minimum an error toast on `false`" — would double-report here.
+    expect(h.calls.notifications).toEqual([]);
+    h.dispose();
+  });
+
+  it("asks triggerSave to announce a busy save — every caller here is a gesture", async () => {
+    // #1708 item 3. `triggerSave` is silent on re-entry unless `announceBusy` is
+    // passed, and the injected type could not carry it, so Ctrl+S during an
+    // in-flight save was a dead key. Widening the type without passing the flag
+    // typechecks and changes nothing, which is what this assertion kills.
+    const h = harness();
+    await h.ws.saveDocumentTarget("a", "save");
+    expect(h.calls.triggerSave).toEqual(["a"]);
+    expect(h.calls.triggerSaveOpts).toEqual([{ announceBusy: true }]);
     h.dispose();
   });
 });

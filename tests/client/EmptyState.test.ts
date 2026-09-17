@@ -181,6 +181,24 @@ describe("EmptyState", () => {
       expect(byTestId(container, "empty-state-setup-restart-anyway")).toBeNull();
     });
 
+    // #1780: a Claude Code that is not signed in gets its own branch. Its one
+    // action re-checks through a restart — never the wizard, never Start Fresh.
+    it("the sign-in branch offers Check again, which fires onRestartClaude", async () => {
+      const props = makeProps({ connected: true, aiChip: "sign-in" });
+      const { container } = render(EmptyState, { props });
+
+      expect(container.textContent).toContain("needs to be signed in");
+      const recheck = byTestId(container, "empty-state-sign-in-recheck");
+      expect(recheck).toBeTruthy();
+      expect(recheck?.getAttribute("data-ai-chip")).toBe("sign-in");
+      recheck?.click();
+      await tick();
+      expect(props.onRestartClaude).toHaveBeenCalledOnce();
+      expect(props.onConnectAi).not.toHaveBeenCalled();
+      expect(byTestId(container, "empty-state-restart-claude")).toBeNull();
+      expect(byTestId(container, "empty-state-start-fresh")).toBeNull();
+    });
+
     describe("aiChip 'restart' — primary Restart + secondary Start Fresh", () => {
       function renderRestart(overrides: Record<string, unknown> = {}) {
         const props = makeProps({ connected: true, aiChip: "restart", ...overrides });

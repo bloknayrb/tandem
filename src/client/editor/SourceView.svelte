@@ -30,6 +30,11 @@ interface Props {
   onCommandsChange: (documentId: string, commands: SourceViewCommands | null) => void;
   /** Return to the WYSIWYG editor. */
   onExit: (documentId: string) => void;
+  /**
+   * #1738: `settings.sourceViewLineWrap`. When true the textarea wraps long
+   * lines (`pre-wrap`) instead of scrolling horizontally (`pre`).
+   */
+  lineWrap?: boolean;
 }
 
 interface SourceViewCommands {
@@ -38,8 +43,16 @@ interface SourceViewCommands {
   exit(): Promise<void>;
 }
 
-const { documentId, ydoc, initialDraft, onDraftChange, onSave, onCommandsChange, onExit }: Props =
-  $props();
+const {
+  documentId,
+  ydoc,
+  initialDraft,
+  onDraftChange,
+  onSave,
+  onCommandsChange,
+  onExit,
+  lineWrap = false,
+}: Props = $props();
 
 // Capture the draft ONCE at mount (untrack makes the non-reactive read
 // explicit). The component is keyed on documentId by the parent, so this is the
@@ -299,6 +312,7 @@ async function copyToClipboard(): Promise<void> {
     <!-- svelte-ignore a11y_autofocus -->
     <textarea
       class="source-view-textarea"
+      class:wrap={lineWrap}
       data-testid="source-view-textarea"
       bind:value={currentMarkdown}
       oninput={handleInput}
@@ -399,6 +413,13 @@ async function copyToClipboard(): Promise<void> {
     tab-size: 2;
     white-space: pre;
     overflow: auto;
+  }
+
+  /* #1738. No `overflow-wrap` rule: browsers already give <textarea>
+     `overflow-wrap: break-word`, so `pre-wrap` alone breaks a long unbroken
+     token (a URL) as well as ordinary long lines. */
+  .source-view-textarea.wrap {
+    white-space: pre-wrap;
   }
 
   .source-view-textarea:focus {

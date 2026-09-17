@@ -44,7 +44,7 @@ import { setCtrlMode } from "../helpers/ctrl-mode.js";
 
 let _ctrlTestDoc: Y.Doc = new Y.Doc();
 
-vi.mock("../../src/server/yjs/provider.js", () => ({
+vi.mock(import("../../src/server/yjs/provider.js"), () => ({
   getOrCreateDocument: () => _ctrlTestDoc,
   // #1447: registerDirtyObserver publishes its mirror through getDocument, which
   // resolves the LIVE room doc rather than the one it was handed. These tests
@@ -53,15 +53,18 @@ vi.mock("../../src/server/yjs/provider.js", () => ({
   getDocument: () => undefined,
 }));
 
-vi.mock("../../src/server/documents/registry.js", async (importOriginal) => ({
+vi.mock(import("../../src/server/documents/registry.js"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/documents/registry.js")>()),
   getOpenDocs: () => new Map(),
 }));
 
 // Default: validateRange returns ok so buffered selection offsets pass through.
 let _validateRangeResult: { ok: boolean } = { ok: true };
-vi.mock("../../src/server/positions.js", () => ({
-  validateRange: () => _validateRangeResult,
+vi.mock(import("../../src/server/positions.js"), () => ({
+  validateRange: () =>
+    _validateRangeResult as unknown as ReturnType<
+      typeof import("../../src/server/positions.js").validateRange
+    >,
 }));
 
 // ---------------------------------------------------------------------------
@@ -334,6 +337,7 @@ describe("setFileSyncContext — duplicate registration disposes prior observer"
       }),
       queueWrite: vi.fn(),
       flush: async () => {},
+      cancelPendingWrite: () => {},
       clear: async () => {},
       isReadOnly: () => false,
       isDisabled: () => false,
@@ -390,6 +394,7 @@ describe("setFileSyncContext — duplicate registration disposes prior observer"
       }),
       queueWrite: oldQueueWriteSpy,
       flush: async () => {},
+      cancelPendingWrite: () => {},
       clear: async () => {},
       isReadOnly: () => false,
       isDisabled: () => false,
@@ -406,6 +411,7 @@ describe("setFileSyncContext — duplicate registration disposes prior observer"
       }),
       queueWrite: newQueueWriteSpy,
       flush: async () => {},
+      cancelPendingWrite: () => {},
       clear: async () => {},
       isReadOnly: () => false,
       isDisabled: () => false,

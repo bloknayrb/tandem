@@ -149,7 +149,7 @@ function verboseNativeDriverShim(): string | undefined {
 }
 
 export const config: WebdriverIO.Config = {
-  host: "127.0.0.1",
+  hostname: "127.0.0.1",
   port: 4444,
 
   specs: ["./specs/**/*.e2e.ts"],

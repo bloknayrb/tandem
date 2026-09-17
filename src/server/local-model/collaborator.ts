@@ -8,7 +8,8 @@
  * `BYO_MODELS_ENABLED` is false (the subscriber is never registered), and even
  * if the flag flips, `config-source.ts` returns null until M1a (no loop runs).
  *
- * Design (see plan §3):
+ * Design (see PR #1160's "Product decisions wired in" table — no tracked
+ * #1123 plan doc covers M1.2; #1160's own description is the record):
  *  - ADR-039 "one active agent at a time": a single-flight controller; a new
  *    message SUPERSEDES the prior run (abort + serialize, then start) [D-B].
  *  - "Hold in Solo": the collaborator only acts in Tandem mode [D-D].
@@ -148,7 +149,12 @@ function composeTask(text: string, selection?: ChatMessagePayload["selection"]):
  * Map a failed run to a FIXED user-facing string. `metrics.errorMessage` is READ
  * to pick the bucket but NEVER embedded in the output (a third-party body /
  * V8-parse snippet must not reach the UI — it stays on stderr). Structural
- * redaction, per plan §3.6.
+ * redaction (#1123 M1.2 — no tracked #1123 plan doc covers it). Pinned by
+ * `collaborator.test.ts`'s "surfaces an error exit as a structured
+ * notification, never the raw error text" plus the table-driven
+ * "maps … to a fixed string with no raw detail" cases; #1160's test plan
+ * calls that pair `structured-failure-no-raw-leak`, which is a PR-body
+ * label, not a name anything in `tests/` carries.
  */
 export function classifyFailure(metrics: LoopMetrics): string {
   const m = metrics.errorMessage ?? "";
@@ -289,21 +295,42 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
   }
 
   async function executeRun(req: RunReq, abort: AbortController, token: object): Promise<void> {
-    // Still the owning, non-aborted run on a still-open doc? Evaluated at the top
-    // (before work) and again at terminal time — the doc may close or this run be
-    // superseded during the model turn. `requireDocument` never fabricates a
-    // phantom room. Mirrors the sink's `isOwner()`.
-    const stillOwner = () =>
-      current?.token === token && !abort.signal.aborted && requireDocument(req.docName) !== null;
-
-    // Resolve the live Y.Doc — bail if it vanished or we were superseded during
-    // the supersede-await.
+    // Resolve the live Y.Doc FIRST — bail if it vanished or we were superseded
+    // during the supersede-await. `ydoc` must be bound before `stillOwner` is
+    // DEFINED, not merely before its first call: the predicate closes over it,
+    // and the top-of-run call below would otherwise hit the TDZ.
     const open = requireDocument(req.docName);
-    if (!open || !stillOwner()) return;
+    if (!open) return;
+    const ydoc = open.doc;
+
+    // Still the owning, non-aborted run on the SAME Y.Doc instance we captured?
+    // Evaluated at the top (before work) and again at terminal time — during the
+    // model turn this run may be superseded, aborted, or have its document
+    // closed OR REPLACED.
+    //
+    // The third conjunct tests IDENTITY, not presence (#1657). Hocuspocus swaps
+    // a room's Y.Doc in `onLoadDocument` (merge state, `destroy()` the old one,
+    // `documents.set(...)`), so a browser connecting mid-run leaves this run
+    // holding a destroyed instance while the room stays open — and neither of
+    // the other two conjuncts sees it: the token is unchanged and nothing
+    // aborts. `requireDocument` re-resolves through the provider map on every
+    // call (`registry.ts` → `getOrCreateDocument`), so the comparison actually
+    // observes the swap. `?.doc === ydoc` is false when it returns null, so
+    // identity SUBSUMES the old presence test and additionally rejects a
+    // re-created instance.
+    //
+    // The sink's `isOwner()` deliberately DIVERGES and stays on presence:
+    // `makeSink` writes only to `CTRL_ROOM` via `appendClaudeChatMessage` /
+    // `updateClaudeChatMessage`, which a document-room swap never touches.
+    const stillOwner = () =>
+      current?.token === token &&
+      !abort.signal.aborted &&
+      requireDocument(req.docName)?.doc === ydoc;
+
+    if (!stillOwner()) return;
     if (!cachedConfig) return;
     const config = cachedConfig; // capture: `let` widens back to |null across the await
 
-    const ydoc = open.doc;
     const includeFullText = extractText(ydoc).length <= INLINE_CHAR_LIMIT;
     const task = composeTask(req.task, req.selection);
     // #1123 M3: the streamed chat reply is bylined with the config's prebuilt

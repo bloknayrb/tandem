@@ -16,9 +16,10 @@
  *      `tandem_checkInbox` or the channel SSE stream.
  *
  *   2. ADR-027: `annotationId` is broadcast ONLY when the targeted annotation
- *      type is NOT `"note"`. Notes are user-private; surfacing their existence
- *      via awareness would leak the note ID. Callers that target a note must
- *      pass `annotationId: undefined` (the helper does this automatically when
+ *      type is NOT `"note"` AFTER `sanitizeAnnotation` normalizes it (#1698).
+ *      Notes are user-private; surfacing their existence via awareness would
+ *      leak the note ID. Callers that target a note must pass
+ *      `annotationId: undefined` (the helper does this automatically when
  *      `sanitizeAnnotationIdForPresence` returns undefined).
  *
  *   3. A module-level 30s timeout sweeps stale entries so a hung handler (or a
@@ -30,7 +31,9 @@
 import * as Y from "yjs";
 import { Y_MAP_AWARENESS, Y_MAP_CLAUDE } from "../../shared/constants.js";
 import { withMcp } from "../../shared/origins.js";
-import type { Annotation, ClaudeAwareness } from "../../shared/types.js";
+import { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
+import type { ClaudeAwareness } from "../../shared/types.js";
+import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { getCurrentDoc } from "./document.js";
 import { noteClaudeActivity } from "./presence-expiry.js";
@@ -159,9 +162,35 @@ function clearPresenceOn(docName: string, expectedToken: number): void {
  * Sanitize an annotationId for presence broadcast. Returns `undefined` if the
  * annotation is a note (per ADR-027 — broadcasting a note's ID confirms its
  * existence to Claude via awareness). Returns the input id if the annotation
- * type is safe to broadcast (`comment`, `highlight`, `flag`) or if no
- * annotation lookup applies (e.g. the id isn't in the map yet — defensive
- * fallback: when in doubt, drop it).
+ * type is safe to broadcast (`comment`, `highlight`) or if no annotation
+ * lookup applies (e.g. the id isn't in the map yet — defensive fallback: when
+ * in doubt, drop it).
+ *
+ * The note test runs on the SANITIZED value, never the stored one (#1698).
+ * A legacy `{ type: "flag" }` — reachable from a pre-ADR-027 document or a
+ * stale-tab CRDT merge — is a note only once `sanitizeAnnotation` normalizes
+ * it, so a raw `ann.type === "note"` read let its id through. Same class as
+ * #1680/#1619: a note guard must always run AFTER `sanitizeAnnotation`.
+ *
+ * This is the note half only, on the sanitized value — not "notes are now
+ * caught". A record whose `type` sanitize does not recognize is coerced to
+ * `{ comment, outbound }` and still passes; so does a stored
+ * `{ comment, audience: "private" }` and a user highlight.
+ *
+ * That bound rests on ONE argument, and it is not the seam's refusals (review
+ * round 2). This runs before `withTypingPresence`, which calls `setPresenceOn`
+ * before it invokes the handler — so the marker is broadcast while
+ * `lifecycle.reply` has refused nothing yet, and a caller replying to a private
+ * comment or a highlight gets the refusal only AFTER its id has been published
+ * to awareness. What actually holds is that the single call site is
+ * `tandem_annotationReply`, so the `annotationId` originates from the CALLER:
+ * echoing a caller-supplied id back into a marker rendered on the user's own
+ * client discloses nothing Claude did not already hold.
+ *
+ * The consequence for anyone tidying this: at broadcast time this function is
+ * the ONLY thing standing between a note's id and awareness. It is not
+ * redundant with the seam, and removing it as belt-and-suspenders reopens
+ * #1698.
  *
  * Callers that always target a note (none in the current four-tool set) should
  * not pass an `annotationId` at all.
@@ -175,12 +204,14 @@ export function sanitizeAnnotationIdForPresence(
   try {
     const doc = getOrCreateDocument(docName);
     const map = doc.getMap(annotationsMapKey);
-    const ann = map.get(annotationId) as Annotation | undefined;
+    const ann = map.get(annotationId) as RawAnnotation | undefined;
     if (!ann || typeof ann !== "object") return undefined;
-    if (ann.type === "note") return undefined;
+    const sanitized = sanitizeAnnotation(ann, (event) => relaySanitizationEvent(docName, event));
+    if (sanitized.type === "note") return undefined;
     return annotationId;
   } catch {
-    // Defensive: any lookup failure means we can't prove it's safe — drop.
+    // Defensive: any lookup failure — including a record `sanitizeAnnotation`
+    // chokes on — means we can't prove it's safe, so drop it. Fail closed.
     return undefined;
   }
 }
