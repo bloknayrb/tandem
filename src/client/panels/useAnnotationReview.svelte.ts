@@ -2,13 +2,13 @@ import type { JSONContent, Editor as TiptapEditor } from "@tiptap/core";
 import { Fragment, Slice } from "@tiptap/pm/model";
 import { onDestroy } from "svelte";
 import * as Y from "yjs";
-import { Y_MAP_ANNOTATIONS } from "../../shared/constants";
+import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants";
 import { withBrowser } from "../../shared/origins";
 import { isPlaintextFormat } from "../../shared/plaintext-format";
 import type { SanitizationEvent } from "../../shared/sanitize";
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import { isSnapshotTruncated, snapshotContradicts } from "../../shared/snapshot";
-import type { Annotation } from "../../shared/types";
+import type { Annotation, AnnotationReply } from "../../shared/types";
 import { isPendingReviewTarget } from "../../shared/types";
 import { AUTHORSHIP_ORIGIN_META } from "../editor/extensions/authorship";
 import type { RestoreBreak } from "../editor/utils/literal-content";
@@ -332,11 +332,12 @@ export function applySuggestion(
     // nobody had edited: a range spanning a heading's `"## "`, a hard break
     // inside a heading, and a range containing a block leaf.
     //
-    // Inside the `try` on purpose. `resolveAnnotation` has already written
-    // `status: "accepted"` and only reverts on a `false` RETURN, so a throw
-    // escaping here would strand the annotation accepted with nothing applied.
-    // Nothing on this path throws today — `flatOffsetToPmPos` clamps — but the
-    // guard would otherwise be silently relying on that.
+    // Inside the `try` on purpose. Since #1826 `resolveAnnotation` writes the
+    // `accepted` status only AFTER this returns true, so a throw escaping here
+    // would strand the annotation `pending` with the guard's refusal lost and
+    // no `onApplyFailed` toast. Nothing on this path throws today —
+    // `flatOffsetToPmPos` clamps — but the guard would otherwise be silently
+    // relying on that.
     if (ann.textSnapshot === undefined) {
       // Not refused: legacy records predate `textSnapshot`, and refusing every
       // one of them would break accept for documents that are perfectly fine.
@@ -438,13 +439,23 @@ export interface UseAnnotationReviewParams {
    */
   getFormat?: () => string | undefined;
   /**
-   * Called when accepting a suggestion fails because its range could not be
-   * resolved (e.g. the underlying text changed since the suggestion was
-   * created). The annotation has already been reverted to `"pending"` by the
-   * time this fires. Callers use this to surface a toast — keep any message
-   * generic per ADR-027 (never echo annotation content here).
+   * Called when accepting a suggestion fails. The annotation is `"pending"` by
+   * the time this fires — since #1826 it was never moved off it; the failure
+   * path writes a normalized `pending` record only to strip a stale
+   * `resolvedBy` (#1770). Callers use this to surface a toast — keep any
+   * message generic per ADR-027 (never echo annotation content here).
+   *
+   * `reason` exists because the two failures have different causes and
+   * different remedies, and one message is wrong for one of them (review round
+   * 3). `"range"` is the range-resolution failure — the text moved under the
+   * suggestion, and a retry after a scroll or an edit can succeed. `"no-editor"`
+   * is the Tiptap instance being absent, which is not a property of the text at
+   * all: source view unmounts the editor (`{#if !inSourceView}`) while the
+   * annotations rail stays mounted by design, so Accept is a live button with
+   * no editor behind it. Reporting that as "the text has changed" sends the
+   * user looking for an edit that never happened.
    */
-  onApplyFailed?: (ann: Annotation) => void;
+  onApplyFailed?: (ann: Annotation, reason: "range" | "no-editor") => void;
   /**
    * Called when undoing an accepted suggestion is refused because the stored
    * `textSnapshot` is a truncated prefix (#1486) — restoring it would delete
@@ -470,6 +481,12 @@ export interface UseAnnotationReviewParams {
 
 export interface UseAnnotationReviewReturn {
   resolveAnnotation: (id: string, status: "accepted" | "dismissed") => void;
+  /**
+   * #1626: accept the replacement a reply proposes over its parent's range.
+   * Shares `resolveAnnotation`'s accept ladder; the parent's stored
+   * `suggestedText` is superseded by the reply's.
+   */
+  acceptReplySuggestion: (annotationId: string, replyId: string) => void;
   undoResolveAnnotation: (id: string) => boolean;
   handleAccept: (id: string) => void;
   handleDismiss: (id: string) => void;
@@ -506,6 +523,94 @@ export function useAnnotationReview({
     return getAnnotations().filter(isPendingReviewTarget);
   }
 
+  /**
+   * The record to write when a resolution is rolled back or undone.
+   *
+   * **`resolvedBy` must not outlive the resolution it describes (#1770).** It
+   * names who performed THIS resolution, and `sanitizeAnnotation` carries the
+   * stored value through — so a plain `{ ...ann, status: "pending" }` revert
+   * leaves `resolvedBy: "claude"` on a record the USER then re-resolves, and
+   * `awareness.ts`'s `userResponses` bucket excludes `resolvedBy === "claude"`,
+   * so the user's own accept is reported to nobody, forever.
+   *
+   * Reachable, not theoretical: a user Accept concurrent with a Claude
+   * `tandem_resolveAnnotation` dismiss on the same pending record. The client
+   * passes its own pending gate before Claude's write lands, Claude's write wins
+   * the Y.Map tie, and the id is in `recentlyResolved` — so Undo is offered on a
+   * record already stamped `claude`.
+   */
+  function revertedToPending(ann: Annotation): Annotation {
+    const { resolvedBy: _resolvedBy, ...rest } = ann;
+    return { ...rest, status: "pending" };
+  }
+
+  /**
+   * The accept ladder, extracted ONCE (#1626).
+   *
+   * `resolveAnnotation` reads `ann.suggestedText` off the stored record, so a
+   * sibling entry point for a reply's proposal would have to re-implement every
+   * rung of this: the pending gate, `sanitizeAnnotation`, apply-before-status,
+   * the missing-editor arm and the `recentlyResolved` postamble. Each of those
+   * is a separately-earned fix (#1770, #1826, #1629), so a second copy is a
+   * second place for them to be lost. Both callers route through here.
+   *
+   * `suggestedText` is a PARAMETER rather than read off the record, because a
+   * reply's proposal supersedes the parent's. The record written on success
+   * carries that text, which is required rather than incidental:
+   * `undoResolveAnnotation` compares the span against
+   * `appliedProjection(... ann.suggestedText ...)`, so a parent left holding its
+   * original proposal would decline every reply-accept undo as "text changed".
+   *
+   * The FAILURE arm reverts the STORED record, not the synthetic one — a failed
+   * accept must not leave the reply's text on the parent as though it had been
+   * chosen.
+   */
+  function applyAcceptedSuggestion(id: string, suggestedText: string) {
+    const y = getYdoc();
+    if (!y) return;
+    const map = y.getMap(Y_MAP_ANNOTATIONS);
+    // Re-read RAW and re-check the gate: this is the idempotency rung, and its
+    // job is to stop `applySuggestion` running twice and inserting the text
+    // twice. Building off the re-read record rather than a props-supplied one
+    // is what keeps a stale `resolvedBy` from riding back in (#1770).
+    const raw = map.get(id) as Annotation | undefined;
+    if (!raw || raw.status !== "pending") return;
+    const stored = sanitizeAnnotation(raw, devSanitizeWarn);
+    const ann = { ...stored, suggestedText } as Annotation;
+
+    const editor = getEditor();
+    // Apply BEFORE writing the status (#1826), with the missing-editor arm
+    // intact: a null editor is a FAILED apply, not a licence to publish
+    // `accepted`. See `resolveAnnotation`'s own note below for why each write is
+    // its own one-statement transaction.
+    if (!editor || !applySuggestion(ann, editor, y, getFormat?.())) {
+      withBrowser(y, () => map.set(id, revertedToPending(stored)));
+      onApplyFailed?.(stored, editor ? "range" : "no-editor");
+      return;
+    }
+    withBrowser(y, () => map.set(id, { ...ann, status: "accepted" }));
+
+    lastResolvedId = id;
+    recentlyResolved = new Set(recentlyResolved).add(id);
+  }
+
+  /**
+   * Accept the replacement a REPLY proposes over its parent's range (#1626).
+   *
+   * The reply carries no range of its own; the parent's is what gets rewritten,
+   * and the parent's stored `suggestedText` is overwritten by what was applied.
+   */
+  function acceptReplySuggestion(annotationId: string, replyId: string) {
+    const y = getYdoc();
+    if (!y) return;
+    const reply = y.getMap(Y_MAP_ANNOTATION_REPLIES).get(replyId) as AnnotationReply | undefined;
+    // The pairing is checked rather than assumed: the ids come from the card's
+    // own props, but both maps are CRDT state any connected client can write.
+    if (!reply || reply.annotationId !== annotationId) return;
+    if (typeof reply.suggestedText !== "string") return;
+    applyAcceptedSuggestion(annotationId, reply.suggestedText);
+  }
+
   function resolveAnnotation(id: string, status: "accepted" | "dismissed") {
     const y = getYdoc();
     if (!y) return;
@@ -513,32 +618,45 @@ export function useAnnotationReview({
     const raw = map.get(id) as Annotation | undefined;
     if (!raw) return;
     // Idempotency: if the annotation has already been resolved (accepted or
-    // dismissed), no-op. Defends against any future double-fire path —
-    // critically, prevents `applySuggestion` from running twice and inserting
-    // the suggested text twice.
+    // dismissed), no-op. The claim holds only for a double-fire from a later
+    // task — no such path exists today, `SidePanel.svelte` iterates distinct
+    // ids — and what it would prevent is `applySuggestion` running twice and
+    // inserting the suggested text twice.
     if (raw.status !== "pending") return;
     const ann = sanitizeAnnotation(raw, devSanitizeWarn);
-    // THREE SEPARATE ONE-STATEMENT TRANSACTIONS, not one wrap spanning the
-    // block. `applySuggestion` dispatches ProseMirror commands, and nesting
-    // y-prosemirror's own `doc.transact(..., ySyncPluginKey)` inside ours makes
-    // the inner transaction inherit OUR origin — at which point `yUndoPlugin`,
-    // which tracks only `ySyncPluginKey`, stops capturing it and the accepted
-    // text becomes un-undoable. That is precisely the surface
-    // `undoResolveAnnotation` below exists to serve.
-    withBrowser(y, () => map.set(id, { ...ann, status }));
 
+    // Apply BEFORE writing the status, so a failed accept never publishes an
+    // `accepted` the pull path then contradicts (#1826). The observer's
+    // claude-update arm emits `annotation:accepted` on a `status: "accepted"`
+    // write and has NO arm for a revert to `pending`, so the old
+    // write-then-revert order left Claude holding `annotation:accepted` on push
+    // while every `tandem_checkInbox` read `pending`.
+    //
+    // Bound, recorded: a throw or a late failure inside `applySuggestion` now
+    // leaves the record `pending` with the text possibly applied, so a second
+    // Accept could re-apply. `snapshotContradicts` (#1629) refuses any record
+    // carrying a `textSnapshot`, so only the snapshot-less legacy arm is
+    // exposed — strictly smaller than the `accepted`-with-nothing-applied state
+    // it replaces.
+    //
+    // Each write below is its OWN one-statement transaction, never one wrap
+    // spanning the apply. `applySuggestion` dispatches ProseMirror commands, and
+    // nesting y-prosemirror's own `doc.transact(..., ySyncPluginKey)` inside
+    // ours makes the inner transaction inherit OUR origin — at which point
+    // `yUndoPlugin`, which tracks only `ySyncPluginKey`, stops capturing it and
+    // the accepted text becomes un-undoable. That is precisely the surface
+    // `undoResolveAnnotation` below exists to serve.
     if (status === "accepted" && ann.suggestedText !== undefined) {
-      const editor = getEditor();
-      if (editor) {
-        const applied = applySuggestion(ann, editor, y, getFormat?.());
-        if (!applied) {
-          // Revert annotation status — text replacement failed
-          withBrowser(y, () => map.set(id, { ...ann, status: "pending" }));
-          onApplyFailed?.(ann);
-          return;
-        }
-      }
+      // The ladder lives in `applyAcceptedSuggestion` (#1626), which holds the
+      // missing-editor arm, the revert-to-pending normalizing write and the
+      // `recentlyResolved` postamble. A missing editor is a FAILED apply, not a
+      // licence to publish `accepted` (review round 1): the old
+      // `editor && !applySuggestion(...)` fell through to the status write, so
+      // the record went out `accepted` with the text never inserted.
+      applyAcceptedSuggestion(id, ann.suggestedText);
+      return;
     }
+    withBrowser(y, () => map.set(id, { ...ann, status }));
 
     lastResolvedId = id;
     recentlyResolved = new Set(recentlyResolved).add(id);
@@ -729,7 +847,7 @@ export function useAnnotationReview({
       }
     }
 
-    withBrowser(y, () => map.set(id, { ...ann, status: "pending" as const }));
+    withBrowser(y, () => map.set(id, revertedToPending(ann)));
     removeFromResolved(id);
     if (lastResolvedId === id) {
       lastResolvedId = null;
@@ -793,6 +911,7 @@ export function useAnnotationReview({
 
   return {
     resolveAnnotation,
+    acceptReplySuggestion,
     undoResolveAnnotation,
     handleAccept,
     handleDismiss,

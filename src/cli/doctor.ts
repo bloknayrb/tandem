@@ -29,7 +29,11 @@ import { request } from "node:http";
 import { createConnection } from "node:net";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
-import { parseLockfile } from "../server/annotations/lockfile.js";
+import { isLockFromPriorBoot, parseLockfile } from "../server/annotations/lockfile.js";
+import {
+  isTandemLikeProcessName,
+  probeProcessIdentity,
+} from "../server/annotations/process-identity.js";
 import {
   isRecordedPathAbsolute,
   isRecordedPathGone,
@@ -41,7 +45,10 @@ import {
   claudeCodeConfigPath,
   claudeDesktopConfigTarget,
 } from "../shared/integrations/client-config-paths.js";
-import type { ClaudeCliPresence } from "../shared/integrations/contract.js";
+import {
+  type ClaudeCliPresence,
+  INTEGRATIONS_SCHEMA_VERSION,
+} from "../shared/integrations/contract.js";
 import { detectClaudeCli, isBareNameLaunchable } from "../shared/integrations/detect-claude-cli.js";
 import { isOnPath, resolveManyOnPath } from "../shared/integrations/path-lookup.js";
 import { rejectUnsafeWindowsPrefix } from "../shared/windows-path-safety.js";
@@ -550,6 +557,12 @@ type ClaudeConfigRead =
   | { kind: "absent" }
   /** The open or read failed — EACCES, EISDIR, ELOOP. Nothing is known about the contents. */
   | { kind: "unreadable" }
+  /**
+   * Read fine, but it holds nothing: zero bytes, whitespace only, or a lone
+   * BOM. Split out from `malformed` because `applyConfig` starts FRESH on this
+   * input rather than refusing it (#1802), so the two must not share a remedy.
+   */
+  | { kind: "empty" }
   /** Read fine, but it is not a JSON object: a parse error, or a literal `null`/array/scalar. */
   | { kind: "malformed" }
   | { kind: "ok"; value: Record<string, unknown> };
@@ -606,9 +619,28 @@ export function readClaudeConfig(path: string): ClaudeConfigRead {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return { kind: "absent" };
     return { kind: "unreadable" };
   }
+  // Strip a leading BOM and screen for emptiness BEFORE parsing — the same pair
+  // `applyConfig` and `readConfigForMutation` run, in the same order. (Round-3
+  // review: this claimed the match already, and `readConfigForMutation` had no
+  // emptiness screen at all, so a zero-byte config was `empty` here and
+  // `malformed-json` in the boot sweep's log. It has one now; keep the three in
+  // step, because the reason a user is shown must not depend on which surface
+  // found the file.) Without this pair
+  // `malformed` was WIDER than the refusal whose remedy it now prescribes: a
+  // BOM-prefixed but perfectly valid config parses fine for `applyConfig`
+  // (which strips U+FEFF), and a zero-byte one makes it start fresh — yet both
+  // were reported here as "not valid JSON … Tandem will not rewrite a config it
+  // cannot parse", a statement false of both, naming no working command. A
+  // crash-truncated `~/.claude.json` is the concrete case: `setup --apply`
+  // fixes it outright, and the old wording sent the user to hand-edit a file
+  // with no content in it.
+  const body = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+  // `/\S/.test`, not `trim() !== ""`: same predicate, no trimmed copy of a file
+  // `applyConfig` permits to reach 16 MiB.
+  if (!/\S/.test(body)) return { kind: "empty" };
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(body);
   } catch {
     return { kind: "malformed" };
   }
@@ -1078,7 +1110,165 @@ function checkMcpJson(r: Recorder, cwd: string, cliAvailable: CliAvailability): 
  */
 const HOME_CLAUDE_JSON = `~/.${"claude"}.json`;
 
-function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability): void {
+/**
+ * Validate the user-level `tandem` entry the way the project-level twin
+ * already validates its own (#1807). Key presence alone read green while
+ * Claude Code could not connect: a leftover `type: "stdio"`, a URL with no
+ * `/mcp`, or a port left at 3479 after the server moved.
+ *
+ * Returns `null` when the entry is fine (or is not ours to judge), otherwise
+ * the warn's message and fix.
+ *
+ * NO message, fix or `data` bag may interpolate the `url` or any part of its
+ * path. `~/.claude.json` carries bearer tokens, `user-mcp-config` survives the
+ * `/api/diagnostics` filter, and the Report-a-bug link prefills a PUBLIC issue
+ * body — while `redactUserPaths`, the only scrubber downstream, knows nothing
+ * about URL userinfo or a query token. `type` goes through
+ * {@link describeClampedValue} for the same reason.
+ *
+ * The one part of the url that is named is the SCHEME, and it is named because
+ * it can carry no secret: it is neither host, userinfo, path nor query, and it
+ * is what tells a reader why an otherwise-correct-looking entry is red. It
+ * goes through the same clamp.
+ */
+/**
+ * Hostnames a `tandem` MCP url may name without a warn. The server binds
+ * `127.0.0.1` by default, so anything else is unreachable, somebody else's
+ * machine, or — the one case doctor cannot tell apart from its own shell — a
+ * deliberate `TANDEM_BIND_HOST` LAN bind. The warn's wording carries that
+ * caveat; the set does not widen for it, because doctor has no way to learn
+ * the bind host and a LAN IP it cannot verify is exactly the shape it must
+ * not certify green.
+ *
+ * `TAURI_HOSTNAME` is deliberately NOT here (round-2 review). It was, on the
+ * grounds that the desktop WebView's own origin is that name — but this arm
+ * decides REACHABILITY, not only exfiltration shape, and the two do not agree.
+ * `server.ts` passes `allowedHosts` (the only list `tauri.localhost` is on)
+ * solely when a LAN IP resolved; on a default loopback bind it is `undefined`,
+ * so the SDK installs `localhostHostValidation()`, whose allowlist is exactly
+ * `localhost` / `127.0.0.1` / `[::1]`. Every `/mcp` request carrying
+ * `Host: tauri.localhost` is answered `403 Invalid Host`. Certifying that url
+ * green is #1807's own defect — a pass in the file Claude Code consults while
+ * Claude Code cannot connect — reintroduced by the arm added to prevent it.
+ * The WebView origin is a CORS/Origin concern; it is not an MCP url host.
+ */
+const LOOPBACK_MCP_HOSTNAMES = new Set(["127.0.0.1", "[::1]", "localhost"]);
+
+/**
+ * Render an entry's `type` — or a url's scheme — for the warn message.
+ *
+ * The warn arm below fires precisely when `type !== "http"`, i.e. precisely
+ * when the value is NOT enum-shaped, so "it's an enum, print it verbatim" is
+ * false on the one branch that prints it. `~/.claude.json` is arbitrary JSON
+ * from disk: a `\r`/`\x1b[2K` value repaints doctor's own warn line as a pass,
+ * a bare `\n` forges a second result line, and the value reaches
+ * `/api/diagnostics` and from there the Report-a-bug prefill unbounded in
+ * length. So clamp it the way {@link detectEnabledTandemPluginKey} clamps the
+ * plugin key, and report `(unexpected)` rather than echoing — the port arm
+ * already prefers `(none)` over a raw value for the same reason.
+ *
+ * The scheme goes through the same clamp. It comes off a *parsed* `URL`, so
+ * control bytes are impossible there, but its length is not bounded and the
+ * clamp costs nothing — and reusing one renderer keeps the two fields of this
+ * message from drifting apart on the rule that governs both.
+ */
+function describeClampedValue(value: unknown): string {
+  if (value === undefined) return "(none)";
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(value) ? value : "(unexpected)";
+}
+
+function validateUserTandemEntry(
+  entry: unknown,
+  mcpPort: number,
+  cliAvailable: CliAvailability,
+): { message: string; fix?: string } | null {
+  const e = (entry ?? {}) as { type?: unknown; url?: unknown; command?: unknown };
+
+  // A stdio entry here is a hand-edit or a plugin-managed shape, and
+  // `reportEntryCommand` already owns its failure modes — warning "unexpected
+  // config" on top of that is a regression dressed as a fix.
+  if (typeof e.command === "string" && e.command.length > 0) return null;
+
+  let parsed: URL | null = null;
+  if (typeof e.url === "string") {
+    try {
+      parsed = new URL(e.url);
+    } catch {
+      parsed = null;
+    }
+  }
+
+  // The scheme is part of this arm, not a separate one: Tandem's MCP server is
+  // plaintext HTTP on loopback, so `https://127.0.0.1:3479/mcp` clears the
+  // type, path, host and port checks while Claude Code's TLS handshake fails
+  // and no `tandem_*` tool ever appears — green in the file Claude Code
+  // consults while Claude Code cannot connect, which is #1807's own defect.
+  // Same remedy as the other two shapes here (`buildMcpEntries` writes
+  // `http://`), so the same arm is the honest home for it.
+  if (
+    e.type !== "http" ||
+    parsed === null ||
+    parsed.protocol !== "http:" ||
+    !parsed.pathname.includes("/mcp")
+  ) {
+    // `pathHasMcp` is computed, not a hardcoded `false`: this arm also fires on
+    // a bad `type` with a perfectly good `/mcp` path, where `false` would be a
+    // false statement in doctor's own output. `scheme` is named for the same
+    // reason — without it an https url reports `type=http, pathHasMcp=true` and
+    // the warn names nothing the reader can act on.
+    const pathHasMcp = parsed === null ? "(unparsable)" : String(parsed.pathname.includes("/mcp"));
+    // Scheme only — never the host, path, userinfo or query, which the
+    // redaction rule governing this whole message keeps out of doctor's output.
+    const scheme =
+      parsed === null ? "(unparsable)" : describeClampedValue(parsed.protocol.replace(/:$/, ""));
+    return {
+      message: `${HOME_CLAUDE_JSON} tandem: unexpected config — type=${describeClampedValue(e.type)}, scheme=${scheme}, pathHasMcp=${pathHasMcp}`,
+      fix: setupApplyRemedy(cliAvailable()),
+    };
+  }
+
+  // Host BEFORE port: a remote host on the right port is the one shape this
+  // check must never certify — Claude Code would send every `tandem_*` call,
+  // document text included, to it — and reporting the port there would name
+  // the wrong field. `URL.hostname` renders IPv6 bracketed, hence `[::1]`.
+  // The message names the SHAPE, not the hostname: the redaction rule above
+  // governs every part of this url, and an internal host name is exactly the
+  // kind of thing the Report-a-bug prefill must not carry into a public issue.
+  //
+  // Still a warn, never a pass — but the sentence must be TRUE. The server
+  // listens on loopback only by DEFAULT: `TANDEM_BIND_HOST` (docs/configuration.md)
+  // binds it to a LAN address, and `server.ts` then puts the resolved LAN IP
+  // into the SDK's `allowedHosts`, so an entry naming that IP is a working
+  // setup. Doctor runs in the user's shell, which need not carry the server's
+  // env, so it cannot know which case this is — it says so rather than
+  // asserting "loopback-only" and prescribing a rewrite that breaks the LAN one.
+  if (!LOOPBACK_MCP_HOSTNAMES.has(parsed.hostname)) {
+    return {
+      message: `${HOME_CLAUDE_JSON} tandem: url names a non-loopback host — Tandem's MCP server listens on loopback unless it was started with TANDEM_BIND_HOST`,
+      // Not `setupApplyRemedy`: it rewrites the url at the DEFAULT port, so on
+      // a moved MCP port it trades this warn for the port one below.
+      fix: `If Tandem was not started with TANDEM_BIND_HOST, edit the tandem entry's url in ${HOME_CLAUDE_JSON} to point at 127.0.0.1:${mcpPort} — a remote host on that port is not this Tandem.`,
+    };
+  }
+
+  // Compare the string form — `URL.port` is a string, so `!== mcpPort` would
+  // always be true — and treat a port-less URL as a mismatch: the entry must
+  // name Tandem's MCP port explicitly.
+  if (parsed.port !== String(mcpPort)) {
+    return {
+      message: `${HOME_CLAUDE_JSON} tandem: url names port ${parsed.port || "(none)"}, but Tandem's MCP port is ${mcpPort}`,
+      // Deliberately NOT `setupApplyRemedy`: `buildMcpEntries` hardcodes
+      // `MCP_URL` at the default port, so `setup --apply` rewrites the same
+      // wrong port and the warn re-fires forever — the dead-end-remedy defect
+      // this file has already been corrected for twice.
+      fix: `Edit the tandem entry's url in ${HOME_CLAUDE_JSON} to use port ${mcpPort}, or unset TANDEM_MCP_PORT and restart Tandem.`,
+    };
+  }
+
+  return null;
+}
+
+function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability, mcpPort: number): void {
   const home = process.env.HOME || process.env.USERPROFILE || "";
   // Claude Code reads global MCP servers from ~/.claude.json (under
   // `mcpServers`), which is exactly where `tandem setup` writes them. The
@@ -1127,6 +1317,16 @@ function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability): void {
     return;
   }
 
+  if (read.kind === "empty") {
+    // An empty (or BOM-only) `~/.claude.json` is the one shape the refusal
+    // wording below is false about: `applyConfig` starts fresh on it, so
+    // `setup --apply` really does resolve this in one command. Reported rather
+    // than folded into `absent` because the file does exist — "not found"
+    // sends the user looking for something that is right there.
+    r.warn("~/.claude.json is empty", setupApplyRemedy(cliAvailable()));
+    return;
+  }
+
   if (read.kind === "unreadable" || read.kind === "malformed") {
     // Two outcomes, one branch, but two statements — the earlier single
     // "is malformed JSON" asserted a fact that is false for the commoner of
@@ -1140,21 +1340,28 @@ function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability): void {
     // check survives the /api/diagnostics filter, so its message reaches the
     // Copy Diagnostics clipboard — destined for public issues.
     //
-    // `withSuffix`, not raw concatenation: the old `${remedy} — that rewrites
-    // it` phrasing produces a dangling clause after `setupApplyRemedy(false)`'s
-    // closed parenthetical (`"...not the desktop app.)"`) — the exact bug
-    // `checkDesktopMcpConfig`'s sibling branch was fixed for. One `withSuffix`
-    // hop here, not the sibling's two: `DESKTOP_RESTART_NOTE` doesn't apply to
-    // Claude Code's config, only to Claude Desktop's.
+    // The malformed arm carries NO `setupApplyRemedy` and no `withSuffix` hop
+    // (#1802). `setup --apply` routes to the same `applyConfig` that now
+    // refuses this exact input — and `setupApplyRemedy(false)`'s wizard
+    // fallback lands there too — so prescribing either is a dead-end fix line
+    // for the condition being reported. It used to promise "Tandem backs the
+    // file up before rewriting it", which is now false in both halves: there
+    // is no backup and there is no rewrite. That claim is only true because
+    // `readClaudeConfig` screens the BOM and the empty file out of this arm
+    // first — both are inputs `applyConfig` accepts, and while they landed here
+    // the sentence below asserted a falsehood about them.
+    // "not a usable JSON object", not "not valid JSON": `readClaudeConfig`
+    // routes BOTH a parse failure and a parseable non-object root (`[]`, `"x"`,
+    // `3`, `null`) into `malformed`, and the second file has nothing wrong with
+    // its JSON at all. Naming a syntax error there sends the user hunting for
+    // one — the same mismatch `applyConfig`'s shape gate had, where the refusal
+    // reached the CLI and the wizard as a bare write failure.
     r.warn(
       read.kind === "malformed"
-        ? "~/.claude.json is not valid JSON"
+        ? "~/.claude.json is not a usable JSON object"
         : "~/.claude.json could not be read",
       read.kind === "malformed"
-        ? withSuffix(
-            setupApplyRemedy(cliAvailable()),
-            "Tandem backs the file up before rewriting it.",
-          )
+        ? "It must be a JSON object — fix it, or restore the file from a backup, then re-run doctor. Tandem will not rewrite a config it cannot read as one."
         : "Check the file's permissions and that it is a regular file, then re-run doctor.",
     );
     return;
@@ -1164,7 +1371,15 @@ function checkUserMcpConfig(r: Recorder, cliAvailable: CliAvailability): void {
   if (!servers.tandem) {
     r.warn("tandem not registered in ~/.claude.json", setupApplyRemedy(cliAvailable()));
   } else {
-    r.pass("tandem registered in ~/.claude.json");
+    const invalid = validateUserTandemEntry(servers.tandem, mcpPort, cliAvailable);
+    if (invalid) {
+      // `warn`, never `fail` — parity with the project-level twin. `tandem
+      // doctor` must not start exiting 1 on a machine whose tools arrive via
+      // the plugin.
+      r.warn(invalid.message, invalid.fix);
+    } else {
+      r.pass("tandem registered in ~/.claude.json");
+    }
     // Normally an HTTP entry here, which the helper ignores. A stdio entry in
     // this file means a hand-edit or a plugin-managed shape, and both can carry
     // the failure modes it reports.
@@ -1507,6 +1722,18 @@ function checkDesktopMcpConfig(
   // to be in a `try` regardless, so a separate stat would be a second syscall
   // answering a question this one already answers — plus a TOCTOU window.
   if (read.kind === "absent") return;
+  // An empty (or BOM-only) file is not a config Tandem refuses — `applyConfig`
+  // starts fresh on it — so it is the *unregistered* case, not the unreadable
+  // one, and it gets the remedy that actually works. Reported rather than
+  // silently returned like `absent`: the file exists, so Claude Desktop is
+  // installed and the missing entry is worth naming.
+  if (read.kind === "empty") {
+    r.warn(
+      "tandem not registered in the Claude Desktop config",
+      withSuffix(setupApplyRemedy(cliAvailable()), DESKTOP_RESTART_NOTE),
+    );
+    return;
+  }
   // Unlike the Claude Code sibling, one branch covers both: "could not be read
   // as JSON" is true whether the open failed or the parse did, so there is no
   // false assertion to split apart.
@@ -1514,20 +1741,23 @@ function checkDesktopMcpConfig(
     // No parse detail, same rule as `~/.claude.json`: V8 SyntaxErrors embed a
     // snippet of the source, and this file holds `env.TANDEM_AUTH_TOKEN`. This
     // message reaches the Copy Diagnostics clipboard and public issues.
-    // Two `withSuffix` hops rather than one interpolation: the remedy this
-    // wraps ends differently in each branch (`…store lock)` vs `…desktop app.)`),
-    // and the old `${remedy} — that rewrites it, and …` phrasing was written
-    // when only the CLI branch existed. Against the wizard text it rendered a
-    // dangling clause after a parenthetical, restating what that sentence had
-    // just said. The backup fact is the only genuinely additive part, so it is
-    // now its own sentence.
+    // Like the `~/.claude.json` sibling, this drops `setupApplyRemedy`: that
+    // command reaches the same `applyConfig`, which now refuses a config it
+    // cannot parse (#1802), and the old "Tandem backs the file up before
+    // rewriting it" is false in both halves. ONE `withSuffix` hop over the new
+    // sentence, not two over a remedy base.
+    //
+    // The sentence must stay true of BOTH kinds this branch merges: an EACCES
+    // file was never parsed and is probably perfectly valid JSON, so it must
+    // not prescribe a JSON fix — and the branch must not be split to allow one,
+    // for the reason stated above it. What DID have to move out of the branch
+    // is the BOM-prefixed-but-valid file: `applyConfig` strips U+FEFF and
+    // rewrites it happily, so reporting it as unreadable-and-refused was a
+    // flat falsehood. `readClaudeConfig` strips it before parsing now.
     r.warn(
       "Claude Desktop config could not be read as JSON",
       withSuffix(
-        withSuffix(
-          setupApplyRemedy(cliAvailable()),
-          "Tandem backs the file up before rewriting it.",
-        ),
+        "Tandem will not rewrite a config it could not read. Check the file's permissions and that it is valid JSON, then re-run doctor.",
         DESKTOP_RESTART_NOTE,
       ),
     );
@@ -1857,20 +2087,70 @@ export interface TandemPluginInput {
   wizardTandemEntry: boolean;
 }
 
+/**
+ * The enabled `tandem@<marketplace>` key in `enabledPlugins`, or `null`.
+ *
+ * `value === true`, not truthiness: `false` is a real and common value — a
+ * plugin the user deliberately disabled — and a truthiness check would report
+ * it as installed. Any marketplace suffix matches on purpose
+ * (`docs/spikes/plugin-delivery.md` recommends a local one), so a hardcoded
+ * `tandem@tandem-editor` in a remedy would hand those users a command that
+ * errors.
+ *
+ * Returns the RAW key, unclamped. The key-shape clamp lives in
+ * {@link detectEnabledTandemPluginKey}, not here: `evaluateTandemPlugin`
+ * short-circuits both of its outcomes on an undefined key, so clamping here
+ * would make doctor stop reporting a plugin that is genuinely installed —
+ * a regression, not a hardening.
+ */
+export function findEnabledTandemPluginKey(
+  enabledPlugins: Record<string, unknown> | null,
+): string | null {
+  if (enabledPlugins === null) return null;
+  return (
+    Object.entries(enabledPlugins).find(
+      ([key, value]) => key.startsWith("tandem@") && value === true,
+    )?.[0] ?? null
+  );
+}
+
+/**
+ * Read `~/.claude/settings.json` and report the enabled Tandem plugin key, for
+ * the one surface that has to decide before doctor runs: `tandem setup --apply`
+ * warns that writing its own MCP entry loads the `tandem_*` toolset twice
+ * (#1811).
+ *
+ * Reuses `checkTandemPlugin`'s home spelling and its screened reader, so this
+ * adds no new reader, no second UNC screen (#1417) and no new home chain.
+ * Absence is never evidence, and this must never make `setup --apply` fail.
+ *
+ * **The key shape is clamped here**, because this fix is what newly prints the
+ * key into a terminal inside a copy-paste `claude plugin uninstall <key>`, and
+ * a newline or ANSI escape in arbitrary JSON-key text would render as something
+ * other than what it is. Suppressing the new notice for such a key costs
+ * nothing; suppressing doctor's existing report of an installed plugin would
+ * not.
+ */
+export function detectEnabledTandemPluginKey(): string | null {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  if (!home || homeIsUnsafe(home)) return null;
+
+  const read = readClaudeConfig(join(home, ".claude", "settings.json"));
+  if (read.kind !== "ok") return null;
+
+  const key = findEnabledTandemPluginKey(
+    (read.value as { enabledPlugins?: Record<string, unknown> }).enabledPlugins ?? {},
+  );
+  return key !== null && /^tandem@[A-Za-z0-9._-]+$/.test(key) ? key : null;
+}
+
 export function evaluateTandemPlugin(input: TandemPluginInput): EvalOutcome[] {
   if (input.enabledPlugins === null) return [];
-  // `false` is a real and common value — a plugin the user deliberately
-  // disabled — so test the VALUE, not just key presence. A truthiness check
-  // would report a disabled plugin as installed.
-  // Keep the KEY, not just the fact. Detection matches any marketplace
-  // (`tandem@<whatever>`) on purpose — `docs/spikes/plugin-delivery.md`
-  // recommends a local marketplace for the no-git path — so a hardcoded
-  // `tandem@tandem-editor` in the remedy hands those users a command that
-  // errors. The uninstall string has to name the plugin we actually found.
-  const installedKey = Object.entries(input.enabledPlugins).find(
-    ([key, value]) => key.startsWith("tandem@") && value === true,
-  )?.[0];
-  if (installedKey === undefined) return [];
+  // Keep the KEY, not just the fact: the uninstall string has to name the
+  // plugin we actually found. Why the value test and the open marketplace
+  // suffix are load-bearing is on {@link findEnabledTandemPluginKey}.
+  const installedKey = findEnabledTandemPluginKey(input.enabledPlugins);
+  if (installedKey === null) return [];
 
   const out: EvalOutcome[] = [
     {
@@ -2474,6 +2754,27 @@ const UNSAFE_APP_DATA_FIX =
   "at a local drive.";
 
 /**
+ * Resolve the app-data dir, screening the raw inputs BEFORE deriving a path or
+ * touching the filesystem — reading a UNC path can leak a Windows credential
+ * hash, and `dir` is already a derived join. Records the refusal against
+ * `label` and returns `null` when the caller must not proceed.
+ */
+function resolveSafeAppDataDir(r: Recorder, label: string): string | null {
+  const { dir, inputs } = resolveAppDataDir();
+  for (const input of inputs) {
+    if (input !== "" && rejectUnsafeWindowsPrefix(input) !== null) {
+      r.fail(
+        `${label} resolves to a network or extended-length path; refusing to read it`,
+        UNSAFE_APP_DATA_FIX,
+        { unsafePath: true },
+      );
+      return null;
+    }
+  }
+  return dir;
+}
+
+/**
  * Annotation-store health.
  *
  * **This check reports what it actually examined.** Its predecessor emitted a
@@ -2491,18 +2792,8 @@ const UNSAFE_APP_DATA_FIX =
  * the request-led work this unit is also asked to cap.
  */
 async function checkAnnotationStore(r: Recorder): Promise<void> {
-  const { dir: base, inputs } = resolveAppDataDir();
-  // Screen the raw inputs BEFORE deriving a path or touching the filesystem.
-  for (const input of inputs) {
-    if (input !== "" && rejectUnsafeWindowsPrefix(input) !== null) {
-      r.fail(
-        "Annotation store location resolves to a network or extended-length path; refusing to read it",
-        UNSAFE_APP_DATA_FIX,
-        { unsafePath: true },
-      );
-      return;
-    }
-  }
+  const base = resolveSafeAppDataDir(r, "Annotation store location");
+  if (base === null) return;
 
   const dir = join(base, "annotations");
   const scan = await scanAnnotationStore(dir);
@@ -2591,6 +2882,17 @@ async function checkAnnotationStore(r: Recorder): Promise<void> {
     );
   }
 
+  // #1791(a): a partial load keeps the readable rows and parks the rest in a
+  // `.partial.<hex>` copy. The active count goes to zero at the next write, so
+  // the copies are the durable evidence and either one is enough to warn.
+  if (scan.partialActive > 0 || scan.partialCopies > 0) {
+    r.warn(
+      `${scan.partialActive} annotation file(s) hold rows this build cannot read; ${scan.partialCopies} .partial copy(ies) in ${dir}`,
+      "Written by a newer Tandem. The readable annotations load; the rest are dropped from the active file on its next write and survive only in the .partial.<hex> copy beside it. Update Tandem before editing those documents.",
+      { partialActive: scan.partialActive, partialCopies: scan.partialCopies, dir },
+    );
+  }
+
   if (scan.newest) {
     const ageMs = Date.now() - scan.newest.mtimeMs;
     const ageStr =
@@ -2650,11 +2952,36 @@ async function checkAnnotationStore(r: Recorder): Promise<void> {
     }
     const { pid } = lock;
     if (isPidLive(pid)) {
-      r.pass(`Annotation store lock held by live PID ${pid}`, undefined, {
-        lockHeld: true,
-        pid,
-        pidLive: true,
-      });
+      // cr-2 / annotation-model-reviewer-2: isLockFromPriorBoot is EVIDENCE,
+      // not a verdict (see its docblock) — a live PID needs the same
+      // process-identity corroboration acquireStoreLock itself requires
+      // before treating a lock as stale (#2038), or a forward clock step
+      // (NTP correcting a wrong RTC, a resumed VM) makes a healthy, still-
+      // running Tandem read as "reused after a reboot" with no way for the
+      // warning to ever clear. Mirror the store's own decision exactly
+      // rather than assert reuse from boot-time evidence alone.
+      if (isLockFromPriorBoot(lock)) {
+        const identity = await probeProcessIdentity(pid);
+        if (identity.kind === "name" && !isTandemLikeProcessName(identity.name)) {
+          r.warn(
+            `Annotation store lock at ${lockPath} is held by PID ${pid}, reused after a reboot`,
+            "The next server start will reclaim this lock automatically.",
+            { lockHeld: true, pid, pidLive: true, priorBoot: true, reused: true },
+          );
+        } else {
+          r.pass(`Annotation store lock held by live PID ${pid}`, undefined, {
+            lockHeld: true,
+            pid,
+            pidLive: true,
+          });
+        }
+      } else {
+        r.pass(`Annotation store lock held by live PID ${pid}`, undefined, {
+          lockHeld: true,
+          pid,
+          pidLive: true,
+        });
+      }
     } else {
       r.warn(
         `Annotation store lock at ${lockPath} points to dead PID ${pid}`,
@@ -2665,6 +2992,69 @@ async function checkAnnotationStore(r: Recorder): Promise<void> {
   } catch (err) {
     r.warn(`Could not read annotation store lock: ${errMsg(err)}`);
   }
+}
+
+/**
+ * `integrations.json` counterpart to {@link checkAnnotationStore} (#1792).
+ *
+ * A downgrade leaves a file this build cannot read, and every
+ * `/api/integrations/*` route then rejects — so the wizard and the Settings
+ * Claude Code tab are dead. `doctor` had no check for it at all, which made the
+ * one diagnostic a user is told to run silent on the cause.
+ *
+ * Read-only and total. An absent file is a pass, and so is an unparseable one,
+ * which `readIntegrationsFile` backs up and recovers on read. An UNREADABLE one
+ * (EACCES, EISDIR…) warns: the server rethrows every errno but ENOENT, so every
+ * integrations route fails exactly as it does for a future schema. The schema
+ * predicate is the server's own — any number above the supported version.
+ */
+async function checkIntegrationsFile(r: Recorder): Promise<void> {
+  const base = resolveSafeAppDataDir(r, "Integrations file location");
+  if (base === null) return;
+
+  const filePath = join(base, "integrations.json");
+  let raw: string;
+  try {
+    raw = readFileSync(filePath, "utf-8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      r.pass("No integrations.json yet — nothing to check", undefined, { exists: false });
+    } else {
+      r.warn(
+        `integrations.json could not be read (${code ?? errMsg(err)})`,
+        `Until it is readable the integrations wizard and the Settings Claude Code tab will not load. Check the file's permissions: ${filePath}`,
+        { exists: true, code: code ?? null },
+      );
+    }
+    return;
+  }
+
+  let found: unknown;
+  try {
+    found = (JSON.parse(raw) as { schemaVersion?: unknown }).schemaVersion;
+  } catch {
+    r.pass("integrations.json is not valid JSON — the server recovers it on read", undefined, {
+      parsed: false,
+    });
+    return;
+  }
+
+  // Mirrors `readSchemaVersion` + `version > INTEGRATIONS_SCHEMA_VERSION` in
+  // `integrations/storage.ts` — narrower (e.g. `Number.isInteger`) passes a
+  // `3.5` the server refuses.
+  if (typeof found === "number" && found > INTEGRATIONS_SCHEMA_VERSION) {
+    r.warn(
+      `integrations.json carries schemaVersion ${found}, newer than this build supports (${INTEGRATIONS_SCHEMA_VERSION})`,
+      "Written by a newer Tandem. Update Tandem, or remove the integrations file; until then the integrations wizard and the Settings Claude Code tab will not load.",
+      { schemaVersion: found, supported: INTEGRATIONS_SCHEMA_VERSION },
+    );
+    return;
+  }
+
+  r.pass(`Integrations schema version: ${String(found ?? "unset")}`, undefined, {
+    schemaVersion: typeof found === "number" ? found : null,
+  });
 }
 
 function errMsg(err: unknown): string {
@@ -2869,7 +3259,7 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
     recordEvaluation(r, evaluateAppTranslocation(process.execPath)),
   );
   await r.check("mcp-json", () => checkMcpJson(r, cwd, cliAvailable));
-  await r.check("user-mcp-config", () => checkUserMcpConfig(r, cliAvailable));
+  await r.check("user-mcp-config", () => checkUserMcpConfig(r, cliAvailable, mcpPort));
   await r.check("desktop-mcp-config", () =>
     checkDesktopMcpConfig(r, cliAvailable, opts.homeOverride),
   );
@@ -2877,6 +3267,7 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   await r.check("claude-cli", () => checkClaudeCli(r));
   await r.check("tandem-plugin", () => checkTandemPlugin(r));
   await r.check("annotation-store", () => checkAnnotationStore(r));
+  await r.check("integrations-file", () => checkIntegrationsFile(r));
   await r.check("stale-global", () => checkStaleGlobal(r));
 
   // `check` returns undefined when the check crashed (it records its own
@@ -2914,6 +3305,43 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
 
 // ── Printer + exit-code wrapper ─────────────────────────────────────
 
+/**
+ * Parse one port env var the way the *server* does, so doctor probes where the
+ * server actually binds.
+ *
+ * `parseInt(raw || String(fallback), 10)` deliberately mirrors
+ * `src/server/index.ts` — not `Number`, and not `backend-ports.ts`'s stricter
+ * `/^\d{1,5}$/`. The server binds `TANDEM_PORT=4918abc` on 4918, so a stricter
+ * parser here would re-create the false "server not running" for exactly the
+ * inputs the server accepts.
+ *
+ * The `1..65535` clamp is a probe-side decision, NOT a mirror of the server:
+ * `listen(0)` binds an OS-chosen ephemeral port, so `TANDEM_PORT=0` is not
+ * "input the server would reject" — it is undiagnosable from outside the
+ * process. Falling back to the default at least prints a port shape the user
+ * recognises.
+ */
+function envPort(raw: string | undefined, fallback: number): number {
+  const n = parseInt(raw || String(fallback), 10);
+  return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : fallback;
+}
+
+/**
+ * The single resolution site for the two documented port overrides (#1806).
+ * `runDoctor` itself never reads them — an embedder that knows its live ports
+ * (the `/api/diagnostics` route) must not get the CLI's answer layered under
+ * its own.
+ */
+export function resolveDoctorPortsFromEnv(env: NodeJS.ProcessEnv = process.env): {
+  wsPort: number;
+  mcpPort: number;
+} {
+  return {
+    wsPort: envPort(env.TANDEM_PORT, DEFAULT_WS_PORT),
+    mcpPort: envPort(env.TANDEM_MCP_PORT, DEFAULT_MCP_PORT),
+  };
+}
+
 export interface RunDoctorCliOptions {
   json?: boolean;
 }
@@ -2945,7 +3373,7 @@ export async function runDoctorCli(opts: RunDoctorCliOptions = {}): Promise<numb
 
   let report: DoctorReport;
   try {
-    report = await runDoctor();
+    report = await runDoctor(resolveDoctorPortsFromEnv());
   } catch (err) {
     const message = errMsg(err);
     if (json) {

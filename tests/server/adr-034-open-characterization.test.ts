@@ -47,7 +47,7 @@ import path from "path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
 
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -59,14 +59,21 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
 
 // Real fs.watch leaks handles and races the tests' own writes. The open paths
 // only need this to be callable.
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: vi.fn(),
   unwatchFile: vi.fn(),
 }));
 
 import { docHash } from "../../src/server/annotations/doc-hash.js";
-import { createStore, resetForTesting as storeReset } from "../../src/server/annotations/store.js";
+import { removeAnnotationRecord } from "../../src/server/annotations/lifecycle.js";
+import {
+  closeStore,
+  createStore,
+  envelopePath,
+  resetForTesting as storeReset,
+} from "../../src/server/annotations/store.js";
+import { getTombstones } from "../../src/server/annotations/sync.js";
 import {
   openFromDisk,
   openFromUpload,
@@ -78,7 +85,8 @@ import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-t
 import { MAX_DOCX_PART_BYTES } from "../../src/server/file-io/docx-size-gate.js";
 import { watchFile } from "../../src/server/file-watcher.js";
 import { extractText, restoreOpenDocuments } from "../../src/server/mcp/document.js";
-import { getOpenDocs } from "../../src/server/mcp/document-service.js";
+import { closeDocumentById, getOpenDocs } from "../../src/server/mcp/document-service.js";
+import { TUTORIAL_ANNOTATIONS } from "../../src/server/mcp/tutorial-annotations.js";
 import {
   getBuffer,
   resetForTesting as notificationsReset,
@@ -320,6 +328,136 @@ describe("durable annotations survive an open", () => {
       "the annotation still covers the words it was anchored to",
     ).toBe("quick brown fox");
   });
+});
+
+describe("tutorial seeds across a reopen (#1696)", () => {
+  /**
+   * Copy the real welcome.md under a `sample/` dir: the injector only runs for
+   * a path ending in sample/welcome.md, so no hand-written fixture.
+   *
+   * A unique trailing paragraph keeps each case's content hash distinct. The
+   * annotations dir is shared across the file while `tmpDir` is removed after
+   * each case, so an identical copy reads to rename recovery as the previous
+   * case's file, moved: it adopts that envelope, tombstones included, and the
+   * new case's first open injects nothing.
+   */
+  async function copyWelcome(): Promise<{ filePath: string; resolved: string }> {
+    const sampleDir = path.join(tmpDir, "sample");
+    await fs.mkdir(sampleDir, { recursive: true });
+    const filePath = path.join(sampleDir, "welcome.md");
+    const source = await fs.readFile(
+      path.join(import.meta.dirname, "..", "..", "sample", "welcome.md"),
+      "utf8",
+    );
+    await fs.writeFile(filePath, `${source}\nCase ${path.basename(tmpDir)}.\n`);
+    // openFromDisk realpaths before hashing; key the ledger read the same way.
+    return { filePath, resolved: await fs.realpath(filePath) };
+  }
+
+  it("a deleted tutorial annotation stays deleted after a close and reopen", async () => {
+    const { filePath, resolved } = await copyWelcome();
+    const ids = TUTORIAL_ANNOTATIONS.map((d) => d.id);
+
+    const first = await openFromDisk(filePath);
+    const doc = getOrCreateDocument(first.documentId);
+    for (const id of ids) {
+      expect(doc.getMap(Y_MAP_ANNOTATIONS).has(id), `first open injects ${id}`).toBe(true);
+    }
+
+    expect(removeAnnotationRecord(doc, "tutorial-comment-1", "browser").kind).toBe("ok");
+    await closeStore(docHash(resolved));
+    expect((await closeDocumentById(first.documentId)).success).toBe(true);
+
+    // The "close" phase dropped the in-memory ledger, so whatever suppresses
+    // the seed on the reopen must have come back through the durable envelope.
+    expect(getTombstones(docHash(resolved))).toEqual([]);
+
+    const second = await openFromDisk(filePath);
+    const reopened = getOrCreateDocument(second.documentId).getMap(Y_MAP_ANNOTATIONS);
+    expect(reopened.has("tutorial-comment-1"), "the deleted seed is not re-injected").toBe(false);
+    for (const id of ids.filter((i) => i !== "tutorial-comment-1")) {
+      expect(reopened.has(id), `reopen keeps ${id}`).toBe(true);
+    }
+  });
+
+  /** Open a fresh welcome.md copy and delete every seed. */
+  async function openWelcomeAndDeleteSeeds(): Promise<{
+    filePath: string;
+    resolved: string;
+    documentId: string;
+  }> {
+    const { filePath, resolved } = await copyWelcome();
+    const first = await openFromDisk(filePath);
+    const doc = getOrCreateDocument(first.documentId);
+    for (const { id } of TUTORIAL_ANNOTATIONS) {
+      expect(removeAnnotationRecord(doc, id, "browser").kind, `delete ${id}`).toBe("ok");
+    }
+    return { filePath, resolved, documentId: first.documentId };
+  }
+
+  // Settings > Replay tutorial opens welcome.md with `force: true`; its step-0
+  // effect has nothing to show without seeds, so the tombstone guard must not
+  // swallow the explicit replay.
+  it("Replay tutorial (force) brings deleted seeds back when welcome.md was closed", async () => {
+    const { filePath, resolved, documentId } = await openWelcomeAndDeleteSeeds();
+    await closeStore(docHash(resolved));
+    expect((await closeDocumentById(documentId)).success).toBe(true);
+
+    const replayed = await openFromDisk(filePath, { force: true });
+    const map = getOrCreateDocument(replayed.documentId).getMap(Y_MAP_ANNOTATIONS);
+    for (const { id } of TUTORIAL_ANNOTATIONS) {
+      expect(map.has(id), `replay re-injects ${id}`).toBe(true);
+    }
+    await expectReplaySurvivesWithoutSession(filePath, resolved, replayed.documentId);
+  });
+
+  it("Replay tutorial (force) brings deleted seeds back when welcome.md is still open", async () => {
+    const { filePath, resolved } = await openWelcomeAndDeleteSeeds();
+
+    const replayed = await openFromDisk(filePath, { force: true });
+    expect(replayed.kind).toBe("force-reloaded");
+    const map = getOrCreateDocument(replayed.documentId).getMap(Y_MAP_ANNOTATIONS);
+    for (const { id } of TUTORIAL_ANNOTATIONS) {
+      expect(map.has(id), `replay re-injects ${id}`).toBe(true);
+    }
+    await expectReplaySurvivesWithoutSession(filePath, resolved, replayed.documentId);
+  });
+
+  /**
+   * The replay is durable, not carried by the session file alone. The seeds
+   * are `withInternal`, so without an explicit snapshot the envelope holds only
+   * the four tombstones; the session file then carries the rev-above-tombstone
+   * seeds, and a reopen with that session gone (source edited, or expired)
+   * deleted the replayed seeds again. Measured before the fix: envelope
+   * `annotations: []` after the replayed doc closed.
+   */
+  async function expectReplaySurvivesWithoutSession(
+    filePath: string,
+    resolved: string,
+    documentId: string,
+  ): Promise<void> {
+    await closeStore(docHash(resolved));
+    expect((await closeDocumentById(documentId)).success).toBe(true);
+
+    const env = JSON.parse(await fs.readFile(envelopePath(docHash(resolved)), "utf8")) as {
+      annotations: { id: string; rev: number }[];
+      tombstones: { id: string; rev: number }[];
+    };
+    for (const { id } of TUTORIAL_ANNOTATIONS) {
+      const alive = env.annotations.find((a) => a.id === id);
+      const stone = env.tombstones.find((t) => t.id === id);
+      expect(alive, `the envelope holds the replayed ${id}`).toBeDefined();
+      expect(stone, `the envelope still holds ${id}'s tombstone`).toBeDefined();
+      expect(alive!.rev, `${id} outranks its tombstone`).toBeGreaterThan(stone!.rev);
+    }
+
+    await fs.rm(SESSION_DIR, { recursive: true, force: true });
+    const reopened = await openFromDisk(filePath);
+    const map = getOrCreateDocument(reopened.documentId).getMap(Y_MAP_ANNOTATIONS);
+    for (const { id } of TUTORIAL_ANNOTATIONS) {
+      expect(map.has(id), `a session-less reopen keeps the replayed ${id}`).toBe(true);
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -688,7 +826,12 @@ describe("file-watcher reload notification", () => {
       const toasts = getBuffer().filter(
         (n) => n.type === "file-reloaded" && n.documentId === opened.documentId,
       ).length;
-      return { toasts, docWrites: docWrites() };
+      // The user-initiated "Reload from file" reports a guard-held skip
+      // (#1663); the watcher's own skip must stay silent, because the
+      // in-flight holder reports its reload. Counted here so a push moved into
+      // `reloadFromDisk`'s guard-fail branch turns `pair` red.
+      const skipped = getBuffer().filter((n) => n.dedupKey?.startsWith("reload-skipped:")).length;
+      return { toasts, skipped, docWrites: docWrites() };
     }
 
     // Baseline: what exactly one reload costs in document-room transactions.
@@ -701,6 +844,8 @@ describe("file-watcher reload notification", () => {
       single.docWrites,
     );
     expect(pair.toasts, "…and now exactly one toast to match it").toBe(1);
+    expect(single.skipped, "the watcher reports no skip (#1663)").toBe(0);
+    expect(pair.skipped, "…not even when its second callback IS skipped").toBe(0);
   });
 
   it("still toasts twice for two reloads that do not overlap", async () => {
@@ -776,6 +921,11 @@ describe("toWireResult keeps the payload the wire sites already ship", () => {
    * because the MCP payload's consumer is the calling model, which no grep of
    * this repo can see. Unread-by-us is not unread.
    */
+  // `wakeUrl` is deliberately NOT here, and must never be added. `tandem_open` returns it,
+  // but on the TOOL payload — this projection is also what `POST /api/open`, `/api/upload`
+  // and `/api/scratchpad` return (`mcp/routes/send-open-result.ts`), and `res.json` takes
+  // `unknown`, so widening it here would put a transport fact into three HTTP wire contracts
+  // with nothing to catch it. This census is that catch.
   const WIRE_KEYS = [
     "alreadyOpen",
     "documentId",

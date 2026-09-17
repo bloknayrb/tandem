@@ -21,7 +21,7 @@ graph TB
     Claude <-->|MCP HTTP :3479<br/>tool calls| Tandem
     Claude <-->|stdio<br/>channel notifications| Shim
     Shim <-->|SSE + HTTP<br/>events + replies| Tandem
-    Tandem -->|fs read/write| Files["Local Files<br/>.md .txt .html"]
+    Tandem -->|fs read/write| Files["Local Files<br/>.md .markdown .txt<br/>.html .htm .docx"]
 ```
 
 Tandem is a single Node.js process that serves three roles simultaneously:
@@ -276,7 +276,7 @@ Claude calls tandem_reply({ text: "...", replyTo: "msg_..." })
 
 ### Session Persistence
 
-Chat state persists across server restarts via the same `saveCtrlSession` / `restoreCtrlSession` lifecycle used for the control channel. The `__tandem_ctrl__` Y.Doc (including `Y.Map('chat')`) is saved to `%LOCALAPPDATA%\tandem\sessions\` and restored on next startup.
+Chat state persists across server restarts via the same `saveCtrlSession` / `restoreCtrlSession` lifecycle used for the control channel. The `__tandem_ctrl__` Y.Doc (including `Y.Map('chat')`) is saved to the session directory — `<app-data>/sessions`, where `<app-data>` is `TANDEM_APP_DATA_DIR` when set and otherwise `env-paths("tandem", { suffix: "" }).data` (`%LOCALAPPDATA%\tandem\Data` on Windows, `~/.local/share/tandem` on Linux, `~/Library/Application Support/tandem` on macOS; `SESSION_DIR`, `src/server/platform.ts:42`) — and restored on next startup.
 
 ### Session Auto-Restore on Startup
 
@@ -449,21 +449,31 @@ User accepts annotation in browser
 
 ### Origin Tagging (Echo Prevention)
 
-All MCP-initiated Y.Map writes use `doc.transact(() => { ... }, 'mcp')`. The event queue observers check `txn.origin === MCP_ORIGIN` and skip events from MCP-tagged transactions. This prevents Claude from seeing its own tool calls echoed back as channel notifications.
+All MCP-initiated Y.Map writes go through **`withMcp(doc, () => { ... })`** from `src/shared/origins.ts` — never a hand-written `doc.transact(…, 'mcp')`. The event queue observers check `txn.origin === MCP_ORIGIN` and skip events from MCP-tagged transactions, which prevents Claude from seeing its own tool calls echoed back as channel notifications. The wrapper is the contract, not a convenience: `withMcp` is one of six helpers (`withMcp`, `withFileSync`, `withInternal`, `withReload`, `withModeRelease`, `withBrowser`), each of which selects a different row in the skip-set matrix at the top of `origins.ts`, and only `browser` writes generate channel events. A raw `.transact(` anywhere in `src/` is a Critical Rule 2 violation — see ADR-031.
 
 ### Event Types
 
+Payload shapes are declared in `src/shared/events/types.ts` and built by the five payload
+builders in `src/server/annotations/projection.ts` — those builders take a `ChannelEligible`
+brand, so the only way to construct an annotation-bearing payload is through
+`narrowForChannel`. The table below is the wire, and it is what the shim and monitor parse.
+
 | Event Type | Trigger | Payload |
 |---|---|---|
-| `annotation:created` | User creates highlight/comment/question | `annotationId`, `annotationType`, `content`, `textSnippet` |
+| `annotation:created` | The user posts a **comment** — or promotes a note to one via "Send to Claude". Not highlights and not notes: `observers/annotations.ts:113` returns early for any user-authored type other than `comment`, and `narrowForChannel` refuses notes outright (ADR-027) | `annotationId`, `annotationType`, `content`, `textSnippet`, `hasSuggestedText?` (present, and always `true`, only when the annotation carries `suggestedText`) |
 | `annotation:accepted` | User accepts Claude's annotation | `annotationId`, `textSnippet` |
 | `annotation:dismissed` | User dismisses Claude's annotation | `annotationId`, `textSnippet` |
 | `chat:message` | User sends chat message | `messageId`, `text`, `replyTo`, `anchor`, `selection?` |
 | `document:opened` | New document opened in browser | `fileName`, `format` |
 | `document:closed` | Document closed | `fileName` |
 | `document:switched` | User switches tabs | `fileName` |
-| `annotation:reply` | Reply added to an annotation thread | `annotationId`, `replyId`, `text` |
-| `annotation:edited` | Annotation body text edited | `annotationId`, `content` |
+| `annotation:reply` | Reply added to an annotation thread, by either author | `annotationId`, `replyId`, `replyText`, `replyAuthor`, `textSnippet` (the *parent's* snapshot) |
+| `annotation:edited` | User edits their own comment's body and `editedAt` advances | `annotationId`, `content`, `textSnippet`, `editedAt` |
+
+Two fields carry more weight than they look. `replyAuthor` is what `isUserPrivacyHeld`
+(`events/queue.ts:205-214`) reads to decide whether a reply is held in Solo mode, and `editedAt`
+is half the channel de-duplication key for edits (`getAnnotationEditedChannelKey`), so an edit
+payload without it would collapse every edit of one annotation onto a single trackable id.
 
 ### Channel Shim Architecture
 
@@ -480,7 +490,7 @@ The shim coexists with the HTTP MCP server — Claude Code connects to both simu
 
 When Claude Code asks for tool approval, it sends `notifications/claude/channel/permission_request` to the shim. The shim forwards the request to `POST /api/channel-permission` on the Tandem server.
 
-**The return leg does not exist — this relay is a stub, not a working feature.** Nothing in `src/client/` reads `pendingPermissions`, so no prompt is ever displayed; `permission_request` is registered as an MCP *notification* handler, and notifications cannot be answered; and `POST /api/channel-permission-verdict` deletes the pending entry and logs the verdict, which therefore never reaches Claude Code. The code says as much in place (*"SSE push to browser is a follow-up"*) — the capability was declared ahead of an implementation that never landed. It is described as shipped API in `docs/mcp-tools.md`, which is wrong and tracked for correction. This matters beyond the feature itself: it was rationale (1) for keeping the channel canonical, and [ADR-047](decisions.md#adr-047-claude-code-push-transport-activation) §3 voids it on these grounds.
+**The return leg does not exist — this relay is a stub, not a working feature.** Nothing in `src/client/` reads `pendingPermissions`, so no prompt is ever displayed; `permission_request` is registered as an MCP *notification* handler, and notifications cannot be answered; and `POST /api/channel-permission-verdict` deletes the pending entry and logs the verdict, which therefore never reaches Claude Code. The capability was declared ahead of an implementation that never landed. `docs/mcp-tools.md` used to describe it as shipped API; #1794 corrected that, and the approval prompt's `input_preview` payload is neither sent by the shim nor stored, served or logged by the server (the served `description` summary line is what #1884 still tracks). This matters beyond the feature itself: it was rationale (1) for keeping the channel canonical, and [ADR-047](decisions.md#adr-047-claude-code-push-transport-activation) §3 voids it on these grounds.
 
 ## Plugin Monitor
 
@@ -527,12 +537,14 @@ The mode cache (`getCachedMode()` warm-up + `getModeSync()` / `refreshMode()` ho
 
 ### Retry Semantics
 
-Reconnect uses exponential backoff: 2s / 4s / 8s / 16s / 30s (cap). The retry counter resets **only after `STABLE_CONNECTION_MS` (60s) of continuous uptime** — resetting per event would let a server that crashes after each event reconnect forever, never exhausting the cap.
+Reconnect uses exponential backoff: 2s / 4s / 8s / 16s / 30s (cap). The retry counter resets **only after `STABLE_CONNECTION_MS` (60s) of continuous uptime** — resetting per event would let a connect-then-die flap re-arm the once-per-outage report on every cycle, and each stdout write is a model turn.
 
-On exhaustion (`CHANNEL_MAX_RETRIES`), the monitor:
+**The consumer never exits and never stops retrying (#1804).** Neither host is respawned — the plugin monitor and the channel shim are each launched once per Claude Code session — so a process that gave up killed the push path for the rest of that session. After `CHANNEL_MAX_RETRIES` consecutive failures the consumer reports **once per outage**:
 1. POSTs `/api/channel-error` with `MONITOR_CONNECT_FAILED`.
-2. Writes a user-facing line to stdout: "Tandem monitor disconnected — restart Tandem to restore real-time events."
-3. Calls `process.exit(1)`.
+2. Writes one user-facing line to stdout: "Tandem monitor lost its connection and is retrying in the background — tandem_checkInbox still works and is authoritative."
+3. Keeps retrying at the 30s cap, with the per-failure stderr lines suppressed until the connection is restored.
+
+A later outage, after a recovery that survived `STABLE_CONNECTION_MS`, reports again.
 
 ### Awareness Lifecycle
 
@@ -574,7 +586,7 @@ Two independent reasons the shim is not registered unless asked for:
 
 So: on a Claude Desktop target only the HTTP `tandem` MCP entry is written, and on Claude Code the shim is written **only** on explicit request — `tandem setup --apply --with-channel-shim`. `shouldRegisterChannelShim` is the single source of truth, and there is deliberately **no wizard checkbox**: the wizard's apply route calls it with no override, so the CLI flag is the only opt-in. (Three places claimed a checkbox until 2026-08-09.) The wizard does not *remove* an existing shim either — its `remove` list comes from the user's confirmed diff — so an entry you opted into survives a wizard apply.
 
-**Existing installs keep their entry, deliberately.** This changes the default for setups run from here on; it does not reach back. A boot-time prune was written and then dropped, and the reason is worth keeping: an entry written by the old default is **byte-identical** to one written by `--with-channel-shim`, because the same code produced both. Nothing on disk distinguishes a legacy artifact from a deliberate opt-in, so a prune cannot delete the first without sometimes deleting the second — and for a hand-launched interactive session the shim plus `--dangerously-load-development-channels` is still the only channel mechanism that exists. Silently removing that from a user who is relying on it is a worse failure than leaving an inert consumer attached for the users who are not. Re-running `tandem setup --apply` without the flag removes the entry, and that is the honest way to get it gone.
+**Existing installs keep their entry, deliberately.** This changes the default for setups run from here on; it does not reach back. A boot-time prune was written and then dropped, and the reason is worth keeping: an entry written by the old default is **byte-identical** to one written by `--with-channel-shim`, because the same code produced both. Nothing on disk distinguishes a legacy artifact from a deliberate opt-in, so a prune cannot delete the first without sometimes deleting the second — and for a hand-launched interactive session the shim plus `--dangerously-load-development-channels` is still the only channel mechanism that exists. Silently removing that from a user who is relying on it is a worse failure than leaving an inert consumer attached for the users who are not. Running `tandem setup --apply --without-channel-shim` removes the entry, and that is the honest way to get it gone. Absent that flag, every `tandem setup` and `tandem rotate-token` path preserves what is registered, on every target kind (#1760): a `targetPushSupport` of `none` is a ceiling on creation, never a licence to remove. Two other routes still delete it, and both are explicit user acts elsewhere — `tandem --uninstall-scrub` (which removes every Tandem entry) and confirming a wizard diff that lists it. What #1760 removed is the *implicit* deletion, not every deletion.
 
 The two paths that actually deliver are unaffected: launcher-spawned sessions are woken by the supervisor writing to the child's stdin (#1266), and hand-launched sessions can arm their own watch ([ADR-049](decisions.md#adr-049-the-self-armed-wake--ws-transport-no-arbitration-payload-free-frames)).
 
@@ -635,6 +647,13 @@ Three coordinate systems, unified in dedicated position modules:
 1. **Flat text offsets** (server) — includes heading prefixes (`## `) and `\n` separators
 2. **ProseMirror positions** (client) — structural node boundaries, no prefixes
 3. **Yjs RelativePositions** (CRDT-anchored) — survive concurrent edits
+
+**Two properties of the flat system that nothing else states, and that both fail silently.**
+
+- **The unit is a UTF-16 code unit, not a character.** The flat text is an ordinary JavaScript string (`extractText` joins delta inserts) and every offset is an index into it, so one astral character — an emoji, most CJK extension B — is *two* units wide. That is why `validateRange`'s check order ends in a surrogate-safe test, and why an offset landing between the two halves of a pair is a rejection (`reason: "surrogate"`) rather than something to round off. See Critical Rule 4 for the four stored/derived-offset callers exempted from it and the one that snaps outward instead.
+- **Only a heading that is a direct child of the fragment root carries its `#` prefix.** `extractTextWithBreaks` (`src/server/mcp/document-model.ts:290-320`) special-cases `nodeName === "heading"` in its loop over the root fragment; a heading nested inside a blockquote, list item or any other container is reached through `collectElementFlat`, which has no heading branch at all and emits the text bare. So "flat offsets include heading prefixes" is true of top-level headings and false of nested ones — do not compute a prefix width from the heading level alone.
+- **A range's INTERIOR is checked against heading prefixes for `tandem_edit` only, and the endpoint rule is what the other callers keep.** `validateRange`'s `rejectHeadingOverlap` resolves the two endpoints and rejects either one landing inside a prefix; that alone let a range step straight over `"## "` and delete the heading (#1766), so `tandem_edit` additionally passes `rejectHeadingInterior`, which ORs in `rangeOverlapsHeadingPrefix` (`src/shared/positions/ydoc.ts`) — a top-level walk, complete because a nested heading contributes no prefix. The two annotation-creating callers, `YDocStore.anchorRange` (`tandem_comment`) and `src/server/local-model/tools.ts`, pass it on their **suggestion** arm only — a stored `suggestedText` is a rewrite of the same flat span deferred to Accept, and both consumers (the editor's `deleteRange` + insert, and `docx-apply`'s `flatText.slice(from, to)` replacement) take that span verbatim, so a suggestion stepping over a prefix deletes the heading exactly as `tandem_edit` used to. #1766's original rationale — "annotation creation writes no text" — held only for the plain-comment half, which still keeps the endpoint-only rule: a comment spanning a section is legal, and "target the text content only" is not advice its author can follow. Both creators take the arm as a **required** discriminant (`purpose` / `kind`), so a new one cannot default into the wrong half.
+- **The exclusive end is not exclusive for the heading check, and that is deliberate.** `to` equal to the *first* character of a heading prefix is rejected as `HEADING_OVERLAP` even though `[from, to)` does not include it, because `resolveToElement(to)` lands at offset 0 of the heading block and reports `clampedFromPrefix`. It is what stops `tandem_edit` swallowing the `\n` that separates a paragraph from the heading below it. On `"para\n## Head\nnext"` the heading block starts at 5, so `[0, 5)` is refused while `[0, 4)` is accepted.
 
 All conversions go through `src/server/positions.ts` (server) and `src/client/positions.ts` (client). Shared types live in `src/shared/positions/`.
 
@@ -753,23 +772,42 @@ The `useTabOrder` hook manages the tab ordering state. Tab overflow scroll uses 
 
 ## Onboarding Tutorial
 
-First-time users see a 3-step tutorial on `sample/welcome.md`:
+First-time users get **four** seeded annotations and a three-actionable-step card on
+`sample/welcome.md`. The two counts are independent — the annotations are server-side seeds, the
+steps are a client component — and they have drifted apart before, so read them separately:
 
 ```
 Server opens sample/welcome.md (first run, no restored sessions)
-    → injectTutorialAnnotations() creates 3 pre-placed annotations:
-        1. Highlight on "Welcome" heading
-        2. Comment on a paragraph
-        3. Comment with replacement text
-    → Injection is idempotent (checks for existing IDs)
+    → injectTutorialAnnotations() creates 4 pre-placed annotations
+      (TUTORIAL_ANNOTATIONS, src/server/mcp/tutorial-annotations.ts:20-47):
+        1. highlight — "highlight text and your AI sees it"      (author: claude)
+        2. comment   — "edit this document at the same time"     (author: claude)
+        3. comment with suggestedText — "simplify onboarding"    (author: claude)
+        4. note      — "accept or dismiss"                       (author: user)
+    → The note is authored "user" deliberately: notes are user-private (ADR-027)
+      and Claude cannot author user-private content. The other three are
+      seeded as Claude-authored AND stamped audience: "outbound", because a
+      seed the user is invited to accept or dismiss is a review target, and a
+      highlight with no stored audience derives `private` in sanitize — which
+      would silently withhold that accept/dismiss from Claude.
+    → Injection is idempotent (skips any id already in the Y.Map) and each
+      anchor goes through anchoredRange(), so a target string that has moved
+      is skipped with a log line rather than mis-anchored.
 
 Browser renders OnboardingTutorial floating card (bottom-left)
-    → Step 1: "Review an annotation" — detected when user accepts/dismisses any annotation
-    → Step 2: "Ask Claude a question" — detected when user creates an annotation
-    → Step 3: "Try editing" — detected when editor receives focus for typing
-    → useTutorial hook tracks completion via annotation status observers + editor events
-    → Progress persisted to localStorage (try-catch guarded)
-    → Card disappears after all 3 steps complete
+    → Step 1: "Review an annotation" — accept or dismiss one
+    → Step 2: "Ask a question"       — annotate a selection, or use Chat
+    → Step 3: "Make an edit"         — type in the document
+    → Step "Claude Desktop Cowork detected" — inserted between 3 and the last
+      card only on the Tauri build when shouldShowCoworkOnboarding() passes
+    → Final card: "You're ready!" — not an actionable step; totalActionable is
+      activeSteps.length - 1, so the card ends on a completion panel rather
+      than vanishing at the end of step 3
+    → useTutorial (src/client/hooks/useTutorial.svelte.ts) advances each step
+      from a $effect: step 0 on any SEEDED annotation being resolved (not any
+      annotation — that was the #621 PR-A2b auto-advance bug), step 1 on the
+      user creating one, step 2 on an editor edit
+    → Completion flag persisted to localStorage (try-catch guarded)
 ```
 
 ## Security
@@ -814,11 +852,11 @@ On launch, the Rust core:
 
 1. Copies `sample/` files to the writable app-data dir (first run only — skips if destination exists)
 2. In **debug builds only** (`cfg!(debug_assertions)`), checks whether a server is already healthy (`GET /health`) and skips spawn if so — supports the `cargo tauri dev` + `npm run dev:standalone` workflow. Release builds always spawn their own sidecar (the early-return was gated after a stale `tsx watch` dev session was found answering `/health` for the installed app, producing a silent "Disconnected" state with mismatched auth/session). `freePort()` in the sidecar handles any port conflict on bind.
-3. Spawns `node-sidecar` (bundled Node.js binary named with target triple) with `dist/server/index.js` as the entry point and `TANDEM_DATA_DIR` set to the platform app-data dir
+3. Spawns `node-sidecar` with `dist/server/index.js` as the entry point and `TANDEM_DATA_DIR` set to the platform app-data dir. **The triple is a build-time convention, not the installed name**: `src-tauri/binaries/` holds `node-sidecar-<target-triple>[.exe]`, tauri-build strips the `-<triple>` when it copies the file into the bundle, and the runtime asks for the bare `.sidecar("node-sidecar")`. Anything that reconstructs the path by hand has to use the stripped name, which is why both the spawn site and `sidecar_exe_path` take it from one shared const, `SIDECAR_BIN_NAME` in `sidecar.rs` (#1762).
 4. Polls `GET http://127.0.0.1:3479/health` every 200ms with a 30s timeout (`HEALTH_TIMEOUT`). It is 30s rather than 15s because it times a wait that happens *inside* the sidecar: `waitForPort` in `src/server/platform.ts` polls up to 15s for the TCP port to release before the server can bind and answer. Lowering either without the other resurrects the post-update failure described under "Install flow" below.
-5. On crash, retries up to `MAX_RESTARTS = 3` times with exponential backoff (1s, 2s, 4s)
+5. On crash **during boot**, retries up to `MAX_RESTARTS = 3` times with exponential backoff (1s, 2s, 4s). **That loop still covers the boot window only** — `start_sidecar`'s `for attempt in 0..=MAX_RESTARTS` (`sidecar.rs:1812`) `return`s the moment `wait_for_health` first succeeds (`:2040`) — but since #1809 a crash **after** boot is no longer a dead end. The `CommandEvent::Terminated` arm runs `crash_restart_decision`, a pure function with three guards and a breaker: a `Terminated` from a **superseded child** is ignored (drain tasks are never cancelled, so child A's event can land after child B is healthy — respawning there would gracefully stop and kill the live one); a crash **before the first healthy poll** is ignored and left to the boot loop; and a crash while a spawn is **disallowed** — `EXITING` on Quit, or `SIDECAR_SHUTTING_DOWN`, held across an update's download *and* install since #1808 — is **deferred**, not ignored: no child may land in the slot an installer is about to overwrite, but `Terminated` is one-shot per spawn and nothing in the crate polls the sidecar's health, so dropping the event left the app backend-less for the rest of the session. The verdict latches `DEFERRED_CRASH` instead, and whoever releases the suppression calls `recover_deferred_crash` — today the update download's failure arm, which pays it; the deliberate pre-install stop writes it off instead, because from there the sidecar being down is intentional. Anything past those three is respawned through `restart_sidecar`, up to `MAX_CRASH_RESTARTS = 3` inside a sliding `CRASH_RESTART_WINDOW` of 5 minutes. A fourth crash in that window **trips the breaker**: no further respawn, and a `sidecar-restart-failed` event — the same toast a failed manual restart shows. The window is sliding rather than a lifetime counter so a day-long session is not permanently unrecoverable after three unrelated crashes; it is never reset by a successful manual restart, because that path has no idea whether the fault is fixed. Recovery after a trip is Settings → Network → Restart server.
 6. On all retries exhausted: shows a "Server Error" dialog offering a one-shot **Retry Server Start** (all platforms) that re-runs `start_sidecar` — the respawned sidecar's own `freePort()` is what does any killing. On **Windows only**, the dialog first says *what* is holding the port, via `describe_port_holder` (read-only `netstat -ano` + `tasklist`, resolved out of `%SystemRoot%\System32`). It distinguishes two populations, because they need different sentences: a **live listener** (nameable, and the retry will terminate it) and a **lingering TIME_WAIT connection** left by the previous run (no process to kill, PID 0, no LISTENING row — the retry works only because the state expires). Declining leaves the app running with no sidecar; Settings → Network → Restart server is the remaining recovery.
-7. On clean exit (`RunEvent::Exit`): kills the sidecar process to avoid orphan processes
+7. On clean exit (`RunEvent::Exit`): runs the bounded **graceful** sidecar stop first — POST `/api/shutdown`, wait for the port to release — and hard-kills only as the fallback. It has not been a bare kill since #1756; see [Shutdown](#shutdown) for the budget, the verdict line and why windows are hidden before any of it.
 
 The sidecar child handle is stored in `SidecarState` (a `Mutex<Option<CommandChild>>`) in Tauri managed state. Stdout/stderr from the sidecar are forwarded to the Tauri log system for diagnostics.
 
@@ -826,9 +864,9 @@ The sidecar child handle is stored in `SidecarState` (a `Mutex<Option<CommandChi
 
 Silent auto-configuration on startup was removed in #477 PR 3c-ii-c (ADR-038 §2b). The Rust core no longer POSTs to a setup endpoint on launch; instead it injects the resolved channel-shim path into the sidecar as `TANDEM_CHANNEL_DIST` so the channel shim still registers correctly on the desktop bundle.
 
-First-run setup is driven by the in-app integration wizard, which auto-opens when `integrations.json` is empty (transport-agnostic — covers both the desktop bundle and the npm-browser path). The wizard persists intent via `POST /api/integrations` and applies it via `POST /api/integrations/apply`. The CLI equivalent is `tandem setup --apply` (non-interactive; honors `--force`, `--target=<kind>`, `--with-channel-shim`).
+First-run setup is driven by the in-app integration wizard, which auto-opens when `integrations.json` is empty (transport-agnostic — covers both the desktop bundle and the npm-browser path). The wizard persists intent via `POST /api/integrations` and applies it via `POST /api/integrations/apply`. The CLI equivalent is `tandem setup --apply` (non-interactive; honors `--force`, `--target=<kind>`, `--with-channel-shim`, `--without-channel-shim`).
 
-If no Claude installation is detected, the wizard's connect step surfaces a "We couldn't find Claude on this computer" empty state with an **Install Claude Code** action (#1084, replacing the former native dialog and the earlier download-link nudge). The tray "Setup AI Assistant" item focuses the window and re-opens the wizard.
+The wizard's connect step's empty state (no target config has ever been written) headlines on detected Claude CLI presence (#1814), not just on whether a target was found: "We couldn't find Claude on this computer" when the CLI itself is absent (or presence is still probing), or "Claude Code is installed, but hasn't connected to Tandem yet." when it is on or off PATH — both paired with an **Install Claude Code** action in the not-found case (#1084, replacing the former native dialog and the earlier download-link nudge). The tray "Setup AI Assistant" item focuses the window and re-opens the wizard.
 
 ### System Tray
 
@@ -947,22 +985,38 @@ Auto-check → tandem://update-available banner → "Restart to install"
       with a native "Update In Progress" dialog, never a bare return: the
       banner's 30s watchdog re-arms the CTA, and useUpdaterBanner's catch only
       console.warns, so a silent Err has no user-visible surface either
+    → update.download() — WITH THE SIDECAR STILL RUNNING (#1808). The download is
+      the long, failure-prone step (offline, a proxy, a 403, a signature
+      mismatch), and nothing on its failure arm respawns a sidecar. The guard is
+      held across it, so a spawn cannot race the install onto the binary
+        → on download finish: write update-pending.json to the app-data dir (#1118)
+        → on download error: clear the marker, RELEASE THE GUARD, recover a
+          deferred crash, then show a native error dialog. The sidecar was never
+          stopped, so in the ordinary case the app still has its backend and the
+          user can retry (#1808) — but "never stopped" is not "still alive": the
+          guard made the crash handler DEFER a sidecar that died on its own
+          mid-download, and this arm is the only thing that ever pays that debt.
+          Release before recovering — restart_sidecar re-checks spawn_allowed()
     → stop_sidecar_gracefully() — POST /api/shutdown, hard kill on timeout
       (its verdict is NOT dropped, and BOTH outcomes log at warn: anything but
        Flushed joins pre_install_warnings and reaches the failure dialog, and
        Flushed logs "Pre-install: graceful sidecar shutdown complete" so
-       smoke-lines.md row 3 has something to read. On Windows this is the ONLY
+       the smoke checklist's §1 updater row has a line to read. On Windows this is the ONLY
        flush on the update path, because install_inner ends in
        std::process::exit(0) and RunEvent::Exit never fires — so there is no
        verdict line here at all)
     → Poll /health until server stops responding (POST_KILL_PORT_RELEASE_SECS = 15s)
       + on Windows, concurrently poll until the sidecar exe unlocks (15s)
-    → download_and_install()
-        → on download finish: write update-pending.json to the app-data dir (#1118)
+    → update.install(bytes)
         → macOS / Linux: install, then app.restart()
         → Windows: install_inner() ends in std::process::exit(0) — app.restart()
           is NEVER reached there
-    → on install error: clear the marker, then show a native error dialog
+    → on install error: clear the marker, then show a native error dialog. The
+      sidecar stays stopped here, deliberately: a failure at this point means the
+      installer could not even be launched, and spawning a child while an
+      installer may be mid-write over the binary is what SIDECAR_SHUTTING_DOWN
+      exists to prevent. Recovery is the dialog plus Settings → Network →
+      Restart server
 ```
 
 Next boot, in `setup()` and before the sidecar spawn: read `update-pending.json`, compare its
@@ -977,7 +1031,7 @@ The sidecar kill before install is required to prevent a port conflict when the 
 up — and on Windows the NSIS installer must be able to replace `node-sidecar.exe` on disk, which a
 running process locks.
 
-Both deadlines were 5s until 2026-08-12, when a beta user's v0.21.1 → v0.22.0 update failed against this class of assumption. Note what each actually observes: the first polls `/health`, so it detects "the old server is gone", not "the OS released the port" — a socket in TIME_WAIT is invisible to it. The second polls a real file write-lock. Both are polling loops that return the moment the resource frees, so the wider ceiling costs a healthy machine nothing. The TIME_WAIT half of the problem is handled on the other side of the restart, by `waitForPort` in `src/server/platform.ts` (also widened to 15s).
+Both deadlines were 5s until 2026-08-12, when a beta user's v0.21.1 → v0.22.0 update failed against this class of assumption. Note what each actually observes: the first polls `/health`, so it detects "the old server is gone", not "the OS released the port" — a socket in TIME_WAIT is invisible to it. The second polls a real file write-lock on the name tauri-build actually ships. Until #1762 it did not: `sidecar_exe_path` (`sidecar.rs:2316-2329`) rebuilt `node-sidecar-<TARGET_TRIPLE>.exe`, which exists nowhere outside `src-tauri/binaries/`, so the `Ok(p) if p.exists()` guard always missed and the wait returned `true` having checked nothing. It now takes the stripped name from `SIDECAR_BIN_NAME`, the same const the spawn site uses, and a *missing* exe reports **still-locked** in a release build (`unlock_verdict_when_absent`) so a packaging bug surfaces as a warning on the failure dialog instead of passing as "unlocked"; a dev build, which legitimately has no bundled sidecar in some layouts, still proceeds. The verdict is three-valued (`UnlockOutcome`: `Released` / `TimedOut` / `Missing`) rather than a bool, and `unlock_warning` is what turns it into the dialog line: the missing-exe arm returns *before* the polling loop, so it gets its own text naming the packaging bug — a shared "not confirmed released within 15s" string would report a timeout that never ran and point diagnosis at a lock instead of at the absent file. The second Windows layer between an update and a running `node-sidecar.exe` is the NSIS `NSIS_HOOK_PREINSTALL` kill (`src-tauri/windows/installer-hook.nsi:27-31`), whose ordering against Tauri's own `CheckIfAppIsRunning` prompt has not been verified. Both are polling loops that return the moment the resource frees, so the wider ceiling costs a healthy machine nothing. The TIME_WAIT half of the problem is handled on the other side of the restart, by `waitForPort` in `src/server/platform.ts` (also widened to 15s).
 
 ### Origin Handling
 
@@ -998,7 +1052,7 @@ Tauri v2 uses a capabilities model to grant permissions:
 
 ## Design Decisions
 
-See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-050), covering:
+See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-051), covering:
 
 - Tiptap over ProseMirror direct
 - Hocuspocus for Yjs WebSocket
@@ -1044,7 +1098,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `file-io/docx-apply.ts` -- Core logic for applying suggestions as tracked changes via JSZip XML manipulation
 - `platform.ts` -- Cross-platform helpers: `SESSION_DIR`, `LAST_SEEN_VERSION_FILE`, `freePort()`, `waitForPort()` (TCP port availability polling)
 - `version-check.ts` -- `checkVersionChange()`: compares running version to stored last-seen version, returns `"first-install" | "upgraded" | "current"`
-- `session/` -- Session persistence to %LOCALAPPDATA%\tandem\sessions\; `listSessionFilePaths()` for startup auto-restore. A corrupt session is quarantined to `<name>.json.corrupt.<ts>` (never unlinked) with a `session-corrupt` toast, and the pre-#1750 migration-loser record is tried once before falling back to disk (#1800).
+- `session/` -- Session persistence to `<app-data>/sessions` (`SESSION_DIR`; see Session Persistence above for how `<app-data>` resolves per OS); `listSessionFilePaths()` for startup auto-restore. A corrupt session is quarantined to `<name>.json.corrupt.<ts>` (never unlinked) with a `session-corrupt` toast, and the pre-#1750 migration-loser record is tried once before falling back to disk (#1800).
 - `models/` -- Server-authoritative Models registry (`models.json`, #1123 M1a/M2). `store.ts` (atomic read/write, backup-on-malformed, canonical `serializeModelsFile`, referential-integrity on read AND write), `registry.ts` (process-singleton cache + content-hash ETag via `getModelsEtag`/`hashModelsFile` + optimistic-concurrency single-flight `persistModelsFileIfMatch`), `api-routes.ts` (`GET /api/models` loopback-full / LAN-allowlist-scrubbed with a scrubbed-file ETag; `POST /api/models` origin+loopback-gated `.strict()` If-Match write), `schema.ts` (Zod `.strict()` versioned wrapper). Read by the local-model resolver (`local-model/config-source.ts`).
 
 - `launcher/` -- The auto-launcher that starts and supervises a Claude Code session (#477 PR 4, #1266, #1268). `supervisor.ts` subscribes to the event queue in-process and writes wake turns directly to the child's stdin, because a channel notification never becomes a turn under the launcher's `-p --input-format stream-json` flags; it registers as an **`"external"`** subscriber so the Solo gate applies. Also holds the crash-loop breaker, the trip-time CLI probe that distinguishes "missing" from "unstartable", and `api-routes.ts` for the `/api/launcher/*` surface.
@@ -1057,7 +1111,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 ### CLI (`src/cli/`)
 
 - `index.ts` -- CLI entrypoint for the `tandem` global command. Dispatches `setup`, `doctor`, `rotate-token`, `activate`, `license`, `mcp-stdio`, `channel`, `monitor`, `--uninstall-scrub`, `--help`, `--version`, and bare/`start`. Top-level error handler with reinstall guidance. See [docs/cli.md](cli.md) for the user-facing reference.
-- `setup.ts` -- `tandem setup` command. Bare invocation prints wizard-driven guidance; `tandem setup --apply [--force] [--target=<kind>] [--with-channel-shim]` writes MCP config non-interactively. The config-writing helpers (`buildMcpEntries`, `detectTargets`, `applyConfig`, `applyConfigWithToken`, `installSkill`) live in `src/server/integrations/apply.ts` (#477 PR 3c-ii-a).
+- `setup.ts` -- `tandem setup` command. Bare invocation prints wizard-driven guidance; `tandem setup --apply [--force] [--target=<kind>] [--with-channel-shim] [--without-channel-shim]` writes MCP config non-interactively. The config-writing helpers (`buildMcpEntries`, `detectTargets`, `applyConfig`, `applyConfigWithToken`, `installSkill`) live in `src/server/integrations/apply.ts` (#477 PR 3c-ii-a).
 - `start.ts` -- `tandem start` (default command). Spawns `node dist/server/index.js` with the user environment, forwards signals, pre-validates server entry point exists.
 - `doctor.ts` -- The `tandem doctor` check collector, bundled into `dist/cli` rather than spawned: `scripts/` is not shipped in the npm package. Shared with `GET /api/diagnostics` and the `tandem_diagnostics` MCP tool.
 - `license.ts` -- `tandem activate` and `tandem license`.
@@ -1118,7 +1172,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 - `editor/toolbar/selection-toolbar.ts` -- Positioning logic for the floating selection popup (`computeSelectionToolbarPosition`, `attachSelectionToolbarListener`)
 - `editor/toolbar/highlight-toggle.ts` -- Toggle-highlight logic: creates a new highlight or removes an existing one if the range already has that color
 - `actions/clickOutside.svelte.ts` -- Svelte action: fires a handler when a mousedown occurs outside the attached element; used by FormattingToolbar heading dropdown and link input popover
-- `SidePanel` -- Annotation filtering (type/author/status, including "Imported" filter for Word comments), bulk accept/dismiss (with confirmation, respects active filters), keyboard review mode (Tab/Y/N/Z), 10-second undo window on accept/dismiss, inline annotation editing (pencil button on pending annotations)
+- `SidePanel` -- Annotation filtering (type/author/status, including "Imported" filter for Word comments), bulk accept/dismiss (with confirmation, respects active filters), keyboard review mode (Tab/Y/N/Z), 3-second undo window on accept/dismiss (`scheduleRemoval`'s 3000 ms timer, `src/client/panels/useAnnotationReview.svelte.ts:557`), inline annotation editing (pencil button on pending annotations)
 - `panels/FilterBar.svelte` -- Filter controls row: type/author/status chip groups (ChipGroup.svelte, A15) + Clear button (extracted from SidePanel)
 - `panels/BulkActions.svelte` -- Bulk accept/dismiss confirmation UI (extracted from SidePanel)
 - `panels/useAnnotationReview.svelte.ts` -- Review-mode state (the `.svelte.ts` suffix is load-bearing; it is a rune-based hook): reviewIndex, keyboard navigation, accept/dismiss, undo timers, bulk action handlers (extracted from SidePanel)
@@ -1177,4 +1231,4 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 - `.claude/settings.json` -- Hook wiring: PreToolUse (block) and PostToolUse (warn) matchers
 - `.claude/hooks/` -- 19 shell scripts plus one `.mjs` helper, enforcing Critical Rules, type-checking, formatting, test running, and the workflow nudges. Inventory and semantics: [`.claude/hooks/README.md`](../.claude/hooks/README.md)
 - `.claude/agents/` -- 4 specialized reviewers (annotation-model, svelte-migration, crdt, security) plus the six `/diverge` frame generators and its critic
-- `.claude/skills/` -- Six Tandem-specific project skills (changelog, dev-server, e2e, e2e-debug, release, screenshots). Other entries resolving under this path at runtime are user-level or plugin skills, not part of this repo's set.
+- `.claude/skills/` -- Seven Tandem-specific project skills (changelog, dev-server, e2e, e2e-debug, release, screenshots, ui-inspector). Other entries resolving under this path at runtime are user-level or plugin skills, not part of this repo's set.

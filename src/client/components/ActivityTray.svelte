@@ -4,7 +4,7 @@ import type { ActivityItem } from "../hooks/useNotifications.svelte";
 import { emptyUnfold, rowEnter, rowOut } from "../panels/cardMotion.js";
 import "../panels/morphTiming.css";
 import { resolveActivityAction } from "./activityActions.js";
-import { relativeTime, SEVERITY_GLYPHS } from "./activityCenter.js";
+import { formatActivityMessage, relativeTime, SEVERITY_GLYPHS } from "./activityCenter.js";
 
 interface Props {
   items: ActivityItem[];
@@ -225,7 +225,7 @@ onDestroy(() => {
                 </span>
                 <div class="body">
                   <div class="msg-row">
-                    <span class="msg">{item.message}</span>
+                    <span class="msg">{formatActivityMessage(item)}</span>
                     {#if item.count > 1}
                       <!--
                         `{#key}` so the badge REMOUNTS on each increment. Coalescing

@@ -5,10 +5,10 @@ import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mocks must be declared before importing the component under test.
-vi.mock("@client/cowork/cowork-helpers.js", () => ({
+vi.mock(import("@client/cowork/cowork-helpers.js"), () => ({
   isTauriRuntime: () => true,
 }));
-vi.mock("@client/cowork/cowork-helpers", () => ({
+vi.mock(import("@client/cowork/cowork-helpers"), () => ({
   isTauriRuntime: () => true,
 }));
 

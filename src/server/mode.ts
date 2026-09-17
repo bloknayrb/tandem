@@ -1,3 +1,4 @@
+import type * as Y from "yjs";
 import {
   CTRL_ROOM,
   TANDEM_MODE_DEFAULT,
@@ -88,4 +89,98 @@ export function hideFromAI(
   if (modeState === "solo") return record.author === "user";
   if (modeState === "indeterminate") return record.heldInSolo === true;
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// Mode provenance (#1733)
+// ---------------------------------------------------------------------------
+
+/**
+ * Who last wrote the mode key, and what the key read at that moment.
+ *
+ * The client-side detector (`useTandemModeBroadcast.svelte.ts`) compares the
+ * room against its own last broadcast, so it sees only disagreements THIS client
+ * is party to and can never say who wrote the other value. The server can: every
+ * client write reaches CTRL_ROOM through Hocuspocus, which applies it with the
+ * `Connection` as transaction origin (a `{ socketId: string }`-shaped object,
+ * `socketId` being a `uuid.v4()`); server-side writes carry one of
+ * `shared/origins.ts`'s tag strings; the ctrl-session restore applies with no
+ * origin at all.
+ *
+ * `connection` is an opaque per-connection tag Tandem keys nothing on — never
+ * the socket, the request or any header.
+ *
+ * IMPORTANT: this names the last TRANSACTION that TOUCHED the key, which is not
+ * necessarily the writer of the value `mode` reports. Under a lost concurrent
+ * tie (#1621) the LOSING write still puts `Y_MAP_MODE` in `keysChanged`, so
+ * `connection` can name one writer while `mode` carries another's value.
+ * Recording `value` is what lets a reader see the two diverge — compare it
+ * against the `mode` reported beside it.
+ */
+export type ModeProvenance = (
+  | { source: "client"; connection: string }
+  | { source: "server"; origin: string }
+  | { source: "restore" | "unknown" }
+) & { at: number; value: ModeState };
+
+let lastModeWrite: ModeProvenance | null = null;
+
+/** The last observed write of the mode key, or `null` if none has been seen. */
+export function readModeProvenance(): ModeProvenance | null {
+  return lastModeWrite;
+}
+
+/** Test-only reset — module state with no reset makes every "is null" row
+ * depend on suite order. */
+export function _resetModeProvenanceForTests(): void {
+  lastModeWrite = null;
+}
+
+/**
+ * Observe the ctrl doc's awareness map and record who last touched the mode key.
+ * Returns the unobserve cleanup; the cleanup deliberately does NOT reset
+ * `lastModeWrite` — a doc swap must not erase what the pre-swap session saw.
+ *
+ * At install, a key that is ALREADY present with nothing recorded yet is
+ * attributed to `restore`: `restoreCtrlSession` runs before
+ * `attachCtrlObservers`, so its replayed write is never observed. The
+ * `lastModeWrite === null` conjunct is load-bearing — the production doc swap
+ * copies the old doc's state, so the key IS present when `reattachCtrlObservers`
+ * re-installs, and without it a live `client` record is relabelled `restore`
+ * mid-session.
+ */
+export function installModeProvenanceObserver(ctrlDoc: Y.Doc): () => void {
+  const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+
+  if (lastModeWrite === null && awareness.get(Y_MAP_MODE) !== undefined) {
+    lastModeWrite = { source: "restore", at: Date.now(), value: readModeState() };
+  }
+
+  const onChange = (event: Y.YMapEvent<unknown>, txn: Y.Transaction): void => {
+    if (!event.keysChanged.has(Y_MAP_MODE)) return;
+    const at = Date.now();
+    const value = readModeState();
+    const origin: unknown = txn.origin;
+    // The Hocuspocus `Connection` shape. `DirectConnection` is never opened by
+    // Tandem, so a `socketId` here is always a real client socket.
+    if (
+      typeof origin === "object" &&
+      origin !== null &&
+      typeof (origin as { socketId?: unknown }).socketId === "string"
+    ) {
+      lastModeWrite = {
+        source: "client",
+        connection: (origin as { socketId: string }).socketId.slice(0, 8),
+        at,
+        value,
+      };
+    } else if (typeof origin === "string") {
+      lastModeWrite = { source: "server", origin, at, value };
+    } else {
+      lastModeWrite = { source: "unknown", at, value };
+    }
+  };
+
+  awareness.observe(onChange);
+  return () => awareness.unobserve(onChange);
 }

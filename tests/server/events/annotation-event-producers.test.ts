@@ -232,7 +232,10 @@ describe("observer registration, which text-shape scanning cannot see", () => {
     const registered = [...ATTACH.matchAll(/\b(make\w*Observer)\s*\(/g)].map((m) => m[1]);
     expect(registered.length, "attachObservers should register observers").toBeGreaterThan(0);
 
-    const NON_ANNOTATION = ["makeAwarenessObserver"];
+    // `makeHeldInSoloStampObserver` (#1769) observes the annotations map but
+    // emits NOTHING: it writes the `heldInSolo` marker under
+    // `MODE_RELEASE_ORIGIN`, which is channel-skipped, and takes no `pushEvent`.
+    const NON_ANNOTATION = ["makeAwarenessObserver", "makeHeldInSoloStampObserver"];
     const unaccounted = registered.filter((name) => {
       if (NON_ANNOTATION.includes(name)) return false;
       const from = QUEUE.match(

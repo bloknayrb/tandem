@@ -7,7 +7,7 @@ import { TAURI_HOSTNAME } from "../../src/shared/constants.js";
 // param validation + error-code → HTTP-status mapping. The migration itself is
 // covered by rename-document.test.ts.
 const renameDocument = vi.fn();
-vi.mock("../../src/server/mcp/document-service.js", () => ({ renameDocument }));
+vi.mock(import("../../src/server/mcp/document-service.js"), () => ({ renameDocument }));
 
 const { handleRename } = await import("../../src/server/mcp/routes/rename.js");
 
@@ -134,11 +134,13 @@ describe("handleRename — success + error mapping", () => {
     expect(res._json).toEqual({ error: code, message: "nope" });
   });
 
-  // The error-branch twins of the case above. `renameDocument`'s `reason` can
-  // carry an absolute path (`Refusing to operate on symlinked path: <abs>`, or
-  // a raw `EXDEV`/`EPERM` errno message naming both paths), and #1294 scrubbed
-  // it for remote callers. Post-#1293 that branch is likewise unreachable from
-  // the wire: the gate answers first, and the reason is never composed at all.
+  // The error-branch twins of the case above. Pre-#1816, `renameDocument`'s
+  // `reason` could carry an absolute path (`Refusing to operate on symlinked
+  // path: <abs>`, or a raw `EXDEV`/`EPERM` errno message naming both paths),
+  // and #1294 scrubbed it for remote callers; since #1816 the real service
+  // never produces a raw `reason` at all, so the path-bearing sample below is
+  // injected only by the `renameDocument` mock. Post-#1293 this branch is
+  // likewise unreachable from the wire: the gate answers first.
   //
   // Asserted as a pair — the error path is the one where a "return early on
   // rejection" refactor is most likely to slip a raw fs message out — with a

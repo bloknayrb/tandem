@@ -5,10 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // default-directory.ts pulls its tiers from settings + the integrations endpoint
 // + the Tauri path API. Mock all three so the resolver's precedence, short-circuit,
 // abort, and error-swallowing behavior can be asserted in isolation (#1023).
-vi.mock("../../src/client/hooks/useTandemSettings.js", () => ({
+vi.mock(import("../../src/client/hooks/useTandemSettings.js"), () => ({
   loadSettings: vi.fn(),
 }));
-vi.mock("../../src/client/utils/fileUpload.js", () => ({
+vi.mock(import("../../src/client/utils/fileUpload.js"), () => ({
   API_BASE: "http://127.0.0.1:3479",
 }));
 vi.mock("@tauri-apps/api/path", () => ({

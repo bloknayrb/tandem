@@ -39,7 +39,7 @@ const CORPUS: Record<string, { blockedOn?: string; why?: string }> = {
   "table-aligned.md": {},
   "table-compact.md": {
     blockedOn: "table geometry",
-    why: "hand-authored |---|---| cannot be reproduced; mdast carries no source markers",
+    why: "hand-authored |---|---| cannot be reproduced; mdast carries no source markers (#1448, observed in the wild on a repo doc in #1852)",
   },
   "nested-marks.md": {},
   "inline-code-fence.md": {},

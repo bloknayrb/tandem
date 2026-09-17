@@ -8,6 +8,7 @@ import {
   McpTestClient,
   openAnnotatePopup,
   submitAnnotation,
+  switchToAnnotationsTab,
 } from "./helpers";
 
 /**
@@ -458,5 +459,58 @@ test("the annotation type survives forcing as a word, not just an icon", async (
   });
   expect(row.headerClipped, "the revealed word overflows the header row").toBe(false);
   expect(row.authorClipped, "the revealed word starved the author side out of the row").toBe(false);
+  expect(row.authorWidth, "the author side was squeezed to nothing").toBeGreaterThan(20);
+});
+
+// #1724 — the coverage bound named directly above: the short-label test only
+// measures "Private note" (12 chars). "Suggested replacement" (21 chars) is
+// the longest label in ANNOTATION_TYPE_GLYPHS and was unmeasured. This is a
+// coverage gap, not a known defect — both forced-colors CSS declarations
+// (`.ach-row`, `.ach-type`) already carry the `flex-wrap`/`row-gap` fix
+// together, so "only one wraps" cannot occur on current master. No CSS change
+// accompanies this test; if it fails, the rule needs widening and that is a
+// separate finding.
+test("the longest type label survives forcing without clipping the header", async ({ page }) => {
+  // [2, 15) is "Test Document" in sample.md's "# Test Document" — mirrors
+  // margin-view.spec.ts's constants for the same fixture. Its interior holds
+  // no heading-prefix character. Passing `suggestedText` routes this through
+  // the SUGGESTION arm (Critical Rule 6: rejectHeadingInterior), a stricter
+  // check than the plain comment the short-label test above exercises via the
+  // popup UI.
+  await mcp.callTool("tandem_comment", {
+    from: 2,
+    to: 15,
+    text: "forced-colors longest-label check",
+    textSnapshot: "Test Document",
+    suggestedText: "Test Doc",
+  });
+
+  await boot(page);
+  // Unlike the short-label test (which reaches the card incidentally via the
+  // popup-UI flow right after submitting), this annotation was created over
+  // MCP before the page loaded, so the side panel must be opened explicitly.
+  await switchToAnnotationsTab(page);
+
+  const badge = page.locator(".annotation-type-badge").first();
+  await expect(badge).toBeVisible({ timeout: 10_000 });
+
+  const shape = await badge.evaluate((el) => {
+    const word = el.querySelector(".ach-badge-word") as HTMLElement | null;
+    return { wordText: word?.textContent?.trim().toLowerCase() ?? "" };
+  });
+  expect(shape.wordText).toContain("suggested replacement");
+
+  const row = await badge.evaluate((el) => {
+    const header = el.closest(".ach-row") as HTMLElement | null;
+    const author = header?.querySelector(".ach-author") as HTMLElement | null;
+    if (!header || !author) throw new Error("the badge is not inside a card header row");
+    return {
+      headerClipped: header.scrollWidth > header.clientWidth + 1,
+      authorClipped: author.scrollWidth > author.clientWidth + 1,
+      authorWidth: author.getBoundingClientRect().width,
+    };
+  });
+  expect(row.headerClipped, "the 21-char label overflows the header row").toBe(false);
+  expect(row.authorClipped, "the 21-char label starved the author side out of the row").toBe(false);
   expect(row.authorWidth, "the author side was squeezed to nothing").toBeGreaterThan(20);
 });

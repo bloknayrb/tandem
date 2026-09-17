@@ -25,6 +25,15 @@ let { currentStep, onNext, onDismiss, coworkStatus }: Props = $props();
 const tandemSettings = createTandemSettings();
 const fadeMs = $derived(motionOff(tandemSettings.settings.reduceMotion) ? 0 : 220);
 
+// #1824 item C: Ctrl+N belongs to the browser in a browser tab (opens a new
+// window before Tandem ever sees the key) — the desktop app owns its own
+// window, so the shortcut only works there. Matches user-guide.md's existing
+// caveat for the same three browser-reserved shortcuts.
+const tauri = isTauriRuntime();
+const editStepText = tauri
+  ? "Click in the document and type something. All changes sync in real-time. Open a tab or scratchpad with Ctrl+N, and jump anywhere with the command palette (Ctrl+Shift+P)."
+  : "Click in the document and type something. All changes sync in real-time. Open a tab or scratchpad with the + button in the tab bar, and jump anywhere with the command palette (Ctrl+Shift+P).";
+
 const BASE_STEPS = [
   {
     id: "review",
@@ -39,7 +48,7 @@ const BASE_STEPS = [
   {
     id: "edit",
     title: "Make an edit",
-    text: "Click in the document and type something. All changes sync in real-time. Open a tab or scratchpad with Ctrl+N, and jump anywhere with the command palette (Ctrl+Shift+P).",
+    text: editStepText,
   },
   {
     id: "cowork",
@@ -53,7 +62,6 @@ const BASE_STEPS = [
   },
 ] as const;
 
-const tauri = isTauriRuntime();
 const skipped = readCoworkOnboardingSkipped();
 
 const showCowork = $derived(tauri && shouldShowCoworkOnboarding(coworkStatus, skipped));

@@ -12,6 +12,7 @@ import TableHeader from "@tiptap/extension-table-header";
 import TableRow from "@tiptap/extension-table-row";
 import Underline from "@tiptap/extension-underline";
 import StarterKit from "@tiptap/starter-kit";
+import { CodeBlockFenceMeta } from "./extensions/code-block-meta";
 import { FootnoteRefMark } from "./extensions/footnote-ref";
 import { ListItemCheckbox } from "./extensions/list-item-checkbox";
 import { ListSpreadExtension } from "./extensions/list-spread";
@@ -288,6 +289,7 @@ export function buildSchemaExtensions(): AnyExtension[] {
     SoftWrapParagraph,
     ListItemCheckbox,
     ListSpreadExtension,
+    CodeBlockFenceMeta,
     // underline/superscript/subscript: marks the .docx import (mammoth) emits but
     // StarterKit does not provide. Required client-side or y-prosemirror deletes
     // the marked text on sync (see DOCX_INLINE_MARKS). Underline → Mod-u.

@@ -88,6 +88,11 @@ const annotationBaseShape = {
     ),
   editedAt: z.number().optional(),
   rev: z.number().optional().describe("Durable-store last-writer-wins counter"),
+  // #1770. Declared, not merely tolerated — same rule as the two flags above.
+  resolvedBy: z
+    .enum(["user", "claude"])
+    .optional()
+    .describe("Who resolved this record; absent means the user"),
   audience: z.enum(["private", "outbound"]),
   promotedFrom: z.literal("note").optional(),
   importSource: z
@@ -115,6 +120,18 @@ const VisibleReplySchema = z.object({
   timestamp: z.number(),
   editedAt: z.number().optional(),
   rev: z.number().optional(),
+  // #1626. `collectRepliesForAnnotation` pushes the RAW Y.Map record and
+  // `mcpStructured` ships it, so an undeclared key is stripped by
+  // `mcp-output-schemas.test.ts`' strip-mode parse and turns `check` red —
+  // Claude would be able to write a proposal it could not read back. Privacy is
+  // unchanged: this is Claude's own text on a Claude-authored reply, and
+  // `channelVisibleReplies` does the filtering as before.
+  suggestedText: z
+    .string()
+    .optional()
+    .describe(
+      "Replacement proposal carried by a Claude-authored reply, over the parent annotation's range",
+    ),
 });
 
 // ---------------------------------------------------------------------------
@@ -128,6 +145,26 @@ const openDocumentEntry = z.object({
   readOnly: z.boolean(),
 });
 
+/**
+ * #1733: who last wrote the CTRL_ROOM mode key, and what the key read at that
+ * moment. `client` carries an opaque per-connection tag; `server` the origin tag
+ * of the helper that wrote it; `restore` means the value arrived with the
+ * ctrl-session replay; `unknown` is anything else. `null` before any write has
+ * been observed.
+ *
+ * The SDK hard-validates structured output, so this must admit every arm of the
+ * union — hence one flat object with the two discriminating fields optional.
+ */
+export const modeProvenanceSchema = z
+  .object({
+    source: z.enum(["client", "server", "restore", "unknown"]),
+    at: z.number(),
+    value: z.enum(["solo", "tandem", "indeterminate"]),
+    connection: z.string().optional(),
+    origin: z.string().optional(),
+  })
+  .nullable();
+
 /** Read mode returns the editor summary fields; write mode echoes `status` (+ optional `warning`). */
 export const statusOutputShape = {
   // Write mode (text param passed)
@@ -139,6 +176,9 @@ export const statusOutputShape = {
   // Read mode (no text param)
   running: z.boolean().optional().describe("Read mode: always true when the server responds"),
   mode: TandemModeSchema.optional().describe('Read mode: "solo" (hold annotations) or "tandem"'),
+  modeProvenance: modeProvenanceSchema
+    .optional()
+    .describe("Read mode: who last wrote the mode key, when, and what it read then (#1733)"),
   storeReadOnly: z.boolean().optional(),
   activeDocument: openDocumentEntry.omit({ readOnly: true }).nullable().optional(),
   openDocuments: z.array(openDocumentEntry).optional(),
@@ -168,6 +208,18 @@ export const getTextContentOutputShape = {
 
 const annotationWithRepliesSchema = z.object({
   ...annotationBaseShape,
+  // #1764. Declared on THIS schema only — `annotationBaseShape` is shared with
+  // `tandem_checkInbox`, which surfaces a different population and must not
+  // grow the field. The enum is the two DEGRADATION verdicts, not all five
+  // `RefreshResult` kinds: `updated` fires for every annotation past any edit
+  // and `repaired` for the whole collection after any reload, so emitting them
+  // would bury the one signal this exists to carry.
+  anchor: z
+    .enum(["degraded", "failed"])
+    .optional()
+    .describe(
+      'Present only when this annotation\'s CRDT anchor is untrustworthy. "degraded": the anchor no longer describes this text; the range shown is the last one the server trusted. Absent on every healthy refresh.',
+    ),
   replies: z.array(VisibleReplySchema),
 });
 
@@ -178,6 +230,12 @@ export const getAnnotationsOutputShape = {
     .number()
     .optional()
     .describe("How many user-private notes were filtered out (ADR-027); omitted when zero"),
+  privateExcluded: z
+    .number()
+    .optional()
+    .describe(
+      "How many non-note records were filtered out because their stored audience is not outbound — user highlights included (ADR-027, #1619/#1710); omitted when zero",
+    ),
 };
 
 // ---------------------------------------------------------------------------
@@ -241,11 +299,16 @@ export const checkInboxOutputShape = {
   summary: z.string(),
   hasNew: z.boolean(),
   mode: TandemModeSchema,
+  modeProvenance: modeProvenanceSchema.describe(
+    "Who last wrote the mode key, when, and what it read then; null before any write is observed (#1733)",
+  ),
   storeReadOnly: z.boolean(),
   userActions: z.array(userActionSchema).describe("New/edited user comments awaiting Claude"),
   userResponses: z
     .array(userResponseSchema)
-    .describe("User accept/dismiss decisions on Claude's annotations"),
+    .describe(
+      "The USER's accept/dismiss decisions on Claude's annotations; Claude's own resolves never appear",
+    ),
   userReplies: z
     .array(inboxUserReplySchema)
     .describe("New user replies on comment threads (held in Solo, released on flip to Tandem)"),
@@ -254,7 +317,18 @@ export const checkInboxOutputShape = {
     isTyping: z.boolean(),
     cursor: z.number().nullable(),
     lastEdit: z.number().nullable(),
-    selectedText: z.string().nullable(),
+    selectedText: z
+      .string()
+      .nullable()
+      .describe(
+        "The most recent non-empty selection in the editor for this document, including one made by clicking an annotation card or chat anchor (≤100 chars). While this document is the active editor tab, it is cleared when the selection collapses, including by a remote edit that deletes it; not cleared when focus leaves the editor, so not necessarily what the user is looking at now. For a document not shown in an editor (a background tab, or no browser open) nothing updates the record, so after an edit it can be sliced from stale offsets: text the user never selected (#1997).",
+      ),
+    selectionAt: z
+      .number()
+      .nullable()
+      .describe(
+        "Epoch ms when the editor last wrote the selection record; null when selectedText is null. While this document is the active editor tab, any document change that moves the selection re-stamps it, including your own edits (#1991), so a recent value does not prove the user just selected this; an old value does prove it is old.",
+      ),
   }),
 };
 

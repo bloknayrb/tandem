@@ -105,16 +105,18 @@ afterEach(() => {
 });
 
 describe("handleModeRelease (WS-A2)", () => {
-  it("flips mode to Tandem, clears markers across the doc, and wakes the monitor once", () => {
+  it("clears markers across the doc and wakes the monitor once", () => {
     const doc = seedHeldDoc();
-    setMode("solo");
+    // Seeded Tandem: since #1769 the route VERIFIES the room rather than writing
+    // it, so the client's own CRDT mode write is the precondition.
+    setMode("tandem");
     const { events, stop } = collect();
 
     const { res, captured } = mockRes();
     handleModeRelease(mockReq(), res);
     stop();
 
-    // Mode is now Tandem.
+    // The route left the mode key exactly as it found it.
     expect(readModeState()).toBe("tandem");
 
     // Both markers cleared, rev bumped.
@@ -157,7 +159,7 @@ describe("handleModeRelease (WS-A2)", () => {
 
   it("is idempotent — a repeat release finds nothing held and fires no second wake", () => {
     seedHeldDoc();
-    setMode("solo");
+    setMode("tandem");
     const { events, stop } = collect();
 
     const first = mockRes();

@@ -131,6 +131,83 @@ describe("countOccurrences", () => {
   });
 });
 
+/**
+ * #1622 — the issue's own diagnostic could not find the text it was reporting
+ * on. `tandem_resolveRange` never reaches `validateRange`; it calls
+ * `findOccurrence`, an exact regex sweep, so the tool the skill recommends for
+ * "offsets correct by construction" is the one that cannot see past a U+00A0.
+ *
+ * **The trigger is an exact count of ZERO, in BOTH halves.** `countOccurrences`
+ * claims to use the same matching as `findOccurrence` so a count and a
+ * subsequent resolve can never disagree, and `local-model/tools.ts` clamps on
+ * `count === 1` before resolving. A `count < occurrence` trigger on either side
+ * would break that, which is why both rows below exist.
+ */
+describe("findOccurrence / countOccurrences — space-class fallback (#1622)", () => {
+  const NBSP = "\u00A0";
+  const DOC = `We categorized emails,${NBSP}Teams chats, and meeting transcripts.`;
+  const PATTERN = "categorized emails, Teams chats";
+
+  it("resolves an NBSP-bearing span from an ordinary-space pattern", () => {
+    const result = findOccurrence(DOC, PATTERN);
+    expect("error" in result).toBe(false);
+    if ("error" in result) return;
+    // The offsets index the ORIGINAL document — the normalization is 1:1 and
+    // length-preserving, so this is the assertion that would break if it were
+    // ever made collapsing.
+    expect(DOC.slice(result.from, result.to)).toBe(`categorized emails,${NBSP}Teams chats`);
+    // ...and the returned `text` is the document's real bytes, not the
+    // normalized copy the sweep ran over.
+    expect(result.text).toContain(NBSP);
+  });
+
+  it("still prefers an exact match over a normalized-only one", () => {
+    // Exact first: the fallback runs only when the exact sweep finds nothing at
+    // all, so an exact occurrence is never passed over for a nearer variant.
+    const text = `lead ${`Teams${NBSP}chats`} and later Teams chats end.`;
+    const result = findOccurrence(text, "Teams chats");
+    expect("error" in result).toBe(false);
+    if ("error" in result) return;
+    expect(text.slice(result.from, result.to)).toBe("Teams chats");
+  });
+
+  it("leaves totalCount alone on a genuine miss", () => {
+    const miss = findOccurrence(DOC, "no such phrase anywhere");
+    expect("error" in miss).toBe(true);
+    if ("error" in miss) expect(miss.totalCount).toBe(0);
+  });
+
+  it("still fires the empty-pattern guard", () => {
+    const result = findOccurrence(DOC, "");
+    expect("error" in result).toBe(true);
+    if ("error" in result) {
+      expect(result.totalCount).toBe(0);
+      expect(result.error).toContain("empty pattern");
+    }
+    expect(countOccurrences(DOC, "")).toBe(0);
+  });
+
+  it("(a) exact count zero: the clamp gate fires for a normalized match too", () => {
+    // `countOccurrences` falls back on the same trigger, so it reports 1 and the
+    // `count === 1` clamp behaves exactly as it does for an exact pattern.
+    expect(countOccurrences(DOC, PATTERN)).toBe(1);
+    const clamped = findOccurrence(DOC, PATTERN, 1);
+    expect("error" in clamped).toBe(false);
+  });
+
+  it("(b) exact count non-zero: neither half falls back, so both still agree", () => {
+    // One exact occurrence plus one NBSP variant elsewhere. The exact count is
+    // 1, so NEITHER half normalizes: `countOccurrences` returns 1 and
+    // `findOccurrence` at occurrence 2 must miss with totalCount 1. A
+    // `count < occurrence` trigger on either side alone makes them disagree.
+    const text = `lead ${`Teams${NBSP}chats`} and later Teams chats end.`;
+    expect(countOccurrences(text, "Teams chats")).toBe(1);
+    const second = findOccurrence(text, "Teams chats", 2);
+    expect("error" in second).toBe(true);
+    if ("error" in second) expect(second.totalCount).toBe(1);
+  });
+});
+
 describe("extractContext", () => {
   it("returns context window around a range", () => {
     const result = extractContext(

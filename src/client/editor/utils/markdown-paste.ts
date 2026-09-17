@@ -207,6 +207,28 @@ function normalizeImagesForPaste(state: MdCoreState): void {
  * user's surrounding formatting just because the pasted snippet happens to
  * mention the unmapped construct.
  */
+/**
+ * Split a fence info string into the two attributes the codeBlock schema
+ * carries: the language (first token) and mdast's `meta` (the rest).
+ *
+ * markdown-it hands the whole info string over as one blob. Keeping it that
+ * way put a value with spaces in it into `language`, which Tiptap renders as
+ * the code element's class and reads back off `classList` — so the meta was
+ * lost the moment the block went through the DOM, and the paste path disagreed
+ * with what the file loader stores (#1799). `meta` reaches the Y.Doc because
+ * `CodeBlockFenceMeta` declares it.
+ */
+function splitFenceInfo(info: string | undefined): {
+  language: string | null;
+  meta: string | null;
+} {
+  const trimmed = info?.trim() ?? "";
+  const sep = trimmed.search(/\s/);
+  return sep === -1
+    ? { language: trimmed || null, meta: null }
+    : { language: trimmed.slice(0, sep), meta: trimmed.slice(sep).trim() || null };
+}
+
 function buildTokenSpec(schema: Schema): { [name: string]: ParseSpec } {
   const tokens: { [name: string]: ParseSpec } = {
     blockquote: { block: "blockquote" },
@@ -224,12 +246,12 @@ function buildTokenSpec(schema: Schema): { [name: string]: ParseSpec } {
     code_block: {
       block: "codeBlock",
       noCloseToken: true,
-      getAttrs: (tok) => ({ language: tok.info?.trim() || null }),
+      getAttrs: (tok) => splitFenceInfo(tok.info),
     },
     fence: {
       block: "codeBlock",
       noCloseToken: true,
-      getAttrs: (tok) => ({ language: tok.info?.trim() || null }),
+      getAttrs: (tok) => splitFenceInfo(tok.info),
     },
     hr: { node: "horizontalRule" },
     hardbreak: { node: "hardBreak" },

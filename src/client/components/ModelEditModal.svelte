@@ -2,6 +2,7 @@
 import { untrack } from "svelte";
 import { isLocalProvider } from "../../shared/models/contract.js";
 import type { ModelProvider, ModelRegistryEntry } from "../hooks/useTandemSettings.svelte.js";
+import { trapTab } from "../utils/focus-trap.js";
 import CollapsibleSection from "./CollapsibleSection.svelte";
 
 interface Props {
@@ -130,6 +131,33 @@ function handleSubmit(e: SubmitEvent) {
   onSave(payload);
 }
 
+let dialogEl: HTMLDivElement | undefined = $state();
+
+// Tab focus trap (#1778). `aria-modal="true"` promises assistive tech that
+// everything outside is inert, and without this real focus walked the app
+// behind the scrim on the first Tab.
+//
+// Window-level rather than an element `onkeydown`, because `trapTab`'s
+// recover-focus branch is the half that matters: a click on the dialog's own
+// padding leaves `document.activeElement` on `<body>`, and an element handler
+// never fires again once focus is outside.
+//
+// The owner bail is required, not decorative. `trapTab`'s recover branch fires
+// whenever focus is outside ITS container — including inside another open
+// dialog — with no `defaultPrevented` check, so two live traps ping-pong within
+// one keydown. A bare `if (e.defaultPrevented) return;` is NOT a substitute:
+// `trapTab` preventDefaults only on the wrap and recover branches, so ordinary
+// mid-dialog Tabs would still reach both handlers.
+$effect(() => {
+  const handler = (e: KeyboardEvent) => {
+    const owner = (document.activeElement as Element | null)?.closest('[aria-modal="true"]');
+    if (owner && owner !== dialogEl && !dialogEl?.contains(owner)) return;
+    trapTab(e, dialogEl ?? null);
+  };
+  window.addEventListener("keydown", handler);
+  return () => window.removeEventListener("keydown", handler);
+});
+
 function startReplacingKey() {
   replacingKey = true;
   apiKey = "";
@@ -137,6 +165,7 @@ function startReplacingKey() {
 </script>
 
 <div
+  bind:this={dialogEl}
   role="dialog"
   aria-modal="true"
   aria-label={isEditing ? "Edit model" : "Add model"}

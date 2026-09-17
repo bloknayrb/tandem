@@ -68,7 +68,7 @@ describe("AnnotationBody — block-level markup needs a block-level host", () =>
       author: "claude",
     });
 
-    for (const block of Array.from(c.querySelectorAll("p, pre, h1, h2, h3, li, div"))) {
+    for (const block of Array.from(c.querySelectorAll("p, pre, h1, h2, h3, li, ul, div"))) {
       expect(block.closest("p") === block || block.closest("p") === null).toBe(true);
     }
     expect(c.querySelector("pre")).not.toBeNull();
@@ -130,8 +130,9 @@ describe("AnnotationBody — clicking a link must not also activate the card", (
     // The other half. Swallowing every click inside the body would make the
     // card unclickable wherever a Claude comment has text — which is all of them.
     const { container, onClick } = cardWith("just prose");
-    // The markdown host itself, not a `<p>`: a single-paragraph message has no
-    // `<p>` at all, because the paragraph pass only fires on a blank-line split.
+    // The markdown host itself rather than the `<p>` inside it. Since #1639
+    // every message has a real `<p>`, but querying the host keeps this assertion
+    // about the click seam rather than about the block markup.
     const text = container.querySelector(".tandem-markdown");
 
     expect(text?.textContent).toBe("just prose");
@@ -145,16 +146,29 @@ describe("AnnotationBody — the shapes a clamped card has to survive", () => {
   // flatten. They cannot pin the layout — happy-dom has no layout — but they
   // fail if `renderMarkdown` stops emitting the shape those rules target, which
   // is how a CSS rule quietly stops covering anything.
-  it("emits a <br> between list items, not just <li> elements", () => {
-    // The reason `display: inline` alone was not enough: `renderMarkdown` turns
-    // every single newline into `<br>`, so a bullet list — the likeliest thing
-    // Claude writes into a comment — carries one line break per item on top of
-    // the `<li>` boxes. A `<br>`'s normal display IS inline, so flattening the
-    // blocks left every break in place and the one-line teaser stayed N lines.
+  it("wraps list items in a <ul> with no <br> between them", () => {
+    // #1639 removed exactly what this used to pin. The old `\n` -> `<br>` pass
+    // ran AFTER the list pass, so a bullet list carried one line break per item
+    // on top of the `<li>` boxes; now the items are a real `<ul>` and the breaks
+    // are gone. The `*` density flatten still has to cover the `<ul>`, which is
+    // a block child like any other.
     const c = body({ text: "Findings:\n- alpha\n- beta", author: "claude" });
 
+    expect(c.querySelectorAll("ul")).toHaveLength(1);
     expect(c.querySelectorAll("li")).toHaveLength(2);
-    expect(c.querySelectorAll("br").length).toBeGreaterThan(0);
+    expect(c.querySelector("ul")?.querySelectorAll("br")).toHaveLength(0);
+  });
+
+  it("still emits a <br> for a soft newline inside a paragraph", () => {
+    // The half that SURVIVED, and the reason `br { display: none }` in
+    // `AnnotationCard.svelte` is still load-bearing rather than dead: a
+    // two-line Claude comment renders `<p>a<br>b</p>`, so the one-line teaser
+    // still has a break to swallow. Without this the density rule would have no
+    // target and would read as deletable.
+    const c = body({ text: "first line\nsecond line", author: "claude" });
+
+    expect(c.querySelectorAll("p")).toHaveLength(1);
+    expect(c.querySelectorAll("br")).toHaveLength(1);
   });
 
   it("keeps literal newlines inside a fenced block", () => {

@@ -26,7 +26,7 @@ const setDefault = vi.fn<(...args: unknown[]) => Promise<boolean>>();
 const clearError = vi.fn();
 let storeSaveError: string | null = null;
 
-vi.mock("../../src/client/hooks/useModels.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useModels.svelte"), () => ({
   createModels: () => ({
     addModel,
     setDefault,
@@ -34,6 +34,16 @@ vi.mock("../../src/client/hooks/useModels.svelte", () => ({
     get saveError() {
       return storeSaveError;
     },
+    // The rest of `ModelsState`. This double named four members and matched
+    // nothing before the typed mock overload (#1615).
+    models: [],
+    defaultModelId: null,
+    loading: false,
+    loadFailed: false,
+    updateModel: vi.fn(async () => true),
+    deleteModel: vi.fn(async () => {}),
+    toggleEnabled: vi.fn(async () => {}),
+    reload: vi.fn(async () => {}),
   }),
 }));
 

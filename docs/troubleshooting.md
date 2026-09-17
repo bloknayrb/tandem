@@ -4,7 +4,7 @@ Common first-launch and runtime issues, with diagnostic steps.
 
 ## Quick diagnostic
 
-If you're running from a source checkout, `npm run doctor` checks the most common setup issues at once:
+`tandem doctor` (or `npm run doctor` from a source checkout) checks the most common setup issues at once:
 
 - Node.js ≥ 22.12.0 installed
 - `.mcp.json` valid (both `tandem` and `tandem-channel` entries)
@@ -131,14 +131,41 @@ empty-state screen, or run **Relaunch Claude in this folder** from the command p
 (`Ctrl+Shift+P`). If you installed it *after* opening Tandem, restart Tandem — a running process
 cannot see a PATH change made after it launched.
 
-If Claude keeps stopping with a healthy install, the CTA says "Restart Claude Code" instead, and
-the likeliest cause is a saved conversation Claude can no longer resume. **Start a fresh
-conversation** (the secondary action beside Restart, or the palette command) drops it and starts
-clean — irreversible, so it is never the default.
+If Claude keeps stopping with a healthy install, the CTA says "Restart Claude Code" instead —
+except for one cause Tandem now recognises and names:
+
+- **You have never signed in to Claude Code.** A Claude Code that has not signed in does *not*
+  exit: it stays running and answers every turn with "Not logged in · Please run /login". Tandem
+  recognises that answer, stops retrying, and asks you to sign in — **Check again** on the
+  empty-state screen, and the same re-check behind the status bar's Claude indicator and the
+  "no AI connected" notice (#1780). Open a terminal, run `claude`, finish signing in, then click
+  it. Clicking it before you have signed in just
+  shows the prompt again. For a moment after launch Claude can read as ready before the prompt
+  appears, while the refused session's connection closes. An *expired* login has not been
+  checked against this; if it answers differently it still looks like an ordinary stop, and the
+  same fix applies.
+
+The other common cause looks like any other crash, so it still gets the generic prompt:
+
+- **A saved conversation Claude can no longer resume.** **Start a fresh conversation** (the
+  secondary action beside Restart, or the palette command) drops it and starts clean —
+  irreversible, so it is never the default.
 
 ## Port already in use
 
-Tandem kills stale processes on `:3478` / `:3479` at startup. If another application owns those ports and won't yield, set alternate ports:
+At startup an npm `tandem` first asks the MCP port's `/health` whether a live Tandem is already
+there. If one is, it **refuses to start** — naming the running version and PID — and kills nothing.
+If nothing answers as a Tandem, the old behaviour stands: it looks up the listening PID and
+terminates it, so a leftover Tandem, a wedged process or an unrelated program on those ports is
+killed rather than worked around (#1758).
+
+Two things that follow. **The desktop app is deliberately exempt from the refusal** — the Tauri
+shell delegates port reclamation to the sidecar it spawns and has no other self-heal, so its own
+child still frees the ports and the app recovers from a stale holder by itself. And **moving only
+one port still exposes the other**: the probe asks about the MCP port, while the kill is keyed on
+the port number alone, so a `TANDEM_MCP_PORT` set on its own leaves `:3478` reachable by the kill.
+If something else owns those ports and you would rather move Tandem, set alternate ports —
+all three:
 
 ```bash
 export TANDEM_PORT=4478
@@ -183,7 +210,7 @@ Either way, look for the push line. `No real-time push consumer attached` means 
 
 **Fix it** — three setup routes; choose one setup route where possible.
 
-*The quickest, where it is available:* **ask Claude to watch for updates.** It needs nothing installed, but it does need a Claude Code that offers a `Monitor` tool — enabled per account rather than per version, and on Windows it also wants Git Bash. The plugin monitor shares the same per-account feature gate, so it cannot help when that gate is off. But the plugin monitor does not require Git Bash on Windows and can fall back to PowerShell, so it may help when Git Bash is the missing precondition. The channel shim further down avoids both requirements. Tandem's bundled skill tells Claude how to open a watch on Tandem's wake stream, which wakes it whenever you comment or send a message. No install, no flag, and it lasts only for that session. If Claude says it cannot, check that the session actually has Tandem's MCP tools (`/mcp` lists them), that your Claude Code offers a `Monitor` tool, and that `tandem_status` reports a `wakeUrl` — the watch has nothing to attach to without one, and stdio-mode Tandem reports none. The current bundled skill tells a hand-started session to try once after its first successful read-mode `tandem_status`; asking directly is recovery if that attempt was skipped, not a subscriber-count override.
+*The quickest, where it is available:* **ask Claude to watch for updates.** It needs nothing installed, but it does need a Claude Code that offers a `Monitor` tool — enabled per account rather than per version, and on Windows it also wants Git Bash. The plugin monitor shares the same per-account feature gate, so it cannot help when that gate is off. But the plugin monitor does not require Git Bash on Windows and can fall back to PowerShell, so it may help when Git Bash is the missing precondition. The channel shim further down avoids both requirements. Tandem's bundled skill tells Claude how to open a watch on Tandem's wake stream, which wakes it whenever you comment or send a message. No install, no flag, and it lasts only for that session. If Claude says it cannot, check that the session actually has Tandem's MCP tools (`/mcp` lists them), that your Claude Code offers a `Monitor` tool, and that Tandem reports a `wakeUrl` — `tandem_status`, `tandem_open` and `tandem_scratchpad` all return one, the watch has nothing to attach to without it, and stdio-mode Tandem reports none. The current bundled skill tells a hand-started session to try once on the first response carrying one; asking directly is recovery if that attempt was skipped, not a subscriber-count override.
 
 *Or* install the Tandem plugin, which registers a monitor that needs no flag — every `claude` you start afterwards picks it up (`claude plugin list` to check whether you already have it). It starts watching when Claude first uses Tandem's skill in a session, so ask for Tandem by name; if you have been chatting about something else, it is not listening yet. Start `claude` from a terminal window: the monitor runs with whatever program path that session was given, and a Claude Code launched from a desktop icon may have no usable Node on it. That failure shows up as [`exit 127`](#plugin-monitor-reports-script-failed-exit-127).
 
@@ -444,11 +471,11 @@ A link Tandem will not treat as safe also no longer *looks* clickable: it stays 
 
 If Tandem is your registered handler and you open a file it can't accept — an unsupported type, a path that no longer exists, or a folder — it now tells you so. Older builds sat on the welcome document with no message and recorded the reason only in the log.
 
-Tandem opens `.md`, `.txt`, `.docx`, `.html` and `.htm`. Both routes a file can arrive by — the command line on Windows and Linux, an Apple Event on macOS — now run the same checks, so a file accepted one way is no longer silently dropped the other. If the refusal happens before the window exists, the message is held and shown once the window is ready.
+Tandem opens `.md`, `.markdown`, `.txt`, `.docx`, `.html` and `.htm`. Both routes a file can arrive by — the command line on Windows and Linux, an Apple Event on macOS — now run the same checks, so a file accepted one way is no longer silently dropped the other. If the refusal happens before the window exists, the message is held and shown once the window is ready.
 
 ## Reset session state
 
-Sessions live in `{APP_DATA_DIR}/sessions/`, with one file per opened document plus a `CTRL_ROOM.json` for cross-document state (chat history, Solo/Tandem mode). To find the directory per OS:
+Sessions live in `{APP_DATA_DIR}/sessions/`, with one file per opened document plus a `__tandem_ctrl__.json` for cross-document state (chat history, Solo/Tandem mode). To find the directory per OS:
 
 | OS | Path |
 |---|---|
@@ -462,9 +489,9 @@ To reset all session state cleanly:
 2. Delete the `sessions/` directory.
 3. Restart Tandem.
 
-To reset only chat history without losing per-document state, delete just `CTRL_ROOM.json`.
+To reset only chat history without losing per-document state, delete just `__tandem_ctrl__.json`.
 
-Durable annotations live in a separate `annotations/` directory alongside `sessions/`. Corrupted annotation files are quarantined automatically (renamed to `.corrupt.json`) instead of being deleted, so you can recover them by hand if needed.
+Durable annotations live in a separate `annotations/` directory alongside `sessions/`. Corrupted annotation files are quarantined automatically (renamed to `<name>.json.corrupt.<timestamp>`) instead of being deleted, so you can recover them by hand if needed.
 
 ## A document will not open / a tab did not come back
 
@@ -527,6 +554,6 @@ Check that:
 2. The token matches the value in `{APP_DATA_DIR}/auth-token`.
 3. You haven't rotated the token without updating the client config — `tandem rotate-token` updates Claude's configs automatically but won't touch other MCP clients.
 
-`TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` does **not** disable the token requirement, despite the name — a token is always minted and always enforced for non-loopback callers (#1121 F7). It only permits a LAN bind before a token exists. And since #1320 a LAN peer can read `/api` but not write to it, so `tandem rotate-token` must be run on the host. See [security.md](security.md#the-api-invariant-1320) for the full model.
+`TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` does **not** disable the token requirement, despite the name — a token is always minted and always enforced for non-loopback callers (#1121 F7). It only permits a LAN bind before a token exists. And since #1320 a LAN peer can read `/api` but not write to it, so `tandem rotate-token` must be run on the host. (That refusal covers `/api` only — `POST /mcp` carries no loopback gate, so a token-holding LAN peer still reaches the mutating MCP tools: [#1906](https://github.com/bloknayrb/tandem/issues/1906).) See [security.md](security.md#the-api-invariant-1320) for the full model.
 
 > **Note:** Tandem writes the Bearer token into your `.mcp.json` headers. On Claude Code CLI **≥ 2.1.141**, `claude mcp get`/`list` no longer prints that token to the terminal (credential headers and URL secrets are redacted, and `${VAR}` references are no longer expanded) — so inspecting the Tandem entry is safe to share. On older CLI versions the token is echoed in plain text; redact it before pasting output anywhere.

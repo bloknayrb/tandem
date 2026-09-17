@@ -102,6 +102,33 @@ describe("removeConfigEntries", () => {
     expect(await readFile(config, "utf-8")).toBe(original);
   });
 
+  it("empty file → skipped as `empty`, not as malformed JSON", async () => {
+    // Round-3 review. `readConfigForMutation` had no emptiness screen, so
+    // `JSON.parse("")` threw and a crash-truncated `~/.claude.json` came back
+    // `malformed-json` — which the boot sweep logs verbatim, while `tandem
+    // doctor` calls the same file empty and prescribes `setup --apply`
+    // (`applyConfig` starts fresh on it). One file, two names, and only one of
+    // the two remedies works.
+    const config = join(dir, ".claude.json");
+    await writeFile(config, "", "utf-8");
+
+    expect(await removeConfigEntries(config, ["tandem"])).toEqual({
+      status: "skipped",
+      reason: "empty",
+    });
+    // The decision is unchanged — this reader never creates and never rewrites.
+    expect(await readFile(config, "utf-8")).toBe("");
+  });
+
+  it("whitespace/BOM-only file → also `empty` (screen runs after the BOM strip)", async () => {
+    const config = join(dir, ".claude.json");
+    await writeFile(config, "﻿\n  ", "utf-8");
+    expect(await removeConfigEntries(config, ["tandem"])).toEqual({
+      status: "skipped",
+      reason: "empty",
+    });
+  });
+
   it("non-object root → skipped, file untouched", async () => {
     const config = join(dir, ".claude.json");
     await writeFile(config, JSON.stringify(["array"]), "utf-8");

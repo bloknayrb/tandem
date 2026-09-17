@@ -5,7 +5,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   carriedSessionNotFound,
-  describeServerInfo,
+  describeServerName,
   getRequestId,
   getResponseId,
   isReplayId,
@@ -13,6 +13,7 @@ import {
   isStaleSessionError,
   makeReplayId,
   nextBackoffMs,
+  PREFLIGHT_GRACE_MS,
   parseTimeoutMs,
   readAndValidateAuthToken,
 } from "../../src/cli/mcp-stdio.js";
@@ -450,6 +451,12 @@ describe("mcp-stdio error synthesis on upstream unavailability", () => {
     expect(parsed.id).toBe(99);
     expect(parsed.error?.code).toBe(-32000);
     expect(parsed.error?.message).toMatch(/not (running|ready)/i);
+
+    // …and does NOT exit (#1805). The wait is what makes this a discriminator:
+    // `shutdown()` writes the -32000 *before* awaiting `http.close()`, so an
+    // immediate check passes for the old exiting implementation too.
+    await new Promise((r) => setTimeout(r, PREFLIGHT_GRACE_MS + 1000));
+    expect(child.exitCode).toBeNull();
   }, 30_000);
 
   it("synthesizes -32000 for pending requests when the upstream dies mid-session", async () => {
@@ -543,17 +550,16 @@ describe("mcp-stdio error synthesis on upstream unavailability", () => {
     const notification = { jsonrpc: "2.0", method: "notifications/initialized" };
     child.stdin.write(`${JSON.stringify(notification)}\n`);
 
-    await awaitClose(child);
-
-    // Preconditions: the child really terminated and really reached the
-    // preflight refusal. Not an exit-code equality — the bridge measurably
-    // exits 0 here, because stdio.onclose runs shutdown(0) before
-    // deferredShutdown's shutdown(1) can take the latch.
-    expect(child.exitCode ?? child.signalCode).not.toBeNull();
-    expect(output.stderr()).toMatch(/preflight failed/i);
+    // It no longer closes (#1805), so wait on the observable precondition
+    // instead. The grace timer and the guidance line are armed in the same
+    // block, so a shorter wait would land before `synthesizeBuffered` runs and
+    // read empty even for a broken implementation.
+    await waitForCount(() => (/preflight failed/i.test(output.stderr()) ? 1 : 0), 1);
+    await new Promise((r) => setTimeout(r, PREFLIGHT_GRACE_MS + 1000));
 
     expect(errorReplies(output.stdout(), -32000)).toEqual([]);
-  }, 15_000);
+    expect(child.exitCode).toBeNull();
+  }, 20_000);
 
   it("synthesizes -32000 for multiple concurrent pending requests on mid-session upstream death", async () => {
     // Fake server: /health → 200, /mcp → holds all POSTs without replying.
@@ -1554,15 +1560,16 @@ describe("stale-session helper predicates", () => {
     });
   });
 
-  describe("describeServerInfo", () => {
-    it("renders name@version and collapses anything else to a sentinel", () => {
-      expect(describeServerInfo({ name: "tandem", version: "1.2.3" })).toBe("tandem@1.2.3");
+  describe("describeServerName", () => {
+    it("renders the name alone and collapses anything else to a sentinel", () => {
+      expect(describeServerName({ name: "tandem", version: "1.2.3" })).toBe("tandem");
+      // The version is now irrelevant to identity (#1759), which is the point.
+      expect(describeServerName({ name: "tandem" })).toBe("tandem");
       // A server that omits serverInfo must not compare equal to one that
       // supplies it, so every non-conforming shape collapses to one sentinel.
-      expect(describeServerInfo(undefined)).toBe("<unknown>");
-      expect(describeServerInfo(null)).toBe("<unknown>");
-      expect(describeServerInfo({ name: "tandem" })).toBe("<unknown>");
-      expect(describeServerInfo({ name: 1, version: 2 })).toBe("<unknown>");
+      expect(describeServerName(undefined)).toBe("<unknown>");
+      expect(describeServerName(null)).toBe("<unknown>");
+      expect(describeServerName({ name: 1 })).toBe("<unknown>");
     });
   });
 
@@ -1767,6 +1774,8 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
     getCount(): number;
     /** Swap the advertised serverInfo, to exercise the fail-closed identity check. */
     setServerInfo(info: { name: string; version: string }): void;
+    /** Swap the negotiated protocolVersion — what an SDK-bumping upgrade moves. */
+    setProtocolVersion(version: string): void;
     /** Accept the next N initialize POSTs and never answer them. */
     stallInitializes(n: number): void;
     /**
@@ -1794,7 +1803,9 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
    * of them ever forwarded an `initialized` notification, the one thing that
    * makes the SDK open the stream.
    */
-  async function makeSessionServer(opts: { sse?: boolean } = {}): Promise<SessionServer> {
+  async function makeSessionServer(
+    opts: { sse?: boolean; port?: number } = {},
+  ): Promise<SessionServer> {
     const posts: SessionServer["posts"] = [];
     let live: string | undefined;
     let minted = 0;
@@ -1805,6 +1816,7 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
     let failNextGets = 0;
     let held: Array<{ res: ServerResponse; id: string | number | undefined }> = [];
     let serverInfo = { name: "fake-tandem", version: "0.0.0-test" };
+    let protocolVersion = "2024-11-05";
 
     const answerInitialize = (res: ServerResponse, id: string | number | undefined) => {
       minted += 1;
@@ -1815,7 +1827,7 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
           jsonrpc: "2.0",
           id,
           result: {
-            protocolVersion: "2024-11-05",
+            protocolVersion,
             capabilities: { tools: {} },
             serverInfo,
           },
@@ -1908,7 +1920,9 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
       res.end();
     });
 
-    await new Promise<void>((r) => (sessionServer as Server).listen(0, "127.0.0.1", r));
+    await new Promise<void>((r) =>
+      (sessionServer as Server).listen(opts.port ?? 0, "127.0.0.1", r),
+    );
     const addr = (sessionServer as Server).address();
     if (!addr || typeof addr === "string") throw new Error("server.address() unexpected");
     return {
@@ -1921,6 +1935,9 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
       getCount: () => gets,
       setServerInfo: (info) => {
         serverInfo = info;
+      },
+      setProtocolVersion: (version) => {
+        protocolVersion = version;
       },
       stallInitializes: (n) => {
         stallInits = n;
@@ -1974,6 +1991,21 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
       await new Promise((r) => setTimeout(r, 50));
     }
     throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}`);
+  }
+
+  /**
+   * A loopback port with nothing listening on it, which a later
+   * `makeSessionServer({ port })` can claim. Bind-then-close rather than a
+   * hard-coded number so two suites cannot collide.
+   */
+  async function reservePort(): Promise<number> {
+    const probe = createServer();
+    await new Promise<void>((r) => probe.listen(0, "127.0.0.1", r));
+    const addr = probe.address();
+    if (!addr || typeof addr === "string") throw new Error("probe.address() unexpected");
+    const { port } = addr;
+    await new Promise<void>((r) => probe.close(() => r()));
+    return port;
   }
 
   function spawnBridge(port: number, env: Record<string, string> = {}) {
@@ -2101,6 +2133,194 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
       .lines()
       .some((m) => m.method === "notifications/tools/list_changed" && m.id === undefined);
     expect(notified).toBe(true);
+  }, 60_000);
+
+  it("survives a dead upstream at startup, then serves once it appears (#1805)", async () => {
+    const port = await reservePort();
+    child = spawnBridge(port, { TANDEM_REQUEST_TIMEOUT_MS: "4000" });
+    const io = collect(child);
+    child.stdin.write(`${JSON.stringify(INITIALIZE)}\n`);
+
+    // Sequence on the observed reply, never a wall clock: bringing the server
+    // up at a fixed "~2s" races the `!httpReady` guard, and on a slow
+    // `--import tsx` boot the t≈1s probe finds it first and id 1 gets a real
+    // result — inverting this assertion for reasons unrelated to the fix.
+    await waitFor(
+      () => responsesFor(io.stdout(), 1).length === 1,
+      "grace-window synthesis",
+      25_000,
+    );
+    expect((responsesFor(io.stdout(), 1)[0]?.error as { code?: number })?.code).toBe(-32000);
+
+    const fake = await makeSessionServer({ port });
+    await waitFor(() => io.stderr().includes("Tandem server reachable"), "recovery line", 45_000);
+    expect(child.exitCode).toBeNull();
+
+    // The session is minted on recovery, BEFORE any client request: the
+    // transport that came up holds no session, so without this kick the first
+    // real request paid POST → 404 → a 1s backoff → replay before it was
+    // served. Waiting for the line here, with nothing written yet, is what
+    // pins that; `initCount() === 1` below is its other half — the request
+    // found a live session and triggered no second handshake.
+    await waitFor(
+      () => io.stderr().includes("deferred handshake completed"),
+      "session minted on recovery",
+      30_000,
+    );
+
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+    await waitFor(() => responsesFor(io.stdout(), 2).length === 1, "served request", 30_000);
+    const answer = responsesFor(io.stdout(), 2)[0];
+    // Without the deferred-handshake seeding this answers -32000 and stderr
+    // carries `no handshake baseline` instead: the locally answered
+    // `initialize` was never forwarded, so there is no baseline to compare.
+    expect(answer?.error).toBeUndefined();
+    expect((answer?.result as { echo?: string })?.echo).toBe("tools/list");
+    expect(fake.initCount()).toBe(1);
+  }, 90_000);
+
+  it("names the restart once and keeps retrying while the upstream is down (#1805)", async () => {
+    const port = await reservePort();
+    child = spawnBridge(port);
+    const io = collect(child);
+
+    await waitFor(() => /preflight failed/i.test(io.stderr()), "preflight guidance", 25_000);
+    // `waitForUpstream` sleeps before probing, so probes land at t≈1s and 3s.
+    await new Promise((r) => setTimeout(r, 4_500));
+
+    const err = io.stderr();
+    expect(err.match(/restart the client/g)?.length).toBe(1);
+    expect(err.match(/preflight failed/g)?.length).toBe(1);
+    expect(child.exitCode).toBeNull();
+  }, 60_000);
+
+  it("answers requests arriving after the grace window instead of buffering (#1805)", async () => {
+    const port = await reservePort();
+    child = spawnBridge(port);
+    const io = collect(child);
+
+    await waitFor(() => /preflight failed/i.test(io.stderr()), "preflight guidance", 25_000);
+    await new Promise((r) => setTimeout(r, 2_000));
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/list" })}\n`);
+
+    // The pre-ready buffer is a one-shot drained only at startup, so without
+    // the `preflightFailed` latch this request gets no reply at all.
+    await waitFor(() => responsesFor(io.stdout(), 7).length === 1, "latched -32000", 20_000);
+    expect((responsesFor(io.stdout(), 7)[0]?.error as { code?: number })?.code).toBe(-32000);
+    expect(child.exitCode).toBeNull();
+  }, 60_000);
+
+  it("recovers from an initialize that arrived after the grace window (#1805)", async () => {
+    const port = await reservePort();
+    child = spawnBridge(port, { TANDEM_REQUEST_TIMEOUT_MS: "4000" });
+    const io = collect(child);
+
+    await waitFor(() => /preflight failed/i.test(io.stderr()), "preflight guidance", 25_000);
+    // Past the grace window, so `synthesizeBuffered` has already run against an
+    // empty buffer and this `initialize` takes the *second* local-answer sink.
+    await new Promise((r) => setTimeout(r, PREFLIGHT_GRACE_MS + 500));
+    child.stdin.write(`${JSON.stringify(INITIALIZE)}\n`);
+    await waitFor(() => responsesFor(io.stdout(), 1).length === 1, "latched -32000", 20_000);
+    expect((responsesFor(io.stdout(), 1)[0]?.error as { code?: number })?.code).toBe(-32000);
+
+    await makeSessionServer({ port });
+    await waitFor(() => io.stderr().includes("Tandem server reachable"), "recovery line", 45_000);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+    await waitFor(() => responsesFor(io.stdout(), 2).length === 1, "served request", 30_000);
+    // Without the latch on this second sink, id 2 answers -32000 — the failure
+    // the first recovery spec cannot see.
+    expect(responsesFor(io.stdout(), 2)[0]?.error).toBeUndefined();
+    expect(io.stderr()).toContain("deferred handshake completed");
+  }, 90_000);
+
+  it("still refuses to adopt an upstream with no handshake baseline (#1805)", async () => {
+    // The mutation that separates "seed only when the handshake was deferred"
+    // from "always seed" — the fail-open the identity check exists to stop.
+    // Reached with `stallInitializes`, never `retireSession`: the fake's
+    // initialize branch is unconditional and re-mints a session, so
+    // `captureNegotiated` would run and the baseline would exist.
+    const fake = await makeSessionServer();
+    child = spawnBridge(fake.port, { TANDEM_REQUEST_TIMEOUT_MS: "500" });
+    const io = collect(child);
+    await new Promise((r) => setTimeout(r, 700));
+
+    fake.stallInitializes(1);
+    child.stdin.write(`${JSON.stringify(INITIALIZE)}\n`);
+    await waitFor(() => responsesFor(io.stdout(), 1).length === 1, "timed-out initialize", 20_000);
+
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+    // Wait on the reconnect's own verdict, not id 2's reply: the short request
+    // timeout answers -32000 before the backoff even fires the replay.
+    await waitFor(() => io.stderr().includes("no handshake baseline"), "refusal", 30_000);
+    expect((responsesFor(io.stdout(), 2)[0]?.error as { code?: number })?.code).toBe(-32000);
+    expect(io.stderr()).not.toContain("deferred handshake completed");
+  }, 60_000);
+
+  it("adopts a version-only change across a reconnect (#1759)", async () => {
+    const fake = await makeSessionServer();
+    child = spawnBridge(fake.port, { TANDEM_REQUEST_TIMEOUT_MS: "4000" });
+    const io = collect(child);
+    await handshake(child, io, fake);
+
+    // A normal Tandem upgrade: same server, new version. Before #1759 this was
+    // byte-for-byte indistinguishable from a foreign process on the port, so
+    // every request after an upgrade failed until the user restarted Claude
+    // Desktop — which never respawns this bridge.
+    fake.setServerInfo({ name: "fake-tandem", version: "9.9.9" });
+    fake.retireSession();
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+
+    await waitFor(() => responsesFor(io.stdout(), 2).length === 1, "healed request", 30_000);
+    const answers = responsesFor(io.stdout(), 2);
+    expect(answers.length).toBe(1);
+    expect(answers[0]?.error).toBeUndefined();
+    expect(io.stderr()).toContain("upstream version changed across re-initialize");
+    expect(io.stderr()).not.toContain("upstream identity changed");
+    expect(child.exitCode).toBeNull();
+  }, 60_000);
+
+  it("adopts a protocol-version change across a reconnect when the server name matches (#1759)", async () => {
+    const fake = await makeSessionServer();
+    child = spawnBridge(fake.port, { TANDEM_REQUEST_TIMEOUT_MS: "4000" });
+    const io = collect(child);
+    await handshake(child, io, fake);
+
+    // The same Tandem after an SDK-bumping upgrade. `protocolVersion` is what
+    // the server's bundled SDK negotiates — the client's requested version
+    // while it is still supported, else the SDK's own LATEST — so it can move
+    // for the very same replayed `initialize`. Comparing it read as "somebody
+    // else grabbed the port" on every backoff tick, forever.
+    fake.setProtocolVersion("2025-03-26");
+    fake.retireSession();
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+
+    await waitFor(() => responsesFor(io.stdout(), 2).length === 1, "healed request", 30_000);
+    const answers = responsesFor(io.stdout(), 2);
+    expect(answers.length).toBe(1);
+    expect(answers[0]?.error).toBeUndefined();
+    expect(io.stderr()).toContain("upstream protocol version changed across re-initialize");
+    expect(io.stderr()).not.toContain("upstream identity changed");
+    expect(child.exitCode).toBeNull();
+  }, 60_000);
+
+  it("still fails closed when only the server name changes (#1759)", async () => {
+    const fake = await makeSessionServer();
+    child = spawnBridge(fake.port, { TANDEM_REQUEST_TIMEOUT_MS: "4000" });
+    const io = collect(child);
+    await handshake(child, io, fake);
+
+    // Version identical, name different: the fail-open the identity check
+    // exists to stop. Loosening the comparison to "both fields moved" would
+    // let this through.
+    fake.setServerInfo({ name: "not-tandem", version: "0.0.0-test" });
+    fake.retireSession();
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+
+    await waitFor(() => responsesFor(io.stdout(), 2).length === 1, "failure response", 30_000);
+    const answer = responsesFor(io.stdout(), 2)[0];
+    expect((answer?.error as { code?: number })?.code).toBe(-32000);
+    expect(io.stderr()).toContain("upstream identity changed across re-initialize");
+    expect(child.exitCode).toBeNull();
   }, 60_000);
 
   it("fails the reconnect closed when the upstream identity changes", async () => {

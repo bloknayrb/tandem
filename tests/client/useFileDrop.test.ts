@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as coworkHelpers from "../../src/client/cowork/cowork-helpers.js";
 import { createFileDrop } from "../../src/client/hooks/useFileDrop.svelte.js";
 
-vi.mock("../../src/client/cowork/cowork-helpers.js", () => ({
+vi.mock(import("../../src/client/cowork/cowork-helpers.js"), () => ({
   isTauriRuntime: vi.fn(() => false),
 }));
 
-vi.mock("../../src/client/utils/fileUpload.js", () => ({
+vi.mock(import("../../src/client/utils/fileUpload.js"), () => ({
   API_BASE: "",
   readFileForUpload: vi.fn(async () => "file-contents"),
 }));

@@ -196,6 +196,22 @@ const CENSUS: Acknowledged[] = [
     reason: "durable annotation envelope",
   },
   {
+    file: "server/app-data-owner.ts",
+    key: "claimAppDataDir",
+    count: 1,
+    rearm: "n/a",
+    reason:
+      "the app-data ownership stamp (#1787); atomic because readStamp reads a truncated one as unowned",
+  },
+  {
+    file: "server/app-data-owner.ts",
+    key: "migrateLegacyTree",
+    count: 1,
+    rearm: "n/a",
+    reason:
+      "the one-time legacy migration's completion marker (#1787); gates the migration so deleting the stamp cannot re-import",
+  },
+  {
     file: "server/integrations/apply.ts",
     key: "applyConfig",
     count: 1,
@@ -422,10 +438,12 @@ describe("document write / rearmWatch site pin (#1749)", () => {
     );
 
     expect(observed).toEqual(expected);
-    // 17 write CALL sites. A `git grep` returns 20 lines; the three extra are
-    // the definitions at `file-io/index.ts` (×2) and `integrations/apply.ts`,
-    // which the walk skips by construction.
-    expect(sites).toHaveLength(17);
+    // 19 write CALL sites (17 + the two `app-data-owner.ts` sites from #1787:
+    // the ownership stamp and the legacy-migration completion marker). A
+    // `git grep` returns 22 lines; the three extra are the definitions at
+    // `file-io/index.ts` (×2) and `integrations/apply.ts`, which the walk skips
+    // by construction.
+    expect(sites).toHaveLength(19);
   });
 
   it("no write site keys to <module>", () => {

@@ -20,7 +20,7 @@ const persistSkippedSaveSession = vi.fn();
 const getActiveDocId = vi.fn(() => "d1");
 const saveDocumentAsToDisk = vi.fn();
 const serializeDocument = vi.fn();
-vi.mock("../../../src/server/mcp/document-service.js", () => ({
+vi.mock(import("../../../src/server/mcp/document-service.js"), () => ({
   closeDocumentById,
   saveDocumentToDisk,
   persistSkippedSaveSession,
@@ -30,10 +30,10 @@ vi.mock("../../../src/server/mcp/document-service.js", () => ({
 }));
 
 const convertToMarkdown = vi.fn();
-vi.mock("../../../src/server/mcp/convert.js", () => ({ convertToMarkdown }));
+vi.mock(import("../../../src/server/mcp/convert.js"), () => ({ convertToMarkdown }));
 
 const applyChangesCore = vi.fn();
-vi.mock("../../../src/server/mcp/docx-apply.js", () => ({ applyChangesCore }));
+vi.mock(import("../../../src/server/mcp/docx-apply.js"), () => ({ applyChangesCore }));
 
 const { handleClose } = await import("../../../src/server/mcp/routes/close.js");
 const { handleConvert } = await import("../../../src/server/mcp/routes/convert.js");
@@ -121,6 +121,12 @@ describe("POST /api/convert — outputPath", () => {
   });
 });
 
+// #1816 made `saveDocumentToDisk`'s real `reason` generic at the source, so
+// this describe's `RAW` sample is injected only by the `saveDocumentToDisk`
+// mock — it no longer reflects what the real service can produce. Both cases
+// pin this route's own defence-in-depth scrub for the day
+// `document-service.ts` stops guaranteeing a generic reason, not a raw reason
+// reachable today.
 describe("POST /api/save — the 200-with-error branch", () => {
   const RAW = `EACCES: permission denied, open '${HOME_DOC}'`;
 

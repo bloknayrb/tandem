@@ -25,11 +25,11 @@ import {
 } from "../../../src/server/file-io/doc-backup.js";
 
 // Notifications buffer + SSE fan-out are irrelevant here; capture calls instead.
-vi.mock("../../../src/server/notifications.js", () => ({
+vi.mock(import("../../../src/server/notifications.js"), () => ({
   pushNotification: vi.fn(),
 }));
 // The Windows ACL helper spawns icacls/whoami — not something unit tests should do.
-vi.mock("../../../src/server/integrations/acl-win.js", () => ({
+vi.mock(import("../../../src/server/integrations/acl-win.js"), () => ({
   setRestrictiveAcl: vi.fn().mockResolvedValue(undefined),
 }));
 

@@ -79,7 +79,14 @@ const COMMAND = "npm run typecheck:tests";
 const SCRIPT =
   "tsc -p tsconfig.tests.node.json --noEmit && " +
   "tsc -p tsconfig.tests.client.json --noEmit && " +
-  "tsc -p tsconfig.tests.e2e.json --noEmit";
+  "tsc -p tsconfig.tests.e2e.json --noEmit && " +
+  // The fourth leg (#1614). Plain `tsc` resolves a `.svelte` import through
+  // Svelte's ambient wildcard and never reads the component, so the three legs
+  // above check no component boundary at all; svelte-check against the same
+  // config is what does. Pinned by the same exact equality as the rest -- the
+  // point of this constant is that appending anything to the script, including
+  // `|| true`, leaves `ci.yml` byte-identical.
+  "svelte-check --tsconfig ./tsconfig.tests.client.json --fail-on-warnings";
 
 const TEST_CONFIGS = [
   "tsconfig.tests.node.json",
@@ -164,7 +171,14 @@ describe("typecheck:tests CI wiring", () => {
 
   it("runs after dependencies are installed", () => {
     const [, job] = typecheckJob();
-    const install = stepIndex(job, "`npm ci`", (s) => s.run?.trim() === "npm ci");
+    // Prefix match, not exact equality: `npm ci` carries `--ignore-scripts`
+    // since #1832, and `stepIndex` throws on no match, so an exact-equality
+    // finder here turns required `check` red on a flag change. This is the
+    // shape acceptance-harness-wiring.test.ts:264 and
+    // windows-acl-proof-wiring.test.ts:161 already use. The flag itself is
+    // pinned by exact equality in release-ci-hygiene.test.ts, so widening
+    // here loses nothing — this assertion is about ORDER.
+    const install = stepIndex(job, "`npm ci`", (s) => /^npm ci\b/.test(s.run?.trim() ?? ""));
     const check = stepIndex(job, COMMAND, (s) => s.run?.includes("typecheck:tests") ?? false);
     expect(check).toBeGreaterThan(install);
   });

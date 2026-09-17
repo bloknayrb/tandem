@@ -9,7 +9,9 @@
  * sidecar entirely so secrets never traverse the loopback HTTP boundary).
  *
  * The Rust commands live in `src-tauri/src/keychain.rs` and use the
- * `keyring` crate to talk to:
+ * `keyring` crate. There are two, set and delete, and **no read** (#1822
+ * item 5): a getter returned plaintext to the WebView and had no caller.
+ * The store behind them is:
  *   - macOS:   Keychain Services
  *   - Windows: Credential Manager
  *   - Linux:   Secret Service (libsecret/dbus)
@@ -40,15 +42,6 @@ export async function loadInvoke(): Promise<InvokeFn> {
     }
     return (() => Promise.reject(new Error(TAURI_NOT_AVAILABLE))) as InvokeFn;
   }
-}
-
-/**
- * Read a stored secret. Returns `null` if no entry exists under `account`
- * (Tauri command returns `Option<String>` which serializes to JSON `null`).
- * Throws when the keychain itself is inaccessible.
- */
-export function keychainGet(invoke: InvokeFn, account: string): Promise<string | null> {
-  return invoke<string | null>("keychain_get", { account });
 }
 
 /** Store or overwrite a secret. */

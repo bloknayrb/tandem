@@ -16,7 +16,7 @@ import { _resetClientLog, readClientLog } from "../../src/client/utils/client-lo
 
 const preflightSubnet = vi.fn();
 
-vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
+vi.mock(import("../../src/client/cowork/cowork-invoke"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/client/cowork/cowork-invoke")>()),
   loadInvoke: vi.fn(async () => vi.fn()),
   coworkPreflightSubnet: () => preflightSubnet(),

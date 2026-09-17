@@ -22,8 +22,12 @@
 import { cleanup, render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  IntegrationWizardState,
+  PickedIntegration,
+  WizardStep,
+} from "../../src/client/hooks/useIntegrationWizard.svelte";
 import { _resetClientLog, readClientLog } from "../../src/client/utils/client-log";
-
 import { CLAUDE_PLUGIN_INSTALL_COMMANDS } from "../../src/shared/constants.js";
 import type { ApplyItemResult } from "../../src/shared/integrations/contract.js";
 import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
@@ -31,7 +35,7 @@ import { wizardStepCell } from "../helpers/wizard-step-cell.svelte";
 
 // Mutable stubs the mocked hooks return; each test sets them BEFORE render.
 const wizardStub: {
-  picked: unknown[];
+  picked: IntegrationWizardState["picked"];
   applyResults: ApplyItemResult[];
   channelRegistered: boolean | null;
   /**
@@ -40,21 +44,21 @@ const wizardStub: {
    * changing it would re-render nothing — see `wizard-step-cell.svelte.ts` for
    * what that hid.
    */
-  step: string;
+  step: WizardStep;
 } = {
   picked: [],
   applyResults: [],
   channelRegistered: null,
-  get step() {
-    return wizardStepCell.value;
+  get step(): WizardStep {
+    return wizardStepCell.value as WizardStep;
   },
-  set step(next: string) {
+  set step(next: WizardStep) {
     wizardStepCell.set(next);
   },
 };
 
-vi.mock("../../src/client/hooks/useIntegrationWizard.svelte", async (importOriginal) => ({
-  ...(await importOriginal<object>()),
+vi.mock(import("../../src/client/hooks/useIntegrationWizard.svelte"), async (importOriginal) => ({
+  ...(await importOriginal()),
   createIntegrationWizard: () => ({
     // A GETTER, not a frozen literal (#1432). It was `step: "done"` while the
     // retry test below wrote `wizardStub.step` — a field nothing read, which
@@ -94,7 +98,7 @@ vi.mock("../../src/client/hooks/useIntegrationWizard.svelte", async (importOrigi
 // `not-applicable` is what the real hook reports for an stdio target — no
 // server to probe. Using the honest value keeps the row in the same shape the
 // production Done screen renders for Claude Desktop.
-vi.mock("../../src/client/hooks/useReachabilityCheck.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useReachabilityCheck.svelte"), () => ({
   createReachabilityCheck: () => ({
     phase: "done",
     serverUp: null,
@@ -106,7 +110,7 @@ vi.mock("../../src/client/hooks/useReachabilityCheck.svelte", () => ({
   }),
 }));
 
-vi.mock("../../src/client/hooks/useClaudeCliStatus.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useClaudeCliStatus.svelte"), () => ({
   createClaudeCliStatus: () => ({
     presence: null,
     bareNameLaunchable: null,
@@ -123,36 +127,69 @@ vi.mock("../../src/client/hooks/useClaudeCliStatus.svelte", () => ({
 // below see the layout they were written against. One test flips it to reach
 // the Cowork sub-view, which is the only way to unmount and remount the
 // push-routes block.
-const coworkStub: { status: unknown } = { status: null };
+const coworkStub: {
+  status: import("../../src/client/hooks/useCoworkStatus.svelte").CoworkStatusState["status"];
+} = { status: null };
 
-vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useCoworkStatus.svelte"), () => ({
   createCoworkStatus: () => ({
     get status() {
       return coworkStub.status;
     },
     loading: false,
     error: null,
-    refetch: vi.fn(async () => {}),
+    refetch: vi.fn(async () => true),
   }),
 }));
 
-vi.mock("../../src/client/cowork/cowork-helpers", async (importOriginal) => {
+// #1817: tri-state override so a test can force either `isTauriRuntime()` arm
+// without disturbing `:509`/`:531` below, which set `coworkStub.status` and
+// then click `data-testid="integration-wizard-cowork-setup"` — gated on
+// `isTauriRuntime()` alone — and would break under an independent cell
+// defaulting to `false`. `afterEach` resets this to `null` so those two keep
+// their `coworkStub.status`-derived behavior.
+let tauriOverride: boolean | null = null;
+vi.mock(import("../../src/client/cowork/cowork-helpers"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/client/cowork/cowork-helpers")>();
-  return { ...actual, isTauriRuntime: () => coworkStub.status !== null };
+  return {
+    ...actual,
+    isTauriRuntime: () => tauriOverride ?? coworkStub.status !== null,
+  };
+});
+
+// #1817's Tauri-true case reaches `wizard.step === "done"` (`mountPushMode`
+// already puts the wizard there), so `useAutostart.svelte`'s real `$effect`
+// runs unmocked once `isTauriRuntime()` is forced true — mirrors
+// `tests/client/network-settings-autostart.test.ts:41-52`. Spread `actual` so
+// the wizard's other three imports from this module (`autostartWizardDefault`,
+// `readAutostartDecided`, `writeAutostartDecided`) stay real; only
+// `createAutostart`'s live status/toggle are stubbed.
+vi.mock(import("../../src/client/hooks/useAutostart.svelte.js"), async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../src/client/hooks/useAutostart.svelte.js")>();
+  return {
+    ...actual,
+    createAutostart: () => ({
+      status: null,
+      loading: false,
+      error: null,
+      toggle: vi.fn(async (_next: boolean) => {}),
+    }),
+  };
 });
 
 // Spread, not re-declare — see `cowork-settings-mounted.test.ts` for the
 // subset-drift this avoids.
-vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
+vi.mock(import("../../src/client/cowork/cowork-invoke"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/client/cowork/cowork-invoke")>()),
   loadInvoke: vi.fn(async () => vi.fn()),
-  coworkToggleIntegration: vi.fn(async () => ({ ok: true })),
-  coworkPreflightSubnet: vi.fn(async () => ({ status: "unavailable" })),
+  coworkToggleIntegration: vi.fn(async () => ({ message: "Cowork enabled" })),
+  coworkPreflightSubnet: vi.fn(async () => ({ status: "unavailable" as const })),
 }));
 
 import IntegrationWizardModal from "../../src/client/components/IntegrationWizardModal.svelte";
 
-function pickedDesktop(id = "claude-desktop-1") {
+function pickedDesktop(id = "claude-desktop-1"): PickedIntegration {
   return {
     id,
     config: {
@@ -167,7 +204,7 @@ function pickedDesktop(id = "claude-desktop-1") {
   };
 }
 
-function pickedCode(id = "claude-code-1") {
+function pickedCode(id = "claude-code-1"): PickedIntegration {
   return {
     id,
     config: {
@@ -185,7 +222,7 @@ function pickedCode(id = "claude-code-1") {
 
 const applied = (id: string): ApplyItemResult => ({ id, status: "applied" });
 
-function mountDone(picked: unknown[], results: ApplyItemResult[]) {
+function mountDone(picked: IntegrationWizardState["picked"], results: ApplyItemResult[]) {
   wizardStub.picked = picked;
   wizardStub.applyResults = results;
   return render(IntegrationWizardModal, { props: { open: true, onClose: vi.fn() } });
@@ -248,6 +285,29 @@ describe("IntegrationWizardModal — per-target push support (#1299)", () => {
     expect(q(container, "integration-wizard-plugin")).toBeNull();
   });
 
+  it("names a refused config by its reason rather than falling back (#1801, #1802)", async () => {
+    // `resultErrorText`'s `default` arm falls back to `result.message`, and the
+    // server's static message happens to read fine — so a MISSING `case` is
+    // invisible unless the assertion is on the client-side sentence. These two
+    // are the rows that used to render as "check it isn't open in another
+    // program", which is both wrong and unactionable for a file Tandem
+    // deliberately declined to touch.
+    const { container } = mountDone(
+      [pickedDesktop(), pickedCode()],
+      [
+        { id: "claude-desktop-1", status: "error", code: "CONFIG_TOO_LARGE" },
+        { id: "claude-code-1", status: "error", code: "CONFIG_MALFORMED" },
+      ],
+    );
+    await tick();
+    const text = container.textContent ?? "";
+    expect(text).toContain("too large for Tandem to rewrite safely");
+    // #1802's half: there is no backup to point at any more, so the sentence
+    // has to say the original file IS the recovery target.
+    expect(text).toContain("left it untouched");
+    expect(text).not.toContain("open in another program");
+  });
+
   it("says nothing on a row that did not apply", async () => {
     // An error row is about the write failing; leading with a delivery caveat
     // would bury the actionable problem under one the user cannot act on yet.
@@ -285,6 +345,7 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
     wizardStub.channelRegistered = null;
     wizardStepCell.reset();
     coworkStub.status = null;
+    tauriOverride = null;
     vi.clearAllMocks();
     // Here rather than at the end of each clipboard test: `navigator` is a
     // global and the stub replaces it wholesale (no `userAgent`, no
@@ -559,18 +620,49 @@ describe("IntegrationWizardModal — push-mode copy (#1389, #1390)", () => {
    * every surface by regex; this one proves the corrected copy actually reaches
    * the screen, which the regex cannot see.
    */
-  it("tells the user the ONLY thing that registers the shim: the CLI flag", async () => {
+  it("tells the user the ONLY thing that registers the shim: the CLI flag (non-Tauri)", async () => {
+    tauriOverride = false;
     const { container } = mountPushMode(false);
     await tick();
     const block = q(container, "integration-wizard-push-mode") as HTMLElement;
     const text = (block.textContent ?? "").replace(/\s+/g, " ");
 
     expect(text).toContain("tandem setup --apply --with-channel-shim");
-    // doctor.ts's caveat. Omitting it sends a desktop user — the majority, and
-    // the reason #1390 exists — to a binary their install does not ship.
-    expect(text).toContain("which the desktop app does not install");
+    // #1817: the npm-package caveat moved to the Tauri-only arm — this
+    // (npm/CLI) runtime has a working `tandem` command, so it does not carry it.
+    expect(text).not.toContain("npm install -g tandem-editor");
     // The route it must NOT offer.
     expect(text).not.toMatch(/come back here and register/i);
+  });
+
+  /**
+   * #1817: the desktop app has no `tandem` command at all, so the
+   * non-registered arm splits on `isTauriRuntime()` — the desktop copy names
+   * the npm install step before the setup command that needs it, closing with
+   * the keep-the-global caveat (the shim entry runs from that global install).
+   */
+  it("names the npm install step before the setup command under Tauri", async () => {
+    tauriOverride = true;
+    const { container } = mountPushMode(false);
+    await tick();
+    const block = q(container, "integration-wizard-push-mode") as HTMLElement;
+    const text = (block.textContent ?? "").replace(/\s+/g, " ");
+
+    expect(text).toContain("npm install -g tandem-editor@latest");
+    expect(text).toContain("desktop app doesn't include the");
+    expect(text).toContain("Keep the global installed");
+    expect(text).toContain("tandem setup --apply --with-channel-shim");
+  });
+
+  it("names the setup command with no npm install step off Tauri", async () => {
+    tauriOverride = false;
+    const { container } = mountPushMode(false);
+    await tick();
+    const block = q(container, "integration-wizard-push-mode") as HTMLElement;
+    const text = (block.textContent ?? "").replace(/\s+/g, " ");
+
+    expect(text).toContain("tandem setup --apply --with-channel-shim");
+    expect(text).not.toContain("npm install -g tandem-editor");
   });
 
   it("does not imply the wizard registered the shim when one is already there", async () => {

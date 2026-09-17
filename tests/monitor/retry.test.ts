@@ -9,16 +9,25 @@ import {
   sseResponse,
 } from "./fetch-harness.js";
 
+/** The `/api/channel-error` bodies the consumer has POSTed so far. */
+function errorReportBodies(stub: ReturnType<typeof createFetchStub>): Array<{ error?: string }> {
+  return stub.calls
+    .filter((c) => c.url.includes("/api/channel-error"))
+    .map((c) => JSON.parse(String(c.init?.body ?? "{}")) as { error?: string });
+}
+
 describe("retry counter semantics", () => {
   let stub: ReturnType<typeof createFetchStub>;
   let stdoutSpy: ReturnType<typeof vi.spyOn>;
   let exitSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     installMonitorFakeTimers();
     stub = createFetchStub();
     stub.install();
     stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
       throw new Error("process.exit called");
     }) as never);
@@ -32,10 +41,16 @@ describe("retry counter semantics", () => {
     stub.restore();
     vi.useRealTimers();
     stdoutSpy.mockRestore();
+    errorSpy.mockRestore();
     exitSpy.mockRestore();
   });
 
-  it("exits after MAX retries even when each attempt produces a single event first", async () => {
+  it("keeps retrying past MAX and reports once, on a connect-then-die stream", async () => {
+    // The stub is unchanged from when this spec asserted the exit: each attempt
+    // emits one event and then dies. It is the only *connect*-then-fail shape
+    // in the suite, and so the only one that can catch a latch cleared on the
+    // handshake rather than on `onStable` — under a fail-always stub that
+    // regression is invisible, because `everConnected` never goes true.
     let connectAttempts = 0;
     stub.on("/api/events", () => {
       connectAttempts++;
@@ -58,44 +73,56 @@ describe("retry counter semantics", () => {
       return sseResponse(s);
     });
 
-    const mainPromise = main().catch(() => {});
-    // Advance past the full backoff budget (2+4+8+16+30 = 60s) so main()
-    // exhausts CHANNEL_MAX_RETRIES and exits via the MAX branch.
+    void main().catch(() => {});
+    // Well past the old 2+4+8+16+30 budget: at the 30s cap this is ~10 cycles.
     await vi.advanceTimersByTimeAsync(200_000);
-    await mainPromise;
+    await vi.advanceTimersByTimeAsync(0);
 
-    // process.exit(1) only fires from the MAX branch, so connectAttempts must
-    // be exactly CHANNEL_MAX_RETRIES — an upper bound alone would pass for an
-    // early-exit regression (e.g. inverted loop condition) that still exits 1.
-    expect(connectAttempts).toBe(CHANNEL_MAX_RETRIES);
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    // Capture before any assertion: the loop never settles, so a spec that
+    // asserts against the live counters races its own teardown.
+    const attempts = connectAttempts;
+    const reports = errorReportBodies(stub);
+    const stdoutCalls: string[] = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+
+    expect(attempts).toBeGreaterThanOrEqual(8);
+    // An upper bound alone would pass for a fix that still exits.
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.error).toBe("MONITOR_CONNECT_FAILED");
+    // Matched on the notice's own phrase, not `tandem_checkInbox`: the
+    // per-event line this stub also produces contains that phrase too.
+    expect(stdoutCalls.filter((s) => /retrying in the background/.test(s))).toHaveLength(1);
   });
 
-  // Contract narrowed deliberately: the exit notice is now conditional on
-  // having connected at least once. Here the server was never reachable, so
-  // there is nothing to report — the line claims real-time events stopped, and
-  // none ever started. (The original justification also leaned on the host
+  // Contract narrowed deliberately: the stdout notice is conditional on having
+  // connected at least once. Here the server was never reachable, so there is
+  // nothing to report — the line says a connection was lost, and none was ever
+  // made. (The original justification also leaned on the host
   // arming this monitor in every session; #1354 replaced `when: "always"` with
   // `on-skill-invoke`, so that half no longer holds — see the note in
   // `src/monitor/run.ts` for why the contract survives without it.)
   // `tests/monitor/index.test.ts` covers the connected-then-dropped case,
   // where the notice DOES fire.
-  it("stays silent on stdout when it never connected, and still exits 1", async () => {
+  it("stays silent on stdout when it never connected, and keeps retrying", async () => {
+    let connectAttempts = 0;
     stub.on("/api/events", () => {
+      connectAttempts++;
       throw new Error("refused");
     });
 
-    const mainPromise = main().catch(() => {});
+    void main().catch(() => {});
     await vi.advanceTimersByTimeAsync(200_000);
-    await mainPromise;
+    await vi.advanceTimersByTimeAsync(0);
 
+    const attempts = connectAttempts;
     const stdoutCalls: string[] = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0]));
-    expect(
-      stdoutCalls.find(
-        (s) => s.includes("monitor:exit") || s.includes("Tandem monitor disconnected"),
-      ),
-    ).toBeUndefined();
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    // Matched on the new notice's phrases, not the retired "disconnected"
+    // wording — that would go vacuous and leave the `!everConnected` guard
+    // pinned by nothing.
+    expect(stdoutCalls.find((s) => /retrying in the background/.test(s))).toBeUndefined();
+    expect(stdoutCalls.find((s) => /tandem_checkInbox/.test(s))).toBeUndefined();
+    expect(attempts).toBeGreaterThanOrEqual(8);
+    expect(exitSpy).not.toHaveBeenCalled();
   });
 
   it("retries on a 503 from /api/events (non-ok response, not a thrown error)", async () => {
@@ -105,13 +132,14 @@ describe("retry counter semantics", () => {
       return new Response("unavailable", { status: 503 });
     });
 
-    const mainPromise = main().catch(() => {});
+    void main().catch(() => {});
     await vi.advanceTimersByTimeAsync(200_000);
-    await mainPromise;
+    await vi.advanceTimersByTimeAsync(0);
 
-    // Expect at least CHANNEL_MAX_RETRIES connect attempts before exhaustion.
-    expect(connectAttempts).toBeGreaterThanOrEqual(CHANNEL_MAX_RETRIES);
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    const attempts = connectAttempts;
+    // Expect at least CHANNEL_MAX_RETRIES connect attempts.
+    expect(attempts).toBeGreaterThanOrEqual(CHANNEL_MAX_RETRIES);
+    expect(exitSpy).not.toHaveBeenCalled();
   });
 
   it("retry counter resets after STABLE_CONNECTION_MS of continuous uptime", async () => {
@@ -135,7 +163,7 @@ describe("retry counter semantics", () => {
       throw new Error("unexpected attempt");
     });
 
-    const p = main().catch(() => {});
+    void main().catch(() => {});
 
     // Drive past attempts 1+2 (backoffs 2s+4s) so attempt 3 is active.
     await vi.advanceTimersByTimeAsync(10_000);
@@ -158,9 +186,105 @@ describe("retry counter semantics", () => {
     expect(delayToAttempt4).toBeLessThan(3000);
 
     stream4.end();
-    // Drain remaining retries so main() exits via the MAX branch.
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  it("reports again on a second outage once a recovery survived STABLE_CONNECTION_MS", async () => {
+    // Kills a latch that is set and never cleared. Its anti-flap other half is
+    // the connect-then-die spec above, where `onStable` never fires and the
+    // report must stay at one.
+    let attempt = 0;
+    const healthy = new ControllableStream();
+    stub.on("/api/events", () => {
+      attempt++;
+      // A first connection that dies at once, so the run HAS connected and
+      // what follows is a real outage — not a never-connected start, whose
+      // latch the first handshake resets on its own (the spec below).
+      if (attempt === 1) {
+        const s = new ControllableStream();
+        setTimeout(() => s.error(new Error("stream died")), 0);
+        return sseResponse(s);
+      }
+      // Six failures, then a stream held open long enough for onStable.
+      if (attempt <= CHANNEL_MAX_RETRIES + 2) throw new Error("refused");
+      if (attempt === CHANNEL_MAX_RETRIES + 3) return sseResponse(healthy);
+      throw new Error("refused again");
+    });
+
+    void main().catch(() => {});
+    // 2+4+8+16+30+30+30 = 120s of backoff before the eighth connect.
+    await vi.advanceTimersByTimeAsync(125_000);
+    expect(errorReportBodies(stub)).toHaveLength(1);
+
+    // Hold it up past STABLE_CONNECTION_MS (60s) so onStable clears the latch.
+    await vi.advanceTimersByTimeAsync(60_500);
+    const stderrAfterRecovery: string[] = errorSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(stderrAfterRecovery.filter((s) => /SSE connection restored/.test(s))).toHaveLength(1);
+    // Nothing was latched when the run first connected, so the transition
+    // line — written only to close a never-connected report — did not fire.
+    expect(stderrAfterRecovery.filter((s) => /SSE connection established/.test(s))).toHaveLength(0);
+
+    // No explicit `end()`: the inactivity watchdog shares the 60s deadline and
+    // cancels this quiet stream immediately after `onStable`, which is exactly
+    // the second outage this spec needs.
     await vi.advanceTimersByTimeAsync(200_000);
-    await p;
+    await vi.advanceTimersByTimeAsync(0);
+
+    const reports = errorReportBodies(stub);
+    const stderrCalls: string[] = errorSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(reports).toHaveLength(2);
+    // The per-failure lines resume after the latch clears.
+    expect(stderrCalls.filter((s) => /SSE connection failed/.test(s)).length).toBeGreaterThan(
+      CHANNEL_MAX_RETRIES,
+    );
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("reports the first real loss after a never-connected start, even inside STABLE_CONNECTION_MS", async () => {
+    // Tandem was not running when the monitor armed: six refused connects set
+    // the once-per-outage latch with a report the monitor swallows
+    // (`everConnected` false). Then the server appears and dies on every
+    // connect before it can survive 60s, so `onStable` never fires. Without a
+    // reset on the never→connected transition the latch is still set and
+    // `retries` still past the threshold, so this — the first outage the user
+    // can feel — reports nothing: no POST, no notice, no stderr line.
+    let attempt = 0;
+    stub.on("/api/events", () => {
+      attempt++;
+      if (attempt <= CHANNEL_MAX_RETRIES + 1) throw new Error("refused");
+      const s = new ControllableStream();
+      setTimeout(() => {
+        s.push(
+          sseFrame(
+            {
+              id: `evt_${attempt}`,
+              type: "chat:message",
+              timestamp: 1,
+              payload: { messageId: "m", text: "hi", replyTo: null, anchor: null },
+            },
+            `evt_${attempt}`,
+          ),
+        );
+        s.error(new Error("stream died"));
+      }, 0);
+      return sseResponse(s);
+    });
+
+    void main().catch(() => {});
+    // 2+4+8+16+30+30 = 90s before the first connect, then a fresh ladder
+    // (2+4+8+16+30 = 60s) before the connected-then-lost report.
+    await vi.advanceTimersByTimeAsync(300_000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const reports = errorReportBodies(stub);
+    const stdoutCalls: string[] = stdoutSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    const stderrCalls: string[] = errorSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    // One swallowed never-connected report, then one real one.
+    expect(reports).toHaveLength(2);
+    expect(stdoutCalls.filter((s) => /retrying in the background/.test(s))).toHaveLength(1);
+    // The transition is announced once, and only because a report was latched.
+    expect(stderrCalls.filter((s) => /SSE connection established/.test(s))).toHaveLength(1);
+    expect(exitSpy).not.toHaveBeenCalled();
   });
 
   it("503 response does not leak handshake/stable/watchdog timers", async () => {
@@ -209,9 +333,9 @@ describe("exponential backoff", () => {
       throw new Error("refused");
     });
 
-    const mainPromise = main().catch(() => {});
+    void main().catch(() => {});
     await vi.advanceTimersByTimeAsync(200_000);
-    await mainPromise;
+    await vi.advanceTimersByTimeAsync(0);
 
     // Expected delays between attempts: ~2000, ~4000, ~8000, ~16000 (capped at 30000)
     const deltas = attemptTimes.slice(1).map((t, i) => t - attemptTimes[i]!);

@@ -166,10 +166,23 @@ prevents them drifting.
    to be a step rather than a habit.
 
 7. Wait for every matrix build, `release-check`, AND `verify-release-manifest`
-   to go green, then publish the draft:
+   to go green, then publish the draft. **Which command depends on whether the
+   version carries a hyphen** (`v1.0.0-rc.1` does, `v1.0.0` does not):
+
    ```bash
+   # No hyphen — a normal release:
    gh release edit v<version> --draft=false --latest
+
+   # With a hyphen — a prerelease:
+   gh release edit v<version> --draft=false --prerelease --latest=false
    ```
+
+   GitHub's `releases/latest` resolves to the newest **non-prerelease** release,
+   and `src-tauri/tauri.conf.json` points the updater at
+   `releases/latest/download/latest.json` — so that resolution is the only thing
+   keeping every installed copy off an RC. **Do not pass a bare `--latest` on a
+   prerelease.** `create-release` already sets the release's `prerelease` flag
+   from the tag (#1748); these flags are the publish-time half of the same rule.
 
    **A green matrix is not a complete release.** Until v0.20.1 every matrix leg
    independently found-or-created the draft, so four jobs starting in the same

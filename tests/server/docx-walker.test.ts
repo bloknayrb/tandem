@@ -1,5 +1,9 @@
 import { parseDocument } from "htmlparser2";
+import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
+import * as Y from "yjs";
+import { loadDocx } from "../../src/server/file-io/docx.js";
+import { htmlToYDoc } from "../../src/server/file-io/docx-html.js";
 import {
   type CommentStartHit,
   detectHeadingLevel,
@@ -8,6 +12,9 @@ import {
   type TextHit,
   walkDocumentBody,
 } from "../../src/server/file-io/docx-walker.js";
+import { extractText } from "../../src/server/mcp/document-model.js";
+import { withInternal } from "../../src/shared/origins.js";
+import { rawDocx } from "../helpers/docx-corpus.js";
 
 // ---------------------------------------------------------------------------
 // Helper: wrap body content in a minimal document.xml envelope
@@ -117,7 +124,7 @@ describe("walkDocumentBody", () => {
     expect(result.flatText).toBe("BeforeInsertedAfter");
   });
 
-  it("counts <w:tab> as 1 character", () => {
+  it("maps <w:tab> to a tab character", () => {
     const xml = wrapBody(`
       <w:p>
         <w:r><w:t>A</w:t></w:r>
@@ -127,9 +134,10 @@ describe("walkDocumentBody", () => {
     `);
     const result = walkDocumentBody(xml);
     expect(result.totalLength).toBe(3); // A + tab + B
+    expect(result.flatText).toBe("A\tB");
   });
 
-  it("counts <w:br> as 1 character", () => {
+  it("maps a plain <w:br> to a newline", () => {
     const xml = wrapBody(`
       <w:p>
         <w:r><w:t>A</w:t></w:r>
@@ -139,9 +147,10 @@ describe("walkDocumentBody", () => {
     `);
     const result = walkDocumentBody(xml);
     expect(result.totalLength).toBe(3);
+    expect(result.flatText).toBe("A\nB");
   });
 
-  it("counts <w:noBreakHyphen> as 1 character", () => {
+  it("maps <w:noBreakHyphen> to U+2011", () => {
     const xml = wrapBody(`
       <w:p>
         <w:r><w:t>A</w:t></w:r>
@@ -151,9 +160,10 @@ describe("walkDocumentBody", () => {
     `);
     const result = walkDocumentBody(xml);
     expect(result.totalLength).toBe(3);
+    expect(result.flatText).toBe("A\u2011B");
   });
 
-  it("counts <w:softHyphen> as 1 character", () => {
+  it("maps <w:softHyphen> to U+00AD", () => {
     const xml = wrapBody(`
       <w:p>
         <w:r><w:t>A</w:t></w:r>
@@ -163,9 +173,10 @@ describe("walkDocumentBody", () => {
     `);
     const result = walkDocumentBody(xml);
     expect(result.totalLength).toBe(3);
+    expect(result.flatText).toBe("A\u00ADB");
   });
 
-  it("counts <w:sym> as 1 character", () => {
+  it("maps <w:sym> to its resolved glyph", () => {
     const xml = wrapBody(`
       <w:p>
         <w:r><w:t>A</w:t></w:r>
@@ -175,6 +186,7 @@ describe("walkDocumentBody", () => {
     `);
     const result = walkDocumentBody(xml);
     expect(result.totalLength).toBe(3);
+    expect(result.flatText).toBe("A✓B");
   });
 
   it("skips <w:instrText>", () => {
@@ -517,5 +529,146 @@ describe("getVisibleTextContent", () => {
         `<x:r><x:t>tail.</x:t></x:r></x:p>`,
     );
     expect(getVisibleTextContent(node)).toBe("Kept tail.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1754 — the walker's flat text vs the REAL import
+// ---------------------------------------------------------------------------
+//
+// Asserted against `rawDocx` -> `loadDocx` -> `htmlToYDoc` -> `extractText`
+// rather than against string literals: the contract is agreement with mammoth,
+// and a literal would keep passing through a mammoth minor bump that moved the
+// answer. Decision B (#1827) defers part of the reconciliation, so the page
+// break rides here as an explicit `not.toBe` — deleting the deferral turns that
+// assertion red instead of passing unnoticed.
+
+async function importedFlatText(buffer: Buffer): Promise<string> {
+  const html = await loadDocx(buffer);
+  const doc = new Y.Doc();
+  withInternal(doc, () => htmlToYDoc(doc, html));
+  return extractText(doc);
+}
+
+async function documentXmlOf(buffer: Buffer): Promise<string> {
+  const zip = await JSZip.loadAsync(buffer);
+  const xml = await zip.file("word/document.xml")?.async("text");
+  if (!xml) throw new Error("fixture has no word/document.xml");
+  return xml;
+}
+
+/** Build a one-body .docx, then return [real import text, walker flat text]. */
+async function bothTexts(body: string): Promise<[string, string]> {
+  const buffer = await rawDocx({ body });
+  return [await importedFlatText(buffer), walkDocumentBody(await documentXmlOf(buffer)).flatText];
+}
+
+describe("flat text matches the real import (#1754)", () => {
+  it("a tab in a run", async () => {
+    const [real, walked] = await bothTexts(
+      `<w:p><w:r><w:t>A</w:t><w:tab/><w:t>B</w:t></w:r></w:p>`,
+    );
+    expect(walked).toBe(real);
+    expect(walked).toBe("A\tB");
+  });
+
+  // THE DISCRIMINATING FIXTURE. Every other case here is a bare body with no
+  // <w:pPr>, so without this the suite is green while the headline bug — the
+  // walker counting each declared tab STOP as a body character — is live.
+  // Custom tab stops are the commonest real shape of a tabbed Word document.
+  it("a paragraph carrying declared tab stops AND a real in-run tab", async () => {
+    const [real, walked] = await bothTexts(
+      `<w:p><w:pPr><w:tabs>` +
+        `<w:tab w:val="left" w:pos="720"/><w:tab w:val="right" w:pos="9000"/>` +
+        `</w:tabs></w:pPr>` +
+        `<w:r><w:t>Name</w:t><w:tab/><w:t>Value</w:t></w:r></w:p>`,
+    );
+    expect(walked).toBe(real);
+    expect(walked).toBe("Name\tValue");
+  });
+
+  it("a line break", async () => {
+    const [real, walked] = await bothTexts(`<w:p><w:r><w:t>A</w:t><w:br/><w:t>B</w:t></w:r></w:p>`);
+    expect(walked).toBe(real);
+    expect(walked).toBe("A\nB");
+  });
+
+  it("an unrecognised w:br type emits nothing, like mammoth's else arm", async () => {
+    const [real, walked] = await bothTexts(
+      `<w:p><w:r><w:t>A</w:t><w:br w:type="zzz"/><w:t>B</w:t></w:r></w:p>`,
+    );
+    expect(walked).toBe(real);
+    expect(walked).toBe("AB");
+  });
+
+  it("a BMP symbol, via the F0.. retry and directly", async () => {
+    const [realRetry, walkedRetry] = await bothTexts(
+      `<w:p><w:r><w:t>A</w:t><w:sym w:font="Wingdings" w:char="F0FC"/><w:t>B</w:t></w:r></w:p>`,
+    );
+    expect(walkedRetry).toBe(realRetry);
+    expect(walkedRetry).toBe("A✓B");
+    const [realDirect, walkedDirect] = await bothTexts(
+      `<w:p><w:r><w:t>A</w:t><w:sym w:font="Wingdings" w:char="FC"/><w:t>B</w:t></w:r></w:p>`,
+    );
+    expect(walkedDirect).toBe(realDirect);
+    expect(walkedDirect).toBe("A✓B");
+  });
+
+  // Kills "map everything to one space with a different character": an astral
+  // glyph is TWO UTF-16 units, so `offset += 1` is off by one per symbol.
+  it("an astral symbol counts two UTF-16 units", async () => {
+    const body = `<w:p><w:r><w:t>A</w:t><w:sym w:font="Webdings" w:char="F021"/><w:t>B</w:t></w:r></w:p>`;
+    const [real, walked] = await bothTexts(body);
+    expect(walked).toBe(real);
+    expect(walked).toBe("A🕷B");
+    const buffer = await rawDocx({ body });
+    expect(walkDocumentBody(await documentXmlOf(buffer)).totalLength).toBe(4);
+  });
+
+  // The other direction: mammoth warns and drops, so the walker must emit
+  // NOTHING rather than the historical one space.
+  it("an unmapped symbol emits nothing", async () => {
+    const body = `<w:p><w:r><w:t>A</w:t><w:sym w:font="Wingdings" w:char="ZZ"/><w:t>B</w:t></w:r></w:p>`;
+    const [real, walked] = await bothTexts(body);
+    expect(walked).toBe(real);
+    expect(walked).toBe("AB");
+    const buffer = await rawDocx({ body });
+    expect(walkDocumentBody(await documentXmlOf(buffer)).totalLength).toBe(2);
+  });
+
+  // No real-import twin here on purpose: mammoth's own `readSymbol` throws on
+  // this shape (`typeface.toUpperCase()` on undefined), so there is nothing to
+  // compare against. The walker still has to survive it — it also runs at APPLY
+  // time against bytes re-read from disk, with mammoth nowhere in the path.
+  it("a w:sym missing w:font or w:char emits nothing instead of throwing", async () => {
+    const xml = wrapBody(
+      `<w:p><w:r><w:t>A</w:t><w:sym w:char="F0FC"/><w:sym w:font="Wingdings"/><w:t>B</w:t></w:r></w:p>`,
+    );
+    expect(walkDocumentBody(xml).flatText).toBe("AB");
+  });
+
+  it("both hyphens", async () => {
+    const [realNb, walkedNb] = await bothTexts(
+      `<w:p><w:r><w:t>A</w:t><w:noBreakHyphen/><w:t>B</w:t></w:r></w:p>`,
+    );
+    expect(walkedNb).toBe(realNb);
+    expect(walkedNb).toBe("A\u2011B");
+    const [realSoft, walkedSoft] = await bothTexts(
+      `<w:p><w:r><w:t>A</w:t><w:softHyphen/><w:t>B</w:t></w:r></w:p>`,
+    );
+    expect(walkedSoft).toBe(realSoft);
+    expect(walkedSoft).toBe("A\u00ADB");
+  });
+
+  it("CURRENT LOSS — decision B defers this (#1754): a page break", async () => {
+    const [real, walked] = await bothTexts(
+      `<w:p><w:r><w:t>A</w:t><w:br w:type="page"/><w:t>B</w:t></w:r></w:p>`,
+    );
+    // The walker keeps a one-character placeholder; the import emits nothing.
+    // Do NOT read this as the only remaining mismatch — empty paragraphs,
+    // column breaks and the namespace half are deferred with it.
+    expect(walked).not.toBe(real);
+    expect(walked).toBe("A B");
+    expect(real).toBe("AB");
   });
 });

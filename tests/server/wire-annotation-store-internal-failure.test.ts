@@ -28,7 +28,7 @@ const syncOverride = vi.hoisted(() => ({
       ) => Promise<unknown> | unknown),
 }));
 
-vi.mock("../../src/server/annotations/sync.js", async (importOriginal) => {
+vi.mock(import("../../src/server/annotations/sync.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/annotations/sync.js")>();
   return {
     ...actual,
@@ -40,7 +40,8 @@ vi.mock("../../src/server/annotations/sync.js", async (importOriginal) => {
       // the seam matches the real loadAndMerge signature; current overrides only
       // throw/reject and ignore it, but a future partial-delegating override won't
       // silently lose it.
-      if (syncOverride.loadAndMergeImpl) return syncOverride.loadAndMergeImpl(ctx, opts);
+      if (syncOverride.loadAndMergeImpl)
+        return syncOverride.loadAndMergeImpl(ctx, opts) as ReturnType<typeof actual.loadAndMerge>;
       return actual.loadAndMerge(ctx, opts);
     },
   };
@@ -48,8 +49,8 @@ vi.mock("../../src/server/annotations/sync.js", async (importOriginal) => {
 
 // Mock the session manager — saveSession/deleteSession touch disk for the
 // .tandem session sidecar, orthogonal to what these tests exercise.
-vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/session/manager.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     saveSession: vi.fn().mockResolvedValue(undefined),
@@ -60,8 +61,8 @@ vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
 
 // Mock the file watcher — real fs.watch on temp files leaks handles and races
 // the rename's own delete/create events.
-vi.mock("../../src/server/file-watcher.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/file-watcher.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     watchFile: vi.fn(),
@@ -71,8 +72,8 @@ vi.mock("../../src/server/file-watcher.js", async (importOriginal) => {
 });
 
 // Mock notifications — the failure path calls pushNotification; assert via spy.
-vi.mock("../../src/server/notifications.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/notifications.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     pushNotification: vi.fn(),

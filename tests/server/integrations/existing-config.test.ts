@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { MAX_CONFIG_BYTES } from "../../../src/server/integrations/apply.js";
 import {
   hasExistingTandemEntry,
   readExistingTandemEntries,
@@ -55,6 +56,38 @@ describe("readExistingTandemEntries", () => {
     const installs = await readExistingTandemEntries(detectOverrides());
     const cc = installs.find((i) => i.target.kind === "claude-code");
     expect(cc?.status).toBe("malformed");
+  });
+
+  // #1823 item 5. `JSON.parse` throws on a BOM, so a valid-but-BOM'd config
+  // was reported "malformed" and the wizard called the file broken — while
+  // `applyConfig` strips U+FEFF and rewrites the same file happily.
+  it("strips a UTF-8 BOM instead of calling the config malformed", async () => {
+    await fs.promises.writeFile(
+      path.join(tmpHome, ".claude.json"),
+      `﻿${JSON.stringify({
+        mcpServers: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
+      })}`,
+      "utf-8",
+    );
+    const installs = await readExistingTandemEntries(detectOverrides());
+    const cc = installs.find((i) => i.target.kind === "claude-code");
+    expect(cc?.status).toBe("ok");
+    expect(cc?.tandemEntry).toEqual({ type: "http", url: "http://127.0.0.1:3479/mcp" });
+    expect(cc?.tandemValidation?.status).toBe("valid");
+  });
+
+  it("refuses a config over the size cap, naming the size and the cap", async () => {
+    // Built SPARSE — the cap is 16 MiB and writing that many real bytes would
+    // make this spec cost seconds of disk I/O for nothing.
+    const p = path.join(tmpHome, ".claude.json");
+    await fs.promises.writeFile(p, "{}", "utf-8");
+    await fs.promises.truncate(p, MAX_CONFIG_BYTES + 1);
+
+    const installs = await readExistingTandemEntries(detectOverrides());
+    const cc = installs.find((i) => i.target.kind === "claude-code");
+    expect(cc?.status).toBe("error");
+    expect(cc?.errorMessage).toContain(String(MAX_CONFIG_BYTES));
+    expect(cc?.errorMessage).toContain(String(MAX_CONFIG_BYTES + 1));
   });
 
   it("returns status: ok with no entry when mcpServers is absent", async () => {

@@ -13,19 +13,25 @@
  */
 
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/svelte";
+import { DecorationSet } from "@tiptap/pm/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Stubbed so the bar can reach `handleReplaceAll` without a real editor: the
 // match count comes from plugin state, and `replaceAll` is what reports the
 // partial outcome that produces the warning.
-vi.mock("../../src/client/editor/extensions/find-replace.js", async (importOriginal) => ({
-  ...(await importOriginal<object>()),
+vi.mock(import("../../src/client/editor/extensions/find-replace.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   getFindState: () => ({
     matches: [
       { from: 1, to: 2 },
       { from: 5, to: 6 },
     ],
     activeIndex: 0,
+    query: "",
+    caseSensitive: false,
+    wholeWord: false,
+    regexMode: false,
+    decoSet: DecorationSet.empty,
   }),
   replaceActive: vi.fn(),
   replaceAll: vi.fn(async () => ({ replaced: 1, partial: true })),

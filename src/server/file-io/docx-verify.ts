@@ -58,7 +58,18 @@ const SOFT_RETENTION = 0.85;
 
 // --- Verdict (scalar/enum only — structurally incapable of holding text) ------
 
-export type BlockReason = "reimport-failed" | "degenerate-model" | "gross-text-loss";
+/**
+ * `import-image-loss` (#1755) has NO producer inside this module, deliberately:
+ * `verifyDocxRoundtrips` compares an export against a re-import of that same
+ * export, and both sides are equally image-less, so it is structurally incapable
+ * of seeing the loss. It is raised in `mcp/document-service.ts` off the
+ * PERSISTED import report, before any bytes are generated.
+ */
+export type BlockReason =
+  | "reimport-failed"
+  | "degenerate-model"
+  | "gross-text-loss"
+  | "import-image-loss";
 export type AdvisoryReason = "comment-loss" | "footnote-loss" | "soft-text-loss" | "verifier-error";
 
 /** All scalars. Safe to `console.error`/`warn` and to surface to the client. */
@@ -434,5 +445,15 @@ export function blockReasonMessage(reason: BlockReason): string {
       return `the regenerated file was missing most of its content${tail}`;
     case "gross-text-loss":
       return `the regenerated file was missing a large amount of text${tail}`;
+    case "import-image-loss":
+      // The one reason with an EXIT (#1941), so the message names it: the same
+      // string is the pushed notification a browser user reads and the `reason`
+      // `tandem_save` returns, and a refusal whose override is documented
+      // elsewhere is a dead end for whoever hit it. Still content-free — a
+      // parameter name and a button phrase, never a path, filename or count.
+      return (
+        "this file's pictures couldn't be imported, so saving would remove them — save anyway " +
+        `if you accept that (allowImageLoss), or convert it to Markdown instead${tail}`
+      );
   }
 }

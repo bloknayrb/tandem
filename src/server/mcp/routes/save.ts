@@ -52,6 +52,24 @@ export async function handleSave(req: Request, res: Response): Promise<void> {
 
   const body = (req.body ?? {}) as Record<string, unknown>;
   const { documentId, targetPath, format, serialize } = body;
+  // #1941. Strict `=== true`, and read off the same `?? {}` fallback as every
+  // other field: `express.json()` is mounted with no `type` option, so a
+  // `text/plain` POST leaves `req.body` undefined and `body` is `{}` here. A
+  // truthiness test would turn `"false"`, `0`-vs-`1` and a dropped field into a
+  // destructive default on the one route that overwrites the user's open
+  // document. Every parse failure lands on `false` = refuse. Branches 2 and 3
+  // never read it: serialize-only touches no disk, and save-as writes a NEW
+  // file rather than overwriting the picture-bearing original.
+  //
+  // What the parse does NOT establish is user INTENT (#2027, open). The gate in
+  // front of this field is `assertOriginAllowlisted`, and its allowlist is any
+  // `http(s)://127.0.0.1:<any port>` origin — so a page on another loopback
+  // port can send this as JSON (preflight answered, socket loopback, omitted
+  // `documentId` falling through to the active doc) and destroy the pictures
+  // with no interaction. Before #1941 that request was refused outright. Do not
+  // read the strictness below as a control on WHO may set the flag; it only
+  // fixes what an absent or malformed body means.
+  const allowImageLoss = body.allowImageLoss === true;
 
   if (documentId !== undefined && typeof documentId !== "string") {
     res.status(400).json({ error: "BAD_REQUEST", message: "documentId must be a string" });
@@ -129,7 +147,7 @@ export async function handleSave(req: Request, res: Response): Promise<void> {
 
   // Branch 1: ordinary save (existing behavior)
   try {
-    const result = await saveDocumentToDisk(targetId, "manual");
+    const result = await saveDocumentToDisk(targetId, "manual", { allowImageLoss });
     if (result.status === "skipped") {
       // The disk save did NOT happen — persist the dirty flag (#1069) and any
       // pending conflict (#1238) so a restart doesn't discard the only copy of
@@ -140,13 +158,18 @@ export async function handleSave(req: Request, res: Response): Promise<void> {
       await persistSkippedSaveSession(targetId);
     }
     // #1294: this branch reports failure in a 200 body rather than through
-    // sendApiError, so the scrub there does not reach it. `reason` is the raw
-    // write error (`EACCES: permission denied, open '<abs path>'`) for a
-    // document the caller identified only by documentId — same disclosure, a
-    // different envelope. Branches 2 and 3 are exempt: their paths are the
-    // caller's own `targetPath`.
+    // sendApiError, so the scrub there does not reach it. Since #1816,
+    // `saveDocumentToDisk`'s own `reason` is already generic (never the raw
+    // write error) at the source, so this scrub is defence-in-depth rather
+    // than the only thing standing between a loopback caller and an absolute
+    // path. Branches 2 and 3 are exempt: their paths are the caller's own
+    // `targetPath`.
     if (result.status === "error" && !isLoopbackRequest(req)) {
-      res.json({ data: { ...result, reason: "The save failed." } });
+      // cr-3 (#1816 follow-up): the client always renders this as
+      // "Save failed: <reason>" — keep the defence-in-depth wording here in
+      // sync with `saveDocumentToDisk`'s own generic reason so neither
+      // caller sees a stutter ("Save failed: The save failed.").
+      res.json({ data: { ...result, reason: "The document could not be saved." } });
       return;
     }
     res.json({ data: result });

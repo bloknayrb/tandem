@@ -17,7 +17,7 @@ import type { ExternalConflictState, SessionData } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { docHash, ENVELOPE_FILENAME_RE } from "../annotations/doc-hash.js";
-import { parseAnnotationDoc } from "../annotations/schema.js";
+import { isPartialParse, parseAnnotationDoc } from "../annotations/schema.js";
 import { createStore, getAnnotationsDir, isStoreReadOnly } from "../annotations/store.js";
 import { reconcileStreamSidecars } from "../chat-stream-staleness.js";
 import { atomicWrite } from "../file-io/index.js";
@@ -1160,6 +1160,11 @@ export async function cleanupStaleTombstones(
 
     const parsed = parseAnnotationDoc(raw);
     if (!parsed.ok) continue; // corrupt/future files have their own lifecycle
+    // #1791(a): a partially-tolerated envelope is not a safe base for a
+    // full-envelope clobber. `rewritten` below is built from `parsed.doc` and
+    // flushed over `<hash>.json`, so rewriting one would durably delete every
+    // row this build could not read.
+    if (isPartialParse(parsed)) continue;
     const doc = parsed.doc;
     if (doc.tombstones.length === 0) continue;
 

@@ -52,6 +52,10 @@ function onKeydown(e: KeyboardEvent) {
   // Stop every key from bubbling to the tab's onkeydown (arrow reorder) and the
   // app-level keydown dispatcher while editing.
   e.stopPropagation();
+  // An IME candidate-confirm Enter must not submit (#1777 item 3). Safari and
+  // some IMEs deliver that keydown with `isComposing` already false, so the
+  // legacy `keyCode === 229` sentinel is the second term.
+  if (e.isComposing || e.keyCode === 229) return;
   if (e.key === "Enter") {
     e.preventDefault();
     finish(true);

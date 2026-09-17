@@ -1,10 +1,22 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { captureSnapshot, collectAnnotations } from "../../src/server/mcp/annotations.js";
+import { extractText } from "../../src/server/mcp/document-model.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { isSnapshotTruncated, SNAPSHOT_CAP } from "../../src/shared/snapshot.js";
+import type { Annotation } from "../../src/shared/types.js";
 import { unanchored as makeResult } from "../helpers/positions.js";
 import { createAnnotation } from "../helpers/ydoc-factory.js";
+
+/**
+ * Any UTF-16 unit that is half of a surrogate pair with no partner.
+ *
+ * Hand-written rather than `String.prototype.isWellFormed()`, which is ES2024
+ * while this repo's `lib` is `["ES2022", "DOM", "DOM.Iterable"]` — it is a
+ * TS2339 under `typecheck:tests`, and raising `lib` for a test would move a
+ * compile target for an assertion.
+ */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 const DOC_HASH = "sha256:annotation-text-snapshot";
 
@@ -162,5 +174,105 @@ describe("#1486: isSnapshotTruncated", () => {
 
   it("does not fire on a missing snapshot", () => {
     expect(isSnapshotTruncated({ id: TEST_ID, textSnapshot: undefined })).toBe(false);
+  });
+});
+
+describe("#1767: the cap never splits a surrogate pair", () => {
+  /** A Y.Doc whose flat text is `content`. */
+  function docWithText(content: string): Y.Doc {
+    const ydoc = new Y.Doc();
+    const fragment = ydoc.getXmlFragment("default");
+    const p = new Y.XmlElement("paragraph");
+    fragment.insert(0, [p]);
+    p.insert(0, [new Y.XmlText(content)]);
+    return ydoc;
+  }
+
+  /** Astral character straddling the cap: high half at CAP-1, low half at CAP. */
+  const STRADDLING = `${"x".repeat(SNAPSHOT_CAP - 1)}\u{1F600} and a tail past the cap.`;
+
+  it("backs the cut off to 199 when the 200th unit is the high half of a pair", () => {
+    // Assert the fixture rather than trusting it: a fixture that stopped
+    // straddling would make every assertion below vacuous.
+    expect(STRADDLING.charCodeAt(SNAPSHOT_CAP - 1)).toBeGreaterThanOrEqual(0xd800);
+    expect(STRADDLING.charCodeAt(SNAPSHOT_CAP - 1)).toBeLessThanOrEqual(0xdbff);
+    expect(STRADDLING.charCodeAt(SNAPSHOT_CAP)).toBeGreaterThanOrEqual(0xdc00);
+
+    const snap = captureSnapshot(docWithText(STRADDLING), 0, STRADDLING.length);
+
+    // 199, not 200-with-a-replacement-character and not 201. Extending past the
+    // cap would answer the surrogate but unbound the record size the cap exists
+    // to bound (#1000 review R2).
+    expect(snap.text).toHaveLength(SNAPSHOT_CAP - 1);
+    expect(snap.text).not.toMatch(LONE_SURROGATE);
+    expect(snap.text).toBe(STRADDLING.slice(0, SNAPSHOT_CAP - 1));
+    // Keyed on the ORIGINAL length, not on the kept slice's: the record is a
+    // prefix whether or not the back-off happened.
+    expect(snap.truncated).toBe(true);
+    // And it stays detectable as one. The legacy sniff wants cap-length AND a
+    // trailing ellipsis, so a 199-unit snapshot is invisible to it — the flag
+    // is what carries this record.
+    expect(
+      isSnapshotTruncated({
+        id: "a1",
+        textSnapshot: snap.text,
+        textSnapshotTruncated: snap.truncated,
+      }),
+    ).toBe(true);
+  });
+
+  it("still keeps exactly 200 units when the cut lands on an ordinary boundary", () => {
+    // The negative twin. Kills an unconditional `- 1`, which would pass every
+    // assertion in the test above.
+    const plain = `${"y".repeat(SNAPSHOT_CAP)}\u{1F600} tail`;
+    const snap = captureSnapshot(docWithText(plain), 0, plain.length);
+    expect(snap.text).toHaveLength(SNAPSHOT_CAP);
+    expect(snap.text).toBe("y".repeat(SNAPSHOT_CAP));
+    expect(snap.truncated).toBe(true);
+  });
+
+  it("keeps 200 units when the cut falls BETWEEN two adjacent astral characters", () => {
+    // The legal boundary Critical Rule 4 exists to protect. The unit AT the cap
+    // is a HIGH surrogate, so a one-sided "is this unit a surrogate" check
+    // shortens a snapshot that splits nothing; the paired predicate sees the
+    // preceding LOW half and correctly says no.
+    const adjacent = `${"z".repeat(SNAPSHOT_CAP - 2)}\u{1F600}\u{1F601} and a tail.`;
+    expect(adjacent.charCodeAt(SNAPSHOT_CAP - 1)).toBeGreaterThanOrEqual(0xdc00);
+    expect(adjacent.charCodeAt(SNAPSHOT_CAP)).toBeGreaterThanOrEqual(0xd800);
+    expect(adjacent.charCodeAt(SNAPSHOT_CAP)).toBeLessThanOrEqual(0xdbff);
+
+    const snap = captureSnapshot(docWithText(adjacent), 0, adjacent.length);
+    expect(snap.text).toHaveLength(SNAPSHOT_CAP);
+    expect(snap.text).not.toMatch(LONE_SURROGATE);
+    expect(snap.text.endsWith("\u{1F600}")).toBe(true);
+  });
+
+  it("survives a Y.Map round-trip through encodeStateAsUpdate", () => {
+    // The whole reason this is a bug rather than a curiosity. In process, and
+    // in the lossless JSON envelope on disk, a lone surrogate still matches the
+    // document; lib0's UTF-8 encode is where it becomes U+FFFD. So the snapshot
+    // must be WRITTEN INTO THE Y.MAP before encoding — encoding a doc whose map
+    // never held it exercises no encode at all and passes on the unfixed code.
+    const ydoc = docWithText(STRADDLING);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const snap = captureSnapshot(ydoc, 0, STRADDLING.length);
+    const id = createAnnotation(map, ydoc, "comment", makeResult(0, STRADDLING.length), "c", {
+      textSnapshot: snap.text,
+      textSnapshotTruncated: snap.truncated,
+    });
+
+    const mirror = new Y.Doc();
+    Y.applyUpdate(mirror, Y.encodeStateAsUpdate(ydoc));
+    const stored = mirror.getMap<Annotation>(Y_MAP_ANNOTATIONS).get(id);
+    expect(stored).toBeDefined();
+    const roundTripped = stored?.textSnapshot ?? "";
+
+    expect(roundTripped).toBe(snap.text);
+    expect(roundTripped).not.toMatch(LONE_SURROGATE);
+    expect(roundTripped).not.toContain("\uFFFD");
+    // The consequence, not just the bytes: the watcher's relocation pass finds
+    // the annotation by `indexOf` on this string, and an unguarded cut makes
+    // that -1 forever — the RANGE_GONE in the issue title.
+    expect(extractText(mirror).indexOf(roundTripped)).toBeGreaterThanOrEqual(0);
   });
 });

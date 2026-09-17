@@ -238,6 +238,9 @@ function snapshot(ydoc: Y.Doc, docHash: string, meta: SyncMeta): AnnotationDocV1
  */
 export type ObserverCleanupPhase = "swap" | "close";
 
+/** The handle both registrars return. Its phase is required — see below. */
+export type ObserverCleanup = (phase: ObserverCleanupPhase) => void;
+
 /**
  * Attach Y.Map observers for annotations and replies that mirror user-intent
  * mutations to the store. Returns a cleanup function that unobserves both
@@ -249,10 +252,13 @@ export type ObserverCleanupPhase = "swap" | "close";
  * Callers (the open pipeline and the reload family, via the queue
  * indirection) invoke cleanup with the appropriate phase on doc close or
  * Y.Doc swap.
+ *
+ * The phase is REQUIRED, with no default (#1695). A wrong phase fails
+ * silently — `"close"` on a swap drops tombstones an in-flight debounced
+ * write still needs (#333), and `"swap"` on a close leaks the ledger — so a
+ * caller must name it rather than inherit one.
  */
-export function registerAnnotationObserver(
-  ctx: SyncContext,
-): (phase?: ObserverCleanupPhase) => void {
+export function registerAnnotationObserver(ctx: SyncContext): ObserverCleanup {
   const { ydoc, store, docHash, meta } = ctx;
 
   const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -300,7 +306,7 @@ export function registerAnnotationObserver(
   annMap.observe(onAnnMutation);
   repMap.observe(onRepMutation);
 
-  return (phase: ObserverCleanupPhase = "close") => {
+  return (phase: ObserverCleanupPhase) => {
     annMap.unobserve(onAnnMutation);
     repMap.unobserve(onRepMutation);
     if (phase === "close") {
@@ -354,8 +360,9 @@ export function recordTombstone(docHash: string, annotationId: string, prevRev: 
 }
 
 /**
- * Read-only accessor for tests and (future) diagnostic tools. Returns a
- * defensive copy so callers can't mutate the module-internal array.
+ * Read-only accessor for tests and for `injectTutorialAnnotations`, which
+ * skips a seed whose id is tombstoned here (#1696). Returns a defensive copy
+ * so callers can't mutate the module-internal array.
  */
 export function getTombstones(docHash: string): TombstoneRecordV1[] {
   const entries = tombstonesByDoc.get(docHash);
@@ -545,7 +552,7 @@ function mergeMap<T extends { rev: number; editedAt?: number }>(
 export async function loadAndMerge(
   ctx: SyncContext,
   opts?: { migrateTombstonesFrom?: string },
-): Promise<(phase?: ObserverCleanupPhase) => void> {
+): Promise<ObserverCleanup> {
   const { ydoc, store, docHash, meta } = ctx;
   const file = await store.load();
 
@@ -583,9 +590,13 @@ export async function loadAndMerge(
   //
   // Safe on force-reload: `clearAndReload` calls `clearFileSyncContext` (which
   // runs the observer cleanup's "close" phase → `tombstonesByDoc.delete(hash)`)
-  // AND `store.clear()` BEFORE this runs, so the in-memory ledger starts empty
-  // there and the union degenerates to the (empty) file seed — no stale
-  // tombstone can be resurrected across a legitimate reload.
+  // BEFORE this runs, so the IN-MEMORY ledger starts empty there and no stale
+  // ledger entry can be resurrected across a legitimate reload. Since #1813 the
+  // FILE seed is no longer empty on that path — `clearAndReload` flushes the
+  // envelope instead of unlinking it, so the union degenerates to whatever the
+  // flushed file carries, which is the pre-reload tombstone set. That is the
+  // point: the flush runs BEFORE the cleanup precisely so those tombstones are
+  // still in the ledger when the snapshot is taken.
   const seed = tombstonesByDoc.get(docHash) ?? new Map<string, TombstoneRecordV1>();
   // Track whether the pre-existing in-memory ledger carries tombstones the file
   // does not — those are migrated-forward deletes (rename) that must still be

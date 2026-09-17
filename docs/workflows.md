@@ -43,7 +43,7 @@ Start Tandem from any directory:
 tandem
 ```
 
-The server starts and the editor opens (Tauri WebView in desktop, or `http://127.0.0.1:5173` in dev). `sample/welcome.md` loads on first run with the onboarding tutorial.
+The server starts. The desktop app opens its own window; the npm install opens nothing and prints the URL to visit instead — `http://127.0.0.1:3479`, served by the same process. (`http://127.0.0.1:5173` is the Vite dev server, and only exists in a source checkout.) `sample/welcome.md` loads on first run with the onboarding tutorial.
 
 In a separate terminal, start Claude Code as you normally would:
 ```bash
@@ -55,7 +55,7 @@ Then try:
 "Let's work on the welcome document in Tandem"
 ```
 
-Claude connects to the running Tandem server, opens the document, and starts reading. Asking for Tandem by name is what runs the bundled skill on first use. Where Claude Code offers a Monitor tool, the skill makes one automatic attempt to open a watch on Tandem's wake stream after its first successful read-mode `tandem_status`, so your comments and chat messages reach it while it is idle.
+Claude connects to the running Tandem server, opens the document, and starts reading. Asking for Tandem by name is what runs the bundled skill on first use. Where Claude Code offers a Monitor tool, the skill makes one automatic attempt to open a watch on Tandem's wake stream on the first Tandem response carrying a wake-stream address — `tandem_open`, `tandem_scratchpad` or a read-mode `tandem_status` — so your comments and chat messages reach it while it is idle.
 
 If that route is not available to you, the channel shim is the fallback — and it needs both halves, registration and the flag:
 
@@ -115,17 +115,7 @@ Claude: tandem_comment({
 })
 ```
 
-Red highlight appears in Bryan's editor. Claude suggests the fix:
-
-```
-Claude: tandem_comment({
-  from: 342, to: 355,
-  text: "Updated per Q3 financial report",
-  suggestedText: "$13.1 million"
-})
-```
-
-Bryan sees the suggestion in the side panel -- accepts or rejects with one click. Repeat for each section.
+One call does both jobs: `text` is the remark, `suggestedText` is the proposed replacement. The passage is marked in Bryan's editor, and the side-panel card shows the change as a word-level diff — he accepts or dismisses it with one click, and accepting applies the replacement. Repeat for each section.
 
 When done:
 ```
@@ -261,6 +251,8 @@ Opus: tandem_getAnnotations({ author: "claude", status: "pending" })
 // Sees all annotations from all agents
 ```
 
+Only Opus (the orchestrator) polls `tandem_checkInbox` in this workflow — the surfaced-item ledger is process-global, and the same poll marks chat messages read, so a sub-agent's poll would durably drop Opus's own view of both.
+
 ## Reviewing Annotations from the Keyboard
 
 **Setup:** Your AI has finished and left 15+ annotations. Bryan wants to process them efficiently.
@@ -305,15 +297,26 @@ Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\contract-review.docx" })
 → { documentId: "contract-review-x1y2z3", readOnly: false, format: "docx", ... }
 ```
 
-The .docx opens editable — edits are held in the session and written back to the original only on an explicit save, and auto-save skips `.docx` entirely. Word comments (`<w:comment>` elements) are automatically extracted and imported as Tandem annotations with `author: "import"`. Bryan sees them in the SidePanel alongside any new annotations Claude adds.
+The .docx opens editable — edits are held in the session and written back to the original only on an explicit save, and auto-save skips `.docx` entirely. Word comments (`<w:comment>` elements) are automatically extracted and imported as Tandem annotations with `author: "import"`, landing as private notes (invisible to Claude, ADR-027) until Bryan batch-promotes them from the SidePanel.
 
 ```
 Claude: tandem_getAnnotations({ author: "import" })
+→ { annotations: [], count: 0, notesExcluded: 2 }
+```
+
+The empty `annotations` array here is expected, not a bug — the two imports are private notes until promoted. `notesExcluded` is the probe: it reports how many Word comments are awaiting promotion.
+
+Bryan promotes both from the SidePanel. Claude picks them up on its next `tandem_checkInbox` poll, then reads the promoted comments:
+
+```
+Claude: tandem_getAnnotations({ author: "user" })
 → { annotations: [
-    { id: "ann_...", author: "import", type: "comment", content: "Please verify this figure", range: { from: 120, to: 135 } },
-    { id: "ann_...", author: "import", type: "comment", content: "Legal needs to review this clause", range: { from: 890, to: 920 } }
+    { id: "ann_...", author: "user", type: "comment", content: "Please verify this figure", range: { from: 120, to: 135 }, importSource: { author: "Legal Reviewer", file: "contract-review.docx" }, promotedFrom: "note" },
+    { id: "ann_...", author: "user", type: "comment", content: "Legal needs to review this clause", range: { from: 890, to: 920 }, importSource: { author: "Legal Reviewer", file: "contract-review.docx" }, promotedFrom: "note" }
   ], count: 2 }
 ```
+
+`importSource` is what identifies these as promoted Word comments — `promotedFrom: "note"` is also present, but it's stamped on every promoted note (including one Bryan sends to Claude personally), so it's not a reliable import marker on its own.
 
 Claude reads the imported comments and acts on them:
 
@@ -327,7 +330,7 @@ Claude: tandem_comment({
 })
 ```
 
-Bryan filters annotations by author in the SidePanel — "Imported" shows the original Word comments, "Claude" shows new findings. He can accept/dismiss both types using the same accept/dismiss shortcuts.
+Bryan filters annotations by author in the SidePanel — "Imported" shows the original Word comments, "Claude" shows new findings. Accept/dismiss, the review queue, and their shortcuts apply to both Claude's comments and an unpromoted import (both have `author !== "user"`); once promoted, an import becomes Bryan's own `author: "user"` annotation, which drops out of the review queue and switches from accept/dismiss to Edit/Remove/Reply.
 
 ## Onboarding Tutorial (First Run)
 
@@ -427,20 +430,20 @@ Only pending annotations can be edited — accepted or dismissed annotations are
 
 Users can open files without Claude Code using the editor UI:
 
-### Path Input
+### Recent Files
 1. Click the **+** button at the end of the tab bar
-2. Enter the absolute file path in the text input
-3. Click **Open** — the file loads in a new tab
+2. Type to filter the recently opened files
+3. Click one — it opens in a new tab
 
 ### Drag-and-Drop
 1. Drag a file from Windows Explorer (or Finder) onto the editor area
 2. A dashed border appears as a drop indicator
 3. Drop the file — it opens in a new tab
 
-### File Upload
-1. Click **+** → switch to **Upload** mode
-2. Click the drop zone to browse, or drag a file onto it
-3. The file content is sent to the server and loaded
+### Browse or Upload
+1. Click **+** → **Browse files…**
+2. On desktop this opens a native file picker for real (write-capable) editing
+3. In the browser build it opens an upload dialog instead: click **Browse…** or drop a file anywhere in the window, and the file content is sent to the server and loaded
 
 **Note:** Uploaded files have no disk path — they use synthetic `upload://` paths and are always read-only. `tandem_save` on an uploaded file saves only the session (annotations), not the file content.
 
@@ -456,7 +459,8 @@ Scratchpads are ephemeral documents with no file on disk — useful for brainsto
 
 ```
 tandem_scratchpad()
-→ { documentId: "abc123", fileName: "Scratchpad.md", format: "md" }
+→ { documentId: "abc123", fileName: "Scratchpad.md", format: "md",
+    wakeUrl: "ws://127.0.0.1:3479/api/wake" }   // wakeUrl omitted in stdio mode
 
 tandem_edit({ from: 0, to: 0, newText: "# Draft Outline\n\n1. Introduction\n2. Analysis\n3. Conclusion" })
 → Content appears in the scratchpad tab
@@ -481,11 +485,11 @@ npm run test:e2e
 npm run test:e2e:ui
 ```
 
-**Requirements:** No dev server running (the test harness starts its own via `dev:standalone`; `freePort()` will kill existing servers on :3478/:3479).
+**Requirements:** none in particular — since #1492 the harness runs on its own reserved ports (defined in `scripts/test-ports.ts`, never the product's `:3478`/`:3479` or Vite's `:5173`) and starts its backend with `reuseExistingServer: false`, so a running Tandem or `npm run dev:server` coexists with a test run instead of being killed by it.
 
 **How tests work:**
 1. `beforeEach`: McpTestClient connects to MCP, fixture files copied to temp dir
 2. Test body: MCP calls open documents/create annotations, Playwright asserts browser state
 3. `afterEach`: All docs closed via MCP, temp dir cleaned up
 
-Tests use `data-testid` attributes for reliable selectors (e.g. `[data-testid="accept-btn"]`). Timing uses Playwright's auto-waiting with 10s timeout for annotation sync (multi-hop: MCP → Y.Doc → Hocuspocus WS → browser → React → ProseMirror).
+Tests use `data-testid` attributes for reliable selectors (e.g. `[data-testid="accept-btn"]`). Timing uses Playwright's auto-waiting with 10s timeout for annotation sync (multi-hop: MCP → Y.Doc → Hocuspocus WS → browser → Svelte → ProseMirror).

@@ -25,13 +25,23 @@ import path from "node:path";
 import { atomicWrite } from "../file-io/index.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
-import { type LockfileContents, lockfilePayload, parseLockfile } from "./lockfile.js";
+import {
+  isLockFromPriorBoot,
+  type LockfileContents,
+  lockfilePayload,
+  parseLockfile,
+} from "./lockfile.js";
 import {
   isTandemLikeProcessName,
   type ProcessIdentity,
   probeProcessIdentity,
 } from "./process-identity.js";
-import { type AnnotationDocV1, parseAnnotationDoc, SCHEMA_VERSION } from "./schema.js";
+import {
+  type AnnotationDocV1,
+  isPartialParse,
+  parseAnnotationDoc,
+  SCHEMA_VERSION,
+} from "./schema.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -46,6 +56,18 @@ export interface DocStore {
    */
   queueWrite(snapshot: () => AnnotationDocV1): void;
   flush(): Promise<void>;
+  /**
+   * Drop any pending debounced write WITHOUT touching the file — `clearOne`'s
+   * first half, split out in #1813.
+   *
+   * `clearOne` used to be the only canceller, and the force-open / source-view
+   * teardown stopped calling it: it now flushes instead, so a mutation landing
+   * inside the flush's own await (the annotation observer is still attached
+   * across it) would arm a FRESH timer that fires after the Y.Maps are cleared,
+   * snapshot the emptied map and full-clobber the envelope. This is what keeps
+   * that teardown total while the unlink goes away.
+   */
+  cancelPendingWrite(): void;
   clear(): Promise<void>;
   isReadOnly(): boolean;
   isDisabled(docHash: string): boolean;
@@ -155,7 +177,9 @@ function isPidAlive(pid: number): boolean {
  *   - `"readonly"` when a live PID holds the lock. In this mode `queueWrite`
  *     is a no-op; `load` still works so the UI can render existing state.
  */
-export async function acquireStoreLock(): Promise<"locked" | "readonly"> {
+export async function acquireStoreLock(
+  probe: (pid: number) => Promise<ProcessIdentity> = probeProcessIdentity,
+): Promise<"locked" | "readonly"> {
   if (isFeatureDisabled()) {
     // Feature off — no lock, not readonly (store is entirely inert).
     readOnly = false;
@@ -193,7 +217,7 @@ export async function acquireStoreLock(): Promise<"locked" | "readonly"> {
       }
 
       // Lock exists — check liveness of the PID inside it.
-      const staleReclaimed = await tryReclaimStaleLock(lockPath);
+      const staleReclaimed = await tryReclaimStaleLock(lockPath, probe);
       if (!staleReclaimed) {
         readOnly = true;
         return "readonly";
@@ -209,11 +233,18 @@ export async function acquireStoreLock(): Promise<"locked" | "readonly"> {
 
 /**
  * Examine an existing lockfile. If its PID is dead, unlink it and return
- * `true` so the caller can retry acquiring. If the PID is alive, return
- * `false`. Any other error is logged and treated as "live" (safer default —
- * fail closed into read-only mode).
+ * `true` so the caller can retry acquiring. If the PID is alive, it is
+ * reclaimed only when BOTH the boot-time estimate says the lock predates
+ * this boot AND `probe` reports a non-Tandem identity for that PID (#2038)
+ * — corroborated reuse-after-reboot detection, since a bare boot-time
+ * comparison alone is a wrong-grant hazard under a system-clock step. Any
+ * other error is logged and treated as "live" (safer default — fail closed
+ * into read-only mode).
  */
-async function tryReclaimStaleLock(lockPath: string): Promise<boolean> {
+async function tryReclaimStaleLock(
+  lockPath: string,
+  probe: (pid: number) => Promise<ProcessIdentity>,
+): Promise<boolean> {
   let rawPid: string;
   try {
     rawPid = (await fs.readFile(lockPath, "utf-8")).trim();
@@ -240,7 +271,14 @@ async function tryReclaimStaleLock(lockPath: string): Promise<boolean> {
   // only one PID that's guaranteed live in the current OS — ours). Falling
   // through to the liveness check gives that test the `readonly` outcome it
   // expects.
-  if (isPidAlive(lock.pid)) return false;
+  if (isPidAlive(lock.pid)) {
+    // Reclaim only when BOTH signals agree: the boot-time estimate says the
+    // lock predates this boot, AND the process at this PID no longer looks
+    // like Tandem. Neither alone is proof (#2038).
+    if (!isLockFromPriorBoot(lock)) return false;
+    const identity = await probe(lock.pid);
+    if (identity.kind !== "name" || isTandemLikeProcessName(identity.name)) return false;
+  }
 
   await fs.unlink(lockPath).catch(() => {});
   return true;
@@ -398,10 +436,21 @@ function notifyFailure(
   state.lastNotifiedAt = now;
 
   const fileName = path.basename(filePath) || docHash;
+  // cr-4 (#1816 follow-up): this producer shares `type: "save-error"` with
+  // document-service.ts's save/save-as/rename notifications, which the
+  // client's `formatActivityMessage` (activityCenter.ts) renders by folding
+  // `errorCode` back into `message` as a "(CODE)" suffix. `message` here
+  // used to embed the RAW `err.message` too — Node's fs errors both name
+  // the code AND the absolute path ("EACCES: permission denied, open
+  // '/Users/…/x.md.annotations.json'") — so the tray/toast doubled the code
+  // and leaked the exact path #1816 went to some trouble to remove
+  // elsewhere. Keep `message` generic, the same shape document-service.ts's
+  // producers use, and let `errorCode` (still set below) carry the one
+  // technical detail through the shared formatter.
   const message =
     kind === "persistent"
       ? `Annotation saving disabled for ${fileName}; restart Tandem to retry.`
-      : `Failed to save annotations for ${fileName}: ${(err as Error)?.message ?? "unknown error"}`;
+      : `Failed to save annotations for ${fileName}.`;
 
   try {
     pushNotification({
@@ -417,8 +466,12 @@ function notifyFailure(
     console.error("[ANNOTATION-STORE] pushNotification threw:", notifyErr);
   }
 
-  // Always mirror to stderr for power users debugging without the UI.
-  console.error(`[ANNOTATION-STORE] ${message}`);
+  // Mirror the RAW error (path + code intact) to stderr for power users
+  // debugging without the UI — the scrub above only affects what reaches
+  // the client-facing notification. `message` carries the user-named file
+  // basename, so it goes in as a `%s` argument, never as the format string
+  // itself (CodeQL js/tainted-format-string; same shape as document-service).
+  console.error("[ANNOTATION-STORE] %s", message, err);
 }
 
 /**
@@ -570,6 +623,28 @@ async function flushOne(docHash: string): Promise<void> {
   }
 }
 
+/**
+ * Copy a partially-readable envelope to `<file>.partial.<8 hex of sha256(raw)>`
+ * (#1791(a)). Returns the copy's path — including when an identical copy
+ * already exists — or `null` when nothing was preserved. Every destructive
+ * sweeper refuses the `.partial.` shape, so the copy outlives the envelope.
+ */
+export async function preservePartialEnvelope(file: string, raw: string): Promise<string | null> {
+  const digest = crypto.createHash("sha256").update(raw, "utf-8").digest("hex").slice(0, 8);
+  const partialPath = `${file}.partial.${digest}`;
+  try {
+    await fs.copyFile(file, partialPath, fs.constants.COPYFILE_EXCL);
+  } catch (copyErr) {
+    if ((copyErr as NodeJS.ErrnoException).code !== "EEXIST") {
+      console.error(
+        `[ANNOTATION-STORE] Failed to preserve partially-readable file ${file}: ${(copyErr as Error).message}`,
+      );
+      return null;
+    }
+  }
+  return partialPath;
+}
+
 async function loadOne(docHash: string, filePath: string): Promise<AnnotationDocV1> {
   if (isFeatureDisabled()) return emptyDoc(docHash, filePath);
 
@@ -588,7 +663,35 @@ async function loadOne(docHash: string, filePath: string): Promise<AnnotationDoc
   }
 
   const result = parseAnnotationDoc(raw);
-  if (result.ok) return result.doc;
+  if (result.ok) {
+    if (isPartialParse(result)) {
+      // #1791(a): the returned doc is a PARTIAL view — rows this build could
+      // not read were dropped. `snapshot()` rebuilds the envelope from Y.Map
+      // state, so the next debounced write erases them from the only copy.
+      // Park a copy first.
+      //
+      // CONTENT-ADDRESSED, not one fixed name. The partial file is not always
+      // healed (`queueWrite` is inert under `isReadOnly()`; file-sync origins
+      // skip the durable queue), so a `Date.now()` name would write one copy
+      // per open forever — but a single fixed name under COPYFILE_EXCL means
+      // the SECOND, *different* partial load preserves nothing, which is
+      // #1791(b)'s "second cycle destroys the only copy" in the file that
+      // fixes it. Hashing the raw bytes gives both: identical content
+      // re-opens to EEXIST (one copy), different content parks its own.
+      const partialPath = await preservePartialEnvelope(target, raw);
+      // Only claim the copy exists when it does: this line is the partial
+      // branch's one surface, and a reader who believes the rows are safe on
+      // disk lets the next snapshot clobber the only copy (#1791 review).
+      console.error(
+        `[ANNOTATION-STORE] ${target} had ${result.skipped.annotations} unreadable annotation(s) and ${result.skipped.replies} unreadable reply(ies); ${
+          partialPath === null
+            ? "those rows were NOT preserved and the next write will drop them."
+            : `a full copy was kept at ${partialPath}.`
+        }`,
+      );
+    }
+    return result.doc;
+  }
 
   if (result.error === "corrupt") {
     const quarantinePath = `${target}.corrupt.${Date.now()}`;
@@ -607,9 +710,15 @@ async function loadOne(docHash: string, filePath: string): Promise<AnnotationDoc
   const schemaVersion = result.schemaVersion;
   const futurePath = `${target}.future`;
   try {
-    // rename is not idempotent; unlink any existing `.future` from a prior
-    // downgrade so we always keep the most recent copy.
-    await fs.unlink(futurePath).catch(() => {});
+    // #1791(b): rename is not idempotent, so an existing `.future` from a
+    // PRIOR downgrade is in the way. It used to be unlinked — but `.future` is
+    // the sole surviving copy of that cycle's annotations, so upgrade →
+    // downgrade → upgrade → downgrade destroyed cycle 1 outright. Archive it
+    // under a unique suffix instead (the shape `atomicWrite` already uses;
+    // millisecond resolution alone can collide). `.future` stays the primary
+    // name — `annotation-store-scan.ts` and `doctor.ts` both read it.
+    const archivePath = `${futurePath}.${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+    await fs.rename(futurePath, archivePath).catch(() => {});
     await fs.rename(target, futurePath);
   } catch (renameErr) {
     console.error(
@@ -622,14 +731,20 @@ async function loadOne(docHash: string, filePath: string): Promise<AnnotationDoc
   return emptyDoc(docHash, filePath);
 }
 
-async function clearOne(docHash: string): Promise<void> {
+/** Drop a pending debounced write without touching the file (#1813). */
+function cancelPendingWriteOne(docHash: string): void {
   if (isFeatureDisabled()) return;
-  // Drop any pending write so we don't immediately re-create the file.
   const entry = pending.get(docHash);
   if (entry) {
     clearTimeout(entry.timer);
     pending.delete(docHash);
   }
+}
+
+async function clearOne(docHash: string): Promise<void> {
+  if (isFeatureDisabled()) return;
+  // Drop any pending write so we don't immediately re-create the file.
+  cancelPendingWriteOne(docHash);
   const target = filePathFor(docHash);
   try {
     await fs.unlink(target);
@@ -666,6 +781,9 @@ export function createStore(docHash: string, meta: { filePath: string }): DocSto
       async flush() {
         /* inert */
       },
+      cancelPendingWrite() {
+        /* inert */
+      },
       async clear() {
         /* inert */
       },
@@ -682,6 +800,7 @@ export function createStore(docHash: string, meta: { filePath: string }): DocSto
     load: () => loadOne(docHash, meta.filePath),
     queueWrite: (snapshotFn) => scheduleWrite(docHash, meta.filePath, snapshotFn),
     flush: () => flushOne(docHash),
+    cancelPendingWrite: () => cancelPendingWriteOne(docHash),
     clear: () => clearOne(docHash),
     isReadOnly: () => readOnly,
     isDisabled: (h) => failureState.get(h)?.disabled === true,

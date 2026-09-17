@@ -85,7 +85,7 @@ onDestroy(clearUndoTimer);
           onDismiss!(annotationId);
         }}
       >
-        Reject
+        Dismiss
       </button>
     {/if}
   </div>

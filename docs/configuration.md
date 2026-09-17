@@ -41,11 +41,13 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 | `TANDEM_ALLOW_UNAUTHENTICATED_LAN` | unset | Set to `1` to allow binding to a non-loopback host before an auth token has been provisioned; without it that startup is refused. **The name overstates it** — it does not turn authentication off. Non-loopback callers still need a valid Bearer token. See [security.md](security.md#network-posture). **Insecure** — trusted-network development only. |
 | `TANDEM_LAN_IP` | auto-detected | Explicit LAN IP for the welcome banner's "share this URL" message. Useful on multi-homed machines where auto-detection picks the wrong interface. |
 
+**Two variables you don't set, but that outrank the ones you do.** When Claude Code's plugin host runs one of Tandem's stdio subcommands (`tandem mcp-stdio`, `tandem channel`, `tandem monitor`) it injects `CLAUDE_PLUGIN_OPTION_SERVER_URL` and `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` from the plugin's user config. Those take **precedence over** `TANDEM_URL` and `TANDEM_AUTH_TOKEN` respectively; a blank value counts as absent, so an empty plugin option falls through rather than masking your setting. This precedence applies only to those subcommands and to `tandem rotate-token` — the server itself reads `TANDEM_URL` / `TANDEM_AUTH_TOKEN` directly. It is also why `tandem rotate-token` refuses to run when either auth variable is set: whatever injected the token would put the old value back on the next launch.
+
 ### App-data and storage
 
 | Variable | Default | Description |
 |---|---|---|
-| `TANDEM_APP_DATA_DIR` | platform default (see below) | Override the app-data root that holds sessions, the auth token, and durable annotations. |
+| `TANDEM_APP_DATA_DIR` | platform default (see below) | Override the app-data root that holds sessions, the auth token, durable annotations, `license.json` and `trial.json`. Pointing it somewhere new presents a fresh trial and an apparently-unlicensed device — the license is still on disk under the old root. |
 | `TANDEM_DATA_DIR` | repo-relative | Override the project-relative data dir used to locate `sample/welcome.md`. Distinct from `TANDEM_APP_DATA_DIR`; most users don't need this. |
 | `TANDEM_ANNOTATION_STORE` | unset | Set to `off` to disable durable annotation persistence (annotations then live only in session files). |
 
@@ -89,6 +91,8 @@ tandem
 
 Even with a valid token, a LAN peer can only **read** `/api` — writes are refused by the loopback invariant (#1320). See [security.md](security.md#the-api-invariant-1320).
 
+**That is a property of `/api`, not of the server.** `enforceLoopbackMutation` is mounted on `/api` alone, so the same token-holding LAN peer can still `POST /mcp` and reach every mutating MCP tool with no loopback check — [#1906](https://github.com/bloknayrb/tandem/issues/1906).
+
 See [security.md](security.md) for the full security model.
 
 ## App-data directories
@@ -105,9 +109,9 @@ The contents:
 
 | Path | Purpose |
 |---|---|
-| `sessions/` | One file per opened document, named by URL-encoded file path. Holds the Y.Doc snapshot and ephemeral state. |
-| `sessions/CTRL_ROOM.json` | Cross-document state — chat history, Solo/Tandem mode, multi-doc UI state. |
-| `annotations/` | Durable annotation store. One `.json` file per document. Corrupt files are renamed to `.corrupt.json` and quarantined instead of deleted. |
+| `sessions/` | One file per opened document, named by a 64-character hash of the file path (URL-encoded path only for `upload://` scratchpads). Holds the Y.Doc snapshot and ephemeral state. |
+| `sessions/__tandem_ctrl__.json` | Cross-document state — chat history, Solo/Tandem mode, multi-doc UI state. |
+| `annotations/` | Durable annotation store. One `.json` file per document. Corrupt files are renamed to `<name>.json.corrupt.<timestamp>` and quarantined instead of deleted. |
 | `auth-token` | Auto-generated auth token, mode `0o600`. |
 | `annotations/store.lock` | PID file for the annotation writer, used for cross-process safety. Lives inside `annotations/`, not at the app-data root. |
 | `last-seen-version` | Tracks the last Tandem version to launch — drives the CHANGELOG auto-open on upgrade. |

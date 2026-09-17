@@ -162,17 +162,40 @@ describe("index.ts startup ordering invariant", () => {
     interface Frame {
       isFn: boolean;
       name: string;
+      /** True when this frame's own enclosing statement begins with `await`. */
+      awaitedStatement: boolean;
     }
     const stack: Frame[] = [];
     const enclosingFn = new Map<number, string>();
+    // #1792: the CHANGELOG open moved into an inline `onUpgrade` arrow passed
+    // to `checkVersionChange`, so the version stamp is written only once the
+    // open resolves. An inline callback LITERAL is not the hazard this rule
+    // guards against - that hazard is a NAMED helper defined early and called
+    // late. A literal passed as an argument can only run during that call, so
+    // the ordering proxy survives PROVIDED the call it is passed to is itself
+    // awaited. Both halves stay required: the enclosing NAMED frame must be
+    // `main`, and every anonymous frame in between must be awaited.
+    const directSites = new Set<number>();
+    const viaAwaitedCallback = new Set<number>();
     const openCall = new RegExp(`\\b(${[...opens].join("|")})\\(`, "g");
     const callIdxs = new Map<number, string>();
     for (const m of src.matchAll(openCall)) callIdxs.set(m.index as number, m[1]);
 
     for (let i = 0; i < src.length; i += 1) {
       if (callIdxs.has(i)) {
-        const fn = [...stack].reverse().find((f) => f.isFn);
-        enclosingFn.set(i, fn?.name ?? "<module>");
+        const frames = [...stack].reverse().filter((f) => f.isFn);
+        const anonPrefix: Frame[] = [];
+        let named: Frame | undefined;
+        for (const f of frames) {
+          if (f.name === "<anonymous>") anonPrefix.push(f);
+          else {
+            named = f;
+            break;
+          }
+        }
+        if (anonPrefix.length === 0) directSites.add(i);
+        else if (anonPrefix.every((f) => f.awaitedStatement)) viaAwaitedCallback.add(i);
+        enclosingFn.set(i, named?.name ?? frames[0]?.name ?? "<module>");
       }
       const ch = src[i];
       if (ch === "{") {
@@ -198,7 +221,17 @@ describe("index.ts startup ordering invariant", () => {
             name = named[1];
           }
         }
-        stack.push({ isFn, name });
+        // "Is this frame's enclosing statement awaited?" - an `await` appearing
+        // after the last statement boundary before this brace. Consulted only
+        // for anonymous frames; a named function's own call site is checked by
+        // the awaited-line assertion below.
+        // Statement boundary is the previous `;` — biome enforces semicolons in
+        // this file, and braces are NOT usable as boundaries here because the
+        // options object a callback is passed inside opens one AFTER the
+        // `await` that owns it.
+        const stmtStart = src.lastIndexOf(";", i);
+        const awaitedStatement = src.lastIndexOf("await ", i) > stmtStart;
+        stack.push({ isFn, name, awaitedStatement });
       } else if (ch === "}") {
         stack.pop();
       }
@@ -221,6 +254,12 @@ describe("index.ts startup ordering invariant", () => {
         src.slice(lineStart, idx + name.length + 1),
         `${name}() must be awaited — fire-and-forget races the bind it is ordered against`,
       ).toMatch(new RegExp(`\\bawait\\s+${name}\\($`));
+      if (!directSites.has(idx)) {
+        expect(
+          viaAwaitedCallback.has(idx),
+          `${name}() sits inside a callback whose own call is NOT awaited - the open then races the bind it is ordered against. Await the call the callback is passed to, or inline the open into main().`,
+        ).toBe(true);
+      }
     }
   });
 

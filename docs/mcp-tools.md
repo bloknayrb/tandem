@@ -2,7 +2,7 @@
 
 These tools are exposed over the MCP protocol. **Claude Code is Tandem's default and most-tested client** ([ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)), but the tools are available to any MCP-capable client connecting to `http://127.0.0.1:3479/mcp`.
 
-Tandem exposes 33 tools via MCP HTTP (30 active, 3 deprecated stubs that return MCP error responses with code `DEPRECATED`). The channel shim also exposes `tandem_reply` for real-time push contexts — the shim itself is a Claude-specific stdio transport on top of the MCP contract; other MCP clients discover the HTTP transport automatically and subscribe to `/api/events` directly for the same real-time stream. All tools use flat text character offsets for positions — use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem exposes 33 tools via MCP HTTP (30 active, 3 deprecated stubs that return MCP error responses with code `DEPRECATED`). The channel shim also exposes `tandem_reply` for real-time push contexts — the shim itself is a Claude-specific stdio transport on top of the MCP contract; other MCP clients discover the HTTP transport automatically and subscribe to `/api/events` directly for the same real-time stream. All tools use flat text offsets for positions, counted in **UTF-16 code units** rather than characters — use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -41,28 +41,47 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | Code | Trigger |
 |------|---------|
 | `NO_DOCUMENT` | Tool called before `tandem_open`, or specified `documentId` not found. |
-| `FILE_NOT_FOUND` | File doesn't exist or is a UNC path. |
-| `FILE_LOCKED` | File is open in another program (e.g., Word). Close it first. |
-| `FORMAT_ERROR` | Unsupported format, read-only / non-markdown document, file too large (>50MB), or invalid regex. |
+| `NOT_FOUND` | The named **annotation** does not exist (`tandem_resolveAnnotation`, `tandem_removeAnnotation`, `tandem_editAnnotation`, `tandem_annotationReply`), or `tandem_rename` was given a document id that is not open. Distinct from `NO_DOCUMENT`, which is about the document. |
+| `FILE_NOT_FOUND` | File doesn't exist, or (`tandem_applyChanges`) the backup directory doesn't. A UNC path is `INVALID_PATH`. |
+| `FILE_LOCKED` | File is open in another program (e.g., Word): `EBUSY`, or `EPERM` from any syscall but `open`. Close it first. On Windows, an `EPERM` on the atomic write's `rename` can also be a file with the read-only attribute, which the errno cannot tell apart from a lock. `tandem_open`, `tandem_save` and `tandem_applyChanges` all draw this split the same way. |
+| `FORMAT_ERROR` | Unsupported format, file too large (>50MB), invalid regex, or a `tandem_save` write failure no more specific code covers (the errno is in `details.errorCode`). A read-only document is `READ_ONLY`, not this. |
 | `FILE_TOO_LARGE` | Inline content exceeds the tool's size cap (e.g. `tandem_appendContent`). |
 | `INVALID_RANGE` | Offset out of bounds, non-integer, inverted, zero-length, splitting a surrogate pair, text not found, or a range overlapping heading markup. **Usually — not always — carries `details.reason`** (see `tandem_edit`): the two rejections that come from somewhere other than the range validator carry none, namely `tandem_resolveRange`'s "pattern not found" and `tandem_edit`'s heading-markup overlap. Treat `details.reason` as optional. |
 | `EMPTY_DOCUMENT` | `tandem_edit` called on an empty document — seed content with `tandem_appendContent` / `tandem_scratchpad({ content })` first. |
+| `INVALID_ARGUMENT` | The arguments were well-typed but not usable together. The ones you will actually hit: a newline in `tandem_edit`'s `newText` on a plaintext document (#1460); a `textSnapshot` on a point insertion; `tandem_editList` missing the `markdown` / `checked` its `op` needs; an ADR-027 private note or private comment aimed at `tandem_resolveAnnotation` / `tandem_removeAnnotation` / `tandem_editAnnotation` / `tandem_annotationReply`; an empty `tandem_editAnnotation` patch; `suggestedText` on a non-comment; and `tandem_annotationReply` against a highlight parent or with over-long text. |
 | `EMPTY_CONVERSION` | `tandem_convertToMarkdown` produced no extractable text from the source `.docx`. |
 | `OPEN_FAILED` | `tandem_convertToMarkdown`'s converted file could not be reopened as a new tab. |
 | `CONFLICT` | `tandem_convertToMarkdown` could not find a free output filename after exhausting its numbered-suffix attempts. |
 | `RANGE_MOVED` | Target text has moved. Response includes `resolvedFrom`/`resolvedTo` with relocated coordinates. |
 | `RANGE_GONE` | Target text was deleted from the document. |
-| `PERMISSION_DENIED` | File path is not accessible (OS-level permission denied, e.g., `EACCES`). |
+| `PERMISSION_DENIED` | File path is not accessible (OS-level permission denied): `EACCES`, or on Windows `EPERM` from `open`, which is how a folder you can read but not write, or a file you cannot read, fails there. `tandem_open`, `tandem_save` and `tandem_applyChanges` all answer these with it. |
 | `DEPRECATED` | A removed tool or parameter was used — the deprecated stubs (`tandem_highlight`, `tandem_suggest`, `tandem_flag`) and `tandem_comment`'s `directedAt`. |
-| `READ_ONLY` | The document is read-only, so the mutation was refused. |
+| `READ_ONLY` | The document is read-only, so the mutation was refused: `tandem_edit`, `tandem_editList`, `tandem_appendContent`, `tandem_applyChanges`, `tandem_restoreBackup` and `tandem_rename`. `tandem_save` instead succeeds session-only with `saved: false` and `reason: "read-only"`, and the annotation tools do not check `readOnly` at all -- annotations are not document content and never reach the file. |
 | `EXTERNAL_CONFLICT` | The file changed on disk since Tandem loaded it. Saving is blocked until the user answers the keep-vs-reload banner, so a save reports this rather than claiming success. |
+| `FILE_MODIFIED` | **`tandem_applyChanges` only.** The source file's mtime/size moved between the read and the write-back, so it refused to overwrite (`src/server/mcp/docx-apply.ts:305`). On `tandem_save` the same word is a *success* skip `reason`, never an error code -- see that tool's notes. |
+| `SOURCE_MISSING` | **`tandem_applyChanges` only.** The source file disappeared before the write-back (`src/server/mcp/docx-apply.ts:296`). Same `tandem_save` caveat as `FILE_MODIFIED`. |
 | `RELOAD_IN_PROGRESS` | A reload from disk is mid-flight; retry once it settles. |
-| `LICENSE_REQUIRED` | The license gate is active and restricted. Reads, plain `tandem_open`, saves and exports still work; content mutations do not. `tandem_open` with `force: true` **is** gated -- it runs `clearAndReload`, which wipes the durable annotation file. Never returned while the gate ships dark. |
+| `LICENSE_REQUIRED` | The license gate is active and restricted. Reads, plain `tandem_open`, saves and exports still work; content mutations do not. `tandem_open` with `force: true` **is** gated -- it runs `clearAndReload`, which discards the in-memory annotation, awareness and content maps and rebuilds the document from disk. Never returned while the gate ships dark. |
 | `NO_SUGGESTIONS` | `tandem_applyChanges` found no accepted suggestions to write. |
 | `BACKUP_FAILED` | `tandem_applyChanges` could not write its backup, so it refused to touch the original. |
 | `INVALID_NAME` | `tandem_rename` was given a name that is empty, path-separated, or otherwise unusable. |
-| `INVALID_PATH` | A supplied path was relative where an absolute one is required, or used a UNC / extended-length / device-namespace prefix. |
+| `NOT_RENAMABLE` | `tandem_rename` on a document with no on-disk file (a scratchpad or upload). Use Save As instead. |
+| `EXTENSION_MISMATCH` | `tandem_rename` was given a name with a different extension. Renaming does not convert formats. |
+| `ALREADY_EXISTS` | `tandem_rename`'s destination name is already taken by a file in that directory. |
+| `PATH_REJECTED` | `tandem_rename`'s destination path failed its path-safety checks (see that tool's notes). |
+| `RENAME_IN_PROGRESS` | `tandem_rename` was called while a save of that document was in progress. Retry. |
+| `BAD_REQUEST` | **`tandem_rename` only, on the MCP surface.** The supplied `documentId` has no basename (`src/server/mcp/document.ts:1427`). `/api` routes use this code far more widely -- see [HTTP API](#http-api). |
+| `RENAME_FAILED` | `tandem_rename`'s residual arm: the rename failed carrying no more specific code, including a raw errno from the filesystem, which arrives in `details.errorCode`. Every anticipated refusal has its own code, so this one means something unclassified went wrong. |
+| `INVALID_PATH` | A supplied path was relative where an absolute one is required (including `tandem_open`'s `filePath`), or used a UNC / extended-length / device-namespace prefix -- or the document has no on-disk location to act on: `tandem_applyChanges` or `tandem_restoreBackup` on an upload or scratchpad. |
+| `NOT_OWNED` | `tandem_editAnnotation` or `tandem_annotationReply` was aimed at an annotation Claude did not author. Authority over a user's own card belongs to the user; answer it with `tandem_reply` or a fresh `tandem_comment` ([#1770](https://github.com/bloknayrb/tandem/issues/1770)). |
+| `ANNOTATION_RESOLVED` | The annotation is already accepted or dismissed, so `tandem_resolveAnnotation`, `tandem_editAnnotation` and `tandem_annotationReply` refuse it. `tandem_resolveAnnotation` sent this as `ANNOTATION_NOT_PENDING` until #1823; that code is gone. |
+| `ACCEPT_REFUSED` | `tandem_resolveAnnotation({ action: "accept" })` on Claude's own annotation, or on one carrying `suggestedText`. Accept is the user's decision; `dismiss` withdraws instead (#1770). |
 | `SEARCH_BUSY` | `tandem_search` with `regex: true` was called while its worker queue -- one search running plus three waiting -- was already full. Retry. |
+| `INTERNAL_ERROR` | The universal boundary code: a handler threw something no arm translated and `withErrorBoundary` flattened it (`src/server/mcp/response.ts:118`). The message reads `<toolName> failed: ...`. Any tool can return it. It is also the `never`-exhaustiveness arm on `tandem_resolveAnnotation` and `tandem_removeAnnotation`, reachable only if a lifecycle outcome is added without being handled -- which is a compile error first, so that message should never be seen. |
+
+`INTERNAL` -- note the missing `_ERROR` -- is a **different** code and is **not** an MCP one: it belongs to the `/api` surface (`src/server/mcp/routes/_shared.ts`), which has its own code vocabulary. The two annotation exhaustiveness arms carried it by accident until they were corrected; no MCP tool emits it. And `tandem_rename` passes five refusals through from `renameDocument` verbatim -- `NOT_RENAMABLE`, `EXTENSION_MISMATCH`, `ALREADY_EXISTS`, `RENAME_IN_PROGRESS`, `PATH_REJECTED` -- listed under that tool rather than here, because nothing else emits them.
+
+**Snapshot matching ignores which Unicode space separator you transcribed (#1622).** For the two tools that take a caller-supplied `textSnapshot` — `tandem_edit` and `tandem_comment` (with or without `suggestedText`) — a snapshot that matches the document after mapping U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F and U+3000 to an ordinary U+0020 is accepted as a match, and `RANGE_GONE` means the text is absent under that normalization too. This exists because `tandem_getTextContent` returns a no-break space faithfully and it is indistinguishable from an ordinary space when you read it back, so the snapshot you construct can never match by exact bytes. Tab, CR and LF are **not** normalized, and neither are zero-width characters. The server's own internal re-anchoring (the file watcher's relocation pass) stays byte-exact. `tandem_suggest` is a deprecated stub that returns before any range is validated, so it is not one of the two.
 
 ## Coordinate System
 
@@ -75,7 +94,9 @@ All MCP tools use **flat text offsets** -- the same positions you'd get from the
 
 Offsets 0-1 are `# ` (heading prefix), 2-6 are `Title`, 7 is `\n`, etc. The editor uses ProseMirror positions internally (which differ), but you never need to know that -- MCP tools handle the conversion.
 
-**Important:** Edit ranges that overlap heading markup (e.g., targeting offset 0-1 which is `# `) are rejected with `INVALID_RANGE`. Always target the text content, not the markdown prefix.
+**Offsets are UTF-16 code units, not characters.** They index a JavaScript string, so anything outside the Basic Multilingual Plane -- emoji, many CJK extension characters, musical symbols -- occupies **two** units, not one. That is why an offset falling between the two halves of a surrogate pair is rejected with `INVALID_RANGE` and `details.reason: "surrogate"` (`src/server/positions.ts:172-192`). Counting characters by eye, or with anything that counts Unicode scalar values, undercounts a document containing them -- another reason to take offsets from `tandem_resolveRange` or `tandem_search` rather than deriving them.
+
+**Important:** Edit ranges that overlap heading markup (e.g., targeting offset 0-1 which is `# `) are rejected with `INVALID_RANGE`. Always target the text content, not the markdown prefix. **The exclusive end is not exclusive here:** a `to` equal to the first character of a heading prefix still resolves into the heading block. On `"para\n## Head\nnext"`, `[0,5)` is rejected with `INVALID_RANGE` even though `to` is exclusive, and `[0,4)` is accepted.
 
 ---
 
@@ -91,12 +112,12 @@ Document IDs are stable -- the same file path always produces the same ID across
 
 ### tandem_open
 
-Open a file in the Tandem editor. Returns a `documentId` for multi-document workflows. Auto-opens the editor on first call.
+Open a file in the Tandem editor. Returns a `documentId` for multi-document workflows. It does **not** open a window or a browser tab -- see the notes below.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `filePath` | string | yes | Absolute path to the file to open |
-| `force` | boolean | no | Force reload from disk even if already open. Clears annotations and session. |
+| `filePath` | string | yes | Absolute path to the file to open. A relative path is refused with `INVALID_PATH` rather than resolved against the *server's* working directory. On a Windows server that includes a root-relative path with no drive letter (`\docs\a.md`, `/Users/me/a.md`), which would otherwise pick up the working directory's drive. That is a check on the argument, not containment. There is no root confinement either ([#1666](https://github.com/bloknayrb/tandem/issues/1666), open). |
+| `force` | boolean | no | Force reload from disk even if already open. Clears the in-memory annotations and the session; the durable annotation envelope survives and is re-merged on the same open, re-anchored where each record's `textSnapshot` still matches (#1813). |
 | `authoredBy` | `"claude"` | no | Pass when you wrote the file wholesale before opening it, to stamp Claude authorship across its content. Idempotent, and only ever stamps Claude — it cannot forge user attribution. |
 
 **Returns:**
@@ -113,11 +134,14 @@ Open a file in the Tandem editor. Returns a `documentId` for multi-document work
   "restoredFromSession": false,
   "alreadyOpen": false,
   "forceReloaded": false,
-  "message": "Document opened: report.md"
+  "message": "Document opened: report.md",
+  "wakeUrl": "ws://127.0.0.1:3479/api/wake"
 }
 ```
 
-**Errors:** `FILE_NOT_FOUND` (doesn't exist, UNC path), `FILE_LOCKED` (open in Word), `FORMAT_ERROR` (>50MB)
+`wakeUrl` is omitted when no wake transport is running (stdio mode). It is on the tool response only -- `POST /api/open` does not carry it.
+
+**Errors:** `FILE_NOT_FOUND` (doesn't exist), `INVALID_PATH` (relative path, including a drive-less root-relative path on Windows; UNC / extended-length / device-namespace path), `FILE_LOCKED` (open in Word: `EBUSY`, or `EPERM` from a syscall other than `open`), `PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`), `FORMAT_ERROR` (unsupported format, >50MB)
 
 **Example:**
 ```
@@ -126,11 +150,11 @@ tandem_open({ filePath: "C:\\Users\\bkolb\\Documents\\progress-report-feb.md" })
 
 **Notes:**
 - Supported formats: `.md`, `.markdown`, `.txt`, `.html`, `.htm`, `.docx`. `.md`/`.txt` auto-save; `.docx` is editable but written back only on an explicit save (auto-save skips it); **`.html`/`.htm` open read-only (#1798)** — they are in neither save set, so nothing can write them back, and opening them editable meant edits that looked accepted and then vanished on tab close. Annotating an `.html` still works. `.markdown` and `.htm` are aliases — `detectFormat` folds them into `md` and `html`; a `.markdown` keeps its own extension on save.
-- Editor opens automatically in the Tauri WebView (desktop) or at `http://127.0.0.1:5173` (development) on the first call.
+- **Nothing is launched.** Browser auto-open was removed in #477 (`src/cli/start.ts`), and no code path from this tool shows or focuses the desktop window -- `show_main_window` (`src-tauri/src/lib.rs:805`) is reached only from startup, the tray and app menu, a second-instance launch, and macOS's own file-open event. The document appears as a new tab in an editor that is already open. If none is, open one yourself: the desktop app, or the URL `tandem` prints on startup -- `http://127.0.0.1:3479` in a normal install, or `http://127.0.0.1:5173` when you are running the Vite dev server.
 - Opening a file that's already open switches to its tab (returns `alreadyOpen: true`).
 - **Auto-reload:** Open documents are automatically reloaded when the file changes on disk (e.g., Claude's Edit tool, `git pull`). Annotations are preserved. A toast notification appears in the editor.
 - **Exception — unsaved edits:** if the document has body edits that haven't reached disk, the reload is held and the editor raises a keep-vs-reload banner instead (#1238). Until the user answers it, every save path is blocked, including `tandem_save`, which returns `EXTERNAL_CONFLICT`. Note that `tandem_edit` marks a document dirty, so editing through Tandem and then through your own file-editing tool raises this banner rather than auto-reloading. A document that is read-only because the *user* asked for it (View Changelog, an explicit `readOnly` open) still reloads unconditionally — but a `.html`, read-only only because its format cannot be written back, gets the banner like any other dirty document (#1798). Its Y.Doc is the only copy of those edits, so reloading over them would destroy them.
-- Pass `force: true` to manually reload from disk. Clears annotations and session. Returns `forceReloaded: true`. Typically unnecessary now that auto-reload handles external changes.
+- Pass `force: true` to manually reload from disk. Clears the in-memory annotations and the session, then re-merges the durable envelope from disk (records whose `textSnapshot` no longer matches come back `degraded`, #1813). Returns `forceReloaded: true`. Typically unnecessary now that auto-reload handles external changes.
 - Multiple documents can be open simultaneously -- each gets its own tab.
 - If a session exists for this file (and the source hasn't changed), annotations are restored.
 
@@ -149,9 +173,12 @@ Create and open a new Scratchpad tab, optionally seeded with markdown content. S
 {
   "documentId": "scratchpad-a1b2c3",
   "fileName": "Scratchpad.md",
-  "format": "md"
+  "format": "md",
+  "wakeUrl": "ws://127.0.0.1:3479/api/wake"
 }
 ```
+
+`wakeUrl` is omitted when no wake transport is running (stdio mode). Seeding a scratchpad with `content` is a complete task in one call, so this response is what a session that does nothing else arms its wake watch from.
 
 **Example:**
 ```
@@ -168,7 +195,7 @@ tandem_scratchpad({ content: "# Test plan\n\n- Step one\n- Step two" })
 
 ### tandem_getTextContent
 
-Read document as plain text whose offsets match the annotation coordinate system.
+Read document as plain text whose offsets match the annotation coordinate system. **A `section` read returns that section's text only, and its offsets are not document offsets.** Read without `section`, or use `tandem_search` / `tandem_resolveRange`, before anchoring.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -201,14 +228,14 @@ tandem_getTextContent({ section: "Cost Summary" })
 ```
 
 **Notes:**
-- Always uses the flat text format (`extractText`) regardless of file format — offsets match the annotation coordinate system exactly. Does not return markdown syntax (no `> `, `- `, etc.).
+- Always uses the flat text format (`extractText`) regardless of file format — offsets into a full-document read match the annotation coordinate system exactly. A `section` read carries no base offset, so its offsets are not document offsets. Does not return markdown syntax (no `> `, `- `, etc.).
 - Section extraction reads from the matching heading until the next heading at the same or higher level.
 
 ---
 
 ### tandem_getOutline
 
-Get document structure without full content. Headings only by default (low token cost); pass `includeBlocks` to also list every block with the character offsets `tandem_edit` and `tandem_editList` take.
+Get document structure without full content. Headings only by default (low token cost); pass `includeBlocks` to also list every block with the flat offsets `tandem_edit` and `tandem_editList` take.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -256,8 +283,8 @@ Replace text at a specific range. Single-paragraph replacements only.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `from` | number | yes | Start position (flat text character offset) |
-| `to` | number | yes | End position (flat text character offset) |
+| `from` | number | yes | Start position (flat text offset, in UTF-16 code units) |
+| `to` | number | yes | End position (flat text offset, in UTF-16 code units) |
 | `newText` | string | yes | Replacement text. Single-block only: a newline is inserted literally in markdown/`.docx` and **refused** in a plaintext document (see Notes) |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 | `textSnapshot` | string | no | The text you expect to find at `[from, to]`. Strongly recommended: on mismatch the edit is refused rather than applied to whatever moved into that range. **Do not pass back a `textSnapshot` read from an annotation whose `textSnapshotTruncated` is `true`** — it is only the first 200 characters, so it relocates to a 200-character range and the edit lands on a shorter span than the annotation covers (#1486). Read the current text instead. |
@@ -267,7 +294,7 @@ Replace text at a specific range. Single-paragraph replacements only.
 { "edited": true, "from": 42, "to": 67, "newTextLength": 31 }
 ```
 
-**Errors:** `INVALID_RANGE`, `FORMAT_ERROR` (read-only document), `INVALID_ARGUMENT` (`newText` contains a line break in a plaintext document — see below, or a `textSnapshot` on a point insertion), and — only when `textSnapshot` is supplied — `RANGE_MOVED` (the text shifted; the error carries the relocated `resolvedFrom` / `resolvedTo`) or `RANGE_GONE` (the text was deleted)
+**Errors:** `INVALID_RANGE`, `READ_ONLY` (read-only document), `INVALID_ARGUMENT` (`newText` contains a line break in a plaintext document — see below, or a `textSnapshot` on a point insertion), and — only when `textSnapshot` is supplied — `RANGE_MOVED` (the text shifted; the error carries the relocated `resolvedFrom` / `resolvedTo`) or `RANGE_GONE` (the text was deleted)
 
 An `INVALID_RANGE` carries `details.reason`, a closed enum you can branch on rather than parse:
 
@@ -316,7 +343,7 @@ Append **structured** markdown to the end of the document. Unlike `tandem_edit` 
 { "appended": true, "blockCount": 3 }
 ```
 
-**Errors:** `FORMAT_ERROR` (read-only, or non-markdown document), `FILE_TOO_LARGE` (content over the 1 MB inline cap), `NO_DOCUMENT`
+**Errors:** `READ_ONLY` (read-only document), `FORMAT_ERROR` (non-markdown document), `FILE_TOO_LARGE` (content over the 1 MB inline cap), `NO_DOCUMENT`
 
 **Example:**
 ```
@@ -354,7 +381,7 @@ Target an item by a flat offset anywhere inside it. Flat text is structurally bl
 { "edited": true, "op": "insertAfter", "insertedCount": 1, "atItemIndex": 2 }
 ```
 
-**Errors:** `FORMAT_ERROR` (read-only; a plaintext format, which has no list structure; or `setChecked` on a `.docx`, since Word lists have no checkbox state), `INVALID_RANGE` (offset is not inside a list -- the message names `tandem_edit` and `tandem_appendContent` as the alternatives), `INVALID_ARGUMENT` (missing `markdown` or `checked`), `FILE_TOO_LARGE`, `EMPTY_DOCUMENT`, `NO_DOCUMENT`
+**Errors:** `READ_ONLY` (read-only document), `FORMAT_ERROR` (a plaintext format, which has no list structure; or `setChecked` on a `.docx`, since Word lists have no checkbox state), `INVALID_RANGE` (offset is not inside a list -- the message names `tandem_edit` and `tandem_appendContent` as the alternatives), `INVALID_ARGUMENT` (missing `markdown` or `checked`), `FILE_TOO_LARGE`, `EMPTY_DOCUMENT`, `NO_DOCUMENT`
 
 **Format support:** markdown **and `.docx`** -- Word documents hold real bulleted and numbered lists and Tandem writes them back on save, so the ops apply there too; only `setChecked` is markdown-only. Plaintext formats (`.txt`, `.csv`, `.html`, unknown extensions) have no list model at all.
 
@@ -381,6 +408,7 @@ Save the current document back to disk. Uses atomic write (temp file + rename).
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `documentId` | string | no | Target document ID (defaults to active document) |
+| `allowImageLoss` | boolean | no | **Destructive.** Save a `.docx` whose body pictures the import dropped, permanently removing them from the file on disk. Defaults to `false` — the save is refused (#1755, #1941). Ask the user first; `tandem_convertToMarkdown` keeps both the pictures and the edits |
 
 **Returns:**
 ```json
@@ -414,7 +442,7 @@ Three further skip codes exist on `SaveResult` but **cannot reach `tandem_save`'
 - Read-only documents save their session only (annotations persist), not the source file, and answer `saved: false`.
 - Writable `.docx` documents save on **explicit save only** (never auto-save). The save writes the document body **plus pending `comment`-type annotations as Word comments** (`comments.xml` + range markers), anchored to their current ranges (#1068). `note` and `highlight` annotations are never written to the file (ADR-027), so un-promoted imported Word comments — which live as private notes until batch-promoted — are dropped from the saved file. Accepted/dismissed comments are dropped too (Word has no resolved-state channel we can write). Threaded replies flatten into the comment body with attribution lines; private replies (including imported Word reply threads) are never written.
 
-**Errors:** `FILE_LOCKED` (file open in another program)
+**Errors:** `FILE_LOCKED` (file open in another program: `EBUSY`, or `EPERM` from the atomic write's `rename`, which on Windows is also what a read-only file gives), `PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`: on Windows, a folder you can read but not write), `FORMAT_ERROR` (any other write failure; the errno is in `details.errorCode`). A save refused before touching the file -- the regenerated `.docx` failed post-write verification, or the import dropped body pictures the export would strip (#1755) -- is also `FORMAT_ERROR`, with `details.errorCode: "VERIFY_BLOCKED"`; it is not a top-level code ([#2004](https://github.com/bloknayrb/tandem/issues/2004)). Of the two, only the **dropped-pictures** refusal is overridable: re-calling with `allowImageLoss: true` saves the document without those pictures (#1941). A failed post-write verification is not overridable at all — that verdict says the regenerated file is broken, a different claim — and the browser has its own exit, the **Save anyway without pictures** button in the document's fidelity notice.
 
 ---
 
@@ -440,12 +468,15 @@ Check editor status (running state, open documents, active document) and optiona
   ],
   "documentCount": 2,
   "mode": "tandem",
+  "modeProvenance": { "source": "client", "connection": "a1b2c3d4", "at": 1710936000000, "value": "tandem" },
   "storeReadOnly": false,
   "wakeUrl": "ws://127.0.0.1:3479/api/wake"
 }
 ```
 
-`storeReadOnly` reports whether the durable annotation store could take its lock; when `true`, annotations live only for this run. `wakeUrl` is the `/api/wake` WebSocket endpoint ([ADR-049](decisions.md)) -- where the client can hold a persistent watch, arming one there is the push path that needs no install and no flag. It is omitted when no endpoint is available (stdio mode). See [architecture.md](architecture.md) for how it relates to the other push paths.
+`modeProvenance` says who last wrote the CTRL_ROOM mode key -- `client` with an opaque per-connection tag, `server` with the origin tag of the helper that wrote it, `restore` (the value arrived with the ctrl-session replay), or `unknown` -- when, and what the key read at that moment. It is `null` before any write has been observed. It names the last *transaction that touched the key*, which under a lost concurrent tie is not necessarily the writer of the value `mode` reports: compare `modeProvenance.value` against `mode`. MCP only (loopback, or token-gated on LAN); `GET /api/mode` does not carry it.
+
+`storeReadOnly` reports whether the durable annotation store could take its lock; when `true`, annotations live only for this run. `wakeUrl` is the `/api/wake` WebSocket endpoint ([ADR-049](decisions.md)) -- where the client can hold a persistent watch, arming one there is the push path that needs no install and no flag. It is omitted when no endpoint is available (stdio mode). `tandem_status` is not its only producer: `tandem_open` and `tandem_scratchpad` return the same field, so a session whose whole task is one call can still arm. `tandem_checkInbox` deliberately does NOT carry it -- it is polled every few tool calls, and re-offering the address that often invites a second watch. See [architecture.md](architecture.md) for how it relates to the other push paths.
 
 **Returns (write mode — with `text` param):**
 ```json
@@ -501,7 +532,7 @@ Rename an open on-disk document's file, keeping the same directory and extension
 
 **Notes:** Only on-disk files (`source: "file"`) are renamable — scratchpads/uploads use Save As, and read-only docs (uploads, `readOnly` opens) are rejected. A disk-opened `.docx` is renamable (#576). The basename is validated against path separators, `..`, Windows-illegal characters (`< > : " | ? *`, the `:` NTFS alternate-data-stream vector), reserved device names (`CON`/`NUL`/`COM1`…), trailing dots/spaces, and UNC/symlink targets.
 
-**Errors:** `NOT_FOUND`, `READ_ONLY`, `NOT_RENAMABLE`, `INVALID_NAME`, `EXTENSION_MISMATCH`, `ALREADY_EXISTS`, `RENAME_IN_PROGRESS`, `INVALID_PATH`, `PATH_REJECTED`
+**Errors:** `NOT_FOUND`, `READ_ONLY`, `NOT_RENAMABLE`, `INVALID_NAME`, `EXTENSION_MISMATCH`, `ALREADY_EXISTS`, `RENAME_IN_PROGRESS`, `INVALID_PATH`, `PATH_REJECTED`, `RENAME_FAILED` (an unclassified failure; the raw errno, when there is one, is in `details.errorCode`)
 
 ---
 
@@ -517,8 +548,8 @@ List all open documents with their IDs, file paths, and formats.
 ```json
 {
   "documents": [
-    { "id": "report-a1b2c3", "filePath": "...", "fileName": "report.md", "format": "md", "readOnly": false, "isActive": true },
-    { "id": "invoice-d4e5f6", "filePath": "...", "fileName": "invoice.docx", "format": "docx", "readOnly": true, "isActive": false }
+    { "id": "report-a1b2c3", "filePath": "...", "fileName": "report.md", "format": "md", "readOnly": false, "source": "file", "isActive": true },
+    { "id": "invoice-d4e5f6", "filePath": "...", "fileName": "invoice.docx", "format": "docx", "readOnly": true, "source": "upload", "isActive": false }
   ],
   "activeDocumentId": "report-a1b2c3",
   "count": 2
@@ -633,10 +664,12 @@ Read annotations, optionally filtered by author/type/status. For checking new us
 
 User notes are **always excluded** — they are private to the user (ADR-027) and cannot be requested via any filter. Imported `.docx` reviewer comments land as private notes (`author: "import"`, `type: "note"`) and stay excluded until the user batch-promotes them via the side rail, at which point they surface as `author: "user"`, `type: "comment"`. The `notesExcluded` response field reports how many notes were filtered out (including not-yet-promoted imports). Each returned annotation includes a `replies` array (comment parents only; user-private replies are stripped).
 
+Since [#1619](https://github.com/bloknayrb/tandem/issues/1619)/[#1710](https://github.com/bloknayrb/tandem/issues/1710), records whose stored `audience` is not `outbound` are **excluded on every Claude-facing read**, matching the channel. That covers user highlights (ADR-027 has always said they are not sent to Claude) and any legacy or stale-tab `{type: "comment", audience: "private"}` record. The `privateExcluded` response field reports the count; it is omitted when zero.
+
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `author` | enum | no | `user`, `claude`, or `import` |
-| `type` | enum | no | `highlight`, `comment` |
+| `type` | enum | no | `highlight`, `comment` — `highlight` returns nothing: every highlight is stamped `audience: "private"` (ADR-027) and `tandem_highlight` is a deprecated stub, so no outbound highlight exists to return |
 | `status` | enum | no | `pending`, `accepted`, `dismissed` |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
@@ -664,22 +697,46 @@ User notes are **always excluded** — they are private to the user (ADR-027) an
 
 `notesExcluded` reports how many `note`-type annotations were filtered out (only present when > 0). Notes cannot be read via MCP — they are user-private (ADR-027).
 
+`anchor` is present on an individual annotation **only when its CRDT anchor is untrustworthy** ([#1764](https://github.com/bloknayrb/tandem/issues/1764)): `"degraded"` means the anchor no longer describes this text and the `range` shown is the last one the server trusted, `"failed"` means the anchor resolved inverted. It is absent on every healthy refresh, so its absence is the normal case and carries no information.
+
 ---
 
 ### tandem_resolveAnnotation
 
-Accept or dismiss an annotation.
+Withdraw one of Claude's own annotations, or record a dismissal. **Accepting
+Claude's own work is the user's decision and is refused here** (#1770).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `id` | string | yes | Annotation ID |
-| `action` | enum | yes | `accept` or `dismiss` |
+| `action` | enum | yes | `accept` or `dismiss` — `accept` is refused on Claude's own record and on any record carrying `suggestedText` |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
 ```json
-{ "id": "ann_1710936000000_a1b2c3", "status": "accepted" }
+{ "id": "ann_1710936000000_a1b2c3", "status": "dismissed" }
 ```
+
+**Who may accept.** Accepting is the act of agreeing to a proposal, and the only
+party who can agree to Claude's proposal is the user. Two cases are refused with
+`ACCEPT_REFUSED`:
+
+- **Claude's own annotation.** Use `dismiss` to withdraw it — that is what a
+  change of mind looks like. A record Claude resolves is stamped
+  `resolvedBy: "claude"` and is deliberately **excluded from `userResponses`** on
+  the next `tandem_checkInbox`, so Claude never reads its own withdrawal back as
+  the user's verdict.
+- **Any annotation carrying `suggestedText`.** An MCP accept flips a status field
+  and applies no text; the replacement lands only when the user accepts it in the
+  editor, or via `tandem_applyChanges`. Accepting one over MCP would leave the
+  document unchanged while the card claimed the suggestion had been taken.
+
+Everything else goes through. Dismissing a **user-authored** comment closes a
+thread rather than claiming agreement, and **accepting** one that carries no
+`suggestedText` is permitted too — there is no proposal of Claude's to agree to,
+and it is the only way an imported Word comment can be closed over MCP. Both are
+stamped `resolvedBy: "claude"` and both stay out of `userResponses`, so the
+record never reads back as the user's own decision.
 
 ---
 
@@ -701,7 +758,7 @@ Delete an annotation permanently.
 
 ### tandem_editAnnotation
 
-Edit the content of an existing annotation. Only pending annotations can be edited.
+Edit the content of an annotation Claude authored. Only pending annotations can be edited; a user-authored or imported record returns `NOT_OWNED` (#1770).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -716,7 +773,12 @@ Edit the content of an existing annotation. Only pending annotations can be edit
 { "id": "ann_1710936000000_a1b2c3", "content": "Updated: ...", "suggestedText": "replacement text if set", "editedAt": 1710936500000 }
 ```
 
-**Errors:** `NO_DOCUMENT` (document not found), error if annotation not found or not pending.
+**Errors:** `NO_DOCUMENT` (document not found), `NOT_OWNED` (the annotation was
+authored by the user), error if annotation not found or not pending. `newText` additionally
+carries Critical Rule 6's heading screen (#1626): a replacement is refused with
+`INVALID_ARGUMENT` when the annotation's **live** span overlaps heading markup — including in its
+interior, which the plain-comment arm legally allows at creation — or when that span no longer
+resolves in the document. A body-only edit (`content` / `reason`) is never screened.
 
 **Example:**
 ```
@@ -727,6 +789,9 @@ tandem_editAnnotation({
 ```
 
 **Notes:**
+- **Only Claude's own annotations can be edited (#1770).** A user-authored card
+  is the user's text; rewriting it would silently put words in their mouth, and
+  the editor shows no authorship change. Editing one returns `NOT_OWNED`.
 - At least one of `content`, `reason`, or `newText` must be provided.
 - `reason` is an alias for `content` — if both are provided, `content` takes precedence.
 - Only pending annotations can be edited — accepted or dismissed annotations return an error.
@@ -737,12 +802,13 @@ tandem_editAnnotation({
 
 ### tandem_annotationReply
 
-Reply to an annotation thread. Only works on pending annotations.
+Reply to a thread on an annotation Claude authored. Only works on pending annotations; a user-authored or imported parent — including a promoted note or Word comment, stored as a user comment — returns `NOT_OWNED` (#1770).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `annotationId` | string | yes | The annotation ID to reply to |
 | `text` | string | yes | Reply text |
+| `suggestedText` | string | no | A refined replacement proposal, over the **parent annotation's** range (#1626). A reply has no range of its own. |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
@@ -750,7 +816,7 @@ Reply to an annotation thread. Only works on pending annotations.
 { "replyId": "reply_1710936500000_x1y2z3", "annotationId": "ann_1710936000000_a1b2c3" }
 ```
 
-**Errors:** `NO_DOCUMENT` (document not found), `NOT_FOUND` (annotation not found), `ANNOTATION_RESOLVED` (annotation already resolved).
+**Errors:** `NO_DOCUMENT` (document not found), `NOT_FOUND` (annotation not found), `NOT_OWNED` (the annotation was authored by the user), `ANNOTATION_RESOLVED` (annotation already resolved), `INVALID_ARGUMENT` (the parent is a highlight, or a private note / private comment, the reply text or `suggestedText` is over the length limit, or a `suggestedText` was sent on a parent whose live span overlaps heading markup -- arms of one code in `describeReplyWriteRefusal`). `NOT_OWNED` and the ADR-027 refusals are answered *ahead* of the heading check, which is the runtime order: the range layer never speaks about a record Claude was not allowed to touch.
 
 **Example:**
 ```
@@ -761,9 +827,24 @@ tandem_annotationReply({
 ```
 
 **Notes:**
+- **Claude may only reply inside threads it started (#1770).** A user's comment
+  is addressed *to* Claude, not a thread Claude is a participant in — answer it
+  with `tandem_reply` (chat) or a fresh `tandem_comment`. A user-authored parent
+  returns `NOT_OWNED`. The user's own replies inside Claude's thread are
+  unaffected, as is the user replying in their own note thread (#1000).
 - Replies are threaded under the parent annotation. The editor renders them as a conversation.
 - Only pending annotations accept replies — resolved annotations return `ANNOTATION_RESOLVED`.
 - The reply author is set to `"claude"` when called via MCP.
+- **`suggestedText` proposes over the parent's range, and accepting it SUPERSEDES the parent's own
+  `suggestedText` (#1626).** There is no archive of the original proposal — a refined proposal
+  replacing the first is the point of the feature, and the stored field must be what was applied or
+  Undo declines "text changed" on every reply accept. The user accepts it in the editor; an MCP
+  accept still applies no text.
+- **The heading check runs against the parent's LIVE span**, resolved through its CRDT anchor, not
+  the offsets stored at creation — a stored suggestion is a rewrite deferred to Accept, and Accept
+  rewrites the live span (Critical Rule 6's interior term, #1766). The `/api/annotation-reply` twin
+  gains nothing: it calls `addUserReply`, the user's unguarded entry, which cannot carry a
+  suggestion at all.
 
 ---
 
@@ -779,6 +860,8 @@ Export all annotations as a formatted summary. Useful for review reports.
 | `outputPath` | string | no | Custom sidecar path for `writeToDisk` — a file path, or an existing directory the default filename is appended to. Must be **absolute** (a relative path would silently resolve against the server's CWD), and UNC / extended-length / device-namespace prefixes are rejected. The final filename must end in `.annotations.md` or `.annotations.json`, matching `format`; the destination **directory** is unrestricted ([#1654](https://github.com/bloknayrb/tandem/issues/1654)). |
 
 Solo mode applies here: while Solo is on, held comments and replies are withheld from the export and the count is disclosed as `heldFromExport` rather than being silently omitted.
+
+The sidecar and the response carry `heldFromExport` and `privateExcluded` as **two separate floors** — the first counts what the Solo hold withheld, the second what ADR-027's audience gate withheld before it (#1619/#1710) — and both are absent when zero. Neither count appears in the markdown text.
 
 **Errors:** `INVALID_PATH` — `outputPath` is relative, carries a UNC / extended-length / device-namespace prefix, contains a colon in the filename (NTFS alternate data stream), or names a file whose suffix is not `.annotations.md` / `.annotations.json` matching `format`. `FILE_NOT_FOUND` — the destination directory does not exist.
 
@@ -798,7 +881,7 @@ Solo mode applies here: while Solo is on, held comments and replies are withheld
 
 ### tandem_applyChanges
 
-Apply all accepted suggestions back to the `.docx` file as tracked changes. The original file is backed up before modification.
+**EXPERIMENTAL** (#1754). Apply all accepted suggestions back to the `.docx` file as tracked changes. The original file is backed up before modification. It refuses any document whose flat text it cannot reproduce from `word/document.xml` — some Word documents are a known limitation, and that refusal arrives as `INTERNAL_ERROR`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -819,7 +902,7 @@ Apply all accepted suggestions back to the `.docx` file as tracked changes. The 
 }
 ```
 
-**Errors:** `FORMAT_ERROR` (not a `.docx` file, or uploaded document), `NO_DOCUMENT` (document not found)
+**Errors:** `NO_DOCUMENT` (document not found), `NO_SUGGESTIONS`, `FORMAT_ERROR` (not a `.docx` file), `INVALID_PATH` (an upload or scratchpad source, a UNC `backupPath`, or a symlinked `backupPath`), `FILE_NOT_FOUND` (the `backupPath` directory does not exist), `BACKUP_FAILED`, `READ_ONLY`, `EXTERNAL_CONFLICT`, `FILE_MODIFIED`, `SOURCE_MISSING`, `FILE_LOCKED` (`EBUSY`, or `EPERM` from a syscall other than `open`), `PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`), `INTERNAL_ERROR` (the flat-text mismatch above -- the experimental caveat). `LICENSE_REQUIRED` is ambient to every gated tool and is never returned while the gate ships dark.
 
 **Example:**
 ```
@@ -828,12 +911,13 @@ tandem_applyChanges({ author: "Claude Review" })
 
 **Notes:**
 - Document must be `.docx` format (`FORMAT_ERROR` otherwise).
-- Document must be a local file, not uploaded (`FORMAT_ERROR` for `upload://` paths).
+- Document must be a local file, not uploaded (`INVALID_PATH` for `upload://` paths).
 - At least one accepted suggestion is required — returns an error if none exist.
 - Applies changes as Word tracked revisions (`<w:ins>`/`<w:del>`), not silent edits. Reviewers in Word see the changes as tracked changes they can accept or reject.
 - Creates a backup of the original file before modifying. Override the backup path with `backupPath`.
 - Warns if pending annotations remain (`pendingWarning`), but does not block the operation.
 - Word comments that overlap applied suggestions are marked as resolved (`commentsResolved` count).
+- Individual suggestions can be refused while the rest apply — `rejectedDetails` carries the reason per annotation id. Beyond a stale `textSnapshot` and an overlapping range, a suggestion is refused when it would take a tab, line break or symbol with it, when the run it would rewrite carries more than one text segment (whole `<w:r>` runs are rewritten, not offset ranges, and only the first segment is recorded in the deletion), and when its text sits inside — or its span merely crosses — a `<w:hyperlink>`, a `<w:ins>` or another nested run, which this path does not edit.
 
 ---
 
@@ -864,7 +948,7 @@ Restore a document from a backup. Tandem copies a document's on-disk bytes to `{
 { "message": "Restored thesis.md from backup thesis-20260609-141500-ab12cd34.md.", "restoredFrom": "…/doc-backups/<hash>/thesis-20260609-141500-ab12cd34.md", "filePath": "/home/user/docs/thesis.md" }
 ```
 
-**Errors:** `FILE_NOT_FOUND` if no backup exists for the document (or the named snapshot doesn't exist); `FORMAT_ERROR` for upload-source documents or unsupported formats; `INVALID_PATH` when the named `.docx` sidecar is not a plain file Tandem could have written — a symbolic link, or a FIFO / directory / device node wearing that name (the sidecar is opened `O_NOFOLLOW|O_NONBLOCK` and the open handle is `fstat`ed, so a planted FIFO is refused rather than blocking the read forever); `READ_ONLY` for read-only documents; `RELOAD_IN_PROGRESS` when a concurrent reload holds the per-document guard.
+**Errors:** `FILE_NOT_FOUND` if no backup exists for the document (or the named snapshot doesn't exist); `FORMAT_ERROR` for unsupported formats; `INVALID_PATH` for upload-source and scratchpad documents (list and restore mode alike), or when the named `.docx` sidecar is not a plain file Tandem could have written — a symbolic link, or a FIFO / directory / device node wearing that name (the sidecar is opened `O_NOFOLLOW|O_NONBLOCK` and the open handle is `fstat`ed, so a planted FIFO is refused rather than blocking the read forever); `READ_ONLY` for read-only documents; `RELOAD_IN_PROGRESS` when a concurrent reload holds the per-document guard.
 
 **Notes:**
 - `.docx`: the `{name}.backup.docx` sidecar restores through the same reload lifecycle as a snapshot (#1768) — `readOnly` is honoured, the pre-restore bytes are snapshotted first, and the watcher's self-write filter is armed. It used to be a private copy-back on the no-`backup` call that took none of those. The sidecar is not deleted after restore — you can restore multiple times. `POST /api/backups/restore` accepts the sidecar name too; `GET /api/backups` deliberately still lists snapshots only, because the palette action restores `backups[0]`.
@@ -947,6 +1031,8 @@ Find text and return a safe position range. **Always use this before `tandem_edi
 { "from": 42, "to": 55, "text": "$12.4 million" }
 ```
 
+The search prefers an **exact** match and falls back to the same space-separator normalization described under the range errors above, but only when the exact search finds nothing at all (#1622) — so a pattern you typed with an ordinary space still finds a span the document spells with a no-break space, and the returned `text` carries the document's real bytes.
+
 **Errors:** `INVALID_RANGE` if text not found.
 
 ---
@@ -982,6 +1068,8 @@ Read content around a range without pulling the full document.
 
 Check if the user is actively editing and where their cursor is.
 
+**`cursor` is a flat text offset in UTF-16 code units** — the same coordinate system as annotation ranges, and the system `tandem_checkInbox`'s `activity.selectedText` is sliced from. Only a document change *triggers* a write — 200 ms debounced while typing, then again at the `TYPING_DEBOUNCE` typing-clear — but that last write publishes the caret's **live** position, so a caret move made inside the window is still reflected by a write the preceding edit already armed. It carries no `textSnapshot`, and `lastEdit` is the write's timestamp rather than the moment of the edit it reports. Use it as a proximity hint; take real ranges from `tandem_resolveRange` or `tandem_search`.
+
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `documentId` | string | no | Target document ID (defaults to active document) |
@@ -997,8 +1085,11 @@ Check if the user is actively editing and where their cursor is.
 ```
 
 **Notes:**
-- `active` is true if the user typed within the last 10 seconds.
-- `isTyping` is true during active keystroke bursts (debounced at 3 seconds).
+- `active` is true if `isTyping`, or the user typed within the last 10 seconds (the `isActive` computation in `tandem_getActivity`'s handler, `src/server/mcp/awareness.ts`).
+- `isTyping` is true during active keystroke bursts; the client clears it `TYPING_DEBOUNCE` = 3000 ms after the last keystroke (`TYPING_DEBOUNCE` in `src/shared/constants.ts`).
+- `cursor` is a **flat text offset** in UTF-16 code units. Only a document change *triggers* a write, but the write publishes the caret's live position, so a caret moved inside the typing window is still reflected — see above. `null` when there is no activity.
+- The tool returns exactly these four fields: no `selection` and no `documentId`. For the most recent selection, read `tandem_checkInbox`'s `activity.selectedText`, which is sliced from flat offsets, and `activity.selectionAt` for when the editor last wrote it — a re-stamp time, not the moment the user selected (see the `tandem_checkInbox` note). (Until the registered description was corrected it promised both; the handler never returned either.)
+- The no-activity branch returns `active: false`, `isTyping: false`, `cursor: null`, `lastEdit: null` and a `message`. `isTyping` was absent there until it was added alongside the description fix, so an older server returns `undefined` for it on that branch.
 - Use this to avoid interrupting the user while they're typing.
 
 ---
@@ -1017,6 +1108,7 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
   "summary": "1 new: 1 comment. 1 accepted. 1 new chat message.",
   "hasNew": true,
   "mode": "tandem",
+  "modeProvenance": { "source": "client", "connection": "a1b2c3d4", "at": 1710936000000, "value": "tandem" },
   "storeReadOnly": false,
   "userActions": [ { ...annotation, "textSnippet": "...", "edited": true, "alreadyPushed": true } ],
   "userReplies": [ { "id": "r_...", "annotationId": "ann_...", "author": "user", "text": "...", "timestamp": 1710936000000, "textSnippet": "...", "alreadyPushed": true } ],
@@ -1026,18 +1118,23 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
     "isTyping": false,
     "cursor": 142,
     "lastEdit": 1710936000000,
-    "selectedText": null
+    "selectedText": null,
+    "selectionAt": null
   }
 }
 ```
 
 **Notes:**
 - Each annotation is surfaced only once -- subsequent calls return only new items (edited annotations re-surface with `edited: true`).
-- `userActions`: new or edited user comments. User notes and highlights never surface here (ADR-027).
-- `userResponses`: the user's accept/dismiss decisions on Claude's annotations.
+- `userActions`: new or edited user comments. User notes and highlights never surface here (ADR-027) — and since #1619 neither does any record whose stored `audience` is not `outbound`, on either bucket, matching the channel.
+- `userResponses`: the **user's** accept/dismiss decisions on Claude's annotations. A record Claude resolved itself carries `resolvedBy: "claude"` and never appears here — reading one's own withdrawal back as a verdict is how a dismissal became "the user rejected it" (#1770). The ledger keys a Claude-authored record on `(id, status)`, so a decision made after an Undo is a fresh entry rather than a silently deduped one.
 - **Channel push never suppresses an inbox item.** An item is always returned; when it was also handed to a real-time consumer it carries `alreadyPushed: true` (`userActions` and `userReplies` only -- `userResponses` never carries the flag). The server can observe that it pushed an event to a consumer, but not that any model received it: an attached channel shim whose host never negotiated the channel accepts the notification and discards it. The flag is advisory in **both** directions -- it can be set for an item no model saw, and it is dropped once the event leaves the channel buffer, so its absence is not evidence the item wasn't pushed. (Buffer eviction is size- and age-triggered but runs only when a *later* event is pushed -- there is no timer -- so on a quiet document the flag can outlive the nominal 60s age bound by an unbounded margin. Ids are also process-global rather than per-document; the same imported Word comment promoted in two files shares one id.) Never skip an item on the strength of this flag. (This was previously a suppression, which silently dropped user comments and replies for any client without a working channel -- the default configuration.)
-- `chatMessages`: new chat messages from the user via the ChatPanel sidebar. Each entry has `id`, `author`, `text`, `timestamp`, and optionally `documentId` (the document that was active when the message was sent).
+- `chatMessages`: new *unread user* messages from the ChatPanel sidebar. Each entry has `id`, `text`, `timestamp`, and optionally `documentId` (the document that was active when the message was sent), `anchor` (a text selection the user attached) and `replyTo`. **There is no `author` field** — the stored `ChatMessage` carries one, but it is used as the filter (`author === "user"`) and then dropped, along with `read` and `agentIdentity` (the "Bucket 3" chat block in `tandem_checkInbox`, `src/server/mcp/awareness.ts`; the output schema omits it too — `inboxChatMessageSchema` in `src/server/mcp/output-schemas.ts`). Every entry is a user message by construction.
+- `activity.cursor` here is the same **flat text offset** (UTF-16 code units) as `tandem_getActivity`'s, the same system `activity.selectedText` beside it is sliced from. Only a document change triggers a write, but the last one (at the `TYPING_DEBOUNCE` typing-clear) publishes the caret's live position — so a caret move can be reflected without any edit. Use it as a proximity hint rather than a range endpoint.
+- `activity.selectedText` is the **most recent non-empty selection**, not necessarily the current one, and `activity.selectionAt` (#1624) is the epoch-ms timestamp of the record it was sliced from — `null` whenever `selectedText` is null, and also when the record carries no numeric timestamp, so `selectionAt: null` does not mean there is no selection. The two come from `Y_MAP_SELECTION`, a different record from the one `cursor`/`isTyping`/`lastEdit` are read from, so the halves of `activity` have independent ages. The editor writes the record after a **150 ms debounce, not the selection dwell** (1 s by default, configurable 500–3000 ms) that gates the `chat:message` selection; a selection made by clicking an annotation card or a chat anchor counts. While the document is the active editor tab, it is **cleared** (a collapsed record, so `selectedText: null`) when the selection collapses — a click, an arrow key, typing — or when a remote edit deletes the selected text. It is **not cleared** when focus leaves the editor, e.g. into the chat panel. **`selectionAt` is when the record was last written, not when the user selected:** in the active editor tab, any document change that moves a lingering selection re-stamps it, including your own `tandem_edit` above it (#1991). A recent value therefore does not prove a recent selection; an old value does prove it is old. **Only the active tab's editor maintains the record** (it is mounted under `{#key activeTab.id}`): for a background tab, or a document no browser is showing, nothing clears, remaps or re-stamps it, so after an edit `selectedText` is sliced from stale offsets and can be text the user never selected (#1997).
+- The audience exclusion on `userActions` / `userResponses` is **silent on the wire**: unlike `tandem_getAnnotations` and `tandem_exportAnnotations`, this tool emits no `privateExcluded` (or `notesExcluded`) counter — `checkInboxOutputShape` declares none (`src/server/mcp/output-schemas.ts:274-298`). Withheld records simply do not appear.
 - `mode`: the user's current collaboration mode (`"tandem"` or `"solo"`). In `"solo"` mode, hold annotations and wait for the mode to switch to `"tandem"` before resuming.
+- `modeProvenance`: who last wrote the mode key (`client` + an opaque connection tag, `server` + origin tag, `restore`, or `unknown`), when, and what the key read at that moment; `null` before any write is observed. It names the last transaction that *touched* the key, so under a lost concurrent tie it is not necessarily the writer of the reported `mode` -- compare `modeProvenance.value` against `mode`.
 
 ---
 
@@ -1123,7 +1220,7 @@ In addition to MCP tools, the server exposes REST endpoints on the same port (:3
 
 ### Route index
 
-Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/health` and the `/api/wake` upgrade registered in `src/server/mcp/server.ts`. The **Gate** column names what each route holds *beyond* the two path-wide controls every `/api` route gets — `authMiddleware` (Bearer for non-loopback callers) and, since #1320, `enforceLoopbackMutation` (non-GET/HEAD/OPTIONS is loopback-only). "one layer" marks the nine mutating routes that call neither `assertOriginAllowlisted` nor `assertLoopbackForMutation` and rely solely on that invariant — the review inventory enumerated in [security.md](security.md).
+Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/health` and the `/api/wake` upgrade registered in `src/server/mcp/server.ts`. The **Gate** column names what each route holds *beyond* the two path-wide controls every `/api` route gets — `authMiddleware` (Bearer for non-loopback callers) and, since #1320, `enforceLoopbackMutation` (non-GET/HEAD/OPTIONS is loopback-only). "one layer" marks the **six** mutating routes that call neither `assertOriginAllowlisted` nor `assertLoopbackForMutation` and rely solely on that invariant — the review inventory enumerated in [security.md](security.md). It was nine until `save`, `convert` and `apply-changes` each gained `assertOriginAllowlisted` (`src/server/mcp/routes/save.ts`, `convert.ts`, `apply-changes.ts`) to close a simple-request CSRF. Of the six, `rotate-token` is the only one carrying a second layer — it requires a parsed JSON body, which is positive proof a preflight passed; the other five have one layer, not two. `open` and `rotate-token` must **not** be given the origin gate: the Tauri sidecar and the CLI call them without an `Origin` header, and that gate fails closed on a missing one. **Both path-wide controls are `/api`'s alone:** on `/mcp`, `authMiddleware` is mounted but `enforceLoopbackMutation` is **not**, so a token-holding LAN peer reaches every mutating MCP tool below without a loopback check — [#1906](https://github.com/bloknayrb/tandem/issues/1906).
 
 | Route | Purpose | Gate beyond the path-wide controls |
 |---|---|---|
@@ -1131,16 +1228,16 @@ Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/healt
 | `GET /api/info` | App metadata for the About panel. | scrubs non-public fields |
 | `GET /api/diagnostics` | `tandem doctor` report + host info. | loopback-only by hand (403) |
 | `GET /api/notify-stream` | SSE stream of server notifications. | — |
-| `GET /api/mode` · `POST /api/mode/release` | Read / release Solo mode. | origin + loopback |
+| `GET /api/mode` · `POST /api/mode/release` | Read / release Solo mode. `POST /api/mode/release` no longer writes the mode key: it answers 409 `MODE_NOT_TANDEM` when the room does not read Tandem, and releases nothing (#1769). | origin + loopback |
 | `GET /api/license/status` · `POST /api/license/activate` | License status and activation. | origin + loopback |
 | `POST /api/open` | Open a file by absolute path. | **one layer** |
 | `POST /api/close` | Close a document by id. | **one layer** |
-| `POST /api/save` | Save / Save As. | **one layer** |
+| `POST /api/save` | Save / Save As. | origin (no loopback assert — the path-wide one covers it) |
 | `POST /api/rename` | Rename an on-disk file. | origin + loopback |
 | `POST /api/upload` | Open uploaded content (no disk path). | **one layer** |
 | `POST /api/scratchpad` | New Scratchpad tab. | origin + loopback + license gate |
-| `POST /api/convert` | Convert `.docx` to Markdown. | **one layer** |
-| `POST /api/apply-changes` | Write accepted suggestions into a `.docx`. | **one layer** + license gate |
+| `POST /api/convert` | Convert `.docx` to Markdown. | origin (no loopback assert — the path-wide one covers it) |
+| `POST /api/apply-changes` | Write accepted suggestions into a `.docx`. | origin + license gate |
 | `GET /api/document/raw` | Raw document bytes. | loopback-only by hand |
 | `POST /api/document/reload` | Reload the document from disk. | origin + loopback + license gate |
 | `GET /api/backups` · `POST /api/backups/restore` | List / restore pre-overwrite snapshots. | origin + loopback (restore also license-gated); list scrubs paths |
@@ -1149,7 +1246,7 @@ Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/healt
 | `POST /api/remove-annotation` | Delete an annotation. | **one layer** + license gate |
 | `POST /api/store/reclaim-lock` | Reclaim the annotation-store lock. | origin + loopback |
 | `GET /api/sessions` · `POST /api/sessions/delete` · `POST /api/sessions/clear` | Session management. | origin + loopback; list scrubs paths |
-| `POST /api/rotate-token` | Rotate the auth token. | **one layer** |
+| `POST /api/rotate-token` | Rotate the auth token. | **one layer** — but not bare: a missing/unparsed JSON body is refused 400 `BAD_REQUEST` (`src/server/mcp/routes/rotate-token.ts:45`), which is positive proof a preflight passed |
 | `POST /api/shutdown` | Graceful shutdown. | hand-rolled `isLoopback` (must accept an absent `Origin`) |
 | `GET/POST /api/launcher/*` | Claude launcher status, nonce, relaunch, working directory. | origin + loopback + nonce |
 | `/api/channel-*`, `DELETE /api/chat` | Channel shim + monitor transport. | carved out of the loopback invariant by name |
@@ -1167,7 +1264,7 @@ Returns app metadata for the client's About panel and version indicator. All fie
 ```json
 {
   "version": "0.22.1",
-  "toolCount": 32,
+  "toolCount": 33,
   "mcpSdkVersion": "1.27.1",
   "transport": "http",
   "storagePath": "C:\\Users\\user\\AppData\\Local\\tandem\\Data\\sessions",
@@ -1179,7 +1276,7 @@ Returns app metadata for the client's About panel and version indicator. All fie
 ```json
 {
   "version": "0.22.1",
-  "toolCount": 32,
+  "toolCount": 33,
   "mcpSdkVersion": "1.27.1",
   "transport": "http",
   "bindHost": "127.0.0.1",
@@ -1249,7 +1346,7 @@ Open a file by its absolute path on disk. Equivalent to `tandem_open` but callab
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `filePath` | string | yes | Absolute path to the file |
-| `force` | boolean | no | Reload from disk even if already open (clears annotations + session). Gated by the license gate; plain open is not. |
+| `force` | boolean | no | Reload from disk even if already open (clears the in-memory annotations + session; the durable envelope survives and re-merges, #1813). Gated by the license gate; plain open is not. |
 | `readOnly` | boolean | no | Force read-only mode. Used by the View Changelog button. |
 
 **Response (200):**
@@ -1405,35 +1502,41 @@ Channel shim reports connection errors.
 
 **Response:** `{ "ok": true }`
 
-The shim gives this best-effort report a 3-second deadline before exiting after retry exhaustion.
+The shim gives this best-effort report a 3-second deadline.
 
-### POST /api/channel-permission
+### Channel permission relay (experimental — no return leg)
 
-Channel shim forwards Claude Code's tool approval prompt for editor-side permission UI.
+**These three routes accept and store a permission request, and nothing more (#1794).** The shim forwards Claude Code's tool approval prompt, the server holds it, and the next permission request sweeps out anything older than 30 seconds: **nothing displays it and no verdict ever reaches Claude Code.** The editor has no permission UI (nothing in `src/client/` reads `pendingPermissions`); the shim registers `permission_request` as an MCP *notification*, which cannot be answered; and the verdict route only deletes the pending entry and echoes the verdict back to the browser that submitted it. See [docs/architecture.md](architecture.md) and ADR-047 §3. The request/response shapes below are accurate about the wire.
+
+**One asymmetry worth stating.** `description` — the tool-level summary line, "Run npm test" — is still sent, stored and served; `inputPreview`, which carries file bodies and command lines, is not: the shim no longer sends it, and the server discards it if anything else does. On `description` alone this moves exposure the *wrong* way: the stderr line that only the machine owner reads no longer carries it, while the served copy any local process can read (`authMiddleware` bypasses on loopback) still does. That is defensible for a summary line, and it is **not** a claim that prompt content is no longer exposed — see the register entry for #1884.
+
+#### POST /api/channel-permission
+
+The shim forwards Claude Code's tool approval prompt. The prompt's `input_preview` is **not sent by the shim** (its handler's schema omits the field, so the parse strips it — `tests/channel/permission-forward.test.ts`), and a caller that sends `inputPreview` anyway finds it **discarded by the server** — neither stored, served nor logged.
 
 **Request:**
 ```json
-{ "requestId": "req_1", "toolName": "tandem_edit", "description": "Edit paragraph 1", "inputPreview": "..." }
+{ "requestId": "req_1", "toolName": "tandem_edit", "description": "Edit paragraph 1" }
 ```
 
 **Response:** `{ "ok": true }`
 
-The permission relay has a 5-second deadline; failures are logged because the browser may not see the approval prompt.
+The permission relay has a 5-second deadline; failures are logged, and the request is then dropped.
 
-### GET /api/channel-permission
+#### GET /api/channel-permission
 
-Poll pending permission requests (for editor UI).
+Returns the pending requests. **No client polls this.**
 
 **Response:**
 ```json
 { "pending": [{ "requestId": "req_1", "toolName": "tandem_edit", "description": "...", "createdAt": 1710936000000 }] }
 ```
 
-Stale requests (>30s) are evicted automatically.
+Stale requests (>30s) are evicted whenever either channel-permission route runs — **the POST sweeps before it inserts**, and that is the half that bounds the map, because (per the paragraph above) nothing polls this GET. Nothing sweeps on a timer, so the last requests of a session stay resident until the next one arrives. Pinned by `tests/server/channel-permission-relay.test.ts`.
 
-### POST /api/channel-permission-verdict
+#### POST /api/channel-permission-verdict
 
-Browser submits allow/deny verdict for a permission request.
+Deletes the pending entry and echoes the verdict to its own caller. **The verdict goes nowhere else** — there is no store, no poll route and no SSE carrying it back to the shim.
 
 **Request:**
 ```json
@@ -1476,7 +1579,7 @@ Tandem's MCP tools each return a **single discrete result** — there is no part
 
 1. `tandem_edit` on a multi-paragraph document (verify the edit lands once, ranges resolve).
 2. `tandem_save` (verify a single save result, file written once).
-3. `tandem_open` with `force: true` (force-reload; verify content/annotations clear-and-repopulate in one result).
+3. `tandem_open` with `force: true` (force-reload; verify content/annotations clear-and-repopulate in one result, and that the durable envelope's records come back).
 4. Issue two tool calls back-to-back (e.g. `tandem_getOutline` then `tandem_edit`) and confirm responses are correctly correlated to their requests.
 
 Expected result: no behavioral change versus the pre-2.1.154 opt-in path. Record the observed CLI version and outcome on issue #1043 when run.

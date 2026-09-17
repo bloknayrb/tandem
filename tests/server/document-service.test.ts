@@ -40,8 +40,8 @@ import {
 import { BROWSER_ORIGIN, INTERNAL_ORIGIN } from "../../src/shared/origins.js";
 
 // Mock session manager to avoid filesystem side effects
-vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/session/manager.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     saveSession: vi.fn().mockResolvedValue(undefined),
@@ -54,8 +54,8 @@ vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
 // durable-annotation round-trip test (save-as promote) actually writes the
 // annotation envelope to disk; the spy wrapper still lets save tests assert it
 // was called. Doc saves in these tests target /tmp paths (harmless real writes).
-vi.mock("../../src/server/file-io/index.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/file-io/index.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   const realAtomicWrite = actual.atomicWrite as (p: string, c: string) => Promise<void>;
   const realAtomicWriteBuffer = actual.atomicWriteBuffer as (p: string, b: Buffer) => Promise<void>;
   return {
@@ -73,7 +73,7 @@ vi.mock("../../src/server/file-io/index.js", async (importOriginal) => {
 // above wires a genuine `fs.watch` against a temp directory, which is the only
 // way to see the #1749 fix rather than a spy that was called.
 const unwatchFileReal = vi.hoisted(() => ({ fn: (_p: string) => {} }));
-vi.mock("../../src/server/file-watcher.js", async (importOriginal) => {
+vi.mock(import("../../src/server/file-watcher.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/file-watcher.js")>();
   unwatchFileReal.fn = actual.unwatchFile;
   return {
@@ -86,8 +86,8 @@ vi.mock("../../src/server/file-watcher.js", async (importOriginal) => {
 // Partial mock of the event queue: `attachObservers` stays REAL (save-as and
 // rename wire it), only `clearFileSyncContext` becomes a spy so the close specs
 // can see WHICH id the per-doc file-sync observer was torn down under (#1797).
-vi.mock("../../src/server/events/queue.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/events/queue.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     clearFileSyncContext: vi.fn(),
@@ -95,8 +95,8 @@ vi.mock("../../src/server/events/queue.js", async (importOriginal) => {
 });
 
 // Mock notifications
-vi.mock("../../src/server/notifications.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/notifications.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     pushNotification: vi.fn(),
@@ -106,8 +106,8 @@ vi.mock("../../src/server/notifications.js", async (importOriginal) => {
 // Mock pre-overwrite snapshots — the real impl would write into the actual
 // app-data dir as a save side effect. The spy also lets the save test assert
 // the call-site contract (path + documentId).
-vi.mock("../../src/server/file-io/doc-backup.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/file-io/doc-backup.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     snapshotBeforeFirstWrite: vi.fn().mockResolvedValue("written"),
@@ -116,7 +116,9 @@ vi.mock("../../src/server/file-io/doc-backup.js", async (importOriginal) => {
 
 // Mock fs/promises for stat checks
 vi.mock("fs/promises", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+  const actual = await importOriginal<
+    typeof import("fs/promises") & { default: Record<string, unknown> }
+  >();
   return {
     ...actual,
     default: {
@@ -688,6 +690,53 @@ describe("saveDocumentToDisk", () => {
     );
   });
 
+  // #1816: a raw Node fs error embeds the absolute path it was operating on
+  // (`EACCES: permission denied, open '/…/secret-project.md'`), and this
+  // toast reaches a desktop user, who is ALWAYS a loopback caller — so the
+  // `_shared.ts` loopback scrub (a LAN-disclosure control, orthogonal to
+  // this) never applied here. `reason` must be plain language with no path
+  // and no raw errno text; `errorCode` is the one place the bare code (not
+  // the message) survives, for a details suffix the caller renders.
+  it("returns a plain-language reason with no path or raw errno text on a write failure", async () => {
+    const { atomicWrite } = await import("../../src/server/file-io/index.js");
+    const target = "/tmp/secret-project.md";
+    addDoc("save-fail-1816", makeOpenDoc("save-fail-1816", target));
+    editBody("save-fail-1816", "content");
+    vi.mocked(atomicWrite).mockRejectedValueOnce(
+      Object.assign(new Error(`EACCES: permission denied, open '${target}'`), {
+        code: "EACCES",
+        syscall: "open",
+      }),
+    );
+
+    const result = await saveDocumentToDisk("save-fail-1816", "manual");
+
+    expect(result.status).toBe("error");
+    expect(result.reason).not.toContain(target);
+    expect(result.reason).not.toContain("EACCES");
+    expect(result.reason).not.toContain("secret-project");
+    // cr-3 (#1816 follow-up): the client always prefixes this with
+    // "Save failed: " (builtin.svelte.ts) — a reason that repeats the same
+    // phrase stutters, so the generic fallback must not be "The save
+    // failed." itself.
+    expect(result.reason).toBe("The document could not be saved.");
+    expect(result.errorCode).toBe("EACCES");
+    // The syscall travels with the errno: on Windows it is what separates a
+    // refusal from a lock (`lockOrPermissionCode`, #1823).
+    expect(result.errorSyscall).toBe("open");
+
+    const { pushNotification } = await import("../../src/server/notifications.js");
+    expect(pushNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "save-error",
+        message: expect.not.stringContaining(target),
+      }),
+    );
+    expect(pushNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.not.stringContaining("EACCES") }),
+    );
+  });
+
   it("saves eligible .txt documents to disk", async () => {
     const { atomicWrite } = await import("../../src/server/file-io/index.js");
 
@@ -768,8 +817,25 @@ describe("saveDocumentToDisk", () => {
     // watcher suppressor was never armed for a write that didn't happen.
     expect(atomicWriteBuffer).not.toHaveBeenCalled();
     expect(suppressNextChange).not.toHaveBeenCalled();
+    // #1816 follow-up (review round 2): `SaveVerificationError`'s message is
+    // deliberately content-free (`blockReasonMessage` — no path, no errno),
+    // so the #1816 scrub must not flatten it down to the generic
+    // "The document could not be saved." sentence used for raw FS errors
+    // (cr-3, round 3, renamed it from "The save failed." to stop a
+    // "Save failed: The save failed." stutter). Both the returned
+    // `reason` and the pushed notification carry the real, safe explanation
+    // — including the #1123-0e "your original file was left unchanged"
+    // reassurance — rather than a content-free reason going content-free
+    // twice over.
+    expect(result.reason).toBe(
+      "the regenerated file did not re-open cleanly — your original file was left unchanged",
+    );
     expect(pushNotification).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "save-error", errorCode: "VERIFY_BLOCKED" }),
+      expect.objectContaining({
+        type: "save-error",
+        errorCode: "VERIFY_BLOCKED",
+        message: expect.stringContaining("your original file was left unchanged"),
+      }),
     );
   });
 });
@@ -977,6 +1043,34 @@ describe("saveDocumentAsToDisk", () => {
     expect(result.errorCode).toBe("NOT_FOUND");
   });
 
+  // #1816 — same fix as saveDocumentToDisk's twin above. `targetPath` here is
+  // caller-supplied (routes/save.ts's own comment: "their paths are the
+  // caller's own targetPath", exempt from the loopback-vs-LAN disclosure
+  // question), but the raw fs error still must not become the user-facing
+  // reason — this route echoes `reason` to every caller, loopback or not.
+  it("returns a plain-language reason with no path or raw errno text on a write failure", async () => {
+    const { atomicWrite } = await import("../../src/server/file-io/index.js");
+    addDoc("save-as-fail-1816", {
+      id: "save-as-fail-1816",
+      filePath: "upload://scratchpad/x/Scratchpad.md",
+      format: "md",
+      readOnly: false,
+      source: "upload",
+    });
+    const target = "/tmp/secret-project.md";
+    vi.mocked(atomicWrite).mockRejectedValueOnce(
+      Object.assign(new Error(`EACCES: permission denied, open '${target}'`), { code: "EACCES" }),
+    );
+
+    const result = await saveDocumentAsToDisk("save-as-fail-1816", target, "md");
+
+    expect(result.status).toBe("error");
+    expect(result.reason).not.toContain(target);
+    expect(result.reason).not.toContain("EACCES");
+    expect(result.reason).toBe("The document could not be saved to that location.");
+    expect(result.errorCode).toBe("EACCES");
+  });
+
   it("rejects read-only documents", async () => {
     addDoc("ro-doc", {
       id: "ro-doc",
@@ -1130,6 +1224,11 @@ describe("saveDocumentAsToDisk", () => {
         expect(result.status).toBe("error");
         expect(result.errorCode).toBe("PATH_REJECTED");
         expect(atomicWrite).not.toHaveBeenCalled();
+        // cr-6 (#1816 follow-up): `assertPathSafe`'s thrown message embeds
+        // the rejected absolute path — it must not reach the caller raw.
+        expect(result.reason).not.toContain(linkDir);
+        expect(result.reason).not.toContain(baseDir);
+        expect(result.reason).toBe("The destination path was rejected.");
       } finally {
         await fsReal.rm(baseDir, { recursive: true, force: true }).catch(() => {});
       }

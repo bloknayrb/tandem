@@ -34,6 +34,24 @@ function fetchWith(data: Record<string, unknown>) {
     );
 }
 
+/** A `fetch` stub that records its `init` — the request BODY is what #1941's
+ * two specs are about, and `fetchWith`'s zero-arg shape types `mock.calls` as
+ * an empty tuple, so the argument is unreachable through it. */
+function savedFetchSpy() {
+  return vi.fn((_url: unknown, _init?: RequestInit) =>
+    Promise.resolve(
+      new Response(JSON.stringify({ data: { status: "saved" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ),
+  );
+}
+
+function sentBody(spy: ReturnType<typeof savedFetchSpy>): unknown {
+  return JSON.parse(String(spy.mock.calls[0]?.[1]?.body));
+}
+
 function fetchFail() {
   return Promise.resolve(
     new Response(JSON.stringify({ message: "disk full" }), {
@@ -79,12 +97,102 @@ describe("triggerSave / saveStore.lastSaveOk", () => {
     vi.unstubAllGlobals();
   });
 
+  // #1941: the override is opt-in on the wire too. An ordinary save must send
+  // the body it always sent — the server tests `=== true`, so a stray
+  // `allowImageLoss: false` would be harmless, but a stray `true` would make
+  // every Ctrl+S an image-destroying save.
+  it("omits allowImageLoss from the request body unless asked", async () => {
+    const fetchMock = savedFetchSpy();
+    vi.stubGlobal("fetch", fetchMock);
+    await triggerSave("doc-1");
+    expect(sentBody(fetchMock)).toEqual({ documentId: "doc-1" });
+    vi.unstubAllGlobals();
+  });
+
+  it("sends allowImageLoss: true when the save-anyway caller asks for it", async () => {
+    const fetchMock = savedFetchSpy();
+    vi.stubGlobal("fetch", fetchMock);
+    await triggerSave("doc-1", { allowImageLoss: true });
+    expect(sentBody(fetchMock)).toEqual({ documentId: "doc-1", allowImageLoss: true });
+    vi.unstubAllGlobals();
+  });
+
   it("sets lastSaveOk=false and notifies on a failed (non-ok) response", async () => {
     vi.stubGlobal("fetch", vi.fn(fetchFail));
     await expect(triggerSave("doc-1")).resolves.toBe(false);
     expect(saveStore.lastSaveOk).toBe(false);
     expect(saveStore.saving).toBe(false);
     expect(notified(notify, "error", "disk full")).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  // #1816: a 200 body reporting `status: "error"` (document-service.ts's own
+  // scrubbed reason) still carries `errorCode` — triggerSave renders it as a
+  // parenthetical details suffix, the client-side layer distinct from (and
+  // unaffected by) the server's own `pushNotification` scrub.
+  it("appends the errno as a details suffix when the result carries one", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        fetchWith({
+          status: "error",
+          reason: "The document could not be saved.",
+          errorCode: "EACCES",
+        }),
+      ),
+    );
+    await expect(triggerSave("doc-1")).resolves.toBe(false);
+    expect(
+      notified(notify, "error", "Save failed: The document could not be saved. (EACCES)"),
+    ).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  // (post-ship review of #1816/#1897) `result.errorCode` can be "UNKNOWN"
+  // (document-service.ts's own catch-all fallback) or "VERIFY_BLOCKED"
+  // (`SaveVerificationError`, whose `reason` is already a deliberately
+  // complete, content-free sentence) — neither should get the jargon suffix.
+  it('omits the suffix for the "UNKNOWN" fallback code', async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        fetchWith({
+          status: "error",
+          reason: "The document could not be saved.",
+          errorCode: "UNKNOWN",
+        }),
+      ),
+    );
+    await expect(triggerSave("doc-1")).resolves.toBe(false);
+    expect(notified(notify, "error", "Save failed: The document could not be saved.")).toBe(true);
+    expect(notified(notify, "error", "(UNKNOWN)")).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it('omits the suffix for "VERIFY_BLOCKED" — its reason is already complete', async () => {
+    const reason =
+      "the regenerated file did not re-open cleanly — your original file was left unchanged";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(fetchWith({ status: "error", reason, errorCode: "VERIFY_BLOCKED" })),
+    );
+    await expect(triggerSave("doc-1")).resolves.toBe(false);
+    expect(notified(notify, "error", `Save failed: ${reason}`)).toBe(true);
+    expect(notified(notify, "error", "(VERIFY_BLOCKED)")).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  // cr-3 (J2 review round 3): the client always prefixes the server's
+  // `reason` with "Save failed: " — a reason that (redundantly) repeats
+  // "save failed" itself stutters. Pins that the server's own generic
+  // fallback text (not just this test's fixture) doesn't reintroduce it.
+  it("does not stutter 'Save failed: The save failed.' on the generic fallback reason", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(fetchWith({ status: "error", reason: "The document could not be saved." })),
+    );
+    await expect(triggerSave("doc-1")).resolves.toBe(false);
+    expect(notified(notify, "error", "The save failed.")).toBe(false);
     vi.unstubAllGlobals();
   });
 

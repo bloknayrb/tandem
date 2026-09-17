@@ -18,7 +18,7 @@ Client compatibility:
 | AI surface | Status |
 |---|---|
 | **Claude Code** (local CLI) | Default. Validated. Channel push supported. |
-| **Claude Desktop** (local app) | Supported via the [Cowork plugin bridge](../README.md#cowork) (Windows today). Request/response only — channel push N/A. |
+| **Claude Desktop** (local app) | Supported on all three platforms — the wizard and `tandem setup --apply` write `claude_desktop_config.json` wherever Claude Desktop puts it (`%APPDATA%\Claude\`, `~/Library/Application Support/Claude/`, `~/.config/claude/`, plus the Microsoft Store's MSIX location). Request/response only — none of the push transports apply. **Cowork** (Claude Desktop's local agent mode) is the Windows-only part, tracked for macOS/Linux in #316 / #317. |
 | **claude.ai web chat** | Not supported. Would require exposing the local server publicly via a tunnel, which is outside scope. |
 | **Other MCP-capable clients** (Cursor, Continue.dev, LM Studio, Ollama, …) | Best-effort, MCP-contract-compatible, not validated. |
 | **Non-MCP AIs** | Not supported today. **Local models** (Ollama / LM Studio via OpenAI-compatible endpoints) are committed for v1.0 ([ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11), tracked in #1123); cloud providers (ChatGPT direct, Gemini direct) follow in v1.1. |

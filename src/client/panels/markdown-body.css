@@ -26,24 +26,20 @@
   overflow-wrap: anywhere;
 }
 
-/*
- * NO `> :first-child { margin-top: 0 }` rule, deliberately — it would introduce
- * a visible bug rather than fix one.
- *
- * `renderMarkdown` builds paragraphs by replacing `\n\n` with `</p><p>`, which
- * is unbalanced: there is no opening tag at the start and no closing tag at the
- * end. Parsed, `a\n\nb` becomes the TEXT NODE `a` followed by `<p>b</p>` — so
- * the first paragraph is not an element at all, and `> :first-child` selects
- * paragraph *two*. Zeroing its top margin runs the first two paragraphs
- * together. Verified against happy-dom, not assumed.
- *
- * As it stands the spacing is already right: each `<p>` from the second onward
- * carries the gap that separates it from what precedes it. Balancing the
- * markup properly is a renderer change, not a CSS one, and it has to keep
- * `<pre>` OUT of the wrapping `<p>` — the invalid-nesting trap this whole change
- * exists to fix. Tracked in #1639, which also owns removing this comment and
- * adding the rule it currently forbids.
- */
+/* `renderMarkdown` emits balanced block markup since #1639 — every paragraph is
+   a real `<p>` element, so `> :first-child` genuinely selects the first block
+   rather than the second. (Before that the markup was unbalanced and this rule
+   could not exist: `a\n\nb` parsed to a bare TEXT NODE followed by `<p>b</p>`,
+   and zeroing the top margin ran the first two paragraphs together.)
+
+   Placement beside `> :last-child` is readability, not an invariant:
+   `.tandem-markdown > :first-child` is (0,2,0) and beats `.tandem-markdown p`,
+   `.tandem-markdown h1|h2|h3` and the `ul` rule below — each (0,1,1) —
+   regardless of source order. */
+.tandem-markdown > :first-child {
+  margin-top: 0;
+}
+
 .tandem-markdown > :last-child {
   margin-bottom: 0;
 }
@@ -84,8 +80,25 @@
   font-style: italic;
 }
 
+/* The indent lives on the `<ul>`, not the `<li>`.
+
+   `index.html`'s inline `<style>` opens with `* { margin: 0; padding: 0; … }`,
+   emitted verbatim — so a `<ul>` does NOT take the UA default
+   (`margin-block: 1em; padding-inline-start: 40px`). It gets zero of both, and
+   with `list-style: disc` (shorthand initial `position: outside`) the markers
+   then paint OUTSIDE the content box: into the card padding, or clipped away
+   entirely by the clamped card's `overflow: clip`. The padding here is what
+   keeps them inside. The margin matches `.tandem-markdown p` below so a list and
+   a paragraph space alike.
+
+   `margin-left` on the `<li>` is what used to stand in for this; keeping both
+   would double the indent. */
+.tandem-markdown ul {
+  margin: 0.25em 0;
+  padding-inline-start: 1.25em;
+}
+
 .tandem-markdown li {
-  margin-left: 1.25em;
   list-style: disc;
 }
 
@@ -152,14 +165,4 @@
   .tandem-markdown a:hover {
     color: LinkText;
   }
-}
-
-/* `renderMarkdown` emits `</p><p>` for a blank line with no opening tag, so an
-   intro line followed by a fenced block parses to `intro<p></p><pre>…` — a stray
-   EMPTY paragraph carrying real vertical space. This is a band-aid on that, not
-   a fix: the fix is balancing the renderer's paragraph markup, which has to keep
-   `<pre>` outside the wrapping `<p>`. Verified against a parser. Tracked in
-   #1639, which owns deleting this rule. */
-.tandem-markdown p:empty {
-  display: none;
 }

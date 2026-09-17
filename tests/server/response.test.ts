@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   escapeRegex,
   getErrorMessage,
@@ -7,6 +7,7 @@ import {
   noDocumentError,
   withErrorBoundary,
 } from "../../src/server/mcp/response.js";
+import type { ToolErrorCode } from "../../src/shared/types.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const parse = (r: any) => JSON.parse(r.content[0].text);
@@ -40,18 +41,30 @@ describe("mcpSuccess", () => {
 
 describe("mcpError", () => {
   it("includes code and message with error: true", () => {
-    const parsed = parse(mcpError("SOME_CODE", "something went wrong"));
-    expect(parsed).toEqual({ error: true, code: "SOME_CODE", message: "something went wrong" });
+    const parsed = parse(mcpError("INVALID_ARGUMENT", "something went wrong"));
+    expect(parsed).toEqual({
+      error: true,
+      code: "INVALID_ARGUMENT",
+      message: "something went wrong",
+    });
   });
 
   it("includes details when provided", () => {
-    const parsed = parse(mcpError("ERR", "msg", { offset: 42, context: "test" }));
+    const parsed = parse(mcpError("INVALID_ARGUMENT", "msg", { offset: 42, context: "test" }));
     expect(parsed.error).toBe(true);
     expect(parsed.details).toEqual({ offset: 42, context: "test" });
   });
 
+  it("types its code as ToolErrorCode", () => {
+    // #1851: the emitted vocabulary is closed. A code outside
+    // ToolErrorCodeSchema must not compile — checked by typecheck:tests.
+    expectTypeOf(mcpError).parameter(0).toEqualTypeOf<ToolErrorCode>();
+    // @ts-expect-error — not a wire code
+    mcpError("NOT_A_CODE", "x");
+  });
+
   it("omits details key when not provided", () => {
-    const parsed = parse(mcpError("ERR", "msg"));
+    const parsed = parse(mcpError("INVALID_ARGUMENT", "msg"));
     expect("details" in parsed).toBe(false);
   });
 });

@@ -34,7 +34,7 @@ import { extractText } from "./document-model.js";
 import { getCurrentDoc, requireDocument } from "./document-service.js";
 import { YDocStore } from "./document-store.js";
 import { gatedTool } from "./license-gate.js";
-import { mcpError, mcpSuccess, noDocumentError } from "./response.js";
+import { lockOrPermissionCode, mcpError, mcpSuccess, noDocumentError } from "./response.js";
 
 // ---------------------------------------------------------------------------
 // Shared core logic (used by both MCP tool and API endpoint)
@@ -202,6 +202,11 @@ export async function applyChangesCore(
       continue;
     }
     if (ann.status !== "accepted") continue;
+    // #1770: no `resolvedBy` guard here, deliberately. Claude cannot produce an
+    // `accepted` record carrying `suggestedText` — `transitionPending` refuses
+    // that accept with `accept-refused/unapplied-suggestion` — so a
+    // Claude-resolved record can never reach this loop, and a guard would match
+    // nothing reachable.
 
     // Resolve CRDT positions, falling back to flat offsets
     let from = ann.range.from;
@@ -473,7 +478,9 @@ async function docxSidecarEntry(filePath: string): Promise<DocBackupSnapshot | n
 export function registerApplyTools(server: McpServer): void {
   server.tool(
     "tandem_applyChanges",
-    "Apply all accepted suggestions to the .docx file as tracked changes (w:del + w:ins). " +
+    "EXPERIMENTAL. Apply all accepted suggestions to the .docx file as tracked changes " +
+      "(w:del + w:ins). It refuses documents whose flat text it cannot reproduce; some Word " +
+      "documents are a known limitation. " +
       "Creates a backup before writing. Only works on .docx files opened from disk.",
     {
       documentId: z.string().optional().describe("Target document ID (defaults to active doc)"),
@@ -495,12 +502,17 @@ export function registerApplyTools(server: McpServer): void {
         if (e.code === "NO_DOCUMENT") return noDocumentError();
         if (e.code === "NO_SUGGESTIONS") return mcpError("NO_SUGGESTIONS", e.message);
         if (e.code === "UNSUPPORTED_FORMAT") return mcpError("FORMAT_ERROR", e.message);
-        if (e.code === "INVALID_PATH") return mcpError("FORMAT_ERROR", e.message);
+        // A UNC `backupPath` or an upload/scratchpad source: a path the caller
+        // must change, answered with the same code every tool uses for it
+        // (#1823). It was FORMAT_ERROR, which is not what either condition is.
+        if (e.code === "INVALID_PATH") return mcpError("INVALID_PATH", e.message);
+        // The backup directory does not exist (`applyChangesCore` throws it
+        // before touching anything). With no arm it rethrew as INTERNAL_ERROR.
+        if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
         if (e.code === "BACKUP_FAILED") return mcpError("BACKUP_FAILED", e.message);
-        // Its own code, and it must stay distinguishable on BOTH surfaces.
-        // Reusing INVALID_PATH would map to FORMAT_ERROR here — a symlinked
-        // destination is not a format problem. Collapsing it onto BACKUP_FAILED
-        // is the mirror mistake, and is what this line used to do: it would put
+        // Its own internal code, and it must stay distinguishable on BOTH
+        // surfaces: the `/api` label table keys on it. Collapsing it onto
+        // BACKUP_FAILED is the mistake this line used to make: it would put
         // "move the symlink or pass a different backupPath", which the caller
         // CAN fix and should retry, in the same bucket as a failed size
         // verification, which it must not retry.
@@ -515,8 +527,10 @@ export function registerApplyTools(server: McpServer): void {
         if (e.code === "SOURCE_MISSING") return mcpError("SOURCE_MISSING", e.message);
         // A locked or unreadable source keeps its own errno rather than a code of
         // ours, so it is matched by code here too — same reasoning as the stat guard.
-        if (e.code === "EBUSY" || e.code === "EPERM" || e.code === "EACCES")
-          return mcpError("FILE_LOCKED", e.message);
+        // A permission refusal is not a lock (#1823), the same split `tandem_open`
+        // and `tandem_save` draw; see `lockOrPermissionCode` for Windows' EPERM.
+        const lockOrPermission = lockOrPermissionCode(e as NodeJS.ErrnoException);
+        if (lockOrPermission) return mcpError(lockOrPermission, e.message);
         throw err;
       }
     }),
@@ -559,7 +573,7 @@ export function registerApplyTools(server: McpServer): void {
         if (args.backup === undefined) {
           if (docState.source !== "file") {
             return mcpError(
-              "FORMAT_ERROR",
+              "INVALID_PATH",
               "Uploaded documents and scratchpads have no on-disk backups.",
             );
           }
@@ -602,14 +616,17 @@ export function registerApplyTools(server: McpServer): void {
         if (e.code === "NO_DOCUMENT") return noDocumentError();
         if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
         // A symlinked sidecar — or a FIFO / directory wearing the sidecar's name
-        // — is a path refusal the caller can act on, not a format problem, the
-        // same distinction tandem_applyChanges draws above.
-        if (e.code === "BACKUP_SYMLINK" || e.code === "BACKUP_NOT_A_FILE") {
+        // — is a path refusal the caller can act on, not a format problem. So is
+        // an upload/scratchpad source, which has no on-disk location to restore
+        // into (#1823: the same code list mode and tandem_applyChanges give it).
+        if (
+          e.code === "BACKUP_SYMLINK" ||
+          e.code === "BACKUP_NOT_A_FILE" ||
+          e.code === "INVALID_PATH"
+        ) {
           return mcpError("INVALID_PATH", e.message);
         }
-        if (e.code === "INVALID_PATH" || e.code === "UNSUPPORTED_FORMAT") {
-          return mcpError("FORMAT_ERROR", e.message);
-        }
+        if (e.code === "UNSUPPORTED_FORMAT") return mcpError("FORMAT_ERROR", e.message);
         if (e.code === "READ_ONLY") return mcpError("READ_ONLY", e.message);
         if (e.code === "RELOAD_IN_PROGRESS") return mcpError("RELOAD_IN_PROGRESS", e.message);
         throw err;

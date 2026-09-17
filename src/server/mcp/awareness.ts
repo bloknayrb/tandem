@@ -10,11 +10,18 @@ import type {
   ChatMessage,
 } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
+import { isClaudeFacing } from "../annotations/projection.js";
 import { isStoreReadOnly } from "../annotations/store.js";
 import { clearStreamStaleness, noteStreamSidecar } from "../chat-stream-staleness.js";
 import { recordInboxPoll, resolveDeliveryRound } from "../events/delivery-state.js";
 import { getAnnotationEditedChannelKey, wasEmittedViaChannel } from "../events/queue.js";
-import { hideFromAI, type ModeState, readModeState, reportedMode } from "../mode.js";
+import {
+  hideFromAI,
+  type ModeState,
+  readModeProvenance,
+  readModeState,
+  reportedMode,
+} from "../mode.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
 import { getCurrentDoc } from "./document.js";
@@ -66,6 +73,107 @@ const replySurfacedIds = new Set<string>();
 /** Ledger key. See `surfacedIds` for why the document scope is required. */
 function ledgerKey(documentId: string, itemId: string): string {
   return `${documentId}:${itemId}`;
+}
+
+/**
+ * The ANNOTATION ledger key (#1770), which adds a status dimension for Claude's
+ * own records.
+ *
+ * The ledger keys on `editedAt` alone, and the client's Undo writes
+ * `status: "pending"` without touching it (`useAnnotationReview.svelte.ts`). So
+ * accept → poll → undo → dismiss → poll returned `userResponses: []`: the
+ * dismissal was never reported, because the id had already been surfaced at a
+ * newer-or-equal `editedAt`. Appending the status makes the dismissed record a
+ * fresh key.
+ *
+ * Not `rev`: neither the client's resolve nor its undo write bumps it.
+ *
+ * Claude-authored only. A user COMMENT keeps the bare-id key — its bucket is
+ * `userActions`, whose whole re-surface rule is the `editedAt` comparison, and
+ * a status dimension there would re-report a comment on every status change.
+ *
+ * Known limit: accept → undo → accept is not re-reported, because the key
+ * repeats. Claude's last report equals the final state, which is the property
+ * that matters.
+ */
+function inboxLedgerKey(
+  documentId: string,
+  ann: Pick<Annotation, "id" | "author" | "status">,
+): string {
+  const base = ledgerKey(documentId, ann.id);
+  return ann.author === "claude" ? `${base}#${ann.status}` : base;
+}
+
+/**
+ * An edit this ledger has not accounted for — **including one on a record the
+ * ledger has no entry for at all** (`?? 0`, not `!== undefined`).
+ *
+ * That second half is the whole point and it is NOT the `edited` re-surface
+ * flag. A user comment can be resolved before it was ever surfaced — Claude can
+ * learn of it from `tandem_getAnnotations` or the channel and call
+ * `tandem_resolveAnnotation` without ever polling `tandem_checkInbox` — and a
+ * record rejected by the `userActions` status gate takes no `surfaced.set`, so
+ * it can never acquire the entry a "surfaced before, edited since" test needs.
+ * Requiring one loses the user's subsequent edit for the life of the process
+ * while the observer still emits `annotation:edited` on the channel: push and
+ * pull disagree, permanently, which is the exact defect #1826 item 1 removed
+ * from the accept path.
+ *
+ * Residual, and it is a duplicate rather than a loss: an already-edited,
+ * resolved user comment surfaces once more after a server restart, because an
+ * empty ledger and a never-surfaced record are indistinguishable without
+ * durable state. The #1826 population — resolved comments never edited — stays
+ * suppressed, since `editedAt` is then absent and `0 > 0` is false. Closing the
+ * residual means a durable ledger.
+ */
+function hasUnaccountedEdit(
+  ann: Pick<Annotation, "editedAt">,
+  lastSurfacedEditedAt: number | undefined,
+): boolean {
+  return (ann.editedAt ?? 0) > (lastSurfacedEditedAt ?? 0);
+}
+
+/**
+ * The two settled end states, enumerated — deliberately NOT spelled as a test
+ * against `"pending"` in either direction (review round 3).
+ *
+ * `Annotation.status` types as the three-value enum, but the stored value is a
+ * bare `string`: `sanitizeAnnotation` passes `status` straight through with no
+ * normalization, and the annotations Y.Map is writable by any connected client,
+ * so an unrecognized status is reachable on a record that reaches both callers
+ * below. Both spellings of the `"pending"` test fail such a record CLOSED, and
+ * closed here means permanently invisible rather than merely delayed:
+ * `=== "pending"` is false, so the gate never admits the comment to
+ * `tandem_checkInbox`; `!== "pending"` is true, so the mirror permanently
+ * excludes it from range refresh as well. Enumerating the real end states makes
+ * an unknown status read as UNSETTLED instead, whose cost is a duplicate.
+ *
+ * Both callers must go through this. The gate and its mirror have to agree, and
+ * one shared predicate is the only thing that keeps them in step.
+ */
+function isSettledStatus(status: string): boolean {
+  return status === "accepted" || status === "dismissed";
+}
+
+/**
+ * A user comment the `userActions` gate below cannot admit: resolved, with no
+ * unaccounted edit. Mirrors the gate — the two must be read together.
+ *
+ * Deliberately omits the `isClaudeFacing` half of the gate. A record withheld
+ * for AUDIENCE is skipped in the loop and also takes no `surfaced.set`, so it
+ * too re-enters the candidate set on every poll; excluding it here would key a
+ * permanent skip on a field the loop is not the only writer of, and a stored
+ * `{comment, private}` record healed to outbound must be able to come back.
+ * Status is safe to key on because this predicate re-runs against the live
+ * record on every poll and holds no state of its own.
+ */
+function isSettledUserComment(ann: Annotation, lastSurfacedEditedAt: number | undefined): boolean {
+  return (
+    ann.author === "user" &&
+    ann.type === "comment" &&
+    isSettledStatus(ann.status) &&
+    !hasUnaccountedEdit(ann, lastSurfacedEditedAt)
+  );
 }
 
 /** Reset surfaced IDs (exported for testing) */
@@ -238,11 +346,19 @@ export function finalizeClaudeChatMessage(id: string): void {
 export function registerAwarenessTools(server: McpServer): void {
   server.tool(
     "tandem_getActivity",
-    "Report whether the user is currently typing (`isTyping`), where their cursor and selection " +
-      "are, and which document they are in. Call it before annotating or editing near the " +
-      "user's cursor — annotating text someone is mid-sentence on is disruptive, and the range " +
-      "is likely to move under you. Returns presence only; it does not return document content " +
-      "or pending user messages (use tandem_checkInbox for those).",
+    "Report whether the user is currently typing (`isTyping`) and where their cursor is, in " +
+      "the target document. Call it before annotating or editing near the user's cursor — " +
+      "annotating text someone is mid-sentence on is disruptive, and the range is likely to " +
+      "move under you. Returns four fields — `active`, `isTyping`, `cursor`, `lastEdit` — and " +
+      "no selection: use tandem_checkInbox's `activity.selectedText` for the most recent " +
+      "selection (see `activity.selectionAt`). " +
+      "`cursor` is a flat text offset in UTF-16 code units — the same coordinate system as " +
+      "annotation ranges. It is a proximity hint, not an edit anchor: only a document change " +
+      "triggers a write, the last of those publishes wherever the caret is by then, and it " +
+      "carries no snapshot — so take ranges from tandem_resolveRange or tandem_search. " +
+      "Returns presence only; " +
+      "it does not return document content or pending user messages (use tandem_checkInbox " +
+      "for those).",
     {
       documentId: z
         .string()
@@ -256,8 +372,15 @@ export function registerAwarenessTools(server: McpServer): void {
       const { activity } = store.getUserAwareness();
 
       if (!activity) {
+        // `isTyping` is present on BOTH branches. The tool description names it
+        // as the headline field, and a caller reading `data.isTyping` on the
+        // no-activity branch used to get `undefined` — falsy, so the common
+        // `if (!isTyping)` read happened to work, and a `typeof` or a strict
+        // `=== false` check silently did not. Never seen: awareness is absent
+        // only before the first client write.
         return mcpSuccess({
           active: false,
+          isTyping: false,
           cursor: null,
           lastEdit: null,
           message: "No activity detected",
@@ -280,7 +403,7 @@ export function registerAwarenessTools(server: McpServer): void {
     "tandem_checkInbox",
     {
       description:
-        'Return user actions not yet returned by a previous poll — new comments, chat messages, and replies to your annotations — plus the current collaboration `mode` and `activity`. This is the authoritative delivery path: real-time push cannot be confirmed to have reached a client, so nothing here is suppressed on the strength of a push, and steady polling is the only reliable way to see user activity. Repeat calls de-duplicate against what was already returned, so frequent polling never double-reports. An item carries `alreadyPushed: true` when it was also emitted as a real-time event; that describes the server\'s side only. Does not return user notes (`type: "note"`), which are private per ADR-027.',
+        'Return user actions not yet returned by a previous poll — new comments, chat messages, and replies to your annotations — plus the current collaboration `mode` and `activity`. This is the authoritative delivery path: real-time push cannot be confirmed to have reached a client, so nothing here is suppressed on the strength of a push, and steady polling is the only reliable way to see user activity. Repeat calls de-duplicate against what was already returned, so frequent polling never double-reports. An item carries `alreadyPushed: true` when it was also emitted as a real-time event; that describes the server\'s side only. Does not return user notes (`type: "note"`), nor any record whose stored `audience` is not outbound (#1619/#1710) — user highlights are always private, so they never appear here at all. `activity.selectedText` is the most recent non-empty selection, not necessarily the current one — it is not cleared when focus leaves the editor — and `activity.selectionAt` is when the editor last wrote it: while the document is the active editor tab, any edit that moves the selection re-stamps it, including yours (#1991), so a recent value does not prove a recent selection, but an old one proves it is old. For a document not shown in an editor nothing updates the record, so after an edit `selectedText` can be sliced from stale offsets (#1997).',
       inputSchema: {
         documentId: z
           .string()
@@ -326,19 +449,21 @@ export function registerAwarenessTools(server: McpServer): void {
         // duplicated here, inline inside a `store.transactMcp`, while every
         // ledger/Solo/dedup spec drove the exported copy. One loop now.
         //
-        // `modeState` and `wasEmittedViaChannel` are arguments, not defaults:
-        // both parameters are REQUIRED as of Unit 8j-2, and the docblock on
-        // `processInboxAnnotations` carries why. What this call site contributes
-        // is that `modeState` is the mode resolved for THIS poll, so the Solo
-        // hold reflects the user's current setting and not a fallback.
+        // ONE context object for both collectors (#1702). `modeState` is the
+        // mode resolved for THIS poll, so the Solo hold reflects the user's
+        // current setting and not a fallback; handing the same object to both
+        // buckets is what keeps them from drifting apart. See `InboxPollContext`.
+        const pollCtx: InboxPollContext = {
+          modeState,
+          documentId: store.documentId,
+          wasChannelEmitted: wasEmittedViaChannel,
+        };
         const { userActions, userResponses } = processInboxAnnotations(
           allAnnotations,
           fullText,
           surfacedIds,
           (anns) => store.refreshAnnotations(anns),
-          store.documentId,
-          modeState,
-          wasEmittedViaChannel,
+          pollCtx,
         );
 
         // WS-A2 userReplies bucket — new user replies on comment threads, held in
@@ -349,9 +474,7 @@ export function registerAwarenessTools(server: McpServer): void {
           fullText,
           (id) => store.listReplies(id),
           replySurfacedIds,
-          modeState,
-          store.documentId,
-          wasEmittedViaChannel,
+          pollCtx,
         );
 
         // Bucket 3: unread chat messages from CTRL_ROOM
@@ -389,6 +512,17 @@ export function registerAwarenessTools(server: McpServer): void {
         const selectedText = hasSelection
           ? safeSlice(fullText, selection!.from, selection!.to)
           : null;
+        // #1624: the selection record's own timestamp. `cursor`/`lastEdit` come
+        // from a DIFFERENT record (`Y_MAP_ACTIVITY`), so without this the two
+        // halves of `activity` read as one snapshot while having independent
+        // ages. Null whenever `selectedText` is null, but NOT only then: a record
+        // with no numeric `timestamp` yields a real `selectedText` beside a null
+        // `selectionAt`, so a null here must never be read as "no selection".
+        // The `typeof` guard is not defensive: an `undefined` here fails the
+        // SDK's structured-output validation for the WHOLE response, not just
+        // this field.
+        const selectionAt =
+          hasSelection && typeof selection!.timestamp === "number" ? selection!.timestamp : null;
 
         // Build summary
         const parts: string[] = [];
@@ -432,6 +566,10 @@ export function registerAwarenessTools(server: McpServer): void {
           summary,
           hasNew,
           mode,
+          // #1733: who last wrote the mode key. Diagnostic only — compare its
+          // `value` against `mode` above; under a lost concurrent tie they can
+          // disagree.
+          modeProvenance: readModeProvenance(),
           storeReadOnly: isStoreReadOnly(),
           userActions,
           userResponses,
@@ -442,6 +580,7 @@ export function registerAwarenessTools(server: McpServer): void {
             cursor: activity?.cursor ?? null,
             lastEdit: activity?.lastEdit ?? null,
             selectedText,
+            selectionAt,
           },
         });
       }),
@@ -516,18 +655,11 @@ export function isUserActive(
  * caller's choice. `YDocStore.refreshAnnotations` is the production
  * implementation; `refreshAnnotation` (singular) no longer exists.
  *
- * **`modeState` and `wasChannelEmitted` are REQUIRED, and were briefly not.**
- * The first draft of this unit gave both defaults and warned about them in
- * prose. Review defeated the warning twice over. `modeState` defaulted to
- * `"indeterminate"`, under which `hideFromAI` holds only records already
- * stamped `heldInSolo` — so a call that stopped at `documentId` (required, and
- * positionally AHEAD of both) surfaced unmarked user records in a live Solo
- * session, with exactly one killer spec. `wasChannelEmitted` defaulted to
- * `() => false` and had NO killer: deleting it from the call site left every
- * spec in the repo green while production silently stopped stamping
- * `alreadyPushed` for every channel-connected session. A required parameter is
- * the only version of that warning a compiler enforces. Both are required on
- * `collectInboxUserReplies` below too, for the same reasons.
+ * **The per-poll values arrive as one {@link InboxPollContext}, every field
+ * required (#1702)** — Units 8j-2 and 8j-3 each silently lost one of them while
+ * they were positional, defaulted and ordered differently on the two collectors,
+ * and the interface plus the tuple pin in `awareness-tools.test.ts` are what
+ * now make that drift a type error rather than a reading exercise.
  *
  * **`refreshAll` cannot change the selection, and that is enforced here rather
  * than asked for.** The signature `(anns: Annotation[]) => Annotation[]` says
@@ -547,14 +679,7 @@ export function processInboxAnnotations(
   fullText: string,
   surfaced: Map<string, number>,
   refreshAll: (anns: Annotation[]) => Annotation[],
-  /**
-   * Scopes the ledger key. Required — a bare-id key silently drops the same
-   * imported Word comment in a second document. See `surfacedIds`.
-   */
-  documentId: string,
-  /** Privacy gate. Required — see the docblock; `"indeterminate"` is NOT fail-closed. */
-  modeState: ModeState,
-  wasChannelEmitted: (payloadId: string) => boolean,
+  ctx: InboxPollContext,
 ): {
   userActions: Array<InboxUserAction>;
   userResponses: Array<Annotation & { textSnippet: string }>;
@@ -564,8 +689,22 @@ export function processInboxAnnotations(
   // of one annotation cannot change another's selection outcome — so batching
   // costs no fidelity against the per-item loop this replaces.
   const candidates = allAnnotations.filter((raw) => {
-    const lastSurfacedEditedAt = surfaced.get(ledgerKey(documentId, raw.id));
-    return lastSurfacedEditedAt === undefined || (raw.editedAt ?? 0) > lastSurfacedEditedAt;
+    const lastSurfacedEditedAt = surfaced.get(inboxLedgerKey(ctx.documentId, raw));
+    // The dedup: already surfaced, nothing new since.
+    if (lastSurfacedEditedAt !== undefined && !hasUnaccountedEdit(raw, lastSurfacedEditedAt)) {
+      return false;
+    }
+    // The user arm's status gate, mirrored. Without it a resolved user comment
+    // — which fails that gate and therefore takes no `surfaced.set` — re-enters
+    // this set on every poll for the life of the process and is re-handed to
+    // `refreshAll`, in production a `withMcp` transaction over
+    // `refreshAllRanges` that persists range repairs. Mirrored, not moved: the
+    // loop keeps its own copy (both are pinned by
+    // `tests/server/inbox-ledger-undo.test.ts`) and every other reason a record
+    // is skipped stays there. Sound to evaluate pre-refresh because a refresh
+    // only improves ranges — it never changes `author`, `type`, `status` or
+    // `editedAt`, which is the same property that makes the split legal at all.
+    return !isSettledUserComment(raw, lastSurfacedEditedAt);
   });
 
   // **`candidates` is the answer; `refreshAll` only gets to improve the ranges
@@ -577,24 +716,26 @@ export function processInboxAnnotations(
   const refreshedById = new Map(refreshAll(candidates).map((a) => [a.id, a]));
   const unsurfaced = candidates.map((c) => refreshedById.get(c.id) ?? c);
 
-  return processUnsurfacedInboxAnnotations(
-    unsurfaced,
-    fullText,
-    surfaced,
-    modeState,
-    wasChannelEmitted,
-    documentId,
-  );
+  return processUnsurfacedInboxAnnotations(unsurfaced, fullText, surfaced, ctx);
 }
+
+/**
+ * The private helper's parameter tuple, exported as a TYPE only so
+ * `awareness-tools.test.ts` can pin it (#1702). This function is where
+ * `modeState` and `wasChannelEmitted` are actually read for userActions and
+ * userResponses, and its one caller would compile unchanged against a new
+ * defaulted trailing parameter — the 8j-2 shape again, one call deeper than the
+ * exported pins reach.
+ */
+export type ProcessUnsurfacedInboxAnnotationsParameters = Parameters<
+  typeof processUnsurfacedInboxAnnotations
+>;
 
 function processUnsurfacedInboxAnnotations(
   unsurfaced: Annotation[],
   fullText: string,
   surfaced: Map<string, number>,
-  modeState: ModeState,
-  wasChannelEmitted: (payloadId: string) => boolean,
-  /** Scopes the ledger key — see `surfacedIds`. */
-  documentId: string,
+  ctx: InboxPollContext,
 ): {
   userActions: Array<InboxUserAction>;
   userResponses: Array<Annotation & { textSnippet: string }>;
@@ -608,13 +749,61 @@ function processUnsurfacedInboxAnnotations(
     // poisoned and the item would be permanently dedup-skipped after release.
     // Held items stay "unsurfaced" and re-appear on the first poll once mode
     // reads tandem (pull-driven release — no explicit replay needed here).
-    if (hideFromAI(ann, modeState)) continue;
+    if (hideFromAI(ann, ctx.modeState)) continue;
 
     const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
-    if (ann.author === "user" && ann.type === "comment") {
-      const lastSurfacedEditedAt = surfaced.get(ledgerKey(documentId, ann.id));
-      const alreadySurfaced = lastSurfacedEditedAt !== undefined;
-      const edited = alreadySurfaced && (ann.editedAt ?? 0) > lastSurfacedEditedAt;
+    // The ledger read is hoisted above the bucket branch so the user arm's
+    // status gate can consult `edited` as a term of its own condition.
+    const key = inboxLedgerKey(ctx.documentId, ann);
+    const lastSurfacedEditedAt = surfaced.get(key);
+    // Two names, and collapsing them into one is a bug in whichever direction
+    // you collapse. `edited` is the WIRE claim — "you were shown this and the
+    // user has changed it since" — so it needs a prior surfacing and is false on
+    // a record with no ledger entry. `unaccountedEdit` is the GATE term and
+    // treats a missing entry as `0`; see `hasUnaccountedEdit`.
+    const edited = lastSurfacedEditedAt !== undefined && (ann.editedAt ?? 0) > lastSurfacedEditedAt;
+    const unaccountedEdit = hasUnaccountedEdit(ann, lastSurfacedEditedAt);
+
+    // #1619: `isClaudeFacing` is the audience half — a stored
+    // `{comment, audience: "private"}` record is withheld from the channel and
+    // must be withheld here too, and a user HIGHLIGHT (always private per
+    // ADR-027) never enters either bucket. Before any `surfaced.set`, for the
+    // same reason the Solo hold is.
+    //
+    // #1826: the status gate. Without it a resolved user comment re-entered
+    // this bucket on every server restart — `surfacedIds` is module-level, so a
+    // restart empties the ledger and every dismissed or accepted user comment
+    // surfaced again as a fresh user action. The term enumerates the two end
+    // states via `isSettledStatus` rather than testing `"pending"` directly:
+    // `!== "dismissed"` would miss `accepted`, which `transitionPending`
+    // reaches for a user comment (it refuses an accept only for a claude author
+    // or a suggestion-bearing record), and a positive `=== "pending"` fails an
+    // unrecognized stored status closed. See that predicate.
+    //
+    // This narrows the bucket against master, intentionally: a user comment
+    // resolved BEFORE Claude's first poll used to be returned once, because the
+    // old gate carried no status term at all. It is now filtered out, so the
+    // observer's `annotation:created` push has no pull-path counterpart for
+    // that record. Accepted — the push already fired with the content, and the
+    // alternative is the restart storm above, where every previously resolved
+    // comment re-enters the bucket as if it were new.
+    //
+    // `|| unaccountedEdit` is what stops this gate creating item 1's own defect
+    // class in the edit path: the observer emits `annotation:edited` on any
+    // `editedAt` advance with no status test, and Dismiss stays open to a
+    // user's comment, so the status term ALONE would push an
+    // edit-after-dismiss on the channel while `tandem_checkInbox` returned
+    // nothing. The term is deliberately NOT the `edited` flag above it — that
+    // one needs a prior ledger entry, which a comment resolved before it was
+    // ever surfaced can never acquire here, making the suppression permanent
+    // rather than restart-bounded (review round 1). Its residual and the reason
+    // this is a duplicate rather than a loss are in `hasUnaccountedEdit`.
+    if (
+      ann.author === "user" &&
+      ann.type === "comment" &&
+      isClaudeFacing(ann) &&
+      (!isSettledStatus(ann.status) || unaccountedEdit)
+    ) {
       const channelKey = edited ? getAnnotationEditedChannelKey(ann.id, ann.editedAt ?? 0) : ann.id;
 
       // Disclose, never suppress. `wasChannelEmitted` means "handed to >=1 SSE
@@ -630,16 +819,58 @@ function processUnsurfacedInboxAnnotations(
         ...ann,
         textSnippet: snippet,
         ...(edited ? { edited: true } : {}),
-        ...(wasChannelEmitted(channelKey) ? { alreadyPushed: true } : {}),
+        ...(ctx.wasChannelEmitted(channelKey) ? { alreadyPushed: true } : {}),
       });
-      surfaced.set(ledgerKey(documentId, ann.id), ann.editedAt ?? 0);
-    } else if (ann.author === "claude" && ann.type !== "note" && ann.status !== "pending") {
+      surfaced.set(key, ann.editedAt ?? 0);
+    } else if (
+      ann.author === "claude" &&
+      isClaudeFacing(ann) &&
+      ann.status !== "pending" &&
+      // #1770: Claude's own resolves are not the user's decisions. This bucket is
+      // documented as "the USER's accept/dismiss decisions", and before the stamp
+      // a Claude dismiss was indistinguishable from one.
+      ann.resolvedBy !== "claude"
+    ) {
       userResponses.push({ ...ann, textSnippet: snippet });
-      surfaced.set(ledgerKey(documentId, ann.id), ann.editedAt ?? 0);
+      surfaced.set(key, ann.editedAt ?? 0);
     }
   }
 
   return { userActions, userResponses };
+}
+
+/**
+ * The per-poll values BOTH inbox collectors need, passed as one object (#1702).
+ *
+ * Every field is required: an optional field would be the Unit 8j-2 default
+ * under a new name. A new value both buckets need goes HERE, never as a
+ * positional parameter on one collector. `tests/server/awareness-tools.test.ts`
+ * holds three `expectTypeOf` pins that turn `typecheck:tests` red: the exact
+ * shape of this interface (so a new OPTIONAL field fails, as does any field
+ * added without updating the pin), and the parameter tuples of both exported
+ * collectors plus the private `processUnsurfacedInboxAnnotations` (so a
+ * defaulted positional parameter on any of them fails). Values that belong to
+ * one collector (`surfaced`, `refreshAll`, `loadReplies`, `replySurfaced`) stay
+ * positional.
+ */
+export interface InboxPollContext {
+  /**
+   * The mode resolved for THIS poll — the Solo privacy gate (`hideFromAI`).
+   * `"indeterminate"` is NOT fail-closed: it holds only records already stamped
+   * `heldInSolo`, so a fallback here surfaces unmarked user records in Solo.
+   */
+  modeState: ModeState;
+  /**
+   * Scopes both ledger keys. A bare-id key silently drops the same imported Word
+   * comment or reply in a second document. See `surfacedIds`.
+   */
+  documentId: string;
+  /**
+   * Stamps `alreadyPushed` — advisory, never a gate. Production passes
+   * `wasEmittedViaChannel`; a `() => false` stand-in silently stops the stamp
+   * for every channel-connected session.
+   */
+  wasChannelEmitted: (payloadId: string) => boolean;
 }
 
 /**
@@ -695,11 +926,7 @@ export function collectInboxUserReplies(
   fullText: string,
   loadReplies: (annotationId: string) => AnnotationReply[],
   replySurfaced: Set<string>,
-  modeState: ModeState,
-  /** Scopes the ledger key — see `replySurfacedIds`. */
-  documentId: string,
-  /** Required for the same reason as on `processInboxAnnotations` — see there. */
-  wasChannelEmitted: (payloadId: string) => boolean,
+  ctx: InboxPollContext,
 ): InboxUserReply[] {
   const out: InboxUserReply[] = [];
   for (const ann of allAnnotations) {
@@ -708,8 +935,8 @@ export function collectInboxUserReplies(
     const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
     for (const reply of visible) {
       if (reply.author !== "user") continue; // Claude's own replies aren't inbox items
-      if (hideFromAI(reply, modeState)) continue; // Solo hold — no ledger write
-      if (replySurfaced.has(ledgerKey(documentId, reply.id))) continue; // already surfaced
+      if (hideFromAI(reply, ctx.modeState)) continue; // Solo hold — no ledger write
+      if (replySurfaced.has(ledgerKey(ctx.documentId, reply.id))) continue; // already surfaced
       // Disclose, never suppress — see the annotation surfacer for the full
       // rationale. This branch was strictly worse than the comment one:
       // `replySurfaced` is a plain Set with no edit dimension, so a poisoned
@@ -722,9 +949,9 @@ export function collectInboxUserReplies(
         text: reply.text,
         timestamp: reply.timestamp,
         textSnippet: snippet,
-        ...(wasChannelEmitted(reply.id) ? { alreadyPushed: true } : {}),
+        ...(ctx.wasChannelEmitted(reply.id) ? { alreadyPushed: true } : {}),
       });
-      replySurfaced.add(ledgerKey(documentId, reply.id));
+      replySurfaced.add(ledgerKey(ctx.documentId, reply.id));
     }
   }
   return out;

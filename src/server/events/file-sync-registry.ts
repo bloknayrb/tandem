@@ -11,15 +11,13 @@
 import * as Y from "yjs";
 import type { DocStore } from "../annotations/store.js";
 import {
+  type ObserverCleanup,
   type ObserverCleanupPhase,
   registerAnnotationObserver,
   type SyncContext,
 } from "../annotations/sync.js";
 
-const fileSyncContexts = new Map<
-  string,
-  { ctx: SyncContext; cleanup: (phase?: ObserverCleanupPhase) => void }
->();
+const fileSyncContexts = new Map<string, { ctx: SyncContext; cleanup: ObserverCleanup }>();
 
 /**
  * Run a file-sync observer cleanup in a try/catch with a uniform log line.
@@ -29,7 +27,7 @@ const fileSyncContexts = new Map<
  */
 function safeCleanup(
   docName: string,
-  cleanup: (phase?: ObserverCleanupPhase) => void,
+  cleanup: ObserverCleanup,
   phase: ObserverCleanupPhase,
   logTag: string,
 ): void {
@@ -60,7 +58,7 @@ function safeCleanup(
 export function setFileSyncContext(
   docName: string,
   ctx: SyncContext,
-  cleanup: (phase?: ObserverCleanupPhase) => void,
+  cleanup: ObserverCleanup,
 ): void {
   // Dispose any prior entry first so we never leak observers on duplicate
   // registration (e.g., forceReload paths that re-run loadAndMerge). Normal
@@ -72,6 +70,23 @@ export function setFileSyncContext(
     safeCleanup(docName, existing.cleanup, "close", "replace");
   }
   fileSyncContexts.set(docName, { ctx, cleanup });
+}
+
+/**
+ * Read the file-sync context for a document WITHOUT disposing anything.
+ *
+ * Same `{ store, docHash }` shape `clearFileSyncContext` returns. Exists for
+ * the force-open / source-view teardown (#1813), which must flush the pending
+ * annotation write while the observer is still attached and the per-doc
+ * tombstone ledger is still populated — i.e. BEFORE the cleanup — and then
+ * detach.
+ */
+export function getFileSyncContext(
+  docName: string,
+): { store: DocStore; docHash: string } | undefined {
+  const entry = fileSyncContexts.get(docName);
+  if (!entry) return undefined;
+  return { store: entry.ctx.store, docHash: entry.ctx.docHash };
 }
 
 /**

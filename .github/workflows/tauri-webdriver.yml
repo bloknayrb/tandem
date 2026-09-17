@@ -85,7 +85,7 @@ jobs:
           cache: npm
 
       - name: Install root dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       # The desktop shell spawns the Node sidecar on launch; the real binary
       # must exist (not a stub) so the WebView can actually load the frontend.

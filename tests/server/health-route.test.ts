@@ -13,12 +13,20 @@
  * from 127.0.0.1") is about `fetch`, not about calling a handler.
  */
 
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { afterEach, describe, expect, it } from "vitest";
 import { makeHealthHandler } from "../../src/server/mcp/routes/health.js";
 
 function makeMockRes() {
   const mock = {
     _body: null as Record<string, unknown> | null,
+    // Recorded, not ignored: the shutdown case below asserts the handler never
+    // downgrades the status CODE (which the Tauri shell reads as "gone").
+    _status: undefined as number | undefined,
+    status(code: number) {
+      mock._status = code;
+      return mock;
+    },
     json(body: Record<string, unknown>) {
       mock._body = body;
     },
@@ -40,6 +48,7 @@ const DELIVERY = {
 };
 
 const seenCounts: number[] = [];
+let shuttingDown = false;
 const DEPS = {
   version: "0.0.0-test",
   hasSession: () => true,
@@ -49,6 +58,7 @@ const DEPS = {
     seenCounts.push(externalConsumerCount);
     return DELIVERY;
   },
+  isShuttingDown: () => shuttingDown,
 };
 
 /**
@@ -87,6 +97,15 @@ describe("GET /health — loopback gate", () => {
       eventCount: 42,
     });
     expect(body.delivery).toEqual(DELIVERY);
+  });
+
+  // #1812: the Tauri shell compares this against the child it spawned, so a
+  // 2xx from a previous process still holding the port stops reading as "our
+  // sidecar is healthy". Loopback-only like every other identity signal here —
+  // the absent half is what kills hoisting the field out of the gate.
+  it("reports the process pid to a loopback caller and to nobody else", () => {
+    expect(callWith("127.0.0.1").pid).toBe(process.pid);
+    expect(callWith("203.0.113.5").pid).toBeUndefined();
   });
 
   // The assertion the old source scan could not make, in the form that also
@@ -141,5 +160,62 @@ describe("GET /health — loopback gate", () => {
     const body = callWith("127.0.0.1");
     const push = body.push as Record<string, unknown>;
     expect(seenCounts).toEqual([push.subscribers]);
+  });
+});
+
+/**
+ * #1758 review — a Tandem that is shutting down must not probe as live.
+ *
+ * `shutdown()` closes the HTTP listener LAST, after up to ~7s of flushing, so
+ * for that whole window `/health` answered `status: "ok"` with a real `pid`.
+ * `probeTandemInstance` read that as a live instance and the REPLACEMENT
+ * process exited 1 — Ctrl-C and re-run within a few seconds, or any wrapper
+ * that SIGTERMs then respawns.
+ */
+describe("GET /health — shutdown state", () => {
+  afterEach(() => {
+    shuttingDown = false;
+  });
+
+  it("reports status ok while running", () => {
+    expect(callWith("127.0.0.1").status).toBe("ok");
+  });
+
+  it("reports status shutting-down once shutdown has begun", () => {
+    shuttingDown = true;
+    for (const addr of ["127.0.0.1", "192.168.1.100"]) {
+      expect(callWith(addr).status).toBe("shutting-down");
+    }
+  });
+
+  /**
+   * The status CODE must stay 2xx. The Tauri shell's `wait_for_server_gone`
+   * treats any non-2xx as "the sidecar has exited" and then hard-kills the
+   * child, so a 503 here would truncate the very flush the graceful stop
+   * exists to perform. See `src/server/shutdown-state.ts`.
+   */
+  it("keeps the response a 200 while shutting down", () => {
+    shuttingDown = true;
+    const res = makeMockRes();
+    // biome-ignore lint/suspicious/noExplicitAny: minimal Express req/res doubles
+    makeHealthHandler(DEPS)(makeMockReq("127.0.0.1") as any, res as any, (() => {}) as any);
+    expect(res._status ?? 200).toBe(200);
+  });
+
+  /**
+   * The join with `probeTandemInstance`: the probe's `status !== "ok"` guard is
+   * what turns this field into "do not refuse your own replacement". Asserted
+   * against the real predicate's source rather than restating the string, so a
+   * rename on either side fails here.
+   */
+  it("emits a status the startup probe rejects", () => {
+    shuttingDown = true;
+    const status = callWith("127.0.0.1").status;
+    expect(status).not.toBe("ok");
+    const probeSource = readFileSync(
+      new URL("../../src/server/platform.ts", import.meta.url),
+      "utf8",
+    );
+    expect(probeSource).toContain('if (record.status !== "ok") return null;');
   });
 });

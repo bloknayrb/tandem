@@ -119,7 +119,7 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
           ? 0.5
           : 1};"
       >
-        {restarting ? "Restarting…" : "Restart sidecar"}
+        {restarting ? "Restarting server…" : "Restart server"}
       </button>
     {:else}
       <!--
@@ -209,7 +209,6 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
       >
         {bindPort ?? "—"}
       </div>
-      <div data-allow-context-menu style={subtextStyle}>Port used when transport is HTTP. To change, run <code>tandem start --port &lt;N&gt;</code>.</div>
     </div>
   {/if}
 
