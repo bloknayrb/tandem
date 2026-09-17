@@ -25,6 +25,21 @@ updates:
     schedule:
       interval: "weekly"
 
+  # `ignore` is legal here and NOT on the github-actions entry above:
+  # tests/scripts/workflow-action-pin.test.ts pins that entry by exact object
+  # equality (so an `ignore` catch-all there fails `check`), while the npm entry
+  # is constrained only by the ecosystem-list assertion.
+  #
+  # Scoped to TypeScript MAJORS alone, because `patterns: ["*"]` groups every npm
+  # update into one PR, so a single unresolvable bump blocks the whole group.
+  # #2061 was exactly that: 42 updates, of which only `typescript 5.9.3 -> 7.0.2`
+  # could not resolve -- `svelte-check@4.7.6` is the latest published version, its
+  # peer range is `typescript@"^5.0.0 || ^6.0.0"`, and no v5 line exists -- so
+  # `npm ci` failed ERESOLVE and 41 healthy updates were held hostage, re-filed
+  # red every week.
+  #
+  # REMOVE THIS once svelte-check publishes TypeScript 7 support. While it stands,
+  # TypeScript majors are not proposed at all, which is the cost of the rule.
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
@@ -33,6 +48,9 @@ updates:
       npm-dependencies:
         patterns:
           - "*"
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "cargo"
     directory: "/src-tauri"
