@@ -1263,30 +1263,98 @@ line number drifts the moment anything above it changes.
 #### Decisions closed in wave 12
 
 **None — no decision round ran this wave.** Wave 11's recommendation to raise the batch size to ~12
-stands unexercised.
+stood unexercised until 2026-09-17, when a round of eleven — the seven below plus four open PRs —
+went to Bryan at once. All eleven came back answered the same day, which is the first evidence that
+the larger batch works.
 
-#### Seven open decisions, none blocking
+#### Seven decisions — all settled 2026-09-17
 
-Three are carried forward from wave 11 and **keep their numbering there** (items 1, 2 and 3 of
-*Three new decisions, none blocking*): **#2037**'s scheduling independence from the
-`BYO_MODELS_ENABLED` flip; **#2039**'s abort-versus-re-resolve product call; and **#2039**'s label,
-`correctness` or `security`. All three remain unanswered. Four are new this wave:
+Answered by Bryan on 2026-09-17. **The numbering below is wave 11's and wave 12's own and is not
+renumbered**, because renumbering these once produced a report reading "4 and 5 went unanswered"
+against a document in which those two had been answered.
 
-4. **#2038 — a genuine reboot-and-observe cannot be obtained in CI.** The fix rests on
-   `os.uptime()` and a process-identity probe, and the one scenario it exists for — a reused PID
-   after a real reboot — is not constructible in a CI runner. The shipped tests inject the boot time
-   rather than experiencing one, so the evidence is a per-OS hand run or nothing. Label candidate:
-   `needs-human-evidence`.
-5. **#1626 — should the Accept affordance appear on every suggestion-bearing reply, or only the
-   most recent?** Implemented as every. A thread with several proposals currently offers several
-   Accept buttons, each rewriting the same parent span.
-6. **#1626 — should accepting archive the parent's superseded `suggestedText`?** It does not, and
-   that is load-bearing rather than an oversight: `undoResolveAnnotation` compares the applied span
-   against the parent's stored field, so archiving it is what would break Undo's ability to recognise
-   what was applied.
-7. **#1626 — should the reply box show a word-diff rather than the proposed text?** Implemented as
-   the proposed text. A word-diff means extracting `SuggestionCard`'s diff box, which is the one
-   change in this area that can silently delete two `data-testid` snapshot entries (Critical Rule 7).
+Three were carried forward from wave 11 (items 1, 2 and 3 of *Three new decisions, none blocking*):
+
+1. **#2037's scheduling independence — SETTLED: independent.** It is the only member of the family
+   on a **live** path and needs no flag, so reading all three as one dark-code family would have
+   postponed the only reachable one.
+2. **#2039 — abort or re-resolve: SETTLED: abort, and make it visible.** Bryan invited a better
+   idea from an agent first; three independent reviews (CRDT/anchoring, annotation-lifecycle,
+   framing) each confirmed abort and each independently **falsified the rationale first recorded
+   here**. That rationale is corrected below rather than deleted, because the wrong version is the
+   instructive part.
+
+   **What was recorded and is false:** *"a Y.Doc swap happens on reload, restore, force-open or
+   external-conflict resolution — precisely when the document has changed."* All five of those
+   mutate the **same instance** in place. `grep -rn "documents\.set(" src/server` returns exactly
+   two sites, and the only instance replacement is `yjs/provider.ts:295` inside `onLoadDocument`.
+   **A swap is a browser connecting or reconnecting to a room Hocuspocus is not holding** — a page
+   refresh, window close, or network drop. Worse for the old argument: `provider.ts:288-289` merges
+   `Y.encodeStateAsUpdate(existing)` into the new doc **before** `existing.destroy()`, so the fresh
+   doc is content-identical at swap time. The swap is the one case where the text did **not** change.
+
+   **Why abort still wins**, on grounds that survive that correction: after a swap the terminal
+   flush is already suppressed, so a re-resolved turn would land annotations while its final chat
+   reply is silently dropped — half-delivering is worse than stopping; abort is ~5 lines against a
+   `getYdoc()` thunk threaded through three modules; and the trigger is rare and already tied to a
+   disruption the user can see.
+
+   **Two constraints on the implementation, both discovered rather than assumed.** The visible half
+   must sit **outside** `if (stillOwner())` (`local-model/collaborator.ts:365`), which is false
+   after a swap *by construction* — a notification raised inside it is dead code and the abort
+   ships silent, reproducing the bug. And the swap must be signalled by a `break` with a new
+   `LoopMetrics.exit`, never `ctx.abort.abort()`, because `sink.isOwner()` includes
+   `!abort.signal.aborted` and any abort between the `truncated` latch and its scheduled write
+   strands #1292's marker. The originally recorded constraint — that the abort must not sit *above*
+   the latch — was itself misstated: it is about aborting at all, not about placement.
+
+   **Three corrections to #2039's own text**, posted to the issue: `map.set` on a destroyed doc does
+   **not** no-op (the write succeeds into an orphan whose observers were detached, so it simply
+   never reaches disk); the swap trigger above; and its claim that the fix needs "a matching abort
+   re-check in `loop.ts`" — that re-check already exists at `loop.ts:204-207`, post-await and
+   pre-dispatch.
+
+   **Two issues filed out of the review.** **#2070** — a content-replacing reload mis-anchors a
+   parked turn and an identity check structurally cannot see it, because the instance is unchanged;
+   if the model's quote still occurs in the new text, the annotation anchors, snapshots and verifies
+   while describing a passage that no longer exists. **#2069** — `document:closed` and
+   `document:switched` never fire in production (the sole emitter skips the origin every production
+   writer uses), which makes the collaborator's abort-on-close unreachable and means #2039's fix
+   must **not** be built on the event queue.
+
+   User-visible impact today is **nil**: `BYO_MODELS_ENABLED` is a literal `const false`, so all of
+   this is owed before that flip, not an incident.
+
+3. **#2039's label — SETTLED: stays `correctness`.** Answered "up to you" and taken on the issue's
+   own Labelling section: the residue is a write into a destroyed doc that is silently dropped —
+   a data-integrity failure rather than a boundary crossing or a disclosure — and the path is dark.
+   So no `docs/security.md` register entry and no count-word move.
+
+Four were new in wave 12:
+
+4. **#2038 — SETTLED: label it.** Now carries `needs-human-evidence`. The issue itself is CLOSED
+   (PR #2051 closed it); the label records that the reboot evidence was never obtained, not that
+   work is owed.
+5. **#1626, Accept on every suggestion-bearing reply or only the most recent — SETTLED: every.**
+   Unchanged from what shipped.
+6. **#1626, archiving the parent's superseded `suggestedText` — SETTLED: leave as-is.** Unchanged,
+   and load-bearing rather than an oversight: `undoResolveAnnotation` compares the applied span
+   against the parent's stored field.
+7. **#1626, word-diff versus proposed text — SETTLED as a third option: build a user toggle.**
+   Filed as **#2062**. Neither offered option was taken, so this is new scope rather than a pick.
+   Whoever implements it must diff `__snapshots__/testid-set.snap.txt` **by hand**: extracting
+   `SuggestionCard`'s diff box is the one change in this area that can silently delete two
+   `data-testid` entries, and a regenerated snapshot makes the deletion look intentional while CI
+   stays green (Critical Rule 7).
+
+**The four PR decisions from the same round.** Recorded here because they were answered together and
+are already in flight: **#1976** keeps the four `.json` sources and the four rendered `.html` and
+drops the 24 visual-check QA artifacts — the rendered output stays because archify is a
+hand-installed personal skill, not in this repo, so a sources-only merge would leave the diagrams
+unviewable by anyone else. **#1923** merges relocated under `docs/reviews/2026-09-17-test-audit/`;
+merging the audit is **not** agreement with the test deletions it proposes. **#1265** is CLOSED as a
+staleness call at 1,558 commits behind, not a rejection of the work. **#2061**'s blockage is answered
+by a TypeScript-majors `ignore` on the npm entry, which releases the other 41 updates.
 
 #### Follow-ups closed after wave 12
 

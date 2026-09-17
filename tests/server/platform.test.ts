@@ -28,6 +28,23 @@ import { expectWithinMs } from "../helpers/timing.js";
  */
 const FAST: ProbeSchedule = { attempts: 3, timeoutMs: 50, delayMs: 10 };
 
+/**
+ * The two `"localhost"` specs need more headroom than `FAST`, and the reason is
+ * not slowness — it is address family. `listen` binds `127.0.0.1` explicitly,
+ * while those specs deliberately pass the literal string `"localhost"` to reach
+ * the LAN arm. On Windows `localhost` resolves to `::1` first, where nothing is
+ * listening, so the connect succeeds only via dual-stack fallback to IPv4.
+ * Under full-suite load that fallback exceeds FAST's 50ms budget and the probe
+ * returns `null` — which reddens the value-asserting spec and, worse, makes its
+ * `toBeNull` twin pass for entirely the wrong reason. Measured: red inside the
+ * 205s pre-push suite, 58/58 green when the file runs alone.
+ *
+ * Still bounded (3 x 500ms worst case) and still off every production path:
+ * `resolveProbeHost` maps `"localhost"` to `"127.0.0.1"`, so no production
+ * caller can pass this host at all.
+ */
+const LAN: ProbeSchedule = { attempts: 3, timeoutMs: 500, delayMs: 10 };
+
 describe("platform", () => {
   describe("SESSION_DIR", () => {
     it("is an absolute path", () => {
@@ -448,22 +465,33 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
      * real LAN socket, which no CI runner can promise.
      */
     it("accepts a pid-less body from a non-loopback bind host", async () => {
-      const port = await listen((_req, res) =>
+      let hits = 0;
+      const port = await listen((_req, res) => {
+        hits += 1;
         // No `pid` — exactly what a LAN caller receives.
-        json(res, 200, { status: "ok", version: "3.2.1", transport: "http" }),
-      );
-      await expect(probeTandemInstance(port, FAST, "localhost")).resolves.toEqual({
+        json(res, 200, { status: "ok", version: "3.2.1", transport: "http" });
+      });
+      await expect(probeTandemInstance(port, LAN, "localhost")).resolves.toEqual({
         pid: null,
         version: "3.2.1",
         host: "localhost",
       });
+      expect(hits).toBeGreaterThan(0);
     });
 
     // …but not just any health endpoint: without `transport` there is nothing
     // left identifying the responder as Tandem at all.
     it("rejects a pid-less non-loopback body with no transport field", async () => {
-      const port = await listen((_req, res) => json(res, 200, { status: "ok", version: "3.2.1" }));
-      await expect(probeTandemInstance(port, FAST, "localhost")).resolves.toBeNull();
+      let hits = 0;
+      const port = await listen((_req, res) => {
+        hits += 1;
+        json(res, 200, { status: "ok", version: "3.2.1" });
+      });
+      await expect(probeTandemInstance(port, LAN, "localhost")).resolves.toBeNull();
+      // Load-bearing. `null` is also what a TIMEOUT returns, so without this the
+      // spec passes when the probe never reached the server at all and the
+      // `transport` rule was never exercised — green for the wrong reason.
+      expect(hits).toBeGreaterThan(0);
     });
   });
 
