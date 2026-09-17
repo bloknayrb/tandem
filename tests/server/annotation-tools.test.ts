@@ -1,8 +1,13 @@
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { acceptPending, dismissPending } from "../../src/server/annotations/lifecycle.js";
 import { exportAnnotations } from "../../src/server/file-io/docx.js";
-import { collectAnnotations, refreshRange } from "../../src/server/mcp/annotations.js";
+import {
+  collectAnnotations,
+  refreshRange,
+  registerAnnotationTools,
+} from "../../src/server/mcp/annotations.js";
 import { extractText, verifyAndResolveRange } from "../../src/server/mcp/document.js";
 import { hideFromAI, readModeState } from "../../src/server/mode.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
@@ -12,8 +17,11 @@ import {
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
+import { withInternal } from "../../src/shared/origins.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
+import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { unanchored } from "../helpers/positions.js";
 import { createAnnotation, noRelay, rangeOf } from "../helpers/ydoc-factory.js";
 
@@ -112,7 +120,27 @@ describe("tandem_note tool logic (via createAnnotation)", () => {
   });
 });
 
+/**
+ * #2048 — these rows used to call `collectAnnotations` and then `.filter()` in
+ * the test, asserting the test's own model of the filter and never calling a
+ * registered handler. They now drive `tandem_getAnnotations` through the
+ * in-memory harness.
+ *
+ * **Four rows changed meaning, and that is the point rather than a regression.**
+ * The hand-rolled version filtered the RAW collection, so it counted a record
+ * the tool has never returned: the user highlight. `mintAnnotation` hardcodes
+ * `audience: "outbound"` and `audience` is a lifecycle-owned field, so a fixture
+ * cannot set it — the highlight is stored outbound and demoted to `private` by
+ * `sanitizeAnnotation` on read, and `isClaudeFacing` then excludes it. So
+ * unfiltered is 3 and not 4, `author: "user"` is 0 and not 1, `status:
+ * "pending"` is 2 and not 3, and `type: "highlight"` returns nothing for this
+ * fixture's user-authored highlight. Those are the ADR-027 / #1619 / #1710
+ * rules this describe appeared to cover and did not.
+ */
 describe("tandem_getAnnotations tool logic", () => {
+  let client: Client;
+  let close: (() => Promise<void>) | undefined;
+
   function populateAnnotations(ydoc: Y.Doc) {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "comment 1", {
@@ -126,58 +154,112 @@ describe("tandem_getAnnotations tool logic", () => {
       author: "claude",
       suggestedText: "x",
     });
-    // One accepted
+    // One accepted. Written through `withInternal` rather than a bare
+    // `map.set`: the sibling resolve describe records its hand-written
+    // `map.set` calls as untagged raw writes removed for Critical Rule 2, and
+    // the real `acceptPending` cannot stand in here — since #1770 it refuses to
+    // accept a CLAUDE-authored record, which is exactly what this fixture needs.
     const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "old comment", {
       author: "claude",
     });
     const ann = map.get(id) as Annotation;
-    map.set(id, { ...ann, status: "accepted" });
+    withInternal(ydoc, () => map.set(id, { ...ann, status: "accepted" }));
     return map;
   }
 
-  it("returns all annotations unfiltered", () => {
-    const ydoc = setupDoc("ga-1", "Hello world test");
-    const map = populateAnnotations(ydoc);
-    const all = collectAnnotations(map, DOC_HASH);
-    expect(all).toHaveLength(4);
-  });
-
-  it("filters by author", () => {
-    const ydoc = setupDoc("ga-2", "Hello world test");
-    const map = populateAnnotations(ydoc);
-    const claude = collectAnnotations(map, DOC_HASH).filter((a) => a.author === "claude");
-    expect(claude).toHaveLength(3);
-    const user = collectAnnotations(map, DOC_HASH).filter((a) => a.author === "user");
-    expect(user).toHaveLength(1);
-  });
-
-  it("filters by type", () => {
-    const ydoc = setupDoc("ga-3", "Hello world test");
-    const map = populateAnnotations(ydoc);
-    const comments = collectAnnotations(map, DOC_HASH).filter((a) => a.type === "comment");
-    expect(comments).toHaveLength(3); // 2 plain comments + 1 with suggestedText
-    const withSuggestion = collectAnnotations(map, DOC_HASH).filter(
-      (a) => a.suggestedText !== undefined,
+  /** The tool's payload, unwrapped from the `{ ok, data }` text envelope. */
+  async function getAnnotations(args: Record<string, unknown> = {}) {
+    const envelope = parseResult(
+      await client.callTool({ name: "tandem_getAnnotations", arguments: args }),
     );
-    expect(withSuggestion).toHaveLength(1);
+    return envelope.data;
+  }
+
+  beforeEach(async () => {
+    // The Solo hold is one of this tool's filters. Say which mode we are in
+    // rather than relying on `indeterminate` happening to let these through.
+    setCtrlMode("tandem");
+    ({ client, close } = await setupMcpServer([registerAnnotationTools]));
   });
 
-  it("filters by status", () => {
+  afterEach(async () => {
+    await close?.();
+    close = undefined;
+    setCtrlMode(null);
+  });
+
+  it("returns every Claude-facing annotation and discloses the private one", async () => {
+    const ydoc = setupDoc("ga-1", "Hello world test");
+    populateAnnotations(ydoc);
+
+    const res = await getAnnotations();
+
+    expect(res.annotations).toHaveLength(3);
+    expect(res.count).toBe(3);
+    // The user highlight — disclosed, not silently dropped (#1619/#1710).
+    expect(res.privateExcluded).toBe(1);
+    // No notes in this fixture, and the counter is omitted when zero.
+    expect(res.notesExcluded).toBeUndefined();
+  });
+
+  it("filters by author, and a user filter returns only Claude-facing records", async () => {
+    const ydoc = setupDoc("ga-2", "Hello world test");
+    populateAnnotations(ydoc);
+
+    expect((await getAnnotations({ author: "claude" })).count).toBe(3);
+
+    // The fixture's only user-authored record is a highlight, which is private
+    // by construction — so this is 0, where the hand-rolled version said 1.
+    const user = await getAnnotations({ author: "user" });
+    expect(user.count).toBe(0);
+    expect(user.privateExcluded).toBe(1);
+  });
+
+  it("filters by type, and a highlight filter returns nothing", async () => {
+    const ydoc = setupDoc("ga-3", "Hello world test");
+    populateAnnotations(ydoc);
+
+    expect((await getAnnotations({ type: "comment" })).count).toBe(3);
+
+    // 0 because this fixture's only highlight is USER-authored, hence private.
+    // The tool's description puts it more strongly — `type: "highlight"`
+    // "always returns nothing" — but the code is narrower than its own prose:
+    // `isClaudeFacing` admits a CLAUDE-authored outbound highlight, and
+    // `read-audience-filter.test.ts` pins one being returned (#1710 row 2, the
+    // shape of the tutorial's first card). This row asserts the fixture's case,
+    // not the description's absolute.
+    const highlights = await getAnnotations({ type: "highlight" });
+    expect(highlights.count).toBe(0);
+    expect(highlights.privateExcluded).toBe(1);
+  });
+
+  it("surfaces suggestedText on the record that carries it", async () => {
     const ydoc = setupDoc("ga-4", "Hello world test");
-    const map = populateAnnotations(ydoc);
-    const pending = collectAnnotations(map, DOC_HASH).filter((a) => a.status === "pending");
-    expect(pending).toHaveLength(3);
-    const accepted = collectAnnotations(map, DOC_HASH).filter((a) => a.status === "accepted");
-    expect(accepted).toHaveLength(1);
+    populateAnnotations(ydoc);
+
+    // Deliberately a property of the RESPONSE, not a filter: there is no
+    // `suggestedText` tool parameter, so the hand-rolled row that filtered on it
+    // was testing nothing the tool does.
+    const res = await getAnnotations();
+    const withSuggestion = res.annotations.filter((a: Annotation) => a.suggestedText !== undefined);
+    expect(withSuggestion).toHaveLength(1);
+    expect(withSuggestion[0].suggestedText).toBe("x");
   });
 
-  it("compound filter: author + status", () => {
+  it("filters by status", async () => {
     const ydoc = setupDoc("ga-5", "Hello world test");
-    const map = populateAnnotations(ydoc);
-    const result = collectAnnotations(map, DOC_HASH)
-      .filter((a) => a.author === "claude")
-      .filter((a) => a.status === "pending");
-    expect(result).toHaveLength(2);
+    populateAnnotations(ydoc);
+
+    // 2, not 3: the third pending record is the private highlight.
+    expect((await getAnnotations({ status: "pending" })).count).toBe(2);
+    expect((await getAnnotations({ status: "accepted" })).count).toBe(1);
+  });
+
+  it("compound filter: author + status", async () => {
+    const ydoc = setupDoc("ga-6", "Hello world test");
+    populateAnnotations(ydoc);
+
+    expect((await getAnnotations({ author: "claude", status: "pending" })).count).toBe(2);
   });
 });
 
