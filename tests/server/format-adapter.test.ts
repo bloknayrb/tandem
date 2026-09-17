@@ -4,8 +4,8 @@ import * as Y from "yjs";
 // Mock the docx body parser so the #696 / ADR-036 / PR #707 review test below
 // can exercise the comments-extraction failure path without supplying a real
 // .docx fixture.
-vi.mock("../../src/server/file-io/docx.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/file-io/docx.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     loadDocx: vi.fn().mockResolvedValue("<p>Body</p>"),

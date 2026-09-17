@@ -21,7 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const BLOCK = { content: [{ type: "text", text: "RESTRICTED" }], isError: true } as const;
 
-vi.mock("../../src/server/mcp/license-gate.js", async (importOriginal) => {
+vi.mock(import("../../src/server/mcp/license-gate.js"), async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return { ...actual, licenseGate: vi.fn() };
 });

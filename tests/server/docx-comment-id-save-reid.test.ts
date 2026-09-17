@@ -25,7 +25,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 // vi.mock factories are hoisted before module-level code; compute paths inline.
 // The dir name must start with `tandem-` — `platform.test.ts` asserts the shape.
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -41,7 +41,7 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
   };
 });
 
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: vi.fn(),
   suppressNextChange: vi.fn(),
@@ -53,7 +53,7 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
  * sets it, so every other row goes through the real `atomicWriteBuffer`.
  */
 const { hooks } = vi.hoisted(() => ({ hooks: { failWrite: false } }));
-vi.mock("../../src/server/file-io/index.js", async (importOriginal) => {
+vi.mock(import("../../src/server/file-io/index.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/file-io/index.js")>();
   return {
     ...actual,

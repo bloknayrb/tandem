@@ -79,7 +79,14 @@ const COMMAND = "npm run typecheck:tests";
 const SCRIPT =
   "tsc -p tsconfig.tests.node.json --noEmit && " +
   "tsc -p tsconfig.tests.client.json --noEmit && " +
-  "tsc -p tsconfig.tests.e2e.json --noEmit";
+  "tsc -p tsconfig.tests.e2e.json --noEmit && " +
+  // The fourth leg (#1614). Plain `tsc` resolves a `.svelte` import through
+  // Svelte's ambient wildcard and never reads the component, so the three legs
+  // above check no component boundary at all; svelte-check against the same
+  // config is what does. Pinned by the same exact equality as the rest -- the
+  // point of this constant is that appending anything to the script, including
+  // `|| true`, leaves `ci.yml` byte-identical.
+  "svelte-check --tsconfig ./tsconfig.tests.client.json --fail-on-warnings";
 
 const TEST_CONFIGS = [
   "tsconfig.tests.node.json",

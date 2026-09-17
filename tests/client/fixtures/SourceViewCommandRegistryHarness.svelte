@@ -1,12 +1,13 @@
 <script lang="ts">
+import type { ComponentProps } from "svelte";
 import type * as Y from "yjs";
 import SourceView from "../../../src/client/editor/SourceView.svelte";
 
-interface SourceCommands {
-  documentId: string;
-  save(intent: "save" | "save-as"): Promise<boolean>;
-  exit(): Promise<void>;
-}
+// Derived from `SourceView`'s own callback signature rather than re-declared:
+// a hand-copied command shape drifts silently (#1614).
+type SourceCommands = NonNullable<
+  Parameters<ComponentProps<typeof SourceView>["onCommandsChange"]>[1]
+>;
 
 interface Props {
   documentId: string;

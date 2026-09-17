@@ -13,13 +13,22 @@
   // split: those rune cells are excluded from the node config and owned here,
   // because only this program pulls in Svelte's ambient `$state`.
   //
-  // KNOWN GAP, stated rather than papered over: bare `tsc` resolves
-  // `import ... from "./Foo.svelte"` through an ambient module declaration and
-  // never reads the component's own <script> block. The three harness
-  // components under `tests/client/fixtures/` are therefore NOT typechecked by
-  // this config. Only `svelte-check` would cover them, and it runs
-  // `--tsconfig ./tsconfig.client.json`, i.e. `src/client` + `src/shared`.
-  // Do not describe this config as covering them.
+  // KNOWN GAP in the `tsc` legs, and what actually closes it (#1614). Bare
+  // `tsc` resolves `import ... from "./Foo.svelte"` through Svelte's ambient
+  // `declare module "*.svelte"` and never reads the component's own <script>
+  // block, so the harness components under `tests/client/fixtures/` are NOT
+  // typechecked by the `tsc` leg that uses this config. Measured: this include
+  // resolves 559 files, 0 of them `.svelte`.
+  //
+  // The include SHAPE is not the lever, and it is worth saying so because the
+  // opposite is intuitive: rewriting these globs to directory form resolves the
+  // identical 559 files for plain `tsc`, and it does not govern svelte-check
+  // either. svelte-check discovers components by walking the project, so with
+  // this very suffix-glob include it still reports an error located INSIDE
+  // `tests/client/fixtures/` (mutation-proved both ways, #1614). What covers
+  // them is the `svelte-check --tsconfig ./tsconfig.tests.client.json` leg of
+  // `typecheck:tests` -- the leg, not the include. Do not describe the `tsc`
+  // legs as covering them.
   "extends": "./tsconfig.client.json",
   "compilerOptions": {
     "noEmit": true

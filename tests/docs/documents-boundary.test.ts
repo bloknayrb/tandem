@@ -385,6 +385,8 @@ const FAN_OUT = [
   // shared/constants.ts row is added for it.
   "server/documents/annotation-wiring.ts -> server/mcp/annotations.ts (value) x1",
   "server/documents/annotation-wiring.ts -> server/notifications.ts (value) x1",
+  // #1863: `annotationsById` names `Annotation` in its return type.
+  "server/documents/annotation-wiring.ts -> shared/types.ts (type) x1",
   "server/documents/annotation-wiring.ts -> shared/utils.ts (value) x1",
   "server/documents/conflict.ts -> server/notifications.ts (value) x1",
   "server/documents/conflict.ts -> server/session/manager.ts (value) x1",

@@ -24,12 +24,10 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../src/server/events/wake-socket.js", () => ({
+vi.mock(import("../../src/server/events/wake-socket.js"), () => ({
   getWakeEndpoint: vi.fn(() => null as string | null),
 }));
 
@@ -39,36 +37,26 @@ import { registerAwarenessTools } from "../../src/server/mcp/awareness.js";
 import { registerDocumentTools } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { WAKE_URL_PRODUCERS } from "../../src/server/mcp/wake-url.js";
+import { parseResult as parsed, setupMcpServer } from "../helpers/mcp-harness.js";
 
 const mockedGetWakeEndpoint = vi.mocked(getWakeEndpoint);
 const LIVE_WAKE_URL = "ws://127.0.0.1:41999/api/wake";
 
 let client: Client;
+let close: (() => Promise<void>) | undefined;
 const tempFiles: string[] = [];
-
-type CallToolResponse = Awaited<ReturnType<Client["callTool"]>>;
-
-function parsed(result: CallToolResponse) {
-  const content = result.content as Array<{ type: string; text?: string }>;
-  const text = content.find((c) => c.type === "text")?.text;
-  return text ? JSON.parse(text) : null;
-}
 
 beforeEach(async () => {
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   setActiveDocId(null);
   mockedGetWakeEndpoint.mockReturnValue(null);
 
-  const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
-  registerDocumentTools(server);
-  registerAwarenessTools(server);
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  client = new Client({ name: "test-client", version: "0.0.1" });
-  await server.connect(serverTransport);
-  await client.connect(clientTransport);
+  ({ client, close } = await setupMcpServer([registerDocumentTools, registerAwarenessTools]));
 });
 
 afterEach(async () => {
+  await close?.();
+  close = undefined;
   for (const f of tempFiles.splice(0)) await fs.rm(f, { force: true });
 });
 

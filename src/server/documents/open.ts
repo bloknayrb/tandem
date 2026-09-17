@@ -91,14 +91,14 @@ import {
   Y_MAP_SAVED_AT_VERSION,
 } from "../../shared/constants.js";
 import { crossBasename } from "../../shared/cross-basename.js";
-import { withFileSync, withInternal } from "../../shared/origins.js";
+import { withFileSync, withInternal, withMcp } from "../../shared/origins.js";
 import { SCRATCHPAD_PREFIX, UPLOAD_PREFIX } from "../../shared/paths.js";
-import type { ExternalConflictState, FlatOffset } from "../../shared/types.js";
+import type { Annotation, ExternalConflictState, FlatOffset } from "../../shared/types.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { getAdapter } from "../file-io/index.js";
 import { detectFormat, docIdFromPath, extractText } from "../mcp/document-model.js";
 import { injectTutorialAnnotations } from "../mcp/tutorial-annotations.js";
-import { anchoredRange } from "../positions.js";
+import { anchoredRange, relPosToFlatOffset, storedRangeStillMatches } from "../positions.js";
 import {
   decodeSessionToScratchDoc,
   type LoadedSession,
@@ -111,7 +111,12 @@ import {
   sourceFileChanged,
 } from "../session/manager.js";
 import { getDocument, getOrCreateDocument } from "../yjs/provider.js";
-import { repairClonedAnchors, wireAnnotationStore } from "./annotation-wiring.js";
+import {
+  annotationsById,
+  persistEnvelopeNow,
+  repairClonedAnchors,
+  wireAnnotationStore,
+} from "./annotation-wiring.js";
 import { ensureAutoSave } from "./autosave.js";
 import { flagExternalConflict } from "./conflict.js";
 import { markDirty, registerDirtyObserver } from "./dirty.js";
@@ -396,6 +401,18 @@ export async function openFromDisk(
           reanchorAnnotations(doc, resolved);
         },
       );
+      // Settings > Replay tutorial force-opens welcome.md. The clear above took
+      // every seed the envelope did not hold (seeds are `withInternal`, never
+      // durable) and nothing else re-creates them, so replay here too, past
+      // any tombstone the user's deletions left (#1696). A re-created
+      // tombstoned seed is persisted, or the envelope's tombstone deletes it
+      // again on the first reopen that has no session file to carry it.
+      if (
+        isWelcomeDoc(resolved) &&
+        injectTutorialAnnotations(doc, resolved, { replay: true }) > 0
+      ) {
+        await persistEnvelopeNow(existingId, doc, resolved);
+      }
       ensureAutoSave();
       return {
         ...buildResult(doc, {
@@ -433,11 +450,15 @@ export async function openFromDisk(
   }
   await finalizeDocOpen(id, doc, resolved, fileName, format, readOnly);
 
-  // Second half of the fallback-anchor repair (#1800, site b). The clone-time
-  // repair (site a) ran BEFORE wireAnnotationStore, whose loadAndMerge then
-  // puts the durable envelope's dead relRange straight back for every
-  // annotation the file wins (rev tie: session records lack editedAt). This
-  // call re-anchors those post-merge — gated on the flag rather than
+  // Second half of the fallback-anchor repair (#1800, site b), as an anchor
+  // overlay (#1863). The clone-time repair (site a) ran BEFORE
+  // wireAnnotationStore, whose loadAndMerge then lets the durable envelope win
+  // every cloned id it holds at a higher rev (or a rev tie: session records
+  // lack editedAt) — and the envelope's flat offsets may describe the corrupt
+  // WINNER's text, so re-minting from them cements a wrong anchor. The
+  // envelope's record is newer everywhere except its anchor (refreshRange
+  // never bumps rev), so only the anchor comes from the clone: see
+  // overlayFallbackAnchors. Gated on the restore result rather than
   // unconditional, because an every-open refresh is a wider behaviour change
   // than this fix is scoped to make.
   //
@@ -448,16 +469,14 @@ export async function openFromDisk(
   // it can run on. Residual: a Hocuspocus onLoadDocument doc swap landing
   // between the two lines writes the repair into an orphan — narrow, stated.
   //
-  // DEFAULT transact (withMcp), NOT skipTransact: the durable observer is
-  // attached by now, and only a non-DURABLE_SKIP origin queues the repaired
-  // state to disk. A withFileSync repair here would mutate the Y.Map and
-  // queue nothing, and the post-merge write cannot cover for it (mergeMap
-  // sets needsWrite false when the file wins) — the envelope would keep the
-  // dead relRange permanently.
-  if (restore.fallbackRestored === true) {
-    repairClonedAnchors(doc, doc.getMap(Y_MAP_ANNOTATIONS), resolved, {
-      skipTransact: false,
-    });
+  // ONE withMcp transaction (the overlay, then the repair inside it with
+  // skipTransact): the durable observer is attached by now, and only a
+  // non-DURABLE_SKIP origin queues the result to disk. A withFileSync write
+  // here would mutate the Y.Map and queue nothing, and the post-merge write
+  // cannot cover for it (mergeMap sets needsWrite false when the file wins) —
+  // the envelope would keep the wrong anchor permanently.
+  if (restore.fallbackAnnotations !== undefined) {
+    overlayFallbackAnchors(doc, resolved, restore.fallbackAnnotations);
   }
 
   // A restored session that carried unsaved edits re-arms the module-state
@@ -507,9 +526,17 @@ export async function openFromDisk(
 
   // Inject tutorial annotations whenever the sample welcome document is opened,
   // regardless of whether TANDEM_NO_SAMPLE skipped the server startup auto-open.
-  // injectTutorialAnnotations is idempotent — safe to call on session-restored docs.
-  if (resolved.endsWith(path.join("sample", "welcome.md"))) {
-    injectTutorialAnnotations(doc);
+  // After finalizeDocOpen, which seeds the tombstone ledger the injector reads (#1696).
+  // `force` on a doc that was not open lands here, and is Settings > Replay
+  // tutorial's request to bring deleted seeds back, so it replays past the
+  // tombstones.
+  // A replay that re-created a tombstoned seed is persisted, as in the
+  // force-reload branch above.
+  if (
+    isWelcomeDoc(resolved) &&
+    injectTutorialAnnotations(doc, resolved, { replay: options?.force === true }) > 0
+  ) {
+    await persistEnvelopeNow(id, doc, resolved);
   }
 
   return {
@@ -806,9 +833,10 @@ interface RestoreResult {
   restored: boolean;
   sessionDirty?: boolean;
   /** Set when the migration-loser fallback was cloned in after the winner's
-   * `ydocState` threw (#1800). Gates the post-merge anchor repair at the
-   * normal-open call site. */
-  fallbackRestored?: boolean;
+   * `ydocState` threw (#1800): the cloned annotation records, read after the
+   * clone-time anchor repair. Its presence gates the post-merge anchor overlay
+   * at the normal-open call site (#1863). */
+  fallbackAnnotations?: ReadonlyMap<string, Annotation>;
   unsavedRestore?: {
     diskChanged: boolean;
     sessionMtime: number;
@@ -927,13 +955,14 @@ async function abandonFallbackToDisk(
  * doc — so every fallback-restored annotation takes `refreshRange`'s
  * dead-relRange branch and is re-anchored from its stored FLAT offsets,
  * which is only safe BECAUSE the clone is byte-exact. That justification
- * covers the session-only records (site a, below) and NOT the durable
- * envelope's: site (b) re-anchors records whose flat offsets were computed
- * against the WINNER's text, actively re-minting a fresh `relRange` from
- * those offsets and queueing it to disk — cementing a wrong anchor rather
- * than leaving it detectably dead. Stated sharp (see the follow-up issue in
- * the PR body: the session record should win over the envelope for cloned
- * ids); not worse than the status quo, which had no anchor at all.
+ * covers the cloned records (site a, below) and NOT the durable envelope's:
+ * a record the envelope wins at the merge may carry flat offsets computed
+ * against the corrupt WINNER's text. So this returns the cloned records, and
+ * site (b) overlays each one's ANCHOR (`range`, `relRange`, `textSnapshot`)
+ * onto the envelope's newer record wherever the clone's anchor verifies
+ * against the live text, keeping the envelope's `rev`, content and status
+ * (#1863). An unverified clone leaves the envelope's record on the ordinary
+ * path, where #1764 reports a contradicted snapshot as degraded.
  *
  * `documentMeta` is MIRRORED, not copied-when-present, for exactly the four
  * keys written only by an adapter import (`Y_MAP_FOOTNOTE_BODIES`,
@@ -977,7 +1006,11 @@ async function abandonFallbackToDisk(
  * The partial state IS emitted before the throw (measured), so the clear is
  * what converges an attached client — not an optimisation to remove later.
  */
-function cloneFallbackIntoDoc(doc: Y.Doc, scratch: Y.Doc, resolved: string): void {
+function cloneFallbackIntoDoc(
+  doc: Y.Doc,
+  scratch: Y.Doc,
+  resolved: string,
+): ReadonlyMap<string, Annotation> {
   let droppedAuthorship = 0;
   withFileSync(doc, () => {
     const liveFragment = doc.getXmlFragment("default");
@@ -1038,6 +1071,84 @@ function cloneFallbackIntoDoc(doc: Y.Doc, scratch: Y.Doc, resolved: string): voi
         `that could not be anchored to the recovered content.`,
     );
   }
+  return annotationsById(doc.getMap(Y_MAP_ANNOTATIONS), resolved);
+}
+
+/** The bundled tutorial document, the only file tutorial seeds are injected into. */
+function isWelcomeDoc(resolved: string): boolean {
+  return resolved.endsWith(path.join("sample", "welcome.md"));
+}
+
+/**
+ * Site (b) of the fallback-anchor repair (#1800), as an anchor overlay (#1863).
+ *
+ * After the merge, a cloned id the durable envelope won holds the envelope's
+ * record: newer `rev`, content, status and `suggestedText`, but flat offsets
+ * that may describe the corrupt winner's text. For each cloned record this puts
+ * the clone's ANCHOR back onto the live record and nothing else, so the durable
+ * `rev` never goes down. It skips:
+ *
+ *   - an id that is no longer live: a winning tombstone stays a delete;
+ *   - a clone whose anchor does not hold on the live text (gate G: its stored
+ *     range still matches its `textSnapshot`, AND its `relRange` resolves to
+ *     exactly that range). The live record then takes the ordinary path,
+ *     including #1764's degraded report. On today's code the snapshot half is
+ *     implied by the relRange half: a clone's own anchor points at the scratch
+ *     lineage and never resolves here, and site (a) mints a live one only where
+ *     the same predicate passes (#1764). It stays so site (b) does not depend
+ *     on that gate staying where it is, and no test can tell it apart (dropping
+ *     it was mutation-measured green);
+ *   - agreeing offsets, where there is nothing to overlay;
+ *   - a suggestion whose snapshot differs from the clone's. Accept replaces the
+ *     span verbatim, so the span must hold the text the suggestion was written
+ *     for.
+ *
+ * `textSnapshotTruncated` and `textSnapshotBreaks` travel with `textSnapshot`,
+ * because both describe that snapshot: the envelope's flag or break offsets
+ * would misdescribe the clone's (undo-of-accept reads the breaks, #1486; the
+ * `.docx` path strips the three together for the same reason).
+ *
+ * ONE `withMcp` transaction, with the repair inside it under `skipTransact`:
+ * the durable observer is attached by now and `withMcp` is not
+ * `DURABLE_SKIP`, so both the overlay and the repair reach the envelope.
+ * `pickWinner` and `mergeMap` are untouched, so no other merge caller changes.
+ */
+function overlayFallbackAnchors(
+  doc: Y.Doc,
+  resolved: string,
+  cloned: ReadonlyMap<string, Annotation>,
+): void {
+  const map = doc.getMap(Y_MAP_ANNOTATIONS);
+  withMcp(doc, () => {
+    const live = annotationsById(map, resolved);
+    const docText = extractText(doc);
+    for (const [id, fallback] of cloned) {
+      const current = live.get(id);
+      if (current === undefined) continue;
+      const rel = fallback.relRange;
+      const anchorHolds =
+        storedRangeStillMatches(fallback, docText) &&
+        rel !== undefined &&
+        relPosToFlatOffset(doc, rel.fromRel) === fallback.range.from &&
+        relPosToFlatOffset(doc, rel.toRel) === fallback.range.to;
+      if (!anchorHolds) continue;
+      if (current.range.from === fallback.range.from && current.range.to === fallback.range.to) {
+        continue;
+      }
+      if (current.suggestedText !== undefined && current.textSnapshot !== fallback.textSnapshot) {
+        continue;
+      }
+      const overlaid: Annotation = { ...current, range: fallback.range, relRange: rel };
+      if (fallback.textSnapshot === undefined) delete overlaid.textSnapshot;
+      else overlaid.textSnapshot = fallback.textSnapshot;
+      if (fallback.textSnapshotTruncated === undefined) delete overlaid.textSnapshotTruncated;
+      else overlaid.textSnapshotTruncated = fallback.textSnapshotTruncated;
+      if (fallback.textSnapshotBreaks === undefined) delete overlaid.textSnapshotBreaks;
+      else overlaid.textSnapshotBreaks = fallback.textSnapshotBreaks;
+      map.set(id, overlaid);
+    }
+    repairClonedAnchors(doc, map, resolved, { skipTransact: true });
+  });
 }
 
 /**
@@ -1081,7 +1192,7 @@ async function maybeRestoreSession(
     // swap alone does not update the locals captured here.
     let active = loaded.session;
     const fallback = loaded.fallback;
-    let fallbackRestored = false;
+    let fallbackAnnotations: ReadonlyMap<string, Annotation> | undefined;
     let changed = await sourceFileChanged(active);
     let dirtySession = active.dirty === true;
     if (!changed || dirtySession) {
@@ -1160,7 +1271,7 @@ async function maybeRestoreSession(
           );
         }
         try {
-          cloneFallbackIntoDoc(doc, scratch, resolved);
+          fallbackAnnotations = cloneFallbackIntoDoc(doc, scratch, resolved);
         } catch (cloneErr) {
           return abandonFallbackToDisk(
             doc,
@@ -1182,7 +1293,6 @@ async function maybeRestoreSession(
         active = fallback.session;
         changed = fallbackChanged;
         dirtySession = fallbackDirty;
-        fallbackRestored = true;
       }
       const fragment = doc.getXmlFragment("default");
       if (fragment.length > 0) {
@@ -1244,7 +1354,7 @@ async function maybeRestoreSession(
         return {
           restored: true,
           sessionDirty: dirtySession,
-          ...(fallbackRestored ? { fallbackRestored: true as const } : {}),
+          ...(fallbackAnnotations !== undefined ? { fallbackAnnotations } : {}),
           ...(needsPrompt
             ? {
                 unsavedRestore: {

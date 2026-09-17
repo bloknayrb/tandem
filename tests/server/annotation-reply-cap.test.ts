@@ -5,7 +5,11 @@
  * record. Only a stderr line marked the loss.
  */
 import { describe, expect, it } from "vitest";
-import { addUserReply, describeReplyWriteRefusal } from "../../src/server/annotations/lifecycle.js";
+import {
+  addUserReply,
+  createAnnotationLifecycle,
+  describeReplyWriteRefusal,
+} from "../../src/server/annotations/lifecycle.js";
 import { REPLY_TEXT_MAX } from "../../src/server/annotations/schema.js";
 import { Y_MAP_ANNOTATION_REPLIES } from "../../src/shared/constants.js";
 import { getAnnotationsMap, makeMarkdownDoc, noRelay } from "../helpers/ydoc-factory.js";
@@ -76,5 +80,91 @@ describe("the reply seam — write-time length bound", () => {
       code: "INVALID_ARGUMENT",
       message: `Reply text exceeds the ${REPLY_TEXT_MAX}-character limit`,
     });
+  });
+});
+
+/**
+ * #1626 — the same bound, PER FIELD, on a reply's `suggestedText`.
+ *
+ * The entry is `createAnnotationLifecycle(ydoc).reply(...)` rather than
+ * `addUserReply`, which the cases above drive: a suggestion is a Claude
+ * capability and the user's entry deliberately cannot carry one (#1000's
+ * asymmetry). The bound is the same number as the durable schema's for the same
+ * reason the `text` bound is — a value accepted at write and rejected at load is
+ * exactly the silent loss #1295 L3 fixed.
+ */
+describe("the reply seam — write-time length bound on suggestedText (#1626)", () => {
+  /**
+   * A parent anchored over the BODY, not over `seedComment`'s `[0, 1)`.
+   *
+   * That range sits inside the `"# "` heading prefix, so a suggestion-bearing
+   * reply on it is refused by the #1626 heading screen — which runs ahead of the
+   * length check and would make every case below pass for the wrong reason. The
+   * flat text of this fixture is `"# H\nbody"`, so `[4, 8)` is `"body"`.
+   */
+  function seedBodyComment(ydoc: ReturnType<typeof makeMarkdownDoc>) {
+    const map = getAnnotationsMap(ydoc);
+    map.set("a1", {
+      id: "a1",
+      type: "comment",
+      author: "claude",
+      content: "c",
+      status: "pending",
+      range: { from: 4, to: 8 },
+      timestamp: Date.now(),
+    });
+    return map;
+  }
+
+  it("accepts text and suggestedText BOTH exactly at the limit", () => {
+    // Per-field parity with the durable schema, which caps each field
+    // independently. An implementation that summed them would refuse this.
+    const ydoc = makeMarkdownDoc("# H\n\nbody\n");
+    seedBodyComment(ydoc);
+
+    const result = createAnnotationLifecycle(ydoc).reply(
+      "a1",
+      "x".repeat(REPLY_TEXT_MAX),
+      { kind: "replacement", suggestedText: "y".repeat(REPLY_TEXT_MAX) },
+      noRelay,
+    );
+
+    expect(result.kind).toBe("ok");
+    expect(replyCount(ydoc)).toBe(1);
+    ydoc.destroy();
+  });
+
+  it("refuses a suggestedText one over the limit, writing nothing", () => {
+    const ydoc = makeMarkdownDoc("# H\n\nbody\n");
+    seedBodyComment(ydoc);
+
+    const result = createAnnotationLifecycle(ydoc).reply(
+      "a1",
+      "short",
+      { kind: "replacement", suggestedText: "y".repeat(REPLY_TEXT_MAX + 1) },
+      noRelay,
+    );
+
+    // The existing `too-long` arm, reused: a separate `suggestion-too-long`
+    // would widen the closed `ReplyRefusalCode` set for no wire difference.
+    expect(result).toStrictEqual({ kind: "too-long", max: REPLY_TEXT_MAX });
+    expect(replyCount(ydoc)).toBe(0);
+    ydoc.destroy();
+  });
+
+  it("still refuses an over-long text on the same entry, unchanged", () => {
+    const ydoc = makeMarkdownDoc("# H\n\nbody\n");
+    seedBodyComment(ydoc);
+
+    const result = createAnnotationLifecycle(ydoc).reply(
+      "a1",
+      "x".repeat(REPLY_TEXT_MAX + 1),
+      { kind: "none" },
+      noRelay,
+    );
+
+    expect(result).toStrictEqual({ kind: "too-long", max: REPLY_TEXT_MAX });
+    expect(replyCount(ydoc)).toBe(0);
+    ydoc.destroy();
   });
 });

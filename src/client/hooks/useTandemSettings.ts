@@ -13,6 +13,13 @@ export type Density = "compact" | "cozy" | "spacious";
 export type PrimaryTab = "chat" | "annotations";
 export type PanelOrder = "chat-editor-annotations" | "annotations-editor-chat";
 export type TextSize = "s" | "m" | "l";
+export const TEXT_SIZES: readonly TextSize[] = ["s", "m", "l"];
+/** User-facing preset names, shared by Settings and the Display menu. */
+export const TEXT_SIZE_LABEL: Readonly<Record<TextSize, string>> = {
+  s: "Small",
+  m: "Medium",
+  l: "Large",
+};
 
 /**
  * Reading-measure preset for the editor content track (Phase 3.5 Stage B).
@@ -36,6 +43,14 @@ export const EDITOR_MEASURE_CH: Readonly<Record<EditorMeasure, string>> = {
   comfortable: "68ch",
   wide: "82ch",
   full: "100%",
+};
+
+/** User-facing preset names, shared by Settings and the Display menu. */
+export const EDITOR_MEASURE_LABEL: Readonly<Record<EditorMeasure, string>> = {
+  narrow: "Narrow",
+  comfortable: "Comfortable",
+  wide: "Wide",
+  full: "Full",
 };
 
 function isEditorMeasure(value: unknown): value is EditorMeasure {
@@ -175,6 +190,10 @@ export interface TandemSettings {
   // inline HTML) in the editor. Display-only — the source is always preserved in
   // the Y.Doc and round-trips to disk regardless of this toggle. Default on.
   showRawMarkdown: boolean;
+  // #1738: wrap long lines in the Markdown source view's textarea
+  // (`white-space: pre-wrap`) instead of scrolling horizontally. Display-only.
+  // Default off, so every existing source view renders exactly as before.
+  sourceViewLineWrap: boolean;
   // 1.13: transient master "mute all decorations" overlay (clean reading view).
   // Suppresses all decoration rendering without clobbering the per-type prefs,
   // so restoring returns exactly the prior set. Editing a per-type row auto-unmutes.
@@ -238,6 +257,9 @@ export interface TandemSettings {
   _readOnly?: boolean;
 }
 
+/** The two reading presets the Display menu writes (#1705/#1706). */
+export type DisplayPrefsUpdate = Partial<Pick<TandemSettings, "textSize" | "editorMeasure">>;
+
 export const TEXT_SIZE_PX: Record<TextSize, number> = { s: 14, m: 16, l: 18 };
 
 // OS-level reduced-motion preference — used as the default so users who have
@@ -282,6 +304,7 @@ const DEFAULTS: TandemSettings = {
   showHighlights: true,
   showNotes: true,
   showRawMarkdown: true,
+  sourceViewLineWrap: false,
   decorationsMuted: false,
   models: [],
   defaultModelId: null,
@@ -624,6 +647,7 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
     showHighlights: parsed.showHighlights === false ? false : DEFAULTS.showHighlights,
     showNotes: parsed.showNotes === false ? false : DEFAULTS.showNotes,
     showRawMarkdown: parsed.showRawMarkdown === false ? false : DEFAULTS.showRawMarkdown,
+    sourceViewLineWrap: parsed.sourceViewLineWrap === true,
     decorationsMuted: parsed.decorationsMuted === true,
     models: parseModels(parsed.models),
     defaultModelId:

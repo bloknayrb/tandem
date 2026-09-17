@@ -6,7 +6,18 @@ import { DEFAULT_BIND_HOST } from "../shared/constants.js";
 
 /**
  * Resolve the Tandem app-data root directory. `TANDEM_APP_DATA_DIR` overrides
- * the `env-paths` default. Not memoised so tests can swap tempdirs mid-run.
+ * the `env-paths` default.
+ *
+ * **The function is not memoised; the two constants below ARE.** That
+ * distinction used to be written here as a flat "not memoised so tests can swap
+ * tempdirs mid-run", which is true of this function and false of `SESSION_DIR`
+ * and `LAST_SEEN_VERSION_FILE` — they are computed once at module load, so a
+ * test setting the variable in a `beforeEach` gets an isolated annotations
+ * directory and a REAL session directory. That is not hypothetical: it put ~40
+ * test fixtures into a real user's session store, where the next restart
+ * reopened them as tabs. Isolation for the whole vitest run now comes from
+ * `test.env` + `tests/setup/app-data-isolation.ts`, which land before any
+ * import; `tests/scripts/app-data-isolation-wiring.test.ts` is the guard.
  */
 export function resolveAppDataDir(): string {
   const envOverride = process.env.TANDEM_APP_DATA_DIR;
@@ -217,8 +228,8 @@ export const TAURI_SIDECAR_ARGV_FLAG = "--tauri-sidecar";
  *
  * **Derived from argv, never from `TANDEM_TAURI_SIDECAR`.** That variable is
  * inherited by every descendant of the sidecar — `tauri-plugin-shell`'s
- * `Command::new` never calls `env_clear()`, and `supervisor.ts` spawns the
- * auto-launched Claude Code with `env: process.env` — so keying the carve-out
+ * `Command::new` never calls `env_clear()`, and `supervisor.ts`'s `childEnv`
+ * strips only secrets and data-dir keys, not this one — so keying the carve-out
  * on it means an npm `tandem` run from an auto-launched session's own shell
  * reads `"1"`, takes the sidecar's carve-out and SIGKILLs the desktop's server:
  * #1758's own bug, surviving on the path the product's auto-launch creates.

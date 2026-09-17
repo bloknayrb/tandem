@@ -173,6 +173,38 @@ describe("open security-findings claims (CLAUDE.md vs docs/security.md)", () => 
     expect(claimBullet()).toContain(`**${word} security findings are open`);
   });
 
+  it("CLAUDE.md's ACCEPTED count word matches the register's Accepted subsection", () => {
+    // The sibling of the open-count spec above, and it did not exist until
+    // 2026-09-11 — which is how #1488 sat as a fourth accepted finding,
+    // decided 2026-09-08, while this bullet said "three" and every spec here
+    // stayed green. Demonstrated rather than imagined: reverting the count
+    // word from "four" to "three" with four entries filed under Accepted
+    // reddened nothing. The open half was pinned; the accepted half was not,
+    // and an accepted finding is still a live code condition, so an
+    // undercount reads as "there is one fewer bound to respect here".
+    //
+    // Counts the register's ENTRIES, not CLAUDE.md's own refs, for the same
+    // reason the open spec counts CLAUDE.md's: each direction has a spec that
+    // treats the other file as the authority, so agreement is checked rather
+    // than assumed. `acceptedOpenings`-style top-level bullets are the entry
+    // discriminator — indented continuations start with two spaces.
+    const openings = acceptedSubsection()
+      .split("\n")
+      .filter((line) => line.startsWith("- "));
+    expect(
+      openings.length,
+      "derived no accepted entries — the parser found nothing",
+    ).toBeGreaterThan(0);
+
+    const word = NUMBER_WORDS[openings.length];
+    expect(word, `no number word for ${openings.length} accepted findings`).toBeTruthy();
+    expect(
+      claimBullet().toLowerCase(),
+      `the register files ${openings.length} entries under \`### Accepted (bounded)\`, so ` +
+        `CLAUDE.md's bullet must read "${word} are accepted rather than fixed"`,
+    ).toContain(`${word.toLowerCase()} are accepted rather than fixed`);
+  });
+
   it("every finding CLAUDE.md calls open has its OWN entry in the register", () => {
     // "The number appears somewhere in the section" is not the claim, and
     // testing it that way was a real hole: deleting #1609's entry outright

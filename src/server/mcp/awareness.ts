@@ -350,8 +350,8 @@ export function registerAwarenessTools(server: McpServer): void {
       "the target document. Call it before annotating or editing near the user's cursor — " +
       "annotating text someone is mid-sentence on is disruptive, and the range is likely to " +
       "move under you. Returns four fields — `active`, `isTyping`, `cursor`, `lastEdit` — and " +
-      "no selection: use tandem_checkInbox's `activity.selectedText` for what the user has " +
-      "selected. " +
+      "no selection: use tandem_checkInbox's `activity.selectedText` for the most recent " +
+      "selection (see `activity.selectionAt`). " +
       "`cursor` is a flat text offset in UTF-16 code units — the same coordinate system as " +
       "annotation ranges. It is a proximity hint, not an edit anchor: only a document change " +
       "triggers a write, the last of those publishes wherever the caret is by then, and it " +
@@ -403,7 +403,7 @@ export function registerAwarenessTools(server: McpServer): void {
     "tandem_checkInbox",
     {
       description:
-        'Return user actions not yet returned by a previous poll — new comments, chat messages, and replies to your annotations — plus the current collaboration `mode` and `activity`. This is the authoritative delivery path: real-time push cannot be confirmed to have reached a client, so nothing here is suppressed on the strength of a push, and steady polling is the only reliable way to see user activity. Repeat calls de-duplicate against what was already returned, so frequent polling never double-reports. An item carries `alreadyPushed: true` when it was also emitted as a real-time event; that describes the server\'s side only. Does not return user notes (`type: "note"`), nor any record whose stored `audience` is not outbound (#1619/#1710) — user highlights are always private, so they never appear here at all.',
+        'Return user actions not yet returned by a previous poll — new comments, chat messages, and replies to your annotations — plus the current collaboration `mode` and `activity`. This is the authoritative delivery path: real-time push cannot be confirmed to have reached a client, so nothing here is suppressed on the strength of a push, and steady polling is the only reliable way to see user activity. Repeat calls de-duplicate against what was already returned, so frequent polling never double-reports. An item carries `alreadyPushed: true` when it was also emitted as a real-time event; that describes the server\'s side only. Does not return user notes (`type: "note"`), nor any record whose stored `audience` is not outbound (#1619/#1710) — user highlights are always private, so they never appear here at all. `activity.selectedText` is the most recent non-empty selection, not necessarily the current one — it is not cleared when focus leaves the editor — and `activity.selectionAt` is when the editor last wrote it: while the document is the active editor tab, any edit that moves the selection re-stamps it, including yours (#1991), so a recent value does not prove a recent selection, but an old one proves it is old. For a document not shown in an editor nothing updates the record, so after an edit `selectedText` can be sliced from stale offsets (#1997).',
       inputSchema: {
         documentId: z
           .string()
@@ -449,19 +449,21 @@ export function registerAwarenessTools(server: McpServer): void {
         // duplicated here, inline inside a `store.transactMcp`, while every
         // ledger/Solo/dedup spec drove the exported copy. One loop now.
         //
-        // `modeState` and `wasEmittedViaChannel` are arguments, not defaults:
-        // both parameters are REQUIRED as of Unit 8j-2, and the docblock on
-        // `processInboxAnnotations` carries why. What this call site contributes
-        // is that `modeState` is the mode resolved for THIS poll, so the Solo
-        // hold reflects the user's current setting and not a fallback.
+        // ONE context object for both collectors (#1702). `modeState` is the
+        // mode resolved for THIS poll, so the Solo hold reflects the user's
+        // current setting and not a fallback; handing the same object to both
+        // buckets is what keeps them from drifting apart. See `InboxPollContext`.
+        const pollCtx: InboxPollContext = {
+          modeState,
+          documentId: store.documentId,
+          wasChannelEmitted: wasEmittedViaChannel,
+        };
         const { userActions, userResponses } = processInboxAnnotations(
           allAnnotations,
           fullText,
           surfacedIds,
           (anns) => store.refreshAnnotations(anns),
-          store.documentId,
-          modeState,
-          wasEmittedViaChannel,
+          pollCtx,
         );
 
         // WS-A2 userReplies bucket — new user replies on comment threads, held in
@@ -472,9 +474,7 @@ export function registerAwarenessTools(server: McpServer): void {
           fullText,
           (id) => store.listReplies(id),
           replySurfacedIds,
-          modeState,
-          store.documentId,
-          wasEmittedViaChannel,
+          pollCtx,
         );
 
         // Bucket 3: unread chat messages from CTRL_ROOM
@@ -512,6 +512,17 @@ export function registerAwarenessTools(server: McpServer): void {
         const selectedText = hasSelection
           ? safeSlice(fullText, selection!.from, selection!.to)
           : null;
+        // #1624: the selection record's own timestamp. `cursor`/`lastEdit` come
+        // from a DIFFERENT record (`Y_MAP_ACTIVITY`), so without this the two
+        // halves of `activity` read as one snapshot while having independent
+        // ages. Null whenever `selectedText` is null, but NOT only then: a record
+        // with no numeric `timestamp` yields a real `selectedText` beside a null
+        // `selectionAt`, so a null here must never be read as "no selection".
+        // The `typeof` guard is not defensive: an `undefined` here fails the
+        // SDK's structured-output validation for the WHOLE response, not just
+        // this field.
+        const selectionAt =
+          hasSelection && typeof selection!.timestamp === "number" ? selection!.timestamp : null;
 
         // Build summary
         const parts: string[] = [];
@@ -569,6 +580,7 @@ export function registerAwarenessTools(server: McpServer): void {
             cursor: activity?.cursor ?? null,
             lastEdit: activity?.lastEdit ?? null,
             selectedText,
+            selectionAt,
           },
         });
       }),
@@ -643,18 +655,11 @@ export function isUserActive(
  * caller's choice. `YDocStore.refreshAnnotations` is the production
  * implementation; `refreshAnnotation` (singular) no longer exists.
  *
- * **`modeState` and `wasChannelEmitted` are REQUIRED, and were briefly not.**
- * The first draft of this unit gave both defaults and warned about them in
- * prose. Review defeated the warning twice over. `modeState` defaulted to
- * `"indeterminate"`, under which `hideFromAI` holds only records already
- * stamped `heldInSolo` — so a call that stopped at `documentId` (required, and
- * positionally AHEAD of both) surfaced unmarked user records in a live Solo
- * session, with exactly one killer spec. `wasChannelEmitted` defaulted to
- * `() => false` and had NO killer: deleting it from the call site left every
- * spec in the repo green while production silently stopped stamping
- * `alreadyPushed` for every channel-connected session. A required parameter is
- * the only version of that warning a compiler enforces. Both are required on
- * `collectInboxUserReplies` below too, for the same reasons.
+ * **The per-poll values arrive as one {@link InboxPollContext}, every field
+ * required (#1702)** — Units 8j-2 and 8j-3 each silently lost one of them while
+ * they were positional, defaulted and ordered differently on the two collectors,
+ * and the interface plus the tuple pin in `awareness-tools.test.ts` are what
+ * now make that drift a type error rather than a reading exercise.
  *
  * **`refreshAll` cannot change the selection, and that is enforced here rather
  * than asked for.** The signature `(anns: Annotation[]) => Annotation[]` says
@@ -674,14 +679,7 @@ export function processInboxAnnotations(
   fullText: string,
   surfaced: Map<string, number>,
   refreshAll: (anns: Annotation[]) => Annotation[],
-  /**
-   * Scopes the ledger key. Required — a bare-id key silently drops the same
-   * imported Word comment in a second document. See `surfacedIds`.
-   */
-  documentId: string,
-  /** Privacy gate. Required — see the docblock; `"indeterminate"` is NOT fail-closed. */
-  modeState: ModeState,
-  wasChannelEmitted: (payloadId: string) => boolean,
+  ctx: InboxPollContext,
 ): {
   userActions: Array<InboxUserAction>;
   userResponses: Array<Annotation & { textSnippet: string }>;
@@ -691,7 +689,7 @@ export function processInboxAnnotations(
   // of one annotation cannot change another's selection outcome — so batching
   // costs no fidelity against the per-item loop this replaces.
   const candidates = allAnnotations.filter((raw) => {
-    const lastSurfacedEditedAt = surfaced.get(inboxLedgerKey(documentId, raw));
+    const lastSurfacedEditedAt = surfaced.get(inboxLedgerKey(ctx.documentId, raw));
     // The dedup: already surfaced, nothing new since.
     if (lastSurfacedEditedAt !== undefined && !hasUnaccountedEdit(raw, lastSurfacedEditedAt)) {
       return false;
@@ -718,24 +716,26 @@ export function processInboxAnnotations(
   const refreshedById = new Map(refreshAll(candidates).map((a) => [a.id, a]));
   const unsurfaced = candidates.map((c) => refreshedById.get(c.id) ?? c);
 
-  return processUnsurfacedInboxAnnotations(
-    unsurfaced,
-    fullText,
-    surfaced,
-    modeState,
-    wasChannelEmitted,
-    documentId,
-  );
+  return processUnsurfacedInboxAnnotations(unsurfaced, fullText, surfaced, ctx);
 }
+
+/**
+ * The private helper's parameter tuple, exported as a TYPE only so
+ * `awareness-tools.test.ts` can pin it (#1702). This function is where
+ * `modeState` and `wasChannelEmitted` are actually read for userActions and
+ * userResponses, and its one caller would compile unchanged against a new
+ * defaulted trailing parameter — the 8j-2 shape again, one call deeper than the
+ * exported pins reach.
+ */
+export type ProcessUnsurfacedInboxAnnotationsParameters = Parameters<
+  typeof processUnsurfacedInboxAnnotations
+>;
 
 function processUnsurfacedInboxAnnotations(
   unsurfaced: Annotation[],
   fullText: string,
   surfaced: Map<string, number>,
-  modeState: ModeState,
-  wasChannelEmitted: (payloadId: string) => boolean,
-  /** Scopes the ledger key — see `surfacedIds`. */
-  documentId: string,
+  ctx: InboxPollContext,
 ): {
   userActions: Array<InboxUserAction>;
   userResponses: Array<Annotation & { textSnippet: string }>;
@@ -749,12 +749,12 @@ function processUnsurfacedInboxAnnotations(
     // poisoned and the item would be permanently dedup-skipped after release.
     // Held items stay "unsurfaced" and re-appear on the first poll once mode
     // reads tandem (pull-driven release — no explicit replay needed here).
-    if (hideFromAI(ann, modeState)) continue;
+    if (hideFromAI(ann, ctx.modeState)) continue;
 
     const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
     // The ledger read is hoisted above the bucket branch so the user arm's
     // status gate can consult `edited` as a term of its own condition.
-    const key = inboxLedgerKey(documentId, ann);
+    const key = inboxLedgerKey(ctx.documentId, ann);
     const lastSurfacedEditedAt = surfaced.get(key);
     // Two names, and collapsing them into one is a bug in whichever direction
     // you collapse. `edited` is the WIRE claim — "you were shown this and the
@@ -819,7 +819,7 @@ function processUnsurfacedInboxAnnotations(
         ...ann,
         textSnippet: snippet,
         ...(edited ? { edited: true } : {}),
-        ...(wasChannelEmitted(channelKey) ? { alreadyPushed: true } : {}),
+        ...(ctx.wasChannelEmitted(channelKey) ? { alreadyPushed: true } : {}),
       });
       surfaced.set(key, ann.editedAt ?? 0);
     } else if (
@@ -837,6 +837,40 @@ function processUnsurfacedInboxAnnotations(
   }
 
   return { userActions, userResponses };
+}
+
+/**
+ * The per-poll values BOTH inbox collectors need, passed as one object (#1702).
+ *
+ * Every field is required: an optional field would be the Unit 8j-2 default
+ * under a new name. A new value both buckets need goes HERE, never as a
+ * positional parameter on one collector. `tests/server/awareness-tools.test.ts`
+ * holds three `expectTypeOf` pins that turn `typecheck:tests` red: the exact
+ * shape of this interface (so a new OPTIONAL field fails, as does any field
+ * added without updating the pin), and the parameter tuples of both exported
+ * collectors plus the private `processUnsurfacedInboxAnnotations` (so a
+ * defaulted positional parameter on any of them fails). Values that belong to
+ * one collector (`surfaced`, `refreshAll`, `loadReplies`, `replySurfaced`) stay
+ * positional.
+ */
+export interface InboxPollContext {
+  /**
+   * The mode resolved for THIS poll — the Solo privacy gate (`hideFromAI`).
+   * `"indeterminate"` is NOT fail-closed: it holds only records already stamped
+   * `heldInSolo`, so a fallback here surfaces unmarked user records in Solo.
+   */
+  modeState: ModeState;
+  /**
+   * Scopes both ledger keys. A bare-id key silently drops the same imported Word
+   * comment or reply in a second document. See `surfacedIds`.
+   */
+  documentId: string;
+  /**
+   * Stamps `alreadyPushed` — advisory, never a gate. Production passes
+   * `wasEmittedViaChannel`; a `() => false` stand-in silently stops the stamp
+   * for every channel-connected session.
+   */
+  wasChannelEmitted: (payloadId: string) => boolean;
 }
 
 /**
@@ -892,11 +926,7 @@ export function collectInboxUserReplies(
   fullText: string,
   loadReplies: (annotationId: string) => AnnotationReply[],
   replySurfaced: Set<string>,
-  modeState: ModeState,
-  /** Scopes the ledger key — see `replySurfacedIds`. */
-  documentId: string,
-  /** Required for the same reason as on `processInboxAnnotations` — see there. */
-  wasChannelEmitted: (payloadId: string) => boolean,
+  ctx: InboxPollContext,
 ): InboxUserReply[] {
   const out: InboxUserReply[] = [];
   for (const ann of allAnnotations) {
@@ -905,8 +935,8 @@ export function collectInboxUserReplies(
     const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
     for (const reply of visible) {
       if (reply.author !== "user") continue; // Claude's own replies aren't inbox items
-      if (hideFromAI(reply, modeState)) continue; // Solo hold — no ledger write
-      if (replySurfaced.has(ledgerKey(documentId, reply.id))) continue; // already surfaced
+      if (hideFromAI(reply, ctx.modeState)) continue; // Solo hold — no ledger write
+      if (replySurfaced.has(ledgerKey(ctx.documentId, reply.id))) continue; // already surfaced
       // Disclose, never suppress — see the annotation surfacer for the full
       // rationale. This branch was strictly worse than the comment one:
       // `replySurfaced` is a plain Set with no edit dimension, so a poisoned
@@ -919,9 +949,9 @@ export function collectInboxUserReplies(
         text: reply.text,
         timestamp: reply.timestamp,
         textSnippet: snippet,
-        ...(wasChannelEmitted(reply.id) ? { alreadyPushed: true } : {}),
+        ...(ctx.wasChannelEmitted(reply.id) ? { alreadyPushed: true } : {}),
       });
-      replySurfaced.add(ledgerKey(documentId, reply.id));
+      replySurfaced.add(ledgerKey(ctx.documentId, reply.id));
     }
   }
   return out;

@@ -6,6 +6,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ANNOTATION_SCAN_MAX_FILES } from "../../src/cli/annotation-store-scan.js";
+import { probeProcessIdentity } from "../../src/server/annotations/process-identity.js";
+import { INTEGRATIONS_SCHEMA_VERSION } from "../../src/shared/integrations/contract.js";
 
 // The file-cap spec writes ANNOTATION_SCAN_MAX_FILES + 1 (513) files
 // synchronously and then scans them, so its cost scales with that constant and
@@ -105,6 +107,17 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, execFile: vi.fn() };
 });
 
+// cr-2 / annotation-model-reviewer-2: checkAnnotationStore's prior-boot warn
+// arm now corroborates with probeProcessIdentity (#2038) before it warns, the
+// same way acquireStoreLock does. The real probe would otherwise route
+// through the node:child_process mock above (tasklist/ps) and hang forever
+// waiting on a callback that's never invoked, so it's mocked directly —
+// isTandemLikeProcessName stays real since it's pure string matching.
+vi.mock(import("../../src/server/annotations/process-identity.js"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, probeProcessIdentity: vi.fn() };
+});
+
 // Doctor reads the annotation store from TANDEM_APP_DATA_DIR (env override in
 // resolveAppDataDir). Point it at a temp dir so the annotation-store check is
 // deterministic and never touches the real OS data dir.
@@ -183,6 +196,67 @@ describe("runDoctor", () => {
     // Schema version is surfaced from the sampled file.
     const schemaResult = storeResults.find((r) => r.data && "schemaVersion" in r.data);
     expect(schemaResult?.data?.schemaVersion).toBe(3);
+  });
+
+  /**
+   * #1792 item 2 — `doctor` had no `integrations.json` counterpart to
+   * `checkAnnotationStore`, so the one diagnostic a user is told to run was
+   * silent about the exact downgrade that kills the integrations wizard.
+   */
+  it("warns when integrations.json carries a future schemaVersion", async () => {
+    writeFileSync(
+      join(dataDir, "integrations.json"),
+      JSON.stringify({ schemaVersion: 9999, integrations: [] }),
+    );
+
+    const report = await runDoctor();
+    const rows = report.results.filter((r) => r.check === "integrations-file");
+    expect(rows.length).toBeGreaterThan(0);
+    const warned = rows.find((r) => r.status === "warn");
+    expect(warned).toBeDefined();
+    expect(warned?.data?.schemaVersion).toBe(9999);
+    expect(warned?.message).toContain("9999");
+  });
+
+  it("warns on a non-integer future schemaVersion, matching the server's predicate", async () => {
+    // The server refuses any number above the supported version; an
+    // integer-only check here passed a file every integrations route 409s on.
+    const found = INTEGRATIONS_SCHEMA_VERSION + 0.5;
+    writeFileSync(
+      join(dataDir, "integrations.json"),
+      JSON.stringify({ schemaVersion: found, integrations: [] }),
+    );
+
+    const report = await runDoctor();
+    const warned = report.results.find(
+      (r) => r.check === "integrations-file" && r.status === "warn",
+    );
+    expect(warned?.data?.schemaVersion).toBe(found);
+  });
+
+  it("warns — never 'no file yet' — when integrations.json exists but cannot be read", async () => {
+    // EISDIR stands in for EACCES portably. The server rethrows every errno but
+    // ENOENT, so the integrations routes 500; an absence claim points away.
+    mkdirSync(join(dataDir, "integrations.json"));
+
+    const report = await runDoctor();
+    const rows = report.results.filter((r) => r.check === "integrations-file");
+    expect(rows.some((r) => r.data?.exists === false)).toBe(false);
+    const warned = rows.find((r) => r.status === "warn");
+    expect(warned?.data).toMatchObject({ exists: true });
+    expect(typeof warned?.data?.code).toBe("string");
+  });
+
+  it("does not warn on a current-schema integrations.json", async () => {
+    writeFileSync(
+      join(dataDir, "integrations.json"),
+      JSON.stringify({ schemaVersion: INTEGRATIONS_SCHEMA_VERSION, integrations: [] }),
+    );
+
+    const report = await runDoctor();
+    const rows = report.results.filter((r) => r.check === "integrations-file");
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.status === "pass")).toBe(true);
   });
 
   /**
@@ -275,6 +349,22 @@ describe("runDoctor", () => {
     expect(parked?.data?.parkedFuture).toBe(1);
   });
 
+  it("warns on a .partial copy left by a partial load (#1791)", async () => {
+    // Row-level tolerance made a partially-readable envelope parse `ok`, and
+    // the active file loses the dropped rows on its next write — the copy is
+    // the only evidence left, so its presence alone must not read as healthy.
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    writeFileSync(join(annDir, "abc.json.partial.0123abcd"), "{}");
+
+    const report = await runDoctor();
+    const partial = report.results.find(
+      (r) => r.check === "annotation-store" && r.data && "partialCopies" in r.data,
+    );
+    expect(partial?.status).toBe("warn");
+    expect(partial?.data?.partialCopies).toBe(1);
+  });
+
   it("reports a zeroed data block when the store dir does not exist", async () => {
     // dataDir exists but has no annotations/ subdir.
     const report = await runDoctor();
@@ -289,7 +379,10 @@ describe("runDoctor", () => {
   // as "unparseable content". process.pid is the live doctor process.
   const lockCases: Array<[string, string]> = [
     ["bare-PID format", String(process.pid)],
-    ["JSON-object format", JSON.stringify({ pid: process.pid, startedAtMs: 123, app: "tandem" })],
+    [
+      "JSON-object format",
+      JSON.stringify({ pid: process.pid, startedAtMs: Date.now(), app: "tandem" }),
+    ],
   ];
   for (const [label, content] of lockCases) {
     it(`reads a live-PID store.lock in ${label} without warning "unparseable"`, async () => {
@@ -307,6 +400,84 @@ describe("runDoctor", () => {
       expect(messages.some((m) => m.includes(`live PID ${process.pid}`))).toBe(true);
     });
   }
+
+  it("warns (not passes) a live-PID JSON lock whose startedAtMs predates this boot AND probes as non-Tandem (#2038)", async () => {
+    // cr-2 / annotation-model-reviewer-2: prior-boot evidence alone must not
+    // warn — doctor now corroborates with the same process-identity probe
+    // acquireStoreLock uses, so this test pins the "corroborated as reused"
+    // half by mocking the probe to report a non-Tandem process.
+    vi.mocked(probeProcessIdentity).mockResolvedValue({ kind: "name", name: "explorer.exe" });
+
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    // startedAtMs: 1 predates any real boot.
+    writeFileSync(
+      join(annDir, "store.lock"),
+      JSON.stringify({ pid: process.pid, startedAtMs: 1, app: "tandem" }),
+    );
+
+    const report = await runDoctor();
+    const result = report.results.find((r) => r.check === "annotation-store" && r.data?.priorBoot);
+
+    expect(result?.status).toBe("warn");
+    expect(result?.message).toContain(`PID ${process.pid}`);
+    expect(result?.message).toContain("reused after a reboot");
+    expect(result?.data).toMatchObject({
+      lockHeld: true,
+      pid: process.pid,
+      pidLive: true,
+      reused: true,
+    });
+    expect(probeProcessIdentity).toHaveBeenCalledWith(process.pid);
+  });
+
+  it("passes (not warns) a live-PID lock that predates this boot but probes as Tandem-like (cr-2)", async () => {
+    // The evidence-only half: isLockFromPriorBoot alone must never be read
+    // as a verdict. A forward clock step (NTP correcting a wrong RTC, a
+    // resumed VM) can make a live, correctly-held Tandem lock look like it
+    // predates the boot — the probe corroborates and doctor must not warn
+    // about a lock the next server start will in fact refuse to reclaim.
+    vi.mocked(probeProcessIdentity).mockResolvedValue({ kind: "name", name: "node" });
+
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    writeFileSync(
+      join(annDir, "store.lock"),
+      JSON.stringify({ pid: process.pid, startedAtMs: 1, app: "tandem" }),
+    );
+
+    const report = await runDoctor();
+    const result = report.results.find(
+      (r) => r.check === "annotation-store" && r.data?.pid === process.pid,
+    );
+
+    expect(result?.status).toBe("pass");
+    expect(result?.message).toContain(`live PID ${process.pid}`);
+    expect(result?.data).not.toHaveProperty("priorBoot");
+  });
+
+  it("passes (not warns) a prior-boot lock when the probe is indeterminate (cr-2)", async () => {
+    // Indeterminate is the fail-safe default (unsupported platform, timeout,
+    // permission denied) — the store treats it as "do not reclaim", and
+    // doctor's corroborated pass must agree rather than warning off a single
+    // uncorroborated boot-time estimate.
+    vi.mocked(probeProcessIdentity).mockResolvedValue({ kind: "indeterminate" });
+
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    writeFileSync(
+      join(annDir, "store.lock"),
+      JSON.stringify({ pid: process.pid, startedAtMs: 1, app: "tandem" }),
+    );
+
+    const report = await runDoctor();
+    const result = report.results.find(
+      (r) => r.check === "annotation-store" && r.data?.pid === process.pid,
+    );
+
+    expect(result?.status).toBe("pass");
+    expect(result?.data).not.toHaveProperty("priorBoot");
+  });
 
   it('still warns "unparseable" when the lock is genuinely non-numeric', async () => {
     const annDir = join(dataDir, "annotations");

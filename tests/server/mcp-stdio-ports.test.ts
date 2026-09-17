@@ -18,7 +18,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runDoctor } from "../../src/cli/doctor.js";
 import { startMcpServerStdio } from "../../src/server/mcp/server.js";
 
-vi.mock("../../src/cli/doctor.js", async (importOriginal) => {
+vi.mock(import("../../src/cli/doctor.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/cli/doctor.js")>();
   const stub: import("../../src/cli/doctor.js").DoctorReport = {
     ok: true,

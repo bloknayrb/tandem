@@ -10,7 +10,8 @@ import { licenseFilePath, TRIAL_DAYS, TRIAL_MS, trialFilePath } from "./paths.js
 import { LicenseVerifyError, verifyLicenseSignature } from "./verifier.js";
 
 // Known license schema majors. The signed `version` field becomes load-bearing:
-// an unknown major is rejected rather than silently honored (review §12 L3).
+// an unknown major is rejected rather than silently honored — a future schema
+// bump must be handled explicitly here, not fall through and be trusted.
 const KNOWN_VERSION_MAJORS = new Set(["1"]);
 function knownVersion(v: string): boolean {
   return typeof v === "string" && KNOWN_VERSION_MAJORS.has(v.split(".")[0]);

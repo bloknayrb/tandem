@@ -97,6 +97,50 @@ test("Ctrl+S in source view commits the edit and does not write stale content to
   expect(fs.readFileSync(filePath, "utf-8")).not.toContain("The original paragraph body.");
 });
 
+test("Ctrl+S from outside the source pane still commits — not a dead key (#1708)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.waitForSelector(".tandem-editor", { timeout: 10_000 });
+
+  await page.getByTestId("formatbar-source-toggle").click();
+  const textarea = page.getByTestId("source-view-textarea");
+  await expect(textarea).toBeVisible();
+  await textarea.fill("# Source Title\n\nCommitted from outside the pane.\n");
+
+  // Move focus OUT of the source container without leaving source view — what
+  // happens the moment the user clicks the chat input, the rail, a toolbar
+  // button, or any non-focusable chrome. `sourceCommandsForEvent` resolves off
+  // the EVENT TARGET, so from here it finds nothing, and the handler used to
+  // fall into a bare `if (inSourceView) return;` AFTER `preventDefault()`: no
+  // save, no message, and the browser's own Save dialog suppressed too, on
+  // every press for as long as source view stayed open.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+
+  // Measured, not assumed. If focus were still inside the pane this test would
+  // be exercising the ordinary in-pane path covered above and would pass
+  // against the unfixed code.
+  const focusOutside = await page.evaluate(
+    () => !document.activeElement?.closest('[data-testid="source-view-container"]'),
+  );
+  expect(focusOutside).toBe(true);
+  await expect(textarea).toBeVisible();
+
+  await page.keyboard.press("ControlOrMeta+s");
+
+  // Saving from outside the pane must not exit source view. Asserted for its own
+  // sake, and because it is the tell that separates a real failure here from a
+  // dev-server full reload — that unmounts SourceView and discards the draft,
+  // which otherwise produces an identical "disk still holds the old body".
+  await expect(textarea).toBeVisible();
+
+  // The funnel activates the target, commits the draft through the registered
+  // source-view commands, and only then persists — so the NEW body reaches disk.
+  await expect
+    .poll(() => fs.readFileSync(filePath, "utf-8"), { timeout: 10_000 })
+    .toContain("Committed from outside the pane.");
+});
+
 test("uncommitted source edits survive a tab switch and back", async ({ page }) => {
   // Second doc so we can switch away from the source-view tab and back.
   const filePath2 = path.join(tmpDir, "doc2.md");
@@ -145,4 +189,65 @@ test("closing a tab with uncommitted source edits prompts before discarding", as
 
   expect(dialogMessage).toContain("unsaved markdown-source edits");
   await expect(page.getByTestId("source-view-textarea")).toBeVisible();
+});
+
+test("the line-wrap setting switches the source textarea from pre to pre-wrap (#1738)", async ({
+  page,
+}) => {
+  // One long ordinary paragraph plus one unbroken ~300-char token. The token is
+  // what separates `pre` from `pre-wrap` even for a browser that would not
+  // break it: under `pre` both lines overflow.
+  const longParagraph = Array.from({ length: 60 }, (_, i) => `word${i}`).join(" ");
+  const unbroken = `https://example.com/${"a".repeat(300)}`;
+  const wrapPath = path.join(tmpDir, "wrap.md");
+  fs.writeFileSync(
+    wrapPath,
+    `# Wrap\n\n${longParagraph} ${longParagraph}\n\n${unbroken}\n`,
+    "utf-8",
+  );
+  await mcp.callTool("tandem_open", { filePath: wrapPath });
+
+  await page.goto("/");
+  await page.waitForSelector(".tandem-editor", { timeout: 10_000 });
+  await page.getByTestId("formatbar-source-toggle").click();
+  const textarea = page.getByTestId("source-view-textarea");
+  await expect(textarea).toHaveValue(/example\.com\/a{300}/);
+
+  const metrics = () =>
+    textarea.evaluate((el) => ({
+      whiteSpace: getComputedStyle(el).whiteSpace,
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+    }));
+
+  // Setting off (the default): no wrap, so the long lines overflow sideways.
+  const off = await metrics();
+  expect(off.whiteSpace).toBe("pre");
+  expect(off.scrollWidth).toBeGreaterThan(off.clientWidth + 1);
+
+  await page.evaluate(() => {
+    const w = window as unknown as { __tandemTest?: { openSettingsModal: () => void } };
+    if (!w.__tandemTest?.openSettingsModal) {
+      throw new Error("__tandemTest.openSettingsModal is not installed");
+    }
+    w.__tandemTest.openSettingsModal();
+  });
+  const modal = page.getByTestId("settings-modal");
+  await expect(modal).toBeVisible({ timeout: 5_000 });
+  await page.getByTestId("settings-modal-tab-editor").click();
+  await page.locator("[data-testid='editor-source-line-wrap'] input").check();
+  await modal.press("Escape");
+  await expect(modal).toHaveCount(0);
+
+  // Setting on: wraps to the pane, with no horizontal overflow left.
+  await expect.poll(async () => (await metrics()).whiteSpace).toBe("pre-wrap");
+  const on = await metrics();
+  expect(on.scrollWidth).toBeLessThanOrEqual(on.clientWidth + 1);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => JSON.parse(localStorage.getItem("tandem:settings") ?? "{}").sourceViewLineWrap,
+      ),
+    )
+    .toBe(true);
 });

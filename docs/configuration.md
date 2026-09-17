@@ -91,6 +91,8 @@ tandem
 
 Even with a valid token, a LAN peer can only **read** `/api` — writes are refused by the loopback invariant (#1320). See [security.md](security.md#the-api-invariant-1320).
 
+**That is a property of `/api`, not of the server.** `enforceLoopbackMutation` is mounted on `/api` alone, so the same token-holding LAN peer can still `POST /mcp` and reach every mutating MCP tool with no loopback check — [#1906](https://github.com/bloknayrb/tandem/issues/1906).
+
 See [security.md](security.md) for the full security model.
 
 ## App-data directories

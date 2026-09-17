@@ -16,6 +16,7 @@ import {
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
 import { disabledControlStyle } from "../../utils/colors";
 import { API_BASE } from "../../utils/fileUpload";
+import { responseErrorMessage } from "../../utils/response-error";
 import PushRoutesInfo from "../PushRoutesInfo.svelte";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
@@ -97,7 +98,16 @@ async function loadWorkingDirectory() {
     const res = await fetch(`${API_BASE}/api/integrations`);
     if (!mounted) return;
     if (!res.ok) {
-      lastLoadError = `Failed to load integrations (HTTP ${res.status}).`;
+      // #1792: the server answers a downgraded `integrations.json` with a 409
+      // carrying an actionable `message`. Rendering only the status code left
+      // the user with a dead tab and no hint, so prefer the body when it has
+      // one; a body that will not parse falls back to the status line.
+      const message = await responseErrorMessage(
+        res,
+        `Failed to load integrations (HTTP ${res.status}).`,
+      );
+      if (!mounted) return;
+      lastLoadError = message;
       return;
     }
     const file = (await res.json()) as {

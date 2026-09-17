@@ -33,14 +33,20 @@
  * file (caller decides whether to surface a recovery prompt).
  */
 
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 
 import { isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
 import {
   isCanonicalNpxStdioArgs,
   TANDEM_STDIO_NPX_ARGS,
 } from "../../shared/integrations/npx-entry-spec.js";
-import { type DetectedTarget, type DetectOptions, detectTargets, type McpEntry } from "./apply.js";
+import {
+  type DetectedTarget,
+  type DetectOptions,
+  detectTargets,
+  MAX_CONFIG_BYTES,
+  type McpEntry,
+} from "./apply.js";
 import { LoopbackUrl } from "./schema.js";
 
 export type ExistingConfigReadStatus = "ok" | "missing" | "malformed" | "error";
@@ -216,6 +222,31 @@ export async function readExistingTandemEntries(
 }
 
 async function readOneTarget(target: DetectedTarget): Promise<ExistingMcpInstall> {
+  // Size cap BEFORE the read (#1823 item 5). This runs request-driven from
+  // `GET /api/integrations/existing` and parses SYNCHRONOUSLY, so a
+  // multi-megabyte `~/.claude.json` — the routinely-large population #1801
+  // exists for — would block the event loop inside `JSON.parse`. The same file
+  // is already refused over the same cap on the write side (`applyConfig`), so
+  // this reuses `MAX_CONFIG_BYTES` rather than inventing a second number.
+  //
+  // The stat's OWN failure deliberately falls through to the read below: a
+  // non-existent config is a normal outcome under `force`, and the read's catch
+  // is what already answers `"missing"` for it. Reusing `status: "error"`
+  // rather than adding an `"oversize"` member is deliberate too — the enum is
+  // rendered by the wizard client, so a new member is a second surface.
+  try {
+    const { size } = await stat(target.configPath);
+    if (size > MAX_CONFIG_BYTES) {
+      return {
+        target,
+        status: "error",
+        errorMessage: `${target.configPath} is ${size} bytes; refusing to read (cap: ${MAX_CONFIG_BYTES}).`,
+      };
+    }
+  } catch {
+    // Fall through — the read below produces the real status.
+  }
+
   let raw: string;
   try {
     raw = await readFile(target.configPath, "utf-8");
@@ -230,6 +261,14 @@ async function readOneTarget(target: DetectedTarget): Promise<ExistingMcpInstall
       errorMessage: err instanceof Error ? err.message : String(err),
     };
   }
+
+  // Strip a UTF-8 BOM before parsing (#1823 item 5). `JSON.parse` throws on
+  // one, so a BOM'd but perfectly valid `~/.claude.json` was reported
+  // `"malformed"` and the wizard told the user their file was broken — while
+  // `applyConfig` and `readConfigForMutation` both strip U+FEFF and rewrite the
+  // very same file happily. The reader disagreeing with the writer about
+  // whether a file is readable is the whole defect.
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
 
   let parsed: ClaudeConfigShape;
   try {

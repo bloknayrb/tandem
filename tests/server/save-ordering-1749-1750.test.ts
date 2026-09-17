@@ -50,8 +50,8 @@ const sessionDir = vi.hoisted(() => {
   return `${base}/tandem-save-order-${Math.random().toString(16).slice(2)}`;
 });
 
-vi.mock("../../src/server/platform", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
+vi.mock(import("../../src/server/platform"), async (importOriginal) => ({
+  ...(await importOriginal()),
   SESSION_DIR: sessionDir,
 }));
 
@@ -61,14 +61,14 @@ const hooks = vi.hoisted(() => ({
   sessionAttempts: [] as string[],
   backupPath: "",
   /** Verdict the mocked docx post-write verifier returns. */
-  verifyVerdict: { kind: "ok" } as { kind: string; reason?: string },
+  verifyVerdict: { kind: "ok" } as { kind: "ok" | "blocked"; reason?: string },
 }));
 
 // PARTIAL mock. `document-service.ts` and `autosave.ts` import `saveSession` as
 // a NAMED ESM BINDING, so `vi.spyOn` on the namespace never reaches it — and a
 // wholesale mock would take `deleteSession`, `loadSession` and the real session
 // directory with it, which the "no session file remains" assertion needs.
-vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
+vi.mock(import("../../src/server/session/manager.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/session/manager.js")>();
   return {
     ...actual,
@@ -91,21 +91,25 @@ vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
 // reachable without a real ZIP round-trip. Only the write triple's ORDERING is
 // under test here; a genuine mammoth export/re-import proves nothing extra
 // about it and costs seconds.
-vi.mock("../../src/server/file-io/docx-verify.js", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
+vi.mock(import("../../src/server/file-io/docx-verify.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   verifyDocxRoundtrips: vi.fn(async () => {
     order.push("verifyDocxRoundtrips");
-    return { ...hooks.verifyVerdict, metrics: {} };
+    return { ...hooks.verifyVerdict, metrics: {} } as unknown as Awaited<
+      ReturnType<typeof import("../../src/server/file-io/docx-verify.js").verifyDocxRoundtrips>
+    >;
   }),
 }));
 
-vi.mock("../../src/server/file-io/index.js", async (importOriginal) => {
+vi.mock(import("../../src/server/file-io/index.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/file-io/index.js")>();
   return {
     ...actual,
     getAdapter: vi.fn((format: string) =>
       format === "docx"
-        ? { saveBinary: async () => Buffer.from("not a real docx") }
+        ? ({ saveBinary: async () => Buffer.from("not a real docx") } as unknown as ReturnType<
+            typeof actual.getAdapter
+          >)
         : actual.getAdapter(format),
     ),
     atomicWrite: vi.fn(async (...args: Parameters<typeof actual.atomicWrite>) => {
@@ -121,7 +125,7 @@ vi.mock("../../src/server/file-io/index.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../src/server/file-watcher.js", async (importOriginal) => {
+vi.mock(import("../../src/server/file-watcher.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/file-watcher.js")>();
   return {
     ...actual,
@@ -129,7 +133,10 @@ vi.mock("../../src/server/file-watcher.js", async (importOriginal) => {
     recordSelfWrite: vi.fn(() => order.push("recordSelfWrite")),
     rearmWatch: vi.fn(() => order.push("rearmWatch")),
     unwatchFile: vi.fn(),
-    watchFile: vi.fn(() => order.push("watchFile")),
+    watchFile: vi.fn(() => {
+      order.push("watchFile");
+      return true;
+    }),
   };
 });
 
@@ -139,7 +146,7 @@ vi.mock("../../src/server/file-watcher.js", async (importOriginal) => {
 // while a fresh `import()` still hands back the mock — a mock that reports
 // itself installed and is never called. All five exports are therefore
 // hand-stubbed.
-vi.mock("../../src/server/documents/watcher.js", () => ({
+vi.mock(import("../../src/server/documents/watcher.js"), () => ({
   // MUST return true: a bare `vi.fn()` returns undefined and
   // `reload-family.ts` then throws RELOAD_IN_PROGRESS.
   reloadFromDisk: vi.fn(async () => {
@@ -152,8 +159,8 @@ vi.mock("../../src/server/documents/watcher.js", () => ({
   releaseReloadGuard: vi.fn(),
 }));
 
-vi.mock("../../src/server/file-io/doc-backup.js", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
+vi.mock(import("../../src/server/file-io/doc-backup.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   snapshotBeforeFirstWrite: vi.fn().mockResolvedValue("written"),
   // The restore path resolves its snapshot through this; pointing it at a temp
   // file is cheaper than building a real doc-backup tree and does not weaken

@@ -118,7 +118,10 @@ describe("Tauri command registration, which only source-scanning can pin", () =>
     );
     expect(registered.length, "the parse swallowed more than the handler list").toBeLessThan(80);
     expect(registered).toContain("show_context_menu");
-    expect(registered).toContain("keychain_get");
+    expect(registered).toContain("keychain_set");
+    // #1822 item 5: the plaintext getter returned integration secrets to the
+    // WebView and had no consumer. Re-registering it is the regression.
+    expect(registered).not.toContain("keychain_get");
     expect(
       registered,
       "a module-qualified entry must register under its bare last segment",

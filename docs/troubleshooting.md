@@ -131,15 +131,22 @@ empty-state screen, or run **Relaunch Claude in this folder** from the command p
 (`Ctrl+Shift+P`). If you installed it *after* opening Tandem, restart Tandem — a running process
 cannot see a PATH change made after it launched.
 
-If Claude keeps stopping with a healthy install, the CTA says "Restart Claude Code" instead. Two
-causes account for nearly all of these, and Tandem cannot yet tell them apart:
+If Claude keeps stopping with a healthy install, the CTA says "Restart Claude Code" instead —
+except for one cause Tandem now recognises and names:
 
-- **You have never signed in to Claude Code.** A Claude Code that has not completed `claude login`
-  exits immediately with an auth message. Tandem's supervisor counts that as a crash like any
-  other, retries until the breaker trips, and then shows the same generic restart prompt — it
-  never says "sign in" (#1780). Open a terminal, run `claude` once, finish the login, then use
-  **Restart Claude anyway**. If this is your first time running both programs, try this before
-  anything else.
+- **You have never signed in to Claude Code.** A Claude Code that has not signed in does *not*
+  exit: it stays running and answers every turn with "Not logged in · Please run /login". Tandem
+  recognises that answer, stops retrying, and asks you to sign in — **Check again** on the
+  empty-state screen, and the same re-check behind the status bar's Claude indicator and the
+  "no AI connected" notice (#1780). Open a terminal, run `claude`, finish signing in, then click
+  it. Clicking it before you have signed in just
+  shows the prompt again. For a moment after launch Claude can read as ready before the prompt
+  appears, while the refused session's connection closes. An *expired* login has not been
+  checked against this; if it answers differently it still looks like an ordinary stop, and the
+  same fix applies.
+
+The other common cause looks like any other crash, so it still gets the generic prompt:
+
 - **A saved conversation Claude can no longer resume.** **Start a fresh conversation** (the
   secondary action beside Restart, or the palette command) drops it and starts clean —
   irreversible, so it is never the default.
@@ -547,6 +554,6 @@ Check that:
 2. The token matches the value in `{APP_DATA_DIR}/auth-token`.
 3. You haven't rotated the token without updating the client config — `tandem rotate-token` updates Claude's configs automatically but won't touch other MCP clients.
 
-`TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` does **not** disable the token requirement, despite the name — a token is always minted and always enforced for non-loopback callers (#1121 F7). It only permits a LAN bind before a token exists. And since #1320 a LAN peer can read `/api` but not write to it, so `tandem rotate-token` must be run on the host. See [security.md](security.md#the-api-invariant-1320) for the full model.
+`TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` does **not** disable the token requirement, despite the name — a token is always minted and always enforced for non-loopback callers (#1121 F7). It only permits a LAN bind before a token exists. And since #1320 a LAN peer can read `/api` but not write to it, so `tandem rotate-token` must be run on the host. (That refusal covers `/api` only — `POST /mcp` carries no loopback gate, so a token-holding LAN peer still reaches the mutating MCP tools: [#1906](https://github.com/bloknayrb/tandem/issues/1906).) See [security.md](security.md#the-api-invariant-1320) for the full model.
 
 > **Note:** Tandem writes the Bearer token into your `.mcp.json` headers. On Claude Code CLI **≥ 2.1.141**, `claude mcp get`/`list` no longer prints that token to the terminal (credential headers and URL secrets are redacted, and `${VAR}` references are no longer expanded) — so inspecting the Tandem entry is safe to share. On older CLI versions the token is echoed in plain text; redact it before pasting output anywhere.

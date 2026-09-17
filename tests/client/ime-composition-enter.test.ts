@@ -15,11 +15,20 @@
  */
 
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
+import { DecorationSet } from "@tiptap/pm/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../src/client/editor/extensions/find-replace.js", async (importOriginal) => ({
-  ...(await importOriginal<object>()),
-  getFindState: () => ({ matches: [{ from: 1, to: 2 }], activeIndex: 0 }),
+vi.mock(import("../../src/client/editor/extensions/find-replace.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  getFindState: () => ({
+    matches: [{ from: 1, to: 2 }],
+    activeIndex: 0,
+    query: "",
+    caseSensitive: false,
+    wholeWord: false,
+    regexMode: false,
+    decoSet: DecorationSet.empty,
+  }),
   replaceActive: vi.fn(),
   replaceAll: vi.fn(async () => ({ replaced: 1, partial: false })),
 }));

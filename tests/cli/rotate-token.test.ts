@@ -27,7 +27,7 @@ const _applyConfigSpy = vi
 // ── Module mocks ─────────────────────────────────────────────────────────────
 
 vi.mock("node:fs", async (importOriginal) => {
-  const actual = (await importOriginal()) as typeof import("node:fs");
+  const actual = (await importOriginal<typeof import("node:fs")>()) as typeof import("node:fs");
   return {
     ...actual,
     promises: {
@@ -38,12 +38,12 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-vi.mock("../../src/shared/auth/token-file.js", () => ({
+vi.mock(import("../../src/shared/auth/token-file.js"), () => ({
   readTokenFromFile: _readTokenSpy,
   getTokenFilePath: _getTokenPathSpy,
 }));
 
-vi.mock("../../src/server/integrations/apply.js", () => ({
+vi.mock(import("../../src/server/integrations/apply.js"), () => ({
   applyConfigWithToken: _applyConfigSpy,
 }));
 

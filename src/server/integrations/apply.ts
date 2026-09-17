@@ -32,6 +32,7 @@ import {
   chmod,
   copyFile,
   mkdir,
+  readdir,
   readFile,
   rename,
   stat,
@@ -1005,6 +1006,65 @@ async function atomicWrite(
       await unlinkOrLeak(tmp, err);
       throw err;
     }
+  }
+
+  // Both success paths reach here (the rename, and the EXDEV copy fallback);
+  // every failure path above re-throws first. See `sweepStaleSetupTemps` for
+  // why this can never fail the write it follows.
+  await sweepStaleSetupTemps(dirname(dest));
+}
+
+/** Orphaned setup temps older than this are swept. */
+const SETUP_TMP_MAX_AGE_MS = 60 * 60 * 1000;
+
+/**
+ * Anchored, and that is the safety boundary (#1823 item 6).
+ *
+ * `^...$` with the UUID shape `atomicWrite` actually generates — never a
+ * `startsWith(".tandem-setup-")`, because these temps live in `$HOME`, the
+ * Claude Desktop config dir and `~/.claude/skills/tandem/`, beside other
+ * vendors' files. A loose pattern deleting someone else's `.tandem-setup-*`
+ * lookalike is the failure this shape exists to prevent.
+ */
+const SETUP_TMP_NAME = /^\.tandem-setup-[0-9a-f-]{36}\.tmp$/;
+
+/**
+ * Remove orphaned `.tandem-setup-*.tmp` files left in `dir`.
+ *
+ * Every error path in `atomicWrite` calls `unlinkOrLeak`, so an orphan means a
+ * SIGKILL landed between the `writeFile` and the `rename`, or the unlink itself
+ * failed. Nothing reaped them before this, and they can hold a bearer token.
+ *
+ * Two independent guards, because the destinations are shared directories:
+ * the anchored {@link SETUP_TMP_NAME}, and a one-hour age gate so a
+ * CONCURRENT `tandem setup --apply` or `tandem rotate-token` in the same
+ * directory cannot have its in-flight temp deleted out from under it.
+ *
+ * **The whole sweep sits inside ONE total catch that can never re-throw**, and
+ * that is load-bearing rather than defensive habit: `atomicWrite` re-throws
+ * from every block and has no outer catch, its destinations include `$HOME`
+ * (where `readdir` can answer EACCES), and `writeTargets` turns anything thrown
+ * into `failures++` and a `✗` line. An unguarded janitorial scan could
+ * therefore fail a `setup --apply` that had already written the config
+ * successfully. Sweeping is best-effort; the write is not.
+ *
+ * Deliberately NOT an extension of `file-io/reaper.ts`: that reaper's swept-dir
+ * list (annotations + sessions only, never user document dirs) is a stated
+ * safety boundary, and these temps live outside it.
+ */
+async function sweepStaleSetupTemps(dir: string): Promise<void> {
+  try {
+    const cutoff = Date.now() - SETUP_TMP_MAX_AGE_MS;
+    for (const name of await readdir(dir)) {
+      if (!SETUP_TMP_NAME.test(name)) continue;
+      const candidate = join(dir, name);
+      // `stat` only the survivors: on a normal directory the filter matches
+      // nothing and this costs one readdir.
+      const { mtimeMs } = await stat(candidate);
+      if (mtimeMs < cutoff) await unlink(candidate);
+    }
+  } catch {
+    // Total, by construction. Never re-throws — see the docblock.
   }
 }
 

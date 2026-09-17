@@ -20,7 +20,7 @@ import type * as Y from "yjs";
 // vi.mock factories are hoisted before module-level code, so outer `const`s
 // are not accessible inside them (see open-pipeline-lifecycle.test.ts).
 
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -38,7 +38,7 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
 // counter (`suppressNextChange`) and the delivery fingerprint
 // (`recordSelfWrite`). Mocking only the layer you assert is how the other one
 // ends up unpinned.
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: vi.fn(),
   suppressNextChange: vi.fn(),
@@ -46,11 +46,11 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
 }));
 
 // Notification bus is irrelevant here; capture calls instead.
-vi.mock("../../src/server/notifications.js", () => ({
+vi.mock(import("../../src/server/notifications.js"), () => ({
   pushNotification: vi.fn(),
 }));
 // The Windows ACL helper spawns icacls/whoami — not for unit tests.
-vi.mock("../../src/server/integrations/acl-win.js", () => ({
+vi.mock(import("../../src/server/integrations/acl-win.js"), () => ({
   setRestrictiveAcl: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -952,7 +952,7 @@ describe("tandem_restoreBackup tool", () => {
 
     const parsed = parseResult(await restoreTool({}));
     expect(parsed.error).toBe(true);
-    expect(parsed.code).toBe("FORMAT_ERROR");
+    expect(parsed.code).toBe("INVALID_PATH");
   });
 
   it("lists .docx snapshots when they exist (omit `backup`)", async () => {
