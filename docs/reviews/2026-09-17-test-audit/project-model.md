@@ -15,15 +15,16 @@ protect this?" rather than "what does this test happen to assert?".
 > machine the audit ran on. They are ~9,000 markdown lines, and
 > `tests/server/file-io/roundtrip-repo-metric.test.ts` round-trips every tracked `.md` in the repo
 > within a 120s budget, which committing them exceeded. This index, the counts, the caveats and the
-> findings below are the tracked record.
+> findings below are the tracked record. They are named rather than linked: a Markdown link to an
+> untracked file is a broken link, and `npm run check:links` reports it as one.
 
 | Part | Area | Behaviors | IDs |
 |---|---|---|---|
-| [server-documents.md](model-parts/server-documents.md) | Document / annotation / CRDT core, file watcher, events, positions | 70 | `SRVDOC-01…70` |
-| [server-mcp-api.md](model-parts/server-mcp-api.md) | MCP tools, `/api` routes, license, launcher, integrations, channel | 78 | `SRVAPI-01…78` |
-| [client-editor.md](model-parts/client-editor.md) | Tiptap editor, decorations, coordinates, sync, paste, link safety | 39 | `CLIED-01…39` |
-| [client-shell.md](model-parts/client-shell.md) | Shell, tabs, panels, settings, theming, dialogs, keyboard | 42 | `CLISH-01…42` |
-| [cli-tooling-native.md](model-parts/cli-tooling-native.md) | `tandem` CLI, `scripts/` build+CI gates, `.github/workflows`, Rust desktop | 200 | `TOOL-01…200` |
+| `model-parts/server-documents.md` | Document / annotation / CRDT core, file watcher, events, positions | 70 | `SRVDOC-01…70` |
+| `model-parts/server-mcp-api.md` | MCP tools, `/api` routes, license, launcher, integrations, channel | 78 | `SRVAPI-01…78` |
+| `model-parts/client-editor.md` | Tiptap editor, decorations, coordinates, sync, paste, link safety | 39 | `CLIED-01…39` |
+| `model-parts/client-shell.md` | Shell, tabs, panels, settings, theming, dialogs, keyboard | 42 | `CLISH-01…42` |
+| `model-parts/cli-tooling-native.md` | `tandem` CLI, `scripts/` build+CI gates, `.github/workflows`, Rust desktop | 200 | `TOOL-01…200` |
 
 **429 entries total.** Each carries: flow (trigger → decisions → state changes → outcome *and* failure
 path), `file:line` anchors, scope, impact, the contract that states the *intended* behavior (ADR number,
@@ -109,4 +110,4 @@ A third is a documentation defect rather than a behavior: the first pass anchore
 - `docs/decisions.md` itself was not read end to end by the document-core pass; its ADR citations come
   from `CLAUDE.md` and code comments. Treat ADR references in that part as secondhand.
 - Agents were run read-only, forbidden by name from `git checkout` / `restore` / `stash` / `clean` /
-  `reset` / `apply` and from any write outside `.test-review/`. The working tree is unchanged.
+  `reset` / `apply` and from any write outside `docs/reviews/2026-09-17-test-audit/`. The working tree is unchanged.

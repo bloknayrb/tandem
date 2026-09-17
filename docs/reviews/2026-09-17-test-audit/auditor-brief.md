@@ -16,7 +16,7 @@ those. Guessing is worse than an honest `unresolved`.
 
 ## Inputs
 
-1. `.test-review/project-model.md` and the relevant file(s) under `.test-review/model-parts/`. This is
+1. `docs/reviews/2026-09-17-test-audit/project-model.md` and the relevant file(s) under `docs/reviews/2026-09-17-test-audit/model-parts/`. This is
    the production model: 429 behaviors with anchors, scope, impact, contract and confidence. Anchor
    every judgment to it. If a test maps to no behavior in the model, that is `unknown`, **not**
    "redundant" — the model has declared gaps and lists them.
@@ -92,7 +92,7 @@ are load-bearing. Getting these wrong is the most expensive mistake you can make
 
 ## What to produce
 
-Write **one file**: `.test-review/audit-parts/<BATCH>.md`. Nothing else, anywhere.
+Write **one file**: `docs/reviews/2026-09-17-test-audit/audit-parts/<BATCH>.md`. Nothing else, anywhere.
 
 Open it with a short batch header: files inspected, `it` blocks accounted for, and anything you could
 not open and why.

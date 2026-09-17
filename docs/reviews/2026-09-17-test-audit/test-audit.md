@@ -1,7 +1,9 @@
 # Tandem — test suite audit
 
-Review-only. **No test or source file was changed by this audit**; the working tree is unchanged and
-`git status` shows only this untracked `.test-review/` directory.
+Review-only. **No test or source file was changed by this audit**; at audit time the working tree
+was unchanged and `git status` showed only the audit's own output directory. That output now lives
+here, under `docs/reviews/2026-09-17-test-audit/`, with its two regenerable subdirectories still
+untracked.
 
 - **Repository:** `bloknayrb/tandem`, branch `docs/mcp-lan-mutation-finding`, rev `3114531`
 - **Uncommitted at audit time:** `.claude/settings.json` (see *Incidents* below — this file was

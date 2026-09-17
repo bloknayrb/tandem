@@ -1,6 +1,6 @@
 # Test-suite cleanup plan — cleared set, set-level interactions, exclusions
 
-Read-only synthesis. Built from `.test-review/removal-candidates.md` (160 proposed actions) and
+Read-only synthesis. Built from `docs/reviews/2026-09-17-test-audit/removal-candidates.md` (160 proposed actions) and
 five reviews: `removal-review-A.md` (34 `consolidate` rows), `-B.md` (67 `remove test` rows,
 BATCH-01..08), `-C.md` (44 distinct proposals, BATCH-09..16, all actions), `-D.md` (33 `remove
 assertions` rows), and `removal-review.md` (16-row sample spanning several batches). Row numbers

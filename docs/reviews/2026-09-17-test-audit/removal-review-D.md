@@ -1,6 +1,6 @@
 # Removal review D — `remove assertions` rows
 
-Scope: every row in `.test-review/removal-candidates.md` whose `Action` column is exactly
+Scope: every row in `docs/reviews/2026-09-17-test-audit/removal-candidates.md` whose `Action` column is exactly
 `remove assertions` (33 rows). Each was opened in the actual test file (and, where the oracle's
 strength turned on production code, in the relevant `src/` file) before being verdicted.
 

@@ -1,6 +1,6 @@
 # Tandem test-suite behavior-coverage heat map
 
-Built from `.test-review/project-model.md` + `model-parts/*.md` (429 behaviors) and
+Built from `docs/reviews/2026-09-17-test-audit/project-model.md` + `model-parts/*.md` (429 behaviors) and
 `audit-parts/BATCH-01..16.md` + `server-launcher.md`. Read-only; no code or test files were run.
 
 > `model-parts/` and `audit-parts/` are untracked — they are ~17,700 markdown lines and exceeded the
