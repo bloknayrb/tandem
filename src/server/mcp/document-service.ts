@@ -1975,6 +1975,34 @@ export function broadcastStoreReadOnly(readOnly: boolean): void {
 const RESTORE_WINDOW_MS = 30 * 60_000;
 
 /**
+ * Reopen failures that can clear on their own, and so earn a `touchSession`
+ * keeping the record in the next restore window.
+ *
+ * Everything absent is treated as permanent — notably `UNSUPPORTED_FORMAT` and
+ * `FILE_TOO_LARGE` from `resolveAndValidatePath`, which fail identically on
+ * every boot. The list is deliberately an ALLOWLIST rather than a denylist of
+ * the two known-permanent codes: a new permanent failure mode added to the open
+ * path would otherwise silently join the retried-forever set, and the cost of
+ * omitting a genuinely transient code is one un-restored tab that is still
+ * listed under Recent sessions, while the cost of admitting a permanent one is
+ * a session file that the mtime-based GC can never reclaim.
+ */
+const TRANSIENT_RESTORE_ERRORS = new Set([
+  "EACCES", // antivirus or another process holding the file
+  "EPERM", // same, as Windows spells it
+  "EBUSY", // locked by another handle
+  "EMFILE", // descriptor table exhausted this boot
+  "ENFILE",
+  "EIO", // transport blip on a network mount
+  "ENETDOWN",
+  "ENETUNREACH",
+  "EHOSTDOWN",
+  "EHOSTUNREACH",
+  "ETIMEDOUT",
+  "EAGAIN",
+]);
+
+/**
  * Split `listSessionFilePaths()` output into the sessions startup should reopen
  * and the ones it should leave on disk.
  *
@@ -2014,34 +2042,6 @@ const RESTORE_WINDOW_MS = 30 * 60_000;
  *   shrink `newest - lastAccessed`, so it can only move sessions INTO the
  *   restore set, never out of it.
  */
-/**
- * Reopen failures that can clear on their own, and so earn a `touchSession`
- * keeping the record in the next restore window.
- *
- * Everything absent is treated as permanent — notably `UNSUPPORTED_FORMAT` and
- * `FILE_TOO_LARGE` from `resolveAndValidatePath`, which fail identically on
- * every boot. The list is deliberately an ALLOWLIST rather than a denylist of
- * the two known-permanent codes: a new permanent failure mode added to the open
- * path would otherwise silently join the retried-forever set, and the cost of
- * omitting a genuinely transient code is one un-restored tab that is still
- * listed under Recent sessions, while the cost of admitting a permanent one is
- * a session file that the mtime-based GC can never reclaim.
- */
-const TRANSIENT_RESTORE_ERRORS = new Set([
-  "EACCES", // antivirus or another process holding the file
-  "EPERM", // same, as Windows spells it
-  "EBUSY", // locked by another handle
-  "EMFILE", // descriptor table exhausted this boot
-  "ENFILE",
-  "EIO", // transport blip on a network mount
-  "ENETDOWN",
-  "ENETUNREACH",
-  "EHOSTDOWN",
-  "EHOSTUNREACH",
-  "ETIMEDOUT",
-  "EAGAIN",
-]);
-
 function partitionByRestoreWindow(sessions: SessionFileEntry[]): {
   newest: number;
   restore: SessionFileEntry[];
