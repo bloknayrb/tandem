@@ -192,6 +192,22 @@ export interface AnnotationReply {
    * replies. Drives the byline; the parent's `author` still governs privacy.
    */
   agentIdentity?: AgentIdentity;
+  /**
+   * A refined replacement proposal carried by a Claude-authored reply (#1626).
+   *
+   * **A reply has no range of its own and gains none**: the proposal is over the
+   * PARENT annotation's range, which is what accepting it rewrites. Accepting
+   * writes this text into the parent's own `suggestedText` — deliberately
+   * superseding the parent's first proposal, because a refined proposal
+   * replacing the original is what #1626 asks for and because
+   * `undoResolveAnnotation` compares the span against the parent's stored field.
+   *
+   * Written only through `AnnotationLifecycle.reply`, whose `ReplySuggestion`
+   * discriminant screens the parent's LIVE span for a heading prefix — a stored
+   * suggestion is a rewrite deferred to Accept, so it is the third carrier of
+   * Critical Rule 6's interior term. `addUserReply` deliberately cannot set it.
+   */
+  suggestedText?: string;
 }
 
 // --- Annotation types ---

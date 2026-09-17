@@ -1,6 +1,3 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 import * as Y from "yjs";
 import { z } from "zod";
@@ -45,6 +42,7 @@ import type { Annotation, AnnotationReply, ChatMessage } from "../../src/shared/
 import { TandemModeSchema } from "../../src/shared/types.js";
 import { generateMessageId } from "../../src/shared/utils.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
+import { setupMcpServer } from "../helpers/mcp-harness.js";
 import { range, unanchored } from "../helpers/positions.js";
 import { createAnnotation } from "../helpers/ydoc-factory.js";
 
@@ -1143,12 +1141,7 @@ describe("InboxPollContext (#1702)", () => {
   }
 
   async function connectInbox() {
-    const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
-    registerAwarenessTools(server);
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const client = new Client({ name: "test-client", version: "0.0.1" });
-    await server.connect(serverTransport);
-    await client.connect(clientTransport);
+    const { client, close } = await setupMcpServer([registerAwarenessTools]);
     const poll = async (documentId?: string) => {
       const result = await client.callTool({
         name: "tandem_checkInbox",
@@ -1159,7 +1152,7 @@ describe("InboxPollContext (#1702)", () => {
         userReplies: Array<{ id: string; alreadyPushed?: true }>;
       };
     };
-    return { client, poll };
+    return { poll, close };
   }
 
   it("the handler stamps alreadyPushed on BOTH buckets from one context", async () => {
@@ -1169,7 +1162,7 @@ describe("InboxPollContext (#1702)", () => {
     attachObservers(docId, ydoc);
     const inertConsumer = () => {};
     subscribe(inertConsumer, "external");
-    const { client, poll } = await connectInbox();
+    const { poll, close } = await connectInbox();
     try {
       writeCommentAndReply(ydoc);
       // Positive control: the queue really did emit both, so a missing stamp
@@ -1185,7 +1178,7 @@ describe("InboxPollContext (#1702)", () => {
     } finally {
       unsubscribe(inertConsumer);
       detachObservers(docId);
-      await client.close();
+      await close();
     }
   });
 
@@ -1193,7 +1186,7 @@ describe("InboxPollContext (#1702)", () => {
     const docId = "inbox-ctx-solo";
     setCtrlMode("solo");
     const ydoc = setupDoc(docId, "Hello world");
-    const { client, poll } = await connectInbox();
+    const { poll, close } = await connectInbox();
     try {
       writeCommentAndReply(ydoc);
 
@@ -1208,7 +1201,7 @@ describe("InboxPollContext (#1702)", () => {
       expect(released.userActions.map((a) => a.id)).toContain(PARENT_ID);
       expect(released.userReplies.map((r) => r.id)).toContain(REPLY_ID);
     } finally {
-      await client.close();
+      await close();
     }
   });
 
@@ -1228,7 +1221,7 @@ describe("InboxPollContext (#1702)", () => {
     // `setupDoc` made B active. Polling A FIRST, by argument, is what separates
     // "the polled document" from "the active one": an active-id key would file
     // A's surfacing under B and B's own poll would then return nothing.
-    const { client, poll } = await connectInbox();
+    const { poll, close } = await connectInbox();
     try {
       for (const docId of ["inbox-ctx-doc-a", "inbox-ctx-doc-b"]) {
         const data = await poll(docId);
@@ -1250,7 +1243,7 @@ describe("InboxPollContext (#1702)", () => {
         expect(again.userReplies, docId).toEqual([]);
       }
     } finally {
-      await client.close();
+      await close();
     }
   });
 });

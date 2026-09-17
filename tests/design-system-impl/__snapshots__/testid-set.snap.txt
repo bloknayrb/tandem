@@ -1,5 +1,6 @@
 accent-hue-slider
 accept-btn-{*}
+accept-reply-btn-{*}
 activity-action-{*}
 activity-clear-all
 activity-dismiss-{*}
@@ -372,6 +373,7 @@ reply-cancel-btn-{*}
 reply-import-byline-{*}
 reply-input-{*}
 reply-send-btn-{*}
+reply-suggestion-{*}
 reply-toggle-{*}
 reply-{*}
 review-only-banner

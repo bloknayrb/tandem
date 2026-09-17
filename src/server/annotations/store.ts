@@ -25,7 +25,12 @@ import path from "node:path";
 import { atomicWrite } from "../file-io/index.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
-import { type LockfileContents, lockfilePayload, parseLockfile } from "./lockfile.js";
+import {
+  isLockFromPriorBoot,
+  type LockfileContents,
+  lockfilePayload,
+  parseLockfile,
+} from "./lockfile.js";
 import {
   isTandemLikeProcessName,
   type ProcessIdentity,
@@ -172,7 +177,9 @@ function isPidAlive(pid: number): boolean {
  *   - `"readonly"` when a live PID holds the lock. In this mode `queueWrite`
  *     is a no-op; `load` still works so the UI can render existing state.
  */
-export async function acquireStoreLock(): Promise<"locked" | "readonly"> {
+export async function acquireStoreLock(
+  probe: (pid: number) => Promise<ProcessIdentity> = probeProcessIdentity,
+): Promise<"locked" | "readonly"> {
   if (isFeatureDisabled()) {
     // Feature off — no lock, not readonly (store is entirely inert).
     readOnly = false;
@@ -210,7 +217,7 @@ export async function acquireStoreLock(): Promise<"locked" | "readonly"> {
       }
 
       // Lock exists — check liveness of the PID inside it.
-      const staleReclaimed = await tryReclaimStaleLock(lockPath);
+      const staleReclaimed = await tryReclaimStaleLock(lockPath, probe);
       if (!staleReclaimed) {
         readOnly = true;
         return "readonly";
@@ -226,11 +233,18 @@ export async function acquireStoreLock(): Promise<"locked" | "readonly"> {
 
 /**
  * Examine an existing lockfile. If its PID is dead, unlink it and return
- * `true` so the caller can retry acquiring. If the PID is alive, return
- * `false`. Any other error is logged and treated as "live" (safer default —
- * fail closed into read-only mode).
+ * `true` so the caller can retry acquiring. If the PID is alive, it is
+ * reclaimed only when BOTH the boot-time estimate says the lock predates
+ * this boot AND `probe` reports a non-Tandem identity for that PID (#2038)
+ * — corroborated reuse-after-reboot detection, since a bare boot-time
+ * comparison alone is a wrong-grant hazard under a system-clock step. Any
+ * other error is logged and treated as "live" (safer default — fail closed
+ * into read-only mode).
  */
-async function tryReclaimStaleLock(lockPath: string): Promise<boolean> {
+async function tryReclaimStaleLock(
+  lockPath: string,
+  probe: (pid: number) => Promise<ProcessIdentity>,
+): Promise<boolean> {
   let rawPid: string;
   try {
     rawPid = (await fs.readFile(lockPath, "utf-8")).trim();
@@ -257,7 +271,14 @@ async function tryReclaimStaleLock(lockPath: string): Promise<boolean> {
   // only one PID that's guaranteed live in the current OS — ours). Falling
   // through to the liveness check gives that test the `readonly` outcome it
   // expects.
-  if (isPidAlive(lock.pid)) return false;
+  if (isPidAlive(lock.pid)) {
+    // Reclaim only when BOTH signals agree: the boot-time estimate says the
+    // lock predates this boot, AND the process at this PID no longer looks
+    // like Tandem. Neither alone is proof (#2038).
+    if (!isLockFromPriorBoot(lock)) return false;
+    const identity = await probe(lock.pid);
+    if (identity.kind !== "name" || isTandemLikeProcessName(identity.name)) return false;
+  }
 
   await fs.unlink(lockPath).catch(() => {});
   return true;

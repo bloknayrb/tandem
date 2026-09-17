@@ -272,7 +272,10 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   // the O_NOFOLLOW sidecar READ the idiom list counts conservatively (#1768).
   "src/server/documents/reload-family.ts": 3,
   "src/server/models/store.ts": 1,
-  "src/server/session/manager.ts": 3,
+  // 4th is `touchSession`, which rewrites one metadata field of a session
+  // record in SESSION_DIR. Not a config writer, so the accepted scope in
+  // docs/security.md is unchanged.
+  "src/server/session/manager.ts": 4,
   "src/server/version-check.ts": 1,
 };
 

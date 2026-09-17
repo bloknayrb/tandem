@@ -29,7 +29,11 @@ import { request } from "node:http";
 import { createConnection } from "node:net";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
-import { parseLockfile } from "../server/annotations/lockfile.js";
+import { isLockFromPriorBoot, parseLockfile } from "../server/annotations/lockfile.js";
+import {
+  isTandemLikeProcessName,
+  probeProcessIdentity,
+} from "../server/annotations/process-identity.js";
 import {
   isRecordedPathAbsolute,
   isRecordedPathGone,
@@ -2948,11 +2952,36 @@ async function checkAnnotationStore(r: Recorder): Promise<void> {
     }
     const { pid } = lock;
     if (isPidLive(pid)) {
-      r.pass(`Annotation store lock held by live PID ${pid}`, undefined, {
-        lockHeld: true,
-        pid,
-        pidLive: true,
-      });
+      // cr-2 / annotation-model-reviewer-2: isLockFromPriorBoot is EVIDENCE,
+      // not a verdict (see its docblock) — a live PID needs the same
+      // process-identity corroboration acquireStoreLock itself requires
+      // before treating a lock as stale (#2038), or a forward clock step
+      // (NTP correcting a wrong RTC, a resumed VM) makes a healthy, still-
+      // running Tandem read as "reused after a reboot" with no way for the
+      // warning to ever clear. Mirror the store's own decision exactly
+      // rather than assert reuse from boot-time evidence alone.
+      if (isLockFromPriorBoot(lock)) {
+        const identity = await probeProcessIdentity(pid);
+        if (identity.kind === "name" && !isTandemLikeProcessName(identity.name)) {
+          r.warn(
+            `Annotation store lock at ${lockPath} is held by PID ${pid}, reused after a reboot`,
+            "The next server start will reclaim this lock automatically.",
+            { lockHeld: true, pid, pidLive: true, priorBoot: true, reused: true },
+          );
+        } else {
+          r.pass(`Annotation store lock held by live PID ${pid}`, undefined, {
+            lockHeld: true,
+            pid,
+            pidLive: true,
+          });
+        }
+      } else {
+        r.pass(`Annotation store lock held by live PID ${pid}`, undefined, {
+          lockHeld: true,
+          pid,
+          pidLive: true,
+        });
+      }
     } else {
       r.warn(
         `Annotation store lock at ${lockPath} points to dead PID ${pid}`,

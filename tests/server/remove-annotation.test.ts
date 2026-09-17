@@ -80,7 +80,7 @@ describe("removeAnnotationRecord", () => {
     const id = createAnnotation(map, ydoc, "comment", unanchored(0, 5), "noted");
 
     addUserReply(ydoc, id, "reply 1", noRelay);
-    createAnnotationLifecycle(ydoc).reply(id, "reply 2", noRelay);
+    createAnnotationLifecycle(ydoc).reply(id, "reply 2", { kind: "none" }, noRelay);
 
     const repliesMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     expect(repliesMap.size).toBe(2);

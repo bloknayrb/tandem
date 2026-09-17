@@ -71,6 +71,11 @@ interface Props {
    * open the in-card editor (`kind:"edit"`) or reply composer (`kind:"reply"`).
    */
   openRequest?: { kind: "edit" | "reply"; nonce: number } | null;
+  /**
+   * #1626: accept a replacement proposed inside the reply thread. Forwarded
+   * straight to ReplyThread; absent ⇒ no accept affordance on any reply.
+   */
+  onAcceptReplySuggestion?: (annotationId: string, replyId: string) => void;
 }
 
 let {
@@ -94,6 +99,7 @@ let {
   reduceMotion = false,
   exitModes,
   openRequest = null,
+  onAcceptReplySuggestion,
 }: Props = $props();
 
 const agentLabel = createAgentLabel();
@@ -370,6 +376,7 @@ function onCardClick(event: MouseEvent) {
     {onReply}
     {reduceMotion}
     openNonce={replyOpenNonce}
+    {onAcceptReplySuggestion}
   />
 </div>
 

@@ -19,7 +19,10 @@ import {
 } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
-import { describeReplyWriteRefusal } from "../annotations/lifecycle.js";
+import {
+  describeReplyWriteRefusal,
+  describeSuggestionRangeRefusal,
+} from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { isClaudeFacing } from "../annotations/projection.js";
 import { atomicWrite } from "../file-io/index.js";
@@ -690,6 +693,12 @@ export function registerAnnotationTools(server: McpServer): void {
             "INVALID_ARGUMENT",
             `Cannot set replacement text on a ${result.annotationType} annotation. Only comments support suggestedText.`,
           );
+        case "invalid-suggestion-range":
+          // Critical Rule 6's interior term reaches this tool too (#1626
+          // review): a `newText` on a comment whose live span steps over a
+          // heading prefix is a deferred rewrite that would delete the heading.
+          // The body-only edit (`content` / `reason`) is unaffected.
+          return mcpError("INVALID_ARGUMENT", describeSuggestionRangeRefusal(result.cause));
         case "ok":
           return mcpSuccess({
             id,
@@ -998,49 +1007,68 @@ export function registerAnnotationTools(server: McpServer): void {
     {
       annotationId: z.string().describe("The annotation ID to reply to"),
       text: z.string().describe("Reply text"),
+      suggestedText: z
+        .string()
+        .optional()
+        .describe(
+          "Optional refined replacement proposal, over the PARENT annotation's range. Accepting " +
+            "it in the editor supersedes the parent's own suggestedText. Refused with " +
+            "INVALID_ARGUMENT when the parent's live span overlaps heading markup.",
+        ),
       documentId: z
         .string()
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    gatedTool("tandem_annotationReply", async ({ annotationId, text, documentId }) => {
-      const store = getDocumentStore(documentId);
-      if (!store) return noDocumentError();
+    gatedTool(
+      "tandem_annotationReply",
+      async ({ annotationId, text, suggestedText, documentId }) => {
+        const store = getDocumentStore(documentId);
+        if (!store) return noDocumentError();
 
-      // #651 presence: surface the typing indicator on the specific card being
-      // replied to. `sanitizeAnnotationIdForPresence` drops the id when the
-      // lookup says note (or absent), and the indicator falls back to the
-      // generic status-bar one.
-      //
-      // NOT belt-and-suspenders over the seam, despite the order this reads in
-      // (review round 2). `lifecycle.reply` does return `invalid-note`, but it
-      // runs inside the handler BELOW, and `withTypingPresence` broadcasts
-      // presence before it invokes that handler — so at the moment the id
-      // reaches awareness the seam has refused nothing. This call is the only
-      // ADR-027 check on the broadcast path.
-      const safeId = sanitizeAnnotationIdForPresence(
-        getCurrentDoc(documentId)?.docName,
-        annotationId,
-        Y_MAP_ANNOTATIONS,
-      );
-      return withTypingPresence(
-        {
-          tool: "tandem_annotationReply",
-          documentId,
-          ...(safeId ? { annotationId: safeId } : {}),
-        },
-        async () => {
-          const result = store.addReply(annotationId, text);
-          if (result.kind === "ok") {
-            return mcpSuccess({ replyId: result.replyId, annotationId });
-          }
-          // The wire codes are unchanged from the ternary chain this replaces;
-          // what moved is that a new arm now fails to compile inside
-          // `describeReplyWriteRefusal` instead of falling into a catch-all.
-          const { code, message } = describeReplyWriteRefusal(result);
-          return mcpError(code, message);
-        },
-      );
-    }),
+        // #651 presence: surface the typing indicator on the specific card being
+        // replied to. `sanitizeAnnotationIdForPresence` drops the id when the
+        // lookup says note (or absent), and the indicator falls back to the
+        // generic status-bar one.
+        //
+        // NOT belt-and-suspenders over the seam, despite the order this reads in
+        // (review round 2). `lifecycle.reply` does return `invalid-note`, but it
+        // runs inside the handler BELOW, and `withTypingPresence` broadcasts
+        // presence before it invokes that handler — so at the moment the id
+        // reaches awareness the seam has refused nothing. This call is the only
+        // ADR-027 check on the broadcast path.
+        const safeId = sanitizeAnnotationIdForPresence(
+          getCurrentDoc(documentId)?.docName,
+          annotationId,
+          Y_MAP_ANNOTATIONS,
+        );
+        return withTypingPresence(
+          {
+            tool: "tandem_annotationReply",
+            documentId,
+            ...(safeId ? { annotationId: safeId } : {}),
+          },
+          async () => {
+            const result = store.addReply(
+              annotationId,
+              text,
+              // #1626: the discriminant is built HERE, at the one place the wire
+              // shape is known. The seam takes the arm, not the bare optional.
+              suggestedText === undefined
+                ? { kind: "none" }
+                : { kind: "replacement", suggestedText },
+            );
+            if (result.kind === "ok") {
+              return mcpSuccess({ replyId: result.replyId, annotationId });
+            }
+            // The wire codes are unchanged from the ternary chain this replaces;
+            // what moved is that a new arm now fails to compile inside
+            // `describeReplyWriteRefusal` instead of falling into a catch-all.
+            const { code, message } = describeReplyWriteRefusal(result);
+            return mcpError(code, message);
+          },
+        );
+      },
+    ),
   );
 }

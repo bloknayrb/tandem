@@ -18,10 +18,8 @@
  * forwarding it at all. Every assertion is over the ARGUMENT, mirroring
  * `tests/server/routes/save-allow-image-loss.test.ts` on the route side.
  */
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saveDocumentToDisk = vi.hoisted(() => vi.fn());
 
@@ -43,10 +41,12 @@ import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/re
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { setupMcpServer } from "../helpers/mcp-harness.js";
 
 const DOC_ID = "save-aio-1";
 
 let client: Client;
+let close: (() => Promise<void>) | undefined;
 
 /** The third argument `tandem_save` handed to `saveDocumentToDisk`, if any. */
 function optsOfFirstCall(): { allowImageLoss?: boolean } | undefined {
@@ -71,12 +71,12 @@ beforeEach(async () => {
   });
   setActiveDocId(DOC_ID);
 
-  const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
-  registerDocumentTools(server);
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  client = new Client({ name: "test-client", version: "0.0.1" });
-  await server.connect(serverTransport);
-  await client.connect(clientTransport);
+  ({ client, close } = await setupMcpServer([registerDocumentTools]));
+});
+
+afterEach(async () => {
+  await close?.();
+  close = undefined;
 });
 
 describe("tandem_save — allowImageLoss forwarding (#1941)", () => {

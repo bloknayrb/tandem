@@ -14,31 +14,14 @@
  * `convert.ts` exports only `convertToMarkdown` plus a type, so the mock
  * factory below is complete.
  */
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 
 const convertToMarkdown = vi.fn();
 vi.mock(import("../../src/server/mcp/convert.js"), () => ({ convertToMarkdown }));
 
 const { registerDocumentTools } = await import("../../src/server/mcp/document.js");
-
-function parseResult(result: Awaited<ReturnType<Client["callTool"]>>) {
-  const content = result.content as Array<{ type: string; text?: string }>;
-  const text = content.find((c) => c.type === "text")?.text;
-  return text ? JSON.parse(text) : null;
-}
-
-async function setupClient(): Promise<Client> {
-  const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
-  registerDocumentTools(server);
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test-client", version: "0.0.1" });
-  await server.connect(serverTransport);
-  await client.connect(clientTransport);
-  return client;
-}
 
 function throwing(code: string): void {
   convertToMarkdown.mockRejectedValueOnce(Object.assign(new Error("anything at all"), { code }));
@@ -46,10 +29,16 @@ function throwing(code: string): void {
 
 describe("tandem_convertToMarkdown error mapping — shape test (#1796)", () => {
   let client: Client;
+  let close: (() => Promise<void>) | undefined;
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    client = await setupClient();
+    ({ client, close } = await setupMcpServer([registerDocumentTools]));
+  });
+
+  afterEach(async () => {
+    await close?.();
+    close = undefined;
   });
 
   it.each([

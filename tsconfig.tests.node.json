@@ -73,6 +73,7 @@
     "tests/plugin/**/*.ts",
     "tests/scripts/**/*.ts",
     "tests/server/**/*.ts",
+    "tests/setup/**/*.ts",
     "tests/shared/**/*.ts",
     "tests/*.test.ts"
   ],

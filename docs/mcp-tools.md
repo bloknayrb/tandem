@@ -774,7 +774,11 @@ Edit the content of an annotation Claude authored. Only pending annotations can 
 ```
 
 **Errors:** `NO_DOCUMENT` (document not found), `NOT_OWNED` (the annotation was
-authored by the user), error if annotation not found or not pending.
+authored by the user), error if annotation not found or not pending. `newText` additionally
+carries Critical Rule 6's heading screen (#1626): a replacement is refused with
+`INVALID_ARGUMENT` when the annotation's **live** span overlaps heading markup — including in its
+interior, which the plain-comment arm legally allows at creation — or when that span no longer
+resolves in the document. A body-only edit (`content` / `reason`) is never screened.
 
 **Example:**
 ```
@@ -804,6 +808,7 @@ Reply to a thread on an annotation Claude authored. Only works on pending annota
 |-----------|------|----------|-------------|
 | `annotationId` | string | yes | The annotation ID to reply to |
 | `text` | string | yes | Reply text |
+| `suggestedText` | string | no | A refined replacement proposal, over the **parent annotation's** range (#1626). A reply has no range of its own. |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
 **Returns:**
@@ -811,7 +816,7 @@ Reply to a thread on an annotation Claude authored. Only works on pending annota
 { "replyId": "reply_1710936500000_x1y2z3", "annotationId": "ann_1710936000000_a1b2c3" }
 ```
 
-**Errors:** `NO_DOCUMENT` (document not found), `NOT_FOUND` (annotation not found), `NOT_OWNED` (the annotation was authored by the user), `ANNOTATION_RESOLVED` (annotation already resolved), `INVALID_ARGUMENT` (the parent is a highlight, or a private note / private comment, or the reply text is over the length limit -- three arms of one code, `src/server/annotations/lifecycle.ts:367-381`).
+**Errors:** `NO_DOCUMENT` (document not found), `NOT_FOUND` (annotation not found), `NOT_OWNED` (the annotation was authored by the user), `ANNOTATION_RESOLVED` (annotation already resolved), `INVALID_ARGUMENT` (the parent is a highlight, or a private note / private comment, the reply text or `suggestedText` is over the length limit, or a `suggestedText` was sent on a parent whose live span overlaps heading markup -- arms of one code in `describeReplyWriteRefusal`). `NOT_OWNED` and the ADR-027 refusals are answered *ahead* of the heading check, which is the runtime order: the range layer never speaks about a record Claude was not allowed to touch.
 
 **Example:**
 ```
@@ -830,6 +835,16 @@ tandem_annotationReply({
 - Replies are threaded under the parent annotation. The editor renders them as a conversation.
 - Only pending annotations accept replies — resolved annotations return `ANNOTATION_RESOLVED`.
 - The reply author is set to `"claude"` when called via MCP.
+- **`suggestedText` proposes over the parent's range, and accepting it SUPERSEDES the parent's own
+  `suggestedText` (#1626).** There is no archive of the original proposal — a refined proposal
+  replacing the first is the point of the feature, and the stored field must be what was applied or
+  Undo declines "text changed" on every reply accept. The user accepts it in the editor; an MCP
+  accept still applies no text.
+- **The heading check runs against the parent's LIVE span**, resolved through its CRDT anchor, not
+  the offsets stored at creation — a stored suggestion is a rewrite deferred to Accept, and Accept
+  rewrites the live span (Critical Rule 6's interior term, #1766). The `/api/annotation-reply` twin
+  gains nothing: it calls `addUserReply`, the user's unguarded entry, which cannot carry a
+  suggestion at all.
 
 ---
 
@@ -1205,7 +1220,7 @@ In addition to MCP tools, the server exposes REST endpoints on the same port (:3
 
 ### Route index
 
-Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/health` and the `/api/wake` upgrade registered in `src/server/mcp/server.ts`. The **Gate** column names what each route holds *beyond* the two path-wide controls every `/api` route gets — `authMiddleware` (Bearer for non-loopback callers) and, since #1320, `enforceLoopbackMutation` (non-GET/HEAD/OPTIONS is loopback-only). "one layer" marks the **six** mutating routes that call neither `assertOriginAllowlisted` nor `assertLoopbackForMutation` and rely solely on that invariant — the review inventory enumerated in [security.md](security.md). It was nine until `save`, `convert` and `apply-changes` each gained `assertOriginAllowlisted` (`src/server/mcp/routes/save.ts`, `convert.ts`, `apply-changes.ts`) to close a simple-request CSRF. Of the six, `rotate-token` is the only one carrying a second layer — it requires a parsed JSON body, which is positive proof a preflight passed; the other five have one layer, not two. `open` and `rotate-token` must **not** be given the origin gate: the Tauri sidecar and the CLI call them without an `Origin` header, and that gate fails closed on a missing one.
+Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/health` and the `/api/wake` upgrade registered in `src/server/mcp/server.ts`. The **Gate** column names what each route holds *beyond* the two path-wide controls every `/api` route gets — `authMiddleware` (Bearer for non-loopback callers) and, since #1320, `enforceLoopbackMutation` (non-GET/HEAD/OPTIONS is loopback-only). "one layer" marks the **six** mutating routes that call neither `assertOriginAllowlisted` nor `assertLoopbackForMutation` and rely solely on that invariant — the review inventory enumerated in [security.md](security.md). It was nine until `save`, `convert` and `apply-changes` each gained `assertOriginAllowlisted` (`src/server/mcp/routes/save.ts`, `convert.ts`, `apply-changes.ts`) to close a simple-request CSRF. Of the six, `rotate-token` is the only one carrying a second layer — it requires a parsed JSON body, which is positive proof a preflight passed; the other five have one layer, not two. `open` and `rotate-token` must **not** be given the origin gate: the Tauri sidecar and the CLI call them without an `Origin` header, and that gate fails closed on a missing one. **Both path-wide controls are `/api`'s alone:** on `/mcp`, `authMiddleware` is mounted but `enforceLoopbackMutation` is **not**, so a token-holding LAN peer reaches every mutating MCP tool below without a loopback check — [#1906](https://github.com/bloknayrb/tandem/issues/1906).
 
 | Route | Purpose | Gate beyond the path-wide controls |
 |---|---|---|

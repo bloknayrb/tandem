@@ -234,7 +234,9 @@ describe("handleAnnotationReply — parity with the seam", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const annId = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "private note");
 
-    expect(createAnnotationLifecycle(ydoc).reply(annId, "claude probe", noRelay)).toStrictEqual({
+    expect(
+      createAnnotationLifecycle(ydoc).reply(annId, "claude probe", { kind: "none" }, noRelay),
+    ).toStrictEqual({
       kind: "invalid-note",
     });
 

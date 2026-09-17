@@ -22,6 +22,7 @@ vi.mock(import("../../../src/server/notifications.js"), async (importOriginal) =
   };
 });
 
+import { systemBootMs } from "../../../src/server/annotations/lockfile.js";
 import { SCHEMA_VERSION } from "../../../src/server/annotations/schema.js";
 import {
   acquireStoreLock,
@@ -445,7 +446,9 @@ describe("reclaimStoreLock", () => {
   });
 
   it("reclaims a live-PID v2 lockfile when identity is non-Tandem", async () => {
-    await enterReadOnly(JSON.stringify({ pid: process.pid, startedAtMs: 1, app: "tandem" }));
+    await enterReadOnly(
+      JSON.stringify({ pid: process.pid, startedAtMs: Date.now(), app: "tandem" }),
+    );
 
     const probe = vi.fn().mockResolvedValue({ kind: "name", name: "explorer.exe" });
     const result = await reclaimStoreLock(probe);
@@ -497,6 +500,60 @@ describe("reclaimStoreLock", () => {
     expect(await first).toEqual({ ok: true, reclaimed: true });
     expect(await second).toEqual({ ok: true, reclaimed: true });
     expect(probe).toHaveBeenCalledTimes(1);
+    await releaseStoreLock();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2038 acquireStoreLock reused-PID-after-reboot corroboration
+// ---------------------------------------------------------------------------
+
+describe("acquireStoreLock — reused PID after reboot (#2038)", () => {
+  async function writeLock(startedAtMs: number): Promise<void> {
+    await fs.mkdir(getAnnotationsDir(), { recursive: true });
+    await fs.writeFile(
+      path.join(getAnnotationsDir(), "store.lock"),
+      JSON.stringify({ pid: process.pid, startedAtMs, app: "tandem" }),
+    );
+  }
+
+  it("reclaims a live-PID lock that predates this boot AND probes as non-Tandem", async () => {
+    await writeLock(1); // startedAtMs: 1 predates any real boot
+    const probe = vi.fn().mockResolvedValue({ kind: "name", name: "explorer.exe" });
+    expect(await acquireStoreLock(probe)).toBe("locked");
+    expect(probe).toHaveBeenCalledWith(process.pid);
+    await releaseStoreLock();
+  });
+
+  it("refuses when the probe reports a Tandem-like identity", async () => {
+    await writeLock(1);
+    expect(await acquireStoreLock(vi.fn().mockResolvedValue({ kind: "name", name: "node" }))).toBe(
+      "readonly",
+    );
+    await releaseStoreLock();
+  });
+
+  it("refuses when the probe is indeterminate", async () => {
+    await writeLock(1);
+    expect(await acquireStoreLock(vi.fn().mockResolvedValue({ kind: "indeterminate" }))).toBe(
+      "readonly",
+    );
+    await releaseStoreLock();
+  });
+
+  it("refuses a live, current-boot lock without ever calling the probe", async () => {
+    // cr-1 / annotation-model-reviewer-1: derive the fixture from
+    // systemBootMs(), not a fixed wall-clock offset from Date.now(). A
+    // hard-coded "60s ago" is only current-boot when the machine has been up
+    // for over 60s at test time — false on a CI VM or a freshly rebooted box
+    // still inside its first minute of uptime, which would flip
+    // isLockFromPriorBoot to true and invert this test's premise.
+    // systemBootMs() + 1s is current-boot by construction, matching the
+    // sibling lockfile.test.ts fixture style.
+    await writeLock(systemBootMs() + 1_000);
+    const probe = vi.fn().mockResolvedValue({ kind: "name", name: "explorer.exe" });
+    expect(await acquireStoreLock(probe)).toBe("readonly");
+    expect(probe).not.toHaveBeenCalled();
     await releaseStoreLock();
   });
 });
