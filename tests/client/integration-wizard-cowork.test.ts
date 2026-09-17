@@ -29,15 +29,18 @@ import {
   COWORK_PREFLIGHT_CHECKING,
   COWORK_PREFLIGHT_FAILED,
 } from "../../src/client/cowork/cowork-helpers";
-import type { SubnetPreflight } from "../../src/client/cowork/cowork-invoke";
+import type {
+  coworkToggleIntegration,
+  SubnetPreflight,
+} from "../../src/client/cowork/cowork-invoke";
 import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
 
-const toggleIntegration = vi.fn(async (..._args: unknown[]) => ({ ok: true as const }));
+const toggleIntegration = vi.fn(async (..._args: unknown[]) => ({ message: "Cowork enabled" }));
 const fakeInvoke = vi.fn();
 
 // isTauriRuntime → true so the Cowork row + sub-view render; everything else
 // in cowork-helpers (coworkSettingsVariant, formatCoworkError) stays real.
-vi.mock("../../src/client/cowork/cowork-helpers", async (importOriginal) => {
+vi.mock(import("../../src/client/cowork/cowork-helpers"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/client/cowork/cowork-helpers")>();
   return { ...actual, isTauriRuntime: () => true };
 });
@@ -53,10 +56,15 @@ const preflightSubnet = vi.fn(async (): Promise<SubnetPreflight> => ({ status: "
 // exports nine symbols and each suite's mock used to name a different subset,
 // so a component reaching for an un-named one failed as `undefined is not a
 // function` — a component-shaped error, discovered one file at a time.
-vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
+vi.mock(import("../../src/client/cowork/cowork-invoke"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/client/cowork/cowork-invoke")>()),
   loadInvoke: vi.fn(async () => fakeInvoke),
-  coworkToggleIntegration: (...args: unknown[]) => toggleIntegration(...args),
+  // Wrapper, NOT a bare reference: a `vi.mock` factory is hoisted, so naming the
+  // top-level spy directly throws "Cannot access before initialization". The
+  // cast rides on the wrapper -- production is `(invoke, enabled)` while the
+  // spy takes `...unknown[]` so call assertions stay simple.
+  coworkToggleIntegration: ((...args: unknown[]) =>
+    toggleIntegration(...args)) as unknown as typeof coworkToggleIntegration,
   coworkPreflightSubnet: () => preflightSubnet(),
 }));
 
@@ -66,7 +74,7 @@ vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
 // SAME component through the SAME mock, and a hand-written literal here omits
 // the optional fields the sidecar always sends — so the two suites would render
 // different `undetectedDetail` arms for reasons neither file states.
-vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useCoworkStatus.svelte"), () => ({
   createCoworkStatus: () => ({
     status: coworkStatusFixture(),
     loading: false,
@@ -83,27 +91,29 @@ vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
 // Stub the Claude-CLI status hook so the modal doesn't fire a real (blocked)
 // fetch at 127.0.0.1:3479 during these Cowork-focused tests. Presence ON_PATH
 // keeps the install CTA out of the empty state.
-vi.mock("../../src/client/hooks/useClaudeCliStatus.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useClaudeCliStatus.svelte"), () => ({
   createClaudeCliStatus: () => ({
-    presence: "INSTALLED_ON_PATH",
+    presence: "INSTALLED_ON_PATH" as const,
+    bareNameLaunchable: true,
     loading: false,
     error: null,
     installing: false,
     installError: null,
-    install: vi.fn(async () => "INSTALLED_ON_PATH"),
+    install: vi.fn(async () => "INSTALLED_ON_PATH" as const),
     refetch: vi.fn(async () => {}),
   }),
 }));
 
 // Empty-connect MCP state — keeps the MAIN view rendered with no /api fetch.
-vi.mock("../../src/client/hooks/useIntegrationWizard.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useIntegrationWizard.svelte"), () => ({
   createIntegrationWizard: () => ({
-    step: "connect",
+    step: "connect" as const,
     detecting: false,
     existing: [],
     picked: [],
     applyResults: [],
     errorMessage: null,
+    channelRegistered: null,
     keychainUnavailable: false,
     begin: vi.fn(async () => {}),
     save: vi.fn(async () => {}),

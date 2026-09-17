@@ -20,48 +20,51 @@ import { render } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../src/shared/constants", async (importOriginal) => ({
+vi.mock(import("../../src/shared/constants"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/shared/constants")>()),
-  BYO_MODELS_ENABLED: true,
+  // Production ships this dark as a literal `false`; the flip is deliberate.
+  BYO_MODELS_ENABLED: true as false,
 }));
 
 // isTauriRuntime → false: the Cowork row hides (its poller early-returns) but the
 // AI-models row is not Tauri-gated, so it still renders. Keeps the mock set lean.
-vi.mock("../../src/client/cowork/cowork-helpers", async (importOriginal) => {
+vi.mock(import("../../src/client/cowork/cowork-helpers"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/client/cowork/cowork-helpers")>();
   return { ...actual, isTauriRuntime: () => false };
 });
 
-vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useCoworkStatus.svelte"), () => ({
   createCoworkStatus: () => ({
     status: null,
     loading: false,
     error: null,
-    refetch: vi.fn(async () => {}),
+    refetch: vi.fn(async () => true),
   }),
 }));
 
-vi.mock("../../src/client/hooks/useClaudeCliStatus.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useClaudeCliStatus.svelte"), () => ({
   createClaudeCliStatus: () => ({
-    presence: "INSTALLED_ON_PATH",
+    presence: "INSTALLED_ON_PATH" as const,
+    bareNameLaunchable: true,
     loading: false,
     error: null,
     installing: false,
     installError: null,
-    install: vi.fn(async () => "INSTALLED_ON_PATH"),
+    install: vi.fn(async () => "INSTALLED_ON_PATH" as const),
     refetch: vi.fn(async () => {}),
   }),
 }));
 
 // Empty-connect MCP state — keeps the MAIN view + More section rendered.
-vi.mock("../../src/client/hooks/useIntegrationWizard.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useIntegrationWizard.svelte"), () => ({
   createIntegrationWizard: () => ({
-    step: "connect",
+    step: "connect" as const,
     detecting: false,
     existing: [],
     picked: [],
     applyResults: [],
     errorMessage: null,
+    channelRegistered: null,
     keychainUnavailable: false,
     begin: vi.fn(async () => {}),
     save: vi.fn(async () => {}),

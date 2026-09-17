@@ -50,6 +50,8 @@ import {
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { subscribe, unsubscribe } from "../events/queue.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
+import { sanitizeForLog } from "../log-sanitize.js";
+import { isTauriSidecar } from "../platform.js";
 
 interface SupervisorOpts {
   /** Directory containing `integrations.json` (typically `resolveAppDataDir()`). */
@@ -101,6 +103,23 @@ interface SupervisorOpts {
    * `scheduleRestart` rather than the function itself would verify the mirror.
    */
   restartBackoffsMs?: number[];
+  /**
+   * Called once, with a fixed string, when the supervisor gives up on a
+   * Claude that kept refusing turns (`wake-delivery-failed`, #1868). Defaults
+   * to a no-op.
+   *
+   * A seam rather than a direct `sentry.ts` import because that module imports
+   * `./mcp/server.js`, which this file must not pull in. `index.ts` wires it to
+   * `captureWarning`, which is inert unless the user opted in with
+   * `TANDEM_SENTRY_DSN` — so by default nothing leaves the machine.
+   */
+  reportDeliveryTrip?: (message: string) => void;
+  /**
+   * Override for `TURN_RECEIPT_MS`, so the not-reading detector can be tested
+   * in milliseconds. Same justification as `wakeLatchMs`: a safeguard against a
+   * silent failure that no test can reach is itself unverified.
+   */
+  turnReceiptMs?: number;
 }
 
 /**
@@ -147,9 +166,40 @@ export function defaultSubscribeToEvents(cb: (event: TandemEvent) => void): () =
  *    Claude: `write()` succeeds into the reaper's pipe, no `result` ever
  *    returns, and the latch simply expires every window. `result` is the only
  *    liveness signal available, so that state is indistinguishable from a very
- *    long turn. It is why the expiry logs at all.
+ *    long turn. It is why the expiry logs at all. For a write to an IDLE
+ *    child, `TURN_RECEIPT_MS` now catches that case sooner (#1867); a write
+ *    made while a turn may still be running is left to this latch.
  */
 const WAKE_LATCH_MAX_MS = 10 * 60_000;
+
+/**
+ * How long a write to an IDLE child may go without any stream-json envelope
+ * before the child is treated as alive-but-not-reading and ended (#1867).
+ *
+ * A receipt check, not a completion timeout: any parsed envelope clears it, so
+ * a turn that has started — however long it then runs — is never ended by it.
+ * What the protocol offers, measured rather than assumed:
+ *   - The CLI emits `system/init` once per turn, promptly after reading a turn
+ *     written to an idle session: 0.87 s after a held-back write, and 12.7 s for
+ *     the slowest first turn (docs/spikes/channel-push-stream-json.md,
+ *     2026-08-04). Re-probed 2026-09-15 on claude 2.1.272 (Windows, isolated
+ *     empty config dir): +0.43 s for turn 1, +0.02 s for turn 2.
+ *   - A child that has not read a turn emits nothing on stdout.
+ * Not measured: `init` latency for a large `--resume` conversation, and
+ * whether `init` is emitted for a turn written while another is still running.
+ * The second is why such a write is never receipt-checked: `sendTurn` checks a
+ * write only when every earlier turn on the spawn has had its `result`. It
+ * counts turns rather than flagging one, because the latch-expiry flush can
+ * leave two outstanding, and the first `result` must not re-arm the check while
+ * the flushed turn may still be running a silent tool call.
+ *
+ * The value is policy, not measurement: about 14x the slowest first turn seen.
+ */
+const TURN_RECEIPT_MS = 180_000;
+/** Handed to the stdin-gone handler by a receipt timeout, which ignores it. */
+const RECEIPT_TIMEOUT: NodeJS.ErrnoException = Object.assign(new Error("no turn receipt"), {
+  code: "ETURNRECEIPT",
+});
 
 interface SpawnPlan {
   integration: ClaudeCodeIntegration;
@@ -163,6 +213,9 @@ interface SpawnPlan {
   cwdFromOverride: boolean;
   sessionId: string;
   resuming: boolean;
+  /** The resumed session was left owing a sign-in re-check (#1780) by an
+   * earlier supervisor — see `loginRecheckOwed`. Always false when fresh. */
+  loginRecheckOwed: boolean;
 }
 
 /** The claude-code entry the supervisor will actually launch. `apply: "skip"`
@@ -207,6 +260,31 @@ const RESTART_BACKOFFS_MS = [1_000, 5_000, 30_000];
  * Avoids unbounded restart-loop spam from a permanently-broken Claude binary. */
 const CIRCUIT_BREAKER_MAX_ATTEMPTS = 10;
 const CIRCUIT_BREAKER_WINDOW_MS = 5 * 60_000;
+/** The only text `reportDeliveryTrip` is ever handed: no path, id, count or
+ * content, so the opt-in report carries nothing about the user (#1868). */
+const DELIVERY_TRIP_REPORT = "launcher: wake delivery failed on consecutive sessions";
+
+/**
+ * The `result` text a Claude Code that has never signed in answers EVERY turn
+ * with (#1780). Measured 2026-09-15 against claude 2.1.272 on Windows 11, with
+ * HOME, USERPROFILE, APPDATA, LOCALAPPDATA and CLAUDE_CONFIG_DIR pointed at an
+ * empty temp dir, the stream-json flags, and stdin held open (fields elided):
+ *
+ *   {"type":"system","subtype":"init",...}
+ *   {"type":"assistant",...}
+ *   {"type":"result","subtype":"success","is_error":true,
+ *    "result":"Not logged in · Please run /login","terminal_reason":"api_error",...}
+ *
+ * A second turn got the identical three envelopes. stderr stayed empty, and the
+ * process exited (code 1) only once stdin was closed. So this is not a crash:
+ * under the supervisor the CLI stays running and each wake earns another
+ * refusal, which is why it is classified here and not in the exit handler.
+ *
+ * Anchored and case-sensitive, so a tool's own "you are not logged in" inside a
+ * normal answer cannot match. An EXPIRED login was not measured; if it answers
+ * differently this does not match, which fails soft to the old behaviour.
+ */
+const NOT_SIGNED_IN_RESULT = /^Not logged in\b/;
 /** RFC-4122 v4-shape UUID, accepted for `--session-id` / `--resume`.
  * Defense-in-depth: even though `launcher-session.json` is mode 0o600,
  * an attacker-controlled value flowing into `--resume` could hijack
@@ -321,6 +399,12 @@ interface SavedSession {
    * can tell that case from a real relocation, which is why the file should
    * eventually be written atomically. */
   cwd?: string;
+  /** Present (and `true`) only while this session owes a sign-in re-check
+   * (#1780). Persisted rather than held in memory alone because the sign-in
+   * trip's SIGTERM keeps this file, so after a Tandem restart the next launch
+   * RESUMES — and a resumed spawn writes no turn unless something says it owes
+   * one. Anything but a literal `true` reads as not owed. */
+  loginRecheckOwed?: boolean;
 }
 
 /**
@@ -439,6 +523,10 @@ export function attachChildStreamErrorHandlers(
 export function makeStdinGoneHandler(
   spawned: Pick<ChildProcess, "exitCode" | "signalCode" | "kill">,
   isCurrent: () => boolean,
+  /** Told that THIS handler is about to end the child, after both guards
+   * passed. The caller counts it (#1868); it may be called more than once for
+   * one child, because `signalCode` is only set at exit. */
+  onKill?: () => void,
 ): (err: NodeJS.ErrnoException) => void {
   return () => {
     // A child whose stdin refuses writes can never be woken again, alive or
@@ -457,6 +545,7 @@ export function makeStdinGoneHandler(
     // nobody attacked the PARAMETER.
     if (!isCurrent()) return;
     if (spawned.exitCode !== null || spawned.signalCode !== null) return;
+    onKill?.();
     try {
       spawned.kill("SIGTERM");
     } catch {
@@ -515,15 +604,54 @@ export function buildClaudeArgs(plan: { sessionId: string; resuming: boolean }):
 export const DESKTOP_ONLY_ENV_KEYS = ["TANDEM_APP_DATA_DIR", "TANDEM_DATA_DIR"] as const;
 
 /**
- * The environment the launched Claude Code is spawned with: ours, minus
- * {@link DESKTOP_ONLY_ENV_KEYS}.
+ * Tandem's own secrets, which must not reach the launched Claude Code or any
+ * shell command it runs (#1822 item 4).
  *
- * A copy, never a mutation of `process.env` — this server still needs both
- * variables for its own `resolveAppDataDir()`.
+ * **A denylist, never an allowlist.** An allowlist would silently drop what
+ * Claude Code itself needs from the user's environment — `PATH`,
+ * `HOME`/`USERPROFILE`, proxy variables, `ANTHROPIC_*`, `CLAUDE_*` — and break
+ * launches in ways no Tandem test would see.
+ *
+ * - `TANDEM_AUTH_TOKEN` — the sidecar's bearer token (`sidecar.rs` sets it).
+ * - `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` — the same token under the plugin-option
+ *   name, which `resolveAuthTokenCandidate` ranks above `TANDEM_AUTH_TOKEN`.
+ * - `TANDEM_SENTRY_DSN` — the operator's crash-reporting DSN.
+ *
+ * Nothing the launched session starts needs the env copy on the desktop's
+ * loopback bind: loopback requests skip bearer auth (`auth/middleware.ts`),
+ * and every config-spawned bridge or shim carries the token in its OWN config
+ * `env` (`integrations/apply.ts`, `cowork_installer.rs`), which is not this
+ * inheritance.
  */
-export function childEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export const TANDEM_SECRET_ENV_KEYS = [
+  "TANDEM_AUTH_TOKEN",
+  "CLAUDE_PLUGIN_OPTION_AUTH_TOKEN",
+  "TANDEM_SENTRY_DSN",
+] as const;
+
+/**
+ * The environment the launched Claude Code is spawned with: ours, minus
+ * {@link DESKTOP_ONLY_ENV_KEYS} and {@link TANDEM_SECRET_ENV_KEYS} — and, for
+ * the Tauri sidecar only, minus `NODE_ENV`.
+ *
+ * `NODE_ENV` is set to `production` on the packaged sidecar by `sidecar.rs`
+ * (#1822 item 6) for the server's OWN sake. Inherited by the launched Claude,
+ * it would make an `npm install` run in the user's project skip
+ * devDependencies. The strip keys on argv ({@link isTauriSidecar}), never on
+ * the inherited `TANDEM_TAURI_SIDECAR`, so an npm `tandem` keeps the user's
+ * own `NODE_ENV` untouched.
+ *
+ * A copy, never a mutation of `process.env` — this server still needs the
+ * data-dir variables for its own `resolveAppDataDir()`, and the token.
+ */
+export function childEnv(
+  base: NodeJS.ProcessEnv = process.env,
+  argv: readonly string[] = process.argv,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base };
   for (const key of DESKTOP_ONLY_ENV_KEYS) delete env[key];
+  for (const key of TANDEM_SECRET_ENV_KEYS) delete env[key];
+  if (isTauriSidecar(argv)) delete env.NODE_ENV;
   return env;
 }
 
@@ -569,6 +697,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const subscribeToEvents = opts.subscribeToEvents ?? defaultSubscribeToEvents;
   const wakeLatchMs = opts.wakeLatchMs ?? WAKE_LATCH_MAX_MS;
   const probeCliUsable = opts.probeCliUsable ?? defaultProbeCliUsable;
+  const reportDeliveryTrip = opts.reportDeliveryTrip ?? (() => {});
+  const turnReceiptMs = opts.turnReceiptMs ?? TURN_RECEIPT_MS;
   const restartBackoffs = opts.restartBackoffsMs?.length
     ? opts.restartBackoffsMs
     : RESTART_BACKOFFS_MS;
@@ -577,6 +707,18 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let currentSessionId: string | undefined;
   let currentResuming = false;
   let stopRequested = false;
+  /**
+   * True only while the most recent stop was the public `stop()` — the user
+   * turning Claude off — as opposed to the `stopInternal` that `relaunch` /
+   * `startFresh` run on their way to a new spawn (#1866).
+   *
+   * Distinct from `stopRequested` on purpose: that flag is raised by EVERY
+   * stop, including the recovery ones, and a recovery restart must carry an
+   * owed wake (dropping it there is #1866's own symptom). Each spawn latches
+   * this at teardown (`carryOwedWake`), so a later `start()` lowering it cannot
+   * resurrect a wake a user stop already discarded.
+   */
+  let userStopped = false;
   let restartIndex = 0;
   let restartTimer: NodeJS.Timeout | null = null;
   /** Confirmation timer for the active spawn. Set in spawnOnce, cancelled in
@@ -619,11 +761,46 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * unannounced until some unrelated later event happened to wake the session.
    */
   let wakeOwedAcrossSpawns = false;
+  /** Bumped by every user `stop()`. A spawn records it at teardown, so a
+   * failed-write callback that lands after a LATER stop cannot re-raise the
+   * `wakeOwedAcrossSpawns` that stop cleared (#1866). */
+  let userStopCount = 0;
+
+  /**
+   * The last session answered "Not logged in" (#1780), so the next spawn owes
+   * it a turn, whether or not any wake is owed.
+   *
+   * Needed because Check again is a relaunch, and the trip's SIGTERM keeps the
+   * saved session (`shouldClearSession` needs an exit code), so the relaunch
+   * RESUMES — and a resumed spawn writes no turn, while the CLI is silent until
+   * it gets one. Without this, Check again could never learn the user has since
+   * signed in.
+   *
+   * Set only by the sign-in trip; cleared only by a `result` that is not a
+   * sign-in refusal. Deliberately untouched by `stop()`, `stopInternal` and
+   * `respawn`: a stop between the trip and Check again must not disarm it.
+   *
+   * Mirrored into the saved session file (`persistLoginRecheck`) and read back
+   * by `buildPlan`, because this closure does not outlive Tandem: quit before
+   * signing in, and the next launch's supervisor would otherwise resume the
+   * kept session with the flag false, write nothing, and read as ready with no
+   * sign-in prompt until some unrelated wake finally drew the refusal.
+   */
+  let loginRecheckOwed = false;
 
   /** Circuit-breaker timestamps of recent restart attempts. */
   let recentAttempts: number[] = [];
   /** True once the breaker has tripped — supervisor refuses further restarts. */
   let breakerTripped = false;
+  /**
+   * Consecutive spawns this supervisor ended because the child stopped
+   * accepting turns (#1868). No time window, unlike `recentAttempts`: 3 means
+   * the same failure on three successive children, however slowly they came.
+   * Reset only by a `result` envelope (proof of healthy delivery) or a user
+   * relaunch/startFresh.
+   */
+  let deliveryKillStreak = 0;
+  const DELIVERY_KILL_LIMIT = 3;
   /** Serializes start / stop / relaunch so concurrent callers don't race the
    * child handle. Each public method takes this lock; reentrant calls within
    * the same task chain (e.g. relaunch → stop → spawn) sequence naturally
@@ -654,7 +831,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   function readSavedSession(): SavedSession | undefined {
     try {
       const raw = fs.readFileSync(sessionFilePath(), "utf8");
-      const parsed = JSON.parse(raw) as { sessionId?: unknown; cwd?: unknown };
+      const parsed = JSON.parse(raw) as {
+        sessionId?: unknown;
+        cwd?: unknown;
+        loginRecheckOwed?: unknown;
+      };
       if (typeof parsed.sessionId !== "string") return undefined;
       // UUID-shape gate: anything else is either corruption or tampering.
       if (!UUID_V4_PATTERN.test(parsed.sessionId)) {
@@ -675,6 +856,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         // Deliberately `undefined` rather than defaulted — `sessionCwdMatches`
         // decides what an unknown origin means, in one place.
         cwd: typeof parsed.cwd === "string" ? parsed.cwd : undefined,
+        loginRecheckOwed: parsed.loginRecheckOwed === true,
       };
     } catch (err) {
       // ENOENT is the normal "no session yet" path and must stay silent.
@@ -690,15 +872,31 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
   /** `cwd` is written alongside the id because a Claude Code session is only
    * resumable from the directory it was created in — see `sessionCwdMatches`. */
-  function writeSavedSession(sessionId: string, cwd: string): void {
+  function writeSavedSession(
+    sessionId: string,
+    cwd: string | undefined,
+    loginRecheck = false,
+  ): void {
+    const record: SavedSession = { sessionId, cwd };
+    if (loginRecheck) record.loginRecheckOwed = true;
     try {
-      fs.writeFileSync(sessionFilePath(), JSON.stringify({ sessionId, cwd }, null, 2), {
+      fs.writeFileSync(sessionFilePath(), JSON.stringify(record, null, 2), {
         encoding: "utf8",
         mode: 0o600,
       });
     } catch (err) {
       console.error("[Launcher] Failed to persist session id:", err);
     }
+  }
+
+  /** Record or drop `loginRecheckOwed` on the saved session (#1780), keeping
+   * its id and its CREATED cwd as they are. A no-op when the file no longer
+   * names `sessionId` — it was cleared or replaced, so the next spawn is fresh
+   * and its bootstrap turn is the re-check anyway. */
+  function persistLoginRecheck(sessionId: string, owed: boolean): void {
+    const saved = readSavedSession();
+    if (saved?.sessionId !== sessionId || saved.loginRecheckOwed === owed) return;
+    writeSavedSession(saved.sessionId, saved.cwd, owed);
   }
 
   function clearSavedSession(): void {
@@ -841,7 +1039,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // this was the only untraced branch in a change whose purpose is
       // removing exactly that.
       console.error(
-        `[Launcher] Requested working directory ${requested} could not be resolved — spawning in ${plan.cwd}, workingDirectory left unchanged`,
+        `[Launcher] Requested working directory ${sanitizeForLog(requested)} could not be resolved — spawning in ${plan.cwd}, workingDirectory left unchanged`,
       );
       return;
     }
@@ -913,9 +1111,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // file whenever `resuming` is false, so a mismatch self-heals.
     let sessionId: string;
     let resuming: boolean;
+    let loginRecheck = false;
     if (saved !== undefined && sessionCwdMatches(saved.cwd, cwd)) {
       sessionId = saved.sessionId;
       resuming = true;
+      loginRecheck = saved.loginRecheckOwed === true;
     } else {
       if (saved !== undefined) {
         console.error(
@@ -926,7 +1126,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       resuming = false;
     }
 
-    return { integration, cwd, cwdFromOverride: fromOverride, sessionId, resuming };
+    return {
+      integration,
+      cwd,
+      cwdFromOverride: fromOverride,
+      sessionId,
+      resuming,
+      loginRecheckOwed: loginRecheck,
+    };
   }
 
   async function spawnOnce(plan: SpawnPlan): Promise<void> {
@@ -974,7 +1181,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // object + KILL_ON_JOB_CLOSE) and Linux (PR_SET_PDEATHSIG, and the reaper
     // execvps in place so `spawned` IS Claude) are safe. stopInternal has the
     // same hole once per deliberate stop; this fix makes it error-triggered.
-    const onStdinGone = makeStdinGoneHandler(spawned, () => child === spawned);
+    //
+    // `killedForDelivery` marks that THIS spawn was ended for refusing turns.
+    // A boolean, counted once in the exit handler, because one broken child
+    // can call `onKill` more than once before it exits (#1868).
+    let killedForDelivery = false;
+    function markDeliveryKill(): void {
+      killedForDelivery = true;
+    }
+    const onStdinGone = makeStdinGoneHandler(spawned, () => child === spawned, markDeliveryKill);
     attachChildStreamErrorHandlers(spawned, onStdinGone);
 
     // A spawn that reached this point supersedes whatever went wrong before it;
@@ -1028,6 +1243,32 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     /** An event arrived mid-turn; wake once the current turn finishes. */
     let pendingWake = false;
     let latchTimer: NodeJS.Timeout | null = null;
+    /** `teardownTurnDelivery` has run for this spawn. A write callback that
+     * lands after it cannot re-arm `pendingWake` — nothing reads this closure's
+     * flag any more — so it must hand the wake to `wakeOwedAcrossSpawns`
+     * directly (#1866). */
+    let tornDown = false;
+    /** Latched at the FIRST teardown: may a wake owed by this spawn cross to the
+     * next one? False when the teardown came from a user `stop()`. Latched rather
+     * than read live, because a callback can land after `start()` has already
+     * lowered `userStopped` again. */
+    let carryOwedWake = true;
+    /** `userStopCount` at this spawn's first teardown; see `carryOwedWake`. */
+    let stopCountAtTeardown = 0;
+    /** Armed by a write to a known-idle child; cleared by ANY parsed envelope
+     * (#1867). If it fires, the child accepted the write into its pipe and never
+     * read it. */
+    let receiptTimer: NodeJS.Timeout | null = null;
+    /** Turns written on this spawn that no `result` has closed yet. While
+     * above zero, a further write goes to a child that may be mid-turn, so it is
+     * not receipt-checked. A count, not a flag: the latch-expiry flush writes a
+     * second turn while the first is open, and the first one's `result` must
+     * not make the child read as idle while the second may still be running.
+     * If the CLI instead folds such a write into the running turn and answers
+     * both with one `result`, the count stays above zero and receipt checks stop
+     * for the rest of this spawn. The latch still recovers that spawn, so the
+     * error is toward the pre-#1867 behaviour, never toward killing a live turn. */
+    let unresolvedTurns = 0;
 
     function clearLatch(): void {
       turnInFlight = false;
@@ -1035,6 +1276,26 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         clearTimeout(latchTimer);
         latchTimer = null;
       }
+      if (receiptTimer) {
+        clearTimeout(receiptTimer);
+        receiptTimer = null;
+      }
+    }
+
+    /** No envelope followed a write to an idle child within `turnReceiptMs`
+     * (#1867). Nothing errored — a small write fits in the pipe buffer — so
+     * without this the wake would wait out the 10-minute latch. End the child
+     * through the stdin-gone handler, which carries its identity and liveness
+     * guards and counts toward the `wake-delivery-failed` streak (#1868), and
+     * re-arm the wake so teardown carries it to the successor (#1866). */
+    function onNoReceipt(): void {
+      receiptTimer = null;
+      console.error(
+        `[Launcher] No turn receipt within ${turnReceiptMs}ms — Claude is alive but not reading its input; ending the session so the wake is retried`,
+      );
+      clearLatch();
+      pendingWake = true;
+      onStdinGone(RECEIPT_TIMEOUT);
     }
 
     /** Write one user turn. Targets `spawned`, not `child`.
@@ -1049,15 +1310,29 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
      * carrying design would have to buffer here instead.
      *
      * A write that fails while the child is still alive ends the child, and
-     * the owed wake crosses to the next spawn via `wakeOwedAcrossSpawns`; a
-     * callback that lands after `teardownTurnDelivery` already ran strands it
-     * (pre-existing, #1866 follow-up). */
+     * the owed wake crosses to the next spawn via `wakeOwedAcrossSpawns`. The
+     * failure callback can land on either side of `teardownTurnDelivery`:
+     * before it, it re-arms `pendingWake` and teardown promotes that; after it,
+     * it promotes directly, gated by the spawn's `carryOwedWake` latch and by
+     * `userStopCount`. A user `stop()` still carries nothing, whether it ended
+     * this spawn or came after a crash had already ended it (#1866). Either way it touches only
+     * this closure and one supervisor-level boolean — never `child`, never a
+     * stdin — so a stale callback cannot reach a successor. The bounded cost: a
+     * callback that lands after a successor already consumed the flag sets it
+     * again, which costs at most one extra payload-free wake, never a lost one. */
     function sendTurn(text: string): boolean {
       const stdin = spawned.stdin;
       if (!stdin?.writable) {
         console.error("[Launcher] Claude stdin not writable — turn not delivered");
         return false;
       }
+      // Receipt-check only a write to a child known to be idle. `turnInFlight`
+      // blocks writes until a `result`, so a write can find a turn unresolved
+      // only after the latch-expiry flush: the flush itself, or any write after
+      // the FIRST of the two outstanding turns resolves. That child may
+      // legitimately be deep in a silent tool call (#1867).
+      const receiptCheckable = unresolvedTurns === 0;
+      unresolvedTurns += 1;
       turnInFlight = true;
       if (latchTimer) clearTimeout(latchTimer);
       latchTimer = setTimeout(() => {
@@ -1076,8 +1351,22 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         // wake so the intent survives into the next spawn rather than dying
         // with this one. Do NOT retry against this stdin — it just refused.
         clearLatch();
-        pendingWake = true;
+        if (tornDown) {
+          // Teardown already ran, so `pendingWake` is a dead flag nobody will
+          // promote. Carry the wake across directly, unless a user stop ended
+          // this spawn, or came after its teardown and already cleared what a
+          // crash owed (#1866).
+          if (carryOwedWake && userStopCount === stopCountAtTeardown) {
+            wakeOwedAcrossSpawns = true;
+          }
+        } else {
+          pendingWake = true;
+        }
       });
+      if (receiptCheckable) {
+        if (receiptTimer) clearTimeout(receiptTimer);
+        receiptTimer = setTimeout(onNoReceipt, turnReceiptMs);
+      }
       return true;
     }
 
@@ -1119,10 +1408,18 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
      * and `error` can both fire.
      */
     function teardownTurnDelivery(): void {
+      // Latch once: `exit` and `error` can both reach here, and a user stop's
+      // decision must not be re-read after `start()` lowers `userStopped`.
+      if (!tornDown) {
+        tornDown = true;
+        carryOwedWake = !userStopped;
+        stopCountAtTeardown = userStopCount;
+      }
       unsubscribeFromEvents();
       // Hand an undelivered wake to the next spawn rather than dropping it —
-      // this runs on crash-restart, not just on a deliberate stop.
-      if (pendingWake) wakeOwedAcrossSpawns = true;
+      // this runs on crash-restart and on relaunch, not just on a deliberate
+      // stop. A user `stop()` carries nothing (#1866).
+      if (pendingWake && carryOwedWake) wakeOwedAcrossSpawns = true;
       pendingWake = false;
       clearLatch();
       // Identity-guarded: only drop the shared handle if it still points at
@@ -1158,7 +1455,16 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // so it discharges any owed wake by itself.
       sendTurn(SUPERVISOR_INITIAL_PROMPT);
       wakeOwedAcrossSpawns = false;
-    } else if (wakeOwedAcrossSpawns) {
+    } else {
+      // A re-check owed by a previous Tandem run (see
+      // `SavedSession.loginRecheckOwed`), adopted so a signed-in `result`
+      // clears the persisted copy too.
+      if (plan.loginRecheckOwed) loginRecheckOwed = true;
+    }
+    if (plan.resuming && (wakeOwedAcrossSpawns || loginRecheckOwed)) {
+      // `loginRecheckOwed` (#1780): a resumed CLI is silent until it is sent a
+      // turn, so Check again after a sign-in refusal must send one. A fresh
+      // spawn's bootstrap turn above already is that re-check.
       if (sendTurn(SUPERVISOR_WAKE_PROMPT)) wakeOwedAcrossSpawns = false;
     }
 
@@ -1179,7 +1485,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // a foreign process's stdin.
       if (!trimmed.startsWith("{")) return;
 
-      let parsed: { type?: string; subtype?: string; is_error?: boolean; errors?: string[] };
+      let parsed: {
+        type?: string;
+        subtype?: string;
+        is_error?: boolean;
+        errors?: string[];
+        result?: unknown;
+      };
       try {
         parsed = JSON.parse(trimmed);
       } catch {
@@ -1188,12 +1500,58 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         return;
       }
 
+      // Any parsed envelope proves the child read what it was sent (#1867).
+      // Not only `init`: if a future CLI stops re-emitting it, this fails soft to
+      // the latch rather than into a kill loop. A banner or a `{`-prefixed
+      // non-JSON line above never reaches here, so it does not count.
+      if (receiptTimer) {
+        clearTimeout(receiptTimer);
+        receiptTimer = null;
+      }
+
       // A `result` envelope ends a turn, whatever its subtype — that is the
       // idleness signal wake coalescing runs on. Confirmed against a real
       // binary (spike, 2026-08-04): `result` follows every turn, and `init` is
       // re-emitted per turn rather than per session.
       if (parsed.type === "result") {
         clearLatch();
+        // A completed turn is the proof of healthy delivery that ends a
+        // wake-delivery kill streak (#1868). Deliberately `result` only: `init`
+        // proves the turn was read, not that the session can finish one.
+        deliveryKillStreak = 0;
+        unresolvedTurns = Math.max(0, unresolvedTurns - 1);
+
+        // A Claude Code that is not signed in answers every turn with this
+        // refusal and never exits (#1780; see `NOT_SIGNED_IN_RESULT`). Stop:
+        // retrying cannot help, and the pending wake's write would only earn
+        // another refusal, so return before `flushPendingWake`. The kill does
+        // not go through `onStdinGone`, so it never counts toward the
+        // wake-delivery streak.
+        if (
+          parsed.is_error === true &&
+          typeof parsed.result === "string" &&
+          NOT_SIGNED_IN_RESULT.test(parsed.result)
+        ) {
+          if (child === spawned) {
+            lastError = "needs-login";
+            breakerTripped = true;
+            loginRecheckOwed = true;
+            persistLoginRecheck(plan.sessionId, true);
+            console.error(
+              "[Launcher] Claude Code is not signed in — not retrying. Run `claude` in a terminal to sign in, then use Check again.",
+            );
+            try {
+              spawned.kill("SIGTERM");
+            } catch {
+              // best-effort, same as stopInternal
+            }
+          }
+          return;
+        }
+        if (child === spawned && loginRecheckOwed) {
+          loginRecheckOwed = false;
+          persistLoginRecheck(plan.sessionId, false);
+        }
 
         // NOTE (#1267): `errors` is NOT confirmed to exist on the CLI's
         // `result` envelope — it can only be settled against a running `claude`
@@ -1280,7 +1638,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       const ranFor = Date.now() - spawnedAt;
       console.error(`[Launcher] Reaper exited (code=${code} signal=${signal} after ${ranFor}ms)`);
       // Identity-guarded for the same reason as the error handler above.
-      if (child === spawned) child = null;
+      const wasCurrent = child === spawned;
+      if (wasCurrent) child = null;
 
       // Cancel the confirmation timer — the process has already exited.
       if (confirmTimer) {
@@ -1299,7 +1658,41 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         clearSavedSession();
       }
 
-      if (stopRequested) return;
+      // Only the CURRENT spawn's exit may restart anything. A superseded one has
+      // already been replaced: `stopInternal` does not wait for a handle that is
+      // already `killed` (the stdin-gone, receipt and sign-in kills all leave
+      // one), and `respawn` then lowers `stopRequested` and the breaker, so this
+      // late exit would otherwise schedule a restart behind the relaunch.
+      if (stopRequested || !wasCurrent) return;
+
+      // A child we ended because it stopped accepting turns (#1868). The
+      // windowed breaker in `scheduleRestart` cannot see this loop at a human
+      // cadence — one wake every 30 s or slower never fills its window, and
+      // `restartIndex` resets once a child has lived 30 s — so it has its own
+      // count, with no time window.
+      if (killedForDelivery && ++deliveryKillStreak >= DELIVERY_KILL_LIMIT) {
+        breakerTripped = true;
+        // Same guarded, fail-open probe as `scheduleRestart`'s trip: a missing
+        // CLI (exit 127) can have its stdin error land before Node records the
+        // exit, and that user needs Setup, not Restart.
+        const cliUsable = probeCliUsableFailOpen("a wake-delivery failure");
+        lastError = cliUsable ? "wake-delivery-failed" : "cli-unusable";
+        console.error(
+          cliUsable
+            ? `[Launcher] Claude was ended ${deliveryKillStreak} times in a row because it stopped accepting turns — giving up. Restart Claude Code to retry.`
+            : "[Launcher] Claude kept failing to accept turns and the Claude CLI is missing or cannot be started — check the integration setup.",
+        );
+        if (cliUsable) {
+          // Guarded for the same reason as the probe: this runs inside an
+          // `exit` emit, where a throw is an uncaughtException.
+          try {
+            reportDeliveryTrip(DELIVERY_TRIP_REPORT);
+          } catch (err) {
+            console.error("[Launcher] Wake-delivery report failed:", err);
+          }
+        }
+        return;
+      }
 
       scheduleRestart();
     });
@@ -1349,6 +1742,19 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     });
   }
 
+  /** `probeCliUsable`, total and failing OPEN (a probe that could not run is
+   * not evidence the CLI is missing). Both breaker trips call it from inside a
+   * child `error`/`exit` emit, where a throw is an uncaughtException — see
+   * `scheduleRestart`. `fallback` names what is reported instead. */
+  function probeCliUsableFailOpen(fallback: string): boolean {
+    try {
+      return probeCliUsable();
+    } catch (err) {
+      console.error(`[Launcher] CLI probe failed; reporting ${fallback}:`, err);
+      return true;
+    }
+  }
+
   function scheduleRestart(): void {
     // Already given up — nothing to schedule, and re-entering would re-run the
     // trip branch's probe. One failed spawn can reach here TWICE: the "error"
@@ -1388,12 +1794,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // evidence the CLI is missing, and "go install Claude Code" is the more
       // alarming and less recoverable of the two claims to make wrongly. This
       // is exactly the pre-change behaviour.
-      let cliUsable = true;
-      try {
-        cliUsable = probeCliUsable();
-      } catch (err) {
-        console.error("[Launcher] CLI probe failed; reporting a plain crash loop:", err);
-      }
+      const cliUsable = probeCliUsableFailOpen("a plain crash loop");
       lastError = cliUsable ? "circuit-open" : "cli-unusable";
       console.error(
         `[Launcher] Circuit breaker tripped: ${recentAttempts.length} restart attempts in ${CIRCUIT_BREAKER_WINDOW_MS}ms — giving up. ${
@@ -1420,6 +1821,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     if (child) return;
     if (breakerTripped) return;
     stopRequested = false;
+    userStopped = false;
     const plan = await buildPlan();
     if (!plan) {
       console.error("[Launcher] No claude-code integration with apply != skip — skipping");
@@ -1484,10 +1886,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // relaunch/startFresh always mean "user is actively asking" → clear breaker.
     breakerTripped = false;
     recentAttempts = [];
+    deliveryKillStreak = 0;
     // stopInternal() raised the stop flag on the way in. Lower it before the
     // new spawn, or the exit handler treats the *next* crash as a deliberate
     // stop and silently declines to restart — the supervisor stays dead.
     stopRequested = false;
+    userStopped = false;
     const plan = await buildPlan(cwdOverride);
     if (!plan) return;
     await persistRequestedCwd(plan, cwdOverride, opts?.persistCwd);
@@ -1563,8 +1967,17 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     currentResuming = false;
   }
 
+  /** The user turning Claude off. Carries no owed wake to a later spawn
+   * (#1866): the clear lives HERE, not in `stopInternal`, because `respawn`
+   * runs `stopInternal` too, and a Restart after a crash must keep the wake the
+   * crash owed. */
   async function stop(): Promise<void> {
-    return withLock(() => stopInternal());
+    return withLock(async () => {
+      userStopped = true;
+      userStopCount += 1;
+      wakeOwedAcrossSpawns = false;
+      await stopInternal();
+    });
   }
 
   async function startFresh(cwdOverride?: string, opts?: RelocateOpts): Promise<void> {

@@ -3,11 +3,11 @@ import * as coworkHelpers from "../../src/client/cowork/cowork-helpers.js";
 import * as serverPaths from "../../src/client/utils/server-paths.js";
 import { SUPPORTED_EXTENSIONS } from "../../src/shared/constants.js";
 
-vi.mock("../../src/client/cowork/cowork-helpers.js", () => ({
+vi.mock(import("../../src/client/cowork/cowork-helpers.js"), () => ({
   isTauriRuntime: vi.fn(() => false),
 }));
 
-vi.mock("../../src/client/utils/server-paths.js", () => ({
+vi.mock(import("../../src/client/utils/server-paths.js"), () => ({
   openServerPath: vi.fn(),
 }));
 

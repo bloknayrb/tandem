@@ -626,3 +626,63 @@ describe("applyConfig — atomicity contract (#644)", () => {
     expect(fs.readFileSync(configPath, "utf-8")).toBe(originalBytes);
   });
 });
+
+/**
+ * #1823 item 6. Orphaned `.tandem-setup-*.tmp` files — left when a SIGKILL
+ * lands between the `writeFile` and the `rename` — were never reaped, and they
+ * can hold a bearer token. The sweep's safety argument is two guards, and both
+ * halves are asserted here: the anchored name pattern and the age gate.
+ */
+describe("atomicWrite — orphaned setup-temp sweep (#1823)", () => {
+  let tmpDir: string;
+  let configPath: string;
+  let savedAppData: string | undefined;
+
+  // A real UUID-shaped name (36 chars), which is what the anchored regex wants.
+  const uuidish = (n: string) => `.tandem-setup-1111111${n}-2222-3333-4444-555555555555.tmp`;
+  const TWO_HOURS_AGO = new Date(Date.now() - 2 * 60 * 60 * 1000);
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-tmp-sweep-"));
+    configPath = path.join(tmpDir, ".claude.json");
+    savedAppData = process.env.TANDEM_APP_DATA_DIR;
+    process.env.TANDEM_APP_DATA_DIR = tmpDir;
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {} }));
+  });
+
+  afterEach(async () => {
+    if (savedAppData === undefined) delete process.env.TANDEM_APP_DATA_DIR;
+    else process.env.TANDEM_APP_DATA_DIR = savedAppData;
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("removes an aged orphan, and spares a fresh one and a non-matching name", async () => {
+    const aged = path.join(tmpDir, uuidish("1"));
+    fs.writeFileSync(aged, "leftover with a bearer token");
+    await fs.promises.utimes(aged, TWO_HOURS_AGO, TWO_HOURS_AGO);
+
+    // The age gate: another `setup --apply` writing into this directory right
+    // now must not have its in-flight temp deleted out from under it.
+    const fresh = path.join(tmpDir, uuidish("2"));
+    fs.writeFileSync(fresh, "in flight");
+
+    // The anchored-regex half: aged, but not a name `atomicWrite` generates.
+    const foreign = path.join(tmpDir, ".tandem-setup-nope.tmp");
+    fs.writeFileSync(foreign, "someone else's");
+    await fs.promises.utimes(foreign, TWO_HOURS_AGO, TWO_HOURS_AGO);
+
+    await applyConfig(configPath, {
+      create: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } },
+      remove: [],
+    });
+
+    expect(fs.existsSync(aged)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+    expect(fs.existsSync(foreign)).toBe(true);
+    // The write it follows still landed.
+    const written = JSON.parse(fs.readFileSync(configPath, "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(written.mcpServers.tandem).toBeDefined();
+  });
+});

@@ -64,7 +64,7 @@ import {
   tabIdsToCloseOthers,
   tabIdsToCloseRight,
 } from "../tabs/tab-context-menu";
-import { saveExactTarget } from "../tabs/target-save.js";
+import { saveExactTarget, type TargetSaveRefusal } from "../tabs/target-save.js";
 import type { OpenTab } from "../types.js";
 import type { ClosedTabRecord } from "./useClosedTabStack.svelte";
 import type { NotificationsState } from "./useNotifications.svelte";
@@ -77,6 +77,22 @@ export type SourceViewCommands = {
 };
 
 type SaveSeverity = "info" | "warning" | "error";
+
+/**
+ * #1708 item 1. One sentence per refusal reason, because they are three
+ * different events: a user whose tab is gone must not be told to expect a
+ * reload, and a user whose source editor had not mounted yet must not be told
+ * the tab vanished.
+ */
+const SAVE_REFUSAL_MESSAGES: Record<TargetSaveRefusal, string> = {
+  "no-such-tab": "Not saved — that document is no longer open.",
+  "tab-changed": "Not saved — the document reloaded while saving.",
+  "no-source-commands": "Not saved — the Markdown source editor wasn't ready yet.",
+};
+
+/** Defaults for the reopen post-condition poll (#1708 item 6). */
+const REOPEN_POLL_MS = 250;
+const REOPEN_TIMEOUT_MS = 8000;
 
 export interface CreateDocumentWorkspaceOpts {
   /** Live tab list. Must read `yjsSync.tabs` in the body, not a snapshot. */
@@ -104,7 +120,13 @@ export interface CreateDocumentWorkspaceOpts {
   };
 
   openServerPath: (filePath: string) => Promise<{ ok: true } | { ok: false; error: string }>;
-  triggerSave: (documentId: string) => Promise<boolean>;
+  /**
+   * The options bag is part of the injected type so this module can pass
+   * `{ announceBusy: true }` (#1708 item 3). Every save that reaches here came
+   * from a user gesture — Ctrl+S, the menu, the tab context menu — and a
+   * re-entrant one that says nothing is a dead key.
+   */
+  triggerSave: (documentId: string, opts?: { announceBusy?: boolean }) => Promise<boolean>;
   triggerSaveAs: (args: {
     activeDocId: string;
     defaultName: string;
@@ -141,6 +163,14 @@ export interface CreateDocumentWorkspaceOpts {
    * would let a future consumer leak scroll memory forever with no signal.
    */
   onTabClosed: (tabId: string) => void;
+
+  /**
+   * Reopen post-condition poll (#1708 item 6). Injectable ONLY so a spec can
+   * reach the timeout path without burning the real ceiling; `App.svelte`
+   * passes neither.
+   */
+  reopenPollMs?: number;
+  reopenTimeoutMs?: number;
 }
 
 export interface DocumentWorkspace {
@@ -276,6 +306,31 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
     sourceViewTabs = next;
   }
 
+  /**
+   * Leave source view through the tab's own registered commands, so a dirty
+   * draft is committed first. The caller must have activated the tab: an
+   * inactive SourceView is unmounted, and `App.svelte` keys it on
+   * `{#key activeTab.id}`, so a lookup taken in the same turn as a remount can
+   * miss a registration that is one microtask away — hence the `tick()`.
+   *
+   * #1708 item 4: both toggles used to optional-chain `…get(id)?.exit()`, so an
+   * unregistered id resolved normally and left the user in source view with
+   * nothing said.
+   */
+  async function exitViaSourceCommands(documentId: string): Promise<void> {
+    await tick();
+    const commands = sourceViewCommands.get(documentId);
+    if (!commands) {
+      pushWorkspaceNotification(
+        "warning",
+        "Couldn't leave source view — the Markdown source editor was still loading.",
+        `source-view-exit:${documentId}`,
+      );
+      return;
+    }
+    await commands.exit();
+  }
+
   async function requestToggleSourceViewTarget(documentId: string): Promise<void> {
     const tab = opts.getTabs().find((candidate) => candidate.id === documentId);
     if (!tab || tab.format !== "md" || tab.readOnly) return;
@@ -284,17 +339,47 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
       enterSourceViewTarget(documentId);
       return;
     }
-    // An inactive SourceView is unmounted. Activate first, then wait for its
-    // command registration so a dirty draft is committed before exit.
-    await tick();
-    await sourceViewCommands.get(documentId)?.exit();
+    await exitViaSourceCommands(documentId);
   }
 
   async function requestToggleSourceView(): Promise<void> {
     const documentId = opts.getActiveTabId();
     if (!documentId) return;
     if (sourceViewTabs.has(documentId)) {
-      await sourceViewCommands.get(documentId)?.exit();
+      // The target twin already waited a tick for a remounting SourceView to
+      // register; this one did not (#1708 item 4). Both go through the shared
+      // helper so neither can drift back to a silent optional chain.
+      await exitViaSourceCommands(documentId);
+      return;
+    }
+    // #1708 item 5. Every VISIBLE affordance is gated on `canSourceView`, but
+    // Ctrl+Shift+E is not — this is the one entry point that has to explain the
+    // rule rather than be a dead key. Both arms read the tab and the read-only
+    // flag directly: `canSourceView` is a single boolean and cannot say which
+    // half failed.
+    const tab = opts.getActiveTab();
+    // An active id resolving to no tab is a transient between swaps, with no
+    // format to name. Silence is the honest answer there.
+    if (!tab) return;
+    // Format FIRST, because it is the durable rule. A read-only `.md` fails
+    // this test, falls through, and gets the read-only sentence; a read-only
+    // `.docx` must be told the rule it can never satisfy. Read-only-first is
+    // the order that misreports — it implies that making the file writable
+    // would enable source view, which the format gate never will.
+    if (tab.format !== "md") {
+      pushWorkspaceNotification(
+        "info",
+        "Source view is only available for Markdown documents.",
+        `source-view-unavailable:not-markdown:${tab.id}`,
+      );
+      return;
+    }
+    if (opts.getIsReadOnly()) {
+      pushWorkspaceNotification(
+        "info",
+        "Source view isn't available — this document is read-only.",
+        `source-view-unavailable:read-only:${tab.id}`,
+      );
       return;
     }
     enterSourceView();
@@ -327,9 +412,22 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
   // #1824 item H: returns `false` (cancelled) rather than silently returning
   // when a confirm is declined, so a bulk-close loop can tell "closed" from
   // "the user stopped the batch here" and abort instead of prompting for the
-  // rest.
+  // rest. #1708 item 7 adds the other early return, and it must answer `true`:
+  // `false` is reserved for the user's Cancel and `closeEachUntilCancelled`
+  // breaks on it, so `false` for an id that never resolved would silently
+  // truncate a bulk close at the ghost.
   function closeTabAndRecord(tabId: string): boolean {
     const tab = opts.getTabs().find((t) => t.id === tabId);
+    if (!tab) {
+      // Before #1708 an unresolvable id ran most of the funnel on nothing: it
+      // skipped both confirms and the stack push, then still cleared the draft
+      // and called `onTabClosed` + `closeTab`. It logs rather than notifying —
+      // `closeOtherTabs` sources its ids from `getOrderedTabs()`, a `$derived`
+      // over the same list this resolves against, so a ghost id is not a state
+      // the user can cause and a toast would name one that does not exist.
+      console.warn(`[Tandem] closeTabAndRecord: no open tab with id "${tabId}"`);
+      return true;
+    }
     // #864 / #1021: both confirms below must be settled (and both must be
     // accepted) BEFORE either one's side effect runs. A scratchpad with
     // unsaved content that has also picked up unsaved source-view edits is
@@ -341,7 +439,7 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
     let scratchpadUuidToClear: string | null = null;
     // #864: warn before closing a scratchpad that has unsaved content. Annotations
     // are intentionally out of scope (accepted loss); only document text matters.
-    if (tab && isScratchpadPath(tab.filePath)) {
+    if (isScratchpadPath(tab.filePath)) {
       const uuid = scratchpadUuidFromPath(tab.filePath);
       if (uuid && opts.scratchpad.hasUnsavedContent(uuid)) {
         const ok = opts.confirm(
@@ -366,7 +464,7 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
     if (scratchpadUuidToClear) {
       opts.scratchpad.clearUnsaved(scratchpadUuidToClear);
     }
-    if (tab && !isUploadPath(tab.filePath)) {
+    if (!isUploadPath(tab.filePath)) {
       opts.closedTabStack.push({ filePath: tab.filePath, closedAt: Date.now() });
     }
     // Drop any source-view flag + draft for the closed tab so the maps don't leak (#1021).
@@ -408,6 +506,47 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
     closeEachUntilCancelled(tabIdsToCloseRight(opts.getOrderedTabs(), fromId));
   }
 
+  /**
+   * Teardown latch (review round 1).
+   *
+   * Every `opts.*` collaborator is bound to ONE `App.svelte` instance, and
+   * `Root.svelte` wraps `<App/>` in `ErrorBoundary` whose `reset()` is a real
+   * production remount — the same fact `mountActionExecutor`'s `onDestroy`
+   * release exists for. The reopen poll below is the only await in this module
+   * long enough to straddle one, so without this a "Try to recover" during the
+   * wait leaves work still writing into the destroyed instance's closures.
+   *
+   * Its own `$effect` with an EMPTY body, deliberately: the body reads nothing
+   * reactive, so the effect never re-runs and its teardown therefore fires on
+   * destruction only. Hanging this off the `beforeunload` effect instead would
+   * latch `disposed` permanently the first time anyone added a reactive read
+   * there — a failure that looks exactly like a working latch.
+   */
+  let disposed = false;
+  $effect(() => () => {
+    disposed = true;
+  });
+
+  /**
+   * Wait for a reopened path to actually appear in the tab list (#1708 item 6).
+   * A poll rather than a subscription: the tab arrives over Yjs and this module
+   * deliberately holds no provider handle.
+   */
+  async function waitForReopenedTab(filePath: string): Promise<boolean> {
+    const pollMs = opts.reopenPollMs ?? REOPEN_POLL_MS;
+    const deadline = Date.now() + (opts.reopenTimeoutMs ?? REOPEN_TIMEOUT_MS);
+    for (;;) {
+      // The first check runs before any wait, so an open that lands
+      // synchronously costs nothing.
+      if (opts.getTabs().some((t) => t.filePath === filePath)) return true;
+      // `disposed` first: a torn-down workspace must stop polling now rather
+      // than burn the rest of an 8-second ceiling against `getTabs` closures
+      // that no longer describe any mounted app.
+      if (disposed || Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+  }
+
   async function reopenClosedTab(): Promise<void> {
     const rec = opts.closedTabStack.pop();
     if (!rec) return;
@@ -425,26 +564,69 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
       // twice; dropping the popped record here would make the user's next
       // Ctrl+Alt+T a silent no-op with the entry gone for good.
       opts.closedTabStack.push(rec);
+      // ...and say so (review round 1). Item 6's post-condition poll widened
+      // this window from one HTTP round trip to as long as the reopen ceiling,
+      // so a user who presses Ctrl+Alt+T again while nothing has appeared yet
+      // lands here — and a branch that restores the record and returns in
+      // silence is the same dead key the rest of this issue removes. The
+      // end-of-wait warning cannot cover it: that one reports the FIRST
+      // attempt, and a user who gives up before the ceiling never sees it.
+      //
+      // `info`, not `warning`: the reopen really is running. Its own dedupKey,
+      // because two DIFFERENT messages must never share one.
+      pushWorkspaceNotification(
+        "info",
+        `Still reopening ${crossBasename(rec.filePath) || rec.filePath}…`,
+        `reopen-inflight:${rec.filePath}`,
+      );
       return;
     }
     inflightReopens.add(rec.filePath);
-    const handleFailure = (reason: string) => {
+    // `kind` keys BOTH the notification id and the dedupKey, so the two
+    // outcomes never coalesce onto one tray row (#1708 item 6).
+    const handleFailure = (
+      reason: string,
+      kind: "failed" | "no-tab" = "failed",
+      severity: SaveSeverity = "error",
+    ) => {
+      if (disposed) {
+        // Both writes below reach ONE App instance: the stack is that
+        // instance's (`useClosedTabStack` — "lifetime is the app session"), and
+        // so is the tray. After an ErrorBoundary remount both have already been
+        // recreated empty, so pushing is a ghost write whose toast nobody can
+        // ever see. A console line instead, the same choice `closeTabAndRecord`
+        // makes for a state the user cannot act on.
+        console.warn(`[Tandem] reopen ${kind} after teardown: ${rec.filePath} — ${reason}`);
+        return;
+      }
       // Restore the record so the user can retry with another Ctrl+Alt+T;
       // silent drop would also surprise users who expect LIFO to be retryable.
       opts.closedTabStack.push(rec);
       const basename = crossBasename(rec.filePath) || rec.filePath;
       opts.pushNotification({
-        id: `reopen-failed-${Date.now()}`,
+        id: `reopen-${kind}-${Date.now()}`,
         type: "general-error",
-        severity: "error",
+        severity,
         message: `Couldn't reopen ${basename}: ${reason}`,
-        dedupKey: `reopen-failed:${rec.filePath}`,
+        dedupKey: `reopen-${kind}:${rec.filePath}`,
         timestamp: Date.now(),
       });
     };
     try {
       const result = await opts.openServerPath(rec.filePath);
-      if (!result.ok) handleFailure(result.error);
+      if (!result.ok) {
+        handleFailure(result.error);
+      } else if (!(await waitForReopenedTab(rec.filePath))) {
+        // `{ ok: true }` means the server ACCEPTED the open, not that a tab
+        // arrived — the tab materialises later over Yjs (#1708 item 6). The
+        // record was popped at the top and restored only inside
+        // `handleFailure`, so without this a server-side no-op loses it for
+        // good. The wait sits inside the `try` so `inflightReopens` holds
+        // across it. One severity BELOW the rejection arm: the open was accepted
+        // and the tab may still land, in which case the next Ctrl+Alt+T finds
+        // it open and activates instead of opening twice.
+        handleFailure("the server accepted it but no tab appeared.", "no-tab", "warning");
+      }
     } catch (err) {
       // The injected implementation catches internally today, so its type says
       // it never throws -- but a type is not an enforcement, and this became an
@@ -459,14 +641,43 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
 
   // ---- save ----------------------------------------------------------------
 
-  function pushSaveNotification(severity: SaveSeverity, message: string): void {
+  /**
+   * Client-action notification, `type: "launcher"` — the tray's classification
+   * for an echo of something the user just did.
+   *
+   * `dedupKey` is optional and carried by the #1708 messages only; the three
+   * older ones stay byte-identical. **Two DIFFERENT messages must never share
+   * one key.** `useNotifications` coalesces on the key and spreads the newer
+   * notification over the matched row, so a shared key silently replaces one
+   * report with the other — which is the information loss #1708 exists to fix.
+   * Two sites emitting the SAME sentence may share a key, and one pair does.
+   */
+  function pushWorkspaceNotification(
+    severity: SaveSeverity,
+    message: string,
+    dedupKey?: string,
+  ): void {
     opts.pushNotification({
       id: generateNotificationId(),
       type: "launcher",
       severity,
       message,
+      dedupKey,
       timestamp: Date.now(),
     });
+  }
+
+  /**
+   * One message and one dedupKey per refusal reason (#1708 items 1 and 2), so
+   * the two sites that can report the same reason cannot drift apart: two sites
+   * emitting the SAME sentence may share a key, two different messages may not.
+   */
+  function reportSaveRefusal(reason: TargetSaveRefusal, tabId: string): void {
+    pushWorkspaceNotification(
+      "warning",
+      SAVE_REFUSAL_MESSAGES[reason],
+      `save-target:${reason}:${tabId}`,
+    );
   }
 
   async function saveDocumentTargetAfterSourceCommit(
@@ -475,30 +686,48 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
     expectedYdoc?: OpenTab["ydoc"],
   ): Promise<boolean> {
     const tab = opts.getTabs().find((candidate) => candidate.id === tabId);
-    if (!tab || (expectedYdoc && tab.ydoc !== expectedYdoc)) return false;
+    // #1708 item 2: the one refusal in this function that said nothing, while
+    // its three siblings below all notify. Split, because the halves are
+    // different events — and the ydoc mismatch takes its OWN dedupKey rather
+    // than item 1's `save-target:tab-changed`, since the tray keeps the newer
+    // message on a shared key and the milder copy would overwrite the only one
+    // that reports lost work. No reassurance about surviving edits: `commit()`
+    // clears the draft before `onSave`, and the remount drops it.
+    if (!tab) {
+      reportSaveRefusal("no-such-tab", tabId);
+      return false;
+    }
+    if (expectedYdoc && tab.ydoc !== expectedYdoc) {
+      pushWorkspaceNotification(
+        "warning",
+        "Not saved — the document reloaded while saving; your last edit was not written to the file.",
+        `save-commit:ydoc-swapped:${tabId}`,
+      );
+      return false;
+    }
 
     const needsPromotion = tab.source === "upload" || isUploadPath(tab.filePath);
     if (needsPromotion) {
       if (tab.readOnly) {
-        pushSaveNotification("warning", "Not saved — this document is read-only.");
+        pushWorkspaceNotification("warning", "Not saved — this document is read-only.");
         return false;
       }
       return opts.triggerSaveAs({
         activeDocId: tab.id,
         defaultName: crossBasename(tab.filePath) || tab.filePath,
         sourceFormat: tab.format,
-        notify: pushSaveNotification,
+        notify: pushWorkspaceNotification,
       });
     }
 
     if (intent === "save-as") {
-      pushSaveNotification(
+      pushWorkspaceNotification(
         "info",
         "Save As is for uploads and scratchpads; this document already saves to its file.",
       );
       return false;
     }
-    return opts.triggerSave(tab.id);
+    return opts.triggerSave(tab.id, { announceBusy: true });
   }
 
   /**
@@ -511,7 +740,7 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
     intent: "save" | "save-as",
   ): Promise<void> {
     if (!tabId) {
-      pushSaveNotification("warning", "No active document to save.");
+      pushWorkspaceNotification("warning", "No active document to save.");
       return;
     }
 
@@ -526,6 +755,11 @@ export function createDocumentWorkspace(opts: CreateDocumentWorkspaceOpts): Docu
       getSourceCommands: (id) => sourceViewCommands.get(id) ?? null,
       saveCommitted: (target, nextIntent) =>
         saveDocumentTargetAfterSourceCommit(target.id, nextIntent, target.ydoc),
+      // #1708 item 1: the boolean this call used to drop. `saveExactTarget`
+      // reports only ITS OWN refusals — a `false` from the source-view command
+      // or from the post-commit helper is already reported by that callee, so a
+      // toast here would double-report one refusal.
+      onRefused: (reason) => reportSaveRefusal(reason, tabId),
     });
   }
 

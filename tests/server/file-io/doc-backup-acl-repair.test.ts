@@ -36,7 +36,7 @@ import {
   restoreAccessForCleanup,
 } from "../../helpers/win-acl-fixture.js";
 
-vi.mock("../../../src/server/notifications.js", () => ({ pushNotification: vi.fn() }));
+vi.mock(import("../../../src/server/notifications.js"), () => ({ pushNotification: vi.fn() }));
 
 const WIN_ONLY = process.platform === "win32";
 const execFileAsync = promisify(execFile);

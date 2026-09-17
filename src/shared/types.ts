@@ -55,19 +55,58 @@ export const AgentIdentitySchema = z.object({
 export const AnnotationActionSchema = z.enum(["accept", "dismiss"]);
 export const ExportFormatSchema = z.enum(["markdown", "json"]);
 export const DocumentFormatSchema = z.enum(["md", "txt", "html", "docx"]);
+/**
+ * Every code an MCP tool puts on the wire through `mcpError` (#1851). `mcpError`
+ * takes {@link ToolErrorCode}, so a new code is a compile error here first rather
+ * than an undocumented string a client meets later — add it to this list AND to
+ * the Error Codes table in `docs/mcp-tools.md`.
+ *
+ * A zod enum rather than a bare union because `tandem_rename` narrows
+ * `renameDocument`'s open `errorCode` string (a raw errno can arrive there)
+ * against it at runtime. The `/api` routes have their own label vocabulary in
+ * `routes/_shared.ts`; this is not it.
+ */
 export const ToolErrorCodeSchema = z.enum([
+  "ACCEPT_REFUSED",
+  "ALREADY_EXISTS",
+  "ANNOTATION_RESOLVED",
+  "BACKUP_FAILED",
+  "BAD_REQUEST",
+  "CONFLICT",
+  "DEPRECATED",
+  "EMPTY_CONVERSION",
+  "EMPTY_DOCUMENT",
+  "EXTENSION_MISMATCH",
+  "EXTERNAL_CONFLICT",
+  "FILE_LOCKED",
+  "FILE_MODIFIED",
+  "FILE_NOT_FOUND",
+  "FILE_TOO_LARGE",
+  "FORMAT_ERROR",
+  "INTERNAL_ERROR",
+  "INVALID_ARGUMENT",
+  "INVALID_NAME",
+  "INVALID_PATH",
+  "INVALID_RANGE",
+  "LICENSE_REQUIRED",
+  "NOT_FOUND",
+  "NOT_OWNED",
+  "NOT_RENAMABLE",
+  "NO_DOCUMENT",
+  "NO_SUGGESTIONS",
+  "OPEN_FAILED",
+  "PATH_REJECTED",
+  "PERMISSION_DENIED",
   "RANGE_GONE",
   "RANGE_MOVED",
-  "FILE_LOCKED",
-  "FILE_NOT_FOUND",
-  "NO_DOCUMENT",
-  "INVALID_RANGE",
-  "INVALID_ARGUMENT",
-  "NOT_FOUND",
-  "ANNOTATION_RESOLVED",
-  "FORMAT_ERROR",
-  "PERMISSION_DENIED",
+  "READ_ONLY",
+  "RELOAD_IN_PROGRESS",
+  "RENAME_FAILED",
+  "RENAME_IN_PROGRESS",
+  "SEARCH_BUSY",
+  "SOURCE_MISSING",
 ]);
+export type ToolErrorCode = z.infer<typeof ToolErrorCodeSchema>;
 
 /**
  * Identifier strings the channel shim or monitor can POST to
@@ -153,6 +192,22 @@ export interface AnnotationReply {
    * replies. Drives the byline; the parent's `author` still governs privacy.
    */
   agentIdentity?: AgentIdentity;
+  /**
+   * A refined replacement proposal carried by a Claude-authored reply (#1626).
+   *
+   * **A reply has no range of its own and gains none**: the proposal is over the
+   * PARENT annotation's range, which is what accepting it rewrites. Accepting
+   * writes this text into the parent's own `suggestedText` — deliberately
+   * superseding the parent's first proposal, because a refined proposal
+   * replacing the original is what #1626 asks for and because
+   * `undoResolveAnnotation` compares the span against the parent's stored field.
+   *
+   * Written only through `AnnotationLifecycle.reply`, whose `ReplySuggestion`
+   * discriminant screens the parent's LIVE span for a heading prefix — a stored
+   * suggestion is a rewrite deferred to Accept, so it is the third carrier of
+   * Critical Rule 6's interior term. `addUserReply` deliberately cannot set it.
+   */
+  suggestedText?: string;
 }
 
 // --- Annotation types ---
@@ -390,7 +445,7 @@ export interface ToolSuccess<T = unknown> {
 
 export interface ToolError {
   error: true;
-  code: z.infer<typeof ToolErrorCodeSchema>;
+  code: ToolErrorCode;
   message: string;
   details?: Record<string, unknown>;
 }

@@ -12,8 +12,8 @@ import { withBrowser, withInternal } from "../../src/shared/origins.js";
 
 // Mock the session manager — saveSession/deleteSession touch disk for the
 // .tandem session sidecar, which is orthogonal to what these tests exercise.
-vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/session/manager.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     saveSession: vi.fn().mockResolvedValue(undefined),
@@ -25,8 +25,8 @@ vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
 // Mock the file watcher — real fs.watch on temp files leaks handles and races
 // the rename's own delete/create events. The rename logic only needs these to
 // be callable; their fs side effects are not under test.
-vi.mock("../../src/server/file-watcher.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/file-watcher.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     watchFile: vi.fn(),
@@ -36,8 +36,8 @@ vi.mock("../../src/server/file-watcher.js", async (importOriginal) => {
 });
 
 // Mock notifications — the error path calls pushNotification; assert via the spy.
-vi.mock("../../src/server/notifications.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/notifications.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     pushNotification: vi.fn(),
@@ -49,7 +49,7 @@ vi.mock("../../src/server/notifications.js", async (importOriginal) => {
 // implementation whenever `pathSafeThrows` is unset (every other test in this
 // file), so this mock is otherwise a no-op passthrough.
 let pathSafeThrows: Error | null = null;
-vi.mock("../../src/server/integrations/apply.js", async (importOriginal) => {
+vi.mock(import("../../src/server/integrations/apply.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/integrations/apply.js")>();
   return {
     ...actual,

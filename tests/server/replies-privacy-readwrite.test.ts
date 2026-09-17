@@ -81,7 +81,12 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
     // one branching on an author string — `lifecycle.reply` carries the ADR-027
     // guard, `addUserReply` does not and must not, since replying to one's own
     // note is exactly what ADR-027 permits (case (b) above).
-    const result = createAnnotationLifecycle(ydoc).reply(annId, "claude probe", noRelay);
+    const result = createAnnotationLifecycle(ydoc).reply(
+      annId,
+      "claude probe",
+      { kind: "none" },
+      noRelay,
+    );
     // `invalid-note`, an arm ONLY the ADR-027 guard produces. Under the old
     // `INVALID_ARGUMENT` this spec also passed when the reply was refused for
     // being over-length or for having a highlight parent — neither of which is
@@ -109,7 +114,12 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
     // legacy envelope or CRDT merge, not by an API call.
     map.set(annId, { ...(map.get(annId) as Annotation), audience: "private" });
 
-    const result = createAnnotationLifecycle(ydoc).reply(annId, "claude probe", noRelay);
+    const result = createAnnotationLifecycle(ydoc).reply(
+      annId,
+      "claude probe",
+      { kind: "none" },
+      noRelay,
+    );
     expect(result).toStrictEqual({ kind: "invalid-note" });
     expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(0);
   });
@@ -129,7 +139,12 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
     // more, which is the whole point — it only arrives from storage.
     map.set(annId, { ...(map.get(annId) as Annotation), type: "flag" });
 
-    const result = createAnnotationLifecycle(ydoc).reply(annId, "claude probe", noRelay);
+    const result = createAnnotationLifecycle(ydoc).reply(
+      annId,
+      "claude probe",
+      { kind: "none" },
+      noRelay,
+    );
     expect(result).toStrictEqual({ kind: "invalid-note" });
     expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(0);
   });
@@ -144,7 +159,12 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
     const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "shared");
     map.set(annId, { ...(map.get(annId) as Annotation), audience: "outbound" });
 
-    const result = createAnnotationLifecycle(ydoc).reply(annId, "claude probe", noRelay);
+    const result = createAnnotationLifecycle(ydoc).reply(
+      annId,
+      "claude probe",
+      { kind: "none" },
+      noRelay,
+    );
     expect(result.kind).toBe("ok");
     expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(1);
   });
@@ -174,7 +194,12 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const annId = createAnnotation(map, ydoc, "highlight", rangeOf(0, 5, ydoc), "");
 
-    const result = createAnnotationLifecycle(ydoc).reply(annId, "claude probe", noRelay);
+    const result = createAnnotationLifecycle(ydoc).reply(
+      annId,
+      "claude probe",
+      { kind: "none" },
+      noRelay,
+    );
     expect(result).toStrictEqual({ kind: "not-repliable", annotationType: "highlight" });
   });
 
@@ -290,5 +315,64 @@ describe("ADR-027 + #1000 reply privacy (Claude read path: channelVisibleReplies
     expect(out).toHaveLength(1);
     expect(out[0].text).toBe("now visible to Claude");
     expect(out.some((r) => r.author === "import")).toBe(false);
+  });
+});
+
+/**
+ * #1626 — where the heading screen sits RELATIVE to the privacy and ownership
+ * guards, which is a contract rather than a detail.
+ *
+ * `replyForClaude` holds the reply family's only ADR-027 and #1770 guards.
+ * Validating the range ahead of them would answer from the range layer on
+ * records Claude was never allowed to touch — a note, a private comment, or a
+ * promoted note / imported Word comment stored as a user comment — all of which
+ * Claude legitimately holds ids for, from `tandem_checkInbox`. Each of the
+ * parents below spans a heading interior, so an implementation that screened
+ * first would answer `invalid-suggestion-range` and disclose the parent's
+ * geometry instead of refusing on the rule that actually applies.
+ */
+describe("#1626: the suggestion screen runs AFTER the ADR-027 / #1770 guards", () => {
+  // "para\n## Head\nnext": the prefix is [5, 8), so [4, 9) steps over it.
+  const HEADING_DOC = "para\n## Head\nnext";
+  const REPLACEMENT = { kind: "replacement", suggestedText: "X" } as const;
+
+  it("a NOTE parent answers invalid-note, never invalid-suggestion-range", () => {
+    const ydoc = setupDoc("order-note", HEADING_DOC);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const annId = createAnnotation(map, ydoc, "note", rangeOf(4, 9, ydoc), "private note");
+
+    expect(
+      createAnnotationLifecycle(ydoc).reply(annId, "proposal", REPLACEMENT, noRelay),
+    ).toStrictEqual({ kind: "invalid-note" });
+  });
+
+  it("a USER-authored comment parent answers not-owned, never invalid-suggestion-range", () => {
+    const ydoc = setupDoc("order-user", HEADING_DOC);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const annId = createAnnotation(map, ydoc, "comment", rangeOf(4, 9, ydoc), "user comment");
+    const ann = map.get(annId) as Annotation;
+    ydoc.transact(
+      () => map.set(annId, { ...ann, author: "import", audience: "outbound" } as Annotation),
+      MCP_ORIGIN,
+    );
+
+    expect(
+      createAnnotationLifecycle(ydoc).reply(annId, "proposal", REPLACEMENT, noRelay),
+    ).toStrictEqual({ kind: "not-owned", author: "import" });
+  });
+
+  it("a HIGHLIGHT parent still answers not-repliable with a suggestion present", () => {
+    // The parent-type arm keeps its own refusal: widening the privacy predicate
+    // to every non-comment would answer `invalid-note` here instead, naming a
+    // rule that has nothing to do with the case.
+    const ydoc = setupDoc("order-highlight", HEADING_DOC);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const annId = createAnnotation(map, ydoc, "highlight", rangeOf(4, 9, ydoc), "mark");
+    const ann = map.get(annId) as Annotation;
+    ydoc.transact(() => map.set(annId, { ...ann, audience: "outbound" } as Annotation), MCP_ORIGIN);
+
+    expect(
+      createAnnotationLifecycle(ydoc).reply(annId, "proposal", REPLACEMENT, noRelay),
+    ).toStrictEqual({ kind: "not-repliable", annotationType: "highlight" });
   });
 });

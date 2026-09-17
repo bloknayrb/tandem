@@ -18,20 +18,23 @@ const persistSnapshot = vi.fn();
 const getAllFileSyncContexts = vi.fn(() => [] as unknown[]);
 const broadcastStoreReadOnly = vi.fn();
 
-vi.mock("../../src/server/annotations/store.js", () => ({
+vi.mock(import("../../src/server/annotations/store.js"), () => ({
   reclaimStoreLock: () => reclaimStoreLock(),
   isStoreReadOnly: () => isStoreReadOnly(),
 }));
 
-vi.mock("../../src/server/annotations/sync.js", () => ({
+vi.mock(import("../../src/server/annotations/sync.js"), () => ({
   persistSnapshot: (...args: unknown[]) => persistSnapshot(...args),
 }));
 
-vi.mock("../../src/server/events/file-sync-registry.js", () => ({
-  getAllFileSyncContexts: () => getAllFileSyncContexts(),
+vi.mock(import("../../src/server/events/file-sync-registry.js"), () => ({
+  getAllFileSyncContexts: () =>
+    getAllFileSyncContexts() as ReturnType<
+      typeof import("../../src/server/events/file-sync-registry.js").getAllFileSyncContexts
+    >,
 }));
 
-vi.mock("../../src/server/mcp/document-service.js", () => ({
+vi.mock(import("../../src/server/mcp/document-service.js"), () => ({
   broadcastStoreReadOnly: (v: boolean) => broadcastStoreReadOnly(v),
 }));
 

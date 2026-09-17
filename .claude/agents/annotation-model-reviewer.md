@@ -57,6 +57,13 @@ Read these before reviewing changes:
 - **Check:** Each observer callback should `import { shouldSkipChannel } from "../../../shared/origins.js"` and use the predicate, not inline origin equality.
 - **Edge case:** Ensure the observer doesn't accidentally skip browser-origin user actions (e.g. by importing the durable-sync predicate by mistake).
 
+## Disposition
+
+A finding blocks the change when it is an ADR-027 privacy leak (a note, or a private comment,
+reaching Claude), a wrong origin-tag helper from `src/shared/origins.ts`, or loss/corruption of
+an annotation record. No weighing of how rarely the path is hit, no "pre-existing class of
+problem" — fix it, or withdraw the finding on the merits.
+
 ## Output Format
 
 For each finding:

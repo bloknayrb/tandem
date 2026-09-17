@@ -72,6 +72,19 @@ function pickModels(tier) {
 }
 const M = pickModels(g.tier);
 
+// Effort policy (Bryan, 2026-09-15): an OPUS agent runs one level below the
+// stage's nominal effort; sonnet and fable agents keep the nominal level. The
+// nominal levels below are therefore the sonnet/fable levels, and opus reads
+// one notch down from them. Keyed on the resolved model, not the call site,
+// because M.plan is opus at tier M, fable (inherited) at tier L and sonnet at
+// tier S — hardcoding the drop per call would silently demote the wrong tier.
+const EFFORT_LADDER = ["low", "medium", "high", "xhigh", "max"];
+function eff(model, nominal) {
+  if (model !== "opus") return nominal;
+  const i = EFFORT_LADDER.indexOf(nominal);
+  return i > 0 ? EFFORT_LADDER[i - 1] : nominal;
+}
+
 // Budget shape (2026-09-07, measured on wave 3): plan refuters and per-finding skeptics were
 // 55% of a group's output tokens and most of its cache reads, while build/verify/e2e/probes
 // were under 10%. So: plan review rounds are capped by tier, domain reviewers speak in round 1
@@ -100,6 +113,28 @@ const M = pickModels(g.tier);
 // to one (below). PR_ROUNDS stays at 2 and should NOT be cut to pay for anything: G8's round 2
 // is what caught the data-loss regression that round 1's own fix introduced. This moves budget
 // from the stage with no demonstrated yield to the stage that finds the bugs.
+//
+// **Wave 9 contradicts the yield claim above, and the claim is what would have
+// justified the cheapest cut — so read this before acting on it.** In G7, plan
+// review caught three things no later stage would have: the specs left the
+// bar-hidden case to Settings, which would have falsified the selection popup's
+// own written mirror guarantee; the E2E fixture `sample.md` is 241 bytes and
+// cannot scroll, so the "preserves the document" case could never have passed
+// against a correct implementation; and #1738's `overflow-wrap: anywhere`
+// carried a mutation that could never go red, because a <textarea> already
+// gets `overflow-wrap: break-word` from the UA sheet. In G6, plan review
+// caught that the minimal #1719 fix removes behaviour ADR-037's Unit 10c
+// amendment records as a DECISION, which is a different act from fixing a bug.
+// All four came from the rules and tests lenses specifically. So the
+// measured-yield argument does not hold for the current groups, and plan
+// review is NOT a safe place to downgrade the model. The 2026-09-10 numbers
+// above are kept because the ROUND-COUNT finding still stands: the rounds do
+// not converge, and no round ever returns zero.
+//
+// Model policy, same date: the two execution stages (`e2e`, `probes`) run on
+// sonnet — they report a real exit status that the pre-push hook and CI re-check
+// — while every judging and editing stage stays on the tier's model. `verify`
+// stays too, because it owns mutation testing.
 const PLAN_ROUNDS = g.tier === "L" ? 2 : 1;
 const PR_ROUNDS = 2;
 
@@ -331,7 +366,7 @@ STEP 2 — write one spec per issue at ${WT}/${SPECS_DIR}/${g.id}-<issue>.md in 
 STEP 3 — commit the specs in the worktree: \`docs(specs): plan ${g.id} — ${issueList}\` with the trailers.
 
 Return {ok, specs:[{issue,path}], filesTouched:[every source/test/doc path the fixes will change, repo-relative], risks:[…], assumptions:[…], bryan:[…]}.`,
-  { label: `plan:${g.id}`, phase: "Plan", model: M.plan, effort: "high", schema: S_PLAN },
+  { label: `plan:${g.id}`, phase: "Plan", model: M.plan, effort: eff(M.plan, "high"), schema: S_PLAN },
   { specs: [], filesTouched: [], risks: [], assumptions: [], bryan: [] }
 );
 
@@ -382,11 +417,11 @@ while (!resumeAtBuild && round < PLAN_ROUNDS) {
   const domainAgents = round > 1 ? [] : g.reviewers && g.reviewers.length ? g.reviewers : ["general-purpose"];
   for (const a of domainAgents) {
     reviewers.push(() =>
-      run("review", refuterPrompt(LENS_DOMAIN), { label: `refute:${a}:r${round}`, phase: "Review", agentType: a, model: M.domain, effort: M.domainEffort, schema: S_FINDINGS }, { blocking: [], nonBlocking: [] })
+      run("review", refuterPrompt(LENS_DOMAIN), { label: `refute:${a}:r${round}`, phase: "Review", agentType: a, model: M.domain, effort: eff(M.domain, M.domainEffort), schema: S_FINDINGS }, { blocking: [], nonBlocking: [] })
     );
   }
-  reviewers.push(() => run("review", refuterPrompt(LENS_RULES), { label: `refute:rules:r${round}`, phase: "Review", model: M.review, effort: "high", schema: S_FINDINGS }, { blocking: [], nonBlocking: [] }));
-  reviewers.push(() => run("review", refuterPrompt(LENS_TESTS), { label: `refute:tests:r${round}`, phase: "Review", model: M.review, effort: "high", schema: S_FINDINGS }, { blocking: [], nonBlocking: [] }));
+  reviewers.push(() => run("review", refuterPrompt(LENS_RULES), { label: `refute:rules:r${round}`, phase: "Review", model: M.review, effort: eff(M.review, "high"), schema: S_FINDINGS }, { blocking: [], nonBlocking: [] }));
+  reviewers.push(() => run("review", refuterPrompt(LENS_TESTS), { label: `refute:tests:r${round}`, phase: "Review", model: M.review, effort: eff(M.review, "high"), schema: S_FINDINGS }, { blocking: [], nonBlocking: [] }));
   const found = (await parallel(reviewers)).filter(Boolean);
   // A dead agent reaches here as the FALLBACK — `{blocking:[], nonBlocking:[], ok:false}` —
   // an empty finding list it never produced. Nothing read `ok`, so a lens that
@@ -426,7 +461,7 @@ ${JSON.stringify(blocking, null, 2)}
 NON-BLOCKING findings (adopt when cheap; otherwise list as not adopted with one reason):
 ${JSON.stringify(nonBlocking, null, 2)}
 Rewrite the affected sections of the specs in place (do not leave the old text), then append a "## Review corrections (round ${round})" section to each affected spec listing adopted and not-adopted items with the reason. Commit in the worktree: \`docs(specs): ${g.id} review round ${round}\` with the trailers. Update filesTouched if the fix's file set changed. Return {ok, adopted:[…], notAdopted:[…]}.`,
-    { label: `revise:r${round}`, phase: "Review", model: M.plan, effort: "high", schema: S_REVISE },
+    { label: `revise:r${round}`, phase: "Review", model: M.plan, effort: eff(M.plan, "high"), schema: S_REVISE },
     { adopted: [], notAdopted: [] }
   );
   if (!revise.ok) {
@@ -455,7 +490,7 @@ Specs:
 Remaining blocking findings:
 ${JSON.stringify(blocking, null, 2)}
 Rewrite each spec so that: it changes only the files the issue names (plus a test for the fix); every mechanism a finding targets that the issue did not ask for (calibration, scanners, drift guards, sweep tests, frozen lists, new gates) is REMOVED, not repaired; each finding is either made moot by the removal or fixed directly; the spec is under ~120 lines. Where the issue's premise is refuted by measurement, say so and propose the smallest change that still closes the gap it describes, or recommend closing the issue with the evidence (list under bryan). Append "## Review corrections (scope cut)" listing what was removed and why. Commit as \`docs(specs): ${g.id} scope cut\` with the trailers. Return {ok, adopted:[…], notAdopted:[…]}.`,
-    { label: "scope-cut", phase: "Review", model: M.plan, effort: "high", schema: S_REVISE },
+    { label: "scope-cut", phase: "Review", model: M.plan, effort: eff(M.plan, "high"), schema: S_REVISE },
     { adopted: [], notAdopted: [] }
   );
   if (cut.ok) {
@@ -468,7 +503,7 @@ Rewrite each spec so that: it changes only the files the issue names (plus a tes
     // nothing ever parked. Rules is the surviving lens because the cut's own failure mode is
     // "removed a mechanism a rule required", which is what it reads for.
     const again = (await parallel([
-      () => run("review", refuterPrompt(LENS_RULES), { label: `refute:rules:cut`, phase: "Review", model: M.review, effort: "high", schema: S_FINDINGS }, { blocking: [], nonBlocking: [] }),
+      () => run("review", refuterPrompt(LENS_RULES), { label: `refute:rules:cut`, phase: "Review", model: M.review, effort: eff(M.review, "high"), schema: S_FINDINGS }, { blocking: [], nonBlocking: [] }),
     ])).filter(Boolean);
     blocking = again.flatMap((f) => f.blocking || []);
     log(`scope-cut round: ${blocking.length} blocking`);
@@ -483,7 +518,7 @@ Specs:
 Findings:
 ${JSON.stringify(blocking, null, 2)}
 Return {ok, adopted:[…], notAdopted:[…]}.`,
-        { label: "revise:post-cut", phase: "Review", model: M.plan, effort: "high", schema: S_REVISE },
+        { label: "revise:post-cut", phase: "Review", model: M.plan, effort: eff(M.plan, "high"), schema: S_REVISE },
         { adopted: [], notAdopted: [] }
       );
       if (fixup.ok && fixup.notAdopted.length === 0) blocking = [];
@@ -519,7 +554,7 @@ Specs (the reviewed plan — implement it as written; where the code contradicts
 Implement in the stated order. For each issue: make the change, add the tests the spec names (convert the named experiment into a vitest spec under tests/<area>/), run \`npm run typecheck\` and \`npx vitest run <the touched suites>\` in the worktree, \`npx biome format --write\` the changed files, and commit once per issue as \`<type>(<area>): <what> (#N)\` with the trailers. ${g.skill ? "This group edits skills/tandem/SKILL.md: bump its frontmatter version and the test literal in the same commit, and report the number as skillVersion." : ""} ${g.rust ? `Rust: \`export CARGO_TARGET_DIR=${REPO}/src-tauri/target\` before \`cargo test --manifest-path src-tauri/Cargo.toml\`.` : ""}
 Do not widen scope beyond the specs; a tangential one-line fix you trip over may be bundled with a note, a larger one is listed in notes for the main session. Anything requiring a human (hardware, deploy, policy) goes in \`bryan\`.
 Return {ok, commits:[subjects], filesTouched:[repo-relative paths actually changed], testsAdded:[paths], skillVersion?, notes, bryan}.`,
-  { label: `build:${g.id}`, phase: "Build", model: M.build, effort: "high", schema: S_BUILD },
+  { label: `build:${g.id}`, phase: "Build", model: M.build, effort: eff(M.build, "high"), schema: S_BUILD },
   { commits: [], filesTouched: [], testsAdded: [], notes: "", bryan: [] }
 );
 if (!build.ok) {
@@ -558,7 +593,7 @@ const simp = await run(
 ${GROUP}
 ${RULES}
 In ${WT}: invoke the Skill tool with skill "simplify". The skill's instructions load into your context (single-pass mode — you have no Agent tool); follow them against \`git diff origin/master...HEAD\` — reuse, simplification, efficiency, altitude — and APPLY the fixes. Do not hunt for bugs. Keep every test the diff added. Re-run \`npm run typecheck\` and the touched suites. If anything changed, format and commit as \`refactor: simplify ${g.id}\` with the trailers. Return {ok, commits:[…], notes}.`,
-  { label: `simplify:${g.id}`, phase: "Simplify", model: M.build, effort: "medium", schema: S_FIX },
+  { label: `simplify:${g.id}`, phase: "Simplify", model: M.build, effort: eff(M.build, "medium"), schema: S_FIX },
   { commits: [], notes: "" }
 );
 result.simplifyNotes = simp.notes;
@@ -592,7 +627,7 @@ ${VERIFY_CMDS.map((c) => "  " + c).join("\n")}
 For each failure decide \`ours\`: true if the failing file is one this branch changed or a test of it; false if it is untouched by this branch (then re-run that single command once and report the second result). Return {green, ran:[commands], failures:[{command, summary (≤3 lines with the failing file and assertion), ours}]}.`;
 }
 
-let verify = await run("verify", verifyPrompt(1), { label: `verify:${g.id}:1`, phase: "Verify", model: M.review, effort: "high", schema: S_VERIFY }, { green: false, ran: [], failures: [] });
+let verify = await run("verify", verifyPrompt(1), { label: `verify:${g.id}:1`, phase: "Verify", model: M.review, effort: eff(M.review, "high"), schema: S_VERIFY }, { green: false, ran: [], failures: [] });
 let fixRounds = 0;
 while (!verify.green && fixRounds < 2) {
   fixRounds += 1;
@@ -604,11 +639,11 @@ ${RULES}
 These checks failed on the branch:
 ${JSON.stringify(verify.failures, null, 2)}
 Fix the root cause in ${WT} (never by skipping, disabling or loosening a test; a failure in a file this branch did not touch that reproduces on a second run is still ours to root-cause if our change can reach it — say so in notes if it cannot). Re-run the failed command until green, format, commit as \`fix(${g.id.toLowerCase()}): <what>\` with the trailers. Return {ok, commits, notes}.`,
-    { label: `fix:verify:${fixRounds}`, phase: "Verify", model: M.build, effort: "high", schema: S_FIX },
+    { label: `fix:verify:${fixRounds}`, phase: "Verify", model: M.build, effort: eff(M.build, "high"), schema: S_FIX },
     { commits: [], notes: "" }
   );
   if (!fix.ok) break;
-  verify = await run("verify", verifyPrompt(fixRounds + 1), { label: `verify:${g.id}:${fixRounds + 1}`, phase: "Verify", model: M.review, effort: "high", schema: S_VERIFY }, { green: false, ran: [], failures: [] });
+  verify = await run("verify", verifyPrompt(fixRounds + 1), { label: `verify:${g.id}:${fixRounds + 1}`, phase: "Verify", model: M.review, effort: eff(M.review, "high"), schema: S_VERIFY }, { green: false, ran: [], failures: [] });
 }
 result.verify = verify;
 if (!verify.green) {
@@ -627,7 +662,7 @@ if (g.e2e) {
   let e2e = await run(
     "e2e",
     `E2E agent. In ${WT}: first make sure the Chromium build Playwright expects is installed — if \`npx playwright test --list\` or a launch error names a missing build, run \`npx playwright install chromium\` once. Then run \`TANDEM_APP_DATA_DIR=$(mktemp -d /tmp/tandem-sweep-XXXXXX) npm run test:e2e\` (reserved harness ports). Do not start a dev server. Return {green, ran:["npm run test:e2e"], failures:[{command, summary, ours}]}.`,
-    { label: `e2e:${g.id}:1`, phase: "E2E", model: M.review, effort: "medium", schema: S_VERIFY },
+    { label: `e2e:${g.id}:1`, phase: "E2E", model: "sonnet", effort: "medium", schema: S_VERIFY },
     { green: false, ran: [], failures: [] }
   );
   if (!e2e.green) {
@@ -639,11 +674,11 @@ ${RULES}
 Failures:
 ${JSON.stringify(e2e.failures, null, 2)}
 Fix the root cause in ${WT} (a renamed data-testid needs the snapshot regenerated; a changed copy needs the spec's expectation updated only if the spec's own claim changed). Re-run \`npm run test:e2e\` until green, format, commit with the trailers. Return {ok, commits, notes}.`,
-      { label: "fix:e2e", phase: "E2E", model: M.build, effort: "high", schema: S_FIX },
+      { label: "fix:e2e", phase: "E2E", model: M.build, effort: eff(M.build, "high"), schema: S_FIX },
       { commits: [], notes: "" }
     );
     if (fix.ok) {
-      e2e = await run("e2e", `Re-run \`npm run test:e2e\` in ${WT}. Return {green, ran, failures}.`, { label: `e2e:${g.id}:2`, phase: "E2E", model: M.review, effort: "medium", schema: S_VERIFY }, { green: false, ran: [], failures: [] });
+      e2e = await run("e2e", `Re-run \`npm run test:e2e\` in ${WT}. Return {green, ran, failures}.`, { label: `e2e:${g.id}:2`, phase: "E2E", model: "sonnet", effort: "medium", schema: S_VERIFY }, { green: false, ran: [], failures: [] });
     }
   }
   result.e2e = e2e;
@@ -667,7 +702,7 @@ const probes = await run(
 ${GROUP}
 For each issue, ${REVIEW_DIR}/experiments/README.md names a reproduction script and the output that means "still broken". In ${WT}, run every script named for this group's issues (npx tsx / node / the harness vitest config, from the worktree root; server probes use ports ${PORTS.ws}/${PORTS.mcp} — experiments/server-probes/run.sh hardcodes 4918/4919, so if this group's pair differs, run the same command line with TANDEM_PORT=${PORTS.ws} TANDEM_MCP_PORT=${PORTS.mcp} instead of the script, keeping every other variable it sets such as TANDEM_LICENSE_GATE=1; run.sh and run2.sh also pin one shared data dir under $TMPDIR/tandem-review-probe, so give every server you start its own TANDEM_APP_DATA_DIR=$(mktemp -d /tmp/tandem-sweep-XXXXXX) — never 3478/3479, and never the reserved E2E harness ports in scripts/test-ports.ts). If a script no longer applies because the fix changed the surface, say so. Capture the decisive output lines. If no experiment exists for an issue, exercise the fix once by hand instead: start the server on scratch ports and drive the changed MCP tool or route with an in-memory MCP client or curl, and record what you saw. Stop any server you started. Anything that can only be checked on hardware you lack goes in \`bryan\`.
 Return {ran:[scripts], output:"the decisive lines per issue, ≤40 lines total", stillBroken:[issue numbers whose 'still broken' output persists], bryan:[…]}.`,
-  { label: `probes:${g.id}`, phase: "Probes", model: M.review, effort: "medium", schema: S_PROBES },
+  { label: `probes:${g.id}`, phase: "Probes", model: "sonnet", effort: "medium", schema: S_PROBES },
   { ran: [], output: "", stillBroken: [], bryan: [] }
 );
 result.probes = probes;
@@ -681,7 +716,7 @@ ${RULES}
 Probe output:
 ${probes.output}
 Fix the root cause in ${WT}, re-run the script(s) until the fixed output appears, format, commit with the trailers. Return {ok, commits, notes}.`,
-    { label: "fix:probes", phase: "Probes", model: M.build, effort: "high", schema: S_FIX },
+    { label: "fix:probes", phase: "Probes", model: M.build, effort: eff(M.build, "high"), schema: S_FIX },
     { commits: [], notes: "" }
   );
   result.probeFix = fix;
@@ -693,10 +728,42 @@ Fix the root cause in ${WT}, re-run the script(s) until the fixed output appears
 
 phase("PR review");
 
+// THE REVIEWER IS YOU, NOT THE SKILL (2026-09-15).
+//
+// This prompt used to say "Invoke the Skill tool with skill 'code-review'".
+// In this harness that skill FORKS a background, non-interactive subagent
+// (spawnDepth 2, requestShape "background"), and the calling agent has no way
+// to await it. Measured across every sweep journal, by joining each
+// `code-review:*` agent's started-label to its result: **15 of 39 rounds
+// delivered no review at all.** Eleven returned a single pseudo-finding that
+// says so outright — "NOT A FINDING", "NO REVIEW RESULT", "do not read this
+// empty result as a clean review" — and four returned a bare `{findings: []}`
+// with the fork still running. The rounds: G1 r1/r2, G10 r1/r2, G9a r1/r2,
+// G9b r1/r2, K-server r1/r2, W1708 r1/r2, G6 r1, G7 r1, K-tests r2.
+//
+// **This number was miscounted twice before it was trusted, and both mistakes
+// are instructive.** The first narrative said "five rounds in a row" and named
+// rounds that had in fact reported. The correction then counted only bare
+// empty arrays and said "4 of 39" — which UNDERCOUNTED, because the eleven
+// self-declared misses each look like one finding to any length check. A round
+// that reports "I have no result" is a missing review, not a finding.
+//
+// The mechanism is verified on G6's transcript: its forked skill agent made
+// ZERO ReportFindings calls and stopped mid-sentence, while the caller had
+// already returned. W1708's fork finished SEVEN MINUTES after its caller gave
+// up, holding findings it never delivered.
+//
+// An empty result is a MISSING review, not a clean one. So the stage reviews
+// the diff itself.
 function codeReviewPrompt(round) {
-  return `PR review, round ${round}, via the repository's code-review skill.
+  return `PR review, round ${round}. **Do this review YOURSELF. Do NOT invoke the code-review skill or spawn any agent** — the skill forks a background subagent you cannot await, and the rounds that tried sometimes returned nothing at all.
 ${GROUP}
-Invoke the Skill tool with skill "code-review" and args "--level high ${BRANCH}". The target MUST be the branch name: the skill forks into the session's main checkout (${REPO}), not into ${WT}, so with no target it reviews whatever branch the main checkout happens to be on (wave 2 caught it reviewing the sweep's own ledger edits). Before returning, run \`cd ${WT} && git diff --name-only origin/master...HEAD\` and DROP any finding whose file is not in that list — it came from the wrong tree. Return {findings:[{id:"cr-<n>", file, line, summary, failure (concrete inputs → wrong output), severity}]}. Report only what the skill returned (minus the dropped ones); add nothing.`;
+In ${WT}, read the whole branch diff: \`git diff origin/master...HEAD\`. Read each changed file around the change, not just the hunk. Judge it against:
+  - the Critical Rules and the gotchas in CLAUDE.md that the changed files touch;
+  - the specs at ${specPaths} (the Done-when lists);
+  - the tests: does each behavioural claim have a test that would FAIL if the behaviour regressed?
+Report only defects with a CONCRETE failure scenario — inputs or state, then the wrong output. No style, no speculation, nothing you did not read.
+Return {findings:[{id:"cr-<n>", file, line, summary, failure, severity}]}. An empty array is a claim that you read the whole diff and found nothing; only return it if that is true.`;
 }
 function domainReviewPrompt(round, a) {
   return `Code review, round ${round}, from your specialty (${a}). Read-only.
@@ -711,10 +778,10 @@ let confirmed = [];
 while (prRound < PR_ROUNDS) {
   prRound += 1;
   result.prReviewRounds = prRound;
-  const reviewers = [() => run("code-review", codeReviewPrompt(prRound), { label: `code-review:r${prRound}`, phase: "PR review", model: M.review, effort: "high", schema: S_REVIEW_FINDINGS }, { findings: [] })];
+  const reviewers = [() => run("code-review", codeReviewPrompt(prRound), { label: `code-review:r${prRound}`, phase: "PR review", model: M.review, effort: eff(M.review, "high"), schema: S_REVIEW_FINDINGS }, { findings: [] })];
   // The repo reviewer reads the code once; round 2 is /code-review on the fix diff.
   for (const a of prRound > 1 ? [] : g.reviewers || []) {
-    reviewers.push(() => run("domain-review", domainReviewPrompt(prRound, a), { label: `${a}:r${prRound}`, phase: "PR review", agentType: a, model: M.domain, effort: M.domainEffort, schema: S_REVIEW_FINDINGS }, { findings: [] }));
+    reviewers.push(() => run("domain-review", domainReviewPrompt(prRound, a), { label: `${a}:r${prRound}`, phase: "PR review", agentType: a, model: M.domain, effort: eff(M.domain, M.domainEffort), schema: S_REVIEW_FINDINGS }, { findings: [] }));
   }
   // Every finding needs an id the batched skeptic can key on; /code-review's are not guaranteed.
   const raw = (await parallel(reviewers)).filter(Boolean).flatMap((r) => r.findings || []).map((f, i) => ({ ...f, id: f.id || `cr${prRound}-${i + 1}` }));
@@ -731,7 +798,7 @@ while (prRound < PR_ROUNDS) {
     `Skeptic. Try to REFUTE each of these code-review findings against the actual code in ${WT} (branch ${BRANCH}), one verdict per finding, keyed by its id. Default a finding to refuted=true if you cannot reproduce its failure scenario by reading the code path or running a quick check; judge each on its own evidence, not on the others.
 Findings: ${JSON.stringify(raw)}
 Return {verdicts:[{id, refuted, reason}]} with exactly one entry per finding id.`,
-    { label: `skeptic:r${prRound}`, phase: "PR review", model: M.review, effort: "high", schema: S_VERDICTS },
+    { label: `skeptic:r${prRound}`, phase: "PR review", model: M.review, effort: eff(M.review, "high"), schema: S_VERDICTS },
     { verdicts: [] }
   );
   const byId = new Map((batch.verdicts || []).map((v) => [v.id, v]));
@@ -763,7 +830,7 @@ ${RULES}
 Confirmed findings:
 ${JSON.stringify(confirmed, null, 2)}
 Fix each in ${WT} (add or extend a test where the finding was a behaviour), re-run \`npm run typecheck\` and the touched suites, format, commit as \`fix(${g.id.toLowerCase()}): address review — <what>\` with the trailers. Return {ok, commits, notes}.`,
-    { label: `fix:review:r${prRound}`, phase: "PR review", model: M.build, effort: "high", schema: S_FIX },
+    { label: `fix:review:r${prRound}`, phase: "PR review", model: M.build, effort: eff(M.build, "high"), schema: S_FIX },
     { commits: [], notes: "" }
   );
   if (!fix.ok) break;
@@ -810,6 +877,11 @@ ${probes.output || "(none)"}
 4. \`gh pr merge <N> --auto --merge\`; record its output verbatim as autoMerge (it may say auto-merge is not allowed on this repository — that is data, not an error).
 5. There is no subscription tool here; the main session polls CI. Return subscribed:false.
 Return {ok, pr, prUrl, hooksArmed, autoMerge, subscribed}.`,
+  // `ship` is the one NAMED EXEMPTION from the opus effort drop (Bryan,
+  // 2026-09-15): it keeps the nominal `medium` on every model. This stage has
+  // to recover when the pre-push hook fails mid-run — G9b's ship agent returned
+  // while the hook was still in vitest and left no PR at all — and that
+  // recovery is judgment, not transcription. Do not fold it back into `eff`.
   { label: `ship:${g.id}`, phase: "Ship", model: M.build, effort: "medium", schema: S_SHIP },
   { hooksArmed: "unknown", autoMerge: "not attempted", subscribed: false }
 );

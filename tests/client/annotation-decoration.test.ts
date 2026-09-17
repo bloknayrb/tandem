@@ -87,7 +87,7 @@ vi.mock("@tiptap/core", () => ({
  */
 let walkCalls = 0;
 
-vi.mock("../../src/shared/sanitize", async (importOriginal) => {
+vi.mock(import("../../src/shared/sanitize"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/shared/sanitize")>();
   return {
     ...actual,
@@ -98,11 +98,14 @@ vi.mock("../../src/shared/sanitize", async (importOriginal) => {
   };
 });
 
-vi.mock("../../src/client/positions", () => ({
+// `PmPos` is a branded number, so a plain literal needs the cast.
+vi.mock(import("../../src/client/positions"), () => ({
   annotationToPmRange(_ann: unknown, _doc: unknown, _ydoc: unknown) {
     return buildDecorationsResult === EMPTY_SENTINEL
       ? null
-      : { from: 1, to: 5, method: "flat" as const };
+      : ({ from: 1, to: 5, method: "flat" } as unknown as NonNullable<
+          ReturnType<typeof import("../../src/client/positions").annotationToPmRange>
+        >);
   },
 }));
 

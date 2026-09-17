@@ -24,7 +24,11 @@ import {
   COWORK_PREFLIGHT_CHECKING,
   COWORK_PREFLIGHT_FAILED,
 } from "../../src/client/cowork/cowork-helpers";
-import type { SubnetPreflight } from "../../src/client/cowork/cowork-invoke";
+import type {
+  coworkSetLanIpOverride,
+  coworkToggleIntegration,
+  SubnetPreflight,
+} from "../../src/client/cowork/cowork-invoke";
 import { coworkErrorCell, coworkStatusCell } from "../helpers/cowork-fixtures.svelte";
 
 // The real command's Ok payload (#1438): a message plus zero or more
@@ -39,18 +43,25 @@ const toggleIntegration = vi.fn(async (..._args: unknown[]) => ({
 const fakeInvoke = vi.fn();
 
 const preflightSubnet = vi.fn(async (): Promise<SubnetPreflight> => ({ status: "unavailable" }));
-const setLanIpOverride = vi.fn(async (..._args: unknown[]) => {});
+// Production resolves the toggle`s own message string, not void.
+const setLanIpOverride = vi.fn(async (..._args: unknown[]) => "lan ip override set");
 
 // Spread `importOriginal` rather than re-declaring the module: `cowork-invoke`
 // exports nine symbols and each suite's mock used to name a different subset,
 // so a component reaching for an un-named one failed as `undefined is not a
 // function` — a component-shaped error, discovered one file at a time.
-vi.mock("../../src/client/cowork/cowork-invoke", async (importOriginal) => ({
+vi.mock(import("../../src/client/cowork/cowork-invoke"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/client/cowork/cowork-invoke")>()),
   loadInvoke: vi.fn(async () => fakeInvoke),
-  coworkToggleIntegration: (...args: unknown[]) => toggleIntegration(...args),
+  // Wrapper, NOT a bare reference: a `vi.mock` factory is hoisted, so naming the
+  // top-level spy directly throws "Cannot access before initialization". The
+  // cast rides on the wrapper -- production is `(invoke, enabled)` while the
+  // spy takes `...unknown[]` so call assertions stay simple.
+  coworkToggleIntegration: ((...args: unknown[]) =>
+    toggleIntegration(...args)) as unknown as typeof coworkToggleIntegration,
   coworkPreflightSubnet: () => preflightSubnet(),
-  coworkSetLanIpOverride: (...args: unknown[]) => setLanIpOverride(...args),
+  coworkSetLanIpOverride: ((...args: unknown[]) =>
+    setLanIpOverride(...args)) as unknown as typeof coworkSetLanIpOverride,
 }));
 
 /**
@@ -96,7 +107,7 @@ function readBackFails(): void {
   refetch.mockImplementation(async () => false);
 }
 
-vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useCoworkStatus.svelte"), () => ({
   createCoworkStatus: () => ({
     get status() {
       return coworkStatusCell.value;
@@ -161,7 +172,7 @@ beforeEach(() => {
   refetch.mockReset();
   refetch.mockImplementation(async () => true);
   setLanIpOverride.mockClear();
-  setLanIpOverride.mockImplementation(async () => {});
+  setLanIpOverride.mockImplementation(async () => "lan ip override set");
   preflightSubnet.mockClear();
   preflightSubnet.mockResolvedValue({ status: "unavailable" });
 });

@@ -266,7 +266,17 @@ interface SaveAsOptions {
  * keybinding cannot race.
  */
 export async function triggerSaveAs(opts: SaveAsOptions): Promise<boolean> {
-  if (saveAsInflight) return false;
+  if (saveAsInflight) {
+    // #1708 item 3: unconditional, with no `announceBusy` flag to gate it.
+    // `triggerSave` needs that flag because it also runs programmatically; this
+    // has one caller and it is always a user gesture, so a silent re-entry is
+    // always a dead Ctrl+Shift+S.
+    notifyUser("info", "A Save As is already in progress…", {
+      dedupKey: "save-as-inflight",
+      id: "save-as-inflight",
+    });
+    return false;
+  }
   const { activeDocId, notify, defaultName, sourceFormat } = opts;
   if (!activeDocId) {
     notify("warning", "No active document to save.");
@@ -430,7 +440,10 @@ async function runBrowserSaveAs(
  */
 export async function triggerSave(
   activeDocId: string | null,
-  { announceBusy = false }: { announceBusy?: boolean } = {},
+  {
+    announceBusy = false,
+    allowImageLoss = false,
+  }: { announceBusy?: boolean; allowImageLoss?: boolean } = {},
 ): Promise<boolean> {
   if (!activeDocId) return false;
   if (inflight) {
@@ -449,7 +462,14 @@ export async function triggerSave(
     const resp = await fetch(`${API_BASE}${API_SAVE}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ documentId: activeDocId }),
+      // `allowImageLoss` (#1941) is OMITTED unless asked for, rather than sent
+      // as `false`: the server tests `=== true`, so the two are identical on
+      // the wire, and an absent field keeps every ordinary save's body exactly
+      // what it was.
+      body: JSON.stringify({
+        documentId: activeDocId,
+        ...(allowImageLoss ? { allowImageLoss: true } : {}),
+      }),
     });
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}));

@@ -10,9 +10,6 @@
  * Replies were already stamped server-side; annotations now are too.
  */
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { addDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
@@ -28,6 +25,7 @@ import { CTRL_ROOM, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MODE_RELEASE_ORIGIN, transactForTest, withMcp } from "../../src/shared/origins.js";
 import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { clearOpenDocs } from "../helpers/doc-service.js";
+import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 
 const DOC_ID = "held-in-solo-stamp-doc";
 
@@ -212,13 +210,10 @@ describe("the server-side heldInSolo stamp (#1769)", () => {
     setCtrlMode(null);
     resetInbox();
 
-    const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
-    registerAnnotationTools(server);
-    registerAwarenessTools(server);
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const mcpClient = new Client({ name: "test-client", version: "0.0.1" });
-    await server.connect(serverTransport);
-    await mcpClient.connect(clientTransport);
+    const { client: mcpClient, close } = await setupMcpServer([
+      registerAnnotationTools,
+      registerAwarenessTools,
+    ]);
 
     // `mcpSuccess` wraps every payload as `{ error: false, data }` (`response.ts`)
     // and both buckets are `Annotation & { textSnippet }`, keyed `id`. Reading
@@ -228,8 +223,7 @@ describe("the server-side heldInSolo stamp (#1769)", () => {
     // positive control below is what proves the row is not vacuous again.
     const inboxIds = async (): Promise<string[]> => {
       const result = await mcpClient.callTool({ name: "tandem_checkInbox", arguments: {} });
-      const content = result.content as Array<{ type: string; text?: string }>;
-      const data = JSON.parse(content.find((c) => c.type === "text")?.text ?? "{}").data ?? {};
+      const data = parseResult(result)?.data ?? {};
       return [
         ...(data.userActions ?? []).map((a: { id: string }) => a.id),
         ...(data.userResponses ?? []).map((a: { id: string }) => a.id),
@@ -247,6 +241,6 @@ describe("the server-side heldInSolo stamp (#1769)", () => {
     setCtrlMode("tandem");
     expect(await inboxIds(), "and delivered once the room reads Tandem again").toContain("s1");
 
-    await mcpClient.close();
+    await close();
   });
 });

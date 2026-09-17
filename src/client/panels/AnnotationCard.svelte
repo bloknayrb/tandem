@@ -71,6 +71,11 @@ interface Props {
    * open the in-card editor (`kind:"edit"`) or reply composer (`kind:"reply"`).
    */
   openRequest?: { kind: "edit" | "reply"; nonce: number } | null;
+  /**
+   * #1626: accept a replacement proposed inside the reply thread. Forwarded
+   * straight to ReplyThread; absent ⇒ no accept affordance on any reply.
+   */
+  onAcceptReplySuggestion?: (annotationId: string, replyId: string) => void;
 }
 
 let {
@@ -94,6 +99,7 @@ let {
   reduceMotion = false,
   exitModes,
   openRequest = null,
+  onAcceptReplySuggestion,
 }: Props = $props();
 
 const agentLabel = createAgentLabel();
@@ -370,6 +376,7 @@ function onCardClick(event: MouseEvent) {
     {onReply}
     {reduceMotion}
     openNonce={replyOpenNonce}
+    {onAcceptReplySuggestion}
   />
 </div>
 
@@ -508,13 +515,18 @@ function onCardClick(event: MouseEvent) {
     line-clamp: 1;
     overflow: clip;
   }
-  /* Markdown bodies (#1626) render BLOCK children — `<p>`, `<pre>`, `<li>` —
-     and each one opens its own line box, so the `-webkit-line-clamp: 1` above
-     collapses to one line per block rather than one line total. A two-paragraph
-     Claude comment would show two lines in a card sized for one, overflowing the
-     clamped band. Flattening the descendants to inline is what makes the teaser
-     single-line again; formatting is irrelevant at this size, and the full
-     rendering returns as soon as the card expands. */
+  /* Markdown bodies (#1626) render BLOCK children — `<p>`, `<ul>`, `<pre>`,
+     `<li>` — and each one opens its own line box, so the `-webkit-line-clamp: 1`
+     above collapses to one line per block rather than one line total. A
+     two-paragraph Claude comment would show two lines in a card sized for one,
+     overflowing the clamped band. Flattening the descendants to inline is what
+     makes the teaser single-line again; formatting is irrelevant at this size,
+     and the full rendering returns as soon as the card expands.
+
+     MORE load-bearing since #1639, not less: every paragraph is now a real `<p>`
+     rather than a bare text node, and `<ul>` is a new block child — both covered
+     by the `*` here. Specificity holds against the `.tandem-markdown ul` rule
+     this selector has to beat: (0,3,0) against (0,1,1). */
   .is-density-clamped :global(.aca-body .tandem-markdown *),
   .is-density-compact :global(.aca-body .tandem-markdown *) {
     display: inline;
@@ -527,11 +539,13 @@ function onCardClick(event: MouseEvent) {
        without this a code block still renders one line per line of code. */
     white-space: normal;
   }
-  /* `<br>` is the other half, and the more common one: `renderMarkdown` turns
-     every single newline into one, so a bullet list — the likeliest thing
-     Claude writes into a comment — emits a `<br>` between every item. `display:
-     inline` is a `<br>`'s NORMAL value and does not stop it breaking the line;
-     `none` is what does. */
+  /* `<br>` is the other half. #1639 removed the `<br>` BETWEEN list items — a
+     bullet list is now a real `<ul>` of `<li>`s with no breaks in it — but the
+     rule is still reachable and still load-bearing, because a soft newline
+     INSIDE a paragraph still emits one: `a\nb` renders `<p>a<br>b</p>`, so any
+     two-line Claude comment carries a break the teaser has to swallow.
+     `display: inline` is a `<br>`'s NORMAL value and does not stop it breaking
+     the line; `none` is what does. */
   .is-density-clamped :global(.aca-body .tandem-markdown br),
   .is-density-compact :global(.aca-body .tandem-markdown br) {
     display: none;

@@ -283,13 +283,17 @@ const docxAdapter: FormatAdapter = {
       // because it drives the overwrite warning, which for this document can no
       // longer happen: the save is refused outright (`import-image-loss`).
       // Count-only, never a `src` or an `alt`; and the copy has to describe the
-      // REFUSAL and name an exit reachable FROM THIS DOCUMENT. The only client
-      // conversion affordance sits behind the review-only banner, which a
-      // writable on-disk .docx never shows, so the exit is Claude.
+      // REFUSAL and name an exit reachable FROM THIS DOCUMENT. Since #1941 there
+      // are two exits and the first needs no Claude at all: the "Save anyway
+      // without pictures" button this line sits directly above in
+      // `FidelityReportBanner`. The wording must still not read as a
+      // lossy-save-by-default — the refusal is the default, the button is the
+      // opt-out.
       ...(droppedImages > 0
         ? [
-            `${droppedImages} picture(s) couldn't be imported, so this file can't be saved ` +
-              "back as .docx — ask Claude to convert it to Markdown to keep your edits",
+            `${droppedImages} picture(s) couldn't be imported, so saving back as .docx is ` +
+              'refused by default — choose "Save anyway without pictures" below to save your ' +
+              "edits without them, or ask Claude to convert it to Markdown to keep everything",
           ]
         : []),
     ];

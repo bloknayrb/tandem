@@ -8,15 +8,13 @@
 //! crate is touched — empty account, empty secret. The rest of the surface
 //! is covered by:
 //!   - Client-side mocks in `tests/client/keychain-backend.test.ts`
-//!   - Manual verification on Tauri dev builds (set/get/delete a real secret)
+//!   - Manual verification on Tauri dev builds (set/delete a real secret)
+//!
+//! There is no `keychain_get` to test: it was removed (#1822 item 5), and
+//! `tests/docs/tauri-command-registration-claims.test.ts` pins its absence
+//! from the invoke handler.
 
-use app_lib::keychain::{keychain_delete, keychain_get, keychain_set};
-
-#[test]
-fn keychain_get_rejects_empty_account() {
-    let err = keychain_get(String::new()).unwrap_err();
-    assert!(err.contains("account is required"), "got: {err}");
-}
+use app_lib::keychain::{keychain_delete, keychain_set};
 
 #[test]
 fn keychain_set_rejects_empty_account() {

@@ -9,9 +9,7 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
@@ -53,38 +51,16 @@ import {
 import { MCP_ORIGIN, withInternal } from "../../src/shared/origins.js";
 import { SNAPSHOT_CAP } from "../../src/shared/snapshot.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { off, range } from "../helpers/positions.js";
 import { createAnnotation, rangeOf } from "../helpers/ydoc-factory.js";
 
 let client: Client;
+let close: (() => Promise<void>) | undefined;
 const sidecarTempFiles: string[] = [];
 
+/** Still used by `rawErrorText` below, which reads the raw envelope text. */
 type CallToolResponse = Awaited<ReturnType<Client["callTool"]>>;
-
-async function setupMcpClient(): Promise<Client> {
-  const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
-  registerDocumentTools(server);
-  registerAnnotationTools(server);
-  registerNavigationTools(server);
-  registerAwarenessTools(server);
-
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-
-  const mcpClient = new Client({ name: "test-client", version: "0.0.1" });
-  await server.connect(serverTransport);
-  await mcpClient.connect(clientTransport);
-  return mcpClient;
-}
-
-function parseResult(result: CallToolResponse) {
-  // `result.content` is fine to read directly, but TS's deep Zod-inferred
-  // union type for it blows up ("is of type 'unknown'") the moment it's
-  // iterated (`.find`, `for...of`, etc.) — casting once to a plain shape
-  // sidesteps that without changing what's actually in the array.
-  const content = result.content as Array<{ type: string; text?: string }>;
-  const textContent = content.find((c) => c.type === "text");
-  return textContent?.text ? JSON.parse(textContent.text) : null;
-}
 
 function setupDoc(id: string, text: string) {
   const ydoc = getOrCreateDocument(id);
@@ -116,7 +92,19 @@ beforeEach(async () => {
   // Clear CTRL_ROOM mode so a Solo-hold test can't bleed into the next test.
   const ctrl = getOrCreateDocument(CTRL_ROOM);
   withInternal(ctrl, () => ctrl.getMap(Y_MAP_USER_AWARENESS).delete(Y_MAP_MODE));
-  client = await setupMcpClient();
+  ({ client, close } = await setupMcpServer([
+    registerDocumentTools,
+    registerAnnotationTools,
+    registerNavigationTools,
+    registerAwarenessTools,
+  ]));
+});
+
+// File-level, beside `afterAll` below. The describe-scoped `afterEach`s further
+// down cover one describe each and none of them touches the client.
+afterEach(async () => {
+  await close?.();
+  close = undefined;
 });
 
 // The `regex: true` cases spawn the #1795 search worker. Hygiene: the forks
@@ -1608,22 +1596,61 @@ describe("MCP tool integration — awareness tools", () => {
     ]);
   });
 
-  it("tandem_checkInbox reports the user's live selection", async () => {
+  it("tandem_checkInbox reports the user's selection WITH its own timestamp (#1624)", async () => {
     // `getUserAwareness()`'s `selection` half is written by this unit and was
     // read by nothing in the suite: swapping its key for `Y_MAP_ACTIVITY`, or
     // returning `undefined` outright, stayed green everywhere while
     // `tandem_checkInbox` silently stopped telling Claude what the user has
     // highlighted.
+    //
+    // #1624: the two halves of `activity` come from two records with
+    // independent ages. The timestamps are distinct so that `selectionAt`
+    // echoing `lastEdit` (the wrong record) cannot pass.
+    const T_SEL = 1_700_000_000_111;
+    const T_EDIT = 1_700_000_999_999;
     const ydoc = setupDoc("mcp-inbox-selection", "Hello world");
+    withInternal(ydoc, () => {
+      const awareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
+      awareness.set(Y_MAP_SELECTION, { from: 6, to: 11, timestamp: T_SEL });
+      awareness.set(Y_MAP_ACTIVITY, { isTyping: false, cursor: 11, lastEdit: T_EDIT });
+    });
+
+    const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.activity.selectedText).toBe("world");
+    expect(parsed.data.activity.selectionAt).toBe(T_SEL);
+    expect(parsed.data.activity.lastEdit).toBe(T_EDIT);
+  });
+
+  it("tandem_checkInbox nulls selectionAt with selectedText on a collapsed record (#1624)", async () => {
+    // A collapse is written as `{from, to: from}` with a FRESH timestamp, so a
+    // `selectionAt` read without the `hasSelection` term would report a time
+    // for a selection that no longer exists.
+    const ydoc = setupDoc("mcp-inbox-selection-collapsed", "Hello world");
     withInternal(ydoc, () =>
       ydoc
         .getMap(Y_MAP_USER_AWARENESS)
-        .set(Y_MAP_SELECTION, { from: 6, to: 11, timestamp: Date.now() }),
+        .set(Y_MAP_SELECTION, { from: 6, to: 6, timestamp: 1_700_000_000_111 }),
+    );
+
+    const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.activity.selectedText).toBeNull();
+    expect(parsed.data.activity.selectionAt).toBeNull();
+  });
+
+  it("tandem_checkInbox survives a selection record with no timestamp (#1624)", async () => {
+    // `undefined` is not `null` to the SDK's structured-output validation: it
+    // fails the WHOLE inbox response. The handler's `typeof` guard is the pin.
+    const ydoc = setupDoc("mcp-inbox-selection-untimed", "Hello world");
+    withInternal(ydoc, () =>
+      ydoc.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_SELECTION, { from: 6, to: 11 }),
     );
 
     const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
     expect(parsed.error).toBe(false);
     expect(parsed.data.activity.selectedText).toBe("world");
+    expect(parsed.data.activity.selectionAt).toBeNull();
   });
 
   it("tandem_reply sends a chat message", async () => {
@@ -1776,7 +1803,7 @@ describe("MCP tool integration — tandem_appendContent (#979)", () => {
       await client.callTool({ name: "tandem_appendContent", arguments: { content: "# nope" } }),
     );
     expect(parsed.error).toBe(true);
-    expect(parsed.code).toBe("FORMAT_ERROR");
+    expect(parsed.code).toBe("READ_ONLY");
   });
 
   it("rejects non-markdown documents", async () => {

@@ -24,9 +24,6 @@
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { beforeEach, describe, expect, it } from "vitest";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
@@ -34,6 +31,7 @@ import { convertToMarkdown } from "../../src/server/mcp/convert.js";
 import { populateYDoc } from "../../src/server/mcp/document.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { setupMcpServer } from "../helpers/mcp-harness.js";
 
 const POSIX = process.platform !== "win32";
 
@@ -70,16 +68,6 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
   });
 
   describe("tandem_exportAnnotations", () => {
-    async function mcpClient(): Promise<Client> {
-      const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
-      registerAnnotationTools(server);
-      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-      const client = new Client({ name: "test-client", version: "0.0.1" });
-      await server.connect(serverTransport);
-      await client.connect(clientTransport);
-      return client;
-    }
-
     function openDoc(): string {
       const id = `export-doc-${counter}`;
       populateYDoc(getOrCreateDocument(id), "Hello world");
@@ -96,13 +84,19 @@ describe("export paths are canonicalized on create-new, not only on overwrite", 
 
     /** The whole `{ error, code, message, data }` envelope. */
     async function exportEnvelope(outputPath: string): Promise<Record<string, unknown>> {
-      const client = await mcpClient();
-      const result = (await client.callTool({
-        name: "tandem_exportAnnotations",
-        arguments: { outputPath, format: "json", writeToDisk: true },
-      })) as { content: Array<{ type: string; text?: string }> };
-      const text = result.content.find((c) => c.type === "text")?.text;
-      return text ? JSON.parse(text) : {};
+      // One client per call, closed here: `exportEnvelope` runs several times
+      // inside a single test, so a module-level handle would close only the last.
+      const { client, close } = await setupMcpServer([registerAnnotationTools]);
+      try {
+        const result = (await client.callTool({
+          name: "tandem_exportAnnotations",
+          arguments: { outputPath, format: "json", writeToDisk: true },
+        })) as { content: Array<{ type: string; text?: string }> };
+        const text = result.content.find((c) => c.type === "text")?.text;
+        return text ? JSON.parse(text) : {};
+      } finally {
+        await close();
+      }
     }
 
     async function exportTo(outputPath: string): Promise<Record<string, unknown>> {

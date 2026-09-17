@@ -20,7 +20,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import * as Y from "yjs";
 
 // vi.mock factories are hoisted before module-level code; compute paths inline.
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -38,7 +38,7 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
 
 // Capture the per-path onChanged callback so tests can deliver an "external
 // change" event deterministically (drives reloadFromDisk on a clean doc).
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: vi.fn(),
   suppressNextChange: vi.fn(),
@@ -53,7 +53,7 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
  * undefined unless a test sets it.
  */
 const { midSave } = vi.hoisted(() => ({ midSave: { run: undefined as (() => void) | undefined } }));
-vi.mock("../../src/server/file-io/doc-backup", async (importOriginal) => {
+vi.mock(import("../../src/server/file-io/doc-backup"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/file-io/doc-backup")>();
   return {
     ...original,
@@ -483,6 +483,39 @@ describe("fidelity report wiring", () => {
 
     const result = await saveDocumentToDisk(opened.documentId, "manual");
     expect(result.status).toBe("saved");
+  });
+
+  it("saves an image-bearing .docx when allowImageLoss is set (#1941)", async () => {
+    // The override half of the decision #1939 shipped the first half of: refuse
+    // by default, proceed when the caller explicitly accepts the loss. The
+    // fixture carries TEXT beside the picture on purpose — a picture-only
+    // document regenerates blank and trips the degenerate-model check for an
+    // unrelated reason, which would make this pass for the wrong one.
+    const corpus = await import("../helpers/docx-corpus.js");
+    const filePath = path.join(tmpDir, "picture-override.docx");
+    const original = await corpus.buildEmbeddedImageWithText();
+    await fs.writeFile(filePath, original);
+
+    const opened = await openFromDisk(filePath);
+    expect(reportOf(getOrCreateDocument(opened.documentId))?.droppedImages).toBe(1);
+
+    // Default is unchanged — the refusal still fires for the same document.
+    const refused = await saveDocumentToDisk(opened.documentId, "manual");
+    expect(refused.status).toBe("error");
+    expect(refused.errorCode).toBe("VERIFY_BLOCKED");
+
+    const result = await saveDocumentToDisk(opened.documentId, "manual", {
+      allowImageLoss: true,
+    });
+    expect(result.status).toBe("saved");
+
+    // The bytes actually moved, and the text survived the regeneration — this
+    // is the half that fails if the override short-circuits the write instead
+    // of proceeding through it.
+    const after = await fs.readFile(filePath);
+    expect(after.equals(original)).toBe(false);
+    const { loadDocx } = await import("../../src/server/file-io/docx.js");
+    expect(await loadDocx(after)).toContain("Hello World");
   });
 
   it("carries droppedImages set MID-SAVE — the refusal is not erased", async () => {

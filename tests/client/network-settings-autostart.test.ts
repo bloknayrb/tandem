@@ -40,7 +40,7 @@ let toggleError: string | null = null;
  */
 const toggle = vi.fn(async (_next: boolean) => {});
 
-vi.mock("../../src/client/hooks/useAutostart.svelte.js", () => ({
+vi.mock(import("../../src/client/hooks/useAutostart.svelte.js"), () => ({
   createAutostart: () => ({
     get status() {
       return autostartStatusCell.value;
@@ -53,7 +53,7 @@ vi.mock("../../src/client/hooks/useAutostart.svelte.js", () => ({
   }),
 }));
 
-vi.mock("../../src/client/cowork/cowork-helpers.js", async (importOriginal) => ({
+vi.mock(import("../../src/client/cowork/cowork-helpers.js"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/client/cowork/cowork-helpers")>()),
   isTauriRuntime: () => true,
 }));
@@ -64,7 +64,7 @@ vi.mock("../../src/client/cowork/cowork-helpers.js", async (importOriginal) => (
 // positive control, which a fixed `info: null` mock cannot express.
 let appInfoCell: AppInfoState = { info: null, loading: false };
 
-vi.mock("../../src/client/hooks/useAppInfo.svelte.js", () => ({
+vi.mock(import("../../src/client/hooks/useAppInfo.svelte.js"), () => ({
   createAppInfo: () => appInfoCell,
 }));
 

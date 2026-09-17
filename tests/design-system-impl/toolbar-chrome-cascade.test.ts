@@ -203,7 +203,7 @@ describe("toolbar-chrome.css cascade contract", () => {
       "the set of controls wearing .tandem-toolbar-ctl changed. If you ADDED one, " +
         "bump this number. If you did not, a control lost the class (or lost the " +
         "attribute form this scan understands) and is now silently un-styled",
-    ).toBe(8);
+    ).toBe(9);
 
     // The directive form would be invisible to `classAttrValues`, and invisible
     // means PASS. 80+ `class:` directives already exist in src/client, so this

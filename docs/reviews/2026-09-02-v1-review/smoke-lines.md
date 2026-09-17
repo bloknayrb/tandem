@@ -1,9 +1,23 @@
 # Hardware-gated checks
 
-Drafted for `docs/release-smoke-checklist.md` and **not yet merged there**; they land with
-[track E](tracks/E-desktop-lifecycle.md). Each line: platform, what to do, the pass criterion, and
-the issue or lead it settles. The first three are on the next-minor
-[release gate](release-gate.md).
+Drafted for `docs/release-smoke-checklist.md` and **merged there on 2026-09-15**. Run and edit the
+checklist, not this file; the table stays as the review's record. Each line gives the platform, what
+to do, the pass criterion, and the issue or lead it settles. The first three were on the next-minor
+[release gate](release-gate.md). Where each line went:
+
+- **Rows 1 and 3:** §1's updater row, as two added paragraphs. Row 3's `Pre-install:` literal is
+  now pinned against the checklist, not this file.
+- **Row 2:** already covered by §1's updater row (no banner after a successful update), which ran
+  on 2026-09-09 (#1596).
+- **Row 4:** §2. **Row 5:** already in §2 before the merge.
+- **Rows 6 and 7:** §2 and §3. Row 6 now records survival instead of failing on it, because the
+  reaper it assumed does not exist on macOS or Linux (#1988). The relaunch is its pass.
+- **Row 8:** §1 and §2, as a check of the credential store itself. "Still signed in" cannot see
+  the keychain, because the auth token also falls back to a file. #1761 closed on 2026-09-09, so
+  the "Expected to FAIL" note below is obsolete.
+- **Row 9: not merged.** A provider API key is set in the Settings **Models** tab, which is
+  filtered out while `BYO_MODELS_ENABLED` is false. It joins the checklist with that flip (#1123).
+- **Row 10:** §3. **Row 11:** §4, now expecting #1758's named refusal. **Row 12:** §1.
 
 | Platform | Do | Pass when | Settles |
 |---|---|---|---|

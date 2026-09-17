@@ -595,9 +595,28 @@ export async function resolveExternalConflict(
 
   // reloadFromDisk returns false (and leaves the flag untouched) when a
   // concurrent reload already holds `reloadInProgress` — in that case this
-  // click didn't perform a reload, so don't claim it did.
+  // click didn't perform a reload, so don't claim it did. A user pressed a
+  // button, though, so a skip is REPORTED rather than swallowed (#1663): HTTP
+  // 200 with no toast reads as "nothing happened". The report lives here, not
+  // in `reloadFromDisk`'s guard-fail branch, because the file-watcher caller's
+  // silence on the same `false` is correct (the in-flight holder reports its
+  // own reload) and the backup-restore caller already throws
+  // RELOAD_IN_PROGRESS.
   const reloaded = await reloadFromDisk(safeId, resolvedFilePath, existing.format);
-  if (reloaded) {
+  if (!reloaded) {
+    // `pushNotification` reaches every tab, including the one whose reload
+    // won, so the wording must read correctly there too. Its own `dedupKey`
+    // keeps it from coalescing with `reload:` or `external-conflict:`.
+    pushNotification({
+      id: generateNotificationId(),
+      type: "external-conflict",
+      severity: "warning",
+      message: `Reload from file did not run for ${path.basename(existing.filePath)}: another reload of it was already in progress. If the conflict banner is still showing, choose again.`,
+      documentId: safeId,
+      dedupKey: `reload-skipped:${safeId}`,
+      timestamp: Date.now(),
+    });
+  } else {
     pushNotification({
       id: generateNotificationId(),
       type: "file-reloaded",

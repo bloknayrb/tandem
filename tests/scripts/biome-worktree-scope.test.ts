@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -56,6 +56,24 @@ afterAll(() => {
 });
 
 /**
+ * `process.env` minus every `GIT_*` variable, for anything spawned into a
+ * miniature repo (#1957).
+ *
+ * `git push` from a LINKED worktree exports `GIT_DIR=<repo>/.git/worktrees/<name>`
+ * to the pre-push hook, and the hook runs this suite. A `git init` that inherits
+ * it ignores `cwd`, re-initializes the REAL repository instead, and — with
+ * `GIT_DIR` set and no work tree — writes `core.bare = true` into the config
+ * every worktree shares. The main checkout then fails every git command with
+ * "this operation must be run in a work tree". Reproduced in throwaway repos:
+ * a pre-push hook running `git init` in a temp dir flips the main checkout's
+ * `core.bare` when pushed from a worktree, and not when pushed from main (whose
+ * hook environment carries no `GIT_DIR`).
+ */
+function isolatedGitEnv(): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+}
+
+/**
  * A miniature repo: a real git repo (biome resolves the VCS root from `.git`),
  * the config under test, one file biome will actually check, and a gitignored
  * directory holding a nested `biome.json` — the worktree shape, minus the
@@ -70,7 +88,7 @@ function plantRepo(config: BiomeConfig): string {
   // formatting diagnostic that would fail the run for the wrong reason.
   const serialised = `${JSON.stringify(config, null, 2)}\n`;
 
-  execFileSync("git", ["init", "--quiet"], { cwd: dir, stdio: "pipe" });
+  execFileSync("git", ["init", "--quiet"], { cwd: dir, stdio: "pipe", env: isolatedGitEnv() });
   writeFileSync(path.join(dir, "biome.json"), serialised);
   writeFileSync(path.join(dir, ".gitignore"), "nested-worktree/\n");
   mkdirSync(path.join(dir, "src"), { recursive: true });
@@ -87,6 +105,7 @@ function runBiome(cwd: string): { status: number; output: string } {
   try {
     const output = execFileSync(process.execPath, [BIOME_BIN, "check", "."], {
       cwd,
+      env: isolatedGitEnv(),
       encoding: "utf-8",
       stdio: "pipe",
     });
@@ -96,6 +115,38 @@ function runBiome(cwd: string): { status: number; output: string } {
     return { status: err.status ?? 1, output: `${err.stdout ?? ""}${err.stderr ?? ""}` };
   }
 }
+
+describe("miniature repo isolation from the hook's git environment (#1957)", () => {
+  it("never re-initializes the repository an inherited GIT_DIR points at", () => {
+    // A decoy stands in for the real repo: this spec must not be the thing
+    // that flips the checkout it runs in.
+    const decoy = mkdtempSync(path.join(tmpdir(), "biome-scope-decoy-"));
+    tempRoots.push(decoy);
+    execFileSync("git", ["init", "--quiet"], { cwd: decoy, stdio: "pipe", env: isolatedGitEnv() });
+    const bare = () =>
+      execFileSync("git", ["config", "--get", "core.bare"], {
+        cwd: decoy,
+        encoding: "utf-8",
+        env: isolatedGitEnv(),
+      }).trim();
+    expect(bare()).toBe("false");
+
+    const saved = process.env.GIT_DIR;
+    process.env.GIT_DIR = path.join(decoy, ".git");
+    let planted: string;
+    try {
+      planted = plantRepo(readConfig());
+    } finally {
+      if (saved === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = saved;
+    }
+
+    expect(bare(), "an inherited GIT_DIR turned the decoy bare").toBe("false");
+    expect(readdirSync(planted), "git init must create the miniature repo's own .git").toContain(
+      ".git",
+    );
+  });
+});
 
 describe("biome scope over in-repo git worktrees", () => {
   it("enables the ignore file rather than enumerating worktree paths", () => {

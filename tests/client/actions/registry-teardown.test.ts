@@ -28,7 +28,7 @@ import {
 import { observeRegistry } from "../../helpers/registry-observer.svelte.js";
 
 const reportErrorSpy = vi.fn();
-vi.mock("../../../src/client/sentry.js", () => ({
+vi.mock(import("../../../src/client/sentry.js"), () => ({
   reportError: (...args: unknown[]) => reportErrorSpy(...args),
 }));
 

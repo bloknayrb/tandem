@@ -238,6 +238,9 @@ function snapshot(ydoc: Y.Doc, docHash: string, meta: SyncMeta): AnnotationDocV1
  */
 export type ObserverCleanupPhase = "swap" | "close";
 
+/** The handle both registrars return. Its phase is required — see below. */
+export type ObserverCleanup = (phase: ObserverCleanupPhase) => void;
+
 /**
  * Attach Y.Map observers for annotations and replies that mirror user-intent
  * mutations to the store. Returns a cleanup function that unobserves both
@@ -249,10 +252,13 @@ export type ObserverCleanupPhase = "swap" | "close";
  * Callers (the open pipeline and the reload family, via the queue
  * indirection) invoke cleanup with the appropriate phase on doc close or
  * Y.Doc swap.
+ *
+ * The phase is REQUIRED, with no default (#1695). A wrong phase fails
+ * silently — `"close"` on a swap drops tombstones an in-flight debounced
+ * write still needs (#333), and `"swap"` on a close leaks the ledger — so a
+ * caller must name it rather than inherit one.
  */
-export function registerAnnotationObserver(
-  ctx: SyncContext,
-): (phase?: ObserverCleanupPhase) => void {
+export function registerAnnotationObserver(ctx: SyncContext): ObserverCleanup {
   const { ydoc, store, docHash, meta } = ctx;
 
   const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -300,7 +306,7 @@ export function registerAnnotationObserver(
   annMap.observe(onAnnMutation);
   repMap.observe(onRepMutation);
 
-  return (phase: ObserverCleanupPhase = "close") => {
+  return (phase: ObserverCleanupPhase) => {
     annMap.unobserve(onAnnMutation);
     repMap.unobserve(onRepMutation);
     if (phase === "close") {
@@ -354,8 +360,9 @@ export function recordTombstone(docHash: string, annotationId: string, prevRev: 
 }
 
 /**
- * Read-only accessor for tests and (future) diagnostic tools. Returns a
- * defensive copy so callers can't mutate the module-internal array.
+ * Read-only accessor for tests and for `injectTutorialAnnotations`, which
+ * skips a seed whose id is tombstoned here (#1696). Returns a defensive copy
+ * so callers can't mutate the module-internal array.
  */
 export function getTombstones(docHash: string): TombstoneRecordV1[] {
   const entries = tombstonesByDoc.get(docHash);
@@ -545,7 +552,7 @@ function mergeMap<T extends { rev: number; editedAt?: number }>(
 export async function loadAndMerge(
   ctx: SyncContext,
   opts?: { migrateTombstonesFrom?: string },
-): Promise<(phase?: ObserverCleanupPhase) => void> {
+): Promise<ObserverCleanup> {
   const { ydoc, store, docHash, meta } = ctx;
   const file = await store.load();
 

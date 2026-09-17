@@ -183,6 +183,13 @@ const CENSUS: Acknowledged[] = [
   },
   {
     file: "server/session/manager.ts",
+    key: "touchSession",
+    count: 1,
+    rearm: "n/a",
+    reason: "session file in SESSION_DIR — rewrites one metadata field, never a user document",
+  },
+  {
+    file: "server/session/manager.ts",
     key: "persistCtrlSnapshot",
     count: 1,
     rearm: "n/a",
@@ -438,12 +445,14 @@ describe("document write / rearmWatch site pin (#1749)", () => {
     );
 
     expect(observed).toEqual(expected);
-    // 19 write CALL sites (17 + the two `app-data-owner.ts` sites from #1787:
-    // the ownership stamp and the legacy-migration completion marker). A
-    // `git grep` returns 22 lines; the three extra are the definitions at
+    // 20 write CALL sites, and the arithmetic is worth keeping explicit because two
+    // separate changes each landed on this number from a different base: 17, plus
+    // the two `app-data-owner.ts` sites from #1787 (the ownership stamp and the
+    // legacy-migration completion marker), plus `touchSession` from #1880. A
+    // `git grep` returns 23 lines; the three extra are the definitions at
     // `file-io/index.ts` (×2) and `integrations/apply.ts`, which the walk skips
     // by construction.
-    expect(sites).toHaveLength(19);
+    expect(sites).toHaveLength(20);
   });
 
   it("no write site keys to <module>", () => {

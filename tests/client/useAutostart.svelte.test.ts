@@ -24,7 +24,7 @@ import {
   type InvokeFn,
 } from "../../src/client/tauri/autostart-invoke.js";
 
-vi.mock("../../src/client/cowork/cowork-invoke", async () => {
+vi.mock(import("../../src/client/cowork/cowork-invoke"), async () => {
   const actual = await vi.importActual<typeof import("../../src/client/cowork/cowork-invoke")>(
     "../../src/client/cowork/cowork-invoke",
   );

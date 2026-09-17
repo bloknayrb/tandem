@@ -34,6 +34,24 @@ function fetchWith(data: Record<string, unknown>) {
     );
 }
 
+/** A `fetch` stub that records its `init` — the request BODY is what #1941's
+ * two specs are about, and `fetchWith`'s zero-arg shape types `mock.calls` as
+ * an empty tuple, so the argument is unreachable through it. */
+function savedFetchSpy() {
+  return vi.fn((_url: unknown, _init?: RequestInit) =>
+    Promise.resolve(
+      new Response(JSON.stringify({ data: { status: "saved" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ),
+  );
+}
+
+function sentBody(spy: ReturnType<typeof savedFetchSpy>): unknown {
+  return JSON.parse(String(spy.mock.calls[0]?.[1]?.body));
+}
+
 function fetchFail() {
   return Promise.resolve(
     new Response(JSON.stringify({ message: "disk full" }), {
@@ -76,6 +94,26 @@ describe("triggerSave / saveStore.lastSaveOk", () => {
     expect(saveStore.lastSaveOk).toBe(true);
     expect(saveStore.saving).toBe(false);
     expect(notify.mock.calls.filter(([sev]) => sev === "error")).toEqual([]);
+    vi.unstubAllGlobals();
+  });
+
+  // #1941: the override is opt-in on the wire too. An ordinary save must send
+  // the body it always sent — the server tests `=== true`, so a stray
+  // `allowImageLoss: false` would be harmless, but a stray `true` would make
+  // every Ctrl+S an image-destroying save.
+  it("omits allowImageLoss from the request body unless asked", async () => {
+    const fetchMock = savedFetchSpy();
+    vi.stubGlobal("fetch", fetchMock);
+    await triggerSave("doc-1");
+    expect(sentBody(fetchMock)).toEqual({ documentId: "doc-1" });
+    vi.unstubAllGlobals();
+  });
+
+  it("sends allowImageLoss: true when the save-anyway caller asks for it", async () => {
+    const fetchMock = savedFetchSpy();
+    vi.stubGlobal("fetch", fetchMock);
+    await triggerSave("doc-1", { allowImageLoss: true });
+    expect(sentBody(fetchMock)).toEqual({ documentId: "doc-1", allowImageLoss: true });
     vi.unstubAllGlobals();
   });
 

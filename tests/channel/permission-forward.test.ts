@@ -38,7 +38,7 @@ vi.mock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
   StdioServerTransport: class {},
 }));
 // The SSE consumer never settles; it is not what this file is about.
-vi.mock("../../src/channel/event-bridge.js", () => ({
+vi.mock(import("../../src/channel/event-bridge.js"), () => ({
   startEventBridge: async () => {},
 }));
 

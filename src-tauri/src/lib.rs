@@ -1693,7 +1693,6 @@ pub fn run() {
             context_menu::show_tab_context_menu,
             context_menu::show_annotation_context_menu,
             install_update,
-            keychain::keychain_get,
             keychain::keychain_set,
             keychain::keychain_delete,
             autostart::autostart_get_status,
@@ -3030,7 +3029,7 @@ async fn perform_install(
     // dialog says it worked — which is why `StopReport` is `#[must_use]`.
     //
     // BOTH outcomes are logged at `warn`, and the success half is not
-    // decoration. `smoke-lines.md` row 3 asks the tester to grep `tandem.log`
+    // decoration. The smoke checklist's §1 updater row has the tester grep `tandem.log`
     // for an update run with unsaved edits — and on Windows there is no verdict
     // line to read, because `RunEvent::Exit` never fires. Every other line on
     // this path is `info!`, below the release floor, so without this the row's
@@ -3041,9 +3040,10 @@ async fn perform_install(
     // so it is pinned like one: `respawn_guard_lines_are_warns_and_match_the
     // _smoke_checklist` in `sidecar.rs` requires it to appear exactly once here,
     // as the first argument of an uncommented `log::warn!(`, and to be present
-    // in `smoke-lines.md`. Row 3 was prose when this string was added, which
-    // meant the commit whose subject was "add a guard for exactly this" created
-    // an unguarded instance of exactly this; the row now carries the literal.
+    // in `release-smoke-checklist.md`, where the row moved from `smoke-lines.md`
+    // row 3. That row was prose when this string was added, which meant the
+    // commit whose subject was "add a guard for exactly this" created an
+    // unguarded instance of exactly this; the row now carries the literal.
     match stop_sidecar_gracefully(app, &client, GRACEFUL_SHUTDOWN_DEADLINE_SECS)
         .await
         .unflushed_warning("Pre-install")
