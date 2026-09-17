@@ -133,9 +133,9 @@ describe("tandem_note tool logic (via createAnnotation)", () => {
  * cannot set it — the highlight is stored outbound and demoted to `private` by
  * `sanitizeAnnotation` on read, and `isClaudeFacing` then excludes it. So
  * unfiltered is 3 and not 4, `author: "user"` is 0 and not 1, `status:
- * "pending"` is 2 and not 3, and `type: "highlight"` returns nothing by
- * documented design. Those are the ADR-027 / #1619 / #1710 rules this describe
- * appeared to cover and did not.
+ * "pending"` is 2 and not 3, and `type: "highlight"` returns nothing for this
+ * fixture's user-authored highlight. Those are the ADR-027 / #1619 / #1710
+ * rules this describe appeared to cover and did not.
  */
 describe("tandem_getAnnotations tool logic", () => {
   let client: Client;
@@ -221,8 +221,13 @@ describe("tandem_getAnnotations tool logic", () => {
 
     expect((await getAnnotations({ type: "comment" })).count).toBe(3);
 
-    // Stated in the tool's own description: highlights are private, so this
-    // filter can never return a record.
+    // 0 because this fixture's only highlight is USER-authored, hence private.
+    // The tool's description puts it more strongly — `type: "highlight"`
+    // "always returns nothing" — but the code is narrower than its own prose:
+    // `isClaudeFacing` admits a CLAUDE-authored outbound highlight, and
+    // `read-audience-filter.test.ts` pins one being returned (#1710 row 2, the
+    // shape of the tutorial's first card). This row asserts the fixture's case,
+    // not the description's absolute.
     const highlights = await getAnnotations({ type: "highlight" });
     expect(highlights.count).toBe(0);
     expect(highlights.privateExcluded).toBe(1);
