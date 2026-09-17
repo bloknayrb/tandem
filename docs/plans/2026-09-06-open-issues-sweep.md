@@ -1190,9 +1190,10 @@ annoyance, take the annoyance. Its cost is the recovery gap filed as **#2038**.
 
 **Wave 12 shipped three PRs, all three merged the same day.** #2052 (`bc965fbf`) closing **#1626**;
 #2051 (`dae5635b`) closing **#2038**; #2050 (`cbccfefd`) closing **#2040**. Three issues were filed
-out of the work and all remain OPEN: **#2048** and **#2049** from the harness migration, and
-**#2053** — #1626's third sub-question, filed at orchestrator review so `Closes #1626` could stand
-honestly rather than degrading to a `Refs`.
+out of the work: **#2048** and **#2049** from the harness migration, and **#2053** — #1626's
+third sub-question, filed at orchestrator review so `Closes #1626` could stand honestly rather than
+degrading to a `Refs`. All three were open when this section was written; #2048 and #2049 have
+since closed (see *Follow-ups closed after wave 12* below) and **#2053** remains open.
 
 **Every lesson this wave produced is again a measurement that looked right and was not — and this
 time two of them were mine, caught before they shipped rather than after.**
@@ -1286,6 +1287,67 @@ Three are carried forward from wave 11 and **keep their numbering there** (items
 7. **#1626 — should the reply box show a word-diff rather than the proposed text?** Implemented as
    the proposed text. A word-diff means extracting `SuggestionCard`'s diff box, which is the one
    change in this area that can silently delete two `data-testid` snapshot entries (Critical Rule 7).
+
+#### Follow-ups closed after wave 12
+
+**Three hand-run follow-ups closed on 2026-09-16, none of them a workflow group.** They get no
+status-table row: the table's rows are wave/group rows for workflow-driven work, and #2055/#2056
+set the precedent that a hand-done follow-up is recorded here as prose instead. That keeps the
+nine-column contract `tests/docs/sweep-ledger-table-claims.test.ts` pins untouched.
+
+**#2045 — the ledger's own status table was malformed.** PR #2055 (`e4ac3a08`). Twelve rows did not
+have the nine columns the header declares: six wave-2/3 rows carried a stranded merge-SHA column
+that shifted four headings, five had pipes inside prose or code spans, and one row was swallowed by
+a missing newline and never rendered at all. Three wave-6 rows also still read `planned` for groups
+that merged 2026-09-10. `tests/docs/sweep-ledger-table-claims.test.ts` now pins the shape inside
+`check`. **A pipe splits a table cell even inside a `code span`** — backticks do not protect it,
+only an escaped pipe does — and neither `awk -F'|'` nor `split("|")` can measure this, because both
+treat an escaped pipe as a separator. A character scan that tracks the backslash is the only
+correct probe.
+
+**#2049 — nothing enforced the harness adoption #2040 had just completed.** PR #2056 (`afe54d17`)
+adds `tests/scripts/mcp-harness-adoption.test.ts`, pinning that every test linking an
+`InMemoryTransport` pair routes through `tests/helpers/mcp-harness.ts`, with
+`tests/server/mcp-stdio-ports.test.ts` the one allowlisted exception and its exemption pinned by
+REASON rather than by path. Two lessons: a drift guard that searches for a string **finds itself**,
+so the checker is excluded by path; and **mutation-test the exclusion, not only the detection** —
+that self-exclusion turned out redundant, because `HARNESS` and `USES_HARNESS` put the search
+literal into the file by construction, which disproved the reason first written for it. The
+exclusion was kept for the narrower style reason and the file says so.
+
+**#2048 — the `tandem_getAnnotations tool logic` describe reimplemented the filter.** PR #2057
+(`b0d76c6b`). It filtered a local array and never called a registered handler, so it asserted the
+test's own model of the filter; it was the live counter-example named in `mcp-harness.ts`'s own doc
+comment, and ADR-035 Unit 8g exists because of that shape. Now driven through
+`setupMcpServer([registerAnnotationTools])`.
+
+**Four of its six rows changed meaning, which is the finding rather than a regression.** The
+hand-rolled version filtered the RAW collection, so it counted a record the tool has never
+returned: the fixture's user highlight. `mintAnnotation` hardcodes `audience: "outbound"` and
+`audience` is a lifecycle-owned field, so a fixture *cannot* set it — the highlight is stored
+outbound, demoted to `private` by `sanitizeAnnotation` on read, and excluded by `isClaudeFacing`.
+Unfiltered is 3 and not 4 (with `privateExcluded: 1`), `author: "user"` is 0 and not 1, `status:
+"pending"` is 2 and not 3, and `type: "highlight"` is 0. Every one of those numbers was derived
+from the rules **before** the suite was run and each held on the first green run; no assertion was
+adjusted to reach green. A fifth row filtered on `suggestedText`, which is not a tool parameter at
+all, and is now an assertion on the returned record.
+
+**A claim of mine was caught mid-review and narrowed rather than shipped.** The first commit's
+comment said `type: "highlight"` "can never return a record", quoting the tool's description
+accurately — it does say highlights "always return nothing". But **the description is stronger than
+the code**: `isClaudeFacing` admits a CLAUDE-authored outbound highlight, and
+`tests/server/read-audience-filter.test.ts` pins one being returned (#1710 row 2, the shape of the
+tutorial's first card). The row's 0 is a fact about that fixture, not a property of the filter. A
+second commit narrows it; the tool's user-facing description is deliberately left alone, because
+narrowing MCP copy is a product decision rather than part of a test rewrite.
+
+**One mutation result recorded rather than glossed.** Five `src` mutations, each row reddened by at
+least one — but the compound `author`+`status` row is reddened **only** by the status mutation.
+With this fixture the sole user-authored record is excluded as private, so dropping the author
+filter still leaves `claude`+`pending` at 2: the compound row pins the conjunction's status half
+alone, and the author row is what pins `author`. Separately, adding `suggestedText` to
+`LIFECYCLE_OWNED_FIELDS` is what **proves** the "a fixture cannot set `audience`" claim above,
+instead of leaving it as an assertion about code.
 
 ### Wave 0 record
 
