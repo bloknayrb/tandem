@@ -4,10 +4,13 @@
  *
  * Driving the REGISTERED handler is what separates a real tool test from one
  * that reimplements the tool's filters and then asserts its own model of them.
- * The live counter-example is `tests/server/annotation-tools.test.ts`'s
- * "tandem_getAnnotations tool logic" describe block, which filters in the test
- * itself and never calls a handler; ADR-035 Unit 8g exists because of it. So
- * the point of this module is not line count — it is that ~20 lines of
+ * The counter-example was `tests/server/annotation-tools.test.ts`'s
+ * "tandem_getAnnotations tool logic" describe block, which filtered in the test
+ * itself and never called a handler; ADR-035 Unit 8g exists because of it. It
+ * was rewritten onto this harness in #2048, and four of its six rows changed
+ * meaning once they began exercising the real filter — which is what leaving
+ * one in place costs, not an argument that the rewrite was optional. So the
+ * point of this module is not line count — it is that ~20 lines of
  * boilerplate is exactly the friction that produces the next hand-rolled
  * filter test, and a one-line import makes the right shape the easy one.
  *
