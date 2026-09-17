@@ -14,7 +14,7 @@ const controls = vi.hoisted(() => ({
   sessionDir: "",
 }));
 
-vi.mock("../../src/server/platform", async () => {
+vi.mock(import("../../src/server/platform"), async () => {
   const actual = await vi.importActual<typeof import("../../src/server/platform")>(
     "../../src/server/platform",
   );
@@ -24,7 +24,7 @@ vi.mock("../../src/server/platform", async () => {
   controls.sessionDir = pathMod.join(osMod.tmpdir(), `tandem-chat-clear-${cryptoMod.randomUUID()}`);
   return { ...actual, SESSION_DIR: controls.sessionDir };
 });
-vi.mock("../../src/server/file-io/index.js", async () => {
+vi.mock(import("../../src/server/file-io/index.js"), async () => {
   const actual = await vi.importActual<typeof import("../../src/server/file-io/index.js")>(
     "../../src/server/file-io/index.js",
   );

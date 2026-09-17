@@ -12,7 +12,8 @@ import { allMcpSource, registeredToolNames, wrappedToolNames } from "../helpers/
  * have caught them: it statically asserts each mutation tool is registered with
  * `gatedTool(...)` and NOT `withErrorBoundary(...)`, and — equally important —
  * that the read/escape-hatch tools stay UNgated so restricted users keep
- * read/save/export/accept-dismiss.
+ * read/save/export. (Accept/dismiss left that set in #1788 — see the
+ * `tandem_resolveAnnotation` row.)
  *
  * Static rather than behavioural so it can't be fooled by a green run when a
  * tool is swapped back to `withErrorBoundary` (the regression class is "wrong
@@ -39,9 +40,9 @@ type ToolGate = { name: string; gate: "gated" | "ungated"; why: string };
  * can't silently ship a hole.
  *
  * List-scoped rationale, `ungated`: read / escape-hatch tools that MUST stay
- * ungated so a restricted user can still read, save, export, and accept/dismiss
- * existing work. Navigation / inspection / chat / file-management tools are here
- * too: none mutate Y.Doc *content* — reads, outline and search are pure;
+ * ungated so a restricted user can still read, save and export existing work.
+ * Accept/dismiss is NOT in that set — see the `tandem_resolveAnnotation` row.
+ * Navigation / inspection / chat / file-management tools are here too: none mutate Y.Doc *content* — reads, outline and search are pure;
  * tandem_convertToMarkdown writes a separate export file; tandem_rename is a
  * filesystem op (not a content write); tandem_reply/checkInbox/getActivity touch
  * CTRL_ROOM (chat/awareness), which stays writable when restricted;
@@ -65,8 +66,8 @@ const TOOL_GATES: ToolGate[] = [
   { name: "tandem_restoreBackup", gate: "gated", why: "replaces document content" },
   {
     name: "tandem_resolveAnnotation",
-    gate: "ungated",
-    why: "accept/dismiss only flips annotation status, it never writes document content, so gating it would needlessly block triage",
+    gate: "gated",
+    why: "decision F (#1788, #1827): restricted is SYMMETRIC read-only for annotation CONTENT and STATUS writes. Accept/dismiss is a write to the document room's annotation map, which Surface A already refuses from the browser when restricted — leaving the MCP twin ungated let Claude triage a document its own user cannot. Supersedes the earlier 'only flips annotation status, gating it would needlessly block triage', which weighed the write and not the asymmetry. The one recorded exception is POST /api/mode/release — see its row in license-gate-api-coverage.test.ts and the open question on #1788. No /api twin exists for resolve (api-paths.ts has reply + remove only), so Critical Rule 9's second half is satisfied by construction",
   },
   { name: "tandem_save", gate: "ungated", why: "escape hatch: writes the user's own file out" },
   {

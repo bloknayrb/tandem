@@ -37,7 +37,7 @@ if [ "$saw_ref" -eq 1 ] && [ "$only_deletes" -eq 1 ]; then
 	exit 0
 fi
 
-npx biome check src/ tests/
+npx biome check .
 # The test tree's typecheck had no local runner at all: this hook did not run
 # it, `npm run typecheck` does not chain it, and CLAUDE.md's verification
 # recipe names neither -- so the CI step was the only thing that ever ran the

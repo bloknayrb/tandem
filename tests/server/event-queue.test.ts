@@ -1137,12 +1137,9 @@ describe("reattachObservers — file-sync context rebind", () => {
   // test in the suite — the wipe only shows up as per-process memory growth
   // across many opens, which no unit test otherwise exercises.
   //
-  // This spec does NOT cover a flipped DEFAULT, though an earlier version of
-  // this comment claimed it did: it passes an explicit `"close"` below, so
-  // `= "close"` in the signature could become `= "swap"` underneath it and
-  // this would still pass. That case is pinned separately, in
-  // tests/server/annotations/sync.test.ts — "cleanup with no argument
-  // defaults to the close phase".
+  // There is no default phase to flip: the cleanup's `phase` parameter is
+  // required (#1695), so a caller that omits it is a compile error rather than
+  // a silent `"close"` or `"swap"`.
   it("close-phase cleanup drops the tombstone ledger (#333)", async () => {
     const { recordTombstone, registerAnnotationObserver, getTombstones } = await import(
       "../../src/server/annotations/sync.js"
@@ -1190,7 +1187,7 @@ let _ctrlTestDoc: Y.Doc = new Y.Doc();
 // in this file. This is currently safe because only attachCtrlObservers() calls
 // getOrCreateDocument() -- attachObservers/reattachObservers take a Y.Doc parameter
 // directly and are unaffected. If that changes, move CTRL_ROOM tests to a separate file.
-vi.mock("../../src/server/yjs/provider.js", () => ({
+vi.mock(import("../../src/server/yjs/provider.js"), () => ({
   getOrCreateDocument: () => _ctrlTestDoc,
   // #1447: registerDirtyObserver publishes its mirror through getDocument, which
   // resolves the LIVE room doc rather than the one it was handed. These tests
@@ -1199,7 +1196,7 @@ vi.mock("../../src/server/yjs/provider.js", () => ({
   getDocument: () => undefined,
 }));
 
-vi.mock("../../src/server/documents/registry.js", async (importOriginal) => ({
+vi.mock(import("../../src/server/documents/registry.js"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/documents/registry.js")>()),
   getOpenDocs: () => new Map(),
 }));
@@ -1213,12 +1210,14 @@ vi.mock("../../src/server/documents/registry.js", async (importOriginal) => ({
 // observer threw — and it also meant no spec here could exercise the actual
 // bounds logic, only the mock's own return value.
 let _validateRangeResult: { ok: boolean } | null = { ok: true };
-vi.mock("../../src/server/positions.js", async (importOriginal) => {
+vi.mock(import("../../src/server/positions.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/positions.js")>();
   return {
     ...actual,
     validateRange: (...args: Parameters<typeof actual.validateRange>) =>
-      _validateRangeResult ?? actual.validateRange(...args),
+      (_validateRangeResult ?? actual.validateRange(...args)) as ReturnType<
+        typeof actual.validateRange
+      >,
   };
 });
 
@@ -1627,6 +1626,80 @@ describe("WS-A2 Solo privacy hold (pushEvent)", () => {
 
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe("annotation:accepted");
+    cleanup();
+  });
+
+  // ── #1823 item 7: tracking ran BEFORE the forward decision was bound ──────
+  //
+  // `isUserPrivacyHeld` deliberately does NOT drop accept/dismiss or a
+  // Claude-authored reply, so in Solo they reach the tracking line. With an
+  // external consumer attached, the old order tracked them even though the
+  // fan-out skips every external subscriber — so `wasEmittedViaChannel`
+  // answered true and `tandem_checkInbox` stamped `alreadyPushed: true` on an
+  // item nothing outside this process ever received.
+  function seedClaudeAnnotation(id: string) {
+    doc.transact(() => {
+      doc.getMap(Y_MAP_ANNOTATIONS).set(id, {
+        id,
+        type: "comment",
+        author: "claude",
+        content: "suggestion",
+        status: "pending",
+        textSnapshot: "hello",
+        range: { from: 0, to: 5 },
+      });
+    }, MCP_ORIGIN);
+  }
+
+  function accept(id: string) {
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    const ann = map.get(id) as Record<string, unknown>;
+    map.set(id, { ...ann, status: "accepted" });
+  }
+
+  it("does not stamp a Solo-withheld accept, with an external consumer attached", () => {
+    setMode("solo");
+    seedClaudeAnnotation("ann_gate_solo");
+    const { events, cleanup } = collectEvents("external");
+
+    accept("ann_gate_solo");
+
+    // Nothing left the process...
+    expect(events).toHaveLength(0);
+    // ...so the delivery hint must not claim otherwise.
+    expect(wasEmittedViaChannel("ann_gate_solo")).toBe(false);
+    cleanup();
+  });
+
+  it("still stamps the same accept in Tandem (kills a fix that never tracks)", () => {
+    setMode("tandem");
+    seedClaudeAnnotation("ann_gate_tandem");
+    const { events, cleanup } = collectEvents("external");
+
+    accept("ann_gate_tandem");
+
+    expect(events).toHaveLength(1);
+    expect(wasEmittedViaChannel("ann_gate_tandem")).toBe(true);
+    cleanup();
+  });
+
+  it("stamps a chat:message even in Solo — chat forwards unconditionally", () => {
+    // The carve-out the whole rationale leans on. Every other
+    // `wasEmittedViaChannel` assertion in this file uses an annotation or reply
+    // id, so a gate written as `readModeState() === "tandem" && …` would pass
+    // both cases above and break only here.
+    setMode("solo");
+    const { events, cleanup } = collectEvents("external");
+
+    _pushEventForTests({
+      id: "evt_chat_gate",
+      timestamp: Date.now(),
+      type: "chat:message",
+      payload: { messageId: "msg_gate", text: "hi", replyTo: null, anchor: null },
+    });
+
+    expect(events).toHaveLength(1);
+    expect(wasEmittedViaChannel("msg_gate")).toBe(true);
     cleanup();
   });
 });

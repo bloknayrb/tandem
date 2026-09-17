@@ -9,15 +9,14 @@
  * snapshot (`UpdaterBannerHarness.svelte` contributes `updater-banner-visible`
  * today). A test scaffold should not be a design-system contract.
  */
+import type { ComponentProps } from "svelte";
 import PendingUpdateBanner from "../../../src/client/components/PendingUpdateBanner.svelte";
 
-interface Props {
-  visible: boolean;
-  onCheck: () => void;
-  onDismiss: () => void;
-}
-
-let { visible, onCheck, onDismiss }: Props = $props();
+// Derived from the component, never re-declared: a hand-copied `Props` here is
+// a silent drift channel, because nothing compared it against production until
+// #1614 put this file in a typechecked program.
+let { visible, onCheck, onDismiss }: ComponentProps<typeof PendingUpdateBanner> =
+  $props();
 </script>
 
 <PendingUpdateBanner {visible} {onCheck} {onDismiss} />

@@ -66,6 +66,13 @@ export type LoadIssue =
        * dismiss the warnings that matter.
        */
       structuralLosses?: number;
+      /**
+       * How many body pictures the import DROPPED (#1755). Distinct from
+       * `structuralLosses` because it is not a display count: a non-zero value
+       * REFUSES the binary save, since `exportYDocToDocx` regenerates the file
+       * from an image-less Y.Doc and would overwrite the user's pictures away.
+       */
+      droppedImages?: number;
     };
 
 /**

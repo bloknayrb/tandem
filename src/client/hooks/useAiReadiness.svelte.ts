@@ -200,11 +200,15 @@ export type AiReadinessState = "booting" | "unconfigured" | "stopped" | "ready";
  *     it is; `binary-not-found` remains the *reaper*-missing case (a broken
  *     Tandem install) and still falls into `restart`, since retrying the
  *     reaper spawn is the only available action.
+ *   - `sign-in` — configured but stopped because the CLI answered "Not logged
+ *     in" (`lastError === "needs-login"`, #1780). Its action is a restart,
+ *     which is the re-check: the supervisor sends the resumed session a turn,
+ *     and a CLI the user has since signed in answers it.
  *   - `restart` — configured but stopped for any other reason, including
- *     `circuit-open` with a healthy CLI and the rare `binary-not-found`.
- *     Plain restart.
+ *     `circuit-open` with a healthy CLI, `wake-delivery-failed`, and the rare
+ *     `binary-not-found`. Plain restart.
  */
-export type AiChip = "connect" | "setup" | "restart" | null;
+export type AiChip = "connect" | "setup" | "sign-in" | "restart" | null;
 
 /**
  * Everything a surface needs to render an `AiChip`'s call to action: its copy
@@ -251,6 +255,13 @@ export const AI_CTA: Record<
       "Claude Code needs to be installed — already have it? Run “Relaunch Claude in this folder” from the command palette",
     ariaLabel: "Claude Code needs to be installed. Set up Claude Code.",
     action: "connect",
+  },
+  "sign-in": {
+    label: "Check Claude sign-in",
+    title:
+      "Claude Code isn't signed in. Run “claude” in a terminal and sign in, then click to check again.",
+    ariaLabel: "Claude Code is not signed in. Check again after signing in.",
+    action: "restart",
   },
   restart: {
     label: "Restart Claude Code",
@@ -728,7 +739,9 @@ export function createAiReadiness(deps: {
         : state === "stopped"
           ? lastError === "cli-unusable"
             ? "setup"
-            : "restart"
+            : lastError === "needs-login"
+              ? "sign-in"
+              : "restart"
           : null,
   );
 

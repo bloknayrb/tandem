@@ -100,20 +100,33 @@ describe("ADR-035 Unit 8f: who may write a reply", () => {
     // an MCP-side module, left all four specs GREEN. The census never sees it —
     // the alias is *defined* in a sanctioned file and the consumer never spells
     // the pinned name — and `writeReply`'s count is untouched, because the alias
-    // goes through `addUserReply`. Exactly ONE occurrence here once comments are
-    // stripped: the declaration. Its body calls `writeReply`, not itself, so a
-    // second mention is an alias, a re-export, or a new internal caller — each
-    // of which hands the unguarded capability somewhere this suite cannot see.
-    expect(
-      lifecycle.match(/\baddUserReply\b/g) ?? [],
-      "the declaration and nothing else — a second mention hands the capability on",
-    ).toHaveLength(1);
+    // goes through `addUserReply`.
+    //
+    // The two symbol-specific alias/re-export guards run FIRST and the
+    // blanket occurrence count LAST — ordering is load-bearing, not
+    // stylistic (general-purpose-3): `export const postReplyAsUser =
+    // addUserReply;` makes the occurrence count 2, and
+    // `expect(...).toHaveLength(1)` throws on the first failure it hits,
+    // aborting the `it()` before either `not.toMatch` below it runs.
+    // Mutation-verified: with the count first, adding the alias export fails
+    // the count line and neither `not.toMatch` executes, so they could never
+    // report their own clearer message. Put first, they do.
     expect(lifecycle, "no alias binding of the unguarded entry").not.toMatch(
       /export\s+(?:const|let|var|function)\s+\w+\s*=?\s*addUserReply\b/,
     );
     expect(lifecycle, "no aliased re-export of the unguarded entry").not.toMatch(
       /export\s*\{[^}]*\baddUserReply\b[^}]*\bas\b/,
     );
+    // Exactly ONE occurrence here once comments are stripped: the
+    // declaration. Its body calls `writeReply`, not itself, so a second
+    // mention is an alias, a re-export, or a new internal caller — each of
+    // which hands the unguarded capability somewhere this suite cannot see.
+    // The general backstop for any other shape the two regexes above don't
+    // name.
+    expect(
+      lifecycle.match(/\baddUserReply\b/g) ?? [],
+      "the declaration and nothing else — a second mention hands the capability on",
+    ).toHaveLength(1);
 
     // `writeReply` stays module-private. Exporting it makes the count above
     // meaningless: a caller in any other file would then reach the mechanism

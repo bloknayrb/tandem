@@ -361,7 +361,7 @@ function blockToYxml(
     }
 
     case "image": {
-      return [imageToYxml(node)];
+      return [imageToYxml(node, deferred)];
     }
 
     case "html": {
@@ -433,9 +433,8 @@ function blockToYxml(
  * No `deferred` entry, unlike every other builder here. The two-pass rule exists
  * because a DETACHED `Y.XmlText` reverses segment order on attach — and there
  * are no segments to reverse. `new Y.XmlText("")` bakes the (empty) content in
- * at construction, the same reasoning `imageToYxml` gives for taking no
- * `deferred`; routing it through pass 2 would only reach `insert(0, "")`, which
- * yjs returns from immediately.
+ * at construction; routing it through pass 2 would only reach `insert(0, "")`,
+ * which yjs returns from immediately.
  */
 function ensureBlockChild(el: Y.XmlElement, childCount: number): void {
   if (childCount > 0) return;
@@ -471,20 +470,28 @@ function rawBlockParagraph(
  *
  * `node.url` comes straight from the opened `.md` file — untrusted content,
  * same as a pasted image src (#1420). Sanitized through the same allowlist
- * `sanitizeImageSrcForPaste` applies at paste time; a rejected src downgrades
- * to a plain-text paragraph carrying the alt/title text (mirroring the
- * paste-time fallback in `markdown-paste.ts`'s `imageFallbackToken`) rather
- * than reaching the Y.Doc unvetted. `new Y.XmlText(text)` bakes content in at
- * construction — same pattern the `<br>` case below uses — so this stays safe
- * under the "attach Y.XmlText before populating" rule without needing the
- * two-pass `deferred` mechanism.
+ * `sanitizeImageSrcForPaste` applies at paste time.
+ *
+ * A REJECTED src is preserved verbatim as a `paragraph[markdownRaw]` (#1755),
+ * the same carrier `footnoteDefinition`/`definition` use and the treatment #1799
+ * gave the truly-inline image case. It used to downgrade to the bare alt text,
+ * which silently deleted the URL from the user's file on the next save —
+ * measured on `![Architecture diagram](file:///C:/…/diagram.png)`, which saved
+ * back as the three words `Architecture diagram`.
+ *
+ * Two properties this inherits rather than invents: the raw run's characters
+ * count 1-for-1 in `getElementText()`, so no annotation offset moves (#981); and
+ * the run is TEXT, never an `src`, so nothing `sanitizeImageSrc` rejected reaches
+ * a DOM sink (#1420 unchanged). The raw arm needs `deferred` because
+ * `rawBlockParagraph` populates in pass 2, after attachment.
  */
-function imageToYxml(node: Extract<PhrasingContent, { type: "image" }>): Y.XmlElement {
+function imageToYxml(
+  node: Extract<PhrasingContent, { type: "image" }>,
+  deferred: DeferredText[],
+): Y.XmlElement {
   const src = sanitizeImageSrc(node.url);
   if (!src) {
-    const el = new Y.XmlElement("paragraph");
-    el.insert(0, [new Y.XmlText(node.alt || node.title || "")]);
-    return el;
+    return rawBlockParagraph(serializeMdastInline(node), deferred);
   }
   const el = new Y.XmlElement("image");
   el.setAttribute("src", src);
@@ -532,7 +539,7 @@ function splitParagraphImages(
   for (const child of children) {
     if (child.type === "image") {
       flushInline();
-      result.push(imageToYxml(child));
+      result.push(imageToYxml(child, deferred));
     } else if (child.type === "break") {
       // Dropped, not accumulated. The caller only routes here when every
       // non-image child is filler, so a break can only sit BETWEEN two images

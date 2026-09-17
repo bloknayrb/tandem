@@ -75,6 +75,17 @@ describe("sessionModelIsStale", () => {
     expect(sessionModelIsStale(session({ conflict: { kind: "nonsense" } as never }))).toBe(true);
   });
 
+  it("discards a session stamped 2 — the pre-#1754/#1755 load path", () => {
+    // Review round 1. Both halves of #1755 live on the LOAD path and neither
+    // reaches a restored session: a v2 session keeps the markdown image whose
+    // `file:`/SVG src was replaced by its alt text, and a `.docx` whose restored
+    // fidelity report has no `droppedImages` never fires the save refusal. So
+    // without the bump the build that shipped the fix goes on destroying exactly
+    // the data it fixes, for up to SESSION_MAX_AGE. The literal is the point —
+    // writing DOCUMENT_MODEL_REVISION - 1 here would pass at any value.
+    expect(sessionModelIsStale(session({ modelRevision: 2 }))).toBe(true);
+  });
+
   it("the revision is a positive integer, so an unstamped session sorts below it", () => {
     expect(Number.isInteger(DOCUMENT_MODEL_REVISION)).toBe(true);
     expect(DOCUMENT_MODEL_REVISION).toBeGreaterThan(0);

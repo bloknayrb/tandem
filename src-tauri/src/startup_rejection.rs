@@ -252,6 +252,14 @@ impl RejectionBatch {
 /// [`surface_startup_rejection`] and the client's drain. That needs the user to
 /// hit Relaunch in the same breath as a rejected open, and the alternative
 /// (replaying it against the new sidecar) is worse.
+///
+/// **That bound is what keeps the call USER-INITIATED ONLY.** #1809 added an
+/// automatic restarter for a post-boot crash, and it must not reach this
+/// function: a crash landing inside that same drain window would eat a live
+/// rejection with no user action to attribute the loss to, and the
+/// `startup-file-rejected` nudge is payload-free, so the listener that fires
+/// next resolves `None` and renders nothing. `restart_sidecar_for` takes a
+/// `RestartCause` for exactly this one branch.
 pub(crate) fn clear_startup_rejection() {
     with_rejection("clear", |slot| *slot = None);
 }

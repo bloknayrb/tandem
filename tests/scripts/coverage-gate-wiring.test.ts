@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -269,7 +277,19 @@ describe("coverage gating — no coverage-ignore hints in gated files", () => {
  */
 function coverageJob() {
   const workflow = parse(read(".github/workflows/ci.yml")) as {
-    jobs: Record<string, { steps?: { run?: string; if?: string }[]; if?: string }>;
+    jobs: Record<
+      string,
+      {
+        steps?: {
+          id?: string;
+          run?: string;
+          if?: string;
+          env?: Record<string, string>;
+          "continue-on-error"?: boolean;
+        }[];
+        if?: string;
+      }
+    >;
   };
   const job = workflow.jobs.coverage;
   expect(job, "no `coverage` job in ci.yml").toBeDefined();
@@ -277,16 +297,54 @@ function coverageJob() {
 }
 
 describe("coverage gating — CI and npm wiring", () => {
-  it("pins the test:coverage script by exact equality", () => {
+  it("pins the three coverage scripts by exact equality", () => {
     // `toContain` is beaten by an appended `|| true`, and by a `--coverage.exclude`
     // that removes a gated file from measurement entirely.
+    //
+    // Three scripts where there was one `&&` chain (#1862): any vitest exit
+    // short-circuited the chain, so the manifest and the gate never ran and the
+    // job's red said nothing about the floors. The vitest half is byte-for-byte
+    // what it was; the other two moved out into their own steps.
     const pkg = JSON.parse(read("package.json")) as { scripts: Record<string, string> };
     expect(pkg.scripts["test:coverage"]).toBe(
       "cross-env TANDEM_COVERAGE=1 vitest run --coverage --coverage.reporter=text " +
         "--coverage.reporter=json-summary --coverage.reporter=html --testTimeout=120000 " +
-        "--hookTimeout=300000 && node scripts/ci/coverage-manifest.mjs && " +
-        "node scripts/ci/coverage-gate.mjs",
+        "--hookTimeout=300000",
     );
+    expect(pkg.scripts["coverage:manifest"]).toBe("node scripts/ci/coverage-manifest.mjs");
+    expect(pkg.scripts["coverage:gate"]).toBe("node scripts/ci/coverage-gate.mjs");
+  });
+
+  it("runs the floors in their own step, unconditional except for cancellation", () => {
+    // The disarm surface MOVED with the gate (#1862). While the whole chain was
+    // one npm script, the exact-equality pin above saw every mutant; now
+    // `run: npm run coverage:gate || true` leaves package.json byte-identical,
+    // `continue-on-error` absent and the `if` literal exact. So the step's own
+    // shell line is pinned by exact equality here — the
+    // `typecheck-tests-wiring.test.ts` idiom, which subsumes the whole
+    // exit-code-masking family (`|| true`, `; true`, `|| echo …`, `set +e &&`,
+    // a trailing pipe) that a denylist covers only partly.
+    const job = coverageJob();
+    const steps = job.steps ?? [];
+
+    const baseline = steps.find((s) => s.run?.includes("test:coverage"));
+    expect(baseline?.id, "the measurement step has no `id: baseline` to read an outcome from").toBe(
+      "baseline",
+    );
+
+    const gate = steps.find((s) => s.run?.includes("coverage:gate"));
+    expect(gate, "the coverage job never runs coverage:gate").toBeDefined();
+    expect(gate?.run?.trim()).toBe("npm run coverage:gate");
+    // Literal equality on the `if`. `success()` is the present bug written as
+    // YAML — the gate would be skipped by the very flake it exists to report —
+    // and `always()` would manufacture a cannot-evaluate red on a cancelled run.
+    // `toBeTruthy()` passes `always()` and `toBeDefined()` passes `success()`;
+    // only a literal catches both. ADR-051 rule 4: never `gate?.if ?? "…"`.
+    expect(gate?.if).toBe("${{ !cancelled() }}");
+    expect(gate?.["continue-on-error"], "the floors step swallows its own failure").toBeFalsy();
+    // Without this passthrough the gate silently loses its measurement-completed
+    // arm and grades incomplete measurements again, with no other symptom.
+    expect(gate?.env?.TANDEM_MEASUREMENT_OUTCOME).toBe("${{ steps.baseline.outcome }}");
   });
 
   it("does not let the coverage job or its measurement step be skipped", () => {
@@ -364,5 +422,121 @@ describe("coverage gating — CI and npm wiring", () => {
   it("keeps the comparator on disk where the script points", () => {
     expect(existsSync(path.join(ROOT, "scripts/ci/coverage-gate.mjs"))).toBe(true);
     expect(existsSync(path.join(ROOT, "scripts/ci/coverage-policy.json"))).toBe(true);
+  });
+});
+
+/**
+ * The two fail-closed arms #1862 added, driven the way the exit-3 spec above is:
+ * the script AND its policy are copied into a `mkdtempSync` tree so `repoRoot`
+ * resolves there, and the coverage inputs beside them are synthesized.
+ *
+ * **Not a spec here: "the shipped `coverage:gate` script name resolves to a
+ * process that exits 3."** `coverage/` is gitignored and persists locally, so on
+ * any machine that has run `test:coverage` the shipped script takes the
+ * pass/fail path — the spec would be flaky or vacuous. The indirection is pinned
+ * textually instead, by the exact-equality pin on the package.json script plus
+ * `existsSync` on the path.
+ */
+describe("coverage floors — the gate refuses a measurement nobody vouched for", () => {
+  /** A summary the floors PASS on, built from the policy itself. */
+  function passingSummary(root: string) {
+    const summary: Record<string, unknown> = {
+      total: { statements: { total: 1, covered: 1, skipped: 0, pct: 100 } },
+    };
+    for (const m of policy.modules) {
+      summary[path.join(root, m.path)] = {
+        statements: { total: m.minStatements, covered: m.minStatements, skipped: 0, pct: 100 },
+        lines: { total: 1, covered: 1, skipped: 0, pct: 100 },
+        branches: { total: 1, covered: 1, skipped: 0, pct: 100 },
+        functions: { total: 1, covered: 1, skipped: 0, pct: 100 },
+      };
+    }
+    return summary;
+  }
+
+  function inTree(
+    opts: { manifest: boolean; env?: Record<string, string> },
+    assert: (r: { status: number | null; output: string }) => void,
+  ) {
+    const tmp = mkdtempSync(path.join(tmpdir(), "coverage-gate-arms-"));
+    try {
+      const ci = path.join(tmp, "scripts", "ci");
+      mkdirSync(ci, { recursive: true });
+      for (const f of ["coverage-gate.mjs", "coverage-policy.json"]) {
+        copyFileSync(path.join(ROOT, "scripts/ci", f), path.join(ci, f));
+      }
+      const cov = path.join(tmp, "coverage");
+      mkdirSync(cov, { recursive: true });
+      writeFileSync(
+        path.join(cov, "coverage-summary.json"),
+        JSON.stringify(passingSummary(tmp)),
+        "utf8",
+      );
+      if (opts.manifest) {
+        writeFileSync(
+          path.join(cov, "baseline-manifest.json"),
+          JSON.stringify({ ok: true }),
+          "utf8",
+        );
+      }
+
+      const r = spawnSync(process.execPath, [path.join(ci, "coverage-gate.mjs")], {
+        encoding: "utf8",
+        env: { ...process.env, TANDEM_MEASUREMENT_OUTCOME: undefined, ...opts.env },
+      });
+      assert({ status: r.status, output: `${r.stdout ?? ""}${r.stderr ?? ""}` });
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  const lastLine = (output: string) =>
+    output
+      .split(/\r?\n/)
+      .filter((l) => l.trim().length > 0)
+      .pop();
+
+  it("exits 3 when the manifest refused the measurement, and says so last", () => {
+    // Kills arm 2's removal — the regression that lets a PARTIAL run land as a
+    // set of specific per-module floor breaches, a red that reads as a precise
+    // finding about the diff. `coverage-manifest.mjs` writes its manifest only
+    // on acceptance, so absence carries its refusal forward.
+    //
+    // The last-line assertion kills an arm that exits 3 without the shared
+    // closing line: the ci.yml triage guide tells a reader to key on that line,
+    // and until #1862 no exit-3 path printed it at all.
+    inTree({ manifest: false }, ({ status, output }) => {
+      expect(output).toContain("no baseline manifest");
+      expect(status, `a refused measurement must not read as a floor breach (exit ${status})`).toBe(
+        3,
+      );
+      expect(lastLine(output)).toBe(
+        "[coverage-gate] The gate could not evaluate. This is not a pass.",
+      );
+    });
+  });
+
+  it("exits 3 when the measurement itself did not complete, and says so last", () => {
+    inTree(
+      { manifest: true, env: { TANDEM_MEASUREMENT_OUTCOME: "failure" } },
+      ({ status, output }) => {
+        expect(output).toContain("the measurement did not complete (outcome: failure)");
+        expect(status).toBe(3);
+        expect(lastLine(output)).toBe(
+          "[coverage-gate] The gate could not evaluate. This is not a pass.",
+        );
+      },
+    );
+  });
+
+  it("keeps the normal path when nothing set an outcome", () => {
+    // Kills an over-eager arm 1, which would break every local
+    // `npm run coverage:gate`: ABSENT is not a failure, only a non-success value
+    // is. This fixture is the same one the arm-1 spec uses, so the two differ in
+    // exactly the variable under test.
+    inTree({ manifest: true }, ({ status, output }) => {
+      expect(output).not.toContain("the measurement did not complete");
+      expect(status, `a good measurement must not read as unevaluable (exit ${status})`).toBe(0);
+    });
   });
 });

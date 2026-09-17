@@ -60,7 +60,7 @@ Inside either directory:
 | `npm-migration-complete` | **Desktop location only.** The record that the one-time copy from the npm directory already happened. Deleting it makes the next desktop launch re-import that directory, so leave it alone. |
 | `auth-token` | **npm location only.** Its path is derived from the `env-paths` root directly and deliberately ignores `TANDEM_APP_DATA_DIR`, so it never appears in the desktop directory — the desktop keeps its token in the OS keychain and passes it to the sidecar. The auto-generated Bearer token (mode `0o600`) that non-loopback callers must present. Deleting it makes Tandem mint a new one on next launch, which invalidates any config still carrying the old value — run `tandem rotate-token` instead of deleting it by hand. |
 | `license.json` | **Your activated license.** Contains the signed blob, which carries your name and email address — the only identity information Tandem writes to disk. Deleting it means re-activating from the key you were emailed. |
-| `trial.json` | The trial clock's start timestamp. Deleting it restarts the trial (the clock is deliberately soft — see [ADR-040](decisions.md)). |
+| `trial.json` | The trial clock's start timestamp. Deleting it restarts the trial (the clock is deliberately soft — see [ADR-040](decisions.md)). This file and `license.json` both live under `TANDEM_APP_DATA_DIR`, so pointing that variable at a new directory presents a fresh trial and an apparently-unlicensed device. |
 | `.backups/` | Backups of `~/.claude.json` and the Claude Desktop config, taken before Tandem rewrote an entry you had customized. Named `claude-json-<YYYYMMDD-HHMMSS>-<id>.json`; the three most recent are kept |
 | `.broken-backups/` | Quarantined copies of malformed config files (user-only permissions) |
 | `last-seen-version` | Drives the "what's new" changelog on upgrade |
@@ -78,8 +78,15 @@ delete, and never appear in your own document folders.
 | Desktop app (Windows) | `%LOCALAPPDATA%\com.tandem.editor\logs\tandem.log` |
 | Desktop app (macOS) | `~/Library/Logs/com.tandem.editor/tandem.log` |
 | Desktop app (Linux) | `~/.local/share/com.tandem.editor/logs/tandem.log` |
-| Uninstall scrub (Windows) | `%LOCALAPPDATA%\tandem\Logs\uninstall.log` |
+| `tandem --uninstall-scrub` (Windows) | `%LOCALAPPDATA%\tandem\Logs\uninstall.log` |
 | npm install | stderr only (no log file) |
+
+The uninstall log belongs to the npm CLI's scrub, the command under
+[Uninstalling cleanly](#uninstalling-cleanly). The Windows desktop uninstaller's
+automatic scrub is a different program: it runs inside the desktop binary
+(`src-tauri/src/uninstall_scrub.rs`) and writes **no log file**, only a stderr
+that the installer does not keep. The installer's details pane shows its exit
+code and nothing else.
 
 The desktop app's **Settings → About → Open Log Folder** button opens the
 right directory for you.

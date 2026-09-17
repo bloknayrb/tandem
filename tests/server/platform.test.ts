@@ -7,6 +7,7 @@ import {
   decideStartupAction,
   freePort,
   isTauriSidecar,
+  npmCliSharesAppDataRoot,
   type ProbeSchedule,
   parseLsofPids,
   parseNetstatListeningPids,
@@ -296,6 +297,33 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
       const result = resolveAppDataDir();
       expect(path.isAbsolute(result)).toBe(true);
       expect(result.replace(/\\/g, "/").toLowerCase()).toContain("tandem");
+    });
+
+    /**
+     * #1789, review round 1. The Settings → License CLI hint used to be gated on
+     * `isTauriRuntime()`, a WebView test — which reads FALSE for the desktop's
+     * own client opened in a browser (the sidecar serves `dist/client/` on
+     * 127.0.0.1), the one place where running the offered command writes
+     * `license.json` into a root the desktop never reads. This is the
+     * discriminant that replaces it, and only the server can compute it.
+     */
+    describe("npmCliSharesAppDataRoot", () => {
+      it("is true when nothing overrides the env-paths root", () => {
+        delete process.env.TANDEM_APP_DATA_DIR;
+        expect(npmCliSharesAppDataRoot()).toBe(true);
+      });
+
+      it("is false under an override — the desktop sidecar's case", () => {
+        // `sidecar.rs` sets TANDEM_APP_DATA_DIR to the Tauri app-data dir; an
+        // npm `tandem activate` sets nothing, so it would never write there.
+        process.env.TANDEM_APP_DATA_DIR = path.join(path.sep, "tandem-desktop-root");
+        expect(npmCliSharesAppDataRoot()).toBe(false);
+      });
+
+      it("treats empty string as unset, exactly as resolveAppDataDir does", () => {
+        process.env.TANDEM_APP_DATA_DIR = "";
+        expect(npmCliSharesAppDataRoot()).toBe(true);
+      });
     });
   });
 

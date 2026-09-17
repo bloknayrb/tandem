@@ -37,7 +37,7 @@ import { buildComment, buildFootnote, buildHeadings } from "../helpers/docx-corp
 // "verifier-confused → advisory" half of the asymmetry). Delegates to the real
 // impl while the flag is off, so every other test runs the genuine path.
 const ctl = vi.hoisted(() => ({ failCapture: false }));
-vi.mock("../../src/server/file-io/docx-capture.js", async (importOriginal) => {
+vi.mock(import("../../src/server/file-io/docx-capture.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/file-io/docx-capture.js")>();
   return {
     ...actual,
@@ -284,10 +284,32 @@ describe("verifyDocxRoundtrips", () => {
 
 describe("blockReasonMessage", () => {
   it("is content-free and reassures the original file was left unchanged", () => {
-    for (const reason of ["reimport-failed", "degenerate-model", "gross-text-loss"] as const) {
+    for (const reason of [
+      "reimport-failed",
+      "degenerate-model",
+      "gross-text-loss",
+      "import-image-loss",
+    ] as const) {
       const msg = blockReasonMessage(reason);
       expect(msg).toContain("left unchanged");
       expect(msg).not.toMatch(/[A-Z]:\\/); // no Windows absolute path
+    }
+  });
+
+  it("names the override on the one reason that has one (#1941)", () => {
+    // The refusal is the only place a user or an agent meets this wall, so the
+    // way out has to be legible FROM IT rather than from docs. Both surfaces
+    // read this exact string: it is the pushed save-error notification and
+    // `tandem_save`'s returned `reason`.
+    const msg = blockReasonMessage("import-image-loss");
+    expect(msg).toMatch(/save anyway/i);
+    expect(msg).toContain("allowImageLoss");
+    // Still content-free — a parameter name is not content.
+    expect(msg).not.toMatch(/[A-Z]:\\/);
+    expect(msg).not.toMatch(/\.docx\b/);
+    // The three non-overridable reasons must NOT advertise one.
+    for (const reason of ["reimport-failed", "degenerate-model", "gross-text-loss"] as const) {
+      expect(blockReasonMessage(reason)).not.toMatch(/save anyway/i);
     }
   });
 });

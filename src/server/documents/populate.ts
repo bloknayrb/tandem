@@ -94,16 +94,21 @@ export function writeImportLossReport(doc: Y.Doc, prepared: Prepared): void {
   if (prepared.format !== "docx") return;
   let importLosses: string[] = [];
   let structuralLosses = 0;
+  let droppedImages = 0;
   for (const issue of prepared.issues) {
     if (issue.kind === "other" && issue.importLosses) {
       importLosses = issue.importLosses;
       structuralLosses = issue.structuralLosses ?? 0;
+      // #1755. Easy to miss because an omitted optional field is NOT a type
+      // error — and the save-side refusal reads exactly this persisted value.
+      droppedImages = issue.droppedImages ?? 0;
     }
   }
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
   meta.set(Y_MAP_FIDELITY_REPORT, {
     importLosses,
     structuralLosses,
+    droppedImages,
     exportDowngrades: [],
     updatedAt: Date.now(),
   } satisfies FidelityReport);

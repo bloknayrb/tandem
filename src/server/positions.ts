@@ -153,10 +153,21 @@ export interface RangeValidationOpts extends FlatRangeOpts {
    * was true of the immediate call and false of the eventual effect, so the
    * rule is now stated over the effect:
    *
-   *  - PASSED by `tandem_edit`, and by the SUGGESTION arm of the two
-   *    annotation creators — `YDocStore.anchorRange({purpose: "suggestion"})`
+   *  - PASSED by `tandem_edit`; by the SUGGESTION arm of the two annotation
+   *    creators — `YDocStore.anchorRange({purpose: "suggestion"})`
    *    (`tandem_comment` with `suggestedText`) and `local-model/tools.ts`'s
-   *    `"replacement"` kind. A suggestion is a text rewrite DEFERRED to Accept:
+   *    `"replacement"` kind; and, since #1626, by the REPLY seam's
+   *    `{kind: "replacement"}` arm (`annotations/lifecycle.ts`'s
+   *    `replyForClaude`), which is the one carrier that screens a span it did
+   *    not just derive — so it resolves the parent through `refreshRange`
+   *    first and screens the LIVE offsets, falling back to the stored ones only
+   *    when the anchor is dead; and by the EDIT path
+   *    (`editPendingAnnotation`, reached by `tandem_editAnnotation`'s
+   *    `newText`), which shares that one screen — `screenSuggestionSpan` — and
+   *    is the carrier the #1626 review found open: a comment created through
+   *    the plain, endpoint-only arm may legally hold a heading prefix in its
+   *    INTERIOR, and an edit can then attach a replacement over exactly that
+   *    span. A suggestion is a text rewrite DEFERRED to Accept:
    *    `useAnnotationReview`'s `deleteRange` + insert and `docx-apply`'s
    *    `flatText.slice(from, to)` replacement both take the stored flat span
    *    verbatim, and `snapshotContradicts` cannot object because the snapshot
@@ -773,7 +784,7 @@ export function remapRangeAcrossReplacement(
  * An out-of-bounds stored range slices to `""` and therefore contradicts, which
  * is the clamp #1765's body asks for.
  */
-function storedRangeStillMatches(ann: Annotation, text: string): boolean {
+export function storedRangeStillMatches(ann: Annotation, text: string): boolean {
   return (
     ann.textSnapshot === undefined ||
     !snapshotContradicts(ann, text.slice(ann.range.from, ann.range.to))

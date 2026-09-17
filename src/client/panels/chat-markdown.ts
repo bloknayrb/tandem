@@ -61,7 +61,22 @@ export function renderMarkdown(text: string): string {
   // strips control characters. A forged `\x00BLOCK0\x00` in the input would
   // otherwise capture a real code block's restoration and leave the genuine
   // placeholder rendered on screen as a literal.
-  const escaped = escapeHtml(text.replace(/\x00/g, ""));
+  //
+  // Normalise CRLF to LF in the same pass, before anything reads a newline.
+  // Every line-oriented pass below — the `^…$` header and list anchors,
+  // `assembleBlocks`'s `split("\n")` — is written against `\n` alone, so CRLF
+  // text arriving over MCP (a `tandem_reply` or `tandem_comment` body composed
+  // on Windows; nothing on the wire normalises it) would otherwise leave a
+  // stray `\r` at the end of every line. Normalising here rather than in each
+  // pass is what keeps the fix from having to be repeated by every future
+  // line-oriented rule. Measured with the normalisation removed, two cases in
+  // `chat-markdown.test.ts` go red — 13 and 14 — and BOTH fail on the surviving
+  // CR rather than on a lost break: the HTML parser turns a stray `\r` into a
+  // LINE FEED inside the text instead of dropping it, so the paragraph reads
+  // `a\nb`. The paragraph SPLIT in 13 now survives the mutation on its own,
+  // because `assembleBlocks` flushes on any whitespace-only line and a `\r`-only
+  // line is one. That is a second layer, not a reason to remove this one.
+  const escaped = escapeHtml(text.replace(/\x00/g, "").replace(/\r\n/g, "\n"));
 
   // Pull fenced code blocks out first so the inline-code and newline passes
   // don't mangle their content. Each is swapped for a placeholder that, given
@@ -105,8 +120,10 @@ export function renderMarkdown(text: string): string {
     // to end of input. Bounded, the same input is 166ms. The message is stored
     // verbatim in the chat Y.Map and survives restart, so the freeze repeats on
     // every render. Excluding `\n` is correctness, not speed — it measured
-    // slightly *slower* — but a link cannot span lines, and it keeps the `<br>`
-    // the newline pass emits below out of the href.
+    // slightly *slower* — but a link cannot span lines, and it is `assembleBlocks`
+    // below that joins the lines of a paragraph with `<br>`, never rewriting a
+    // URL — so a link that spanned lines would be split across two paragraph
+    // lines rather than carrying a `<br>` inside its href.
     .replace(/\[([^\]\n]{1,500})\]\(([^)\n]{1,2000})\)/g, (_match, text: string, url: string) => {
       const trimmed = url.trim();
 
@@ -124,12 +141,13 @@ export function renderMarkdown(text: string): string {
       }
       return text;
     })
-    // unordered lists
-    .replace(/^[*-] (.+)$/gm, "<li>$1</li>")
-    // paragraphs
-    .replace(/\n\n/g, "</p><p>")
-    // line breaks
-    .replace(/\n/g, "<br>");
+    // unordered lists — the per-line `<li>`; `assembleBlocks` wraps runs of them
+    // in a `<ul>`.
+    .replace(/^[*-] (.+)$/gm, "<li>$1</li>");
+
+  // Block assembly. Runs AFTER every inline pass and BEFORE the block restore
+  // below, so placeholders are still detectable as placeholders.
+  result = assembleBlocks(result);
 
   // Restore fenced code blocks after all inline passes.
   //
@@ -165,4 +183,107 @@ export function renderMarkdown(text: string): string {
     /\x00BLOCK(\d+)\x00/g,
     (match, idx: string) => blocks[Number(idx)] ?? match,
   );
+}
+
+/**
+ * Group already-tokenised lines into balanced block elements.
+ *
+ * This runs over text that is already escaped and already tokenised — it parses
+ * no user syntax of its own. A blank line separates blocks; within a block,
+ * consecutive plain lines become one `<p>` joined by `<br>`, and consecutive
+ * `<li>` lines become one `<ul>`.
+ *
+ * Four properties, each load-bearing and each invisible from the code alone:
+ *
+ * 1. **No line is ever split — that is what keeps a block out of the wrapping
+ *    `<p>`.** The placeholder arm tests whether a line *contains* a placeholder
+ *    and emits the WHOLE line bare. Splitting a line on the placeholder would
+ *    cut an element an earlier inline pass opened: `**a ```x``` b**` reaches
+ *    here as the single line `<strong>a \x00BLOCK0\x00 b</strong>`, and a split
+ *    yields `<p><strong>a </p><pre>…</pre><p> b</strong></p>` — opened in one
+ *    `<p>`, closed in another. The same holds for `[label](url)` (the link guard
+ *    rejects a placeholder in the URL, never in the label) and for `# heading`.
+ * 2. **Arm order is the contract: `<li>` is tested BEFORE the placeholder.**
+ *    `<li>` legally accepts flow content, so a fence inside a bullet stays
+ *    inside its item — `- see ```x``` here` becomes
+ *    `<ul><li>see <pre>…</pre> here</li></ul>` — rather than being hoisted out
+ *    of the list.
+ * 3. **Both the tag-prefix dispatch and the placeholder test are sound only
+ *    because of escape-first / strip-first.** Every `<` and every `\x00` in the
+ *    intermediate string was emitted by `renderMarkdown`: a user typing `<li>`
+ *    is already `&lt;li&gt;`, and a forged `\x00BLOCK0\x00` is already plain
+ *    `BLOCK0`. A change that moves escaping or the NUL strip later breaks this
+ *    dispatch as well as the XSS property.
+ * 4. **An empty run is never flushed, and a whitespace-only line is a block
+ *    BOUNDARY rather than a paragraph line.** The first is what removes the
+ *    stray empty `<p>` a fenced block used to leave behind, and what let
+ *    `p:empty` be deleted from `markdown-body.css`. The second is what makes the
+ *    boundary whitespace-blind: a line holding only a space or a tab reads as
+ *    blank to every markdown writer and to CommonMark, and skipping it instead
+ *    of flushing merges the paragraphs on either side of it.
+ *
+ * **Two recorded bounds of the subset, neither of them introduced here** — each
+ * renders identically before and after this function existed:
+ *
+ * 1. **A mid-line fence on a plain prose line.** `see ```x``` here` matches no
+ *    earlier arm, so it is emitted bare and the prose around it stays a
+ *    top-level text node rather than becoming a `<p>`. Closing it would mean
+ *    deciding what a mid-line fence *means*.
+ * 2. **A placeholder inside an inline element keeps a `<pre>` nested inside an
+ *    `<h1>`, `<strong>` or `<a>`.** `# head ```x``` tail` leaves `<pre>`
+ *    parented by `H1` — an invalid content model the parser tolerates rather
+ *    than repairs.
+ *
+ * **The line split is CRLF-blind and is allowed to be**: `renderMarkdown`
+ * normalises `\r\n` to `\n` before any pass runs, so nothing here ever sees a
+ * CR. A `\r`-only line would still be a boundary here (it is whitespace to
+ * `line.trim()`), but the CR at the end of every OTHER line would survive into
+ * the text. Do not remove that normalisation on the reasoning that this split
+ * "handles newlines".
+ *
+ * Ordered lists, nested lists, blockquotes and tables are outside the subset.
+ */
+function assembleBlocks(input: string): string {
+  const out: string[] = [];
+  let para: string[] = [];
+  let items: string[] = [];
+
+  const flushPara = () => {
+    if (para.length) out.push(`<p>${para.join("<br>")}</p>`);
+    para = [];
+  };
+  const flushList = () => {
+    if (items.length) out.push(`<ul>${items.join("")}</ul>`);
+    items = [];
+  };
+
+  for (const line of input.split("\n")) {
+    if (line.trim() === "") {
+      // A blank line closes both runs; nothing carries across it. Flushing here
+      // rather than `continue`-ing is what makes the boundary WHITESPACE-blind:
+      // a "blank" line holding a space or a tab is a paragraph break in
+      // CommonMark and was one here before block assembly existed, and a
+      // `continue` silently merged the paragraphs around it.
+      flushList();
+      flushPara();
+    } else if (line.startsWith("<li>")) {
+      flushPara();
+      items.push(line);
+    } else if (/^<h[123]>/.test(line) || /\x00BLOCK\d+\x00/.test(line)) {
+      // Already a standalone block: a heading this function emitted, or a line
+      // carrying a fenced-block placeholder. Both close the runs before them,
+      // which is what preserves document order.
+      flushPara();
+      flushList();
+      out.push(line);
+    } else {
+      flushList();
+      para.push(line);
+    }
+  }
+
+  flushList();
+  flushPara();
+
+  return out.join("");
 }

@@ -6,12 +6,50 @@ import { DEFAULT_BIND_HOST } from "../shared/constants.js";
 
 /**
  * Resolve the Tandem app-data root directory. `TANDEM_APP_DATA_DIR` overrides
- * the `env-paths` default. Not memoised so tests can swap tempdirs mid-run.
+ * the `env-paths` default.
+ *
+ * **The function is not memoised; the two constants below ARE.** That
+ * distinction used to be written here as a flat "not memoised so tests can swap
+ * tempdirs mid-run", which is true of this function and false of `SESSION_DIR`
+ * and `LAST_SEEN_VERSION_FILE` — they are computed once at module load, so a
+ * test setting the variable in a `beforeEach` gets an isolated annotations
+ * directory and a REAL session directory. That is not hypothetical: it put ~40
+ * test fixtures into a real user's session store, where the next restart
+ * reopened them as tabs. Isolation for the whole vitest run now comes from
+ * `test.env` + `tests/setup/app-data-isolation.ts`, which land before any
+ * import; `tests/scripts/app-data-isolation-wiring.test.ts` is the guard.
  */
 export function resolveAppDataDir(): string {
   const envOverride = process.env.TANDEM_APP_DATA_DIR;
   if (envOverride && envOverride.length > 0) return envOverride;
   return envPaths("tandem", { suffix: "" }).data;
+}
+
+/**
+ * Would an npm-installed `tandem activate <file>` write where THIS server reads?
+ *
+ * The discriminant behind the Settings → License CLI hint (#1789, review round
+ * 1). `isTauriRuntime()` in the client answers "am I in the Tauri WebView",
+ * which is NOT the same question: a desktop install also serves the full client
+ * over `http://127.0.0.1:3479` (`bundle.resources` ships `dist/client/`), and a
+ * desktop user who opens that URL in a browser reads `isTauriRuntime() ===
+ * false`. Offering them the command there is the exact failure the hint was
+ * withdrawn for — `src/cli/license.ts` never sets `TANDEM_APP_DATA_DIR`, so an
+ * npm CLI writes `license.json` under the npm env-paths root while the desktop
+ * sidecar was launched pointing at the Tauri app-data dir (`sidecar.rs` sets
+ * both `TANDEM_DATA_DIR` and `TANDEM_APP_DATA_DIR`). Activation prints
+ * "✓ License activated" and the desktop never sees it.
+ *
+ * Only the server can answer it, because only the server knows which root it
+ * resolved. `true` means this process reads the same directory a fresh npm
+ * `tandem` would write; any override (the desktop sidecar, or a test tempdir)
+ * makes it `false`, which is the fail-closed direction — the hint disappears
+ * rather than naming a command that silently does nothing.
+ */
+export function npmCliSharesAppDataRoot(): boolean {
+  return (
+    path.resolve(resolveAppDataDir()) === path.resolve(envPaths("tandem", { suffix: "" }).data)
+  );
 }
 
 /**
@@ -190,8 +228,8 @@ export const TAURI_SIDECAR_ARGV_FLAG = "--tauri-sidecar";
  *
  * **Derived from argv, never from `TANDEM_TAURI_SIDECAR`.** That variable is
  * inherited by every descendant of the sidecar — `tauri-plugin-shell`'s
- * `Command::new` never calls `env_clear()`, and `supervisor.ts` spawns the
- * auto-launched Claude Code with `env: process.env` — so keying the carve-out
+ * `Command::new` never calls `env_clear()`, and `supervisor.ts`'s `childEnv`
+ * strips only secrets and data-dir keys, not this one — so keying the carve-out
  * on it means an npm `tandem` run from an auto-launched session's own shell
  * reads `"1"`, takes the sidecar's carve-out and SIGKILLs the desktop's server:
  * #1758's own bug, surviving on the path the product's auto-launch creates.

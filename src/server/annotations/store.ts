@@ -25,13 +25,23 @@ import path from "node:path";
 import { atomicWrite } from "../file-io/index.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
-import { type LockfileContents, lockfilePayload, parseLockfile } from "./lockfile.js";
+import {
+  isLockFromPriorBoot,
+  type LockfileContents,
+  lockfilePayload,
+  parseLockfile,
+} from "./lockfile.js";
 import {
   isTandemLikeProcessName,
   type ProcessIdentity,
   probeProcessIdentity,
 } from "./process-identity.js";
-import { type AnnotationDocV1, parseAnnotationDoc, SCHEMA_VERSION } from "./schema.js";
+import {
+  type AnnotationDocV1,
+  isPartialParse,
+  parseAnnotationDoc,
+  SCHEMA_VERSION,
+} from "./schema.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -167,7 +177,9 @@ function isPidAlive(pid: number): boolean {
  *   - `"readonly"` when a live PID holds the lock. In this mode `queueWrite`
  *     is a no-op; `load` still works so the UI can render existing state.
  */
-export async function acquireStoreLock(): Promise<"locked" | "readonly"> {
+export async function acquireStoreLock(
+  probe: (pid: number) => Promise<ProcessIdentity> = probeProcessIdentity,
+): Promise<"locked" | "readonly"> {
   if (isFeatureDisabled()) {
     // Feature off — no lock, not readonly (store is entirely inert).
     readOnly = false;
@@ -205,7 +217,7 @@ export async function acquireStoreLock(): Promise<"locked" | "readonly"> {
       }
 
       // Lock exists — check liveness of the PID inside it.
-      const staleReclaimed = await tryReclaimStaleLock(lockPath);
+      const staleReclaimed = await tryReclaimStaleLock(lockPath, probe);
       if (!staleReclaimed) {
         readOnly = true;
         return "readonly";
@@ -221,11 +233,18 @@ export async function acquireStoreLock(): Promise<"locked" | "readonly"> {
 
 /**
  * Examine an existing lockfile. If its PID is dead, unlink it and return
- * `true` so the caller can retry acquiring. If the PID is alive, return
- * `false`. Any other error is logged and treated as "live" (safer default —
- * fail closed into read-only mode).
+ * `true` so the caller can retry acquiring. If the PID is alive, it is
+ * reclaimed only when BOTH the boot-time estimate says the lock predates
+ * this boot AND `probe` reports a non-Tandem identity for that PID (#2038)
+ * — corroborated reuse-after-reboot detection, since a bare boot-time
+ * comparison alone is a wrong-grant hazard under a system-clock step. Any
+ * other error is logged and treated as "live" (safer default — fail closed
+ * into read-only mode).
  */
-async function tryReclaimStaleLock(lockPath: string): Promise<boolean> {
+async function tryReclaimStaleLock(
+  lockPath: string,
+  probe: (pid: number) => Promise<ProcessIdentity>,
+): Promise<boolean> {
   let rawPid: string;
   try {
     rawPid = (await fs.readFile(lockPath, "utf-8")).trim();
@@ -252,7 +271,14 @@ async function tryReclaimStaleLock(lockPath: string): Promise<boolean> {
   // only one PID that's guaranteed live in the current OS — ours). Falling
   // through to the liveness check gives that test the `readonly` outcome it
   // expects.
-  if (isPidAlive(lock.pid)) return false;
+  if (isPidAlive(lock.pid)) {
+    // Reclaim only when BOTH signals agree: the boot-time estimate says the
+    // lock predates this boot, AND the process at this PID no longer looks
+    // like Tandem. Neither alone is proof (#2038).
+    if (!isLockFromPriorBoot(lock)) return false;
+    const identity = await probe(lock.pid);
+    if (identity.kind !== "name" || isTandemLikeProcessName(identity.name)) return false;
+  }
 
   await fs.unlink(lockPath).catch(() => {});
   return true;
@@ -597,6 +623,28 @@ async function flushOne(docHash: string): Promise<void> {
   }
 }
 
+/**
+ * Copy a partially-readable envelope to `<file>.partial.<8 hex of sha256(raw)>`
+ * (#1791(a)). Returns the copy's path — including when an identical copy
+ * already exists — or `null` when nothing was preserved. Every destructive
+ * sweeper refuses the `.partial.` shape, so the copy outlives the envelope.
+ */
+export async function preservePartialEnvelope(file: string, raw: string): Promise<string | null> {
+  const digest = crypto.createHash("sha256").update(raw, "utf-8").digest("hex").slice(0, 8);
+  const partialPath = `${file}.partial.${digest}`;
+  try {
+    await fs.copyFile(file, partialPath, fs.constants.COPYFILE_EXCL);
+  } catch (copyErr) {
+    if ((copyErr as NodeJS.ErrnoException).code !== "EEXIST") {
+      console.error(
+        `[ANNOTATION-STORE] Failed to preserve partially-readable file ${file}: ${(copyErr as Error).message}`,
+      );
+      return null;
+    }
+  }
+  return partialPath;
+}
+
 async function loadOne(docHash: string, filePath: string): Promise<AnnotationDocV1> {
   if (isFeatureDisabled()) return emptyDoc(docHash, filePath);
 
@@ -615,7 +663,35 @@ async function loadOne(docHash: string, filePath: string): Promise<AnnotationDoc
   }
 
   const result = parseAnnotationDoc(raw);
-  if (result.ok) return result.doc;
+  if (result.ok) {
+    if (isPartialParse(result)) {
+      // #1791(a): the returned doc is a PARTIAL view — rows this build could
+      // not read were dropped. `snapshot()` rebuilds the envelope from Y.Map
+      // state, so the next debounced write erases them from the only copy.
+      // Park a copy first.
+      //
+      // CONTENT-ADDRESSED, not one fixed name. The partial file is not always
+      // healed (`queueWrite` is inert under `isReadOnly()`; file-sync origins
+      // skip the durable queue), so a `Date.now()` name would write one copy
+      // per open forever — but a single fixed name under COPYFILE_EXCL means
+      // the SECOND, *different* partial load preserves nothing, which is
+      // #1791(b)'s "second cycle destroys the only copy" in the file that
+      // fixes it. Hashing the raw bytes gives both: identical content
+      // re-opens to EEXIST (one copy), different content parks its own.
+      const partialPath = await preservePartialEnvelope(target, raw);
+      // Only claim the copy exists when it does: this line is the partial
+      // branch's one surface, and a reader who believes the rows are safe on
+      // disk lets the next snapshot clobber the only copy (#1791 review).
+      console.error(
+        `[ANNOTATION-STORE] ${target} had ${result.skipped.annotations} unreadable annotation(s) and ${result.skipped.replies} unreadable reply(ies); ${
+          partialPath === null
+            ? "those rows were NOT preserved and the next write will drop them."
+            : `a full copy was kept at ${partialPath}.`
+        }`,
+      );
+    }
+    return result.doc;
+  }
 
   if (result.error === "corrupt") {
     const quarantinePath = `${target}.corrupt.${Date.now()}`;
@@ -634,9 +710,15 @@ async function loadOne(docHash: string, filePath: string): Promise<AnnotationDoc
   const schemaVersion = result.schemaVersion;
   const futurePath = `${target}.future`;
   try {
-    // rename is not idempotent; unlink any existing `.future` from a prior
-    // downgrade so we always keep the most recent copy.
-    await fs.unlink(futurePath).catch(() => {});
+    // #1791(b): rename is not idempotent, so an existing `.future` from a
+    // PRIOR downgrade is in the way. It used to be unlinked — but `.future` is
+    // the sole surviving copy of that cycle's annotations, so upgrade →
+    // downgrade → upgrade → downgrade destroyed cycle 1 outright. Archive it
+    // under a unique suffix instead (the shape `atomicWrite` already uses;
+    // millisecond resolution alone can collide). `.future` stays the primary
+    // name — `annotation-store-scan.ts` and `doctor.ts` both read it.
+    const archivePath = `${futurePath}.${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+    await fs.rename(futurePath, archivePath).catch(() => {});
     await fs.rename(target, futurePath);
   } catch (renameErr) {
     console.error(

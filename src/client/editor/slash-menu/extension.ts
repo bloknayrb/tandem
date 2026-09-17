@@ -293,19 +293,25 @@ export const SlashCommandExtension = Extension.create<SlashCommandOptions>({
             const metaState = applySlashCommandMeta(tr, value);
             if (metaState) return metaState;
 
+            // #1824 item B: only a typed insertion ending at the caret may
+            // *open* the menu (#998) — a caret move/click, a paste, or a
+            // remote sync that merely lands after an existing "/" is plain
+            // text. When the menu isn't already open and this isn't that
+            // typed-insertion case, `resolveActiveSlashCommand`'s ~10 DOM
+            // probes (including `isSlashMenuSuppressed`'s `querySelector`,
+            // run on EVERY transaction) can only ever land on the same
+            // `{active: null, dismissedKey: value.dismissedKey}` shape this
+            // branch already holds — skip the probe. Placed AFTER the
+            // meta-check above, not before it: a meta transaction can arrive
+            // while `value.active` is null and must not be swallowed here.
+            if (!value.active && !isTypedInsertionAtCaret(tr)) {
+              return value;
+            }
+
             const nextActive = resolveActiveSlashCommand(
               newState,
               value.active?.selectedIndex ?? 0,
             );
-
-            // Gate the inactive -> active transition: only a typed insertion
-            // ending at the caret may *open* the menu. A caret move/click, a
-            // paste, or a remote sync that merely lands after an existing "/"
-            // is plain text. Once already open we keep re-deriving (below) so
-            // the query tracks and the menu closes when the caret leaves. (#998)
-            if (nextActive && !value.active && !isTypedInsertionAtCaret(tr)) {
-              return { active: null, dismissedKey: value.dismissedKey };
-            }
 
             if (nextActive && activeKey(nextActive) === value.dismissedKey) {
               return { active: null, dismissedKey: value.dismissedKey };

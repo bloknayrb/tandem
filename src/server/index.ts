@@ -30,6 +30,7 @@ import {
   startLocalModelCollaborator,
   stopLocalModelCollaborator,
 } from "./local-model/collaborator.js";
+import { formatLogLine } from "./log-filter.js";
 import {
   restoreCtrlSession,
   restoreOpenDocuments,
@@ -60,7 +61,7 @@ import {
   SESSION_DIR,
   waitForPort,
 } from "./platform.js";
-import { captureFatal, initSidecarCrashReporting } from "./sentry.js";
+import { captureFatal, captureWarning, initSidecarCrashReporting } from "./sentry.js";
 import {
   cleanupOrphanedAnnotationFiles,
   cleanupSessions,
@@ -78,15 +79,24 @@ import { startHocuspocus } from "./yjs/provider.js";
 
 // In production (Tauri sidecar, TANDEM_TAURI_SIDECAR=1), suppress known noisy
 // warnings from dependencies (mammoth, Y.js). In dev mode, show everything.
+// The pattern set and the formatting both live in `./log-filter.ts` — a pure
+// module, because this file cannot be imported by a test: importing it runs
+// `main()`, which frees the product ports and would kill a running dev server.
+// (Spelled without the function's own name on purpose — `platform.test.ts`
+// scans this file's SOURCE TEXT for that identifier and requires every
+// occurrence to follow `decideStartupAction`, so a prose mention up here reads
+// to it as a real call site.)
 const isProduction = process.env.TANDEM_TAURI_SIDECAR === "1";
-const SUPPRESSED_PATTERNS = [/^\[mammoth\]/, /Invalid access/i, /^\s*add yjs type/i];
 
 const originalStderrWrite = process.stderr.write.bind(process.stderr);
 if (isProduction) {
   const filteredError = (...args: Parameters<typeof console.error>) => {
-    const msg = args.map(String).join(" ");
-    if (SUPPRESSED_PATTERNS.some((p) => p.test(msg))) return;
-    originalStderrWrite(msg + "\n");
+    // `formatLogLine`, not `args.map(String).join(" ")`: the old shape printed
+    // every `%s`/`%d` placeholder literally and truncated Errors to
+    // `name: message`, dropping the stack (#1823 item 1).
+    const line = formatLogLine(args);
+    if (line === null) return;
+    originalStderrWrite(line + "\n");
   };
   console.log = filteredError;
   console.warn = filteredError;
@@ -137,6 +147,7 @@ async function startLauncherSupervisor(): Promise<void> {
     // `spawn-failed` reason is the pre-existing shape here.
     launcherSupervisor = createSupervisor({
       integrationsBase: resolveAppDataDir(),
+      reportDeliveryTrip: captureWarning,
     });
     await launcherSupervisor.start();
   } catch (err) {
@@ -184,9 +195,29 @@ process.on("exit", (code) => {
   console.error(`[Tandem] Process exiting with code ${code}`);
 });
 
+/**
+ * Has `main()` finished restoring the session and the open documents?
+ *
+ * The stdin-EOF handler below is armed at MODULE scope, while
+ * `restoreCtrlSession()` / `restoreOpenDocuments()` are awaited inside
+ * `main()`. The gate is not optional and is invisible at the call site: an EOF
+ * arriving during boot would reach `shutdown()` → `saveCurrentSession()` →
+ * `saveCtrlSession`, which `session/manager.ts` persists with NO restore guard
+ * — cloning a freshly-created, still-empty CTRL doc over the user's real chat
+ * history. So before the restore completes the process leaves immediately and
+ * writes nothing.
+ */
+let startupComplete = false;
+
 if (transportMode === "stdio") {
   process.stdin.on("end", () => {
     console.error("[Tandem] stdin ended (MCP transport closed)");
+    // `StdioServerTransport` registers only `data`/`error` on stdin, never
+    // `end`, so before #1823 item 3 the server simply logged this and outlived
+    // its MCP client forever. Accepted scope change: a stdio run whose stdin is
+    // already closed at spawn now exits instead of surviving.
+    if (startupComplete) void shutdown("stdin EOF");
+    else process.exit(0);
   });
 }
 
@@ -261,10 +292,21 @@ async function shutdown(signal: string) {
     console.error("[Tandem] search worker shutdown failed:", err);
   }
   // Stop the launcher BEFORE we tear down everything else — supervisor.stop()
-  // sends SIGTERM to the reaper which gracefully reaps Claude. If we skip this
-  // and just process.exit(0), the OS-level Job Object (Windows) / PDEATHSIG
-  // (Linux) / kqueue (macOS) still kills Claude — but cleanly going through
-  // SIGTERM gives Claude a chance to flush.
+  // signals the reaper, which reaps Claude. If we skip this and just
+  // process.exit(0), the OS-level Job Object (Windows) / PDEATHSIG (Linux) /
+  // kqueue (macOS) still kills Claude.
+  //
+  // The flush window is POSIX-ONLY, and this comment used to claim it
+  // unconditionally (#1823 item 4). On Unix the reaper installs SIGTERM/SIGINT
+  // handlers that relay to Claude and escalate after `GRACE_PERIOD_SECS`
+  // (`reaper/src/linux.rs`, `reaper/src/macos.rs`), so the SIGTERM really does
+  // buy a flush. On Windows there are no POSIX signals: `kill("SIGTERM")` is
+  // `TerminateProcess`, `reaper/src/windows.rs` installs no signal handler at
+  // all, and the reaper's death closes the job handle so KILL_ON_JOB_CLOSE
+  // kills Claude outright — no flush window. `SIGTERM_GRACE_MS`
+  // (`launcher/supervisor.ts`) is NOT dead code there; the reaper exits at once
+  // so the wait resolves immediately, and only the SIGKILL escalation below it
+  // is unreachable on Windows.
   if (launcherSupervisor) {
     try {
       await launcherSupervisor.stop();
@@ -559,6 +601,11 @@ async function main() {
     console.error("[Tandem] Failed to restore open documents:", err);
   });
 
+  // From here a stdin EOF may take the graceful shutdown path: the CTRL doc now
+  // holds the restored chat history, so saving it can no longer clobber it.
+  // Deliberately OUTSIDE the transport branch — see `startupComplete`.
+  startupComplete = true;
+
   // Write a unique ID so clients can detect when the server process has restarted
   writeGenerationId();
 
@@ -689,11 +736,18 @@ async function main() {
     // artifact (users shouldn't accidentally edit it) and read-only also
     // guards against any future regression in the serializer.
     try {
-      const versionStatus = await checkVersionChange(APP_VERSION, LAST_SEEN_VERSION_FILE);
-      if (versionStatus === "upgraded") {
-        await openFromDisk(path.join(projectRoot, "CHANGELOG.md"), { readOnly: true });
-        console.error(`[Tandem] Opened CHANGELOG.md (upgraded to v${APP_VERSION})`);
-      }
+      // #1792: the open is the version-change HOOK, not a step after the
+      // check — the stamp is written only once it resolves. Stamping first
+      // meant a failed open lost that release's notes for good: the next
+      // start reads `current`.
+      await checkVersionChange(APP_VERSION, LAST_SEEN_VERSION_FILE, {
+        onUpgrade: async () => {
+          await openFromDisk(path.join(projectRoot, "CHANGELOG.md"), { readOnly: true });
+          // Version-change-neutral wording: a downgrade takes this arm too and
+          // correctly opens the running build's own CHANGELOG.
+          console.error(`[Tandem] Opened CHANGELOG.md (now running v${APP_VERSION})`);
+        },
+      });
     } catch (err) {
       console.error("[Tandem] Version check / changelog open failed (non-fatal):", err);
     }

@@ -334,6 +334,7 @@ describe("useTandemSettings — updateSettings write path", () => {
     showHighlights: true,
     showNotes: true,
     showRawMarkdown: true,
+    sourceViewLineWrap: false,
     decorationsMuted: false,
     models: [],
     defaultModelId: null,

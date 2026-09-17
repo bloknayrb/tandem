@@ -217,28 +217,36 @@ describe("mdastToYDoc — block nodes", () => {
 
   // An opened .md file is untrusted content exactly like a pasted one
   // (#1420) — a hostile image src must not reach the Y.Doc, even though this
-  // path never goes through the client's paste-time sanitizer.
-  it("image with an unsafe (protocol-relative) src downgrades to alt text", () => {
+  // path never goes through the client's paste-time sanitizer. Since #1755 the
+  // rejected arm PRESERVES the verbatim markdown source as a
+  // `paragraph[markdownRaw]` rather than throwing the URL away with the rest of
+  // the node: the run is TEXT, never an `src`, so nothing reaches a DOM sink,
+  // and the user's file keeps the line it had.
+  it("image with an unsafe (protocol-relative) src is kept as raw source", () => {
     loadTree(
       makeMdast([{ type: "image", url: "//evil.com/x.png", alt: "photo", title: "My photo" }]),
     );
     const el = getFragment(doc).get(0) as Y.XmlElement;
     expect(el.nodeName).toBe("paragraph");
-    expect(getElementText(el)).toBe("photo");
+    expect(el.getAttribute("markdownRaw")).toBe(true);
+    expect(el.getAttribute("src")).toBeUndefined();
+    expect(getElementText(el)).toBe('![photo](//evil.com/x.png "My photo")');
   });
 
-  it("image with an unsafe (backslash cross-host) src downgrades to alt text", () => {
+  it("image with an unsafe (backslash cross-host) src is kept as raw source", () => {
     loadTree(makeMdast([{ type: "image", url: "/\\evil.com/x.png", alt: "photo", title: null }]));
     const el = getFragment(doc).get(0) as Y.XmlElement;
     expect(el.nodeName).toBe("paragraph");
-    expect(getElementText(el)).toBe("photo");
+    expect(el.getAttribute("src")).toBeUndefined();
+    expect(getElementText(el)).toContain("![photo](");
   });
 
-  it("image with an unsafe src and no alt falls back to the title", () => {
+  it("image with an unsafe src and no alt keeps the url, not just the title", () => {
     loadTree(makeMdast([{ type: "image", url: "//evil.com/x.png", alt: null, title: "My photo" }]));
     const el = getFragment(doc).get(0) as Y.XmlElement;
     expect(el.nodeName).toBe("paragraph");
-    expect(getElementText(el)).toBe("My photo");
+    expect(el.getAttribute("src")).toBeUndefined();
+    expect(getElementText(el)).toBe('![](//evil.com/x.png "My photo")');
   });
 
   it("raw html block preserves markdown html metadata", () => {

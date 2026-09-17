@@ -30,7 +30,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import * as Y from "yjs";
 
 // vi.mock factories are hoisted before module-level code; compute paths inline.
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -49,7 +49,7 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
 // Mock the watcher seam: capture the per-path onChanged callback so tests can
 // deliver "external change" events deterministically, and spy on
 // suppressNextChange to assert the own-save pre-arm.
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: vi.fn(),
   suppressNextChange: vi.fn(),
@@ -63,6 +63,7 @@ import {
   reloadDocumentFromMarkdown,
   resolveExternalConflict,
 } from "../../src/server/documents/reload-family.js";
+import { acquireReloadGuard, releaseReloadGuard } from "../../src/server/documents/watcher.js";
 import { getAdapter } from "../../src/server/file-io/index.js";
 import { suppressNextChange, watchFile } from "../../src/server/file-watcher.js";
 import { registerDocumentTools } from "../../src/server/mcp/document.js";
@@ -348,6 +349,41 @@ describe("resolveExternalConflict", () => {
     expect(conflictOf(doc)).toBeUndefined();
     expect(extractText(doc)).toContain("Newer disk body");
     expect(extractText(doc)).not.toContain("local unsaved edit");
+  });
+
+  it('"reload" REPORTS a skip when another reload holds the guard (#1663)', async () => {
+    // A user pressed "Reload from file". When a concurrent reload (another
+    // tab, a restore, a source-view commit) holds the per-doc guard,
+    // `reloadFromDisk` returns false and this click does nothing — which used
+    // to answer HTTP 200 with no toast at all. Selected by `dedupKey`, never by
+    // `type`: "external-conflict" is shared with the conflict banner's own push.
+    const { id, doc } = await flaggedSetup();
+    const textBefore = extractText(doc);
+    resetNotifications();
+
+    expect(acquireReloadGuard(id), "control: the guard was free to take").toBe(true);
+    try {
+      await resolveExternalConflict(id, "reload");
+    } finally {
+      releaseReloadGuard(id);
+    }
+
+    const skipped = getBuffer().filter((n) => n.dedupKey === `reload-skipped:${id}`);
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]).toMatchObject({ severity: "warning", documentId: id });
+    expect(getBuffer().filter((n) => n.type === "file-reloaded")).toHaveLength(0);
+    expect(conflictOf(doc), "the skipped reload left the flag in place").toBeDefined();
+    expect(extractText(doc), "…and the local text untouched").toBe(textBefore);
+  });
+
+  it('"reload" with the guard free toasts the reload and reports no skip', async () => {
+    const { id } = await flaggedSetup();
+    resetNotifications();
+
+    await resolveExternalConflict(id, "reload");
+
+    expect(getBuffer().filter((n) => n.type === "file-reloaded")).toHaveLength(1);
+    expect(getBuffer().filter((n) => n.dedupKey?.startsWith("reload-skipped:"))).toHaveLength(0);
   });
 
   it("is a no-op success when no conflict is pending", async () => {

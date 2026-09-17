@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import * as Y from "yjs";
 
 // Isolated app-data dir, mirroring open-pipeline-transact-batching.test.ts.
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -18,7 +18,7 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
   };
 });
 
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: vi.fn(),
 }));
@@ -31,7 +31,7 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
 // The factory imports yjs dynamically so the mock body can build a Y.XmlText
 // at call time (vi.mock factories run at module-init before regular imports).
 const PARTIAL_WRITE_MARKER = "partial-write-before-throw";
-vi.mock("../../src/server/file-io/markdown", async () => {
+vi.mock(import("../../src/server/file-io/markdown"), async () => {
   const Y_runtime = await import("yjs");
   return {
     loadMarkdown: vi.fn((doc: import("yjs").Doc) => {
@@ -51,7 +51,7 @@ const docxCommentsMocks = vi.hoisted(() => ({
   inject: vi.fn(),
   extract: vi.fn(),
 }));
-vi.mock("../../src/server/file-io/docx-comments", async (importOriginal) => {
+vi.mock(import("../../src/server/file-io/docx-comments"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/file-io/docx-comments")>();
   return {
     ...actual,
@@ -72,7 +72,7 @@ vi.mock("../../src/server/file-io/docx-comments", async (importOriginal) => {
 
 // Mock pushNotification so M1b/M2 can assert on call shape. Pattern from
 // tests/server/annotations/store.test.ts:17-22.
-vi.mock("../../src/server/notifications.js", async (importOriginal) => {
+vi.mock(import("../../src/server/notifications.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/notifications.js")>();
   return { ...actual, pushNotification: vi.fn() };
 });

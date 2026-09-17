@@ -992,6 +992,41 @@ describe("attachChildStreamErrorHandlers — a child-stdin write error is a chil
     expect(kill).not.toHaveBeenCalled();
   });
 
+  // #1868: `onKill` is how the supervisor counts a wake-delivery kill, so it
+  // must fire exactly when THIS handler ends the child, and never past a guard.
+  it("makeStdinGoneHandler tells onKill before it kills a current live child", () => {
+    const order: string[] = [];
+    const kill = vi.fn(() => {
+      order.push("kill");
+      return true;
+    });
+    const onKill = vi.fn(() => {
+      order.push("onKill");
+    });
+    const handler = makeStdinGoneHandler(
+      { exitCode: null, signalCode: null, kill },
+      () => true,
+      onKill,
+    );
+    handler(makeErr("EPIPE"));
+    expect(order).toEqual(["onKill", "kill"]);
+  });
+
+  it("makeStdinGoneHandler does not tell onKill for a superseded or already-exited child", () => {
+    const onKill = vi.fn();
+    makeStdinGoneHandler(
+      { exitCode: null, signalCode: null, kill: vi.fn() },
+      () => false,
+      onKill,
+    )(makeErr("EPIPE"));
+    makeStdinGoneHandler(
+      { exitCode: 127, signalCode: null, kill: vi.fn() },
+      () => true,
+      onKill,
+    )(makeErr("EPIPE"));
+    expect(onKill).not.toHaveBeenCalled();
+  });
+
   it("makeStdinGoneHandler survives a throwing kill — a throw inside a stream error emit is uncaughtException (#1757 with the fix nominally present)", () => {
     const kill = vi.fn().mockImplementationOnce(() => {
       throw new Error("boom");
@@ -1065,7 +1100,7 @@ describe("attachChildStreamErrorHandlers — a child-stdin write error is a chil
     const childIndent = lines.find((l) => /^\s*child = spawned;/.test(l))!.match(/^\s*/)![0];
     expect(lines[bindIdx].match(/^\s*/)![0]).toBe(childIndent);
     expect(lines[bindIdx].trim()).toBe(
-      "const onStdinGone = makeStdinGoneHandler(spawned, () => child === spawned);",
+      "const onStdinGone = makeStdinGoneHandler(spawned, () => child === spawned, markDeliveryKill);",
     );
     expect(lines[callIdx].trim()).toBe("attachChildStreamErrorHandlers(spawned, onStdinGone);");
     // Even an exact text pin cannot see a thunk forged behind an alias; the
@@ -1108,6 +1143,53 @@ describe("childEnv — the launched session must not inherit the desktop's app-d
     const base = { TANDEM_APP_DATA_DIR: "/desktop/app-data" };
     childEnv(base);
     expect(base.TANDEM_APP_DATA_DIR).toBe("/desktop/app-data");
+  });
+
+  /**
+   * #1822 item 4: Tandem's own secrets stay out of the launched session, and
+   * the rest of the user's environment survives. The three survivors are what
+   * kill an allowlist rewrite — `SOME_USER_TOOL_CONFIG` stands for everything
+   * no allowlist would think to name.
+   */
+  it("strips Tandem's secrets and keeps the user's environment", () => {
+    const env = childEnv(
+      {
+        TANDEM_AUTH_TOKEN: "tok",
+        CLAUDE_PLUGIN_OPTION_AUTH_TOKEN: "tok",
+        TANDEM_SENTRY_DSN: "https://k@example.invalid/1",
+        PATH: "/usr/bin",
+        HTTPS_PROXY: "http://proxy.invalid:8080",
+        SOME_USER_TOOL_CONFIG: "keep-me",
+      },
+      [],
+    );
+    expect(env.TANDEM_AUTH_TOKEN).toBeUndefined();
+    expect(env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN).toBeUndefined();
+    expect(env.TANDEM_SENTRY_DSN).toBeUndefined();
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HTTPS_PROXY).toBe("http://proxy.invalid:8080");
+    expect(env.SOME_USER_TOOL_CONFIG).toBe("keep-me");
+  });
+
+  /**
+   * #1822 item 6 sets `NODE_ENV=production` on the packaged sidecar. Inherited
+   * by the launched Claude it would make an `npm install` skip devDependencies,
+   * so the sidecar strips it — keyed on argv, which grandchildren do not
+   * inherit.
+   */
+  it("strips NODE_ENV when this process is the Tauri sidecar", () => {
+    const env = childEnv({ NODE_ENV: "production" }, ["node", "server.js", "--tauri-sidecar"]);
+    expect("NODE_ENV" in env).toBe(false);
+  });
+
+  /**
+   * The inherited `TANDEM_TAURI_SIDECAR` is not provenance: an npm `tandem` run
+   * inside an auto-launched session carries it. Keying the strip on it would
+   * silently drop that user's own `NODE_ENV`.
+   */
+  it("keeps NODE_ENV outside the sidecar, even with TANDEM_TAURI_SIDECAR inherited", () => {
+    const env = childEnv({ NODE_ENV: "production", TANDEM_TAURI_SIDECAR: "1" }, ["node", "tandem"]);
+    expect(env.NODE_ENV).toBe("production");
   });
 
   /**

@@ -29,7 +29,7 @@ import type { Annotation, AuthorshipRange } from "../../src/shared/types";
  */
 let failConversion = false;
 
-vi.mock("../../src/client/positions", async (importOriginal) => {
+vi.mock(import("../../src/client/positions"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/client/positions")>();
   return {
     ...actual,

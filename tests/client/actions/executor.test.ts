@@ -38,7 +38,7 @@ import {
 import { makeActionDeps } from "./deps-bag.js";
 
 const reportErrorSpy = vi.fn();
-vi.mock("../../../src/client/sentry.js", () => ({
+vi.mock(import("../../../src/client/sentry.js"), () => ({
   reportError: (...args: unknown[]) => reportErrorSpy(...args),
 }));
 

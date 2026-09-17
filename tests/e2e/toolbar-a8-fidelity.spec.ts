@@ -176,11 +176,13 @@ test("every bar control renders on the shared 26px control metrics", async ({ pa
   // value — happened to be exactly FormattingToolbar's own button count, so four
   // of the bar's controls could disappear without reddening anything.
   //
-  // 17, with the two split halves excluded above:
+  // 18, with the two split halves excluded above:
   //   13 from FormattingToolbar — undo, redo, B, I, S, `<>`, link, heading,
   //      bullet list, ordered list, blockquote, horizontal rule, code block
   //    2 from HighlightColorPicker — the apply button AND the colour toggle
   //      (it is two controls, not one; that is the count this first got wrong)
+  //    1 display-menu-trigger (#1705 — the Display menu's items render only
+  //      behind its {#if menuOpen}, so only the trigger is in the bar at rest)
   //    1 formatbar-source-toggle
   //    1 formatbar-hide-btn
   //
@@ -192,7 +194,7 @@ test("every bar control renders on the shared 26px control metrics", async ({ pa
     "the formatting bar's control set changed. If you ADDED or REMOVED a control " +
       "deliberately, update this count; otherwise a control has gone missing from " +
       "the bar and nothing else in the suite asserts bar geometry",
-  ).toHaveLength(17);
+  ).toHaveLength(18);
 
   // The UA default is a 2px border; every styled control here uses 1px
   // (transparent at rest). That is the tell that the class went missing.

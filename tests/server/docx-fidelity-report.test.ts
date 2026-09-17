@@ -20,7 +20,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import * as Y from "yjs";
 
 // vi.mock factories are hoisted before module-level code; compute paths inline.
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -38,11 +38,34 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
 
 // Capture the per-path onChanged callback so tests can deliver an "external
 // change" event deterministically (drives reloadFromDisk on a clean doc).
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: vi.fn(),
   suppressNextChange: vi.fn(),
 }));
+
+/**
+ * A seam INSIDE the binary save's write window (#1755, review round 1). Five
+ * awaits separate the `droppedImages` refusal at the top of that branch from the
+ * `Y_MAP_FIDELITY_REPORT` refresh at the bottom, and `writeImportLossReport`
+ * (the file-watcher reload path) is a second writer to that key. Passing through
+ * to the real snapshot keeps every other test in this file honest; the hook is
+ * undefined unless a test sets it.
+ */
+const { midSave } = vi.hoisted(() => ({ midSave: { run: undefined as (() => void) | undefined } }));
+vi.mock(import("../../src/server/file-io/doc-backup"), async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/server/file-io/doc-backup")>();
+  return {
+    ...original,
+    snapshotBeforeFirstWrite: async (
+      ...args: Parameters<typeof original.snapshotBeforeFirstWrite>
+    ) => {
+      const outcome = await original.snapshotBeforeFirstWrite(...args);
+      midSave.run?.();
+      return outcome;
+    },
+  };
+});
 
 import { openFromDisk } from "../../src/server/documents/open.js";
 import { removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
@@ -52,6 +75,7 @@ import { getOpenDocs, saveDocumentToDisk } from "../../src/server/mcp/document-s
 import { resetForTesting as resetNotifications } from "../../src/server/notifications.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_DOCUMENT_META, Y_MAP_FIDELITY_REPORT } from "../../src/shared/constants.js";
+import { withInternal } from "../../src/shared/origins.js";
 import type { FidelityReport } from "../../src/shared/types.js";
 
 /** A minimal clean one-paragraph .docx (no mammoth warnings). */
@@ -133,6 +157,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // A leaked hook would fire inside every later save in this file.
+  midSave.run = undefined;
   await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
 });
 
@@ -417,6 +443,116 @@ describe("fidelity report wiring", () => {
 
     const result = await saveDocumentToDisk(opened.documentId, "manual");
     expect(result.unpreservedImports).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // #1755 — dropped body pictures are reported, and the save is REFUSED
+  // -------------------------------------------------------------------------
+
+  it("refuses the save of an image-bearing .docx and leaves the file untouched", async () => {
+    const corpus = await import("../helpers/docx-corpus.js");
+    const filePath = path.join(tmpDir, "picture.docx");
+    const original = await corpus.buildEmbeddedImage();
+    await fs.writeFile(filePath, original);
+
+    const opened = await openFromDisk(filePath);
+    const report = reportOf(getOrCreateDocument(opened.documentId))!;
+    // The count reaches Y_MAP_FIDELITY_REPORT, not just the LoadIssue.
+    expect(report.droppedImages).toBe(1);
+
+    // A RETURNED value, never a rejection: saveDocumentToDisk catches
+    // SaveVerificationError and answers a SaveResult.
+    const result = await saveDocumentToDisk(opened.documentId, "manual");
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("VERIFY_BLOCKED");
+    expect(result.reason).toMatch(/picture/i);
+
+    // The half that kills an implementation throwing AFTER atomicWriteBuffer.
+    const after = await fs.readFile(filePath);
+    expect(after.length).toBe(original.length);
+    expect(after.equals(original)).toBe(true);
+  });
+
+  it("an image-free .docx still saves — kills 'refuse every .docx'", async () => {
+    const corpus = await import("../helpers/docx-corpus.js");
+    const filePath = path.join(tmpDir, "headings.docx");
+    await fs.writeFile(filePath, await corpus.buildHeadings());
+
+    const opened = await openFromDisk(filePath);
+    expect(reportOf(getOrCreateDocument(opened.documentId))?.droppedImages ?? 0).toBe(0);
+
+    const result = await saveDocumentToDisk(opened.documentId, "manual");
+    expect(result.status).toBe("saved");
+  });
+
+  it("saves an image-bearing .docx when allowImageLoss is set (#1941)", async () => {
+    // The override half of the decision #1939 shipped the first half of: refuse
+    // by default, proceed when the caller explicitly accepts the loss. The
+    // fixture carries TEXT beside the picture on purpose — a picture-only
+    // document regenerates blank and trips the degenerate-model check for an
+    // unrelated reason, which would make this pass for the wrong one.
+    const corpus = await import("../helpers/docx-corpus.js");
+    const filePath = path.join(tmpDir, "picture-override.docx");
+    const original = await corpus.buildEmbeddedImageWithText();
+    await fs.writeFile(filePath, original);
+
+    const opened = await openFromDisk(filePath);
+    expect(reportOf(getOrCreateDocument(opened.documentId))?.droppedImages).toBe(1);
+
+    // Default is unchanged — the refusal still fires for the same document.
+    const refused = await saveDocumentToDisk(opened.documentId, "manual");
+    expect(refused.status).toBe("error");
+    expect(refused.errorCode).toBe("VERIFY_BLOCKED");
+
+    const result = await saveDocumentToDisk(opened.documentId, "manual", {
+      allowImageLoss: true,
+    });
+    expect(result.status).toBe("saved");
+
+    // The bytes actually moved, and the text survived the regeneration — this
+    // is the half that fails if the override short-circuits the write instead
+    // of proceeding through it.
+    const after = await fs.readFile(filePath);
+    expect(after.equals(original)).toBe(false);
+    const { loadDocx } = await import("../../src/server/file-io/docx.js");
+    expect(await loadDocx(after)).toContain("Hello World");
+  });
+
+  it("carries droppedImages set MID-SAVE — the refusal is not erased", async () => {
+    // Review round 1. The whole-object replace at the end of the binary branch
+    // rewrites Y_MAP_FIDELITY_REPORT; omitting `droppedImages` from it is not a
+    // type error (the field is optional), and `satisfies FidelityReport` says
+    // nothing. It looks unreachable because the refusal fires first — but only
+    // for the value read BEFORE the write window. A reload landing inside that
+    // window (the file was replaced on disk by a picture-bearing version) sets
+    // it, and erasing it here disarms the #1755 gate for the rest of the
+    // session: the NEXT save regenerates the .docx image-less.
+    const filePath = path.join(tmpDir, "clean-then-pictures.docx");
+    await fs.writeFile(filePath, await buildSimpleDocx("Body text"));
+    const opened = await openFromDisk(filePath);
+    const doc = getOrCreateDocument(opened.documentId);
+
+    midSave.run = () => {
+      withInternal(doc, () => {
+        doc.getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_FIDELITY_REPORT, {
+          importLosses: ["2 picture(s) couldn't be imported"],
+          structuralLosses: 1,
+          droppedImages: 2,
+          exportDowngrades: [],
+          updatedAt: Date.now(),
+        } satisfies FidelityReport);
+      });
+    };
+
+    const first = await saveDocumentToDisk(opened.documentId, "manual");
+    expect(first.status).toBe("saved");
+    expect(reportOf(doc)?.droppedImages).toBe(2);
+
+    // The half that matters: the gate is still armed on the next save.
+    midSave.run = undefined;
+    const second = await saveDocumentToDisk(opened.documentId, "manual");
+    expect(second.status).toBe("error");
+    expect(second.errorCode).toBe("VERIFY_BLOCKED");
   });
 
   it("writes NO report for a non-docx (.md) document", async () => {

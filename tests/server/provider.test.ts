@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { createHocuspocusLifecycle } from "../../src/server/bootstrap/hocuspocus-lifecycle.js";
 import { getOpenDocs } from "../../src/server/documents/registry.js";
@@ -6,8 +6,11 @@ import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/re
 import { getGenerationId, writeGenerationId } from "../../src/server/mcp/document-service.js";
 import {
   assertAllowedOrigin,
+  describeRejectedToken,
   getDocument,
   getOrCreateDocument,
+  logOversizedFrame,
+  MAX_SYNC_PAYLOAD_BYTES,
   removeDocument,
 } from "../../src/server/yjs/provider.js";
 import { CTRL_ROOM, TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../src/shared/constants.js";
@@ -129,5 +132,98 @@ describe("writeGenerationId", () => {
 
     writeGenerationId();
     expect(getGenerationId()).not.toBe(first);
+  });
+});
+
+// ── #1822, review round 1 — provider log hygiene and the 1009 signal ──────────
+
+/** Written as escapes rather than literals: a raw ESC byte in a source file
+ * is invisible in every diff view that would have to review it. */
+const ESC = "\u001b";
+const BEL = "\u0007";
+
+describe("assertAllowedOrigin sanitizes the origin it logs (#1822 item 1, same class)", () => {
+  // The origin is whatever the peer put on the WebSocket upgrade, and it is
+  // read BEFORE authentication. `console.*` redirects to stderr (Critical
+  // Rule 3), so an unstripped ESC/OSC-0 sequence retitles the operator's
+  // terminal and a bare LF forges a whole log line. Hocuspocus binds 127.0.0.1
+  // always, so this is loopback-only — the same control, at lower reach than
+  // the channel routes.
+  const OSC = `${ESC}]0;pwned${BEL}`;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("strips the escape from an unparseable origin", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() => assertAllowedOrigin(`not a url${OSC}`)).toThrow();
+    const line = spy.mock.calls.flat().join(" ");
+    expect(line).not.toContain(ESC);
+    expect(line).not.toContain(BEL);
+  });
+
+  it("strips the escape from a parseable but disallowed origin", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // A URL whose HOSTNAME is fine to parse but not allowlisted; the escape
+    // rides in the path, which the log still interpolates verbatim.
+    expect(() => assertAllowedOrigin(`http://evil.example/${OSC}`)).toThrow();
+    const line = spy.mock.calls.flat().join(" ");
+    expect(line).not.toContain(ESC);
+    expect(line).not.toContain(BEL);
+  });
+});
+
+describe("describeRejectedToken (#1822 item 1 class — the pre-auth token log)", () => {
+  it("strips an escape sequence that fits inside the eight-character slice", () => {
+    // `ESC ]0;x BEL` is six characters, so the old `token.slice(0, 8)` did not
+    // truncate the attack — it framed it. Sanitizing BEFORE the slice is what
+    // makes the truncation irrelevant to the outcome.
+    const rendered = describeRejectedToken(`${ESC}]0;x${BEL}abcdefgh`);
+    expect(rendered).not.toContain(ESC);
+    expect(rendered).not.toContain(BEL);
+  });
+
+  it("still truncates a long benign token to eight characters", () => {
+    // The truncation is the privacy half and must survive the sanitize step:
+    // a generation id is not a secret, but there is no reason to print it whole.
+    expect(describeRejectedToken("a".repeat(64))).toBe(`"${"a".repeat(8)}\u2026"`);
+  });
+
+  it('answers "missing" for an absent or empty token', () => {
+    expect(describeRejectedToken(undefined)).toBe("missing");
+    expect(describeRejectedToken("")).toBe("missing");
+  });
+});
+
+describe("logOversizedFrame (#1822 item 2 — the 1009 wedge is diagnosable)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("logs once, naming the cap, for ws's max-payload error", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    logOversizedFrame(
+      Object.assign(new RangeError("Max payload size exceeded"), {
+        code: "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH",
+      }),
+    );
+    expect(spy).toHaveBeenCalledTimes(1);
+    const line = spy.mock.calls.flat().join(" ");
+    // Naming the constant is the point: without it the operator sees a close
+    // code and no reason. Assert the NUMBER, so a silent re-derivation of
+    // MAX_SYNC_PAYLOAD_BYTES cannot leave the log describing the old bound.
+    expect(line).toContain(String(MAX_SYNC_PAYLOAD_BYTES));
+    expect(line).toContain("1009");
+  });
+
+  it("stays silent for every other socket error", () => {
+    // An aborted connection is normal traffic. This is not a general ws error
+    // log, and turning it into one would bury the signal it exists to raise.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    logOversizedFrame(Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }));
+    logOversizedFrame(new Error("no code at all"));
+    logOversizedFrame(undefined);
+    expect(spy).not.toHaveBeenCalled();
   });
 });

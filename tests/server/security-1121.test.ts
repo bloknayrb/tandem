@@ -38,20 +38,20 @@ const {
   hasDoc: vi.fn((_id: string) => true),
 }));
 
-vi.mock("../../src/server/auth/middleware.js", async (importOriginal) => {
+vi.mock(import("../../src/server/auth/middleware.js"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/auth/middleware.js")>();
   return { ...original, isLoopback: (req: unknown) => isLoopbackMock(req) };
 });
 
-vi.mock("../../src/server/mcp/document-service.js", () => ({ getCurrentDoc }));
-vi.mock("../../src/server/file-io/doc-backup.js", () => ({ listDocBackups }));
-vi.mock("../../src/server/platform.js", () => ({ resolveAppDataDir }));
-vi.mock("../../src/server/documents/reload-family.js", () => ({
+vi.mock(import("../../src/server/mcp/document-service.js"), () => ({ getCurrentDoc }));
+vi.mock(import("../../src/server/file-io/doc-backup.js"), () => ({ listDocBackups }));
+vi.mock(import("../../src/server/platform.js"), () => ({ resolveAppDataDir }));
+vi.mock(import("../../src/server/documents/reload-family.js"), () => ({
   restoreDocumentFromBackup,
   reloadDocumentFromMarkdown,
   resolveExternalConflict,
 }));
-vi.mock("../../src/server/documents/registry.js", () => ({ getActiveDocId, hasDoc }));
+vi.mock(import("../../src/server/documents/registry.js"), () => ({ getActiveDocId, hasDoc }));
 
 import { handleListBackups, handleRestoreBackup } from "../../src/server/mcp/routes/backups.js";
 import { handleGetDocumentRaw } from "../../src/server/mcp/routes/document-raw.js";

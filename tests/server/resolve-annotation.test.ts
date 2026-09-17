@@ -7,10 +7,8 @@
  * pattern in edit-annotation.test.ts.
  */
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { beforeEach, describe, expect, it } from "vitest";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { populateYDoc } from "../../src/server/mcp/document.js";
@@ -19,25 +17,11 @@ import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { createAnnotation, rangeOf } from "../helpers/ydoc-factory.js";
 
 let client: Client;
-
-async function setupMcpClient(): Promise<Client> {
-  const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
-  registerAnnotationTools(server);
-
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const mcpClient = new Client({ name: "test-client", version: "0.0.1" });
-  await server.connect(serverTransport);
-  await mcpClient.connect(clientTransport);
-  return mcpClient;
-}
-
-function parseResult(result: { content: Array<{ type: string; text?: string }> }) {
-  const textContent = result.content.find((c) => c.type === "text");
-  return textContent?.text ? JSON.parse(textContent.text) : null;
-}
+let close: (() => Promise<void>) | undefined;
 
 function setupDoc(id: string, text: string) {
   const ydoc = getOrCreateDocument(id);
@@ -50,7 +34,12 @@ function setupDoc(id: string, text: string) {
 beforeEach(async () => {
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   setActiveDocId(null);
-  client = await setupMcpClient();
+  ({ client, close } = await setupMcpServer([registerAnnotationTools]));
+});
+
+afterEach(async () => {
+  await close?.();
+  close = undefined;
 });
 
 describe("tandem_resolveAnnotation NOT_FOUND error code", () => {
@@ -104,7 +93,7 @@ describe("tandem_resolveAnnotation precondition (issue #694)", () => {
       arguments: { id, action: "accept" },
     });
     const parsed = parseResult(result as { content: Array<{ type: string; text?: string }> });
-    expect(parsed.code).toBe("ANNOTATION_NOT_PENDING");
+    expect(parsed.code).toBe("ANNOTATION_RESOLVED");
     expect(parsed.message).toContain("already accepted");
 
     const after = map.get(id) as Annotation;
@@ -126,7 +115,7 @@ describe("tandem_resolveAnnotation precondition (issue #694)", () => {
       arguments: { id, action: "dismiss" },
     });
     const parsed = parseResult(result as { content: Array<{ type: string; text?: string }> });
-    expect(parsed.code).toBe("ANNOTATION_NOT_PENDING");
+    expect(parsed.code).toBe("ANNOTATION_RESOLVED");
     expect(parsed.message).toContain("already dismissed");
 
     const after = map.get(id) as Annotation;
@@ -147,7 +136,7 @@ describe("tandem_resolveAnnotation precondition (issue #694)", () => {
       arguments: { id, action: "accept" },
     });
     const parsed = parseResult(result as { content: Array<{ type: string; text?: string }> });
-    expect(parsed.code).toBe("ANNOTATION_NOT_PENDING");
+    expect(parsed.code).toBe("ANNOTATION_RESOLVED");
 
     const after = map.get(id) as Annotation;
     expect(after.status).toBe("dismissed");

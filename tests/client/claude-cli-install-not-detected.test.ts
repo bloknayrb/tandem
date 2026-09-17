@@ -16,14 +16,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Keep the wizard + cowork hooks stubbed (no real /api round-trips), but use
 // the REAL useClaudeCliStatus so install()'s SF-2 branch actually runs.
-vi.mock("../../src/client/hooks/useIntegrationWizard.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useIntegrationWizard.svelte"), () => ({
   createIntegrationWizard: () => ({
-    step: "connect",
+    step: "connect" as const,
     detecting: false,
     existing: [],
     picked: [],
     applyResults: [],
     errorMessage: null,
+    channelRegistered: null,
     keychainUnavailable: false,
     begin: vi.fn(async () => {}),
     save: vi.fn(async () => {}),
@@ -35,12 +36,12 @@ vi.mock("../../src/client/hooks/useIntegrationWizard.svelte", () => ({
   detectedToPicked: vi.fn(() => null),
 }));
 
-vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useCoworkStatus.svelte"), () => ({
   createCoworkStatus: () => ({
     status: null,
     loading: false,
     error: null,
-    refetch: vi.fn(async () => {}),
+    refetch: vi.fn(async () => true),
   }),
 }));
 

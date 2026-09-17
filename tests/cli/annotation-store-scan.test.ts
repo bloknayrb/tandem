@@ -174,6 +174,39 @@ describe("scanAnnotationStore — verdicts", () => {
     });
   });
 
+  it("counts #1791 archives: every .future park, and partial loads plus their copies", async () => {
+    const row = {
+      id: "ann_good",
+      author: "claude",
+      type: "comment",
+      range: { from: 0, to: 5 },
+      content: "kept",
+      status: "pending",
+      timestamp: 1,
+      rev: 1,
+    };
+    // One row this build cannot read: parses `ok` with a row dropped. Before
+    // row-level tolerance it counted unreadable; it must not now count healthy.
+    writeDoc("p.json", {
+      ...VALID_DOC,
+      annotations: [row, { ...row, id: "ann_future", type: "suggestion" }],
+    });
+    writeDoc("p.json.partial.0123abcd", "garbage");
+    writeDoc("b.json.future", "garbage");
+    writeDoc("b.json.future.1700000000000-deadbeef", "garbage");
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await scanAnnotationStore(dir);
+    errorSpy.mockRestore();
+    expect(result).toMatchObject({
+      docCount: 1,
+      unreadableActive: 0,
+      partialActive: 1,
+      partialCopies: 1,
+      parkedFuture: 2,
+    });
+  });
+
   it("ignores the lockfile and any non-.json entry", async () => {
     writeDoc("a.json", VALID_DOC);
     writeFileSync(join(dir, "store.lock"), "1234");

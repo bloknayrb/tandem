@@ -172,13 +172,15 @@ These commands are available when running Tandem from a source checkout (`git cl
 | `npm run build:server` | tsup only — bundles server, CLI, channel shim, monitor and the stdio bridge into `dist/`. A missing `dist/stdio-bridge/` is not a build error: the generated `tandem` MCP entry silently falls back to bare `npx` behind a `log::warn!`. |
 | `npm run build:reaper` | Builds the `tandem-reaper` sidecar. Both declared `externalBin`s must exist or `cargo tauri dev/build` fails its existence check. |
 | `npm run build:tauri` | Tauri production build — produces installers. |
-| `npm run check:fonts` | Validates that all referenced font assets are present. |
+| `npm run check:fonts` | Validates that all referenced font assets are present. Requires a prior `npm run build`: it inspects the built `dist/client/index.html` and errors if that file is absent. |
 
 ### Testing
 
 | Script | What it runs |
 |---|---|
-| `npm run test:coverage` | The same vitest run with coverage on, then the coverage manifest and the per-module coverage gate (`scripts/ci/coverage-gate.mjs`). |
+| `npm run test:coverage` | The same vitest run with coverage on. **The measurement only** — it no longer chains the manifest and the gate (#1862): any vitest exit short-circuited the `&&` chain, so the gate never ran and the job's red said nothing about the floors. |
+| `npm run coverage:manifest` | `scripts/ci/coverage-manifest.mjs` — writes `coverage/baseline-manifest.json`, and refuses (exit **1**) a measurement it judges partial. Run it **after** `test:coverage`. |
+| `npm run coverage:gate` | `scripts/ci/coverage-gate.mjs` — the per-module floors. Run it **after** `coverage:manifest`: it exits **3**, "the gate could not evaluate", when there is no manifest to vouch for the measurement, and 3 is its convention alone (`coverage-manifest.mjs` exits 1 on every refusal). |
 | `npm test` | Vitest unit tests. **Needs Python 3.10+ on `PATH`** (as `python3` or `python`) — see the acceptance-harness row below for why, and CONTRIBUTING.md's Prerequisites. |
 | `npm run test:e2e` | Playwright E2E tests (auto-starts servers via `webServer` config). |
 | `npm run test:e2e:ui` | Playwright UI mode for interactive E2E debugging. |

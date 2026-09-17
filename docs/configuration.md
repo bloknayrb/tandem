@@ -47,7 +47,7 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 
 | Variable | Default | Description |
 |---|---|---|
-| `TANDEM_APP_DATA_DIR` | platform default (see below) | Override the app-data root that holds sessions, the auth token, and durable annotations. |
+| `TANDEM_APP_DATA_DIR` | platform default (see below) | Override the app-data root that holds sessions, the auth token, durable annotations, `license.json` and `trial.json`. Pointing it somewhere new presents a fresh trial and an apparently-unlicensed device — the license is still on disk under the old root. |
 | `TANDEM_DATA_DIR` | repo-relative | Override the project-relative data dir used to locate `sample/welcome.md`. Distinct from `TANDEM_APP_DATA_DIR`; most users don't need this. |
 | `TANDEM_ANNOTATION_STORE` | unset | Set to `off` to disable durable annotation persistence (annotations then live only in session files). |
 
@@ -90,6 +90,8 @@ tandem
 **This does not skip the token requirement**, despite the name and despite what this page said until #1320. A token is always minted, and `authMiddleware` always enforces it for non-loopback callers, flag or not (#1121 F7). Since #1293 the flag does exactly one thing: it lets the server *bind* to a LAN host before a token has been provisioned. It relaxes no guard.
 
 Even with a valid token, a LAN peer can only **read** `/api` — writes are refused by the loopback invariant (#1320). See [security.md](security.md#the-api-invariant-1320).
+
+**That is a property of `/api`, not of the server.** `enforceLoopbackMutation` is mounted on `/api` alone, so the same token-holding LAN peer can still `POST /mcp` and reach every mutating MCP tool with no loopback check — [#1906](https://github.com/bloknayrb/tandem/issues/1906).
 
 See [security.md](security.md) for the full security model.
 

@@ -42,6 +42,7 @@ import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
 import { snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
 import { commentExportDowngrades, prepareExportComments } from "../file-io/docx-comment-export.js";
+import { reconcileImportCommentIds } from "../file-io/docx-comments.js";
 import { detectExportFidelityIssues } from "../file-io/docx-export.js";
 import {
   type BlockReason,
@@ -56,6 +57,7 @@ import { rearmWatch, recordSelfWrite, suppressNextChange, unwatchFile } from "..
 import { assertPathSafe } from "../integrations/apply.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
+import type { SessionFileEntry } from "../session/manager.js";
 import {
   deleteSession,
   listSessionFilePaths,
@@ -65,6 +67,7 @@ import {
   saveCtrlSession,
   saveSession,
   stopAutoSave,
+  touchSession,
 } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 
@@ -155,15 +158,26 @@ function fidelityReportOf(doc: Y.Doc): FidelityReport | undefined {
 }
 
 /**
- * How many STRUCTURAL import losses a report carries (#1142 G3) — content or
- * page furniture that is gone, not mammoth's style-level tail. This is what the
- * save-time overwrite warning gates on; see the field's note in
- * `shared/types.ts` for why the broader count would make it ambient. Takes the
- * report rather than the doc so a caller can read it ONCE and use the same
- * snapshot for what it returns and what it persists.
+ * A positive count field off a fidelity report, or 0. The `typeof` guard is
+ * load-bearing rather than ceremonial: `fidelityReportOf` is a bare cast over a
+ * CRDT-synced value that survives session restore un-revalidated, so a legacy or
+ * malformed field must read as "none" instead of reaching arithmetic.
+ *
+ * Takes the report rather than the doc so a caller can read it ONCE and use the
+ * same snapshot for what it returns and what it persists.
+ *
+ * - `structuralLosses` (#1142 G3) — content or page furniture that is gone, not
+ *   mammoth's style-level tail. This is what the save-time overwrite warning
+ *   gates on; see the field's note in `shared/types.ts` for why the broader
+ *   count would make it ambient.
+ * - `droppedImages` (#1755) — body pictures the import dropped, which REFUSES
+ *   the binary save rather than merely warning.
  */
-function structuralLossesOf(report: FidelityReport | undefined): number {
-  const value = report?.structuralLosses;
+function reportCount(
+  report: FidelityReport | undefined,
+  field: "structuralLosses" | "droppedImages",
+): number {
+  const value = report?.[field];
   return typeof value === "number" && value > 0 ? value : 0;
 }
 
@@ -196,6 +210,12 @@ export interface SaveResult {
    */
   skipCode?: SkipCode;
   errorCode?: string;
+  /**
+   * The failing syscall of an `error` result's errno, when there was one. On
+   * Windows it is what separates a permission refusal from a lock, since both
+   * arrive as `EPERM` (see `lockOrPermissionCode`, #1823).
+   */
+  errorSyscall?: string;
   /**
    * Body-export fidelity warnings (#576, `.docx` only) — content the export
    * downgraded (unsupported blocks, non-embedded images). Present on a
@@ -264,6 +284,19 @@ class SaveVerificationError extends Error {
 export async function saveDocumentToDisk(
   docId: string,
   source: "auto-save" | "manual" | "mcp" = "auto-save",
+  /**
+   * `allowImageLoss` (#1941) — the explicit override for the #1755 refusal, and
+   * the ONLY thing this bag carries. A third OPTIONAL parameter by design: every
+   * existing caller (`reload-family.ts`, `autoSaveAllToDisk`, the auto-save
+   * timer) is unchanged by construction and keeps refusing.
+   *
+   * It changes WHETHER a save proceeds, never WHERE it lands — the destination
+   * is still `docState.filePath`, so #1654's bound on caller-named write
+   * destinations is untouched. Scoped to `import-image-loss` alone: the
+   * post-write verdict block below is a different claim (*the regenerated file
+   * is broken*) and is not overridable.
+   */
+  opts?: { allowImageLoss?: boolean },
 ): Promise<SaveResult> {
   // path.basename eliminates directory components so CodeQL does not trace
   // user input through Map.get(id) to docState.filePath FS sinks
@@ -454,6 +487,39 @@ export async function saveDocumentToDisk(
       // Binary branch (#576, .docx). Capture fidelity warnings against the same
       // Y.Doc snapshot we serialize, then write the ZIP via atomicWriteBuffer
       // (atomicWrite's UTF-8 encoding would corrupt the binary).
+      // Refuse before anything else in this branch (#1755). `exportYDocToDocx`
+      // regenerates the file from a Y.Doc that never received the document's
+      // pictures, so writing would silently strip them from the user's .docx.
+      // Placement is constrained from both sides: it must sit ABOVE the pinned
+      // `prepareExportComments`/`saveBinary` window (no `await` may be inserted
+      // inside that), and being before `saveBinary` means no bytes are
+      // generated and the once-per-run pre-overwrite backup gate is not
+      // consumed, while being before `atomicWriteBuffer`/`suppressNextChange`
+      // means the file is untouched and the watcher suppressor never armed.
+      //
+      // `saveDocumentToDisk` CATCHES this and returns
+      // `{ status: "error", errorCode: "VERIFY_BLOCKED" }` — it does not reject.
+      // The throw also lands before `saveSession`, so no session snapshot is
+      // written: the repo's softer `saved: false` + skip-reason vocabulary reads
+      // as a benign no-op, and these edits genuinely cannot reach .docx.
+      // Annotations are unaffected either way (durable annotation store).
+      //
+      // NOT added to `tandem_applyChanges`: `file-io/docx-apply.ts` edits the
+      // ORIGINAL `word/document.xml` in place and re-zips, so the pictures
+      // survive it. Adding this "for consistency" would break the one write path
+      // that preserves them.
+      //
+      // `opts.allowImageLoss` (#1941) is the explicit override: refuse by
+      // default, proceed when a caller has said, in so many words, that it
+      // accepts losing the pictures. Both surfaces default to FALSE on any
+      // parse failure (`tandem_save` omits the param, `POST /api/save` tests
+      // `=== true`), so a malformed or bodyless request still refuses.
+      if (!opts?.allowImageLoss && reportCount(fidelityReportOf(doc), "droppedImages") > 0) {
+        throw new SaveVerificationError(
+          blockReasonMessage("import-image-loss"),
+          "import-image-loss",
+        );
+      }
       const warnings = detectExportFidelityIssues(doc);
       // Comment-side fidelity (#1142 G3): flattened reply threads and comments
       // whose ranges no longer resolve. Computed from ONE `prepareExportComments`
@@ -479,7 +545,7 @@ export async function saveDocumentToDisk(
       // persisted `structuralLosses` disagree with the count already delivered
       // to the toast and to Claude.
       importSnapshot = fidelityReportOf(doc);
-      unpreservedImports = structuralLossesOf(importSnapshot) || undefined;
+      unpreservedImports = reportCount(importSnapshot, "structuralLosses") || undefined;
       const buffer = await adapter.saveBinary!(doc);
       // Pre-overwrite snapshot of the on-disk original (first write per path per
       // run), mirroring the text branch below. .docx is the highest-stakes case:
@@ -516,6 +582,21 @@ export async function saveDocumentToDisk(
       } finally {
         rearmWatch(docState.filePath);
       }
+      // The bytes are on disk, so the `w:id` values in `exportComments` are now
+      // the ones the FILE carries — point the stored `importSource.commentId`s
+      // at them (#1693). `prepareExportComments` re-mints whenever the stored id
+      // is not reusable as a `w:id`, and the next open then misses BOTH layers
+      // that protect an already-promoted Word comment (the hashed offset key and
+      // the `commentId` drift index), injecting a ghost note whose own next save
+      // writes two Word comments for one original (#1448).
+      //
+      // Placement is the contract, on both sides. It is BELOW the write because
+      // this branch can still refuse above it — a `blocked` verify verdict or a
+      // throwing `atomicWriteBuffer` — and rewriting the stored ids for a save
+      // that never landed is the same ghost with the two sides swapped. It is
+      // OUTSIDE the inner `try`, not a fourth line in it: that block is the
+      // #1749 write triple, whose `finally` exists for `rearmWatch` alone.
+      reconcileImportCommentIds(doc, exportComments);
       // `fidelityWarnings` drives the save toast; `exportDowngrades` is the
       // persistent notice. They differ by exactly the flattened-reply line,
       // which is deliberately persistent-only: imported Word reply threads
@@ -570,7 +651,20 @@ export async function saveDocumentToDisk(
       if (isBinary) {
         meta.set(Y_MAP_FIDELITY_REPORT, {
           importLosses: importSnapshot?.importLosses ?? [],
-          structuralLosses: structuralLossesOf(importSnapshot),
+          structuralLosses: reportCount(importSnapshot, "structuralLosses"),
+          // Carried, and deliberately RE-READ rather than taken from
+          // `importSnapshot` (#1755) — the opposite of the pinning above,
+          // because this field is a safety gate rather than a number already
+          // delivered to the toast. It looks dead (the refusal at the top of
+          // this branch fires for exactly the documents with a non-zero value),
+          // but five awaits separate the two: a file-watcher reload landing in
+          // that window — the file was replaced on disk by a picture-bearing
+          // version — runs `writeImportLossReport` and sets it. Omitting the
+          // field from this WHOLE-OBJECT replace would then erase the refusal
+          // for the rest of the session and the next `tandem_save` would
+          // regenerate the .docx image-less. `satisfies FidelityReport` cannot
+          // catch the omission: the field is optional.
+          droppedImages: reportCount(fidelityReportOf(doc), "droppedImages"),
           exportDowngrades,
           // Post-write verify advisories (#1123 0e) — louder than downgrades;
           // `?? []` clears a prior save's advisory on a now-clean save.
@@ -703,6 +797,7 @@ export async function saveDocumentToDisk(
       // be saved to that location." shape instead.
       reason: verificationBlock ? verificationBlock.message : "The document could not be saved.",
       errorCode: (err as NodeJS.ErrnoException).code,
+      errorSyscall: (err as NodeJS.ErrnoException).syscall,
     };
   } finally {
     savingDocs.delete(safeDocId);
@@ -1854,6 +1949,116 @@ export function broadcastStoreReadOnly(readOnly: boolean): void {
 }
 
 /**
+ * How far behind the newest session a session may be and still be reopened at
+ * startup.
+ *
+ * **The bound is relative to the newest session, never to the wall clock.**
+ * That is what makes it correct for a user who has not opened Tandem in a
+ * month: every session written by the same run shares roughly one timestamp, so
+ * the whole working set moves together and an absolute age test would throw all
+ * of it away.
+ *
+ * Why the working set clusters that tightly: `ensureAutoSave` rewrites EVERY
+ * open document's session on each 60s tick, dirty or not, and `saveCurrentSession`
+ * writes all of them again at shutdown. So documents open together are written
+ * together, and 30 minutes is ~30 ticks of slack over a spread that is normally
+ * one tick wide.
+ *
+ * What this exists to stop: a session file that entered the directory from
+ * somewhere other than the user's own working set. The vitest suite wrote ~40
+ * of them into a real user's store, and because a restored document is then
+ * autosaved like any other, its mtime kept refreshing and the 30-day
+ * `cleanupSessions` GC could never reclaim it — restore-then-autosave made them
+ * immortal. Bounding the reopen is what breaks that cycle; the GC then collects
+ * them normally.
+ */
+const RESTORE_WINDOW_MS = 30 * 60_000;
+
+/**
+ * Reopen failures that can clear on their own, and so earn a `touchSession`
+ * keeping the record in the next restore window.
+ *
+ * Everything absent is treated as permanent — notably `UNSUPPORTED_FORMAT` and
+ * `FILE_TOO_LARGE` from `resolveAndValidatePath`, which fail identically on
+ * every boot. The list is deliberately an ALLOWLIST rather than a denylist of
+ * the two known-permanent codes: a new permanent failure mode added to the open
+ * path would otherwise silently join the retried-forever set, and the cost of
+ * omitting a genuinely transient code is one un-restored tab that is still
+ * listed under Recent sessions, while the cost of admitting a permanent one is
+ * a session file that the mtime-based GC can never reclaim.
+ */
+const TRANSIENT_RESTORE_ERRORS = new Set([
+  "EACCES", // antivirus or another process holding the file
+  "EPERM", // same, as Windows spells it
+  "EBUSY", // locked by another handle
+  "EMFILE", // descriptor table exhausted this boot
+  "ENFILE",
+  "EIO", // transport blip on a network mount
+  "ENETDOWN",
+  "ENETUNREACH",
+  "EHOSTDOWN",
+  "EHOSTUNREACH",
+  "ETIMEDOUT",
+  "EAGAIN",
+]);
+
+/**
+ * Split `listSessionFilePaths()` output into the sessions startup should reopen
+ * and the ones it should leave on disk.
+ *
+ * Two rules, and the second is load-bearing:
+ *
+ * 1. Reopen anything within `RESTORE_WINDOW_MS` of the newest session.
+ * 2. **Always reopen a session that holds unsaved work**, however old.
+ *    `closeDocumentById` deliberately keeps the session of a document closed
+ *    with an unresolved external conflict, because it is the only copy of those
+ *    edits — and its `lastAccessed` is frozen at close time and never
+ *    refreshed, so rule 1 alone would discard precisely the session that was
+ *    kept on purpose.
+ *
+ * Nothing here deletes: a session outside the window stays on disk and stays in
+ * `listSessionFilePaths()`, so it is still offered by the Sessions UI. The
+ * filtering belongs to the restore decision, NOT to the enumeration — the
+ * listing is shared with `listSessionsMetadata`, and narrowing it there would
+ * make a recoverable document look like data loss.
+ *
+ * Returned as ONE partition rather than a predicate called twice. The log line
+ * naming what was skipped and the loop deciding what to reopen must describe
+ * the same split, and `Date.now()` below means a predicate re-evaluated a
+ * moment later can legitimately answer differently.
+ *
+ * `newest` is derived defensively in two ways, because both failure modes end
+ * in the user silently getting one tab back instead of eight:
+ *
+ * - **`reduce`, not `Math.max(...spread)`.** The bug this bound exists to fix
+ *   put 4,469 stray directories in a real app-data store, so the session
+ *   directory is not something to assume stays small. A spread large enough to
+ *   exceed the argument limit throws `RangeError` out of `restoreOpenDocuments`
+ *   and into `index.ts`'s bare `.catch`, which restores nothing at all.
+ * - **Clamped to now.** One record stamped in the future — clock skew, an NTP
+ *   correction, a session copied from another machine — would otherwise put
+ *   `newest` ahead of real time and push every genuine session outside the
+ *   window. The clamp is provably one-directional: lowering `newest` can only
+ *   shrink `newest - lastAccessed`, so it can only move sessions INTO the
+ *   restore set, never out of it.
+ */
+function partitionByRestoreWindow(sessions: SessionFileEntry[]): {
+  newest: number;
+  restore: SessionFileEntry[];
+  skip: SessionFileEntry[];
+} {
+  const newestOnDisk = sessions.reduce((max, s) => Math.max(max, s.lastAccessed), 0);
+  const newest = Math.min(Date.now(), newestOnDisk);
+  const restore: SessionFileEntry[] = [];
+  const skip: SessionFileEntry[] = [];
+  for (const session of sessions) {
+    const keep = session.holdsUnsavedWork || newest - session.lastAccessed <= RESTORE_WINDOW_MS;
+    (keep ? restore : skip).push(session);
+  }
+  return { newest, restore, skip };
+}
+
+/**
  * Scan sessions and re-open previously open documents.
  * Called during startup to restore the working set.
  */
@@ -1861,8 +2066,18 @@ export async function restoreOpenDocuments(previousActiveDocId: string | null): 
   const sessions = await listSessionFilePaths();
   if (sessions.length === 0) return 0;
 
+  const { newest, restore, skip } = partitionByRestoreWindow(sessions);
+
+  for (const skipped of skip) {
+    console.error(
+      "[Tandem] Not reopening %s: its session predates the last working set by more than %d minutes. It remains available under Recent sessions.",
+      path.basename(skipped.filePath),
+      RESTORE_WINDOW_MS / 60_000,
+    );
+  }
+
   let restoredCount = 0;
-  for (const { filePath, readOnly } of sessions) {
+  for (const { filePath, readOnly } of restore) {
     try {
       // Carry the persisted read-only flag back through: without it every
       // restored document takes `resolveAndValidatePath`'s hardcoded `false`,
@@ -1878,6 +2093,28 @@ export async function restoreOpenDocuments(previousActiveDocId: string | null): 
         });
       } else {
         console.error("[Tandem] Failed to restore %s:", filePath, err);
+        // Keep the record in the next window, but ONLY for a failure that can
+        // plausibly clear on its own — an antivirus lock, a drive not mounted
+        // yet, a descriptor exhausted. Without this the record keeps its old
+        // `lastAccessed` while every session that DID reopen is autosaved
+        // forward, so the next boot finds it outside the window and never
+        // retries: one momentary lock costs the tab permanently.
+        //
+        // **The allowlist is what keeps this from re-opening the cycle the
+        // window closes.** `resolveAndValidatePath` also throws
+        // `UNSUPPORTED_FORMAT` and `FILE_TOO_LARGE`, which are PERMANENT — a
+        // `.docx` that grew past 50MB fails identically on every boot. Touching
+        // those would rewrite the session file every startup, and
+        // `cleanupSessions` ages records by MTIME, so the 30-day GC could never
+        // reclaim one: restore-then-rewrite, immortal again, by a different
+        // route than restore-then-autosave.
+        //
+        // `newest`, not `Date.now()`: this document did NOT open, so it must
+        // not become the anchor the next boot measures everything else against.
+        // A restored document writes no session until `ensureAutoSave`'s first
+        // 60s tick, so a crash before that tick would leave a failed session
+        // holding the newest stamp on disk and drop the genuinely-restored ones.
+        if (TRANSIENT_RESTORE_ERRORS.has(code ?? "")) await touchSession(filePath, newest);
       }
     }
   }

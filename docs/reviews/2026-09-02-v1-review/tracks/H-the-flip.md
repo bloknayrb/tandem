@@ -45,8 +45,14 @@ armed scratch server**, never in shipped behaviour.
 
 ## Done when
 
-- With the gate armed and the trial expired, the browser room is read-only, every gated tool
-  returns `LICENSE_REQUIRED`, and `POST /api/mode/release` does too.
+- With the gate armed and the trial expired, the browser room is read-only and every gated tool
+  returns `LICENSE_REQUIRED`. **`POST /api/mode/release` stays UNGATED** pending Bryan: mode lives
+  in `CTRL_ROOM`, which Surface A deliberately never marks read-only, so gating only the release
+  lets a restricted user reach Solo and never leave it, with their annotations stranded behind a
+  Held pill while their reads stay open. Decision F asked for the opposite; the 2026-09-08 review
+  of that route reasoned about the user afterwards and won. Open on #1788 (comment 5612504584);
+  the row and its `why` live in `tests/server/license-gate-api-coverage.test.ts`. H-b and H-c
+  should not implement the gating.
 - `firstRunAt: ""` yields restricted, not a perpetual trial.
 - The flip checklist names both consts and the `tauri.conf.json` endpoint.
 - A user whose update window has ended sees why no update is served.

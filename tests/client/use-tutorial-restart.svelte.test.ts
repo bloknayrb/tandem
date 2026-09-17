@@ -6,7 +6,7 @@ import { TUTORIAL_COMPLETED_KEY } from "../../src/shared/constants.js";
 // createTutorial spins up a createCoworkStatus poller that registers onDestroy —
 // illegal under $effect.root (no component instance). Stub it inert; the Cowork
 // step is irrelevant to the replay re-arm this file tests.
-vi.mock("../../src/client/hooks/useCoworkStatus.svelte.js", () => ({
+vi.mock(import("../../src/client/hooks/useCoworkStatus.svelte.js"), () => ({
   createCoworkStatus: () => ({
     get status() {
       return null;
@@ -14,6 +14,8 @@ vi.mock("../../src/client/hooks/useCoworkStatus.svelte.js", () => ({
     get error() {
       return null;
     },
+    loading: false,
+    refetch: vi.fn(async () => true),
   }),
 }));
 

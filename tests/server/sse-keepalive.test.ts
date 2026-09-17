@@ -22,7 +22,7 @@ const { subscribeSpy, unsubscribeSpy } = vi.hoisted(() => ({
   unsubscribeSpy: vi.fn(),
 }));
 
-vi.mock("../../src/server/events/queue.js", () => ({
+vi.mock(import("../../src/server/events/queue.js"), () => ({
   subscribe: subscribeSpy,
   unsubscribe: unsubscribeSpy,
   replaySince: vi.fn(() => []),

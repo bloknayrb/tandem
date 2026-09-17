@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { fireEvent, render } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { beforeEach, describe, expect, it } from "vitest";
 import ReplyThread from "../../src/client/panels/ReplyThread.svelte";
 import type { Annotation, AnnotationReply } from "../../src/shared/types";
@@ -202,5 +203,92 @@ describe("ReplyThread — A13 disclosure", () => {
     // Reply button says plain "Reply" — count lives on the toggle.
     const button = container.querySelector("[data-testid='reply-btn-annotation-1']");
     expect(button?.textContent?.trim()).toBe("Reply");
+  });
+});
+
+/**
+ * #1626 review — **the auto-open must survive the LIVE path, not just a fresh
+ * mount.**
+ *
+ * The seed shipped as a mount-time `untrack(...)` initializer. SidePanel's
+ * pending list is `{#each filteredData.pending as ann (ann.id)}` — KEYED — so
+ * when the Y.Map observer rebuilds `repliesMap` an already-rendered card is
+ * updated in place and never remounted. A suggestion arriving at a card the
+ * user is looking at therefore never ran the initializer: `open` stayed false,
+ * the `{#if open}` block never mounted, and neither the proposal nor its Accept
+ * button existed in the DOM — the user saw "1 reply" and nothing else. The
+ * seed's own rationale ("a proposal the user cannot see is a proposal they
+ * cannot accept") is what that defeats, so the rerender case is the one that
+ * matters; the mount case is kept as the control it always was.
+ */
+describe("#1626: a suggestion-bearing reply opens the thread", () => {
+  const SUGGESTION = makeReply({ id: "r2", text: "refined", suggestedText: "Replacement" });
+
+  it("opens at mount when a suggestion is already present", () => {
+    const { container } = render(ReplyThread, {
+      props: {
+        annotation: makeAnnotation(),
+        replies: [SUGGESTION],
+        isPending: true,
+        isEditing: false,
+        onAcceptReplySuggestion: () => {},
+      },
+    });
+
+    expect(
+      container
+        .querySelector("[data-testid='reply-toggle-annotation-1']")
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(container.querySelector("[data-testid='reply-suggestion-r2']")).toBeTruthy();
+    expect(container.querySelector("[data-testid='accept-reply-btn-r2']")).toBeTruthy();
+  });
+
+  it("opens when the suggestion arrives at an ALREADY-MOUNTED card", async () => {
+    const props = {
+      annotation: makeAnnotation(),
+      replies: [makeReply()],
+      isPending: true,
+      isEditing: false,
+      onAcceptReplySuggestion: () => {},
+    };
+    const { container, rerender } = render(ReplyThread, { props });
+
+    const toggle = container.querySelector("[data-testid='reply-toggle-annotation-1']");
+    expect(toggle?.getAttribute("aria-expanded"), "collapsed while no proposal exists").toBe(
+      "false",
+    );
+
+    // The reply record syncing in — a prop update, NOT a remount, which is what
+    // the keyed `{#each}` guarantees and what the mount-time seed missed.
+    await rerender({ ...props, replies: [makeReply(), SUGGESTION] });
+    await tick();
+
+    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector("[data-testid='reply-suggestion-r2']")).toBeTruthy();
+    expect(container.querySelector("[data-testid='accept-reply-btn-r2']")).toBeTruthy();
+  });
+
+  it("does NOT re-open a thread the user closed", async () => {
+    // The latch. A bare `$effect` would re-open on every reply-list rerender,
+    // which is precisely why the original was written as a mount-time seed —
+    // the fix has to keep that property, not trade it away.
+    const props = {
+      annotation: makeAnnotation(),
+      replies: [SUGGESTION],
+      isPending: true,
+      isEditing: false,
+      onAcceptReplySuggestion: () => {},
+    };
+    const { container, rerender } = render(ReplyThread, { props });
+
+    const toggle = container.querySelector("[data-testid='reply-toggle-annotation-1']") as Element;
+    await fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded"), "user closed it").toBe("false");
+
+    await rerender({ ...props, replies: [SUGGESTION, makeReply({ id: "r3", text: "later" })] });
+    await tick();
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 });

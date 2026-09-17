@@ -340,7 +340,7 @@ describe("AnnotationLifecycle.create — ADR-027 / ADR-035 privacy", () => {
     // would stay green if `reply` were dropped from the `Pick` AND from the
     // interface, which is a capability regression that must not read as a pass.
     const created = creator.create({ anchored: unanchored(0, 5), content: "x" });
-    creator.reply(created.annotation.id, "ack", noRelay);
+    creator.reply(created.annotation.id, "ack", { kind: "none" }, noRelay);
 
     // Runtime caveat, stated because the docblock reads stronger than the code:
     // TypeScript is structural, so this annotation narrows the BINDING, not the
@@ -445,7 +445,7 @@ describe("create-family write paths that stay OUTSIDE the lifecycle", () => {
     const origins: unknown[] = [];
     tutorialDoc.on("afterTransaction", (txn: Y.Transaction) => origins.push(txn.origin));
 
-    injectTutorialAnnotations(tutorialDoc);
+    injectTutorialAnnotations(tutorialDoc, "/tandem-tutorial-origin-probe/sample/welcome.md");
 
     // Guard the guard: if nothing was injected there is no transaction to
     // inspect and the origin assertion would be vacuous.

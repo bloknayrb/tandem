@@ -7,7 +7,7 @@ import * as Y from "yjs";
 
 // Match the isolation pattern in open-pipeline-lifecycle.test.ts so this file
 // does not collide with concurrent test files using the same app-data dir.
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -20,7 +20,7 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
   };
 });
 
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: vi.fn(),
 }));
@@ -28,7 +28,7 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
 // Mocked so M1a can assert that the docx-with-comments success path does NOT
 // fire either the extract-failure or the inject-failure notification. Pattern
 // from tests/server/annotations/store.test.ts:17-22.
-vi.mock("../../src/server/notifications.js", async (importOriginal) => {
+vi.mock(import("../../src/server/notifications.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/notifications.js")>();
   return { ...actual, pushNotification: vi.fn() };
 });
