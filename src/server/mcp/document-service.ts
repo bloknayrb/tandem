@@ -42,6 +42,7 @@ import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
 import { snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
 import { commentExportDowngrades, prepareExportComments } from "../file-io/docx-comment-export.js";
+import { reconcileImportCommentIds } from "../file-io/docx-comments.js";
 import { detectExportFidelityIssues } from "../file-io/docx-export.js";
 import {
   type BlockReason,
@@ -157,15 +158,26 @@ function fidelityReportOf(doc: Y.Doc): FidelityReport | undefined {
 }
 
 /**
- * How many STRUCTURAL import losses a report carries (#1142 G3) — content or
- * page furniture that is gone, not mammoth's style-level tail. This is what the
- * save-time overwrite warning gates on; see the field's note in
- * `shared/types.ts` for why the broader count would make it ambient. Takes the
- * report rather than the doc so a caller can read it ONCE and use the same
- * snapshot for what it returns and what it persists.
+ * A positive count field off a fidelity report, or 0. The `typeof` guard is
+ * load-bearing rather than ceremonial: `fidelityReportOf` is a bare cast over a
+ * CRDT-synced value that survives session restore un-revalidated, so a legacy or
+ * malformed field must read as "none" instead of reaching arithmetic.
+ *
+ * Takes the report rather than the doc so a caller can read it ONCE and use the
+ * same snapshot for what it returns and what it persists.
+ *
+ * - `structuralLosses` (#1142 G3) — content or page furniture that is gone, not
+ *   mammoth's style-level tail. This is what the save-time overwrite warning
+ *   gates on; see the field's note in `shared/types.ts` for why the broader
+ *   count would make it ambient.
+ * - `droppedImages` (#1755) — body pictures the import dropped, which REFUSES
+ *   the binary save rather than merely warning.
  */
-function structuralLossesOf(report: FidelityReport | undefined): number {
-  const value = report?.structuralLosses;
+function reportCount(
+  report: FidelityReport | undefined,
+  field: "structuralLosses" | "droppedImages",
+): number {
+  const value = report?.[field];
   return typeof value === "number" && value > 0 ? value : 0;
 }
 
@@ -198,6 +210,12 @@ export interface SaveResult {
    */
   skipCode?: SkipCode;
   errorCode?: string;
+  /**
+   * The failing syscall of an `error` result's errno, when there was one. On
+   * Windows it is what separates a permission refusal from a lock, since both
+   * arrive as `EPERM` (see `lockOrPermissionCode`, #1823).
+   */
+  errorSyscall?: string;
   /**
    * Body-export fidelity warnings (#576, `.docx` only) — content the export
    * downgraded (unsupported blocks, non-embedded images). Present on a
@@ -266,11 +284,38 @@ class SaveVerificationError extends Error {
 export async function saveDocumentToDisk(
   docId: string,
   source: "auto-save" | "manual" | "mcp" = "auto-save",
+  /**
+   * `allowImageLoss` (#1941) — the explicit override for the #1755 refusal, and
+   * the ONLY thing this bag carries. A third OPTIONAL parameter by design: every
+   * existing caller (`reload-family.ts`, `autoSaveAllToDisk`, the auto-save
+   * timer) is unchanged by construction and keeps refusing.
+   *
+   * It changes WHETHER a save proceeds, never WHERE it lands — the destination
+   * is still `docState.filePath`, so #1654's bound on caller-named write
+   * destinations is untouched. Scoped to `import-image-loss` alone: the
+   * post-write verdict block below is a different claim (*the regenerated file
+   * is broken*) and is not overridable.
+   */
+  opts?: { allowImageLoss?: boolean },
 ): Promise<SaveResult> {
   // path.basename eliminates directory components so CodeQL does not trace
   // user input through Map.get(id) to docState.filePath FS sinks
   // (js/path-injection). Valid IDs are 64-char hex / upload_* — no separators,
   // so this is a no-op at runtime.
+  //
+  // Everything after this lookup uses `safeDocId`, never the raw `docId`
+  // (#1797). The split was destructive here, not merely inconsistent:
+  // `POST /api/save` type-checks `documentId` and passes it straight through,
+  // so `"dir/<realId>"` RESOLVED to the real document and its real filePath
+  // while `getOrCreateDocument(docId)` minted a brand-new EMPTY Y.Doc for the
+  // unknown room name — which the adapter then serialized over the user's
+  // file. The external-modification guard could not stop it, because it read
+  // `Y_MAP_SAVED_AT_VERSION` off that same fresh doc and found nothing; the
+  // lock was bypassed the same way, so two prefixed saves could write one file
+  // at once. `saveDocumentAsToDisk` and `renameDocument` deliberately keep the
+  // raw id: they do `openDocs.get(docId)` and compute no safe id at all, so
+  // they are internally consistent and fail closed, and a basename there would
+  // WIDEN what they accept.
   const safeDocId = path.basename(docId);
   const docState = openDocs.get(safeDocId);
   if (!docState) {
@@ -339,7 +384,7 @@ export async function saveDocumentToDisk(
   }
 
   // Per-document lock
-  if (savingDocs.has(docId)) {
+  if (savingDocs.has(safeDocId)) {
     return {
       status: "skipped",
       reason: "Save already in progress",
@@ -347,7 +392,7 @@ export async function saveDocumentToDisk(
     };
   }
 
-  savingDocs.add(docId);
+  savingDocs.add(safeDocId);
   try {
     // An unresolved external conflict blocks every writer whose disk copy has
     // actually diverged, whatever the mtime heuristic below concludes (#1238).
@@ -374,7 +419,7 @@ export async function saveDocumentToDisk(
     // fresh object on every call (even for an unchanged raw value, via its
     // Date.now() fallback for a malformed `detectedAt`), so comparing two
     // narrowed reads would spuriously look like a change on every call.
-    const conflictMetaBeforeSave = getOrCreateDocument(docId).getMap(Y_MAP_DOCUMENT_META);
+    const conflictMetaBeforeSave = getOrCreateDocument(safeDocId).getMap(Y_MAP_DOCUMENT_META);
     const rawConflictBeforeSave = conflictMetaBeforeSave.get(Y_MAP_EXTERNAL_CONFLICT);
     const pendingConflict = narrowConflict(rawConflictBeforeSave);
     if (pendingConflict && (source === "auto-save" || pendingConflict.diskChanged)) {
@@ -400,7 +445,7 @@ export async function saveDocumentToDisk(
       // Compare to the session's mtime — if the file changed externally, skip
       // We use a 1-second tolerance because fs.watch debounce + atomic rename
       // can cause minor mtime drift
-      const meta = getOrCreateDocument(docId).getMap(Y_MAP_DOCUMENT_META);
+      const meta = getOrCreateDocument(safeDocId).getMap(Y_MAP_DOCUMENT_META);
       const lastSavedAt = meta.get(Y_MAP_SAVED_AT_VERSION) as number | undefined;
       // If the file is newer than our last save, someone else modified it
       if (lastSavedAt && stat.mtimeMs > lastSavedAt + 1000) {
@@ -427,11 +472,11 @@ export async function saveDocumentToDisk(
       };
     }
 
-    const doc = getOrCreateDocument(docId);
+    const doc = getOrCreateDocument(safeDocId);
     // Snapshot the dirty version BEFORE the async write so a content edit that
     // lands DURING the write isn't lost — markCleanIfUnchanged only clears the
     // flag if no newer edit arrived (#851).
-    const dirtySnapshot = snapshotDirtyVersion(docId);
+    const dirtySnapshot = snapshotDirtyVersion(safeDocId);
 
     let fidelityWarnings: string[] | undefined;
     let integrityWarnings: string[] | undefined;
@@ -442,6 +487,39 @@ export async function saveDocumentToDisk(
       // Binary branch (#576, .docx). Capture fidelity warnings against the same
       // Y.Doc snapshot we serialize, then write the ZIP via atomicWriteBuffer
       // (atomicWrite's UTF-8 encoding would corrupt the binary).
+      // Refuse before anything else in this branch (#1755). `exportYDocToDocx`
+      // regenerates the file from a Y.Doc that never received the document's
+      // pictures, so writing would silently strip them from the user's .docx.
+      // Placement is constrained from both sides: it must sit ABOVE the pinned
+      // `prepareExportComments`/`saveBinary` window (no `await` may be inserted
+      // inside that), and being before `saveBinary` means no bytes are
+      // generated and the once-per-run pre-overwrite backup gate is not
+      // consumed, while being before `atomicWriteBuffer`/`suppressNextChange`
+      // means the file is untouched and the watcher suppressor never armed.
+      //
+      // `saveDocumentToDisk` CATCHES this and returns
+      // `{ status: "error", errorCode: "VERIFY_BLOCKED" }` — it does not reject.
+      // The throw also lands before `saveSession`, so no session snapshot is
+      // written: the repo's softer `saved: false` + skip-reason vocabulary reads
+      // as a benign no-op, and these edits genuinely cannot reach .docx.
+      // Annotations are unaffected either way (durable annotation store).
+      //
+      // NOT added to `tandem_applyChanges`: `file-io/docx-apply.ts` edits the
+      // ORIGINAL `word/document.xml` in place and re-zips, so the pictures
+      // survive it. Adding this "for consistency" would break the one write path
+      // that preserves them.
+      //
+      // `opts.allowImageLoss` (#1941) is the explicit override: refuse by
+      // default, proceed when a caller has said, in so many words, that it
+      // accepts losing the pictures. Both surfaces default to FALSE on any
+      // parse failure (`tandem_save` omits the param, `POST /api/save` tests
+      // `=== true`), so a malformed or bodyless request still refuses.
+      if (!opts?.allowImageLoss && reportCount(fidelityReportOf(doc), "droppedImages") > 0) {
+        throw new SaveVerificationError(
+          blockReasonMessage("import-image-loss"),
+          "import-image-loss",
+        );
+      }
       const warnings = detectExportFidelityIssues(doc);
       // Comment-side fidelity (#1142 G3): flattened reply threads and comments
       // whose ranges no longer resolve. Computed from ONE `prepareExportComments`
@@ -467,7 +545,7 @@ export async function saveDocumentToDisk(
       // persisted `structuralLosses` disagree with the count already delivered
       // to the toast and to Claude.
       importSnapshot = fidelityReportOf(doc);
-      unpreservedImports = structuralLossesOf(importSnapshot) || undefined;
+      unpreservedImports = reportCount(importSnapshot, "structuralLosses") || undefined;
       const buffer = await adapter.saveBinary!(doc);
       // Pre-overwrite snapshot of the on-disk original (first write per path per
       // run), mirroring the text branch below. .docx is the highest-stakes case:
@@ -477,7 +555,7 @@ export async function saveDocumentToDisk(
       // byte copy) and never throws — a snapshot failure must not block the save.
       await snapshotBeforeFirstWrite(docState.filePath, {
         appDataDir: resolveAppDataDir(),
-        documentId: docId,
+        documentId: safeDocId,
       });
       // Post-write verification (#1123 Phase 0e): re-import the produced bytes
       // and confirm they round-trip the live doc's CONTENT before overwriting.
@@ -504,6 +582,21 @@ export async function saveDocumentToDisk(
       } finally {
         rearmWatch(docState.filePath);
       }
+      // The bytes are on disk, so the `w:id` values in `exportComments` are now
+      // the ones the FILE carries — point the stored `importSource.commentId`s
+      // at them (#1693). `prepareExportComments` re-mints whenever the stored id
+      // is not reusable as a `w:id`, and the next open then misses BOTH layers
+      // that protect an already-promoted Word comment (the hashed offset key and
+      // the `commentId` drift index), injecting a ghost note whose own next save
+      // writes two Word comments for one original (#1448).
+      //
+      // Placement is the contract, on both sides. It is BELOW the write because
+      // this branch can still refuse above it — a `blocked` verify verdict or a
+      // throwing `atomicWriteBuffer` — and rewriting the stored ids for a save
+      // that never landed is the same ghost with the two sides swapped. It is
+      // OUTSIDE the inner `try`, not a fourth line in it: that block is the
+      // #1749 write triple, whose `finally` exists for `rearmWatch` alone.
+      reconcileImportCommentIds(doc, exportComments);
       // `fidelityWarnings` drives the save toast; `exportDowngrades` is the
       // persistent notice. They differ by exactly the flattened-reply line,
       // which is deliberately persistent-only: imported Word reply threads
@@ -520,7 +613,7 @@ export async function saveDocumentToDisk(
       // per run). Never throws; a snapshot failure must not block the save.
       await snapshotBeforeFirstWrite(docState.filePath, {
         appDataDir: resolveAppDataDir(),
-        documentId: docId,
+        documentId: safeDocId,
       });
       // Inner try/finally per branch — see the binary arm above for why. One
       // `try` around the whole `if` would not do: the re-arm has to sit
@@ -558,7 +651,20 @@ export async function saveDocumentToDisk(
       if (isBinary) {
         meta.set(Y_MAP_FIDELITY_REPORT, {
           importLosses: importSnapshot?.importLosses ?? [],
-          structuralLosses: structuralLossesOf(importSnapshot),
+          structuralLosses: reportCount(importSnapshot, "structuralLosses"),
+          // Carried, and deliberately RE-READ rather than taken from
+          // `importSnapshot` (#1755) — the opposite of the pinning above,
+          // because this field is a safety gate rather than a number already
+          // delivered to the toast. It looks dead (the refusal at the top of
+          // this branch fires for exactly the documents with a non-zero value),
+          // but five awaits separate the two: a file-watcher reload landing in
+          // that window — the file was replaced on disk by a picture-bearing
+          // version — runs `writeImportLossReport` and sets it. Omitting the
+          // field from this WHOLE-OBJECT replace would then erase the refusal
+          // for the rest of the session and the next `tandem_save` would
+          // regenerate the .docx image-less. `satisfies FidelityReport` cannot
+          // catch the omission: the field is optional.
+          droppedImages: reportCount(fidelityReportOf(doc), "droppedImages"),
           exportDowngrades,
           // Post-write verify advisories (#1123 0e) — louder than downgrades;
           // `?? []` clears a prior save's advisory on a now-clean save.
@@ -567,7 +673,7 @@ export async function saveDocumentToDisk(
         } satisfies FidelityReport);
       }
     });
-    markCleanIfUnchanged(docId, dirtySnapshot);
+    markCleanIfUnchanged(safeDocId, dirtySnapshot);
 
     // Session write LAST, and in its own try/catch (#1750). The
     // `SAVED_AT_VERSION` stamp above is a claim about the disk, and the disk
@@ -587,7 +693,7 @@ export async function saveDocumentToDisk(
     const carriedConflict = readPendingConflict(doc);
     try {
       await saveSession(docState.filePath, docState.format, doc, {
-        dirty: snapshotDirtyVersion(docId) !== dirtySnapshot,
+        dirty: snapshotDirtyVersion(safeDocId) !== dirtySnapshot,
         conflict: carriedConflict,
       });
     } catch (err) {
@@ -643,30 +749,58 @@ export async function saveDocumentToDisk(
           ? `Saved ${path.basename(docState.filePath)}, but Tandem could not record its recovery state. An unresolved external-edit conflict on this file will be lost if Tandem restarts before you resolve it.`
           : `Saved ${path.basename(docState.filePath)}, but Tandem could not record its recovery state; unsaved-work tracking for this file will not survive a restart.`,
         errorCode: (err as NodeJS.ErrnoException).code ?? "UNKNOWN",
-        documentId: docId,
-        dedupKey: `session-save-failed:${docId}`,
+        documentId: safeDocId,
+        dedupKey: `session-save-failed:${safeDocId}`,
         timestamp: Date.now(),
       });
     }
 
     return { status: "saved", fidelityWarnings, integrityWarnings, unpreservedImports };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
     const errCode = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
+    // #1816: `err.message` is the raw Node fs error and typically embeds the
+    // absolute path Tandem was writing to (`EACCES: permission denied, open
+    // '/Users/…/file.md'`). Neither the pushed notification nor the returned
+    // `reason` may carry it: both reach a desktop user, who is ALWAYS a
+    // loopback caller, so `_shared.ts`'s loopback scrub — a LAN-disclosure
+    // control, orthogonal to this — never covered them. The raw error still
+    // reaches the log line below; `errorCode` is the one technical detail
+    // that travels to the client, for a "(EACCES)"-style detail suffix.
+    //
+    // `SaveVerificationError` is the one exception: its message is built by
+    // `blockReasonMessage` specifically to be content-free (never a path or
+    // errno — see its docblock above), so scrubbing it down to the same
+    // generic sentence as a raw FS error would throw away the #1123-0e
+    // "your original file was left unchanged" reassurance for no privacy
+    // gain. Surface it verbatim, on loopback and non-loopback callers alike.
+    console.error("[Save] saveDocumentToDisk failed for", docState.filePath, err);
+    const verificationBlock = err instanceof SaveVerificationError ? err : null;
     pushNotification({
       id: generateNotificationId(),
       type: "save-error",
       severity: "error",
-      message: `Save failed for ${path.basename(docState.filePath)}: ${msg}`,
+      message: verificationBlock
+        ? `Save failed for ${path.basename(docState.filePath)}: ${verificationBlock.message}`
+        : `Save failed for ${path.basename(docState.filePath)}.`,
       toolName: source,
       errorCode: errCode,
-      documentId: docId,
-      dedupKey: `${source}:${docId}`,
+      documentId: safeDocId,
+      dedupKey: `${source}:${safeDocId}`,
       timestamp: Date.now(),
     });
-    return { status: "error", reason: msg, errorCode: (err as NodeJS.ErrnoException).code };
+    return {
+      status: "error",
+      // cr-3 (#1816 follow-up): `triggerSave` (builtin.svelte.ts) always
+      // prefixes this reason with "Save failed: ". A generic reason that
+      // repeats the same phrase stutters — "Save failed: The save failed.
+      // (EACCES)". Match Save-As's non-repeating "The document could not
+      // be saved to that location." shape instead.
+      reason: verificationBlock ? verificationBlock.message : "The document could not be saved.",
+      errorCode: (err as NodeJS.ErrnoException).code,
+      errorSyscall: (err as NodeJS.ErrnoException).syscall,
+    };
   } finally {
-    savingDocs.delete(docId);
+    savingDocs.delete(safeDocId);
   }
 }
 
@@ -825,9 +959,17 @@ export async function saveDocumentAsToDisk(
   try {
     assertPathSafe(resolved, { allowedRoots: [path.parse(resolved).root] });
   } catch (err) {
+    // cr-6 (#1816 follow-up): `assertPathSafe`'s thrown message embeds the
+    // absolute path it rejected ("Refusing to operate on symlinked path:
+    // <abs>"). This used to reach the toast verbatim — `targetPath` is the
+    // caller's own Save-As selection, but the message is still an absolute
+    // path in a headline, the exact shape #1816 scrubbed everywhere else.
+    // Mirrors `renameDocument`'s identical `assertPathSafe` catch: log the
+    // raw error, return the same generic PATH_REJECTED wording.
+    console.error("[Save As] assertPathSafe rejected", resolved, err);
     return {
       status: "error",
-      reason: err instanceof Error ? err.message : String(err),
+      reason: "The destination path was rejected.",
       errorCode: "PATH_REJECTED",
     };
   }
@@ -1015,20 +1157,28 @@ export async function saveDocumentAsToDisk(
 
     return { status: "saved", targetPath: resolved, fileName, format };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
     const errCode = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
+    // #1816: same fix as saveDocumentToDisk's catch above — `err.message`
+    // embeds an absolute path and must not reach either the pushed
+    // notification or the returned `reason`; `errCode` is the detail that
+    // does. The raw error is still logged below.
+    console.error("[Save As] saveDocumentAsToDisk failed for", resolved, err);
     pushNotification({
       id: generateNotificationId(),
       type: "save-error",
       severity: "error",
-      message: `Save As failed for ${path.basename(resolved)}: ${msg}`,
+      message: `Save As failed for ${path.basename(resolved)}.`,
       toolName: "manual",
       errorCode: errCode,
       documentId: docId,
       dedupKey: `save-as:${docId}`,
       timestamp: Date.now(),
     });
-    return { status: "error", reason: msg, errorCode: errCode };
+    return {
+      status: "error",
+      reason: "The document could not be saved to that location.",
+      errorCode: errCode,
+    };
   } finally {
     savingDocs.delete(docId);
   }
@@ -1173,9 +1323,16 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
   try {
     assertPathSafe(newPath, { allowedRoots: [path.parse(newPath).root] });
   } catch (err) {
+    // #1816: `assertPathSafe`'s thrown message embeds the absolute path it
+    // rejected ("Refusing to operate on symlinked path: <abs>"), and
+    // `routes/rename.ts` echoes `reason` verbatim to a loopback caller (i.e.
+    // every desktop user). Log the raw error; return the same generic string
+    // `routes/rename.ts`'s own RENAME_GENERIC_MESSAGE.PATH_REJECTED uses, so
+    // loopback and non-loopback callers see identical wording for this code.
+    console.error("[Rename] assertPathSafe rejected", newPath, err);
     return {
       status: "error",
-      reason: err instanceof Error ? err.message : String(err),
+      reason: "The destination path was rejected.",
       errorCode: "PATH_REJECTED",
     };
   }
@@ -1293,9 +1450,14 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
         );
       }
       const code = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
+      // #1816: `err.message` embeds BOTH absolute paths (old and new) and is
+      // already logged above — it must not also become the user-facing
+      // `reason`, which `routes/rename.ts` echoes verbatim to a loopback
+      // caller (i.e. every desktop user). `code` is the one technical detail
+      // that still travels, for a details suffix.
       return {
         status: "error",
-        reason: err instanceof Error ? err.message : String(err),
+        reason: "The document could not be renamed.",
         errorCode: code,
       };
     }
@@ -1520,20 +1682,24 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
 
     return { status: "renamed", oldPath, newPath, fileName };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
     const errCode = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
+    // #1816: same fix as saveDocumentToDisk's catch above. A failed
+    // `fs.rename` message embeds BOTH absolute paths (old and new); this
+    // route's loopback branch (`routes/rename.ts`) used to echo it verbatim
+    // to every desktop user. The raw error is still logged below.
+    console.error("[Rename] renameDocument failed for", oldPath, err);
     pushNotification({
       id: generateNotificationId(),
       type: "save-error",
       severity: "error",
-      message: `Rename failed for ${path.basename(oldPath)}: ${msg}`,
+      message: `Rename failed for ${path.basename(oldPath)}.`,
       toolName: "manual",
       errorCode: errCode,
       documentId: docId,
       dedupKey: `rename:${docId}`,
       timestamp: Date.now(),
     });
-    return { status: "error", reason: msg, errorCode: errCode };
+    return { status: "error", reason: "The document could not be renamed.", errorCode: errCode };
   } finally {
     savingDocs.delete(docId);
   }
@@ -1554,6 +1720,15 @@ export async function closeDocumentById(
   // user input through Map.get(id) to docState.filePath FS sinks
   // (js/path-injection). Valid IDs are 64-char hex — no separators, so this
   // is a no-op at runtime.
+  //
+  // ONE resolved id for the lookup and for every teardown step below (#1797).
+  // `clearFileSyncContext`, `savingDocs.delete`, `clearDirtyState` and
+  // `closeDocument` used to take the RAW `id`, while the steps keyed off
+  // `docState.filePath` ran regardless — so `POST /api/close
+  // {"documentId":"x/<realId>"}` (the route passes its body value through
+  // unnormalised) unwatched the file, closed the durable annotation store and
+  // deleted the session while leaving the document registered, open in every
+  // tab, and still holding its save lock. It returned success: true.
   const safeId = path.basename(id);
   const docState = openDocs.get(safeId);
   if (!docState) {
@@ -1618,18 +1793,18 @@ export async function closeDocumentById(
   } catch (err) {
     console.error("[Tandem] closeDocumentById: closeStore failed for %s:", safeId, err);
   }
-  clearFileSyncContext(id);
+  clearFileSyncContext(safeId);
 
   // Clear save lock to prevent a close-reopen race where the old lock blocks new saves
-  savingDocs.delete(id);
+  savingDocs.delete(safeId);
 
   // Drop dirty-tracking state + detach its body observer (#851).
-  clearDirtyState(id);
+  clearDirtyState(safeId);
 
   // The registry's slice of the close: untrack, reassign the active id when the
   // closed doc held it, publish once. The store flush, file-sync context and
   // dirty teardown above stay here — their ordering is load-bearing.
-  closeDocument(id);
+  closeDocument(safeId);
 
   // Delete the session file so this document doesn't reopen on restart —
   // unless the block above just wrote it as the surviving copy of unpersisted

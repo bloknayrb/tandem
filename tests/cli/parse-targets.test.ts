@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseTargetArgs } from "../../src/cli/setup.js";
+import { parseChannelShimArgs, parseTargetArgs } from "../../src/cli/setup.js";
 
 // `parseTargetArgs` is the pure core of `tandem setup --target=` handling.
 // The exit-on-all-invalid guard lives in `src/cli/index.ts` (an untested
@@ -44,5 +44,36 @@ describe("parseTargetArgs", () => {
     const { targets, unknown } = parseTargetArgs(["--apply", "--force"]);
     expect(targets).toEqual([]);
     expect(unknown).toEqual([]);
+  });
+});
+
+// The three-way channel-shim intent (#1760). `undefined` is "preserve" and
+// `false` is "remove" — collapsing them is data loss, which is why the parser
+// is a pure function with its own specs rather than an inline `includes()`.
+describe("parseChannelShimArgs", () => {
+  it("reads --with-channel-shim as an explicit true", () => {
+    expect(parseChannelShimArgs(["--apply", "--with-channel-shim"])).toEqual({
+      intent: true,
+      conflict: false,
+    });
+  });
+
+  it("reads --without-channel-shim as an explicit false (the only removal path)", () => {
+    expect(parseChannelShimArgs(["--apply", "--without-channel-shim"])).toEqual({
+      intent: false,
+      conflict: false,
+    });
+  });
+
+  it("leaves intent undefined when neither flag is given — 'preserve', not 'remove'", () => {
+    const parsed = parseChannelShimArgs(["--apply", "--force"]);
+    expect(parsed.conflict).toBe(false);
+    expect(parsed.intent).toBeUndefined();
+  });
+
+  it("reports a conflict when both flags are given, choosing neither", () => {
+    const parsed = parseChannelShimArgs(["--with-channel-shim", "--without-channel-shim"]);
+    expect(parsed.conflict).toBe(true);
+    expect(parsed.intent).toBeUndefined();
   });
 });

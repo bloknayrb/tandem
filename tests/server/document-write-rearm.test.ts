@@ -94,11 +94,12 @@
  * `recordSelfWrite(p, "")` would disarm layer 2, now the ONLY thing between a
  * self-write echo and a reload on POSIX.
  *
- * ## A6 coupling
+ * ## A6 (#1768), applied
  *
- * A6 deletes the `tandem_restoreBackup` row AND decrements `docx-apply.ts`'s
- * count 2 → 1. Two edits, both inside the table. `reload-family.ts` stays at 2
- * because A6 adds no write.
+ * `tandem_restoreBackup` no longer writes: its private sidecar copy-back is
+ * gone and the sidecar restores through `restoreDocumentFromBackup` like any
+ * snapshot. Its row left this table and `docx-apply.ts` went 2 → 1;
+ * `reload-family.ts` stayed at 2, because the change added no write.
  */
 
 import fs from "node:fs";
@@ -152,14 +153,6 @@ const CENSUS: Acknowledged[] = [
       "the watcher reload IS this write's designed completion; a re-arm discards the pending event",
   },
   {
-    file: "server/mcp/docx-apply.ts",
-    key: "tandem_restoreBackup",
-    count: 1,
-    rearm: "forbidden",
-    reason:
-      "sidecar restore, same shape as applyChangesCore — A6 deletes this row and the count with it",
-  },
-  {
     file: "server/documents/reload-family.ts",
     key: "restoreDocumentFromBackup",
     count: 2,
@@ -208,6 +201,22 @@ const CENSUS: Acknowledged[] = [
     count: 1,
     rearm: "n/a",
     reason: "durable annotation envelope",
+  },
+  {
+    file: "server/app-data-owner.ts",
+    key: "claimAppDataDir",
+    count: 1,
+    rearm: "n/a",
+    reason:
+      "the app-data ownership stamp (#1787); atomic because readStamp reads a truncated one as unowned",
+  },
+  {
+    file: "server/app-data-owner.ts",
+    key: "migrateLegacyTree",
+    count: 1,
+    rearm: "n/a",
+    reason:
+      "the one-time legacy migration's completion marker (#1787); gates the migration so deleting the stamp cannot re-import",
   },
   {
     file: "server/integrations/apply.ts",
@@ -436,10 +445,14 @@ describe("document write / rearmWatch site pin (#1749)", () => {
     );
 
     expect(observed).toEqual(expected);
-    // 19 write CALL sites. A `git grep` returns 22 lines; the three extra are
-    // the definitions at `file-io/index.ts` (×2) and `integrations/apply.ts`,
-    // which the walk skips by construction.
-    expect(sites).toHaveLength(19);
+    // 20 write CALL sites, and the arithmetic is worth keeping explicit because two
+    // separate changes each landed on this number from a different base: 17, plus
+    // the two `app-data-owner.ts` sites from #1787 (the ownership stamp and the
+    // legacy-migration completion marker), plus `touchSession` from #1880. A
+    // `git grep` returns 23 lines; the three extra are the definitions at
+    // `file-io/index.ts` (×2) and `integrations/apply.ts`, which the walk skips
+    // by construction.
+    expect(sites).toHaveLength(20);
   });
 
   it("no write site keys to <module>", () => {

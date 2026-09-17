@@ -42,6 +42,26 @@ import { type Action, registerActions } from "./registry.svelte.js";
 // Save — mirrors useSaveShortcut.svelte.ts logic
 // ---------------------------------------------------------------------------
 
+// #1816: both save failure paths below append the structured error code as a
+// `" (CODE)"` parenthetical rather than folding it into the (now-generic)
+// headline message. One formatter keeps that suffix shape identical.
+//
+// Two codes are exempt because their accompanying `reason`/`message` is
+// already a complete sentence, mirroring `formatRenameErrorMessage`
+// (yjsSync.svelte.ts) and `formatActivityMessage` (activityCenter.ts), which
+// suppress the same pair for the same reason: `"UNKNOWN"` is
+// `document-service.ts`'s catch-all fallback when the underlying error
+// carried no `.code`, and carries no information of its own; `"VERIFY_BLOCKED"`
+// (`SaveVerificationError`) pairs with a message built by `blockReasonMessage`
+// specifically to be content-free — including the #1123-0e "your original
+// file was left unchanged" reassurance — so a jargon code tacked on would
+// undercut it rather than add a diagnostic detail.
+const SAVE_ERROR_CODE_SUFFIX_EXEMPT = new Set(["UNKNOWN", "VERIFY_BLOCKED"]);
+
+function errorCodeSuffix(code?: string): string {
+  return code && !SAVE_ERROR_CODE_SUFFIX_EXEMPT.has(code) ? ` (${code})` : "";
+}
+
 let saving = $state(false);
 // Set right before `saving` flips back to false in `triggerSave`'s `finally`,
 // so a falling-edge "Saved" flash (StatusBar.svelte) can tell a completed save
@@ -246,7 +266,17 @@ interface SaveAsOptions {
  * keybinding cannot race.
  */
 export async function triggerSaveAs(opts: SaveAsOptions): Promise<boolean> {
-  if (saveAsInflight) return false;
+  if (saveAsInflight) {
+    // #1708 item 3: unconditional, with no `announceBusy` flag to gate it.
+    // `triggerSave` needs that flag because it also runs programmatically; this
+    // has one caller and it is always a user gesture, so a silent re-entry is
+    // always a dead Ctrl+Shift+S.
+    notifyUser("info", "A Save As is already in progress…", {
+      dedupKey: "save-as-inflight",
+      id: "save-as-inflight",
+    });
+    return false;
+  }
   const { activeDocId, notify, defaultName, sourceFormat } = opts;
   if (!activeDocId) {
     notify("warning", "No active document to save.");
@@ -310,8 +340,21 @@ async function runTauriSaveAs(
       }),
     });
     if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { message?: string };
-      notify("error", `Save As failed: ${body.message ?? res.statusText}`);
+      // cr-6 (#1816 follow-up): this branch is `routes/save.ts`'s Save-As
+      // error path, which hand-builds `{ error, message }` directly and
+      // never runs through `sendApiError` (that scrub only applies to a
+      // *thrown* exception, caught separately). It reads safely regardless:
+      // `saveDocumentAsToDisk`'s own producers are themselves scrubbed at
+      // the source (generic `reason` text, raw error logged server-side —
+      // see its `assertPathSafe` catch), so `body.message` is already plain
+      // language here, not because this call passed through `sendApiError`.
+      // `body.error` is the structured code — append it as a details
+      // suffix, matching `triggerSave`'s `(${errorCode})` pattern.
+      const body = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+      notify(
+        "error",
+        `Save As failed: ${body.message ?? res.statusText}${errorCodeSuffix(body.error)}`,
+      );
       return false;
     }
     const json = (await res.json().catch(() => null)) as {
@@ -397,7 +440,10 @@ async function runBrowserSaveAs(
  */
 export async function triggerSave(
   activeDocId: string | null,
-  { announceBusy = false }: { announceBusy?: boolean } = {},
+  {
+    announceBusy = false,
+    allowImageLoss = false,
+  }: { announceBusy?: boolean; allowImageLoss?: boolean } = {},
 ): Promise<boolean> {
   if (!activeDocId) return false;
   if (inflight) {
@@ -416,7 +462,14 @@ export async function triggerSave(
     const resp = await fetch(`${API_BASE}${API_SAVE}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ documentId: activeDocId }),
+      // `allowImageLoss` (#1941) is OMITTED unless asked for, rather than sent
+      // as `false`: the server tests `=== true`, so the two are identical on
+      // the wire, and an absent field keeps every ordinary save's body exactly
+      // what it was.
+      body: JSON.stringify({
+        documentId: activeDocId,
+        ...(allowImageLoss ? { allowImageLoss: true } : {}),
+      }),
     });
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}));
@@ -436,6 +489,7 @@ export async function triggerSave(
         data?: {
           status?: "saved" | "skipped" | "error";
           reason?: string;
+          errorCode?: string;
           skipCode?: string;
           fidelityWarnings?: string[];
           integrityWarnings?: string[];
@@ -454,7 +508,14 @@ export async function triggerSave(
         return false;
       }
       if (result?.status === "error") {
-        notifyUser("error", `Save failed: ${result.reason ?? "The document could not be saved."}`);
+        // #1816: `reason` is plain language (the server never sends the raw
+        // fs error or its absolute path here, loopback or not); `errorCode`
+        // is the one technical detail that does travel, appended as a
+        // parenthetical rather than folded into the headline.
+        notifyUser(
+          "error",
+          `Save failed: ${result.reason ?? "The document could not be saved."}${errorCodeSuffix(result.errorCode)}`,
+        );
         return false;
       }
       if (result?.status !== "saved") {

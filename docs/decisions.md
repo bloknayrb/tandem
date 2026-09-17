@@ -312,10 +312,12 @@ Probe instrumentation — `src/server/mcp/server.ts` patched to (a) advertise `b
 - **(c) Keep current model, remove directedAt only:** Minimal change. Doesn't address the flag/highlight overlap or the unintuitive type-based mental model.
 **Rationale:** The type-based model forced users to think in annotation taxonomy rather than intent. The audience-based model maps directly to user goals: mark text (highlight), write for myself (note), write for Claude (comment). Removing flag is safe because highlight colors already carry severity semantics. Removing `directedAt` eliminates a vestigial field with no behavioral backing. Making notes convertible to comments supports a natural workflow: review alone, mark up, then selectively share with Claude.
 **Consequences:** `AnnotationTypeSchema` changes from `["highlight", "comment", "flag"]` to `["highlight", "note", "comment"]`. `sanitizeAnnotation()` migrates legacy `flag` → `note` and strips `directedAt`. Side panel filters change. Tutorial annotations updated. MCP tools reduced. Claude skill updated to not act on notes. Full design in `docs/archive/annotation-system-analysis.md`.
-**Imported `.docx` comments (revised 2026-05-15, ADR-035 grilling pass):** Word reviewer comments enter as `author: "import"`, `type: "note"` — *not* `"comment"`. Rationale: imported comments are potentially third-party content (a colleague's review pass), not the active user's intent. The audience-based model already treats notes as user-private — visible to the user, surfaced via `tandem_getAnnotations`, but not auto-pushed to Claude. The user reviews each imported comment and promotes individually to `type: "comment"` (using the existing note→comment "Send to Claude" action) when they want Claude to act on it. `tandem_checkInbox` continues to ignore notes, including imports — Claude does not see imported comments without explicit user promotion. `sanitizeAnnotation` migrates legacy `author: "import", type: "comment"` records to `type: "note"` on read (emits an `import-comment-to-note` migration-log event). This reverses the earlier PR #482 / v0.9.1 revert; the original PR #474 import-as-note model was correct, and the revert traded user agency for convenience that wasn't load-bearing. The side-panel "Imported" filter (keyed off `author: "import"`) continues to work for both pre- and post-migration records.
+**Imported `.docx` comments (revised 2026-05-15, ADR-035 grilling pass):** Word reviewer comments enter as `author: "import"`, `type: "note"` — *not* `"comment"`. Rationale: imported comments are potentially third-party content (a colleague's review pass), not the active user's intent. The audience-based model already treats notes as user-private — visible to the user and excluded from every Claude-facing read (`tandem_getAnnotations`, `tandem_exportAnnotations`, `tandem_checkInbox`) as well as the channel. The user reviews each imported comment and promotes individually to `type: "comment"` (using the existing note→comment "Send to Claude" action) when they want Claude to act on it. `tandem_checkInbox` continues to ignore notes, including imports — Claude does not see imported comments without explicit user promotion. `sanitizeAnnotation` migrates legacy `author: "import", type: "comment"` records to `type: "note"` on read (emits an `import-comment-to-note` migration-log event). This reverses the earlier PR #482 / v0.9.1 revert; the original PR #474 import-as-note model was correct, and the revert traded user agency for convenience that wasn't load-bearing. The side-panel "Imported" filter (keyed off `author: "import"`) continues to work for both pre- and post-migration records.
 **Target version:** v0.9.0 (data model + tool consolidation, PR #474); UI redesign (selection toolbar, convert-to-comment) deferred to v0.10.0 Svelte migration.
 **Imported-comment writeback (revised 2026-06-17, docx-confidence Phase 0):** ADR-027 governs **Claude visibility**, which is a distinct boundary from the **`.docx` file round-trip**. Imported Word comments (`author: "import"`, stored as private `note`s) are now **written back to their source `.docx` on save**, even unpromoted — closing the priority-#1 confidence gap where a plain open→edit→save silently dropped reviewer comments (surfaced by the Phase 0d fidelity scoreboard; driver: "imported comments should not be dropped"). This does **not** weaken ADR-027's Claude-facing guarantees: imports stay `audience: "private"` and Claude-invisible throughout — the channel, `tandem_getAnnotations`, and `tandem_exportAnnotations` paths are untouched. Writing a comment back to the file it came from is content preservation, not Claude exposure. Enforcement lives solely in the `.docx` export gate (`src/server/file-io/docx-comment-export.ts`), which exports an annotation when EITHER it is a user/Claude `comment` (`type === "comment"` ∧ `audience !== "private"` ∧ `status === "pending"`) OR it is an **import round-trip** — `author === "import"` **AND** a populated `importSource`. The `importSource` corroboration is load-bearing: the durable store's `.passthrough()` envelope enum-validates `author` but does NOT cross-validate it against `importSource`, so `author: "import"` alone must never be sufficient to bypass the gate (a tampered/legacy record could otherwise smuggle user-private content into a shared file). Imported *replies* are gated symmetrically on `author === "import"` AND a populated `importAuthor`. Imports bypass the `type`, `audience`, **and** `status` gates — an accepted/dismissed import still round-trips (status is Tandem's review state, not the file's content); only an explicit **delete** (removal from the annotation map) drops an import from the file. Imported reply threads (`author: "import"` replies) likewise round-trip; user-authored notes/highlights and user-authored `private` replies never export. **Behavior note:** the reviewer's real name (`importSource.author`) now propagates as the Word comment byline on *every* save automatically — including Save-As to a *different* path (e.g. `internal-review.docx` → `client-deliverable.docx` carries the original reviewer's name). This is correct (it is their comment) but is a disclosure surface worth noting.
 **Private note reply threads (revised 2026-06-03, #1000):** Notes may now carry reply threads — both user-authored replies and imported Word comment-reply threads (`author: "import"`). These replies are **user-private**: they display in the user's own UI (`getVisibleReplies` shows replies for notes and comments; highlights remain reply-less) but must NEVER reach Claude. Privacy is a durable property of the *reply* (`AnnotationReply.private`), set at creation for any reply whose parent is not a `comment`, **not** a function of the parent's current type — so a later note→comment promotion ("Send to Claude") cannot back-publish a previously-private reply. The Claude-facing boundary is enforced in three places, none of which moved for the relaxation: the channel observer (`src/server/events/observers/replies.ts` — only `comment` parents emit `annotation:reply`), and both MCP read paths (`tandem_getAnnotations` / `tandem_exportAnnotations`) via the single `channelVisibleReplies` helper (comment-parent gate **and** `private`-strip). `tandem_checkInbox` never attaches replies at all. Only the write-path guard (notes now accepted, highlights still rejected) and the client-display filter relaxed. Imported Word reply author names (`importAuthor`) and reply bodies are stored at rest in the durable annotation JSON alongside the existing `importSource.author`; they are never serialized to any Claude-facing surface. This is consistent with ADR-035's principle that audience/privacy is the load-bearing gate: a note and its entire reply thread stay private until the user explicitly promotes the note, and even then the pre-promotion thread remains local history.
+**Audience honoured on the pull surfaces (revised 2026-09-07, #1619/#1710):** the pull surfaces now filter on `audience` as the channel always has. `tandem_getAnnotations`, `tandem_exportAnnotations`, `tandem_checkInbox` (both buckets) and `channelVisibleReplies` share one predicate, `isClaudeFacing` in `src/server/annotations/projection.ts` — `type !== "note" && audience === "outbound"` — stated beside the push-side conjunction it mirrors. Until this, all four gated on `type` alone, so a highlight stamped `private` was returned to Claude on every read despite this ADR's own decision line saying highlights are "not sent to Claude", and a legacy `{comment, audience: "private"}` record withheld from the channel was delivered one poll later. Both reads disclose the count as `privateExcluded`. One population no predicate can rescue: a CLAUDE-authored highlight persisted with **no** stored `audience` (records predating ADR-035's mint-time stamp) sanitizes to `private` and so is no longer surfaced, and a user's accept/dismiss of it never reaches `userResponses` — over-hiding rather than a leak, and only in legacy sidecars.
+
 
 ## ADR-028: Plugin Monitor URL and Auth Resolution — `userConfig` over Hardcoded Default
 
@@ -539,6 +541,7 @@ Callers that don't care about the variant destructure `.annotation` / `.from` / 
 **Consequences:**
 - `src/shared/positions/types.ts` gains `RefreshResult`, `PmRangeResult` (replacing the existing one), `AnchoredRangeResult` (replacing the existing one), and `RangeValidation` updated to the new shape.
 - ~10 caller sites migrate. For "don't care" callers (most), the change is mechanical: `const ann = refreshRange(...)` → `const { annotation } = refreshRange(...)`. For "should care" callers (margin overlay, side-panel review, MCP error responses for invalid ranges), a `switch` block decides what to do with `degraded` / `failed`.
+  - **Amendment (2026-09-08), as revised by #1764.** The tagged variants exist and are returned. Two callers now read `kind`: the `.docx` comment export, which skips a `failed` resolution (`src/server/file-io/docx-comment-export.ts:334-338`), and `tandem_getAnnotations`, which since #1764 surfaces the two DEGRADATION verdicts as an optional `anchor` field on the wire — `listAnnotationsRefreshed` returns `RefreshResult[]` rather than bare annotations for exactly that reason. The remaining discarders still call `.map((r) => r.annotation)`: `mcp/document-store.ts`'s `refreshAnnotations` (what `tandem_checkInbox` goes through), `tandem_exportAnnotations`, `documents/annotation-wiring.ts`, and the watcher's reload pass. So `repaired` and a healthy `updated` still reach the wire looking exactly like `ok` — deliberately, since both fire for whole collections and would bury the signal. Read the Decision above as the shape of the return type, not as a claim about what every caller does with it.
 - `console.warn` / `console.error` calls inside the position module are removed; the variant carries the same information without the side effect. Callers that want a log line emit one at the call site.
 - `refreshAllRanges` inherits the new shape — returns `RefreshResult[]`. The `MCP_ORIGIN` import in `refreshAllRanges` becomes `withMcp(ydoc, run)` once ADR-031 lands.
 - ADR-018 remains the canonical record of the module split; this ADR is a continuation focused on result-type design. No supersede relationship.
@@ -926,8 +929,10 @@ while the leak is on the pull path. The per-mutation table lives in PR #1690 and
 in the new file's own docblock, which is where a count of "how many specs stayed
 green" can go stale without misleading anyone reading the decision.
 
-This does not close #1619. The pull surfaces still gate on `type` and never on
-`audience`, which is true of any comment, promoted or not.
+This did not close #1619: at the time the pull surfaces still gated on `type`
+and never on `audience`, which was true of any comment, promoted or not.
+**Closed since, 2026-09-07 (#1619/#1710)** — all four Claude-facing reads now
+share `isClaudeFacing`; see the ADR-027 amendment above.
 
 ### Amendment (2026-08-30, Unit 8h): `importNote` declined — the `.docx` path stays outside the seam
 
@@ -1180,6 +1185,25 @@ through the same CSS classes but is rail *chrome*, and moving four timers, two
 rAF dances and a `transitionend` filter with no behavioural net is how a
 behaviour-preserving refactor stops preserving behaviour.
 
+**#1719 amendment (2026-09-15):** The injected `closeTransientChat` and its Unit
+10c ordering are **removed**. `LayoutModelOptions` no longer carries the closer,
+`selectRailTab` is the single statement `activeRailTab = tab`, and `App.svelte`
+passes no closer — so `createLayoutModel` references `createRailContentModel`
+nowhere. A tab switch made from *inside* a chat reveal is not a reason to tear
+the reveal down: the reveal's precondition is a collapsed rail, not a Chat tab,
+and tearing it down on the Annotations click removed the tab buttons the user
+had just used, leaving a fully collapsed rail with no message (#1719). So the
+Unit 10c amendment's resolution of the `showAnnotations`-vs-`selectRailTab`
+difference — that a closer firing on a non-Chat tab "is one this project no
+longer wants" in the *other* direction — is settled the other way here: the
+difference is resolved by there being no closer. The "writes the tab before
+invoking the closer" claim retires with the call it describes, and the two specs
+that amendment credits (the one recording what the closer OBSERVES and the
+throwing-closer one) are deleted with the option they instrument. The reveal
+stays bounded by its other teardowns — outside `pointerdown`, Escape, document
+switch, `toggleRightPanel`, `sendChatMessage`, and since #1716 the rail becoming
+effectively visible.
+
 **Wave I amendment (2026-05-18):** The cross-rail tab picker is retired entirely. The left rail is hard-coded to the outline; the right rail is hard-coded to Annotations + Chat. The `leftRailTabs` / `rightRailTabs` settings fields are removed from the schema (v4→v5 migration strips them), the `RailTab` type is gone, and `LayoutModel.moveTabs` + the `leftTabs` / `rightTabs` getters are deleted. Layout-model surface narrows to visibility helpers (`leftVisible`, `rightVisible`, `toggleLeft`, `toggleRight`). The orphan-rail rule from §3 no longer applies; neither rail can empty because its tab set is fixed.
 
 ## ADR-038: MCP-First Integration Policy; Claude as Default Integration
@@ -1403,7 +1427,7 @@ The internal `status: "restricted"` literal is **not** renamed — `license-type
 
 **Implementation tracker: #1521.** Both amendments are design records; no code moves on either. The reshape — four admission points replacing the per-tool gate, the deletion of Surface A and `tandem_resolveAnnotation`, the UI and the copy — is tracked there, and it lands **dark**. Flipping `LICENSE_GATE_ENABLED` remains a separate v1.0 exit gate.
 
-**Constraint — everything stays dark.** `LICENSE_GATE_ENABLED` remains `false` in `tsup.config.ts` and the build stays byte-identical with the flag off. This amendment is a design change to merged-but-inert code; no code moves on it here. The gated-set enumeration in [`docs/licensing-explained.md`](licensing-explained.md#the-gated-set--this-list-is-the-api-halfs-review) is superseded in **shape** by decision 1 but remains an accurate description of the code as merged, so it stands as Critical Rule 9's review surface until the surface gate is implemented.
+**Constraint — everything stays dark.** `LICENSE_GATE_ENABLED` remains `false` in `tsup.config.ts` and the build stays byte-identical with the flag off. This amendment is a design change to merged-but-inert code; no code moves on it here. The gated-set enumeration in [`docs/licensing-explained.md`](licensing-explained.md#the-gated-set) is superseded in **shape** by decision 1 but remains an accurate description of the code as merged, so it stands as Critical Rule 9's review surface until the surface gate is implemented.
 
 **Cross-references:** ADR-038 (MCP-first policy — basis for §2), ADR-022 / ADR-026 / ADR-027 (annotation system / authorship / data model — the in-place review surface), ADR-028 (split-status pattern), ADR-039 (local-model collaborator — the fifth enforcement site named in the 2026-08-18 amendment), `docs/positioning.md`, `docs/licensing-explained.md`, `docs/roadmap.md` #394 + D4, `LICENSE` (BUSL-1.1), #1116 (engineering tracker), #1346 (the 2026-08-18 amendment and the 2026-08-19 second amendment), #1521 (surface-gate implementation tracker).
 
@@ -1608,9 +1632,10 @@ Three placement details diverge from this ADR's own sketch above and from #1118'
 >   Code and false for Claude Desktop, where the child lives all day. It now captures the client's
 >   `initialize`/`notifications/initialized` in flight and replays them against a fresh transport
 >   under a private `__tandem_reinit_<uuid>` id whose response is swallowed rather than forwarded,
->   verifying `protocolVersion` and `serverInfo` against the original handshake and failing closed on
->   a mismatch — without that check, adding a reconnect would turn a fail-closed into a fail-open for
->   a process that grabbed the port. Failure is soft: pending requests get their `-32000` and one
+>   verifying the server *name* against the original handshake — a changed server *version* or
+>   `protocolVersion` is a Tandem upgrade (the latter moves with the server's bundled SDK), adopted
+>   and logged (#1759) — and failing closed on a name mismatch — without that check, adding a
+>   reconnect would turn a fail-closed into a fail-open for a process that grabbed the port. Failure is soft: pending requests get their `-32000` and one
 >   capped-exponential retry is armed. It never exits, because killing a Claude Desktop child nothing
 >   will respawn is the regression the whole change exists to prevent.
 >
@@ -1851,6 +1876,43 @@ Three reasons, in ascending order of force:
 >
 > **`when: "always"` stays rejected — decided by Bryan, 2026-08-11: "i dont want the monitor to always be armed."** This closes the question #1354 left open. The 3-of-6 measurement above was new input to it and did not change the answer, so the one *model-independent* arming option is off the table for good: #1354's `on-skill-invoke` trigger stands, and first-use arming remains a matter of raising the probability that the model chooses to arm (this amendment, plus the skill description) rather than removing the judgment. Do not re-propose `always` on the strength of a low dispatch rate — that argument has been made, with data, and declined.
 
+> **Amendment (2026-09-10) — `wakeUrl` is no longer read-mode `tandem_status` alone.** This ADR
+> never named a producer itself; the "read `wakeUrl` from a read-mode `tandem_status` response"
+> invariant lived in `SKILL.md`, `SERVER_INSTRUCTIONS` and the Track-D plan docs, with
+> `getWakeEndpoint()` having exactly one caller to match. It is recorded here because this is the
+> decision those surfaces implement, and because a reader who trusts the ADR should not have to
+> reconstruct the trigger from three prose copies. That made the trigger unsatisfiable for a
+> whole population, silently: `tandem_scratchpad({ content })` opens a draft tab and seeds it in
+> ONE call, so a session asked to jot something into Tandem completes its task without ever
+> needing a status read — and `SKILL.md` correctly forbids guessing the URL, because a wrong port
+> opens a socket to an unrelated service and looks armed. Such a session could not arm, and was
+> right not to. Observed 2026-09-10 in a real session, which called `tandem_scratchpad` exactly
+> once and armed nothing.
+>
+> `tandem_open` and `tandem_scratchpad` now return `wakeUrl` as well, and the skill's anchor moved
+> to **the first `tandem_*` response that carries one**. The anchor stays a single moment
+> deliberately: the bound was never the word "status", it was the word "first", and several
+> producers with no anchor would read as several standing invitations to arm.
+>
+> **`tandem_checkInbox` deliberately does NOT carry it.** It is polled every 2-3 tool calls, so it
+> would re-present the arm affordance dozens of times per session — the route to a second watch
+> that `wake-advisory.ts` documents, which also burns a `MAX_WAKE_CONSUMERS` slot and makes
+> `getSubscriberCount() === 0`, the only sound negative in the connection-honesty surface,
+> unreachable process-globally for every other session. Its marginal coverage is near zero anyway:
+> any session that reaches a poll has already called one of the three producers.
+>
+> One thing this amendment does NOT change: `wakeUrl` still names `127.0.0.1` unconditionally, so
+> under a non-loopback bind a remote MCP client receives an address on its own machine. That is
+> pre-existing and tracked in [security.md](security.md#open-findings); widening the producer set
+> multiplies its reach without altering its shape.
+>
+> One consequence worth stating, because no commit message does: for the common
+> `tandem_open`-first flow the arm moment now lands on the session's FIRST tool call rather than
+> after a status read. That widens the window in which the plugin monitor has not yet connected
+> and a self-armed watch reads a stale zero subscriber count, so the doubled-wake stand-down in
+> `SKILL.md` should be expected to fire more often than before. It is the recovery, and it works
+> — but a rise in its rate is a consequence of this change, not evidence of a new fault.
+
 **Cross-references:** [ADR-045](#adr-045-mcp-transport-multiplexing--one-mcpserver-per-session-keyed-by-mcp-session-id) (why neither session id is a usable key), ADR-027 (the Solo/privacy contract the strip reinforces), #1266 (the supervisor's payload-free wake), `docs/spikes/monitor-self-arm-probe.md` (P-A2, P4, and the burst measurement).
 
 ---
@@ -1873,6 +1935,8 @@ Inverting the default fixes all three at once: deny is structural, and the hand-
 **Why "non-GET" and not "mutating".** `GET /api/channel-permission` evicts TTL-expired entries, so it mutates. A rule phrased over mutation would need a per-route inventory of what counts — precisely the artifact this ADR abolishes. Method is a property of the request; mutation is a property of the handler, and only one of those is knowable at the mount.
 
 **Why reads are exempt.** `document/raw` and `diagnostics` refuse a non-loopback caller; `info`, `sessions`, `backups`, `launcher/status`, `models` and `integrations` scrub their payload instead. Those scrubs were designed and reviewed for LAN callers, and the `resolvedLanIP` Host accommodation exists to let them work. Extending the invariant to GET would strand both. The result is now coherent rather than accidental: **LAN peers may read `/api`; their writes are refused.**
+
+**That conclusion is scoped to `/api` on purpose.** This ADR inverted the default for one route prefix; it did not make write-refusal a property of the server. `enforceLoopbackMutation` is mounted on `/api` and nowhere else, so `POST /mcp` reaches the same mutations through the MCP tool surface with no loopback check — [#1906](https://github.com/bloknayrb/tandem/issues/1906).
 
 **Consequences:**
 
@@ -1907,7 +1971,7 @@ three times (#1229), which is why the acceptance harness's step carries no `if:`
 no `continue-on-error` and no `|| true`, and why `check` fails when any of that
 changes.
 
-**Decision.** The pattern, now used seven times, is: **the job does the work; a
+**Decision.** The pattern, now used nine times, is: **the job does the work; a
 wiring test inside `check` pins the job's shape and the inputs it reads.** The
 work stays where it is cheap. The disarming becomes expensive, because disarming
 it means editing something a required check reads.
@@ -1923,8 +1987,24 @@ Instances:
 | Every workflow's actions are SHA-pinned | `tests/scripts/workflow-action-pin.test.ts` |
 | `tauri-release.yml`'s signing gates | `tests/scripts/release-signing-gates.test.ts` |
 | `node-sidecar-pin` | `tests/scripts/node-sidecar-pin-wiring.test.ts` |
+| `check`'s vitest file anchor | `tests/scripts/vitest-file-anchor-wiring.test.ts` |
+| Release/CI hygiene: `npm ci --ignore-scripts`, the updater-signature gate | `tests/scripts/release-ci-hygiene.test.ts` |
 
-The last three (#1745–#1747) stretch the pattern in a direction worth naming,
+**The eighth (#1673) is the first instance INSIDE a required job, and it is the
+one that shows what "required" does and does not buy.** The anchor step runs in
+`check`, so the obvious reading is that it needs no wiring test at all — being
+required is the protection. That reading is wrong and this PR's own first draft
+held it: **required makes a RED block; it does nothing about a step that never
+runs.** `run: … || true`, `continue-on-error: true`, an `if:` that stops
+matching, or deleting the step outright each leave `check` green with the anchor
+dead — the #1229 shape, re-created inside the very group that exists to fix it.
+`check` already carried two step-level gates pinned from inside itself for
+exactly this reason (`typecheck:tests` and the acceptance harness), so the
+anchor is the third, not a new category. It is also the weakest of the three,
+because it is the only one carrying an `if:` — a condition nothing else
+constrains.
+
+The last three of the first seven (#1745–#1747) stretch the pattern in a direction worth naming,
 because two of them pin something that is not a *job*. `tauri-release.yml` and
 `dependabot.yml` run on a `v*` tag and on Dependabot's own schedule; neither is
 reachable from any required check, and neither has ever been read by anything

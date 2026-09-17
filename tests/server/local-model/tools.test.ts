@@ -127,6 +127,40 @@ describe("dispatch — annotation writes", () => {
     expect(ann.suggestedText).toBe("phase one");
   });
 
+  it("propose_replacement refuses a quote whose INTERIOR spans a heading prefix", () => {
+    // The local-model twin of `tandem_comment`'s suggestion arm. A
+    // `propose_replacement` stores `suggestedText`, and the editor accept and
+    // the `.docx` apply both replace the stored flat span verbatim — so a quote
+    // stepping over `"## "` deletes the heading, which is what #1766 closed for
+    // `tandem_edit`. `resolveAnchor` now takes the kind as a REQUIRED parameter,
+    // so the two arms cannot silently share a verdict.
+    doc = makeMarkdownDoc("Intro para\n\n## Section\n\nBody text here\n");
+    const quoted = "para\n## Section";
+    const out = dispatch(
+      "propose_replacement",
+      { quoted_text: quoted, suggested_text: "X", rationale: "why" },
+      { ydoc: doc },
+    );
+    expect((out.result as { error?: string }).error).toBe("HEADING_OVERLAP");
+    expect(getAnnotationsMap(doc).size).toBe(0);
+  });
+
+  it("comment_on_quote still ACCEPTS that same quote — a comment writes no text", () => {
+    // The discriminating negative, and the reason the interior term is an arm
+    // rather than a widening of `rejectHeadingOverlap`. A comment spanning a
+    // section is legal, and "target the text content only" is not advice its
+    // author can follow when the target IS two blocks and the heading between
+    // them. Same document, same quote, same resolver — only the kind differs.
+    doc = makeMarkdownDoc("Intro para\n\n## Section\n\nBody text here\n");
+    const out = dispatch(
+      "comment_on_quote",
+      { quoted_text: "para\n## Section", comment: "on the whole section" },
+      { ydoc: doc },
+    );
+    expect((out.result as { ok?: boolean }).ok).toBe(true);
+    expect(getAnnotationsMap(doc).size).toBe(1);
+  });
+
   it("returns ANCHOR_NOT_FOUND for a quote that isn't in the document", () => {
     doc = makeMarkdownDoc(FIXTURE);
     const out = dispatch(

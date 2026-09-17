@@ -8,6 +8,8 @@
  *   - legacy: a bare PID string — written by older versions.
  */
 
+import os from "node:os";
+
 /** App identifier stamped into v2 lockfiles. */
 export const LOCK_APP_ID = "tandem";
 
@@ -53,4 +55,32 @@ export function parseLockfile(raw: string): LockfileContents | null {
   const pid = Number.parseInt(trimmed, 10);
   if (!Number.isFinite(pid) || pid <= 0) return null;
   return { pid };
+}
+
+/** Absorbs os.uptime()'s whole-second truncation + read jitter only — NOT a
+ * defense against a system-clock step; see isLockFromPriorBoot. */
+const BOOT_TIME_SAFETY_MARGIN_MS = 5_000;
+
+export function systemBootMs(): number {
+  return Date.now() - os.uptime() * 1000;
+}
+
+/**
+ * True when a lock's startedAtMs predates the estimated current boot by more
+ * than the margin. EVIDENCE, not a verdict: startedAtMs and nowBootMs are
+ * both wall-clock-derived, taken at different instants, so a forward
+ * system-clock step after the lock was written can make a LIVE, same-boot
+ * lock read as "prior boot." Callers with a live PID MUST corroborate a
+ * `true` result with an independent signal (the process-identity probe)
+ * before treating the lock as stale. Missing/non-numeric startedAtMs
+ * answers `false` (no evidence, no reclaim).
+ */
+export function isLockFromPriorBoot(
+  lock: LockfileContents,
+  nowBootMs: number = systemBootMs(),
+): boolean {
+  return (
+    typeof lock.startedAtMs === "number" &&
+    lock.startedAtMs < nowBootMs - BOOT_TIME_SAFETY_MARGIN_MS
+  );
 }

@@ -26,7 +26,7 @@ import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
 // uacDeclined status so the modal renders. Everything else in the component
 // (cowork-invoke, dismiss module) stays real — no button is ever clicked, so
 // loadInvoke's Tauri-unavailable rejection is never hit.
-vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
+vi.mock(import("../../src/client/hooks/useCoworkStatus.svelte"), () => ({
   createCoworkStatus: () => ({
     status: coworkStatusFixture({
       enabled: true,
@@ -35,7 +35,7 @@ vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
     }),
     loading: false,
     error: null,
-    refetch: vi.fn(async () => {}),
+    refetch: vi.fn(async () => true),
   }),
 }));
 

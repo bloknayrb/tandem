@@ -5,7 +5,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   carriedSessionNotFound,
-  describeServerInfo,
+  describeServerName,
   getRequestId,
   getResponseId,
   isReplayId,
@@ -13,38 +13,141 @@ import {
   isStaleSessionError,
   makeReplayId,
   nextBackoffMs,
+  PREFLIGHT_GRACE_MS,
   parseTimeoutMs,
   readAndValidateAuthToken,
 } from "../../src/cli/mcp-stdio.js";
 import { expectWithinMs } from "../helpers/timing.js";
 
+interface ChildOutput {
+  /** Everything the child has written to stdout since `outputOf` first ran. */
+  stdout: () => string;
+  /** Everything the child has written to stderr since `outputOf` first ran. */
+  stderr: () => string;
+  /**
+   * The next complete (newline-terminated) line no reader has taken yet, or
+   * `undefined` while none is pending. Whitespace-only lines are skipped, as
+   * the old per-call `readLines` filter did.
+   */
+  takeLine: () => string | undefined;
+}
+
+const childOutputs = new WeakMap<ChildProcessWithoutNullStreams, ChildOutput>();
+
+/**
+ * Buffer a child's stdout/stderr ONCE, from the moment it is spawned (#1674).
+ *
+ * Attaching a `data` listener puts the stream into flowing mode, so a second
+ * listener attached later never sees what the first already consumed — and a
+ * paused stream only buffers while the child is alive. That is why every
+ * reader shares one buffer per child instead of attaching its own, and why
+ * specs that also inspect raw stdout call `outputOf(child)` in the same tick
+ * as their `spawn`. Readers consume stdout in emission order from that point
+ * via `takeLine()`'s cursor; the raw `stdout()` view is unconsumed.
+ */
+function outputOf(child: ChildProcessWithoutNullStreams): ChildOutput {
+  const existing = childOutputs.get(child);
+  if (existing) return existing;
+  let out = "";
+  let err = "";
+  let cursor = 0;
+  child.stdout.on("data", (c: Buffer) => {
+    out += c.toString("utf8");
+  });
+  child.stderr.on("data", (c: Buffer) => {
+    err += c.toString("utf8");
+  });
+  const view: ChildOutput = {
+    stdout: () => out,
+    stderr: () => err,
+    takeLine: () => {
+      // Only newline-terminated lines: an unterminated tail stays pending
+      // until its "\n" arrives, so a frame split across chunks is never
+      // handed to JSON.parse in halves.
+      for (;;) {
+        const nl = out.indexOf("\n", cursor);
+        if (nl < 0) return undefined;
+        const line = out.slice(cursor, nl);
+        cursor = nl + 1;
+        if (line.trim()) return line;
+      }
+    },
+  };
+  childOutputs.set(child, view);
+  return view;
+}
+
+/**
+ * Await the next line the child writes to stdout.
+ *
+ * `what` names the awaited subject in the rejection ("no <what> within Nms"),
+ * defaulting to today's noun so unchanged call sites keep printing
+ * `no stdout within Nms`. The rejection also names whether the child had
+ * terminated, which is what separates "the bridge never emitted" from "the
+ * subprocess never started" (#1674, #724).
+ */
 async function readOneLine(
   child: ChildProcessWithoutNullStreams,
   timeoutMs = 10_000,
+  what = "stdout",
 ): Promise<string> {
-  const stdoutChunks: string[] = [];
-  const stderrChunks: string[] = [];
-  child.stdout.on("data", (c: Buffer) => stdoutChunks.push(c.toString("utf8")));
-  child.stderr.on("data", (c: Buffer) => stderrChunks.push(c.toString("utf8")));
+  const output = outputOf(child);
   return new Promise<string>((resolveResp, rejectResp) => {
     const checker = setInterval(() => {
-      const joined = stdoutChunks.join("");
-      const nl = joined.indexOf("\n");
-      if (nl >= 0) {
+      const line = output.takeLine();
+      if (line !== undefined) {
         clearTimeout(timer);
         clearInterval(checker);
-        resolveResp(joined.slice(0, nl));
+        resolveResp(line);
       }
     }, 50);
     const timer = setTimeout(() => {
       clearInterval(checker);
+      // exitCode is null for a signal-killed child, and this file SIGKILLs in
+      // afterEach — so liveness reads both fields.
+      const terminated = child.exitCode !== null || child.signalCode !== null;
+      const liveness = terminated
+        ? `child exited with code ${child.exitCode ?? child.signalCode}`
+        : "child still running";
+      const err = output.stderr();
+      const tail = err.length > 500 ? `…${err.slice(-500)}` : err;
       rejectResp(
         new Error(
-          `no stdout within ${timeoutMs}ms. stderr=${stderrChunks.join("")} stdout=${stdoutChunks.join("")}`,
+          `no ${what} within ${timeoutMs}ms (${liveness}). stderr=${tail} stdout=${output.stdout()}`,
         ),
       );
     }, timeoutMs);
   });
+}
+
+/** The awaited subject shared by every spec that waits on a synthesized error. */
+const SYNTHESIZED_32000 = "synthesized -32000 on stdout";
+
+/** Resolve once the child's stdio buffers are complete ("close", not "exit"). */
+function awaitClose(child: ChildProcessWithoutNullStreams): Promise<void> {
+  return new Promise<void>((r) => {
+    child.once("close", () => r());
+  });
+}
+
+/**
+ * The JSON-RPC error replies in `stdout` carrying `code`, optionally narrowed
+ * to one request `id`. Non-JSON lines are noise, not failures — but the parse
+ * lives here rather than inside a caller's `try`, where a throw used to swallow
+ * the assertion that followed it.
+ */
+function errorReplies(stdout: string, code: number, id?: number): string[] {
+  return stdout
+    .split("\n")
+    .filter((l) => l.trim())
+    .filter((l) => {
+      try {
+        const p = JSON.parse(l) as { id?: number; error?: { code?: number } };
+        return p.error?.code === code && (id === undefined || p.id === id);
+      } catch {
+        return false;
+      }
+    });
 }
 
 /**
@@ -72,19 +175,18 @@ async function readLines(
   n: number,
   timeoutMs = 10_000,
 ): Promise<string[]> {
-  const stdoutChunks: string[] = [];
-  child.stdout.on("data", (c: Buffer) => stdoutChunks.push(c.toString("utf8")));
+  const output = outputOf(child);
+  const lines: string[] = [];
+  const drain = () => {
+    for (let line = output.takeLine(); line !== undefined; line = output.takeLine()) {
+      lines.push(line);
+    }
+  };
   return new Promise<string[]>((resolveResp) => {
-    const lines: string[] = [];
-    let remainder = "";
     const checker = setInterval(() => {
-      const joined = remainder + stdoutChunks.join("");
-      stdoutChunks.length = 0;
-      const parts = joined.split("\n");
-      remainder = parts.pop() ?? "";
-      for (const part of parts) {
-        if (part.trim()) lines.push(part);
-      }
+      // Drain everything available in this tick rather than exactly n, so an
+      // over-delivered extra frame still shows up in the caller's count.
+      drain();
       if (lines.length >= n) {
         clearTimeout(timer);
         clearInterval(checker);
@@ -93,6 +195,7 @@ async function readLines(
     }, 50);
     const timer = setTimeout(() => {
       clearInterval(checker);
+      drain();
       resolveResp(lines);
     }, timeoutMs);
   });
@@ -348,6 +451,12 @@ describe("mcp-stdio error synthesis on upstream unavailability", () => {
     expect(parsed.id).toBe(99);
     expect(parsed.error?.code).toBe(-32000);
     expect(parsed.error?.message).toMatch(/not (running|ready)/i);
+
+    // …and does NOT exit (#1805). The wait is what makes this a discriminator:
+    // `shutdown()` writes the -32000 *before* awaiting `http.close()`, so an
+    // immediate check passes for the old exiting implementation too.
+    await new Promise((r) => setTimeout(r, PREFLIGHT_GRACE_MS + 1000));
+    expect(child.exitCode).toBeNull();
   }, 30_000);
 
   it("synthesizes -32000 for pending requests when the upstream dies mid-session", async () => {
@@ -432,30 +541,25 @@ describe("mcp-stdio error synthesis on upstream unavailability", () => {
       env: { ...process.env, TANDEM_URL: "http://127.0.0.1:1" },
       stdio: ["pipe", "pipe", "pipe"],
     });
+    // Buffer from spawn: an exited child's paused stream yields nothing to a
+    // listener attached afterwards, so the old post-exit collector always
+    // read "" and this spec asserted on an empty list (#1674).
+    const output = outputOf(child);
 
     // Write a notification (no id) — must never produce a -32000 reply.
     const notification = { jsonrpc: "2.0", method: "notifications/initialized" };
     child.stdin.write(`${JSON.stringify(notification)}\n`);
 
-    // Wait for child to exit (it exits 1 after PREFLIGHT_GRACE_MS).
-    await new Promise<void>((r) => child!.once("exit", () => r()));
+    // It no longer closes (#1805), so wait on the observable precondition
+    // instead. The grace timer and the guidance line are armed in the same
+    // block, so a shorter wait would land before `synthesizeBuffered` runs and
+    // read empty even for a broken implementation.
+    await waitForCount(() => (/preflight failed/i.test(output.stderr()) ? 1 : 0), 1);
+    await new Promise((r) => setTimeout(r, PREFLIGHT_GRACE_MS + 1000));
 
-    // Collect any stdout lines that arrived.
-    const stdoutChunks: string[] = [];
-    child.stdout.on("data", (c: Buffer) => stdoutChunks.push(c.toString("utf8")));
-    const allOutput = stdoutChunks.join("");
-    const lines = allOutput.split("\n").filter((l) => l.trim());
-
-    // No line should be a -32000 error reply.
-    for (const line of lines) {
-      try {
-        const parsed = JSON.parse(line) as { error?: { code?: number } };
-        expect(parsed.error?.code).not.toBe(-32000);
-      } catch {
-        // Non-JSON line — fine, ignore.
-      }
-    }
-  }, 15_000);
+    expect(errorReplies(output.stdout(), -32000)).toEqual([]);
+    expect(child.exitCode).toBeNull();
+  }, 20_000);
 
   it("synthesizes -32000 for multiple concurrent pending requests on mid-session upstream death", async () => {
     // Fake server: /health → 200, /mcp → holds all POSTs without replying.
@@ -727,7 +831,7 @@ describe("mcp-stdio per-request timeout", () => {
     await waitForPosts(postsReceived, 1);
 
     // Expect -32000 within 500ms timer + processing slack.
-    const line = await readOneLine(child, 3_000);
+    const line = await readOneLine(child, 3_000, SYNTHESIZED_32000);
     const parsed = JSON.parse(line) as {
       id: number;
       error?: { code: number; message: string; data?: { detail: string } };
@@ -828,9 +932,10 @@ describe("mcp-stdio per-request timeout", () => {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    // Collect stdout so we can count total -32000 lines later.
-    const stdoutChunks: string[] = [];
-    child.stdout.on("data", (c: Buffer) => stdoutChunks.push(c.toString("utf8")));
+    // Buffer stdout from spawn (#1674). A second listener attached later —
+    // which is what readOneLine used to do — would never see the -32000 this
+    // spec waits for, and the deadline would then blame the bridge.
+    outputOf(child);
 
     // Send the request immediately — preReadyBuffer holds it until httpReady
     // flips, then forwardToUpstream fires and the 300ms timer starts. Polling
@@ -848,7 +953,7 @@ describe("mcp-stdio per-request timeout", () => {
 
     // Wait for the 300ms timer to fire and produce the -32000. Loose bound
     // (5s) to absorb scheduling jitter under parallel test load.
-    const firstLine = await readOneLine(child, 5_000);
+    const firstLine = await readOneLine(child, 5_000, SYNTHESIZED_32000);
     const first = JSON.parse(firstLine) as { id: number; error?: { code: number } };
     expect(first.id).toBe(30);
     expect(first.error?.code).toBe(-32000);
@@ -858,18 +963,8 @@ describe("mcp-stdio per-request timeout", () => {
 
     // Wait 500ms for any spurious second -32000 to arrive.
     await new Promise((r) => setTimeout(r, 500));
-    const allOutput = stdoutChunks.join("");
-    const allLines = allOutput.split("\n").filter((l) => l.trim());
-    const errorCount = allLines.filter((l) => {
-      try {
-        const p = JSON.parse(l) as { id?: number; error?: { code?: number } };
-        return p.id === 30 && p.error?.code === -32000;
-      } catch {
-        return false;
-      }
-    }).length;
     // Exactly one -32000 for id=30 — timer fired first, catch found map empty.
-    expect(errorCount).toBe(1);
+    expect(errorReplies(outputOf(child).stdout(), -32000, 30)).toHaveLength(1);
   }, 20_000);
 
   it("process exits in <3s after half-open timeout fires (no orphan handles)", async () => {
@@ -897,15 +992,17 @@ describe("mcp-stdio per-request timeout", () => {
     // vitest load, where `--import tsx` startup can far exceed 500ms. The ordering
     // is load-bearing: the 300ms timer is armed just before http.send, so when
     // waitForPosts returns (POST received) it has been running only for the
-    // network round-trip — ~290ms still remain, so readOneLine's listener
-    // attaches well before the -32000 is emitted.
+    // network round-trip — ~290ms still remain when the -32000 is emitted.
+    // (Since #1674 the buffer is attached at spawn, so a reader can no longer
+    // miss a line it was late for; the polling still keeps the deadline off
+    // subprocess startup latency.)
     child.stdin.write(
       `${JSON.stringify({ jsonrpc: "2.0", id: 40, method: "initialize", params: { protocolVersion: "2024-11-05", clientInfo: { name: "test", version: "0" }, capabilities: {} } })}\n`,
     );
     await waitForPosts(postsReceived, 1);
 
     // Wait for the -32000 to arrive (timer fired). Loose bound for full-suite load.
-    const line = await readOneLine(child, 5_000);
+    const line = await readOneLine(child, 5_000, SYNTHESIZED_32000);
     const parsed = JSON.parse(line) as { id: number; error?: { code: number } };
     expect(parsed.id).toBe(40);
     expect(parsed.error?.code).toBe(-32000);
@@ -922,6 +1019,84 @@ describe("mcp-stdio per-request timeout", () => {
       });
     });
     expect(closed).toBe(true);
+  }, 20_000);
+});
+
+describe("child output buffering", () => {
+  const spawned: ChildProcessWithoutNullStreams[] = [];
+
+  // Leaked child handles starve subprocess startup for the rest of the suite
+  // (#724) — the second, independently sufficient cause of #1674's text. Every
+  // spawn is tracked, not just the latest, because one spec spawns three.
+  afterEach(() => {
+    for (const c of spawned) c.kill();
+    spawned.length = 0;
+  });
+
+  function spawnNode(script: string): ChildProcessWithoutNullStreams {
+    const c = spawn(process.execPath, ["-e", script], { stdio: ["pipe", "pipe", "pipe"] });
+    spawned.push(c);
+    // Same tick as the spawn: an exited child's stream yields nothing to a
+    // listener attached afterwards.
+    outputOf(c);
+    return c;
+  }
+
+  const STAY_ALIVE = "setInterval(() => {}, 1000);";
+
+  /** The Error a deadline rejected with; a resolved read fails loudly instead. */
+  const rejectionOf = (p: Promise<string>): Promise<Error> =>
+    p.then(
+      (line) => {
+        throw new Error(`expected a rejection, got ${JSON.stringify(line)}`);
+      },
+      (e: Error) => e,
+    );
+
+  it("delivers a line emitted before the first readOneLine", async () => {
+    const c = spawnNode(`process.stdout.write("first\\n"); ${STAY_ALIVE}`);
+    const out = outputOf(c);
+    // Poll for the line rather than sleeping a fixed span (#687), so the
+    // 1s deadline below measures the reader and not subprocess startup.
+    await waitForCount(() => (out.stdout().includes("\n") ? 1 : 0), 1, 5_000);
+    await expect(readOneLine(c, 1_000)).resolves.toBe("first");
+  }, 15_000);
+
+  it("hands successive readers successive lines", async () => {
+    const c = spawnNode('process.stdout.write("one\\ntwo\\n");');
+    expect(await readOneLine(c, 2_000)).toBe("one");
+    expect(await readOneLine(c, 2_000)).toBe("two");
+  }, 15_000);
+
+  it("waits for the newline rather than serving the unterminated tail", async () => {
+    const c = spawnNode(
+      `process.stdout.write('{"a":1'); setTimeout(() => process.stdout.write("}\\n"), 200); ${STAY_ALIVE}`,
+    );
+    expect(JSON.parse(await readOneLine(c, 2_000))).toEqual({ a: 1 });
+  }, 15_000);
+
+  it("names the awaited subject and the child's liveness", async () => {
+    // Arm 1 — exited cleanly, default subject. Await termination first so the
+    // 300ms deadline measures the timer, not spawn latency (#687).
+    const exited = spawnNode("process.exit(0);");
+    await awaitClose(exited);
+    await expect(readOneLine(exited, 300)).rejects.toThrow(
+      /^no stdout within 300ms \(child exited with code 0\)/,
+    );
+
+    // Arm 2 — signal-killed, so exitCode is null and only signalCode names it.
+    const killed = spawnNode(STAY_ALIVE);
+    killed.kill("SIGKILL");
+    await awaitClose(killed);
+    const killedErr = await rejectionOf(readOneLine(killed, 300));
+    expect(killedErr.message).toContain("exited");
+    expect(killedErr.message).toContain("SIGKILL");
+
+    // Arm 3 — still running, custom subject. No wait: the child must be live.
+    const alive = spawnNode(STAY_ALIVE);
+    const aliveErr = await rejectionOf(readOneLine(alive, 300, SYNTHESIZED_32000));
+    expect(aliveErr.message).toContain("synthesized -32000");
+    expect(aliveErr.message).toContain("still running");
   }, 20_000);
 });
 
@@ -1385,15 +1560,16 @@ describe("stale-session helper predicates", () => {
     });
   });
 
-  describe("describeServerInfo", () => {
-    it("renders name@version and collapses anything else to a sentinel", () => {
-      expect(describeServerInfo({ name: "tandem", version: "1.2.3" })).toBe("tandem@1.2.3");
+  describe("describeServerName", () => {
+    it("renders the name alone and collapses anything else to a sentinel", () => {
+      expect(describeServerName({ name: "tandem", version: "1.2.3" })).toBe("tandem");
+      // The version is now irrelevant to identity (#1759), which is the point.
+      expect(describeServerName({ name: "tandem" })).toBe("tandem");
       // A server that omits serverInfo must not compare equal to one that
       // supplies it, so every non-conforming shape collapses to one sentinel.
-      expect(describeServerInfo(undefined)).toBe("<unknown>");
-      expect(describeServerInfo(null)).toBe("<unknown>");
-      expect(describeServerInfo({ name: "tandem" })).toBe("<unknown>");
-      expect(describeServerInfo({ name: 1, version: 2 })).toBe("<unknown>");
+      expect(describeServerName(undefined)).toBe("<unknown>");
+      expect(describeServerName(null)).toBe("<unknown>");
+      expect(describeServerName({ name: 1 })).toBe("<unknown>");
     });
   });
 
@@ -1598,6 +1774,8 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
     getCount(): number;
     /** Swap the advertised serverInfo, to exercise the fail-closed identity check. */
     setServerInfo(info: { name: string; version: string }): void;
+    /** Swap the negotiated protocolVersion — what an SDK-bumping upgrade moves. */
+    setProtocolVersion(version: string): void;
     /** Accept the next N initialize POSTs and never answer them. */
     stallInitializes(n: number): void;
     /**
@@ -1625,7 +1803,9 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
    * of them ever forwarded an `initialized` notification, the one thing that
    * makes the SDK open the stream.
    */
-  async function makeSessionServer(opts: { sse?: boolean } = {}): Promise<SessionServer> {
+  async function makeSessionServer(
+    opts: { sse?: boolean; port?: number } = {},
+  ): Promise<SessionServer> {
     const posts: SessionServer["posts"] = [];
     let live: string | undefined;
     let minted = 0;
@@ -1636,6 +1816,7 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
     let failNextGets = 0;
     let held: Array<{ res: ServerResponse; id: string | number | undefined }> = [];
     let serverInfo = { name: "fake-tandem", version: "0.0.0-test" };
+    let protocolVersion = "2024-11-05";
 
     const answerInitialize = (res: ServerResponse, id: string | number | undefined) => {
       minted += 1;
@@ -1646,7 +1827,7 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
           jsonrpc: "2.0",
           id,
           result: {
-            protocolVersion: "2024-11-05",
+            protocolVersion,
             capabilities: { tools: {} },
             serverInfo,
           },
@@ -1739,7 +1920,9 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
       res.end();
     });
 
-    await new Promise<void>((r) => (sessionServer as Server).listen(0, "127.0.0.1", r));
+    await new Promise<void>((r) =>
+      (sessionServer as Server).listen(opts.port ?? 0, "127.0.0.1", r),
+    );
     const addr = (sessionServer as Server).address();
     if (!addr || typeof addr === "string") throw new Error("server.address() unexpected");
     return {
@@ -1752,6 +1935,9 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
       getCount: () => gets,
       setServerInfo: (info) => {
         serverInfo = info;
+      },
+      setProtocolVersion: (version) => {
+        protocolVersion = version;
       },
       stallInitializes: (n) => {
         stallInits = n;
@@ -1805,6 +1991,21 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
       await new Promise((r) => setTimeout(r, 50));
     }
     throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}`);
+  }
+
+  /**
+   * A loopback port with nothing listening on it, which a later
+   * `makeSessionServer({ port })` can claim. Bind-then-close rather than a
+   * hard-coded number so two suites cannot collide.
+   */
+  async function reservePort(): Promise<number> {
+    const probe = createServer();
+    await new Promise<void>((r) => probe.listen(0, "127.0.0.1", r));
+    const addr = probe.address();
+    if (!addr || typeof addr === "string") throw new Error("probe.address() unexpected");
+    const { port } = addr;
+    await new Promise<void>((r) => probe.close(() => r()));
+    return port;
   }
 
   function spawnBridge(port: number, env: Record<string, string> = {}) {
@@ -1932,6 +2133,194 @@ describe("mcp-stdio re-initializes on a stale upstream session", () => {
       .lines()
       .some((m) => m.method === "notifications/tools/list_changed" && m.id === undefined);
     expect(notified).toBe(true);
+  }, 60_000);
+
+  it("survives a dead upstream at startup, then serves once it appears (#1805)", async () => {
+    const port = await reservePort();
+    child = spawnBridge(port, { TANDEM_REQUEST_TIMEOUT_MS: "4000" });
+    const io = collect(child);
+    child.stdin.write(`${JSON.stringify(INITIALIZE)}\n`);
+
+    // Sequence on the observed reply, never a wall clock: bringing the server
+    // up at a fixed "~2s" races the `!httpReady` guard, and on a slow
+    // `--import tsx` boot the t≈1s probe finds it first and id 1 gets a real
+    // result — inverting this assertion for reasons unrelated to the fix.
+    await waitFor(
+      () => responsesFor(io.stdout(), 1).length === 1,
+      "grace-window synthesis",
+      25_000,
+    );
+    expect((responsesFor(io.stdout(), 1)[0]?.error as { code?: number })?.code).toBe(-32000);
+
+    const fake = await makeSessionServer({ port });
+    await waitFor(() => io.stderr().includes("Tandem server reachable"), "recovery line", 45_000);
+    expect(child.exitCode).toBeNull();
+
+    // The session is minted on recovery, BEFORE any client request: the
+    // transport that came up holds no session, so without this kick the first
+    // real request paid POST → 404 → a 1s backoff → replay before it was
+    // served. Waiting for the line here, with nothing written yet, is what
+    // pins that; `initCount() === 1` below is its other half — the request
+    // found a live session and triggered no second handshake.
+    await waitFor(
+      () => io.stderr().includes("deferred handshake completed"),
+      "session minted on recovery",
+      30_000,
+    );
+
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+    await waitFor(() => responsesFor(io.stdout(), 2).length === 1, "served request", 30_000);
+    const answer = responsesFor(io.stdout(), 2)[0];
+    // Without the deferred-handshake seeding this answers -32000 and stderr
+    // carries `no handshake baseline` instead: the locally answered
+    // `initialize` was never forwarded, so there is no baseline to compare.
+    expect(answer?.error).toBeUndefined();
+    expect((answer?.result as { echo?: string })?.echo).toBe("tools/list");
+    expect(fake.initCount()).toBe(1);
+  }, 90_000);
+
+  it("names the restart once and keeps retrying while the upstream is down (#1805)", async () => {
+    const port = await reservePort();
+    child = spawnBridge(port);
+    const io = collect(child);
+
+    await waitFor(() => /preflight failed/i.test(io.stderr()), "preflight guidance", 25_000);
+    // `waitForUpstream` sleeps before probing, so probes land at t≈1s and 3s.
+    await new Promise((r) => setTimeout(r, 4_500));
+
+    const err = io.stderr();
+    expect(err.match(/restart the client/g)?.length).toBe(1);
+    expect(err.match(/preflight failed/g)?.length).toBe(1);
+    expect(child.exitCode).toBeNull();
+  }, 60_000);
+
+  it("answers requests arriving after the grace window instead of buffering (#1805)", async () => {
+    const port = await reservePort();
+    child = spawnBridge(port);
+    const io = collect(child);
+
+    await waitFor(() => /preflight failed/i.test(io.stderr()), "preflight guidance", 25_000);
+    await new Promise((r) => setTimeout(r, 2_000));
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/list" })}\n`);
+
+    // The pre-ready buffer is a one-shot drained only at startup, so without
+    // the `preflightFailed` latch this request gets no reply at all.
+    await waitFor(() => responsesFor(io.stdout(), 7).length === 1, "latched -32000", 20_000);
+    expect((responsesFor(io.stdout(), 7)[0]?.error as { code?: number })?.code).toBe(-32000);
+    expect(child.exitCode).toBeNull();
+  }, 60_000);
+
+  it("recovers from an initialize that arrived after the grace window (#1805)", async () => {
+    const port = await reservePort();
+    child = spawnBridge(port, { TANDEM_REQUEST_TIMEOUT_MS: "4000" });
+    const io = collect(child);
+
+    await waitFor(() => /preflight failed/i.test(io.stderr()), "preflight guidance", 25_000);
+    // Past the grace window, so `synthesizeBuffered` has already run against an
+    // empty buffer and this `initialize` takes the *second* local-answer sink.
+    await new Promise((r) => setTimeout(r, PREFLIGHT_GRACE_MS + 500));
+    child.stdin.write(`${JSON.stringify(INITIALIZE)}\n`);
+    await waitFor(() => responsesFor(io.stdout(), 1).length === 1, "latched -32000", 20_000);
+    expect((responsesFor(io.stdout(), 1)[0]?.error as { code?: number })?.code).toBe(-32000);
+
+    await makeSessionServer({ port });
+    await waitFor(() => io.stderr().includes("Tandem server reachable"), "recovery line", 45_000);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+    await waitFor(() => responsesFor(io.stdout(), 2).length === 1, "served request", 30_000);
+    // Without the latch on this second sink, id 2 answers -32000 — the failure
+    // the first recovery spec cannot see.
+    expect(responsesFor(io.stdout(), 2)[0]?.error).toBeUndefined();
+    expect(io.stderr()).toContain("deferred handshake completed");
+  }, 90_000);
+
+  it("still refuses to adopt an upstream with no handshake baseline (#1805)", async () => {
+    // The mutation that separates "seed only when the handshake was deferred"
+    // from "always seed" — the fail-open the identity check exists to stop.
+    // Reached with `stallInitializes`, never `retireSession`: the fake's
+    // initialize branch is unconditional and re-mints a session, so
+    // `captureNegotiated` would run and the baseline would exist.
+    const fake = await makeSessionServer();
+    child = spawnBridge(fake.port, { TANDEM_REQUEST_TIMEOUT_MS: "500" });
+    const io = collect(child);
+    await new Promise((r) => setTimeout(r, 700));
+
+    fake.stallInitializes(1);
+    child.stdin.write(`${JSON.stringify(INITIALIZE)}\n`);
+    await waitFor(() => responsesFor(io.stdout(), 1).length === 1, "timed-out initialize", 20_000);
+
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+    // Wait on the reconnect's own verdict, not id 2's reply: the short request
+    // timeout answers -32000 before the backoff even fires the replay.
+    await waitFor(() => io.stderr().includes("no handshake baseline"), "refusal", 30_000);
+    expect((responsesFor(io.stdout(), 2)[0]?.error as { code?: number })?.code).toBe(-32000);
+    expect(io.stderr()).not.toContain("deferred handshake completed");
+  }, 60_000);
+
+  it("adopts a version-only change across a reconnect (#1759)", async () => {
+    const fake = await makeSessionServer();
+    child = spawnBridge(fake.port, { TANDEM_REQUEST_TIMEOUT_MS: "4000" });
+    const io = collect(child);
+    await handshake(child, io, fake);
+
+    // A normal Tandem upgrade: same server, new version. Before #1759 this was
+    // byte-for-byte indistinguishable from a foreign process on the port, so
+    // every request after an upgrade failed until the user restarted Claude
+    // Desktop — which never respawns this bridge.
+    fake.setServerInfo({ name: "fake-tandem", version: "9.9.9" });
+    fake.retireSession();
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+
+    await waitFor(() => responsesFor(io.stdout(), 2).length === 1, "healed request", 30_000);
+    const answers = responsesFor(io.stdout(), 2);
+    expect(answers.length).toBe(1);
+    expect(answers[0]?.error).toBeUndefined();
+    expect(io.stderr()).toContain("upstream version changed across re-initialize");
+    expect(io.stderr()).not.toContain("upstream identity changed");
+    expect(child.exitCode).toBeNull();
+  }, 60_000);
+
+  it("adopts a protocol-version change across a reconnect when the server name matches (#1759)", async () => {
+    const fake = await makeSessionServer();
+    child = spawnBridge(fake.port, { TANDEM_REQUEST_TIMEOUT_MS: "4000" });
+    const io = collect(child);
+    await handshake(child, io, fake);
+
+    // The same Tandem after an SDK-bumping upgrade. `protocolVersion` is what
+    // the server's bundled SDK negotiates — the client's requested version
+    // while it is still supported, else the SDK's own LATEST — so it can move
+    // for the very same replayed `initialize`. Comparing it read as "somebody
+    // else grabbed the port" on every backoff tick, forever.
+    fake.setProtocolVersion("2025-03-26");
+    fake.retireSession();
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+
+    await waitFor(() => responsesFor(io.stdout(), 2).length === 1, "healed request", 30_000);
+    const answers = responsesFor(io.stdout(), 2);
+    expect(answers.length).toBe(1);
+    expect(answers[0]?.error).toBeUndefined();
+    expect(io.stderr()).toContain("upstream protocol version changed across re-initialize");
+    expect(io.stderr()).not.toContain("upstream identity changed");
+    expect(child.exitCode).toBeNull();
+  }, 60_000);
+
+  it("still fails closed when only the server name changes (#1759)", async () => {
+    const fake = await makeSessionServer();
+    child = spawnBridge(fake.port, { TANDEM_REQUEST_TIMEOUT_MS: "4000" });
+    const io = collect(child);
+    await handshake(child, io, fake);
+
+    // Version identical, name different: the fail-open the identity check
+    // exists to stop. Loosening the comparison to "both fields moved" would
+    // let this through.
+    fake.setServerInfo({ name: "not-tandem", version: "0.0.0-test" });
+    fake.retireSession();
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
+
+    await waitFor(() => responsesFor(io.stdout(), 2).length === 1, "failure response", 30_000);
+    const answer = responsesFor(io.stdout(), 2)[0];
+    expect((answer?.error as { code?: number })?.code).toBe(-32000);
+    expect(io.stderr()).toContain("upstream identity changed across re-initialize");
+    expect(child.exitCode).toBeNull();
   }, 60_000);
 
   it("fails the reconnect closed when the upstream identity changes", async () => {

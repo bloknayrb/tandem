@@ -53,7 +53,7 @@ const ORIGINAL_PLATFORM = process.platform;
 
 /**
  * The repo's platform-stub idiom (`document-service.test.ts:963-970`,
- * `file-io/doc-backup.test.ts`, `integrations/apply-acl.test.ts`).
+ * `file-io/doc-backup.test.ts`).
  * `vi.stubGlobal("process", …)` does NOT work — imported modules keep the same
  * `process` object. Every stubbed case restores in a `finally`: a leaked
  * `platform: "linux"` would make every LATER win32-gated assertion test the
@@ -273,9 +273,24 @@ describe("suppressNextChange", () => {
     expect(onChanged).toHaveBeenCalledTimes(1);
   });
 
-  it("is a no-op for unwatched paths", () => {
-    // Should not throw
+  it("is a no-op for unwatched paths", async () => {
+    // Not-throwing alone is green whether the counter is path-keyed or global.
+    // Suppress an UNWATCHED path, then fire a real change on a watched one: the
+    // callback must still fire, which is what "no-op" has to mean here.
+    const watcher = createMockWatcher();
+    mockWatch.mockImplementation((_path: string, cb: (eventType: string) => void) => {
+      watcher.changeHandler = cb;
+      return watcher;
+    });
+
+    const onChanged = vi.fn().mockResolvedValue(undefined);
+    watchFile("/tmp/test.md", onChanged);
+
     suppressNextChange("/tmp/nonexistent.md");
+
+    watcher.changeHandler!("change");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(onChanged).toHaveBeenCalledTimes(1);
   });
 
   it("swallows multiple events when suppress is called multiple times", async () => {
@@ -694,6 +709,12 @@ describe("watcher error listeners and handle identity", () => {
 
     handles[0].errorHandler!(new Error("EBADF"));
     expect(watchedCount()).toBe(0);
+    // …and says so (#1662). Unwatching silently made "unwatched" look like
+    // "unchanged": on win32, deleting a watched file's parent directory
+    // throws nothing at `fs.watch` and arrives only as this async `error`.
+    const lost = lostWatchNotifications(file);
+    expect(lost).toHaveLength(1);
+    expect(lost[0].severity).toBe("warning");
   });
 
   it("a stale error from handle #1 (the INITIAL arm) is ignored after a re-arm", async () => {
@@ -714,6 +735,9 @@ describe("watcher error listeners and handle identity", () => {
 
       handles[0].errorHandler!(new Error("EBADF"));
       expect(watchedCount()).toBe(1);
+      expect(lostWatchNotifications(file), "a stale handle's error is silent (#1662)").toHaveLength(
+        0,
+      );
     } finally {
       restorePlatform();
     }
@@ -737,6 +761,9 @@ describe("watcher error listeners and handle identity", () => {
 
       handles[1].errorHandler!(new Error("EBADF"));
       expect(watchedCount()).toBe(1);
+      expect(lostWatchNotifications(file), "a stale handle's error is silent (#1662)").toHaveLength(
+        0,
+      );
     } finally {
       restorePlatform();
     }

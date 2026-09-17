@@ -58,7 +58,7 @@
     {
       "path": "src/server/documents/watcher.ts",
       "unit": "7",
-      "suite": "tests/server/file-watcher.test.ts",
+      "suite": "tests/server/reload-from-disk-persistence.test.ts",
       "minStatements": 82,
       "observed": { "statements": 92.68, "lines": 97.26, "branches": 84.61, "functions": 78.57 },
       "floors": { "statements": 92.5, "lines": 97, "branches": 84.5, "functions": 78.5 }
@@ -74,7 +74,7 @@
     {
       "path": "src/server/annotations/projection.ts",
       "unit": "8",
-      "suite": "tests/server/events/channel-projection-characterization.test.ts",
+      "suite": "tests/server/events/channel-eligible-brand.test.ts",
       "minStatements": 56,
       "observed": { "statements": 82.14, "lines": 81.81, "branches": 72.22, "functions": 100 },
       "floors": { "statements": 82, "lines": 81.5, "branches": 72, "functions": 100 }

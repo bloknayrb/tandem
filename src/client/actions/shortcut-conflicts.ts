@@ -5,9 +5,10 @@
  * The override-first loop in `matchShortcut` wins over the legacy chain, so a
  * remapped chord can silently STEAL whatever a fixed (non-remappable) branch
  * would otherwise do. The protection must therefore know every chord a fixed
- * branch claims — including the loose branches (`find`/`find-nav` ignore Alt,
- * `pick-tab` ignores Alt+Shift, the `?` help branch has no modifier gate at
- * all). Rather than hand-transcribe that gating (which is exactly the drift
+ * branch claims — including the loose branches (`pick-tab` ignores Shift, the
+ * `?` help branch has no modifier gate at all; `find`/`find-nav` gained an alt
+ * gate in #1777, so Ctrl+Alt+F/G are now free rather than claimed). Rather
+ * than hand-transcribe that gating (which is exactly the drift
  * that motivated this fix), `claimedByFixedShortcut` asks the matcher itself:
  * synthesize an event from the chord, run `matchShortcut` with NO overrides,
  * and treat any non-remappable result as a conflict. The matcher is the single

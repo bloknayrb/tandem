@@ -4,7 +4,9 @@ import { TUTORIAL_ANNOTATION_PREFIX, Y_MAP_ANNOTATIONS } from "../../shared/cons
 import { withInternal } from "../../shared/origins.js";
 import type { Annotation, AnnotationType, HighlightColor } from "../../shared/types.js";
 import { toFlatOffset } from "../../shared/types.js";
+import { docHash } from "../annotations/doc-hash.js";
 import { nextRev } from "../annotations/schema.js";
+import { getTombstones } from "../annotations/sync.js";
 import { anchoredRange, describeRangeFailure } from "../positions.js";
 import { extractText } from "./document-model.js";
 
@@ -47,20 +49,52 @@ export const TUTORIAL_ANNOTATIONS: readonly TutorialAnnotationDef[] = [
   },
 ];
 
-/** Idempotent — skips annotations that already exist in the Y.Map. */
-export function injectTutorialAnnotations(doc: Y.Doc): void {
+/**
+ * Idempotent — skips a seed already in the Y.Map, and a seed the user deleted:
+ * an id tombstoned in the ledger for `filePath` is not re-created (#1696). Call
+ * after `wireAnnotationStore`, whose merge seeds that ledger from the envelope —
+ * `map.has` alone reads a merged-away deletion as absence and re-mints it.
+ *
+ * The tombstone check relies on bulk clears (`clearDocMaps` in
+ * `documents/populate.ts`) running with the annotation observer detached, since
+ * the observer tombstones deletes from every origin and would otherwise suppress
+ * every seed a clear removed.
+ *
+ * `replay` is the explicit "bring the seeds back" request (Settings > Replay
+ * tutorial, which opens welcome.md with `force: true`). It re-creates a
+ * tombstoned seed instead of skipping it, minted at a `rev` ABOVE its tombstone
+ * so a later merge reads it as a resurrection rather than deleting it again.
+ *
+ * Returns how many TOMBSTONED seeds it re-created. The write is `withInternal`
+ * (`DURABLE_SKIP`), so nothing queues the resurrection to disk, and the
+ * envelope keeps the tombstone as the newest record for that id. The only other
+ * carrier is the session file, which a changed source file or session expiry
+ * discards; a reopen after that deleted the replayed seeds again. So a caller
+ * that gets a non-zero count must persist a snapshot (`persistEnvelopeNow`)
+ * for the replay to outlive the session.
+ */
+export function injectTutorialAnnotations(
+  doc: Y.Doc,
+  filePath: string,
+  options?: { replay?: boolean },
+): number {
   const map = doc.getMap(Y_MAP_ANNOTATIONS);
 
   const fullText = extractText(doc);
   if (!fullText) {
     console.error("[tutorial] Y.Doc has no text content — cannot inject tutorial annotations");
-    return;
+    return 0;
   }
 
+  const deleted = new Map(getTombstones(docHash(filePath)).map((t) => [t.id, t]));
+  const replay = options?.replay === true;
+
   let injected = 0;
+  let resurrected = 0;
   withInternal(doc, () => {
     for (const def of TUTORIAL_ANNOTATIONS) {
-      if (map.has(def.id)) continue;
+      const tombstone = deleted.get(def.id);
+      if (map.has(def.id) || (tombstone !== undefined && !replay)) continue;
       const idx = fullText.indexOf(def.targetText);
       if (idx === -1) {
         console.error(`[tutorial] Target text "${def.targetText}" not found — skipping ${def.id}`);
@@ -119,17 +153,19 @@ export function injectTutorialAnnotations(doc: Y.Doc): void {
         status: "pending" as const,
         timestamp: Date.now(),
         textSnapshot: def.targetText,
-        rev: nextRev(),
+        rev: nextRev(tombstone),
         ...(def.color !== undefined ? { color: def.color } : {}),
         ...(def.suggestedText !== undefined ? { suggestedText: def.suggestedText } : {}),
       } as Annotation;
 
       map.set(def.id, annotation);
       injected++;
+      if (tombstone !== undefined) resurrected++;
     }
   });
 
   console.error(
     `[tutorial] Injected ${injected}/${TUTORIAL_ANNOTATIONS.length} tutorial annotations`,
   );
+  return resurrected;
 }

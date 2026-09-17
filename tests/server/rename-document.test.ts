@@ -12,8 +12,8 @@ import { withBrowser, withInternal } from "../../src/shared/origins.js";
 
 // Mock the session manager — saveSession/deleteSession touch disk for the
 // .tandem session sidecar, which is orthogonal to what these tests exercise.
-vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/session/manager.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     saveSession: vi.fn().mockResolvedValue(undefined),
@@ -25,8 +25,8 @@ vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
 // Mock the file watcher — real fs.watch on temp files leaks handles and races
 // the rename's own delete/create events. The rename logic only needs these to
 // be callable; their fs side effects are not under test.
-vi.mock("../../src/server/file-watcher.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/file-watcher.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     watchFile: vi.fn(),
@@ -36,11 +36,27 @@ vi.mock("../../src/server/file-watcher.js", async (importOriginal) => {
 });
 
 // Mock notifications — the error path calls pushNotification; assert via the spy.
-vi.mock("../../src/server/notifications.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+vi.mock(import("../../src/server/notifications.js"), async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     pushNotification: vi.fn(),
+  };
+});
+
+// #1816: lets one test force `assertPathSafe`'s PATH_REJECTED catch without a
+// real symlink (unusable on Windows without elevation). Delegates to the real
+// implementation whenever `pathSafeThrows` is unset (every other test in this
+// file), so this mock is otherwise a no-op passthrough.
+let pathSafeThrows: Error | null = null;
+vi.mock(import("../../src/server/integrations/apply.js"), async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/server/integrations/apply.js")>();
+  return {
+    ...actual,
+    assertPathSafe: (targetPath: string, opts?: { allowedRoots?: string[] }) => {
+      if (pathSafeThrows) throw pathSafeThrows;
+      return actual.assertPathSafe(targetPath, opts);
+    },
   };
 });
 
@@ -87,6 +103,7 @@ beforeEach(async () => {
   storeReset();
   syncReset();
   queueReset();
+  pathSafeThrows = null;
 });
 
 afterEach(async () => {
@@ -607,6 +624,42 @@ describe("renameDocument — fs.rename failure rollback (Phase 2)", () => {
     expect(envelope.annotations.map((a) => a.id)).toContain("post-rollback");
   });
 
+  // #1816: a failed `fs.rename`'s message embeds BOTH absolute paths (old and
+  // new), and `routes/rename.ts` echoes `result.reason` verbatim to a loopback
+  // caller — i.e. every desktop user. `reason` must be plain language with no
+  // path and no raw errno text; `errorCode` (ENOENT here) is what still
+  // travels for a details suffix.
+  it("returns a plain-language reason with no path or raw errno text (#1816)", async () => {
+    const { docId, filePath } = await openFileDoc("rollback-copy.md", "body content");
+    await fsReal.rm(filePath);
+
+    const result = await renameDocument(docId, "rollback-copy-renamed.md");
+
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("ENOENT");
+    expect(result.reason).not.toContain(filePath);
+    expect(result.reason).not.toContain("ENOENT");
+    expect(result.reason).toBe("The document could not be renamed.");
+  });
+
+  // #1816: `assertPathSafe`'s thrown message embeds the absolute path it
+  // rejected ("Refusing to operate on symlinked path: <abs>"), and
+  // `routes/rename.ts` echoes `result.reason` verbatim to a loopback caller.
+  // Forced via the module mock rather than a real symlink (unusable on
+  // Windows without elevation).
+  it("returns a plain-language reason with no path text on a rejected destination (#1816)", async () => {
+    const { docId } = await openFileDoc("path-rejected.md", "body content");
+    pathSafeThrows = new Error("Refusing to operate on symlinked path: /abs/target.md");
+
+    const result = await renameDocument(docId, "path-rejected-renamed.md");
+
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("PATH_REJECTED");
+    expect(result.reason).toBe("The destination path was rejected.");
+    expect(result.reason).not.toContain("Refusing");
+    expect(result.reason).not.toContain("/abs/target.md");
+  });
+
   // #1040 rollback regression: on rollback oldHash === the still-registered
   // context's hash. The rollback re-wire's loadAndMerge re-seeds the oldHash
   // tombstone ledger (UNION + tombstonesByDoc.set), and WITHOUT a pre-wire
@@ -901,9 +954,17 @@ describe("renameDocument — note privacy (ADR-027)", () => {
     // ADR-027 surface 2: Claude must see zero annotations here.
     const store = getDocumentStore(docId);
     expect(store).not.toBeNull();
-    const claudeVisible = store!.listAnnotationsRefreshed().filter((a) => a.type !== "note");
+    const claudeVisible = store!
+      .listAnnotationsRefreshed()
+      .map((r) => r.annotation)
+      .filter((a) => a.type !== "note");
     expect(claudeVisible).toHaveLength(0);
-    expect(store!.listAnnotationsRefreshed().some((a) => a.id === "note-1")).toBe(true);
+    expect(
+      store!
+        .listAnnotationsRefreshed()
+        .map((r) => r.annotation)
+        .some((a) => a.id === "note-1"),
+    ).toBe(true);
   });
 
   it("a withFileSync merge via open/reload re-wire that mutates a live note emits no channel event and stays hidden from Claude", async () => {
@@ -975,10 +1036,18 @@ describe("renameDocument — note privacy (ADR-027)", () => {
     // (getDocumentStore reflects the re-wired context registered above.)
     const store = getDocumentStore(docId);
     expect(store).not.toBeNull();
-    const claudeVisible = store!.listAnnotationsRefreshed().filter((a) => a.type !== "note");
+    const claudeVisible = store!
+      .listAnnotationsRefreshed()
+      .map((r) => r.annotation)
+      .filter((a) => a.type !== "note");
     expect(claudeVisible).toHaveLength(0);
     // And the note is still present in the doc (private, not deleted).
-    expect(store!.listAnnotationsRefreshed().some((a) => a.id === "note-1")).toBe(true);
+    expect(
+      store!
+        .listAnnotationsRefreshed()
+        .map((r) => r.annotation)
+        .some((a) => a.id === "note-1"),
+    ).toBe(true);
   });
 });
 

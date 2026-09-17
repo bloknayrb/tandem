@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // `runSetup({ apply: true })` orchestrates the non-interactive write path
@@ -10,15 +13,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // file-wide, and `setup.test.ts` deliberately exercises the REAL apply.js
 // helpers (buildMcpEntries/applyConfig/detectTargets/installSkill suites).
 // Mocking apply.js there would gut that coverage.
-vi.mock("../../src/server/integrations/apply.js", async (importActual) => {
+vi.mock(import("../../src/server/integrations/apply.js"), async (importActual) => {
   const actual = await importActual<typeof import("../../src/server/integrations/apply.js")>();
   return {
     ...actual,
     detectTargets: vi.fn(),
     applyConfig: vi.fn(),
     installSkill: vi.fn(),
-    buildMcpEntries: vi.fn(() => ({})),
-    applyOpsForCli: vi.fn(() => ({})),
+    // Widened to a real `McpEntries`, and deliberately NOT asserted through
+    // `unknown`: the typed `vi.mock(import(...))` overload checks this factory
+    // against `Partial<T>`, and a cast here would void exactly the check the
+    // conversion buys (review round 1). The bare `{}` it replaces was a stale
+    // double -- production returns `{ tandem: McpEntry }` -- preserved by the
+    // cast rather than fixed. The return type is taken from the production
+    // signature so a change to `McpEntries` lands here as an error.
+    buildMcpEntries: vi.fn(
+      (): ReturnType<typeof actual.buildMcpEntries> => ({
+        tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" },
+      }),
+    ),
+    // `ApplyOps` is `{ create: McpEntries; remove: RemovableEntry[] }`; the
+    // bare `{}` double predates the typed mock overload and matched nothing.
+    applyOpsForCli: vi.fn(() => ({
+      create: {},
+      remove: [],
+    })) as unknown as typeof actual.applyOpsForCli,
     // `resolveChannelShimIntent`, not `resolveChannelShimIntent` — `setup`
     // moved to the former so an omitted flag preserves rather than deletes.
     // Left unmocked it does a REAL config read against these fake paths,
@@ -29,18 +48,46 @@ vi.mock("../../src/server/integrations/apply.js", async (importActual) => {
   };
 });
 
+// `getTokenFilePath()` resolves through `envPaths`, which this file's
+// `vi.stubEnv("HOME"/"USERPROFILE")` does NOT redirect on Windows — so without
+// this mock the token cases below would read the developer's (or the CI
+// runner's) real token file and pass or fail by machine. Precedent:
+// tests/cli/rotate-token.test.ts.
+const { _readTokenFromFile } = vi.hoisted(() => ({
+  _readTokenFromFile: vi.fn(async (): Promise<string | null> => null),
+}));
+vi.mock(import("../../src/shared/auth/token-file.js"), () => ({
+  readTokenFromFile: _readTokenFromFile,
+  getTokenFilePath: vi.fn(() => "/tmp/tandem-auth-token"),
+}));
+
 import { runSetup } from "../../src/cli/setup.js";
 import {
   applyConfig,
+  buildMcpEntries,
+  ConfigRefusalError,
   type DetectedTarget,
   detectTargets,
   installSkill,
+  PathRejectedError,
   resolveChannelShimIntent,
 } from "../../src/server/integrations/apply.js";
+import {
+  ERROR_CODE_CONFIG_MALFORMED,
+  ERROR_CODE_CONFIG_TOO_LARGE,
+} from "../../src/shared/integrations/contract.js";
 
 const CLAUDE_CODE: DetectedTarget = {
   label: "Claude Code",
   configPath: "/home/u/.claude.json",
+  kind: "claude-code",
+};
+// A second push-capable target. `writeTargets` gates the push-status credit on
+// `targetPushSupport`, so a spec about write ORDERING needs two targets the
+// gate lets through — otherwise it passes for the wrong reason.
+const CLAUDE_CODE_PROJECT: DetectedTarget = {
+  label: "Claude Code (project)",
+  configPath: "/home/u/proj/.mcp.json",
   kind: "claude-code",
 };
 const CLAUDE_DESKTOP: DetectedTarget = {
@@ -51,19 +98,36 @@ const CLAUDE_DESKTOP: DetectedTarget = {
 
 describe("runSetup({ apply: true }) orchestration", () => {
   let errSpy: ReturnType<typeof vi.spyOn>;
+  let home: string;
   const stderr = () => errSpy.mock.calls.map((c: unknown[]) => String(c[0] ?? "")).join("\n");
 
   beforeEach(() => {
+    // REQUIRED, not optional (#1811): this file mocks only apply.js, so
+    // `detectEnabledTandemPluginKey` would otherwise read the operator's real
+    // ~/.claude/settings.json in every --apply spec here and the negative spec
+    // would pass or fail by machine. Both env vars — `homedir()` reads
+    // USERPROFILE on Windows.
+    home = mkdtempSync(join(tmpdir(), "tandem-setup-apply-"));
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
     errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(detectTargets).mockReset();
     vi.mocked(applyConfig).mockReset();
-    vi.mocked(installSkill).mockReset().mockResolvedValue(undefined);
+    vi.mocked(installSkill).mockReset().mockResolvedValue({ written: true });
     vi.mocked(resolveChannelShimIntent).mockReset().mockResolvedValue(false);
   });
   afterEach(() => {
     errSpy.mockRestore();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    rmSync(home, { recursive: true, force: true });
   });
+
+  /** Write `~/.claude/settings.json` into the scratch home. */
+  const writeEnabledPlugins = (enabledPlugins: Record<string, unknown>) => {
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ enabledPlugins }));
+  };
 
   it("writes config for a detected target and reports success (no exit)", async () => {
     vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
@@ -83,6 +147,25 @@ describe("runSetup({ apply: true }) orchestration", () => {
     expect(out).toContain("Setup complete");
   });
 
+  it("passes an explicit false through to the resolver (--without-channel-shim)", async () => {
+    // `undefined` and `false` mean opposite things to `resolveChannelShimIntent`
+    // — preserve vs remove (#1760) — so the option has to arrive intact rather
+    // than being coerced anywhere on the way down.
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockResolvedValue(undefined);
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await runSetup({ apply: true, withChannelShim: false });
+
+    expect(resolveChannelShimIntent).toHaveBeenCalledWith(
+      "claude-code",
+      CLAUDE_CODE.configPath,
+      false,
+    );
+  });
+
   it("exits 1 when every target write fails (after installing the skill)", async () => {
     vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
     vi.mocked(applyConfig).mockRejectedValue(new Error("EACCES"));
@@ -97,6 +180,249 @@ describe("runSetup({ apply: true }) orchestration", () => {
     expect(installSkill).toHaveBeenCalledTimes(1);
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(stderr()).toContain("Setup failed");
+  });
+
+  it("does not tell the user to check permissions when the config was REFUSED", async () => {
+    // #1802 made a malformed/oversize config throw `ConfigRefusalError` out of
+    // `applyConfig` rather than replacing the file. That lands in the same
+    // all-failed branch as an EACCES, whose remedy — "Check file permissions" —
+    // is a dead end for a file whose permissions are fine. `doctor` and the
+    // wizard both name the real remedy; this is the third surface.
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockRejectedValue(
+      new ConfigRefusalError(
+        ERROR_CODE_CONFIG_MALFORMED,
+        "/home/u/.claude.json is not valid JSON — refusing to rewrite it",
+      ),
+    );
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await expect(runSetup({ apply: true })).rejects.toThrow("process.exit called");
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const out = stderr();
+    expect(out).toContain("Setup failed");
+    expect(out).toContain("refused to rewrite");
+    expect(out).not.toContain("Check file permissions");
+  });
+
+  it("does not prescribe a JSON fix when the refusal was CONFIG_TOO_LARGE", async () => {
+    // Round-2 review of #1801/#1802. `ConfigRefusalError` covers two conditions
+    // with nothing in common but the decision to leave the file alone, and a
+    // count-only branch printed the malformed remedy for both: the user whose
+    // `~/.claude.json` outgrew the cap — the routinely-multi-megabyte
+    // population #1801 exists for — was told to fix JSON that parses perfectly
+    // and to restore a backup they have no reason to have, then to re-run the
+    // identical command. The wizard already branches on `err.reason`.
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockRejectedValue(
+      new ConfigRefusalError(
+        ERROR_CODE_CONFIG_TOO_LARGE,
+        "/home/u/.claude.json is 20000000 bytes; refusing to read (cap: 16777216).",
+      ),
+    );
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await expect(runSetup({ apply: true })).rejects.toThrow("process.exit called");
+
+    const out = stderr();
+    expect(out).toContain("refused to rewrite");
+    expect(out).toContain("larger than Tandem will rewrite safely");
+    // The malformed remedy's own words — "Fix the JSON" no longer appears in
+    // either branch, so asserting its absence would pass whatever the summary
+    // said.
+    expect(out).not.toContain("must be a JSON object");
+    expect(out).not.toContain("restore the file from a");
+    expect(out).not.toContain("Check file permissions");
+  });
+
+  it("still says check permissions when the failure was an I/O error", async () => {
+    // The other direction: the refusal wording must not swallow the case it was
+    // carved out of.
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockRejectedValue(new Error("EACCES"));
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await expect(runSetup({ apply: true })).rejects.toThrow("process.exit called");
+
+    expect(stderr()).toContain("Check file permissions");
+  });
+
+  // ── #1823 item 9 ─────────────────────────────────────────────────────────
+  // `assertPathSafe` throws `PathRejectedError`, which is NOT a
+  // `ConfigRefusalError`, so a symlinked `~/.claude.json` failed the
+  // single-class equality and fell through to "Check file permissions" — the
+  // same dead end #1802 removed for the other two classes, on a file whose
+  // permissions are fine.
+  it("names a symlink refusal instead of sending the user to check permissions", async () => {
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockRejectedValue(
+      new PathRejectedError("/home/u/.claude.json", "symlink", "refusing to follow a symlink"),
+    );
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await expect(runSetup({ apply: true })).rejects.toThrow("process.exit called");
+
+    const out = stderr();
+    expect(out).toContain("refused the config path");
+    expect(out).toContain("symlink");
+    expect(out).toContain("replace the symlink with a real file");
+    expect(out).not.toContain("Check file permissions");
+  });
+
+  // Review round 1: naming the reason and then printing ONE hardcoded symlink
+  // remedy underneath it merely relocates the dead end — a redirected
+  // `%APPDATA%` (outside-home) or a UNC `%USERPROFILE%` (#1417) was told to
+  // replace a symlink that does not exist. `assertPathSafe` reaches three of
+  // the four reasons, so each needs its own remedy.
+  it("names the outside-home remedy, not a symlink the user does not have", async () => {
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockRejectedValue(
+      new PathRejectedError("/home/u/.claude.json", "outside-home", "Refusing path outside roots"),
+    );
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await expect(runSetup({ apply: true })).rejects.toThrow("process.exit called");
+
+    const out = stderr();
+    expect(out).toContain("outside-home");
+    expect(out).toContain("resolves outside your home");
+    expect(out).not.toContain("replace the symlink");
+    expect(out).not.toContain("Check file permissions");
+  });
+
+  it("names the UNC remedy and says --force will not help", async () => {
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockRejectedValue(
+      new PathRejectedError("//server/share/.claude.json", "unc", "UNC path"),
+    );
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await expect(runSetup({ apply: true })).rejects.toThrow("process.exit called");
+
+    const out = stderr();
+    expect(out).toContain("unc");
+    expect(out).toContain("--force will not help");
+    expect(out).not.toContain("replace the symlink");
+  });
+
+  it("avoids the dead end on a MIXED all-failed run (refusal + path rejection)", async () => {
+    // Why the branch tests the UNION rather than adding a third single-class
+    // arm: one malformed file plus one symlinked file is 1 + 1 = 2, and both
+    // single-class equalities miss it.
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_CODE_PROJECT]);
+    vi.mocked(applyConfig)
+      .mockRejectedValueOnce(
+        new ConfigRefusalError(ERROR_CODE_CONFIG_MALFORMED, "is not valid JSON — refusing"),
+      )
+      .mockRejectedValueOnce(
+        new PathRejectedError("/home/u/proj/.mcp.json", "symlink", "refusing to follow a symlink"),
+      );
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await expect(runSetup({ apply: true })).rejects.toThrow("process.exit called");
+
+    const out = stderr();
+    expect(out).not.toContain("Check file permissions");
+    expect(out).toContain("refused to rewrite");
+    expect(out).toContain("refused the config path");
+  });
+
+  // ── #1823 item 10 ────────────────────────────────────────────────────────
+  describe("auth token threading", () => {
+    const noExit = () =>
+      vi.spyOn(process, "exit").mockImplementation((() => {
+        throw new Error("process.exit called");
+      }) as never);
+    // `buildMcpEntries` is the one mock this file's `beforeEach` never resets
+    // (it is created in the hoisted factory), so each case clears it and reads
+    // the LAST call.
+    const lastOpts = () =>
+      vi.mocked(buildMcpEntries).mock.calls.at(-1)?.[1] as { token?: string } | undefined;
+
+    it("threads the token file's token into the written entries", async () => {
+      _readTokenFromFile.mockResolvedValue("tok_from_file");
+      vi.mocked(buildMcpEntries).mockClear();
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      noExit();
+
+      await runSetup({ apply: true });
+
+      expect(lastOpts()?.token).toBe("tok_from_file");
+    });
+
+    it("passes no token when there is no token file (unchanged behaviour)", async () => {
+      _readTokenFromFile.mockResolvedValue(null);
+      vi.mocked(buildMcpEntries).mockClear();
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      noExit();
+
+      await runSetup({ apply: true });
+
+      expect(lastOpts()?.token).toBeUndefined();
+    });
+
+    it("refuses to write an env-sourced token (Tauri / plugin host)", async () => {
+      // The same refusal `rotate-token.ts` encodes. Env wins at runtime, so
+      // writing the FILE's token would put a superseded header on disk that
+      // nothing later heals.
+      _readTokenFromFile.mockResolvedValue("tok_from_file");
+      vi.stubEnv("TANDEM_AUTH_TOKEN", "tok_from_env");
+      vi.mocked(buildMcpEntries).mockClear();
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      noExit();
+
+      await runSetup({ apply: true });
+
+      expect(lastOpts()?.token).toBeUndefined();
+    });
+
+    // Review round 1. `readTokenFromFile` answers null only for ENOENT and
+    // rethrows every other errno; the read sits above the per-target `try` and
+    // nothing up to `src/cli/index.ts` wraps it, so an unreadable token file
+    // aborted the whole command having written NOTHING. The header is bounded
+    // to off-loopback clients, so an unusable file must degrade exactly as an
+    // absent one does.
+    it("writes every config when the token file is unreadable", async () => {
+      // `Once`: the hoisted mock survives `restoreAllMocks`, so a persistent
+      // rejection would leak its warning line into every later spec.
+      _readTokenFromFile.mockRejectedValueOnce(
+        Object.assign(new Error("EACCES: permission denied, open '/x/auth-token'"), {
+          code: "EACCES",
+        }),
+      );
+      vi.mocked(buildMcpEntries).mockClear();
+      vi.mocked(applyConfig).mockClear();
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      const exit = noExit();
+
+      await runSetup({ apply: true });
+
+      expect(vi.mocked(applyConfig)).toHaveBeenCalledTimes(1);
+      expect(lastOpts()?.token).toBeUndefined();
+      expect(exit).not.toHaveBeenCalled();
+      const out = stderr();
+      expect(out).toContain("Could not read the auth token file");
+      expect(out).toContain("Setup complete!");
+    });
   });
 
   it("partial failure (some targets succeed, some fail) does not exit", async () => {
@@ -146,6 +472,79 @@ describe("runSetup({ apply: true }) orchestration", () => {
 
     expect(applyConfig).toHaveBeenCalledTimes(1);
     expect(applyConfig).toHaveBeenCalledWith(CLAUDE_CODE.configPath, expect.anything());
+  });
+
+  it("prints the kept-skill line when installSkill declined to downgrade (#1790)", async () => {
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+    vi.mocked(applyConfig).mockResolvedValue(undefined);
+    vi.mocked(installSkill).mockResolvedValue({
+      written: false,
+      onDiskVersion: 999,
+      bundledVersion: 15,
+    });
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await runSetup({ apply: true });
+
+    const out = stderr();
+    // Kills a caller that dereferences the result unguarded, and pins the
+    // remedy: DELETE the file. No Tandem version moves a `version: 999` file,
+    // so "upgrade Tandem" would be a dead-end fix line.
+    expect(out).toContain("kept the installed skill");
+    expect(out).toContain("v999");
+    expect(out).toContain("delete ~/.claude/skills/tandem/SKILL.md");
+    expect(out).not.toContain("✓ ~/.claude/skills/tandem/SKILL.md");
+  });
+
+  // #1811 — `setup --apply` is the command that CREATES the duplicated
+  // tandem_* toolset, and it was the one surface that never mentioned it.
+  describe("plugin duplication notice", () => {
+    const noExit = () =>
+      vi.spyOn(process, "exit").mockImplementation((() => {
+        throw new Error("process.exit called");
+      }) as never);
+
+    it("warns when the plugin is installed, and still writes the config", async () => {
+      writeEnabledPlugins({ "tandem@tandem-editor": true });
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      noExit();
+
+      await runSetup({ apply: true });
+
+      expect(stderr()).toContain("plugin uninstall tandem@tandem-editor");
+      // The discriminating half: warn, do not skip. `--apply`'s contract is
+      // "write the config", and skipping would strand a user who later
+      // disables the plugin with no output saying why.
+      expect(applyConfig).toHaveBeenCalledTimes(1);
+    });
+
+    it("says nothing when no settings file exists", async () => {
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      noExit();
+
+      await runSetup({ apply: true });
+
+      expect(stderr()).not.toContain("plugin uninstall");
+    });
+
+    it("says nothing on a Claude Desktop-only run", async () => {
+      // The plugin is a Claude Code plugin: a desktop-only --apply writes no
+      // Claude Code entry and duplicates nothing, so the notice there would be
+      // a false statement prescribing the uninstall of a working plugin.
+      writeEnabledPlugins({ "tandem@tandem-editor": true });
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_DESKTOP]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      noExit();
+
+      await runSetup({ apply: true, targets: ["claude-desktop"] });
+
+      expect(stderr()).not.toContain("plugin uninstall");
+      expect(applyConfig).toHaveBeenCalledTimes(1);
+    });
   });
 
   /**
@@ -206,8 +605,13 @@ describe("runSetup({ apply: true }) orchestration", () => {
       //
       // Two targets, both eligible, one write failing — a single failing target
       // would take the all-failed exit path and never reach the report at all.
+      //
+      // BOTH must be push-capable (#1760). With Claude Desktop as the second
+      // target the `writeShim` gate excludes it before the write outcome is
+      // known, so the spec would pass without ever exercising the ordering it
+      // exists for.
       vi.mocked(resolveChannelShimIntent).mockResolvedValue(true);
-      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_DESKTOP]);
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_CODE_PROJECT]);
       vi.mocked(applyConfig)
         .mockResolvedValueOnce(undefined)
         .mockRejectedValueOnce(new Error("EACCES"));
@@ -215,8 +619,30 @@ describe("runSetup({ apply: true }) orchestration", () => {
 
       await runSetup({ apply: true });
 
-      // Scope to the status line — "Claude Desktop" legitimately appears
+      // Scope to the status line — the failing label legitimately appears
       // elsewhere in the output (the "Found:" list, and its own ✗ failure line).
+      const line = plain()
+        .split("\n")
+        .find((l: string) => l.includes("Registered for:"));
+      expect(line).toBeDefined();
+      expect(line).toContain("Claude Code");
+      expect(line).not.toContain("Claude Code (project)");
+    });
+
+    it("does not credit a no-push target whose entry was merely preserved", async () => {
+      // The gate the re-point above vacates. `resolveChannelShimIntent` now
+      // answers `true` for a Claude Desktop config that already holds a
+      // hand-registered entry, but nothing was written there and the kind
+      // cannot deliver — so crediting it re-arms #1299's false "Registered for:
+      // Claude Desktop". `shimRegisteredFor.push` is gated on `writeShim`, not
+      // on `preserveShim`, and this is the only spec that can see it.
+      vi.mocked(resolveChannelShimIntent).mockResolvedValue(true);
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_DESKTOP]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      noExit();
+
+      await runSetup({ apply: true });
+
       const line = plain()
         .split("\n")
         .find((l: string) => l.includes("Registered for:"));

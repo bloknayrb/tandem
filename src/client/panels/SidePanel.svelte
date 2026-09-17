@@ -184,7 +184,10 @@ let filterType = $state<FilterType>("all");
 let filterAuthor = $state<FilterAuthor>("all");
 let filterStatus = $state<FilterStatus>("all");
 let filterBarOpen = $state(false);
-let bulkConfirm = $state<"accept" | "dismiss" | null>(null);
+// Armed state for the bulk Accept/Reject confirm. Read through the `bulkConfirm`
+// derived below, never directly — the derived is what masks a stale arm while
+// the bar is unmounted (the #1444 shape, see there).
+let bulkConfirmRequested = $state<"accept" | "dismiss" | null>(null);
 
 // Scroll container ref
 let scrollContainerEl: HTMLDivElement | undefined = $state();
@@ -214,18 +217,44 @@ $effect(() => {
   if (bulkConfirm) confirmBtnEl?.focus();
 });
 
-// Reset bulk confirm when filters change
+// Reset bulk confirm when the filters or the document change.
+//
+// The documentId read is load-bearing (#1772): SidePanel is mounted once with a
+// display toggle and no {#key documentId}, so without it an armed "Accept all /
+// Reject all" survives a tab switch and handleBulk then resolves whichever
+// document is active at confirm time. Key it on documentId ONLY — never on
+// `annotations` or its array identity, which App.svelte recomputes on every
+// store change and would silently cancel the user's armed confirm each time
+// Claude posts a comment on the document they are reviewing.
 $effect(() => {
   // read filter state to establish reactivity
   void filterType;
   void filterAuthor;
   void filterStatus;
-  bulkConfirm = null;
+  void documentId;
+  bulkConfirmRequested = null;
 });
 
 // Notify parent of filter changes (enables filter-aware annotation counts in OutlinePanel)
 $effect(() => {
   onFilterChange?.(filterType, filterAuthor, filterStatus);
+});
+
+// #1824 item G: filters silently persisted across a document switch — SidePanel
+// is mounted once (same display-toggle shape as the bulk-confirm effect
+// above), so switching tabs while "Comments only" is active hid every
+// annotation in the newly-active document with no visible reason. A SECOND,
+// INDEPENDENT effect, deliberately not folded into the reset-bulk-confirm
+// effect above: that one reads all three filter values as its own dependency
+// (#1772, so an armed bulk confirm clears on a filter change too), and
+// writing the filters from inside it would make it self-dependent —
+// every write re-triggers the same effect, and the filter bar becomes
+// permanently unsettable. This effect reads ONLY documentId.
+$effect(() => {
+  void documentId;
+  filterType = "all";
+  filterAuthor = "all";
+  filterStatus = "all";
 });
 
 // Replies: observe Y.Map(annotationReplies)
@@ -297,6 +326,32 @@ const filteredData = $derived.by(() => {
   const reviewAllPending = annotations.filter(isPendingReviewTarget);
 
   return { filtered, pending, reviewPending, resolved, allPending, reviewAllPending };
+});
+
+// The structural backstop for the armed bulk confirm, mirroring promoteConfirm's
+// `size > 0` term (#1444). BulkActions renders nothing below two pending review
+// targets, so an arm can outlive its own bar: arm "Accept All (2)", let Claude
+// resolve one, and the row unmounts with the flag still set — then the next
+// comment re-mounts the bar straight into the confirm branch, `bind:confirmRef`
+// re-binds, the focus effect fires and Enter is parked on "accept every pending
+// annotation" nobody asked for. This term MASKS that; the effect below is what
+// resets it. Both are needed — user effects flush after the render effects, so
+// without the mask the bar gets one frame in the confirm branch, which is a
+// frame in which the focus effect above can fire. The threshold is the same
+// count as the {#if} in BulkActions.svelte.
+const bulkConfirm = $derived(filteredData.reviewPending.length > 1 ? bulkConfirmRequested : null);
+
+// ...and the reset the mask is a backstop for. Masking alone would only hide the
+// flag while the bar is down: cross back over the threshold and it returns,
+// re-mounting into the confirm branch with nothing armed. The second reset site,
+// alongside the documentId/filter effect above.
+//
+// Reading `reviewPending.length` here does NOT make this an annotations-keyed
+// reset — the write is on the <= 1 branch only, which is precisely where there
+// is no bar to keep armed. An arriving comment moves the length from 2 to 3 and
+// this effect writes nothing, so the armed confirm survives it (#1772).
+$effect(() => {
+  if (filteredData.reviewPending.length <= 1) bulkConfirmRequested = null;
 });
 
 const agentLabel = createAgentLabel();
@@ -505,7 +560,7 @@ $effect(() => subscribeAnnotationActions());
 
 function handleBulk(status: "accepted" | "dismissed") {
   for (const ann of filteredData.reviewPending) review.resolveAnnotation(ann.id, status);
-  bulkConfirm = null;
+  bulkConfirmRequested = null;
 }
 
 // Batch-promote selection for imported notes (W8). Set lives in SidePanel
@@ -698,6 +753,7 @@ function handleRailBackgroundClick(e: MouseEvent) {
         </button>
         <button
           data-testid="filter-bar-toggle"
+          aria-expanded={filterBarOpen}
           onclick={() => (filterBarOpen = !filterBarOpen)}
           style="display: flex; align-items: center; gap: 4px; background: none; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-pill); padding: 3px 10px; font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle); cursor: pointer; white-space: nowrap;"
         >
@@ -752,9 +808,9 @@ function handleRailBackgroundClick(e: MouseEvent) {
     bind:confirmRef={confirmBtnEl}
     onConfirmAccept={() => handleBulk("accepted")}
     onConfirmDismiss={() => handleBulk("dismissed")}
-    onCancel={() => (bulkConfirm = null)}
-    onRequestAccept={() => (bulkConfirm = "accept")}
-    onRequestDismiss={() => (bulkConfirm = "dismiss")}
+    onCancel={() => (bulkConfirmRequested = null)}
+    onRequestAccept={() => (bulkConfirmRequested = "accept")}
+    onRequestDismiss={() => (bulkConfirmRequested = "dismiss")}
     {reduceMotion}
   />
 
@@ -800,6 +856,7 @@ function handleRailBackgroundClick(e: MouseEvent) {
           onSendToClaude={canSendToClaude(ann) ? handleSendToClaude : undefined}
           onEdit={canEdit(ann) ? handleEdit : undefined}
           onReply={canReply(ann) ? handleReply : undefined}
+          onAcceptReplySuggestion={canAccept(ann) ? review.acceptReplySuggestion : undefined}
           openRequest={cardOpenRequest?.id === ann.id ? cardOpenRequest : null}
           onClick={() => review.scrollToAnnotation(ann)}
           selected={selectedImportIds.has(ann.id)}

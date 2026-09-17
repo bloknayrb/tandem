@@ -14,11 +14,12 @@ import {
   CTRL_ROOM,
   MODE_RELEASE_WAKE_ID_PREFIX,
 } from "../../shared/constants.js";
+import { makeHeldInSoloStampObserver } from "../annotations/held-in-solo.js";
 import {
   resetForTesting as dirtyResetForTesting,
   registerDirtyObserver,
 } from "../documents/dirty.js";
-import { readModeState } from "../mode.js";
+import { installModeProvenanceObserver, readModeState } from "../mode.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import {
   isUnansweredAsk,
@@ -30,6 +31,7 @@ import {
 import {
   clearFileSyncContext,
   resetForTesting as fileSyncResetForTesting,
+  getFileSyncContext,
   reattachFileSyncObserver,
   setFileSyncContext,
 } from "./file-sync-registry.js";
@@ -41,7 +43,7 @@ import { makeRepliesObserver } from "./observers/replies.js";
 import type { BufferedSelection, TandemEvent } from "./types.js";
 import { generateEventId } from "./types.js";
 
-export { clearFileSyncContext, setFileSyncContext };
+export { clearFileSyncContext, getFileSyncContext, setFileSyncContext };
 
 type EventCallback = (event: TandemEvent) => void;
 
@@ -173,11 +175,11 @@ function trackPayloadId(event: TandemEvent): boolean {
  * longer know", so the deliver-everything branch is the one branch it must
  * never take.
  *
- * Read LIVE, per delivery — never stamped at push time. The Solo→Tandem release
- * flips mode and then emits the wake, so a stamped value would swallow it. That
- * ordering is also why fail-closed is safe here: the release route writes
- * "tandem" into CTRL_ROOM before it calls `emitModeReleaseWake`, so mode reads
- * `"tandem"` — not indeterminate — at the moment the wake is delivered.
+ * Read LIVE, per delivery — never stamped at push time. That is also why
+ * fail-closed is safe here: since #1769 the release route VERIFIES the room
+ * reads "tandem" (409 otherwise) and does so in the same synchronous frame as
+ * `emitModeReleaseWake` — no `await` between them — so mode reads `"tandem"`,
+ * not indeterminate, at the moment the wake is delivered.
  */
 function shouldForwardExternally(event: TandemEvent): boolean {
   // Chat is the always-delivered channel in both directions, and it is also the
@@ -233,8 +235,11 @@ function pushEvent(event: TandemEvent): void {
   // lost/corrupt on restart, or before the client's first ctrl broadcast) fails
   // CLOSED here. That is strictly STRICTER than `mode.ts#hideFromAI`, which in
   // indeterminate withholds only records carrying the persisted `heldInSolo`
-  // marker — so an unmarked comment authored during indeterminate is still
-  // surfaced on pull while this gate withholds its push. Over-withholding costs
+  // marker. Since #1769 the server-side stamp
+  // (`annotations/held-in-solo.ts`) marks a user comment created or edited
+  // whenever mode does not read Tandem, so a NEW record authored during
+  // indeterminate now carries the marker and is withheld on pull as well; the
+  // asymmetry survives only for records predating that stamp. Over-withholding costs
   // nothing here because only the NOTIFICATION is forgone (see below), whereas
   // over-delivering would push content the pull path is busy withholding.
   // Restarting mid-Solo is precisely the state this hold exists for.
@@ -245,7 +250,24 @@ function pushEvent(event: TandemEvent): void {
   if (isUserPrivacyHeld(event) && readModeState() !== "tandem") return;
 
   buffer.push(event);
-  // Track only when the fan-out below is non-empty. "Pushed to nobody" is a fact
+
+  // Bound ONCE and reused, rather than re-read per site: `pushEvent` is
+  // synchronous so two reads cannot currently disagree, but binding it is the
+  // difference between correct and correct-by-accident. It sits HERE, above the
+  // tracking, because tracking is one of its consumers (#1823 item 7).
+  const forwardExternally = shouldForwardExternally(event);
+
+  // Track only when the fan-out below is non-empty AND this event actually
+  // forwards externally. The forward term is #1823 item 7: tracking used to run
+  // BEFORE the forward decision was bound, so in SOLO with an external consumer
+  // attached, the events `isUserPrivacyHeld` does not drop — `annotation:accepted`,
+  // `annotation:dismissed`, a Claude-authored `annotation:reply` — were tracked
+  // even though the loop below skips every external subscriber. That made
+  // `wasEmittedViaChannel` answer true and `tandem_checkInbox` stamp
+  // `alreadyPushed: true` on an item nothing outside this process ever received.
+  // `chat:message` forwards unconditionally, so it is unaffected.
+  //
+  // "Pushed to nobody" is a fact
   // the server CAN establish, and asserting otherwise made `alreadyPushed` false
   // on every comment in the default install (no channel shim, no monitor, no SSE
   // consumer). What stays unknowable is whether an ATTACHED consumer's host did
@@ -265,7 +287,9 @@ function pushEvent(event: TandemEvent): void {
   // EXTERNAL subscribers only. An in-process listener receiving the event says
   // nothing about whether it left this machine, and `alreadyPushed` exists to hint
   // that a model may already have seen it.
-  if (externalSubscribers.size > 0 && trackPayloadId(event)) trackedEvents.add(event);
+  if (forwardExternally && externalSubscribers.size > 0 && trackPayloadId(event)) {
+    trackedEvents.add(event);
+  }
 
   while (buffer.length > CHANNEL_EVENT_BUFFER_SIZE) {
     const evicted = buffer.shift();
@@ -277,11 +301,6 @@ function pushEvent(event: TandemEvent): void {
     const evicted = buffer.shift();
     if (evicted && trackedEvents.delete(evicted)) untrackPayloadId(evicted);
   }
-
-  // Bound ONCE and reused, rather than re-read per subscriber: `pushEvent` is
-  // synchronous so two reads cannot currently disagree, but binding it is the
-  // difference between correct and correct-by-accident.
-  const forwardExternally = shouldForwardExternally(event);
 
   // The delivery-state join's push half. Each conjunct is load-bearing and none
   // is redundant with the tracking above:
@@ -433,6 +452,15 @@ export function replaySince(lastEventId: string): TandemEvent[] {
  * collaborator holds a permanent subscription with no external consumer attached,
  * and `pushEvent`'s gate above would stamp every comment — so the gate needs to
  * count external subscribers only, not `subscribers.size`.
+ *
+ * Counting the right SUBSCRIBERS is only half of it: the event must also have
+ * been forwarded (#1823 item 7). In SOLO the fan-out skips every external
+ * subscriber, and the events `isUserPrivacyHeld` does not drop —
+ * `annotation:accepted`, `annotation:dismissed`, a Claude-authored
+ * `annotation:reply` — still reach the tracking line with a consumer attached.
+ * Tracking them there made this answer true for something no external consumer
+ * received, so `pushEvent`'s gate carries `forwardExternally` as a conjunct.
+ * `chat:message` forwards unconditionally and is unaffected.
  */
 export function wasEmittedViaChannel(payloadId: string): boolean {
   return emittedPayloadIds.has(payloadId);
@@ -449,9 +477,9 @@ const MODE_RELEASE_WAKE_CONTENT =
  * annotationId in a DISJOINT namespace from real annotation ids — so
  * `trackPayloadId` records only the synthetic id and can't collide with a real
  * held item (which would mis-stamp its `alreadyPushed` hint on the first
- * post-release poll). The caller MUST have already set
- * mode to Tandem (the release route does this first); otherwise the pushEvent
- * Solo-hold would drop this `annotation:created`.
+ * post-release poll). Mode MUST already read Tandem when this is called — the
+ * release route verifies exactly that before reaching here (#1769); otherwise
+ * the pushEvent Solo-hold would drop this `annotation:created`.
  */
 export function emitModeReleaseWake(): void {
   pushEvent({
@@ -492,6 +520,12 @@ export function attachObservers(docName: string, doc: Y.Doc, opts?: { uploadDoc?
     );
   }
 
+  // #1769: stamp `heldInSolo` server-side on user comments created/edited while
+  // the room does not read Tandem. Attached for every doc (upload/scratchpad
+  // included — the marker is a privacy substrate, not a channel event), and
+  // re-run by `reattachObservers` after the Hocuspocus doc swap.
+  cleanups.push(makeHeldInSoloStampObserver({ docName, doc }));
+
   // Selections are buffered per-document and attached to the next chat:message,
   // rather than firing as standalone events (#188).
   cleanups.push(makeAwarenessObserver({ docName, doc, selectionBuffer }));
@@ -502,7 +536,7 @@ export function attachObservers(docName: string, doc: Y.Doc, opts?: { uploadDoc?
   registerDirtyObserver(docName, doc);
 
   docObservers.set(docName, cleanups);
-  console.error(`[EventQueue] Attached observers for document: ${docName}`);
+  console.error("[EventQueue] Attached observers for document: %s", docName);
 }
 
 /** Detach all observers for a document. Safe to call even if none are attached. */
@@ -511,7 +545,7 @@ export function detachObservers(docName: string): void {
   if (cleanups) {
     for (const cleanup of cleanups) cleanup();
     docObservers.delete(docName);
-    console.error(`[EventQueue] Detached observers for document: ${docName}`);
+    console.error("[EventQueue] Detached observers for document: %s", docName);
   }
 }
 
@@ -537,6 +571,9 @@ export function attachCtrlObservers(): void {
   ctrlCleanups = [
     makeCtrlChatObserver({ ctrlDoc, pushEvent, selectionBuffer }),
     makeCtrlMetaObserver({ ctrlDoc, pushEvent }),
+    // #1733: record which connection last wrote the mode key. Pushed here so the
+    // Hocuspocus doc swap re-installs it.
+    installModeProvenanceObserver(ctrlDoc),
   ];
 
   console.error("[EventQueue] Attached CTRL_ROOM observers (chat + documentMeta)");

@@ -83,7 +83,7 @@ const MAX_WAKE_CONSUMERS = 16;
  * drift, but more importantly a URL derived from configuration can be confidently
  * wrong, while one derived from `address()` cannot exist unless the endpoint
  * does. In stdio mode nothing attaches, so this stays null and
- * `tandem_status` reports no wake URL at all — which is the truth there.
+ * no producer reports a wake URL at all — which is the truth there.
  *
  * This exists because `SKILL.md` used to hardcode `ws://127.0.0.1:3479/api/wake`.
  * Under an overridden port that is a SILENT failure: the model opens a socket to

@@ -6,6 +6,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ANNOTATION_SCAN_MAX_FILES } from "../../src/cli/annotation-store-scan.js";
+import { probeProcessIdentity } from "../../src/server/annotations/process-identity.js";
+import { INTEGRATIONS_SCHEMA_VERSION } from "../../src/shared/integrations/contract.js";
 
 // The file-cap spec writes ANNOTATION_SCAN_MAX_FILES + 1 (513) files
 // synchronously and then scans them, so its cost scales with that constant and
@@ -30,6 +32,7 @@ const SCAN_CAP_TIMEOUT_MS = timeoutMs(90_000, 300_000);
 
 import {
   CWD_DEPENDENT_CHECKS,
+  detectEnabledTandemPluginKey,
   evaluateAbsentChannelEntry,
   evaluateAppTranslocation,
   evaluateClaudeCli,
@@ -41,11 +44,13 @@ import {
   evaluateSpawnedEntryCommand,
   evaluateStaleGlobal,
   evaluateTandemPlugin,
+  findEnabledTandemPluginKey,
   globalTandemEditorVersion,
   isNodeVersionSupported,
   isTandemEditorRepo,
   MIN_NODE_VERSION,
   probeTandemEditorRepo,
+  resolveDoctorPortsFromEnv,
   runDoctor,
   runDoctorCli,
   setupApplyRemedy,
@@ -100,6 +105,17 @@ async function fakeViteServer({
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return { ...actual, execFile: vi.fn() };
+});
+
+// cr-2 / annotation-model-reviewer-2: checkAnnotationStore's prior-boot warn
+// arm now corroborates with probeProcessIdentity (#2038) before it warns, the
+// same way acquireStoreLock does. The real probe would otherwise route
+// through the node:child_process mock above (tasklist/ps) and hang forever
+// waiting on a callback that's never invoked, so it's mocked directly —
+// isTandemLikeProcessName stays real since it's pure string matching.
+vi.mock(import("../../src/server/annotations/process-identity.js"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, probeProcessIdentity: vi.fn() };
 });
 
 // Doctor reads the annotation store from TANDEM_APP_DATA_DIR (env override in
@@ -180,6 +196,67 @@ describe("runDoctor", () => {
     // Schema version is surfaced from the sampled file.
     const schemaResult = storeResults.find((r) => r.data && "schemaVersion" in r.data);
     expect(schemaResult?.data?.schemaVersion).toBe(3);
+  });
+
+  /**
+   * #1792 item 2 — `doctor` had no `integrations.json` counterpart to
+   * `checkAnnotationStore`, so the one diagnostic a user is told to run was
+   * silent about the exact downgrade that kills the integrations wizard.
+   */
+  it("warns when integrations.json carries a future schemaVersion", async () => {
+    writeFileSync(
+      join(dataDir, "integrations.json"),
+      JSON.stringify({ schemaVersion: 9999, integrations: [] }),
+    );
+
+    const report = await runDoctor();
+    const rows = report.results.filter((r) => r.check === "integrations-file");
+    expect(rows.length).toBeGreaterThan(0);
+    const warned = rows.find((r) => r.status === "warn");
+    expect(warned).toBeDefined();
+    expect(warned?.data?.schemaVersion).toBe(9999);
+    expect(warned?.message).toContain("9999");
+  });
+
+  it("warns on a non-integer future schemaVersion, matching the server's predicate", async () => {
+    // The server refuses any number above the supported version; an
+    // integer-only check here passed a file every integrations route 409s on.
+    const found = INTEGRATIONS_SCHEMA_VERSION + 0.5;
+    writeFileSync(
+      join(dataDir, "integrations.json"),
+      JSON.stringify({ schemaVersion: found, integrations: [] }),
+    );
+
+    const report = await runDoctor();
+    const warned = report.results.find(
+      (r) => r.check === "integrations-file" && r.status === "warn",
+    );
+    expect(warned?.data?.schemaVersion).toBe(found);
+  });
+
+  it("warns — never 'no file yet' — when integrations.json exists but cannot be read", async () => {
+    // EISDIR stands in for EACCES portably. The server rethrows every errno but
+    // ENOENT, so the integrations routes 500; an absence claim points away.
+    mkdirSync(join(dataDir, "integrations.json"));
+
+    const report = await runDoctor();
+    const rows = report.results.filter((r) => r.check === "integrations-file");
+    expect(rows.some((r) => r.data?.exists === false)).toBe(false);
+    const warned = rows.find((r) => r.status === "warn");
+    expect(warned?.data).toMatchObject({ exists: true });
+    expect(typeof warned?.data?.code).toBe("string");
+  });
+
+  it("does not warn on a current-schema integrations.json", async () => {
+    writeFileSync(
+      join(dataDir, "integrations.json"),
+      JSON.stringify({ schemaVersion: INTEGRATIONS_SCHEMA_VERSION, integrations: [] }),
+    );
+
+    const report = await runDoctor();
+    const rows = report.results.filter((r) => r.check === "integrations-file");
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.status === "pass")).toBe(true);
   });
 
   /**
@@ -272,6 +349,22 @@ describe("runDoctor", () => {
     expect(parked?.data?.parkedFuture).toBe(1);
   });
 
+  it("warns on a .partial copy left by a partial load (#1791)", async () => {
+    // Row-level tolerance made a partially-readable envelope parse `ok`, and
+    // the active file loses the dropped rows on its next write — the copy is
+    // the only evidence left, so its presence alone must not read as healthy.
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    writeFileSync(join(annDir, "abc.json.partial.0123abcd"), "{}");
+
+    const report = await runDoctor();
+    const partial = report.results.find(
+      (r) => r.check === "annotation-store" && r.data && "partialCopies" in r.data,
+    );
+    expect(partial?.status).toBe("warn");
+    expect(partial?.data?.partialCopies).toBe(1);
+  });
+
   it("reports a zeroed data block when the store dir does not exist", async () => {
     // dataDir exists but has no annotations/ subdir.
     const report = await runDoctor();
@@ -286,7 +379,10 @@ describe("runDoctor", () => {
   // as "unparseable content". process.pid is the live doctor process.
   const lockCases: Array<[string, string]> = [
     ["bare-PID format", String(process.pid)],
-    ["JSON-object format", JSON.stringify({ pid: process.pid, startedAtMs: 123, app: "tandem" })],
+    [
+      "JSON-object format",
+      JSON.stringify({ pid: process.pid, startedAtMs: Date.now(), app: "tandem" }),
+    ],
   ];
   for (const [label, content] of lockCases) {
     it(`reads a live-PID store.lock in ${label} without warning "unparseable"`, async () => {
@@ -304,6 +400,84 @@ describe("runDoctor", () => {
       expect(messages.some((m) => m.includes(`live PID ${process.pid}`))).toBe(true);
     });
   }
+
+  it("warns (not passes) a live-PID JSON lock whose startedAtMs predates this boot AND probes as non-Tandem (#2038)", async () => {
+    // cr-2 / annotation-model-reviewer-2: prior-boot evidence alone must not
+    // warn — doctor now corroborates with the same process-identity probe
+    // acquireStoreLock uses, so this test pins the "corroborated as reused"
+    // half by mocking the probe to report a non-Tandem process.
+    vi.mocked(probeProcessIdentity).mockResolvedValue({ kind: "name", name: "explorer.exe" });
+
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    // startedAtMs: 1 predates any real boot.
+    writeFileSync(
+      join(annDir, "store.lock"),
+      JSON.stringify({ pid: process.pid, startedAtMs: 1, app: "tandem" }),
+    );
+
+    const report = await runDoctor();
+    const result = report.results.find((r) => r.check === "annotation-store" && r.data?.priorBoot);
+
+    expect(result?.status).toBe("warn");
+    expect(result?.message).toContain(`PID ${process.pid}`);
+    expect(result?.message).toContain("reused after a reboot");
+    expect(result?.data).toMatchObject({
+      lockHeld: true,
+      pid: process.pid,
+      pidLive: true,
+      reused: true,
+    });
+    expect(probeProcessIdentity).toHaveBeenCalledWith(process.pid);
+  });
+
+  it("passes (not warns) a live-PID lock that predates this boot but probes as Tandem-like (cr-2)", async () => {
+    // The evidence-only half: isLockFromPriorBoot alone must never be read
+    // as a verdict. A forward clock step (NTP correcting a wrong RTC, a
+    // resumed VM) can make a live, correctly-held Tandem lock look like it
+    // predates the boot — the probe corroborates and doctor must not warn
+    // about a lock the next server start will in fact refuse to reclaim.
+    vi.mocked(probeProcessIdentity).mockResolvedValue({ kind: "name", name: "node" });
+
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    writeFileSync(
+      join(annDir, "store.lock"),
+      JSON.stringify({ pid: process.pid, startedAtMs: 1, app: "tandem" }),
+    );
+
+    const report = await runDoctor();
+    const result = report.results.find(
+      (r) => r.check === "annotation-store" && r.data?.pid === process.pid,
+    );
+
+    expect(result?.status).toBe("pass");
+    expect(result?.message).toContain(`live PID ${process.pid}`);
+    expect(result?.data).not.toHaveProperty("priorBoot");
+  });
+
+  it("passes (not warns) a prior-boot lock when the probe is indeterminate (cr-2)", async () => {
+    // Indeterminate is the fail-safe default (unsupported platform, timeout,
+    // permission denied) — the store treats it as "do not reclaim", and
+    // doctor's corroborated pass must agree rather than warning off a single
+    // uncorroborated boot-time estimate.
+    vi.mocked(probeProcessIdentity).mockResolvedValue({ kind: "indeterminate" });
+
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    writeFileSync(
+      join(annDir, "store.lock"),
+      JSON.stringify({ pid: process.pid, startedAtMs: 1, app: "tandem" }),
+    );
+
+    const report = await runDoctor();
+    const result = report.results.find(
+      (r) => r.check === "annotation-store" && r.data?.pid === process.pid,
+    );
+
+    expect(result?.status).toBe("pass");
+    expect(result?.data).not.toHaveProperty("priorBoot");
+  });
 
   it('still warns "unparseable" when the lock is genuinely non-numeric', async () => {
     const annDir = join(dataDir, "annotations");
@@ -1735,6 +1909,90 @@ describe("evaluateTandemPlugin", () => {
       expect(outcome.fix).not.toContain("tandem@tandem-editor");
     }
   });
+
+  it("still names the uninstall remedy on the duplication warn (#1811)", () => {
+    // #1811's first half claims doctor documents the double toolset with no
+    // remedy. It does not: this warn has named `claude plugin uninstall <key>`
+    // since before the review baseline. Pinned because #1811 substitutes the
+    // finder line this outcome is derived from.
+    const out = evaluateTandemPlugin({
+      enabledPlugins: { "tandem@tandem-editor": true },
+      wizardTandemEntry: true,
+    });
+    const warn = out.find((o) => o.status === "warn");
+    expect(warn?.message).toContain("twice");
+    expect(warn?.fix).toContain("claude plugin uninstall tandem@tandem-editor");
+  });
+});
+
+/** A raw ESC, built rather than typed — an escape byte in source is invisible. */
+const ESC = String.fromCharCode(27);
+
+describe("findEnabledTandemPluginKey (#1811)", () => {
+  it.each([
+    ["an enabled plugin", { "tandem@tandem-editor": true }, "tandem@tandem-editor"],
+    // A truthiness check would report a deliberately disabled plugin as installed.
+    ["a disabled plugin", { "tandem@x": false }, null],
+    ["someone else's plugin", { "other@y": true }, null],
+    ["an empty registry", {}, null],
+    ["no registry at all", null, null],
+    // A hardcoded suffix would miss the local-marketplace path
+    // `docs/spikes/plugin-delivery.md` recommends.
+    ["a local marketplace", { "tandem@local-marketplace": true }, "tandem@local-marketplace"],
+  ])("returns %s", (_label, plugins, expected) => {
+    expect(findEnabledTandemPluginKey(plugins)).toBe(expected);
+  });
+
+  it.each([
+    ["a newline suffix", "tandem@bad\nname"],
+    ["an ANSI suffix", `tandem@${ESC}[31mred`],
+  ])("is UNCLAMPED and still returns %s", (_label, key) => {
+    // The clamp deliberately does NOT live here: `evaluateTandemPlugin` returns
+    // [] on an undefined key, so rejecting a suffix here would silence doctor's
+    // report of a plugin that is genuinely installed — a regression, not a
+    // hardening.
+    expect(findEnabledTandemPluginKey({ [key]: true })).toBe(key);
+  });
+});
+
+describe("detectEnabledTandemPluginKey (#1811)", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "tandem-doctor-plugin-"));
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const writeSettings = (enabledPlugins: Record<string, unknown>) => {
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ enabledPlugins }));
+  };
+
+  it("returns the key from ~/.claude/settings.json", () => {
+    writeSettings({ "tandem@tandem-editor": true });
+    expect(detectEnabledTandemPluginKey()).toBe("tandem@tandem-editor");
+  });
+
+  it("returns null when there is no settings file", () => {
+    expect(detectEnabledTandemPluginKey()).toBeNull();
+  });
+
+  it.each([
+    ["a newline suffix", "tandem@bad\nname"],
+    ["an ANSI suffix", `tandem@${ESC}[31mred`],
+  ])("clamps the key shape and rejects %s", (_label, key) => {
+    // This is the only place the clamp is asserted. It reds both a missing
+    // clamp and a clamp pushed down into the shared finder — `setup --apply`
+    // prints this key into a copy-paste `claude plugin uninstall <key>`.
+    writeSettings({ [key]: true });
+    expect(detectEnabledTandemPluginKey()).toBeNull();
+  });
 });
 
 /**
@@ -1982,6 +2240,34 @@ describe("desktop-mcp-config remedies reach both branches", () => {
     // this file holds `env.TANDEM_AUTH_TOKEN`.
     expect(warn?.message).not.toContain("not json");
   });
+
+  it("treats an EMPTY desktop config as unregistered, not as unreadable", async () => {
+    // Round-2 review of #1802: `applyConfig` starts fresh on a zero-byte file,
+    // so "Tandem will not rewrite a config it could not read" is false of it
+    // and drops the one command that fixes it.
+    const configPath = claudeDesktopConfigPath({ homeOverride: home });
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, "");
+
+    const warn = await desktopResult();
+    expect(warn?.message).toContain("not registered");
+    expect(warn?.fix).toContain("Restart Claude Desktop");
+    expect(warn?.fix).not.toContain("will not rewrite");
+  });
+
+  it("does not report a BOM-prefixed but valid desktop config as unreadable", async () => {
+    const configPath = claudeDesktopConfigPath({ homeOverride: home });
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(
+      configPath,
+      `﻿${JSON.stringify({ mcpServers: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } } })}`,
+    );
+
+    const report = await runDoctor({ homeOverride: home });
+    const entry = report.results.find((x) => x.check === "desktop-mcp-config");
+    expect(entry?.status).toBe("pass");
+    expect(entry?.message).toContain("tandem registered");
+  });
 });
 
 // Three wiring gaps found in review: `checkUserMcpConfig` (~/.claude.json),
@@ -1998,6 +2284,9 @@ describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "tandem-doctor-usermcp-"));
     vi.stubEnv("HOME", home);
+    // Both, so the specs are machine-independent on Windows, where `homedir()`
+    // reads USERPROFILE (#1807).
+    vi.stubEnv("USERPROFILE", home);
   });
 
   afterEach(() => {
@@ -2019,7 +2308,59 @@ describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
     // renders "...not the desktop app.) — that rewrites it", a dangling
     // clause after an already-finished sentence.
     expect(warn?.fix).not.toContain("..");
-    expect(warn?.fix).toContain("Tandem backs the file up before rewriting it.");
+    // Since #1802 `applyConfig` refuses this exact input rather than backing
+    // it up and rewriting, so the old promise is false in both halves.
+    expect(warn?.fix).not.toContain("backs the file up");
+    expect(warn?.fix).toContain("Tandem will not rewrite a config it cannot read as one.");
+    // And `setup --apply` routes to that same refusal, so prescribing it here
+    // would be a dead-end fix line for the condition being reported.
+    expect(warn?.fix).not.toMatch(/setup --apply/);
+  });
+
+  it("does not call a parseable non-object ~/.claude.json invalid JSON", async () => {
+    // Round-3 review. `readClaudeConfig` routes a non-object root into the same
+    // `malformed` arm as a syntax error, and the arm asserted "is not valid
+    // JSON" about a file whose JSON is perfectly valid — sending the user to
+    // hunt a syntax error that is not there. `applyConfig`'s shape gate refuses
+    // this same input, so the refusal is right; only the sentence was wrong.
+    writeFileSync(claudeCodeConfigPath({ homeOverride: home }), "[]");
+
+    const warn = await userMcpResult();
+    expect(warn?.message).not.toContain("not valid JSON");
+    expect(warn?.message).toContain("JSON object");
+    // Still a refusal, so still no dead-end remedy.
+    expect(warn?.fix).not.toMatch(/setup --apply/);
+  });
+
+  it("prescribes setup --apply for an EMPTY ~/.claude.json", async () => {
+    // Round-2 review of #1802. `readClaudeConfig` had no emptiness screen, so a
+    // crash-truncated (zero-byte) config landed on the malformed arm and was
+    // told "Tandem will not rewrite a config it cannot parse" — while
+    // `applyConfig` starts fresh on exactly this input, i.e. `setup --apply`
+    // resolves it outright. The user was sent to hand-edit a file with no
+    // content in it.
+    writeFileSync(claudeCodeConfigPath({ homeOverride: home }), "");
+
+    const warn = await userMcpResult();
+    expect(warn?.message).toContain("empty");
+    expect(warn?.fix).toMatch(/setup --apply|wizard/);
+    expect(warn?.fix).not.toContain("will not rewrite");
+    // Not folded into the absent branch: the file is right there.
+    expect(warn?.message).not.toContain("not found");
+  });
+
+  it("does not report a BOM-prefixed but valid ~/.claude.json as broken", async () => {
+    // The other side of the same screen. `applyConfig` strips U+FEFF and
+    // rewrites this file happily, so any refusal wording about it is false.
+    writeFileSync(
+      claudeCodeConfigPath({ homeOverride: home }),
+      `﻿${JSON.stringify({ mcpServers: { tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } } })}`,
+    );
+
+    const report = await runDoctor();
+    const entry = report.results.find((x) => x.check === "user-mcp-config");
+    expect(entry?.status).toBe("pass");
+    expect(entry?.message).toContain("tandem registered");
   });
 
   it("still names a fallback when ~/.claude.json does not exist at all", async () => {
@@ -2028,6 +2369,224 @@ describe("checkUserMcpConfig wiring (~/.claude.json)", () => {
     expect(warn?.message).toContain("not found");
     expect(warn?.fix).toContain("project-local .mcp.json");
     expect(warn?.fix).not.toContain("..");
+  });
+
+  // #1807 — the user level passed on key presence alone while its
+  // project-level twin validated the same entry, so a leftover install read
+  // green in the file Claude Code actually consults.
+  describe("validates the tandem entry, not just its presence (#1807)", () => {
+    const writeEntry = (tandem: unknown) => {
+      writeFileSync(
+        claudeCodeConfigPath({ homeOverride: home }),
+        JSON.stringify({ mcpServers: { tandem } }),
+      );
+    };
+
+    /** Every `user-mcp-config` outcome, stringified — `fix` and `data` too. */
+    const userMcpAll = async (opts: Parameters<typeof runDoctor>[0] = {}) => {
+      const report = await runDoctor(opts);
+      return report.results.filter((x) => x.check === "user-mcp-config");
+    };
+
+    it("warns on a stdio type, naming the computed pathHasMcp", async () => {
+      writeEntry({ type: "stdio", url: "http://127.0.0.1:3479/mcp" });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain("type=stdio");
+      // Computed, not a hardcoded `false`: the path really does carry /mcp.
+      expect(warn?.message).toContain("pathHasMcp=true");
+    });
+
+    // Round-2 review. This arm fires precisely when `type` is NOT enum-shaped,
+    // so echoing it verbatim was echoing arbitrary JSON text from disk into a
+    // terminal, into `/api/diagnostics`, and from there into a PUBLIC
+    // Report-a-bug prefill. `\r\x1b[2K` repaints doctor's own warn as a pass;
+    // a bare `\n` forges a second result line.
+    it("clamps a control-byte type instead of echoing it", async () => {
+      const hostile = "\u001b[2K\r  \u001b[32m ok \u001b[0m tandem registered in ~/.claude.json\nx";
+      writeEntry({ type: hostile, url: "http://127.0.0.1:3479/mcp" });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain("type=(unexpected)");
+      expect(warn?.message).not.toContain(String.fromCharCode(27));
+      expect(warn?.message).not.toContain("\n");
+      // And nothing repainted itself as the pass line.
+      expect(
+        (await userMcpAll()).some((x) => x.message === "tandem registered in ~/.claude.json"),
+      ).toBe(false);
+    });
+
+    it("reports a missing type as (none), not the string undefined", async () => {
+      writeEntry({ url: "http://127.0.0.1:3479/mcp" });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain("type=(none)");
+      expect(warn?.message).not.toContain("undefined");
+    });
+
+    it("warns on a url with no /mcp path, without echoing the url", async () => {
+      writeEntry({ type: "http", url: "http://127.0.0.1:3479/" });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain("pathHasMcp=false");
+      expect(warn?.message).not.toContain("http://127.0.0.1:3479/");
+    });
+
+    // Round-3 review. Every other arm passes on this entry — type is "http",
+    // the path carries /mcp, the host is loopback, the port is right — but
+    // Tandem's MCP server is plaintext HTTP, so Claude Code's TLS handshake
+    // fails and no `tandem_*` tool ever appears. Certifying it green is the
+    // #1807 defect itself: a pass in the file Claude Code consults while
+    // Claude Code cannot connect.
+    it.each([
+      ["https", "https://127.0.0.1:3479/mcp"],
+      ["ws", "ws://127.0.0.1:3479/mcp"],
+    ])("warns on the %s scheme, which the MCP server does not speak", async (scheme, url) => {
+      writeEntry({ type: "http", url });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain(`scheme=${scheme}`);
+      // Named, because `type=http, pathHasMcp=true` alone tells the reader
+      // nothing they can act on — but nothing else about the url is.
+      expect(JSON.stringify(await userMcpAll())).not.toContain("127.0.0.1:3479");
+      // Here `setup --apply` IS the remedy: `buildMcpEntries` writes `http://`.
+      expect(warn?.fix).toBeTruthy();
+    });
+
+    it("reports the scheme as (unparsable) when the url will not parse", async () => {
+      writeEntry({ type: "http", url: "not a url" });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain("scheme=(unparsable)");
+      expect(warn?.message).toContain("pathHasMcp=(unparsable)");
+    });
+
+    it("warns on a port that disagrees with the probed MCP port, with a remedy that works", async () => {
+      writeEntry({ type: "http", url: "http://127.0.0.1:9999/mcp" });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain("9999");
+      expect(warn?.message).toContain("3479");
+      // `setup --apply` rewrites the same hardcoded 3479, so prescribing it
+      // here would be a dead-end fix line for the condition being reported.
+      expect(warn?.fix).not.toMatch(/setup --apply/);
+    });
+
+    // The one shape a green verdict would be worst on: right type, right
+    // path, right port, someone else's machine. Claude Code would send every
+    // `tandem_*` call — `tandem_getTextContent` output, `tandem_edit` payloads
+    // — to that host.
+    it.each([
+      ["a remote host on the expected port", "http://attacker.example:3479/mcp"],
+      ["a LAN address", "http://192.168.1.9:3479/mcp"],
+    ])("warns on %s", async (_label, url) => {
+      writeEntry({ type: "http", url });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain("non-loopback host");
+      // Post-ship review: "loopback-only" was false under `TANDEM_BIND_HOST`
+      // (docs/configuration.md), so a user who deliberately bound to the LAN
+      // and pointed `~/.claude.json` at that IP was told to break a working
+      // setup. Doctor cannot see the server's env from the user's shell, so
+      // the sentence and the remedy both carry the condition instead.
+      expect(warn?.message).toContain("unless it was started with TANDEM_BIND_HOST");
+      expect(warn?.message).not.toContain("loopback-only");
+      expect(warn?.fix).toMatch(/^If Tandem was not started with TANDEM_BIND_HOST, /);
+      expect(warn?.fix).toContain("127.0.0.1:3479");
+      // Names the shape, not the hostname: this message rides the same
+      // redaction rule as the rest, and the fix must not be the dead-end
+      // `setup --apply` (it rewrites the DEFAULT port).
+      expect(JSON.stringify(await userMcpAll())).not.toContain(new URL(url).hostname);
+      expect(warn?.fix).not.toMatch(/setup --apply/);
+    });
+
+    // Round-2 review. `tauri.localhost` was in the loopback host set on the
+    // grounds that the desktop WebView's origin is that name — but this arm
+    // decides reachability. `server.ts` allowlists that host only when a LAN
+    // IP resolved; on a default loopback bind the SDK's own
+    // `localhostHostValidation()` answers every `/mcp` request carrying
+    // `Host: tauri.localhost` with 403. Certifying it green is exactly the
+    // #1807 defect the arm exists to prevent.
+    it("warns on the Tauri WebView hostname, which the MCP server 403s", async () => {
+      writeEntry({ type: "http", url: "http://tauri.localhost:3479/mcp" });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain("non-loopback host");
+      expect(JSON.stringify(await userMcpAll())).not.toContain("tauri.localhost");
+    });
+
+    it.each([
+      ["127.0.0.1", "http://127.0.0.1:3479/mcp"],
+      ["localhost", "http://localhost:3479/mcp"],
+      ["bracketed IPv6 loopback", "http://[::1]:3479/mcp"],
+    ])("still passes the loopback form %s", async (_label, url) => {
+      writeEntry({ type: "http", url });
+
+      const results = await userMcpAll();
+      expect(results.some((x) => x.message === "tandem registered in ~/.claude.json")).toBe(true);
+    });
+
+    it.each([
+      ["userinfo and a query token", "http://tok:s3cret@example.invalid:9999/mcp?key=abc"],
+      ["a secret path segment", "http://example.invalid:9999/mcp/s3cret"],
+    ])("never echoes the url (%s)", async (_label, url) => {
+      writeEntry({ type: "http", url });
+
+      const results = await userMcpAll();
+      const serialized = JSON.stringify(results);
+      expect(results.some((x) => x.status === "warn")).toBe(true);
+      expect(serialized).not.toContain("s3cret");
+      expect(serialized).not.toContain("key=abc");
+      expect(serialized).not.toContain(url);
+    });
+
+    it("leaves a stdio (command) entry to reportEntryCommand and still passes", async () => {
+      writeEntry({ command: "/abs/node", args: [] });
+
+      const results = await userMcpAll();
+      // The positive: that pass is reachable only when the command arm returns
+      // null, so it reds both if the arm is dropped and if the validator
+      // returns null while emitting nothing at all.
+      expect(results.some((x) => x.message === "tandem registered in ~/.claude.json")).toBe(true);
+      // reportEntryCommand's own outcome still appears alongside it.
+      expect(results.length).toBeGreaterThan(1);
+    });
+
+    it("passes a healthy entry and says nothing about its url", async () => {
+      const url = "http://tok:s3cret@127.0.0.1:3479/mcp?key=abc";
+      writeEntry({ type: "http", url });
+
+      const results = await userMcpAll();
+      const serialized = JSON.stringify(results);
+      expect(results.some((x) => x.message === "tandem registered in ~/.claude.json")).toBe(true);
+      expect(serialized).not.toContain("s3cret");
+      expect(serialized).not.toContain("key=abc");
+      expect(serialized).not.toContain(url);
+    });
+
+    it("passes a plain healthy entry", async () => {
+      writeEntry({ type: "http", url: "http://127.0.0.1:3479/mcp" });
+
+      const results = await userMcpAll();
+      expect(results.some((x) => x.message === "tandem registered in ~/.claude.json")).toBe(true);
+    });
+
+    it("compares against the probed MCP port, not a hardcoded 3479", async () => {
+      writeEntry({ type: "http", url: "http://127.0.0.1:3479/mcp" });
+
+      const results = await userMcpAll({ mcpPort: 4918 });
+      const warn = results.find((x) => x.status === "warn");
+      expect(warn?.message).toContain("4918");
+    });
+
+    it("treats a port-less url as a mismatch and reports (none)", async () => {
+      writeEntry({ type: "http", url: "http://127.0.0.1/mcp" });
+
+      const warn = await userMcpResult();
+      expect(warn?.message).toContain("(none)");
+      expect(warn?.message).toContain("3479");
+      expect(warn?.fix).not.toMatch(/setup --apply/);
+    });
   });
 });
 
@@ -2358,4 +2917,124 @@ describe("checkNodeVersion wiring (via runDoctor(), not the pure evaluator)", ()
     // `failures` — so "warn" is what keeps `tandem doctor` at exit 0 on an
     // install that works.
   });
+});
+
+// #1806 — `tandem doctor` ignored TANDEM_PORT / TANDEM_MCP_PORT, so a user who
+// moved the server with the documented env vars got "server not running" plus a
+// remedy that starts a SECOND instance on the defaults.
+describe("resolveDoctorPortsFromEnv (#1806)", () => {
+  let home: string;
+
+  beforeEach(() => {
+    // The two wiring specs below run the WHOLE doctor, including
+    // `checkUserMcpConfig` and `checkTandemPlugin`, which read HOME/USERPROFILE
+    // directly — `runDoctorCli` has no `homeOverride` seam. Both variables,
+    // because `homedir()` reads USERPROFILE on Windows.
+    home = mkdtempSync(join(tmpdir(), "tandem-doctor-ports-"));
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it.each([
+    ["an explicit port", { TANDEM_PORT: "4918" }, 4918, 3479],
+    ["nothing set", {}, 3478, 3479],
+    // The `||` arm — which is why the server's `parseInt(raw || fallback)`
+    // spelling matters and `Number(raw)` would not do.
+    ["an empty string", { TANDEM_PORT: "" }, 3478, 3479],
+    // The server binds 4918abc on 4918; a stricter parser here would re-create
+    // the false "not running" for an input the server accepts.
+    ["a trailing-garbage port", { TANDEM_PORT: "4918abc" }, 4918, 3479],
+    ["an unparseable port", { TANDEM_PORT: "abc" }, 3478, 3479],
+    // The probe-side clamp: `listen(0)` is undiagnosable from outside.
+    ["zero", { TANDEM_PORT: "0" }, 3478, 3479],
+    ["an out-of-range port", { TANDEM_PORT: "70000" }, 3478, 3479],
+    ["the MCP override", { TANDEM_MCP_PORT: "4919" }, 3478, 4919],
+    ["both overrides", { TANDEM_PORT: "4918", TANDEM_MCP_PORT: "4919" }, 4918, 4919],
+  ])("resolves %s", (_label, env, wsPort, mcpPort) => {
+    expect(resolveDoctorPortsFromEnv(env as NodeJS.ProcessEnv)).toEqual({ wsPort, mcpPort });
+  });
+
+  /**
+   * An HTTP listener that answers immediately, NOT a bare `net` server:
+   * `runDoctor` runs `checkHealth` whenever the MCP probe succeeds, and
+   * `httpGet` waits 3s for a socket that never replies.
+   */
+  async function listenEphemeral(): Promise<{ port: number; close(): Promise<void> }> {
+    const server = createServer((_req, res) => {
+      res.writeHead(404);
+      res.end();
+    });
+    const port = await new Promise<number>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        const addr = server.address();
+        resolve(typeof addr === "object" && addr ? addr.port : 0);
+      });
+    });
+    return {
+      port,
+      close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    };
+  }
+
+  async function portsMessage(): Promise<string> {
+    const chunks: string[] = [];
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      chunks.push(String(chunk));
+      return true;
+    });
+    try {
+      await runDoctorCli({ json: true });
+    } finally {
+      stdoutSpy.mockRestore();
+    }
+    const parsed = JSON.parse(chunks.join(""));
+    const ports = parsed.results.find((x: { check: string }) => x.check === "ports");
+    return String(ports?.message ?? "");
+  }
+
+  // Generous budget: these drive the real doctor end to end, including
+  // `cliAvailable`'s PATH walk (~335 `statSync` calls) on top of the probes.
+  const WIRING_TIMEOUT_MS = timeoutMs(20_000, 60_000);
+
+  it(
+    "runDoctorCli probes the TANDEM_PORT the server would bind",
+    async () => {
+      const listener = await listenEphemeral();
+      try {
+        vi.stubEnv("TANDEM_PORT", String(listener.port));
+        const message = await portsMessage();
+        // Word boundaries, never `toContain`: ephemeral ports like 33478 or
+        // 34780 contain "3478" and the kernel picks which one we get.
+        expect(message).toMatch(new RegExp(String.raw`\b${listener.port}\b`));
+        expect(message).not.toMatch(/\b3478\b/);
+      } finally {
+        await listener.close();
+      }
+    },
+    WIRING_TIMEOUT_MS,
+  );
+
+  it(
+    "runDoctorCli probes the TANDEM_MCP_PORT the server would bind",
+    async () => {
+      const listener = await listenEphemeral();
+      try {
+        vi.stubEnv("TANDEM_MCP_PORT", String(listener.port));
+        const message = await portsMessage();
+        expect(message).toMatch(new RegExp(String.raw`\b${listener.port}\b`));
+        // 3479 must be gone; 3478 is EXPECTED — the ws port is still the
+        // default, and `checkPorts` names it in both surviving branches.
+        expect(message).not.toMatch(/\b3479\b/);
+        expect(message).toMatch(/\b3478\b/);
+      } finally {
+        await listener.close();
+      }
+    },
+    WIRING_TIMEOUT_MS,
+  );
 });

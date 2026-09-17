@@ -30,6 +30,7 @@ import {
   startLocalModelCollaborator,
   stopLocalModelCollaborator,
 } from "./local-model/collaborator.js";
+import { formatLogLine } from "./log-filter.js";
 import {
   restoreCtrlSession,
   restoreOpenDocuments,
@@ -51,19 +52,23 @@ import {
 } from "./mcp/server.js";
 import { pushNotification } from "./notifications.js";
 import {
+  decideStartupAction,
   freePort,
+  isTauriSidecar,
   LAST_SEEN_VERSION_FILE,
+  probeTandemInstance,
   resolveAppDataDir,
   SESSION_DIR,
   waitForPort,
 } from "./platform.js";
-import { captureFatal, initSidecarCrashReporting } from "./sentry.js";
+import { captureFatal, captureWarning, initSidecarCrashReporting } from "./sentry.js";
 import {
   cleanupOrphanedAnnotationFiles,
   cleanupSessions,
   cleanupStaleTombstones,
   stopAutoSave,
 } from "./session/manager.js";
+import { isShuttingDown, markShuttingDown } from "./shutdown-state.js";
 import { maybeOpenStartupFile } from "./startup-file.js";
 import { checkVersionChange } from "./version-check.js";
 import { startHocuspocus } from "./yjs/provider.js";
@@ -74,15 +79,24 @@ import { startHocuspocus } from "./yjs/provider.js";
 
 // In production (Tauri sidecar, TANDEM_TAURI_SIDECAR=1), suppress known noisy
 // warnings from dependencies (mammoth, Y.js). In dev mode, show everything.
+// The pattern set and the formatting both live in `./log-filter.ts` — a pure
+// module, because this file cannot be imported by a test: importing it runs
+// `main()`, which frees the product ports and would kill a running dev server.
+// (Spelled without the function's own name on purpose — `platform.test.ts`
+// scans this file's SOURCE TEXT for that identifier and requires every
+// occurrence to follow `decideStartupAction`, so a prose mention up here reads
+// to it as a real call site.)
 const isProduction = process.env.TANDEM_TAURI_SIDECAR === "1";
-const SUPPRESSED_PATTERNS = [/^\[mammoth\]/, /Invalid access/i, /^\s*add yjs type/i];
 
 const originalStderrWrite = process.stderr.write.bind(process.stderr);
 if (isProduction) {
   const filteredError = (...args: Parameters<typeof console.error>) => {
-    const msg = args.map(String).join(" ");
-    if (SUPPRESSED_PATTERNS.some((p) => p.test(msg))) return;
-    originalStderrWrite(msg + "\n");
+    // `formatLogLine`, not `args.map(String).join(" ")`: the old shape printed
+    // every `%s`/`%d` placeholder literally and truncated Errors to
+    // `name: message`, dropping the stack (#1823 item 1).
+    const line = formatLogLine(args);
+    if (line === null) return;
+    originalStderrWrite(line + "\n");
   };
   console.log = filteredError;
   console.warn = filteredError;
@@ -99,7 +113,6 @@ const wsPort = parseInt(process.env.TANDEM_PORT || String(DEFAULT_WS_PORT), 10);
 const mcpPort = parseInt(process.env.TANDEM_MCP_PORT || String(DEFAULT_MCP_PORT), 10);
 
 let httpServer: Server | null = null;
-let isShuttingDown = false;
 let launcherSupervisor: import("./launcher/supervisor.js").Supervisor | null = null;
 let launcherUnavailableReason: import("../shared/launcher/contract.js").LauncherUnavailableReason =
   resolveInitialLauncherReason(process.env);
@@ -134,6 +147,7 @@ async function startLauncherSupervisor(): Promise<void> {
     // `spawn-failed` reason is the pre-existing shape here.
     launcherSupervisor = createSupervisor({
       integrationsBase: resolveAppDataDir(),
+      reportDeliveryTrip: captureWarning,
     });
     await launcherSupervisor.start();
   } catch (err) {
@@ -157,7 +171,7 @@ async function handleFatalError(label: string, value: unknown): Promise<void> {
     console.error("[Tandem] Known WS error (swallowed):", value.message, value.stack);
     return;
   }
-  if (isShuttingDown) {
+  if (isShuttingDown()) {
     console.error(`[Tandem] ${label} during shutdown (ignored):`, value);
     return;
   }
@@ -181,16 +195,38 @@ process.on("exit", (code) => {
   console.error(`[Tandem] Process exiting with code ${code}`);
 });
 
+/**
+ * Has `main()` finished restoring the session and the open documents?
+ *
+ * The stdin-EOF handler below is armed at MODULE scope, while
+ * `restoreCtrlSession()` / `restoreOpenDocuments()` are awaited inside
+ * `main()`. The gate is not optional and is invisible at the call site: an EOF
+ * arriving during boot would reach `shutdown()` → `saveCurrentSession()` →
+ * `saveCtrlSession`, which `session/manager.ts` persists with NO restore guard
+ * — cloning a freshly-created, still-empty CTRL doc over the user's real chat
+ * history. So before the restore completes the process leaves immediately and
+ * writes nothing.
+ */
+let startupComplete = false;
+
 if (transportMode === "stdio") {
   process.stdin.on("end", () => {
     console.error("[Tandem] stdin ended (MCP transport closed)");
+    // `StdioServerTransport` registers only `data`/`error` on stdin, never
+    // `end`, so before #1823 item 3 the server simply logged this and outlived
+    // its MCP client forever. Accepted scope change: a stdio run whose stdin is
+    // already closed at spawn now exits instead of surviving.
+    if (startupComplete) void shutdown("stdin EOF");
+    else process.exit(0);
   });
 }
 
 // Graceful shutdown: save session + stop auto-save before exit
 async function shutdown(signal: string) {
-  if (isShuttingDown) return;
-  isShuttingDown = true;
+  // The latch and the single-flight guard are one call (see
+  // `shutdown-state.ts`): `/health` reads the same flag, so a second SIGTERM
+  // must not be able to observe it unset.
+  if (!markShuttingDown()) return;
   console.error(`[Tandem] ${signal} received, saving session...`);
   try {
     unwatchAll();
@@ -256,10 +292,21 @@ async function shutdown(signal: string) {
     console.error("[Tandem] search worker shutdown failed:", err);
   }
   // Stop the launcher BEFORE we tear down everything else — supervisor.stop()
-  // sends SIGTERM to the reaper which gracefully reaps Claude. If we skip this
-  // and just process.exit(0), the OS-level Job Object (Windows) / PDEATHSIG
-  // (Linux) / kqueue (macOS) still kills Claude — but cleanly going through
-  // SIGTERM gives Claude a chance to flush.
+  // signals the reaper, which reaps Claude. If we skip this and just
+  // process.exit(0), the OS-level Job Object (Windows) / PDEATHSIG (Linux) /
+  // kqueue (macOS) still kills Claude.
+  //
+  // The flush window is POSIX-ONLY, and this comment used to claim it
+  // unconditionally (#1823 item 4). On Unix the reaper installs SIGTERM/SIGINT
+  // handlers that relay to Claude and escalate after `GRACE_PERIOD_SECS`
+  // (`reaper/src/linux.rs`, `reaper/src/macos.rs`), so the SIGTERM really does
+  // buy a flush. On Windows there are no POSIX signals: `kill("SIGTERM")` is
+  // `TerminateProcess`, `reaper/src/windows.rs` installs no signal handler at
+  // all, and the reaper's death closes the job handle so KILL_ON_JOB_CLOSE
+  // kills Claude outright — no flush window. `SIGTERM_GRACE_MS`
+  // (`launcher/supervisor.ts`) is NOT dead code there; the reaper exits at once
+  // so the wait resolves immediately, and only the SIGKILL escalation below it
+  // is unreachable on Windows.
   if (launcherSupervisor) {
     try {
       await launcherSupervisor.stop();
@@ -291,6 +338,65 @@ async function main() {
   // error early in startup can still be shipped by handleFatalError. No-op
   // (and no @sentry/node load) when the DSN is unset.
   await initSidecarCrashReporting();
+
+  // #1758 — identify the holder of :<mcpPort> BEFORE anything mutates state.
+  // `freePort` (further down) looks up a listening PID and SIGKILLs it; it
+  // cannot ask whether that PID is a healthy Tandem serving a human. So an
+  // npm `tandem` from a terminal used to kill the desktop app's sidecar out
+  // from under the user's open documents, leaving the read-only second
+  // instance as the survivor.
+  //
+  // Order across this whole preamble, stated once: probe (HTTP only) → claim →
+  // sweep → trial → lock. Nothing has been written at this point — no lock
+  // taken, no port killed — which is the point of probing first.
+  if (transportMode === "http") {
+    const probe = await probeTandemInstance(mcpPort);
+    const action = decideStartupAction({
+      probe,
+      mode: "http",
+      isSidecar: isTauriSidecar(),
+    });
+    if (action === "refuse" && probe) {
+      // The message names ALL THREE variables deliberately. An either/or
+      // invites the user to move only the MCP port; the probe then finds that
+      // port free, startup proceeds, and `freePort(wsPort)` SIGKILLs the
+      // desktop's Hocuspocus on the other one — `freePort` keys on the port,
+      // not the bind address.
+      // `probe.host` is the address actually asked, which is the bind host when
+      // `TANDEM_BIND_HOST` moved it off loopback — naming 127.0.0.1 there would
+      // point the user at a port nothing is listening on. `pid` is `null` on
+      // that arm (it is loopback-only in `/health`), so the message degrades to
+      // the version alone rather than printing "pid null".
+      console.error(
+        `[Tandem] Tandem is already running at http://${probe.host}:${mcpPort} (v${probe.version}${
+          probe.pid === null ? "" : `, pid ${probe.pid}`
+        }). ` +
+          `Not starting a second instance — quit the running one first, or run on different ports: ` +
+          `see "Port already in use" in docs/troubleshooting.md ` +
+          `(TANDEM_PORT, TANDEM_MCP_PORT and TANDEM_URL all have to match).`,
+      );
+      // Exit 1, not 0: this is a refusal to start, and 0 would read as success
+      // to a wrapper script.
+      process.exit(1);
+    }
+  }
+
+  // #1787 — claim the app-data root for THIS install before anything writes
+  // into it. The sweep, the trial clock and the store lock below all read
+  // `resolveAppDataDir()`, so claiming after them would sweep and stamp two
+  // different directories. Never throws: an escaping error here reaches
+  // `main().catch(...) => process.exit(1)`, which for the desktop is an app
+  // that never starts.
+  {
+    const { claimAppDataDir, refusalMessage } = await import("./app-data-owner.js");
+    const appDataDir = resolveAppDataDir();
+    const flavor = isTauriSidecar() ? "desktop" : "npm";
+    const claim = await claimAppDataDir(appDataDir, APP_VERSION, flavor);
+    if (claim !== "claimed") {
+      console.error(refusalMessage(appDataDir, claim.refused, flavor));
+      process.exit(1);
+    }
+  }
 
   // Prune stale `.claude.json` backups left over from a previous run.
   // Idempotent and bounded — only touches Tandem's own `.backups/` dir.
@@ -495,6 +601,11 @@ async function main() {
     console.error("[Tandem] Failed to restore open documents:", err);
   });
 
+  // From here a stdin EOF may take the graceful shutdown path: the CTRL doc now
+  // holds the restored chat history, so saving it can no longer clobber it.
+  // Deliberately OUTSIDE the transport branch — see `startupComplete`.
+  startupComplete = true;
+
   // Write a unique ID so clients can detect when the server process has restarted
   writeGenerationId();
 
@@ -625,11 +736,18 @@ async function main() {
     // artifact (users shouldn't accidentally edit it) and read-only also
     // guards against any future regression in the serializer.
     try {
-      const versionStatus = await checkVersionChange(APP_VERSION, LAST_SEEN_VERSION_FILE);
-      if (versionStatus === "upgraded") {
-        await openFromDisk(path.join(projectRoot, "CHANGELOG.md"), { readOnly: true });
-        console.error(`[Tandem] Opened CHANGELOG.md (upgraded to v${APP_VERSION})`);
-      }
+      // #1792: the open is the version-change HOOK, not a step after the
+      // check — the stamp is written only once it resolves. Stamping first
+      // meant a failed open lost that release's notes for good: the next
+      // start reads `current`.
+      await checkVersionChange(APP_VERSION, LAST_SEEN_VERSION_FILE, {
+        onUpgrade: async () => {
+          await openFromDisk(path.join(projectRoot, "CHANGELOG.md"), { readOnly: true });
+          // Version-change-neutral wording: a downgrade takes this arm too and
+          // correctly opens the running build's own CHANGELOG.
+          console.error(`[Tandem] Opened CHANGELOG.md (now running v${APP_VERSION})`);
+        },
+      });
     } catch (err) {
       console.error("[Tandem] Version check / changelog open failed (non-fatal):", err);
     }
@@ -764,11 +882,34 @@ async function main() {
   } else {
     // Stdio mode: MCP must start before Hocuspocus to beat Claude Code's init timeout
     (async () => {
-      freePort(wsPort);
-      try {
-        await waitForPort(wsPort);
-      } catch (err) {
-        console.error(`[Tandem] ${err instanceof Error ? err.message : err} — proceeding anyway`);
+      // Probed HERE rather than at the top of `main()` so it runs concurrently
+      // with `startMcpServerStdio` below: up to ~3.5s of probing ahead of the
+      // MCP handshake would threaten the client's init timeout.
+      const probe = await probeTandemInstance(mcpPort);
+      const action = decideStartupAction({
+        probe,
+        mode: "stdio",
+        isSidecar: isTauriSidecar(),
+      });
+      if (action === "skip-freeport") {
+        // Do NOT exit: an MCP client's init would fail. This branch already
+        // tolerates a Hocuspocus bind failure, so skipping the kill turns
+        // "silently killed the desktop" into "MCP works, Hocuspocus did not
+        // bind" — the honest outcome.
+        console.error(`[Tandem] Another Tandem is serving :${mcpPort} — leaving :${wsPort} alone`);
+      } else {
+        freePort(wsPort);
+        // Only after a kill is there anything to wait FOR: `waitForPort` polls
+        // for the port to come free. On the `skip-freeport` arm we have just
+        // decided to leave it occupied, so the poll was guaranteed to burn its
+        // whole timeout and then proceed anyway (review round 2) — pure startup
+        // latency on every stdio launch alongside a running desktop, which is
+        // the exact case this branch exists to serve.
+        try {
+          await waitForPort(wsPort);
+        } catch (err) {
+          console.error(`[Tandem] ${err instanceof Error ? err.message : err} — proceeding anyway`);
+        }
       }
       await startHocuspocus(wsPort);
       console.error(`[Tandem] Hocuspocus WebSocket server running on ws://127.0.0.1:${wsPort}`);
@@ -776,7 +917,7 @@ async function main() {
       console.error("[Tandem] Hocuspocus startup error:", err);
     });
 
-    await startMcpServerStdio();
+    await startMcpServerStdio({ wsPort, mcpPort });
     console.error("[Tandem] MCP server running on stdio");
   }
 }

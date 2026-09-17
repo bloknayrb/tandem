@@ -172,16 +172,16 @@ describe("startup cache warm", () => {
       throw new Error("skip SSE for this test");
     });
 
-    const mainPromise = main().catch(() => {});
+    void main().catch(() => {});
     // Yield once to let the startup warm-up fetch resolve.
     await vi.advanceTimersByTimeAsync(1);
 
     const modeCalls = stub.calls.filter((c) => c.url.includes("/api/mode"));
     expect(modeCalls.length).toBeGreaterThanOrEqual(1);
 
-    // Advance through full retry exhaustion
+    // The consumer retries forever now (#1804), so there is nothing to await.
     await vi.advanceTimersByTimeAsync(5 * 30_000 + 5_000);
-    await mainPromise;
+    await vi.advanceTimersByTimeAsync(0);
   });
 });
 

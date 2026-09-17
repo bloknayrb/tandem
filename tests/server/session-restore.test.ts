@@ -6,7 +6,7 @@ import * as Y from "yjs";
 import { CTRL_ROOM } from "../../src/shared/constants";
 
 // Isolate session tests in a unique temp directory to avoid races with other test files
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -19,7 +19,7 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
 
 // Real fs.watch leaks handles and races the tests' own writes. The open paths
 // only need this to be callable.
-vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
+vi.mock(import("../../src/server/file-watcher"), async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/server/file-watcher")>()),
   watchFile: vi.fn(),
   unwatchFile: vi.fn(),
@@ -28,7 +28,7 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
 // Failure-isolation twin (#1800): the open-path recovery must survive a
 // throwing eviction. Flag-gated so every other case gets the real helper.
 let evictShouldThrow = false;
-vi.mock("../../src/server/documents/populate.js", async (importOriginal) => {
+vi.mock(import("../../src/server/documents/populate.js"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/documents/populate.js")>();
   return {
     ...original,
@@ -91,7 +91,7 @@ import {
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
-import type { AuthorshipRange } from "../../src/shared/types.js";
+import type { Annotation, AuthorshipRange } from "../../src/shared/types.js";
 import { useTmpAnnotationsEnvWithFlag } from "../helpers/annotation-store-env.js";
 import { buildDocxWithComments } from "../helpers/docx-fixtures.js";
 
@@ -392,6 +392,7 @@ describe("corrupt ydocState quarantine (#1800)", () => {
   async function seedEnvelope(
     filePath: string,
     annotations: AnnotationDocV1["annotations"],
+    tombstones: AnnotationDocV1["tombstones"] = [],
   ): Promise<void> {
     const hash = docHash(filePath);
     const store = createStore(hash, { filePath });
@@ -400,7 +401,7 @@ describe("corrupt ydocState quarantine (#1800)", () => {
       docHash: hash,
       meta: { filePath, lastUpdated: Date.now() },
       annotations,
-      tombstones: [],
+      tombstones,
       replies: [],
     }));
     await store.flush();
@@ -1334,7 +1335,16 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     const older = textDoc("alpha beta gamma\n");
     const newer = textDoc("alpha beta WINNER gamma\n");
     older.transact(() => {
+      // `textSnapshot` is the text actually at {11,16}, matching the sibling
+      // envelope fixture below. `seedHighlight`'s default is `""`, which since
+      // #1764 is a REAL claim that the range held no text (`snapshotContradicts`
+      // distinguishes an empty snapshot from an absent one) — so a
+      // self-contradicting record would be refused a re-anchor here for the
+      // right reason and this spec would stop testing what it is named for.
+      // Production never writes that shape: browser highlights carry no
+      // `textSnapshot` at all and `captureSnapshot` slices the real text.
       seedHighlight(older.getMap(Y_MAP_ANNOTATIONS), "ann-S", 11, 16, {
+        textSnapshot: "gamma",
         relRange: liveRelRange(older, 11, 16),
       });
       // Same id in session and envelope: the envelope wins the merge and puts
@@ -1424,6 +1434,191 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     expect(relPosToFlatOffset(doc, envRel.fromRel)).toBe(6);
     expect(relPosToFlatOffset(doc, envRel.toRel)).toBe(10);
     expect(extractText(doc).slice(6, 10)).toBe("beta");
+  });
+
+  /** Dual sessions over "alpha beta gamma": the fallback (older) branch
+   *  carries whatever `seed` writes, and the winner's `ydocState` is
+   *  corrupt, so the open takes the fallback clone (#1863). */
+  async function writeFallbackSessions(
+    resolved: string,
+    seed: (older: Y.Doc) => void,
+  ): Promise<void> {
+    const older = textDoc("alpha beta gamma\n");
+    const newer = textDoc("alpha beta WINNER gamma\n");
+    older.transact(() => seed(older), "internal");
+    await writeDualSessions({
+      resolved,
+      format: "md",
+      older,
+      newer,
+      olderDirty: false,
+      newerDirty: false,
+      corruptWinner: "len-1",
+      corruptFallback: null,
+    });
+  }
+
+  /** The session's ann-W over "beta" at {6,10}. The snapshot is set
+   *  explicitly: `seedHighlight`'s default `""` is a real claim that the
+   *  range held no text, and would fail the overlay's gate. */
+  function seedSessionAnnW(older: Y.Doc, id = "ann-W"): void {
+    seedHighlight(older.getMap(Y_MAP_ANNOTATIONS), id, 6, 10, {
+      textSnapshot: "beta",
+      relRange: liveRelRange(older, 6, 10),
+    });
+  }
+
+  // `cloneBreaks` covers both halves of the overlay's set-or-delete for
+  // `textSnapshotBreaks`: the envelope always carries break offsets from ITS
+  // capture, and the overlaid record must carry the clone's (or none), never
+  // the envelope's, because the breaks describe the snapshot that moved with it.
+  const ENV_BREAKS = [{ at: 1, kind: "block" }] as const;
+  it.each([
+    ["no snapshot", undefined, undefined],
+    ["snapshot beta", "beta", [{ at: 2, kind: "hard" }]],
+  ] as const)("fallback restore overlays the session's anchor and keeps the envelope's record (#1863), envelope with %s", async (_label, envSnapshot, cloneBreaks) => {
+    const { resolved } = await writeDocFile(`overlay-${envSnapshot ?? "none"}.md`, DISK_TEXT);
+    // ann-W is the session's ONLY id, so mergeMap queues no write of its own:
+    // the envelope can only change through the overlay's observer write.
+    await writeFallbackSessions(resolved, (older) =>
+      seedHighlight(older.getMap(Y_MAP_ANNOTATIONS), "ann-W", 6, 10, {
+        textSnapshot: "beta",
+        relRange: liveRelRange(older, 6, 10),
+        ...(cloneBreaks !== undefined ? { textSnapshotBreaks: cloneBreaks } : {}),
+      }),
+    );
+    // The envelope's record is newer (rev 2) and carries newer content and
+    // status, but its offsets are those of "alpha XX beta gamma", text the
+    // fallback does not hold.
+    await seedEnvelope(resolved, [
+      {
+        id: "ann-W",
+        author: "user",
+        type: "highlight",
+        range: { from: toFlatOffset(9), to: toFlatOffset(13) },
+        content: "newer text",
+        status: "dismissed",
+        timestamp: 1700000000000,
+        color: "yellow",
+        rev: 2,
+        textSnapshotBreaks: [...ENV_BREAKS],
+        ...(envSnapshot !== undefined ? { textSnapshot: envSnapshot } : {}),
+      },
+    ]);
+
+    const res = await openFromDisk(resolved);
+    const doc = getOrCreateDocument(res.documentId);
+    // No test-side map writes before the flush: the envelope must reflect
+    // only open-path writes.
+    await closeStore(docHash(resolved));
+    expect(res.kind).toBe("restored");
+
+    // The anchor is the session's...
+    const live = doc.getMap(Y_MAP_ANNOTATIONS).get("ann-W") as unknown as Annotation;
+    expect(live.range).toEqual({ from: 6, to: 10 });
+    expect(live.relRange).toBeDefined();
+    expect(relPosToFlatOffset(doc, live.relRange!.fromRel)).toBe(6);
+    expect(relPosToFlatOffset(doc, live.relRange!.toRel)).toBe(10);
+    // ...and everything else is the envelope's, rev included, so a later
+    // stale peer or tombstone still compares against the newer rev.
+    expect(live.content).toBe("newer text");
+    expect(live.status).toBe("dismissed");
+    expect(live.rev).toBe(2);
+    // The break offsets are the clone's, like the snapshot they describe.
+    expect(live.textSnapshotBreaks).toEqual(cloneBreaks);
+
+    const env = (await readEnvelopeAnnotations(resolved)).find((a) => a["id"] === "ann-W");
+    expect(env).toBeDefined();
+    expect(env!["range"]).toEqual({ from: 6, to: 10 });
+    const envRel = env!["relRange"] as { fromRel: never; toRel: never };
+    expect(relPosToFlatOffset(doc, envRel.fromRel)).toBe(6);
+    expect(relPosToFlatOffset(doc, envRel.toRel)).toBe(10);
+    expect(env!["content"]).toBe("newer text");
+    expect(env!["rev"] as number).toBeGreaterThanOrEqual(2);
+    expect(env!["textSnapshotBreaks"]).toEqual(cloneBreaks);
+  });
+
+  it("a suggestion whose snapshot differs is not overlaid (#1863)", async () => {
+    const { resolved } = await writeDocFile("overlay-suggestion.md", DISK_TEXT);
+    await writeFallbackSessions(resolved, (older) => seedSessionAnnW(older));
+    // Accept replaces the stored span verbatim, so a suggestion written for
+    // "BETA" must not be moved onto the session's "beta".
+    await seedEnvelope(resolved, [
+      {
+        id: "ann-W",
+        author: "claude",
+        type: "comment",
+        range: { from: toFlatOffset(9), to: toFlatOffset(13) },
+        content: "Capitalize",
+        status: "pending",
+        timestamp: 1700000000000,
+        textSnapshot: "BETA",
+        suggestedText: "BETA!",
+        rev: 2,
+      },
+    ]);
+
+    const res = await openFromDisk(resolved);
+    expect(res.kind).toBe("restored");
+    const live = getOrCreateDocument(res.documentId)
+      .getMap(Y_MAP_ANNOTATIONS)
+      .get("ann-W") as unknown as Annotation;
+    expect(live.range).toEqual({ from: 9, to: 13 });
+    expect(live.textSnapshot).toBe("BETA");
+  });
+
+  it("a tombstoned cloned id stays deleted (#1863)", async () => {
+    const { resolved } = await writeDocFile("overlay-tombstone.md", DISK_TEXT);
+    await writeFallbackSessions(resolved, (older) => seedSessionAnnW(older, "ann-T"));
+    // The envelope deleted ann-T at rev 5 and holds no alive copy; the
+    // session's copy is rev 1, so the merge's tombstone veto removes it.
+    await seedEnvelope(resolved, [], [{ id: "ann-T", rev: 5, deletedAt: Date.now() }]);
+
+    const res = await openFromDisk(resolved);
+    const doc = getOrCreateDocument(res.documentId);
+    await closeStore(docHash(resolved));
+    expect(res.kind).toBe("restored");
+    expect(doc.getMap(Y_MAP_ANNOTATIONS).has("ann-T")).toBe(false);
+    const env = await readEnvelopeAnnotations(resolved);
+    expect(env.some((a) => a["id"] === "ann-T")).toBe(false);
+  });
+
+  it("a non-fallback restore still lets the envelope win (#1863)", async () => {
+    // Pins merge precedence, which the overlay must not change. A non-fallback
+    // session is not known to hold a better anchor than a newer envelope
+    // record, so the envelope wins and refreshRange / #1764 judge its anchor
+    // as before. A global "session wins" change goes red here.
+    const { resolved } = await writeDocFile("envelope-wins.md", DISK_TEXT);
+    const seed = textDoc("alpha beta gamma\n");
+    seed.transact(() => {
+      seedHighlight(seed.getMap(Y_MAP_ANNOTATIONS), "ann-W", 6, 10, {
+        textSnapshot: "beta",
+        content: "session",
+        relRange: liveRelRange(seed, 6, 10),
+      });
+    }, "internal");
+    await writeSessionFile(resolved, "md", seed, false);
+    await seedEnvelope(resolved, [
+      {
+        id: "ann-W",
+        author: "user",
+        type: "highlight",
+        range: { from: toFlatOffset(9), to: toFlatOffset(13) },
+        content: "envelope",
+        status: "pending",
+        timestamp: 1700000000000,
+        color: "yellow",
+        rev: 2,
+      },
+    ]);
+
+    const res = await openFromDisk(resolved);
+    expect(res.kind).toBe("restored");
+    const live = getOrCreateDocument(res.documentId)
+      .getMap(Y_MAP_ANNOTATIONS)
+      .get("ann-W") as unknown as Annotation;
+    expect(live.content).toBe("envelope");
+    expect(live.range).toEqual({ from: 9, to: 13 });
   });
 
   it("live-room maps survive an open with no session file", async () => {

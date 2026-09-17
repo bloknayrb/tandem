@@ -36,6 +36,14 @@ export interface LicenseStatusResponse {
   licenseInstalled?: boolean;
   /** Dark-build only, loopback only. Display name from the installed license. */
   licenseeName?: string;
+  /**
+   * Loopback only. Would an npm-installed `tandem activate` write where the
+   * server that answered this actually reads? Gates the Settings → License CLI
+   * hint (#1789). Absent on the LAN-scrubbed payload and on any server too old
+   * to send it, and absence must read as `false` — the failure it guards is a
+   * command that prints "✓ License activated" into a directory nothing reads.
+   */
+  cliActivateEffective?: boolean;
 }
 
 export interface LicenseUi {

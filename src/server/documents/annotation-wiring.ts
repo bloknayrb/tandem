@@ -9,12 +9,13 @@
 
 import path from "path";
 import type * as Y from "yjs";
+import type { Annotation } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { recoverRenamedEnvelope } from "../annotations/rename-recovery.js";
 import { annotationFileExists, createStore } from "../annotations/store.js";
-import { loadAndMerge } from "../annotations/sync.js";
-import { setFileSyncContext } from "../events/queue.js";
+import { loadAndMerge, persistSnapshot } from "../annotations/sync.js";
+import { getFileSyncContext, setFileSyncContext } from "../events/queue.js";
 import { collectAnnotations, refreshAllRanges } from "../mcp/annotations.js";
 import { pushNotification } from "../notifications.js";
 
@@ -27,9 +28,11 @@ import { pushNotification } from "../notifications.js";
  * branch — re-anchored from stored flat offsets, which is only safe because
  * the clone is byte-exact. Byte-exactness expires at the first edit, so the
  * repair cannot wait for whoever calls `refreshAllRanges` next: nothing on
- * the open path calls it (every server caller is downstream of a later
- * action and the client never writes back), while `loadAndMerge` snapshots
- * the dead relRange into the durable envelope on this very open.
+ * the NORMAL open path calls it (every other server caller is downstream of a
+ * later action and the client never writes back — the force-reload arm's
+ * `reanchorAnnotations` is a different arm and never reaches the fallback
+ * restore), while `loadAndMerge` snapshots the dead relRange into the durable
+ * envelope on this very open.
  *
  * `map` is a PARAMETER, not `doc.getMap(Y_MAP_ANNOTATIONS)` computed here:
  * this module has no `shared/constants.ts` edge and computing it here would
@@ -54,9 +57,10 @@ import { pushNotification } from "../notifications.js";
  * `skipTransact: true` (the default would re-tag with `withMcp`, the wrong
  * origin here and a nested re-tag) — persisted because `loadAndMerge` runs
  * later and reads the Y.Maps directly, origin-blind; (b) after the merge,
- * gated on `fallbackRestored`, with the DEFAULT transact — by then the
- * durable observer is attached and only a non-`DURABLE_SKIP` origin queues
- * the repaired state to disk.
+ * gated on the restore result carrying the cloned records, inside the anchor
+ * overlay's single `withMcp` transaction (so `skipTransact: true` there too) —
+ * by then the durable observer is attached and only a non-`DURABLE_SKIP`
+ * origin queues the repaired state to disk (#1863).
  */
 export function repairClonedAnchors(
   doc: Y.Doc,
@@ -65,6 +69,42 @@ export function repairClonedAnchors(
   opts: { skipTransact: boolean },
 ): void {
   refreshAllRanges(collectAnnotations(map, docHash(filePath)), doc, map, opts);
+}
+
+/**
+ * The live map's annotation records keyed by id, normalized through
+ * `collectAnnotations` under `docHash(filePath)` — the key `repairClonedAnchors`
+ * uses. The fallback restore reads it once after the clone-time repair (the
+ * cloned records) and once after the merge (the records the anchor overlay
+ * compares against) (#1863). It lives here so `documents/open.ts` gains no
+ * `mcp/annotations.ts` edge.
+ */
+export function annotationsById(
+  map: Y.Map<unknown>,
+  filePath: string,
+): ReadonlyMap<string, Annotation> {
+  return new Map(collectAnnotations(map, docHash(filePath)).map((a) => [a.id, a]));
+}
+
+/**
+ * Write the document's current annotation state to its durable envelope now,
+ * for a write whose origin the durable observer skips (#1696: Settings > Replay
+ * tutorial re-creates tombstoned seeds under `withInternal`, and without this
+ * the resurrection lives only in the session file).
+ *
+ * A no-op when the document has no file-sync context (the store feature is off,
+ * or `wireAnnotationStore` failed). A failed write is logged, never thrown: the
+ * store has already recorded and surfaced it, and an open must not fail on
+ * annotation durability.
+ */
+export async function persistEnvelopeNow(id: string, doc: Y.Doc, filePath: string): Promise<void> {
+  const ctx = getFileSyncContext(id);
+  if (ctx === undefined) return;
+  try {
+    await persistSnapshot(ctx.store, doc, ctx.docHash, filePath);
+  } catch (err) {
+    console.error("[Tandem] persistEnvelopeNow failed for %s (%s):", id, filePath, err);
+  }
 }
 
 /**
@@ -105,8 +145,10 @@ export async function wireAnnotationStore(
     // is the one loadAndMerge picks up. Gating on "no existing envelope"
     // guarantees recovery never steals from a live envelope.
     //
-    // Only enabled for the normal-open path. Force-reload (clearAndReload)
-    // deliberately clears the envelope and must NOT resurrect a stale orphan;
+    // Only enabled for the normal-open path: recovery is a FIRST-OPEN-only
+    // heuristic, and a force-reload is a reload of an already-open document
+    // that has its own envelope (kept since #1813 — clearAndReload no longer
+    // unlinks it), so an orphan match there would be a stale one.
     // upload:// recovery is deferred (see rename-recovery.ts header).
     if (opts?.allowRecovery && !(await annotationFileExists(hash))) {
       await recoverRenamedEnvelope(doc, hash, filePath);

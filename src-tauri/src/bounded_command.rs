@@ -446,13 +446,16 @@ mod tests {
     #[test]
     fn partial_lengths_report_what_arrived() {
         let outcome =
-            // 3s, not 1.5s: the child has to spawn, dynamically link, start
-            // libtest and reach its first flush before the budget expires, and
-            // 1.5s was the tightest margin in this module by 5x. A miss there
-            // would read as "the helper flushed but nothing was reported",
-            // pointing at the code when the runner was slow. The helper still
-            // outlives this by 57s, so the `TimedOut` half is unaffected.
-            output_with_timeout(helper("dribble"), Duration::from_secs(3)).expect("spawn");
+            // 10s, not 3s (and 3s was not 1.5s): the child has to spawn,
+            // dynamically link, start libtest and reach its first flush before
+            // the budget expires. A miss reads as "the helper flushed but
+            // nothing was reported", pointing at the code when the runner was
+            // slow — and 3s missed on 2026-09-07 inside the pre-push hook, where
+            // this runs right after 10k vitest cases and a cold cargo build on a
+            // Windows laptop; it passed 3/3 in isolation seconds later. The
+            // helper still outlives this by 50s, so the `TimedOut` half is
+            // unaffected, and the wall-clock cost is paid only on a miss.
+            output_with_timeout(helper("dribble"), Duration::from_secs(10)).expect("spawn");
         match outcome {
             BoundedOutcome::TimedOut {
                 partial_stdout_len, ..

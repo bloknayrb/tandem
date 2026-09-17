@@ -38,7 +38,9 @@
  * - Resolves `tokenSecretRef` via `deps.keychain.getSecret(ref)` per entry.
  * - Calls `applyConfig` with explicit `{ create, remove }` ops built from
  *   the user's confirmation diff (passed via the wizard's persist call).
- * - Calls `installSkill()` exactly once after the per-integration loop.
+ * - Calls `installSkill()` exactly once after the per-integration loop, and
+ *   records a declined install (#1790, newer skill on disk) on the
+ *   skill-refresh error channel — the response shape does not carry it.
  * - Response never echoes entries / headers / tokens.
  */
 
@@ -60,6 +62,7 @@ import {
   ERROR_CODE_BAD_ORIGIN,
   ERROR_CODE_INSTALL_FAILED,
   ERROR_CODE_INSTALL_IN_PROGRESS,
+  ERROR_CODE_INTEGRATIONS_FUTURE_SCHEMA,
   ERROR_CODE_INVALID_APPLY_REQUEST,
   ERROR_CODE_INVALID_INTEGRATIONS_FILE,
   ERROR_CODE_INVALID_NONCE,
@@ -88,6 +91,7 @@ import {
   applyConfig,
   buildMcpEntries,
   CHANNEL_DIST,
+  ConfigRefusalError,
   detectClaudeCli,
   detectTargets,
   installSkill,
@@ -95,6 +99,7 @@ import {
   type McpEntry,
   PathRejectedError,
   type RemovableEntry,
+  recordSkillInstallOutcome,
   shouldRegisterChannelShim,
 } from "./apply.js";
 import {
@@ -110,7 +115,7 @@ import {
 } from "./install-claude-cli.js";
 import { type Keychain, KeychainUnavailableError } from "./keychain.js";
 import { type IntegrationConfig, IntegrationsFileSchema } from "./schema.js";
-import type { IntegrationsStore } from "./storage.js";
+import { IntegrationsFutureSchemaError, type IntegrationsStore } from "./storage.js";
 
 export {
   API_INTEGRATIONS,
@@ -145,6 +150,17 @@ export interface IntegrationsRoutesDeps {
    * be built in the working tree.
    */
   shouldRegisterChannelShim?: typeof shouldRegisterChannelShim;
+  /**
+   * Optional skill-install override. Production leaves this undefined and
+   * calls the real `installSkill()`, which writes `~/.claude/skills/tandem/SKILL.md`
+   * under the REAL home directory — there is deliberately no request-body
+   * `homeOverride` (see `parseApplyBody`). Tests MUST inject a spy: the apply
+   * suite drives the real route, and without this seam every `npm test` and
+   * every pre-push hook silently overwrote the operator's installed skill with
+   * whatever the checkout happened to bundle (found 2026-09-07 — it had
+   * downgraded a v15 install to v14 three times in one night).
+   */
+  installSkill?: typeof installSkill;
   /**
    * Optional Claude-CLI binary detector override. Production leaves this
    * undefined and calls the real `detectClaudeCli()`. Tests inject a stub so
@@ -956,6 +972,27 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
             );
             continue;
           }
+          if (err instanceof ConfigRefusalError) {
+            // The config was refused, not written — the user's file is exactly
+            // as it was. `err.message` names the path and, for the size
+            // refusal, the byte count, so it stays server-side: this route is
+            // browser-reachable and `ApplyItemResult.message` is the leak-safe
+            // field. The `reason` is the whole payload the wizard needs (#1801,
+            // #1802) — without it every refusal renders as "couldn't write the
+            // settings file — check it isn't open in another program", which is
+            // both wrong and unactionable. It is already an
+            // `ApplyItemErrorCode`, so it forwards directly; the user-facing
+            // sentence is the wizard's `resultErrorText` to own, and the terse
+            // message here matches every sibling `errorResult` above.
+            console.error(
+              `[Tandem] apply: ${entry.id} → ${target.configPath} refused (${err.reason}):`,
+              err.message,
+            );
+            results.push(
+              errorResult(entry.id, err.reason, "Refused to rewrite the config — see server logs"),
+            );
+            continue;
+          }
           // Node's ENOENT formatting embeds the offending path; echoing
           // err.message back to the client would leak filesystem layout.
           console.error(`[Tandem] apply: ${entry.id} → ${target.configPath} failed:`, err);
@@ -972,7 +1009,18 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
       // Skill install runs once if anything applied (per-user side effect).
       if (anyApplied) {
         try {
-          await installSkill();
+          const skill = await (deps.installSkill ?? installSkill)();
+          // A decline (#1790: a NEWER skill is on disk) is not a failed
+          // integration, so the response shape stays as it is — but it must
+          // not vanish either. It rides the refresher's error channel, which
+          // `GET /api/launcher/status` already surfaces and the client already
+          // renders; before this, only the refresher ever set it.
+          recordSkillInstallOutcome(skill);
+          if (!skill.written) {
+            console.error(
+              `[Tandem] apply: kept the installed skill (v${skill.onDiskVersion} on disk is newer than this install's v${skill.bundledVersion})`,
+            );
+          }
         } catch (err) {
           // Non-fatal; log only.
           console.error("[Tandem] apply: skill install failed:", err);
@@ -1151,6 +1199,22 @@ function makePostInstallClaudeCodeHandler(deps: IntegrationsRoutesDeps): Handler
  */
 function sendInternal(res: Response, err: unknown, label: string): void {
   console.error(`[Tandem] ${label}:`, err);
+  // #1792: a downgrade makes every integrations route reject with the SAME
+  // precise error, and flattening it to `{"error":"INTERNAL"}` left the wizard
+  // dead with no hint. Branched here rather than at the seven call sites so a
+  // new one cannot forget it. The response message is BUILT HERE — the thrown
+  // message carries the resolved `filePath`, and these routes are
+  // LAN-reachable, so the path stays in the `console.error` line above.
+  if (err instanceof IntegrationsFutureSchemaError) {
+    res.status(409).json({
+      error: "CONFLICT",
+      code: ERROR_CODE_INTEGRATIONS_FUTURE_SCHEMA,
+      message:
+        `integrations.json was written by a newer Tandem (schemaVersion ${err.found}; ` +
+        `this build supports ${err.supported}). Update Tandem, or remove the integrations file.`,
+    });
+    return;
+  }
   res.status(500).json({
     error: "INTERNAL",
     message: "Internal server error",

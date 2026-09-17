@@ -55,8 +55,11 @@ export const RELOAD_ORIGIN = "reload";
 export const BROWSER_ORIGIN = "browser";
 
 /**
- * Origin for the WS-A2 Solo→Tandem release pass, which clears the persisted
- * `heldInSolo` markers across open docs. Channel SKIPS (this is not a fresh user
+ * Origin for the WS-A2 `heldInSolo` marker LIFECYCLE — both halves: the
+ * Solo→Tandem release pass, which clears the markers across open docs, and the
+ * server-side stamp (`server/annotations/held-in-solo.ts`, #1769), which sets one
+ * on a user comment created or edited while the room does not read Tandem.
+ * Channel SKIPS (this is not a fresh user
  * action — the underlying annotations/replies are released via the checkInbox
  * pull path, not a re-emitted edit event; a channel `annotation:edited` here
  * would be a spurious duplicate). Durable-sync PERSISTS (the cleared marker MUST
@@ -64,8 +67,12 @@ export const BROWSER_ORIGIN = "browser";
  * `heldInSolo:true` and, under indeterminate mode, re-holds an already-released
  * item). Tombstone observer records, like every other origin.
  *
+ * Channel-skip is also what makes the stamp observer's own re-entry impossible:
+ * it bails on `shouldSkipChannel(txn.origin)`, so its nested write fires neither
+ * it nor any channel observer.
+ *
  * NOTE: this profile (channel-skip / durable-persist / tombstone) currently
- * mirrors `mcp`'s exactly — but a server-owned mode-release sweep is NOT a
+ * mirrors `mcp`'s exactly — but a server-owned marker write is NOT a
  * Claude-initiated MCP write, so it carries its own semantic identity (per
  * ADR-031 the helper choice IS the contract, and `audit:origins` reads it).
  * Keeping it distinct also lets the profile diverge later without touching mcp.
@@ -156,9 +163,9 @@ export function withBrowser<T>(doc: Y.Doc, fn: () => T): T {
   return runTransact(doc, fn, BROWSER_ORIGIN);
 }
 
-/** Wrap the WS-A2 Solo→Tandem release marker-clear. Channel skips (no spurious
- * edit events), durable-sync persists (the cleared marker must survive restart).
- * See the `MODE_RELEASE_ORIGIN` doc comment. */
+/** Wrap a WS-A2 `heldInSolo` marker write — the release clear or the server-side
+ * stamp. Channel skips (no spurious edit events), durable-sync persists (the
+ * marker state must survive restart). See the `MODE_RELEASE_ORIGIN` doc comment. */
 export function withModeRelease<T>(doc: Y.Doc, fn: () => T): T {
   return runTransact(doc, fn, MODE_RELEASE_ORIGIN);
 }

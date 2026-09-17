@@ -259,6 +259,24 @@ export const buildEmbeddedImage = (): Promise<Buffer> =>
     ]),
   );
 
+/**
+ * A body picture PLUS a text paragraph (#1755). The scope pin for
+ * `tandem_applyChanges`: it edits the ORIGINAL `word/document.xml` in place and
+ * re-zips, so the picture survives it — unlike `exportYDocToDocx`, which
+ * regenerates from an image-less Y.Doc and is therefore refused.
+ */
+export const buildEmbeddedImageWithText = (): Promise<Buffer> =>
+  pack(
+    singleSection([
+      new Paragraph({
+        children: [
+          new ImageRun({ data: PNG_1x1, transformation: { width: 16, height: 16 }, type: "png" }),
+        ],
+      }),
+      new Paragraph("Hello World"),
+    ]),
+  );
+
 // ---------------------------------------------------------------------------
 // Raw-OOXML fixtures (style divergence, comments, tracked changes)
 // ---------------------------------------------------------------------------

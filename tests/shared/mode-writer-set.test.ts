@@ -70,10 +70,10 @@ const EXPECTED_MODE_WRITES: Array<[string, number]> = [
   // The user's toggle. Gated on the ctrl provider's first sync so the write is
   // causally ordered rather than concurrent — that gate is #1621's fix.
   ["src/client/hooks/useTandemModeBroadcast.svelte.ts", 1],
-  // The Solo-to-Tandem release, server-side and UNCONDITIONAL: any client's flip
-  // writes "tandem" for everyone. This is the writer that makes adoption unsafe
-  // on the client — see the both-directions spec in tandem-mode-race.test.ts.
-  ["src/server/mcp/routes/mode-release.ts", 1],
+  // #1769 removed the second writer. `POST /api/mode/release` used to write
+  // "tandem" unconditionally for everyone; it now VERIFIES the room reads Tandem
+  // and answers 409 MODE_NOT_TANDEM otherwise, so the key has exactly one writer
+  // and the room always holds the user's last CRDT toggle.
 ];
 
 /** Every file mentioning the constant, writers and readers alike. */
@@ -81,7 +81,6 @@ const EXPECTED_MENTIONS = [
   "src/client/hooks/useTandemModeBroadcast.svelte.ts",
   // `tandem_status` — what Claude is told the mode is.
   "src/server/mcp/document.ts",
-  "src/server/mcp/routes/mode-release.ts",
   // `readModeState` / `reportedMode` — the hide predicate for held annotations.
   "src/server/mode.ts",
   // The declaration itself.

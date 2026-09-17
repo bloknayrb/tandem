@@ -102,6 +102,17 @@ export function isTransientlyUnavailable(reason: LauncherUnavailableReason | und
  * installed afterwards will not update it. That is acceptable because the
  * supervisor spawns from the PATH the *process* started with, so such a user
  * needs a Tandem restart regardless of what the enum says.
+ *
+ * `wake-delivery-failed` (#1868): the supervisor ended three successive
+ * children in a row because each stopped accepting turns on stdin, with no
+ * completed turn in between, and gave up. The CLI itself probed as usable, so
+ * the remedy is a restart — which is why the client folds it into the same
+ * `restart` chip as `circuit-open`, with no client change.
+ *
+ * `needs-login` (#1780): the Claude CLI runs but is not signed in — it answered
+ * a turn with its "Not logged in" refusal, so the supervisor stopped retrying.
+ * The remedy is to sign in (`claude` in a terminal) and re-check, which the
+ * client offers as its own `sign-in` chip rather than a bare restart.
  */
 export type LauncherErrorCode =
   | "spawn-failed"
@@ -109,13 +120,21 @@ export type LauncherErrorCode =
   | "cli-unusable"
   | "stop-failed"
   | "circuit-open"
-  | "status-check-failed";
+  | "status-check-failed"
+  | "wake-delivery-failed"
+  | "needs-login";
 
 /** Loopback-only side-channel for bundled-skill refresh failures. The user
  * has no other signal that the skill is stale, so `/status` surfaces this
  * for the palette/settings UI to convert into a notification. */
 export interface SkillRefreshError {
-  code: "write-failed" | "read-failed" | "path-rejected" | "timed-out";
+  /**
+   * `newer-on-disk` is the wizard's, not the refresher's: `installSkill()`
+   * declined to downgrade a newer installed skill (#1790), and without this
+   * record `POST /api/integrations/apply` answered 200 with every integration
+   * `applied` while nothing anywhere said the skill was left alone.
+   */
+  code: "write-failed" | "read-failed" | "path-rejected" | "timed-out" | "newer-on-disk";
   message: string;
 }
 

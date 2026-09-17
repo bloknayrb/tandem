@@ -56,6 +56,13 @@
     "src/monitor/**/*.ts",
     "src/cli/**/*.ts",
     "src/stdio-bridge/**/*.ts",
+    // The two Cloudflare Workers. They were reached only TRANSITIVELY, via the
+    // two Worker test suites that import them -- typechecked by accident rather
+    // than by configuration, and silently dropped the moment a file stops being
+    // imported. Ends `/**/*.ts`, so the suffix-glob rule in
+    // `tests/scripts/typecheck-tests-wiring.test.ts` accepts it, and its orphan
+    // sweep (which walks only `tests/`) is unaffected.
+    "infra/**/*.ts",
     "tests/build/**/*.ts",
     "tests/channel/**/*.ts",
     "tests/cli/**/*.ts",

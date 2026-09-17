@@ -4,6 +4,23 @@ on:
   push:
     branches: [master]
   pull_request:
+  # Merge queue. GitHub builds a temporary `gh-readonly-queue/master/...` branch
+  # holding master plus this PR plus everything queued ahead of it, and fires
+  # `merge_group` against it; the PR merges only if the required checks pass
+  # THERE. That is what replaced `strict: true` (require-branches-up-to-date),
+  # which forced a manual `gh pr update-branch` and a full re-run on every open
+  # PR each time any other one merged.
+  #
+  # **Without this trigger the queue does not fail — it HANGS.** No workflow runs
+  # on the merge group, the required checks never report, and each PR sits until
+  # the queue times out and evicts it. Fail-safe (nothing wrong merges) but
+  # totally opaque, and it looks like a GitHub outage rather than a missing
+  # trigger. `tests/scripts/acceptance-harness-wiring.test.ts` and
+  # `windows-acl-proof-wiring.test.ts` both pin this key for that reason.
+  #
+  # Unfiltered, like `pull_request:` above: a `branches:` filter here would
+  # re-create the hang for the branch it excludes.
+  merge_group:
   workflow_dispatch:
 
 # Least privilege for every job here (CodeQL `actions/missing-workflow-permissions`).
@@ -54,6 +71,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           toolchain: stable
+
+      # The GitHub-hosted Ubuntu image ships a Google Chrome apt source that we do
+      # not use — Playwright downloads its own chromium binary, and `--with-deps`
+      # installs system libraries rather than Chrome. When that repo serves a
+      # Packages.gz whose hash disagrees with its Release file, `apt-get update`
+      # exits 100 and every job that touches apt dies in its dependency step,
+      # before any Tandem code runs. Dropping the source makes an outage in a
+      # repository we have no use for stop gating the merge queue.
+      - name: Drop the unused Google Chrome apt source
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo find /etc/apt/sources.list.d -maxdepth 1 -name 'google*' -print -delete
 
       - name: Install Linux system dependencies
         if: matrix.os == 'ubuntu-latest'
@@ -146,7 +174,7 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      - run: npm ci --ignore-scripts
 
       - name: Real-icacls proof (#1299 recovery path)
         run: node scripts/ci/windows-acl-proof.mjs
@@ -192,6 +220,21 @@ jobs:
   # sits at uniformly zero covered statements (what a single-project run looks
   # like from the outside).
   #
+  # **How to read a red here (#1862).** The measurement, the manifest and the
+  # floors are three steps, not one `&&` chain: any vitest exit used to
+  # short-circuit the chain, so the gate never ran and the job showed the
+  # identical red a genuine floor breach gets. Measured 2026-09-09 on a
+  # docs-only PR — vitest exited 1 on an EnvironmentTeardownError with 652 files
+  # passed and 0 failed, no floor breached and no floor evaluated.
+  #
+  # A red `Coverage floors` means the gate RAN — read its last line.
+  # `[coverage-gate] N failure(s).` is a real floor breach on a measurement that
+  # completed and was accepted. `The gate could not evaluate. This is not a
+  # pass.` is a measurement that did not happen; read the two steps above it.
+  # Not covered here: a measurement that exited 0 having silently lost test
+  # files still grades as a floor breach — that is the vitest file anchor in
+  # `check` (#1673).
+  #
   # The artifact uploads with `if: always()` because the manifest is most worth
   # reading on the run where something went wrong.
   #
@@ -207,12 +250,28 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      - run: npm ci --ignore-scripts
 
       - name: Coverage baseline
+        id: baseline
         run: npm run test:coverage
         timeout-minutes: 30
 
+      - name: Coverage manifest
+        if: ${{ !cancelled() }}
+        run: npm run coverage:manifest
+
+      - name: Coverage floors
+        if: ${{ !cancelled() }}
+        run: npm run coverage:gate
+        env:
+          TANDEM_MEASUREMENT_OUTCOME: ${{ steps.baseline.outcome }}
+
+      # `Upload coverage baseline` stays LAST. It is `if: always()` and its
+      # `path:` names coverage/baseline-manifest.json, which the `Coverage
+      # manifest` step above now produces — appending the new steps after the
+      # upload would publish an artifact missing the file that made the
+      # 2026-09-09 diagnosis possible.
       - name: Upload coverage baseline
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
@@ -282,7 +341,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - run: npm ci
+      - run: npm ci --ignore-scripts
 
       - name: Lint
         run: npm run lint
@@ -298,10 +357,11 @@ jobs:
 
       # The root config covers `src/` -- including `src/cli`, which neither the
       # client nor the server config includes. It already ran, but only inside
-      # the `Build` step five steps below, so a type error in the 2,905-line
-      # doctor.ts surfaced behind `Test`, the tag fetch and the acceptance
-      # harness rather than here. This is about WHEN it fails, not whether it
-      # runs.
+      # the `Build` step lower down, so a type error in the 2,905-line doctor.ts
+      # surfaced there rather than here. This is about WHEN it fails, not
+      # whether it runs. (#1748 moved `Build` above `Test`, which shortens that
+      # gap; `Build` still runs after every typecheck step, so this is still the
+      # earlier failure.)
       - name: Typecheck (root)
         run: npx tsc --noEmit
 
@@ -312,8 +372,32 @@ jobs:
       - name: Typecheck (tests)
         run: npm run typecheck:tests
 
+      - name: Build
+        run: npm run build
+
       - name: Test
-        run: npm test -- --run
+        run: npm test -- --run --reporter=default --reporter=json --outputFile.json=.vitest-report.json
+
+      # #1673: vitest's summary counts what it RAN, and nothing compared that
+      # against what it COLLECTED. A run that loses files to
+      # `[vitest-pool]: Failed to start forks worker` reports a smaller total
+      # and can exit 0 — a green that should be red.
+      #
+      # `if: ${{ !cancelled() }}`, never `always()` and never `success()`: a run
+      # can both fail a test AND lose files, so the anchor must survive a red
+      # `Test`, while `success()` would re-create the bug this step is about.
+      #
+      # An exit-3 here after a SKIPPED `Test` step means an earlier step in this
+      # job failed (npm ci, a lint, a typecheck) and vitest never ran — not that
+      # files were lost. This step's last output line tells the two apart: a
+      # named cannot-evaluate reason, versus a DID-NOT-RUN list.
+      #
+      # tests/scripts/vitest-file-anchor-wiring.test.ts pins this step's `run`,
+      # `if`, `continue-on-error` and `shell`, and the `Test` step's `run`, all
+      # by exact equality (ADR-051).
+      - name: Every collected test file actually ran
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/vitest-file-anchor.mjs .vitest-report.json
 
       # The session-monitor acceptance harness (82 tests) guards the first-use
       # auto-arm gate and had no runner in CI or the pre-push hook until #1399 --
@@ -348,9 +432,6 @@ jobs:
         run: npm run test:acceptance-harness
         timeout-minutes: 3
 
-      - name: Build
-        run: npm run build
-
       - name: Verify harness components stripped from client bundle
         run: node scripts/ci/verify-harness-stripped.mjs
 
@@ -361,6 +442,16 @@ jobs:
       - name: Monitor subcommand smoke test
         run: node scripts/ci/monitor-smoke.mjs
         timeout-minutes: 1
+
+      # The GitHub-hosted Ubuntu image ships a Google Chrome apt source that we do
+      # not use — Playwright downloads its own chromium binary, and `--with-deps`
+      # installs system libraries rather than Chrome. When that repo serves a
+      # Packages.gz whose hash disagrees with its Release file, `apt-get update`
+      # exits 100 and every job that touches apt dies in its dependency step,
+      # before any Tandem code runs. Dropping the source makes an outage in a
+      # repository we have no use for stop gating the merge queue.
+      - name: Drop the unused Google Chrome apt source
+        run: sudo find /etc/apt/sources.list.d -maxdepth 1 -name 'google*' -print -delete
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
@@ -413,10 +504,11 @@ jobs:
         if: failure()
         with:
           name: playwright-report
-          # `test-results/` carries Playwright's trace.zip / video.webm /
-          # screenshot artifacts (configured in playwright.config.ts via
-          # trace/screenshot/video). Without this path, diagnosing a CI-only
-          # flake requires re-running the spec locally.
+          # `test-results/` carries Playwright's trace.zip and failure
+          # screenshots (playwright.config.ts sets `trace: on-first-retry` and
+          # `screenshot: only-on-failure`; video is deliberately NOT enabled).
+          # Without this path, diagnosing a CI-only flake requires re-running
+          # the spec locally.
           path: |
             playwright-report/
             test-results/

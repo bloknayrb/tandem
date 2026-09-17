@@ -30,6 +30,10 @@ const REFUSAL_STATUS: Record<ReplyRefusalCode, number> = {
   NOT_FOUND: 404,
   ANNOTATION_RESOLVED: 409,
   INVALID_ARGUMENT: 400,
+  // #1770. The browser route never produces this code — it calls `addUserReply`,
+  // which is deliberately unguarded — but the `Record` is exhaustive, so the
+  // mapping must exist.
+  NOT_OWNED: 403,
 };
 
 export function handleAnnotationReply(req: Request, res: Response): void {

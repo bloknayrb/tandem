@@ -33,7 +33,7 @@ import { flushSync } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { isTauri } = vi.hoisted(() => ({ isTauri: vi.fn(() => true) }));
-vi.mock("../../src/client/cowork/cowork-helpers.js", () => ({ isTauriRuntime: isTauri }));
+vi.mock(import("../../src/client/cowork/cowork-helpers.js"), () => ({ isTauriRuntime: isTauri }));
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((cmd: string) => {

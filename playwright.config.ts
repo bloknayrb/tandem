@@ -54,6 +54,19 @@ export default defineConfig({
   use: {
     baseURL: `http://127.0.0.1:${E2E_VITE_PORT}`,
     headless: true,
+    // #1825: `retries: 1` with nothing captured left a CI-only flake with no
+    // evidence at all -- ci.yml uploads `test-results/`, which was empty.
+    // NOT `video`: it is the expensive one and nothing asks for it, so the
+    // ci.yml comment names only what is actually enabled.
+    //
+    // Three downstream configs inherit from this one, checked rather than
+    // assumed: scripts/screenshots spreads `...baseConfig.use`,
+    // scripts/design-baselines spreads `...baseConfig` and defines no `use`
+    // (so it inherits wholesale), and tests/perf defines its own `use` and
+    // inherits NOTHING -- which is the one that matters, since trace capture
+    // on a retry inside a timing gate would shift the measurement.
+    trace: "on-first-retry",
+    screenshot: "only-on-failure",
   },
   // Two webServer entries instead of `npm run dev:standalone`:
   //   1. Vite dev server for the client

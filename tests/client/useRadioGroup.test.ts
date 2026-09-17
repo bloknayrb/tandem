@@ -1,19 +1,33 @@
-import { describe, expect, it, vi } from "vitest";
-import { useRadioGroup } from "../../src/client/hooks/useRadioGroup.js";
+// @vitest-environment happy-dom
 
-// The hook body runs synchronously when called — we don't need renderHook,
-// we just invoke it as a function and exercise the returned handlers.
+/**
+ * #1778 item 3 — this suite used to exercise `hooks/useRadioGroup.ts`, which
+ * had zero importers in `src/`. The shipped hook is `createRadioGroup`
+ * (`hooks/useRadioGroup.svelte.ts`), which all three consumers import and which
+ * nothing tested — including the `radios?.[domIdx]?.focus()` call that is the
+ * only behavioural difference between the two. The dead module is deleted and
+ * this suite is retargeted; `value` becomes a `() => value` getter.
+ */
+
+import { describe, expect, it, vi } from "vitest";
+import { createRadioGroup } from "../../src/client/hooks/useRadioGroup.svelte.js";
+
 function callHook<T extends string>(
   value: T,
   values: readonly T[],
   isDisabled?: (v: T) => boolean,
 ) {
   const setValue = vi.fn();
-  const { handleKeyDown, tabIndexFor } = useRadioGroup(value, values, setValue, isDisabled);
+  const { handleKeyDown, tabIndexFor } = createRadioGroup(
+    () => value,
+    values,
+    setValue,
+    isDisabled,
+  );
   return { setValue, handleKeyDown, tabIndexFor };
 }
 
-describe("useRadioGroup — tabIndexFor", () => {
+describe("createRadioGroup — tabIndexFor", () => {
   it("puts the checked value in the tab order, others out", () => {
     const { tabIndexFor } = callHook("m", ["s", "m", "l"] as const);
     expect(tabIndexFor("s")).toBe(-1);
@@ -43,10 +57,11 @@ describe("useRadioGroup — tabIndexFor", () => {
   });
 });
 
-describe("useRadioGroup — handleKeyDown", () => {
+describe("createRadioGroup — handleKeyDown", () => {
   // Minimal KeyboardEvent stub — we only need the fields the handler reads
   // plus a querySelectorAll on currentTarget that returns an empty list so
-  // focus() is skipped (no DOM in the vitest node env).
+  // focus() is skipped. The `.focus()` call itself is covered by the real
+  // dispatch below, which is the only harness that can see it.
   function keyEvt(key: string) {
     let prevented = false;
     const evt = {
@@ -104,5 +119,44 @@ describe("useRadioGroup — handleKeyDown", () => {
     handleKeyDown(evt);
     expect(setValue).not.toHaveBeenCalled();
     expect(prevented()).toBe(false);
+  });
+});
+
+describe("createRadioGroup — roving focus (the shipped hook's one extra behaviour)", () => {
+  // Spelled out because the obvious shortcut does not test the code:
+  // `e.currentTarget` is null outside a real dispatch, and the implementation's
+  // `container?.querySelectorAll(...)` / `radios?.[domIdx]?.focus()` optional
+  // chaining makes that a silent no-op — so a hand-built
+  // `{ key: "ArrowRight", currentTarget: el } as any` passes even with the
+  // `.focus()` line deleted. Only a real `dispatchEvent` on a real container
+  // populates `currentTarget`.
+  function mountGroup(values: readonly string[]) {
+    const container = document.createElement("div");
+    container.setAttribute("role", "radiogroup");
+    const radios = values.map((v) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.setAttribute("role", "radio");
+      b.textContent = v;
+      container.appendChild(b);
+      return b;
+    });
+    document.body.appendChild(container);
+    return { container, radios };
+  }
+
+  it("moves DOM focus onto the newly selected radio", () => {
+    const values = ["s", "m", "l"] as const;
+    const { container, radios } = mountGroup(values);
+    const setValue = vi.fn();
+    const { handleKeyDown } = createRadioGroup(() => "s", values, setValue);
+    container.addEventListener("keydown", handleKeyDown);
+
+    radios[0].focus();
+    radios[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+
+    expect(setValue).toHaveBeenCalledWith("m");
+    expect(document.activeElement).toBe(radios[1]);
+    container.remove();
   });
 });

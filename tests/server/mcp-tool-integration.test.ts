@@ -9,9 +9,7 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
@@ -22,15 +20,24 @@ import {
 } from "../../src/server/events/delivery-state.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
-import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
+import {
+  getOrCreateXmlText,
+  populateYDoc,
+  registerDocumentTools,
+} from "../../src/server/mcp/document.js";
 import { extractMarkdown, extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { registerNavigationTools } from "../../src/server/mcp/navigation.js";
 import { shutdownSearchWorker } from "../../src/server/mcp/search-worker.js";
 import {
+  _resetModeProvenanceForTests,
+  installModeProvenanceObserver,
+} from "../../src/server/mode.js";
+import {
   getBuffer as getNotificationBuffer,
   resetForTesting as resetNotifications,
 } from "../../src/server/notifications.js";
+import { anchoredRange } from "../../src/server/positions.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
@@ -44,38 +51,16 @@ import {
 import { MCP_ORIGIN, withInternal } from "../../src/shared/origins.js";
 import { SNAPSHOT_CAP } from "../../src/shared/snapshot.js";
 import type { Annotation } from "../../src/shared/types.js";
-import { range } from "../helpers/positions.js";
+import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
+import { off, range } from "../helpers/positions.js";
 import { createAnnotation, rangeOf } from "../helpers/ydoc-factory.js";
 
 let client: Client;
+let close: (() => Promise<void>) | undefined;
 const sidecarTempFiles: string[] = [];
 
+/** Still used by `rawErrorText` below, which reads the raw envelope text. */
 type CallToolResponse = Awaited<ReturnType<Client["callTool"]>>;
-
-async function setupMcpClient(): Promise<Client> {
-  const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
-  registerDocumentTools(server);
-  registerAnnotationTools(server);
-  registerNavigationTools(server);
-  registerAwarenessTools(server);
-
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-
-  const mcpClient = new Client({ name: "test-client", version: "0.0.1" });
-  await server.connect(serverTransport);
-  await mcpClient.connect(clientTransport);
-  return mcpClient;
-}
-
-function parseResult(result: CallToolResponse) {
-  // `result.content` is fine to read directly, but TS's deep Zod-inferred
-  // union type for it blows up ("is of type 'unknown'") the moment it's
-  // iterated (`.find`, `for...of`, etc.) — casting once to a plain shape
-  // sidesteps that without changing what's actually in the array.
-  const content = result.content as Array<{ type: string; text?: string }>;
-  const textContent = content.find((c) => c.type === "text");
-  return textContent?.text ? JSON.parse(textContent.text) : null;
-}
 
 function setupDoc(id: string, text: string) {
   const ydoc = getOrCreateDocument(id);
@@ -107,7 +92,19 @@ beforeEach(async () => {
   // Clear CTRL_ROOM mode so a Solo-hold test can't bleed into the next test.
   const ctrl = getOrCreateDocument(CTRL_ROOM);
   withInternal(ctrl, () => ctrl.getMap(Y_MAP_USER_AWARENESS).delete(Y_MAP_MODE));
-  client = await setupMcpClient();
+  ({ client, close } = await setupMcpServer([
+    registerDocumentTools,
+    registerAnnotationTools,
+    registerNavigationTools,
+    registerAwarenessTools,
+  ]));
+});
+
+// File-level, beside `afterAll` below. The describe-scoped `afterEach`s further
+// down cover one describe each and none of them touches the client.
+afterEach(async () => {
+  await close?.();
+  close = undefined;
 });
 
 // The `regex: true` cases spawn the #1795 search worker. Hygiene: the forks
@@ -173,6 +170,45 @@ describe("MCP tool integration — document tools", () => {
     expect(parsed.error).toBe(false);
     expect(parsed.data.running).toBe(true);
     expect(parsed.data.documentCount).toBe(1);
+  });
+
+  // #1733: the field must survive the SDK's hard validation of structured
+  // output, which is what this round-trip pins — the union has four arms and the
+  // schema has to admit each.
+  it("tandem_status and tandem_checkInbox carry modeProvenance", async () => {
+    setupDoc("mcp-doc-provenance", "Content");
+    _resetModeProvenanceForTests();
+
+    const before = parseResult(await client.callTool({ name: "tandem_status", arguments: {} }));
+    expect(before.data.modeProvenance).toBeNull();
+    const inboxBefore = parseResult(
+      await client.callTool({ name: "tandem_checkInbox", arguments: {} }),
+    );
+    expect(inboxBefore.data.modeProvenance).toBeNull();
+
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    const cleanup = installModeProvenanceObserver(ctrl);
+    try {
+      const scratch = new Y.Doc();
+      Y.applyUpdate(scratch, Y.encodeStateAsUpdate(ctrl));
+      const sv = Y.encodeStateVector(scratch);
+      scratch.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_MODE, "tandem");
+      Y.applyUpdate(ctrl, Y.encodeStateAsUpdate(scratch, sv), { socketId: "abcdef0123456789" });
+
+      const status = parseResult(await client.callTool({ name: "tandem_status", arguments: {} }));
+      expect(status.data.modeProvenance).toMatchObject({
+        source: "client",
+        connection: "abcdef01",
+        value: "tandem",
+      });
+      const inbox = parseResult(
+        await client.callTool({ name: "tandem_checkInbox", arguments: {} }),
+      );
+      expect(inbox.data.modeProvenance).toMatchObject({ source: "client", value: "tandem" });
+    } finally {
+      cleanup();
+      _resetModeProvenanceForTests();
+    }
   });
 });
 
@@ -385,6 +421,43 @@ describe("MCP tool integration — annotation tools", () => {
     expect(ok.data.annotationId).toMatch(/^ann_/);
   });
 
+  it("tandem_comment accepts a transcribed snapshot over an NBSP span and stores the real bytes (#1622)", async () => {
+    // The end of the self-contradiction the issue describes: the SAME call
+    // succeeded with `textSnapshot` omitted and then persisted the NBSP-bearing
+    // string as the annotation's snapshot — so the stored value differed from
+    // the rejected one by one invisible codepoint.
+    //
+    // A caller reading `tandem_getTextContent` cannot see the U+00A0, so it
+    // sends back an ordinary space. That is now a match, and what gets STORED is
+    // still `captureSnapshot`'s own slice of the document.
+    const NBSP = "\u00A0";
+    const body = `We categorized emails,${NBSP}Teams chats, and meeting transcripts.`;
+    const ydoc = setupDoc("mcp-ann-nbsp", body);
+    const map = ydoc.getMap<Annotation>(Y_MAP_ANNOTATIONS);
+
+    const span = `categorized emails,${NBSP}Teams chats`;
+    const from = body.indexOf(span);
+    const to = from + span.length;
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_comment",
+        arguments: {
+          from,
+          to,
+          text: "on the sources",
+          // The transcription: an ordinary space where the document has NBSP.
+          textSnapshot: span.replace(NBSP, " "),
+        },
+      }),
+    );
+    expect(parsed.error).toBe(false);
+
+    const stored = map.get(parsed.data.annotationId);
+    expect(stored?.textSnapshot).toBe(span);
+    expect(stored?.textSnapshot).toContain(NBSP);
+  });
+
   it("tandem_comment refuses a range overlapping a heading prefix (Critical Rule 6)", async () => {
     // **Nothing pinned this at the handler level until ADR-035 Unit 8j-2.** The
     // only `INVALID_RANGE` assertions in the suite were in `positions.test.ts`,
@@ -411,6 +484,17 @@ describe("MCP tool integration — annotation tools", () => {
     expect(parsed.error).toBe(true);
     expect(parsed.code).toBe("INVALID_RANGE");
 
+    // **Byte-identical to today, and that is the point (#1766).** The annotation
+    // tools answer through `rangeFailureToError` (`mcp/annotations.ts`) and keep
+    // the ENDPOINT-only rule, so its message must not pick up `tandem_edit`'s
+    // new "split the edit at the heading boundary" advice — splitting is not
+    // something a comment author can do, and a comment spanning a section is
+    // legal. This assertion is what fails if the #1766 message edit is applied
+    // to the shared helper instead of to `tandem_edit`'s own inline `mcpError`.
+    expect(parsed.message).toBe(
+      'Range overlaps with heading markup (e.g., "## "). Target the text content only.',
+    );
+
     // **The control, and it is what makes the assertion above mean anything.**
     // `INVALID_RANGE` has several producers, so a refusal alone does not show
     // the HEADING branch fired — a wrong document, an unresolvable offset or an
@@ -424,6 +508,88 @@ describe("MCP tool integration — annotation tools", () => {
     const okParsed = parseResult(ok);
     expect(okParsed.error).toBe(false);
     expect(okParsed.data.annotationId).toMatch(/^ann_/);
+  });
+
+  it("tandem_comment still spans a heading — the #1766 interior scan is tandem_edit's alone", async () => {
+    // **The sibling of the spec above, and the only thing in the suite that
+    // would notice a fix that ORed the interior scan into `rejectHeadingOverlap`
+    // itself.** `YDocStore.anchorRange` hardcodes that flag for
+    // `tandem_comment` / `tandem_suggest`, so widening it here would refuse a
+    // comment about a whole section and answer "target the text content only" —
+    // advice with no followable form when the target IS two blocks and the
+    // heading between them.
+    //
+    // Offsets: "Intro para" is [0, 10), the heading block starts at 11 with its
+    // `"## "` prefix at [11, 14), and "Body text here" starts at 22. [0, 25)
+    // therefore steps straight over the prefix while both ENDPOINTS clear it —
+    // exactly the shape `tandem_edit` now refuses.
+    const ydoc = setupDoc("mcp-ann-span-heading", "Intro para\n## Section\nBody text here");
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_comment",
+        arguments: { from: 0, to: 25, text: "on the whole section" },
+      }),
+    );
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.annotationId).toMatch(/^ann_/);
+
+    // Stored on the span it was asked for, not silently clamped off the heading.
+    const map = ydoc.getMap<Annotation>(Y_MAP_ANNOTATIONS);
+    expect(map.get(parsed.data.annotationId)?.range).toEqual({ from: 0, to: 25 });
+  });
+
+  it("tandem_comment WITH suggestedText refuses the same span — a suggestion rewrites it", async () => {
+    // **The other half of the spec above, and the hole #1766 left open.** #1766
+    // read `rejectHeadingInterior` as `tandem_edit`'s alone because "annotation
+    // creation writes no text". True of the immediate call, false of the
+    // eventual effect: `suggestedText` is a rewrite DEFERRED to Accept, and both
+    // consumers replace the stored flat span verbatim — `useAnnotationReview`'s
+    // `deleteRange({from, to})` + insert, and `docx-apply`'s
+    // `flatText.slice(from, to)` replacement. `snapshotContradicts` cannot stop
+    // it: the snapshot was captured over that exact span and still matches.
+    //
+    // So before this fix `tandem_edit(0, 25, "X")` was refused while
+    // `tandem_comment(0, 25, { suggestedText: "X" })` plus one click in the
+    // editor reached the same heading deletion.
+    //
+    // The fixture and offsets are the sibling spec's, deliberately: the ONLY
+    // difference between the two calls is `suggestedText`, so this cannot pass
+    // for any reason other than the arm it is testing.
+    const ydoc = setupDoc("mcp-ann-span-heading-suggest", "Intro para\n## Section\nBody text here");
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_comment",
+        arguments: {
+          from: 0,
+          to: 25,
+          text: "rewrite the whole section",
+          suggestedText: "Replacement",
+        },
+      }),
+    );
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_RANGE");
+    expect(parsed.message).toBe(
+      'Range overlaps with heading markup (e.g., "## "). Target the text content only.',
+    );
+
+    // Nothing was stored — a refusal that still created the annotation would be
+    // the same bug wearing an error message.
+    expect(ydoc.getMap<Annotation>(Y_MAP_ANNOTATIONS).size).toBe(0);
+
+    // **The control.** The same suggestion inside one block must still be
+    // accepted, or this spec would be green against a build in which
+    // `suggestedText` is refused outright.
+    const ok = parseResult(
+      await client.callTool({
+        name: "tandem_comment",
+        arguments: { from: 22, to: 26, text: "tighten", suggestedText: "Text" },
+      }),
+    );
+    expect(ok.error).toBe(false);
+    expect(ok.data.annotationId).toMatch(/^ann_/);
   });
 
   it("tandem_comment records textSnapshotTruncated when the range exceeds the cap (#1486)", async () => {
@@ -470,18 +636,23 @@ describe("MCP tool integration — annotation tools", () => {
   });
 
   it("tandem_comment rejects invalid arguments (missing required field)", async () => {
-    setupDoc("mcp-ann-2", "Hello world");
+    const ydoc = setupDoc("mcp-ann-2", "Hello world");
+    const map = ydoc.getMap<Annotation>(Y_MAP_ANNOTATIONS);
 
-    // Missing 'text' field — Zod validation should reject
-    try {
-      await client.callTool({
-        name: "tandem_comment",
-        arguments: { from: 0, to: 5 },
-      });
-      // If no error thrown, check the response
-    } catch {
-      // Expected — SDK may throw on validation failure
-    }
+    // Missing 'text'. The SDK does not throw on a schema failure — it returns an
+    // error envelope — so the old try/empty-catch body was green whether the tool
+    // rejected the call or accepted it.
+    const result = (await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 0, to: 5 },
+    })) as { isError?: boolean; content: { type: string; text: string }[] };
+
+    expect(result.isError).toBe(true);
+    // Loose on the CODE only: matching Zod's wording pins a dependency's prose,
+    // and matching `/text/` is satisfied by the envelope's own `type: "text"`.
+    expect(result.content[0].text).toMatch(/-32602/);
+    // And the other half — a rejection that still wrote is not a rejection.
+    expect(map.size).toBe(0);
   });
 
   // The no-args variants verify that deprecated stubs accept calls missing the
@@ -692,10 +863,18 @@ describe("MCP tool integration — annotation tools", () => {
 
     // Seed two imported Word comments — post-#482 these are author=import,
     // type=comment (Claude-visible like any other comment).
+    //
+    // `audience: "outbound"` is explicit since #1619, and it is not decoration:
+    // `sanitizeAnnotation` derives `private` for an `author: "import"` record
+    // with no stored audience (W8/#756 — an untriaged Word comment is a private
+    // note until the user promotes it), and every Claude-facing read now honours
+    // that field as the channel always has. The PROMOTED shape carries
+    // `outbound`, which is the record this spec is about.
     const imported1: Annotation = {
       id: "imp_1",
       author: "import",
       type: "comment",
+      audience: "outbound",
       range: range(6, 11),
       content: "[Reviewer] Reword this",
       status: "pending",
@@ -706,6 +885,7 @@ describe("MCP tool integration — annotation tools", () => {
       id: "imp_2",
       author: "import",
       type: "comment",
+      audience: "outbound",
       range: range(12, 16),
       content: "[Reviewer] Check fact",
       status: "pending",
@@ -744,6 +924,152 @@ describe("MCP tool integration — annotation tools", () => {
     expect(filteredParsed.data.annotations.every((a: Annotation) => a.author === "import")).toBe(
       true,
     );
+  });
+});
+
+describe("MCP tool integration — author authority (#1770)", () => {
+  /**
+   * The MCP surface is where the refusal has to land: `lifecycle`'s guard is
+   * pinned separately, but a switch arm that never mapped `not-owned` onto a
+   * code would return an unhandled-result `undefined` through the SDK and read
+   * as a transport fault rather than a refusal.
+   */
+  function seedUserComment(docId: string, id: string): void {
+    const ydoc = setupDoc(docId, "Hello world test content");
+    withInternal(ydoc, () => {
+      ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, {
+        id,
+        author: "user",
+        type: "comment",
+        audience: "outbound",
+        range: { from: 0, to: 5 },
+        content: "the user's own comment",
+        status: "pending",
+        timestamp: 1,
+        rev: 1,
+      });
+    });
+  }
+
+  it("tandem_editAnnotation refuses a user-authored annotation with NOT_OWNED", async () => {
+    seedUserComment("mcp-owner-edit", "u_edit");
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_editAnnotation",
+        arguments: { id: "u_edit", content: "let me reword yours" },
+      }),
+    );
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("NOT_OWNED");
+    // The record is untouched — a refusal that still wrote would be worse than
+    // no guard, and `error: true` alone cannot see that.
+    const stored = getOrCreateDocument("mcp-owner-edit").getMap(Y_MAP_ANNOTATIONS).get("u_edit") as
+      | Annotation
+      | undefined;
+    expect(stored?.content).toBe("the user's own comment");
+  });
+
+  it("tandem_annotationReply refuses a user-authored annotation with NOT_OWNED", async () => {
+    seedUserComment("mcp-owner-reply", "u_reply");
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_annotationReply",
+        arguments: { annotationId: "u_reply", text: "answering inside your thread" },
+      }),
+    );
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("NOT_OWNED");
+  });
+
+  it("tandem_resolveAnnotation refuses accept on Claude's own record", async () => {
+    // Accept is the USER's decision. Claude may only withdraw.
+    const ydoc = setupDoc("mcp-owner-accept", "Hello world test content");
+    const id = createAnnotation(
+      ydoc.getMap(Y_MAP_ANNOTATIONS),
+      ydoc,
+      "comment",
+      rangeOf(0, 5, ydoc),
+      "mine",
+    );
+
+    const accepted = parseResult(
+      await client.callTool({
+        name: "tandem_resolveAnnotation",
+        arguments: { id, action: "accept" },
+      }),
+    );
+    expect(accepted.error).toBe(true);
+    expect(accepted.code).toBe("ACCEPT_REFUSED");
+
+    // The control: the same id, dismissed, succeeds and is stamped.
+    const dismissed = parseResult(
+      await client.callTool({
+        name: "tandem_resolveAnnotation",
+        arguments: { id, action: "dismiss" },
+      }),
+    );
+    expect(dismissed.error).toBe(false);
+    const stored = ydoc.getMap(Y_MAP_ANNOTATIONS).get(id) as Annotation;
+    expect(stored.status).toBe("dismissed");
+    expect(stored.resolvedBy).toBe("claude");
+  });
+
+  it("tandem_resolveAnnotation refuses accept on a suggestion it cannot apply", async () => {
+    // The SECOND `accept-refused` reason, and the one the author check cannot
+    // reach: a record Claude does NOT own, so it clears `own-annotation`, but
+    // which carries `suggestedText`. `applySuggestion` is client-only, so an
+    // MCP accept never applied it — it flipped status and left the document
+    // untouched, which is the opposite of what the tool promised.
+    const ydoc = setupDoc("mcp-unapplied-suggestion", "Hello world test content");
+    withInternal(ydoc, () => {
+      ydoc.getMap(Y_MAP_ANNOTATIONS).set("u_sugg", {
+        id: "u_sugg",
+        author: "user",
+        type: "comment",
+        audience: "outbound",
+        range: { from: 0, to: 5 },
+        content: "swap this word",
+        suggestedText: "Goodbye",
+        status: "pending",
+        timestamp: 1,
+        rev: 1,
+      });
+    });
+
+    const accepted = parseResult(
+      await client.callTool({
+        name: "tandem_resolveAnnotation",
+        arguments: { id: "u_sugg", action: "accept" },
+      }),
+    );
+    expect(accepted.error).toBe(true);
+    expect(accepted.code).toBe("ACCEPT_REFUSED");
+    // The MESSAGE, not just the code: both reasons share one envelope, so a
+    // code-only assertion passes with the two arms swapped — and swapping them
+    // would tell the user their own comment is Claude's.
+    expect(accepted.message).toContain("suggestedText");
+    expect(accepted.message).not.toContain("Claude's own");
+
+    // Refused means UNWRITTEN. The document text is the half that matters here:
+    // the whole reason for this arm is that an accept must not silently leave
+    // the suggestion unapplied while reporting success.
+    const stored = ydoc.getMap(Y_MAP_ANNOTATIONS).get("u_sugg") as Annotation;
+    expect(stored.status).toBe("pending");
+    expect(stored.resolvedBy).toBeUndefined();
+    expect(extractText(ydoc)).toContain("Hello world");
+
+    // The control: the same record dismisses, so the refusal is keyed on the
+    // accept transition and not on the record being unreachable.
+    const dismissed = parseResult(
+      await client.callTool({
+        name: "tandem_resolveAnnotation",
+        arguments: { id: "u_sugg", action: "dismiss" },
+      }),
+    );
+    expect(dismissed.error).toBe(false);
+    expect((ydoc.getMap(Y_MAP_ANNOTATIONS).get("u_sugg") as Annotation).status).toBe("dismissed");
   });
 });
 
@@ -838,7 +1164,13 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
     });
     const parsed = parseResult(result);
     expect(parsed.error).toBe(false);
-    expect(parsed.data.writtenPath).toBe(customPath);
+    // `customPath`'s leaf does not exist yet, so `annotations.ts` realpath's
+    // its PARENT (the ENOENT branch, :874-879) and rejoins the basename. They
+    // coincide here, but not on macOS, where `/var/folders` is itself a
+    // symlink (#1855).
+    expect(parsed.data.writtenPath).toBe(
+      join(await fs.realpath(join(customPath, "..")), basename(customPath)),
+    );
     const raw = await fs.readFile(customPath, "utf-8");
     expect(raw).toContain("Custom path comment");
   });
@@ -912,7 +1244,6 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
       `tandem-export-dir-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     );
     await fs.mkdir(targetDir, { recursive: true });
-    const expectedFile = join(targetDir, `${basename(docPath)}.annotations.json`);
 
     const ydoc = setupDocAtPath("mcp-export-dir", "Hello world", docPath);
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
@@ -925,8 +1256,16 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
       });
       const parsed = parseResult(result);
       expect(parsed.error).toBe(false);
-      expect(parsed.data.writtenPath).toBe(expectedFile);
-      const raw = await fs.readFile(expectedFile, "utf-8");
+      // `targetDir` exists, so `annotations.ts` realpath's it directly (the
+      // existing-directory branch, :849-855) before appending the default
+      // filename. They coincide here, but not on macOS, where `/var/folders`
+      // is itself a symlink (#1855).
+      const expectedRealFile = join(
+        await fs.realpath(targetDir),
+        basename(docPath) + ".annotations.json",
+      );
+      expect(parsed.data.writtenPath).toBe(expectedRealFile);
+      const raw = await fs.readFile(expectedRealFile, "utf-8");
       expect(raw).toContain("dir-target comment");
     } finally {
       await fs.rm(targetDir, { recursive: true, force: true });
@@ -1182,6 +1521,12 @@ describe("MCP tool integration — awareness tools", () => {
     expect(empty.error).toBe(false);
     expect(empty.data.active).toBe(false);
     expect(empty.data.cursor).toBe(null);
+    // `isTyping` is present on BOTH branches, and the assertion is `toBe(false)`
+    // rather than a falsy check on purpose: this branch used to omit the field
+    // entirely, which every `if (!isTyping)` read tolerated and every
+    // `=== false` / `typeof` read did not. A falsy assertion here would pass
+    // against the omission it exists to prevent.
+    expect(empty.data.isTyping).toBe(false);
 
     // **And the `documentId` argument must still route.** The handler was
     // repointed from a hand-rolled `getCurrentDoc(documentId)` +
@@ -1251,22 +1596,61 @@ describe("MCP tool integration — awareness tools", () => {
     ]);
   });
 
-  it("tandem_checkInbox reports the user's live selection", async () => {
+  it("tandem_checkInbox reports the user's selection WITH its own timestamp (#1624)", async () => {
     // `getUserAwareness()`'s `selection` half is written by this unit and was
     // read by nothing in the suite: swapping its key for `Y_MAP_ACTIVITY`, or
     // returning `undefined` outright, stayed green everywhere while
     // `tandem_checkInbox` silently stopped telling Claude what the user has
     // highlighted.
+    //
+    // #1624: the two halves of `activity` come from two records with
+    // independent ages. The timestamps are distinct so that `selectionAt`
+    // echoing `lastEdit` (the wrong record) cannot pass.
+    const T_SEL = 1_700_000_000_111;
+    const T_EDIT = 1_700_000_999_999;
     const ydoc = setupDoc("mcp-inbox-selection", "Hello world");
+    withInternal(ydoc, () => {
+      const awareness = ydoc.getMap(Y_MAP_USER_AWARENESS);
+      awareness.set(Y_MAP_SELECTION, { from: 6, to: 11, timestamp: T_SEL });
+      awareness.set(Y_MAP_ACTIVITY, { isTyping: false, cursor: 11, lastEdit: T_EDIT });
+    });
+
+    const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.activity.selectedText).toBe("world");
+    expect(parsed.data.activity.selectionAt).toBe(T_SEL);
+    expect(parsed.data.activity.lastEdit).toBe(T_EDIT);
+  });
+
+  it("tandem_checkInbox nulls selectionAt with selectedText on a collapsed record (#1624)", async () => {
+    // A collapse is written as `{from, to: from}` with a FRESH timestamp, so a
+    // `selectionAt` read without the `hasSelection` term would report a time
+    // for a selection that no longer exists.
+    const ydoc = setupDoc("mcp-inbox-selection-collapsed", "Hello world");
     withInternal(ydoc, () =>
       ydoc
         .getMap(Y_MAP_USER_AWARENESS)
-        .set(Y_MAP_SELECTION, { from: 6, to: 11, timestamp: Date.now() }),
+        .set(Y_MAP_SELECTION, { from: 6, to: 6, timestamp: 1_700_000_000_111 }),
+    );
+
+    const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.activity.selectedText).toBeNull();
+    expect(parsed.data.activity.selectionAt).toBeNull();
+  });
+
+  it("tandem_checkInbox survives a selection record with no timestamp (#1624)", async () => {
+    // `undefined` is not `null` to the SDK's structured-output validation: it
+    // fails the WHOLE inbox response. The handler's `typeof` guard is the pin.
+    const ydoc = setupDoc("mcp-inbox-selection-untimed", "Hello world");
+    withInternal(ydoc, () =>
+      ydoc.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_SELECTION, { from: 6, to: 11 }),
     );
 
     const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
     expect(parsed.error).toBe(false);
     expect(parsed.data.activity.selectedText).toBe("world");
+    expect(parsed.data.activity.selectionAt).toBeNull();
   });
 
   it("tandem_reply sends a chat message", async () => {
@@ -1419,7 +1803,7 @@ describe("MCP tool integration — tandem_appendContent (#979)", () => {
       await client.callTool({ name: "tandem_appendContent", arguments: { content: "# nope" } }),
     );
     expect(parsed.error).toBe(true);
-    expect(parsed.code).toBe("FORMAT_ERROR");
+    expect(parsed.code).toBe("READ_ONLY");
   });
 
   it("rejects non-markdown documents", async () => {
@@ -1462,6 +1846,102 @@ describe("MCP tool integration — tandem_scratchpad content seeding (#979)", ()
     // Scratchpad content is deliberately NOT authorship-stamped (ephemeral).
     const ydoc = getOrCreateDocument(created.data.documentId);
     expect(ydoc.getMap(Y_MAP_AUTHORSHIP).size).toBe(0);
+  });
+});
+
+describe("MCP tool integration — tandem_edit space-class snapshot (#1622)", () => {
+  it("accepts a transcribed snapshot over an NBSP span, and still rejects a genuinely absent one", async () => {
+    // **The call site, not the validator.** `positions.test.ts` passes
+    // `normalizeSpaceClass` itself, so it measures the option's implementation
+    // and never that `tandem_edit` opts in — deleting the flag from the handler
+    // leaves every one of those specs green while the product still answers
+    // RANGE_GONE for text that is right there.
+    const NBSP = "\u00A0";
+    const body = `We categorized emails,${NBSP}Teams chats, and more.`;
+    const ydoc = setupDoc("edit-nbsp", body);
+
+    const span = `categorized emails,${NBSP}Teams chats`;
+    const from = body.indexOf(span);
+    const to = from + span.length;
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: {
+          from,
+          to,
+          newText: "those sources",
+          // What a caller reading `tandem_getTextContent` transcribes: it cannot
+          // see the U+00A0, so it sends an ordinary space.
+          textSnapshot: span.replace(NBSP, " "),
+        },
+      }),
+    );
+    expect(parsed.error).toBe(false);
+    expect(extractText(ydoc)).toContain("We those sources, and more.");
+
+    // The control: normalization must not have turned the snapshot check off.
+    // A handler that simply dropped `textSnapshot` would also pass the assertion
+    // above.
+    const gone = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: { from: 0, to: 2, newText: "X", textSnapshot: "not in this document" },
+      }),
+    );
+    expect(gone.error).toBe(true);
+    expect(gone.code).toBe("RANGE_GONE");
+  });
+});
+
+/**
+ * #1766 — Critical Rule 6 was ENDPOINT-only, so a `tandem_edit` range could step
+ * straight over a heading prefix and delete the heading.
+ *
+ * Driven through the REGISTERED tool, because the predicate is not the thing at
+ * risk: `document-edit.test.ts` is a local `applyEdit` mirror whose heading arm
+ * is its own hand-copied endpoint-only check and which never calls
+ * `validateRange` at all, so a spec added there would stay green with
+ * `rejectHeadingInterior` never wired to the handler.
+ */
+describe("MCP tool integration — tandem_edit refuses a heading-spanning range (#1766)", () => {
+  it("refuses the edit that used to delete the heading, and names the split", async () => {
+    // The issue's measured case: "Para one" is [0, 8), the heading block starts
+    // at 9 with `"## "` at [9, 12), "Head" runs [12, 16). Both endpoints of
+    // [4, 13) clear the prefix, so the endpoint-only check said ok and the
+    // cross-element branch produced "ParaXead\nTail".
+    const ydoc = setupDoc("edit-heading-span", "Para one\n## Head\nTail");
+    const before = extractText(ydoc);
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: { from: 4, to: 13, newText: "X" },
+      }),
+    );
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_RANGE");
+    // Nothing else pins the one message this fix changes. "Target the text
+    // content only" is unfollowable for an INTERIOR overlap — there is no
+    // sub-range that both clears the prefix and covers what the caller asked to
+    // replace — so the refusal has to name the remedy that exists.
+    expect(parsed.message).toContain("split the edit at the heading boundary");
+
+    // The document is untouched: the refusal is the fix, not a partial apply.
+    expect(extractText(ydoc)).toBe(before);
+    expect(extractText(ydoc)).toContain("## Head");
+
+    // **The control.** Same document, same tool, a range wholly inside the
+    // leading paragraph: it must still apply. Without this the spec is
+    // satisfied by a `tandem_edit` that refuses everything.
+    const ok = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: { from: 0, to: 4, newText: "Text" },
+      }),
+    );
+    expect(ok.error).toBe(false);
+    expect(extractText(ydoc)).toBe("Text one\n## Head\nTail");
   });
 });
 
@@ -1660,5 +2140,298 @@ describe("checkInbox stamps the pull path", () => {
     expect(state.state).toBe("awaiting-poll");
     expect(state.latencyMs).toBeNull();
     expect(state.pollCount).toBe(1); // liveness still stamped
+  });
+});
+
+/**
+ * #1764 — the degradation verdict `refreshRange` produces has been computed
+ * since ADR-032 and discarded by every MCP consumer. `tandem_getAnnotations`
+ * now carries it as `anchor`, and ONLY on degradation: `updated` fires for
+ * every annotation past any edit and `repaired` for the whole collection after
+ * any reload, so emitting those would bury the one signal this exists for.
+ */
+describe("MCP tool integration — anchor degradation on tandem_getAnnotations (#1764)", () => {
+  /** The single paragraph's Y.XmlText. */
+  function paragraphText(ydoc: Y.Doc): Y.XmlText {
+    return getOrCreateXmlText(ydoc.getXmlFragment("default").get(0) as Y.XmlElement);
+  }
+
+  async function annotations(): Promise<Array<Record<string, unknown>>> {
+    const parsed = parseResult(
+      await client.callTool({ name: "tandem_getAnnotations", arguments: {} }),
+    );
+    expect(parsed.error).toBe(false);
+    return parsed.data.annotations as Array<Record<string, unknown>>;
+  }
+
+  it("carries NO anchor key after a tandem_edit that merely shifts the anchors", async () => {
+    setupDoc("anchor-updated", "Hello world test");
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 6, to: 11, text: "on world" },
+    });
+
+    // An edit before the annotation: the relRange survives and resolves to new
+    // offsets, which is `updated` — the commonest outcome there is.
+    await client.callTool({
+      name: "tandem_edit",
+      arguments: { from: 0, to: 5, newText: "Hi" },
+    });
+
+    const anns = await annotations();
+    expect(anns).toHaveLength(1);
+    expect(anns[0].anchor).toBeUndefined();
+  });
+
+  it("carries NO anchor key after a byte-exact content rebuild (repaired)", async () => {
+    const ydoc = setupDoc("anchor-repaired", "Hello world test");
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 6, to: 11, text: "on world" },
+    });
+
+    // The reload shape: content replaced with identical text, so every
+    // relRange is dead and every stored range is exactly right.
+    withInternal(ydoc, () => {
+      const fragment = ydoc.getXmlFragment("default");
+      fragment.delete(0, fragment.length);
+      const el = new Y.XmlElement("paragraph");
+      fragment.insert(0, [el]);
+      el.insert(0, [new Y.XmlText("Hello world test")]);
+    });
+
+    const anns = await annotations();
+    expect(anns).toHaveLength(1);
+    expect(anns[0].anchor).toBeUndefined();
+  });
+
+  it('reports anchor: "degraded" on the one record whose anchors collapsed', async () => {
+    const ydoc = setupDoc("anchor-degraded", "Hello world test");
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 0, to: 5, text: "on Hello" },
+    });
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 6, to: 11, text: "on world" },
+    });
+
+    // Delete and re-insert "world": both of that record's anchors resolve onto
+    // one offset while its annotated text is still present and still matches
+    // its snapshot — the spurious collapse #1764 refuses to persist.
+    withInternal(ydoc, () => {
+      const xt = paragraphText(ydoc);
+      xt.delete(6, 5);
+      xt.insert(6, "world");
+    });
+
+    const anns = await annotations();
+    expect(anns).toHaveLength(2);
+    const byContent = new Map(anns.map((a) => [a.content as string, a]));
+    expect(byContent.get("on world")?.anchor).toBe("degraded");
+    expect(byContent.get("on world")?.range).toEqual({ from: 6, to: 11 });
+    expect(byContent.get("on Hello")?.anchor).toBeUndefined();
+  });
+});
+
+/**
+ * #1765 — `tandem_edit`'s cross-element branch merges the tail block into the
+ * start block and then DELETES the emptied original. Yjs cannot move items, so
+ * every RelativePosition anchored in that element dies, including annotations
+ * entirely AFTER the edited range. The edit re-anchors those by arithmetic.
+ *
+ * Driven through the REGISTERED tool on purpose: `tests/server/document-edit.
+ * test.ts` is a local `applyEdit` mirror that never calls `validateRange`,
+ * `refreshRange` or `anchoredRange` and never touches `Y_MAP_ANNOTATIONS`, so a
+ * spec added there would pass with none of this existing.
+ */
+describe("MCP tool integration — cross-block tandem_edit re-anchors the tail (#1765)", () => {
+  // `populateYDoc` makes one top-level element per LINE, so this is four
+  // elements and the flat text is the input verbatim (37 units):
+  //   "Alpha beta gamma" 0..16 | "" 17 | "Delta epsilon zeta" 18..36 | "" 37
+  const FIXTURE = "Alpha beta gamma\n\nDelta epsilon zeta\n";
+  const ZETA_FROM = 32;
+  const ZETA_TO = 36;
+
+  async function annotationsOf(): Promise<Array<Record<string, unknown>>> {
+    const parsed = parseResult(
+      await client.callTool({ name: "tandem_getAnnotations", arguments: {} }),
+    );
+    expect(parsed.error).toBe(false);
+    return parsed.data.annotations as Array<Record<string, unknown>>;
+  }
+
+  /**
+   * The `range` of a record `annotationsOf` returned. (Named `annRange`, not
+   * `rangeOf`: this file already imports a `rangeOf` from `ydoc-factory` that
+   * builds an anchored range from two offsets, and shadowing it here broke
+   * three call sites in this same describe.)
+   *
+   * `annotationsOf` deliberately types the wire payload as
+   * `Record<string, unknown>` — it is JSON off an MCP call, and the specs above
+   * assert `anns[0].range` whole against a literal, which needs no narrowing.
+   * The two specs that slice `extractText` with its ends do, and reaching
+   * through `unknown` for them is a TS2571 that `npm test` cannot see and only
+   * `typecheck:tests` reports.
+   */
+  function annRange(ann: Record<string, unknown>): { from: number; to: number } {
+    return ann.range as { from: number; to: number };
+  }
+
+  /** Count Y.Map writes to the annotations map while `fn` runs. */
+  async function annotationWrites(ydoc: Y.Doc, fn: () => Promise<unknown>): Promise<number> {
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    let writes = 0;
+    const observer = (event: Y.YMapEvent<unknown>) => {
+      writes += event.keysChanged.size;
+    };
+    map.observe(observer);
+    try {
+      await fn();
+    } finally {
+      map.unobserve(observer);
+    }
+    return writes;
+  }
+
+  it("re-anchors an annotation that sat after the edited range", async () => {
+    const ydoc = setupDoc("x-block-1", FIXTURE);
+    expect(extractText(ydoc).slice(ZETA_FROM, ZETA_TO)).toBe("zeta");
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: ZETA_FROM, to: ZETA_TO, text: "on zeta" },
+    });
+
+    // The issue's headline: [6, 23) crosses the block boundary, so the tail
+    // element — the one holding this annotation — is destroyed.
+    const edit = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: { from: 6, to: 23, newText: "XX" },
+      }),
+    );
+    expect(edit.error).toBe(false);
+    expect(extractText(ydoc)).toBe("Alpha XX epsilon zeta\n");
+
+    const anns = await annotationsOf();
+    expect(anns).toHaveLength(1);
+    // delta = 2 - 17 = -15, so {32,36} → {17,21}, which is "zeta" again.
+    expect(anns[0].range).toEqual({ from: 17, to: 21 });
+    expect(extractText(ydoc).slice(17, 21)).toBe("zeta");
+    // A live anchor, not a degraded one: the record is healthy afterwards.
+    expect(anns[0].anchor).toBeUndefined();
+  });
+
+  it("re-anchors a POINT annotation in the destroyed element", async () => {
+    // Kills a missing `allowEmpty`: Word comment import emits point comments,
+    // and `checkAgainstText` drops them without it.
+    const ydoc = setupDoc("x-block-2", FIXTURE);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const point = anchoredRange(ydoc, off(30), off(30), undefined, { allowEmpty: true });
+    if (!point.ok) throw new Error("point anchor fixture failed");
+    createAnnotation(map, ydoc, "comment", point, "insertion marker");
+
+    await client.callTool({
+      name: "tandem_edit",
+      arguments: { from: 6, to: 23, newText: "XX" },
+    });
+
+    const anns = await annotationsOf();
+    expect(anns).toHaveLength(1);
+    expect(anns[0].range).toEqual({ from: 15, to: 15 });
+  });
+
+  it("refuses to relocate an annotation SPANNING the join, leaving it degraded", async () => {
+    // The second measured shape: partially overwritten, so there is no correct
+    // destination and any placement would be a guess.
+    const ydoc = setupDoc("x-block-3", FIXTURE);
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 11, to: 23, text: "spans the join" },
+    });
+
+    const writes = await annotationWrites(ydoc, () =>
+      client.callTool({ name: "tandem_edit", arguments: { from: 6, to: 23, newText: "XX" } }),
+    );
+    expect(writes, "the intersecting record is not re-anchored").toBe(0);
+
+    const anns = await annotationsOf();
+    expect(anns).toHaveLength(1);
+    expect(anns[0].anchor).toBe("degraded");
+  });
+
+  it("writes nothing on a SAME-BLOCK edit, with annotations present", async () => {
+    const ydoc = setupDoc("x-block-4", FIXTURE);
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: ZETA_FROM, to: ZETA_TO, text: "on zeta" },
+    });
+
+    const writes = await annotationWrites(ydoc, () =>
+      client.callTool({ name: "tandem_edit", arguments: { from: 0, to: 5, newText: "Aleph" } }),
+    );
+    expect(writes, "the same-block branch never enters the pass").toBe(0);
+
+    // The experiment's control: the annotation still covers its original text.
+    const anns = await annotationsOf();
+    expect(extractText(ydoc).slice(annRange(anns[0]).from, annRange(anns[0]).to)).toBe("zeta");
+  });
+
+  it("writes nothing when every annotation lies inside the replaced span", async () => {
+    const ydoc = setupDoc("x-block-5", FIXTURE);
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 11, to: 16, text: "on gamma" },
+    });
+
+    const writes = await annotationWrites(ydoc, () =>
+      client.callTool({ name: "tandem_edit", arguments: { from: 6, to: 23, newText: "XX" } }),
+    );
+    expect(writes, "every candidate refuses").toBe(0);
+  });
+
+  it("leaves an annotation in an untouched later paragraph covering its own text", async () => {
+    // The experiments' second control. Five elements:
+    //   "One alpha" 0..9 | "" 10 | "Two beta" 11..19 | "" 20 | "Three gamma" 21..32
+    const ydoc = setupDoc("x-block-6", "One alpha\n\nTwo beta\n\nThree gamma\n");
+    const flat = extractText(ydoc);
+    const target = flat.indexOf("gamma");
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: target, to: target + 5, text: "on gamma" },
+    });
+
+    await client.callTool({
+      name: "tandem_edit",
+      arguments: { from: 4, to: 15, newText: "Z" },
+    });
+
+    const anns = await annotationsOf();
+    expect(anns).toHaveLength(1);
+    expect(extractText(ydoc).slice(annRange(anns[0]).from, annRange(anns[0]).to)).toBe("gamma");
+  });
+
+  it("VERIFIES the destination and refuses a contradicting one", async () => {
+    // Nothing else reaches the `snapshotContradicts` fail-safe: the specs above
+    // have matching destinations, the spanning one is refused by the arithmetic,
+    // and the two zero-write ones never enter the branch. Without this an
+    // implementation that omits the check entirely is green.
+    const ydoc = setupDoc("x-block-7", FIXTURE);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const anchored = rangeOf(ZETA_FROM, ZETA_TO, ydoc);
+    const id = createAnnotation(map, ydoc, "comment", anchored, "stale snapshot", {
+      // A snapshot from before an earlier in-range change: it matches neither
+      // the stored offsets nor the remapped destination.
+      textSnapshot: "WRONG",
+    });
+
+    const writes = await annotationWrites(ydoc, () =>
+      client.callTool({ name: "tandem_edit", arguments: { from: 6, to: 23, newText: "XX" } }),
+    );
+    expect(writes, "the destination check refuses the write").toBe(0);
+    expect((map.get(id) as Annotation).range).toEqual({ from: ZETA_FROM, to: ZETA_TO });
+
+    const anns = await annotationsOf();
+    expect(anns[0].anchor).toBe("degraded");
   });
 });

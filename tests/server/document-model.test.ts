@@ -471,20 +471,20 @@ describe("image embeds — flat-offset alignment (issue #153)", () => {
     expect(saveMarkdown(doc).trim()).toBe(md);
   });
 
-  it("an image embedded among inline text splits into block image + paragraphs", () => {
+  it("an image embedded among inline text stays ONE paragraph, as a raw run (#1799)", () => {
+    // #153's promotion survives for image-only paragraphs (see the standalone
+    // spec above); a PROSE-SURROUNDED image became a `rawMarkdown` run in
+    // #1799, because splitting it into three blocks rewrote the user's file on
+    // open and moved every annotation offset past the image.
     doc = makeMarkdownDoc("Text with ![inline](u.png) image inline.");
     const frag = getFragment(doc);
     const names = [];
     for (let i = 0; i < frag.length; i++) {
       names.push((frag.get(i) as Y.XmlElement).nodeName);
     }
-    expect(names).toContain("image");
-    // Surrounding text is preserved as paragraph content (no data loss).
-    const flat = extractText(doc);
-    expect(flat).toContain("Text with");
-    expect(flat).toContain("image inline.");
-    // The image block itself contributes no characters.
-    const img = frag.get(names.indexOf("image")) as Y.XmlElement;
-    expect(getElementTextLength(img)).toBe(0);
+    expect(names).toEqual(["paragraph"]);
+    // The image's literal markdown is part of the flat coordinate system now —
+    // the same exposure raw links and inline HTML already carry under ADR-042.
+    expect(extractText(doc)).toBe("Text with ![inline](u.png) image inline.");
   });
 });

@@ -9,9 +9,27 @@
 > [licensing-terms.md](licensing-terms.md) (what a purchase grants),
 > [security.md](security.md), [data-locations.md](data-locations.md).
 >
-> **Status: the whole system ships dark.** `LICENSE_GATE_ENABLED = false` in
-> `tsup.config.ts`. Everything below is built and tested, and none of it does
-> anything to a user today.
+> **Status: the whole system ships dark.** Everything below is built and tested, and none
+> of it does anything to a user today.
+>
+> **Going live is TWO constants, in two languages** ([#1785](https://github.com/bloknayrb/tandem/issues/1785)).
+> `const LICENSE_GATE_ENABLED` in `tsup.config.ts` turns the run gate on, and
+> `const LICENSE_UPDATE_ENDPOINT: &str = ""` in `src-tauri/src/lib.rs` must be pointed at
+> the deployed Worker. While that string is empty, `resolve_update_route()` short-circuits on
+> its first line and `build_updater()` takes its `Public` arm, `app.updater()` — so **every
+> build today, licensed or not, checks the PUBLIC manifest** from `src-tauri/tauri.conf.json`,
+> and the `X-Tandem-License-Id` path described in Part 2 is unreachable code. Flipping only
+> the first const ships a gate whose update window is not actually enforced;
+> `tests/docs/license-flip-consts.test.ts` refuses that half-flip.
+>
+> **Symbol names, not line numbers, on purpose.** This banner is the flip checklist, and it
+> already sent an operator to the wrong line once: the number that used to sit here landed on
+> `LICENSE_STATUS_URL`, one const above the target — also a URL, also license-related, so
+> "point it at the Worker" repoints
+> the loopback probe instead — after which `update_route` answers
+> `NoUpdates("status-unavailable")` for *every* device, licensed and trial alike, with only a
+> `log::warn!` to show for it. A line number in a file under active edit is a pointer that
+> goes stale silently; grep the const name.
 
 ---
 
@@ -21,9 +39,22 @@
 
 You buy Tandem once. You get a **license key** by email — a long block of
 letters and numbers, plus a `tandem.license` file attached. You paste the key in
-(or double-click the file), and Tandem is yours: it keeps working forever, on
+(**double-clicking the file does nothing** — Tandem registers no `.license` file
+association; its only associations are `.md`/`.markdown`, `.txt`, `.html` and `.docx`,
+`src-tauri/tauri.conf.json:74-102`), and Tandem is yours: it keeps working forever, on
 any computer you personally use, with no internet connection required to prove
 it. For the first year you also get new versions as they're released.
+
+**Where you paste it depends on which Tandem you're running.** On the desktop app
+the only route is Settings → License; the desktop bundle ships no `tandem`
+command, so there is nothing to run. The `tandem activate <file>` command belongs
+to the npm install, and it writes into **that install's own app-data
+directory** — so running a separately installed CLI to license a desktop app
+succeeds and changes nothing the desktop can see. Nothing reports that, which is
+why it is worth stating here. That holds even if you reach the desktop's own
+editor through a browser (it serves the same UI on `http://127.0.0.1:3479`): the
+server there still reads the desktop's app-data directory, so Settings → License
+is still the only route, and it stops offering the command accordingly.
 
 ## What you get, precisely
 
@@ -48,6 +79,20 @@ on a plane, and what means we never learn when or how often you use the app.
 The cost is length: you can't make a self-proving document short. So we made
 sure you never have to type it. The email attaches it as a file, and you can
 paste it in one go.
+
+## Before any of that: the public beta is free
+
+Everything on this page describes v1.0 and later. **Every pre-1.0 release is free
+to use, with no time limit and nothing to activate** — the BUSL Additional Use
+Grant in [LICENSE](../LICENSE) says so in as many words, so this is a term you
+are granted rather than an enforcement gap you are getting away with. It is also
+not enforced: the gate ships dark, so a beta build has no trial clock running at
+all and the three states below are unreachable in it.
+
+At v1.0 the gate flips and the 14-day trial starts for new installs. **Beta users
+are grandfathered with a free license and skip the trial entirely** — see the
+claiming instructions in the README, which matter because Tandem has no telemetry
+and therefore no list of beta users to work from.
 
 ## The three states Tandem can be in
 
@@ -84,6 +129,13 @@ which was especially wrong for beta testers who never had a trial.
 There's one failure that looks exactly like everything being fine: your license
 works, Tandem runs, but you silently stop being offered updates — and the app
 cheerfully reports **"You're up to date"** forever.
+
+Half of that is now closed on the device itself: if *this* copy of Tandem can see
+that its own update window has ended, a manual check for updates says so and
+points at Settings → License, rather than claiming you are current. The other
+half — the case where the device still believes it is entitled and the server
+disagrees — is invisible from here (it arrives as an ordinary "nothing new"
+response), so the server's own refusal reason stays the authoritative detector.
 
 That's the worst kind of bug, because nobody files a ticket for it. A large part
 of the engineering below exists purely to make that state detectable.
@@ -198,7 +250,7 @@ set (`tests/server/license-gate-coverage.test.ts` enforces this) — because an
 MCP write bypasses Surface A entirely, so gating a route without its twin leaves
 a hole.
 
-### The gated set — this list IS the `/api` half's review
+### The gated set
 
 > **Shape superseded 2026-08-18 (#1346, ADR-040 amendment), still current as code.** The decision
 > is that an unlicensed copy is a plain markdown editor with **no AI integration at all** — a
@@ -207,14 +259,27 @@ a hole.
 > surface until the surface gate is implemented. Read it as "what is gated today", not "what the
 > gate is for".
 
-The MCP half is CI-enforced by `tests/server/license-gate-coverage.test.ts`. **The `/api` half
-has no test: this enumeration is the review**, referenced by Critical Rule 9 in `CLAUDE.md`.
-Adding a mutating MCP tool or `/api` route means adding it here, in both halves.
+**Both halves are now CI-enforced**, so this list is a readable mirror rather than the review
+itself — which it was until 2026-09-08. `tests/server/license-gate-coverage.test.ts` covers the
+MCP tools; `tests/server/license-gate-api-coverage.test.ts` covers the `/api` routes. Each holds
+one row per surface, `gated` or `ungated`, with a written reason, and fails closed when a new
+surface appears with no row.
+
+The `/api` one was added because a prose list cannot notice an omission. `POST /api/mode/release`
+mutates annotation records across every open document and appeared in no list at all until #1821
+read the source, so nothing had ever taken a view on it. It also carries two sweeps a reader
+cannot perform reliably: one for a whole registrar file outside the five it knows, and one for a
+`licenseGate()` call in an unlisted module — the in-handler shape a `licenseGateMiddleware` grep
+does not find.
+
+Adding a mutating MCP tool or `/api` route still means adding it here, in both halves; the
+difference is that forgetting now turns `check` red instead of waiting for someone to re-read
+this page.
 
 **MCP** — `tandem_edit`, `tandem_appendContent`, `tandem_editList`, `tandem_scratchpad`, `tandem_comment`,
 `tandem_suggest`, `tandem_highlight`, `tandem_flag`, `tandem_editAnnotation`,
-`tandem_annotationReply`, `tandem_removeAnnotation`, `tandem_applyChanges`,
-`tandem_restoreBackup`.
+`tandem_annotationReply`, `tandem_removeAnnotation`, `tandem_resolveAnnotation`,
+`tandem_applyChanges`, `tandem_restoreBackup`.
 
 **`/api`** — `apply-changes`, `annotation-reply`, `remove-annotation`, `document/reload`,
 `external-conflict/resolve`, `backups/restore`, `scratchpad`.
@@ -233,8 +298,37 @@ gates the `force === true` sub-path of `POST /api/open`, mirroring the `tandem_o
 body, not the registration site.**
 
 **Deliberately ungated:** all reads, *plain* `open` (only the destructive `force: true` reload is
-gated, on both halves), save/export, `GET` routes, chat, and `tandem_resolveAnnotation` — a
-status flip, not a content write.
+gated, on both halves), save/export, `GET` routes, and chat. `tandem_resolveAnnotation` left this
+set in [#1788](https://github.com/bloknayrb/tandem/issues/1788) (decision F): accept/dismiss
+writes the document room's annotation map, which Surface A already refuses from the browser when
+restricted, so leaving the MCP twin ungated let Claude triage a document its own user could not.
+It has **no `/api` twin** — `src/shared/api-paths.ts` carries reply and remove and nothing
+resolve-shaped, the browser accepting over Hocuspocus — so the `/api` half of Critical Rule 9 is
+satisfied by construction rather than by an edit.
+
+**Three mutations sit outside the gate and are not obviously reads.** Recorded here rather
+than left silent, because an absence nobody wrote down reads the same as an omission:
+
+- `tandem_rename` / `POST /api/rename` — renames the user's file on disk. Ungated
+  (`src/server/mcp/document.ts:1420` is a plain `withErrorBoundary`).
+- `tandem_convertToMarkdown` / `POST /api/convert` — **writes a new `.md` file to disk** and
+  opens it. Ungated (`src/server/mcp/document.ts:1499`).
+- `POST /api/mode/release` — clears `heldInSolo` markers on open documents
+  (`src/server/mcp/routes/mode-release.ts:108-115`). Ungated, and the reasoning is now its own
+  rather than a cross-reference to `tandem_resolveAnnotation`: **mode lives in `CTRL_ROOM`, which
+  Surface A deliberately never marks read-only**, so a restricted user can still toggle
+  Solo→Tandem. Gating only the RELEASE would let them reach Solo and never leave it, stranding
+  their annotations behind a Held pill while their reads stay open — worse than what gating
+  prevents. Decision F asked for the opposite; the later (2026-09-08) reasoning won because it is
+  the only one of the two that considered the user afterwards, and re-gating one row is one line.
+  **Open for Bryan** on [#1788](https://github.com/bloknayrb/tandem/issues/1788) (comment
+  5612504584). It has no MCP twin, and since
+  [#1769](https://github.com/bloknayrb/tandem/issues/1769) it no longer writes the mode key at
+  all.
+
+Whether any of the three should join the gated set is a decision, not a doc fix. Neither
+disk-writing tool is a *document content* write in the sense the gate is drawn around, but
+both put bytes on the user's filesystem, which is more than "a plain markdown editor".
 
 ## AI surfaces — the #1346 inventory
 
@@ -252,7 +346,7 @@ changed. Six exist:
 
 | # | Surface | Admission point | Enforcement today |
 |---|---|---|---|
-| 1 | MCP over HTTP (`:3479`) | per-session `McpServer`, `onsessioninitialized` | per-tool: 12 `gatedTool`, 1 conditional in-handler, 16 ungated |
+| 1 | MCP over HTTP (`:3479`) | per-session `McpServer`, `onsessioninitialized` | per-tool: **14** `gatedTool`, 1 conditional in-handler, **18** ungated (33 registered) |
 | 2 | MCP over stdio | `src/cli/mcp-stdio.ts` | **inherits row 1** — pure JSON-RPC proxy, no handlers of its own |
 | 3 | `/api` mutating twins | Express registrars | per-route: 7 middleware mounts + 1 in-handler — **but see below: these are the *user's* surfaces** |
 | 4 | Chat | `appendClaudeChatMessage()` | **none** |
@@ -392,6 +486,12 @@ activate correctly today**.
 
 ## Updates, and the endpoint that must not lie
 
+> **None of this runs today.** `LICENSE_UPDATE_ENDPOINT` is `""` (`src-tauri/src/lib.rs`),
+> so the updater takes the `app.updater()` branch and checks the public GitHub manifest for
+> every build. Everything in this section, and the failure mode in Part 3, describes what
+> happens **after** that const is pointed at the Worker
+> ([#1785](https://github.com/bloknayrb/tandem/issues/1785)).
+
 The desktop updater sends only an opaque UUID (`X-Tandem-License-Id`) — never
 the key, the name, or the email. The Worker looks it up and either proxies the
 signed public manifest or returns `204`.
@@ -399,9 +499,11 @@ signed public manifest or returns `204`.
 Every rejection returns **byte-identical** bytes, so the endpoint is not an
 existence oracle. It logs `{result, reason, ts}` — the reason is a closed enum
 describing *our* state (`no-header`, `unknown-id`, `unparseable`, `expired`,
-`upstream`), never the license id, so no per-customer update history exists.
+`revoked`, `upstream`), never the license id, so no per-customer update history
+exists. `revoked` is the operator's own tombstone — a refund or a hand-run
+revocation — and is deliberately the one absence that does *not* raise an alert.
 
-That `reason` field is five lines of code and it is the most important
+That `reason` field is a handful of lines of code and it is the most important
 observability in the system. See Part 3.
 
 ---
@@ -425,12 +527,17 @@ the public GitHub endpoint — no error" — and that sentence is precisely the
 mental model that produced the bug.
 
 The state is reachable at least five ways: a failed entitlement write, a refund
-(which deletes the entitlement while the blob still verifies forever), the
+(which revokes the entitlement while the blob still verifies forever), the
 documented revocation procedure, KV eviction, and a namespace-id mismatch
-between the two `wrangler.toml` files.
+between the two `wrangler.toml` files. The first two are *deliberate*, and they
+now write a revocation tombstone rather than deleting the key, so the Worker can
+tell the operator's own action apart from an entitlement that simply vanished.
 
-**Detection:** a rising `unknown-id` count. Nothing else distinguishes it from
-health.
+**Detection:** the Worker POSTs an operator alert on `unknown-id` /
+`unparseable`, and `[observability]` retains the log lines behind it. A `reason`
+enum on its own was never a detector — nothing kept the lines and nothing
+notified anyone. Merged but **inert until both Workers are redeployed** with
+`[observability]` and `ALERT_WEBHOOK_URL` set.
 **Repair:** re-`PUT` the entitlement from the ledger — it's fully derivable, so
 nothing needs re-issuing.
 

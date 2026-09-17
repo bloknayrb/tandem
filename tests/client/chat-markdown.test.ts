@@ -72,7 +72,7 @@ describe("renderMarkdown", () => {
   it("escapes html payloads inside markdown captures", () => {
     const html = renderMarkdown('**<img src=x onerror="alert(1)">**');
 
-    expect(html).toBe("<strong>&lt;img src=x onerror=&quot;alert(1)&quot;&gt;</strong>");
+    expect(html).toBe("<p><strong>&lt;img src=x onerror=&quot;alert(1)&quot;&gt;</strong></p>");
     expect(html).not.toContain("<img");
     expect(html).not.toContain('onerror="alert(1)"');
   });
@@ -151,7 +151,7 @@ describe("renderMarkdown — fenced-block restoration", () => {
     expect(html).not.toContain("\x00");
     // "PREFIX" appears once, ahead of the block — not also inside it.
     expect(html.match(/PREFIX/g)).toHaveLength(1);
-    expect(html).toBe('PREFIX<br><pre><code class="language-sh">echo $`x</code></pre>');
+    expect(html).toBe('<p>PREFIX</p><pre><code class="language-sh">echo $`x</code></pre>');
   });
 
   it("handles a literal $' without expanding anything (regression)", () => {
@@ -161,7 +161,7 @@ describe("renderMarkdown — fenced-block restoration", () => {
 
     expect(html).not.toContain("\x00");
     expect(html).toContain("echo &quot;$&#39;&quot;");
-    expect(html.endsWith("after")).toBe(true);
+    expect(html.endsWith("<p>after</p>")).toBe(true);
   });
 
   it("strips NULs so a forged placeholder cannot capture a real block", () => {
@@ -176,7 +176,7 @@ describe("renderMarkdown — fenced-block restoration", () => {
     expect(html).not.toContain("\x00");
     expect(html).toContain('<pre><code class="language-js">real code</code></pre>');
     // The forged text survives as inert prose, in its original position.
-    expect(html).toMatch(/^BLOCK0 decoy/);
+    expect(html).toMatch(/^<p>BLOCK0 decoy<\/p>/);
   });
 
   it("restores every block when there is more than one", () => {
@@ -222,13 +222,13 @@ describe("renderMarkdown — fenced-block restoration", () => {
     // bug was first-match-only and ordering was load-bearing. These are the
     // other three positions.
     expect(renderMarkdown("```js\nreal\n```\n\x00BLOCK0\x00 decoy")).toBe(
-      '<pre><code class="language-js">real</code></pre><br>BLOCK0 decoy',
+      '<pre><code class="language-js">real</code></pre><p>BLOCK0 decoy</p>',
     );
     // Inside the fence — the twin of the prose decoy.
     expect(renderMarkdown("```\n\x00BLOCK0\x00\n```")).toBe("<pre><code>BLOCK0</code></pre>");
     // With no real block at all. This is the input `?? match` was written for,
     // and it never reaches it: the strip removes the NULs first.
-    expect(renderMarkdown("\x00BLOCK0\x00")).toBe("BLOCK0");
+    expect(renderMarkdown("\x00BLOCK0\x00")).toBe("<p>BLOCK0</p>");
   });
 
   it("emits a language class that cannot carry anything but a word", () => {
@@ -313,7 +313,8 @@ describe("renderMarkdown — the {@html} escaping invariant", () => {
     }
 
     // A newline can't reach the href at all now — the URL class excludes it, so
-    // this never matches as a link and the `<br>` pass has nothing to rewrite.
+    // this never matches as a link. `assembleBlocks` then sees two ordinary
+    // paragraph lines and joins them with a `<br>`, never touching a URL.
     expect(renderMarkdown("[click](https://a.test/a\nb)")).not.toContain("<a ");
 
     // And an ordinary link still works, so the guard isn't just rejecting.
@@ -397,5 +398,258 @@ describe("renderMarkdown — the {@html} escaping invariant", () => {
 
     expect(html).toContain("&amp;lt;script&amp;gt;");
     expect(html).not.toContain("<script");
+  });
+});
+
+/**
+ * Balanced block assembly (#1639).
+ *
+ * Every structural assertion here goes through the PARSED DOM, because the
+ * defect this describe exists for is invisible to string inspection: the parser
+ * rescues unbalanced markup, so `a\n\nb` reads fine as a string and is a bare
+ * text node plus one `<p>` once parsed.
+ *
+ * **The discriminator is `childNodes.length === children.length`, not
+ * `closest("p")`.** Measured in this suite's own happy-dom, `pre.closest("p")`
+ * is null for EVERY implementation — the parser always reparents a `<pre>` out
+ * of a `<p>`, which is the issue's own premise — so it discriminates nothing and
+ * is kept below only as a redundant companion. A bare text node at top level is
+ * the thing the parser has no escape hatch for, and counting it is what fails on
+ * the broken form.
+ */
+describe("renderMarkdown — balanced block assembly", () => {
+  it("case 1: makes two real <p> elements from a blank-line split", () => {
+    // The headline defect. Before this, `a` was a TEXT NODE and only `b` was an
+    // element — so `> :first-child` in `markdown-body.css` selected paragraph
+    // TWO. The childNodes half is what kills a fix emitting two `<p>` plus a
+    // stray text node.
+    const host = parse(renderMarkdown("a\n\nb"));
+
+    expect(host.children.length).toBe(2);
+    expect(host.childNodes.length).toBe(2);
+    expect(Array.from(host.children).map((el) => el.tagName)).toEqual(["P", "P"]);
+  });
+
+  it("case 2: keeps document order across a same-chunk fence", () => {
+    // A fence separated from its prose by a SINGLE newline, which no blank-line
+    // example exercises. Kills two things at once: a chunk-level wrapper (which
+    // yields `P,PRE` plus a bare trailing text node) and a placeholder arm that
+    // emits without flushing the buffered runs first, which would reorder the
+    // block ahead of the prose that preceded it.
+    const host = parse(renderMarkdown("intro\n```js\nc\n```\noutro"));
+
+    expect(host.childNodes.length).toBe(host.children.length);
+    expect(Array.from(host.children).map((el) => el.tagName)).toEqual(["P", "PRE", "P"]);
+
+    const pre = host.querySelector("pre");
+    expect(pre?.previousElementSibling?.textContent).toContain("intro");
+    expect(pre?.nextElementSibling?.textContent).toContain("outro");
+    expect(pre?.parentElement).toBe(host);
+  });
+
+  it("case 3: never tears an element that an inline fence sits inside", () => {
+    // NOTE: these three are already green on master and discriminate NOTHING
+    // about this change — all three inputs produce byte-identical output before
+    // and after, because each reaches assembly as a single line containing a
+    // placeholder and is emitted bare either way. They guard the REJECTED
+    // piece-level split (which would cut an element opened by an earlier inline
+    // pass), not the new assembly. The discriminating cases are 1, 2, 6 and 7.
+    //
+    // "Intact" here means NOT CUT. It is not a claim that the nesting is valid:
+    // `pre.parentElement` is `STRONG` / `A` / `H1`, an invalid content model the
+    // parser tolerates rather than repairs, and that is a recorded bound of the
+    // subset rather than something this change introduces. The empty `<pre>` is
+    // why each expected string carries two spaces.
+    for (const [input, selector, text] of [
+      ["**a ```x``` b**", "strong", "a  b"],
+      ["[lab ```x``` el](https://x.test)", "a", "lab  el"],
+      ["# head ```x``` tail", "h1", "head  tail"],
+    ] as const) {
+      const host = parse(renderMarkdown(input));
+      expect(host.querySelectorAll(selector), input).toHaveLength(1);
+
+      const el = host.querySelector(selector);
+      expect(el?.querySelector("pre"), input).not.toBeNull();
+      expect(el?.textContent, input).toBe(text);
+    }
+  });
+
+  it("case 4: keeps a fence inside the <li> it was written in", () => {
+    // Arm order is the contract: `<li>` is tested BEFORE the placeholder. `<li>`
+    // legally accepts flow content, so the block belongs inside the item. An arm
+    // order that tested the placeholder first would hoist it out of the list.
+    const host = parse(renderMarkdown("- see ```x``` here"));
+
+    expect(host.querySelectorAll("ul")).toHaveLength(1);
+    expect(host.querySelectorAll("li")).toHaveLength(1);
+    expect(host.querySelector("li")?.querySelector("pre")).not.toBeNull();
+  });
+
+  it("case 5: leaves no empty <p> around a fenced block", () => {
+    // This is what let `p:empty { display: none }` be deleted from
+    // `markdown-body.css`. Before, the `</p><p>` pair straddled the placeholder
+    // and left a stray EMPTY paragraph carrying real vertical space.
+    const html = renderMarkdown("intro\n\n```js\nc\n```\n\n");
+    const host = parse(html);
+
+    expect(host.querySelectorAll("p")).toHaveLength(1);
+    for (const p of Array.from(host.querySelectorAll("p"))) {
+      expect(p.textContent?.trim()).not.toBe("");
+    }
+
+    // The one deliberately STRING-level assertion in this suite, and it has to
+    // be: acceptance item 2 ("a fenced block is never inside a `<p>`") has no
+    // assertion that survives the parser for the lone-placeholder shape.
+    // `<p><pre>x</pre></p>` parses to `P,PRE,P` with 3 childNodes and 3
+    // children, so the discriminator above is blind to it — the invalid nesting
+    // exists only in the emitted string. Do not "tidy" this onto the DOM.
+    expect(html).not.toMatch(/<p>\s*<pre/);
+  });
+
+  it("case 6: wraps list items in one <ul>, with no <br> between them", () => {
+    // Kills three implementations at once: unwrapped `<li>`; a `<br>` left
+    // between items (the old `\n` pass ran AFTER the list pass, so every `<li>`
+    // was preceded by one); and the list swallowed into the paragraph above it.
+    const host = parse(renderMarkdown("Findings:\n- alpha\n- beta"));
+
+    expect(host.querySelectorAll("ul")).toHaveLength(1);
+
+    const ul = host.querySelector("ul");
+    expect(Array.from(ul?.children ?? []).map((el) => el.tagName)).toEqual(["LI", "LI"]);
+    expect(ul?.querySelectorAll("br")).toHaveLength(0);
+
+    const intro = ul?.previousElementSibling;
+    expect(intro?.tagName).toBe("P");
+    expect(intro?.textContent).toBe("Findings:");
+  });
+
+  it("case 7: opens a separate <ul> per run, not one around the whole body", () => {
+    // Both the one-chunk form (a paragraph line between two bullet runs) and the
+    // across-chunks form. A fix that opens a single `<ul>` around everything
+    // passes case 6 and fails here.
+    for (const input of ["- a\nmid\n- b", "- a\n\nmid\n\n- b"]) {
+      const host = parse(renderMarkdown(input));
+      expect(host.querySelectorAll("ul"), input).toHaveLength(2);
+      expect(host.querySelectorAll("li"), input).toHaveLength(2);
+    }
+  });
+
+  it("case 8: leaves a heading as its own top-level element", () => {
+    // Kills a fix that wraps every line: `<p><h1>H</h1></p>` parses to `P,H1,P`,
+    // against the exact `H1,P` asserted here.
+    const host = parse(renderMarkdown("# H\n\npara"));
+
+    expect(Array.from(host.children).map((el) => el.tagName)).toEqual(["H1", "P"]);
+    // Redundant companion, NOT the discriminating assertion — see this
+    // describe's docblock.
+    expect(host.querySelector("h1")?.closest("p")).toBeNull();
+  });
+
+  it("case 9: dispatches on tags it emitted, never on tags the user typed", () => {
+    // The escape-first property, which nothing pinned before. The tag-prefix
+    // dispatch and the placeholder test are sound ONLY because every `<` and
+    // every `\x00` in the intermediate string was emitted by this function: a
+    // user typing `<li>` is already `&lt;li&gt;` by then. A change that moves
+    // escaping later fails here as well as in the XSS describe.
+    const host = parse(renderMarkdown("<li>x</li>\n<h1>y</h1>"));
+
+    expect(host.querySelectorAll("p")).toHaveLength(1);
+    expect(host.querySelectorAll("li, h1, ul")).toHaveLength(0);
+    expect(host.textContent).toBe("<li>x</li><h1>y</h1>");
+  });
+
+  it("case 10: keeps a soft newline inside a paragraph as a <br>", () => {
+    // The SURVIVOR case, and it is load-bearing twice over: it kills a fix that
+    // drops `<br>` wholesale, and it is what keeps the `br { display: none }`
+    // density rule in `AnnotationCard.svelte` honest — that rule is still
+    // reachable precisely because this shape still emits a break.
+    const host = parse(renderMarkdown("a\nb"));
+
+    expect(host.querySelectorAll("p")).toHaveLength(1);
+    expect(host.querySelectorAll("br")).toHaveLength(1);
+    expect(host.textContent).toBe("ab");
+  });
+
+  it("case 11: treats a whitespace-only line as a paragraph break", () => {
+    // PR-review round 2. The predicate is `line.trim() === ""`, so a "blank"
+    // line holding a space or a tab is recognised — but the arm it took was
+    // `continue`, which dropped the line WITHOUT closing the open run and merged
+    // the two paragraphs into one. Measured against master, which had no block
+    // assembly: `a\n \nb` rendered `a<br> <br>b`, a visible blank line. It is
+    // reachable the same way the CRLF regression was — `tandem_reply` and
+    // `tandem_comment` take a bare `z.string()` and nothing in `src/` trims
+    // trailing whitespace, so any Claude message whose blank lines carry a space
+    // ran on as a single paragraph on all four markdown surfaces. CommonMark
+    // treats such a line as a paragraph break; so does this.
+    for (const blank of [" ", "   ", "\t"]) {
+      const host = parse(renderMarkdown(`a\n${blank}\nb`));
+
+      expect(host.querySelectorAll("p")).toHaveLength(2);
+      expect(host.querySelectorAll("br")).toHaveLength(0);
+      expect(Array.from(host.querySelectorAll("p")).map((p) => p.textContent)).toEqual(["a", "b"]);
+    }
+
+    // The line is a boundary, not content: no whitespace text node survives it.
+    expect(parse(renderMarkdown("a\n \nb")).textContent).toBe("ab");
+  });
+
+  it("case 12: renders empty and whitespace-only input as nothing at all", () => {
+    // `""` pins existing behaviour, and two things now depend on it:
+    // `AnnotationBody` funnels its placeholder through this same call, and
+    // deleting `p:empty` removed the net that used to hide a stray `<p></p>`.
+    // Without the flush guards, assembly emits exactly that.
+    expect(renderMarkdown("")).toBe("");
+
+    // `"   "` is a deliberate BEHAVIOUR CHANGE, not a pin: it returned `"   "`
+    // before (nothing touched whitespace) and returns `""` now. The one consumer
+    // is `AnnotationBody`'s `text || placeholder`, where `"   "` is truthy and
+    // so reaches the renderer as-is — a whitespace-only Claude body now renders
+    // an empty div instead of a div holding three spaces. Neither shape is
+    // visible to a reader; recorded because it is a value change.
+    expect(renderMarkdown("   ")).toBe("");
+  });
+
+  it("case 13: splits paragraphs on a CRLF blank line, not just an LF one", () => {
+    // PR-review round 1. The chunk split and the per-line loop are both written
+    // against `\n`, so without the CRLF normalisation in `renderMarkdown` a
+    // `\r\n\r\n` blank line arrives here as a `\r`-only line, which
+    // `line.trim() === ""` DROPS — merging the two paragraphs into one `<p>`
+    // holding a single `<br>`. That is reachable: `tandem_reply` and
+    // `tandem_comment` take a bare `z.string()` and nothing on the wire
+    // normalises line endings, so a Claude message composed with CRLF endings
+    // lost every paragraph break on all four markdown surfaces.
+    const host = parse(renderMarkdown("a\r\n\r\nb"));
+
+    expect(host.querySelectorAll("p")).toHaveLength(2);
+    expect(host.querySelectorAll("br")).toHaveLength(0);
+    expect(Array.from(host.querySelectorAll("p")).map((p) => p.textContent)).toEqual(["a", "b"]);
+  });
+
+  it("case 14: keeps a CRLF soft newline as a <br> inside one paragraph", () => {
+    // The other half of case 13: normalisation must not eat a single line break.
+    // Pins that `\r\n` behaves exactly as `\n` does in case 10, and that no
+    // stray CR survives into the rendered text.
+    const host = parse(renderMarkdown("a\r\nb"));
+
+    expect(host.querySelectorAll("p")).toHaveLength(1);
+    expect(host.querySelectorAll("br")).toHaveLength(1);
+    expect(host.textContent).toBe("ab");
+  });
+
+  it("case 15: recognises a heading and a list item written with CRLF endings", () => {
+    // NOT mutation-sensitive, and kept deliberately rather than sold as a pin:
+    // measured, this case still passes with the normalisation removed, because
+    // the HTML parser normalises a stray CR out of the markup stream before
+    // `textContent` ever sees it. So it records that the line-oriented passes
+    // (heading anchor, list-item anchor, one `<ul>` per run) behave under CRLF —
+    // cases 13 and 14 are the two that go red when the normalisation is removed.
+    const host = parse(renderMarkdown("# H\r\n\r\n- one\r\n- two"));
+
+    expect(host.querySelector("h1")?.textContent).toBe("H");
+    expect(host.querySelectorAll("ul")).toHaveLength(1);
+    expect(Array.from(host.querySelectorAll("li")).map((li) => li.textContent)).toEqual([
+      "one",
+      "two",
+    ]);
   });
 });

@@ -50,6 +50,7 @@ if (args.includes("--help") || args.includes("-h")) {
 
 Usage:
   tandem                            Start Tandem server and open the editor
+  tandem start                      Explicit alias for bare \`tandem\`
   tandem setup                      Print first-run setup guidance (setup is wizard-driven)
   tandem setup --apply              Write MCP config to detected AI clients non-interactively
   tandem setup --apply --force      Apply to default paths regardless of detection
@@ -57,6 +58,8 @@ Usage:
                                     Restrict --apply to specific client(s)
   tandem setup --apply --with-channel-shim
                                     Also register the stdio channel shim (legacy opt-in)
+  tandem setup --apply --without-channel-shim
+                                    Remove the stdio channel shim registration
   tandem doctor                     Diagnose setup issues (Node version, MCP config,
                                     ports, server health, push path, annotation
                                     store)
@@ -65,8 +68,11 @@ Usage:
   tandem activate <license|path>    Activate a signed license (string or file path)
   tandem license                    Show the current license / trial status
   tandem --uninstall-scrub          Remove Tandem's MCP entries, skill, and Cowork
-                                    registration from Claude configs (run before
-                                    uninstalling; the Windows uninstaller runs it)
+                                    registration from Claude configs. Run it
+                                    yourself before uninstalling — no uninstaller
+                                    runs it; the Windows one runs the desktop
+                                    app's own scrub, which leaves MCP entries and
+                                    the skill in place
   tandem mcp-stdio                  Run as a stdio MCP server proxying to local HTTP
                                     (used by the plugin's Cowork bridge; requires
                                     tandem server running on the host)
@@ -101,17 +107,17 @@ if (!isStdioMode) {
 
 try {
   if (args[0] === "--uninstall-scrub") {
-    // Invoked by the Tauri NSIS uninstaller hook on Windows, and manually on
-    // any platform before removing the app. Removes Tandem's MCP config
-    // entries + bundled skill everywhere; Cowork plugin entries + firewall
-    // rules on Windows. Runs inside the already-signed tandem.exe rather than a
-    // separate uninstall_scrub.exe — a dedicated scrub binary would sit unsigned
-    // beside the installer at uninstall time, which is a binary-planting target.
+    // Run by hand on any platform before removing the app — nothing invokes it
+    // automatically. The Tauri NSIS uninstall hook runs the DESKTOP binary's
+    // --uninstall-scrub (src-tauri/src/uninstall_scrub.rs), which never reaches
+    // this file. Removes Tandem's MCP config entries + bundled skill
+    // everywhere; Cowork plugin entries + firewall rules on Windows. See the
+    // docblock in ./uninstall-scrub.ts for how the two scrubs divide.
     const { runUninstallScrub } = await import("./uninstall-scrub.js");
     const exitCode = await runUninstallScrub();
     process.exit(exitCode);
   } else if (args[0] === "setup") {
-    const { runSetup, parseTargetArgs } = await import("./setup.js");
+    const { runSetup, parseTargetArgs, parseChannelShimArgs } = await import("./setup.js");
     // `--target=claude-code` / `--target=claude-desktop`, repeatable. Warn on
     // unrecognized values so a typo doesn't silently become a confusing "No
     // matching installations" downstream.
@@ -131,17 +137,25 @@ try {
       );
       process.exit(1);
     }
+    // `undefined` when neither flag is given, NOT `false`, and the distinction
+    // is data loss: `resolveChannelShimIntent` treats absent as "preserve what
+    // is there" and `false` as "remove it", so collapsing the two would make
+    // `tandem setup --apply` delete a deliberate opt-in. `--without-channel-shim`
+    // is the only `tandem setup` flag that removes it (#1760) — `--uninstall-scrub`
+    // and a confirmed wizard diff still remove it by their own explicit routes;
+    // refuse both flags at once before any write rather than guessing which one
+    // the user meant.
+    const shim = parseChannelShimArgs(args);
+    if (shim.conflict) {
+      console.error(
+        "[tandem] --with-channel-shim and --without-channel-shim are mutually exclusive. Aborting.",
+      );
+      process.exit(1);
+    }
     await runSetup({
       apply: args.includes("--apply"),
       force: args.includes("--force"),
-      // `undefined` when the flag is absent, NOT `false`, and the distinction
-      // still matters after Track E made the shim opt-in. `setup` now writes no
-      // shim either way, but `applyConfigWithToken` reads the same option and
-      // treats absent as "preserve what is there" and `false` as "remove it" —
-      // so collapsing the two would make `tandem rotate-token` delete a
-      // deliberate opt-in. There is no `--no-channel-shim`; absent means "no
-      // opinion".
-      withChannelShim: args.includes("--with-channel-shim") || undefined,
+      withChannelShim: shim.intent,
       targets,
     });
   } else if (args[0] === "mcp-stdio") {

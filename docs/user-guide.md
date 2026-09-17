@@ -52,7 +52,11 @@ Open documents appear as tabs along the top. Each tab shows the file name, a dot
 
 ### Formatting Toolbar
 
-Select text to reveal formatting buttons: **Bold**, **Italic**, **Headings** (H1/H2/H3), **Bullet List**, **Ordered List**, **Blockquote**, **Code**, **Link** (`Ctrl+K`), **Horizontal Rule**, and **Code Block**. Standard keyboard shortcuts also work (`Ctrl+B`, `Ctrl+I`, etc.). The toolbar wraps to a second row on narrow windows.
+Select text to reveal formatting buttons: **Bold**, **Italic**, **Strikethrough**, **Code**, **Link** (`Ctrl+K`), **Headings** (H1/H2/H3), **Bullet List**, **Ordered List**, **Blockquote**, and **Code Block**. Standard keyboard shortcuts also work (`Ctrl+B`, `Ctrl+I`, etc.). The toolbar wraps to a second row on narrow windows.
+
+The persistent formatting bar (Settings → Appearance → **Show formatting bar**) carries two extra controls the selection popup deliberately leaves out: **Undo** / **Redo**, and **Horizontal Rule** — inserting a rule while text is selected makes little sense.
+
+The bar's **Display** menu (the `Aa` button) sets the text size and reading measure for the formatted editor without opening Settings. It changes the same settings as Settings → Appearance and Settings → Editor, so the two always agree. The Markdown source view keeps its own fixed size and width.
 
 ### Selection Popup
 
@@ -63,7 +67,7 @@ When text is selected, a floating popup appears with two parts:
   - **Note to self** (`Alt+Enter`) — A private note. Never sent to the AI. `Alt+Enter` always files a note, whichever button is primary.
   - **Send to your AI** (`Ctrl+Enter`) — An outbound comment. The AI sees the selected passage and your text, and can respond with annotations, chat messages, or both. The button is labelled with your configured assistant's name. `Ctrl+Enter` sends the *primary* action, which is the outbound comment by default.
 
-The popup also includes a toggle to show or hide the formatting bar.
+The popup also includes a toggle to show or hide the formatting bar, and mirrors the bar's **Decorations** and **Display** menus so both stay reachable while the bar is hidden.
 
 ### Slash Menu
 
@@ -71,15 +75,15 @@ Type `/` at the start of a line (or after a space) to open a block menu: Paragra
 
 **Paragraph** is a reset rather than an insert: it turns the current block back into plain body text, lifting it out of a list or a quote. It is first in the list, so `/p` reaches it directly and pressing `Enter` on the unfiltered menu does nothing rather than inserting a heading you didn't ask for.
 
-Use `↑` / `↓` to move, `Enter` to insert, `Esc` to close. The `/` and whatever you typed after it are removed when the command runs. The menu only opens on text you actually type, so clicking after an existing `/` won't summon it, and it stays out of the way while the find bar, command palette, or an annotation popup is open.
+Use `↑` / `↓` to move, `Enter` to insert, `Esc` to close. The `/` and whatever you typed after it are removed when the command runs. The menu only opens on text you actually type, so clicking after an existing `/` won't summon it, and it stays out of the way while the find bar, command palette, or an annotation popup is open, or when the caret is inside a code block.
 
 ### Right-Click Menus
 
 **Desktop app only** — these are real OS menus. The browser build shows its browser's own menu in the document and nothing in the app chrome.
 
 - **In the document:** Undo/Redo, Cut/Copy/Paste, **Paste as Raw Text** (`Ctrl+Shift+V`), and Select All. Right-clicking a link gives Open / Copy / Edit / Remove Link; right-clicking inside a table gives row and column submenus plus Merge Cells, Split Cell, and Delete Table. With text selected, three more items appear: **Ask AI about selection…**, **Comment to AI…**, and **Private Note…**. (On macOS, plain text keeps the native menu so Look Up and Services still work.)
-- **On a tab:** Close, Close Tabs to the Left / Others / to the Right, Rename, Save or Save As…, View Markdown Source, Copy File Name, Copy Path, and Reveal in Finder / Show in File Explorer.
-- **On an annotation card** (side panel or margin): Accept, Dismiss, Reply…, Edit…, Send to your AI, Copy text, and Remove (or Archive, for notes).
+- **On a tab:** Close, Close Tabs to the Left / Others / to the Right, Rename, Save or Save As…, View Markdown Source, Copy File Name, Copy Path, and Reveal in Finder / Show in File Explorer / Show in File Manager (macOS / Windows / Linux).
+- **On an annotation card** (side panel or margin): Accept, Dismiss, Reply…, Edit…, **Send to Claude**, Copy text, and Remove (or Archive, for notes). The card's own button and the annotate popup use your configured assistant's name; this one OS menu item says "Claude" whichever model you have configured.
 
 Right-clicking empty app chrome — rails, panel padding, the status bar — deliberately does nothing.
 
@@ -133,13 +137,13 @@ Press `?` at any time to open the keyboard shortcuts reference. Press `?` or `Es
 
 ### Opening Files
 
-There are three ways to open a file:
-
-**Path input** — Click the **+** button in the tab bar, type an absolute file path, and click **Open**.
+You can open a file a few ways:
 
 **Drag-and-drop** — Drag a file from your file manager onto the editor. A dashed border appears as a drop indicator.
 
-**Upload** — Click **+**, switch to **Upload** mode, and browse or drag a file into the drop zone. Uploaded files get a synthetic `upload://` path and are always read-only — `Save` preserves the session (annotations) but cannot write back to disk.
+**Recent files** — Click **+** in the tab bar to see recently opened files; type to filter, then click one to open it.
+
+**Browse or upload** — Click **+** in the tab bar, then **Browse files…**. On desktop this opens a native file picker for real (write-capable) editing. In the browser build it opens an upload dialog: uploaded files get a synthetic `upload://` path and are always read-only — `Save` preserves the session (annotations) but cannot write back to disk.
 
 ### Supported Formats
 
@@ -147,7 +151,7 @@ There are three ways to open a file:
 - **Word** (`.docx`) — Read-write. Saving writes your edits back to the `.docx` body, and pending comments are written back as real Word comments. Existing Word comments (`<w:comment>` elements) are imported as annotations with author "import". External edits (e.g. from Word) are detected: a clean document reloads in place, while a document with unsaved edits shows a keep-vs-reload banner instead of losing anything. A **Convert to Markdown** option is also available if you prefer working in Markdown. See [Word fidelity](#word-fidelity) below.
 - **Plain text** (`.txt`) — Full read-write support. One behaviour differs from Markdown:
   see [Line breaks in plain text](#line-breaks-in-plain-text) below.
-- **HTML** (`.html`, `.htm`) — Read support.
+- **HTML** (`.html`, `.htm`) — Read-only. It opens for reading and annotating, and the file is never written back: HTML is the one supported format with no save path at all, so it opens read-only rather than accepting edits it would silently drop on tab close.
 
 ### Line breaks in plain text
 
@@ -278,7 +282,7 @@ Annotations can be reviewed without leaving the keyboard:
 
 You can also enable the **margin view** (Settings → AI Assistant → "Margin annotation view") to see annotation cards beside the text they reference, in addition to the side panel list.
 
-The margin adapts on two independent axes, and it helps to know which one you are seeing. **When the window is narrow**, the whole margin steps down — from full-width cards, to a narrow track showing a one-line teaser without the action row, to a bare tick mark, to nothing at all. **When cards are crowded** — too many anchored too close together — individual cards shrink to a one-line summary but **keep** their Accept/Reject buttons, so a shrunken card in a full-width margin is still actionable.
+The margin adapts on two independent axes, and it helps to know which one you are seeing. **When the window is narrow**, the whole margin steps down — from full-width cards, to a narrow track showing a one-line teaser without the action row, to a bare tick mark, to nothing at all. **When cards are crowded** — too many anchored too close together — individual cards shrink to a one-line summary but **keep** their Accept/Dismiss buttons, so a shrunken card in a full-width margin is still actionable.
 
 Either way, click a card to expand it while it's selected, or click its chevron to keep it expanded even after you select something else. Cards also widen to use empty margin space when you collapse or narrow a side rail.
 
@@ -290,14 +294,16 @@ Either way, click a card to expand it while it's selected, or click its chevron 
 
 ![The Solo / Tandem toggle, with Tandem selected](screenshots/10-solo-tandem-toggle.png)
 
-The title bar includes a **Solo / Tandem** toggle (`Ctrl+Shift+M`). It holds work back in *both* directions — the AI's annotations are held from you, and your own comments are held from the AI.
+The title bar includes a **Solo / Tandem** toggle (`Ctrl+Shift+M`).
 
-- **Tandem** (default) — the AI's annotations appear immediately as they arrive, and the comments and replies you write are visible to it.
-- **Solo** — the AI's pending annotations are held back from the document. Resolved annotations (accepted/dismissed) are always visible regardless of mode.
+- **Tandem** (default) — everything flows both ways: the AI's annotations appear as they arrive, and the comments and replies you write are visible to it.
+- **Solo** — the comments and replies **you** author are withheld from the AI until you switch back. **Chat and document edits are not affected in either direction**: your chat messages still reach the AI, and it can still read the document, answer, and edit. Solo holds annotations and replies, not the conversation.
 
-Since v0.19.0 the server, not the client, enforces the other direction: while you are in Solo, the comments and replies **you** author are withheld from the AI. Each held item shows an amber **Held** pill, and the status bar shows a running count of what is being withheld. Switching back to Tandem releases the whole set at once — the AI picks them up on its next check, and a one-time nudge wakes a push-connected session to look.
+**Solo is a one-way hold, and it is worth knowing which way.** The half the server enforces is outbound: since v0.19.0 nothing you write reaches the AI while you are in Solo. Each held item shows an amber **Held** pill, and the status bar shows a running count of what is being withheld. Switching back to Tandem releases the whole set at once — the AI picks them up on its next check, and a one-time nudge wakes a push-connected session to look.
 
-Solo also hides the right rail, so the annotation list is out of sight while you write.
+The inbound half is **cooperation, not enforcement**. Both `tandem_checkInbox` and `tandem_status` report the current mode, and Tandem's bundled skill asks the AI to hold off on new annotations while you are in Solo — but nothing hides an annotation it creates anyway, and the document text and your current selection stay readable to it throughout. Solo means "the AI won't hear from me", not "the AI can't see me". (#1779 is the issue that corrected this section; it is closed. The absence of an inbound mechanism is a design fact, not an open bug.)
+
+If you would rather not see the annotation list at all while you write, **Settings → Collaboration → Hide side panel in Solo mode** (on by default) collapses the right rail whenever you enter Solo and restores it when you return to Tandem.
 
 **Exactly what the Solo hold covers.** Held comments and replies are withheld from every surface that sends them to the AI:
 
@@ -311,7 +317,7 @@ Solo also hides the right rail, so the annotation list is out of sight while you
 
 Personal **notes** are private in both modes and are never surfaced to the AI through any tool ([ADR-027](decisions.md)).
 
-Use **Solo** during focused writing to avoid interruption, or when you want to mark up a draft without the AI reacting to each comment. Switch to **Tandem** when you're ready — all held annotations appear at once, in both directions.
+Use **Solo** during focused writing to avoid interruption, or when you want to mark up a draft without the AI reacting to each comment. Switch to **Tandem** when you're ready — everything held is released at once.
 
 ## Chat
 
@@ -344,12 +350,12 @@ Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
 | Tab | What's in it |
 |-----|--------------|
 | **Appearance** | Theme (light / warm / dark / system), which panel opens by default, text size, accent hue, spacing density, which decorations are shown (authorship, comments, highlights, notes), reduce motion, the optional formatting bar, reveal-rails-on-hover, uniform tab width, and the scroll pill |
-| **Editor** | Reading measure, editor font, default font by file type, default save folder, smart typography, spellcheck, and raw-markdown view — see [Editor settings](#editor-settings) below |
+| **Editor** | Reading measure, editor font, default font by file type, default save folder, smart typography, spellcheck, raw-markdown view, and source-view line wrap — see [Editor settings](#editor-settings) below |
 | **Network** | Connection details, start-at-login (desktop app only), and the advanced retry/delay controls |
-| **Accessibility** | Motion-reduction and related display preferences |
-| **Collaboration** | Your display name, Solo/Tandem behavior, and presence options |
+| **Accessibility** | High contrast, and pattern fills for annotations (**Reduce motion** lives under Appearance) |
+| **Collaboration** | Your display name, and whether the side panel hides itself in Solo mode |
 | **AI Assistant** | Working directory, the margin annotation view, **Real-time updates** (how a session you started yourself hears about your comments as they happen, including the Tandem plugin's install commands with a Copy button), the integration wizard, Replay tutorial, and Cowork enablement (desktop app only) |
-| **Shortcuts** | Click-to-record remapping for every app-level shortcut, with per-row reset and a reset-all |
+| **Shortcuts** | A **Customizable** section with click-to-record remapping (19 app-level shortcuts), per-row reset and a reset-all, followed by read-only **(fixed)** sections — text formatting, undo/redo, heading levels, tab jumps and the help key are not remappable |
 | **License** | Activation and current license or trial status |
 | **About** | Version, Copy Diagnostics, and Open log folder (desktop app only) |
 
@@ -357,7 +363,7 @@ Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
 
 Most of what shapes the reading surface lives here.
 
-- **Reading measure** — The line length of the text: Narrow (58 characters), Comfortable (68), Wide (82), or Full (fills the editor). A fixed measure keeps lines readable no matter which panels are open.
+- **Reading measure** — The line length of the text: Narrow (58 characters), Comfortable (68), Wide (82), or Full (fills the editor). A fixed measure keeps lines readable no matter which panels are open. The formatting bar's **Display** menu sets it too.
 - **Editor font** — Sans-serif, Serif, or Monospace for the document text.
 - **Default font by file type** — Overrides the editor font per format (`.md`, `.docx`, `.html`, `.txt`). Anything you don't set falls back to the editor font; **Reset to defaults** clears every override at once.
 - **Default save folder** — Where **Save As** puts new files. Leave it empty to fall back to your AI's working directory, then your home folder. In the desktop app a **Choose…** button opens a native folder picker; in the browser you type the path, and browser Save As is a download that ignores this setting.
@@ -367,7 +373,7 @@ Most of what shapes the reading surface lives here.
 
 ## Keyboard Shortcuts
 
-Press `?` to open the in-app shortcuts reference at any time — it always reflects your effective bindings. Most app-level shortcuts are remappable in **Settings → Shortcuts** (click-to-record); the defaults are listed below.
+Press `?` to open the in-app shortcuts reference at any time — it always reflects your effective bindings. Nineteen app-level shortcuts are remappable in **Settings → Shortcuts** (click-to-record); the rest — text formatting, undo/redo, heading levels, tab jumps and `?` itself — are fixed. The defaults are listed below.
 
 ### Editor
 
@@ -375,6 +381,8 @@ Press `?` to open the in-app shortcuts reference at any time — it always refle
 |----------|--------|
 | `Ctrl+B` | Bold |
 | `Ctrl+I` | Italic |
+| `Ctrl+Z` | Undo |
+| `Ctrl+Y` | Redo |
 | `Ctrl+K` | Insert/remove link |
 | `Ctrl+S` | Save document |
 | `Ctrl+Shift+S` | Save As (e.g. promote a scratchpad to a file) |
@@ -384,7 +392,7 @@ Press `?` to open the in-app shortcuts reference at any time — it always refle
 | `Alt+L` | Select containing block |
 | `Ctrl+Shift+E` | View / exit Markdown source |
 
-> **Note:** Undo/redo is not yet available in collaborative mode (tracked as a future enhancement).
+> **Note:** Undo and redo run off the CRDT's own undo history rather than the editor's, so they work while you and your AI are both in the document. The persistent formatting bar has buttons for both, and the desktop app's document right-click menu offers them too.
 
 ### Annotations & Review
 
@@ -417,6 +425,8 @@ Press `?` to open the in-app shortcuts reference at any time — it always refle
 | `Enter` | Send message (chat panel) |
 | `?` | Show/hide keyboard shortcuts |
 
+> **In the browser build, `Ctrl+N`, `Ctrl+T` and `Ctrl+W` belong to the browser** — it opens a window, opens a tab, or closes your Tandem tab before the page ever sees the key. Use the **+** button in the tab bar and the command palette (`Ctrl+Shift+P`) instead, or remap New Scratchpad, New tab menu and Close active tab in **Settings → Shortcuts**. The desktop app owns its own window, so all three work there.
+
 ## Working with Claude Code
 
 Tandem connects to Claude Code through MCP (Model Context Protocol). Claude gets Tandem's full MCP tool surface for reading documents, creating annotations, searching text, managing files, and communicating with you.
@@ -431,7 +441,7 @@ Claude can check the connection with `tandem_status`, which reports open documen
 
 ### Real-Time Push (Recommended)
 
-Chat messages, annotation accepts/dismisses, and text selections can push to Claude in real time rather than waiting for it to poll. Sessions Tandem launches for you already get this and need no setup. In a session you start yourself, first Tandem use runs the bundled skill; after its first successful read-mode `tandem_status`, the skill automatically makes one persistent built-in Monitor attempt using the returned wake-stream address.
+Chat messages, annotation accepts/dismisses, and text selections can push to Claude in real time rather than waiting for it to poll. Sessions Tandem launches for you already get this and need no setup. In a session you start yourself, first Tandem use runs the bundled skill; on the first Tandem response that returns a wake-stream address — `tandem_open`, `tandem_scratchpad` or a read-mode `tandem_status` — the skill automatically makes one persistent built-in Monitor attempt using it.
 
 The **built-in Monitor watch** needs no installation or flag and lasts only for that session. It requires a Claude Code account where Monitor is enabled and, on Windows, Git Bash. Asking Claude to watch is recovery if the automatic attempt was skipped, not a required setup step.
 
@@ -504,9 +514,9 @@ The message appears after 3 seconds of failed connection. If the server was rest
 
 Check the connection indicator in the status bar. If it shows "Reconnecting...", the WebSocket connection dropped — it will auto-reconnect.
 
-If connected but annotations still aren't showing, check your **mode** in the title bar. **Solo** mode holds Claude's pending annotations, and also hides the right rail. Switch to **Tandem** to see everything.
+If connected but annotations still aren't showing, check your **mode** in the title bar. **Solo** does not hide anything Claude creates, but it does hide the right rail by default, and Claude is asked to hold off on new annotations while you are in it — so the usual symptom is "nothing new is arriving". Switch to **Tandem** and the comments you wrote in Solo are released to Claude at the same time.
 
-Check the developer console for CRDT fallback warnings (`buildDecorations()` warnings indicate annotations falling back from CRDT-anchored to flat offsets).
+If the annotations are there but anchored to the wrong text, that is a re-anchoring problem rather than a sync one — **Settings → About → Copy Diagnostics** and [file an issue](https://github.com/bloknayrb/tandem/issues) with the report attached.
 
 ### Document won't load
 
@@ -524,4 +534,4 @@ For server-side and MCP troubleshooting, see [troubleshooting.md](troubleshootin
 
 ### Desktop app: server won't start
 
-The desktop app runs the server as a background sidecar process. Check the system tray — if Tandem's icon is there, the server is running. If the icon is missing or the app shows an error dialog, the sidecar failed to start (port conflict, missing resources, or crash). Restart the app. For persistent issues, check the Tauri log output in the system console.
+The desktop app runs the server as a background sidecar process. Check the system tray — if Tandem's icon is there, the server is running. If the icon is missing or the app shows an error dialog, the sidecar failed to start (port conflict, missing resources, or crash). The error dialog offers **Retry Server Start**; Settings → Network → **Restart server** does the same thing later. For persistent issues, open **Settings → About → Open Log Folder** and read `tandem.log` — see [troubleshooting → Reading server logs](troubleshooting.md#reading-server-logs).

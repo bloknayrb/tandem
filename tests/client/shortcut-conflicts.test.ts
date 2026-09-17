@@ -45,30 +45,9 @@ describe("claimedByFixedShortcut", () => {
     ],
     ["Ctrl+A → select-all", chord({ ctrlOrMeta: true, code: "KeyA" }), "Select all"],
     [
-      "Ctrl+Alt+F → find (no alt gate)",
-      chord({ ctrlOrMeta: true, alt: true, code: "KeyF" }),
-      "Find / Replace",
-    ],
-    [
-      "Ctrl+Alt+Shift+F → find-in-tabs",
-      chord({ ctrlOrMeta: true, alt: true, shift: true, code: "KeyF" }),
-      "Find in open tabs",
-    ],
-    ["Ctrl+Alt+G → find-next", chord({ ctrlOrMeta: true, alt: true, code: "KeyG" }), "Find next"],
-    [
-      "Ctrl+Alt+Shift+G → find-prev",
-      chord({ ctrlOrMeta: true, alt: true, shift: true, code: "KeyG" }),
-      "Find previous",
-    ],
-    [
       "Ctrl+Shift+3 → pick-tab (no shift gate)",
       chord({ ctrlOrMeta: true, shift: true, code: "Digit3" }),
       "Jump to tab 3",
-    ],
-    [
-      "Ctrl+Alt+7 → pick-tab (no alt gate)",
-      chord({ ctrlOrMeta: true, alt: true, code: "Digit7" }),
-      "Jump to tab 7",
     ],
     // Enter exercises keyForChord's `e.key`-derivation defense-in-depth branch.
     // These chords can't reach claimedByFixedShortcut through either production
@@ -91,6 +70,21 @@ describe("claimedByFixedShortcut", () => {
 
   it("returns null for a free chord", () => {
     expect(claimedByFixedShortcut(chord({ ctrlOrMeta: true, code: "KeyJ" }))).toBeNull();
+  });
+
+  // #1777 item 2 gave `find`, `find-nav` and `pick-tab` an `!e.altKey` gate so
+  // AltGr (delivered as ctrl+alt) stops firing app shortcuts. These five chords
+  // were claimed before that and are now free for the user to bind. This is an
+  // intended behavioural change; repairing it by reverting the alt gate would
+  // half-land item 2 while leaving the whole suite green.
+  it.each([
+    ["Ctrl+Alt+F", chord({ ctrlOrMeta: true, alt: true, code: "KeyF" })],
+    ["Ctrl+Alt+Shift+F", chord({ ctrlOrMeta: true, alt: true, shift: true, code: "KeyF" })],
+    ["Ctrl+Alt+G", chord({ ctrlOrMeta: true, alt: true, code: "KeyG" })],
+    ["Ctrl+Alt+Shift+G", chord({ ctrlOrMeta: true, alt: true, shift: true, code: "KeyG" })],
+    ["Ctrl+Alt+7", chord({ ctrlOrMeta: true, alt: true, code: "Digit7" })],
+  ])("no longer claims %s (alt gate, #1777)", (_desc, c) => {
+    expect(claimedByFixedShortcut(c)).toBeNull();
   });
 
   it("returns null when a chord merely equals a remappable default (findConflict's job)", () => {

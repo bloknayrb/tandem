@@ -22,18 +22,18 @@ const clearAllSessions = vi.fn();
 const isStoreReadOnly = vi.fn(() => false);
 const isLoopbackMock = vi.fn((_remoteAddress: string | undefined) => true);
 
-vi.mock("../../src/server/session/manager.js", () => ({
+vi.mock(import("../../src/server/session/manager.js"), () => ({
   listSessionsMetadata: () => listSessionsMetadata(),
   deleteSession: (p: string) => deleteSession(p),
   clearAllSessions: () => clearAllSessions(),
 }));
 
-vi.mock("../../src/server/annotations/store.js", () => ({
+vi.mock(import("../../src/server/annotations/store.js"), () => ({
   isStoreReadOnly: () => isStoreReadOnly(),
 }));
 
 // Allow tests to simulate non-loopback callers for path-stripping coverage.
-vi.mock("../../src/server/auth/middleware.js", async (importOriginal) => {
+vi.mock(import("../../src/server/auth/middleware.js"), async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server/auth/middleware.js")>();
   return {
     ...original,

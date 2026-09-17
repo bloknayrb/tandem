@@ -28,10 +28,24 @@ beforeEach(() => {
   doc = makeDoc("Hello world");
 });
 
+/**
+ * A USER-authored comment. Every ACCEPT row uses one since #1770: accept is the
+ * user's decision, so `transitionPending` refuses an accept of a CLAUDE-authored
+ * record with `accept-refused/own-annotation`. `mintAnnotation` stamps
+ * `author: "claude"` and `audience: "outbound"`; the extras override the author
+ * and the audience survives (sanitize demotes only user note/highlight/flag).
+ */
+function createUserComment(map: Y.Map<unknown>, content = "test", extras = {}): string {
+  return createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), content, {
+    author: "user",
+    ...extras,
+  });
+}
+
 describe("acceptPending", () => {
   it("returns kind: 'ok' for a pending annotation, transitions to accepted, bumps rev", () => {
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "test");
+    const id = createUserComment(map);
     const before = map.get(id) as Annotation;
 
     const result = acceptPending(id, doc, map, noRelay);
@@ -53,7 +67,7 @@ describe("acceptPending", () => {
     expect(after.rev).toBeGreaterThan(before.rev ?? 0);
   });
 
-  it("preserves every field the record already carried", () => {
+  it("preserves every field the record already carried (via dismiss on Claude's own)", () => {
     // **The highest-value spec in this file, and the family had nothing like
     // it.** Accept is the most common resolve action, and `transitionPending`
     // rebuilds the record with a spread. Replace that spread with a
@@ -65,6 +79,11 @@ describe("acceptPending", () => {
     // It reads `map.get(id)`, never `result.data`, because the two mutants
     // differ exactly there — `result.data` IS the object the literal built, so
     // a return-value assertion cannot see a divergent write.
+    // #1770 re-fixtured, never deleted: this row used ACCEPT on the
+    // Claude-authored mint, which is now `accept-refused/own-annotation` twice
+    // over (own annotation AND an unapplied `suggestedText`). Dismissing
+    // Claude's own record is the transition that is still permitted, and it
+    // exercises the identical spread.
     const map = getAnnotationsMap(doc);
     const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "test", {
       suggestedText: "replacement",
@@ -79,17 +98,18 @@ describe("acceptPending", () => {
     const before = { ...(map.get(id) as Annotation) };
     expect(before.relRange, "fixture precondition: the record is anchored").toBeDefined();
 
-    acceptPending(id, doc, map, noRelay);
+    dismissPending(id, doc, map, noRelay);
 
     const after = map.get(id) as Annotation;
-    // Status and rev are the two fields the transition OWNS; everything else
+    // Status, rev and resolvedBy are the three fields the transition OWNS;
+    // everything else
     // must survive byte-for-byte, so assert the whole record rather than a
     // field list that a future field would silently escape. `rev` is asserted
     // by its own specs above and below — reading it off `after` here would be
     // circular, so it is excluded from the comparison rather than smuggled in.
     const { rev: _afterRev, ...afterRest } = after;
     const { rev: _beforeRev, ...beforeRest } = before;
-    expect(afterRest).toStrictEqual({ ...beforeRest, status: "accepted" });
+    expect(afterRest).toStrictEqual({ ...beforeRest, status: "dismissed", resolvedBy: "claude" });
     expect(after.rev, "and the transition did bump it").toBeGreaterThan(before.rev ?? 0);
   });
 
@@ -101,7 +121,7 @@ describe("acceptPending", () => {
 
   it("returns kind: 'not-pending' for an already-accepted annotation; rev unchanged", () => {
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "test");
+    const id = createUserComment(map);
     acceptPending(id, doc, map, noRelay); // first accept
     const acceptedRev = (map.get(id) as Annotation).rev;
 
@@ -141,7 +161,7 @@ describe("dismissPending", () => {
 
   it("returns kind: 'not-pending' for an already-resolved annotation", () => {
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "test");
+    const id = createUserComment(map);
     acceptPending(id, doc, map, noRelay);
 
     const result = dismissPending(id, doc, map, noRelay);
@@ -185,7 +205,8 @@ describe("transactions are tagged with MCP_ORIGIN (channel-event skip)", () => {
     ],
   ])("%s fires under MCP_ORIGIN", (_label, op) => {
     const map = getAnnotationsMap(doc);
-    const id = createAnnotation(map, doc, "comment", rangeOf(0, 5, doc), "test");
+    // USER-authored, so the accept row still performs a write (#1770).
+    const id = createUserComment(map);
 
     const origins: unknown[] = [];
     doc.on("beforeTransaction", (tr: Y.Transaction) => origins.push(tr.origin));

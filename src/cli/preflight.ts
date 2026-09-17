@@ -10,7 +10,8 @@
  * - `probeTandemServer` — returns a result without side effects. Used by
  *   `tandem mcp-stdio`, which starts its stdio transport before preflight
  *   so it can synthesize -32000 JSON-RPC errors for any in-flight request
- *   before exiting (issue #336).
+ *   (issue #336) while it keeps probing in the background until the server
+ *   appears — it does not exit (#1805).
  */
 
 import { resolveTandemUrl } from "../shared/cli-runtime.js";

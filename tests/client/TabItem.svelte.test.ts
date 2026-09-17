@@ -66,12 +66,17 @@ function mount(id: string, ydoc: Y.Doc) {
   });
   const indicator = () =>
     result.container.querySelector<HTMLElement>(`[data-testid="unsaved-indicator-${id}"]`);
+  const tabPill = () => result.container.querySelector<HTMLElement>(`[data-testid="tab-${id}"]`);
   return {
     unmount: result.unmount,
     /** True when the unsaved dot is rendered. */
     hasDot: () => Boolean(indicator()?.querySelector(".dot")),
     /** True when the A2 save-confirmation check is rendered. */
     hasCheck: () => Boolean(indicator()?.querySelector(".saved-check")),
+    /** #1544 — the tab row's own accessible name, the only channel that reaches AT. */
+    tabAriaLabel: () => tabPill()?.getAttribute("aria-label") ?? null,
+    /** #1544 — the indicator wrapper is decorative-only; it must never unhide. */
+    indicatorAriaHidden: () => indicator()?.getAttribute("aria-hidden") ?? null,
   };
 }
 
@@ -239,6 +244,52 @@ describe("TabItem unsaved dot — clearing (#1447)", () => {
     meta.set(Y_MAP_EXTERNAL_CONFLICT, { kind: "modified" });
     await wait(20);
     expect(tab.hasDot()).toBe(true);
+    tab.unmount();
+  });
+});
+
+describe("TabItem unsaved indicator — accessible name (#1544)", () => {
+  // The indicator wrapper's only children are themselves aria-hidden, so
+  // unhiding the wrapper announced nothing to assistive tech. The tab row's
+  // own aria-label is the only channel that reaches the accname computation
+  // (an explicit aria-label on role="tab" overrides all descendant content),
+  // so the dirty state has to ride there instead.
+  it("dirty: the tab's own aria-label names the unsaved state", async () => {
+    const ydoc = new Y.Doc();
+    const tab = mount("a11y-dirty", ydoc);
+
+    syncContent(ydoc, "edited content");
+    setMirror(ydoc, true);
+    await afterArm();
+
+    expect(tab.tabAriaLabel()).toMatch(/unsaved changes/i);
+    tab.unmount();
+  });
+
+  it("saved: the tab's own aria-label is the plain filename", async () => {
+    const ydoc = new Y.Doc();
+    const tab = mount("a11y-saved", ydoc);
+
+    setMirror(ydoc, false);
+    await afterArm();
+
+    expect(tab.tabAriaLabel()).toBe("a11y-saved.md");
+    tab.unmount();
+  });
+
+  it("the indicator wrapper stays aria-hidden in both states — it is decorative only", async () => {
+    const ydoc = new Y.Doc();
+    const tab = mount("a11y-indicator-hidden", ydoc);
+
+    setMirror(ydoc, false);
+    await afterArm();
+    expect(tab.indicatorAriaHidden()).toBe("true");
+
+    syncContent(ydoc, "now dirty");
+    setMirror(ydoc, true);
+    await afterArm();
+    expect(tab.indicatorAriaHidden()).toBe("true");
+
     tab.unmount();
   });
 });

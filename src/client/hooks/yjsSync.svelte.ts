@@ -31,6 +31,51 @@ import { deduplicateDocList } from "./useYjsSync";
 export type ConnectionStatus = "connected" | "connecting" | "disconnected";
 
 /**
+ * cr-2 (#1816 follow-up, J2 review round 3): `renameDocument`'s errorCode is
+ * semantic for most rejections — `body.message` (from `routes/rename.ts`,
+ * either the loopback `reason` or the `RENAME_GENERIC_MESSAGE` lookup for a
+ * non-loopback caller) is ALREADY a complete, finished sentence for every one
+ * of these. Appending "(ALREADY_EXISTS)" or "(EXTENSION_MISMATCH)" to an
+ * already-finished sentence is just noise on the two most common rename
+ * failures. Mirrors the key set of `RENAME_GENERIC_MESSAGE` in
+ * `src/server/mcp/routes/rename.ts` — keep the two in sync.
+ *
+ * The suffix earns its place only for the two producers `renameDocument`
+ * still hands back a raw fs errno alongside a content-free generic reason
+ * ("The document could not be renamed."): the `fs.rename` catch and the
+ * outer catch-all in `document-service.ts`. Neither of those codes appears
+ * in this set, so they fall through to getting the suffix.
+ */
+const RENAME_SEMANTIC_ERROR_CODES = new Set([
+  "NOT_FOUND",
+  "READ_ONLY",
+  "NOT_RENAMABLE",
+  "INVALID_NAME",
+  "INVALID_PATH",
+  "EXTENSION_MISMATCH",
+  "PATH_REJECTED",
+  "ALREADY_EXISTS",
+  "RENAME_IN_PROGRESS",
+  "SAVE_IN_PROGRESS",
+]);
+
+/** Exported for unit testing (cr-2) — pure, no client/server wiring needed. */
+export function formatRenameErrorMessage(
+  body: { message?: string; error?: string },
+  status: number,
+): string {
+  const base = body.message ? body.message : `Rename failed (${status}).`;
+  // Only append the suffix for an errno-shaped code — a semantic one (see
+  // RENAME_SEMANTIC_ERROR_CODES) means `base` is already the complete
+  // sentence, and "UNKNOWN" (the outer catch-all's fallback when the
+  // underlying error carried no `.code`) is as uninformative as a semantic
+  // one.
+  const showSuffix =
+    !!body.error && body.error !== "UNKNOWN" && !RENAME_SEMANTIC_ERROR_CODES.has(body.error);
+  return showSuffix ? `${base} (${body.error})` : base;
+}
+
+/**
  * Map a user-chosen reconnect strategy onto @hocuspocus/provider's
  * websocket backoff knobs. Both strategies keep `maxAttempts: 0` (unlimited) —
  * auto-reconnect must NEVER be disabled, because the stale-tab generation-gate
@@ -767,13 +812,10 @@ export function createYjsSync(opts?: {
     })
       .then(async (res) => {
         if (res.ok) return;
-        let message = `Rename failed (${res.status}).`;
-        try {
-          const body = (await res.json()) as { message?: string };
-          if (body?.message) message = body.message;
-        } catch {
-          // non-JSON body — keep the status-code message
-        }
+        // #1816: `routes/rename.ts` already sends `{ error: errorCode, message }`
+        // — the code was on the wire and simply unread here.
+        const body = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+        const message = formatRenameErrorMessage(body, res.status);
         console.warn("[Tandem] Server rejected rename:", res.status, message);
         revert(message);
       })

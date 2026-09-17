@@ -10,7 +10,7 @@ import {
 } from "../../src/shared/constants.js";
 
 // Isolate session tests in a unique temp directory to avoid races with other test files
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const mod = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");
@@ -26,7 +26,7 @@ vi.mock("../../src/server/platform", async (importOriginal) => {
 // implementation passes through to the real one is what lets a single case make
 // one save throw while the ~30 real-disk round-trips in this file keep working.
 const atomicWriteMock = vi.hoisted(() => ({ impl: null as null | (() => Promise<void>) }));
-vi.mock("../../src/server/file-io/index.js", async (importOriginal) => {
+vi.mock(import("../../src/server/file-io/index.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/server/file-io/index.js")>();
   return {
     ...actual,

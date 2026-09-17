@@ -263,13 +263,14 @@ test("the rail's panel switcher exposes which panel is selected", async ({ page 
   const annotations = page.locator("[data-testid='annotations-tab']");
   const chat = page.locator("[data-testid='chat-tab']");
 
-  // Three-panel layout renders both panels side by side with static headers and
-  // no tab buttons at all (see `switchToAnnotationsTab` in helpers.ts). Skip
-  // rather than fail, so a layout-mode default change does not read as an a11y
-  // regression.
-  if ((await annotations.count()) === 0) {
-    test.skip(true, "tabbed rail layout is not active; there is no switcher to assert on");
-  }
+  // This carried a layout-mode `test.skip` guard for the three-panel layout,
+  // which renders both panels side by side with no tab buttons (see
+  // `switchToAnnotationsTab` in helpers.ts). MEASURED 2026-09-06 with `-g "panel
+  // switcher"` on the reserved ports: the test reported `passed`, not `skipped`,
+  // so the guard never fired — dead weight of the #1529 shape, where a runtime
+  // skip nothing exercises reads exactly like a pass. Asserting the count makes
+  // a layout-default change fail loudly instead of going quietly green.
+  await expect(annotations).toHaveCount(1);
 
   await expect(annotations).toBeVisible({ timeout: 5_000 });
   await expect(chat).toBeVisible({ timeout: 5_000 });
@@ -295,4 +296,91 @@ test("the rail's panel switcher exposes which panel is selected", async ({ page 
   await annotations.click();
   await expect(annotations).toHaveAttribute("aria-current", "page");
   await expect(chat).not.toHaveAttribute("aria-current", /.*/);
+});
+
+// ---------------------------------------------------------------------------
+// aria-modal dialogs actually trap Tab (#1778)
+// ---------------------------------------------------------------------------
+// `aria-modal="true"` promises assistive tech that everything outside is inert.
+// Before this fix, focus left the command palette on the SECOND Tab (walking
+// the titlebar, tabs and rail) and the file-open dialog on the first — so a
+// single-press assertion would have passed against the bug.
+
+test("Tab stays inside the command palette (#1778)", async ({ page }) => {
+  await boot(page);
+
+  await page.locator(".tiptap").click();
+  await page.keyboard.press("Control+Shift+P");
+  const palette = page.locator("[data-testid='command-palette']");
+  await expect(palette).toBeVisible({ timeout: 5_000 });
+
+  for (let i = 0; i < 3; i++) {
+    await page.keyboard.press("Tab");
+    const inside = await page.evaluate(() =>
+      Boolean(document.activeElement?.closest("[data-testid='command-palette']")),
+    );
+    expect(inside, `focus escaped the palette on Tab #${i + 1}`).toBe(true);
+  }
+});
+
+test("Tab stays inside the file-open dialog (#1778)", async ({ page }) => {
+  await boot(page);
+
+  await page.keyboard.press("Control+o");
+  const dialog = page.locator("[data-testid='file-open-dialog']");
+  await expect(dialog).toBeVisible({ timeout: 5_000 });
+
+  for (let i = 0; i < 3; i++) {
+    await page.keyboard.press("Tab");
+    const inside = await page.evaluate(() =>
+      Boolean(document.activeElement?.closest('[role="dialog"][aria-modal="true"]')),
+    );
+    expect(inside, `focus escaped the file-open dialog on Tab #${i + 1}`).toBe(true);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Radiogroup containers are not a second tab stop (#1778)
+// ---------------------------------------------------------------------------
+// Every `role="radiogroup"` here gives its `role="radio"` buttons a roving
+// `tabIndexFor`, so a `tabindex="0"` on the non-interactive container is a
+// redundant stop a keyboard user has to pass through. The positive-tabindex
+// guard above does not catch `tabindex="0"`, so it is not a substitute.
+
+test("no radiogroup container is itself a tab stop (#1778)", async ({ page }) => {
+  await boot(page);
+
+  await page.keyboard.press("Control+Comma");
+  await expect(page.locator("[data-testid='settings-modal']")).toBeVisible({ timeout: 5_000 });
+
+  for (const tabId of ["appearance", "editor"]) {
+    await page.locator(`[data-testid='settings-modal-tab-${tabId}']`).click();
+    await expect(page.locator('[role="radiogroup"]').first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('[role="radiogroup"][tabindex="0"]')).toHaveCount(0);
+  }
+});
+
+test("Tab from the Theme label lands on the checked radio, not its container (#1778)", async ({
+  page,
+}) => {
+  await boot(page);
+
+  await page.keyboard.press("Control+Comma");
+  await expect(page.locator("[data-testid='settings-modal']")).toBeVisible({ timeout: 5_000 });
+  await page.locator("[data-testid='settings-modal-tab-appearance']").click();
+
+  const group = page.locator('[role="radiogroup"]').first();
+  await expect(group).toBeVisible({ timeout: 5_000 });
+
+  // Start from the group's own checked radio, then walk backwards: the stop
+  // immediately before it must not be the container.
+  await group.locator('[role="radio"][tabindex="0"]').first().focus();
+  const role = await page.evaluate(() => document.activeElement?.getAttribute("role"));
+  expect(role).toBe("radio");
+
+  await page.keyboard.press("Shift+Tab");
+  const landedOnContainer = await page.evaluate(
+    () => document.activeElement?.getAttribute("role") === "radiogroup",
+  );
+  expect(landedOnContainer, "the radiogroup container is still a tab stop").toBe(false);
 });

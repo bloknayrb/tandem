@@ -243,7 +243,7 @@ describe("previewCwdDrift", () => {
     expect(out.drifted).toBe(true);
   });
 
-  it("normalizes Claude's side too, so a symlinked home is not a permanent nudge", async () => {
+  it("normalizes Claude's side too, so a symlinked home is not a permanent nudge", async (ctx) => {
     // `resolveCwd`'s default branch can return an un-realpath'd `os.homedir()`
     // while the candidate is always realpath'd. Where home contains a symlink
     // the two differ as strings for ONE directory — which would render a
@@ -252,7 +252,8 @@ describe("previewCwdDrift", () => {
     try {
       fs.symlinkSync(projA, link, "junction");
     } catch {
-      return; // unprivileged Windows without Developer Mode — skip
+      ctx.skip(); // unprivileged Windows without Developer Mode: report SKIPPED, not passed (#1825)
+      return;
     }
     expect(await previewCwdDrift(base({ candidate: projA, claudeCwd: link }))).toEqual({
       drifted: false,

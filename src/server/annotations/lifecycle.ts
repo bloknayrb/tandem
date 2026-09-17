@@ -111,6 +111,11 @@ import {
 } from "../../shared/utils.js";
 import { readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
+// #1626: the reply seam screens a suggestion-bearing reply against the PARENT's
+// live span. No cycle — `positions.ts` reaches only `shared/*` and
+// `mcp/document-model.ts`, neither of which imports this module.
+import { anchoredRange, refreshRange } from "../positions.js";
+import { isClaudeFacing } from "./projection.js";
 import { nextRev, REPLY_TEXT_MAX } from "./schema.js";
 
 // ---------------------------------------------------------------------------
@@ -153,7 +158,14 @@ export type LifecycleResult<T> =
   | { kind: "ok"; data: T }
   | { kind: "not-found"; id: string }
   | { kind: "invalid-note" }
-  | { kind: "not-pending"; id: string; currentStatus: AnnotationStatus };
+  | { kind: "not-pending"; id: string; currentStatus: AnnotationStatus }
+  // #1770: an arm only the ACCEPT verb produces, on a union that serves both
+  // verbs — the verb-specific-arm-on-a-shared-union deviation the `EditResult`
+  // docblock argues against, taken knowingly. One function
+  // (`transitionPending`) serves accept and dismiss and one consumer switches
+  // on the result, so a second union would duplicate every other arm to
+  // separate two lines.
+  | { kind: "accept-refused"; reason: "own-annotation" | "unapplied-suggestion" };
 
 /**
  * What the shared MECHANISM can answer, and the base {@link RemoveResult} widens.
@@ -238,6 +250,62 @@ export type ReplyResult =
   | { kind: "not-pending"; currentStatus: AnnotationStatus };
 
 /**
+ * ADR-027's write-side privacy predicate (#1803): a note, or a comment whose
+ * stored `audience` is not `outbound` — the write twin of #1619's read filter.
+ *
+ * Spelled exactly as the reply guard already spelled it, and used at all FOUR
+ * Claude-facing write families (resolve, edit, reply, remove), which until #1803
+ * disagreed: a stored `{comment, audience: "private"}` record (reachable by a
+ * legacy envelope or a stale-tab merge, and NOT healed by `sanitizeAnnotation`,
+ * which derives an audience only when none is stored) was something Claude could
+ * not reply to but could edit, resolve and remove.
+ *
+ * Highlights are deliberately NOT here: on EDIT and REPLY they fall to their own
+ * arms (`not-repliable`, `invalid-suggestion-target`), which carry the real
+ * parent type. Widening this to `audience !== "outbound"` over every type would
+ * swallow them and answer `invalid-note` instead — a refusal naming a rule that
+ * has nothing to do with the case. Resolve and remove have no such arm, which is
+ * what {@link isWithheldFromClaude} exists for.
+ *
+ * Kept module-PRIVATE. Nothing new is imported by any route or MCP module, so
+ * `annotation-remove-seam.test.ts` and `annotation-reply-seam.test.ts` keep
+ * their importer sets. It must NOT be added to `addUserReply` or
+ * `removeAnnotationRecord`: the user replying in, or archiving, their own
+ * private thread is what #1000/#1680 permit.
+ */
+function isPrivateForClaude(ann: Annotation): boolean {
+  return ann.type === "note" || (ann.type === "comment" && ann.audience !== "outbound");
+}
+
+/**
+ * The RESOLVE and REMOVE half of the same rule, and it is the READ filter's own
+ * predicate rather than the one above (#1803 residual, closed in review).
+ *
+ * `isPrivateForClaude` leaves highlights to a per-family arm, which edit and
+ * reply both have and resolve and remove both LACK. So after #1619 made a user's
+ * private highlight unreadable on every Claude-facing surface,
+ * `tandem_resolveAnnotation` could still flip one (stamping `resolvedBy:
+ * "claude"` on the user's own markup) and `tandem_removeAnnotation` could still
+ * delete it — a record three tools disagreed about. **A read filter is not a
+ * write guard** is exactly the lesson #1680 recorded; this is its highlight
+ * instance.
+ *
+ * `!isClaudeFacing` is a strict widening of `isPrivateForClaude`: identical on
+ * notes and comments, and additionally refusing a highlight whose audience is
+ * not `outbound` — which every user highlight is, since `sanitizeAnnotation`
+ * demotes user-authored note/highlight/flag. Claude cannot MINT a highlight
+ * (`tandem_highlight` is a deprecated stub), so nothing Claude authored is lost
+ * to this.
+ *
+ * Module-PRIVATE for the same reason as its sibling; `isClaudeFacing` is a type-
+ * and-audience predicate over a plain record, so importing it here adds no cycle
+ * (`projection.ts` imports only `shared/`).
+ */
+function isWithheldFromClaude(ann: Annotation): boolean {
+  return !isClaudeFacing(ann);
+}
+
+/**
  * The reply family's result: the shared outcomes plus the one arm only the
  * ADR-027 guard on {@link AnnotationLifecycle.reply} produces.
  *
@@ -248,10 +316,87 @@ export type ReplyResult =
  * `private`. The second case is the write-side twin of #1619 and is why the
  * arm is not simply `is-note`.
  */
-export type ClaudeReplyResult = ReplyResult | { kind: "invalid-note" };
+export type ClaudeReplyResult =
+  | ReplyResult
+  | { kind: "invalid-note" }
+  // #1770: Claude may only reply in a thread on an annotation it authored.
+  | { kind: "not-owned"; author: Annotation["author"] }
+  // #1626: the reply carried a `suggestedText` and the parent's LIVE span did
+  // not survive the screen, so the deferred rewrite must not be stored.
+  //
+  // **Carries a `cause`, and deliberately nothing else — no
+  // `failure: RangeValidation`, no `resolvedFrom` / `resolvedTo`.** A reply
+  // refusal is not a range-resolution surface, and a geometry payload is the
+  // only mechanism by which one could ever describe a record's offsets to a
+  // caller; the two-value {@link SuggestionRangeCause} carries no offsets, so
+  // that channel stays closed. What it does buy is a message that is TRUE: see
+  // that type's docblock for the wrong diagnosis it replaced.
+  | { kind: "invalid-suggestion-range"; cause: SuggestionRangeCause };
 
-/** The wire codes a reply refusal can carry. Closed, and unchanged by Unit 8f. */
-export type ReplyRefusalCode = "NOT_FOUND" | "INVALID_ARGUMENT" | "ANNOTATION_RESOLVED";
+/**
+ * Why a suggestion's screen refused the parent's live span (#1626).
+ *
+ * **Two values, because the single flat arm asserted a cause it could not
+ * know.** `screenSuggestionSpan` calls `anchoredRange`, which fails five ways
+ * here, and the refusal used to render ONE message for all of them: *"The
+ * parent annotation spans heading markup…, or comment on the text content
+ * only."* Only `HEADING_OVERLAP` makes that true. A parent whose paragraph the
+ * user deleted resolves both RelativePositions to null, falls back to a stored
+ * range past the new end and answers `out-of-bounds`; a parent collapsed onto
+ * one offset by a block join answers `empty`. In both cases Claude was told a
+ * heading was involved when none was, and handed a remedy — "comment on the
+ * text content only" — that no retry can satisfy, because the text it names is
+ * gone. An unbounded retry loop on a false diagnosis is worse than a refusal.
+ *
+ * `"unresolvable"` deliberately does NOT name which of the four reasons fired.
+ * The remedy is identical for all of them (re-read the document and comment on
+ * the current text), and the distinctions — empty vs. out-of-bounds vs.
+ * surrogate — are exactly the geometry this arm exists not to describe.
+ */
+export type SuggestionRangeCause = "heading" | "unresolvable";
+
+/**
+ * The message for an {@link SuggestionRangeCause}, shared by the reply and edit
+ * families.
+ *
+ * **One function, because two copies of a refusal message is how the reply arm
+ * and the edit arm start telling a caller different things about the same
+ * screen.** The wire CODE differs between the families only in where it is
+ * assembled (`describeReplyWriteRefusal` vs. the `tandem_editAnnotation`
+ * switch); the sentence is the same fact either way.
+ */
+export function describeSuggestionRangeRefusal(cause: SuggestionRangeCause): string {
+  return cause === "heading"
+    ? 'The annotation\'s range spans heading markup (e.g. "## "), so a replacement proposed on ' +
+        "it would delete the heading. Send it without a replacement, or annotate the text " +
+        "content only."
+    : "The annotation's range no longer resolves in the current document, so a replacement " +
+        "proposed on it cannot be placed. Re-read the document and annotate the text as it " +
+        "stands now.";
+}
+
+/**
+ * Does this reply carry a replacement proposal? (#1626)
+ *
+ * **A required discriminant, positioned ahead of the optionals**, exactly as
+ * `YDocStore.anchorRange`'s `purpose` is and for the same reason: a stored
+ * `suggestedText` is a text rewrite DEFERRED to Accept, so a reply carrying one
+ * is the THIRD consumer of Critical Rule 6's `rejectHeadingInterior` term
+ * (#1766). A bare optional field would let a new producer — `local-model`'s
+ * `reply_to_annotation` is the live example — acquire that capability with no
+ * compile error, which is the one property the discriminant exists to keep.
+ *
+ * `addUserReply` deliberately does NOT take it: a suggestion is a Claude
+ * capability, and widening the user's entry is the #1000 asymmetry in reverse.
+ */
+export type ReplySuggestion = { kind: "none" } | { kind: "replacement"; suggestedText: string };
+
+/** The wire codes a reply refusal can carry. Closed. */
+export type ReplyRefusalCode =
+  | "NOT_FOUND"
+  | "INVALID_ARGUMENT"
+  | "ANNOTATION_RESOLVED"
+  | "NOT_OWNED";
 
 /**
  * The single description of a refusal to WRITE a reply — code and message —
@@ -307,6 +452,22 @@ export function describeReplyWriteRefusal(result: Exclude<ClaudeReplyResult, { k
         code: "INVALID_ARGUMENT",
         message: "Claude can only reply to comments that are shared with it",
       };
+    case "invalid-suggestion-range":
+      return {
+        code: "INVALID_ARGUMENT",
+        // The cause is what keeps this sentence honest: before #1626's review
+        // every `anchoredRange` failure rendered the heading sentence, so a
+        // parent whose text the user had deleted was refused with a heading it
+        // did not have and a remedy it could not follow. See
+        // {@link SuggestionRangeCause}.
+        message: `${describeSuggestionRangeRefusal(result.cause)} The parent annotation's range is the one a reply proposes over; a reply without suggestedText is still accepted.`,
+      };
+    case "not-owned":
+      return {
+        code: "NOT_OWNED",
+        message:
+          "Claude can only reply on annotations it authored; answer a user's comment with tandem_reply or a fresh tandem_comment",
+      };
     default: {
       const unhandled: never = result;
       throw new Error(`unhandled reply refusal: ${(unhandled as { kind: string }).kind}`);
@@ -329,9 +490,12 @@ export function describeReplyWriteRefusal(result: Exclude<ClaudeReplyResult, { k
  *   via `anchoredRange`'s `rejectHeadingOverlap`. Both callers that turn a
  *   caller-supplied span into a NEW annotation pass it — `YDocStore.anchorRange`
  *   (where it is now hardcoded rather than a parameter) and
- *   `local-model/tools.ts:204` — while every other `anchoredRange` caller is
+ *   `local-model/tools.ts` — while every other `anchoredRange` caller is
  *   re-anchoring a range that was already chosen and correctly passes nothing.
- *   The type cannot tell you which of those a caller is.
+ *   The type cannot tell you which of those a caller is. Nor can it tell you
+ *   whether the INTERIOR term (`rejectHeadingInterior`) was carried, which both
+ *   creators decide from a required discriminant, because a `suggestedText`
+ *   extra makes the create a deferred REWRITE of the span.
  * - A Claude-authored note (ADR-027) is unconstructible *at runtime*: `create`
  *   has no `type` parameter, and {@link stripOwnedFields} deletes `type` and
  *   `audience` from whatever a caller passes. The matching `Omit` in
@@ -379,9 +543,18 @@ export type EditResult =
   | { kind: "ok"; annotation: Annotation }
   | { kind: "not-found" }
   | { kind: "invalid-note" }
+  // #1770: Claude may only edit an annotation it authored. The author is echoed
+  // so the caller can say whose it is.
+  | { kind: "not-owned"; author: Annotation["author"] }
   | { kind: "not-pending"; currentStatus: Annotation["status"] }
   | { kind: "empty-patch" }
-  | { kind: "invalid-suggestion-target"; annotationType: AnnotationType };
+  | { kind: "invalid-suggestion-target"; annotationType: AnnotationType }
+  // #1626 review: `tandem_editAnnotation` is the FOURTH carrier of Critical
+  // Rule 6's interior term. It can put a `suggestedText` on a comment created
+  // through the PLAIN arm — endpoint-only by design, so `tandem_comment(0, 17)`
+  // over "para\n## Head\nnext" is accepted — and the stored replacement is then
+  // a deferred rewrite of a span whose interior is a heading prefix.
+  | { kind: "invalid-suggestion-range"; cause: SuggestionRangeCause };
 
 /**
  * The mutable fields an edit may set.
@@ -586,6 +759,7 @@ export interface AnnotationLifecycle {
   reply(
     annotationId: string,
     text: string,
+    suggestion: ReplySuggestion,
     onLossy: OnLossy,
     agentIdentity?: AgentIdentity,
   ): ClaudeReplyResult;
@@ -646,8 +820,8 @@ export function createAnnotationLifecycle(ydoc: Y.Doc): AnnotationLifecycle {
     accept: (id, onLossy) => transitionPending(id, ydoc, map, "accepted", onLossy),
     dismiss: (id, onLossy) => transitionPending(id, ydoc, map, "dismissed", onLossy),
     remove: (id, onLossy) => removeForClaude(id, ydoc, map, onLossy),
-    reply: (annotationId, text, onLossy, agentIdentity) =>
-      replyForClaude(ydoc, annotationId, text, onLossy, agentIdentity),
+    reply: (annotationId, text, suggestion, onLossy, agentIdentity) =>
+      replyForClaude(ydoc, annotationId, text, suggestion, onLossy, agentIdentity),
   };
 }
 
@@ -832,7 +1006,10 @@ function transitionPending(
   // rather than an audit of mutations.
   const ann = sanitizeAnnotation(raw as RawAnnotation, onLossy);
 
-  // ADR-027 (#1680): notes are user-private. Claude must not resolve them.
+  // ADR-027 (#1680, #1803): notes, private comments AND a user's private
+  // highlight are user-private. Claude must not resolve any of them —
+  // {@link isWithheldFromClaude} is the read filter's own predicate, because
+  // this family has no per-type arm to fall to.
   //
   // **After sanitize, and before the pending check — both halves matter.**
   // After, because a stored `flag` is a note only once sanitized, so a raw-type
@@ -841,15 +1018,39 @@ function transitionPending(
   // a caller the note exists and is merely resolved, which is a disclosure
   // ADR-027 does not make. Only a spec seeding an ALREADY-RESOLVED note
   // distinguishes this ordering from the other one.
-  if (ann.type === "note") return { kind: "invalid-note" };
+  if (isWithheldFromClaude(ann)) return { kind: "invalid-note" };
 
   if (ann.status !== "pending") {
     return { kind: "not-pending", id, currentStatus: ann.status };
   }
 
+  // #1770 (decision 3): Claude may DISMISS or withdraw, never ACCEPT. Accepting
+  // is the user's decision, and until now Claude could accept its own annotation
+  // and the record was indistinguishable from a user's in `userResponses`.
+  //
+  // Behind the pending check on purpose, so `not-pending` keeps precedence.
+  //
+  // The second arm refuses rather than applying: `applySuggestion` is
+  // client-only, so an MCP accept has never applied `suggestedText` — it flipped
+  // status and left the document untouched, which is the opposite of what the
+  // tool description promised. Applying it here would make this tool write
+  // document content, falsifying `license-gate-coverage.test.ts`'s claim that it
+  // does not.
+  //
+  // Dismiss stays open to every non-private record, including a user's comment —
+  // the existing flow, with `resolvedBy: "claude"` as its only trace.
+  if (nextStatus === "accepted") {
+    if (ann.author === "claude") return { kind: "accept-refused", reason: "own-annotation" };
+    if (ann.suggestedText !== undefined) {
+      return { kind: "accept-refused", reason: "unapplied-suggestion" };
+    }
+  }
+
   const updated: Annotation = {
     ...ann,
     status: nextStatus,
+    // #1770: who performed THIS resolution. Absent means the user.
+    resolvedBy: "claude",
     rev: nextRev(ann),
   };
 
@@ -867,9 +1068,10 @@ function transitionPending(
  *
  * **The guard ORDER is the contract, not an implementation detail**, and it is
  * asserted in three suites (`edit-annotation.test.ts`, `document-store.test.ts`
- * and `annotation-edit-lifecycle.test.ts`). not-found → sanitize → note
- * (ADR-027) → pending → empty-patch → suggestion-target. Two of those orderings
- * are load-bearing and look arbitrary:
+ * and `annotation-edit-lifecycle.test.ts`). not-found → sanitize → private
+ * (ADR-027/#1803) → not-owned (#1770) → pending → empty-patch →
+ * suggestion-target. Three of those orderings are load-bearing and look
+ * arbitrary:
  *
  * - The **note check precedes the pending check**, so editing a resolved note
  *   reports `invalid-note`, not `not-pending`. Swapping them tells a caller the
@@ -878,6 +1080,10 @@ function transitionPending(
  * - **Sanitize runs before every guard**, so a legacy-shaped note is recognised
  *   as a note by its sanitized type rather than its stored one — a stored
  *   `flag` sanitizes to `note`, and a raw-type check would let Claude edit it.
+ * - **The author check follows the privacy one**, so a user's note or private
+ *   comment answers `invalid-note` rather than `not-owned`. Reversing them
+ *   would answer a question about ownership on a record whose existence
+ *   ADR-027 does not concede.
  *
  * The empty-patch / suggestion-target order is NOT in that set, despite sitting
  * in the same sequence: `empty-patch` needs both fields absent and
@@ -901,8 +1107,18 @@ function editPendingAnnotation(
   // Sanitize legacy shapes before editing (matches the pre-seam handler).
   const ann = sanitizeAnnotation(raw, onLossy);
 
-  // ADR-027: notes are user-private. Claude must not modify them via MCP.
-  if (ann.type === "note") return { kind: "invalid-note" };
+  // ADR-027 (#1803): notes AND private comments are user-private. Claude must
+  // not modify either via MCP.
+  if (isPrivateForClaude(ann)) return { kind: "invalid-note" };
+
+  // #1770 (decision 4): Claude may only edit an annotation it AUTHORED. Until
+  // now it could rewrite a user's pending comment under the user's byline.
+  //
+  // AFTER the ADR-027 guard, so a user's note or private comment answers
+  // `invalid-note` and never `not-owned`. A USER highlight answers `not-owned`
+  // on both edit and reply — not a new oracle: the existing arms already
+  // disclose `annotationType` via `invalid-suggestion-target` / `not-repliable`.
+  if (ann.author !== "claude") return { kind: "not-owned", author: ann.author };
 
   if (ann.status !== "pending") return { kind: "not-pending", currentStatus: ann.status };
 
@@ -912,6 +1128,28 @@ function editPendingAnnotation(
 
   if (patch.suggestedText !== undefined && ann.type !== "comment") {
     return { kind: "invalid-suggestion-target", annotationType: ann.type };
+  }
+
+  // Critical Rule 6 (#1766), fourth carrier — found by the #1626 review.
+  //
+  // **A `suggestedText` arriving by EDIT is the same deferred rewrite as one
+  // arriving by create or reply, and this path had no range screen at all.**
+  // The two-call sequence is the reachable one: the plain-comment arm is
+  // endpoint-only by design, so `tandem_comment(0, 17)` over
+  // `"para\n## Head\nnext"` is accepted with the `"## "` prefix in its INTERIOR;
+  // `tandem_editAnnotation(id, newText)` then stores a replacement over exactly
+  // that span, Accept replaces it verbatim, and `snapshotContradicts` cannot
+  // object because the snapshot was captured over that span and still matches.
+  // The heading disappears silently.
+  //
+  // **AFTER `invalid-suggestion-target`**, for the reason that ordering holds
+  // in the reply family too: a highlight parent must answer the arm that names
+  // the real rule, not one about geometry. And only when the patch actually
+  // carries a suggestion — a content-only edit rewrites no text, so screening
+  // it would refuse ordinary body edits on any comment spanning a section.
+  if (patch.suggestedText !== undefined) {
+    const cause = screenSuggestionSpan(ann, ydoc);
+    if (cause) return { kind: "invalid-suggestion-range", cause };
   }
 
   const updated = {
@@ -939,10 +1177,11 @@ function editPendingAnnotation(
   // `withMcp`, and the wrong helper fails in two different directions.
   //
   // Toward the CHANNEL: only browser-origin writes reach it (`CHANNEL_SKIP` in
-  // `shared/origins.ts` holds the other five), so `withBrowser` here would emit an
-  // `annotation:edited` for a server-initiated write — specifically when Claude
-  // edits a USER-authored pending comment, the one shape the observer's update
-  // branch admits. Pinned by an origin spec rather than left to review.
+  // `shared/origins.ts` holds the other five), so `withBrowser` here would emit
+  // an `annotation:edited` for a server-initiated write. Since #1770 this
+  // function only ever writes a CLAUDE-authored record, so the observer's update
+  // branch would not admit it anyway — but the helper choice is the contract and
+  // does not depend on that. Pinned by an origin spec rather than left to review.
   //
   // Toward DISK, which is the half a "they all skip the channel anyway" reading
   // misses: `withFileSync` and `withInternal` also sit in `DURABLE_SKIP`, so
@@ -1078,7 +1317,9 @@ export function removeAnnotationRecord(
     });
     if (unreadable > 0) {
       console.warn(
-        `[Tandem] reply sweep for ${annotationId}: ${unreadable} unreadable annotationId(s), left in place`,
+        "[Tandem] reply sweep for %s: %d unreadable annotationId(s), left in place",
+        annotationId,
+        unreadable,
       );
     }
     for (const key of orphaned) repliesMap.delete(key);
@@ -1137,6 +1378,7 @@ function writeReply(
   onLossy: OnLossy,
   actor: "browser" | "mcp",
   agentIdentity?: AgentIdentity,
+  suggestedText?: string,
 ): ReplyResult {
   // #1295 L3: bound the text at the model layer rather than at one caller. All
   // three production callers left it unbounded while the DURABLE schema caps it
@@ -1149,6 +1391,13 @@ function writeReply(
   // still right — the failure being fixed is precisely a value accepted at write
   // and rejected at load, so they must be the same number.
   if (text.length > REPLY_TEXT_MAX) return { kind: "too-long", max: REPLY_TEXT_MAX };
+  // #1626: PER FIELD, at the same bound, reusing the same arm. Exact parity with
+  // the durable schema, which caps each field independently — a separate
+  // `suggestion-too-long` arm would be a second spelling of one rule and would
+  // widen `ReplyRefusalCode`'s closed set for no wire-visible difference.
+  if (suggestedText !== undefined && suggestedText.length > REPLY_TEXT_MAX) {
+    return { kind: "too-long", max: REPLY_TEXT_MAX };
+  }
 
   const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
   const raw = map.get(annotationId) as RawAnnotation | undefined;
@@ -1199,6 +1448,10 @@ function writeReply(
       : {}),
     // #1123 M3: agent byline, local-model collaborator only. Absent ⇒ omitted.
     ...(agentIdentity ? { agentIdentity } : {}),
+    // #1626: the refined proposal, over the PARENT's range. Only reachable from
+    // `replyForClaude`, which screens that range first; `addUserReply` passes
+    // nothing, so the key is omitted entirely on the user path.
+    ...(suggestedText !== undefined ? { suggestedText } : {}),
   };
 
   const wrap = actor === "mcp" ? withMcp : withBrowser;
@@ -1257,6 +1510,53 @@ export function addUserReply(
 }
 
 /**
+ * Screen an annotation's LIVE span for Critical Rule 6's heading terms, on
+ * behalf of a `suggestedText` about to be stored against it (#1626).
+ *
+ * **One screen, shared by every carrier in this file** — the reply seam and the
+ * edit path. Two copies would be two chances to pass a different option set,
+ * and the option set IS the rule: `rejectHeadingOverlap` alone is the
+ * endpoint-only test a plain comment is held to, and the interior term is what
+ * a deferred rewrite additionally needs.
+ *
+ * **The CURRENT offsets, not the stored ones.** `anchoredRange` validates
+ * exactly what it is handed, and at accept time the client resolves through
+ * `relRange` (`annotationToPmRange`) — so on a document edited since the record
+ * was anchored, screening `ann.range` checks a span that is not the one Accept
+ * rewrites. `refreshRange` is the existing resolver for that, called WITHOUT
+ * `map` so these write paths persist no re-anchor (the read path
+ * `listAnnotationsRefreshed` owns that). A dead or unverifiable anchor falls
+ * back to the stored range, which is the same "all there is" position the
+ * client's accept lands in.
+ *
+ * **The fourth argument is `undefined` — never `ann.textSnapshot`.** The
+ * staleness gate compares by exact equality while `captureSnapshot` caps a
+ * stored snapshot at SNAPSHOT_CAP (200), so passing it would refuse every
+ * suggestion on a record spanning more than 200 characters, on an untouched
+ * document, with RANGE_MOVED. Drift detection belongs to `snapshotContradicts`
+ * at accept time, which prefix-matches correctly.
+ *
+ * Returns `null` when the span is clear. The two refusal values are
+ * distinguished because `anchoredRange` fails five ways and only one of them is
+ * a heading — see {@link SuggestionRangeCause} for the false diagnosis that
+ * shipped while this collapsed to a single arm.
+ */
+function screenSuggestionSpan(ann: Annotation, ydoc: Y.Doc): SuggestionRangeCause | null {
+  const refreshed = refreshRange(ann, ydoc);
+  const live =
+    refreshed.kind === "degraded" || refreshed.kind === "failed"
+      ? ann.range
+      : refreshed.annotation.range;
+  const screened = anchoredRange(ydoc, live.from, live.to, undefined, {
+    rejectHeadingOverlap: true,
+    rejectHeadingInterior: true,
+    normalizeSpaceClass: true,
+  });
+  if (screened.ok) return null;
+  return screened.code === "HEADING_OVERLAP" ? "heading" : "unresolvable";
+}
+
+/**
  * Claude's reply, and **the only place the ADR-027 rule for replies lives**.
  *
  * Two conditions, and the second is new. The note rule is the one #1000 relaxed
@@ -1280,6 +1580,7 @@ function replyForClaude(
   ydoc: Y.Doc,
   annotationId: string,
   text: string,
+  suggestion: ReplySuggestion,
   onLossy: OnLossy,
   agentIdentity?: AgentIdentity,
 ): ClaudeReplyResult {
@@ -1302,14 +1603,61 @@ function replyForClaude(
     // contract is identical and nothing keyed on the code could have seen it.
     // A highlight now falls through to `writeReply`, whose own refusal is the
     // one that applies to every author — the same answer master gave.
-    if (ann.type === "note" || (ann.type === "comment" && ann.audience !== "outbound")) {
+    if (isPrivateForClaude(ann)) {
       return { kind: "invalid-note" };
+    }
+    // #1770 (decision 4): Claude may only reply in a thread on an annotation it
+    // AUTHORED. AFTER the privacy guard, for the same reason `editPending`
+    // orders them that way.
+    //
+    // A consequence worth stating: `promotedAnnotation` writes `author: "user"`,
+    // so a promoted note or imported Word comment is NOT repliable by Claude.
+    // The replacement is `tandem_reply` (chat) or a fresh `tandem_comment`.
+    if (ann.author !== "claude") {
+      return { kind: "not-owned", author: ann.author };
+    }
+    // #1626 + Critical Rule 6 (#1766): a stored `suggestedText` is a rewrite
+    // DEFERRED to Accept, and both consumers replace the parent's flat span
+    // verbatim — so without the interior term a reply stepping over a "## "
+    // prefix deletes the heading, and `snapshotContradicts` cannot object (the
+    // snapshot was captured over that exact span and still matches).
+    //
+    // **AFTER the two guards above, and the order is the contract.** Validating
+    // ahead of them would answer from the range layer on records Claude was
+    // never allowed to touch — a note, a private comment, or a promoted
+    // note / imported Word comment stored as `author: "user"`, all of which
+    // Claude legitimately holds ids for via `tandem_checkInbox`. Here they are
+    // unreachable by construction. Running it inside the seam rather than in
+    // the MCP handler is what also covers the local-model producer, which never
+    // passes through that handler.
+    //
+    // **Screened only for a record that would otherwise be WRITTEN**, which is
+    // why the type and status are re-read here rather than left to
+    // `writeReply`. A highlight has no body to thread and a resolved parent
+    // accepts nothing, and both carry their own refusal — `not-repliable`
+    // (naming the real parent type) and `not-pending` (naming the status). A
+    // range answer ahead of either names a rule that has nothing to do with the
+    // case, which is the masking this file already records as the hazard of
+    // moving a check up. Claude cannot mint a highlight today, so the first is a
+    // corner; it is still a refusal that must not change its mind.
+    if (suggestion.kind === "replacement" && ann.type === "comment" && ann.status === "pending") {
+      const cause = screenSuggestionSpan(ann, ydoc);
+      if (cause) return { kind: "invalid-suggestion-range", cause };
     }
   }
   // A missing record falls through to `writeReply`, which answers `not-found` —
   // the guard has nothing to protect when there is no parent, and duplicating
   // the arm here would let the two spellings drift.
-  return writeReply(ydoc, annotationId, text, "claude", onLossy, "mcp", agentIdentity);
+  return writeReply(
+    ydoc,
+    annotationId,
+    text,
+    "claude",
+    onLossy,
+    "mcp",
+    agentIdentity,
+    suggestion.kind === "replacement" ? suggestion.suggestedText : undefined,
+  );
 }
 
 function removeForClaude(
@@ -1321,10 +1669,12 @@ function removeForClaude(
   const raw = map.get(id) as RawAnnotation | undefined;
   if (!raw) return { kind: "not-found", id };
 
-  // Sanitized type, not `raw.type`. A stored legacy `flag` normalizes to a note,
+  // Sanitized record, not `raw`. A stored legacy `flag` normalizes to a note,
   // and a raw check lets exactly that record through — the same ordering the
-  // resolve and edit guards use.
-  if (sanitizeAnnotation(raw, onLossy).type === "note") return { kind: "invalid-note" };
+  // resolve and edit guards use. The predicate is the resolve one, not edit's:
+  // this family has no highlight arm either, and deleting a user's private
+  // highlight by id is the destructive half of the same asymmetry.
+  if (isWithheldFromClaude(sanitizeAnnotation(raw, onLossy))) return { kind: "invalid-note" };
 
   return removeAnnotationRecord(ydoc, id, "mcp");
 }

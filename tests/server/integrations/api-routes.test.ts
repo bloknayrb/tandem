@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   _resetApplyGateForTests,
@@ -17,6 +17,12 @@ import {
   type IntegrationsRoutesDeps,
   registerIntegrationsRoutes,
 } from "../../../src/server/integrations/api-routes.js";
+import {
+  _resetSkillRefreshErrorForTests,
+  getSkillRefreshError,
+  MAX_CONFIG_BYTES,
+  type SkillInstallResult,
+} from "../../../src/server/integrations/apply.js";
 import type { ExistingMcpInstall } from "../../../src/server/integrations/existing-config.js";
 import {
   ClaudeInstallError,
@@ -40,6 +46,8 @@ import {
 import {
   ERROR_CODE_APPLY_IN_PROGRESS,
   ERROR_CODE_BAD_ORIGIN,
+  ERROR_CODE_CONFIG_MALFORMED,
+  ERROR_CODE_CONFIG_TOO_LARGE,
   ERROR_CODE_INSTALL_FAILED,
   ERROR_CODE_INSTALL_IN_PROGRESS,
   ERROR_CODE_INVALID_APPLY_REQUEST,
@@ -153,11 +161,18 @@ describe("integrations API routes", () => {
   let tmpDir: string;
   let deps: IntegrationsRoutesDeps;
   let backend: ReturnType<typeof memoryBackend>;
+  // The real `installSkill()` writes under the REAL home directory and the
+  // route deliberately accepts no `homeOverride`, so every app built from
+  // `deps` gets this spy. Without it the apply tests below rewrote the
+  // operator's `~/.claude/skills/tandem/SKILL.md` on every run.
+  let installSkillSpy: ReturnType<typeof vi.fn<() => Promise<SkillInstallResult>>>;
 
   beforeEach(async () => {
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-int-api-"));
     backend = memoryBackend();
+    installSkillSpy = vi.fn(async (): Promise<SkillInstallResult> => ({ written: true }));
     deps = {
+      installSkill: installSkillSpy,
       store: createIntegrationsStore(tmpDir),
       keychain: createKeychain(backend),
       readExisting: async () =>
@@ -173,6 +188,7 @@ describe("integrations API routes", () => {
   });
 
   afterEach(async () => {
+    _resetSkillRefreshErrorForTests();
     if (tmpDir) await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -1147,6 +1163,9 @@ describe("integrations API routes", () => {
           TAURI_ORIGIN,
         );
         expect(res.status).toBe(200);
+        // Pins the "exactly once after the loop" contract AND that the route
+        // took the injected seam rather than the real home-directory writer.
+        expect(installSkillSpy).toHaveBeenCalledTimes(1);
         const body = res.body as { results: Array<{ status: string }>; nextNonce: string };
         expect(body.results[0]?.status).toBe("applied");
         const after = JSON.parse(fs.readFileSync(tmpClaudeJson, "utf-8"));
@@ -1154,6 +1173,93 @@ describe("integrations API routes", () => {
         expect(after.mcpServers.tandem).toBeDefined();
         // The nonce rotated because a write occurred.
         expect(body.nextNonce).not.toBe(nonce);
+      });
+
+      // Post-ship review of #1790. `installSkill()` declines to downgrade a
+      // NEWER skill on disk, and the route used to discard that result: 200,
+      // every integration `applied`, and nothing anywhere said the skill was
+      // left alone — `getSkillRefreshError()` stayed null because only the
+      // refresher ever set it. The response shape is deliberately unchanged
+      // (a declined skill is not a failed integration); the decline rides the
+      // refresher's channel, which `/api/launcher/status` already surfaces.
+      describe("a declined skill install reaches the skill-refresh error channel", () => {
+        async function applyOnce(): Promise<{
+          status: number;
+          results: Array<{ status: string }>;
+        }> {
+          const tmpClaudeJson = path.join(tmpDir, ".claude.json");
+          fs.writeFileSync(tmpClaudeJson, JSON.stringify({ mcpServers: {} }));
+          await deps.store.write({
+            schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+            integrations: [
+              {
+                kind: "claude-code",
+                id: "cc-1",
+                label: "Claude Code",
+                configPath: tmpClaudeJson,
+                transport: "http",
+                url: "http://127.0.0.1:3479",
+              },
+            ],
+          });
+          const app = makeApp({
+            ...deps,
+            detectTargets: () => [
+              { label: "Claude Code", configPath: tmpClaudeJson, kind: "claude-code" },
+            ],
+            shouldRegisterChannelShim: () => false,
+          });
+          const nonce = await freshNonce(app);
+          const res = await request(
+            app,
+            "POST",
+            API_INTEGRATIONS_APPLY,
+            { ids: ["cc-1"], confirmationNonce: nonce },
+            TAURI_ORIGIN,
+          );
+          return {
+            status: res.status,
+            results: (res.body as { results: Array<{ status: string }> }).results,
+          };
+        }
+
+        it("records newer-on-disk without changing the apply response", async () => {
+          installSkillSpy.mockResolvedValueOnce({
+            written: false,
+            onDiskVersion: 16,
+            bundledVersion: 15,
+          });
+          const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+          try {
+            const { status, results } = await applyOnce();
+            expect(status).toBe(200);
+            expect(results[0]?.status).toBe("applied");
+            expect(installSkillSpy).toHaveBeenCalledTimes(1);
+            expect(getSkillRefreshError()).toEqual({
+              code: "newer-on-disk",
+              message: expect.stringMatching(/v16.*v15.*SKILL\.md/),
+            });
+            expect(errorSpy).toHaveBeenCalledWith(
+              expect.stringContaining("kept the installed skill"),
+            );
+          } finally {
+            errorSpy.mockRestore();
+          }
+        });
+
+        it("a written install clears a prior record, as the refresher's success does", async () => {
+          installSkillSpy.mockResolvedValueOnce({
+            written: false,
+            onDiskVersion: 16,
+            bundledVersion: 15,
+          });
+          await applyOnce();
+          expect(getSkillRefreshError()?.code).toBe("newer-on-disk");
+
+          // Default spy: `{ written: true }`.
+          await applyOnce();
+          expect(getSkillRefreshError()).toBeNull();
+        });
       });
 
       it("create-wins: keeps tandem-channel even when listed in removals if the shim is being registered (#985)", async () => {
@@ -1287,6 +1393,103 @@ describe("integrations API routes", () => {
         // The static message must not contain "realpath=" or the outside path.
         expect(body.results[0]?.message).not.toMatch(/realpath=/);
         expect(body.results[0]?.message).not.toContain(outside);
+      });
+
+      it("an oversize config returns CONFIG_TOO_LARGE, not WRITE_FAILED (#1801)", async () => {
+        // `applyConfig` is a direct import, not a member of
+        // `IntegrationsRoutesDeps`, so there is no seam to stub: the fixture
+        // has to be a genuinely over-cap file. Built sparsely — `truncateSync`
+        // past the cap costs neither memory nor time.
+        const bigConfig = path.join(tmpDir, "big.claude.json");
+        fs.writeFileSync(bigConfig, "");
+        fs.truncateSync(bigConfig, MAX_CONFIG_BYTES + 1);
+        await deps.store.write({
+          schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+          integrations: [
+            {
+              kind: "claude-code",
+              id: "cc-1",
+              label: "Claude Code",
+              configPath: bigConfig,
+              transport: "http",
+              url: "http://127.0.0.1:3479",
+            },
+          ],
+        });
+        const app = makeApp({
+          ...deps,
+          detectTargets: () => [
+            { label: "Claude Code", configPath: bigConfig, kind: "claude-code" },
+          ],
+        });
+        const nonce = await freshNonce(app);
+        const res = await request(
+          app,
+          "POST",
+          API_INTEGRATIONS_APPLY,
+          { ids: ["cc-1"], confirmationNonce: nonce },
+          TAURI_ORIGIN,
+        );
+
+        expect(res.status).toBe(200);
+        const body = res.body as {
+          results: Array<{ status: string; code?: string; message?: string }>;
+        };
+        expect(body.results[0]?.status).toBe("error");
+        // The whole point: WRITE_FAILED renders as "check it isn't open in
+        // another program", which is wrong and unactionable here.
+        expect(body.results[0]?.code).toBe(ERROR_CODE_CONFIG_TOO_LARGE);
+        // `err.message` names both the path and the byte count; this route is
+        // browser-reachable, so neither may cross.
+        expect(body.results[0]?.message).not.toContain(bigConfig);
+        expect(body.results[0]?.message).not.toMatch(/[0-9]{4,}/);
+      });
+
+      it("a malformed config returns CONFIG_MALFORMED and is not rewritten (#1802)", async () => {
+        // This row used to come back `applied`, with the user's config
+        // replaced by a Tandem-only file and the wizard showing nothing wrong.
+        const badConfig = path.join(tmpDir, "bad.claude.json");
+        const badContent = '{"mcpServers":{';
+        fs.writeFileSync(badConfig, badContent);
+        await deps.store.write({
+          schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+          integrations: [
+            {
+              kind: "claude-code",
+              id: "cc-1",
+              label: "Claude Code",
+              configPath: badConfig,
+              transport: "http",
+              url: "http://127.0.0.1:3479",
+            },
+          ],
+        });
+        const app = makeApp({
+          ...deps,
+          detectTargets: () => [
+            { label: "Claude Code", configPath: badConfig, kind: "claude-code" },
+          ],
+        });
+        const nonce = await freshNonce(app);
+        const res = await request(
+          app,
+          "POST",
+          API_INTEGRATIONS_APPLY,
+          { ids: ["cc-1"], confirmationNonce: nonce },
+          TAURI_ORIGIN,
+        );
+
+        expect(res.status).toBe(200);
+        const body = res.body as {
+          results: Array<{ status: string; code?: string; message?: string }>;
+        };
+        expect(body.results[0]?.status).toBe("error");
+        expect(body.results[0]?.code).toBe(ERROR_CODE_CONFIG_MALFORMED);
+        expect(fs.readFileSync(badConfig, "utf-8")).toBe(badContent);
+        // Neither the path nor any fragment of the file may cross to a
+        // browser-reachable response.
+        expect(body.results[0]?.message).not.toContain(badConfig);
+        expect(body.results[0]?.message).not.toContain("mcpServers");
       });
 
       it("SECRET_MISSING message does not echo the tokenSecretRef value", async () => {

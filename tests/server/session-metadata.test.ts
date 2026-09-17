@@ -7,7 +7,7 @@ import * as Y from "yjs";
 // Isolate session + annotation dirs in unique temp directories. The session
 // dir is provided via the platform mock (hoisted — no module-level refs); the
 // annotation dir is driven by TANDEM_APP_DATA_DIR set in beforeAll.
-vi.mock("../../src/server/platform", async (importOriginal) => {
+vi.mock(import("../../src/server/platform"), async (importOriginal) => {
   const mod = await importOriginal<typeof import("../../src/server/platform")>();
   const osMod = await import("os");
   const pathMod = await import("path");

@@ -381,12 +381,50 @@ test("Ctrl+Enter accepts the first pending annotation", async ({ page }) => {
     0,
   );
 
+  // Put focus on the rail card, which is the path #1777 fix (1) preserves.
+  // Editor.svelte autofocuses ProseMirror, and `switchToAnnotationsTab` returns
+  // silently when there is no tab to click, so without this the caret can still
+  // be in the editor — where Ctrl+Enter is now a hard break and nothing else.
+  await card.focus();
   await page.keyboard.press("Control+Enter");
 
   // After accept, the card moves into the collapsed "resolved" details section.
   await expect(page.locator("summary", { hasText: "1 resolved" })).toBeVisible({
     timeout: 5_000,
   });
+});
+
+test("Ctrl+Enter in the editor inserts a break and does NOT accept (#1777)", async ({ page }) => {
+  // The discriminating case for fix (1). Tiptap's HardBreak claims Mod-Enter on
+  // the .ProseMirror node and preventDefault()s it before App's window listener
+  // runs, so without `if (e.defaultPrevented) return;` one keystroke inserted a
+  // break AND accepted the first pending annotation.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: 2,
+    to: 15,
+    text: "Do not accept me from the editor",
+    textSnapshot: "Test Document",
+  });
+  await page.goto("/");
+  await switchToAnnotationsTab(page);
+
+  const card = page.locator("[data-testid^='annotation-card-']").first();
+  await expect(card).toBeVisible({ timeout: 10_000 });
+
+  const editor = page.locator(".ProseMirror");
+  await editor.click();
+  const breaksBefore = await editor.locator("br").count();
+
+  await page.keyboard.press("Control+Enter");
+
+  // Half 1 — the break landed (the editor still owns the chord).
+  await expect
+    .poll(async () => editor.locator("br").count(), { timeout: 5_000 })
+    .toBeGreaterThan(breaksBefore);
+  // Half 2 — the annotation was NOT accepted. `toHaveCount(0)` retries, so this
+  // is not a race against a slow accept.
+  await expect(page.locator("summary", { hasText: "1 resolved" })).toHaveCount(0);
 });
 
 test("Ctrl+Shift+Enter dismisses the first pending annotation", async ({ page }) => {
@@ -403,6 +441,7 @@ test("Ctrl+Shift+Enter dismisses the first pending annotation", async ({ page })
   const card = page.locator("[data-testid^='annotation-card-']").first();
   await expect(card).toBeVisible({ timeout: 10_000 });
 
+  await card.focus();
   await page.keyboard.press("Control+Shift+Enter");
 
   await expect(page.locator("summary", { hasText: "1 resolved" })).toBeVisible({
@@ -520,6 +559,52 @@ test("Escape closes the command palette even when focus is outside it", async ({
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press("Escape");
   await expect(palette).toHaveCount(0);
+});
+
+test("Ctrl+Shift+P does not stack the command palette over the Help modal (cr-2)", async ({
+  page,
+}) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  // Brand menu, not the "?" / Ctrl+/ shortcut — both are suppressed while
+  // focus sits inside the contenteditable editor (see the Help modal test
+  // above), so this is the reliable way to open it.
+  await page.locator("[data-testid='titlebar-brand-menu']").click();
+  await page.locator("[data-testid='brand-menu-shortcuts']").click();
+  const helpModal = page.locator("[data-testid='help-modal']");
+  await expect(helpModal).toBeVisible({ timeout: 3_000 });
+
+  // The Help modal's own dialog onkeydown stopPropagation()s every non-
+  // Escape key while it holds focus, which already blocks the shortcut from
+  // reaching the window-level dispatcher in the common case (same shape as
+  // the "Escape closes the command palette" test above). The gap this
+  // guards is focus landing outside the dialog — blur to reproduce it, so
+  // this test actually exercises the toggle-palette guard rather than the
+  // dialog's own local trap.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  const palette = page.locator("[data-testid='command-palette']");
+  await page.keyboard.press("Control+Shift+P");
+  await expect(palette).toHaveCount(0);
+  await expect(helpModal).toBeVisible();
+});
+
+test("Ctrl+Shift+P does not stack the command palette over the file-open dialog (cr-2)", async ({
+  page,
+}) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  await page.keyboard.press("Control+o");
+  const fileDialog = page.locator("[data-testid='file-open-dialog']");
+  await expect(fileDialog).toBeVisible({ timeout: 3_000 });
+
+  const palette = page.locator("[data-testid='command-palette']");
+  await page.keyboard.press("Control+Shift+P");
+  await expect(palette).toHaveCount(0);
+  await expect(fileDialog).toBeVisible();
 });
 
 test("command palette Accept action resolves the first pending annotation from empty selection", async ({

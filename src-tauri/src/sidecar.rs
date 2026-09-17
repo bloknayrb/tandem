@@ -98,6 +98,22 @@ const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// That case is a different failure with its own deadline and its own error
 /// message; we deliberately do not size this constant for it.
 pub(crate) const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long `wait_for_health_at` holds out for a `pid` before accepting a 2xx
+/// that carries none (#1812 review).
+///
+/// A bounded degradation, not a loophole: a *current* sidecar always reports
+/// its pid, so only a responder that predates the identity check can reach this
+/// arm, and a different CURRENT process still mismatches and is still rejected
+/// for the full `HEALTH_TIMEOUT`. Without it, a Tauri shell paired with an
+/// older Node `dist` — every developer's stale `target/debug/dist`, and any
+/// release build whose two halves drifted — never starts at all: four attempts
+/// of `HEALTH_TIMEOUT`, then a "Retry Server Start" dialog that retries into
+/// the same wall.
+///
+/// Sized well under `HEALTH_TIMEOUT` so the identity check still gets the first
+/// word, and well over `HEALTH_POLL_INTERVAL` so a slow-but-current sidecar
+/// answering with its pid is never beaten to it by the grace.
+pub(crate) const PIDLESS_HEALTH_GRACE: Duration = Duration::from_secs(5);
 pub(crate) const HTTP_CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long to wait for the sidecar to exit after POST /api/shutdown before
 /// hard-killing it. The Node shutdown's disk flush is 5s-bounded
@@ -123,7 +139,14 @@ pub(crate) const POST_KILL_PORT_RELEASE_SECS: u64 = 15;
 /// file handle so the NSIS installer can overwrite it. Same reasoning, same
 /// budget as POST_KILL_PORT_RELEASE_SECS — TerminateProcess returns before the
 /// OS drops the handle.
-#[cfg(target_os = "windows")]
+///
+/// Compiled on every platform, like `UnlockOutcome` and `unlock_warning` below
+/// and for the same reason: `unlock_warning_never_reports_a_timeout_that_did
+/// _not_run` asserts the timeout copy names *the deadline it actually waited*,
+/// which is only a real assertion against this constant rather than a literal
+/// retyped in the test. `#[cfg(target_os = "windows")]` here made that test
+/// compile on Windows alone and broke the ubuntu and macOS `rust-test` legs.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) const SIDECAR_UNLOCK_DEADLINE_SECS: u64 = 15;
 /// How long `port_holder_for_dialog` waits for `describe_port_holder`'s
 /// `netstat`/`tasklist` calls before giving up and showing the generic
@@ -134,6 +157,159 @@ pub(crate) const SIDECAR_UNLOCK_DEADLINE_SECS: u64 = 15;
 #[cfg(target_os = "windows")]
 const PORT_HOLDER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_RESTARTS: u32 = 3;
+
+/// How many steady-state crash restarts are allowed inside
+/// `CRASH_RESTART_WINDOW` before the breaker trips (#1809).
+///
+/// **The window is the point, not the count.** A lifetime counter would make a
+/// day-long session permanently unrecoverable after three unrelated crashes
+/// hours apart; a sliding window self-heals in five minutes and still refuses
+/// to spin on a sidecar that cannot stay up.
+///
+/// Two consequences are accepted rather than engineered around, recorded here
+/// so a reviewer does not re-derive them as bugs:
+///
+/// - **The window is never reset by a successful manual recovery.** Clearing
+///   the history when the user presses Restart server would put a reset on a
+///   path that has no idea whether the underlying fault is fixed.
+/// - **The budget is consumed before `restart_sidecar` reports anything.** It
+///   early-returns on a failed `RestartGate::try_acquire()` and again on
+///   `!spawn_allowed()`, and threading those verdicts back would make the
+///   decision impure and untestable.
+const MAX_CRASH_RESTARTS: usize = 3;
+/// The sliding window `MAX_CRASH_RESTARTS` is counted over. See its docblock.
+const CRASH_RESTART_WINDOW: Duration = Duration::from_secs(300);
+
+/// Timestamps of the steady-state crash restarts inside the current window.
+///
+/// A `std::sync::Mutex` (const-constructible since Rust 1.63), not a tokio one:
+/// every access is a short, non-awaiting prune-and-push, and the call site
+/// binds and DROPS the guard before its `match` for exactly that reason.
+static CRASH_RESTARTS: Mutex<Vec<std::time::Instant>> = Mutex::new(Vec::new());
+
+/// What to do about a `CommandEvent::Terminated` that arrived after boot.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CrashRestartDecision {
+    /// Not our business: a superseded child, or a crash the boot loop is
+    /// already retrying.
+    Ignore,
+    /// A real post-boot crash that arrived while spawns are suppressed. Not a
+    /// spawn now, but a debt: `DEFERRED_CRASH` is latched and the code that
+    /// releases the suppression owes a `recover_deferred_crash`.
+    Deferred,
+    /// Respawn through `restart_sidecar`.
+    Restart,
+    /// Too many crashes in the window — stop trying and surface it.
+    BreakerTripped,
+}
+
+/// Should a post-boot sidecar termination be restarted?
+///
+/// Pure, so `cargo test` reaches every arm without an `AppHandle`. The three
+/// guards run in this order and each one is load-bearing:
+///
+/// 1. **`!was_current_child` -> `Ignore`, history untouched. FIRST, and not
+///    optional.** `Terminated` is delivered per spawn attempt over a
+///    `channel(1)` behind `child.wait()`, drain tasks are never cancelled, and
+///    the drain loop logs every stdout/stderr line before reaching `Terminated`
+///    — so child A's event can land after child B is already in the slot and
+///    already healthy (see `terminated_clears_slot`, and the live "leaving it
+///    (newer child)" arm in `clear_terminated_slot`). Without this input the
+///    decision would see `healthy = true, spawn_allowed = true`, return
+///    `Restart`, and `restart_sidecar` would read `owns_child` off a slot still
+///    holding the live child B — POSTing `/api/shutdown` at a healthy sidecar
+///    and then hard-killing it.
+/// 2. **`!healthy` -> `Ignore`, history untouched.** During boot the same drain
+///    task fires `Terminated` while `start_sidecar`'s `0..=MAX_RESTARTS` loop is
+///    still retrying; respawning there double-spawns into the slot that loop is
+///    about to fill. `SIDECAR_HEALTHY` is precisely "the boot loop already
+///    returned `Started`". `restart_sidecar` clears it via
+///    `clear_healthy_under_lock` *before* stopping, so a user-initiated restart
+///    also lands here. The history must not be touched before this check, or
+///    the boot retries would burn the steady-state budget.
+/// 3. **`!spawn_allowed` -> `Deferred`, history untouched.** Covers `EXITING`
+///    (Quit) and `SIDECAR_SHUTTING_DOWN` — which, since #1808, is held across
+///    the update DOWNLOAD as well as the install. No spawn happens now: a fresh
+///    child must not land in the slot the installer is about to overwrite on
+///    disk. But `Terminated` is one-shot per spawn and there is no health
+///    watchdog anywhere in this crate, so returning `Ignore` here *discarded*
+///    the crash — and a download that then failed returned to an app whose
+///    backend was gone, which is the very state #1808 exists to prevent,
+///    reached through a narrower door. So the verdict is a debt rather than a
+///    dismissal: it latches `DEFERRED_CRASH`, and whoever releases the
+///    suppression calls [`recover_deferred_crash`]. The history is still
+///    untouched — nothing was spawned, so nothing was spent.
+///
+/// **Every termination past those three is treated as a crash, deliberately.**
+/// The caller binds `CommandEvent::Terminated(status)` and this function never
+/// reads `status.code`: an outside `POST /api/shutdown` and a Task-Manager kill
+/// produce the same event with `SIDECAR_HEALTHY` still true, and the desktop app
+/// owns this sidecar. The two deliberate stops that matter — Quit and an update
+/// install — are already covered by guard 3.
+fn crash_restart_decision(
+    was_current_child: bool,
+    healthy: bool,
+    spawn_allowed: bool,
+    history: &mut Vec<std::time::Instant>,
+    now: std::time::Instant,
+) -> CrashRestartDecision {
+    if !was_current_child || !healthy {
+        return CrashRestartDecision::Ignore;
+    }
+    if !spawn_allowed {
+        return CrashRestartDecision::Deferred;
+    }
+    history.retain(|t| now.duration_since(*t) < CRASH_RESTART_WINDOW);
+    history.push(now);
+    if history.len() <= MAX_CRASH_RESTARTS {
+        CrashRestartDecision::Restart
+    } else {
+        CrashRestartDecision::BreakerTripped
+    }
+}
+
+/// A post-boot crash arrived while `spawn_allowed()` was false and still owes a
+/// restart. Set by the `Deferred` arm of the drain loop, consumed exactly once
+/// by [`take_deferred_crash`].
+///
+/// Why a latch rather than "nothing, the crash was during an install anyway":
+/// `CommandEvent::Terminated` is delivered once per spawn and the drain loop
+/// `break`s straight after handling it, and this crate has no periodic health
+/// watchdog (`UPDATE_CHECK_INTERVAL` and `COWORK_HEAL_INTERVAL` are the only
+/// timers). So nothing ever re-examined the dropped crash, and the update
+/// download's `Err` arm — offline, a proxy, a 403, a signature mismatch —
+/// returned to an app with no backend, every tab Disconnected and no toast.
+static DEFERRED_CRASH: AtomicBool = AtomicBool::new(false);
+
+/// Take the deferred-crash debt, clearing it. `true` means a post-boot crash was
+/// observed while spawns were suppressed and has not been acted on yet.
+///
+/// Public to the crate because the update path both *pays* the debt (the
+/// download-failure arm, via [`recover_deferred_crash`]) and *writes it off*
+/// (once the install's deliberate stop has run, the sidecar being down is
+/// intentional and no longer this latch's business).
+pub(crate) fn take_deferred_crash() -> bool {
+    DEFERRED_CRASH.swap(false, Ordering::AcqRel)
+}
+
+/// Restart the sidecar if it crashed while spawns were suppressed.
+///
+/// Call after releasing `SIDECAR_SHUTTING_DOWN` on any path where the app keeps
+/// running. A no-op when no crash was deferred, and `restart_sidecar` re-checks
+/// `spawn_allowed()` itself, so a racing exit or a second install still
+/// declines. `RestartCause::PostBootCrash`: the user did not ask for this, so a
+/// buffered cold-start rejection must survive it (see `clear_startup_rejection`).
+pub(crate) fn recover_deferred_crash(app: &tauri::AppHandle) {
+    if !take_deferred_crash() {
+        return;
+    }
+    // `warn`, not `info`: on an installed build `info` is below the release
+    // `LevelFilter::Warn` floor, and this is the only trace that the backend
+    // went away and came back on its own.
+    log::warn!("[sidecar] restarting a sidecar that crashed while spawns were suppressed");
+    restart_sidecar_for(app.clone(), RestartCause::PostBootCrash);
+}
+
 /// The two TCP ports the sidecar binds. Used by the port-holder diagnostic on
 /// the exhausted-restarts path; keep in sync with the URL constants above and
 /// with DEFAULT_WS_PORT / DEFAULT_MCP_PORT in src/shared/constants.ts. Pinned
@@ -149,6 +325,22 @@ pub(crate) const MCP_PORT: u16 = 3479;
 /// would otherwise move the sidecar off loopback under a shell that still polls
 /// 127.0.0.1.
 pub(crate) const SIDECAR_BIND_HOST: &str = "127.0.0.1";
+
+/// The sidecar binary's name as it exists on disk at RUNTIME.
+///
+/// The `-<triple>` suffix is a **build-time** convention only:
+/// `externalBin` requires `src-tauri/binaries/node-sidecar-<triple>[.exe]`, and
+/// tauri-build strips the triple when it copies the binary into the bundle (and
+/// into `target/<profile>/` for `cargo tauri dev`). Measured on both: the
+/// installed app dir and the dev target dir hold `node-sidecar.exe`; the
+/// triple-suffixed name exists nowhere outside `src-tauri/binaries/`.
+///
+/// So this is the only name runtime code may use, and it is a const rather than
+/// two literals because divergence between the spawn name and a reconstructed
+/// path is exactly what #1762 was: `sidecar_exe_path` rebuilt the triple form,
+/// never matched a real file, and `wait_for_sidecar_unlock` reported "unlocked"
+/// having never found the file to check.
+pub(crate) const SIDECAR_BIN_NAME: &str = "node-sidecar";
 
 /// Total wall-clock budget for the graceful stop attempted from
 /// `RunEvent::Exit` (#1756), in seconds.
@@ -181,7 +373,7 @@ static EXITING: AtomicBool = AtomicBool::new(false);
 /// Set by `perform_install` around its pre-install graceful stop and released by
 /// `ShuttingDownGuard`'s `Drop`. Unlike `EXITING` this one is meant to be
 /// bounded — **and only the guard makes that true.** Held across
-/// `download_and_install().await`, a panic or a dropped task would otherwise
+/// `download(..).await` and `install(..)`, a panic or a dropped task would otherwise
 /// latch it for the process lifetime, leaving `restart_sidecar` and "Retry
 /// Server Start" permanent silent no-ops.
 pub(crate) static SIDECAR_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
@@ -190,8 +382,8 @@ pub(crate) static SIDECAR_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 ///
 /// `Drop` runs on the normal return, on an unwind, and when the enclosing future
 /// is dropped mid-await — which is the whole point: the flag is held across
-/// `download_and_install().await`, and the failure arm's explicit clear covered
-/// only the path that reaches it.
+/// `download(..).await` and `install(..)`, and the failure arm's explicit clear
+/// covered only the path that reaches it.
 ///
 /// `Drop` keeps the `compare_exchange(true, false)` rather than a bare store,
 /// and that CAS is the `EXITING` interlock: if an exit began while the install
@@ -206,7 +398,7 @@ pub(crate) static SIDECAR_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 /// `perform_install` futures. Under a bare store the first to finish would
 /// `Drop` its guard, that `Drop`'s CAS would succeed, and
 /// `SIDECAR_SHUTTING_DOWN` would go false while the second is still inside
-/// `download_and_install().await` — re-permitting Restart-server and Retry
+/// `download(..).await` — re-permitting Restart-server and Retry
 /// Server Start to spawn a child into a slot whose binary is being overwritten
 /// on disk. A `None` here means an install already holds the latch, and the
 /// second caller must bail rather than proceed unguarded.
@@ -290,10 +482,30 @@ impl Drop for RestartGate {
     }
 }
 
+/// Who asked for this restart.
+///
+/// The only thing it decides is whether a buffered cold-start rejection is
+/// dropped — see the `clear_startup_rejection` call below. An enum rather than a
+/// bool so the two callers read as what they are at the call site.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RestartCause {
+    /// The user pressed Restart server (or the Retry Server Start dialog).
+    UserInitiated,
+    /// The #1809 crash handler, or the deferred-crash recovery that pays its
+    /// debt. No user action to attribute anything to.
+    PostBootCrash,
+}
+
 /// Gracefully stop the sidecar (flush dirty docs + save session, #1088),
 /// hard-kill as fallback, then spawn it again.
 #[tauri::command]
 pub(crate) fn restart_sidecar(app: tauri::AppHandle) {
+    restart_sidecar_for(app, RestartCause::UserInitiated);
+}
+
+/// `restart_sidecar` with its cause made explicit. The Tauri command above is
+/// the user-initiated entry point; #1809's crash handler is the other caller.
+pub(crate) fn restart_sidecar_for(app: tauri::AppHandle, cause: RestartCause) {
     let Some(gate) = RestartGate::try_acquire() else {
         log::warn!("restart_sidecar ignored — a restart is already in flight");
         return;
@@ -309,7 +521,18 @@ pub(crate) fn restart_sidecar(app: tauri::AppHandle) {
     // Drop any buffered cold-start rejection so a stale reason from the previous
     // launch can't be replayed against the freshly restarted sidecar on the next
     // init-time drain. See the STARTUP_REJECTION doc comment (#630 risk note).
-    clear_startup_rejection();
+    //
+    // USER-INITIATED ONLY. That note accepts discarding a still-undrained LIVE
+    // rejection because it "needs the user to hit Relaunch in the same breath as
+    // a rejected open" — an action they performed and can reason about. #1809's
+    // automatic crash restart has no such alibi: a sidecar crashing in the few
+    // hundred ms between `surface_startup_rejection` and `App.svelte`'s
+    // take-once drain would silently eat the only surface that explains why the
+    // file the user double-clicked never opened, because the nudge event is
+    // payload-free by design and resolves to `None` on its own.
+    if cause == RestartCause::UserInitiated {
+        clear_startup_rejection();
+    }
     let client = app.state::<reqwest::Client>().inner().clone();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -344,7 +567,8 @@ pub(crate) fn restart_sidecar(app: tauri::AppHandle) {
         match start_sidecar(&handle, &client, None).await {
             Ok(SpawnOutcome::Started) => {}
             // A decline is not a restart. By this point the command body has
-            // already run `clear_healthy_under_lock` and `clear_startup_rejection`,
+            // already run `clear_healthy_under_lock` (and, on a user-initiated
+            // restart, `clear_startup_rejection`),
             // so `SIDECAR_HEALTHY` is false with no sidecar coming back: exactly
             // #1416's condition (opens queue into a queue with no consumer) with
             // a Restart button that looks like it worked — `NetworkSettings.svelte`
@@ -507,7 +731,7 @@ impl GracefulStop {
 /// **`#[must_use]`, because two of the three call sites are not the exit path.**
 /// `restart_sidecar` and `perform_install` both stop the sidecar for their own
 /// reasons and neither reaches `exit_verdict_line`; `perform_install`'s stop is
-/// the *only* flush on the Windows update path (`download_and_install` ends in
+/// the *only* flush on the Windows update path (`install` ends in
 /// `std::process::exit(0)`, so `RunEvent::Exit` never fires). A dropped report
 /// there means the update proceeds having discarded unsaved edits while the
 /// dialogs say it worked.
@@ -568,20 +792,86 @@ pub(crate) async fn stop_sidecar_gracefully(
     deadline_secs: u64,
 ) -> StopReport {
     let state: tauri::State<'_, SidecarState> = handle.state();
-    let owns_child = match state.0.lock() {
-        Ok(guard) => guard.is_some(),
-        Err(poisoned) => poisoned.into_inner().is_some(),
+    let owned_child_pid = match state.0.lock() {
+        Ok(guard) => guard.as_ref().map(|child| child.pid()),
+        Err(poisoned) => poisoned.into_inner().as_ref().map(|child| child.pid()),
     };
+    let owns_child = owned_child_pid.is_some();
     let report = graceful_stop_request(
         client,
         deadline_secs,
         Endpoints::PRODUCTION,
         owns_child,
+        owned_child_pid,
         SIDECAR_SHUTTING_DOWN.load(Ordering::Acquire),
     )
     .await;
     kill_sidecar_inner(handle);
     report
+}
+
+/// Bound on the pre-shutdown identity GET (#1812).
+///
+/// Well under `EXIT_GRACEFUL_BUDGET`: the same call runs inside
+/// `graceful::attempt`'s `tokio::time::timeout(budget, ...)`, so an unbounded
+/// probe against a listener that accepts and never answers could consume the
+/// budget and reach the hard kill with no flush attempted.
+const IDENTITY_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Positive foreign-identity check for the `/api/shutdown` target (#1812).
+///
+/// `Some(observed)` ONLY when `/health` answered a 2xx whose body carries a
+/// parseable `pid` that differs from ours — the one outcome that proves the POST
+/// would flush a server we do not own.
+///
+/// **Every other outcome is `None`, i.e. "POST exactly as before":** a transport
+/// error, the 1 s timeout, a non-2xx, an unparseable body, or a 2xx body with no
+/// `pid` key. The last is not an edge case — `/health` gains `pid` in the same
+/// change, so every previously-built sidecar answers without one, and treating
+/// that as foreign would hard-kill the flush on every Quit against a pre-change
+/// sidecar. A health GET that stalls after connecting is likewise not evidence
+/// of a foreign process.
+async fn foreign_health_pid(
+    client: &reqwest::Client,
+    health_url: &str,
+    child_pid: u32,
+) -> Option<u32> {
+    let probe = tokio::time::timeout(IDENTITY_PROBE_TIMEOUT, async {
+        let resp = client.get(health_url).send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        resp.text().await.ok()
+    })
+    .await;
+
+    let body = match probe {
+        Ok(Some(body)) => body,
+        Ok(None) => {
+            log::warn!(
+                "Shutdown-target identity check inconclusive (no readable 2xx from {health_url}) — POSTing anyway"
+            );
+            return None;
+        }
+        Err(_) => {
+            log::warn!(
+                "Shutdown-target identity check timed out after {}s — POSTing anyway",
+                IDENTITY_PROBE_TIMEOUT.as_secs()
+            );
+            return None;
+        }
+    };
+
+    match health_body_pid(&body) {
+        Some(observed) if observed != child_pid => Some(observed),
+        Some(_) => None,
+        None => {
+            log::warn!(
+                "Shutdown target reported no pid — a sidecar older than the identity check; POSTing anyway"
+            );
+            None
+        }
+    }
 }
 
 /// The two sidecar URLs a graceful stop touches, kept together so a test can
@@ -628,13 +918,16 @@ impl Endpoints<'static> {
 /// are two unsynchronised reads with no lock across the gap, so a Quit that
 /// calls `try_acquire()` inside that window does make it true. Not "always
 /// false": that was the previous absolute, replaced rather than fixed.
-/// Narrowing that line properly is #1812/#1825 territory (knowing what is
-/// actually on the port), not this parameter's.
+/// Narrowing that line properly is #1825 territory (deriving the URL) plus the
+/// half of #1812 that stays open — the identity check below is positive-only,
+/// so it cannot tell "nothing was ever there" from "something unidentified is".
+/// Neither is this parameter's job.
 async fn graceful_stop_request(
     client: &reqwest::Client,
     deadline_secs: u64,
     endpoints: Endpoints<'_>,
     owns_child: bool,
+    owned_child_pid: Option<u32>,
     skip_expected: bool,
 ) -> StopReport {
     let Endpoints {
@@ -659,16 +952,25 @@ async fn graceful_stop_request(
     //     instance) the POST hits *that* server, which flushes and exits, while
     //     this log line claims a graceful stop. `owns_child` only says we hold a
     //     child handle, never that the child is what is listening.
-    // The second case has a window nobody has to misconfigure anything to reach:
-    // `start_sidecar` stores the child into `SidecarState` BEFORE `wait_for_health`
-    // (up to 30s), so for that whole window `owns_child` is true while a
+    // The second case had a window nobody has to misconfigure anything to reach:
+    // `start_sidecar` stores the child into `SidecarState` BEFORE the health
+    // poll (up to 30s), so for that whole window `owns_child` is true while a
     // *different* process may still be the one answering :3479 — a Quit there
-    // POSTs at, waits on and reports a flush of someone else's server.
-    // `wait_for_port_release` polls `/health` with the same absence of an
-    // identity check. #1825 (derive the URL) and #1812 (identity) are the fixes;
-    // both are out of scope here. The spawn site now pins `TANDEM_MCP_PORT` /
-    // `TANDEM_PORT` / `TANDEM_BIND_HOST` explicitly, which removes the ambient-env
-    // half of the first case but nothing of the second.
+    // POSTed at, waited on and reported a flush of someone else's server.
+    //
+    // #1812 now narrows that: `owned_child_pid` carries the pid of the child we
+    // hold, and the identity GET below skips the POST when `/health` positively
+    // names a DIFFERENT process. What it deliberately does NOT do is fail
+    // closed — a pid-less body (every sidecar built before this change), an
+    // unreachable or stalling `/health`, a non-2xx or an unparseable body all
+    // POST exactly as before, because the POST is what flushes the user's
+    // unsaved edits and this function's own history (see the `is_timeout()`
+    // note below) is of a safe arm keyed one error class too wide.
+    // `wait_for_port_release` polls `/health` with no identity check at all,
+    // which is correct there — it asks "is anything still on the port".
+    // #1825 (derive the URL) is still open. The spawn site pins
+    // `TANDEM_MCP_PORT` / `TANDEM_PORT` / `TANDEM_BIND_HOST` explicitly, which
+    // removes the ambient-env half of the first case but nothing of the second.
     if owns_child {
         log::info!("Graceful stop: we own the sidecar child — POSTing {shutdown_url}");
         // Three POST outcomes, and `Refused` is the NARROW one — an allowlist of
@@ -687,43 +989,65 @@ async fn graceful_stop_request(
         // defect one error class over: it skipped the port wait and hard-killed
         // the flush for every non-timeout transport failure, while logging a
         // verdict that read as "the shutdown never started".
-        let posted = match client.post(shutdown_url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                Posted::Accepted(read_already_in_progress(resp).await)
-            }
-            Ok(resp) => {
-                log::warn!(
-                    "Graceful shutdown POST answered HTTP {} — not a 2xx, so this route registered no shutdown; falling back to hard kill",
-                    resp.status()
-                );
-                Posted::Refused
-            }
-            Err(e) if e.is_connect() => {
-                // Nothing was ever delivered. Note that reqwest's `is_timeout()`
-                // is NOT the discriminator: it walks the source chain for its own
-                // `TimedOut` marker, a hyper timeout, or any
-                // `io::ErrorKind::TimedOut`, so it is also true for a
-                // connect-phase stall — while being false for every
-                // post-delivery break we most need to treat as unconfirmed.
-                // `is_connect()` (hyper-util legacy `Error::is_connect`) is the
-                // one that actually means "never reached the handler".
-                log::warn!(
-                    "Graceful shutdown POST never connected ({e}) — falling back to hard kill"
-                );
-                Posted::Refused
-            }
-            Err(e) => {
-                // Measured on Windows: refusing a closed loopback port takes ~2s
-                // of SYN retransmits, inside the 5s client timeout, so an
-                // ordinary "nothing is listening" carries a connect error and
-                // takes the arm above. What lands here is a request whose fate is
-                // genuinely unknown, and the cost of assuming the worse case is
-                // one extra `/health` poll against a port that is not answering
-                // — well inside `EXIT_GRACEFUL_BUDGET`.
-                log::warn!(
-                    "Graceful shutdown POST failed after connecting ({e}) — the server may have started the flush anyway; waiting for the port instead of killing"
-                );
-                Posted::Unconfirmed
+        // Pair the observation with the pid it was compared against, so the log
+        // line below names the expected pid from the same value the comparison
+        // used rather than re-unwrapping an `Option` that cannot be `None` here.
+        let foreign = match owned_child_pid {
+            Some(child_pid) => foreign_health_pid(client, health_url, child_pid)
+                .await
+                .map(|observed| (observed, child_pid)),
+            None => None,
+        };
+        // Positive foreign identity: the flush would land on someone else's
+        // server. `Posted::Refused` is the load-bearing half of the verdict — it
+        // is the ONLY arm that returns without `wait_for_server_gone`, and a
+        // foreign process does not exit, so any other verdict would burn the
+        // whole `deadline_secs` inside `graceful::attempt`'s budget and then
+        // report a `TimedOut` that is simply false.
+        let posted = if let Some((observed, expected)) = foreign {
+            log::warn!(
+                "shutdown target is not our child (pid {observed}, expected {expected}) — skipping the flush request"
+            );
+            Posted::Refused
+        } else {
+            match client.post(shutdown_url).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    Posted::Accepted(read_already_in_progress(resp).await)
+                }
+                Ok(resp) => {
+                    log::warn!(
+                        "Graceful shutdown POST answered HTTP {} — not a 2xx, so this route registered no shutdown; falling back to hard kill",
+                        resp.status()
+                    );
+                    Posted::Refused
+                }
+                Err(e) if e.is_connect() => {
+                    // Nothing was ever delivered. Note that reqwest's `is_timeout()`
+                    // is NOT the discriminator: it walks the source chain for its own
+                    // `TimedOut` marker, a hyper timeout, or any
+                    // `io::ErrorKind::TimedOut`, so it is also true for a
+                    // connect-phase stall — while being false for every
+                    // post-delivery break we most need to treat as unconfirmed.
+                    // `is_connect()` (hyper-util legacy `Error::is_connect`) is the
+                    // one that actually means "never reached the handler".
+                    log::warn!(
+                        "Graceful shutdown POST never connected ({e}) — falling back to hard kill"
+                    );
+                    Posted::Refused
+                }
+                Err(e) => {
+                    // Measured on Windows: refusing a closed loopback port takes ~2s
+                    // of SYN retransmits, inside the 5s client timeout, so an
+                    // ordinary "nothing is listening" carries a connect error and
+                    // takes the arm above. What lands here is a request whose fate is
+                    // genuinely unknown, and the cost of assuming the worse case is
+                    // one extra `/health` poll against a port that is not answering
+                    // — well inside `EXIT_GRACEFUL_BUDGET`.
+                    log::warn!(
+                        "Graceful shutdown POST failed after connecting ({e}) — the server may have started the flush anyway; waiting for the port instead of killing"
+                    );
+                    Posted::Unconfirmed
+                }
             }
         };
         // `already_in_progress` can only be `Some` on the `Accepted` arm, and
@@ -958,13 +1282,18 @@ impl SlotPid for tauri_plugin_shell::process::CommandChild {
 
 /// The pid-keyed clear itself, generic over the slot payload so both branches
 /// are drivable from a unit test.
-fn clear_terminated_slot<T: SlotPid>(slot: &Mutex<Option<T>>, pid: u32) {
+/// Returns the `terminated_clears_slot` verdict, which is also the
+/// `was_current_child` input `crash_restart_decision` needs (#1809). Sourced
+/// from the identity test that already runs on every termination rather than a
+/// second predicate that could drift out of sync with this one.
+fn clear_terminated_slot<T: SlotPid>(slot: &Mutex<Option<T>>, pid: u32) -> bool {
     let mut guard = match slot.lock() {
         Ok(g) => g,
         Err(poisoned) => poisoned.into_inner(),
     };
     let slot_pid = guard.as_ref().map(SlotPid::slot_pid);
-    if terminated_clears_slot(slot_pid, pid) {
+    let was_current_child = terminated_clears_slot(slot_pid, pid);
+    if was_current_child {
         guard.take();
         // `warn`, not `info`: this clear is what makes the NEXT Quit read
         // "no owned child" and skip the flush, and in release the log floor is
@@ -978,6 +1307,7 @@ fn clear_terminated_slot<T: SlotPid>(slot: &Mutex<Option<T>>, pid: u32) {
             "Sidecar pid {pid} terminated — slot holds {slot_pid:?}, leaving it (newer child)"
         );
     }
+    was_current_child
 }
 
 /// Clear the owned-child slot when the child we stored has died.
@@ -990,17 +1320,24 @@ fn clear_terminated_slot<T: SlotPid>(slot: &Mutex<Option<T>>, pid: u32) {
 ///
 /// Deliberately does NOT kill anything — the child is already gone, and a kill
 /// attached to this aliasing window is the bug above with a weapon.
-fn on_child_terminated_in(state: &SidecarState, pid: u32) {
-    clear_terminated_slot(&state.0, pid);
+fn on_child_terminated_in(state: &SidecarState, pid: u32) -> bool {
+    clear_terminated_slot(&state.0, pid)
 }
 
 /// `AppHandle` wrapper for `on_child_terminated_in`. The drain task is
 /// `'static`, so it cannot hold a `State<'_, SidecarState>`; it holds a cloned
 /// handle and resolves the state here.
-fn on_child_terminated(handle: &tauri::AppHandle, pid: u32) {
+/// Returns whether the terminated pid was the child we currently own — the
+/// `was_current_child` input to `crash_restart_decision` (#1809). An unmanaged
+/// `SidecarState` answers `false`: we cannot show this was our live child, and
+/// the restart decision must fail toward not touching anything.
+fn on_child_terminated(handle: &tauri::AppHandle, pid: u32) -> bool {
     match handle.try_state::<SidecarState>() {
         Some(state) => on_child_terminated_in(state.inner(), pid),
-        None => log::warn!("Sidecar pid {pid} terminated — SidecarState unmanaged, nothing to clear"),
+        None => {
+            log::warn!("Sidecar pid {pid} terminated — SidecarState unmanaged, nothing to clear");
+            false
+        }
     }
 }
 
@@ -1058,6 +1395,10 @@ mod graceful {
     /// unit-testable. Windows are hidden here too — see `prepare`.
     pub(super) struct Prep {
         pub(super) owned_child: bool,
+        /// The owned child's pid, for the shutdown target's identity check
+        /// (#1812). `None` means "no check" — today's behaviour — which is what
+        /// a panicked `prepare` and an unmanaged `SidecarState` both degrade to.
+        pub(super) owned_child_pid: Option<u32>,
         /// `None` only when there is no managed client and building one failed.
         pub(super) client: Option<reqwest::Client>,
         /// `prepare`'s `catch_unwind` fired. Carried so the verdict line cannot
@@ -1098,6 +1439,7 @@ mod graceful {
                 );
                 Prep {
                     owned_child: false,
+                    owned_child_pid: None,
                     client: None,
                     panicked: true,
                     // Unknown; assume the loud branch. A false "unsaved edits
@@ -1118,13 +1460,13 @@ mod graceful {
             }
         }
 
-        let owned_child = handle
+        let owned_child_pid = handle
             .try_state::<SidecarState>()
-            .map(|state| match state.0.lock() {
-                Ok(guard) => guard.is_some(),
-                Err(poisoned) => poisoned.into_inner().is_some(),
-            })
-            .unwrap_or(false);
+            .and_then(|state| match state.0.lock() {
+                Ok(guard) => guard.as_ref().map(|child| child.pid()),
+                Err(poisoned) => poisoned.into_inner().as_ref().map(|child| child.pid()),
+            });
+        let owned_child = owned_child_pid.is_some();
 
         // Reuse the managed client so the exit path inherits the same 5s timeout
         // the budget arithmetic assumes. Never `unwrap()` the fallback build: a
@@ -1142,6 +1484,7 @@ mod graceful {
 
         Prep {
             owned_child,
+            owned_child_pid,
             client,
             panicked: false,
             skip_expected: super::SIDECAR_SHUTTING_DOWN.load(std::sync::atomic::Ordering::Acquire),
@@ -1176,6 +1519,7 @@ mod graceful {
     ) -> (Outcome, GracefulAttempted) {
         let Prep {
             owned_child,
+            owned_child_pid,
             client,
             panicked: prep_panicked,
             skip_expected,
@@ -1220,6 +1564,7 @@ mod graceful {
                         deadline_secs,
                         endpoints,
                         owned_child,
+                        owned_child_pid,
                         skip_expected,
                     ),
                 )
@@ -1426,6 +1771,63 @@ pub(crate) enum SpawnOutcome {
     Declined,
 }
 
+/// The unconditional environment the sidecar child is launched with.
+///
+/// Extracted from `start_sidecar`'s builder chain so the one line that carries
+/// the app-data separation is observable by a test (#1787). The `Option`-gated
+/// pairs (`TANDEM_AUTH_TOKEN`, `TANDEM_CHANNEL_DIST`, `TANDEM_STDIO_BRIDGE_DIST`)
+/// stay at the call site.
+///
+/// `TANDEM_DATA_DIR` and `TANDEM_APP_DATA_DIR` take the SAME value and mean
+/// different things: the first names the *resource/sample* base, the second the
+/// *state* root that `resolveAppDataDir()` actually reads. Only the first was
+/// ever set, so the desktop sidecar and an npm `tandem` shared one state root —
+/// sessions, `last-seen-version`, `integrations.json`, the annotation envelope
+/// dir, doc backups and (once the gate is live) the license files (#1787).
+/// `strip_win_prefix` is applied by the caller; keep it.
+///
+/// Pinning the listening addresses is separate and older. **`tauri-plugin-shell`
+/// DOES inherit the parent environment**: `Command::new`
+/// (`tauri-plugin-shell-2.3.5/src/process/mod.rs:162-179`) never calls
+/// `env_clear()`; `env_clear` (`:205-208`) runs only when the caller asks;
+/// `spawn` (`:305-320`) hands a plain `std::process::Command` to
+/// `SharedChild::spawn`, which inherits by default. So an ambient
+/// `TANDEM_MCP_PORT` in the environment that launched the desktop app reached
+/// the child and moved it off :3479, after which the shell missed its own child
+/// on every health poll and — after #1756 — POSTed `/api/shutdown` at whatever
+/// else answered :3479 on **every Quit**. Setting these explicitly makes the
+/// child's addresses the ones `HEALTH_URL` / `SHUTDOWN_URL` / `WS_PORT` /
+/// `MCP_PORT` name. It does not fix #1825 (those are still hardcoded). The
+/// POST's identity check now exists (#1812) but is positive-only: a pid-less
+/// body or an unreachable `/health` still POSTs.
+///
+/// That same inheritance is why `TANDEM_TAURI_SIDECAR` is NOT the provenance
+/// discriminant — it reaches every descendant. The `--tauri-sidecar` argv flag
+/// beside `server_js_str` is (#1758, #1787); this variable is kept unchanged
+/// for its existing consumers.
+///
+/// **`NODE_ENV=production` on release builds only (#1822 item 6).** Without it
+/// Express and `finalhandler` default to `development` and put `err.stack` in
+/// their HTML error pages. A debug / `cargo tauri dev` build gets no `NODE_ENV`
+/// from here, so the server's dev-only paths (`supervisor.ts`'s
+/// `reaper/target/release` fallback) keep working there. The server's
+/// `childEnv` strips it again before spawning the launched Claude Code, where
+/// it would make an `npm install` skip devDependencies.
+fn sidecar_env_pairs(app_data_dir: &str, release_build: bool) -> Vec<(&'static str, String)> {
+    let mut pairs = vec![
+        ("TANDEM_TAURI_SIDECAR", "1".to_string()),
+        ("TANDEM_DATA_DIR", app_data_dir.to_string()),
+        ("TANDEM_APP_DATA_DIR", app_data_dir.to_string()),
+        ("TANDEM_PORT", WS_PORT.to_string()),
+        ("TANDEM_MCP_PORT", MCP_PORT.to_string()),
+        ("TANDEM_BIND_HOST", SIDECAR_BIND_HOST.to_string()),
+    ];
+    if release_build {
+        pairs.push(("NODE_ENV", "production".to_string()));
+    }
+    pairs
+}
+
 /// Spawn the Node.js sidecar and wait for the health endpoint.
 /// Retries up to MAX_RESTARTS times with exponential backoff on crash.
 ///
@@ -1540,32 +1942,19 @@ pub(crate) async fn start_sidecar(
 
         let mut cmd = handle
             .shell()
-            .sidecar("node-sidecar")
+            .sidecar(SIDECAR_BIN_NAME)
             .map_err(|e| format!("Failed to create sidecar command: {e}"))?
-            .args([server_js_str.as_str()])
-            .env("TANDEM_TAURI_SIDECAR", "1")
-            .env("TANDEM_DATA_DIR", app_data_dir_str.as_str())
-            // Pin the sidecar's listening addresses to the ones this shell has
-            // hardcoded in `HEALTH_URL` / `SHUTDOWN_URL` / `WS_PORT` / `MCP_PORT`.
-            //
-            // **`tauri-plugin-shell` DOES inherit the parent environment.**
-            // `Command::new` (`tauri-plugin-shell-2.3.5/src/process/mod.rs:162-179`)
-            // never calls `env_clear()`; `env_clear` (`:205-208`) runs only when
-            // the caller asks for it; `spawn` (`:305-320`) converts to a plain
-            // `std::process::Command` and hands it to `SharedChild::spawn`,
-            // which inherits by default. So an ambient `TANDEM_MCP_PORT` in the
-            // environment that launched the desktop app reached the child and
-            // moved it off :3479 (`src/server/index.ts:97-98`, `:503`); the
-            // shell would then miss its own child on every health poll and,
-            // after #1756, POST `/api/shutdown` at whatever else answers :3479
-            // on **every Quit**. Setting these explicitly is what makes the
-            // child's addresses the ones the constants above name. It does not
-            // fix #1825 (the URLs are still hardcoded) and gives the POST no
-            // identity check (#1812) — a foreign server already on :3479 is
-            // still mistaken for ours.
-            .env("TANDEM_PORT", WS_PORT.to_string())
-            .env("TANDEM_MCP_PORT", MCP_PORT.to_string())
-            .env("TANDEM_BIND_HOST", SIDECAR_BIND_HOST);
+            // `--tauri-sidecar` is the provenance discriminant the server reads
+            // (#1758, #1787). It is argv rather than an env var deliberately:
+            // `TANDEM_TAURI_SIDECAR` below is inherited by every DESCENDANT of
+            // this child, so an npm `tandem` run from an auto-launched Claude
+            // Code session's own shell would otherwise claim the sidecar's
+            // carve-outs. Argv is not inherited by grandchildren.
+            .args([server_js_str.as_str(), "--tauri-sidecar"]);
+        let release_build = !cfg!(debug_assertions);
+        for (key, value) in sidecar_env_pairs(app_data_dir_str.as_str(), release_build) {
+            cmd = cmd.env(key, value);
+        }
 
         if let Some(ref token) = auth_token {
             cmd = cmd.env("TANDEM_AUTH_TOKEN", token.as_str());
@@ -1660,7 +2049,101 @@ pub(crate) async fn start_sidecar(
                         // Clear the owned-child slot so a crashed sidecar stops
                         // reading as "we own :3479". Pid-keyed, and no kill —
                         // see `on_child_terminated_in`. #1756.
-                        on_child_terminated(&terminated_handle, child_pid);
+                        //
+                        // Its return value is the identity verdict, which is
+                        // also the first and most important input to the
+                        // steady-state crash decision below (#1809).
+                        let was_current = on_child_terminated(&terminated_handle, child_pid);
+                        // Bind and DROP the guard before the match. A
+                        // `MutexGuard` created in a match scrutinee lives to the
+                        // end of the match body, and this block sits inside a
+                        // `tauri::async_runtime::spawn` future whose loop awaits
+                        // — so a scrutinee-held `!Send` guard compiles today
+                        // only because no arm awaits, and would break with an
+                        // error naming the spawn the moment one did. Poisoning
+                        // is recovered the way `clear_terminated_slot` does it.
+                        let decision = {
+                            let mut history =
+                                CRASH_RESTARTS.lock().unwrap_or_else(|p| p.into_inner());
+                            crash_restart_decision(
+                                was_current,
+                                crate::sidecar_is_healthy(),
+                                spawn_allowed(),
+                                &mut history,
+                                std::time::Instant::now(),
+                            )
+                        };
+                        match decision {
+                            CrashRestartDecision::Ignore => {}
+                            CrashRestartDecision::Deferred => {
+                                // `warn`: on an installed build `info` is below
+                                // the release log floor, and a backend that went
+                                // away mid-install is exactly what an operator
+                                // reading `tandem.log` after a failed update
+                                // needs to find.
+                                log::warn!(
+                                    "[sidecar] crashed while spawns are suppressed — deferring the restart"
+                                );
+                                DEFERRED_CRASH.store(true, Ordering::Release);
+                            }
+                            CrashRestartDecision::Restart => {
+                                log::warn!(
+                                    "[sidecar] crashed after boot — restarting (up to {MAX_CRASH_RESTARTS} in {}s)",
+                                    CRASH_RESTART_WINDOW.as_secs()
+                                );
+                                restart_sidecar_for(
+                                    terminated_handle.clone(),
+                                    RestartCause::PostBootCrash,
+                                );
+                            }
+                            CrashRestartDecision::BreakerTripped => {
+                                log::warn!(
+                                    "[sidecar] more than {MAX_CRASH_RESTARTS} crash restarts in {}s — giving up",
+                                    CRASH_RESTART_WINDOW.as_secs()
+                                );
+                                // Make the flags agree with reality. This is the
+                                // one arm that leaves NO sidecar and none coming,
+                                // and `SIDECAR_HEALTHY` is still true from the
+                                // last successful boot — it is cleared in exactly
+                                // one place, `clear_healthy_under_lock`, which
+                                // only `restart_sidecar` calls. Without this the
+                                // app keeps believing a permanently dead sidecar
+                                // is healthy: `try_queue_or_post` takes
+                                // `OpenRoute::PostNow` and a Finder open POSTs at
+                                // a dead :3479 instead of queueing for the next
+                                // successful start (#1416's own condition), and
+                                // `await_sidecar_healthy` returns `true`
+                                // immediately, releasing the deferred launcher
+                                // against nothing.
+                                //
+                                // ORDER IS LOAD-BEARING, and it is the same order
+                                // `restart_sidecar`'s own failure arm uses:
+                                // `clear_healthy_under_lock` also CLEARS
+                                // `SIDECAR_GAVE_UP` (it means "a new attempt is
+                                // starting"), so the latch has to be set AFTER
+                                // it. `report_pending_opens_with(.., true, ..)`
+                                // is what sets it; it surfaces nothing when the
+                                // queue is empty, which is the usual case here
+                                // precisely because a healthy sidecar POSTs
+                                // rather than queues.
+                                let pending = terminated_handle.state::<PendingOpens>();
+                                clear_healthy_under_lock(&pending);
+                                report_pending_opens_with(pending.inner(), true, |code| {
+                                    surface_startup_rejection(&terminated_handle, code)
+                                });
+                                // The same event a failed manual restart emits:
+                                // `App.svelte` ignores the payload and hardcodes
+                                // its toast, so this code is a log-side
+                                // distinction only.
+                                if let Err(emit_err) = terminated_handle
+                                    .emit("sidecar-restart-failed", "SIDECAR_CRASH_BREAKER_TRIPPED")
+                                {
+                                    log::error!(
+                                        "[sidecar] failed to emit crash-breaker event: {emit_err}"
+                                    );
+                                }
+                            }
+                        }
                         break;
                     }
                     other => {
@@ -1692,7 +2175,7 @@ pub(crate) async fn start_sidecar(
         }
 
         let started = std::time::Instant::now();
-        match wait_for_health(&client, &sidecar_dead).await {
+        match wait_for_health(&client, &sidecar_dead, child_pid).await {
             Ok(()) => {
                 log::info!("Sidecar healthy after {:.1}s", started.elapsed().as_secs_f64());
 
@@ -1731,20 +2214,118 @@ pub(crate) async fn start_sidecar(
     ))
 }
 
-/// Poll the health endpoint until it responds 200.
+/// The `pid` a `/health` body reports, if it reports one at all.
+///
+/// `None` covers a non-JSON body, a body with no `pid` key, and a `pid` that is
+/// not a `u32` — all of which mean "this responder did not identify itself",
+/// never "this responder is ours". `/health` publishes `pid` to loopback
+/// callers only, which is every caller here.
+fn health_body_pid(body: &str) -> Option<u32> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()?
+        .get("pid")?
+        .as_u64()?
+        .try_into()
+        .ok()
+}
+
+/// Poll the health endpoint until the child we spawned answers it.
 /// Bails early if `sidecar_dead` is set (process terminated before becoming healthy).
 async fn wait_for_health(
     client: &reqwest::Client,
     sidecar_dead: &AtomicBool,
+    child_pid: u32,
+) -> Result<(), String> {
+    wait_for_health_at(client, HEALTH_URL, sidecar_dead, child_pid, HEALTH_TIMEOUT).await
+}
+
+/// `wait_for_health` with the URL and the bound as parameters.
+///
+/// Same seam as `check_health_at`: the URL exists so a test listener can be
+/// substituted. The `timeout` is a parameter for a second reason — the elapsed
+/// check uses `std::time::Instant`, which `tokio::time::pause()` cannot
+/// advance, so a test of the mismatch path would otherwise cost the full
+/// `HEALTH_TIMEOUT` (30s) on every required `rust-test` leg and in the pre-push
+/// hook.
+///
+/// A 2xx is accepted immediately when the body identifies `child_pid`. A
+/// MISMATCH is not an error — it is recorded and polling continues, so the
+/// timeout is what decides. Two distinct warn lines, each emitted once per
+/// distinct observed state: repeating either every 250 ms would bury the log.
+///
+/// **A pid-LESS 2xx is accepted after `PIDLESS_HEALTH_GRACE`, loudly.** Holding
+/// out for the whole `HEALTH_TIMEOUT` bricks any shell paired with a Node `dist`
+/// older than the identity check: `start_sidecar` retries `0..=MAX_RESTARTS`
+/// into the same failure and then shows "Retry Server Start", which retries into
+/// it again — ~2 minutes and no in-product recovery. That is not hypothetical
+/// for developers (`target/debug/dist` is not hot-reloaded, so every
+/// pre-existing one is stale) and it would make `src-tauri` and the bundled
+/// `dist` a hard same-commit coupling in release builds, with "the app never
+/// starts" as the failure mode. The grace costs the identity guarantee only
+/// against a responder that cannot answer it at all; a CURRENT sidecar always
+/// carries a pid, so a *different* current process still mismatches and still
+/// never takes this arm.
+async fn wait_for_health_at(
+    client: &reqwest::Client,
+    health_url: &str,
+    sidecar_dead: &AtomicBool,
+    child_pid: u32,
+    timeout: Duration,
 ) -> Result<(), String> {
     let start = std::time::Instant::now();
+    // Never longer than the overall bound, so a short test timeout still
+    // reaches the grace arm rather than expiring first.
+    let grace = std::cmp::min(PIDLESS_HEALTH_GRACE, timeout / 2);
     let mut last_error: Option<String> = None;
-    while start.elapsed() < HEALTH_TIMEOUT {
+    let mut warned_about: Option<u32> = None;
+    let mut warned_unidentified = false;
+    while start.elapsed() < timeout {
         if sidecar_dead.load(Ordering::Acquire) {
             return Err("Sidecar process terminated before becoming healthy".to_string());
         }
-        match client.get(HEALTH_URL).send().await {
-            Ok(resp) if resp.status().is_success() => return Ok(()),
+        match client.get(health_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                let body = resp.text().await.unwrap_or_default();
+                // A missing or unparseable `pid` is never "assume ours": an
+                // unidentified responder is exactly the previous-process case
+                // this check exists to catch.
+                match health_body_pid(&body) {
+                    Some(observed) if observed == child_pid => return Ok(()),
+                    Some(observed) => {
+                        last_error =
+                            Some(format!("answered by pid {observed}, expected {child_pid}"));
+                        if warned_about != Some(observed) {
+                            warned_about = Some(observed);
+                            log::warn!(
+                                "health answered by a different process (pid {observed}, expected {child_pid}) — still waiting"
+                            );
+                        }
+                    }
+                    None => {
+                        if start.elapsed() >= grace {
+                            // Grace expired: accept, and say why in one line a
+                            // bug report can carry. See the docblock — the
+                            // alternative is an app that never starts.
+                            log::warn!(
+                                "health body still carries no pid after {}s — accepting UNVERIFIED (this sidecar predates the identity check; rebuild `dist` to restore it)",
+                                grace.as_secs()
+                            );
+                            return Ok(());
+                        }
+                        last_error = Some("health body carries no pid".to_string());
+                        if !warned_unidentified {
+                            warned_unidentified = true;
+                            // Under `cargo tauri dev` this is a stale
+                            // `target/debug/dist`: the shell's OWN child answers
+                            // without a pid. The fix is to rebuild `dist`.
+                            log::warn!(
+                                "health body carries no pid — this sidecar predates the identity check; waiting up to {}s before accepting it unverified",
+                                grace.as_secs()
+                            );
+                        }
+                    }
+                }
+            }
             Ok(resp) => {
                 last_error = Some(format!("HTTP {}", resp.status()));
             }
@@ -1756,7 +2337,7 @@ async fn wait_for_health(
     }
     Err(format!(
         "Health endpoint not ready after {}s (last error: {})",
-        HEALTH_TIMEOUT.as_secs(),
+        timeout.as_secs(),
         last_error.unwrap_or_else(|| "none".to_string())
     ))
 }
@@ -2068,17 +2649,82 @@ fn sidecar_exe_path() -> Result<std::path::PathBuf, String> {
         .parent()
         .ok_or_else(|| "exe path has no parent dir".to_string())?
         .to_path_buf();
-    let name = if cfg!(target_os = "windows") {
-        format!("node-sidecar-{}.exe", env!("TARGET_TRIPLE"))
-    } else {
-        format!("node-sidecar-{}", env!("TARGET_TRIPLE"))
-    };
+    // No inner `cfg!(target_os = ...)` split: the function already carries
+    // `#[cfg(target_os = "windows")]`, so an `else` arm is unreachable and would
+    // silently reintroduce a second naming rule if the gate were ever widened.
+    let name = format!("{SIDECAR_BIN_NAME}.exe");
     Ok(exe_dir.join(name))
+}
+
+/// What the Windows pre-install exe-lock wait actually observed.
+///
+/// Three states rather than a bool because the caller turns this into a warning
+/// the operator reads out of a failure dialog, and "we never found the file" is
+/// not "the lock outlived the deadline". A single bool collapsed them and made
+/// the missing-exe case report a 15 s timeout that never happened, pointing
+/// diagnosis at a lock instead of at the packaging bug `wait_for_sidecar_unlock`
+/// had just logged.
+///
+/// Cross-platform on purpose (outside the `#[cfg(target_os = "windows")]` gate)
+/// so the ubuntu and macOS `rust-test` legs reach the tests that pin it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) enum UnlockOutcome {
+    /// The exe's write lock was observed released (or this is a dev build with
+    /// no bundled sidecar, where proceeding is correct).
+    Released,
+    /// The exe is on disk and was still locked when the deadline expired.
+    TimedOut,
+    /// The exe could not be found or its path could not be resolved, so no wait
+    /// ran at all. A packaging bug in a release build.
+    Missing,
+}
+
+/// What `wait_for_sidecar_unlock` reports when it cannot find or resolve the
+/// sidecar exe.
+///
+/// Dev has no bundled sidecar in some layouts and must proceed; a release build
+/// that cannot find it has a packaging bug and must NOT let that pass as
+/// unlocked — reporting a non-`Released` outcome is what surfaces the bug
+/// instead of letting the NSIS kill hook be the only layer by accident (#1762).
+///
+/// Cross-platform on purpose, same reason as [`UnlockOutcome`].
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn unlock_verdict_when_absent(is_debug: bool) -> UnlockOutcome {
+    if is_debug {
+        UnlockOutcome::Released
+    } else {
+        UnlockOutcome::Missing
+    }
+}
+
+/// The pre-install warning an [`UnlockOutcome`] earns, or `None` when there is
+/// nothing to say.
+///
+/// The two non-`Released` strings must stay distinct: they are the only thing
+/// the operator sees in the update-failure dialog, and telling them a lock was
+/// "not confirmed released within 15s" when the exe was never on disk sends
+/// them hunting a timeout that did not occur. The `Missing` half is the
+/// dialog-side twin of the `reporting still-locked (packaging bug)` log line
+/// that `docs/release-smoke-checklist.md` greps for.
+///
+/// Pure and cross-platform so the ubuntu and macOS `rust-test` legs reach it.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn unlock_warning(outcome: UnlockOutcome, deadline_secs: u64) -> Option<String> {
+    match outcome {
+        UnlockOutcome::Released => None,
+        UnlockOutcome::TimedOut => Some(format!(
+            "Sidecar exe lock not confirmed released within {deadline_secs}s -- installer may prompt for retry"
+        )),
+        UnlockOutcome::Missing => Some(format!(
+            "{SIDECAR_BIN_NAME}.exe was not found beside the app binary, so no unlock wait ran -- packaging bug; the installer may hit a locked file"
+        )),
+    }
 }
 
 /// Poll until the sidecar exe file is writable (OS released the handle).
 #[cfg(target_os = "windows")]
-pub(crate) async fn wait_for_sidecar_unlock(deadline_secs: u64) -> bool {
+pub(crate) async fn wait_for_sidecar_unlock(deadline_secs: u64) -> UnlockOutcome {
     let sidecar_path = match sidecar_exe_path() {
         Ok(p) if p.exists() => p,
         Ok(p) => {
@@ -2086,28 +2732,369 @@ pub(crate) async fn wait_for_sidecar_unlock(deadline_secs: u64) -> bool {
             if cfg!(debug_assertions) {
                 log::debug!("Sidecar exe not on disk at {} — skipping unlock wait (dev mode)", p.display());
             } else {
-                log::warn!("Sidecar exe not on disk at {} — skipping unlock wait (packaging bug?)", p.display());
+                log::warn!("Sidecar exe not on disk at {} — reporting still-locked (packaging bug)", p.display());
             }
-            return true;
+            return unlock_verdict_when_absent(cfg!(debug_assertions));
         }
         Err(e) => {
             if cfg!(debug_assertions) {
-                log::debug!("Could not resolve sidecar exe path: {e} — skipping unlock wait");
+                log::debug!("Could not resolve sidecar exe path: {e} — skipping unlock wait (dev mode)");
             } else {
-                log::warn!("Could not resolve sidecar exe path: {e} — skipping unlock wait");
+                log::warn!("Could not resolve sidecar exe path: {e} — reporting still-locked (packaging bug)");
             }
-            return true;
+            return unlock_verdict_when_absent(cfg!(debug_assertions));
         }
     };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(deadline_secs);
     while tokio::time::Instant::now() < deadline {
         if std::fs::OpenOptions::new().write(true).open(&sidecar_path).is_ok() {
             log::info!("Sidecar exe file lock released");
-            return true;
+            return UnlockOutcome::Released;
         }
         tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
     }
-    false
+    UnlockOutcome::TimedOut
+}
+
+/// #1809 — `MAX_RESTARTS` is a boot-window budget, so a sidecar that crashed
+/// minutes in was never respawned. The decision is pure, so every arm is
+/// reachable without an `AppHandle`.
+///
+/// **Build every `Instant` forward, never backward.** `Instant - Duration`
+/// panics when the result precedes the monotonic origin, and on Windows
+/// `Instant` is QPC-since-boot — so a backward-built instant would panic on a
+/// runner with under ~301 s of uptime.
+#[cfg(test)]
+mod crash_restart_tests {
+    use super::*;
+    use std::time::Instant;
+
+    /// The worst bug this guard prevents, so it goes first: a `Terminated` from
+    /// a killed retry attempt landing after a newer child is healthy would
+    /// otherwise gracefully stop and respawn a live sidecar, because
+    /// `restart_sidecar` reads `owns_child` from the slot that still holds it.
+    #[test]
+    fn crash_restart_decision_ignores_a_terminated_event_for_a_superseded_child() {
+        let mut history = Vec::new();
+        let decision = crash_restart_decision(false, true, true, &mut history, Instant::now());
+        assert_eq!(decision, CrashRestartDecision::Ignore);
+        assert!(
+            history.is_empty(),
+            "a superseded child's event must not consume the crash budget"
+        );
+    }
+
+    /// A crash while `start_sidecar`'s own `0..=MAX_RESTARTS` loop is still
+    /// retrying belongs to that loop. Recording the attempt before checking
+    /// `healthy` would burn the boot retries out of the steady-state budget.
+    #[test]
+    fn crash_restart_decision_ignores_a_crash_before_the_first_healthy_poll() {
+        let mut history = Vec::new();
+        let decision = crash_restart_decision(true, false, true, &mut history, Instant::now());
+        assert_eq!(decision, CrashRestartDecision::Ignore);
+        assert!(history.is_empty(), "boot retries must not touch the window");
+    }
+
+    /// Quit (`EXITING`) and an update install or download
+    /// (`SIDECAR_SHUTTING_DOWN`, held across both since #1808) must never be
+    /// respawned into — but the crash must not be thrown away either.
+    /// `Terminated` is one-shot per spawn, the drain loop `break`s right after,
+    /// and nothing in this crate polls the sidecar's health, so an `Ignore` here
+    /// was permanent: the download-failure arm returned to an app with no
+    /// backend, no toast and no `warn` line, which is #1808's own broken state
+    /// reached through a narrower door.
+    #[test]
+    fn crash_restart_decision_defers_a_crash_while_a_spawn_is_disallowed() {
+        let mut history = Vec::new();
+        let decision = crash_restart_decision(true, true, false, &mut history, Instant::now());
+        assert_eq!(decision, CrashRestartDecision::Deferred);
+        assert!(
+            history.is_empty(),
+            "a refused spawn must not consume the crash budget"
+        );
+    }
+
+    /// The deferral must lose to the two guards above it, both of which mean
+    /// "this event is not evidence that the backend is gone": a superseded
+    /// child's `Terminated` belongs to a process another child already
+    /// replaced, and a pre-healthy crash belongs to `start_sidecar`'s own retry
+    /// loop. Latching a debt for either would restart a live sidecar (or
+    /// double-spawn into the boot loop's slot) the moment an install released
+    /// the latch.
+    #[test]
+    fn crash_restart_decision_does_not_defer_events_the_earlier_guards_own() {
+        let mut history = Vec::new();
+        assert_eq!(
+            crash_restart_decision(false, true, false, &mut history, Instant::now()),
+            CrashRestartDecision::Ignore,
+            "a superseded child is not a debt"
+        );
+        assert_eq!(
+            crash_restart_decision(true, false, false, &mut history, Instant::now()),
+            CrashRestartDecision::Ignore,
+            "a crash the boot loop is already retrying is not a debt"
+        );
+        assert!(history.is_empty());
+    }
+
+    /// #1809 review — the automatic crash restart must not discard a buffered
+    /// cold-start rejection. `clear_startup_rejection`'s docblock accepts
+    /// discarding a LIVE one only because that "needs the user to hit Relaunch
+    /// in the same breath as a rejected open"; a crash landing in the window
+    /// between `surface_startup_rejection` and `App.svelte`'s take-once drain
+    /// has no such alibi, and the `startup-file-rejected` nudge is payload-free,
+    /// so the listener that fires next resolves `None` and renders nothing.
+    ///
+    /// Structural because `restart_sidecar_for` needs an `AppHandle` and the
+    /// buffer lives behind a process-wide static — the same reason
+    /// `perform_install`'s ordering is pinned this way.
+    #[test]
+    fn only_a_user_initiated_restart_clears_the_startup_rejection() {
+        let src = include_str!("sidecar.rs");
+        let start = src
+            .find("pub(crate) fn restart_sidecar_for(")
+            .expect("restart_sidecar_for must exist");
+        let body = &src[start..];
+        let end = body
+            .find("\n}\n")
+            .expect("restart_sidecar_for's body must be delimited");
+        let body = &body[..end];
+
+        let clear = body
+            .find("clear_startup_rejection();")
+            .expect("a user-initiated restart must still drop a stale rejection");
+        let guard = body
+            .find("if cause == RestartCause::UserInitiated {")
+            .expect("the clear must be gated on the cause");
+        assert!(
+            guard < clear,
+            "the clear must sit INSIDE the user-initiated branch, not before it"
+        );
+
+        // And the crash handler must be passing the other cause — a call site
+        // that reverts to `RestartCause::UserInitiated` would leave the gate in
+        // place and still eat the rejection. Sliced from the match arm rather
+        // than matched as one rustfmt-shaped literal, so a re-wrap of the call
+        // does not false-red it.
+        let arm_start = src
+            .find("CrashRestartDecision::Restart => {")
+            .expect("the crash arm must exist");
+        let arm = &src[arm_start..];
+        let arm_end = arm
+            .find("CrashRestartDecision::BreakerTripped =>")
+            .expect("the breaker arm must follow it");
+        let arm = &arm[..arm_end];
+        assert!(
+            arm.contains("restart_sidecar_for("),
+            "the crash arm must go through the cause-carrying entry point"
+        );
+        assert!(
+            arm.contains("RestartCause::PostBootCrash"),
+            "the #1809 crash arm must restart with PostBootCrash"
+        );
+    }
+
+    /// The breaker arm is the only exit from the crash handler that leaves no
+    /// sidecar and none coming, so it is also where the give-up state has to be
+    /// written. `SIDECAR_HEALTHY` is cleared in exactly one place
+    /// (`clear_healthy_under_lock`, reached only from `restart_sidecar`), and
+    /// this arm does not go through it — so without the pair below the app keeps
+    /// routing opens to a dead :3479 and `await_sidecar_healthy` answers `true`
+    /// for a server that is never coming back.
+    ///
+    /// Structural for the same reason as its sibling above: the arm needs an
+    /// `AppHandle` and the flags are process-wide statics. The BEHAVIOUR of the
+    /// pair — including why the order cannot be swapped — is pinned in
+    /// `lib.rs`'s `the_breaker_sequence_leaves_the_app_in_the_gave_up_state`.
+    #[test]
+    fn the_breaker_arm_clears_healthy_before_latching_the_give_up() {
+        let src = include_str!("sidecar.rs");
+        let arm_start = src
+            .find("CrashRestartDecision::BreakerTripped => {")
+            .expect("the breaker arm must exist");
+        let arm = &src[arm_start..];
+        // The match is the last statement in the `Terminated` branch, which ends
+        // in the drain loop's `break`. Slicing to it beats counting braces and
+        // survives any re-wrap inside the arm.
+        let arm_end = arm
+            .find("break;")
+            .expect("the drain loop's break must follow the match");
+        // Comment lines dropped before any search: this arm's own docs NAME both
+        // calls, and a prose mention would otherwise satisfy the assertions and
+        // scramble the ordering check.
+        let arm: String = arm[..arm_end]
+            .lines()
+            // A single `'/'` rather than the two-character literal: every line
+            // in this arm that begins with a slash is a comment, and the
+            // two-slash spelling is a false positive for the UNC-duplication
+            // detector in `tests/shared/unc-check-duplication.test.ts`, which
+            // matches a spelling rather than a semantic.
+            .filter(|l| !l.trim_start().starts_with('/'))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let arm = arm.as_str();
+
+        let clear = arm
+            .find("clear_healthy_under_lock(")
+            .expect("the breaker must clear SIDECAR_HEALTHY — nothing else on this path does");
+        let latch = arm
+            .find("report_pending_opens_with(")
+            .expect("the breaker must latch SIDECAR_GAVE_UP so opens fail fast instead of queueing");
+        assert!(
+            clear < latch,
+            "clear_healthy_under_lock also CLEARS the give-up latch, so it must run FIRST — \
+             reversed, the breaker withdraws the verdict it just reached"
+        );
+
+        // ...and with `terminal = true`, which is the argument that latches.
+        // Sliced up to the surface closure rather than matched as one
+        // rustfmt-shaped literal.
+        let call = &arm[latch..];
+        let call_head = &call[..call
+            .find('|')
+            .expect("the report call must take a surface closure")];
+        assert!(
+            call_head.contains("true"),
+            "the breaker must report as TERMINAL — `false` reports the queue without latching"
+        );
+    }
+
+    /// The debt is take-once. A second consumer (the install path writes it off
+    /// once the deliberate stop has run) must not find it still set and respawn
+    /// a child over a binary the installer may be mid-write on.
+    #[test]
+    fn take_deferred_crash_is_one_shot() {
+        DEFERRED_CRASH.store(true, Ordering::Release);
+        assert!(take_deferred_crash(), "the first taker gets the debt");
+        assert!(!take_deferred_crash(), "and it is gone afterwards");
+    }
+
+    /// Kills both a breaker that never trips and an off-by-one that allows a
+    /// fourth restart.
+    #[test]
+    fn crash_restart_decision_allows_three_in_the_window_then_trips() {
+        let mut history = Vec::new();
+        let start = Instant::now();
+        let outcomes: Vec<CrashRestartDecision> = (0..4)
+            .map(|i| {
+                crash_restart_decision(
+                    true,
+                    true,
+                    true,
+                    &mut history,
+                    start + Duration::from_secs(i),
+                )
+            })
+            .collect();
+        assert_eq!(
+            outcomes,
+            vec![
+                CrashRestartDecision::Restart,
+                CrashRestartDecision::Restart,
+                CrashRestartDecision::Restart,
+                CrashRestartDecision::BreakerTripped,
+            ]
+        );
+    }
+
+    /// Kills a lifetime counter and a prune that drops nothing: a day-long
+    /// session must not be permanently unrecoverable after three unrelated
+    /// crashes hours apart.
+    #[test]
+    fn crash_restart_decision_forgets_crashes_older_than_the_window() {
+        let old = Instant::now();
+        let mut history = vec![old, old, old];
+        let decision = crash_restart_decision(
+            true,
+            true,
+            true,
+            &mut history,
+            old + CRASH_RESTART_WINDOW + Duration::from_secs(1),
+        );
+        assert_eq!(decision, CrashRestartDecision::Restart);
+        assert_eq!(
+            history.len(),
+            1,
+            "the three stale entries must be pruned, leaving only this crash"
+        );
+    }
+}
+
+#[cfg(test)]
+mod sidecar_name_tests {
+    use super::*;
+
+    /// tauri-build strips the `-<triple>` when it copies `externalBin` into the
+    /// bundle, so the reconstructed path must use the bare name. Before #1762
+    /// this built `node-sidecar-<triple>.exe`, which exists nowhere outside
+    /// `src-tauri/binaries/` — so the `Ok(p) if p.exists()` arm always missed
+    /// and the unlock wait reported success having checked nothing.
+    ///
+    /// Scoped to the FILE NAME, not the whole path: `sidecar_exe_path` is
+    /// `current_exe().parent().join(name)`, and a developer running
+    /// `cargo test --target x86_64-pc-windows-msvc` would false-red a
+    /// whole-path scan. (CI passes no `--target`.)
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn sidecar_exe_path_uses_the_installed_name_not_the_build_time_triple() {
+        let p = sidecar_exe_path().expect("sidecar_exe_path must resolve in a test process");
+        assert_eq!(
+            p.file_name().and_then(|n| n.to_str()),
+            Some("node-sidecar.exe"),
+            "the unlock wait must probe the name tauri-build actually ships (#1762)"
+        );
+    }
+
+    /// The half Track E's Done-when asks for: a missing sidecar path must not
+    /// read as "unlocked" in a release build.
+    #[test]
+    fn a_missing_sidecar_exe_reports_still_locked_in_release() {
+        assert_eq!(
+            unlock_verdict_when_absent(true),
+            UnlockOutcome::Released,
+            "dev has no bundled sidecar in some layouts and must proceed"
+        );
+        assert_eq!(
+            unlock_verdict_when_absent(false),
+            UnlockOutcome::Missing,
+            "a release build that cannot find the sidecar has a packaging bug (#1762)"
+        );
+    }
+
+    /// The missing-exe arm returns BEFORE the polling loop, so describing it as
+    /// a timeout is a false statement about what happened — and it is the only
+    /// text the operator gets, in a dialog, while the real cause (no exe beside
+    /// the app binary) is an unrelated line in the log.
+    #[test]
+    fn unlock_warning_never_reports_a_timeout_that_did_not_run() {
+        assert_eq!(
+            unlock_warning(UnlockOutcome::Released, SIDECAR_UNLOCK_DEADLINE_SECS),
+            None,
+            "a released lock is not a warning"
+        );
+
+        let timed_out = unlock_warning(UnlockOutcome::TimedOut, SIDECAR_UNLOCK_DEADLINE_SECS)
+            .expect("a lock that outlived the deadline must warn");
+        assert!(
+            timed_out.contains(&format!("within {SIDECAR_UNLOCK_DEADLINE_SECS}s")),
+            "the timeout warning must name the deadline it actually waited: {timed_out}"
+        );
+
+        let missing = unlock_warning(UnlockOutcome::Missing, SIDECAR_UNLOCK_DEADLINE_SECS)
+            .expect("a release build with no sidecar exe must warn");
+        assert!(
+            !missing.contains(&format!("within {SIDECAR_UNLOCK_DEADLINE_SECS}s")),
+            "no wait ran, so the missing-exe warning must not claim a deadline expired: {missing}"
+        );
+        assert!(
+            missing.contains("packaging bug"),
+            "the missing-exe warning must point at the packaging bug (#1762): {missing}"
+        );
+        assert!(
+            missing.contains(SIDECAR_BIN_NAME),
+            "it must name the file that was not found: {missing}"
+        );
+    }
 }
 
 /// Resolve the bundled channel-shim JS path, injected into the sidecar as
@@ -2577,6 +3564,7 @@ mod shutdown_guard_tests {
         let health = format!("http://{addr}/health");
         let prep = graceful::Prep {
             owned_child: true,
+            owned_child_pid: None,
             client: Some(build_http_client(HTTP_CLIENT_TIMEOUT).expect("build client")),
             panicked: false,
             skip_expected: false,
@@ -2653,6 +3641,7 @@ mod shutdown_guard_tests {
                 latched_before_prepare.set(EXITING.load(Ordering::Acquire));
                 graceful::Prep {
                     owned_child: true,
+                    owned_child_pid: None,
                     client: Some(build_http_client(HTTP_CLIENT_TIMEOUT).expect("build client")),
                     panicked: false,
                     skip_expected: false,
@@ -2716,6 +3705,7 @@ mod shutdown_guard_tests {
         let (outcome, _proof) = exit_sequence(
             || graceful::Prep {
                 owned_child: true,
+                owned_child_pid: None,
                 client: None,
                 panicked: false,
                 skip_expected: false,
@@ -2764,7 +3754,7 @@ mod shutdown_guard_tests {
         );
     }
 
-    /// `SIDECAR_SHUTTING_DOWN` is held across `download_and_install(..).await`.
+    /// `SIDECAR_SHUTTING_DOWN` is held across `download(..).await` and `install(..)`.
     /// Before the guard, only the explicit clear on the `Err` arm released it, so
     /// a panic or a dropped task latched it for the process lifetime and made
     /// `spawn_allowed()` false forever.
@@ -2800,7 +3790,7 @@ mod shutdown_guard_tests {
 
     /// Two concurrent `perform_install` futures. Under the old bare store the
     /// first to finish released the latch out from under the second, which was
-    /// still inside `download_and_install(..).await` — re-permitting a spawn
+    /// still inside `download(..).await` — re-permitting a spawn
     /// into a slot whose binary was being overwritten.
     #[test]
     fn shutting_down_guard_refuses_a_second_concurrent_install() {
@@ -2820,7 +3810,7 @@ mod shutdown_guard_tests {
 
     /// Every "grep this literal" a smoke row makes, and the LEVEL it is emitted
     /// at. Three pairs today: the respawn-guard row's two strings, and the
-    /// pre-install flush line that `smoke-lines.md` row 3 reads.
+    /// pre-install flush line that the §1 updater row reads.
     ///
     /// The respawn-guard row asserts "Both are `warn!`, so both clear the
     /// release log floor" and nothing pinned that: the first sat at `info!`
@@ -2860,8 +3850,6 @@ mod shutdown_guard_tests {
         let sidecar_src = include_str!("sidecar.rs");
         let lib_src = include_str!("lib.rs");
         let checklist = include_str!("../../docs/release-smoke-checklist.md");
-        let smoke_lines =
-            include_str!("../../docs/reviews/2026-09-02-v1-review/smoke-lines.md");
 
         // (literal, doc name, doc text, source name, source text)
         let pairs: [(&str, &str, &str, &str, &str); 3] = [
@@ -2884,8 +3872,8 @@ mod shutdown_guard_tests {
             ),
             (
                 concat!("Pre-install: graceful sidecar", " shutdown complete"),
-                "smoke-lines.md",
-                smoke_lines,
+                "release-smoke-checklist.md",
+                checklist,
                 "lib.rs",
                 lib_src,
             ),
@@ -3007,6 +3995,9 @@ mod shutdown_guard_tests {
                 health: &health,
             },
             true,
+            // `None` = no identity check, i.e. the behaviour these five
+            // cases were written against (#1812).
+            None,
             false,
         ));
 
@@ -3143,6 +4134,9 @@ mod shutdown_guard_tests {
                 health: &health,
             },
             true,
+            // `None` = no identity check, i.e. the behaviour these five
+            // cases were written against (#1812).
+            None,
             false,
         ));
 
@@ -3189,6 +4183,9 @@ mod shutdown_guard_tests {
                 health: &health,
             },
             true,
+            // `None` = no identity check, i.e. the behaviour these five
+            // cases were written against (#1812).
+            None,
             false,
         ));
 
@@ -3233,6 +4230,9 @@ mod shutdown_guard_tests {
                 health: &health,
             },
             true,
+            // `None` = no identity check, i.e. the behaviour these five
+            // cases were written against (#1812).
+            None,
             false,
         ));
 
@@ -3272,6 +4272,9 @@ mod shutdown_guard_tests {
                 health: &health,
             },
             true,
+            // `None` = no identity check, i.e. the behaviour these five
+            // cases were written against (#1812).
+            None,
             false,
         ));
         let elapsed = started.elapsed();
@@ -3295,6 +4298,7 @@ mod shutdown_guard_tests {
         let (outcome, _proof) = graceful::attempt(
             graceful::Prep {
                 owned_child: false,
+                owned_child_pid: None,
                 client: None,
                 panicked: true,
                 skip_expected: false,
@@ -3454,5 +4458,432 @@ mod shutdown_guard_tests {
         assert_eq!(HTTP_CLIENT_TIMEOUT.as_secs(), 5);
         assert_eq!(EXIT_GRACEFUL_BUDGET_SECS, 17);
         assert_eq!(EXIT_GRACEFUL_BUDGET, Duration::from_secs(17));
+    }
+}
+
+/// #1812 — the health poll and the shutdown POST must know WHICH process is
+/// answering :3479, not merely that something is.
+#[cfg(test)]
+mod health_identity_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpListener};
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Arc;
+
+    /// The pure extractor every identity check is keyed on. The last three
+    /// cases are the discriminating ones: a missing `pid` must be `None` (a
+    /// `serde` default or an `unwrap_or(child_pid)` would restore today's bug
+    /// against every pre-fix server), and a non-JSON body must be `None` too (a
+    /// `contains("pid")` string check would pass).
+    #[test]
+    fn health_body_pid_requires_a_numeric_pid() {
+        assert_eq!(health_body_pid(r#"{"status":"ok","pid":4242}"#), Some(4242));
+        assert_eq!(health_body_pid(r#"{"status":"ok","pid":4243}"#), Some(4243));
+        assert_eq!(health_body_pid(r#"{"status":"ok"}"#), None);
+        assert_eq!(health_body_pid("pid 4242, honest"), None);
+        assert_eq!(health_body_pid(""), None);
+    }
+
+    /// Answer every request with one fixed 200 body.
+    fn stub_health_body(body: &'static str, lifetime: Duration) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("local_addr");
+        listener.set_nonblocking(true).expect("set_nonblocking");
+        std::thread::spawn(move || {
+            let until = std::time::Instant::now() + lifetime;
+            while std::time::Instant::now() < until {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).expect("blocking stream");
+                        let mut buf = [0u8; 2048];
+                        let _ = stream.read(&mut buf);
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = stream.write_all(resp.as_bytes());
+                        let _ = stream.flush();
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => return,
+                }
+            }
+        });
+        addr
+    }
+
+    /// The call-site test: the predicate existing and passing its own unit test
+    /// pins nothing about anything consulting it.
+    ///
+    /// The explicit 1 s `timeout` is what keeps the mismatch case at ~1 s rather
+    /// than `HEALTH_TIMEOUT`'s 30 s on all three required `rust-test` legs and
+    /// in the pre-push hook — the cost that makes deleting this case attractive.
+    #[test]
+    fn wait_for_health_at_accepts_only_the_child_it_spawned() {
+        let dead = AtomicBool::new(false);
+        let client = build_http_client(Duration::from_secs(5)).expect("build client");
+
+        let foreign = stub_health_body(r#"{"status":"ok","pid":999999}"#, Duration::from_secs(5));
+        let foreign_url = format!("http://{foreign}/health");
+        let result = tauri::async_runtime::block_on(wait_for_health_at(
+            &client,
+            &foreign_url,
+            &dead,
+            4242,
+            Duration::from_secs(1),
+        ));
+        assert!(
+            result.is_err(),
+            "a 2xx from a DIFFERENT process must not be accepted as our sidecar"
+        );
+
+        let ours = stub_health_body(r#"{"status":"ok","pid":4242}"#, Duration::from_secs(5));
+        let ours_url = format!("http://{ours}/health");
+        let result = tauri::async_runtime::block_on(wait_for_health_at(
+            &client,
+            &ours_url,
+            &dead,
+            4242,
+            Duration::from_secs(2),
+        ));
+        assert_eq!(
+            result,
+            Ok(()),
+            "a 2xx naming our own pid must be accepted: {result:?}"
+        );
+    }
+
+    /// The grace arm (#1812 review): a pid-LESS 2xx is accepted once
+    /// `PIDLESS_HEALTH_GRACE` has elapsed, while a pid MISMATCH never is.
+    ///
+    /// Without the grace, a Tauri shell paired with a Node `dist` older than
+    /// the identity check never starts — four `HEALTH_TIMEOUT` attempts into a
+    /// "Retry Server Start" dialog that retries into the same wall. The second
+    /// half is what keeps the grace from becoming "accept anything": both
+    /// bodies are unverifiable-looking, and only the pid-less one is let
+    /// through.
+    ///
+    /// The 2 s / 1 s timeouts keep this at ~3 s rather than `HEALTH_TIMEOUT`'s
+    /// 30 s; `grace` is `min(PIDLESS_HEALTH_GRACE, timeout / 2)`, so the first
+    /// call accepts at ~1 s.
+    #[test]
+    fn wait_for_health_at_accepts_a_pidless_body_after_the_grace() {
+        let dead = AtomicBool::new(false);
+        let client = build_http_client(Duration::from_secs(5)).expect("build client");
+
+        let legacy = stub_health_body(
+            r#"{"status":"ok","version":"0.1.0"}"#,
+            Duration::from_secs(6),
+        );
+        let legacy_url = format!("http://{legacy}/health");
+        let started = std::time::Instant::now();
+        let result = tauri::async_runtime::block_on(wait_for_health_at(
+            &client,
+            &legacy_url,
+            &dead,
+            4242,
+            Duration::from_secs(2),
+        ));
+        assert_eq!(
+            result,
+            Ok(()),
+            "a pid-less 2xx must be accepted after the grace rather than bricking startup: {result:?}"
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(900),
+            "the grace must actually be waited out, not skipped"
+        );
+
+        // The mismatch arm is untouched: a DIFFERENT current process still
+        // fails for the full bound.
+        let foreign = stub_health_body(r#"{"status":"ok","pid":999999}"#, Duration::from_secs(3));
+        let foreign_url = format!("http://{foreign}/health");
+        let result = tauri::async_runtime::block_on(wait_for_health_at(
+            &client,
+            &foreign_url,
+            &dead,
+            4242,
+            Duration::from_secs(1),
+        ));
+        assert!(
+            result.is_err(),
+            "the grace must not extend to a body that names a different pid"
+        );
+    }
+
+    #[derive(Clone, Copy)]
+    enum FirstHealth {
+        /// Answer the first `/health` with this 200 body.
+        Body(&'static str),
+        /// Accept the first `/health` and never answer it.
+        Silent,
+    }
+
+    /// A loopback stand-in serving both `/health` and `/api/shutdown`.
+    ///
+    /// The FIRST health request takes `mode` — that is the identity GET.
+    /// Subsequent ones answer 404, which `check_health_at` reads as "the port is
+    /// released", so `wait_for_server_gone` returns immediately instead of
+    /// paying a connect refusal per poll. Every connection is handled on its own
+    /// thread so a silent health hold cannot block the shutdown POST.
+    ///
+    /// Returns the address and a counter of shutdown POSTs actually received —
+    /// the assertion that the flush request was, or was not, issued.
+    fn stub_identity_and_shutdown(
+        mode: FirstHealth,
+        lifetime: Duration,
+    ) -> (SocketAddr, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("local_addr");
+        listener.set_nonblocking(true).expect("set_nonblocking");
+        let shutdown_hits = Arc::new(AtomicUsize::new(0));
+        let hits = shutdown_hits.clone();
+        std::thread::spawn(move || {
+            let health_seen = Arc::new(AtomicUsize::new(0));
+            let until = std::time::Instant::now() + lifetime;
+            while std::time::Instant::now() < until {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let hits = hits.clone();
+                        let health_seen = health_seen.clone();
+                        std::thread::spawn(move || {
+                            stream.set_nonblocking(false).expect("blocking stream");
+                            stream
+                                .set_read_timeout(Some(Duration::from_secs(5)))
+                                .expect("read timeout");
+                            let mut buf = [0u8; 4096];
+                            let read = stream.read(&mut buf).unwrap_or(0);
+                            let head = String::from_utf8_lossy(&buf[..read]).to_string();
+                            if head.starts_with("POST /api/shutdown") {
+                                hits.fetch_add(1, Ordering::Release);
+                                let body = br#"{"data":{"shuttingDown":true}}"#;
+                                let resp = format!(
+                                    "HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                    body.len()
+                                );
+                                let _ = stream.write_all(resp.as_bytes());
+                                let _ = stream.write_all(body);
+                                let _ = stream.flush();
+                                return;
+                            }
+                            let first = health_seen.fetch_add(1, Ordering::AcqRel) == 0;
+                            if first {
+                                match mode {
+                                    FirstHealth::Body(body) => {
+                                        let resp = format!(
+                                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                            body.len()
+                                        );
+                                        let _ = stream.write_all(resp.as_bytes());
+                                        let _ = stream.flush();
+                                    }
+                                    FirstHealth::Silent => {
+                                        // Accept and never answer: the identity
+                                        // GET must be bounded by its own timeout,
+                                        // not by the client's.
+                                        std::thread::sleep(Duration::from_secs(4));
+                                    }
+                                }
+                                return;
+                            }
+                            let _ = stream.write_all(
+                                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                            );
+                            let _ = stream.flush();
+                        });
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => return,
+                }
+            }
+        });
+        (addr, shutdown_hits)
+    }
+
+    fn run_stop(
+        addr: SocketAddr,
+        deadline_secs: u64,
+        owned_child_pid: Option<u32>,
+    ) -> (StopReport, Duration) {
+        let shutdown = format!("http://{addr}/api/shutdown");
+        let health = format!("http://{addr}/health");
+        let client = build_http_client(Duration::from_secs(5)).expect("build client");
+        let started = std::time::Instant::now();
+        let report = tauri::async_runtime::block_on(graceful_stop_request(
+            &client,
+            deadline_secs,
+            Endpoints {
+                shutdown: &shutdown,
+                health: &health,
+            },
+            true,
+            owned_child_pid,
+            false,
+        ));
+        (report, started.elapsed())
+    }
+
+    /// A POSITIVE foreign identity is the one case that skips the flush.
+    ///
+    /// The verdict assertion is as load-bearing as the "received nothing" one:
+    /// only `Posted::Refused` → `PostFailed` returns without
+    /// `wait_for_server_gone`, and a foreign process never exits, so a skip that
+    /// fell into the wait would burn the whole `deadline_secs` and report a
+    /// `TimedOut` that is false — while "the endpoint received nothing" stayed
+    /// green.
+    #[test]
+    fn a_foreign_pid_skips_the_shutdown_post_without_waiting() {
+        let (addr, hits) = stub_identity_and_shutdown(
+            FirstHealth::Body(r#"{"status":"ok","pid":999999}"#),
+            Duration::from_secs(6),
+        );
+        let (report, elapsed) = run_stop(addr, 5, Some(4242));
+
+        assert_eq!(hits.load(Ordering::Acquire), 0, "the flush must not be sent");
+        assert_eq!(report.verdict, GracefulStop::PostFailed);
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "the skip must return immediately, not wait out deadline_secs: {elapsed:?}"
+        );
+    }
+
+    /// A pid-less body is the DEFAULT answer from every sidecar built before
+    /// `/health` gained `pid`. Treating "unidentified" as "foreign" would
+    /// hard-kill the flush on every Quit against one of those.
+    #[test]
+    fn a_pid_less_health_body_still_posts_the_flush() {
+        let (addr, hits) = stub_identity_and_shutdown(
+            FirstHealth::Body(r#"{"status":"ok"}"#),
+            Duration::from_secs(6),
+        );
+        let (report, _elapsed) = run_stop(addr, 3, Some(4242));
+
+        assert_eq!(
+            hits.load(Ordering::Acquire),
+            1,
+            "an unidentified responder is not proof of a foreign process — POST anyway"
+        );
+        assert_ne!(report.verdict, GracefulStop::PostFailed);
+    }
+
+    /// A health GET that accepts and never answers is a transient stall, not
+    /// evidence of a foreign process — and it must not eat the exit budget.
+    #[test]
+    fn a_stalling_identity_probe_still_posts_the_flush_and_stays_bounded() {
+        let (addr, hits) =
+            stub_identity_and_shutdown(FirstHealth::Silent, Duration::from_secs(10));
+        let (report, elapsed) = run_stop(addr, 3, Some(4242));
+
+        assert_eq!(
+            hits.load(Ordering::Acquire),
+            1,
+            "a stalled identity probe must fail OPEN — the POST is what flushes unsaved edits"
+        );
+        assert_ne!(report.verdict, GracefulStop::PostFailed);
+        assert!(
+            elapsed < EXIT_GRACEFUL_BUDGET,
+            "the identity probe is bounded at 1s; the whole stop must stay well inside the exit budget: {elapsed:?}"
+        );
+    }
+}
+
+/// #1787 — the sidecar's app-data separation is one line, so it gets a test.
+#[cfg(test)]
+mod sidecar_env_tests {
+    use super::*;
+
+    /// Spelled by `concat!` so the occurrence count in
+    /// `start_sidecar_folds_the_env_pairs_onto_the_command` does not count this
+    /// module's own uses of it.
+    const APP_DATA_KEY: &str = concat!("TANDEM_APP_", "DATA_DIR");
+
+    /// Dropping `TANDEM_APP_DATA_DIR` does not merely leave the bug: once the
+    /// desktop has claimed the LEGACY directory as `flavor: "desktop"`, the next
+    /// npm `tandem` hits the flavor refusal and exits. So this is a hard-failure
+    /// guard, not a hygiene one.
+    #[test]
+    fn sidecar_env_pairs_exports_both_data_dir_variables() {
+        let pairs = sidecar_env_pairs("/tmp/x", true);
+        let get = |key: &str| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.as_str())
+        };
+
+        assert_eq!(get("TANDEM_DATA_DIR"), Some("/tmp/x"));
+        assert_eq!(
+            get(APP_DATA_KEY),
+            Some("/tmp/x"),
+            "`resolveAppDataDir()` reads TANDEM_APP_DATA_DIR; TANDEM_DATA_DIR alone leaves the \
+             desktop sharing the npm install's state root"
+        );
+        assert_eq!(get("TANDEM_TAURI_SIDECAR"), Some("1"));
+        assert!(get("TANDEM_PORT").is_some());
+        assert!(get("TANDEM_MCP_PORT").is_some());
+        assert!(get("TANDEM_BIND_HOST").is_some());
+        assert_eq!(
+            get("NODE_ENV"),
+            Some("production"),
+            "a release sidecar must run Express in production mode, or its error \
+             pages carry err.stack (#1822 item 6)"
+        );
+    }
+
+    /// A debug / `cargo tauri dev` build must NOT get `NODE_ENV=production`:
+    /// the server gates dev-only paths on `NODE_ENV !== "production"`.
+    #[test]
+    fn sidecar_env_pairs_sets_no_node_env_on_a_debug_build() {
+        let pairs = sidecar_env_pairs("/tmp/x", false);
+        assert!(
+            pairs.iter().all(|(k, _)| *k != "NODE_ENV"),
+            "a debug build must leave NODE_ENV unset"
+        );
+    }
+
+    /// The half the value assertion above cannot make: that `start_sidecar`
+    /// actually consumes the helper.
+    ///
+    /// Without this, adding `sidecar_env_pairs`, passing its test and leaving
+    /// the original inline `.env()` chain in place ships no fix at all. The
+    /// occurrence count is what pins the ONE home of the literal.
+    #[test]
+    fn start_sidecar_folds_the_env_pairs_onto_the_command() {
+        let src = include_str!("sidecar.rs");
+        let start = src
+            .find("pub(crate) async fn start_sidecar")
+            .or_else(|| src.find("async fn start_sidecar"))
+            .expect("start_sidecar must exist");
+        // Bounded window: the next top-level `\n}` closes the function body far
+        // past the builder chain, so scan a generous slice rather than the whole
+        // file, which would match this test module itself.
+        let tail = &src[start..];
+        // Char-indexed, not byte-sliced: this file is full of em dashes.
+        let end = tail
+            .char_indices()
+            .take(20_000)
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(tail.len());
+        let body = &tail[..end];
+        assert!(
+            body.contains("let release_build = !cfg!(debug_assertions);")
+                && body.contains("sidecar_env_pairs(app_data_dir_str.as_str(), release_build)"),
+            "start_sidecar must fold sidecar_env_pairs onto the command builder, \
+             with release_build derived from debug_assertions"
+        );
+
+        let needle = format!("\"{APP_DATA_KEY}\"");
+        let occurrences = src.matches(needle.as_str()).count();
+        assert_eq!(
+            occurrences, 1,
+            "the TANDEM_APP_DATA_DIR literal belongs in sidecar_env_pairs and nowhere else \
+             (found {occurrences})"
+        );
     }
 }

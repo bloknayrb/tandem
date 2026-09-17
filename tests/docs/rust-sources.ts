@@ -88,9 +88,55 @@ export function rustSourceDefining(pattern: RegExp, what: string): RustSource {
   return hits[0];
 }
 
-/** Drop `/* … *\/` and `// …` comments, leaving `://` in paths alone. */
+/**
+ * Drop `/* … *\/` and `// …` comments, leaving a `//` inside a string, raw
+ * string or char literal alone.
+ *
+ * **Literal-aware by construction, not by a URL-shaped regex exception.** The
+ * prior version was one regex with a narrow `[^:]` carve-out for `://`, which
+ * only ever protected a URL and left every other `//`/`/*` inside a Rust
+ * string/raw-string/char literal to be read as a real comment — corrupting the
+ * literal's closing quote and desyncing every downstream brace/terminator
+ * scanner. The damage forks: a dangling quote that never finds a partner
+ * before end-of-file makes `matchRustBrace`/`testItemEnd` throw
+ * `"unbalanced #[cfg(test)] block"`; one that resyncs on some later quote
+ * instead **silently drops** everything between the corruption and that
+ * accidental resync point from `code`, with no error. The second direction is
+ * live on `master` today: `stripRustComments` run against
+ * `src-tauri/src/autostart.rs`'s literal `"//fileserver/tools/Tandem/tandem.exe"`
+ * inside `mod tests` used to desync onto the next module's closing brace and
+ * silently drop `has_argv_flag`/`AUTOSTART_FLAG`/`AUTOSTART_DISABLE_ENV`/
+ * `is_autostart_launch`/`resolve_autostart_launch`/`should_start_hidden`/
+ * `AUTOSTART_SEEN_MARKER`/`autostart_seen_and_mark` from `code` — eight
+ * production symbols, absent from every `rustSources()`-based guard with no
+ * test failure pointing at it. Found for #1861.
+ */
 export function stripRustComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  let out = "";
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === '"' || c === "'") {
+      const after = skipRustLiteral(src, i);
+      if (after > i) {
+        out += src.slice(i, after);
+        i = after;
+        continue;
+      }
+    }
+    if (c === "/" && src[i + 1] === "/") {
+      while (i < src.length && src[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      const end = src.indexOf("*/", i + 2);
+      i = end === -1 ? src.length : end + 2;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
 }
 
 /**
@@ -273,8 +319,14 @@ export function matchRustBrace(src: string, open: number): number {
  * Index just past the string or char literal starting at `i`, or `i` if what is
  * there is not a literal (a lifetime `'a`, most commonly).
  *
- * Comments are already gone — `stripRustComments` runs first — so only literals
- * can hide a brace.
+ * **Two callers, one with comments already gone and one without.** For
+ * `matchRustBrace`/`testItemEnd`, comments are already gone — `stripRustComments`
+ * runs first — so only literals can hide a brace. `stripRustComments` itself is
+ * now also a caller, and comments are emphatically *not* gone yet when it calls
+ * this: safety there comes from its own `//`/`/*` branches firing first in its
+ * loop (so a literal is only ever consulted once the two comment-opener checks
+ * have already missed), not from this function skipping comments on the
+ * caller's behalf.
  */
 function skipRustLiteral(src: string, i: number): number {
   if (src[i] === "'") {
