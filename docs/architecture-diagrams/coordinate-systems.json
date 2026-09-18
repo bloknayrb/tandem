@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Tandem Coordinate Systems Pipeline",
+    "quality_profile": "showcase",
+    "viewBox": [1068, 560]
+  },
+  "stages": [
+    { "label": "Edit Sources" },
+    { "label": "Flat Text Offsets" },
+    { "label": "Anchor Mint" },
+    { "label": "CRDT Sync + Reload" },
+    { "label": "Read-back" }
+  ],
+  "nodes": [
+    { "id": "mcpTool", "type": "external", "label": "MCP Tool Call", "sublabel": "flat offset args", "stage": 0, "row": 0 },
+    { "id": "clientEdit", "type": "frontend", "label": "Editor Edit", "sublabel": "ProseMirror position", "stage": 0, "row": 1 },
+    { "id": "flatOffset", "type": "backend", "label": "Flat Text Offset", "sublabel": "extractText()", "tag": "no extractMarkdown", "stage": 1, "row": 0 },
+    { "id": "anchoredRange", "type": "backend", "label": "anchoredRange()", "sublabel": "offset + anchor", "stage": 2, "row": 0 },
+    { "id": "relPosNode", "type": "database", "label": "RelativePosition", "sublabel": "CRDT-anchored", "tag": "shared/positions/", "stage": 2, "row": 1 },
+    { "id": "hocuspocusSync", "type": "messagebus", "label": "Hocuspocus Sync", "sublabel": "Y.Doc broadcast", "stage": 3, "row": 0 },
+    { "id": "reanchor", "type": "backend", "label": "reanchorAnnotations()", "sublabel": "on load/reload", "width": 170, "stage": 3, "row": 1 },
+    { "id": "getAnnotations", "type": "external", "label": "tandem_getAnnotations", "sublabel": "resolved | degraded", "width": 150, "stage": 4, "row": 0 },
+    { "id": "flatToPm", "type": "frontend", "label": "flatOffsetToPmPos()", "sublabel": "render decoration", "width": 160, "stage": 4, "row": 1 },
+    { "id": "degradedNode", "type": "backend", "label": "Anchor: degraded", "sublabel": "stale, unresolvable", "width": 150, "stage": 4, "row": 2 }
+  ],
+  "flows": [
+    { "from": "mcpTool", "to": "flatOffset", "label": "flat range args", "variant": "emphasis", "route": "straight" },
+    { "from": "clientEdit", "to": "flatOffset", "label": "pmPosToFlatOffset()" },
+    { "from": "flatOffset", "to": "anchoredRange", "label": "validate + mint", "variant": "emphasis" },
+    { "from": "anchoredRange", "to": "relPosNode", "label": "mints anchor" },
+    { "from": "anchoredRange", "to": "hocuspocusSync", "label": "Y.Doc write", "variant": "emphasis" },
+    { "from": "relPosNode", "to": "reanchor", "label": "resolves anchor", "labelDy": -23 },
+    { "from": "hocuspocusSync", "to": "reanchor", "label": "on reload", "variant": "emphasis" },
+    { "from": "reanchor", "to": "getAnnotations", "label": "offset refreshed", "variant": "emphasis" },
+    { "from": "getAnnotations", "to": "flatToPm", "label": "resolved position" },
+    { "from": "reanchor", "to": "degradedNode", "label": "unresolvable", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Three Coordinate Systems", "items": ["Flat text offsets — extractText(), server/positions.ts", "ProseMirror positions — structural, client/positions.ts", "Yjs RelativePositions — CRDT-anchored, shared/positions/"] },
+    { "dot": "amber", "title": "One Call, Two Anchors", "items": ["anchoredRange() mints the flat offset and the Yjs RelativePosition together", "validateRange() gates the mint before anchoredRange runs", "tandem_getTextContent uses extractText() only — extractMarkdown() shifts offsets out of the annotation coordinate system"] },
+    { "dot": "rose", "title": "Re-anchoring On Reload", "items": ["reanchorAnnotations() resolves each RelativePosition after Y.Doc load/reload", "A stale or unresolvable RelativePosition cannot be resolved back to an offset", "tandem_getAnnotations surfaces that outcome as anchor: \"degraded\""] }
+  ]
+}
