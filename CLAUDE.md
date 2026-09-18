@@ -272,7 +272,7 @@ Mechanism, ops and failure modes: [docs/licensing-explained.md](docs/licensing-e
 
 ## Status
 
-**Shipped: v0.25.0** (2026-09-05). Release history is [CHANGELOG.md](CHANGELOG.md); remaining
+**Shipped: v0.26.0** (2026-09-18). Release history is [CHANGELOG.md](CHANGELOG.md); remaining
 v1.0 work is [docs/roadmap.md](docs/roadmap.md#active--toward-v10); what the last smoke run
 settled is in [docs/release-smoke-checklist.md](docs/release-smoke-checklist.md#what-the-v0250-run-settled).
 **Do not re-narrate any of them here.** **§1's updater row finally ran** (2026-09-09,

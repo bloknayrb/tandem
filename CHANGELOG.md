@@ -7,6 +7,148 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-09-18
+
+### What's New
+
+- Force-reopening a document no longer deletes your personal notes.
+- Saving a `.docx` refuses instead of silently dropping pictures Tandem couldn't import.
+- The desktop app recovers on its own from a crashed server or a failed update.
+- The stdio bridge, plugin monitor and channel shim survive a Tandem restart instead of dying.
+- Your AI can no longer read or change your highlights and private comments.
+- MCP error codes and some responses changed — integrations matching old values need updating.
+
+### Added
+
+- **A Display menu in the formatting bar sets text size and reading measure, and source view gains a line-wrap setting (#2011).** Both size settings were previously buried in two different Settings tabs; the "Aa" button puts them one click away and is mirrored into the selection popup for when the bar is hidden. The Markdown source view can now wrap long lines, via a checkbox in Settings → Editor, off by default.
+
+- **A reply can carry its own suggested rewrite (#2052).** When you push back on a proposal, your AI can answer with a revised `suggestedText` over the parent's range instead of prose, and accepting it applies the rewrite like any other suggestion. **Bound:** only on a pending comment your AI wrote itself.
+
+- **`tandem_status` and `tandem_checkInbox` report which connection last changed Solo/Tandem mode (#1900).** A new `modeProvenance` field names the last writer and when, for the case where a window's mode disagrees with the room's. **Bound:** after two near-simultaneous toggles it names the last write, not necessarily the one that decided the value.
+
+### Changed
+
+- **Startup reopens only the documents from your most recent session (#1880).** Tandem used to reopen every session record it found, so stale entries resurfaced on every restart; it now reopens sessions within 30 minutes of the newest one, plus any session holding unsaved work regardless of age. **Bound:** nothing is deleted — an older session stays on disk and reopens normally when you open that file.
+
+- **The same MCP failure now returns the same error code from every tool (#2007).** A read-only document answered `FORMAT_ERROR` from the edit tools instead of `READ_ONLY`, and a non-pending annotation answered `ANNOTATION_RESOLVED` from one tool and `ANNOTATION_NOT_PENDING` from another. **Bound:** codes changed on the wire — an integration matching on an old value needs updating. **Bound:** `tandem_save` still reports a blocked `.docx` save as `FORMAT_ERROR`, with the real code in `details.errorCode` (#2004).
+
+- **Your AI can dismiss but no longer accept a suggestion, and can edit only annotations it wrote (#1900).** An accept from your AI marked a suggestion accepted without applying its text. **Bound:** new wire codes `ACCEPT_REFUSED` and `NOT_OWNED`, and resolved records gain `resolvedBy`.
+
+- **`tandem_open` refuses a relative path instead of resolving it against the server's working directory (#2007).** On Windows a drive-less root path is refused too, a UNC path answers `INVALID_PATH` rather than `FILE_NOT_FOUND`, and a save into a folder you cannot write reads `PERMISSION_DENIED` instead of telling you to close Word.
+
+- **`/health` reports `shutting-down` during shutdown and no longer sends `pid` to non-loopback callers (#1925).** It still answers HTTP 200.
+
+- **`tandem_getActivity` always includes `isTyping` (#1907).** The no-activity response used to omit it.
+
+- **`activity.cursor` is now a flat text offset like every other position in the API (#1919).** It was a ProseMirror structural position, which no MCP client can interpret. **Bound:** a client that had worked around the old value needs updating.
+
+- **`tandem setup --apply --without-channel-shim` is the one way to remove the channel shim (#1891).** Re-running `setup --apply` without the flag now leaves an existing `tandem-channel` entry alone on every target. **Bound:** on Claude Desktop this reverses the old behaviour — a legacy `tandem-channel` entry, including one you added by hand, used to be removed and now survives.
+
+- **"Reject" is now "Dismiss" throughout annotation review (#1966).** It matches the wording used everywhere else in Tandem.
+
+### Fixed
+
+- **Force-reopening a document, or committing from source view, no longer deletes your personal notes (#1924).** Both paths removed the durable annotation file from disk, and the pre-overwrite backup covered only the document text. Annotations are now re-merged and re-anchored after the reload. **Bound:** an annotation whose text is no longer in the document stays at its old position, and `tandem_getAnnotations` reports it as `degraded`.
+
+- **One unreadable row in an annotation file no longer discards every annotation in it (#1985).** The loader quarantined the whole file, so every comment and note in it disappeared. The bad row is now skipped and the rest loads. **Bound:** this does not bring back annotations already lost this way; the quarantined copy (`<file>.corrupt.<timestamp>`) in the annotations directory still holds them.
+
+- **Saving a `.docx` no longer silently drops pictures Tandem failed to import (#1939, #2026, #2029).** Pictures sitting inside a paragraph, the ordinary case, were written back missing on any edit-then-save; the save is now refused, and the fidelity banner shows how many pictures would be lost. A "Save anyway without pictures" action in that banner, and an `allowImageLoss` option on `tandem_save`, override it deliberately. **Bound:** autosave and session reload cannot override and always refuse; `tandem_applyChanges` is unaffected, because it edits the original file and keeps the pictures.
+
+- **Formatted text no longer leaks into files as literal `<bold>`-style tags (#1924).** Text carrying a formatting mark inside frontmatter, footnotes, reference-link definitions, raw HTML blocks or code-fence bodies, including a code block exported to `.docx`, was written out with the mark as markup, and in `.docx` export every Word comment after that block shifted position too. **Bound:** ordinary paragraph text was never affected. **Bound:** only what is written to disk changed; the block still shows the mark in the editor until the file is reopened.
+
+- **Markdown round-trips more faithfully (#1924).** Escaped `\[label]` text no longer becomes a live link on save, an image with text beside it stays inline instead of splitting its paragraph in three, a code fence keeps its full info string (`title="x.ts" {1,3}`), and a UTF-8 byte-order mark survives saving. A failed save also no longer leaves a `.tandem-tmp-*` file beside your document. **Bound:** an image with text beside it now shows in the editor as its Markdown source rather than as a picture; an image alone on its line is unaffected. **Residue:** temp files from earlier failures are not swept and are safe to delete.
+
+- **`.docx` import no longer reads tabs, line breaks, non-breaking hyphens and symbol characters as spaces (#1939).** The visible text and every annotation offset after them were wrong. An edit spanning one of these characters is now refused rather than rewriting it incorrectly. Saving Markdown also no longer turns a `file:` or SVG `data:` image into its alt text.
+
+- **A promoted Word comment no longer duplicates in the saved file after the document is edited again in Word (#1956).** **Bound:** after the file is opened fresh, a duplicate private note can still appear in the sidebar beside the promoted comment (#1954).
+
+- **Annotations hold their place across edits that used to strand or mis-anchor them (#1916).** An edit merging two blocks could leave the annotations later in the merged block on arbitrary offsets, a read-time repair could confidently re-pin an annotation to the wrong text, and a snapshot cut mid-emoji could pin one to dead coordinates permanently. An anchor Tandem cannot verify is now reported as `degraded` instead of guessed, and a snapshot that differs from the document only by a non-breaking or other Unicode space no longer reads as stale. **Bound:** an annotation with no stored text snapshot, including every imported Word comment, is still re-anchored unverified. **Bound:** an edit that only swaps such a space for a normal one is no longer detected.
+
+- **Find and replace no longer selects and replaces the wrong text after a line break (#1919).** Every Shift+Enter break before a match shifted the selection by one character.
+
+- **A suggestion can no longer delete a heading on Accept (#1916).** `tandem_edit`, and a suggestion's rewrite, now refuse a range whose interior crosses heading markup, not only one that starts or ends inside it.
+
+- **A failed Accept no longer reports the suggestion as applied, and a restart no longer re-delivers every comment you already resolved (#1921).** **Bound:** a comment you resolve and then edit can still arrive once more after a restart.
+
+- **Switching from Solo back to Tandem can no longer leave the server and your window disagreeing (#1900).** A race could leave the server in Tandem while your window showed Solo, and a comment made from a second window into a Solo room was delivered after a restart.
+
+- **A reused process id after a reboot no longer leaves the annotation store permanently read-only (#2051).**
+
+- **The desktop app recovers on its own from a crashed server, a failed update download and a broken start-at-login entry (#1968).** A server crash left the app "Disconnected" until you restarted it, a failed update tore down the running server first, and moving the app silently broke start-at-login. The server now restarts itself (up to 3 times in 5 minutes, then tells you), a failed download leaves the app working, and start-at-login re-registers on each launch. On Windows, the updater's wait for the server to release its executable now actually runs. **Unverified:** start-at-login on macOS and Linux was read, not run on hardware.
+
+- **A desktop install and an npm-installed `tandem` no longer share one app-data directory (#1925).** Sessions, annotations, backups and integration settings from both could mix invisibly, and one install's health check could trust the other's server. The desktop now uses its own directory and refuses to start against one an npm install owns; running npm `tandem` while the desktop app is open no longer kills the desktop's server, and deferred start-at-login now actually starts. **Bound:** on first launch the desktop copies the old shared directory into its own; the originals stay where they are, and data already mixed there comes with it.
+
+- **An auto-launched Claude session that stops responding is retried instead of silently waited on (#1998).** After repeated failures a "Restart" chip appears, and a signed-out Claude Code now shows a "Check Claude sign-in" prompt instead of retrying forever. **Unverified:** the stalled-session retry was exercised only in tests, not against a live Claude Code; the sign-in detection was measured against one Claude Code build on Windows.
+
+- **The stdio bridge, plugin monitor and channel shim retry when Tandem is unreachable instead of exiting (#1889).** Neither Claude Desktop nor Claude Code respawns them, so one Tandem restart used to leave the connection or push path dead until you restarted the client. A Tandem upgrade across a reconnect is now adopted; a different server still fails closed. **Not exercised before release:** verified against a fake server only, not a live Claude Desktop or plugin-monitor restart. **Bound:** the channel shim as the plugin launches it still exits if Tandem is not running when Claude Code starts it (#1890).
+
+- **Opening a document or scratchpad now hands your AI the wake watch URL (#1947).** Only `tandem_status` returned `wakeUrl`, so a session that went straight to a scratchpad never armed its watch and missed your comments and chat until it next polled.
+
+- **`tandem setup --apply` no longer replaces a malformed Claude config with a Tandem-only one (#1891).** A config that failed to parse was backed up and overwritten, losing your projects list while reporting success; it is now left untouched with instructions to fix it. The size cap is raised from 5 MiB to 16 MiB, and the CLI refusal names the size and path. `tandem rotate-token` now warns when a preserved `tandem-channel` entry still holds the old token.
+
+- **`tandem doctor` no longer calls a running server down, or a broken MCP entry healthy (#1896).** It ignored `TANDEM_PORT`/`TANDEM_MCP_PORT`, and it passed a user-level `tandem` entry with the wrong transport, an `https` URL, a missing `/mcp` or a non-loopback host. It also warns, as does `setup --apply`, when the plugin and a `tandem` MCP entry load every tool twice.
+
+- **`tandem setup --apply` no longer overwrites a newer skill file with the older bundled one (#1896).** **Bound:** it still writes when the on-disk version cannot be read, since setup runs only with your consent.
+
+- **The bundled Claude skill no longer tells Claude to find promoted Word comments with a filter that always returns nothing (#1888).** The same update lists `tandem_annotationReply`, forbids editing a file directly while Tandem has it open, and tells sub-agents not to poll the inbox. Existing installs receive it on the next HTTP-mode server start or `setup --apply`.
+
+- **A deleted tutorial annotation stays deleted, and a session restore that falls back to its saved copy keeps the session's anchor when that anchor still verifies (#2012).** **Bound:** the tutorial fix holds for 30 days, after which the deletion record is compacted and the seed can return (#2009). **Bound:** #1863 stays open for two rarer shapes.
+
+- **Accept All and Dismiss All can no longer fire against the wrong document (#1898).** A bulk confirm armed on one document stayed armed after switching tabs, and could re-arm itself after the bulk bar remounted. Deleting a saved session from the open dialog now also asks first.
+
+- **Keyboard shortcuts no longer double-fire, swallow AltGr characters or submit a half-typed IME word (#1915).** Ctrl+Enter both inserted a line break and accepted an annotation, and Polish, Czech, German and similar layouts lost characters to Ctrl+Alt shortcuts. The command palette and file-open dialog now trap Tab focus, `/` inside a code block no longer opens the slash menu, and a remote edit above your reply draft no longer shifts or drops it. **Bound:** Ctrl+Alt (Option on macOS) combinations no longer trigger app shortcuts. **Unverified:** the AltGr and IME fixes were not run on a real non-US layout or IME.
+
+- **Failed saves, closes and source-view toggles no longer fail silently (#2017).** Six of them now tell you, and the seventh is logged.
+
+- **Clicking a rail tab inside the floating chat reveal no longer closes the panel you just opened (#2016).**
+
+- **A dead file watcher, and a Reload from file that did nothing, now tell you (#2000).** **Bound:** a watch that fails while Tandem restores your last session at startup is still silent (#1662).
+
+- **`tandem_checkInbox` now says when your selection was last recorded (#1996).** It carries `selectionAt` beside `selectedText`, which used to report a twenty-minute-old selection as current. **Bound:** a recent `selectionAt` does not prove a recent selection — an edit that shifts a lingering selection re-stamps it (#1991). **Bound:** for a document not open in the active editor tab, `selectedText` can be read from stale offsets after an edit (#1997).
+
+- **A stdio-mode server exits when its client disconnects, and other v1.0-review fixes (#2024).** A Claude config with a byte-order mark is read by the integrations settings instead of reported unparseable, `setup --apply` after `rotate-token` keeps the auth token that Cowork clients need, `tandem --help` lists `start`, a symlinked user-level Claude config is refused with that reason rather than "check permissions", and the desktop server log keeps its values and stack traces.
+
+- **Copy in the app now matches what the app does (#1897, #1900, #1966).** Solo mode no longer promises your AI "won't see your comments or edits" — chat and the document are never held, only your annotations and replies. The desktop app no longer tells you to run a `tandem` command it does not ship, the setup wizard no longer says "we couldn't find Claude" above a line saying it did, and "Restart sidecar" is now "Restart server".
+
+- **Assorted editor and accessibility fixes (#1966, #2021).** Cancelling a bulk tab close now aborts the whole batch, the error screen's Reload asks before discarding unsynced work, the unsaved-tab marker is now announced to screen readers, Settings no longer opens underneath the first-run wizard, and chat messages and your AI's comments render paragraphs and lists as real blocks.
+
+- **Downgrading no longer destroys your newer annotations or breaks settings with an opaque error (#1985).** A second downgrade deleted the only parked copy of a newer version's annotation file, and a newer integrations config now gets a readable message instead of an error. A settings change refused on a read-only settings file now warns instead of doing nothing, and that warning no longer crashes on a non-HTTPS LAN origin.
+
+### Security
+
+- **Your AI can no longer read your highlights or private comments (#1900).** `tandem_getAnnotations` and `tandem_exportAnnotations` withheld only notes, so user highlights and older private comments reached the AI and its export files; they are now withheld and counted in a new `privateExcluded` field. **Bound:** filtering with `type: "highlight"` now always returns an empty list.
+
+- **Your AI can no longer edit, reply to, resolve or remove your highlights and private comments, and can edit or reply only to annotations it wrote (#1900).** The four write paths checked an annotation's type rather than who it was for. Your AI's own resolves now read back as its own rather than in `userResponses` as your decisions. **Bound:** reachable only by an MCP client acting through Tandem's tools; nothing network-facing changed. **Bound:** your AI can still dismiss a non-private comment of yours.
+
+- **Two loopback `/api` routes could damage an open document when given a malformed document id (#1882).** `POST /api/close` could stop watching a file, close its annotation store and delete its session record while the document stayed open, and `POST /api/save` could write an empty document over the real file past the save lock. Separately, `tandem_restoreBackup` with no backup named copied a `.docx` sidecar over the document past read-only mode and every save guard. **Bound:** the `/api` routes are loopback-only, and the MCP tools `tandem_close`/`tandem_save` were never affected. **Bound:** the restore half needed a `.docx` with a `{name}.backup.docx` beside it and no Tandem snapshot this run, and any MCP client could trigger it; a named pipe planted at that path could hang file I/O on macOS and Linux.
+
+- **The auto-launcher no longer passes Tandem's secrets to the Claude session it starts (#2006).** `TANDEM_AUTH_TOKEN` and `TANDEM_SENTRY_DSN` were in the launched process's environment, and so in everything it spawned; a desktop command that returned keychain secrets in plaintext to the app's own WebView, with no legitimate caller, is removed. **Bound:** only processes the launched session started could read the variables, and only the app's own WebView could call the removed command. The desktop server now also runs with `NODE_ENV=production`, and `tandem --uninstall-scrub` takes the Cowork lock instead of racing the desktop.
+
+- **Asking you to approve a `Write` or `Bash` call no longer sends its file contents or command line through Tandem (#1889).** The channel shim forwarded the approval prompt's input preview to `/api/channel-permission`, which served it back to any caller, and under a Cowork LAN bind that request crossed the network. **Bound:** only sessions using the opt-in channel shim (`--with-channel-shim`) sent these. **Bound:** the tool name and description still travel the relay (#1884).
+
+- **Tandem's server refuses oversized WebSocket frames, and bad requests no longer return a stack trace (#1987).** One ~90 MB frame could roughly double memory use, and a malformed or oversized request got an HTML page naming your username and install path. Peer text written to the log is stripped of control characters. **Bound:** the WebSocket port listens on loopback in every configuration, so only processes on your machine could send the frame; under Cowork the stack-trace page was reachable from the LAN through `/api/channel-*`. **Bound:** a document whose sync update exceeds 66 MiB (reachable from about 21 MiB of dense text) no longer syncs; it used to, and the server now logs one line naming the limit.
+
+- **Save, Save As and rename failures no longer show the raw filesystem error, with your document's full path, in a toast (#1897).** The full error still goes to the server log. **Bound:** only visible on your own screen.
+
+- **Crash reports no longer include your hostname or full file paths (#2024).** **Bound:** crash reporting is off unless you set `TANDEM_SENTRY_DSN`, so a default install sent nothing. A `setup --apply` killed mid-write no longer leaves a bearer-token temp file behind indefinitely; the next successful setup write to that folder removes any older than an hour.
+
+### Documentation
+
+- **The user guide no longer says Solo mode hides your AI's annotations from you (#1902).** No such mechanism exists; the CLI, configuration and troubleshooting docs were also corrected for drift.
+- **The README states the licensing terms: a free beta, then a 14-day trial and a one-time purchase (#1909).**
+- **`tandem --help` now says no uninstaller runs the npm scrub (#2006).** After a desktop uninstall your MCP entries and skill stay until you run `tandem --uninstall-scrub` yourself.
+- **The channel permission relay is documented as what it does and marked experimental (#1889).** It never delivered verdicts back to Claude Code.
+- **Troubleshooting names the right session files (#1888),** and the open dialog docs drop a path input the browser build never had (#1897).
+
+### Internal
+
+- **An in-memory MCP tool harness replaces per-suite scaffolding across the server tests (#2042, #2050, #2056, #2057),** and a production-first audit of the whole suite removed or repaired tests that asserted nothing (#1923, #1973, #1881).
+- **Tests no longer write into the real app-data directory (#1880)** — test fixtures had been landing in the developer's own session store — and a spec's `git init` can no longer turn the real repository bare (#1986).
+- **npm releases publish through Trusted Publishing, with no long-lived token (#1878).** The release pipeline now validates real asset URLs and verifies updater signatures against the app's built-in key, and a release-candidate tag can no longer become the GitHub latest release or npm `latest` (#1876, #1955).
+- **The dark licensing gate and local-model collaborator received correctness fixes (#1940, #1944, #1945, #2043).** Both remain off in this release, so nothing here is user-visible.
+- **The integrations normalizer rewrites `localhost` only in `integrations[].url` (#2020),** caller-influenced strings no longer reach a log format string (#1900, #1897), `hono` was updated to 4.13.8, clearing four advisories in code Tandem never loads (#1927), and `devalue` and `js-yaml` dev dependencies were updated to clear advisories (#2076, #1928).
+- **The security register was reconciled with the tracker (#1969, #1972, #1979, #2047),** and the pre-v1.0 review sweep recorded its decisions, specs and ledgers across ~140 documentation commits.
+
 ## [0.25.0] - 2026-09-05
 
 ### Added
