@@ -46,7 +46,7 @@ reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-feature
 tokio = { version = "1", features = ["time", "macros"] }
 keyring = "4"
 base64 = "0.23"
-dirs = "6"
+dirs = "7"
 rand = "0.10"
 fs2 = "0.4"
 # CrabNebula DevTools (IPC/event/log inspector). Optional + behind the
@@ -109,7 +109,7 @@ windows-sys = { version = "0.61", features = [
 # dark-mode support uses to gate the uxtheme ordinal it resolves; used here
 # so `win_app_mode`'s build >= 18362 guard matches that precedent exactly
 # rather than re-deriving a parallel version-detection mechanism.
-windows-version = "0.1"
+windows-version = "0.100"
 
 [features]
 # Test-only hooks: TANDEM_COWORK_ROOT_OVERRIDE env-var reads.
