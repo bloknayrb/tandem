@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Annotation Lifecycle",
+    "quality_profile": "showcase",
+    "viewBox": [980, 566]
+  },
+  "lanes": [
+    { "id": "main", "label": "Annotation state" },
+    { "id": "events", "label": "Guard + recovery" }
+  ],
+  "states": [
+    { "id": "created", "type": "start", "label": "Created", "sublabel": "highlight | comment | note", "lane": "main", "col": 0, "step": "01", "tag": "author: user|claude|import" },
+    { "id": "tagged", "type": "active", "label": "Origin-tagged write", "sublabel": "origins.ts helper", "lane": "main", "col": 1, "step": "02" },
+    { "id": "pending", "type": "waiting", "label": "Pending", "sublabel": "in Y.Map('annotations')", "lane": "main", "col": 2, "step": "03" },
+    { "id": "gated", "type": "decision", "label": "Privacy gate", "sublabel": "edit / resolve / remove", "lane": "main", "col": 3, "step": "04", "tag": "ADR-027" },
+    { "id": "accepted", "type": "success", "label": "Accepted", "sublabel": "rewrites target span", "lane": "main", "col": 4, "step": "05" },
+    { "id": "dismissed", "type": "neutral", "label": "Dismissed", "sublabel": "transitionPending", "lane": "events", "col": 1 },
+    { "id": "degraded", "type": "failure", "label": "Anchor degraded", "sublabel": "RelativePosition unresolved", "lane": "events", "col": 0, "yOffset": 78 },
+    { "id": "removed", "type": "external", "label": "Removed", "sublabel": "AnnotationLifecycle.remove", "lane": "events", "col": 2 }
+  ],
+  "transitions": [
+    { "id": "create-to-tagged", "from": "created", "to": "tagged", "label": "every write", "labelDy": -24 },
+    { "id": "tagged-to-pending", "from": "tagged", "to": "pending", "label": "lands in Y.Map", "labelDy": -24 },
+    { "id": "pending-to-gated", "from": "pending", "to": "gated", "label": "edit/resolve/remove", "labelDy": -24 },
+    { "id": "gated-blocked", "from": "gated", "to": "pending", "variant": "security", "fromSide": "top", "toSide": "top", "route": "top-channel", "label": "note or private → blocked" },
+    { "id": "gated-accept", "from": "gated", "to": "accepted", "label": "Accept (rewrites span)", "labelDy": -24 },
+    { "id": "gated-dismiss", "from": "gated", "to": "dismissed", "variant": "default", "route": "drop", "label": "Dismiss" },
+    { "id": "pending-degrade", "from": "pending", "to": "degraded", "variant": "security", "fromSide": "left", "toSide": "left", "via": [[320, 157], [320, 385]], "label": "RelativePosition unresolvable" },
+    { "id": "degrade-heal", "from": "degraded", "to": "pending", "variant": "emphasis", "fromSide": "left", "toSide": "top", "via": [[20, 385], [20, 80], [402, 80]], "label": "re-anchors on reload" },
+    { "id": "accepted-remove", "from": "accepted", "to": "removed", "fromSide": "bottom", "toSide": "top", "route": "straight", "label": "remove", "labelDy": 24 }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Creation & Origin Tagging",
+      "items": [
+        "Every Y.Doc write goes through one of six origins.ts wrappers before landing in Y.Map('annotations')",
+        "Only withBrowser-origin writes emit channel events"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Privacy Guard (ADR-027)",
+      "items": [
+        "note/private: invisible on read; isPrivateForClaude gates edit/reply, isWithheldFromClaude resolve/remove",
+        "addUserReply and removeAnnotationRecord (browser Archive) are deliberately unguarded"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Anchoring & Recovery",
+      "items": [
+        "A stale RelativePosition marks the annotation anchor: degraded, not deleted",
+        "Accepting a comment with suggestedText rewrites the stored flat span verbatim"
+      ]
+    }
+  ]
+}
