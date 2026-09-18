@@ -30,16 +30,32 @@ updates:
   # equality (so an `ignore` catch-all there fails `check`), while the npm entry
   # is constrained only by the ecosystem-list assertion.
   #
-  # Scoped to TypeScript MAJORS alone, because `patterns: ["*"]` groups every npm
-  # update into one PR, so a single unresolvable bump blocks the whole group.
-  # #2061 was exactly that: 42 updates, of which only `typescript 5.9.3 -> 7.0.2`
-  # could not resolve -- `svelte-check@4.7.6` is the latest published version, its
-  # peer range is `typescript@"^5.0.0 || ^6.0.0"`, and no v5 line exists -- so
-  # `npm ci` failed ERESOLVE and 41 healthy updates were held hostage, re-filed
-  # red every week.
+  # `update-types` scopes the group to minor+patch, so MAJORS are excluded from
+  # it and Dependabot files them as individual PRs instead. That is the same
+  # reasoning the github-actions entry above is ungrouped for: the risky bumps
+  # are the ones that must arrive one per PR, reviewable on their own merits.
   #
-  # REMOVE THIS once svelte-check publishes TypeScript 7 support. While it stands,
-  # TypeScript majors are not proposed at all, which is the cost of the rule.
+  # This is the second fix for one disease. `patterns: ["*"]` alone groups every
+  # npm update into one PR, so a single unmergeable bump holds the rest hostage.
+  # #2061 was that: 42 updates of which only `typescript 5.9.3 -> 7.0.2` could
+  # not resolve, and 41 healthy ones were held, re-filed red every week. The
+  # `ignore` below was the point patch for that one dependency. #2068 was the
+  # SAME shape with no bad actor to name -- 41 updates whose seven manifest-level
+  # changes were six majors (@hocuspocus/{provider,server}, zod 3->4, vitest
+  # 4->5, markdown-it 14->15) plus one biome minor, so `check` went red on lint
+  # and the 34 healthy transitive bumps were unmergeable as a unit. Splitting by
+  # update-type fixes the class; ignoring dependencies one at a time does not.
+  #
+  # The cost is real and is the point: a major now needs its own review, and a
+  # major nobody reviews is a PR that sits open rather than a bump that rides in
+  # under 40 other diffs.
+  #
+  # REMOVE THE `ignore` BELOW once svelte-check publishes TypeScript 7 support.
+  # `svelte-check@4.7.6` is the latest published version, its peer range is
+  # `typescript@"^5.0.0 || ^6.0.0"`, and no v5 line exists, so `npm ci` fails
+  # ERESOLVE. While it stands, TypeScript majors are not proposed at all -- which
+  # is strictly narrower than the update-types split above, and still needed:
+  # the split would file the TypeScript major as its own PR, permanently red.
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
@@ -48,10 +64,19 @@ updates:
       npm-dependencies:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
     ignore:
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
 
+  # Split by update-type for the same reason as npm above. Cargo has not yet hit
+  # the hostage failure, but the shape is identical -- and a Rust major is worse
+  # to review in a group, because `Cargo.lock` churns hundreds of lines around
+  # the two `Cargo.toml` edits that actually carry the semantics. #2067 was four
+  # grouped updates of which two were majors (`dirs` 6->7, `windows-version`
+  # 0.1->0.100); both happened to be safe, which is luck, not a process.
   - package-ecosystem: "cargo"
     directory: "/src-tauri"
     schedule:
@@ -60,3 +85,6 @@ updates:
       cargo-dependencies:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"

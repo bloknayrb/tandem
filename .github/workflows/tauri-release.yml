@@ -272,7 +272,7 @@ jobs:
       # `sign` tool picks it up via DefaultAzureCredential -> AzureCliCredential.
       - name: Azure OIDC login
         if: matrix.platform == 'windows-latest'
-        # Held at the v3.0.2 SHA a reviewed Dependabot bump landed (#1835), and
+        # Held at the v3.1.0 SHA a reviewed Dependabot bump landed (#2065), and
         # deliberately NOT re-resolved to whatever the tag or the branch points
         # at now. This is the highest-privilege step here -- it mints the OIDC
         # session that signs Windows binaries -- so a held pin at a reviewed SHA
@@ -281,8 +281,17 @@ jobs:
         # security one. The upgrade path is a reviewed Dependabot bump, not a
         # blind re-resolve. Residual carried knowingly: this misses any
         # auth-handling fix shipped upstream since.
-        # Audited 2026-09-10 (tag v3.0.2 -> 7ddb5af1, confirmed via gh api).
-        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        #
+        # Audited 2026-09-18 (tag v3.1.0 -> a641126d, confirmed by resolving
+        # refs/tags/v3.1.0^{} against the upstream repo, NOT by trusting the
+        # bump's own comment). v3.0.2 -> v3.1.0 adds two opt-in inputs and
+        # changes no default: `mask-client-id` (defaults true, i.e. today's
+        # behaviour -- the masking call is now conditional on it) and
+        # `max-context-population` (AzPS-only, unset here). The rest of the
+        # range is CI, docs and the action's own dependency bumps. Nothing in
+        # the credential or federated-token path moved, which is the half that
+        # would have blocked this.
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
