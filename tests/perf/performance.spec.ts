@@ -447,7 +447,14 @@ test.describe("v1.0 performance gate", () => {
       // element to be stable (same box across consecutive frames) — with a
       // loaded margin column that can itself take seconds, which is a completely
       // different defect from a slow accept handler. Reporting one number would
-      // not distinguish them. #1288 is that wait.
+      // not distinguish them. #1288, which first raised this wait, is CLOSED
+      // and its proposed mechanism (margin-column crowding) is REFUTED — see
+      // docs/perf-gate-results.md §"#1288 does not reproduce, and its proposed
+      // mechanism is refuted". The wait is still a live concern, not a settled
+      // non-issue: under the current (#1734) definition, PR #1973's own
+      // verification sample put ~335ms of a 340ms annotation-accept total in
+      // this same click-stability wait (click-dispatch 335ms, post-click
+      // settle 5ms) — so isolating it stays worth doing.
       //
       // Measured on the RAIL button, deliberately: that is where run 1's
       // 7851ms time-to-clickable was observed, and measuring the margin button

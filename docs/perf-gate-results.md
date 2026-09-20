@@ -405,9 +405,17 @@ The new wait resolved in 311ms — far under the 30s timeout the assertion
 carries, so this is a real reading, not a wait that timed out and reported its
 own ceiling. The full run also cleared open-to-interactive (655ms) and
 annotation-create (268ms) with room, and the scroll condition (16.8ms worst
-frame gap, 0 long tasks). No residual over-budget number and no residual
-click-dispatch motion coupling to file a follow-up issue for — #1734 closes
-clean on this run.
+frame gap, 0 long tasks). No residual over-budget number to file a follow-up
+issue for — #1734 closes clean on this run. **This run recorded only the
+311ms total, not a click-dispatch/post-click-settle split** (unlike runs 1–2's
+table above), so it cannot itself support a claim about residual
+click-dispatch motion coupling one way or the other. A split does exist for
+the current (#1734) definition, just not from this run: PR #1973's own
+"Verification" body records a separate sample — `annotation-accept: 340.0ms`,
+breakdown "click-dispatch 335ms, post-click settle 5ms" (~98.5%
+click-dispatch) — noted here as corroborating context, not folded into the
+table above, and not reproducible from any tracked file (only the PR body has
+it).
 
 This document's own historical rows above (`§Harness configuration`-adjacent
 table, and "What the accept measurement actually spends") describe the OLD
