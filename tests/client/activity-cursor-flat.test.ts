@@ -310,10 +310,7 @@ describe("Y_MAP_SELECTION lifetime (#1624)", () => {
     expect(rec?.from).toBe(rec?.to);
   });
 
-  it("(c) a remote edit that shifts a lingering selection RE-STAMPS it", async () => {
-    // Pins #1991's current behaviour; when #1991 lands, remove the re-stamp
-    // caveat from the schema, both descriptions, docs/mcp-tools.md and SKILL.md
-    // in the same change.
+  it("(c) a remote edit that shifts a lingering selection does NOT re-stamp it (#1991)", async () => {
     const { ydoc } = await selectThree();
     const before = selectionRecord(ydoc) as SelectionRecord;
     const t0 = before.timestamp as number;
@@ -327,8 +324,68 @@ describe("Y_MAP_SELECTION lifetime (#1624)", () => {
     await vi.advanceTimersByTimeAsync(300);
 
     const after = selectionRecord(ydoc) as SelectionRecord;
+    // Both assertions discriminate: `from` kills a fix that suppresses the
+    // write (the offsets would go stale and `selectedText` be sliced wrong),
+    // `timestamp` kills the re-stamp.
     expect(after.from).toBe(before.from + 2);
-    expect(after.timestamp).toBeGreaterThan(t0);
+    expect(after.timestamp).toBe(t0);
+  });
+
+  it("(c2) a user selection made after a remote shift stamps now (#1991)", async () => {
+    const { ydoc, editor } = await selectThree();
+    const t0 = (selectionRecord(ydoc) as SelectionRecord).timestamp as number;
+
+    await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+    remoteChange(ydoc, (fragment) => {
+      findText(fragment, "Some text here")?.insert(0, "AB");
+    });
+    await vi.advanceTimersByTimeAsync(300);
+
+    const from = toFlatOffset(extractText(ydoc).indexOf("Some"));
+    const to = toFlatOffset(from + "Some".length);
+    editor.commands.setTextSelection({
+      from: flatOffsetToPmPos(editor.state.doc, from),
+      to: flatOffsetToPmPos(editor.state.doc, to),
+    });
+    const now = Date.now();
+    await vi.advanceTimersByTimeAsync(200);
+
+    const rec = selectionRecord(ydoc) as SelectionRecord;
+    expect(rec.selectedText).toBe("Some");
+    expect(rec.timestamp).toBe(now);
+    expect(rec.timestamp as number).toBeGreaterThan(t0);
+  });
+
+  it("(c3) a fresh local selection inside the 150ms debounce keeps its own time (#1991)", async () => {
+    const { ydoc, editor } = await selectThree();
+    const t0 = (selectionRecord(ydoc) as SelectionRecord).timestamp as number;
+
+    await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+
+    // Select span B locally; its write is still pending 50 ms later when a
+    // remote insert lands and re-arms the debounce. The published stamp must
+    // be B's, not A's — this row is what forbids assigning the stamp inside
+    // the debounce callback.
+    const from = toFlatOffset(extractText(ydoc).indexOf("Some"));
+    const to = toFlatOffset(from + "Some".length);
+    editor.commands.setTextSelection({
+      from: flatOffsetToPmPos(editor.state.doc, from),
+      to: flatOffsetToPmPos(editor.state.doc, to),
+    });
+    const t1 = Date.now();
+
+    await vi.advanceTimersByTimeAsync(50);
+    remoteChange(ydoc, (fragment) => {
+      const heading = findText(fragment, "Title");
+      expect(heading, "fixture: the heading precedes span B").not.toBeNull();
+      heading?.insert(0, "AB");
+    });
+    await vi.advanceTimersByTimeAsync(300);
+
+    const rec = selectionRecord(ydoc) as SelectionRecord;
+    expect(rec.selectedText).toBe("Some");
+    expect(rec.timestamp).toBe(t1);
+    expect(rec.timestamp).not.toBe(t0);
   });
 
   it("(d) a remote deletion of the selected text clears the selection", async () => {

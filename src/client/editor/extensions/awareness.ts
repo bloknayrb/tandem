@@ -171,6 +171,9 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
           let activityWriteTimeout: ReturnType<typeof setTimeout> | null = null;
           let selectionDebounceTimeout: ReturnType<typeof setTimeout> | null = null;
           let pendingActivity = false;
+          // #1991: the time the USER last made the non-empty selection, carried
+          // across the remote remaps that shift it.
+          let lastSelectionStamp: number | null = null;
           // #1776: `cursor` is published to MCP clients, which hold no ProseMirror
           // document — so it must leave here in the SAME flat coordinate system as
           // `Y_MAP_SELECTION` below and as annotation ranges. A raw
@@ -227,6 +230,23 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                   const truncated =
                     selectedText.length > 200 ? selectedText.slice(0, 197) + "..." : selectedText;
 
+                  // #1991: a remote change rebuilds the document and
+                  // `restoreRelativeSelection` moves a lingering selection, so
+                  // `eq` fails and this arm runs for a selection the user did
+                  // not make. The shifted offsets and the re-read text are real
+                  // and are still written; only the time is carried over.
+                  // Gated on remoteness alone — a remote edit INSIDE the span
+                  // is no more a user selection than one above it.
+                  //
+                  // Assigned here rather than in the debounce callback: a later
+                  // update() clears the pending timer, so a stamp set only at
+                  // fire time would let a fresh local selection be published
+                  // carrying the previous one's time — this defect inverted.
+                  const stampedAt = isRemoteChange
+                    ? (lastSelectionStamp ?? Date.now())
+                    : Date.now();
+                  lastSelectionStamp = stampedAt;
+
                   if (selectionDebounceTimeout) clearTimeout(selectionDebounceTimeout);
                   selectionDebounceTimeout = setTimeout(() => {
                     selectionDebounceTimeout = null;
@@ -234,7 +254,7 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                       userAwareness.set(Y_MAP_SELECTION, {
                         ...flat,
                         selectedText: truncated,
-                        timestamp: Date.now(),
+                        timestamp: stampedAt,
                       }),
                     );
                   }, 150);
