@@ -279,17 +279,22 @@ describe("Y_MAP_SELECTION lifetime (#1624)", () => {
     return ydoc.getMap(Y_MAP_USER_AWARENESS).get(Y_MAP_SELECTION) as SelectionRecord | undefined;
   }
 
+  /** Select the first occurrence of `word`, by flat offset, as the user would. */
+  function selectWord(editor: Editor, ydoc: Y.Doc, word: string): void {
+    const from = toFlatOffset(extractText(ydoc).indexOf(word));
+    const to = toFlatOffset(from + word.length);
+    editor.commands.setTextSelection({
+      from: flatOffsetToPmPos(editor.state.doc, from),
+      to: flatOffsetToPmPos(editor.state.doc, to),
+    });
+  }
+
   /** (a)'s state: `three` selected and its debounced write landed. */
   async function selectThree() {
     vi.useFakeTimers();
     vi.setSystemTime(1_000_000);
     const { ydoc, editor } = boundEditor(MARKDOWN);
-    const from = toFlatOffset(extractText(ydoc).indexOf("three"));
-    const to = toFlatOffset(from + "three".length);
-    editor.commands.setTextSelection({
-      from: flatOffsetToPmPos(editor.state.doc, from),
-      to: flatOffsetToPmPos(editor.state.doc, to),
-    });
+    selectWord(editor, ydoc, "three");
     await vi.advanceTimersByTimeAsync(200);
     return { ydoc, editor };
   }
@@ -341,12 +346,7 @@ describe("Y_MAP_SELECTION lifetime (#1624)", () => {
     });
     await vi.advanceTimersByTimeAsync(300);
 
-    const from = toFlatOffset(extractText(ydoc).indexOf("Some"));
-    const to = toFlatOffset(from + "Some".length);
-    editor.commands.setTextSelection({
-      from: flatOffsetToPmPos(editor.state.doc, from),
-      to: flatOffsetToPmPos(editor.state.doc, to),
-    });
+    selectWord(editor, ydoc, "Some");
     const now = Date.now();
     await vi.advanceTimersByTimeAsync(200);
 
@@ -366,12 +366,7 @@ describe("Y_MAP_SELECTION lifetime (#1624)", () => {
     // remote insert lands and re-arms the debounce. The published stamp must
     // be B's, not A's — this row is what forbids assigning the stamp inside
     // the debounce callback.
-    const from = toFlatOffset(extractText(ydoc).indexOf("Some"));
-    const to = toFlatOffset(from + "Some".length);
-    editor.commands.setTextSelection({
-      from: flatOffsetToPmPos(editor.state.doc, from),
-      to: flatOffsetToPmPos(editor.state.doc, to),
-    });
+    selectWord(editor, ydoc, "Some");
     const t1 = Date.now();
 
     await vi.advanceTimersByTimeAsync(50);

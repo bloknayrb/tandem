@@ -272,6 +272,8 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                 lastCursor = { doc: state.doc, pos: state.selection.from };
               }
 
+              // #1918: only a LOCAL doc change is the user's activity — a
+              // remote one must not publish `isTyping: true` for them.
               if (state.doc !== prevState.doc && !isRemoteChange) {
                 pendingActivity = true;
 
