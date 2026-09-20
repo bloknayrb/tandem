@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 /**
  * #1910 — `.claude/settings.json`'s `check-token-violation.sh` entry carries
@@ -25,9 +25,7 @@ import { describe, expect, it } from "vitest";
  * nothing here adjudicates that disagreement).
  */
 
-const SETTINGS_PATH =
-  process.env.TANDEM_SETTINGS_PATH_FOR_TEST ??
-  path.resolve(__dirname, "../../.claude/settings.json");
+const SETTINGS_PATH = path.resolve(__dirname, "../../.claude/settings.json");
 
 const HOOK_COMMAND_FRAGMENT = "check-token-violation.sh";
 
@@ -64,9 +62,13 @@ function findTokenViolationHooks(
 }
 
 describe("check-token-violation.sh stays advisory (#1910)", () => {
+  let hits: Array<{ lifecycle: string; entry: HookEntry }>;
+
+  beforeAll(() => {
+    hits = findTokenViolationHooks(loadSettings());
+  });
+
   it("appears exactly once across every hook lifecycle", () => {
-    const settings = loadSettings();
-    const hits = findTokenViolationHooks(settings);
     expect(
       hits.length,
       `expected exactly one hook entry referencing ${HOOK_COMMAND_FRAGMENT}, found ${hits.length}`,
@@ -74,15 +76,13 @@ describe("check-token-violation.sh stays advisory (#1910)", () => {
   });
 
   it("is registered under PostToolUse, not any other lifecycle", () => {
-    const settings = loadSettings();
-    const [hit] = findTokenViolationHooks(settings);
+    const [hit] = hits;
     expect(hit, "no check-token-violation.sh hook entry found").toBeDefined();
     expect(hit?.lifecycle).toBe("PostToolUse");
   });
 
   it("carries continueOnBlock: true", () => {
-    const settings = loadSettings();
-    const [hit] = findTokenViolationHooks(settings);
+    const [hit] = hits;
     expect(hit, "no check-token-violation.sh hook entry found").toBeDefined();
     expect(hit?.entry.continueOnBlock).toBe(true);
   });
