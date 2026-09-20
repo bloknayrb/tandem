@@ -68,7 +68,7 @@ central proposal was a no-op that would have shipped looking like a fix.
    draft cited `:463`, which is an unrelated `FILE_NOT_FOUND`). Every proposed spec asserted the internal
    thrown code, so none could have passed even after the fix — and `FORMAT_ERROR` would tell an AI
    caller to retry the *document* format when the *path* was rejected. Also
-   `PathRejectedError` (`apply.ts:284-293`) carries no `.code` at all, so both catch chains would
+   `PathRejectedError` (`apply.ts:327-336`) carries no `.code` at all, so both catch chains would
    have let it escape to a 500.
 6. The four-row table's line citations were drifted by 5–8 lines throughout.
 
