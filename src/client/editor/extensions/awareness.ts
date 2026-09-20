@@ -183,6 +183,20 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
             update(view, prevState) {
               const { state } = view;
 
+              // #1918: a plugin VIEW has no transaction, so remoteness is read
+              // off the ySync plugin state rather than `tr.getMeta` the way
+              // plugin 1 does at the top of this file. y-tiptap recomputes both
+              // flags on every transaction, so neither is sticky.
+              // `isUndoRedoOperation` is set only when the Y transaction origin
+              // is THIS tab's `Y.UndoManager` — a user action that must keep
+              // counting as activity. Another tab's undo arrives as an ordinary
+              // provider update and is remote.
+              const ySync = ySyncPluginKey.getState(state) as
+                | { isChangeOrigin?: boolean; isUndoRedoOperation?: boolean }
+                | undefined;
+              const isRemoteChange =
+                ySync?.isChangeOrigin === true && ySync.isUndoRedoOperation !== true;
+
               // Broadcast selection changes (convert PM positions to flat text offsets)
               // Only when selection actually moved, not on every transaction
               if (!state.selection.eq(prevState.selection)) {
@@ -230,7 +244,15 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
               // Broadcast typing activity — debounce the Y.Map write to avoid
               // network sync on every keystroke. Batch rapid edits into one write.
               if (state.doc !== prevState.doc) {
+                // Refreshed on EVERY doc change, remote included (#1918): a
+                // remote edit landing inside a window the user's own keystroke
+                // armed must still move this, or the pending write publishes a
+                // flat offset computed against the pre-remote document.
+                // Refreshing a local variable is neither a write nor a timer.
                 lastCursor = { doc: state.doc, pos: state.selection.from };
+              }
+
+              if (state.doc !== prevState.doc && !isRemoteChange) {
                 pendingActivity = true;
 
                 // Debounce the "typing" write (200ms to batch rapid keystrokes)

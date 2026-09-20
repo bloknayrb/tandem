@@ -71,20 +71,45 @@ afterEach(() => {
   for (const editor of live.splice(0)) editor.destroy();
 });
 
-describe("activity.cursor is a flat text offset (#1776)", () => {
-  /**
-   * One `Z` inserted immediately before `three`. Typed anywhere else, (1) and
-   * (3) are unsatisfiable.
-   */
-  function typeZBeforeThree() {
-    const { ydoc, editor, activity } = boundEditor(MARKDOWN);
-    const target = toFlatOffset(extractText(ydoc).indexOf("three"));
-    editor.commands.setTextSelection(flatOffsetToPmPos(editor.state.doc, target));
-    vi.useFakeTimers();
-    editor.commands.insertContent("Z");
-    return { ydoc, editor, activity };
+/** The first Y.XmlText under `node` whose content contains `needle`. */
+function findText(node: Y.XmlFragment | Y.XmlElement, needle: string): Y.XmlText | null {
+  for (const child of node.toArray()) {
+    if (child instanceof Y.XmlText) {
+      if (child.toString().includes(needle)) return child;
+    } else if (child instanceof Y.XmlElement) {
+      const hit = findText(child, needle);
+      if (hit) return hit;
+    }
   }
+  return null;
+}
 
+/**
+ * Apply `mutate` on a peer doc and deliver the delta, as a server edit arrives.
+ * Module-scope since #1918 — both the activity and the selection blocks need it.
+ */
+function remoteChange(ydoc: Y.Doc, mutate: (fragment: Y.XmlFragment) => void): void {
+  const peer = new Y.Doc();
+  Y.applyUpdate(peer, Y.encodeStateAsUpdate(ydoc));
+  mutate(peer.getXmlFragment("default"));
+  Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(peer, Y.encodeStateVector(ydoc)));
+  peer.destroy();
+}
+
+/**
+ * One `Z` inserted immediately before `three`. Typed anywhere else, (1) and
+ * (3) are unsatisfiable. Module-scope since #1918, which reuses it.
+ */
+function typeZBeforeThree() {
+  const { ydoc, editor, activity } = boundEditor(MARKDOWN);
+  const target = toFlatOffset(extractText(ydoc).indexOf("three"));
+  editor.commands.setTextSelection(flatOffsetToPmPos(editor.state.doc, target));
+  vi.useFakeTimers();
+  editor.commands.insertContent("Z");
+  return { ydoc, editor, activity };
+}
+
+describe("activity.cursor is a flat text offset (#1776)", () => {
   it("(1) the fixture still discriminates: PM position !== flat offset", () => {
     const { editor } = typeZBeforeThree();
     // `editor.state.selection.from` is a ProseMirror position; `caretFlat` is
@@ -169,6 +194,78 @@ describe("activity.cursor is a flat text offset (#1776)", () => {
 });
 
 /**
+ * #1918: `Y_MAP_ACTIVITY` describes what the USER is doing. A remote y-tiptap
+ * transaction (`tandem_edit`, initial ySync, another tab's undo) replaces
+ * `state.doc`, and the old `state.doc !== prevState.doc` gate published
+ * `isTyping: true` with a fresh `lastEdit` for an edit the user did not make.
+ */
+describe("activity is not published for a remote change (#1918)", () => {
+  /** A remote insert into the leading paragraph, above everything else. */
+  function remoteInsert(ydoc: Y.Doc): void {
+    remoteChange(ydoc, (fragment) => {
+      const leading = findText(fragment, "Some text here");
+      expect(leading, "fixture: the leading paragraph exists").not.toBeNull();
+      leading?.insert(0, "AB");
+    });
+  }
+
+  it("(6) a remote insert writes no activity record at all", async () => {
+    const { ydoc, activity } = boundEditor(MARKDOWN);
+    vi.useFakeTimers();
+
+    remoteInsert(ydoc);
+    await vi.advanceTimersByTimeAsync(TYPING_DEBOUNCE + 250);
+
+    // Not merely `isTyping: false`: any write costs a fresh `lastEdit`, which
+    // `tandem_getActivity` reports as `active: true`.
+    expect(activity()).toBeUndefined();
+  });
+
+  it("(7) a local keystroke still publishes", async () => {
+    const { editor, activity } = typeZBeforeThree();
+    await vi.advanceTimersByTimeAsync(250);
+
+    const written = activity();
+    expect(written?.isTyping).toBe(true);
+    expect(written?.cursor).toBe(caretFlat(editor));
+  });
+
+  it("(8) a remote change after a local edit does not extend the record", async () => {
+    const { ydoc, activity } = typeZBeforeThree();
+    // Past TYPING_DEBOUNCE so BOTH local writes have landed and the record is
+    // quiescent. Capturing at +250 instead reds even with a correct guard,
+    // because the typing-clear timer overwrites it — that is the ordering,
+    // never the guard.
+    await vi.advanceTimersByTimeAsync(TYPING_DEBOUNCE + 250);
+    const captured = { ...(activity() as object) };
+
+    await vi.advanceTimersByTimeAsync(5000);
+    remoteInsert(ydoc);
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(activity()).toStrictEqual(captured);
+  });
+
+  it("(9) a local undo still counts as the user", async () => {
+    const { editor, activity } = typeZBeforeThree();
+    await vi.advanceTimersByTimeAsync(TYPING_DEBOUNCE + 50);
+    const before = activity()?.lastEdit as number;
+    expect(typeof before).toBe("number");
+
+    // Routed through the Y UndoManager (StarterKit's own history is off), so
+    // it arrives as a change-origin transaction with `isUndoRedoOperation`.
+    // This row is the only one that kills a guard without that term.
+    await vi.advanceTimersByTimeAsync(10);
+    editor.commands.undo();
+    await vi.advanceTimersByTimeAsync(250);
+
+    const after = activity();
+    expect(after?.isTyping).toBe(true);
+    expect(after?.lastEdit).toBeGreaterThan(before);
+  });
+});
+
+/**
  * What `tandem_checkInbox`'s `activity.selectedText` / `activity.selectionAt`
  * are documented to mean (#1624) — the schema `.describe`, both tool
  * descriptions, docs/mcp-tools.md and skills/tandem/SKILL.md all rest on these
@@ -180,28 +277,6 @@ describe("Y_MAP_SELECTION lifetime (#1624)", () => {
 
   function selectionRecord(ydoc: Y.Doc): SelectionRecord | undefined {
     return ydoc.getMap(Y_MAP_USER_AWARENESS).get(Y_MAP_SELECTION) as SelectionRecord | undefined;
-  }
-
-  /** The first Y.XmlText under `node` whose content contains `needle`. */
-  function findText(node: Y.XmlFragment | Y.XmlElement, needle: string): Y.XmlText | null {
-    for (const child of node.toArray()) {
-      if (child instanceof Y.XmlText) {
-        if (child.toString().includes(needle)) return child;
-      } else if (child instanceof Y.XmlElement) {
-        const hit = findText(child, needle);
-        if (hit) return hit;
-      }
-    }
-    return null;
-  }
-
-  /** Apply `mutate` on a peer doc and deliver the delta, as a server edit arrives. */
-  function remoteChange(ydoc: Y.Doc, mutate: (fragment: Y.XmlFragment) => void): void {
-    const peer = new Y.Doc();
-    Y.applyUpdate(peer, Y.encodeStateAsUpdate(ydoc));
-    mutate(peer.getXmlFragment("default"));
-    Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(peer, Y.encodeStateVector(ydoc)));
-    peer.destroy();
   }
 
   /** (a)'s state: `three` selected and its debounced write landed. */
