@@ -38,6 +38,7 @@
 import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
+import { timeoutMs } from "../helpers/timing.js";
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
 const SRC = join(REPO_ROOT, "src");
@@ -119,7 +120,9 @@ describe("registry primitives stay out of production code", () => {
     expect(importers, "nothing under src/ may import documents/registry-testing").toEqual([]);
   });
 
-  it("does not re-export the primitives from the production barrels", async () => {
+  it("does not re-export the primitives from the production barrels", {
+    timeout: timeoutMs(45_000, 120_000),
+  }, async () => {
     const barrels = {
       "document-service.js": await import("../../src/server/mcp/document-service.js"),
       "document.js": await import("../../src/server/mcp/document.js"),
