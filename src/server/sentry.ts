@@ -99,7 +99,10 @@ export function scrub(input: string): string {
  * cookies and request bodies, not filenames or hostnames.
  *
  * The WebView (`src/client/sentry.ts`) and the Rust shell
- * (`src-tauri/src/sentry_reporting.rs`) still ship both — tracked as #2023.
+ * (`src-tauri/src/sentry_reporting.rs`) shipped both until #2023; all three
+ * hooks now delete `server_name` and redact exception frame paths. The hooks
+ * still differ on their OTHER surfaces, deliberately — `request.url` and
+ * breadcrumb messages are WebView-only.
  */
 export function scrubEvent(event: ErrorEvent): ErrorEvent {
   if (event.message) event.message = scrub(event.message);

@@ -31,6 +31,8 @@
 //!
 //! A `before_send` hook scrubs events before they leave the process:
 //! - absolute home-directory paths are rewritten to `~/…`
+//! - `event.server_name` — the machine's hostname — is cleared outright (#2023)
+//! - every exception stack frame's `filename` / `abs_path` is redacted (#2023)
 //! - the DSN is never logged
 //! Document content and annotation bodies never reach this layer — they live in
 //! the sidecar/WebView and are not attached to Rust panic events. The WebView
@@ -137,21 +139,61 @@ pub fn init() -> Option<SentryGuard> {
 }
 
 /// Mutate an outgoing Sentry event in place to strip personally-identifying
-/// data. Currently: rewrite the user's home directory to `~` everywhere it
-/// appears in the event's stringified surfaces. Pure-ish (reads `$HOME` once);
-/// unit-tested via [`redact_home`].
+/// data: clear the machine's hostname, and rewrite the user's home directory to
+/// `~` everywhere it appears in the event's stringified surfaces. Mirrors the
+/// sidecar's `scrubEvent` (`src/server/sentry.ts`).
+///
+/// **The order here is the contract (#2023).** Clearing `server_name` is not a
+/// redaction and needs no home directory, so it happens BEFORE the
+/// [`home_dir_string`] lookup that the rest of the scrubbing early-returns on.
+/// Leaving it inside [`scrub_event_with_home`] alone would make hostname
+/// removal conditional on `dirs::home_dir()` succeeding — on a host where it
+/// yields `None` the hostname would still egress, and no inner-function test
+/// could see it.
 fn scrub_event(event: &mut sentry::protocol::Event<'static>) {
+    event.server_name = None;
     let Some(home) = home_dir_string() else { return };
+    scrub_event_with_home(event, &home);
+}
+
+/// The pure half of [`scrub_event`], taking the home directory as an argument
+/// so it is unit-testable without touching the process environment — the same
+/// shape [`redact_home`] already has.
+///
+/// Exception stacktraces only, exactly like the sidecar hook: the panic
+/// integration puts the backtrace on the exception, and nothing here registers
+/// a handler that would populate `event.stacktrace` or `event.threads`.
+fn scrub_event_with_home(event: &mut sentry::protocol::Event<'static>, home: &str) {
+    // Idempotent with the caller's own clear, so a test driving this function
+    // still pins the hostname removal.
+    event.server_name = None;
 
     // Scrub the top-level message and any exception values/types — these are
     // the surfaces most likely to embed an absolute path (panic payloads,
     // file-not-found messages, etc.).
     if let Some(msg) = event.message.take() {
-        event.message = Some(redact_home(&msg, &home).into_owned());
+        event.message = Some(redact_home(&msg, home).into_owned());
     }
     for exception in event.exception.values.iter_mut() {
         if let Some(value) = exception.value.take() {
-            exception.value = Some(redact_home(&value, &home).into_owned());
+            exception.value = Some(redact_home(&value, home).into_owned());
+        }
+        if let Some(stacktrace) = exception.stacktrace.as_mut() {
+            scrub_frames(stacktrace, home);
+        }
+    }
+}
+
+/// Redact the home directory out of every frame path in one stacktrace. In a
+/// source-run or dev build `filename` and `abs_path` are absolute paths under
+/// `$HOME`; both are scrubbed so whichever the runtime populates is covered.
+fn scrub_frames(stacktrace: &mut sentry::protocol::Stacktrace, home: &str) {
+    for frame in stacktrace.frames.iter_mut() {
+        if let Some(filename) = frame.filename.take() {
+            frame.filename = Some(redact_home(&filename, home).into_owned());
+        }
+        if let Some(abs_path) = frame.abs_path.take() {
+            frame.abs_path = Some(redact_home(&abs_path, home).into_owned());
         }
     }
 }
@@ -216,5 +258,70 @@ mod tests {
         let out = redact_home("/home/alice/x", "");
         assert!(matches!(out, Cow::Borrowed(_)));
         assert_eq!(out, "/home/alice/x");
+    }
+
+    // ---- #2023: server_name and stack-frame paths ----
+
+    fn event_with_frame(filename: &str, abs_path: &str) -> sentry::protocol::Event<'static> {
+        let frame = sentry::protocol::Frame {
+            filename: Some(filename.to_string()),
+            abs_path: Some(abs_path.to_string()),
+            ..Default::default()
+        };
+        let exception = sentry::protocol::Exception {
+            ty: "panic".into(),
+            value: Some("boom".into()),
+            stacktrace: Some(sentry::protocol::Stacktrace {
+                frames: vec![frame],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        sentry::protocol::Event {
+            exception: vec![exception].into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn scrub_event_with_home_clears_server_name() {
+        let mut event = sentry::protocol::Event {
+            server_name: Some("build-box".into()),
+            ..Default::default()
+        };
+        scrub_event_with_home(&mut event, "/home/alice");
+        assert_eq!(event.server_name, None);
+    }
+
+    #[test]
+    fn scrub_event_with_home_redacts_frame_paths() {
+        let mut event = event_with_frame("/home/alice/app/src/x.rs", "/home/alice/app/src/x.rs");
+        scrub_event_with_home(&mut event, "/home/alice");
+
+        let frame = &event.exception.values[0].stacktrace.as_ref().unwrap().frames[0];
+        assert_eq!(frame.filename.as_deref(), Some("~/app/src/x.rs"));
+        assert_eq!(frame.abs_path.as_deref(), Some("~/app/src/x.rs"));
+    }
+
+    #[test]
+    fn scrub_event_with_home_tolerates_an_empty_event() {
+        let mut event = sentry::protocol::Event::default();
+        scrub_event_with_home(&mut event, "/home/alice");
+        assert!(event.exception.values.is_empty());
+        assert_eq!(event.message, None);
+    }
+
+    /// The hoist: the outer hook clears the hostname BEFORE the home-directory
+    /// lookup it early-returns on, so a host where `dirs::home_dir()` yields
+    /// `None` still gets the hostname removed. Every spec above drives the
+    /// inner function and cannot see that return.
+    #[test]
+    fn scrub_event_clears_server_name_without_a_home_dir() {
+        let mut event = sentry::protocol::Event {
+            server_name: Some("build-box".into()),
+            ..Default::default()
+        };
+        scrub_event(&mut event);
+        assert_eq!(event.server_name, None);
     }
 }

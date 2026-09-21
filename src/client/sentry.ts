@@ -28,6 +28,9 @@
  * Even though the operator opted in, we scrub aggressively before anything
  * leaves the WebView:
  * - absolute home-dir paths in messages → `~/…` (mirrors the Rust scrubber)
+ * - `event.server_name` — the machine's hostname — is deleted outright (#2023)
+ * - every exception stack frame's `filename` / `abs_path` is redacted the same
+ *   way messages are (#2023)
  * - request/console breadcrumbs that could contain document content or API
  *   keys are dropped or redacted
  * - `sendDefaultPii` is left off
@@ -45,6 +48,55 @@ let sentry: typeof SentryBrowser | null = null;
 /** True inside the Tauri WebView (where the IPC transport is available). */
 function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+/**
+ * Strip personally-identifying data from an outgoing WebView event, in place.
+ *
+ * A named function passed to `Sentry.init` **by reference** rather than an
+ * inline arrow, so a unit test can drive exactly what the hook does — the
+ * sidecar's `scrubEvent` (`src/server/sentry.ts`) is shaped the same way for
+ * the same reason.
+ *
+ * Five surfaces. The first three are original; the last two are #2023, which
+ * found this hook and the Rust shell's shipping them untouched long after the
+ * sidecar stopped:
+ *
+ *  - `event.message` and each `exception.values[].value`.
+ *  - `request.url` (scrubbed) and `request.data` (dropped outright — query
+ *    strings and bodies can carry document content). WebView-only; the sidecar
+ *    has no request surface.
+ *  - **`event.server_name`** — the machine's HOSTNAME. Nothing here sets it, so
+ *    the SDK's own default shipped on every event. Deleted rather than
+ *    redacted: no scrubbed form of a hostname is useful to us.
+ *  - each exception stack frame's **`filename`** and **`abs_path`**, which in a
+ *    source-run or dev build are absolute paths under `$HOME`.
+ *
+ * Frames are read off `event.exception.values[].stacktrace` only. That is
+ * scoping, not an oversight: `@sentry/browser` populates neither
+ * `event.stacktrace` nor `event.threads`.
+ *
+ * `scrubText` rather than `redactPaths` alone, because it composes the path and
+ * secret redactions and a bundled-asset frame path can carry a token in a query
+ * string. `sendDefaultPii: false` covers none of this: it governs IPs, cookies
+ * and request bodies, not filenames or hostnames.
+ */
+function scrubEvent(event: SentryBrowser.ErrorEvent): SentryBrowser.ErrorEvent {
+  if (event.message) event.message = scrubText(event.message);
+  delete event.server_name;
+  for (const exception of event.exception?.values ?? []) {
+    if (exception.value) exception.value = scrubText(exception.value);
+    for (const frame of exception.stacktrace?.frames ?? []) {
+      if (frame.filename) frame.filename = scrubText(frame.filename);
+      if (frame.abs_path) frame.abs_path = scrubText(frame.abs_path);
+    }
+  }
+  // Drop request bodies / query strings — these can carry doc content.
+  if (event.request) {
+    event.request.data = undefined;
+    if (event.request.url) event.request.url = scrubText(event.request.url);
+  }
+  return event;
 }
 
 /**
@@ -78,18 +130,8 @@ export async function initCrashReporting(): Promise<void> {
       // unset), the IPC command is unregistered and events are dropped by the
       // transport — a harmless no-op, matching the opt-in posture.
       sendDefaultPii: false,
-      beforeSend: (event) => {
-        if (event.message) event.message = scrubText(event.message);
-        for (const exception of event.exception?.values ?? []) {
-          if (exception.value) exception.value = scrubText(exception.value);
-        }
-        // Drop request bodies / query strings — these can carry doc content.
-        if (event.request) {
-          event.request.data = undefined;
-          if (event.request.url) event.request.url = scrubText(event.request.url);
-        }
-        return event;
-      },
+      // By reference, not inline — see `scrubEvent`.
+      beforeSend: scrubEvent,
       beforeBreadcrumb: (breadcrumb) => {
         // `console`/`fetch`/`xhr` breadcrumbs can capture document text or auth
         // headers. Scrub their messages and drop their data payloads.
@@ -149,4 +191,4 @@ export function reportError(error: unknown, context?: Record<string, unknown>): 
  * which until then held byte-identical copies; `scrub` stays named here so the
  * existing tests keep their entry point.
  */
-export const __test = { scrub: scrubText, redactSecrets, redactPaths };
+export const __test = { scrub: scrubText, redactSecrets, redactPaths, scrubEvent };
