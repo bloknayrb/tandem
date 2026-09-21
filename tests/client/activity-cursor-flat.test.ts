@@ -230,8 +230,17 @@ describe("activity is not published for a remote change (#1918)", () => {
     expect(written?.cursor).toBe(caretFlat(editor));
   });
 
-  it("(8) a remote change after a local edit does not extend the record", async () => {
-    const { ydoc, activity } = typeZBeforeThree();
+  /**
+   * The remote change must not make the user look active — and must not leave
+   * the published `cursor` behind either. A remote insert above the caret
+   * shifts the flat coordinate system the last write was expressed in, so an
+   * untouched `cursor` would point two characters short of the caret in the
+   * text every MCP client now reads, and it is Claude's own `tandem_edit` that
+   * created the skew. Both halves in one `toStrictEqual`: `cursor` moves by
+   * exactly the insert's width, every other key is carried over verbatim.
+   */
+  it("(8) a remote change refreshes the cursor without extending the record", async () => {
+    const { ydoc, editor, activity } = typeZBeforeThree();
     // Past TYPING_DEBOUNCE so BOTH local writes have landed and the record is
     // quiescent. Capturing at +250 instead reds even with a correct guard,
     // because the typing-clear timer overwrites it — that is the ordering,
@@ -243,7 +252,43 @@ describe("activity is not published for a remote change (#1918)", () => {
     remoteInsert(ydoc);
     await vi.advanceTimersByTimeAsync(250);
 
-    expect(activity()).toStrictEqual(captured);
+    expect(activity()).toStrictEqual({
+      ...captured,
+      cursor: (captured as { cursor: number }).cursor + 2,
+    });
+    // Independently of the arithmetic: the published offset is where the caret
+    // actually is in the post-remote document.
+    expect(activity()?.cursor).toBe(caretFlat(editor));
+  });
+
+  it("(8b) a remote change mints no record when there is none", async () => {
+    // The refresh in (8) merges into an EXISTING record. With no local
+    // activity to carry over, silence is still the only honest answer — (6)
+    // with a longer window, so a refresh that mints cannot hide behind it.
+    const { ydoc, activity } = boundEditor(MARKDOWN);
+    vi.useFakeTimers();
+
+    remoteInsert(ydoc);
+    await vi.advanceTimersByTimeAsync(TYPING_DEBOUNCE + 2000);
+
+    expect(activity()).toBeUndefined();
+  });
+
+  it("(10) a remote edit inside the armed window moves the pending cursor", async () => {
+    // The `lastCursor` refresh sits deliberately OUTSIDE the `!isRemoteChange`
+    // guard, and nothing else pins it: fold it into the guarded block and the
+    // 200 ms write below converts a remapped caret against the PRE-remote doc.
+    // The assertion lands at +250, before the remote-cursor refresh's own
+    // 200 ms timer (armed at +100) could paper over it.
+    const { ydoc, editor, activity } = typeZBeforeThree();
+    await vi.advanceTimersByTimeAsync(100);
+    remoteInsert(ydoc);
+    await vi.advanceTimersByTimeAsync(150);
+
+    const written = activity();
+    expect(written?.isTyping).toBe(true);
+    expect(written?.cursor).toBe(caretFlat(editor));
+    expect(extractText(ydoc).slice(written?.cursor as number)).toMatch(/^three/);
   });
 
   it("(9) a local undo still counts as the user", async () => {
@@ -381,6 +426,35 @@ describe("Y_MAP_SELECTION lifetime (#1624)", () => {
     expect(rec.selectedText).toBe("Some");
     expect(rec.timestamp).toBe(t1);
     expect(rec.timestamp).not.toBe(t0);
+  });
+
+  it("(c4) a local undo that shifts a lingering selection does NOT re-stamp it (#1991)", async () => {
+    // The undo path is the one #1918's `isUndoRedoOperation` carve-out leaks
+    // into: this tab's undo IS the user editing, so it must keep counting as
+    // activity, but it moves a lingering selection through
+    // `restoreRelativeSelection` exactly as a remote edit does. Stamping it
+    // would tell Claude the user selected this text just now.
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    const { ydoc, editor } = boundEditor(MARKDOWN);
+
+    // A local edit ABOVE the selection, so undoing it shifts the selection.
+    const editAt = toFlatOffset(extractText(ydoc).indexOf("Some"));
+    editor.commands.setTextSelection(flatOffsetToPmPos(editor.state.doc, editAt));
+    editor.commands.insertContent("AB");
+    await vi.advanceTimersByTimeAsync(TYPING_DEBOUNCE + 250);
+
+    selectWord(editor, ydoc, "three");
+    await vi.advanceTimersByTimeAsync(200);
+    const before = selectionRecord(ydoc) as SelectionRecord;
+    expect(before.selectedText).toBe("three");
+
+    await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+    editor.commands.undo();
+    await vi.advanceTimersByTimeAsync(300);
+
+    const after = selectionRecord(ydoc) as SelectionRecord;
+    expect(after.timestamp).toBe(before.timestamp);
   });
 
   it("(d) a remote deletion of the selected text clears the selection", async () => {

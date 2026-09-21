@@ -356,6 +356,9 @@ export function registerAwarenessTools(server: McpServer): void {
       "annotation ranges. It is a proximity hint, not an edit anchor: only a document change " +
       "triggers a write, the last of those publishes wherever the caret is by then, and it " +
       "carries no snapshot — so take ranges from tandem_resolveRange or tandem_search. " +
+      "An edit you make yourself shifts the user's caret too, so it refreshes `cursor` in " +
+      "place; `isTyping` and `lastEdit` stay as the user left them and never report your " +
+      "own edit as their activity. " +
       "Returns presence only; " +
       "it does not return document content or pending user messages (use tandem_checkInbox " +
       "for those).",
