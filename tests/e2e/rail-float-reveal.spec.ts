@@ -137,10 +137,35 @@ test("a chat reveal opened DURING the retreat cancels it (#2014)", async ({ page
 
   await page.mouse.move(8, 400);
   await page.waitForTimeout(HOVER_LEAVE_MS + 80);
-  await expect(shell).toHaveClass(/\bfloat-closing\b/);
-
-  // Inside the closing window: the chat shortcut's own path (`focusChat`).
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent("tandem:focus-chat")));
+  // The retreat window is only FLOAT_CLOSE_MS = 300 ms wide, and every
+  // Playwright round trip eats into it. Checking `float-closing` from the
+  // driver and THEN dispatching in a second round trip can land the dispatch
+  // after `closeTimer` has already cleared the class on a loaded runner --
+  // every later sample then reads `{closing: false, floating: true}` and the
+  // spec passes with `cancelFloatClose("right")` deleted from `focusChat`.
+  // So the check, the dispatch and the first sample all happen IN PAGE, in a
+  // single round trip: the closing phase is asserted immediately before the
+  // event, and the class re-read two frames later, after Svelte has flushed.
+  // Without the fix that re-read is still `closing: true`.
+  const afterReveal = await page.evaluate(async (sel) => {
+    const el = document.querySelector(sel);
+    const closingBefore = !!el?.classList.contains("float-closing");
+    // Inside the closing window: the chat shortcut's own path (`focusChat`).
+    window.dispatchEvent(new CustomEvent("tandem:focus-chat"));
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve(null))),
+    );
+    return {
+      closingBefore,
+      closing: !!el?.classList.contains("float-closing"),
+      floating: !!el?.classList.contains("floating"),
+    };
+  }, SHELL);
+  // The retreat really was running when the reveal opened -- otherwise the
+  // assertions below prove nothing.
+  expect(afterReveal.closingBefore).toBe(true);
+  expect(afterReveal.closing).toBe(false);
+  expect(afterReveal.floating).toBe(true);
 
   // Sampled across the rest of the window rather than polled, for the reason
   // the first test states: a poll for `float-closing === false` passes the
