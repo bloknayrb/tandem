@@ -115,7 +115,16 @@ one wave are file-disjoint (checked against the ledgers); each is its own `Workf
 | 12 | #1626 reply surfaces | #1626 (both parts) | M [ui] | **Scheduled 2026-09-16 by decision.** One issue, two parts. Part 1 — annotation bodies and replies render **raw** markdown; Bryan chose **(a) convert to formatted text**. Part 2 — a reply cannot carry a `suggestedText` at all; "schedule it". **#1629 is CLOSED and discharged**, so nothing blocks part 2. G14 (wave 9, #2021) already took the *chat* markdown half as Refs; this is the annotation/reply surface, which it did not touch. |
 | 12 | #2038 store-lock recovery | #2038 | S | **Filed 2026-09-16 out of decision 7 (refuse over grant).** A reused PID after a reboot leaves the annotation store read-only with no in-app recovery, because `process.kill(pid, 0)` reports alive for an unrelated process. `startedAtMs` is already written (`lockfile.ts:25`) and already read (`:44`) and **compared nowhere** — the missing comparison is the fix, not new machinery. |
 | 12 | #2040 harness migration remainder | #2040 | M | The ten files #1689's scope cut left, plus `mcp-stdio-ports` named as a permanent non-migration so nobody chases it. **Inherits the guarded-`afterEach` pattern #2044 wrote into the harness doc comment** — without it each migration re-introduces the `close is not a function` mask over the real failure. |
-| — | NOT scheduled, with reasons | #2041 #2037 #2039 | — | **#2041** (Windows reaper flush window) — **deferred to post-v1.0** by decision 6 and labelled `needs-human-evidence`; not scheduling it IS the decision, not a gap. **#2037** (`tandem_applyChanges` re-reads a possibly-swapped Y.Doc) — awaiting Bryan's scheduling call; the only member of the #1657 family on a live path, and unowned. **#2039** (a mid-turn swap suppresses terminal effects but does not abort the turn) — awaiting Bryan's design call, which is a product decision rather than a code choice. |
+| 13 | W13g docs and test-tooling drift | #2005 #1974 #1910 (+#1911 Refs) | S | Fresh-triage wave (2026-09-20): every row here came from re-reading all open issues against the tree, not from the rows above. |
+| 13 | W13a activity awareness honesty | #1918 #1991 #1961 (+#1624 Refs) | M [crdt] | Skill bump 25 to 26. Owns `docs/mcp-tools.md` until merged. |
+| 13 | W13m local-model abort on doc swap | #2039 | M [crdt, annotation-model] | Bryan decided 2026-09-17: abort, do not re-resolve. Stays dark behind `BYO_MODELS_ENABLED`. #2070 and #2069 explicitly excluded. |
+| 13 | W13s security | #2037 #2023 | M [security, crdt] rust | #2037 is the one ADR-052 exception: smallest fix, no `docx-apply.ts` refactor. Moves CLAUDE.md's open-findings count four to three. |
+| 13 | W13v server and CLI small fixes | #2003 #2008 #1890 #1995 #1938 (+#1980 Refs) | M [crdt, security] | After W13a (`docs/mcp-tools.md`). |
+| 13 | W13c client rail, pulse, outline, tutorial | #2014 #1963 #2002 #1965 | M [svelte, crdt] e2e |  |
+| 13 | W13t settings | #1964 #1946 | M [svelte, security] e2e | After W13c (one e2e group at a time). |
+| 13 | W13r sidecar toast and rust residue | #1970 #1861 #1959 (+#630 Refs) | M [security, svelte] rust | #1861 was open only on the #1970 carve-out, so one fix closes both. |
+| 13 | W13k test and tooling lows residue | #1825 (Refs) | S [annotation-model] | Re-verify four residuals before touching any. |
+| — | NOT scheduled, with reasons | #2041 | — | **#2041** (Windows reaper flush window) — **deferred to post-v1.0** by decision 6 and labelled `needs-human-evidence`; not scheduling it IS the decision, not a gap. **#2037** and **#2039** were listed here until wave 13: #2039 was decided by Bryan on 2026-09-17 (abort the turn) and shipped as W13m; #2037 was taken as W13s under the unattended-wave instruction as a live data-integrity defect with a one-predicate fix. Both are closed. |
 | 11+ | decision rounds | the ~30 DECIDE issues, 4 at a time | per item | |
 
 ## Workflow architecture
@@ -485,6 +494,15 @@ literal in `tests/skill-instruction-contract.test.ts` moves with it). `Hooks arm
 | 12 | #1626 reply surfaces | #1626 | `fix/reply-surfaces-1626` | #2052 | 25 | armed | merged | Merged 2026-09-16 (`bc965fbf`); closes #1626. Run `wf_a02d9eaa-418`, probe ports 5004/5005; 22 agents, 2 plan-review rounds, 2 PR-review rounds. **Part 1 was verified as already shipped and deliberately NOT re-implemented** — G14 (wave 9, #2021) landed the shared renderer, and `CommentThread` renders reply text through `AnnotationBody` into it, so no second copy exists and `AnnotationCard`'s `br { display: none }` density rule is untouched (its removal was asserted by #1639's acceptance item 3 and measured FALSE). **Part 2 shipped:** `tandem_annotationReply` takes an optional `suggestedText` proposed over the **parent's** range; replies gain no range of their own, which is what keeps the change small. **Declared in three places, and the third is not optional bookkeeping:** the wire type, `AnnotationReplyRecordSchemaV1` (capped per field at the existing `REPLY_TEXT_MAX`, on #1295 L3's rule that write-time and load-time limits must be the same number), and `VisibleReplySchema` — `collectRepliesForAnnotation` ships the RAW record and the strip-mode parse drops undeclared keys, so without the third Claude could write a proposal it could not read back. **Critical Rule 6 gained a THIRD and a FOURTH carrier.** The reply seam's replacement arm and the EDIT path (`editPendingAnnotation`, reached by `tandem_editAnnotation`'s `newText`) share ONE screen, `screenSuggestionSpan`, because the option set IS the rule and two copies are two chances to drift on it. **It screens the LIVE span** — `refreshRange` first, stored offsets only when the anchor is dead — because at accept time the client resolves through `relRange`, so screening the stored range checks a span Accept does not rewrite. **The edit path is the carrier the review FOUND OPEN:** the plain, endpoint-only arm legally accepts a comment whose INTERIOR holds a prefix, and an edit can then hang a replacement on exactly that span, which Accept replaces verbatim while `snapshotContradicts` cannot object. **`anchoredRange`'s fourth argument is `undefined`, never the parent's `textSnapshot`** — the staleness gate compares by exact equality while `captureSnapshot` caps at SNAPSHOT_CAP (200), so passing it would refuse every suggestion on a record spanning more than 200 characters, on an UNTOUCHED document; it has its own test case. **The refusal carries a `cause` and deliberately no offsets:** `anchoredRange` fails five ways here and the flat arm asserted a heading for all of them, so a parent whose paragraph the user had deleted was refused with a heading it did not have and a remedy no retry could satisfy — an unbounded retry loop on a false diagnosis is worse than a refusal. **TWO SPEC DEVIATIONS, both improvements found by running the spec rather than reading it.** (1) The screen is gated on the replacement arm AND a pending comment: ungated, a Claude-authored HIGHLIGHT answered the range arm instead of `not-repliable`, and a RESOLVED parent would have answered it instead of `not-pending` — the range layer speaking for a record another arm already refuses, which is the masking hazard `replyForClaude`'s own docblock names. (2) The spec's fourth test case is INVERTED, deliberately and with the reason in the file: "a parent a later edit MOVES onto a prefix's interior" is **not constructible as a discriminator**, because a range only gains a prefix when a heading block is inserted inside its span and the stored offsets then cover part of that prefix too, so both screens refuse and nothing is distinguished. The shipped mirror does discriminate — a parent over "Head", then four characters inserted at document start: the live span is still exactly "Head" and accepts, while the stored span reinterpreted against the new text spans the newline plus the prefix and would refuse, so an implementation screening the stored range turns it red. **The seam is untouched:** `addUserReply` gains nothing and stays unguarded (#1000), the guard keeps its exact note-or-non-outbound-comment shape, `writeReply` still has three occurrences, and `annotation-reply-seam.test.ts` is unmodified and green. `/api/annotation-reply` gains nothing because it calls `addUserReply`, so **Critical Rule 9's pairing is met by the twin being INCAPABLE rather than by a second gate** — worth stating, because "no new gate" otherwise reads as an omission. **Every contract surface moved together:** `data-testid` additions only (two, zero deletions, `SuggestionCard.svelte` untouched so its two diff testids cannot move); the shipped skill 24 → 25 with BOTH pinned literals, `version` and `bodyHash`, in one commit, since moving one ships a body edit nobody receives; `CLAUDE.md`'s Critical Rule 6 a single one-line change; and `annotation-create-seam-census.test.ts` updated because `ReplySuggestion` is a new lifecycle export — the census doing its job, not something routed around. **The orchestrator hand review found no unresolved findings, applied two corrections to the PR body and FILED ONE FOLLOW-UP.** #1626's third sub-question — whether the export writers convert markdown or emit raw markers — was real but **unfiled**, and the body left Bryan a Refs-vs-Closes choice; it is now **#2053**, so `Closes #1626` stands, because the choice turned on whether the remainder was tracked anywhere and that has one right answer. #2053 also records what makes it a genuine design question rather than a call to the existing renderer: `renderMarkdown` emits HTML, the wrong target for both writers, and `.annotations.md` is already markdown by construction. The second correction WITHDREW a For-Bryan item as **measured false**: it claimed `tandem_editAnnotation` has no author gate, so Claude editing a user's comment would render literal asterisks — but `editPendingAnnotation` refuses a non-Claude parent with `not-owned` under #1770 decision 4, so the state described is unreachable and no `editedBy` field is owed. Filing it would have filed a non-defect and spent one of Bryan's decisions on a false premise. **Not verified here:** Playwright was not run, so `tests/e2e/reply-threads.spec.ts` ships unexecuted; the body says so rather than implying coverage. **For Bryan — three product calls remain, all already implemented one way:** whether the Accept affordance appears on every suggestion-bearing reply or only the most recent; whether accepting should ARCHIVE the parent's superseded `suggestedText`, which it does not, because `undoResolveAnnotation` compares the span against the parent's stored field; and whether the reply box should show a word-diff rather than the proposed text, which would mean extracting `SuggestionCard`'s diff box — the one change that can silently delete two testid snapshot entries. |
 | 12 | #2038 store-lock recovery | #2038 | `fix/store-lock-recovery-2038` | #2051 | — | armed | merged | Merged 2026-09-16 (`dae5635b`); closes #2038. Run `wf_cd28978d-c5c`, probe ports 5000/5001; 21 agents, 2 plan-review rounds, 2 PR-review rounds. **Shipped: the missing comparison, plus corroboration.** `startedAtMs` was already written (`lockfile.ts:25`) and already read (`:44`) and compared nowhere; `isLockFromPriorBoot(lock, nowBootMs = systemBootMs())` now compares it against `Date.now() - os.uptime() * 1000` with a 5 s margin, and `tryReclaimStaleLock` takes an injectable `probe` so a live-PID lock is reclaimed **only when BOTH** the boot-time estimate says it predates this boot AND `probeProcessIdentity` reports a non-Tandem image name. **The single-signal version is the wrong-grant hazard decision 7 exists to prevent** — failing to reclaim merely preserves today's read-only behaviour, while wrongly reclaiming puts two writers on the annotation store. Every ambiguous branch refuses: missing or non-numeric `startedAtMs` answers false, a non-`name` identity refuses, an unreadable lock is treated as live. **Review round 2 found a real defect and it was in `doctor`, not the store:** a forward clock step (NTP correcting a wrong RTC, a resumed VM) makes a live, correctly-held lock read as prior-boot, so a doctor arm warning on boot-time evidence alone would emit a warning that can never clear — doctor now runs the same corroboration, which is why it gained a probe call. **The predicate's docblock says EVIDENCE, not a verdict**, and that phrasing is load-bearing for both consumers. **Two test-design choices are what keep the suite from being vacuous, and both are easy to "tidy" into nothing:** `lockfile.test.ts` pins `nowBootMs` as a FIXED value so a predicate that ignores the parameter is caught rather than coincidentally passing, and the current-boot fixture derives from `systemBootMs() + 1s` rather than a hard-coded "60 s ago", which inverts its own premise on a CI VM still inside its first minute of uptime. **Mutation evidence is one row wide, by construction:** reverting the corroboration to the pre-fix bare liveness return reddens exactly `reclaims a live-PID lock that predates this boot AND probes as non-Tandem`, because the describe's other three rows all assert `readonly`, which IS the pre-fix behaviour. **The orchestrator hand review found no unresolved findings and applied two corrections to the PR body:** an Assumption still claimed doctor gained "only the new `isLockFromPriorBoot` branch" under R1823's "reports, does not gate" scoping, contradicting the body's own Summary — the same defect the run had already fixed one layer down in the shipped spec (`W2038-2038.md:120`, fixed in `0967d1c7`), surviving in the half that quotes it; and the mutation test was run but published nowhere. **Two findings raised and REFUTED, recorded because a refuted finding is still a result:** that a recycled PID landing on any `node` process still leaves the store read-only — true, and documented intent, since `isTandemLikeProcessName` is deliberately broad because over-matching only refuses a reclaim, with `POST /api/store/reclaim-lock` left untouched as the residual recovery path; and that doctor's new subprocess spawn widens #1609's accepted bound — it does not, since the new input is a PID integer from the machine's own `store.lock`, validated twice, probed via `execFile` with an argv array, `windowsHide`, a 2 s timeout and an anchored `systemBin("tasklist.exe")`, so no user-controlled string reaches a shell and no register edit is owed. **Out of scope, deliberately:** `doReclaim` and its route (already probes independently), legacy bare-PID locks with no `startedAtMs` (still recover only via the button), and any banner or UI change. Branch was BEHIND `cbccfefd` under `strict: true` and was brought current with GitHub's Update branch — a merge from master, no rewrite, no force-push. **For Bryan — one awareness item, not blocking:** a genuine reboot-and-observe on each supported OS is not obtainable in CI, and Windows is the PID-recycling case the issue names; the tests prove the comparison and its wiring, not that a real reboot reclaims. |
 | 12 | #2040 harness migration remainder | #2040 | `fix/harness-migration-remainder-2040` | #2050 | — | armed | merged | Merged 2026-09-16 (`cbccfefd`); closes #2040. Run `wf_b419cdf0-4bb`, probe ports 5002/5003; 12 agents, 1 plan-review round, 1 PR-review round. **Shipped: ten suites moved onto `tests/helpers/mcp-harness.ts`, and `src/` is untouched.** Each now calls `setupMcpServer([...])` over its existing registrar list in its existing order, replacing the hand-rolled server/linked-pair/client/two-connects shape. **The migration is strictly stronger than what it replaced, and the PR body undersold it rather than overselling:** the harness's `close()` awaits both the client close and the server close, while every hand-rolled site closed the client only — so six files went from no teardown to full and four from half to full. **Six of the ten never closed at all**; they now use #2044's guarded `afterEach` shape (an optional binding, an optional-call, then cleared), because vitest runs a file-level `afterEach` even when `beforeEach` threw, so an unguarded call reports `close is not a function` on top of the real cause and re-closes the PREVIOUS test's client on every later test. **`read-audience-filter` and `range-bounds-validation` already closed and were replaced IN PLACE** — reordering teardown is a behavioural delta this migration does not cover, so `range-bounds`' close still runs after its `removeDoc` loop. **`parseResult` was reconciled by DELETION, not a shim** — four file-local copies plus the second definition in `wire-code-fixtures.ts`, together with three orphaned `CallToolResponse` aliases and an orphaned `import type` — because a shim is exactly what lets two copies drift back apart while looking reconciled. `restore-backup.test.ts` correctly keeps its own: it parses the return of a directly-invoked tool function, not a client call result, so the harness's two-arm union does not describe its input. **`mcp-stdio-ports.test.ts` is named as a PERMANENT non-migration** so nobody chases the one residual probe hit: it links a transport pair but hands `serverTransport` to `startMcpServerStdio`, so there is no registrar list to pass. **Evidence is mutation plus counting, not existence** — a spec asserting the helper exists would test the refactor rather than the code; four mutations each reddened NAMED specs, and per-file `expect(` counts are byte-identical before and after, because identical suite totals cannot prove assertions survived. **The orchestrator hand review found no unresolved findings and applied two corrections to the PR body:** the mutation block read "8/9 tests red" for `convert-error-mapping`, conflating that file's `expect(` count with its test count — it holds eight tests, six `it.each` rows plus two `it`s, and the mutation reddened all eight, so the published figure understated its own evidence as though one test had survived; and the two follow-ups filed during the work, **#2048** (`annotation-tools.test.ts`'s hand-rolled-filter describe reimplements the filter instead of driving the handler) and **#2049** (nothing pins the harness shape, so the next file can hand-roll it again), were quoted nowhere in the body although the spec's own "Done when" required both — a deferral that is real but invisible where the work is read. **One finding raised and REFUTED:** three `CallToolResponse` citations looked off by one when derived by counting forward from the diff's hunk headers; read directly against master all three are exact (`range-bounds-validation:59`, `read-audience-filter:49`, `wake-url-surfacing:49`), so the inference was wrong rather than the PR — deriving a line number from a hunk header is the cheap check that failed, and the direct read is what settles that class of question. |
+| 13 | W13g docs and test-tooling drift | #2005 #1974 #1910 #1911 | `fix/docs-and-test-tooling-drift-2005` | #2086 | — | armed | merged | Merged 2026-09-20 (`6a60e235`); closes #2005 #1974 #1910, Refs #1911. Run `wf_9066cba3-e81`. One false Assumptions line corrected by hand (it said `timeoutMs()` was avoided; the code uses it). For Bryan: whether the perf clock starts at click-completion (#1974); whether to restore a `TANDEM_SETTINGS_PATH_FOR_TEST` override (#1910). |
+| 13 | W13a activity awareness honesty | #1918 #1991 #1961 #1624 | `fix/activity-awareness-honesty-1918` | #2087 | 26 | armed | merged | Merged 2026-09-20 (`6d5e2553`); closes #1918 #1991 #1961, Refs #1624. Run `wf_a129f6b8-c04`, probe ports 5010/5011; 22 agents, ~2.9M tokens, 1.8 h; 2 plan rounds, 2 PR rounds. PR review ADDED a remote-edit cursor refresh the plan had ruled out; body rewritten by hand in three places to match. One final-round fix not re-reviewed (the `tandem_getActivity` cursor claim, bounded). |
+| 13 | W13m local-model abort on doc swap | #2039 | `fix/local-model-abort-on-doc-swap-2039` | #2088 | — | armed | merged | Merged 2026-09-20 (`acccf1f4`); closes #2039. Run `wf_17cdd243-21f`, probe ports 5014/5015; 17 agents, ~2.2M tokens, 0.9 h; 2 plan rounds, 1 PR round. Notification sits OUTSIDE `if (stillOwner())` per Bryan's pinned constraint, and is suppressed when the document is closed rather than swapped. Ships dark. Notification copy in the body corrected by hand. |
+| 13 | W13s security | #2037 #2023 | `fix/security-applychanges-doc-swap-and-sentry-scrubbing-2037` | #2089 | — | armed | merged | Merged 2026-09-20 (`3529776e`); closes #2037 #2023. Run `wf_725244f7-3d9`, probe ports 5016/5017; 23 agents, ~3.1M tokens, 1.5 h; 2 plan rounds, 2 PR rounds. Guard re-resolves by the CAPTURED room name, not `safeDocId`. Both Sentry hooks now share `scrubSentryEvent`. CLAUDE.md open-findings count four to three. Body corrected by hand (a `DOCUMENT_SWAPPED` code that does not exist; a stale predicate quote); one comment miscount fixed in a follow-up commit. |
+| 13 | W13v server and CLI small fixes | #2003 #2008 #1890 #1995 #1938 #1980 | `fix/server-and-cli-small-correctness-fixes-2003` | #2090 | — | armed | merged | Merged 2026-09-20 (`db40bfb5`); closes #2003 #2008 #1890 #1995 #1938, Refs #1980. Run `wf_6191e459-6ef`, probe ports 5020/5021; 18 agents, ~2.8M tokens, 1.8 h; 2 plan rounds, 1 PR round. #2008 changes `/api/open`'s Windows permission refusal 423 to 403. Two #1995 specs are POSIX-only and run in CI's ubuntu `check` alone. Body corrected by hand (`ensureTandemServer` is kept, not deleted; an added `breakerTripped` re-check was unmentioned). |
+| 13 | W13c client rail, pulse, outline, tutorial | #2014 #1963 #2002 #1965 | `fix/client-rail-pulse-outline-and-tutorial-fixes-2014` | #2091 | — | armed | merged | Merged 2026-09-20 (`07625a4c`); closes all four. Run `wf_ba4a9aa0-893`, probe ports 5018/5019; 26 agents, ~3.6M tokens, 2.6 h; 2 plan rounds, 2 PR rounds. #1963's prescribed mechanism was REPLACED in review by a decoration-owned tint; body rewritten by hand. #2002's count is currently inert (flagged for Bryan). One final-round e2e timing fix not re-reviewed. |
+| 13 | W13t settings | #1964 #1946 | `fix/settings-read-only-radiogroup-and-desktop-token-panel-1964` | #2092 | — | armed | merged | Merged 2026-09-21 (`64ecc9d5`); closes #1964 #1946. Run `wf_c3045a33-7cf`, probe ports 5022/5023; 21 agents, ~2.8M tokens, 1.3 h; 2 plan rounds, 2 PR rounds. **The workflow ran no Playwright despite `e2e: true`**; seven Settings specs run by hand before merge, 113 passed. #1946 omits `tokenRotatedAt` when the token file is not the token's source; `rotate-token` gained no gate. |
+| 13 | W13r sidecar toast and rust residue | #1970 #1861 #1959 #630 | `fix/sidecar-restart-toast-and-rust-test-harness-residue-1970` | #2093 | — | armed | merged | Merged 2026-09-21 (`a68ee75a`); closes #1970 #1861 #1959, Refs #630. Run `wf_18e43546-1d7`, probe ports 5024/5025; 21 agents, ~2.6M tokens, 1.5 h; 2 plan rounds, 2 PR rounds. The toast emit sits in the spawn-success arm, not the issue's decision-site sketch, and a structural Rust test pins it. #630's first clause refuted; no code change for it. No hardware smoke of the toast. |
+| 13 | W13k test and tooling lows residue | #1825 | `fix/test-and-tooling-lows-residue-1825` | #2094 | — | armed | merged | Merged 2026-09-21 (`aaff07a1`); Refs #1825. Run `wf_55d5eae2-0f5`, probe ports 5026/5027; 17 agents, ~2.1M tokens, 0.9 h; 1 plan round, 2 PR rounds. All four residuals were already fixed on master; ships the evidence spec only. A `\b` tightening it proposed was withdrawn at review (the unbounded count is the stricter pin). The one-line skip reason it suggested rides in the ledger PR. |
 
 ### Wave 3 closed — 2026-09-08
 
@@ -1416,6 +1434,209 @@ filter still leaves `claude`+`pending` at 2: the compound row pins the conjuncti
 alone, and the author row is what pins `author`. Separately, adding `suggestedText` to
 `LIFECYCLE_OWNED_FIELDS` is what **proves** the "a fixture cannot set `audience`" claim above,
 instead of leaving it as an assertion about code.
+
+### Wave 13 complete — 2026-09-21
+
+**Wave 13 was run unattended: Bryan's instruction on 2026-09-20 was to work every open issue that
+did not need his explicit input, and he was away for the ~26 hours it took.** It shipped nine PRs,
+all merged: #2086 (`6a60e235`), #2087 (`6d5e2553`), #2088 (`acccf1f4`), #2089 (`3529776e`), #2090
+(`db40bfb5`), #2091 (`07625a4c`), #2092 (`64ecc9d5`), #2093 (`a68ee75a`) and #2094
+(`aaff07a1`). **Twenty-three issues closed by merge** — #2005 #1974 #1910, #1991 #1918 #1961,
+#2039, #2037 #2023, #2003 #2008 #1890 #1995 #1938, #2014 #1963 #2002 #1965, #1964 #1946, #1970
+#1861 #1959 — and one, **#2004**, closed by hand as already fixed (`5b1454d2`). Five stayed open as
+`Refs` with a what-landed / what-remains comment each: **#1911, #1624, #1980, #630, #1825**. Two
+more got a status comment and no closure, because the hold on each was Bryan's: **#1734** (its
+carve-out #1974 closed here) and **#1722** (its last half, #1964, landed here).
+
+**The wave started from a fresh triage of all 135 open issues, not from the old planning table.**
+Every open issue was read against the current tree by a schema-constrained triage workflow and
+given one verdict. 107 were triaged on this machine; the other 28 had been triaged in a cloud
+session before the move to Bryan's PC (see *What the cloud phase lost* below) and all 28 were
+non-autonomous except #1523 (a test-only sliver, not taken) and #2060 (cleaning Bryan's real app
+data — needs a human). The 107:
+
+| Verdict | Count | Meaning |
+|---|---|---|
+| fix | 21 | Derivable from the tree and the ticket; scheduled below. |
+| fix-partial | 7 | An unambiguous sliver exists; the rest needs a decision. Taken as `Refs`. |
+| already-fixed | 5 | #2004 closed; #1861 closed via #1970; #1734 and #1721 left to Bryan; #1862 open on its unfixed half (#1937). |
+| decide | 31 | A product, policy or design call. Listed under *Decisions batched for Bryan*. |
+| blocked | 17 | Hardware-gated, upstream-gated, or inside the `.docx` pipeline ADR-052 replaces. |
+| feature | 16 | Design-shaped new work, most of it already deferred past v1.0 by decision. |
+| dated | 10 | Carries its own review date; nothing to do before it. |
+
+**ADR-052 changed what "fixable" means for a third of the backlog.** Bryan decided on 2026-09-18 to
+adopt SuperDoc as the `.docx` engine; it is decided and not implemented. Every issue whose remaining
+work lives inside the mammoth / docx-npm / `docx-comments.ts` pipeline was therefore held as
+**blocked** rather than fixed into code that is scheduled for deletion: #1142, #1693, #1754, #1951,
+#1954 (and #1950 as a feature). **The one exception taken was #2037**, because it was a live
+data-integrity defect with a one-predicate fix — and it shipped with an explicit instruction not to
+refactor `docx-apply.ts`. If ADR-052 is reversed or re-scoped, that blocked set is the first thing
+to re-triage.
+
+**Groups were scheduled file-disjoint against every unmerged PR, not against each other in the
+abstract**, and launched as slots freed: at most one `e2e` group at a time, and a group's notes
+named the files an unmerged PR owned so its planner could not wander into them. It held with one
+near-miss: W13v was told it owned `docs/mcp-tools.md` before W13s turned out to need one line of
+that file's `tandem_applyChanges` error list too. The edits landed in different sections and merged clean, but that was luck of placement — **a shared reference doc is a collision surface even when the
+source files are disjoint, so name it in exactly one concurrent group's notes.**
+
+#### Lessons
+
+**Six of the nine PR bodies were wrong about their own final code, and every error was the same
+shape: the body described the PLAN, and PR review had changed the code.** #2087
+said a remote change refreshes no `cursor` (the shipped code refreshes it in place) and named the
+wrong stamp gate. #2088 quoted notification copy that review had narrowed because it was false.
+#2089 announced a new `DOCUMENT_SWAPPED` error code that does not exist — the code reuses
+`RELOAD_IN_PROGRESS` — and quoted the guard predicate in the `safeDocId` form the code's own comment
+explains is wrong. #2090 said `ensureTandemServer` was deleted; it is kept, exported, with no
+production caller. #2091 described a `decoRevision` counter and a `deco-revision.ts` module that
+review had **replaced outright** with a decoration-owned tint, and cited a test file that no longer
+existed. Wave 12 recorded this as "a stale Assumption outlives the fix that invalidated it"; wave
+13 measured it on every PR whose review rounds changed the design (#2086's was a single
+Assumptions line; #2093's body was accurate, and #2094 shipped no design). **The Assumptions
+and Summary sections are written before review and nothing rewrites them after. Diff the body
+against `git diff origin/master...HEAD`, not against the workflow's return value — the return value
+carries the same stale text.**
+
+**A group flagged `e2e: true` does not prove Playwright ran.** W13t's build notes said "E2E not run
+(no server started here)", its PR body repeated that under *For Bryan*, and the journal holds no
+Playwright result from any stage — yet the run returned `pr-open` with no unresolved findings. The
+seven Settings-touching specs were run by hand on the branch before merge: 113 passed, 0 failed.
+W13a's `e2e` flag was similarly moot (no spec exercises the activity record at all). **Grep the
+journal for a pass count before trusting the flag; an absent result is not a green one.**
+
+**"Add the word boundary" is wrong for a count ceiling.** W13k proposed tightening
+`annotation-remove-seam.test.ts`'s occurrence count to a `\b`-bounded regex for symmetry with the
+reply seam, citing the symbol-regex lesson. That lesson is about a PRESENCE check surviving a rename
+because the old name matches as a prefix. This pin is `toHaveLength(2)`: a wrapper named
+`removeAnnotationRecordSafely` is a third match for the unbounded form and reds the test, while the
+bounded form would stop seeing it. The unbounded regex is the stricter one. Withdrawn in the PR body
+rather than left as an open suggestion for someone to apply later.
+
+**The issue body's fix site can be wrong, and the right site is found by asking what the code can
+know there.** #1959 asked for the success toast to be emitted from the
+`CrashRestartDecision::Restart` arm. That arm runs before the graceful stop and the respawn, so a
+declined or failed respawn would have shown "restarted" followed by "failed to restart". The emit
+went into `restart_sidecar_for`'s `Ok(SpawnOutcome::Started)` arm instead, gated on the cause, and a
+structural test pins that it appears exactly once and not at the decision site. #1963 is the same
+lesson on the client: the issue prescribed a revision counter re-applying a class after each
+transaction, and review measured that ProseMirror's DOMObserver strips a foreign class ~1 ms after
+the write **with no transaction dispatched**, so no transaction-keyed re-apply can win. The tint
+moved into the decoration's own attrs.
+
+**A "fix" verdict can dissolve on contact, and the honest output is a spec, not a diff.** All four
+#1825 residuals W13k was sent to fix were already fixed on master (`018a434a`, #1783, `3ab75719`);
+the group shipped file:line evidence and one reporter-visible skip reason. #630's first remaining
+clause was likewise refuted — the POST-failure surface already ships as the buffered `open-failed`
+reason code, and a distinct event would have inverted the two-surfaced rule. **Dependabot and
+neighbouring groups close residuals silently; re-verify before building, and let "nothing to do" be
+a result.**
+
+**A stray uncommitted edit appeared in a worktree that no agent in the run made.** W13c's verify
+stage found `.claude/settings.json` modified in `wt-w13c` — `continueOnBlock` dropped from the
+token-violation hook entry and a plugin added to `enabledPlugins` — which reddened one hook-wiring
+spec. It was gone before the push and the main checkout's copy was never affected. Cause not
+established; the likeliest is a plugin install side effect writing to the nearest project settings
+file. Recorded because the next occurrence will look like an agent breaking a rule.
+
+#### Environment facts measured this wave (Windows, Bryan's PC)
+
+- **`.husky/_` is generated and gitignored, so a hand-made worktree has `core.hooksPath=.husky/_`
+  set and no hooks in it** — a push from there runs no pre-push gate at all and says nothing. Run
+  `npx husky` in the worktree first and confirm `.husky/_/pre-push` exists. This is #2030's exact
+  shape; the workflow's own worktrees arm it, a hand-made one does not.
+- **`git worktree remove` can fail with "Permission denied" after the junction is safely gone**,
+  leaving an empty deregistered directory some process still holds (`wt-w13g`). Harmless;
+  `git worktree prune` has already dropped it. Every other removal this wave was junction-first
+  from PowerShell (`[System.IO.Directory]::Delete(path, $false)` on a verified `LinkType: Junction`)
+  and the main `node_modules` held at 471 entries throughout.
+- **PowerShell parses `stash@{0}` as a hashtable literal and `;` after `--%` as an argument.** Quote
+  the ref (`'stash@{0}'`) and do not chain after a stop-parsing token.
+- **Python on this machine defaults to cp1252**; any script printing issue text needs
+  `PYTHONIOENCODING=utf-8`.
+- **A hand-run push needs the same three things the workflow gives its own worktrees, and the
+  orchestrator forgot two of them.** `CARGO_TARGET_DIR=<repo>/src-tauri/target` (the shared warm
+  target), the four `tauri_build` stubs under `src-tauri/binaries/` plus the `dist/` dirs from
+  CONTRIBUTING.md's Testing section, and `npx husky`. Without `CARGO_TARGET_DIR` the pre-push
+  `cargo test` does a **cold 2.3 GB build inside the worktree**; overlapping vitest, that drove the
+  machine low enough on memory that the harness's guard killed the backgrounded push mid-hook
+  (01:47 on 2026-09-21, a follow-up to #2094). The push never landed and nothing said so except
+  the task notice — the branch stayed at its old head. Without the stubs the same hook fails
+  outright on `resource path ... doesn't exist`. #2094 merged at the head the workflow had pushed,
+  and the one-line change rides in this PR instead. **After any backgrounded push, compare
+  `git log -1` with the PR's `headRefOid`.**
+- Three workflows ran concurrently without contention (one `e2e`, two not), against the ledger's
+  two-at-a-time convention. Probe ports 5010–5027 were used, one pair per group.
+
+#### What the cloud phase lost
+
+The session began in a cloud container and was moved to Bryan's PC mid-triage. **Nine running triage
+agents, the scratchpad, and one unpushed commit were lost in the move** — the commit added a
+REST-only `args.githubVia` mode to the workflow script, needed there because the container's `gh`
+got 403 on GraphQL. It is not needed on Windows, where `gh` is fully authenticated, and was not
+rebuilt. **An unpushed commit in a disposable environment is not saved work**; the triage was redone
+here as a workflow with schema output, which is also why its result survives as one JSON file
+rather than nine transcripts.
+
+#### Decisions batched for Bryan
+
+From the wave's own PRs:
+
+- **#1624** — still needs a real editor writing `Y_MAP_SELECTION` end to end and the record's
+  lifetime across a reload measured; then close it or re-scope it onto #1997. Accepted residue: a
+  remote remap after a reload and before any local selection mints a fresh stamp.
+- **#1961** — confirm "the desktop app" is the wording wanted in the shipped skill (v26).
+- **#1974 / #1734** — should the `annotation-accept` clock start at click-completion? #1734 looks
+  closeable now that #1974 is closed.
+- **#1910** — restore a `TANDEM_SETTINGS_PATH_FOR_TEST` override, or leave it removed?
+- **#2039** — the swap notification copy is user-facing and currently dark; worth a wording pass
+  before `BYO_MODELS_ENABLED` flips. #2070 and #2069 are untouched and still need design calls.
+- **#2008** — a Windows permission refusal on `/api/open` now answers 403, not 423. One hardware
+  look that the Open error copy reads sensibly.
+- **#1980** — which recovery affordance for the three write-only annotation archive shapes, and
+  whether `.corrupt.<ts>` should ever be reaped.
+- **#1946** — should the desktop gain a token-rotation affordance at all, or an honest static line
+  naming the OS keychain? It currently shows nothing, which is correct and silent.
+- **#1959** — confirm the copy "Tandem server restarted after a crash."; decide whether the
+  deferred-crash recovery path should toast too (it does today); one kill-the-sidecar smoke.
+- **#630** — strike the refuted `startup-file-error` clause; decide whether to spend a `tests/docs`
+  signature pin keeping the rejection sink `&'static str`.
+- **#1722** — every half has shipped; close it?
+- **#2002** — the outline annotation count it fixes is inert (the outline `PanelSlot` passes no
+  `annotations`). Wire it up, or close on the measurement?
+- **#2014** — filed from a static read and never reproduced in the real desktop app; the Playwright
+  spec is the only repro.
+
+The 31 `decide` verdicts from triage, one line each (the full question for each is in the issue):
+**#1373** Cowork pre-flight: block on probe failure, or amend the doc that says it never does.
+**#1517** authorship stamps: durable or ephemeral. **#1598** a long-poll wake for Cowork sessions.
+**#1662** how a boot-time watch-registration failure reaches the user. **#1683** dark pressed-toggle
+inset: accept the weaker press or adopt the measured white inset (and #1721 rides on it). **#1696**
+tutorial tombstone consequences. **#1700** refactor the 12 raw `requireDocument` Y.Doc handles
+behind a seam, or formally accept them. **#1704** (`untrusted-source`) WSL setup paths. **#1711**
+rethink the onboarding tutorial. **#1725** the Claude-authored tutorial highlight vs "highlights are
+user-only" copy. **#1792** tutorial annotations never refresh for upgraders. **#1822** launcher
+`resolveCwd` lacks the `homeConfines` check its siblings apply. **#1831** delete or repair the dead
+`claude-code-review.yml`. **#1845** `measureTabFloor` DOM coupling. **#1863** refuse a
+wrong-document fallback restore, or double-decode to detect it. **#1884** fix the
+channel-permission LAN read now, or wait on #1885. **#1937** which direction for the vitest
+teardown flake. **#1943** ship `tandem deactivate` before v1.0? **#1952** suppress `wakeUrl` on a
+non-loopback bind? **#1953** when the wake advisory should speak. **#1981** which ordering fixes the
+100 kB `/api` body cap. **#1982** lower `MAX_FILE_SIZE` to what the sync path can carry? **#1997**
+invalidate or re-anchor a stale selection for an unmounted document. **#2001** which side of a
+separator a range start anchors to. **#2009** how a deliberate delete of a deterministic id survives
+tombstone compaction. **#2030** give the `core.hooksPath` "for now" a revisit date (this wave
+re-measured its failure mode, above). **#2053** annotation-body markdown in export writers.
+**#2064** is concurrent multi-session polling of one document supported? **#2069** make
+`document:closed` fire, or special-case it in the observer. **#2070** its own design, now that #2039
+chose instance identity over a generation counter.
+
+**Not done, deliberately:** the #1823 sliver (a tracking comment enumerating which server-runtime
+bullets are already fixed) — a false "already fixed" on a public issue is worse than no comment, and
+it needs the real-filesystem checks the issue itself marks `[inferred]`. The #1719 sliver
+(reproduce the rail-seam mirror bug before a second implementation) — its anchors have moved and
+the repro is a judgement about feel. #1523 (test-only sliver from the cloud-phase triage).
 
 ### Wave 0 record
 
