@@ -317,7 +317,7 @@ export async function applyChangesCore(
   // `undefined`, which is never `=== ydoc`, so the removed-document case is
   // subsumed. Same class as #1657 (#2037).
   //
-  // Two things that must not be "simplified" later:
+  // Three things that must not be "simplified" later:
   //   - This is NOT a pure read: `requireDocument` → `getOrCreateDocument`
   //     mints and installs a fresh empty Y.Doc when the registry entry
   //     survives but the provider map was emptied. Accepted — the answer is
