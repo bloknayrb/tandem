@@ -1,12 +1,13 @@
 /**
  * Shared preflight check for stdio MCP subcommands.
  *
- * Both `tandem mcp-stdio` and `tandem channel` need a live Tandem server on
- * localhost before they can do anything useful. Two flavors:
+ * Two flavors:
  *
  * - `ensureTandemServer` — fail fast via stderr + exit(1) when the server
- *   isn't reachable. Used by `tandem channel`, whose stdio transport can't
- *   meaningfully respond on its own.
+ *   isn't reachable. **No production caller since #1890**: `tandem channel`
+ *   dropped it, because the plugin spawns that server before Tandem is
+ *   necessarily up and the exit took the push path out for the session. Kept
+ *   as the fail-fast flavor for a subcommand that genuinely wants one.
  * - `probeTandemServer` — returns a result without side effects. Used by
  *   `tandem mcp-stdio`, which starts its stdio transport before preflight
  *   so it can synthesize -32000 JSON-RPC errors for any in-flight request
@@ -65,7 +66,7 @@ export async function ensureTandemServer(opts: PreflightOptions = {}): Promise<v
   if (!probe.ok) {
     const guidance =
       probe.kind === "unreachable"
-        ? "Start the Tauri app or run `tandem start` on the host, then retry."
+        ? "Start the desktop app or run `tandem start` on the host, then retry."
         : "The Tandem server is running but unhealthy — check the host logs.";
     process.stderr.write(
       `[tandem] Tandem server preflight failed at ${probe.url} (${probe.reason}).\n` +

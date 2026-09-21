@@ -306,6 +306,47 @@ export async function applyChangesCore(
     );
   }
 
+  // The Y.Doc captured at step 1 may no longer be the room's document: the
+  // `await fs.stat(filePath)` just above is the last await before this read,
+  // and Hocuspocus replaces a room's Y.Doc in `onLoadDocument` (merge state,
+  // `destroy()` the old instance, `documents.set(...)`), so an ordinary tab
+  // open or stale-tab reconnect during that await would leave `extractText`
+  // reading a DESTROYED instance — and `ydocFlatText` is what every accepted
+  // suggestion's offsets are scored against, so stale text goes into the
+  // user's .docx with no error. Identity, not presence: `?.` yields
+  // `undefined`, which is never `=== ydoc`, so the removed-document case is
+  // subsumed. Same class as #1657 (#2037).
+  //
+  // Three things that must not be "simplified" later:
+  //   - This is NOT a pure read: `requireDocument` → `getOrCreateDocument`
+  //     mints and installs a fresh empty Y.Doc when the registry entry
+  //     survives but the provider map was emptied. Accepted — the answer is
+  //     still "not the doc we captured", the refusal follows immediately, and
+  //     this is the same call step 1 already makes.
+  //   - It re-resolves by the CAPTURED room name (`docState.docName`), never by
+  //     `safeDocId`. On the active-document default path `safeDocId` is
+  //     `undefined`, so `requireDocument(safeDocId)` would resolve whatever is
+  //     active NOW: a tab click or an MCP `tandem_open` landing during the
+  //     `fs.stat` await moves `activeDocId`, and the guard would then compare a
+  //     DIFFERENT room's Y.Doc against `ydoc` and refuse a call whose own
+  //     document was never swapped. The room name pins the comparison to the
+  //     document actually being applied.
+  //   - It guards the capture→read pairing, not the whole call. The awaits
+  //     after this read (`fs.readFile`, `applyTrackedChanges`, the backup/
+  //     stat/write sequence) are deliberately unguarded: by then the text and
+  //     the bytes are captured and mutually consistent, so a swap there cannot
+  //     desync them.
+  //
+  // Refuse rather than re-extract: the suggestions' CRDT positions were
+  // resolved against the old fragment at step 3, and a swap destroys it, so
+  // re-extracting would score one half of the mapping against a different
+  // document. The caller retries.
+  if (requireDocument(docState.docName)?.doc !== ydoc) {
+    throw Object.assign(new Error("The document was reloaded while applying changes. Try again."), {
+      code: "RELOAD_IN_PROGRESS",
+    });
+  }
+
   const ydocFlatText = extractText(ydoc);
   const buffer = await fs.readFile(filePath);
 
@@ -525,6 +566,12 @@ export function registerApplyTools(server: McpServer): void {
         if (e.code === "EXTERNAL_CONFLICT") return mcpError("EXTERNAL_CONFLICT", e.message);
         if (e.code === "FILE_MODIFIED") return mcpError("FILE_MODIFIED", e.message);
         if (e.code === "SOURCE_MISSING") return mcpError("SOURCE_MISSING", e.message);
+        // A concurrent Hocuspocus Y.Doc swap mid-apply (#2037). Without this arm
+        // the refusal escapes as an unhandled MCP protocol failure — exactly what
+        // the comment above forbids. Reuses the existing wire code: a doc swap is
+        // a reload in the caller's terms, and `routes/_shared.ts` already maps it
+        // to 409 on the `/api` side.
+        if (e.code === "RELOAD_IN_PROGRESS") return mcpError("RELOAD_IN_PROGRESS", e.message);
         // A locked or unreadable source keeps its own errno rather than a code of
         // ours, so it is matched by code here too — same reasoning as the stat guard.
         // A permission refusal is not a lock (#1823), the same split `tandem_open`
