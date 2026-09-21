@@ -294,7 +294,14 @@ export function getSection(
     if (node.nodeName === "heading") {
       const level = Number(node.getAttribute("level") ?? 1);
       if (inSection && level <= sectionLevel) break;
-      if (text.trim().toLowerCase() === sectionName.trim().toLowerCase()) {
+      // `!inSection` is load-bearing (#2003): without it a same-named SUB-heading
+      // re-enters the match arm and resets `sectionLevel` to its deeper level,
+      // so the next sibling at that depth — still inside the section — satisfies
+      // the `break` above and truncates the section silently. Once open, a
+      // deeper same-named heading falls through to the `if (inSection)` branch
+      // and is emitted as an ordinary heading line. The conjunct cannot affect
+      // the not-yet-open path, so first-match-wins is preserved by construction.
+      if (!inSection && text.trim().toLowerCase() === sectionName.trim().toLowerCase()) {
         inSection = true;
         sectionLevel = level;
         lines.push(headingPrefix(level) + text);

@@ -91,6 +91,31 @@ describe("tandem_getTextContent — section filtering via getSection()", () => {
       expect(result.text).not.toContain("Next");
     }
   });
+
+  it("a same-named sub-heading does not truncate the section (#2003)", () => {
+    const ydoc = setupDoc("gtc-6", "## Costs\nintro\n### Costs\ndetail\n### Sub\nmore\n## Next");
+    const fragment = ydoc.getXmlFragment("default");
+
+    const result = getSection(fragment, "Costs");
+    expect(result.found).toBe(true);
+    if (result.found) {
+      expect(result.text).toContain("### Sub");
+      expect(result.text).toContain("more");
+      expect(result.text).not.toContain("## Next");
+    }
+  });
+
+  it("keeps a same-named sub-heading as a line of the section (#2003)", () => {
+    const ydoc = setupDoc("gtc-7", "## Costs\nintro\n### Costs\ndetail\n### Sub\nmore\n## Next");
+    const fragment = ydoc.getXmlFragment("default");
+
+    const result = getSection(fragment, "Costs");
+    expect(result.found).toBe(true);
+    if (result.found) {
+      expect(result.text).toContain("### Costs");
+      expect(result.text).toContain("detail");
+    }
+  });
 });
 
 describe("tandem_getOutline via getOutline()", () => {
