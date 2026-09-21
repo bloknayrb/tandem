@@ -47,9 +47,9 @@ function cardStyle(selected: boolean, disabled?: boolean): string {
 
 // #1964: the `role="radio"` buttons carry `aria-disabled` rather than native
 // `disabled` (disabling the focused node blurs it — same rationale as
-// FileOpenDialog.svelte:55-62), so they stay focusable under readOnly and the
-// hook's arrow-key path is live. `() => readOnly` — NOT a ternary evaluated
-// once — is what stops that path reaching the refused `updateSettings` write.
+// FileOpenDialog.svelte:55-62), so the refusal cannot come from the DOM. The
+// `() => readOnly` predicate below — NOT a ternary evaluated once — is what
+// holds it, for both the hook's arrow-key path and its `activate()` click path.
 const themeRg = createRadioGroup<ThemePreference>(
   () => settings.theme,
   ["light", "warm", "dark", "system"] as const,
@@ -93,10 +93,7 @@ const densityRg = createRadioGroup<Density>(
         aria-checked={settings.theme === t}
         tabindex={themeRg.tabIndexFor(t)}
         aria-disabled={readOnly}
-        onclick={() => {
-          if (readOnly) return;
-          onUpdate({ theme: t });
-        }}
+        onclick={() => themeRg.activate(t)}
         class="settings-card"
         style={cardStyle(settings.theme === t, readOnly)}
       >
@@ -149,10 +146,7 @@ const densityRg = createRadioGroup<Density>(
       aria-checked={settings.primaryTab === "chat"}
       tabindex={primaryTabRg.tabIndexFor("chat")}
       aria-disabled={readOnly}
-      onclick={() => {
-        if (readOnly) return;
-        onUpdate({ primaryTab: "chat" });
-      }}
+      onclick={() => primaryTabRg.activate("chat")}
       class="settings-card"
       style={cardStyle(settings.primaryTab === "chat", readOnly)}
     >
@@ -164,10 +158,7 @@ const densityRg = createRadioGroup<Density>(
       aria-checked={settings.primaryTab === "annotations"}
       tabindex={primaryTabRg.tabIndexFor("annotations")}
       aria-disabled={readOnly}
-      onclick={() => {
-        if (readOnly) return;
-        onUpdate({ primaryTab: "annotations" });
-      }}
+      onclick={() => primaryTabRg.activate("annotations")}
       class="settings-card"
       style={cardStyle(settings.primaryTab === "annotations", readOnly)}
     >
@@ -194,10 +185,7 @@ const densityRg = createRadioGroup<Density>(
         aria-checked={settings.textSize === size}
         tabindex={textSizeRg.tabIndexFor(size)}
         aria-disabled={readOnly}
-        onclick={() => {
-          if (readOnly) return;
-          onUpdate({ textSize: size });
-        }}
+        onclick={() => textSizeRg.activate(size)}
         class="settings-card"
         style={cardStyle(settings.textSize === size, readOnly)}
       >
@@ -250,10 +238,7 @@ const densityRg = createRadioGroup<Density>(
         aria-checked={settings.density === value}
         tabindex={densityRg.tabIndexFor(value)}
         aria-disabled={readOnly}
-        onclick={() => {
-          if (readOnly) return;
-          onUpdate({ density: value });
-        }}
+        onclick={() => densityRg.activate(value)}
         class="settings-card"
         style={cardStyle(settings.density === value, readOnly)}
       >
