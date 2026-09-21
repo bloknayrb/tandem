@@ -1410,7 +1410,7 @@ export async function runMcpStdio(): Promise<void> {
   if (!probe.ok) {
     const guidance =
       probe.kind === "unreachable"
-        ? "Start the Tauri app or run `tandem start` on the host, then retry."
+        ? "Start the desktop app or run `tandem start` on the host, then retry."
         : "The Tandem server is running but unhealthy — check the host logs.";
     // Written once because this block runs once — it is straight-line startup
     // code, and the retry ladder lives inside `waitForUpstream` below and never
@@ -1427,7 +1427,7 @@ export async function runMcpStdio(): Promise<void> {
     );
     const synthMessage =
       probe.kind === "unreachable"
-        ? "Tandem server not running. Start the Tauri app or run `tandem start`."
+        ? "Tandem server not running. Start the desktop app or run `tandem start`."
         : "Tandem server unhealthy (check host logs).";
     deferredSynthesize({ message: synthMessage, detail: probe.reason });
     await waitForUpstream(baseUrl);

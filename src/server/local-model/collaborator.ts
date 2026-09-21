@@ -322,10 +322,11 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
     // The sink's `isOwner()` deliberately DIVERGES and stays on presence:
     // `makeSink` writes only to `CTRL_ROOM` via `appendClaudeChatMessage` /
     // `updateClaudeChatMessage`, which a document-room swap never touches.
-    const stillOwner = () =>
-      current?.token === token &&
-      !abort.signal.aborted &&
-      requireDocument(req.docName)?.doc === ydoc;
+    //
+    // #2039 extracts the identity conjunct so the loop's per-turn check and
+    // this gate cannot drift apart.
+    const docUnchanged = () => requireDocument(req.docName)?.doc === ydoc;
+    const stillOwner = () => current?.token === token && !abort.signal.aborted && docUnchanged();
 
     if (!stillOwner()) return;
     if (!cachedConfig) return;
@@ -358,11 +359,47 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
         signal: abort.signal,
         onContentDelta: sink.push,
         onTurnEnd: sink.onTurnEnd,
+        // #2039: stop the loop at the next turn boundary once our captured
+        // instance is no longer the room's live one.
+        isDocCurrent: docUnchanged,
       });
 
+      // #2039: the swap arm sits OUTSIDE the ownership gate, deliberately.
+      // `stillOwner()` is false after a swap BY CONSTRUCTION (#1657), so an arm
+      // inside that block would be dead code and the abort would ship silent —
+      // exactly the bug. It carries no token test either: a run that is both
+      // superseded and swapped may notify while a newer run is in flight, which
+      // is judged better than the dead-code failure. Do not "tidy"
+      // `current?.token === token` back in.
+      //
+      // No `sink.flushFinal()` here: dropping the terminal reply is #1657's
+      // guarantee and stays. `sink.dispose()` in the `finally` still runs.
+      //
       // Ownership-gated terminal actions. A superseded / closed-doc / aborted run
       // drops its output silently (its last streamed partial stays in place).
-      if (stillOwner()) {
+      if (result.metrics.exit === "doc-swapped") {
+        // A null lookup means the document is CLOSED, not swapped — that
+        // inherits the existing silent-drop contract (#2069: a close never
+        // arrives as an abort, because `document:closed` never fires). Telling
+        // a user who just closed a tab that it "reconnected" names a remedy no
+        // retry can satisfy. The ABORT is unchanged on both paths; only the
+        // message is suppressed on close.
+        if (requireDocument(req.docName)) {
+          pushNotification({
+            id: generateMessageId(),
+            type: "general-error",
+            severity: "warning",
+            // Narrower than "the rest of its work was discarded" on purpose:
+            // `provider.ts` merges the old state into the fresh doc before
+            // destroying it, so annotations from turns that completed before
+            // the swap survive — only the terminal reply is dropped.
+            message:
+              "The local model stopped: this document reconnected mid-turn, so it stopped early — any comments it already added are still there, but its reply was not delivered. Ask again to continue.",
+            documentId: req.docName,
+            timestamp: Date.now(),
+          });
+        }
+      } else if (stillOwner()) {
         const exit = result.metrics.exit;
         if (exit === "clean") {
           sink.flushFinal();

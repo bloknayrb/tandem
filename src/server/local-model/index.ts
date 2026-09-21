@@ -44,6 +44,8 @@ export interface RunTurnOpts {
   onContentDelta?: (delta: string) => void;
   /** Per turn boundary (after `chat()`), for the streaming sink (#1123 M1.2). */
   onTurnEnd?: (info: { hadToolCalls: boolean }) => void;
+  /** Still the same Y.Doc instance this run captured? (#2039) See `RunLoopOpts`. */
+  isDocCurrent?: () => boolean;
 }
 
 /** Run one collaborator turn (read/decide/act) against a document. */
@@ -65,6 +67,10 @@ export async function runLocalModelTurn(opts: RunTurnOpts): Promise<LoopResult> 
     isLicenseRestricted: opts.isLicenseRestricted,
     onContentDelta: opts.onContentDelta,
     onTurnEnd: opts.onTurnEnd,
+    // #2039: this forward is the ONLY thing that makes `doc-swapped` reachable
+    // in production — the field list is hand-enumerated, so an omission is
+    // silent (the option is optional and TypeScript cannot object).
+    isDocCurrent: opts.isDocCurrent,
   });
 }
 
