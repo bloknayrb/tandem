@@ -1354,7 +1354,7 @@ Open a file by its absolute path on disk. Equivalent to `tandem_open` but callab
 { "data": { "documentId": "report-a1b2c3", "fileName": "report.md", "format": "md", "readOnly": false, "source": "file", ... } }
 ```
 
-**Errors:** `400 BAD_REQUEST` (missing/non-string `filePath`, and unsupported format -- `UNSUPPORTED_FORMAT` is mapped to `BAD_REQUEST` by `errorCodeToLabel`), `404 NOT_FOUND` (the wire label; `FILE_NOT_FOUND`/`ENOENT` map to it), `400 INVALID_PATH`, `413 FILE_TOO_LARGE`, `423 FILE_LOCKED`, `403 PERMISSION_DENIED`, `403 LICENSE_REQUIRED` (on `force: true`)
+**Errors:** `400 BAD_REQUEST` (missing/non-string `filePath`, and unsupported format -- `UNSUPPORTED_FORMAT` is mapped to `BAD_REQUEST` by `errorCodeToLabel`), `404 NOT_FOUND` (the wire label; `FILE_NOT_FOUND`/`ENOENT` map to it), `400 INVALID_PATH`, `413 FILE_TOO_LARGE`, `423 FILE_LOCKED` (`EBUSY`, or `EPERM` from a syscall other than `open`), `403 PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`), `403 LICENSE_REQUIRED` (on `force: true`)
 
 ### POST /api/scratchpad
 
