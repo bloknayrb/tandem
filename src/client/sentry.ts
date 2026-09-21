@@ -41,7 +41,7 @@
  */
 
 import type * as SentryBrowser from "@sentry/browser";
-import { redactPaths, redactSecrets, scrubText } from "../shared/scrub-text";
+import { redactPaths, redactSecrets, scrubSentryEvent, scrubText } from "../shared/scrub-text";
 
 let sentry: typeof SentryBrowser | null = null;
 
@@ -58,39 +58,19 @@ function isTauri(): boolean {
  * sidecar's `scrubEvent` (`src/server/sentry.ts`) is shaped the same way for
  * the same reason.
  *
- * Five surfaces. The first three are original; the last two are #2023, which
- * found this hook and the Rust shell's shipping them untouched long after the
- * sidecar stopped:
- *
- *  - `event.message` and each `exception.values[].value`.
- *  - `request.url` (scrubbed) and `request.data` (dropped outright — query
- *    strings and bodies can carry document content). WebView-only; the sidecar
- *    has no request surface.
- *  - **`event.server_name`** — the machine's HOSTNAME. Nothing here sets it, so
- *    the SDK's own default shipped on every event. Deleted rather than
- *    redacted: no scrubbed form of a hostname is useful to us.
- *  - each exception stack frame's **`filename`** and **`abs_path`**, which in a
- *    source-run or dev build are absolute paths under `$HOME`.
- *
- * Frames are read off `event.exception.values[].stacktrace` only. That is
- * scoping, not an oversight: `@sentry/browser` populates neither
- * `event.stacktrace` nor `event.threads`.
+ * [`scrubSentryEvent`] carries the shared surfaces (message, exception values,
+ * `server_name`, exception stack-frame paths) and the reasoning for each; it is
+ * shared with the sidecar hook precisely so the two cannot drift apart, which
+ * is the drift #2023 had to fix. `request` is WebView-only and stays here: the
+ * body is dropped outright and the URL scrubbed, since query strings and bodies
+ * can carry document content.
  *
  * `scrubText` rather than `redactPaths` alone, because it composes the path and
  * secret redactions and a bundled-asset frame path can carry a token in a query
- * string. `sendDefaultPii: false` covers none of this: it governs IPs, cookies
- * and request bodies, not filenames or hostnames.
+ * string.
  */
 function scrubEvent(event: SentryBrowser.ErrorEvent): SentryBrowser.ErrorEvent {
-  if (event.message) event.message = scrubText(event.message);
-  delete event.server_name;
-  for (const exception of event.exception?.values ?? []) {
-    if (exception.value) exception.value = scrubText(exception.value);
-    for (const frame of exception.stacktrace?.frames ?? []) {
-      if (frame.filename) frame.filename = scrubText(frame.filename);
-      if (frame.abs_path) frame.abs_path = scrubText(frame.abs_path);
-    }
-  }
+  scrubSentryEvent(event, scrubText);
   // Drop request bodies / query strings — these can carry doc content.
   if (event.request) {
     event.request.data = undefined;

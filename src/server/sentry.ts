@@ -26,7 +26,7 @@
 
 import type { ErrorEvent } from "@sentry/node";
 
-import { redactPaths, redactSecrets } from "../shared/scrub-text.js";
+import { redactPaths, redactSecrets, scrubSentryEvent } from "../shared/scrub-text.js";
 import { APP_VERSION } from "./mcp/server.js";
 
 const SENTRY_DSN_ENV = "TANDEM_SENTRY_DSN";
@@ -83,38 +83,16 @@ export function scrub(input: string): string {
  * exported options object — a test that drives the real hook needs a handle on
  * it, and an unwired fix would otherwise pass green.
  *
- * Four surfaces. The first pair is original; the last two are #1823 item 2,
- * which found them going out untouched despite `sendDefaultPii: false`:
- *
- *  - `event.message` and each `exception.values[].value`.
- *  - **`event.server_name`** — the machine's HOSTNAME. Nothing here set it, so
- *    the SDK's own default shipped on every event. Deleted rather than
- *    redacted: no scrubbed form of a hostname is useful to us.
- *  - each stack frame's **`filename`** and **`abs_path`**, which in a
- *    source-run or dev build are absolute paths under `$HOME`. Both keys exist
- *    on the SDK's `StackFrame` type (`@sentry/core` 10.73), so both are
- *    scrubbed and whichever the runtime actually populates is covered.
- *
- * `sendDefaultPii: false` covers neither of the new two: it governs IPs,
- * cookies and request bodies, not filenames or hostnames.
- *
- * The WebView (`src/client/sentry.ts`) and the Rust shell
- * (`src-tauri/src/sentry_reporting.rs`) shipped both until #2023; all three
- * hooks now delete `server_name` and redact exception frame paths. The hooks
- * still differ on their OTHER surfaces, deliberately — `request.url` and
+ * The four scrubbed surfaces — message, exception values, `server_name` and
+ * exception stack-frame paths — and why `sendDefaultPii: false` covers none of
+ * the last two live on [`scrubSentryEvent`], which the WebView hook
+ * (`src/client/sentry.ts`) also calls so the two cannot drift apart again; the
+ * Rust shell (`src-tauri/src/sentry_reporting.rs`) mirrors it by hand. The
+ * hooks still differ on their OTHER surfaces, deliberately — `request.url` and
  * breadcrumb messages are WebView-only.
  */
 export function scrubEvent(event: ErrorEvent): ErrorEvent {
-  if (event.message) event.message = scrub(event.message);
-  delete event.server_name;
-  for (const exception of event.exception?.values ?? []) {
-    if (exception.value) exception.value = scrub(exception.value);
-    for (const frame of exception.stacktrace?.frames ?? []) {
-      if (frame.filename) frame.filename = scrub(frame.filename);
-      if (frame.abs_path) frame.abs_path = scrub(frame.abs_path);
-    }
-  }
-  return event;
+  return scrubSentryEvent(event, scrub);
 }
 
 /**
