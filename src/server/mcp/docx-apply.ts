@@ -322,9 +322,15 @@ export async function applyChangesCore(
   //     mints and installs a fresh empty Y.Doc when the registry entry
   //     survives but the provider map was emptied. Accepted — the answer is
   //     still "not the doc we captured", the refusal follows immediately, and
-  //     this is the same call step 1 already makes. Do not substitute
-  //     `getDocument(safeDocId)`: that takes a room *name*, while `safeDocId`
-  //     is `undefined` on the active-document default path.
+  //     this is the same call step 1 already makes.
+  //   - It re-resolves by the CAPTURED room name (`docState.docName`), never by
+  //     `safeDocId`. On the active-document default path `safeDocId` is
+  //     `undefined`, so `requireDocument(safeDocId)` would resolve whatever is
+  //     active NOW: a tab click or an MCP `tandem_open` landing during the
+  //     `fs.stat` await moves `activeDocId`, and the guard would then compare a
+  //     DIFFERENT room's Y.Doc against `ydoc` and refuse a call whose own
+  //     document was never swapped. The room name pins the comparison to the
+  //     document actually being applied.
   //   - It guards the capture→read pairing, not the whole call. The awaits
   //     after this read (`fs.readFile`, `applyTrackedChanges`, the backup/
   //     stat/write sequence) are deliberately unguarded: by then the text and
@@ -335,7 +341,7 @@ export async function applyChangesCore(
   // resolved against the old fragment at step 3, and a swap destroys it, so
   // re-extracting would score one half of the mapping against a different
   // document. The caller retries.
-  if (requireDocument(safeDocId)?.doc !== ydoc) {
+  if (requireDocument(docState.docName)?.doc !== ydoc) {
     throw Object.assign(new Error("The document was reloaded while applying changes. Try again."), {
       code: "RELOAD_IN_PROGRESS",
     });

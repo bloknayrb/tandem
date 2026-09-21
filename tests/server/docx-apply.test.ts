@@ -1354,6 +1354,33 @@ describe("applyChangesCore — a mid-apply doc swap", () => {
     REAL_APPLY_TIMEOUT_MS,
   );
 
+  it(
+    "does not refuse when the ACTIVE document changes mid-apply on the default path",
+    async () => {
+      // `applyChangesCore()` with no `documentId` captures the active doc. A
+      // tab click or an MCP `tandem_open` landing during the `fs.stat` await
+      // moves `activeDocId` — the captured room's Y.Doc is untouched, so the
+      // apply must still succeed. A guard re-resolving by the default path
+      // (`requireDocument(undefined)`) compares the NEW active document's
+      // Y.Doc and refuses with a reload that never happened.
+      const otherId = `${DOC_ID}-other`;
+      getOrCreateDocument(otherId);
+      addDoc(otherId, {
+        id: otherId,
+        filePath: path.join(path.dirname(docPath), "other.docx"),
+        format: "docx",
+        readOnly: false,
+        source: "file",
+      });
+
+      const pending = applyChangesCore();
+      setActiveDocId(otherId);
+
+      await expect(pending).resolves.toMatchObject({ applied: 1 });
+    },
+    REAL_APPLY_TIMEOUT_MS,
+  );
+
   it("the registered tandem_applyChanges maps the refusal to a structured error", async () => {
     // The three specs above drive `applyChangesCore` directly and cannot tell a
     // wired catch arm from `throw err`, which would escape as an unhandled MCP
