@@ -1,6 +1,12 @@
 export interface RadioGroupHandlers<T extends string> {
   handleKeyDown: (e: KeyboardEvent) => void;
   tabIndexFor: (v: T) => 0 | -1;
+  /**
+   * Click/activation path for one radio, refused when `isDisabled` says so.
+   * Call sites use this instead of hand-writing the same guard around
+   * `setValue`, so the keyboard path and the pointer path share one predicate.
+   */
+  activate: (v: T) => void;
 }
 
 /**
@@ -62,5 +68,10 @@ export function createRadioGroup<T extends string>(
     return v === tabStop ? 0 : -1;
   };
 
-  return { handleKeyDown, tabIndexFor };
+  const activate = (v: T): void => {
+    if (isDisabled?.(v)) return;
+    setValue(v);
+  };
+
+  return { handleKeyDown, tabIndexFor, activate };
 }

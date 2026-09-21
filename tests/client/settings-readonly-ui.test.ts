@@ -14,6 +14,7 @@
  */
 
 import { cleanup, render } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AccessibilitySettings from "../../src/client/components/AccessibilitySettings.svelte";
 import AppearanceSettings from "../../src/client/components/AppearanceSettings.svelte";
@@ -71,6 +72,18 @@ type ControlCase = {
   testid: string;
   /** True when the testid marks a label wrapper — descend to its `<input>`. */
   innerInput?: boolean;
+  /**
+   * #1964: `role="radio"` controls only. The native-`disabled` contract every
+   * other control in this file asserts is deliberately RELAXED for them —
+   * native `disabled` drops focus to the nearest focusable ancestor, which
+   * blurs the roving-tabindex radio the user is standing on, so the radios
+   * carry `aria-disabled` plus a guarded `onclick` instead (precedent:
+   * `FileOpenDialog.svelte:55-62`). The read-only arm therefore asserts
+   * `aria-disabled="true"` AND the absence of the native attribute — without
+   * the second half an implementation that adds `aria-disabled` while keeping
+   * `disabled={readOnly}` passes and leaves the focus half unfixed.
+   */
+  ariaDisabled?: true;
 };
 
 const CASES: ControlCase[] = [
@@ -78,11 +91,13 @@ const CASES: ControlCase[] = [
     name: "AppearanceSettings theme radio",
     component: AppearanceSettings,
     testid: "theme-dark-btn",
+    ariaDisabled: true,
   },
   {
     name: "AppearanceSettings density radio",
     component: AppearanceSettings,
     testid: "density-compact-btn",
+    ariaDisabled: true,
   },
   {
     name: "AppearanceSettings decoration checkbox",
@@ -111,6 +126,7 @@ const CASES: ControlCase[] = [
     name: "EditorSettings measure radio",
     component: EditorSettings,
     testid: "editor-measure-wide",
+    ariaDisabled: true,
   },
   {
     name: "EditorSettings smart-typography checkbox",
@@ -182,7 +198,12 @@ describe("settings read-only UI — controls disabled and writes blocked", () =>
       const ctx = makeCtx(true);
       const { container } = render(c.component, { props: ctx });
       const control = resolveControl(container, c) as HTMLInputElement | HTMLButtonElement;
-      expect(control.disabled).toBe(true);
+      if (c.ariaDisabled) {
+        expect(control.getAttribute("aria-disabled")).toBe("true");
+        expect(control.hasAttribute("disabled")).toBe(false);
+      } else {
+        expect(control.disabled).toBe(true);
+      }
       control.click();
       expect(ctx.onUpdate).not.toHaveBeenCalled();
     });
@@ -191,7 +212,20 @@ describe("settings read-only UI — controls disabled and writes blocked", () =>
       const ctx = makeCtx(false);
       const { container } = render(c.component, { props: ctx });
       const control = resolveControl(container, c) as HTMLInputElement | HTMLButtonElement;
-      expect(control.disabled).toBe(false);
+      if (c.ariaDisabled) {
+        // Phrased negatively so it does not depend on Svelte stringifying
+        // `false` into the attribute at all.
+        expect(control.getAttribute("aria-disabled")).not.toBe("true");
+        // …and the click must still WRITE. #1964 moved every radio's click
+        // from an inline `onclick={() => onUpdate({...})}` onto the shared
+        // `activate()` guard, so an inert `activate` (e.g. `if (isDisabled)`
+        // instead of `if (isDisabled?.(v))`) would make every settings radio
+        // a dead click with the refusing half of this file still green.
+        control.click();
+        expect(ctx.onUpdate).toHaveBeenCalled();
+      } else {
+        expect(control.disabled).toBe(false);
+      }
     });
   }
 });
@@ -309,4 +343,102 @@ describe("App.svelte — settings write-refused wiring (#1722/#1792)", () => {
     const block = source.slice(start, source.indexOf("});", start));
     expect(block).toMatch(/\bid:\s*generateNotificationId\(\)/);
   });
+});
+
+/**
+ * #1964 — the hook half. Every `createRadioGroup` call site must pass
+ * `() => readOnly` as its 4th argument, so the roving-tabindex/arrow-key path
+ * the hook owns cannot reach the refused `updateSettings` write once the
+ * radios are focusable again (they are: `aria-disabled` replaced native
+ * `disabled`).
+ *
+ * MECHANISM PIN, not a user scenario. `settings._readOnly` cannot actually
+ * flip mid-session — `createTandemSettings` is a singleton and `_readOnly` is
+ * fixed at construction — but only a live flip discriminates a getter
+ * (`() => readOnly`) from an init-time ternary (`readOnly ? () => true :
+ * undefined`), which is the specific wrong implementation.
+ *
+ * The assertions iterate `[role="radiogroup"]` rather than naming groups: a
+ * named spec would leave `primaryTabRg`, `textSizeRg`, `editorFontRg` and the
+ * `fontByExtensionRgs` factory shippable with the defect and every test green,
+ * and iteration fails closed when a group is added.
+ */
+describe("settings radiogroups — keyboard path honours readOnly (#1964)", () => {
+  const RADIO_GROUP_HOSTS = [
+    { name: "AppearanceSettings", component: AppearanceSettings },
+    { name: "EditorSettings", component: EditorSettings },
+  ] as const;
+
+  function groupsOf(container: HTMLElement): HTMLElement[] {
+    const groups = Array.from(container.querySelectorAll<HTMLElement>('[role="radiogroup"]'));
+    expect(groups.length, "no radiogroups rendered").toBeGreaterThan(0);
+    return groups;
+  }
+
+  const arrowRight = () =>
+    new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+
+  for (const host of RADIO_GROUP_HOSTS) {
+    it(`${host.name}: after a flip to readOnly, every group is inert to ArrowRight`, async () => {
+      const ctx = makeCtx(false);
+      const { container, rerender } = render(host.component, { props: ctx });
+      await rerender({ ...ctx, readOnly: true });
+      await tick();
+
+      for (const group of groupsOf(container)) {
+        const radios = Array.from(group.querySelectorAll<HTMLElement>('[role="radio"]'));
+        expect(radios.length, "radiogroup with no radios").toBeGreaterThan(0);
+        for (const radio of radios) {
+          expect(radio.getAttribute("tabindex")).toBe("-1");
+          expect(radio.getAttribute("aria-disabled")).toBe("true");
+        }
+        group.dispatchEvent(arrowRight());
+      }
+      expect(ctx.onUpdate).not.toHaveBeenCalled();
+    });
+
+    it(`${host.name}: every radio's CLICK writes when not readOnly`, async () => {
+      // The click path is `activate()`, not `handleKeyDown` — the same
+      // iteration rationale as above, so a newly added group cannot ship a
+      // dead click. One call per radio: a group whose clicks are all inert
+      // would otherwise hide behind a sibling group that still writes.
+      const ctx = makeCtx(false);
+      const { container } = render(host.component, { props: ctx });
+      await tick();
+
+      let radioCount = 0;
+      for (const group of groupsOf(container)) {
+        const radios = Array.from(group.querySelectorAll<HTMLElement>('[role="radio"]'));
+        expect(radios.length, "radiogroup with no radios").toBeGreaterThan(0);
+        radioCount += radios.length;
+        for (const radio of radios) radio.click();
+      }
+      expect(ctx.onUpdate).toHaveBeenCalledTimes(radioCount);
+    });
+
+    it(`${host.name}: after a flip to readOnly, every radio's CLICK is refused`, async () => {
+      const ctx = makeCtx(false);
+      const { container, rerender } = render(host.component, { props: ctx });
+      await rerender({ ...ctx, readOnly: true });
+      await tick();
+
+      for (const group of groupsOf(container)) {
+        for (const radio of group.querySelectorAll<HTMLElement>('[role="radio"]')) {
+          (radio as HTMLElement).click();
+        }
+      }
+      expect(ctx.onUpdate).not.toHaveBeenCalled();
+    });
+
+    it(`${host.name}: the same ArrowRight DOES write when not readOnly`, async () => {
+      const ctx = makeCtx(false);
+      const { container } = render(host.component, { props: ctx });
+      await tick();
+
+      for (const group of groupsOf(container)) {
+        group.dispatchEvent(arrowRight());
+      }
+      expect(ctx.onUpdate).toHaveBeenCalled();
+    });
+  }
 });
