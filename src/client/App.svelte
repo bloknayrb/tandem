@@ -2450,6 +2450,7 @@ const shouldShowModelPicker = $derived(
             kind="outline"
             focusTrigger={outlineFocusTrigger}
             {editor}
+            ydoc={activeTab?.ydoc ?? null}
             headings={headingsState.headings}
             visible={true}
           />
