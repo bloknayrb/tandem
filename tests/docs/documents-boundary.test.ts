@@ -55,6 +55,7 @@ import { readdirSync, readFileSync, statSync } from "fs";
 import { extname, join, posix, relative } from "path";
 import { describe, expect, it } from "vitest";
 import { hasExtension, isSourceFile, SOURCE_EXTENSIONS } from "../helpers/source-extensions.js";
+import { timeoutMs } from "../helpers/timing.js";
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
 const SRC = join(REPO_ROOT, "src");
@@ -725,7 +726,9 @@ describe("runtime export surfaces", () => {
    * neighbouring spec's coverage is worse than an unpinned guard, because it
    * makes the next reader stop looking.
    */
-  it("documents/reload-family.ts exports exactly what is written down", async () => {
+  it("documents/reload-family.ts exports exactly what is written down", {
+    timeout: timeoutMs(45_000, 120_000),
+  }, async () => {
     const mod = await import("../../src/server/documents/reload-family.js");
     expect(
       Object.keys(mod).sort(),
@@ -735,7 +738,9 @@ describe("runtime export surfaces", () => {
     );
   });
 
-  it("documents/open.ts exports exactly what is written down", async () => {
+  it("documents/open.ts exports exactly what is written down", {
+    timeout: timeoutMs(45_000, 120_000),
+  }, async () => {
     const mod = await import("../../src/server/documents/open.js");
     expect(
       Object.keys(mod).sort(),

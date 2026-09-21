@@ -5,6 +5,7 @@ Wired in `.claude/settings.json`. Each script's purpose is documented in its fir
 **Hook semantics:**
 - `PreToolUse` hooks exit `2` to block the tool call.
 - `PostToolUse` hooks exit `0` (warnings only — they emit to stderr but never block).
+- **Exception: `check-token-violation.sh` exits `2` on a violation and carries `continueOnBlock: true` in `.claude/settings.json`, which turns that exit-2 into an in-turn self-correction rather than a halted turn** — see the script's own header comment. It is the one `PostToolUse` hook that does not follow the blanket exit-`0` rule above.
 - Workflow-nudge hooks emit stderr and never block.
 - Per-session state lives in `.claude/.workflow-state/<session_id>/` (gitignored, pruned at SessionStart after 7 days via `sessionstart-prune-state.sh`).
 
