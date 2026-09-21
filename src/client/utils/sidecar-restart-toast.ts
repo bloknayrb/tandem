@@ -17,6 +17,7 @@
  */
 
 import type { TandemNotification } from "../../shared/types";
+import { listenTauriEvent, type TauriEventModule } from "./tauri-event";
 
 /**
  * The Tauri event name. Pinned against Rust's `EVENT_SIDECAR_RESTARTED` by
@@ -52,9 +53,7 @@ export function buildSidecarRestartedNotification(now: number): TandemNotificati
 
 export interface SidecarRestartedDeps {
   /** Usually `() => import("@tauri-apps/api/event")`. */
-  loadEvent: () => Promise<{
-    listen: (event: string, handler: () => void) => Promise<() => void>;
-  }>;
+  loadEvent: () => Promise<TauriEventModule>;
   /** Surface the notice. Takes the built notification, not a message string. */
   push: (notification: TandemNotification) => void;
   /** Injected for tests; defaults to `console.warn`. */
@@ -70,29 +69,10 @@ export interface SidecarRestartedDeps {
  * `recover_deferred_crash` can restart the sidecar before `App.svelte` mounts.)
  */
 export function wireSidecarRestarted(deps: SidecarRestartedDeps): () => void {
-  const warn = deps.warn ?? ((message: string, err: unknown) => console.warn(message, err));
-  let cancelled = false;
-  let unlisten: (() => void) | null = null;
-
-  deps
-    .loadEvent()
-    .then(({ listen }) =>
-      listen(SIDECAR_RESTARTED_EVENT, () => {
-        if (cancelled) return;
-        deps.push(buildSidecarRestartedNotification(Date.now()));
-      }),
-    )
-    .then((un) => {
-      if (cancelled) un();
-      else unlisten = un;
-    })
-    .catch((err) => {
-      warn(`[App] Failed to wire ${SIDECAR_RESTARTED_EVENT} listener:`, err);
-    });
-
-  return () => {
-    cancelled = true;
-    unlisten?.();
-    unlisten = null;
-  };
+  return listenTauriEvent({
+    loadEvent: deps.loadEvent,
+    event: SIDECAR_RESTARTED_EVENT,
+    onEvent: () => deps.push(buildSidecarRestartedNotification(Date.now())),
+    warn: deps.warn,
+  });
 }

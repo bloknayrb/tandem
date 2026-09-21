@@ -143,6 +143,7 @@ import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentF
 import { openServerPath } from "./utils/server-paths";
 import { wireSidecarRestarted } from "./utils/sidecar-restart-toast";
 import { wireStartupRejection } from "./utils/startup-rejection";
+import { listenTauriEvent } from "./utils/tauri-event";
 
 // `getRetryStrategy` is read lazily inside yjsSync (only after bootstrap), so it
 // safely closes over `settingsState`, which is initialized further down.
@@ -295,11 +296,11 @@ initTauriFileDrop(notifications.push);
 // is hard-coded here so no path, errno text, env var, or auth token from
 // the underlying failure can ever reach the DOM. See #631.
 if (isTauriRuntime()) {
-  let unlisten: (() => void) | null = null;
-  let cancelled = false;
-  import("@tauri-apps/api/event")
-    .then(({ listen }) =>
-      listen("sidecar-restart-failed", () => {
+  onDestroy(
+    listenTauriEvent({
+      loadEvent: () => import("@tauri-apps/api/event"),
+      event: "sidecar-restart-failed",
+      onEvent: () =>
         notifications.push({
           id: `sidecar-restart-failed-${Date.now()}`,
           type: "general-error",
@@ -308,31 +309,21 @@ if (isTauriRuntime()) {
           dedupKey: "sidecar-restart-failed",
           timestamp: Date.now(),
           errorCode: "SIDECAR_RESTART_FAILED",
-        });
-      }),
-    )
-    .then((un) => {
-      if (cancelled) un();
-      else unlisten = un;
-    })
-    .catch((err) => {
-      console.warn("[App] Failed to wire sidecar-restart-failed listener:", err);
-    });
-  onDestroy(() => {
-    cancelled = true;
-    unlisten?.();
-  });
+        }),
+    }),
+  );
 }
 
 // And the other half: a post-boot crash whose restart SUCCEEDED (#1959). The
 // notification itself is built in `utils/sidecar-restart-toast.ts`, so this site
 // only supplies the Tauri module loader and the push.
 if (isTauriRuntime()) {
-  const cleanupSidecarRestarted = wireSidecarRestarted({
-    loadEvent: () => import("@tauri-apps/api/event"),
-    push: (n) => notifications.push(n),
-  });
-  onDestroy(cleanupSidecarRestarted);
+  onDestroy(
+    wireSidecarRestarted({
+      loadEvent: () => import("@tauri-apps/api/event"),
+      push: (n) => notifications.push(n),
+    }),
+  );
 }
 
 // Tray "Setup AI Assistant" (Tauri-only): the Rust side emits
