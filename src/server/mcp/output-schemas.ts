@@ -327,7 +327,7 @@ export const checkInboxOutputShape = {
       .number()
       .nullable()
       .describe(
-        "Epoch ms when the editor last wrote the selection record; null when selectedText is null. While this document is the active editor tab, any document change that moves the selection re-stamps it, including your own edits (#1991), so a recent value does not prove the user just selected this; an old value does prove it is old.",
+        "Epoch ms when the user last made this selection; null when selectedText is null. While this document is the active editor tab, a remote edit that shifts or rewrites the selected span updates from/to and selectedText without re-stamping the time.",
       ),
   }),
 };

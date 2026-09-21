@@ -65,7 +65,7 @@ export async function ensureTandemServer(opts: PreflightOptions = {}): Promise<v
   if (!probe.ok) {
     const guidance =
       probe.kind === "unreachable"
-        ? "Start the Tauri app or run `tandem start` on the host, then retry."
+        ? "Start the desktop app or run `tandem start` on the host, then retry."
         : "The Tandem server is running but unhealthy — check the host logs.";
     process.stderr.write(
       `[tandem] Tandem server preflight failed at ${probe.url} (${probe.reason}).\n` +
