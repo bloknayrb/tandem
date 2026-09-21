@@ -347,6 +347,49 @@ describe("runDoctor", () => {
     );
     expect(parked?.status).toBe("warn");
     expect(parked?.data?.parkedFuture).toBe(1);
+
+    // #1980: the old remediation promised "Update, and they load again", which
+    // is false — the park RENAMED the file away and an upgraded build still
+    // reads `<hash>.json`. Negative assertions, deliberately: the defect is a
+    // false promise, and a positive-only assertion passes on text still
+    // carrying it.
+    // `DoctorResult` names the remediation field `fix` (the spec called it
+    // `remediation`; the code wins).
+    const remediation = parked?.fix;
+    expect(remediation).toBeDefined();
+    expect(remediation).not.toContain("load again");
+    expect(remediation).toContain(".json.future");
+    // And no how-to: after a park, `<hash>.json` is normally rewritten with
+    // real, current annotations, so "rename it back over it" destroys live
+    // data — in the one string this fix exists to make honest.
+    expect(remediation).not.toMatch(/rename .* over/i);
+  });
+
+  it("does not claim a 7-day cleanup for quarantined annotation files (#1980)", async () => {
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    // Shape per `ATOMIC_TEMP_RE`'s docstring: `<hash>.json.corrupt.<epoch-ms>`.
+    writeFileSync(join(annDir, "abc.json.corrupt.1758300000000"), "{}");
+
+    const report = await runDoctor();
+    // Selected on the WARN, never on `r.data.corruptCount`: the always-emitted
+    // `annotation-store` summary record carries `corruptCount` too, and a
+    // data-key selector resolves to that row — which has no remediation at all
+    // and would make every negative assertion below pass vacuously.
+    const warn = report.results.find(
+      (r) =>
+        r.check === "annotation-store" &&
+        r.status === "warn" &&
+        r.message.includes("quarantined annotation file"),
+    );
+    // Anti-vacuity precondition, before the string assertions.
+    expect(warn?.fix).toBeDefined();
+    expect(warn?.data?.corruptCount).toBe(1);
+
+    // There is no 7-day mechanism and no reaper: `ATOMIC_TEMP_RE` is anchored
+    // to `.tandem-tmp-<ms>-<12 hex>` and nothing else unlinks one.
+    expect(warn?.fix).not.toContain("7d");
+    expect(warn?.fix).toContain("nothing deletes");
   });
 
   it("warns on a .partial copy left by a partial load (#1791)", async () => {

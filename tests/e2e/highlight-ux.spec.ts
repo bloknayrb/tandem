@@ -50,9 +50,11 @@ import {
  * `aria-current="true"` (set by `AnnotationCard` when `isReviewTarget`, which
  * SidePanel binds to `activeAnnotationId === ann.id`) as the authoritative
  * "this annotation is focused" signal. We deliberately do NOT assert on the
- * editor's `.tandem-annotation-active` class: that class is applied
- * imperatively to ProseMirror-owned decoration spans and is wiped on the next
- * decoration rebuild, so it is not a reliable focus oracle.
+ * editor's `.tandem-annotation-active` class: since #1963 it is part of the
+ * decoration's own attrs and does survive a rebuild, but it paints only where
+ * a decoration is drawn, so a muted or filtered annotation type is focused
+ * with no tinted span at all. The card is the focus oracle; the tint is a
+ * rendering of it (`deco-pulse-survives-rebuild.spec.ts` owns that half).
  */
 
 let mcp: McpTestClient;

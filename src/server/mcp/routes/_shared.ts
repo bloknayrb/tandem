@@ -179,6 +179,8 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
     case "DOCX_TOO_LARGE":
       return 413;
     case "EBUSY":
+    // `EPERM` still reaches here from a syscall other than `open`; `sendApiError`
+    // remaps the `open` case to PERMISSION_DENIED before calling in (#2008).
     case "EPERM":
       return 423;
     case "EACCES":
@@ -267,6 +269,8 @@ export function errorCodeToLabel(code: string): string {
     case "DOCX_TOO_LARGE":
       return "FILE_TOO_LARGE";
     case "EBUSY":
+    // `EPERM` still reaches here from a syscall other than `open` (a lock or the
+    // read-only attribute); `sendApiError` is where the split happens (#2008).
     case "EPERM":
       return "FILE_LOCKED";
     case "EACCES":
@@ -310,7 +314,16 @@ export function errorCodeToLabel(code: string): string {
  */
 export function sendApiError(res: Response, err: unknown): void {
   const e = err as NodeJS.ErrnoException;
-  const code = e.code ?? "";
+  // #2008: on Windows libuv reports ERROR_ACCESS_DENIED as `EPERM`, not
+  // `EACCES`, and only the failing syscall separates a permission refusal from
+  // a lock — `EPERM` on `open` is always a refusal, `EPERM` on `rename` is a
+  // lock or the read-only attribute. Same rule as `lockOrPermissionCode`
+  // (src/server/mcp/response.ts); read its docblock for the measurements.
+  // Written out here rather than imported: `response.ts` pulls in
+  // `events/queue.js` → `yjs/provider.js` → `@hocuspocus/server`, and 22
+  // modules import this file, so that edge would land Hocuspocus in every
+  // `/api` route's module init. A leaf every route imports has to stay a leaf.
+  const code = e.code === "EPERM" && e.syscall === "open" ? "PERMISSION_DENIED" : (e.code ?? "");
   const status = errorCodeToHttpStatus(code);
   const label = errorCodeToLabel(code);
   const detail =

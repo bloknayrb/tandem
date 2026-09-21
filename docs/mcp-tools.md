@@ -61,7 +61,7 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `FILE_MODIFIED` | **`tandem_applyChanges` only.** The source file's mtime/size moved between the read and the write-back, so it refused to overwrite (`src/server/mcp/docx-apply.ts:305`). On `tandem_save` the same word is a *success* skip `reason`, never an error code -- see that tool's notes. |
 | `SOURCE_MISSING` | **`tandem_applyChanges` only.** The source file disappeared before the write-back (`src/server/mcp/docx-apply.ts:296`). Same `tandem_save` caveat as `FILE_MODIFIED`. |
 | `RELOAD_IN_PROGRESS` | A reload from disk is mid-flight; retry once it settles. |
-| `LICENSE_REQUIRED` | The license gate is active and restricted. Reads, plain `tandem_open`, saves and exports still work; content mutations do not. `tandem_open` with `force: true` **is** gated -- it runs `clearAndReload`, which discards the in-memory annotation, awareness and content maps and rebuilds the document from disk. Never returned while the gate ships dark. |
+| `LICENSE_REQUIRED` | The license gate is active and restricted. Reads, plain `tandem_open`, saves and exports still work; content mutations **and annotation status changes** do not. `tandem_open` with `force: true` **is** gated -- it runs `clearAndReload`, which discards the in-memory annotation, awareness and content maps and rebuilds the document from disk. Never returned while the gate ships dark. |
 | `NO_SUGGESTIONS` | `tandem_applyChanges` found no accepted suggestions to write. |
 | `BACKUP_FAILED` | `tandem_applyChanges` could not write its backup, so it refused to touch the original. |
 | `INVALID_NAME` | `tandem_rename` was given a name that is empty, path-separated, or otherwise unusable. |
@@ -1354,7 +1354,7 @@ Open a file by its absolute path on disk. Equivalent to `tandem_open` but callab
 { "data": { "documentId": "report-a1b2c3", "fileName": "report.md", "format": "md", "readOnly": false, "source": "file", ... } }
 ```
 
-**Errors:** `400 BAD_REQUEST` (missing/non-string `filePath`, and unsupported format -- `UNSUPPORTED_FORMAT` is mapped to `BAD_REQUEST` by `errorCodeToLabel`), `404 NOT_FOUND` (the wire label; `FILE_NOT_FOUND`/`ENOENT` map to it), `400 INVALID_PATH`, `413 FILE_TOO_LARGE`, `423 FILE_LOCKED`, `403 PERMISSION_DENIED`, `403 LICENSE_REQUIRED` (on `force: true`)
+**Errors:** `400 BAD_REQUEST` (missing/non-string `filePath`, and unsupported format -- `UNSUPPORTED_FORMAT` is mapped to `BAD_REQUEST` by `errorCodeToLabel`), `404 NOT_FOUND` (the wire label; `FILE_NOT_FOUND`/`ENOENT` map to it), `400 INVALID_PATH`, `413 FILE_TOO_LARGE`, `423 FILE_LOCKED` (`EBUSY`, or `EPERM` from a syscall other than `open`), `403 PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`), `403 LICENSE_REQUIRED` (on `force: true`)
 
 ### POST /api/scratchpad
 

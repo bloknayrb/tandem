@@ -179,6 +179,60 @@ describe("sendApiError — raw fs messages do not cross the network (#1294)", ()
   });
 });
 
+describe("sendApiError — EPERM splits on the failing syscall (#2008)", () => {
+  // The measured Windows matrix from the issue: libuv reports
+  // ERROR_ACCESS_DENIED as EPERM, so only the syscall separates a permission
+  // refusal (`open`) from a lock or read-only attribute (`rename`).
+  function mockRes() {
+    const json = vi.fn();
+    const status = vi.fn((_code: number) => ({ json }));
+    const res = {
+      req: { socket: { remoteAddress: "127.0.0.1" } },
+      status,
+    } as unknown as Response;
+    return { res, status, json };
+  }
+
+  function send(errno: { code: string; syscall?: string }) {
+    const { res, status, json } = mockRes();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    sendApiError(res, Object.assign(new Error(`${errno.code}: failed`), errno));
+    return { status: status.mock.calls[0]?.[0], body: json.mock.calls[0]?.[0] };
+  }
+
+  it("EPERM on open is a permission refusal, not a lock", () => {
+    const { status, body } = send({ code: "EPERM", syscall: "open" });
+    expect(status).toBe(403);
+    expect(body.error).toBe("PERMISSION_DENIED");
+  });
+
+  it("EPERM on rename stays FILE_LOCKED", () => {
+    const { status, body } = send({ code: "EPERM", syscall: "rename" });
+    expect(status).toBe(423);
+    expect(body.error).toBe("FILE_LOCKED");
+    expect(body.message).toBe("File is locked by another program.");
+  });
+
+  it("EBUSY on open is still a lock — the syscall alone decides nothing", () => {
+    const { status, body } = send({ code: "EBUSY", syscall: "open" });
+    expect(status).toBe(423);
+    expect(body.error).toBe("FILE_LOCKED");
+  });
+
+  it("EPERM with no syscall keeps the pre-split answer", () => {
+    const { status, body } = send({ code: "EPERM" });
+    expect(status).toBe(423);
+    expect(body.error).toBe("FILE_LOCKED");
+  });
+
+  it("EACCES is unchanged (no-regression twin)", () => {
+    const { status, body } = send({ code: "EACCES" });
+    expect(status).toBe(403);
+    expect(body.error).toBe("PERMISSION_DENIED");
+  });
+});
+
 describe("GENERIC_ERROR_MESSAGE is keyed on labels, exhaustively", () => {
   it("has an entry for every label errorCodeToLabel can return", () => {
     // Guards the whole class the FILE_NOT_FOUND key was one instance of: a
