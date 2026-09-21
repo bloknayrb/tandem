@@ -97,6 +97,15 @@ function limitResult(exit: "max_turns" | "max_tool_calls"): LoopResult {
   };
 }
 
+function swappedResult(): LoopResult {
+  return {
+    metrics: { ...cleanResult("").metrics, exit: "doc-swapped" },
+    steps: [],
+    finalContent: "",
+    messages: [],
+  };
+}
+
 function makeDeps(over: Partial<CollaboratorDeps> = {}): CollaboratorDeps {
   return {
     runTurn: async () => cleanResult(""),
@@ -726,6 +735,89 @@ describe("collaborator — mid-turn doc swap (#1657)", () => {
     // A sink-independent second pin: `pushNotification` bypasses the sink
     // entirely, so this stays red under the mutation even if the sink changes.
     expect(getBuffer().filter((n) => n.documentId === "doc-swap-notify")).toEqual([]);
+  });
+
+  // #2039: the swap is now ABORTED and made visible. The notification must come
+  // from a branch OUTSIDE `if (stillOwner())` — that gate is false after a swap
+  // by construction, so an arm inside it is dead code and ships silent.
+  it("notifies on a 'doc-swapped' exit although stillOwner() is false", async () => {
+    await swapMidTurn("doc-swap-abort", swappedResult());
+
+    const notes = getBuffer().filter((n) => n.documentId === "doc-swap-abort");
+    expect(notes).toHaveLength(1);
+    expect(notes[0].severity).toBe("warning");
+    // The message matters: a regression pushing the budget copy ("reached its
+    // step limit") is exactly the misleading outcome this issue is about.
+    expect(notes[0].message).toMatch(/reconnected/);
+  });
+
+  it("notifies NOTHING when the document was CLOSED rather than swapped", async () => {
+    // `requireDocument` returns null once the registry row is dropped, so
+    // `docUnchanged()` is false for a close too (#2069: a close never arrives
+    // as an abort). Telling that user the document "reconnected" names a remedy
+    // no retry can satisfy, so only the message is suppressed — not the abort.
+    setupDoc("doc-swap-closed", "Body");
+    let release!: () => void;
+    const gate = new Promise<void>((res) => {
+      release = res;
+    });
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          opts.onContentDelta?.("partial answer");
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          await gate;
+          return swappedResult();
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("go", { documentId: "doc-swap-closed" }));
+    await Promise.resolve();
+
+    removeDoc("doc-swap-closed");
+    release();
+    await drain(collab);
+
+    expect(getBuffer().filter((n) => n.documentId === "doc-swap-closed")).toEqual([]);
+  });
+
+  it("still mints no terminal reply on a 'doc-swapped' exit", async () => {
+    await swapMidTurn("doc-swap-noreply", swappedResult());
+
+    // Making the abort visible must not undo #1657: no flushFinal on this arm.
+    expect(chatMessages()).toHaveLength(0);
+  });
+
+  it("threads isDocCurrent into the turn, and it flips on the swap", async () => {
+    setupDoc("doc-swap-thread", "Body");
+    let captured: { isDocCurrent?: () => boolean } | undefined;
+    let release!: () => void;
+    const gate = new Promise<void>((res) => {
+      release = res;
+    });
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          captured = opts;
+          await gate;
+          return cleanResult("");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("go", { documentId: "doc-swap-thread" }));
+    await Promise.resolve();
+
+    // `typeof` first: `opts.isDocCurrent?.()` is `undefined` when the field was
+    // never threaded, which a bare falsy assertion would happily accept.
+    expect(typeof captured?.isDocCurrent).toBe("function");
+    expect(captured?.isDocCurrent?.()).toBe(true);
+    swapDoc("doc-swap-thread", "Body");
+    expect(captured?.isDocCurrent?.()).toBe(false);
+
+    release();
+    await drain(collab);
   });
 });
 
