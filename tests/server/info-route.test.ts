@@ -15,7 +15,10 @@
  * server-security-invariants.test.ts (Invariant 7).
  */
 
+import fs from "node:fs";
 import { request as httpRequest, type IncomingMessage, type Server } from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeInfoHandler } from "../../src/server/mcp/routes/info.js";
 import { startMcpServerHttp } from "../../src/server/mcp/server.js";
@@ -211,6 +214,10 @@ const BASE_DEPS = {
   mcpSdkVersion: "0.0.0",
   storagePath: "/tmp/sessions",
   getTokenFilePath: () => `/tmp/token-file-${Date.now()}`,
+  // #1946: the token file is this server's token source on the npm arm, which
+  // is what every pre-existing spec below exercises. Required dep — a new
+  // construction site fails `typecheck:tests` rather than silently failing open.
+  tokenFileIsAuthoritative: () => true,
   changelogPath: "/tmp/CHANGELOG.md",
   getGenerationId: () => "gen-test",
 };
@@ -435,5 +442,77 @@ describe("GET /api/info — welcomePath field (unit)", () => {
     expect("welcomePath" in body).toBe(true);
     expect(body.welcomePath).toBe("/tmp/sample/welcome.md");
     expect("storagePath" in body).toBe(false);
+  });
+});
+
+/**
+ * #1946 — `tokenRotatedAt` describes a file, so it may only be reported when
+ * that file is this server's token source. On a desktop install the token
+ * arrives via `TANDEM_AUTH_TOKEN` from the OS keychain and the file has no
+ * reader: the field then claimed "not yet created" about a live token, or
+ * showed a co-installed npm build's rotation time.
+ */
+describe("GET /api/info — tokenRotatedAt honours the token source (#1946)", () => {
+  const invoke = async (deps: Parameters<typeof makeInfoHandler>[0]) => {
+    const handler = makeInfoHandler(deps);
+    const res = makeMockRes();
+    await (handler as (req: unknown, res: unknown, next: unknown) => Promise<void>)(
+      makeMockReq("127.0.0.1"),
+      res,
+      () => {},
+    );
+    return res._body as Record<string, unknown>;
+  };
+
+  it("omits the field for a loopback caller when the token file is not authoritative", async () => {
+    const body = await invoke({ ...BASE_DEPS, tokenFileIsAuthoritative: () => false });
+    expect("tokenRotatedAt" in body).toBe(false);
+    // Paired on purpose: this kills a fix that narrows the whole loopback block.
+    expect("storagePath" in body).toBe(true);
+    expect("generationId" in body).toBe(true);
+  });
+
+  it("never stats the token file when it is not authoritative", async () => {
+    // Computing the value and then dropping it would leave the ENOENT
+    // console.error branch reachable on every desktop install.
+    let calls = 0;
+    await invoke({
+      ...BASE_DEPS,
+      tokenFileIsAuthoritative: () => false,
+      getTokenFilePath: () => {
+        calls += 1;
+        return "/tmp/tandem-test-should-not-be-stated";
+      },
+    });
+    expect(calls).toBe(0);
+  });
+
+  it("still reports the mtime on the authoritative arm", async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-info-token-"));
+    const tokenPath = path.join(dir, "auth-token");
+    await fs.promises.writeFile(tokenPath, "not-a-real-token", "utf-8");
+    try {
+      const body = await invoke({
+        ...BASE_DEPS,
+        tokenFileIsAuthoritative: () => true,
+        getTokenFilePath: () => tokenPath,
+      });
+      expect("tokenRotatedAt" in body).toBe(true);
+      expect(typeof body.tokenRotatedAt).toBe("number");
+    } finally {
+      await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still reports null (not omitted) on the authoritative arm with no file", async () => {
+    // Without this, "omit always" passes the two specs above while silently
+    // removing the panel for every npm user.
+    const body = await invoke({
+      ...BASE_DEPS,
+      tokenFileIsAuthoritative: () => true,
+      getTokenFilePath: () => `/tmp/tandem-test-no-such-token-${Date.now()}`,
+    });
+    expect("tokenRotatedAt" in body).toBe(true);
+    expect(body.tokenRotatedAt).toBeNull();
   });
 });
