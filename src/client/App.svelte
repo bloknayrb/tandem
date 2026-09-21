@@ -2200,6 +2200,9 @@ const tutorial = createTutorial(
   () => visibleAnnotations,
   () => editor,
   () => activeTab?.fileName,
+  // A getter, not a value: `chatState.messages` is `[]` at mount, so a
+  // by-value capture would freeze the chat advance branch dead.
+  () => chatState.messages,
 );
 
 // First-run model picker (#1123) — an OPTIONAL, skippable step sequenced AFTER

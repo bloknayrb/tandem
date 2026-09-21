@@ -1,6 +1,6 @@
 import type { Editor } from "@tiptap/core";
 import { TUTORIAL_ANNOTATION_PREFIX, TUTORIAL_COMPLETED_KEY } from "../../shared/constants.js";
-import type { Annotation } from "../../shared/types.js";
+import type { Annotation, ChatMessage } from "../../shared/types.js";
 import {
   isTauriRuntime,
   readCoworkOnboardingSkipped,
@@ -72,6 +72,7 @@ export function createTutorial(
   getAnnotations: () => Annotation[],
   getEditor: () => Editor | null,
   getActiveTabFileName: () => string | undefined,
+  getChatMessages: () => ChatMessage[],
 ): TutorialState {
   let completed = $state(readCompleted());
   let currentStep = $state(0);
@@ -110,12 +111,28 @@ export function createTutorial(
     }
   });
 
-  // Step 1: detect user-authored annotation (excluding tutorial seeds —
-  // see isNonTutorialUserAnnotation JSDoc for ADR-027 context).
+  // Step 1 ("Ask a question"): detect a user-authored annotation (excluding
+  // tutorial seeds — see isNonTutorialUserAnnotation JSDoc for ADR-027
+  // context) OR a chat message the user sent during this step (#1965). The
+  // step's own copy and the user guide both say chat completes it, so a user
+  // who only uses Chat was stuck here with nothing explaining why.
+  //
+  // The `timestamp > stepAdvancedAt` term is required, not a refinement: chat
+  // is durable and app-global (the session manager snapshots and restores
+  // Y_MAP_CHAT, `useChatState` repopulates from the ctrl Y.Doc on connect, and
+  // `documentId` is optional), and `restartTutorial` cannot clear chat
+  // history. Without it, every replay — and any first run against a server
+  // with prior chat — would see the step-0 advance and the chat term true in
+  // the same flush, silently auto-skipping the very step this fixes.
+  // `stepAdvancedAt` is a plain `let`, not `$state`, so reading it adds no
+  // dependency; the effect still re-runs off the two getters.
   $effect(() => {
     if (!tutorialActive || currentStep !== 1) return;
     const annotations = getAnnotations();
-    if (annotations.some(isNonTutorialUserAnnotation)) {
+    if (
+      annotations.some(isNonTutorialUserAnnotation) ||
+      getChatMessages().some((m) => m.author === "user" && m.timestamp > stepAdvancedAt)
+    ) {
       stepAdvancedAt = Date.now();
       currentStep = 2;
     }
