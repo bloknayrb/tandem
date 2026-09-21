@@ -1,8 +1,10 @@
 import type { Transaction } from "@tiptap/pm/state";
-import { ySyncPluginKey } from "@tiptap/y-tiptap";
+import { yCursorPluginKey, ySyncPluginKey } from "@tiptap/y-tiptap";
 import { describe, expect, it } from "vitest";
 import { shouldBumpDecoRevision } from "../../src/client/editor/deco-revision";
 import { annotationPluginKey } from "../../src/client/editor/extensions/annotation";
+import { authorshipPluginKey } from "../../src/client/editor/extensions/authorship";
+import { awarenessPluginKey } from "../../src/client/editor/extensions/awareness";
 
 /**
  * #1963 — the gate on `Editor.svelte`'s decoration-rebuild counter.
@@ -30,6 +32,28 @@ describe("shouldBumpDecoRevision", () => {
 
   it("bumps on the annotation plugin's own rebuild signal", () => {
     const metas = new Map<unknown, unknown>([[annotationPluginKey, true]]);
+    expect(shouldBumpDecoRevision(tr(false, metas))).toBe(true);
+  });
+
+  // The three redraw signals that arrive AFTER the y-sync doc replacement and
+  // strip `.tandem-annotation-active` again. None of them rebuilds annotation
+  // decorations; each repaints the `[data-annotation-id]` span and rewrites the
+  // merged `class` attribute, which is the half of #1963 that survived the
+  // first fix. All three carry `docChanged: false` and none of the other metas,
+  // so without their own terms here nothing re-applies the pulse and the user
+  // still sees the highlight vanish on a remote write.
+  it("bumps on the remote-caret redraw (yjs-cursor)", () => {
+    const metas = new Map<unknown, unknown>([[yCursorPluginKey, { awarenessUpdated: true }]]);
+    expect(shouldBumpDecoRevision(tr(false, metas))).toBe(true);
+  });
+
+  it("bumps on the Claude-awareness redraw", () => {
+    const metas = new Map<unknown, unknown>([[awarenessPluginKey, true]]);
+    expect(shouldBumpDecoRevision(tr(false, metas))).toBe(true);
+  });
+
+  it("bumps on the authorship plugin's rebuild dispatch", () => {
+    const metas = new Map<unknown, unknown>([[authorshipPluginKey, { type: "rebuild" }]]);
     expect(shouldBumpDecoRevision(tr(false, metas))).toBe(true);
   });
 

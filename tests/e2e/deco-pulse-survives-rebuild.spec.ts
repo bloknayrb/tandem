@@ -78,20 +78,22 @@ test("#1963: the active-annotation pulse survives a decoration rebuild", async (
   await decoration.click();
   await expect(card).toHaveAttribute("aria-current", "true", { timeout: 10_000 });
 
-  // Watch for RE-APPLICATIONS of the pulse class, not for its end state.
+  // Watch for RE-APPLICATIONS of the pulse class. This counter is the *weak*
+  // half of the oracle and is kept only because it discriminates sharply
+  // against master: it is exactly 0 there — the pulse effect reads only
+  // `editor` and `activeAnnotationId`, neither of which moves on a remote
+  // write, so nothing ever re-applies — and ≥1 once the counter is wired.
   //
-  // Measured while writing this spec: the class does not survive as a steady
-  // DOM state at all. ProseMirror rewrites the decoration span's `class`
-  // attribute on every redraw, and the redraws that follow a remote write
-  // (`yjs-cursor$`, `tandemAuthorship$`, `tandemAwareness$` — all
-  // decoration-bearing plugins, none of them a decoration REBUILD) land a few
-  // milliseconds after the y-sync transaction and strip it again. So an
-  // end-state assertion is red on the fix as well as on master and would say
-  // nothing about #1963. Counting re-applications is the honest discriminator:
-  // this is exactly 0 on master — the pulse effect reads only `editor` and
-  // `activeAnnotationId`, neither of which moves on a remote write, so nothing
-  // ever re-applies — and ≥1 on the fix, which is the `void decoRevision;`
-  // read plus the transaction counter behind it.
+  // It is not sufficient on its own, and the first cut of this spec stopped
+  // here. ProseMirror rewrites the decoration span's `class` attribute on every
+  // redraw, and the redraws that follow a remote write (`yjs-cursor$`,
+  // `tandemAuthorship$`, `tandemAwareness$` — all decoration-bearing plugins,
+  // none of them a decoration REBUILD) land a few milliseconds after the y-sync
+  // transaction and strip it again. A gate that covers only the y-sync
+  // transaction therefore re-applies the class once and loses it again
+  // milliseconds later: this counter goes to ≥1 and the user still sees no
+  // highlight. The steady-state assertion at the end of this spec is the one
+  // that catches that, so do not drop it back to the count alone.
   await page.evaluate(() => {
     (window as unknown as { __pulseAdds: number }).__pulseAdds = 0;
     const root = document.querySelector(".ProseMirror");
@@ -132,4 +134,28 @@ test("#1963: the active-annotation pulse survives a decoration rebuild", async (
       timeout: 10_000,
     })
     .toBeGreaterThan(0);
+
+  // …and it STAYS applied. The sample is a continuous window, not a point
+  // read: a plain `toHaveClass` retries until it passes, so it is satisfied by
+  // the single transient re-application a y-sync-only gate produces and would
+  // be green on the defect this assertion exists to catch. Each probe requires
+  // the class to be present on every sample across STEADY_MS, so the trailing
+  // `yjs-cursor$` / `tandemAwareness$` / `tandemAuthorship$` redraws must each
+  // be followed by a re-application for it to hold.
+  const STEADY_MS = 600;
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async (steadyMs: number) => {
+          const el = document.querySelector("[data-annotation-id]");
+          const deadline = Date.now() + steadyMs;
+          for (;;) {
+            if (!el?.classList.contains("tandem-annotation-active")) return false;
+            if (Date.now() >= deadline) return true;
+            await new Promise((r) => setTimeout(r, 50));
+          }
+        }, STEADY_MS),
+      { timeout: 15_000 },
+    )
+    .toBe(true);
 });
