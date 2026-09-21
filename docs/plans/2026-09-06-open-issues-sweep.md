@@ -1555,11 +1555,17 @@ file. Recorded because the next occurrence will look like an agent breaking a ru
   the ref (`'stash@{0}'`) and do not chain after a stop-parsing token.
 - **Python on this machine defaults to cp1252**; any script printing issue text needs
   `PYTHONIOENCODING=utf-8`.
-- **The harness's low-memory guard killed one pre-push run mid-hook** (01:47 on 2026-09-21, a
-  follow-up push to #2094, while vitest and a cold `cargo test` link overlapped). The push never
-  landed and nothing said so except the task notice — the branch simply stayed at its old head.
-  #2094 merged at the head the workflow had pushed, and the one-line change rides in this PR
-  instead. **After any backgrounded push, compare `git log -1` with the PR's `headRefOid`.**
+- **A hand-run push needs the same three things the workflow gives its own worktrees, and the
+  orchestrator forgot two of them.** `CARGO_TARGET_DIR=<repo>/src-tauri/target` (the shared warm
+  target), the four `tauri_build` stubs under `src-tauri/binaries/` plus the `dist/` dirs from
+  CONTRIBUTING.md's Testing section, and `npx husky`. Without `CARGO_TARGET_DIR` the pre-push
+  `cargo test` does a **cold 2.3 GB build inside the worktree**; overlapping vitest, that drove the
+  machine low enough on memory that the harness's guard killed the backgrounded push mid-hook
+  (01:47 on 2026-09-21, a follow-up to #2094). The push never landed and nothing said so except
+  the task notice — the branch stayed at its old head. Without the stubs the same hook fails
+  outright on `resource path ... doesn't exist`. #2094 merged at the head the workflow had pushed,
+  and the one-line change rides in this PR instead. **After any backgrounded push, compare
+  `git log -1` with the PR's `headRefOid`.**
 - Three workflows ran concurrently without contention (one `e2e`, two not), against the ledger's
   two-at-a-time convention. Probe ports 5010–5027 were used, one pair per group.
 
