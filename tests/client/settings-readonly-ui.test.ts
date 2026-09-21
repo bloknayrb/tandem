@@ -216,6 +216,13 @@ describe("settings read-only UI — controls disabled and writes blocked", () =>
         // Phrased negatively so it does not depend on Svelte stringifying
         // `false` into the attribute at all.
         expect(control.getAttribute("aria-disabled")).not.toBe("true");
+        // …and the click must still WRITE. #1964 moved every radio's click
+        // from an inline `onclick={() => onUpdate({...})}` onto the shared
+        // `activate()` guard, so an inert `activate` (e.g. `if (isDisabled)`
+        // instead of `if (isDisabled?.(v))`) would make every settings radio
+        // a dead click with the refusing half of this file still green.
+        control.click();
+        expect(ctx.onUpdate).toHaveBeenCalled();
       } else {
         expect(control.disabled).toBe(false);
       }
@@ -386,6 +393,39 @@ describe("settings radiogroups — keyboard path honours readOnly (#1964)", () =
           expect(radio.getAttribute("aria-disabled")).toBe("true");
         }
         group.dispatchEvent(arrowRight());
+      }
+      expect(ctx.onUpdate).not.toHaveBeenCalled();
+    });
+
+    it(`${host.name}: every radio's CLICK writes when not readOnly`, async () => {
+      // The click path is `activate()`, not `handleKeyDown` — the same
+      // iteration rationale as above, so a newly added group cannot ship a
+      // dead click. One call per radio: a group whose clicks are all inert
+      // would otherwise hide behind a sibling group that still writes.
+      const ctx = makeCtx(false);
+      const { container } = render(host.component, { props: ctx });
+      await tick();
+
+      let radioCount = 0;
+      for (const group of groupsOf(container)) {
+        const radios = Array.from(group.querySelectorAll<HTMLElement>('[role="radio"]'));
+        expect(radios.length, "radiogroup with no radios").toBeGreaterThan(0);
+        radioCount += radios.length;
+        for (const radio of radios) radio.click();
+      }
+      expect(ctx.onUpdate).toHaveBeenCalledTimes(radioCount);
+    });
+
+    it(`${host.name}: after a flip to readOnly, every radio's CLICK is refused`, async () => {
+      const ctx = makeCtx(false);
+      const { container, rerender } = render(host.component, { props: ctx });
+      await rerender({ ...ctx, readOnly: true });
+      await tick();
+
+      for (const group of groupsOf(container)) {
+        for (const radio of group.querySelectorAll<HTMLElement>('[role="radio"]')) {
+          (radio as HTMLElement).click();
+        }
       }
       expect(ctx.onUpdate).not.toHaveBeenCalled();
     });
