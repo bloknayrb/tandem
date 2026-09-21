@@ -2811,6 +2811,77 @@ mod crash_restart_tests {
         assert!(!announces_successful_restart(RestartCause::UserInitiated));
     }
 
+    /// #1959 review — the announcement must stay in `restart_sidecar_for`'s
+    /// `Ok(SpawnOutcome::Started)` arm, and nowhere else. The issue body
+    /// proposed emitting from the `CrashRestartDecision::Restart` decision site
+    /// instead, which runs BEFORE the graceful stop and the respawn: from there
+    /// a declined respawn (`SpawnOutcome::Declined`, non-EXITING) or an `Err`
+    /// would show "Tandem server restarted after a crash." immediately followed
+    /// by "Tandem server failed to restart." — the exact outcome the emit site's
+    /// own comment says it exists to prevent.
+    ///
+    /// Nothing else catches that move: `only_a_crash_restart_announces_itself`
+    /// exercises the pure discriminant, the vitest specs drive an injected fake
+    /// `listen`, and the cross-language pin in
+    /// `tests/docs/startup-open-failure-wiring-claims.test.ts` greps the whole
+    /// file. So the SITE is pinned structurally, the same way the two arm tests
+    /// below are, and for the same reason: reaching it for real needs an
+    /// `AppHandle` and a child process that crashes.
+    ///
+    /// The needle is `concat!`-ed so the verbatim sequence never appears in this
+    /// test — that is what lets the uniqueness count read the entire file with
+    /// no "production half" filter, exactly as
+    /// `respawn_guard_lines_are_warns_and_match_the_smoke_checklist` does.
+    #[test]
+    fn the_restarted_event_is_announced_only_from_the_spawn_success_arm() {
+        let src = include_str!("sidecar.rs");
+        let emit = concat!(".emit(EVENT_SIDECAR", "_RESTARTED");
+        assert_eq!(
+            src.matches(emit).count(),
+            1,
+            "exactly one site may announce a successful restart"
+        );
+
+        let fn_start = src
+            .find("pub(crate) fn restart_sidecar_for(")
+            .expect("restart_sidecar_for must exist");
+        let body = &src[fn_start..];
+        let body = &body[..body
+            .find("\n}\n")
+            .expect("restart_sidecar_for's body must be delimited")];
+
+        // Sliced out of the match rather than brace-counted, so a re-wrap
+        // inside the arm cannot false-red this.
+        let arm_start = body
+            .find("Ok(SpawnOutcome::Started) => {")
+            .expect("the spawn success arm must exist");
+        let arm = &body[arm_start..];
+        let arm = &arm[..arm
+            .find("Ok(SpawnOutcome::Declined) => {")
+            .expect("the declined arm must follow the success arm")];
+        assert!(
+            arm.contains(emit),
+            "the emit must sit in the arm that saw a sidecar actually come back"
+        );
+        assert!(
+            arm.contains("announces_successful_restart(cause)"),
+            "and it must stay gated on the cause, or a user-initiated restart toasts too"
+        );
+
+        // And the decision site must not grow one of its own.
+        let decision_start = src
+            .find("CrashRestartDecision::Restart => {")
+            .expect("the crash restart arm must exist");
+        let decision = &src[decision_start..];
+        let decision = &decision[..decision
+            .find("CrashRestartDecision::BreakerTripped =>")
+            .expect("the breaker arm must follow it")];
+        assert!(
+            !decision.contains(emit),
+            "the decision site runs before the respawn — it cannot know a restart succeeded"
+        );
+    }
+
     /// The worst bug this guard prevents, so it goes first: a `Terminated` from
     /// a killed retry attempt landing after a newer child is healthy would
     /// otherwise gracefully stop and respawn a live sidecar, because

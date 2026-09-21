@@ -1,11 +1,32 @@
 /**
- * The listen/cancel dance every Tauri event listener in the client repeats.
+ * The listen/cancel dance for a PAYLOAD-FREE Tauri event listener.
  *
  * `@tauri-apps/api/event` is dynamically imported (the client also runs in a
  * plain browser, where the module must never load), so wiring a listener is
  * always a promise chain whose unlisten handle can arrive *after* the component
  * has been destroyed. Getting that wrong leaks a listener across a hot reload.
- * One implementation, so the three call sites cannot disagree about it.
+ *
+ * **This is not yet the one implementation, and a fix applied here does not
+ * reach the rest.** Exactly two sites route through it — `src/client/App.svelte`
+ * (`sidecar-restart-failed`) and `src/client/utils/sidecar-restart-toast.ts`
+ * (`sidecar-restarted`), the #1959 pair it was extracted from. Hand-rolled
+ * chains against the same dynamic import still live in
+ * `src/client/App.svelte` (`open-integration-wizard`),
+ * `src/client/tabs/DocumentTabs.svelte`,
+ * `src/client/editor/context-menu/install.ts`,
+ * `src/client/panels/annotation-context-menu-host.ts`,
+ * `src/client/hooks/useUpdaterChannel.svelte.ts`,
+ * `src/client/hooks/usePendingUpdateBanner.svelte.ts`,
+ * `src/client/utils/pending-update-hint.ts` and
+ * `src/client/utils/startup-rejection.ts`. Several carry a payload, a refcount
+ * or a token discriminator this signature does not model, so migrating them is
+ * a change with its own review, not a rename. Until one of them moves, do not
+ * read a guard added below as covering it — in particular the `cancelled`
+ * re-check inside the handler is local to this file.
+ *
+ * That enumeration is pinned by `tests/docs/tauri-event-helper-claims.test.ts`,
+ * which sweeps `src/client` for the dynamic import and fails closed on a site
+ * this list does not name.
  */
 
 export interface TauriEventModule {
