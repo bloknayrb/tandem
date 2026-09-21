@@ -2913,7 +2913,7 @@ async function checkAnnotationStore(r: Recorder): Promise<void> {
   if (scan.quarantined > 0) {
     r.warn(
       `${scan.quarantined} quarantined annotation file(s) in ${dir}`,
-      "Safe to delete after inspection; kept 7d by design.",
+      "Kept indefinitely — nothing deletes them. Safe to delete after inspection; reading one back is manual today. See #1980.",
       { corruptCount: scan.quarantined, dir },
     );
   }
@@ -2925,7 +2925,7 @@ async function checkAnnotationStore(r: Recorder): Promise<void> {
   if (scan.parkedFuture > 0) {
     r.warn(
       `${scan.parkedFuture} annotation file(s) parked as .future in ${dir}`,
-      "Written by a newer Tandem. Update, and they load again; they are never deleted.",
+      "Written by a newer Tandem and renamed aside to <hash>.json.future, so this build does not load them — it reads <hash>.json. They are never deleted; recovering one is manual today. See #1980.",
       { parkedFuture: scan.parkedFuture, dir },
     );
   }
