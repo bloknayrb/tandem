@@ -9,19 +9,21 @@ import {
 } from "./helpers";
 
 /**
- * #1963 — the active-annotation pulse must survive a decoration rebuild.
+ * #1963 — the active-annotation tint must survive a decoration rebuild.
  *
- * `Editor.svelte`'s pulse effect writes `.tandem-annotation-active` onto DOM
- * nodes the annotation decoration plugin produced, but it read only `editor`
- * and `activeAnnotationId`. When y-prosemirror's `_typeChanged` replaces the PM
- * doc on a remote write (#1669) and ProseMirror re-renders the
- * `[data-annotation-id]` spans, neither input moves, the effect does not re-run
- * and the pulse is silently gone from a still-active annotation.
+ * Clicking an annotation tints its span (`.tandem-annotation-active`, the #798
+ * A6a "this is the spot" cue, whose keyframe rests at the same 16% accent so
+ * the tint PERSISTS while the card is focused). A remote write replaces the PM
+ * doc (#1669), ProseMirror re-renders the `[data-annotation-id]` spans, and the
+ * tint used to be gone for good afterwards.
  *
- * This is not optional coverage: an implementation that ships
- * `deco-revision.ts` and wires the counter but omits the one-line
- * `void decoRevision;` read is green on every unit spec with #1963 unfixed, and
- * nothing under `tests/` renders `Editor.svelte`.
+ * The fix makes the class part of the annotation DECORATION, so every rebuild
+ * reproduces it. `tests/client/decoration-survives-sync.test.ts` pins that at
+ * the plugin level with a real bound editor; this spec exists for the half only
+ * a browser has — ProseMirror's DOMObserver, which is what defeated the first,
+ * imperative fix: it treats a `classList.add` on a span it owns as damage and
+ * re-renders the node from the DecorationSet ~1ms later, dispatching no
+ * transaction, so no transaction-keyed re-apply can survive it.
  *
  * Shaped on `decoration-survives-mcp-write.spec.ts`, which drives the same
  * y-sync doc replacement from an MCP write.
@@ -48,7 +50,7 @@ test.afterEach(async () => {
   cleanupFixtureDir(tmpDir);
 });
 
-test("#1963: the active-annotation pulse survives a decoration rebuild", async ({ page }) => {
+test("#1963: the active-annotation tint survives a decoration rebuild", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_comment", {
     from: TITLE_FROM,
@@ -66,47 +68,12 @@ test("#1963: the active-annotation pulse survives a decoration rebuild", async (
   await expect(decoration).toHaveCount(1, { timeout: 15_000 });
 
   // Activate it: clicking the decoration runs `onAnnotationClick`, which sets
-  // `activeAnnotationId` — the input the pulse effect keys on. The side-panel
-  // card's `aria-current` is the oracle for "this annotation is focused", NOT
-  // the editor's own `.tandem-annotation-active`: that class is written onto
-  // ProseMirror-owned decoration spans and is wiped whenever ProseMirror
-  // redraws them (`highlight-ux.spec.ts` says so outright), which is exactly
-  // the defect under test — so asserting it here would be asserting the bug
-  // does not happen before the rebuild this spec drives.
+  // `activeAnnotationId`, which dispatches the plugin's `set-active` meta.
   const card = page.locator("[data-testid^='annotation-card-']").first();
   await expect(card).toBeVisible({ timeout: 10_000 });
   await decoration.click();
   await expect(card).toHaveAttribute("aria-current", "true", { timeout: 10_000 });
-
-  // Watch for RE-APPLICATIONS of the pulse class. This counter is the *weak*
-  // half of the oracle and is kept only because it discriminates sharply
-  // against master: it is exactly 0 there — the pulse effect reads only
-  // `editor` and `activeAnnotationId`, neither of which moves on a remote
-  // write, so nothing ever re-applies — and ≥1 once the counter is wired.
-  //
-  // It is not sufficient on its own, and the first cut of this spec stopped
-  // here. ProseMirror rewrites the decoration span's `class` attribute on every
-  // redraw, and the redraws that follow a remote write (`yjs-cursor$`,
-  // `tandemAuthorship$`, `tandemAwareness$` — all decoration-bearing plugins,
-  // none of them a decoration REBUILD) land a few milliseconds after the y-sync
-  // transaction and strip it again. A gate that covers only the y-sync
-  // transaction therefore re-applies the class once and loses it again
-  // milliseconds later: this counter goes to ≥1 and the user still sees no
-  // highlight. The steady-state assertion at the end of this spec is the one
-  // that catches that, so do not drop it back to the count alone.
-  await page.evaluate(() => {
-    (window as unknown as { __pulseAdds: number }).__pulseAdds = 0;
-    const root = document.querySelector(".ProseMirror");
-    if (!root) throw new Error("no ProseMirror root");
-    new MutationObserver((records) => {
-      for (const r of records) {
-        const el = r.target as HTMLElement;
-        if (el.classList?.contains("tandem-annotation-active")) {
-          (window as unknown as { __pulseAdds: number }).__pulseAdds++;
-        }
-      }
-    }).observe(root, { attributes: true, subtree: true, attributeFilter: ["class"] });
-  });
+  await expect(decoration).toHaveClass(/\btandem-annotation-active\b/, { timeout: 10_000 });
 
   // The rebuild. An edit in an UNRELATED paragraph, below the annotated title,
   // so it cannot overlap the annotated range — an overlapping edit would
@@ -125,31 +92,30 @@ test("#1963: the active-annotation pulse survives a decoration rebuild", async (
     timeout: 10_000,
   });
 
-  // Still painted (that half is #1669), still the active annotation, and the
-  // pulse was re-applied to it after the rebuild.
+  // Still painted (that half is #1669), still the focused annotation, and still
+  // tinted.
   await expect(decoration).toHaveCount(1);
   await expect(card).toHaveAttribute("aria-current", "true");
-  await expect
-    .poll(() => page.evaluate(() => (window as unknown as { __pulseAdds: number }).__pulseAdds), {
-      timeout: 10_000,
-    })
-    .toBeGreaterThan(0);
 
-  // …and it STAYS applied. The sample is a continuous window, not a point
-  // read: a plain `toHaveClass` retries until it passes, so it is satisfied by
-  // the single transient re-application a y-sync-only gate produces and would
-  // be green on the defect this assertion exists to catch. Each probe requires
-  // the class to be present on every sample across STEADY_MS, so the trailing
-  // `yjs-cursor$` / `tandemAwareness$` / `tandemAuthorship$` redraws must each
-  // be followed by a re-application for it to hold.
+  // A continuous window, not a point read. `toHaveClass` retries until it
+  // passes, so it is satisfied by any transient re-application — which is
+  // exactly what the imperative fix produced before the DOMObserver repaired
+  // the span a millisecond later. Requiring the class on every sample across
+  // STEADY_MS is what separates "it came back for a moment" from "it is the
+  // resting state", and only the latter is what the user sees.
   const STEADY_MS = 600;
   await expect
     .poll(
       () =>
         page.evaluate(async (steadyMs: number) => {
-          const el = document.querySelector("[data-annotation-id]");
           const deadline = Date.now() + steadyMs;
           for (;;) {
+            // Re-queried every sample, and scoped to `.ProseMirror`: the
+            // decoration span is destroyed and re-created by each redraw, so a
+            // captured node goes detached and reads false forever, and
+            // `data-annotation-id` is also on the side-panel card and the
+            // margin-column paths, which never carry the tint.
+            const el = document.querySelector(".ProseMirror [data-annotation-id]");
             if (!el?.classList.contains("tandem-annotation-active")) return false;
             if (Date.now() >= deadline) return true;
             await new Promise((r) => setTimeout(r, 50));

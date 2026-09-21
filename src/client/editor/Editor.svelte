@@ -4,21 +4,18 @@ import { Editor as TiptapEditor } from "@tiptap/core";
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
 import Typography from "@tiptap/extension-typography";
-import type { Transaction } from "@tiptap/pm/state";
 import { untrack } from "svelte";
 import * as Y from "yjs";
 import type { TandemNotification } from "../../shared/types.js";
 import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { readStoredName, subscribeToUserName } from "../hooks/useUserName";
-import { createCoalescingTick } from "../utils/coalescing-tick";
 import { openServerPath } from "../utils/server-paths";
 import { installContextMenu } from "./context-menu/install";
-import { shouldBumpDecoRevision } from "./deco-revision";
 // Schema-defining extensions (nodes + marks + static plugins) live in one shared
 // module so the editor and tests register the same schema — see editor-extensions.ts.
 import { buildSchemaExtensions } from "./editor-extensions";
 import { makeEditorProps } from "./editor-props";
-import { AnnotationExtension } from "./extensions/annotation";
+import { AnnotationExtension, annotationPluginKey } from "./extensions/annotation";
 import { AnnotationPingExtension } from "./extensions/annotationPing";
 import { AuthorshipExtension } from "./extensions/authorship";
 import { AwarenessExtension } from "./extensions/awareness";
@@ -286,59 +283,25 @@ $effect(() => {
   return subscribeToUserName((name) => ed.commands.updateUser({ name }));
 });
 
-// -- Decoration-rebuild counter (#1963) ------------------------------------
-// The pulse effect below writes onto DOM nodes the annotation decoration
-// plugin produced. When that plugin rebuilds — the #1669 case, where
-// y-prosemirror replaces the PM doc and ProseMirror re-renders the
-// `[data-annotation-id]` spans — neither `editor` nor `activeAnnotationId`
-// moves, so the effect would not re-run and the class is silently gone from a
-// still-active annotation. This counter is the missing reactive input.
-let decoRevision = $state(0);
-
-// Capture `editor` so cleanup `.off()` runs against the instance we attached
-// to — the reactive prop getter is null during tab switch.
+// -- Active annotation tint (#798 A6a, #1963) ------------------------------
+// The focused annotation's tint is part of the annotation DECORATION, not a
+// class written onto the span it produced. It has to be: ProseMirror's
+// DOMObserver treats an attribute it did not write as damage, marks the node
+// dirty and re-renders it from the DecorationSet — measured at ~1ms after a
+// `classList.add`, and a repair dispatches no transaction, so no
+// transaction-keyed re-apply can win that race. The plugin holds the active id
+// and every rebuild (remote sync, type toggle, recovery) re-derives the tint.
+//
+// `untrack` around the dispatch, matching `App.svelte`'s decoration-visibility
+// effect: `view.dispatch` runs subscribers synchronously and this effect must
+// not take a dependency on whatever they read.
 $effect(() => {
   const ed = editor;
+  const id = activeAnnotationId;
   if (!ed || ed.isDestroyed) return;
-  // Deferred: `transaction` is emitted synchronously from ProseMirror's
-  // dispatch, so a bare `decoRevision++` throws state_unsafe_mutation (prod
-  // too). Precedent: FormattingToolbar.svelte. The filter runs OUTSIDE the
-  // tick, so a burst of qualifying transactions collapses to one write while a
-  // cursor-move burst schedules nothing.
-  const bump = createCoalescingTick(() => {
-    if (!ed.isDestroyed) decoRevision++;
+  untrack(() => {
+    ed.view.dispatch(ed.state.tr.setMeta(annotationPluginKey, { type: "set-active", id }));
   });
-  const handler = ({ transaction }: { transaction: Transaction }) => {
-    if (!shouldBumpDecoRevision(transaction)) return;
-    bump();
-  };
-  ed.on("transaction", handler);
-  return () => {
-    if (!ed.isDestroyed) ed.off("transaction", handler);
-  };
-});
-
-// -- Apply active annotation highlight class -------------------------------
-$effect(() => {
-  const ed = editor;
-  if (!ed) return;
-  // Dependency-only read: a decoration rebuild re-creates the
-  // `[data-annotation-id]` spans without moving `editor` or
-  // `activeAnnotationId`, so the class has to be re-applied off this counter.
-  void decoRevision;
-  const container = ed.view.dom;
-
-  container.querySelectorAll(".tandem-annotation-active").forEach((el) => {
-    el.classList.remove("tandem-annotation-active");
-  });
-
-  if (activeAnnotationId) {
-    container
-      .querySelectorAll(`[data-annotation-id="${CSS.escape(activeAnnotationId)}"]`)
-      .forEach((el) => {
-        el.classList.add("tandem-annotation-active");
-      });
-  }
 });
 
 function notifyLinkProblem(message: string, severity: "warning" | "error", dedupKey: string): void {
@@ -483,9 +446,8 @@ function handleEditorClick(e: MouseEvent) {
   } else if (!bestId) {
     // Clicked editor text that isn't an annotation → deselect (empty selection
     // is a valid resting state). Inert for editing: clearing the selection-state
-    // var has no document effect — the active-highlight effect above just strips
-    // the `.tandem-annotation-active` class and skips re-adding it when the id is
-    // null.
+    // var has no document effect — the active-tint effect above just dispatches
+    // `set-active` with a null id, and the plugin rebuilds without the tint.
     onClearAnnotation?.();
   }
 }

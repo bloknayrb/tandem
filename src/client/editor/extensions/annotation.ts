@@ -32,6 +32,27 @@ export interface AnnotationToggleMeta {
   visible: DecorationVisibility;
 }
 
+/**
+ * Dispatched by `Editor.svelte` when the focused annotation changes (#1963).
+ *
+ * The active-annotation tint used to be a `classList.add` onto the decoration
+ * span, which cannot hold: `.tandem-annotation-active` is not part of the
+ * decoration, so ProseMirror's own DOMObserver sees an attribute it did not
+ * write, marks the node dirty and re-renders the span from the DecorationSet —
+ * measured at ~1ms after the write, which is why the class was gone again
+ * before the next frame and why gating a re-apply on transaction metadata
+ * could not fix it (nothing dispatches a transaction for a DOM repair). Making
+ * the class part of the decoration is what makes it survive: every redraw
+ * rebuilds it from here.
+ */
+export interface AnnotationActiveMeta {
+  type: "set-active";
+  id: string | null;
+}
+
+/** Everything `annotationPluginKey` carries. `true` is the bare rebuild signal. */
+export type AnnotationMeta = AnnotationToggleMeta | AnnotationActiveMeta | true;
+
 const ALL_VISIBLE: DecorationVisibility = { comment: true, highlight: true, note: true };
 
 /**
@@ -96,6 +117,7 @@ function buildDecorations(
   ydoc: Y.Doc | null,
   visible: DecorationVisibility,
   agentLabel: string,
+  activeId: string | null,
 ): DecorationSet {
   const decorations: Decoration[] = [];
   const maxPos = doc.content.size;
@@ -200,6 +222,15 @@ function buildDecorations(
       }
     }
 
+    // The focused annotation's tint and pulse (#798 A6a, #1963). Appended to
+    // whatever the type branch above chose rather than replacing it, so the
+    // underline/highlight that identifies the annotation stays visible under
+    // the tint. The CSS rule is `[data-annotation-id].tandem-annotation-active`,
+    // so it only ever paints on a span that already carries an id.
+    if (activeId !== null && ann.id === activeId) {
+      attrs.class = `${attrs.class} tandem-annotation-active`;
+    }
+
     try {
       decorations.push(Decoration.inline(from, to, attrs));
     } catch (err) {
@@ -262,6 +293,10 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
 
     let hasVisibleAnnotations = computeHasVisibleAnnotations();
     let recoveryAttempted = false;
+    // The focused annotation (#1963). Held here rather than in the decoration
+    // set so every rebuild below — toggle, remote-sync, recovery — re-derives
+    // the tint instead of losing it.
+    let activeId: string | null = null;
 
     return [
       new Plugin({
@@ -270,11 +305,27 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
         state: {
           init(_, state) {
             return hasVisibleAnnotations
-              ? buildDecorations(state.doc, annotationsMap, ydoc, visible, agentFamily)
+              ? buildDecorations(state.doc, annotationsMap, ydoc, visible, agentFamily, activeId)
               : DecorationSet.empty;
           },
           apply(tr, decorationSet, _oldState, newState) {
-            const meta = tr.getMeta(annotationPluginKey) as AnnotationToggleMeta | true | undefined;
+            const meta = tr.getMeta(annotationPluginKey) as AnnotationMeta | undefined;
+            if (meta && typeof meta === "object" && meta.type === "set-active") {
+              // Idempotent on an unchanged id, and that is behaviour rather
+              // than thrift: a rebuild re-creates the span, which RESTARTS the
+              // pulse keyframe, so re-clicking the already-focused card would
+              // flash it again. #798 A6a is explicit that the pulse is a
+              // "this is the spot" cue on becoming active, not a click ack.
+              // (The effect in `Editor.svelte` also only fires on a change, so
+              // this is the second of two guards, not the only one — but the
+              // plugin is where the DOM consequence lives.)
+              if (meta.id === activeId) return decorationSet;
+              // Otherwise rebuild rather than map: the tint lives in the
+              // decoration's own attrs, so re-deriving the set is the only way
+              // to move it. A click-rate event, not a keystroke one, so the
+              // #610 walk budget is unaffected.
+              activeId = meta.id;
+            }
             if (meta && typeof meta === "object" && meta.type === "toggle-decorations") {
               // A type toggle changes visibility without changing the map, so
               // recompute the visible-annotations quantity here too, and re-arm
@@ -288,7 +339,14 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
               // Refresh the agent label on rebuild so a model change is reflected.
               agentFamily = readAgentFamilyLabel();
               return hasVisibleAnnotations
-                ? buildDecorations(newState.doc, annotationsMap, ydoc, visible, agentFamily)
+                ? buildDecorations(
+                    newState.doc,
+                    annotationsMap,
+                    ydoc,
+                    visible,
+                    agentFamily,
+                    activeId,
+                  )
                 : DecorationSet.empty;
             }
             if (!hasVisibleAnnotations) return DecorationSet.empty;
@@ -351,6 +409,7 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                 ydoc,
                 visible,
                 agentFamily,
+                activeId,
               );
               // Latch on SUCCESS only, matching the recovery branch below.
               // Two things clear the flag, not one: the Y.Map observer and the
@@ -385,6 +444,7 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                   ydoc,
                   visible,
                   agentFamily,
+                  activeId,
                 );
                 if (rebuilt !== DecorationSet.empty) recoveryAttempted = true;
                 return rebuilt;
