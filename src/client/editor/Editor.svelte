@@ -4,13 +4,16 @@ import { Editor as TiptapEditor } from "@tiptap/core";
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
 import Typography from "@tiptap/extension-typography";
+import type { Transaction } from "@tiptap/pm/state";
 import { untrack } from "svelte";
 import * as Y from "yjs";
 import type { TandemNotification } from "../../shared/types.js";
 import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { readStoredName, subscribeToUserName } from "../hooks/useUserName";
+import { createCoalescingTick } from "../utils/coalescing-tick";
 import { openServerPath } from "../utils/server-paths";
 import { installContextMenu } from "./context-menu/install";
+import { shouldBumpDecoRevision } from "./deco-revision";
 // Schema-defining extensions (nodes + marks + static plugins) live in one shared
 // module so the editor and tests register the same schema — see editor-extensions.ts.
 import { buildSchemaExtensions } from "./editor-extensions";
@@ -283,10 +286,46 @@ $effect(() => {
   return subscribeToUserName((name) => ed.commands.updateUser({ name }));
 });
 
+// -- Decoration-rebuild counter (#1963) ------------------------------------
+// The pulse effect below writes onto DOM nodes the annotation decoration
+// plugin produced. When that plugin rebuilds — the #1669 case, where
+// y-prosemirror replaces the PM doc and ProseMirror re-renders the
+// `[data-annotation-id]` spans — neither `editor` nor `activeAnnotationId`
+// moves, so the effect would not re-run and the class is silently gone from a
+// still-active annotation. This counter is the missing reactive input.
+let decoRevision = $state(0);
+
+// Capture `editor` so cleanup `.off()` runs against the instance we attached
+// to — the reactive prop getter is null during tab switch.
+$effect(() => {
+  const ed = editor;
+  if (!ed || ed.isDestroyed) return;
+  // Deferred: `transaction` is emitted synchronously from ProseMirror's
+  // dispatch, so a bare `decoRevision++` throws state_unsafe_mutation (prod
+  // too). Precedent: FormattingToolbar.svelte. The filter runs OUTSIDE the
+  // tick, so a burst of qualifying transactions collapses to one write while a
+  // cursor-move burst schedules nothing.
+  const bump = createCoalescingTick(() => {
+    if (!ed.isDestroyed) decoRevision++;
+  });
+  const handler = ({ transaction }: { transaction: Transaction }) => {
+    if (!shouldBumpDecoRevision(transaction)) return;
+    bump();
+  };
+  ed.on("transaction", handler);
+  return () => {
+    if (!ed.isDestroyed) ed.off("transaction", handler);
+  };
+});
+
 // -- Apply active annotation highlight class -------------------------------
 $effect(() => {
   const ed = editor;
   if (!ed) return;
+  // Dependency-only read: a decoration rebuild re-creates the
+  // `[data-annotation-id]` spans without moving `editor` or
+  // `activeAnnotationId`, so the class has to be re-applied off this counter.
+  void decoRevision;
   const container = ed.view.dom;
 
   container.querySelectorAll(".tandem-annotation-active").forEach((el) => {
