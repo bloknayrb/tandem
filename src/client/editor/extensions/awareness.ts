@@ -170,7 +170,11 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
           let typingTimeout: ReturnType<typeof setTimeout> | null = null;
           let activityWriteTimeout: ReturnType<typeof setTimeout> | null = null;
           let selectionDebounceTimeout: ReturnType<typeof setTimeout> | null = null;
+          let remoteCursorTimeout: ReturnType<typeof setTimeout> | null = null;
           let pendingActivity = false;
+          // #1991: the time the USER last made the non-empty selection, carried
+          // across the remote remaps that shift it.
+          let lastSelectionStamp: number | null = null;
           // #1776: `cursor` is published to MCP clients, which hold no ProseMirror
           // document — so it must leave here in the SAME flat coordinate system as
           // `Y_MAP_SELECTION` below and as annotation ranges. A raw
@@ -182,6 +186,29 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
           return {
             update(view, prevState) {
               const { state } = view;
+
+              // #1918: a plugin VIEW has no transaction, so remoteness is read
+              // off the ySync plugin state rather than `tr.getMeta` the way
+              // plugin 1 does at the top of this file. y-tiptap recomputes both
+              // flags on every transaction, so neither is sticky.
+              // `isUndoRedoOperation` is set only when the Y transaction origin
+              // is THIS tab's `Y.UndoManager` — a user action that must keep
+              // counting as activity. Another tab's undo arrives as an ordinary
+              // provider update and is remote.
+              const ySync = ySyncPluginKey.getState(state) as
+                | { isChangeOrigin?: boolean; isUndoRedoOperation?: boolean }
+                | undefined;
+              const isRemoteChange =
+                ySync?.isChangeOrigin === true && ySync.isUndoRedoOperation !== true;
+              // The selection stamp asks a narrower question than activity
+              // does: "did the USER just make this selection?". This tab's own
+              // undo IS the user editing — so it counts as activity — but it
+              // still only shifts a selection the user made earlier, via
+              // `restoreRelativeSelection`, exactly like a remote edit. So the
+              // stamp treats every Y-driven transaction as a shift; carving
+              // undo out here would re-stamp a lingering selection, which is
+              // #1991's own defect on the undo path.
+              const selectionShiftedByDocChange = ySync?.isChangeOrigin === true;
 
               // Broadcast selection changes (convert PM positions to flat text offsets)
               // Only when selection actually moved, not on every transaction
@@ -213,6 +240,23 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                   const truncated =
                     selectedText.length > 200 ? selectedText.slice(0, 197) + "..." : selectedText;
 
+                  // #1991: a remote change rebuilds the document and
+                  // `restoreRelativeSelection` moves a lingering selection, so
+                  // `eq` fails and this arm runs for a selection the user did
+                  // not make. The shifted offsets and the re-read text are real
+                  // and are still written; only the time is carried over.
+                  // Gated on doc-driven-ness alone — an edit INSIDE the span
+                  // is no more a user selection than one above it.
+                  //
+                  // Assigned here rather than in the debounce callback: a later
+                  // update() clears the pending timer, so a stamp set only at
+                  // fire time would let a fresh local selection be published
+                  // carrying the previous one's time — this defect inverted.
+                  const stampedAt = selectionShiftedByDocChange
+                    ? (lastSelectionStamp ?? Date.now())
+                    : Date.now();
+                  lastSelectionStamp = stampedAt;
+
                   if (selectionDebounceTimeout) clearTimeout(selectionDebounceTimeout);
                   selectionDebounceTimeout = setTimeout(() => {
                     selectionDebounceTimeout = null;
@@ -220,7 +264,7 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                       userAwareness.set(Y_MAP_SELECTION, {
                         ...flat,
                         selectedText: truncated,
-                        timestamp: Date.now(),
+                        timestamp: stampedAt,
                       }),
                     );
                   }, 150);
@@ -230,7 +274,17 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
               // Broadcast typing activity — debounce the Y.Map write to avoid
               // network sync on every keystroke. Batch rapid edits into one write.
               if (state.doc !== prevState.doc) {
+                // Refreshed on EVERY doc change, remote included (#1918): a
+                // remote edit landing inside a window the user's own keystroke
+                // armed must still move this, or the pending write publishes a
+                // flat offset computed against the pre-remote document.
+                // Refreshing a local variable is neither a write nor a timer.
                 lastCursor = { doc: state.doc, pos: state.selection.from };
+              }
+
+              // #1918: only a LOCAL doc change is the user's activity — a
+              // remote one must not publish `isTyping: true` for them.
+              if (state.doc !== prevState.doc && !isRemoteChange) {
                 pendingActivity = true;
 
                 // Debounce the "typing" write (200ms to batch rapid keystrokes)
@@ -271,11 +325,37 @@ export const AwarenessExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                   );
                 }, TYPING_DEBOUNCE);
               }
+
+              // A remote edit publishes no activity (#1918) — but it DOES move
+              // the caret, and it moves the coordinate system the last
+              // published `cursor` was expressed in, so leaving that number
+              // alone points Claude at different text after its own
+              // `tandem_edit`. Refresh the offset in place: the record's
+              // `isTyping` and `lastEdit` are carried over verbatim, so no
+              // remote edit can mint activity or make the user look active.
+              // An ABSENT record stays absent — minting one here is exactly
+              // what #1918 forbids.
+              if (state.doc !== prevState.doc && isRemoteChange && !remoteCursorTimeout) {
+                remoteCursorTimeout = setTimeout(() => {
+                  remoteCursorTimeout = null;
+                  const prev = userAwareness.get(Y_MAP_ACTIVITY) as
+                    | { isTyping: boolean; cursor: number; lastEdit: number }
+                    | undefined;
+                  if (!prev) return;
+                  // Live state, like the typing-clear write, and converted
+                  // outside the transaction (Critical Rule 2).
+                  const { doc, selection } = view.state;
+                  const cursor = pmPosToFlatOffset(doc, toPmPos(selection.from));
+                  if (cursor === prev.cursor) return;
+                  withBrowser(ydoc, () => userAwareness.set(Y_MAP_ACTIVITY, { ...prev, cursor }));
+                }, 200);
+              }
             },
             destroy() {
               if (typingTimeout) clearTimeout(typingTimeout);
               if (activityWriteTimeout) clearTimeout(activityWriteTimeout);
               if (selectionDebounceTimeout) clearTimeout(selectionDebounceTimeout);
+              if (remoteCursorTimeout) clearTimeout(remoteCursorTimeout);
             },
           };
         },
