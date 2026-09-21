@@ -302,6 +302,45 @@ const CLOSED_NOT_IN_CLAUDE_MD = [
   },
 ];
 
+/**
+ * The #2037 entry QUOTES the guard predicate that closed it. Nothing else pins a quoted line
+ * of source in this file — the specs above match issue refs, not code — and a wrong quote here
+ * is worse than none: the register is the finding's tracked home, so a maintainer reconciling
+ * the code to it would substitute the quoted form. For this predicate that substitution is a
+ * live bug rather than a cosmetic one (`requireDocument(safeDocId)` resolves whatever document
+ * is ACTIVE on the default path, producing a spurious RELOAD_IN_PROGRESS for a document that
+ * was never swapped), so the quote is pinned in both directions: the register must show the
+ * shipped form, and neither file may carry the `safeDocId` spelling of it.
+ */
+const DOCX_APPLY_TS = readFileSync(join(REPO_ROOT, "src/server/mcp/docx-apply.ts"), "utf-8");
+const SWAP_GUARD = "requireDocument(docState.docName)?.doc !== ydoc";
+const WRONG_SWAP_GUARD = "requireDocument(safeDocId)?.doc";
+
+describe("the #2037 entry quotes the guard predicate that actually shipped", () => {
+  it("the quoted predicate is the source line", () => {
+    expect(DOCX_APPLY_TS, "control: the swap guard is not in docx-apply.ts in this form").toContain(
+      SWAP_GUARD,
+    );
+    expect(
+      SECURITY_MD,
+      "docs/security.md's #2037 entry must quote the shipped predicate verbatim",
+    ).toContain(SWAP_GUARD);
+  });
+
+  it("neither the source nor the register carries the safeDocId spelling", () => {
+    expect(
+      DOCX_APPLY_TS.split("\n").filter(
+        (l) => l.includes(WRONG_SWAP_GUARD) && !l.trimStart().startsWith("//"),
+      ),
+      "re-resolving the swap guard by safeDocId compares the ACTIVE document, not the captured one",
+    ).toEqual([]);
+    expect(
+      SECURITY_MD.includes(WRONG_SWAP_GUARD),
+      "docs/security.md must not quote the safeDocId form of the #2037 guard",
+    ).toBe(false);
+  });
+});
+
 describe("the register does not outgrow CLAUDE.md's enumeration", () => {
   it("every issue the register files an entry for is accounted for in CLAUDE.md", () => {
     const allowed = new Set(CLOSED_NOT_IN_CLAUDE_MD.map((r) => r.issue));
