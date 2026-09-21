@@ -45,25 +45,34 @@ function cardStyle(selected: boolean, disabled?: boolean): string {
   ].join(" ");
 }
 
+// #1964: the `role="radio"` buttons carry `aria-disabled` rather than native
+// `disabled` (disabling the focused node blurs it — same rationale as
+// FileOpenDialog.svelte:55-62), so they stay focusable under readOnly and the
+// hook's arrow-key path is live. `() => readOnly` — NOT a ternary evaluated
+// once — is what stops that path reaching the refused `updateSettings` write.
 const themeRg = createRadioGroup<ThemePreference>(
   () => settings.theme,
   ["light", "warm", "dark", "system"] as const,
   (t) => onUpdate({ theme: t }),
+  () => readOnly,
 );
 const primaryTabRg = createRadioGroup<PrimaryTab>(
   () => settings.primaryTab,
   ["chat", "annotations"] as const,
   (p) => onUpdate({ primaryTab: p }),
+  () => readOnly,
 );
 const textSizeRg = createRadioGroup<TextSize>(
   () => settings.textSize,
   TEXT_SIZES,
   (t) => onUpdate({ textSize: t }),
+  () => readOnly,
 );
 const densityRg = createRadioGroup<Density>(
   () => settings.density,
   ["compact", "cozy", "spacious"] as const,
   (d) => onUpdate({ density: d }),
+  () => readOnly,
 );
 </script>
 
@@ -83,8 +92,11 @@ const densityRg = createRadioGroup<Density>(
         role="radio"
         aria-checked={settings.theme === t}
         tabindex={themeRg.tabIndexFor(t)}
-        disabled={readOnly}
-        onclick={() => onUpdate({ theme: t })}
+        aria-disabled={readOnly}
+        onclick={() => {
+          if (readOnly) return;
+          onUpdate({ theme: t });
+        }}
         class="settings-card"
         style={cardStyle(settings.theme === t, readOnly)}
       >
@@ -136,8 +148,11 @@ const densityRg = createRadioGroup<Density>(
       role="radio"
       aria-checked={settings.primaryTab === "chat"}
       tabindex={primaryTabRg.tabIndexFor("chat")}
-      disabled={readOnly}
-      onclick={() => onUpdate({ primaryTab: "chat" })}
+      aria-disabled={readOnly}
+      onclick={() => {
+        if (readOnly) return;
+        onUpdate({ primaryTab: "chat" });
+      }}
       class="settings-card"
       style={cardStyle(settings.primaryTab === "chat", readOnly)}
     >
@@ -148,8 +163,11 @@ const densityRg = createRadioGroup<Density>(
       role="radio"
       aria-checked={settings.primaryTab === "annotations"}
       tabindex={primaryTabRg.tabIndexFor("annotations")}
-      disabled={readOnly}
-      onclick={() => onUpdate({ primaryTab: "annotations" })}
+      aria-disabled={readOnly}
+      onclick={() => {
+        if (readOnly) return;
+        onUpdate({ primaryTab: "annotations" });
+      }}
       class="settings-card"
       style={cardStyle(settings.primaryTab === "annotations", readOnly)}
     >
@@ -175,8 +193,11 @@ const densityRg = createRadioGroup<Density>(
         role="radio"
         aria-checked={settings.textSize === size}
         tabindex={textSizeRg.tabIndexFor(size)}
-        disabled={readOnly}
-        onclick={() => onUpdate({ textSize: size })}
+        aria-disabled={readOnly}
+        onclick={() => {
+          if (readOnly) return;
+          onUpdate({ textSize: size });
+        }}
         class="settings-card"
         style={cardStyle(settings.textSize === size, readOnly)}
       >
@@ -228,8 +249,11 @@ const densityRg = createRadioGroup<Density>(
         role="radio"
         aria-checked={settings.density === value}
         tabindex={densityRg.tabIndexFor(value)}
-        disabled={readOnly}
-        onclick={() => onUpdate({ density: value })}
+        aria-disabled={readOnly}
+        onclick={() => {
+          if (readOnly) return;
+          onUpdate({ density: value });
+        }}
         class="settings-card"
         style={cardStyle(settings.density === value, readOnly)}
       >

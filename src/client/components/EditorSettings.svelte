@@ -68,10 +68,16 @@ function resetFontsToDefaults(): void {
 
 const hasFontOverrides = $derived(Object.keys(settings.fontByExtension ?? {}).length > 0);
 
+// #1964: the `role="radio"` buttons carry `aria-disabled` rather than native
+// `disabled` (disabling the focused node blurs it — same rationale as
+// FileOpenDialog.svelte:55-62), so they stay focusable under readOnly and the
+// hook's arrow-key path is live. `() => readOnly` — NOT a ternary evaluated
+// once — is what stops that path reaching the refused `updateSettings` write.
 const editorFontRg = createRadioGroup<EditorFont>(
   () => settings.editorFont,
   ["sans", "serif", "mono"] as const,
   (f) => onUpdate({ editorFont: f }),
+  () => readOnly,
 );
 // Per-format font radio groups (#811). Each group is its own RG instance so
 // arrow-key navigation is scoped to one row at a time. `createRadioGroup`
@@ -83,6 +89,7 @@ for (const row of FONT_FORMAT_ROWS) {
     () => effectiveFontFor(row.format),
     ["sans", "serif", "mono"] as const,
     (f) => setFontFor(row.format, f),
+    () => readOnly,
   );
 }
 
@@ -142,6 +149,7 @@ const measureRg = createRadioGroup<EditorMeasure>(
   () => settings.editorMeasure,
   PRESETS.map((p) => p.value),
   (next) => onUpdate({ editorMeasure: next }),
+  () => readOnly,
 );
 
 const activeHint = $derived(PRESETS.find((p) => p.value === settings.editorMeasure)?.hint ?? "");
@@ -168,8 +176,11 @@ const activeHint = $derived(PRESETS.find((p) => p.value === settings.editorMeasu
         aria-checked={active}
         tabindex={measureRg.tabIndexFor(preset.value)}
         data-testid={`editor-measure-${preset.value}`}
-        disabled={readOnly}
-        onclick={() => onUpdate({ editorMeasure: preset.value })}
+        aria-disabled={readOnly}
+        onclick={() => {
+          if (readOnly) return;
+          onUpdate({ editorMeasure: preset.value });
+        }}
         style={`flex: 1; padding: 6px 4px; border: none; border-radius: var(--tandem-r-1); ${disabledControlStyle(readOnly)} font-size: 11px; font-weight: ${active ? 600 : 400}; background: ${active ? "var(--tandem-accent)" : "transparent"}; color: ${active ? "var(--tandem-accent-fg)" : "var(--tandem-fg)"};`}
       >
         {preset.label}
@@ -197,8 +208,11 @@ const activeHint = $derived(PRESETS.find((p) => p.value === settings.editorMeasu
           role="radio"
           aria-checked={settings.editorFont === value}
           tabindex={editorFontRg.tabIndexFor(value)}
-          disabled={readOnly}
-          onclick={() => onUpdate({ editorFont: value })}
+          aria-disabled={readOnly}
+          onclick={() => {
+            if (readOnly) return;
+            onUpdate({ editorFont: value });
+          }}
           class="settings-card"
           style={cardStyle(settings.editorFont === value, readOnly)}
         >
@@ -244,8 +258,11 @@ const activeHint = $derived(PRESETS.find((p) => p.value === settings.editorMeasu
                 role="radio"
                 aria-checked={effectiveFontFor(row.format) === value}
                 tabindex={fontByExtensionRgs[row.format].tabIndexFor(value)}
-                disabled={readOnly}
-                onclick={() => setFontFor(row.format, value)}
+                aria-disabled={readOnly}
+                onclick={() => {
+                  if (readOnly) return;
+                  setFontFor(row.format, value);
+                }}
                 class="settings-card"
                 style={cardStyle(effectiveFontFor(row.format) === value, readOnly)}
               >
