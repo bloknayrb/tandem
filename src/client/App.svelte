@@ -141,6 +141,7 @@ import { resolveDefaultModelChip } from "./utils/model-chip";
 import { resolveModelFirstRunNeeded } from "./utils/model-first-run";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 import { openServerPath } from "./utils/server-paths";
+import { wireSidecarRestarted } from "./utils/sidecar-restart-toast";
 import { wireStartupRejection } from "./utils/startup-rejection";
 
 // `getRetryStrategy` is read lazily inside yjsSync (only after bootstrap), so it
@@ -321,6 +322,17 @@ if (isTauriRuntime()) {
     cancelled = true;
     unlisten?.();
   });
+}
+
+// And the other half: a post-boot crash whose restart SUCCEEDED (#1959). The
+// notification itself is built in `utils/sidecar-restart-toast.ts`, so this site
+// only supplies the Tauri module loader and the push.
+if (isTauriRuntime()) {
+  const cleanupSidecarRestarted = wireSidecarRestarted({
+    loadEvent: () => import("@tauri-apps/api/event"),
+    push: (n) => notifications.push(n),
+  });
+  onDestroy(cleanupSidecarRestarted);
 }
 
 // Tray "Setup AI Assistant" (Tauri-only): the Rust side emits

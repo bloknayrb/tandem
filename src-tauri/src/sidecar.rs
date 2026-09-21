@@ -496,6 +496,22 @@ pub(crate) enum RestartCause {
     PostBootCrash,
 }
 
+/// Payload-free nudge: a sidecar that crashed after boot has been restarted and
+/// is coming back. Listened for in `src/client/utils/sidecar-restart-toast.ts`;
+/// the two literals are pinned against each other in
+/// `tests/docs/startup-open-failure-wiring-claims.test.ts`.
+pub(crate) const EVENT_SIDECAR_RESTARTED: &str = "sidecar-restarted";
+
+/// Whether a SUCCESSFUL restart with this cause announces itself to the user.
+///
+/// Only a crash does. A user-initiated restart already has feedback at the
+/// click site (`NetworkSettings.svelte`), so announcing it again would toast
+/// "restarted after a crash" at someone who pressed the button themselves.
+/// A pure function so the gate is testable without an `AppHandle`.
+pub(crate) fn announces_successful_restart(cause: RestartCause) -> bool {
+    matches!(cause, RestartCause::PostBootCrash)
+}
+
 /// Gracefully stop the sidecar (flush dirty docs + save session, #1088),
 /// hard-kill as fallback, then spawn it again.
 #[tauri::command]
@@ -565,7 +581,24 @@ pub(crate) fn restart_sidecar_for(app: tauri::AppHandle, cause: RestartCause) {
         // Restart never re-injects the cold-start file: the original `setup()`
         // invocation already opened it and registered it in `openDocuments`.
         match start_sidecar(&handle, &client, None).await {
-            Ok(SpawnOutcome::Started) => {}
+            Ok(SpawnOutcome::Started) => {
+                // The success arm, NOT the `CrashRestartDecision::Restart`
+                // decision site: that arm runs before the graceful stop and the
+                // respawn, so emitting there would announce a restart that can
+                // still fail or be declined — and both of those arms below emit
+                // `sidecar-restart-failed`, so the user would get "restarted"
+                // followed by "failed to restart".
+                //
+                // One accepted false positive, DEBUG BUILDS ONLY:
+                // `SpawnOutcome::Started` also covers "an external
+                // `dev:standalone` server was already answering /health". A
+                // release build always spawns, so this cannot reach a user.
+                if announces_successful_restart(cause) {
+                    if let Err(emit_err) = handle.emit(EVENT_SIDECAR_RESTARTED, ()) {
+                        log::error!("[restart_sidecar] failed to emit restarted event: {emit_err}");
+                    }
+                }
+            }
             // A decline is not a restart. By this point the command body has
             // already run `clear_healthy_under_lock` (and, on a user-initiated
             // restart, `clear_startup_rejection`),
@@ -2768,6 +2801,15 @@ pub(crate) async fn wait_for_sidecar_unlock(deadline_secs: u64) -> UnlockOutcome
 mod crash_restart_tests {
     use super::*;
     use std::time::Instant;
+
+    /// Without this, an implementation that emits unconditionally from
+    /// `restart_sidecar_for`'s success arm toasts "Tandem server restarted
+    /// after a crash." at a user who just pressed Restart server (#1959).
+    #[test]
+    fn only_a_crash_restart_announces_itself() {
+        assert!(announces_successful_restart(RestartCause::PostBootCrash));
+        assert!(!announces_successful_restart(RestartCause::UserInitiated));
+    }
 
     /// The worst bug this guard prevents, so it goes first: a `Terminated` from
     /// a killed retry attempt landing after a newer child is healthy would
