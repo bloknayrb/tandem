@@ -274,6 +274,41 @@ describe("activity is not published for a remote change (#1918)", () => {
     expect(activity()).toBeUndefined();
   });
 
+  it("(8c) the refresh is debounced — an immediate read still sees the old offset", async () => {
+    // The copy on `tandem_getActivity` and in docs/mcp-tools.md must carve
+    // this out: (8)'s refresh is armed for 200 ms, so a `tandem_getActivity`
+    // taken right after `tandem_edit` reads the PRE-edit offset. Asserting the
+    // stale number rather than merely "not yet the new one" is what makes a
+    // promise of an in-place refresh unwritable.
+    const { ydoc, editor, activity } = typeZBeforeThree();
+    await vi.advanceTimersByTimeAsync(TYPING_DEBOUNCE + 250);
+    const before = activity()?.cursor as number;
+
+    remoteInsert(ydoc);
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(activity()?.cursor).toBe(before);
+    // ...and it is genuinely wrong by then: the caret has already moved.
+    expect(caretFlat(editor)).toBe(before + 2);
+  });
+
+  it("(8d) with no mounted editor nothing refreshes the cursor, ever", async () => {
+    // The refresh lives in an editor plugin, so a background tab (unmounted
+    // under `{#key activeTab.id}`) or a document no browser is showing has
+    // nobody to run it — the record keeps its pre-edit offset indefinitely.
+    // This is the `cursor` twin of #1997's `selectedText` carve-out.
+    const { ydoc, editor, activity } = typeZBeforeThree();
+    await vi.advanceTimersByTimeAsync(TYPING_DEBOUNCE + 250);
+    const captured = { ...(activity() as object) };
+
+    live.splice(live.indexOf(editor), 1);
+    editor.destroy();
+    remoteInsert(ydoc);
+    await vi.advanceTimersByTimeAsync(TYPING_DEBOUNCE + 5000);
+
+    expect(activity()).toStrictEqual(captured);
+  });
+
   it("(10) a remote edit inside the armed window moves the pending cursor", async () => {
     // The `lastCursor` refresh sits deliberately OUTSIDE the `!isRemoteChange`
     // guard, and nothing else pins it: fold it into the guarded block and the
