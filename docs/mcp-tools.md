@@ -1258,7 +1258,7 @@ The channel routes and `GET /api/events` are documented in [Channel API](#channe
 
 ### GET /api/info
 
-Returns app metadata for the client's About panel and version indicator. All fields are returned for loopback (127.0.0.1) callers; sensitive fields are omitted for non-loopback callers.
+Returns app metadata for the client's About panel and version indicator. Sensitive fields are omitted for non-loopback callers. `tokenRotatedAt` carries one further condition: it describes the auth token file, so it is emitted only when that file is the running server's token source. A desktop install receives its token from the OS keychain via `TANDEM_AUTH_TOKEN` before the sidecar spawns, so the field is omitted there even for a loopback caller (#1946).
 
 **Response (200) — loopback caller:**
 ```json
@@ -1296,7 +1296,7 @@ Returns app metadata for the client's About panel and version indicator. All fie
 | `workflowsPath` | string | no | Absolute path to the bundled `docs/workflows.md`; present only when the file exists |
 | `welcomePath` | string | no | Absolute path to `sample/welcome.md`; present only when the file exists |
 | `storagePath` | string | yes | Absolute path to session storage directory |
-| `tokenRotatedAt` | number \| null | yes | Auth token file mtime in epoch ms; `null` if token file absent or unreadable |
+| `tokenRotatedAt` | number \| null | yes | Auth token file mtime in epoch ms; `null` if token file absent or unreadable. **Omitted entirely** — not `null` — when `TANDEM_AUTH_TOKEN` supplied the running token, because the file is then not this server's source (#1946). |
 | `generationId` | string \| null | yes | Identifies this server run. Browser clients pin it as their Hocuspocus auth token so a tab that survived a restart is rejected instead of CRDT-merging stale state. Loopback-only because Hocuspocus binds `127.0.0.1`, so no one else could use it. |
 
 **Errors:** `403 FORBIDDEN` (Host header is not `127.0.0.1` or `tauri.localhost` — DNS-rebinding protection, narrowed in PR #637)
