@@ -14,6 +14,7 @@
  */
 import type { Editor } from "@tiptap/core";
 import type { ComponentProps } from "svelte";
+import type * as Y from "yjs";
 import type { Annotation } from "../../shared/types";
 import ChatPanel from "../panels/ChatPanel.svelte";
 import type { FilterAuthor, FilterStatus, FilterType } from "../panels/FilterBar.svelte";
@@ -29,6 +30,7 @@ type OutlineSlotProps = {
   editor: Editor | null;
   headings: HeadingEntry[];
   annotations?: Annotation[];
+  ydoc?: Y.Doc | null;
   focusTrigger?: number;
   activeFilterType?: FilterType;
   activeFilterAuthor?: FilterAuthor;
@@ -64,6 +66,7 @@ const wrapStyle = $derived(
         editor={(rest as OutlineSlotProps).editor}
         headings={(rest as OutlineSlotProps).headings}
         annotations={(rest as OutlineSlotProps).annotations}
+        ydoc={(rest as OutlineSlotProps).ydoc}
         focusTrigger={(rest as OutlineSlotProps).focusTrigger}
         activeFilterType={(rest as OutlineSlotProps).activeFilterType}
         activeFilterAuthor={(rest as OutlineSlotProps).activeFilterAuthor}
@@ -80,6 +83,7 @@ const wrapStyle = $derived(
     editor={(rest as OutlineSlotProps).editor}
     headings={(rest as OutlineSlotProps).headings}
     annotations={(rest as OutlineSlotProps).annotations}
+    ydoc={(rest as OutlineSlotProps).ydoc}
     focusTrigger={(rest as OutlineSlotProps).focusTrigger}
     activeFilterType={(rest as OutlineSlotProps).activeFilterType}
   />
