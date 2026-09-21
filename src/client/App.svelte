@@ -1322,7 +1322,20 @@ function maybeHideFloat(side: RailSide) {
   // No retreat slide when the rail is pinned (still visible via its non-collapsed
   // state — there's nothing to retreat) or under reduced motion: drop straight to
   // the minimized sliver. Only a collapsed hover-float slides back into the edge.
-  if (railVisible(side) || motionOff(settingsState.settings.reduceMotion)) {
+  // An open chat reveal is the same kind of condition as the pinned arm: the
+  // reveal owns the float chrome and is already painted over the editor, so there
+  // is nothing to slide back into the edge. Without it, `.floating` (set via
+  // railContent.revealOpen on the right shell) and `.float-closing` are
+  // co-present and the closing keyframe's `forwards` fill holds the revealed
+  // panel off-screen for FLOAT_CLOSE_MS. The `side === "right"` guard is
+  // required, not defensive: revealOpen is a single app-global chat reveal
+  // rendered only in the right shell, so an unguarded term would stop a
+  // left-rail retreat from animating whenever chat is revealed on the right.
+  if (
+    railVisible(side) ||
+    (side === "right" && railContent.revealOpen) ||
+    motionOff(settingsState.settings.reduceMotion)
+  ) {
     railFloatClosing[side] = false;
     return;
   }
