@@ -894,6 +894,18 @@ function focusChat(): void {
   // definition, which is where the "pinned rails simply switch to Chat" rule
   // now lives.
   railContent.openReveal();
+  // #2014's other entry order. `maybeHideFloat`'s reveal arm only stops the
+  // right shell ENTERING the closing phase while chat is already revealed; a
+  // reveal opened DURING an in-flight retreat (hover the collapsed rail, move
+  // away, then hit the chat shortcut inside the 300 ms window) lands
+  // `.floating` — which `revealOpen` alone sets -- on top of a `.float-closing`
+  // nothing else clears, and the closing keyframe's `forwards` fill holds the
+  // panel the user just summoned off-screen while `focusChat` focuses its
+  // composer. Only `onRailShellEnter` and `maybeHideFloat` clear the flag, and
+  // neither runs on this path. Cancelling the retreat is the right resolution
+  // rather than deferring the reveal: the panel is already painted and the
+  // reveal is an explicit user request for it to stay.
+  cancelFloatClose("right");
   queueMicrotask(() =>
     document.querySelector<HTMLTextAreaElement>('[data-testid="chat-composer-input"]')?.focus(),
   );
@@ -1296,6 +1308,17 @@ const focusInside: Record<RailSide, boolean> = { left: false, right: false };
 const railVisible = (side: RailSide) =>
   side === "left" ? effectiveLeftVisible : effectiveRightVisible;
 
+// Abandon an in-flight retreat: drop the flag AND kill the timer that would
+// otherwise drop it later (a live timer is harmless where the flag is already
+// false, but leaving it armed means a second retreat's `clearTimeout` is the
+// only thing standing between this side and a stale flag drop mid-slide).
+// Callers are the two ways a retreat is called off: re-entering the shell, and
+// opening the chat reveal over it (#2014).
+function cancelFloatClose(side: RailSide) {
+  clearTimeout(closeTimer[side]);
+  railFloatClosing[side] = false;
+}
+
 function onRailShellEnter(side: RailSide) {
   pointerInside[side] = true;
   if (railVisible(side) || !settingsState.settings.railHoverReveal) return;
@@ -1304,8 +1327,7 @@ function onRailShellEnter(side: RailSide) {
   // straight back to floating. The panel is still on screen, so skip the enter
   // delay (a delay here would let it finish collapsing and flash away first).
   if (railFloatClosing[side]) {
-    clearTimeout(closeTimer[side]);
-    railFloatClosing[side] = false;
+    cancelFloatClose(side);
     railFloat[side] = true;
     return;
   }

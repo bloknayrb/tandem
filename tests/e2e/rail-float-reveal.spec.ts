@@ -113,3 +113,55 @@ test("an open chat reveal never co-exists with the float-closing phase (#2014)",
   // reveal on focus-out instead.
   await expect(page.locator(COMPOSER)).toBeVisible();
 });
+
+test("a chat reveal opened DURING the retreat cancels it (#2014)", async ({ page }) => {
+  // The opposite entry order to the test above, and the half a
+  // `maybeHideFloat`-only fix does not cover: the closing phase is already
+  // armed when the reveal opens, so the arm that refuses to ENTER it never
+  // runs. `.floating` arrives from `revealOpen` on top of a `.float-closing`
+  // nothing clears, and the closing keyframe's `forwards` fill holds the
+  // summoned panel off-screen for the rest of FLOAT_CLOSE_MS.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  await setRailVisible(page, "right", false);
+
+  const shell = page.locator(SHELL);
+
+  // Arm the hover float with no reveal open (the deterministic hold, for the
+  // reason the first test states), then leave so the retreat starts.
+  await shell.hover();
+  await page.waitForTimeout(HOVER_ENTER_MS + 150);
+  await expect(shell).toHaveClass(/\bfloating\b/);
+
+  await page.mouse.move(8, 400);
+  await page.waitForTimeout(HOVER_LEAVE_MS + 80);
+  await expect(shell).toHaveClass(/\bfloat-closing\b/);
+
+  // Inside the closing window: the chat shortcut's own path (`focusChat`).
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("tandem:focus-chat")));
+
+  // Sampled across the rest of the window rather than polled, for the reason
+  // the first test states: a poll for `float-closing === false` passes the
+  // moment the timer drops it and is green on the defect.
+  const readClasses = () =>
+    page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      return {
+        closing: !!el?.classList.contains("float-closing"),
+        floating: !!el?.classList.contains("floating"),
+      };
+    }, SHELL);
+
+  const deadline = Date.now() + FLOAT_CLOSE_MS;
+  for (;;) {
+    const { closing, floating } = await readClasses();
+    expect(closing).toBe(false);
+    expect(floating).toBe(true);
+    if (Date.now() >= deadline) break;
+    await page.waitForTimeout(50);
+  }
+
+  await expect(page.locator(COMPOSER)).toBeVisible();
+});
