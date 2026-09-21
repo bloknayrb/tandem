@@ -296,6 +296,10 @@ const CLOSED_NOT_IN_CLAUDE_MD = [
   // Retained under the closed-findings heading because the mechanism is load-bearing for the
   // entry above it; closed findings are deliberately not carried in CLAUDE.md's bullet at all.
   { issue: 1537, why: "hyphenated-scheme render bypass — CLOSED, kept for the mechanism" },
+  {
+    issue: 2037,
+    why: "fixed on fix/security-applychanges-doc-swap-and-sentry-scrubbing-2037; register entry retained for the mechanism",
+  },
 ];
 
 describe("the register does not outgrow CLAUDE.md's enumeration", () => {
