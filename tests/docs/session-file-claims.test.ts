@@ -47,17 +47,18 @@ describe("session/config file-name claims (#1782)", () => {
     }
   });
 
-  it.each(
-    CLAIMING_FILES,
-  )("%s states the full quarantine-rename shape, not the bare suffix", (rel) => {
-    const doc = read(rel);
-    expect(doc, `${rel} does not contain the full quarantine shape`).toContain(
-      ".json.corrupt.<timestamp>",
-    );
-    expect(doc, `${rel} still contains the bare .corrupt.json shape`).not.toContain(
-      "`.corrupt.json`",
-    );
-  });
+  it.each(CLAIMING_FILES)(
+    "%s states the full quarantine-rename shape, not the bare suffix",
+    (rel) => {
+      const doc = read(rel);
+      expect(doc, `${rel} does not contain the full quarantine shape`).toContain(
+        ".json.corrupt.<timestamp>",
+      );
+      expect(doc, `${rel} still contains the bare .corrupt.json shape`).not.toContain(
+        "`.corrupt.json`",
+      );
+    },
+  );
 
   /**
    * Review finding (cr-2): `docs/configuration.md`'s sessions/ row said every

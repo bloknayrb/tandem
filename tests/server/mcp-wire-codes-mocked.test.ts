@@ -161,29 +161,32 @@ describe("tandem_save errno → one code per condition (#1823 §C)", () => {
     // details.errorCode "VERIFY_BLOCKED", and this row pins that.
     ["VERIFY_BLOCKED", undefined, "FORMAT_ERROR"],
     ["ENOSPC", "write", "FORMAT_ERROR"],
-  ])("save failing with %s on %s answers %s, keeping details.errorCode", async (errno, syscall, expected) => {
-    const ydoc = getOrCreateDocument(`save-${errno}`);
-    populateYDoc(ydoc, "Hello");
-    addDoc(`save-${errno}`, {
-      id: `save-${errno}`,
-      filePath: path.join(tmpDir, `save-${errno}.md`),
-      format: "md",
-      readOnly: false,
-      source: "file",
-    });
-    setActiveDocId(`save-${errno}`);
-    mocks.saveDocumentToDisk.mockResolvedValueOnce({
-      status: "error",
-      reason: "The document could not be saved.",
-      errorCode: errno,
-      errorSyscall: syscall,
-    });
+  ])(
+    "save failing with %s on %s answers %s, keeping details.errorCode",
+    async (errno, syscall, expected) => {
+      const ydoc = getOrCreateDocument(`save-${errno}`);
+      populateYDoc(ydoc, "Hello");
+      addDoc(`save-${errno}`, {
+        id: `save-${errno}`,
+        filePath: path.join(tmpDir, `save-${errno}.md`),
+        format: "md",
+        readOnly: false,
+        source: "file",
+      });
+      setActiveDocId(`save-${errno}`);
+      mocks.saveDocumentToDisk.mockResolvedValueOnce({
+        status: "error",
+        reason: "The document could not be saved.",
+        errorCode: errno,
+        errorSyscall: syscall,
+      });
 
-    const parsed = parseResult(await client.callTool({ name: "tandem_save", arguments: {} }));
-    expect(parsed.error).toBe(true);
-    expect(parsed.code).toBe(expected);
-    expect(parsed.details).toEqual({ errorCode: errno });
-  });
+      const parsed = parseResult(await client.callTool({ name: "tandem_save", arguments: {} }));
+      expect(parsed.error).toBe(true);
+      expect(parsed.code).toBe(expected);
+      expect(parsed.details).toEqual({ errorCode: errno });
+    },
+  );
 });
 
 describe("tandem_applyChanges lock-or-permission on the write-back (#1823 §C)", () => {

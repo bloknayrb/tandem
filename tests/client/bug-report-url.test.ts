@@ -23,14 +23,12 @@ function bodyOf(url: string): string {
 }
 
 describe("buildBugReportUrl", () => {
-  it.each([
-    [undefined],
-    [null],
-    [""],
-    ["   \n\t  "],
-  ])("returns the bare issue URL for %p", (input) => {
-    expect(buildBugReportUrl(input)).toBe(TANDEM_ISSUES_NEW_URL);
-  });
+  it.each([[undefined], [null], [""], ["   \n\t  "]])(
+    "returns the bare issue URL for %p",
+    (input) => {
+      expect(buildBugReportUrl(input)).toBe(TANDEM_ISSUES_NEW_URL);
+    },
+  );
 
   it("prefills two blank lines, the heading, then the fenced report", () => {
     const url = buildBugReportUrl("Tandem v1.2.3 (http)\nwin32/x64");

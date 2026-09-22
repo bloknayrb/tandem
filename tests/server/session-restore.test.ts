@@ -481,42 +481,39 @@ describe("corrupt ydocState quarantine (#1800)", () => {
     p.insert(0, [new Y.XmlText(text)]);
   }
 
-  it.each([
-    "len-1",
-    "half",
-    "bitflip",
-    "deleted",
-    "empty-object",
-  ] as CorruptShape[])("corrupt ydocState (%s) opens from disk with a quarantine file and one toast", async (shape) => {
-    const { resolved, sessionPath } = await writeCorruptSession("note.md", shape);
+  it.each(["len-1", "half", "bitflip", "deleted", "empty-object"] as CorruptShape[])(
+    "corrupt ydocState (%s) opens from disk with a quarantine file and one toast",
+    async (shape) => {
+      const { resolved, sessionPath } = await writeCorruptSession("note.md", shape);
 
-    const res = await openFromDisk(resolved);
-    expect(res.kind).toBe("fresh");
-    const doc = getOrCreateDocument(res.documentId);
-    // Disk content wins — pipeline-equality plus guards against a silent swap.
-    expect(extractText(doc)).toBe(extractText(textDoc(DISK_TEXT)));
-    expect(extractText(doc)).toContain("actually on disk");
-    expect(extractText(doc)).not.toContain("live only in the session");
-    expect(getOpenDocs().has(res.documentId)).toBe(true);
+      const res = await openFromDisk(resolved);
+      expect(res.kind).toBe("fresh");
+      const doc = getOrCreateDocument(res.documentId);
+      // Disk content wins — pipeline-equality plus guards against a silent swap.
+      expect(extractText(doc)).toBe(extractText(textDoc(DISK_TEXT)));
+      expect(extractText(doc)).toContain("actually on disk");
+      expect(extractText(doc)).not.toContain("live only in the session");
+      expect(getOpenDocs().has(res.documentId)).toBe(true);
 
-    const files = await fs.readdir(SESSION_DIR);
-    expect(files).not.toContain(path.basename(sessionPath));
-    expect(quarantineNames(sessionKey(resolved), files)).toHaveLength(1);
+      const files = await fs.readdir(SESSION_DIR);
+      expect(files).not.toContain(path.basename(sessionPath));
+      expect(quarantineNames(sessionKey(resolved), files)).toHaveLength(1);
 
-    const notes = sessionNotifications(`session-corrupt:${res.documentId}`);
-    expect(notes).toHaveLength(1);
-    const n = notes[0];
-    expect(n.type).toBe("general-error");
-    expect(n.severity).toBe("warning");
-    expect(n.message).toContain("set aside");
-    // The open-path message names the DOCUMENT, not the 64-hex session file.
-    expect(n.message).toContain("note.md");
-    expect(n.documentId).toBe(res.documentId);
-    expect(n.dedupKey).toBe(`session-corrupt:${res.documentId}`);
-    expect(typeof n.id).toBe("string");
-    expect(n.id.length).toBeGreaterThan(0);
-    expect(typeof n.timestamp).toBe("number");
-  });
+      const notes = sessionNotifications(`session-corrupt:${res.documentId}`);
+      expect(notes).toHaveLength(1);
+      const n = notes[0];
+      expect(n.type).toBe("general-error");
+      expect(n.severity).toBe("warning");
+      expect(n.message).toContain("set aside");
+      // The open-path message names the DOCUMENT, not the 64-hex session file.
+      expect(n.message).toContain("note.md");
+      expect(n.documentId).toBe(res.documentId);
+      expect(n.dedupKey).toBe(`session-corrupt:${res.documentId}`);
+      expect(typeof n.id).toBe("string");
+      expect(n.id.length).toBeGreaterThan(0);
+      expect(typeof n.timestamp).toBe("number");
+    },
+  );
 
   it("quarantine refreshes the mtime so a back-dated session survives the next GC", async () => {
     const { resolved, sessionPath } = await writeCorruptSession("aging.md", "len-1");
@@ -1476,67 +1473,70 @@ describe("corrupt ydocState quarantine (#1800)", () => {
   it.each([
     ["no snapshot", undefined, undefined],
     ["snapshot beta", "beta", [{ at: 2, kind: "hard" }]],
-  ] as const)("fallback restore overlays the session's anchor and keeps the envelope's record (#1863), envelope with %s", async (_label, envSnapshot, cloneBreaks) => {
-    const { resolved } = await writeDocFile(`overlay-${envSnapshot ?? "none"}.md`, DISK_TEXT);
-    // ann-W is the session's ONLY id, so mergeMap queues no write of its own:
-    // the envelope can only change through the overlay's observer write.
-    await writeFallbackSessions(resolved, (older) =>
-      seedHighlight(older.getMap(Y_MAP_ANNOTATIONS), "ann-W", 6, 10, {
-        textSnapshot: "beta",
-        relRange: liveRelRange(older, 6, 10),
-        ...(cloneBreaks !== undefined ? { textSnapshotBreaks: cloneBreaks } : {}),
-      }),
-    );
-    // The envelope's record is newer (rev 2) and carries newer content and
-    // status, but its offsets are those of "alpha XX beta gamma", text the
-    // fallback does not hold.
-    await seedEnvelope(resolved, [
-      {
-        id: "ann-W",
-        author: "user",
-        type: "highlight",
-        range: { from: toFlatOffset(9), to: toFlatOffset(13) },
-        content: "newer text",
-        status: "dismissed",
-        timestamp: 1700000000000,
-        color: "yellow",
-        rev: 2,
-        textSnapshotBreaks: [...ENV_BREAKS],
-        ...(envSnapshot !== undefined ? { textSnapshot: envSnapshot } : {}),
-      },
-    ]);
+  ] as const)(
+    "fallback restore overlays the session's anchor and keeps the envelope's record (#1863), envelope with %s",
+    async (_label, envSnapshot, cloneBreaks) => {
+      const { resolved } = await writeDocFile(`overlay-${envSnapshot ?? "none"}.md`, DISK_TEXT);
+      // ann-W is the session's ONLY id, so mergeMap queues no write of its own:
+      // the envelope can only change through the overlay's observer write.
+      await writeFallbackSessions(resolved, (older) =>
+        seedHighlight(older.getMap(Y_MAP_ANNOTATIONS), "ann-W", 6, 10, {
+          textSnapshot: "beta",
+          relRange: liveRelRange(older, 6, 10),
+          ...(cloneBreaks !== undefined ? { textSnapshotBreaks: cloneBreaks } : {}),
+        }),
+      );
+      // The envelope's record is newer (rev 2) and carries newer content and
+      // status, but its offsets are those of "alpha XX beta gamma", text the
+      // fallback does not hold.
+      await seedEnvelope(resolved, [
+        {
+          id: "ann-W",
+          author: "user",
+          type: "highlight",
+          range: { from: toFlatOffset(9), to: toFlatOffset(13) },
+          content: "newer text",
+          status: "dismissed",
+          timestamp: 1700000000000,
+          color: "yellow",
+          rev: 2,
+          textSnapshotBreaks: [...ENV_BREAKS],
+          ...(envSnapshot !== undefined ? { textSnapshot: envSnapshot } : {}),
+        },
+      ]);
 
-    const res = await openFromDisk(resolved);
-    const doc = getOrCreateDocument(res.documentId);
-    // No test-side map writes before the flush: the envelope must reflect
-    // only open-path writes.
-    await closeStore(docHash(resolved));
-    expect(res.kind).toBe("restored");
+      const res = await openFromDisk(resolved);
+      const doc = getOrCreateDocument(res.documentId);
+      // No test-side map writes before the flush: the envelope must reflect
+      // only open-path writes.
+      await closeStore(docHash(resolved));
+      expect(res.kind).toBe("restored");
 
-    // The anchor is the session's...
-    const live = doc.getMap(Y_MAP_ANNOTATIONS).get("ann-W") as unknown as Annotation;
-    expect(live.range).toEqual({ from: 6, to: 10 });
-    expect(live.relRange).toBeDefined();
-    expect(relPosToFlatOffset(doc, live.relRange!.fromRel)).toBe(6);
-    expect(relPosToFlatOffset(doc, live.relRange!.toRel)).toBe(10);
-    // ...and everything else is the envelope's, rev included, so a later
-    // stale peer or tombstone still compares against the newer rev.
-    expect(live.content).toBe("newer text");
-    expect(live.status).toBe("dismissed");
-    expect(live.rev).toBe(2);
-    // The break offsets are the clone's, like the snapshot they describe.
-    expect(live.textSnapshotBreaks).toEqual(cloneBreaks);
+      // The anchor is the session's...
+      const live = doc.getMap(Y_MAP_ANNOTATIONS).get("ann-W") as unknown as Annotation;
+      expect(live.range).toEqual({ from: 6, to: 10 });
+      expect(live.relRange).toBeDefined();
+      expect(relPosToFlatOffset(doc, live.relRange!.fromRel)).toBe(6);
+      expect(relPosToFlatOffset(doc, live.relRange!.toRel)).toBe(10);
+      // ...and everything else is the envelope's, rev included, so a later
+      // stale peer or tombstone still compares against the newer rev.
+      expect(live.content).toBe("newer text");
+      expect(live.status).toBe("dismissed");
+      expect(live.rev).toBe(2);
+      // The break offsets are the clone's, like the snapshot they describe.
+      expect(live.textSnapshotBreaks).toEqual(cloneBreaks);
 
-    const env = (await readEnvelopeAnnotations(resolved)).find((a) => a["id"] === "ann-W");
-    expect(env).toBeDefined();
-    expect(env!["range"]).toEqual({ from: 6, to: 10 });
-    const envRel = env!["relRange"] as { fromRel: never; toRel: never };
-    expect(relPosToFlatOffset(doc, envRel.fromRel)).toBe(6);
-    expect(relPosToFlatOffset(doc, envRel.toRel)).toBe(10);
-    expect(env!["content"]).toBe("newer text");
-    expect(env!["rev"] as number).toBeGreaterThanOrEqual(2);
-    expect(env!["textSnapshotBreaks"]).toEqual(cloneBreaks);
-  });
+      const env = (await readEnvelopeAnnotations(resolved)).find((a) => a["id"] === "ann-W");
+      expect(env).toBeDefined();
+      expect(env!["range"]).toEqual({ from: 6, to: 10 });
+      const envRel = env!["relRange"] as { fromRel: never; toRel: never };
+      expect(relPosToFlatOffset(doc, envRel.fromRel)).toBe(6);
+      expect(relPosToFlatOffset(doc, envRel.toRel)).toBe(10);
+      expect(env!["content"]).toBe("newer text");
+      expect(env!["rev"] as number).toBeGreaterThanOrEqual(2);
+      expect(env!["textSnapshotBreaks"]).toEqual(cloneBreaks);
+    },
+  );
 
   it("a suggestion whose snapshot differs is not overlaid (#1863)", async () => {
     const { resolved } = await writeDocFile("overlay-suggestion.md", DISK_TEXT);

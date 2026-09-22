@@ -197,26 +197,26 @@ describe("#1826: the userActions bucket has a status gate", () => {
     );
   }
 
-  it.each([
-    "dismissed",
-    "accepted",
-  ] as const)("a %s user comment never surfaced while pending yields no userAction", (status) => {
-    // A fresh ledger IS the restart. Both rows are red on master.
-    //
-    // The `accepted` row is what separates the specified gate from a lazy
-    // `status !== "dismissed"`: `transitionPending` refuses an accept only for
-    // a claude author or a suggestion-bearing record, so an outbound user
-    // comment really can end up `{accepted, resolvedBy: "claude"}` — which is
-    // the fixture below.
-    const surfaced = new Map<string, number>();
-    seedUserComment("u-resolved", {
-      status,
-      ...(status === "accepted" ? { resolvedBy: "claude" } : {}),
-    });
+  it.each(["dismissed", "accepted"] as const)(
+    "a %s user comment never surfaced while pending yields no userAction",
+    (status) => {
+      // A fresh ledger IS the restart. Both rows are red on master.
+      //
+      // The `accepted` row is what separates the specified gate from a lazy
+      // `status !== "dismissed"`: `transitionPending` refuses an accept only for
+      // a claude author or a suggestion-bearing record, so an outbound user
+      // comment really can end up `{accepted, resolvedBy: "claude"}` — which is
+      // the fixture below.
+      const surfaced = new Map<string, number>();
+      seedUserComment("u-resolved", {
+        status,
+        ...(status === "accepted" ? { resolvedBy: "claude" } : {}),
+      });
 
-    expect(poll(surfaced).userActions).toEqual([]);
-    expect([...surfaced.keys()], "and no ledger entry is written").toEqual([]);
-  });
+      expect(poll(surfaced).userActions).toEqual([]);
+      expect([...surfaced.keys()], "and no ledger entry is written").toEqual([]);
+    },
+  );
 
   it("the identical record at `pending` still yields one userAction (control)", () => {
     // Without this, a gate that empties the bucket outright passes every row.

@@ -86,16 +86,17 @@ describe("wakeUrl surfacing — the session-opening tools", () => {
     expect(Object.keys(CASES).sort()).toEqual([...WAKE_URL_PRODUCERS].sort());
   });
 
-  it.each(
-    WAKE_URL_PRODUCERS,
-  )("%s carries wakeUrl when a wake transport is running", async (tool) => {
-    mockedGetWakeEndpoint.mockReturnValue(LIVE_WAKE_URL);
+  it.each(WAKE_URL_PRODUCERS)(
+    "%s carries wakeUrl when a wake transport is running",
+    async (tool) => {
+      mockedGetWakeEndpoint.mockReturnValue(LIVE_WAKE_URL);
 
-    const res = parsed(await client.callTool({ name: tool, arguments: await CASES[tool]() }));
+      const res = parsed(await client.callTool({ name: tool, arguments: await CASES[tool]() }));
 
-    expect(res.error).toBe(false);
-    expect(res.data.wakeUrl).toBe(LIVE_WAKE_URL);
-  });
+      expect(res.error).toBe(false);
+      expect(res.data.wakeUrl).toBe(LIVE_WAKE_URL);
+    },
+  );
 
   it.each(WAKE_URL_PRODUCERS)("%s OMITS the key entirely in stdio mode", async (tool) => {
     mockedGetWakeEndpoint.mockReturnValue(null);

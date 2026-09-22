@@ -296,20 +296,21 @@ describe("resolveSafeCwd — path normalization (security I2)", () => {
   // Asserts the syscall, not the return value — see `tests/helpers/unc-fixtures.ts`.
   // Here `null` came out either way, because `realpath` throws on a host that
   // does not answer; the hash is gone before the throw.
-  it.each(
-    NETWORK_PATHS,
-  )("rejects %s (%s) WITHOUT touching the filesystem, on every platform", (_label, candidate) => {
-    const realpathSync = vi.spyOn(fs, "realpathSync");
-    const statSync = vi.spyOn(fs, "statSync");
-    try {
-      expect(resolveSafeCwd(candidate)).toBeNull();
-      expect(realpathSync).not.toHaveBeenCalled();
-      expect(statSync).not.toHaveBeenCalled();
-    } finally {
-      realpathSync.mockRestore();
-      statSync.mockRestore();
-    }
-  });
+  it.each(NETWORK_PATHS)(
+    "rejects %s (%s) WITHOUT touching the filesystem, on every platform",
+    (_label, candidate) => {
+      const realpathSync = vi.spyOn(fs, "realpathSync");
+      const statSync = vi.spyOn(fs, "statSync");
+      try {
+        expect(resolveSafeCwd(candidate)).toBeNull();
+        expect(realpathSync).not.toHaveBeenCalled();
+        expect(statSync).not.toHaveBeenCalled();
+      } finally {
+        realpathSync.mockRestore();
+        statSync.mockRestore();
+      }
+    },
+  );
 
   it("rejects non-string input", () => {
     expect(resolveSafeCwd(undefined as unknown as string)).toBeNull();

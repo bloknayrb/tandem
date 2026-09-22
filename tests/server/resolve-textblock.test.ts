@@ -121,32 +121,33 @@ describe("resolveToTextblock", () => {
     });
   });
 
-  it.each(
-    SHAPES,
-  )("%s — agrees with collectBlocks about which block owns an offset", (_label, md) => {
-    // The two walkers this feature adds encode the same separator contract
-    // twice: `descendToTextblock` searches for one offset, `collectBlocks`
-    // enumerates every block. Nothing else pins them together, and they can
-    // drift with both suites green — the failure mode being `tandem_edit`
-    // writing at an offset the caller read out of `blocks[]`, which is exactly
-    // the round trip the tools tell callers to make.
-    withDoc(md, (doc) => {
-      const frag = doc.getXmlFragment("default");
-      const blocks = collectBlocks(doc);
-      const flat = extractText(doc);
-      for (let i = 0; i <= flat.length; i++) {
-        const pos = resolveToTextblock(frag, toFlatOffset(i));
-        if (!pos) continue;
-        // The block whose half-open range contains `i`, if any. Offsets on a
-        // separator belong to no block; the resolver clamps them to the
-        // preceding one, so only assert where a block genuinely owns the offset.
-        const owner = blocks.find((b) => i >= b.from && i < b.to);
-        if (!owner) continue;
-        expect(pos.path, `offset ${i} in ${JSON.stringify(md)}`).toEqual(owner.path);
-        expect(i - owner.from, `offset ${i} within its block`).toBe(pos.textOffset);
-      }
-    });
-  });
+  it.each(SHAPES)(
+    "%s — agrees with collectBlocks about which block owns an offset",
+    (_label, md) => {
+      // The two walkers this feature adds encode the same separator contract
+      // twice: `descendToTextblock` searches for one offset, `collectBlocks`
+      // enumerates every block. Nothing else pins them together, and they can
+      // drift with both suites green — the failure mode being `tandem_edit`
+      // writing at an offset the caller read out of `blocks[]`, which is exactly
+      // the round trip the tools tell callers to make.
+      withDoc(md, (doc) => {
+        const frag = doc.getXmlFragment("default");
+        const blocks = collectBlocks(doc);
+        const flat = extractText(doc);
+        for (let i = 0; i <= flat.length; i++) {
+          const pos = resolveToTextblock(frag, toFlatOffset(i));
+          if (!pos) continue;
+          // The block whose half-open range contains `i`, if any. Offsets on a
+          // separator belong to no block; the resolver clamps them to the
+          // preceding one, so only assert where a block genuinely owns the offset.
+          const owner = blocks.find((b) => i >= b.from && i < b.to);
+          if (!owner) continue;
+          expect(pos.path, `offset ${i} in ${JSON.stringify(md)}`).toEqual(owner.path);
+          expect(i - owner.from, `offset ${i} within its block`).toBe(pos.textOffset);
+        }
+      });
+    },
+  );
 
   it("reports a heading prefix only for a TOP-LEVEL heading", () => {
     // `extractTextWithBreaks` emits `"## "` in its own top-level loop; a nested

@@ -167,17 +167,18 @@ describe("`.tandem-claude-focus` out-specifies the editor's own block rules", ()
     expect(found).toContain(".tandem-editor ol");
   });
 
-  it.each(
-    competitors.flatMap((rule) => rule.fullSelectors.map((sel) => [sel, rule] as const)),
-  )("beats `%s`", (sel, rule) => {
-    const focusMin = Math.min(...focus.fullSelectors.map(specificity));
-    expect(
-      focusMin,
-      `\`${focus.fullSelectors.join(", ")}\` (${focusMin}) must out-specify \`${sel}\` ` +
-        `(${specificity(sel)}), which declares \`${rule.body}\`. The focus decoration lands on ` +
-        "TOP-LEVEL nodes, so it sits on blockquotes and lists too, and CSS resolves this by " +
-        "specificity — source order never enters into it. Raise the focus selector (another " +
-        "ancestor class), do not reach for `!important` or move the values back inline.",
-    ).toBeGreaterThan(specificity(sel));
-  });
+  it.each(competitors.flatMap((rule) => rule.fullSelectors.map((sel) => [sel, rule] as const)))(
+    "beats `%s`",
+    (sel, rule) => {
+      const focusMin = Math.min(...focus.fullSelectors.map(specificity));
+      expect(
+        focusMin,
+        `\`${focus.fullSelectors.join(", ")}\` (${focusMin}) must out-specify \`${sel}\` ` +
+          `(${specificity(sel)}), which declares \`${rule.body}\`. The focus decoration lands on ` +
+          "TOP-LEVEL nodes, so it sits on blockquotes and lists too, and CSS resolves this by " +
+          "specificity — source order never enters into it. Raise the focus selector (another " +
+          "ancestor class), do not reach for `!important` or move the values back inline.",
+      ).toBeGreaterThan(specificity(sel));
+    },
+  );
 });

@@ -380,19 +380,20 @@ describe("reduce-motion guard coverage across src/client (#1530)", () => {
    * silently stricter pass instead. Asserting the keys resolve is the honest
    * gate either way, and it fails on the lookup rather than on its consequence.
    */
-  it.each(
-    EXCEPTIONS.map((e) => [`${e.file} — ${e.declared}`, e] as const),
-  )("EXCEPTIONS entry %s matches a real motion target", (_name, exception) => {
-    expect(
-      MOTION_TARGETS.find(
-        (t) => rel(t.file) === exception.file && t.selector === norm(exception.declared),
-      ),
-      `no scanned target matches this EXCEPTIONS entry. Either the rule it excuses is gone — ` +
-        "delete the entry — or the key no longer resolves. `file` is repo-relative with " +
-        "FORWARD slashes (the `rel()` coordinate system, normalized for Windows) and " +
-        "`declared` must equal the target's `norm`-alized selector.",
-    ).toBeDefined();
-  });
+  it.each(EXCEPTIONS.map((e) => [`${e.file} — ${e.declared}`, e] as const))(
+    "EXCEPTIONS entry %s matches a real motion target",
+    (_name, exception) => {
+      expect(
+        MOTION_TARGETS.find(
+          (t) => rel(t.file) === exception.file && t.selector === norm(exception.declared),
+        ),
+        `no scanned target matches this EXCEPTIONS entry. Either the rule it excuses is gone — ` +
+          "delete the entry — or the key no longer resolves. `file` is repo-relative with " +
+          "FORWARD slashes (the `rel()` coordinate system, normalized for Windows) and " +
+          "`declared` must equal the target's `norm`-alized selector.",
+      ).toBeDefined();
+    },
+  );
 
   it("reads timing tokens that both mechanisms zero — an empty set would exempt nothing and over-report", () => {
     expect([...ZEROED_TOKENS].sort()).toEqual([
@@ -406,100 +407,105 @@ describe("reduce-motion guard coverage across src/client (#1530)", () => {
     ]);
   });
 
-  it.each(
-    MOTION_TARGETS.map((t) => [`${rel(t.file)} — ${t.selector} (${t.prop})`, t] as const),
-  )("%s is guarded by both mechanisms", (_label, target) => {
-    const exception = exceptionFor(target);
-    const guardedSelector = exception?.guardedAs ?? target.selector;
+  it.each(MOTION_TARGETS.map((t) => [`${rel(t.file)} — ${t.selector} (${t.prop})`, t] as const))(
+    "%s is guarded by both mechanisms",
+    (_label, target) => {
+      const exception = exceptionFor(target);
+      const guardedSelector = exception?.guardedAs ?? target.selector;
 
-    const media = findGuard(target, guardedSelector, (chain) =>
-      isReduceMotionGuardOf(chain, target.rule.atRules),
-    );
-    expect(
-      media,
-      `no \`@media (prefers-reduced-motion: reduce) { ${guardedSelector} { ${target.prop}: none } }\` ` +
-        `rule found in ${rel(target.file)}. Add one directly AFTER the rule it guards — its ` +
-        "specificity is identical (matched by resolved selector, and an at-rule adds none), so it " +
-        "wins only by source order. If the timing is genuinely JS-computed, use token-zeroing " +
-        "(morphTiming.css / tabDragMotion.css) instead; if the guard must use a different " +
-        "selector, add an EXCEPTIONS entry and force it with `!important`.",
-    ).toBeDefined();
+      const media = findGuard(target, guardedSelector, (chain) =>
+        isReduceMotionGuardOf(chain, target.rule.atRules),
+      );
+      expect(
+        media,
+        `no \`@media (prefers-reduced-motion: reduce) { ${guardedSelector} { ${target.prop}: none } }\` ` +
+          `rule found in ${rel(target.file)}. Add one directly AFTER the rule it guards — its ` +
+          "specificity is identical (matched by resolved selector, and an at-rule adds none), so it " +
+          "wins only by source order. If the timing is genuinely JS-computed, use token-zeroing " +
+          "(morphTiming.css / tabDragMotion.css) instead; if the guard must use a different " +
+          "selector, add an EXCEPTIONS entry and force it with `!important`.",
+      ).toBeDefined();
 
-    const wantGlobal = `${GLOBAL_TOGGLE} ${guardedSelector}`;
-    const global = findGuard(target, wantGlobal, (chain) => sameChain(chain, target.rule.atRules));
-    expect(
-      global,
-      `no \`${wantGlobal} { ${target.prop}: none }\` rule found in ${rel(target.file)} — Tandem's ` +
-        "in-app reduceMotion setting does nothing for this rule without it, so exactly the users " +
-        "who never touched their OS setting keep the motion. In a .svelte file write it as " +
-        "`:global(body.tandem-reduce-motion) <selector>`; in a plain stylesheet or index.html, " +
-        "write it bare.",
-    ).toBeDefined();
+      const wantGlobal = `${GLOBAL_TOGGLE} ${guardedSelector}`;
+      const global = findGuard(target, wantGlobal, (chain) =>
+        sameChain(chain, target.rule.atRules),
+      );
+      expect(
+        global,
+        `no \`${wantGlobal} { ${target.prop}: none }\` rule found in ${rel(target.file)} — Tandem's ` +
+          "in-app reduceMotion setting does nothing for this rule without it, so exactly the users " +
+          "who never touched their OS setting keep the motion. In a .svelte file write it as " +
+          "`:global(body.tandem-reduce-motion) <selector>`; in a plain stylesheet or index.html, " +
+          "write it bare.",
+      ).toBeDefined();
 
-    if (!media || !global) return;
+      if (!media || !global) return;
 
-    // EXCEPTIONS deliberately guard under a DIFFERENT selector, so there is no
-    // target structure to repeat — `guardedAs` is itself the authored form, and
-    // `!important` (asserted below) is what makes it sound.
-    const authoredGuard = exception?.guardedAs ?? target.authored;
-    expect(
-      media.fullSelectors.map(structural),
-      `${rel(target.file)}: the @media guard matched \`${guardedSelector}\` only after ` +
-        "`:global(...)` unwrapping — it must repeat its target's selector VERBATIM, `:global` " +
-        "wrappers included. In a Svelte component a bare inner selector is scope-hashed and a " +
-        "`:global` one is not, so the two match different elements while reading identically here.",
-    ).toContain(authoredGuard);
-    // Two authorings satisfy the `:global` half in a `.svelte` file, and both are
-    // safe for the same reason: neither leaves a part of the selector scoped that
-    // the target had global. The split form repeats the target verbatim and adds
-    // its own wrapper; the whole-selector form (`:global(body.x .a .b)`, used by
-    // ReplyThread and SidePanel) puts EVERYTHING outside the scope hash, so no
-    // part can be hashed by accident. A plain stylesheet has only the bare form.
-    const acceptableGlobal = target.file.endsWith(".svelte")
-      ? [
-          `:global(${GLOBAL_TOGGLE}) ${authoredGuard}`,
-          `:global(${GLOBAL_TOGGLE} ${norm(authoredGuard)})`,
-        ]
-      : [`${GLOBAL_TOGGLE} ${authoredGuard}`];
-    expect(
-      global.fullSelectors.map(structural).some((s) => acceptableGlobal.includes(s)),
-      `${rel(target.file)}: the ${GLOBAL_TOGGLE} guard matched \`${guardedSelector}\` only after ` +
-        "`:global(...)` unwrapping. Where the target has an inner `:global`, the guard must keep " +
-        "that part global too — either as the double-global form " +
-        `(\`${acceptableGlobal[0]}\`) or with the whole selector inside one wrapper` +
-        (acceptableGlobal[1] ? ` (\`${acceptableGlobal[1]}\`)` : "") +
-        ". A bare inner selector is scope-hashed and matches a different element.",
-    ).toBe(true);
+      // EXCEPTIONS deliberately guard under a DIFFERENT selector, so there is no
+      // target structure to repeat — `guardedAs` is itself the authored form, and
+      // `!important` (asserted below) is what makes it sound.
+      const authoredGuard = exception?.guardedAs ?? target.authored;
+      expect(
+        media.fullSelectors.map(structural),
+        `${rel(target.file)}: the @media guard matched \`${guardedSelector}\` only after ` +
+          "`:global(...)` unwrapping — it must repeat its target's selector VERBATIM, `:global` " +
+          "wrappers included. In a Svelte component a bare inner selector is scope-hashed and a " +
+          "`:global` one is not, so the two match different elements while reading identically here.",
+      ).toContain(authoredGuard);
+      // Two authorings satisfy the `:global` half in a `.svelte` file, and both are
+      // safe for the same reason: neither leaves a part of the selector scoped that
+      // the target had global. The split form repeats the target verbatim and adds
+      // its own wrapper; the whole-selector form (`:global(body.x .a .b)`, used by
+      // ReplyThread and SidePanel) puts EVERYTHING outside the scope hash, so no
+      // part can be hashed by accident. A plain stylesheet has only the bare form.
+      const acceptableGlobal = target.file.endsWith(".svelte")
+        ? [
+            `:global(${GLOBAL_TOGGLE}) ${authoredGuard}`,
+            `:global(${GLOBAL_TOGGLE} ${norm(authoredGuard)})`,
+          ]
+        : [`${GLOBAL_TOGGLE} ${authoredGuard}`];
+      expect(
+        global.fullSelectors.map(structural).some((s) => acceptableGlobal.includes(s)),
+        `${rel(target.file)}: the ${GLOBAL_TOGGLE} guard matched \`${guardedSelector}\` only after ` +
+          "`:global(...)` unwrapping. Where the target has an inner `:global`, the guard must keep " +
+          "that part global too — either as the double-global form " +
+          `(\`${acceptableGlobal[0]}\`) or with the whole selector inside one wrapper` +
+          (acceptableGlobal[1] ? ` (\`${acceptableGlobal[1]}\`)` : "") +
+          ". A bare inner selector is scope-hashed and matches a different element.",
+      ).toBe(true);
 
-    if (exception) {
-      for (const [half, rule] of [
-        ["@media", media],
-        [GLOBAL_TOGGLE, global],
-      ] as const) {
-        const decl = motionDecls(rule.body).find((d) => d.prop === target.prop && isNone(d.value));
-        expect(
-          decl && isImportant(decl.value),
-          `${rel(target.file)}'s ${half} guard for \`${guardedSelector}\` lost its \`!important\`. ` +
-            `It guards \`${target.selector}\`, a MORE specific selector, so without the flag the ` +
-            "guard silently loses and the motion keeps running. Restore it, or guard the full " +
-            "selector and drop the EXCEPTIONS entry.",
-        ).toBe(true);
+      if (exception) {
+        for (const [half, rule] of [
+          ["@media", media],
+          [GLOBAL_TOGGLE, global],
+        ] as const) {
+          const decl = motionDecls(rule.body).find(
+            (d) => d.prop === target.prop && isNone(d.value),
+          );
+          expect(
+            decl && isImportant(decl.value),
+            `${rel(target.file)}'s ${half} guard for \`${guardedSelector}\` lost its \`!important\`. ` +
+              `It guards \`${target.selector}\`, a MORE specific selector, so without the flag the ` +
+              "guard silently loses and the motion keeps running. Restore it, or guard the full " +
+              "selector and drop the EXCEPTIONS entry.",
+          ).toBe(true);
+        }
+        return;
       }
-      return;
-    }
 
-    expect(
-      media.start,
-      `${rel(target.file)}: the @media guard for \`${guardedSelector}\` must be declared AFTER the ` +
-        "rule it guards — same selector means same specificity, and an at-rule adds none, so it " +
-        "wins on source order alone.",
-    ).toBeGreaterThan(target.rule.start);
-    expect(
-      global.start,
-      `${rel(target.file)}: the ${GLOBAL_TOGGLE} guard for \`${guardedSelector}\` must be declared ` +
-        "after the rule it guards.",
-    ).toBeGreaterThan(target.rule.start);
-  });
+      expect(
+        media.start,
+        `${rel(target.file)}: the @media guard for \`${guardedSelector}\` must be declared AFTER the ` +
+          "rule it guards — same selector means same specificity, and an at-rule adds none, so it " +
+          "wins on source order alone.",
+      ).toBeGreaterThan(target.rule.start);
+      expect(
+        global.start,
+        `${rel(target.file)}: the ${GLOBAL_TOGGLE} guard for \`${guardedSelector}\` must be declared ` +
+          "after the rule it guards.",
+      ).toBeGreaterThan(target.rule.start);
+    },
+  );
 });
 
 describe("reduce-motion guard coverage across src/client (#1530): inline styles are invisible to the scan above", () => {
@@ -577,16 +583,17 @@ describe("reduce-motion guard coverage across src/client (#1530): inline styles 
    * names a file actually in the scanned corpus, in the corpus's own
    * coordinate system.
    */
-  it.each(
-    [...INLINE_ALLOWLIST.keys()].map((name) => [name] as const),
-  )("INLINE_ALLOWLIST key %s names a file the inline scan actually visits", (name) => {
-    expect(
-      SVELTE_FILES.map(rel),
-      `\`${name}\` is not among the scanned .svelte files, so its allowance applies to nothing ` +
-        "and the file it was written for is being held to zero. Keys are repo-relative with " +
-        "FORWARD slashes — see `rel()`.",
-    ).toContain(name);
-  });
+  it.each([...INLINE_ALLOWLIST.keys()].map((name) => [name] as const))(
+    "INLINE_ALLOWLIST key %s names a file the inline scan actually visits",
+    (name) => {
+      expect(
+        SVELTE_FILES.map(rel),
+        `\`${name}\` is not among the scanned .svelte files, so its allowance applies to nothing ` +
+          "and the file it was written for is being held to zero. Keys are repo-relative with " +
+          "FORWARD slashes — see `rel()`.",
+      ).toContain(name);
+    },
+  );
 
   it("finds inline style attributes to scan — zero means the scanner desynced from the markup", () => {
     const total = SVELTE_FILES.reduce(
@@ -596,51 +603,53 @@ describe("reduce-motion guard coverage across src/client (#1530): inline styles 
     expect(total).toBeGreaterThan(100);
   });
 
-  it.each(
-    SVELTE_FILES.map((f) => [rel(f), f] as const),
-  )("%s declares no unallowlisted transition/animation in an inline style attribute", (name, file) => {
-    const offenders = inlineStyleValues(readFileSync(file, "utf-8")).filter((v) =>
-      /(?:^|[;\s])(?:transition|animation)\s*:/.test(v),
-    );
-    const allowed = INLINE_ALLOWLIST.get(name)?.count ?? 0;
-    expect(
-      offenders.length,
-      `${name} has ${offenders.length} inline motion declaration(s), ${allowed} allowlisted. An ` +
-        "inline `style` is unreachable by every guard in this file — no stylesheet rule can " +
-        "override it without `!important`. If the timing is STATIC, move the declaration into a " +
-        "stylesheet rule and guard THAT (see ChatPanel's typing dots, #1530); if it is genuinely " +
-        "JS-computed, use token-zeroing (morphTiming.css / tabDragMotion.css). Add an " +
-        "INLINE_ALLOWLIST entry only with a guard that can actually beat an inline declaration.\n" +
-        offenders.map((o) => `  - ${o.replace(/\s+/g, " ").trim().slice(0, 160)}`).join("\n"),
-    ).toBe(allowed);
-  });
+  it.each(SVELTE_FILES.map((f) => [rel(f), f] as const))(
+    "%s declares no unallowlisted transition/animation in an inline style attribute",
+    (name, file) => {
+      const offenders = inlineStyleValues(readFileSync(file, "utf-8")).filter((v) =>
+        /(?:^|[;\s])(?:transition|animation)\s*:/.test(v),
+      );
+      const allowed = INLINE_ALLOWLIST.get(name)?.count ?? 0;
+      expect(
+        offenders.length,
+        `${name} has ${offenders.length} inline motion declaration(s), ${allowed} allowlisted. An ` +
+          "inline `style` is unreachable by every guard in this file — no stylesheet rule can " +
+          "override it without `!important`. If the timing is STATIC, move the declaration into a " +
+          "stylesheet rule and guard THAT (see ChatPanel's typing dots, #1530); if it is genuinely " +
+          "JS-computed, use token-zeroing (morphTiming.css / tabDragMotion.css). Add an " +
+          "INLINE_ALLOWLIST entry only with a guard that can actually beat an inline declaration.\n" +
+          offenders.map((o) => `  - ${o.replace(/\s+/g, " ").trim().slice(0, 160)}`).join("\n"),
+      ).toBe(allowed);
+    },
+  );
 
-  it.each(
-    [...INLINE_ALLOWLIST].map(([name, entry]) => [name, entry] as const),
-  )("%s's allowlisted inline motion is guarded by an `!important` rule that can beat it", (name, entry) => {
-    const rules = RULES_BY_FILE.get(join(ROOT, name));
-    expect(rules, `${name} is not in the scanned corpus`).toBeDefined();
-    for (const selector of entry.guardedBy) {
-      for (const [half, chainOk] of [
-        ["@media", (c: string[]) => c.length === 1 && REDUCE_MOTION_QUERY.test(c[0])],
-        [GLOBAL_TOGGLE, (c: string[]) => c.length === 0],
-      ] as const) {
-        const want = half === "@media" ? selector : `${GLOBAL_TOGGLE} ${selector}`;
-        const guard = (rules ?? []).find(
-          (r) =>
-            chainOk(r.atRules) &&
-            r.fullSelectors.map(norm).includes(want) &&
-            motionDecls(r.body).some((d) => isNone(d.value) && isImportant(d.value)),
-        );
-        expect(
-          guard,
-          `${name}: no \`${want} { animation: none !important }\` rule. The allowlisted inline ` +
-            "`animation` on this element can only be overridden with `!important` — without it " +
-            "the dot keeps animating under both reduced-motion mechanisms.",
-        ).toBeDefined();
+  it.each([...INLINE_ALLOWLIST].map(([name, entry]) => [name, entry] as const))(
+    "%s's allowlisted inline motion is guarded by an `!important` rule that can beat it",
+    (name, entry) => {
+      const rules = RULES_BY_FILE.get(join(ROOT, name));
+      expect(rules, `${name} is not in the scanned corpus`).toBeDefined();
+      for (const selector of entry.guardedBy) {
+        for (const [half, chainOk] of [
+          ["@media", (c: string[]) => c.length === 1 && REDUCE_MOTION_QUERY.test(c[0])],
+          [GLOBAL_TOGGLE, (c: string[]) => c.length === 0],
+        ] as const) {
+          const want = half === "@media" ? selector : `${GLOBAL_TOGGLE} ${selector}`;
+          const guard = (rules ?? []).find(
+            (r) =>
+              chainOk(r.atRules) &&
+              r.fullSelectors.map(norm).includes(want) &&
+              motionDecls(r.body).some((d) => isNone(d.value) && isImportant(d.value)),
+          );
+          expect(
+            guard,
+            `${name}: no \`${want} { animation: none !important }\` rule. The allowlisted inline ` +
+              "`animation` on this element can only be overridden with `!important` — without it " +
+              "the dot keeps animating under both reduced-motion mechanisms.",
+          ).toBeDefined();
+        }
       }
-    }
-  });
+    },
+  );
 
   /**
    * The sweep above reads each `style={…}` occurrence's EXPRESSION SOURCE TEXT,
@@ -660,22 +669,23 @@ describe("reduce-motion guard coverage across src/client (#1530): inline styles 
     return out;
   }
 
-  it.each(
-    tsFiles(CLIENT).map((f) => [rel(f), f] as const),
-  )("%s builds no motion declaration into a style string", (name, file) => {
-    const src = readFileSync(file, "utf-8")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^[ \t]*\/\/.*$/gm, "");
-    const offenders = [
-      ...src.matchAll(/(?:^|[;\s"'`])((?:transition|animation)\s*:[^;\n`"']*)/g),
-    ].map((m) => m[1].trim());
-    expect(
-      offenders,
-      `${name} emits a motion declaration into a string that ends up in an inline \`style\`, ` +
-        "where no reduce-motion guard can reach it. Move it into a stylesheet rule and guard " +
-        "THAT — `extensions/awareness.ts` did exactly this in #1530, moving the Claude-focus " +
-        "paragraph tint into `editor.css`'s `.tandem-claude-focus` — or, if the timing is " +
-        "genuinely computed, use token-zeroing.",
-    ).toEqual([]);
-  });
+  it.each(tsFiles(CLIENT).map((f) => [rel(f), f] as const))(
+    "%s builds no motion declaration into a style string",
+    (name, file) => {
+      const src = readFileSync(file, "utf-8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^[ \t]*\/\/.*$/gm, "");
+      const offenders = [
+        ...src.matchAll(/(?:^|[;\s"'`])((?:transition|animation)\s*:[^;\n`"']*)/g),
+      ].map((m) => m[1].trim());
+      expect(
+        offenders,
+        `${name} emits a motion declaration into a string that ends up in an inline \`style\`, ` +
+          "where no reduce-motion guard can reach it. Move it into a stylesheet rule and guard " +
+          "THAT — `extensions/awareness.ts` did exactly this in #1530, moving the Claude-focus " +
+          "paragraph tint into `editor.css`'s `.tandem-claude-focus` — or, if the timing is " +
+          "genuinely computed, use token-zeroing.",
+      ).toEqual([]);
+    },
+  );
 });

@@ -151,20 +151,21 @@ describe("interceptAnchorGesture — gestures it declines", () => {
     expect(openHref).not.toHaveBeenCalled();
   });
 
-  it.each(
-    INERT_HREFS,
-  )("suppresses the duplicate-app-window default for %s on auxclick", (_l, href) => {
-    // The aux default action is a NEW TAB, not a scroll: `href=""` resolves to
-    // the current document URL and `#frag` to current-URL-plus-fragment, so the
-    // middle click would open a second editor session against the same
-    // documents. Reachable via the veto blanking a `\\fileserver\…` Word link
-    // to `href=""` in the read-only changelog.
-    anchor.setAttribute("href", href);
-    const { handled, event } = fire(inner, "auxclick", { button: MOUSE_BUTTON_MIDDLE });
-    expect(handled).toBe(true);
-    expect(event.defaultPrevented).toBe(true);
-    expect(openHref).not.toHaveBeenCalled();
-  });
+  it.each(INERT_HREFS)(
+    "suppresses the duplicate-app-window default for %s on auxclick",
+    (_l, href) => {
+      // The aux default action is a NEW TAB, not a scroll: `href=""` resolves to
+      // the current document URL and `#frag` to current-URL-plus-fragment, so the
+      // middle click would open a second editor session against the same
+      // documents. Reachable via the veto blanking a `\\fileserver\…` Word link
+      // to `href=""` in the read-only changelog.
+      anchor.setAttribute("href", href);
+      const { handled, event } = fire(inner, "auxclick", { button: MOUSE_BUTTON_MIDDLE });
+      expect(handled).toBe(true);
+      expect(event.defaultPrevented).toBe(true);
+      expect(openHref).not.toHaveBeenCalled();
+    },
+  );
 
   it("declines an anchor with no href attribute at all", () => {
     const bare = document.createElement("a");

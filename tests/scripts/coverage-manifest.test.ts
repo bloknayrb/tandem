@@ -156,22 +156,20 @@ describe("coverage baseline: refusals", () => {
     expect(r.message).toContain("no `total` key");
   });
 
-  it.each([
-    "statements",
-    "branches",
-    "functions",
-    "lines",
-  ])("refuses a summary missing total.%s", (metric) => {
-    // Only `statements` was validated before review; the other three were
-    // published unchecked. A provider bump that drops one yields
-    // `undefined`, which JSON.stringify removes silently, and Unit 13 seeds
-    // a floor from a totals object missing a metric.
-    const input = validInput();
-    const summary = clone(input.summary) as { total: Record<string, unknown> };
-    delete summary.total[metric];
-    const r = refused(buildManifest({ ...input, summary }));
-    expect(r.message).toContain(metric);
-  });
+  it.each(["statements", "branches", "functions", "lines"])(
+    "refuses a summary missing total.%s",
+    (metric) => {
+      // Only `statements` was validated before review; the other three were
+      // published unchecked. A provider bump that drops one yields
+      // `undefined`, which JSON.stringify removes silently, and Unit 13 seeds
+      // a floor from a totals object missing a metric.
+      const input = validInput();
+      const summary = clone(input.summary) as { total: Record<string, unknown> };
+      delete summary.total[metric];
+      const r = refused(buildManifest({ ...input, summary }));
+      expect(r.message).toContain(metric);
+    },
+  );
 
   it("refuses a run that measured zero statements", () => {
     // The bug this unit found: a negated glob in `test.include` selects the
