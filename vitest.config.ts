@@ -119,7 +119,9 @@ export default defineConfig({
     projects: [
       {
         // Client tests: Svelte components need browser conditions + DOM environment
-        plugins: [svelte({ hot: false })],
+        // No `plugins` here: vitest 5 merges the root `plugins` into each
+        // project, so a second `svelte()` compiled every `.svelte(.ts|.js)`
+        // twice and failed on the reserved `$` import (137 client files).
         resolve: {
           conditions: ["browser"],
           alias: {

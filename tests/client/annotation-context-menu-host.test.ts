@@ -197,9 +197,15 @@ describe("runAnnotationAction (shared re-validating dispatcher)", () => {
 
   it("copy writes the body to the clipboard; missing handlers are a safe no-op", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
-    // @ts-expect-error — minimal clipboard shim for jsdom.
-    globalThis.navigator = { clipboard: { writeText } };
-    runAnnotationAction("ctx:annotation:copy", ann("note", "user", "pending", "secret"), {});
-    expect(writeText).toHaveBeenCalledWith("secret");
+    // Minimal clipboard shim. `vi.stubGlobal`, not assignment: happy-dom's
+    // `navigator` is getter-only under vitest 5, and the stub is also undone
+    // afterwards instead of leaking into later tests in this file.
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    try {
+      runAnnotationAction("ctx:annotation:copy", ann("note", "user", "pending", "secret"), {});
+      expect(writeText).toHaveBeenCalledWith("secret");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
