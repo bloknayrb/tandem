@@ -47,7 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`tandem channel` no longer exits when Tandem is not running yet (#2090).** Starting the channel before Tandem made it quit immediately; it now logs a warning to stderr and keeps running.
 
-- **An auto-launched session that restarts can no longer have its resume confirmation cancelled or triggered by the previous session's timer (#2090).**
+- **A restarted auto-launched Claude session is no longer disturbed by the late exit of the one it replaced (#2090).** The old session's exit could delete the saved session record the new one was using, so the next Tandem start opened a fresh Claude conversation instead of resuming, and it could cancel or fire the new session's resume confirmation.
 
 - **`tandem doctor` no longer promises that parked or quarantined annotation files will load again or expire after seven days (#2090).** Neither happens; the messages now say so. **Bound:** Tandem still has no way to restore these files for you (#1980).
 
