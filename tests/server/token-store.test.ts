@@ -14,9 +14,13 @@ vi.mock("env-paths", () => ({
 }));
 
 // Import after mocks are registered.
-const { loadOrCreateToken, readTokenFromFile, writeTokenToFile, getTokenFilePath } = await import(
-  "../../src/server/auth/token-store"
-);
+const {
+  loadOrCreateToken,
+  readTokenFromFile,
+  writeTokenToFile,
+  getTokenFilePath,
+  tokenFileIsAuthoritative,
+} = await import("../../src/server/auth/token-store");
 
 const BASE64URL_RE = /^[A-Za-z0-9_-]{43}$/;
 
@@ -190,5 +194,46 @@ describe("token-store", () => {
       await expect(loadOrCreateToken()).rejects.toThrow();
       expect(mockExit).toHaveBeenCalledWith(1);
     });
+  });
+});
+
+/**
+ * #1946 — the REAL predicate. `/api/info`'s specs all inject a fake one, so
+ * without this an implementation reading the wrong variable name, or returning
+ * a constant, passes everything while the route keeps reporting an mtime for a
+ * file no desktop install ever reads.
+ */
+describe("tokenFileIsAuthoritative", () => {
+  let saved: string | undefined;
+
+  beforeEach(() => {
+    saved = process.env.TANDEM_AUTH_TOKEN;
+    delete process.env.TANDEM_AUTH_TOKEN;
+  });
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.TANDEM_AUTH_TOKEN;
+    else process.env.TANDEM_AUTH_TOKEN = saved;
+  });
+
+  it("true when TANDEM_AUTH_TOKEN is unset", () => {
+    expect(tokenFileIsAuthoritative()).toBe(true);
+  });
+
+  it("true when TANDEM_AUTH_TOKEN is empty", () => {
+    process.env.TANDEM_AUTH_TOKEN = "";
+    expect(tokenFileIsAuthoritative()).toBe(true);
+  });
+
+  it("true when TANDEM_AUTH_TOKEN is whitespace only", () => {
+    // Mirrors loadOrCreateToken's `envToken.trim().length > 0` — a whitespace
+    // env var is not a token, so the file is still the source.
+    process.env.TANDEM_AUTH_TOKEN = "   ";
+    expect(tokenFileIsAuthoritative()).toBe(true);
+  });
+
+  it("false when TANDEM_AUTH_TOKEN carries a real token (the desktop shape)", () => {
+    process.env.TANDEM_AUTH_TOKEN = "a-real-looking-token";
+    expect(tokenFileIsAuthoritative()).toBe(false);
   });
 });

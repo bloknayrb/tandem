@@ -57,6 +57,28 @@ export async function writeTokenToFile(token: string): Promise<string> {
   return token;
 }
 
+/**
+ * True when the token file at `getTokenFilePath()` is the one THIS process's
+ * token actually came from (#1946).
+ *
+ * Mirrors `loadOrCreateToken`'s first branch exactly — including the trim —
+ * and lives beside it so the mirroring stays reviewable. It does NOT unify the
+ * codebase's env-token tests: three branches exist and already differ
+ * (`loadOrCreateToken` below trims, `src/server/index.ts` is truthy-only, and
+ * `mcp/routes/rotate-token.ts` is bare truthy with no trim). With
+ * `TANDEM_AUTH_TOKEN="   "` this predicate reports the file authoritative
+ * while rotate-token still answers 409 "Token is managed by Tauri" —
+ * deliberate, since migrating that route would widen rotation to the
+ * whitespace-env case on a security-sensitive path.
+ *
+ * On a desktop install the Tauri host injects the token from the OS keychain,
+ * so the file has no reader and anything derived from it (e.g. /api/info's
+ * `tokenRotatedAt`) describes a file this server never opened.
+ */
+export function tokenFileIsAuthoritative(): boolean {
+  return !process.env.TANDEM_AUTH_TOKEN?.trim();
+}
+
 // Priority: env var (Tauri injects before sidecar spawn) → existing file → generate+persist.
 // Returns the token string. Exits with code 1 on unrecoverable failure. Return type will be
 // widened to string|null in PR b when CLI loopback-only mode may proceed token-less.

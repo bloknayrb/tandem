@@ -363,6 +363,40 @@ describe("#1416 open-failure wiring that only source-scanning can pin", () => {
     ).toMatch(/app\.emit\(EVENT_STARTUP_FILE_REJECTED/);
   });
 
+  it("agrees with the client on the sidecar-restarted event's name", () => {
+    // Same hazard, same shape as the nudge pin above, for #1959's own
+    // payload-free event: the four client specs drive an injected fake `listen`
+    // and the Rust `only_a_crash_restart_announces_itself` tests a pure
+    // discriminant, so a one-character disagreement between the two literals
+    // leaves every suite green while the toast never arrives.
+    const rust = rustSourceDefining(
+      /const EVENT_SIDECAR_RESTARTED: &str/,
+      "EVENT_SIDECAR_RESTARTED",
+    );
+    const declared = rust.code.match(/const EVENT_SIDECAR_RESTARTED: &str = "([a-z-]+)";/);
+    expect(
+      declared,
+      "the Rust event constant is not a plain string literal any more",
+    ).not.toBeNull();
+
+    const client = stripTsComments(
+      readFileSync(join(REPO_ROOT, "src", "client", "utils", "sidecar-restart-toast.ts"), "utf8"),
+    );
+    const listened = client.match(/const SIDECAR_RESTARTED_EVENT = "([a-z-]+)";/);
+    expect(
+      listened,
+      "the client's SIDECAR_RESTARTED_EVENT binding is not a plain literal any more",
+    ).not.toBeNull();
+
+    expect(declared?.[1], "Rust emits one event name and the client listens for another.").toBe(
+      listened?.[1],
+    );
+    expect(
+      rust.code,
+      "the emit site must pass EVENT_SIDECAR_RESTARTED, not a second literal",
+    ).toMatch(/\.emit\(EVENT_SIDECAR_RESTARTED/);
+  });
+
   it("gives every Rust wire code an explicit case in the client's message map", () => {
     const sources = rustSources();
     // Stripped once and shared: `routedIn` below asks about the same derived

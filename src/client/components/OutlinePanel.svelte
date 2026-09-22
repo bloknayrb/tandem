@@ -2,11 +2,12 @@
 import type { Editor } from "@tiptap/core";
 import { TextSelection } from "prosemirror-state";
 import { untrack } from "svelte";
+import type * as Y from "yjs";
 import type { Annotation } from "../../shared/types";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import { getDisplayAuthor } from "../panels/annotation-card-helpers";
 import type { FilterAuthor, FilterStatus, FilterType } from "../panels/FilterBar.svelte";
-import { flatOffsetToPmPos } from "../positions";
+import { annotationToPmRange } from "../positions";
 import type { HeadingEntry } from "../utils/headings";
 
 interface Props {
@@ -16,6 +17,12 @@ interface Props {
       OutlinePanel must not compute it independently. */
   headings: HeadingEntry[];
   annotations?: Annotation[];
+  /** The active tab's Y.Doc, so annotation positions resolve through the
+      CRDT-anchored `relRange` rather than a possibly-stale flat offset (#2002).
+      Optional with a null default is load-bearing: `annotationToPmRange` falls
+      back to the flat offsets when it is null, which is exactly the old
+      behaviour, so callers that pass no ydoc keep working. */
+  ydoc?: Y.Doc | null;
   focusTrigger?: number;
   activeFilterType?: FilterType;
   activeFilterAuthor?: FilterAuthor;
@@ -26,6 +33,7 @@ let {
   editor,
   headings,
   annotations = [],
+  ydoc = null,
   focusTrigger = 0,
   activeFilterType = "all",
   activeFilterAuthor = "all",
@@ -156,9 +164,20 @@ const headingAnnotationCounts = $derived.by(() => {
     if (activeFilterAuthor !== "all" && getDisplayAuthor(ann) !== activeFilterAuthor) continue;
     if (activeFilterStatus !== "all" && ann.status !== activeFilterStatus) continue;
     try {
-      annPositions.push(flatOffsetToPmPos(ed.state.doc, ann.range.from));
+      // The shared resolver, as every other client consumer uses: it prefers
+      // the CRDT-anchored `relRange` and falls back to the stored flat range.
+      // Resolving by flat `range.from` alone read the SERVER's coordinates,
+      // which are only as fresh as the server's last refresh, so an annotation
+      // bucketed under the wrong heading after a local edit moved text.
+      // Null-guarded rather than `!` (which would throw into this catch) or
+      // `?.from` (which would push `undefined` into a number[]).
+      const resolved = annotationToPmRange(ann, ed.state.doc, ydoc);
+      if (!resolved) continue; // same skip the catch performs
+      annPositions.push(resolved.from);
     } catch {
-      // skip annotations with invalid ranges
+      // Skip annotations the resolver cannot place: `flatOffsetToPmPos` clamps,
+      // so this covers `resolveWithinNode` / doc-shape failures, not an
+      // out-of-range offset.
     }
   }
 

@@ -496,6 +496,22 @@ pub(crate) enum RestartCause {
     PostBootCrash,
 }
 
+/// Payload-free nudge: a sidecar that crashed after boot has been restarted and
+/// is coming back. Listened for in `src/client/utils/sidecar-restart-toast.ts`;
+/// the two literals are pinned against each other in
+/// `tests/docs/startup-open-failure-wiring-claims.test.ts`.
+pub(crate) const EVENT_SIDECAR_RESTARTED: &str = "sidecar-restarted";
+
+/// Whether a SUCCESSFUL restart with this cause announces itself to the user.
+///
+/// Only a crash does. A user-initiated restart already has feedback at the
+/// click site (`NetworkSettings.svelte`), so announcing it again would toast
+/// "restarted after a crash" at someone who pressed the button themselves.
+/// A pure function so the gate is testable without an `AppHandle`.
+pub(crate) fn announces_successful_restart(cause: RestartCause) -> bool {
+    matches!(cause, RestartCause::PostBootCrash)
+}
+
 /// Gracefully stop the sidecar (flush dirty docs + save session, #1088),
 /// hard-kill as fallback, then spawn it again.
 #[tauri::command]
@@ -565,7 +581,24 @@ pub(crate) fn restart_sidecar_for(app: tauri::AppHandle, cause: RestartCause) {
         // Restart never re-injects the cold-start file: the original `setup()`
         // invocation already opened it and registered it in `openDocuments`.
         match start_sidecar(&handle, &client, None).await {
-            Ok(SpawnOutcome::Started) => {}
+            Ok(SpawnOutcome::Started) => {
+                // The success arm, NOT the `CrashRestartDecision::Restart`
+                // decision site: that arm runs before the graceful stop and the
+                // respawn, so emitting there would announce a restart that can
+                // still fail or be declined — and both of those arms below emit
+                // `sidecar-restart-failed`, so the user would get "restarted"
+                // followed by "failed to restart".
+                //
+                // One accepted false positive, DEBUG BUILDS ONLY:
+                // `SpawnOutcome::Started` also covers "an external
+                // `dev:standalone` server was already answering /health". A
+                // release build always spawns, so this cannot reach a user.
+                if announces_successful_restart(cause) {
+                    if let Err(emit_err) = handle.emit(EVENT_SIDECAR_RESTARTED, ()) {
+                        log::error!("[restart_sidecar] failed to emit restarted event: {emit_err}");
+                    }
+                }
+            }
             // A decline is not a restart. By this point the command body has
             // already run `clear_healthy_under_lock` (and, on a user-initiated
             // restart, `clear_startup_rejection`),
@@ -2769,6 +2802,86 @@ mod crash_restart_tests {
     use super::*;
     use std::time::Instant;
 
+    /// Without this, an implementation that emits unconditionally from
+    /// `restart_sidecar_for`'s success arm toasts "Tandem server restarted
+    /// after a crash." at a user who just pressed Restart server (#1959).
+    #[test]
+    fn only_a_crash_restart_announces_itself() {
+        assert!(announces_successful_restart(RestartCause::PostBootCrash));
+        assert!(!announces_successful_restart(RestartCause::UserInitiated));
+    }
+
+    /// #1959 review — the announcement must stay in `restart_sidecar_for`'s
+    /// `Ok(SpawnOutcome::Started)` arm, and nowhere else. The issue body
+    /// proposed emitting from the `CrashRestartDecision::Restart` decision site
+    /// instead, which runs BEFORE the graceful stop and the respawn: from there
+    /// a declined respawn (`SpawnOutcome::Declined`, non-EXITING) or an `Err`
+    /// would show "Tandem server restarted after a crash." immediately followed
+    /// by "Tandem server failed to restart." — the exact outcome the emit site's
+    /// own comment says it exists to prevent.
+    ///
+    /// Nothing else catches that move: `only_a_crash_restart_announces_itself`
+    /// exercises the pure discriminant, the vitest specs drive an injected fake
+    /// `listen`, and the cross-language pin in
+    /// `tests/docs/startup-open-failure-wiring-claims.test.ts` greps the whole
+    /// file. So the SITE is pinned structurally, the same way the two arm tests
+    /// below are, and for the same reason: reaching it for real needs an
+    /// `AppHandle` and a child process that crashes.
+    ///
+    /// The needle is `concat!`-ed so the verbatim sequence never appears in this
+    /// test — that is what lets the uniqueness count read the entire file with
+    /// no "production half" filter, exactly as
+    /// `respawn_guard_lines_are_warns_and_match_the_smoke_checklist` does.
+    #[test]
+    fn the_restarted_event_is_announced_only_from_the_spawn_success_arm() {
+        let src = include_str!("sidecar.rs");
+        let emit = concat!(".emit(EVENT_SIDECAR", "_RESTARTED");
+        assert_eq!(
+            src.matches(emit).count(),
+            1,
+            "exactly one site may announce a successful restart"
+        );
+
+        let fn_start = src
+            .find("pub(crate) fn restart_sidecar_for(")
+            .expect("restart_sidecar_for must exist");
+        let body = &src[fn_start..];
+        let body = &body[..body
+            .find("\n}\n")
+            .expect("restart_sidecar_for's body must be delimited")];
+
+        // Sliced out of the match rather than brace-counted, so a re-wrap
+        // inside the arm cannot false-red this.
+        let arm_start = body
+            .find("Ok(SpawnOutcome::Started) => {")
+            .expect("the spawn success arm must exist");
+        let arm = &body[arm_start..];
+        let arm = &arm[..arm
+            .find("Ok(SpawnOutcome::Declined) => {")
+            .expect("the declined arm must follow the success arm")];
+        assert!(
+            arm.contains(emit),
+            "the emit must sit in the arm that saw a sidecar actually come back"
+        );
+        assert!(
+            arm.contains("announces_successful_restart(cause)"),
+            "and it must stay gated on the cause, or a user-initiated restart toasts too"
+        );
+
+        // And the decision site must not grow one of its own.
+        let decision_start = src
+            .find("CrashRestartDecision::Restart => {")
+            .expect("the crash restart arm must exist");
+        let decision = &src[decision_start..];
+        let decision = &decision[..decision
+            .find("CrashRestartDecision::BreakerTripped =>")
+            .expect("the breaker arm must follow it")];
+        assert!(
+            !decision.contains(emit),
+            "the decision site runs before the respawn — it cannot know a restart succeeded"
+        );
+    }
+
     /// The worst bug this guard prevents, so it goes first: a `Terminated` from
     /// a killed retry attempt landing after a newer child is healthy would
     /// otherwise gracefully stop and respawn a live sidecar, because
@@ -3920,17 +4033,8 @@ mod shutdown_guard_tests {
             // a comment, real call gone) that the previous mechanism died of.
             let macro_at = before_quote.len() - MACRO.len();
             let line_start = src[..macro_at].rfind('\n').map_or(0, |i| i + 1);
-            // `concat!`, not a spelled-out "//" literal. `tests/docs/rust-sources.ts`
-            // strips comments with a regex BEFORE it counts braces, and that
-            // regex is not string-aware: a line-comment marker inside a Rust
-            // string literal makes it delete the closing quote and the rest of
-            // the line, after which its brace matcher desynchronises and throws
-            // — taking all six suites built on that helper down with it. It
-            // fails loudly rather than silently, so this is a landmine and not a
-            // hole, but the crate has to step around it.
-            const LINE_COMMENT: &str = concat!("/", "/");
             assert!(
-                !src[line_start..macro_at].contains(LINE_COMMENT),
+                !src[line_start..macro_at].contains("//"),
                 "the log::warn! carrying {line:?} in {src_name} is commented out — the literal is \
                  still present but nothing emits it"
             );

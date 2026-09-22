@@ -356,6 +356,12 @@ export function registerAwarenessTools(server: McpServer): void {
       "annotation ranges. It is a proximity hint, not an edit anchor: only a document change " +
       "triggers a write, the last of those publishes wherever the caret is by then, and it " +
       "carries no snapshot — so take ranges from tandem_resolveRange or tandem_search. " +
+      "An edit you make yourself shifts the user's caret too, and the editor showing that " +
+      "document refreshes `cursor` in place a moment later; `isTyping` and `lastEdit` stay " +
+      "as the user left them and never report your own edit as their activity. That refresh " +
+      "needs a mounted editor and is debounced, so for a background tab, a document no " +
+      "browser is showing, or a read taken right after your own edit, `cursor` is still the " +
+      "PRE-edit offset — re-read it after a moment rather than trusting it to have moved. " +
       "Returns presence only; " +
       "it does not return document content or pending user messages (use tandem_checkInbox " +
       "for those).",
@@ -403,7 +409,7 @@ export function registerAwarenessTools(server: McpServer): void {
     "tandem_checkInbox",
     {
       description:
-        'Return user actions not yet returned by a previous poll — new comments, chat messages, and replies to your annotations — plus the current collaboration `mode` and `activity`. This is the authoritative delivery path: real-time push cannot be confirmed to have reached a client, so nothing here is suppressed on the strength of a push, and steady polling is the only reliable way to see user activity. Repeat calls de-duplicate against what was already returned, so frequent polling never double-reports. An item carries `alreadyPushed: true` when it was also emitted as a real-time event; that describes the server\'s side only. Does not return user notes (`type: "note"`), nor any record whose stored `audience` is not outbound (#1619/#1710) — user highlights are always private, so they never appear here at all. `activity.selectedText` is the most recent non-empty selection, not necessarily the current one — it is not cleared when focus leaves the editor — and `activity.selectionAt` is when the editor last wrote it: while the document is the active editor tab, any edit that moves the selection re-stamps it, including yours (#1991), so a recent value does not prove a recent selection, but an old one proves it is old. For a document not shown in an editor nothing updates the record, so after an edit `selectedText` can be sliced from stale offsets (#1997).',
+        'Return user actions not yet returned by a previous poll — new comments, chat messages, and replies to your annotations — plus the current collaboration `mode` and `activity`. This is the authoritative delivery path: real-time push cannot be confirmed to have reached a client, so nothing here is suppressed on the strength of a push, and steady polling is the only reliable way to see user activity. Repeat calls de-duplicate against what was already returned, so frequent polling never double-reports. An item carries `alreadyPushed: true` when it was also emitted as a real-time event; that describes the server\'s side only. Does not return user notes (`type: "note"`), nor any record whose stored `audience` is not outbound (#1619/#1710) — user highlights are always private, so they never appear here at all. `activity.selectedText` is the most recent non-empty selection, not necessarily the current one — it is not cleared when focus leaves the editor — and `activity.selectionAt` is when the user last made it. For a document not shown in an editor nothing updates the record, so after an edit `selectedText` can be sliced from stale offsets (#1997).',
       inputSchema: {
         documentId: z
           .string()

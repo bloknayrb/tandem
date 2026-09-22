@@ -2,6 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import render from "dom-serializer";
 import JSZip from "jszip";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,9 +32,9 @@ import { walkDocumentBody } from "../../src/server/file-io/docx-walker.js";
 import { unwatchFile } from "../../src/server/file-watcher.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
-import { applyChangesCore } from "../../src/server/mcp/docx-apply.js";
+import { applyChangesCore, registerApplyTools } from "../../src/server/mcp/docx-apply.js";
 import { resolveAppDataDir } from "../../src/server/platform.js";
-import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
 import {
   Y_MAP_ANNOTATIONS,
   Y_MAP_DOCUMENT_META,
@@ -1242,6 +1243,164 @@ describe("applyChangesCore — write guards", () => {
     },
     REAL_APPLY_TIMEOUT_MS,
   );
+});
+
+// ---------------------------------------------------------------------------
+// applyChangesCore — a mid-apply doc swap (#2037)
+//
+// `applyChangesCore` captures the room's Y.Doc before its first await and reads
+// it again with `extractText` after `await fs.stat(filePath)`. Hocuspocus
+// replaces a room's Y.Doc in `onLoadDocument`, so an ordinary tab open or a
+// stale-tab reconnect in that window used to leave the read scoring every
+// accepted suggestion against a DESTROYED instance, and the stale text went
+// into the user's .docx with no error.
+//
+// The swap has to land in the PROVIDER's map, not the registry: `OpenDoc` has
+// no `doc` field, and `requireDocument` returns `getOrCreateDocument(docName)`.
+// The prologue up to `fs.stat` is synchronous, so calling the swap immediately
+// after `applyChangesCore(...)` (without awaiting) lands deterministically
+// inside the guarded window.
+// ---------------------------------------------------------------------------
+
+type ToolResult = { content: Array<{ type: string; text: string }> };
+type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>;
+
+describe("applyChangesCore — a mid-apply doc swap", () => {
+  let counter = 0;
+  let DOC_ID: string;
+  let docPath: string;
+
+  beforeEach(async () => {
+    for (const id of [...getOpenDocs().keys()]) removeDoc(id);
+    setActiveDocId(null);
+
+    counter += 1;
+    DOC_ID = `swap-test-doc-${counter}`;
+    docPath = path.join(
+      await fsp.mkdtemp(path.join(os.tmpdir(), "tandem-apply-swap-")),
+      "doc.docx",
+    );
+    await fsp.writeFile(
+      docPath,
+      await createTestDocx(wrapBody("<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>")),
+    );
+
+    const doc = getOrCreateDocument(DOC_ID);
+    doc.getXmlFragment("default").insert(0, [makeYParagraph("Hello world")]);
+    doc.getMap(Y_MAP_ANNOTATIONS).set("a1", {
+      id: "a1",
+      type: "comment",
+      author: "claude",
+      status: "accepted",
+      range: { from: 0, to: 5 },
+      content: "swap it",
+      suggestedText: "Howdy",
+      textSnapshot: "Hello",
+      timestamp: Date.now(),
+    });
+
+    addDoc(DOC_ID, {
+      id: DOC_ID,
+      filePath: docPath,
+      format: "docx",
+      readOnly: false,
+      source: "file",
+    });
+    setActiveDocId(DOC_ID);
+  });
+
+  const onDisk = () => fsp.readFile(docPath);
+
+  it("refuses when the room's Y.Doc is replaced mid-apply, and writes nothing", async () => {
+    const before = await onDisk();
+
+    const pending = applyChangesCore(DOC_ID);
+    // Drop the provider's entry and install a DIFFERENT Y.Doc under the same
+    // room name — exactly what `onLoadDocument` does.
+    removeDocument(DOC_ID);
+    getOrCreateDocument(DOC_ID);
+
+    await expect(pending).rejects.toMatchObject({
+      code: "RELOAD_IN_PROGRESS",
+      message: /reloaded while applying/,
+    });
+    // The refusal must precede `fs.readFile` / `applyTrackedChanges`.
+    expect(await onDisk()).toEqual(before);
+  });
+
+  it("refuses when the document is removed from the registry mid-apply", async () => {
+    const before = await onDisk();
+
+    const pending = applyChangesCore(DOC_ID);
+    // `requireDocument` genuinely returns null here — an implementation that
+    // dereferences without `?.` throws a TypeError instead.
+    removeDoc(DOC_ID);
+    setActiveDocId(null);
+
+    await expect(pending).rejects.toMatchObject({
+      code: "RELOAD_IN_PROGRESS",
+      message: /reloaded while applying/,
+    });
+    expect(await onDisk()).toEqual(before);
+  });
+
+  it(
+    "applies normally when no swap happens",
+    async () => {
+      // The positive control: without it a guard that always throws passes the
+      // two specs above.
+      await expect(applyChangesCore(DOC_ID)).resolves.toMatchObject({ applied: 1 });
+    },
+    REAL_APPLY_TIMEOUT_MS,
+  );
+
+  it(
+    "does not refuse when the ACTIVE document changes mid-apply on the default path",
+    async () => {
+      // `applyChangesCore()` with no `documentId` captures the active doc. A
+      // tab click or an MCP `tandem_open` landing during the `fs.stat` await
+      // moves `activeDocId` — the captured room's Y.Doc is untouched, so the
+      // apply must still succeed. A guard re-resolving by the default path
+      // (`requireDocument(undefined)`) compares the NEW active document's
+      // Y.Doc and refuses with a reload that never happened.
+      const otherId = `${DOC_ID}-other`;
+      getOrCreateDocument(otherId);
+      addDoc(otherId, {
+        id: otherId,
+        filePath: path.join(path.dirname(docPath), "other.docx"),
+        format: "docx",
+        readOnly: false,
+        source: "file",
+      });
+
+      const pending = applyChangesCore();
+      setActiveDocId(otherId);
+
+      await expect(pending).resolves.toMatchObject({ applied: 1 });
+    },
+    REAL_APPLY_TIMEOUT_MS,
+  );
+
+  it("the registered tandem_applyChanges maps the refusal to a structured error", async () => {
+    // The three specs above drive `applyChangesCore` directly and cannot tell a
+    // wired catch arm from `throw err`, which would escape as an unhandled MCP
+    // protocol failure.
+    const handlers = new Map<string, ToolHandler>();
+    registerApplyTools({
+      tool: (name: string, _desc: string, _schema: unknown, handler: ToolHandler) => {
+        handlers.set(name, handler);
+      },
+    } as unknown as McpServer);
+
+    const applyTool = handlers.get("tandem_applyChanges")!;
+    const pending = applyTool({ documentId: DOC_ID });
+    removeDocument(DOC_ID);
+    getOrCreateDocument(DOC_ID);
+
+    const parsed = JSON.parse((await pending).content[0].text);
+    expect(parsed).toMatchObject({ error: true, code: "RELOAD_IN_PROGRESS" });
+    expect(parsed.message).toMatch(/reloaded while applying/);
+  });
 });
 
 // ---------------------------------------------------------------------------

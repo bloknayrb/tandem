@@ -120,6 +120,17 @@ interface SupervisorOpts {
    * silent failure that no test can reach is itself unverified.
    */
   turnReceiptMs?: number;
+  /**
+   * Override for the `--resume` confirmation window, so a superseded-spawn test
+   * can wait out the safeguard in milliseconds rather than 30 seconds. Same
+   * justification as `wakeLatchMs`.
+   *
+   * Wired ONLY to the confirmation timer in `spawnOnce`. It is deliberately
+   * **not** wired to `RESUME_CONFIRM_MS`'s second use — the `restartIndex`
+   * backoff reset in `startInternal` — which is a different timer that happens
+   * to share the constant.
+   */
+  resumeConfirmMs?: number;
 }
 
 /**
@@ -699,6 +710,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const probeCliUsable = opts.probeCliUsable ?? defaultProbeCliUsable;
   const reportDeliveryTrip = opts.reportDeliveryTrip ?? (() => {});
   const turnReceiptMs = opts.turnReceiptMs ?? TURN_RECEIPT_MS;
+  const resumeConfirmMs = opts.resumeConfirmMs ?? RESUME_CONFIRM_MS;
   const restartBackoffs = opts.restartBackoffsMs?.length
     ? opts.restartBackoffsMs
     : RESTART_BACKOFFS_MS;
@@ -1217,10 +1229,18 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // stopInternal() so it never fires on a deliberate stop.
     let resumeConfirmed = !plan.resuming;
     if (plan.resuming) {
-      confirmTimer = setTimeout(() => {
+      // The callback nulls the SHARED slot only while it still owns it (#1995):
+      // a superseded spawn's leaked timer would otherwise clear the successor's
+      // handle out of the slot, leaving `stopInternal` nothing to cancel.
+      // Recorded consequence: a superseded spawn's timer is then cancelled by
+      // nothing and stays pending until it fires (at most `resumeConfirmMs`).
+      // Deliberate and harmless — it sets only its own dead spawn's
+      // `resumeConfirmed` and cannot touch the slot.
+      const timer = setTimeout(() => {
         resumeConfirmed = true;
-        confirmTimer = null;
-      }, RESUME_CONFIRM_MS);
+        if (confirmTimer === timer) confirmTimer = null;
+      }, resumeConfirmMs);
+      confirmTimer = timer;
     }
 
     // --- Turn delivery -----------------------------------------------------
@@ -1600,14 +1620,6 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
     spawned.on("error", (err: NodeJS.ErrnoException) => {
       teardownTurnDelivery();
-      // Cancel the confirmation timer — spawn errors don't flow through the
-      // exit handler, so confirmTimer must be cleared here too. Without this,
-      // the 30s timer from a failed resuming spawn would fire later and null
-      // out confirmTimer for a subsequent spawn.
-      if (confirmTimer) {
-        clearTimeout(confirmTimer);
-        confirmTimer = null;
-      }
       // CRITICAL: clear child state so status() doesn't lie about being
       // running and so subsequent start()/relaunch() actually re-attempt.
       // ENOENT is unrecoverable without user action — trip the breaker
@@ -1619,6 +1631,26 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         currentCwd = undefined;
         currentSessionId = undefined;
         currentResuming = false;
+        // Cancel the confirmation timer — spawn errors don't flow through the
+        // exit handler, so confirmTimer must be cleared here too. Inside the
+        // identity guard (#1995): when this spawn has been superseded the slot
+        // holds the SUCCESSOR's handle, and clearing it would leave the
+        // successor's `resumeConfirmed` false for its whole life, so any later
+        // non-zero exit would satisfy `shouldClearSession` and unlink
+        // `launcher-session.json` — the #1169/#1268 class. The leaked-timer
+        // risk this clear used to cover is gone: the confirmation callback now
+        // nulls the shared slot only while it still owns it.
+        //
+        // No test: Node emits `'error'` on a child only for spawn, kill or send
+        // failure, within a tick of `spawn()`, so a spawn that started,
+        // accepted a turn and was then superseded cannot produce one. The
+        // ordering a killing spec needs is not constructible in
+        // `stream-json-protocol.test.ts`, which does no `spawn` mocking by
+        // design, and `SupervisorOpts` exposes no `spawn` seam.
+        if (confirmTimer) {
+          clearTimeout(confirmTimer);
+          confirmTimer = null;
+        }
       }
       if (err.code === "ENOENT") {
         lastError = "binary-not-found";
@@ -1639,23 +1671,29 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       console.error(`[Launcher] Reaper exited (code=${code} signal=${signal} after ${ranFor}ms)`);
       // Identity-guarded for the same reason as the error handler above.
       const wasCurrent = child === spawned;
-      if (wasCurrent) child = null;
+      // A superseded spawn's verdict must not act on state the successor now
+      // owns (#1995): neither the timer slot this spawn no longer holds, nor
+      // the single `launcher-session.json` the successor is running on. Both
+      // sit inside the identity guard for that reason.
+      if (wasCurrent) {
+        child = null;
 
-      // Cancel the confirmation timer — the process has already exited.
-      if (confirmTimer) {
-        clearTimeout(confirmTimer);
-        confirmTimer = null;
-      }
+        // Cancel the confirmation timer — the process has already exited.
+        if (confirmTimer) {
+          clearTimeout(confirmTimer);
+          confirmTimer = null;
+        }
 
-      // If the resume failed before being confirmed, drop the stale session so
-      // the next restart goes fresh. Guard code !== null to avoid clearing on
-      // signal kills (SIGTERM/SIGKILL set code=null, signal="SIGTERM"/"SIGKILL").
-      // The old ranFor < RESUME_GRACE_MS guard was broken because claude --resume
-      // takes ~6 s to detect a missing conversation — longer than RESUME_GRACE_MS
-      // was set (5 s), so the session was never cleared (issue #1169).
-      if (shouldClearSession({ resuming: plan.resuming, code, resumeConfirmed })) {
-        console.error("[Launcher] Resume failed before confirmation — clearing saved session");
-        clearSavedSession();
+        // If the resume failed before being confirmed, drop the stale session so
+        // the next restart goes fresh. Guard code !== null to avoid clearing on
+        // signal kills (SIGTERM/SIGKILL set code=null, signal="SIGTERM"/"SIGKILL").
+        // The old ranFor < RESUME_GRACE_MS guard was broken because claude --resume
+        // takes ~6 s to detect a missing conversation — longer than RESUME_GRACE_MS
+        // was set (5 s), so the session was never cleared (issue #1169).
+        if (shouldClearSession({ resuming: plan.resuming, code, resumeConfirmed })) {
+          console.error("[Launcher] Resume failed before confirmation — clearing saved session");
+          clearSavedSession();
+        }
       }
 
       // Only the CURRENT spawn's exit may restart anything. A superseded one has
@@ -1834,6 +1872,18 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // Claude silently comes back, event subscription and all.
     if (stopRequested) {
       console.error("[Launcher] Stop requested while building the spawn plan — not spawning");
+      return;
+    }
+    // Same window, same reason (#1995): the pre-await check above is a read of
+    // a flag that moves DURING the await, exactly like `stopRequested`. Every
+    // trip site fires from a live child's handlers, so the reachable path is
+    // `scheduleRestart` calling this without the op lock.
+    //
+    // No test: `startInternal` has already returned at the `if (child)` line
+    // whenever a child is live, and the harness cannot trip the breaker inside
+    // the await without a test-only setter this file deliberately lacks.
+    if (breakerTripped) {
+      console.error("[Launcher] Breaker tripped while building the spawn plan — not spawning");
       return;
     }
     try {

@@ -196,7 +196,16 @@ export interface AppInfoData {
    * includes the field as `null` rather than omitting it.
    */
   generationId?: string | null;
-  /** Loopback-only: mtime of the auth token file in ms, or null if not yet created. */
+  /**
+   * Loopback-only: mtime of the auth token file in ms, or null if that file
+   * does not exist.
+   *
+   * ABSENT means either a non-loopback caller OR that this server's token did
+   * not come from that file (#1946 — the desktop sidecar takes it from the OS
+   * keychain via `TANDEM_AUTH_TOKEN`, so the file has no reader). Absence must
+   * keep meaning "say nothing", never "no token": every consumer gates on
+   * `tokenRotatedAt !== undefined` and renders nothing when it is undefined.
+   */
   tokenRotatedAt?: number | null;
   /** Absolute path to CHANGELOG.md on the server host. Undefined if not found at startup. */
   changelogPath?: string;

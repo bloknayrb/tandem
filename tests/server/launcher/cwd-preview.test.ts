@@ -252,7 +252,8 @@ describe("previewCwdDrift", () => {
     try {
       fs.symlinkSync(projA, link, "junction");
     } catch {
-      ctx.skip(); // unprivileged Windows without Developer Mode: report SKIPPED, not passed (#1825)
+      // Report SKIPPED, not passed (#1825) — and say why where a reporter prints it.
+      ctx.skip("junction creation unavailable (unprivileged Windows without Developer Mode)");
       return;
     }
     expect(await previewCwdDrift(base({ candidate: projA, claudeCwd: link }))).toEqual({

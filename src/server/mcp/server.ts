@@ -15,7 +15,7 @@ import { API_HEALTH } from "../../shared/api-paths.js";
 import { CLAUDE_SESSION_HEADER, normalizeSessionId } from "../../shared/cli-runtime.js";
 import { DEFAULT_BIND_HOST, DEFAULT_WS_PORT, TAURI_HOSTNAME } from "../../shared/constants.js";
 import { createAuthMiddleware } from "../auth/middleware.js";
-import { getTokenFilePath } from "../auth/token-store.js";
+import { getTokenFilePath, tokenFileIsAuthoritative } from "../auth/token-store.js";
 import { getDeliveryState } from "../events/delivery-state.js";
 import { getPushConsumerLiveness } from "../events/push-liveness.js";
 import { getSubscriberCount } from "../events/queue.js";
@@ -881,6 +881,7 @@ export async function startMcpServerHttp(
       mcpSdkVersion: MCP_SDK_VERSION,
       storagePath: SESSION_DIR,
       getTokenFilePath,
+      tokenFileIsAuthoritative,
       changelogPath: CHANGELOG_PATH,
       workflowsPath: WORKFLOWS_PATH,
       welcomePath: WELCOME_PATH,

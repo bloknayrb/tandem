@@ -430,3 +430,100 @@ describe("#1669 decorations survive an MCP content write", () => {
     expect(authorshipDecorationCount(editor)).toBe(0);
   });
 });
+
+/**
+ * Every annotation decoration's `class` attribute, in set order.
+ *
+ * The active tint is an attrs-level fact, so this reads what the plugin
+ * actually emits rather than what the DOM happens to hold at the moment of the
+ * assertion — the DOM is checked separately below, because the DOM is where
+ * #1963 was reported.
+ */
+function annotationDecorationClasses(editor: Editor): string[] {
+  const set = annotationPluginKey.getState(editor.state) as {
+    find?: () => Array<{ type?: { attrs?: Record<string, string> } }>;
+  } | null;
+  return (set?.find?.() ?? []).map((d) => d.type?.attrs?.class ?? "");
+}
+
+describe("#1963 the active-annotation tint survives a rebuild", () => {
+  /**
+   * The tint has to be part of the decoration, not a class written onto the
+   * span the decoration produced.
+   *
+   * The first fix for #1963 kept the `classList.add` and re-ran it whenever a
+   * transaction looked like a decoration rebuild. Measured in the browser, that
+   * cannot work: ProseMirror's DOMObserver sees an attribute it did not write,
+   * marks the node dirty and re-renders the span from the DecorationSet ~1ms
+   * later — and a DOM repair dispatches no transaction, so there is no metadata
+   * a re-apply could key on. Owning the class here is what makes every redraw
+   * reproduce it.
+   */
+  function activated(markdown: string, needle: string) {
+    const { ydoc, editor } = boundEditor(markdown);
+    ydoc.getMap(Y_MAP_ANNOTATIONS).set("ann-1", {
+      id: "ann-1",
+      type: "highlight",
+      status: "pending",
+      content: "",
+      author: "user",
+      createdAt: Date.now(),
+      range: rangeOf(ydoc, needle),
+    });
+    editor.view.dispatch(editor.state.tr.setMeta(annotationPluginKey, true));
+    editor.view.dispatch(
+      editor.state.tr.setMeta(annotationPluginKey, { type: "set-active", id: "ann-1" }),
+    );
+    return { ydoc, editor };
+  }
+
+  it("keeps the tint on the decoration across an MCP write to a sibling", () => {
+    const { ydoc, editor } = activated(
+      "Annotated sentence here.\n\nSecond paragraph.\n",
+      "Annotated sentence",
+    );
+    expect(
+      annotationDecorationClasses(editor),
+      "precondition: the focused annotation is tinted",
+    ).toEqual([expect.stringContaining("tandem-annotation-active")]);
+
+    mcpWriteToSibling(ydoc, " Appended by Claude.");
+
+    // The y-sync branch rebuilds the whole set (#1669); the tint has to come
+    // back with it. This is the assertion the first fix could not make.
+    expect(annotationDecorationClasses(editor)).toEqual([
+      expect.stringContaining("tandem-annotation-active"),
+    ]);
+    // …and the span the user actually looks at carries it.
+    expect(editor.view.dom.querySelector("[data-annotation-id]")?.className).toContain(
+      "tandem-annotation-active",
+    );
+  });
+
+  it("keeps the type's own class alongside the tint", () => {
+    // The tint is APPENDED. Replacing the class would drop the highlight's own
+    // background and the id-bearing span's identity styling, which is a
+    // silent-looking regression: the annotation is still painted, just not as
+    // itself.
+    const { editor } = activated(
+      "Annotated sentence here.\n\nSecond paragraph.\n",
+      "Annotated sentence",
+    );
+    expect(annotationDecorationClasses(editor)[0]).toContain("tandem-highlight");
+  });
+
+  it("clears the tint when focus moves away", () => {
+    const { editor } = activated(
+      "Annotated sentence here.\n\nSecond paragraph.\n",
+      "Annotated sentence",
+    );
+    editor.view.dispatch(
+      editor.state.tr.setMeta(annotationPluginKey, { type: "set-active", id: null }),
+    );
+    expect(annotationDecorationClasses(editor)).toEqual([
+      expect.not.stringContaining("tandem-annotation-active"),
+    ]);
+    // Still painted — deactivating is not un-annotating.
+    expect(annotationDecorationTexts(editor)).toEqual(["Annotated sentence"]);
+  });
+});
