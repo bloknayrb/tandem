@@ -49,6 +49,7 @@ const ENV_KEYS = [
   "TANDEM_STUB_CLAUDE_RECORD_DIR",
   "TANDEM_STUB_CLAUDE_TURN_DELAY_MS",
   "TANDEM_STUB_CLAUDE_CLOSE_STDIN_AFTER_FIRST_TURN",
+  "TANDEM_STUB_CLAUDE_EXIT_DELAY_MS",
 ] as const;
 
 let tmpDir: string;
@@ -810,6 +811,170 @@ describe.skipIf(process.platform === "win32")("stdin EPIPE end-to-end (#1757) �
     }
   }, 30_000);
 });
+
+describe.skipIf(process.platform === "win32")(
+  "a superseded spawn's exit does not act on its successor (#1995) — POSIX only",
+  () => {
+    // POSIX-only for the same reason as the #1757 suite above: the supersede is
+    // driven by the stdin-gone kill, which only produces an EPIPE
+    // deterministically here. It is the one path that leaves a `killed` handle
+    // so `stopInternal` returns without awaiting the exit — which is what makes
+    // a LATE exit constructible at all.
+    const SESSION_FILE = "launcher-session.json";
+    const sessionPath = () => path.join(tmpDir, SESSION_FILE);
+
+    async function writeSavedSession(): Promise<void> {
+      await writeClaudeIntegration();
+      fs.writeFileSync(sessionPath(), JSON.stringify({ sessionId: VALID_UUID }), "utf8");
+    }
+
+    /** The stub records one file per stdin close and one per delayed exit. */
+    const hasRecord = (name: string) => fs.existsSync(path.join(recordDir, name));
+
+    /**
+     * The saved session id, or null if the file is gone.
+     *
+     * Read by CONTENT, never by `existsSync`: a cleared session is immediately
+     * followed by a restart that mints a fresh id and writes the file straight
+     * back, so a presence check passes on the very defect these specs exist to
+     * catch. Surviving the clear means the file still names THIS session.
+     */
+    function savedSessionId(): string | null {
+      try {
+        return JSON.parse(fs.readFileSync(sessionPath(), "utf8")).sessionId ?? null;
+      } catch {
+        return null;
+      }
+    }
+
+    it("a superseded late exit clears neither the successor's session nor its timer", async () => {
+      // 3000 ms must exceed the time from spawn A to `relaunch()` — that is
+      // when `stopInternal` cancels A's own timer, and A's `resumeConfirmed`
+      // has to still be false at its exit or neither half discriminates.
+      const resumeConfirmMs = 3000;
+      process.env.TANDEM_STUB_CLAUDE_CLOSE_STDIN_AFTER_FIRST_TURN = "1";
+      // Holds A's exit until `relaunch()` has made B the current spawn.
+      process.env.TANDEM_STUB_CLAUDE_EXIT_DELAY_MS = "800";
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      await writeSavedSession();
+      const { sup, emit } = supervisorWithEventSink({
+        wakeLatchMs: 500,
+        restartBackoffsMs: [0],
+        resumeConfirmMs,
+      });
+      try {
+        await sup.start();
+        const first = sup.status();
+        if (!first.running) throw new Error("expected a running supervisor");
+        const pid1 = first.reaperPid;
+        expect(first.resuming).toBe(true);
+
+        // A resuming spawn gets no bootstrap turn, so the wake IS the first
+        // turn — and it is what makes the stub close its own stdin.
+        emit(annotationEvent());
+        await waitFor(
+          () =>
+            turnsFromPid(pid1).length > 0 && hasRecord(`closed-stdin-${pid1}.json`) ? true : null,
+          "the wake turn and the stub's stdin close on spawn A",
+        );
+        // Let the in-flight turn's result land so the next wake is a fresh
+        // write rather than a coalesced one.
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        emit(annotationEvent());
+        await waitFor(
+          () =>
+            errSpy.mock.calls.flat().join("\n").includes("[Launcher] Claude stdin write failed (")
+              ? true
+              : null,
+          "the stdin-gone kill on spawn A",
+        );
+
+        // A is now killed-but-alive, so `stopInternal` drops the handle without
+        // awaiting its exit and B becomes current while A is still running.
+        await sup.relaunch();
+        const second = sup.status();
+        if (!second.running) throw new Error("expected spawn B to be running");
+        const pid2 = second.reaperPid;
+        expect(pid2).not.toBe(pid1);
+        expect(second.resuming).toBe(true);
+        const bSpawnedAt = Date.now();
+
+        await waitFor(
+          () => (hasRecord(`exited-${pid1}.json`) ? true : null),
+          "spawn A's late, non-zero exit",
+        );
+        // Kills the unguarded `clearSavedSession`: A's verdict (resuming, code
+        // 3, unconfirmed) is about A, but the file it unlinks is the one B is
+        // running on.
+        expect(savedSessionId()).toBe(VALID_UUID);
+
+        // Kills the unguarded `clearTimeout`: with it, A's late exit took B's
+        // handle out of the shared slot, so B's `resumeConfirmed` never flips
+        // and B's own non-zero exit below deletes the session.
+        await waitFor(
+          () =>
+            turnsFromPid(pid2).length > 0 && hasRecord(`closed-stdin-${pid2}.json`) ? true : null,
+          "the owed wake and the stdin close on spawn B",
+        );
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.max(0, bSpawnedAt + resumeConfirmMs + 400 - Date.now())),
+        );
+        emit(annotationEvent());
+        await waitFor(
+          () => (hasRecord(`exited-${pid2}.json`) ? true : null),
+          "spawn B's own non-zero exit",
+        );
+        expect(savedSessionId()).toBe(VALID_UUID);
+      } finally {
+        errSpy.mockRestore();
+        await sup.stop();
+      }
+    }, 30_000);
+
+    it("the current spawn's own exit still clears its unconfirmed session", async () => {
+      // The over-fix guard: moving the two statements into `if (wasCurrent)`
+      // must not stop them running for the spawn that IS current.
+      const resumeConfirmMs = 4000;
+      process.env.TANDEM_STUB_CLAUDE_CLOSE_STDIN_AFTER_FIRST_TURN = "1";
+      process.env.TANDEM_STUB_CLAUDE_EXIT_DELAY_MS = "0";
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      await writeSavedSession();
+      const { sup, emit } = supervisorWithEventSink({
+        wakeLatchMs: 500,
+        restartBackoffsMs: [0],
+        resumeConfirmMs,
+      });
+      try {
+        await sup.start();
+        const first = sup.status();
+        if (!first.running) throw new Error("expected a running supervisor");
+        const pid1 = first.reaperPid;
+
+        emit(annotationEvent());
+        await waitFor(
+          () =>
+            turnsFromPid(pid1).length > 0 && hasRecord(`closed-stdin-${pid1}.json`) ? true : null,
+          "the wake turn and the stub's stdin close",
+        );
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        emit(annotationEvent());
+        await waitFor(() => (hasRecord(`exited-${pid1}.json`) ? true : null), "the spawn's exit");
+
+        await waitFor(
+          () => (savedSessionId() === VALID_UUID ? null : true),
+          "the unconfirmed resume's session to be cleared",
+          5_000,
+        );
+        // And the cancelled timer stays cancelled: waiting past the window
+        // must not throw out of the callback.
+        await new Promise((resolve) => setTimeout(resolve, resumeConfirmMs + 200));
+      } finally {
+        errSpy.mockRestore();
+        await sup.stop();
+      }
+    }, 30_000);
+  },
+);
 
 describe("supervisor lastError lifecycle (#1267)", () => {
   it("clears a previous fatal error once a spawn succeeds, and stays clear after stop", async () => {

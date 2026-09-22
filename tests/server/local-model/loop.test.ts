@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
+import { runLocalModelTurn } from "../../../src/server/local-model/index.js";
 import { runLoop } from "../../../src/server/local-model/loop.js";
 import { TOOLS } from "../../../src/server/local-model/tools.js";
 import type { Annotation } from "../../../src/shared/types.js";
@@ -299,5 +300,99 @@ describe("runLoop — aggregate wall-clock deadline (#1295 L6)", () => {
     const r = await runLoop(base({ runDeadlineMs: 600_000, timeoutMs: 30, maxTurns: 99 }));
 
     expect(r.metrics.exit).toBe("timeout");
+  });
+});
+
+describe("runLoop — mid-turn doc swap (#2039)", () => {
+  // Every case here flips `isDocCurrent` DURING the first `chat()` rather than
+  // starting it false. A statically-false predicate is satisfied by a
+  // top-of-loop check (it breaks before `chat()`, yielding turns === 0), which
+  // would leave the real shape — the swap lands mid-await, so THIS turn's tool
+  // calls dispatch onto the destroyed instance — pinned by nothing.
+
+  it("stops a TOOL-ONLY turn before dispatch when the doc is swapped mid-await", async () => {
+    let swapped = false;
+    const fetchMock = vi.fn(async () => {
+      swapped = true;
+      return v1ToolCallArgs("comment_on_quote", { quoted_text: "body text here", comment: "x" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const opts = base({ isDocCurrent: () => !swapped, maxToolCalls: 9, maxTurns: 9 });
+    const r = await runLoop(opts);
+
+    expect(r.metrics.exit).toBe("doc-swapped");
+    expect(r.metrics.turns).toBe(1); // chat() ran...
+    expect(r.metrics.toolCalls).toBe(0); // ...but nothing dispatched
+    expect(getAnnotationsMap(opts.ydoc).size).toBe(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops a FINAL-ANSWER turn with no finalContent when the doc is swapped mid-await", async () => {
+    let swapped = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        swapped = true;
+        return v1Text("the reply");
+      }),
+    );
+    const r = await runLoop(base({ isDocCurrent: () => !swapped, maxTurns: 9 }));
+
+    // Exiting `clean` here would hand the collaborator a reply to flush.
+    expect(r.metrics.exit).toBe("doc-swapped");
+    expect(r.metrics.turns).toBe(1);
+    expect(r.finalContent).toBe("");
+  });
+
+  it("treats an omitted isDocCurrent as 'still current'", async () => {
+    stubFetch(() => v1Text("all good"));
+    const r = await runLoop(base({ maxTurns: 9 }));
+    expect(r.metrics.exit).toBe("clean");
+  });
+
+  it("reports 'aborted', not 'doc-swapped', when both land during the same turn", async () => {
+    // The abort must land DURING chat(): an already-aborted signal breaks at the
+    // top-of-loop guard and never reaches either post-await check.
+    const controller = new AbortController();
+    let swapped = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        controller.abort();
+        swapped = true;
+        return v1ToolCallArgs("comment_on_quote", { quoted_text: "body text here", comment: "x" });
+      }),
+    );
+    const r = await runLoop(
+      base({
+        signal: controller.signal,
+        isDocCurrent: () => !swapped,
+        maxToolCalls: 9,
+        maxTurns: 9,
+      }),
+    );
+
+    expect(r.metrics.exit).toBe("aborted");
+    expect(r.metrics.turns).toBe(1);
+    expect(r.metrics.toolCalls).toBe(0);
+  });
+
+  it("runLocalModelTurn forwards isDocCurrent to the loop (production entry point)", async () => {
+    // `runLocalModelTurn` hand-enumerates every forwarded field, so omitting
+    // this one is silent — the option is optional and the direct-runLoop cases
+    // above stay green.
+    doc = makeMarkdownDoc("# H\n\nbody text here\n");
+    stubFetch(() =>
+      v1ToolCallArgs("comment_on_quote", { quoted_text: "body text here", comment: "x" }),
+    );
+    const r = await runLocalModelTurn({
+      ydoc: doc,
+      config: CONFIG,
+      task: "go",
+      isDocCurrent: () => false,
+    });
+
+    expect(r.metrics.exit).toBe("doc-swapped");
+    expect(r.metrics.toolCalls).toBe(0);
   });
 });

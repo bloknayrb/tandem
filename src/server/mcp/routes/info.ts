@@ -15,6 +15,14 @@ export interface InfoHandlerDeps {
   /** Returns the absolute path to the auth token file. */
   getTokenFilePath: () => string;
   /**
+   * True when this server's token actually came from the file at
+   * `getTokenFilePath()` (#1946). Required, not optional-defaulting-true:
+   * optional would fail OPEN — a forgotten wiring keeps reporting an mtime for
+   * a file with no reader — while required fails at compile time at every
+   * construction site, and `tests/` is typechecked.
+   */
+  tokenFileIsAuthoritative: () => boolean;
+  /**
    * Absolute path to CHANGELOG.md on disk, resolved at server startup.
    * Undefined if the file does not exist (e.g. stripped production builds).
    */
@@ -50,6 +58,9 @@ export interface InfoHandlerDeps {
  * Public fields (always returned): version, toolCount, mcpSdkVersion, transport,
  * changelogPath, workflowsPath, welcomePath.
  * Sensitive fields (loopback-only): storagePath, tokenRotatedAt, generationId.
+ * `tokenRotatedAt` is additionally omitted — not null — when the token file is
+ * not this server's token source (#1946); both client surfaces already gate on
+ * `tokenRotatedAt !== undefined`.
  *
  * #1294 note — this route deliberately does NOT apply `scrubPathForCaller` to
  * the three `*Path` fields, and it is the one documented exception to that
@@ -67,8 +78,14 @@ export function makeInfoHandler(deps: InfoHandlerDeps): Handler {
   return async (req: Request, res: Response): Promise<void> => {
     const loopback = isLoopback(req.socket.remoteAddress);
 
+    // Only meaningful when the token file is the one in use. On a desktop
+    // install the token comes from the environment (keychain → sidecar), so
+    // the file is stale or absent and we omit the field entirely rather than
+    // report someone else's rotation time — or claim "not yet created" about a
+    // token that exists. Do not stat at all in that case (#1946).
+    const tokenFileAuthoritative = deps.tokenFileIsAuthoritative();
     let tokenRotatedAt: number | null = null;
-    if (loopback) {
+    if (loopback && tokenFileAuthoritative) {
       const tokenPath = deps.getTokenFilePath();
       try {
         const s = await stat(tokenPath);
@@ -113,7 +130,9 @@ export function makeInfoHandler(deps: InfoHandlerDeps): Handler {
 
     if (loopback) {
       body.storagePath = deps.storagePath;
-      body.tokenRotatedAt = tokenRotatedAt;
+      if (tokenFileAuthoritative) {
+        body.tokenRotatedAt = tokenRotatedAt;
+      }
       // Loopback-only to match its consumer's reach: Hocuspocus binds 127.0.0.1,
       // so only loopback clients can ever use the generation token.
       body.generationId = deps.getGenerationId?.() ?? null;

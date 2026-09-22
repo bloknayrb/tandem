@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-09-21
+
+### What's New
+
+- Applying Word tracked changes refuses rather than writing a stale `.docx` if the document reloads mid-apply.
+- The desktop app tells you when it has restarted its server after a crash.
+- Opt-in crash reports from the desktop window and shell no longer carry your computer's name or home-folder paths.
+- Your AI no longer reads another tab's edits as you typing, or an old selection as a fresh one.
+- Smaller fixes to Settings, the tutorial, annotation highlighting, `tandem channel` and `tandem doctor`.
+
+### Added
+
+- **The desktop app shows a toast when it restarts its server after a crash (#2093).** Open tabs blinked and reconnected with no explanation; now "Tandem server restarted after a crash." appears. **Bound:** only an automatic restart after a crash announces itself — restarting from Settings → Network shows no toast.
+
+### Changed
+
+- **An `/api` request the OS refuses to open for permissions now fails with `PERMISSION_DENIED` (HTTP 403) instead of `FILE_LOCKED` (HTTP 423) (#2090).** A folder you simply cannot write to was reported as a file another program had open; the MCP tools already answered `PERMISSION_DENIED`. **Bound:** an integration that matches `FILE_LOCKED` on the `/api` surface should also handle `PERMISSION_DENIED`.
+
+- **`GET /api/info` omits `tokenRotatedAt` when the server's token came from `TANDEM_AUTH_TOKEN`, so the desktop app's Settings → Network no longer shows a Token Rotation block (#2092).** The desktop keeps its token in the OS keychain, so the panel showed the rotation time of a token file nothing reads. **Bound:** the npm install still shows the block unchanged, unless you set `TANDEM_AUTH_TOKEN` yourself.
+
+- **The shipped Tandem skill and two CLI messages say "the desktop app" instead of "the Tauri app" (#2087).** The skill's version moves to 26, so an existing install refreshes on the next server start.
+
+### Fixed
+
+- **Your AI no longer sees you as typing when another tab or its own edit changes the document (#2087).** `tandem_getActivity` and `tandem_checkInbox` reported `isTyping: true` for edits that arrived from elsewhere, so a watching AI could hold off waiting for you to finish. A remote edit still moves the reported cursor to the right place in an existing activity record.
+
+- **A selection you made earlier is no longer reported as fresh after someone else's edit shifts it (#2087).** Its `selectionAt` timestamp was reset to "now" whenever an edit above it moved its offsets, so a minutes-old selection looked current.
+
+- **`tandem_getTextContent` with a `section` no longer stops at a sub-heading that repeats the section's name (#2090).** A `## Costs` followed by `### Costs` returned only what came after the inner heading.
+
+- **The active annotation's highlight pulse no longer disappears when the editor redraws (#2091).** Clicking an annotation card tinted its text, but the editor redrew the highlight within a millisecond and stripped it; the tint is now part of the highlight itself and survives redraws and sync.
+
+- **The tutorial's chat step completes when you send a chat message (#2091).** Step 2 invites you to type in the Chat panel, but only adding an annotation advanced it.
+
+- **The right rail no longer shows its floating and closing states at once while a chat reveal is open (#2091).** **Unverified:** found by reading the code and pinned by an automated browser test, not observed by hand in the desktop app.
+
+- **When Settings is read-only, its Appearance and Editor choice groups no longer change on arrow keys (#2092).** Settings turns read-only when your settings file was written by a newer version of Tandem; the switches already refused input, but the choice groups still moved on ArrowLeft/ArrowRight. They also stay reachable with Tab, so a screen reader can still read them.
+
+- **`tandem channel` no longer exits when Tandem is not running yet (#2090).** Starting the channel before Tandem made it quit immediately; it now logs a warning to stderr and keeps running.
+
+- **A restarted auto-launched Claude session is no longer disturbed by the late exit of the one it replaced (#2090).** The old session's exit could delete the saved session record the new one was using, so the next Tandem start opened a fresh Claude conversation instead of resuming, and it could cancel or fire the new session's resume confirmation.
+
+- **`tandem doctor` no longer promises that parked or quarantined annotation files will load again or expire after seven days (#2090).** Neither happens; the messages now say so. **Bound:** Tandem still has no way to restore these files for you (#1980).
+
+### Security
+
+- **`tandem_applyChanges` could write a `.docx` built from out-of-date text (#2089).** If a browser connected or reconnected to the document while the tool was applying changes, the file written to disk could be built from text that no longer matched the open document. It now refuses with `RELOAD_IN_PROGRESS`, which is safe to retry. **Unverified:** the window is one file check wide and has been exercised only by automated tests.
+
+- **Crash reports from the desktop window and the desktop shell now strip your computer's name and home-folder paths (#2089).** The server's crash reports already did; the other two reporters sent both. **Bound:** crash reporting is off unless `TANDEM_SENTRY_DSN` is set, so a default install sent nothing. **Unverified:** checked by unit tests, not against a real crash event.
+
 ## [0.26.0] - 2026-09-18
 
 ### What's New

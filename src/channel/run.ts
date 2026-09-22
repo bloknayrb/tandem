@@ -34,9 +34,10 @@ import {
 import { startEventBridge } from "./event-bridge.js";
 
 export interface RunChannelOptions {
-  /** Skip the non-fatal reachability probe. The CLI wrapper runs a strict
-   *  preflight upstream and we don't want to double-log "server not reachable"
-   *  noise. Defaults to false. */
+  /** Skip the non-fatal reachability probe. Kept for tests that do not want
+   *  the probe's stderr; since #1890 no production caller passes it — the CLI
+   *  wrapper dropped its fatal preflight and relies on this probe instead.
+   *  Defaults to false. */
   skipReachabilityLog?: boolean;
 }
 

@@ -43,8 +43,12 @@ export interface LoopMetrics {
    * `timeout` covers BOTH wall-clock expiries: the run-budget clamp and a plain
    * per-turn `timeoutMs`. Neither is caller-initiated, and `aborted` is silent
    * by design, so bucketing either one there tells the user nothing at all.
+   *
+   * `doc-swapped` means the run's captured Y.Doc is no longer the room's live
+   * instance — a Hocuspocus swap, or the document being untracked; the
+   * collaborator distinguishes the two before notifying.
    */
-  exit: "clean" | "max_turns" | "max_tool_calls" | "timeout" | "aborted" | "error";
+  exit: "clean" | "max_turns" | "max_tool_calls" | "timeout" | "aborted" | "error" | "doc-swapped";
   errorMessage?: string;
 }
 
@@ -134,6 +138,9 @@ export interface RunLoopOpts {
    *  M1.2). `hadToolCalls` lets a streaming sink discard a tool-call turn's
    *  preamble so the next turn's content replaces it instead of bleeding in. */
   onTurnEnd?: (info: { hadToolCalls: boolean }) => void;
+  /** Still the same Y.Doc instance this run captured? (#2039) Omitted ⇒ treated
+   *  as `true`, so every caller that does not thread it is unchanged. */
+  isDocCurrent?: () => boolean;
 }
 
 export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
@@ -203,6 +210,21 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
       // write-back in collaborator.ts).
       if (signal?.aborted) {
         metrics.exit = "aborted";
+        break;
+      }
+
+      // #2039: the same interleave point, for the swap a signal cannot see. A
+      // Hocuspocus Y.Doc swap leaves the abort flag clear and the room open, so
+      // this turn's writes would land — successfully, and invisibly — in a
+      // destroyed orphan. Nothing throws, so the check must be positive. It
+      // sits AFTER the abort re-check (an abort that already propagated still
+      // reports `aborted` and raises no swap notification) and BEFORE the
+      // no-tool-calls branch (a final-answer turn must not exit `clean` and
+      // hand the collaborator a reply to flush). Plain `break`, never
+      // `abort()` — `sink.isOwner()` reads the signal and an abort landing
+      // between #1292's `truncated` latch and its scheduled write strands it.
+      if (opts.isDocCurrent && !opts.isDocCurrent()) {
+        metrics.exit = "doc-swapped";
         break;
       }
 

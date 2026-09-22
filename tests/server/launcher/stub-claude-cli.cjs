@@ -169,6 +169,25 @@ let turnSeq = 0;
  * default is short enough that ordinary tests don't pay for it. */
 const turnDelayMs = Number(process.env.TANDEM_STUB_CLAUDE_TURN_DELAY_MS ?? 50);
 
+// --- delayed, non-zero exit on SIGTERM (opt-in, default off) ---------------
+//
+// #1995 needs a spawn whose `exit` lands AFTER the supervisor has already
+// replaced it, and whose code is NON-ZERO: a default SIGTERM death sets
+// `code = null`, which `shouldClearSession` short-circuits on, so it cannot
+// discriminate the superseded-exit guards at all. Installing the handler only
+// when the variable is SET keeps every other case's exit shape untouched.
+const exitDelayRaw = process.env.TANDEM_STUB_CLAUDE_EXIT_DELAY_MS;
+if (exitDelayRaw !== undefined) {
+  process.on("SIGTERM", () => {
+    setTimeout(() => {
+      // Written before exiting so a test can wait on the exit itself rather
+      // than on a timeout it guessed.
+      writeRecord(`exited-${process.pid}.json`, { at: Date.now(), code: 3 });
+      process.exit(3);
+    }, Number(exitDelayRaw));
+  });
+}
+
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
   stdinBuffer += chunk;

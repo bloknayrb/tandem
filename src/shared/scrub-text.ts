@@ -126,3 +126,57 @@ export function redactPaths(input: string): string {
 export function scrubText(input: string): string {
   return redactPaths(redactSecrets(input));
 }
+
+/**
+ * The structural slice of a Sentry event that every `beforeSend` hook in the
+ * repo scrubs the same way. Written structurally rather than against
+ * `@sentry/node`'s or `@sentry/browser`'s `ErrorEvent` because the two hooks
+ * import different packages; both event shapes satisfy this.
+ */
+export interface ScrubbableSentryEvent {
+  message?: string;
+  server_name?: string;
+  exception?: {
+    values?: Array<{
+      value?: string;
+      stacktrace?: { frames?: Array<{ filename?: string; abs_path?: string }> };
+    }>;
+  };
+}
+
+/**
+ * Scrub the surfaces the sidecar and WebView hooks share, in place (#1823,
+ * #2023). One implementation so the two cannot drift apart again — the leak
+ * #2023 fixed was exactly that drift.
+ *
+ *  - `event.message` and each `exception.values[].value`, through `scrub`.
+ *  - **`event.server_name`** — the machine's HOSTNAME. Nothing sets it, so the
+ *    SDK's own default ships on every event. Deleted rather than redacted: no
+ *    scrubbed form of a hostname is useful to us.
+ *  - each exception stack frame's **`filename`** and **`abs_path`**, which in a
+ *    source-run or dev build are absolute paths under `$HOME`. Both keys exist
+ *    on the SDK's `StackFrame`, so both are scrubbed and whichever the runtime
+ *    actually populates is covered.
+ *
+ * Frames are read off `exception.values[].stacktrace` only: neither SDK
+ * populates `event.stacktrace` or `event.threads` here.
+ *
+ * `sendDefaultPii: false` covers none of this — it governs IPs, cookies and
+ * request bodies, not filenames or hostnames. Surfaces that are NOT shared
+ * (the WebView's `request` and breadcrumbs) stay in the caller.
+ */
+export function scrubSentryEvent<E extends ScrubbableSentryEvent>(
+  event: E,
+  scrub: (input: string) => string,
+): E {
+  if (event.message) event.message = scrub(event.message);
+  delete event.server_name;
+  for (const exception of event.exception?.values ?? []) {
+    if (exception.value) exception.value = scrub(exception.value);
+    for (const frame of exception.stacktrace?.frames ?? []) {
+      if (frame.filename) frame.filename = scrub(frame.filename);
+      if (frame.abs_path) frame.abs_path = scrub(frame.abs_path);
+    }
+  }
+  return event;
+}
