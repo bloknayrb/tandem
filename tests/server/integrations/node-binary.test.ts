@@ -211,15 +211,15 @@ describe("probeNodeBinary", () => {
    * permits exactly those, which is why the corpus keeps the two lists apart
    * rather than exporting one "all bad paths" array.
    */
-  it.each([
-    ...NETWORK_PATHS,
-    ...LOCAL_EXTENDED_PATHS,
-  ])("refuses %s without calling statSync", (_label, candidate) => {
-    _statSyncSpy.mockClear();
+  it.each([...NETWORK_PATHS, ...LOCAL_EXTENDED_PATHS])(
+    "refuses %s without calling statSync",
+    (_label, candidate) => {
+      _statSyncSpy.mockClear();
 
-    // `null`, not `false`: refusing to look is not evidence of absence, and
-    // `false` would license a rewrite of the user's config.
-    expect(probeNodeBinary(candidate)).toBeNull();
-    expect(_statSyncSpy).not.toHaveBeenCalled();
-  });
+      // `null`, not `false`: refusing to look is not evidence of absence, and
+      // `false` would license a rewrite of the user's config.
+      expect(probeNodeBinary(candidate)).toBeNull();
+      expect(_statSyncSpy).not.toHaveBeenCalled();
+    },
+  );
 });

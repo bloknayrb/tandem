@@ -56,16 +56,14 @@ describe("redactUserPaths", () => {
     expect(redactUserPaths(input, [])).toBe(expected);
   });
 
-  it.each([
-    [""],
-    ["/"],
-    ["C:\\"],
-    ["C:"],
-  ])("ignores the degenerate root %p rather than corrupting every path", (path) => {
-    const input = "/home/bryan/x and C:\\Windows\\y";
-    // Only the generic second pass should apply.
-    expect(redactUserPaths(input, [{ path, as: "~" }])).toBe("/home/[user]/x and C:\\Windows\\y");
-  });
+  it.each([[""], ["/"], ["C:\\"], ["C:"]])(
+    "ignores the degenerate root %p rather than corrupting every path",
+    (path) => {
+      const input = "/home/bryan/x and C:\\Windows\\y";
+      // Only the generic second pass should apply.
+      expect(redactUserPaths(input, [{ path, as: "~" }])).toBe("/home/[user]/x and C:\\Windows\\y");
+    },
+  );
 
   it("replaces every occurrence, not just the first", () => {
     expect(redactUserPaths("/home/bryan/a then /home/bryan/b", [HOME])).toBe("~/a then ~/b");

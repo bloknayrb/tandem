@@ -124,14 +124,13 @@ describe("round-trip: populateYDoc -> extractText", () => {
     expect(extractText(doc)).toBe(input);
   });
 
-  it.each([
-    ["# Heading One"],
-    ["## Heading Two"],
-    ["### Heading Three"],
-  ])("heading round-trip: %s", (input) => {
-    doc = makeDoc(input);
-    expect(extractText(doc)).toBe(input);
-  });
+  it.each([["# Heading One"], ["## Heading Two"], ["### Heading Three"]])(
+    "heading round-trip: %s",
+    (input) => {
+      doc = makeDoc(input);
+      expect(extractText(doc)).toBe(input);
+    },
+  );
 
   it("mixed headings and paragraphs", () => {
     const input = "# Title\n## Section\nParagraph text\n### Sub\nMore text";

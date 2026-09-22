@@ -329,16 +329,17 @@ describe("GET /api/diagnostics — dev-repo check filtering", () => {
   // Diagnostics. The self-gate is an optimization; the constant is the
   // contract — so this iterates the constant rather than a transcription of
   // it, and a newly added cwd-dependent check arrives here already covered.
-  it.each([
-    ...CWD_DEPENDENT_CHECKS,
-  ])("strips the cwd-dependent %s check from field reports", (check) => {
-    const filtered = filterDevRepoChecks(
-      makeReport([result("node-version", "pass"), result(check, "warn")]),
-    );
-    expect(filtered.results.map((r) => r.check)).toEqual(["node-version"]);
-    expect(filtered.warnings).toBe(0);
-    expect(filtered.summary).toBe("All checks passed. Tandem is ready.");
-  });
+  it.each([...CWD_DEPENDENT_CHECKS])(
+    "strips the cwd-dependent %s check from field reports",
+    (check) => {
+      const filtered = filterDevRepoChecks(
+        makeReport([result("node-version", "pass"), result(check, "warn")]),
+      );
+      expect(filtered.results.map((r) => r.check)).toEqual(["node-version"]);
+      expect(filtered.warnings).toBe(0);
+      expect(filtered.summary).toBe("All checks passed. Tandem is ready.");
+    },
+  );
 
   it("strips the node-modules SKIP, which is the shape a real field report carries", () => {
     // The others vanish from a non-checkout cwd; node-modules is the one that

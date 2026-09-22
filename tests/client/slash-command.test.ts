@@ -176,15 +176,12 @@ describe("paragraph slash command", () => {
   // keyword set could be deleted and the suite would stay green. These four are
   // the discoverability aliases — the words someone types when they do not know
   // the command is called "Paragraph".
-  it.each([
-    "normal",
-    "body",
-    "text",
-    "plain",
-    "reset",
-  ])("is reachable by the '%s' alias", (alias) => {
-    expect(filterSlashCommands(alias).map((c) => c.id)).toContain("paragraph");
-  });
+  it.each(["normal", "body", "text", "plain", "reset"])(
+    "is reachable by the '%s' alias",
+    (alias) => {
+      expect(filterSlashCommands(alias).map((c) => c.id)).toContain("paragraph");
+    },
+  );
 
   // "para" is NOT unique, which is genuinely surprising and worth pinning
   // rather than leaving for the next person to rediscover: horizontal-rule
@@ -326,18 +323,19 @@ describe("paragraph slash command", () => {
     ],
   ];
 
-  it.each(
-    DEEP_CASES,
-  )("parses %s in a doubly-nested item intact, then retypes it in place (#1720)", (_label, input, expected) => {
-    editor.commands.setContent(input);
-    // Parse-time. A `paragraph block*` listItem reports HERE, naming the
-    // schema rather than the command.
-    expect(editor.getHTML()).toBe(input);
+  it.each(DEEP_CASES)(
+    "parses %s in a doubly-nested item intact, then retypes it in place (#1720)",
+    (_label, input, expected) => {
+      editor.commands.setContent(input);
+      // Parse-time. A `paragraph block*` listItem reports HERE, naming the
+      // schema rather than the command.
+      expect(editor.getHTML()).toBe(input);
 
-    editor.commands.setTextSelection(posOf(editor, "deep"));
-    runParagraph();
-    expect(editor.getHTML()).toBe(expected);
-  });
+      editor.commands.setTextSelection(posOf(editor, "deep"));
+      runParagraph();
+      expect(editor.getHTML()).toBe(expected);
+    },
+  );
 
   /**
    * The behaviour #1720 got right, pinned as CURRENT behaviour rather than as

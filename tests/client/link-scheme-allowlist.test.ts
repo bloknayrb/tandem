@@ -160,15 +160,16 @@ describe("isRenderableLinkScheme — the allowlist posture (#1537)", () => {
     expect(isRenderableLinkScheme(undefined)).toBe(false);
   });
 
-  it.each(
-    NOT_A_SCHEME_BY_THE_URL_GRAMMAR,
-  )("renders %j — the URL parser sees no scheme there, so neither does this", (href) => {
-    // The other edge of "only render as a link if it works as a link". Each
-    // row resolves relative under the real parser, which is the definition of
-    // schemeless being used here.
-    expect(new URL(href, "http://localhost:5173/doc/a.md").protocol).toBe("http:");
-    expect(isRenderableLinkScheme(href)).toBe(true);
-  });
+  it.each(NOT_A_SCHEME_BY_THE_URL_GRAMMAR)(
+    "renders %j — the URL parser sees no scheme there, so neither does this",
+    (href) => {
+      // The other edge of "only render as a link if it works as a link". Each
+      // row resolves relative under the real parser, which is the definition of
+      // schemeless being used here.
+      expect(new URL(href, "http://localhost:5173/doc/a.md").protocol).toBe("http:");
+      expect(isRenderableLinkScheme(href)).toBe(true);
+    },
+  );
 
   it("must still render 2024:plan.md — the regression this pins", () => {
     // Named explicitly rather than left inside the loop above. `2024:plan.md`
@@ -258,34 +259,37 @@ describe("the premise: what Tiptap's defaultValidate actually accepts", () => {
   // ftp, ftps, mailto, tel, callto, sms, cid, xmpp) with the hyphen properly
   // escaped — so the Follina-class below is now rejected by UPSTREAM itself,
   // and the drift row for `ms2:x` flipped the other way (see below).
-  it.each(
-    NEVER_WORKED_SCHEME_HREFS,
-  )("accepts %j — which is why the narrowing term exists", (href) => {
-    expect(tiptapDefaultIsAllowedUri(href, [])).toBeTruthy();
-  });
+  it.each(NEVER_WORKED_SCHEME_HREFS)(
+    "accepts %j — which is why the narrowing term exists",
+    (href) => {
+      expect(tiptapDefaultIsAllowedUri(href, [])).toBeTruthy();
+    },
+  );
 
-  it.each(
-    REFUSED_SCHEME_HREFS,
-  )("v3 rejects %j itself — and the narrowing term rejects it independently", (href) => {
-    // Defense in depth, not a redundant pin: upstream's allowlist and our
-    // WHATWG-scheme predicate now agree on these, so the union outcome is
-    // unchanged either way. If upstream ever widens again, our term still
-    // subtracts them — that is the property being preserved.
-    expect(tiptapDefaultIsAllowedUri(href, [])).toBeFalsy();
-    expect(isRenderableLinkScheme(href)).toBe(false);
-  });
+  it.each(REFUSED_SCHEME_HREFS)(
+    "v3 rejects %j itself — and the narrowing term rejects it independently",
+    (href) => {
+      // Defense in depth, not a redundant pin: upstream's allowlist and our
+      // WHATWG-scheme predicate now agree on these, so the union outcome is
+      // unchanged either way. If upstream ever widens again, our term still
+      // subtracts them — that is the property being preserved.
+      expect(tiptapDefaultIsAllowedUri(href, [])).toBeFalsy();
+      expect(isRenderableLinkScheme(href)).toBe(false);
+    },
+  );
 
-  it.each(
-    NOT_A_SCHEME_BY_THE_URL_GRAMMAR,
-  )("accepts %j too — which is why the mechanism is NOT about hyphens", (href) => {
-    // `_`, `@`, a leading digit, a leading `.` and a space are all outside
-    // the collapsed range, so `defaultValidate` waves each of these through
-    // exactly as it does `ms-msdt:/id`. The difference is downstream: no URL
-    // parser reads a scheme here, so these stay relative and stay live. A
-    // narrowing term that keyed on "has a colon" would have blanked them.
-    expect(tiptapDefaultIsAllowedUri(href, [])).toBeTruthy();
-    expect(isRenderableLinkScheme(href)).toBe(true);
-  });
+  it.each(NOT_A_SCHEME_BY_THE_URL_GRAMMAR)(
+    "accepts %j too — which is why the mechanism is NOT about hyphens",
+    (href) => {
+      // `_`, `@`, a leading digit, a leading `.` and a space are all outside
+      // the collapsed range, so `defaultValidate` waves each of these through
+      // exactly as it does `ms-msdt:/id`. The difference is downstream: no URL
+      // parser reads a scheme here, so these stay relative and stay live. A
+      // narrowing term that keyed on "has a colon" would have blanked them.
+      expect(tiptapDefaultIsAllowedUri(href, [])).toBeTruthy();
+      expect(isRenderableLinkScheme(href)).toBe(true);
+    },
+  );
 
   // UPSTREAM-DRIFT DETECTORS. `coap+tcp:x`, `a.b:c` and `x+y:z` are rejected
   // by `defaultValidate` because a terminator INSIDE `[a-z+./0-9:]` cannot end
@@ -297,14 +301,13 @@ describe("the premise: what Tiptap's defaultValidate actually accepts", () => {
   // our WHATWG predicate still rejects it (`ms2` is a syntactically valid
   // scheme and not an allowlisted one). If a future upgrade moves any of
   // these again, the paragraph above stops describing the dependency.
-  it.each([
-    "coap+tcp:x",
-    "a.b:c",
-    "x+y:z",
-  ])("rejects %j today — a terminator inside [a-z+./0-9:] does not end the run", (href) => {
-    expect(tiptapDefaultIsAllowedUri(href, [])).toBeFalsy();
-    expect(isRenderableLinkScheme(href)).toBe(false);
-  });
+  it.each(["coap+tcp:x", "a.b:c", "x+y:z"])(
+    "rejects %j today — a terminator inside [a-z+./0-9:] does not end the run",
+    (href) => {
+      expect(tiptapDefaultIsAllowedUri(href, [])).toBeFalsy();
+      expect(isRenderableLinkScheme(href)).toBe(false);
+    },
+  );
 
   it("accepts ms2:x upstream since v3, but the narrowing term still subtracts it", () => {
     expect(tiptapDefaultIsAllowedUri("ms2:x", [])).toBeTruthy();
@@ -313,25 +316,25 @@ describe("the premise: what Tiptap's defaultValidate actually accepts", () => {
 });
 
 describe("end-to-end through the production schema (the mark path a .md import uses)", () => {
-  it.each([
-    ...REFUSED_SCHEME_HREFS,
-    ...NEVER_WORKED_SCHEME_HREFS,
-  ])("blanks %j and leaks it nowhere", (href) => {
-    const { anchor, html } = renderLinkMark(href);
-    // Positive control FIRST: an anchor really rendered, so the assertions
-    // below are about the guard rather than about a mark that failed to
-    // apply. Without this row every absence-assertion passes vacuously.
-    expect(anchor, "no anchor rendered — the assertions below would be vacuous").toBeTruthy();
-    expect(anchor?.getAttribute("href")).toBe("");
-    // A disallowed scheme is never given a title and never resurrected.
-    expect(anchor?.hasAttribute("title")).toBe(false);
-    expect(anchor?.hasAttribute("target")).toBe(false);
-    // The refused href reaches the DOM nowhere at all — not in an attribute,
-    // not in a tooltip, not in text. This is what makes "no title" a
-    // semantic claim rather than a single-attribute one.
-    expect(html).not.toContain(href);
-    expect(anchor?.outerHTML).not.toContain(href);
-  });
+  it.each([...REFUSED_SCHEME_HREFS, ...NEVER_WORKED_SCHEME_HREFS])(
+    "blanks %j and leaks it nowhere",
+    (href) => {
+      const { anchor, html } = renderLinkMark(href);
+      // Positive control FIRST: an anchor really rendered, so the assertions
+      // below are about the guard rather than about a mark that failed to
+      // apply. Without this row every absence-assertion passes vacuously.
+      expect(anchor, "no anchor rendered — the assertions below would be vacuous").toBeTruthy();
+      expect(anchor?.getAttribute("href")).toBe("");
+      // A disallowed scheme is never given a title and never resurrected.
+      expect(anchor?.hasAttribute("title")).toBe(false);
+      expect(anchor?.hasAttribute("target")).toBe(false);
+      // The refused href reaches the DOM nowhere at all — not in an attribute,
+      // not in a tooltip, not in text. This is what makes "no title" a
+      // semantic claim rather than a single-attribute one.
+      expect(html).not.toContain(href);
+      expect(anchor?.outerHTML).not.toContain(href);
+    },
+  );
 
   it("marks a blanked anchor so the CSS can stop it looking clickable", () => {
     // `.tandem-editor a[href]` matches an EMPTY href too, so a refused link
@@ -349,16 +352,14 @@ describe("end-to-end through the production schema (the mark path a .md import u
     expect(anchor?.hasAttribute("data-tandem-link-blocked")).toBe(false);
   });
 
-  it.each([
-    "mailto:someone@example.com",
-    "docs/spec.md",
-    "./notes.md",
-    "//example.com/page",
-  ])("leaves %j live — the did-not-overshoot control for the kept set", (href) => {
-    const { anchor } = renderLinkMark(href);
-    expect(anchor?.getAttribute("href")).toBe(href);
-    expect(anchor?.hasAttribute("data-tandem-link-blocked")).toBe(false);
-  });
+  it.each(["mailto:someone@example.com", "docs/spec.md", "./notes.md", "//example.com/page"])(
+    "leaves %j live — the did-not-overshoot control for the kept set",
+    (href) => {
+      const { anchor } = renderLinkMark(href);
+      expect(anchor?.getAttribute("href")).toBe(href);
+      expect(anchor?.hasAttribute("data-tandem-link-blocked")).toBe(false);
+    },
+  );
 });
 
 describe("what the narrowing must NOT have moved", () => {

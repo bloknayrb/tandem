@@ -239,16 +239,13 @@ describe("isRenderableLinkHref (the render-time veto, #1420)", () => {
     expect(isRenderableLinkHref(href)).toBe(false);
   });
 
-  it.each([
-    NUL,
-    US,
-    ch(0x0b),
-    "\t",
-    "\n",
-  ])("rejects a control character anywhere in the href", (control) => {
-    expect(isRenderableLinkHref(`https://example.com/${control}x`)).toBe(false);
-    expect(isRenderableLinkHref(`${control}//evil.com/x.md`)).toBe(false);
-  });
+  it.each([NUL, US, ch(0x0b), "\t", "\n"])(
+    "rejects a control character anywhere in the href",
+    (control) => {
+      expect(isRenderableLinkHref(`https://example.com/${control}x`)).toBe(false);
+      expect(isRenderableLinkHref(`${control}//evil.com/x.md`)).toBe(false);
+    },
+  );
 
   it("accepts an INTERIOR space — the reason URL_HOSTILE_CHARS is not reused here", () => {
     // `URL_HOSTILE_CHARS` contains U+0020. This veto applies to every href
@@ -372,22 +369,19 @@ describe("isRenderableLinkScheme (documentation corpus — see link-scheme-allow
     expect(isRenderableLinkScheme(`${prefix}example.com/x`)).toBe(true);
   });
 
-  it.each([
-    "2024:plan.md",
-    ".hidden:note.md",
-    "12:30 notes.md",
-    "user@host:x",
-    "ms_msdt:x",
-  ])("keeps %j — a colon is not a scheme, and these opened files", (href) => {
-    // The rule cuts both ways. An earlier draft used `hasSchemePrefix` (a `:`
-    // before the first `/`, `#` or `?`) as the scheme test, which called every
-    // row here scheme-bearing and blanked it — while each in fact resolves as a
-    // relative path under the real URL parser, and the ones naming a linkable
-    // file reached `openServerPath`. Clause 2 is the WHATWG scheme grammar for
-    // exactly this reason.
-    expect(new URL(href, "http://localhost:5173/doc/a.md").protocol).toBe("http:");
-    expect(isRenderableLinkScheme(href)).toBe(true);
-  });
+  it.each(["2024:plan.md", ".hidden:note.md", "12:30 notes.md", "user@host:x", "ms_msdt:x"])(
+    "keeps %j — a colon is not a scheme, and these opened files",
+    (href) => {
+      // The rule cuts both ways. An earlier draft used `hasSchemePrefix` (a `:`
+      // before the first `/`, `#` or `?`) as the scheme test, which called every
+      // row here scheme-bearing and blanked it — while each in fact resolves as a
+      // relative path under the real URL parser, and the ones naming a linkable
+      // file reached `openServerPath`. Clause 2 is the WHATWG scheme grammar for
+      // exactly this reason.
+      expect(new URL(href, "http://localhost:5173/doc/a.md").protocol).toBe("http:");
+      expect(isRenderableLinkScheme(href)).toBe(true);
+    },
+  );
 
   it("does not judge schemeless hrefs — that is the other predicates' half", () => {
     // Contrast with `isSchemelessPathHref` directly above: that one rejects a

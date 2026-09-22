@@ -194,38 +194,41 @@ describe("YDocStore lifecycle parity", () => {
       (id: string, d: Y.Doc, m: Y.Map<unknown>) => dismissPending(id, d, m, noRelay),
       "dismissed",
     ],
-  ])("%sAnnotation writes what the standalone helper writes", (_label, viaStore, viaHelper, want) => {
-    const ydoc = setupDoc(`parity-${want}`, "Hello world");
-    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    const store = new YDocStore(ydoc, FILE_PATH, `parity-${want}`);
+  ])(
+    "%sAnnotation writes what the standalone helper writes",
+    (_label, viaStore, viaHelper, want) => {
+      const ydoc = setupDoc(`parity-${want}`, "Hello world");
+      const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+      const store = new YDocStore(ydoc, FILE_PATH, `parity-${want}`);
 
-    // USER-authored since #1770: accept of a Claude-authored record is refused,
-    // and this spec is about store/helper PARITY, not about who may accept.
-    const idStore = mint(ydoc, "comment", rangeOf(0, 5, ydoc), "x", { author: "user" });
-    const idHelper = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x", {
-      author: "user",
-    });
+      // USER-authored since #1770: accept of a Claude-authored record is refused,
+      // and this spec is about store/helper PARITY, not about who may accept.
+      const idStore = mint(ydoc, "comment", rangeOf(0, 5, ydoc), "x", { author: "user" });
+      const idHelper = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x", {
+        author: "user",
+      });
 
-    // Without this, `normalizeForParity` blanking `id` and `timestamp` would be
-    // the whole of the comparison if `rangeOf` ever stopped anchoring.
-    expect((map.get(idStore) as Annotation).relRange, "the fixtures are anchored").toBeDefined();
+      // Without this, `normalizeForParity` blanking `id` and `timestamp` would be
+      // the whole of the comparison if `rangeOf` ever stopped anchoring.
+      expect((map.get(idStore) as Annotation).relRange, "the fixtures are anchored").toBeDefined();
 
-    const resStore = viaStore(store, idStore);
-    const resHelper = viaHelper(idHelper, ydoc, map);
+      const resStore = viaStore(store, idStore);
+      const resHelper = viaHelper(idHelper, ydoc, map);
 
-    // Both arms, not just their kinds — `.kind` alone is matched by any two
-    // results that happen to succeed.
-    expect(resStore.kind).toBe("ok");
-    expect(resHelper.kind).toBe("ok");
-    if (resStore.kind !== "ok" || resHelper.kind !== "ok") return;
+      // Both arms, not just their kinds — `.kind` alone is matched by any two
+      // results that happen to succeed.
+      expect(resStore.kind).toBe("ok");
+      expect(resHelper.kind).toBe("ok");
+      if (resStore.kind !== "ok" || resHelper.kind !== "ok") return;
 
-    // The records, modulo the two fields that legitimately differ between any
-    // two annotations minted a moment apart.
-    expect(normalizeForParity(map.get(idStore) as Annotation)).toStrictEqual(
-      normalizeForParity(map.get(idHelper) as Annotation),
-    );
-    expect((map.get(idStore) as Annotation).status).toBe(want);
-  });
+      // The records, modulo the two fields that legitimately differ between any
+      // two annotations minted a moment apart.
+      expect(normalizeForParity(map.get(idStore) as Annotation)).toStrictEqual(
+        normalizeForParity(map.get(idHelper) as Annotation),
+      );
+      expect((map.get(idStore) as Annotation).status).toBe(want);
+    },
+  );
 });
 
 describe("YDocStore.removeAnnotation parity", () => {

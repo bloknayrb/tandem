@@ -245,21 +245,18 @@ describe("POST /api/document/reload — origin gate (#1121 F6)", () => {
     );
   });
 
-  it.each([
-    undefined,
-    "",
-    "../other-doc",
-    "bad/doc",
-    "x".repeat(257),
-  ])("rejects invalid documentId %s", async (documentId) => {
-    const res = mockRes();
-    await handleReloadFromMarkdown(
-      loopbackReq({ body: { documentId, markdown: "# unchanged" } }),
-      res,
-    );
-    expect(res._status).toBe(400);
-    expect(reloadDocumentFromMarkdown).not.toHaveBeenCalled();
-  });
+  it.each([undefined, "", "../other-doc", "bad/doc", "x".repeat(257)])(
+    "rejects invalid documentId %s",
+    async (documentId) => {
+      const res = mockRes();
+      await handleReloadFromMarkdown(
+        loopbackReq({ body: { documentId, markdown: "# unchanged" } }),
+        res,
+      );
+      expect(res._status).toBe(400);
+      expect(reloadDocumentFromMarkdown).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects a stale document ID that is no longer open", async () => {
     hasDoc.mockReturnValue(false);

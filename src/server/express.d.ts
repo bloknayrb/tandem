@@ -54,5 +54,5 @@ declare module "express" {
   }
 
   export default express;
-  export { Request, Response, NextFunction, Application, Express };
+  export { Application, Express, NextFunction, Request, Response };
 }

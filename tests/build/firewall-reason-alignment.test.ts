@@ -84,20 +84,19 @@ function tsReasons(typeName: string): string[] {
   return members;
 }
 
-describe.each(ENUMS)("$name stays aligned across Rust and TypeScript", ({
-  name,
-  min,
-  expect: sentinel,
-}) => {
-  it("has the same members on both sides", () => {
-    const rust = rustReasons(name).sort();
-    const ts = tsReasons(name).sort();
-    expect(ts, `Rust has ${rust.join(", ")}; TypeScript has ${ts.join(", ")}`).toEqual(rust);
-  });
+describe.each(ENUMS)(
+  "$name stays aligned across Rust and TypeScript",
+  ({ name, min, expect: sentinel }) => {
+    it("has the same members on both sides", () => {
+      const rust = rustReasons(name).sort();
+      const ts = tsReasons(name).sort();
+      expect(ts, `Rust has ${rust.join(", ")}; TypeScript has ${ts.join(", ")}`).toEqual(rust);
+    });
 
-  it("parses a plausible set from each side, so a regex that matches nothing cannot pass", () => {
-    expect(rustReasons(name)).toContain(sentinel);
-    expect(tsReasons(name)).toContain(sentinel);
-    expect(rustReasons(name).length).toBeGreaterThanOrEqual(min);
-  });
-});
+    it("parses a plausible set from each side, so a regex that matches nothing cannot pass", () => {
+      expect(rustReasons(name)).toContain(sentinel);
+      expect(tsReasons(name)).toContain(sentinel);
+      expect(rustReasons(name).length).toBeGreaterThanOrEqual(min);
+    });
+  },
+);

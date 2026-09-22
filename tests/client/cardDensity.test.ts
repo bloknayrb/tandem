@@ -100,14 +100,12 @@ const cases: Case[] = [
 ];
 
 describe("cardDensity", () => {
-  it.each(cases)("$mode active=$isActive editing=$isEditing → $expected ($why)", ({
-    mode,
-    isActive,
-    isEditing,
-    expected,
-  }) => {
-    expect(cardDensity({ mode, isActive, isEditing })).toBe(expected);
-  });
+  it.each(cases)(
+    "$mode active=$isActive editing=$isEditing → $expected ($why)",
+    ({ mode, isActive, isEditing, expected }) => {
+      expect(cardDensity({ mode, isActive, isEditing })).toBe(expected);
+    },
+  );
 
   it("is total over the full input space (no undefined return)", () => {
     const modes: MarginMode[] = ["full", "narrow", "stub", "off"];

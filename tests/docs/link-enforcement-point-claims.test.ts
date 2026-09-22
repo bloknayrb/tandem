@@ -61,13 +61,12 @@ function markdownHref(url: string): string | undefined {
 }
 
 describe("lessons-learned §33 — the .docx link allowlist runs at import", () => {
-  it.each([
-    "http://example.com/x",
-    "https://example.com/x",
-    "mailto:a@example.com",
-  ])("keeps %s", (href) => {
-    expect(docxHref(href)).toBe(href);
-  });
+  it.each(["http://example.com/x", "https://example.com/x", "mailto:a@example.com"])(
+    "keeps %s",
+    (href) => {
+      expect(docxHref(href)).toBe(href);
+    },
+  );
 
   it.each([
     "javascript:alert(1)", // the bullet's own subject
@@ -83,14 +82,12 @@ describe("lessons-learned §33 — the .docx link allowlist runs at import", () 
 });
 
 describe("lessons-learned §33 — .md import has no href layer at all", () => {
-  it.each([
-    "https://example.com/x",
-    "javascript:alert(1)",
-    "ms-msdt:/id",
-    "docs/spec.md",
-  ])("writes %s verbatim", (url) => {
-    expect(markdownHref(url)).toBe(url);
-  });
+  it.each(["https://example.com/x", "javascript:alert(1)", "ms-msdt:/id", "docs/spec.md"])(
+    "writes %s verbatim",
+    (url) => {
+      expect(markdownHref(url)).toBe(url);
+    },
+  );
 });
 
 describe("lessons-learned §33 — the bullet names the layers, not an expression", () => {

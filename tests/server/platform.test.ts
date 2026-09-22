@@ -510,15 +510,12 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
 
     // A wildcard bind DOES cover loopback, and loopback is the better target
     // there: `/health` reveals `pid` only to a loopback caller.
-    it.each([
-      "127.0.0.1",
-      "::1",
-      "localhost",
-      "0.0.0.0",
-      "::",
-    ])("resolves %s back to 127.0.0.1", (host) => {
-      expect(resolveProbeHost(host)).toBe("127.0.0.1");
-    });
+    it.each(["127.0.0.1", "::1", "localhost", "0.0.0.0", "::"])(
+      "resolves %s back to 127.0.0.1",
+      (host) => {
+        expect(resolveProbeHost(host)).toBe("127.0.0.1");
+      },
+    );
 
     // The finding itself: a LAN bind is not on 127.0.0.1 at all, so probing
     // loopback returns ECONNREFUSED and `freePort` SIGKILLs the live instance.

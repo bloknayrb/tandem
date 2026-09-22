@@ -286,41 +286,42 @@ describe("App.svelte reduce-motion guard coverage (#1425)", () => {
     },
   );
 
-  it.each(
-    MOTION_TARGETS.map((t) => [`${t.selector} (${t.prop})`, t] as const),
-  )("%s is guarded by both halves, declared after the rule it guards", (_label, target) => {
-    const guardedSelector = guardedSelectorFor(target);
-    const media = mediaGuardRule(guardedSelector, target.prop);
-    expect(
-      media,
-      `no \`@media (prefers-reduced-motion: reduce) { ${guardedSelector} { ${target.prop}: none } }\` rule ` +
-        `found. Add one directly after \`${target.selector}\`'s own rule (source order matters here — see the ` +
-        "comment on the `.rail-shell.dragging` rule for why identical specificity makes this load-bearing), " +
-        `or if \`${target.selector}\` is guarded under a DIFFERENT selector, add an entry to EXCEPTIONS above ` +
-        "with a markup proof in the describe block below.",
-    ).toBeDefined();
-
-    const global = globalGuardRule(guardedSelector, target.prop);
-    expect(
-      global,
-      `no \`:global(body.tandem-reduce-motion) ${guardedSelector} { ${target.prop}: none }\` rule found — the ` +
-        "in-app reduceMotion setting does nothing for this rule without it.",
-    ).toBeDefined();
-
-    if (media && global) {
+  it.each(MOTION_TARGETS.map((t) => [`${t.selector} (${t.prop})`, t] as const))(
+    "%s is guarded by both halves, declared after the rule it guards",
+    (_label, target) => {
+      const guardedSelector = guardedSelectorFor(target);
+      const media = mediaGuardRule(guardedSelector, target.prop);
       expect(
-        media.start,
-        `the @media guard for ${guardedSelector} must be declared AFTER the rule it guards — its specificity ` +
-          "is identical (it was matched by RESOLVED selector, so same-selector really does mean " +
-          "same-specificity, and an at-rule adds none), so it wins only by source order.",
-      ).toBeGreaterThan(target.rule.start);
+        media,
+        `no \`@media (prefers-reduced-motion: reduce) { ${guardedSelector} { ${target.prop}: none } }\` rule ` +
+          `found. Add one directly after \`${target.selector}\`'s own rule (source order matters here — see the ` +
+          "comment on the `.rail-shell.dragging` rule for why identical specificity makes this load-bearing), " +
+          `or if \`${target.selector}\` is guarded under a DIFFERENT selector, add an entry to EXCEPTIONS above ` +
+          "with a markup proof in the describe block below.",
+      ).toBeDefined();
+
+      const global = globalGuardRule(guardedSelector, target.prop);
       expect(
-        global.start,
-        `the :global(body.tandem-reduce-motion) guard for ${guardedSelector} must be declared after the rule ` +
-          "it guards.",
-      ).toBeGreaterThan(target.rule.start);
-    }
-  });
+        global,
+        `no \`:global(body.tandem-reduce-motion) ${guardedSelector} { ${target.prop}: none }\` rule found — the ` +
+          "in-app reduceMotion setting does nothing for this rule without it.",
+      ).toBeDefined();
+
+      if (media && global) {
+        expect(
+          media.start,
+          `the @media guard for ${guardedSelector} must be declared AFTER the rule it guards — its specificity ` +
+            "is identical (it was matched by RESOLVED selector, so same-selector really does mean " +
+            "same-specificity, and an at-rule adds none), so it wins only by source order.",
+        ).toBeGreaterThan(target.rule.start);
+        expect(
+          global.start,
+          `the :global(body.tandem-reduce-motion) guard for ${guardedSelector} must be declared after the rule ` +
+            "it guards.",
+        ).toBeGreaterThan(target.rule.start);
+      }
+    },
+  );
 });
 
 describe("App.svelte reduce-motion guard coverage (#1425): the float-slide exception is markup-verified, not assumed", () => {
@@ -554,26 +555,27 @@ describe("App.svelte reduce-motion guard coverage (#1425): inline `style` attrib
     ).toEqual([...JS_BUILT_INLINE_STYLES.map((e) => e.expression)].sort());
   });
 
-  it.each(
-    JS_BUILT_INLINE_STYLES.map((e) => [e.expression, e] as const),
-  )("%s's builder module declares no transition/animation", (_label, entry) => {
-    // Comments stripped first so prose can neither satisfy nor trip the scan:
-    // block comments wholesale, and `//` comments only where one OPENS a line,
-    // which never touches a `//` inside a string (a URL, say) and so cannot
-    // hide a real declaration.
-    const src = readFileSync(entry.builder, "utf-8")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^[ \t]*\/\/.*$/gm, "");
-    const offenders = [
-      ...src.matchAll(/(?:^|[;\s"'`])((?:transition|animation)\s*:[^;\n`"']*)/g),
-    ].map((m) => m[1].trim());
-    expect(
-      offenders,
-      `\`${entry.expression}\` is written into an inline \`style\` attribute in App.svelte, and ` +
-        "an inline style is structurally unreachable by every reduce-motion guard in this file " +
-        "(#1396, #1425). A motion declaration emitted from here is therefore unguardable where it " +
-        "lands. Move it into a stylesheet rule and guard THAT, or — if the timing is genuinely " +
-        "JS-computed — use token-zeroing (morphTiming.css/tabDragMotion.css) and record it here.",
-    ).toEqual([]);
-  });
+  it.each(JS_BUILT_INLINE_STYLES.map((e) => [e.expression, e] as const))(
+    "%s's builder module declares no transition/animation",
+    (_label, entry) => {
+      // Comments stripped first so prose can neither satisfy nor trip the scan:
+      // block comments wholesale, and `//` comments only where one OPENS a line,
+      // which never touches a `//` inside a string (a URL, say) and so cannot
+      // hide a real declaration.
+      const src = readFileSync(entry.builder, "utf-8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^[ \t]*\/\/.*$/gm, "");
+      const offenders = [
+        ...src.matchAll(/(?:^|[;\s"'`])((?:transition|animation)\s*:[^;\n`"']*)/g),
+      ].map((m) => m[1].trim());
+      expect(
+        offenders,
+        `\`${entry.expression}\` is written into an inline \`style\` attribute in App.svelte, and ` +
+          "an inline style is structurally unreachable by every reduce-motion guard in this file " +
+          "(#1396, #1425). A motion declaration emitted from here is therefore unguardable where it " +
+          "lands. Move it into a stylesheet rule and guard THAT, or — if the timing is genuinely " +
+          "JS-computed — use token-zeroing (morphTiming.css/tabDragMotion.css) and record it here.",
+      ).toEqual([]);
+    },
+  );
 });

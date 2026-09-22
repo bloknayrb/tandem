@@ -359,26 +359,25 @@ describe("channel projection — replies", () => {
     h.dispose();
   });
 
-  it.each([
-    "true",
-    1,
-    "yes",
-  ])("a reply whose private flag is the non-boolean %p is withheld", (value) => {
-    // `private === true` fails open on every one of these. The reply is the
-    // one value on this path nothing sanitizes.
-    const h = harness();
-    add(h, "a1", { author: "user", type: "comment" });
-    h.replies.set("r1", {
-      id: "r1",
-      annotationId: "a1",
-      author: "user",
-      text: "t",
-      timestamp: 1,
-      private: value as unknown as boolean,
-    });
-    expect(h.types()).toEqual(["annotation:created"]);
-    h.dispose();
-  });
+  it.each(["true", 1, "yes"])(
+    "a reply whose private flag is the non-boolean %p is withheld",
+    (value) => {
+      // `private === true` fails open on every one of these. The reply is the
+      // one value on this path nothing sanitizes.
+      const h = harness();
+      add(h, "a1", { author: "user", type: "comment" });
+      h.replies.set("r1", {
+        id: "r1",
+        annotationId: "a1",
+        author: "user",
+        text: "t",
+        timestamp: 1,
+        private: value as unknown as boolean,
+      });
+      expect(h.types()).toEqual(["annotation:created"]);
+      h.dispose();
+    },
+  );
 
   it.each(["import", "claude"] as const)("a reply authored by %s emits nothing", (author) => {
     // Imported Word reply threads are `author: "import"` (#1000), user-private

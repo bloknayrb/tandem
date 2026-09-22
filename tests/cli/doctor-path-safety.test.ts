@@ -291,20 +291,20 @@ describe("doctor's Claude-config home resolution (characterization)", () => {
  * and they are the first coverage those two guards have ever had.
  */
 describe("doctor screens hostile home paths before reading any Claude config (#1417)", () => {
-  it.each([
-    ...NETWORK_PATHS,
-    ...LOCAL_EXTENDED_PATHS,
-  ])("%s — no read of a Claude config derived from it", async (_label, hostileHome) => {
-    // Both, because the resolvers read `HOME || USERPROFILE` and a real
-    // Windows box has only the second.
-    process.env.HOME = hostileHome;
-    process.env.USERPROFILE = hostileHome;
+  it.each([...NETWORK_PATHS, ...LOCAL_EXTENDED_PATHS])(
+    "%s — no read of a Claude config derived from it",
+    async (_label, hostileHome) => {
+      // Both, because the resolvers read `HOME || USERPROFILE` and a real
+      // Windows box has only the second.
+      process.env.HOME = hostileHome;
+      process.env.USERPROFILE = hostileHome;
 
-    await runDoctor();
+      await runDoctor();
 
-    expectFilterWouldSee(hostileHome);
-    expect(claudeConfigCallsDerivedFrom(hostileHome)).toEqual([]);
-  });
+      expectFilterWouldSee(hostileHome);
+      expect(claudeConfigCallsDerivedFrom(hostileHome)).toEqual([]);
+    },
+  );
 
   // The desktop check reads `%APPDATA%` and `homedir()` rather than HOME or
   // USERPROFILE directly, so on win32 the block above never reaches it. Its
@@ -327,14 +327,14 @@ describe("doctor screens hostile home paths before reading any Claude config (#1
   // hostile path there on any platform. THIS block, driving `homeOverride`, is
   // the only thing that exercises the desktop input screen — which is why it
   // exists rather than being folded into the one above.
-  it.each([
-    ...NETWORK_PATHS,
-    ...LOCAL_EXTENDED_PATHS,
-  ])("%s — no read of a Claude Desktop config derived from it", async (_label, hostileHome) => {
-    await runDoctor({ homeOverride: hostileHome });
-    expectFilterWouldSee(hostileHome);
-    expect(claudeConfigCallsDerivedFrom(hostileHome)).toEqual([]);
-  });
+  it.each([...NETWORK_PATHS, ...LOCAL_EXTENDED_PATHS])(
+    "%s — no read of a Claude Desktop config derived from it",
+    async (_label, hostileHome) => {
+      await runDoctor({ homeOverride: hostileHome });
+      expectFilterWouldSee(hostileHome);
+      expect(claudeConfigCallsDerivedFrom(hostileHome)).toEqual([]);
+    },
+  );
 
   // The env-less case, which the block above cannot reach because it SETS
   // HOME/USERPROFILE rather than clearing them. With both unset,
@@ -342,19 +342,19 @@ describe("doctor screens hostile home paths before reading any Claude config (#1
   // is false, so screening the env value alone left exactly the launchd/service
   // configuration this guard exists for behind the derived-path screen that
   // posix collapse defeats. Screening the EFFECTIVE home closes it.
-  it.each([
-    ...NETWORK_PATHS,
-    ...LOCAL_EXTENDED_PATHS,
-  ])("%s — no read derived from a hostile homedir() when the environment is empty", async (_label, hostileHome) => {
-    delete process.env.HOME;
-    delete process.env.USERPROFILE;
-    _homedirSpy.mockReturnValue(hostileHome);
+  it.each([...NETWORK_PATHS, ...LOCAL_EXTENDED_PATHS])(
+    "%s — no read derived from a hostile homedir() when the environment is empty",
+    async (_label, hostileHome) => {
+      delete process.env.HOME;
+      delete process.env.USERPROFILE;
+      _homedirSpy.mockReturnValue(hostileHome);
 
-    await runDoctor();
+      await runDoctor();
 
-    expectFilterWouldSee(hostileHome);
-    expect(claudeConfigCallsDerivedFrom(hostileHome)).toEqual([]);
-  });
+      expectFilterWouldSee(hostileHome);
+      expect(claudeConfigCallsDerivedFrom(hostileHome)).toEqual([]);
+    },
+  );
 
   // The input screen must screen the input that actually FEEDS the derivation.
   // A first pass refused the desktop check whenever `homeOverride ?? homedir()`
@@ -487,20 +487,18 @@ describe("readClaudeConfig screens the path it is handed", () => {
     expect(readClaudeConfig(file)).toEqual({ kind: "ok", value: { mcpServers: {} } });
   });
 
-  it.each([
-    [NULL_BODY],
-    [ARRAY_BODY],
-    [NUMBER_BODY],
-    [STRING_BODY],
-  ])("treats a non-object JSON body (%s) as malformed, not as an empty config", (body) => {
-    // Each of these parses, then answers `?.mcpServers` with `undefined` --
-    // indistinguishable at the call site from a valid config with nothing
-    // registered. Doctor reported "tandem not registered" and prescribed
-    // `setup --apply` for a file that is corrupt.
-    const file = join(dataDir, "scalar.json");
-    writeFileSync(file, body, "utf-8");
-    expect(readClaudeConfig(file)).toEqual({ kind: "malformed" });
-  });
+  it.each([[NULL_BODY], [ARRAY_BODY], [NUMBER_BODY], [STRING_BODY]])(
+    "treats a non-object JSON body (%s) as malformed, not as an empty config",
+    (body) => {
+      // Each of these parses, then answers `?.mcpServers` with `undefined` --
+      // indistinguishable at the call site from a valid config with nothing
+      // registered. Doctor reported "tandem not registered" and prescribed
+      // `setup --apply` for a file that is corrupt.
+      const file = join(dataDir, "scalar.json");
+      writeFileSync(file, body, "utf-8");
+      expect(readClaudeConfig(file)).toEqual({ kind: "malformed" });
+    },
+  );
 });
 
 /**
@@ -530,16 +528,15 @@ describe("claudeDesktopConfigTarget reports the input its path derives from", ()
     else process.env.APPDATA = savedAppData;
   });
 
-  it.each([
-    "win32",
-    "darwin",
-    "linux",
-  ] as const)("screens homeOverride when nothing outranks it (%s)", (platformOverride) => {
-    _homedirSpy.mockReturnValue(HOME);
-    expect(claudeDesktopConfigTarget({ homeOverride: "/ov", platformOverride }).screenInput).toBe(
-      "/ov",
-    );
-  });
+  it.each(["win32", "darwin", "linux"] as const)(
+    "screens homeOverride when nothing outranks it (%s)",
+    (platformOverride) => {
+      _homedirSpy.mockReturnValue(HOME);
+      expect(claudeDesktopConfigTarget({ homeOverride: "/ov", platformOverride }).screenInput).toBe(
+        "/ov",
+      );
+    },
+  );
 
   it("screens appDataOverride on win32, which BEATS homeOverride", () => {
     // The half doctor's deleted mirror got backwards. Screening `homeOverride`
@@ -580,28 +577,27 @@ describe("claudeDesktopConfigTarget reports the input its path derives from", ()
     expect(claudeDesktopConfigTarget({ platformOverride: "win32" }).screenInput).toBe(HOME);
   });
 
-  it.each([
-    "win32",
-    "darwin",
-    "linux",
-  ] as const)("the path it returns actually derives from the input it reports (%s)", (platformOverride) => {
-    // The correspondence itself, which is what the mirror kept getting wrong.
-    // Nothing previously pinned that the screened value and the read path
-    // were the same value, so a consumer could screen one and read the other.
-    process.env.APPDATA = "/env-appdata";
-    _homedirSpy.mockReturnValue(HOME);
-    for (const opts of [
-      { platformOverride },
-      { platformOverride, homeOverride: "/ov" },
-      { platformOverride, appDataOverride: "/ad" },
-      { platformOverride, homeOverride: "/ov", appDataOverride: "/ad" },
-    ]) {
-      const { screenInput, path } = claudeDesktopConfigTarget(opts);
-      expect(path, `path does not derive from screenInput for ${JSON.stringify(opts)}`).toContain(
-        join(screenInput),
-      );
-    }
-  });
+  it.each(["win32", "darwin", "linux"] as const)(
+    "the path it returns actually derives from the input it reports (%s)",
+    (platformOverride) => {
+      // The correspondence itself, which is what the mirror kept getting wrong.
+      // Nothing previously pinned that the screened value and the read path
+      // were the same value, so a consumer could screen one and read the other.
+      process.env.APPDATA = "/env-appdata";
+      _homedirSpy.mockReturnValue(HOME);
+      for (const opts of [
+        { platformOverride },
+        { platformOverride, homeOverride: "/ov" },
+        { platformOverride, appDataOverride: "/ad" },
+        { platformOverride, homeOverride: "/ov", appDataOverride: "/ad" },
+      ]) {
+        const { screenInput, path } = claudeDesktopConfigTarget(opts);
+        expect(path, `path does not derive from screenInput for ${JSON.stringify(opts)}`).toContain(
+          join(screenInput),
+        );
+      }
+    },
+  );
 });
 
 /**
@@ -631,14 +627,13 @@ describe("a refused profile is reported rather than silently skipped", () => {
       .map((x) => x.message);
   };
 
-  it.each([
-    ["user-mcp-config"],
-    ["desktop-mcp-config"],
-    ["tandem-plugin"],
-  ])("%s warns that the profile is on a network path", async (check) => {
-    const messages = await warningsFor(check);
-    expect(messages.join(" | ")).toMatch(/network or device path/);
-  });
+  it.each([["user-mcp-config"], ["desktop-mcp-config"], ["tandem-plugin"]])(
+    "%s warns that the profile is on a network path",
+    async (check) => {
+      const messages = await warningsFor(check);
+      expect(messages.join(" | ")).toMatch(/network or device path/);
+    },
+  );
 
   // The plugin check's SECOND refusal path: the input screen passes and the
   // loader's backstop is what rejects. Reachable only where `path.posix.join`
@@ -769,19 +764,19 @@ describe("the annotation-store check screens its app-data input", () => {
     return _fspReaddirTally.paths.filter((p) => p.includes("annotations"));
   }
 
-  it.each([
-    ...NETWORK_PATHS,
-    ...LOCAL_EXTENDED_PATHS,
-  ])("%s in TANDEM_APP_DATA_DIR reaches no filesystem call", async (_label, hostile) => {
-    process.env.TANDEM_APP_DATA_DIR = hostile;
-    _fspReaddirTally.paths.length = 0;
+  it.each([...NETWORK_PATHS, ...LOCAL_EXTENDED_PATHS])(
+    "%s in TANDEM_APP_DATA_DIR reaches no filesystem call",
+    async (_label, hostile) => {
+      process.env.TANDEM_APP_DATA_DIR = hostile;
+      _fspReaddirTally.paths.length = 0;
 
-    const report = await runDoctor();
-    const store = report.results.filter((r) => r.check === "annotation-store");
+      const report = await runDoctor();
+      const store = report.results.filter((r) => r.check === "annotation-store");
 
-    expect(annotationReaddirs()).toEqual([]);
-    expect(store.some((r) => r.status === "fail" && r.data?.unsafePath === true)).toBe(true);
-  });
+      expect(annotationReaddirs()).toEqual([]);
+      expect(store.some((r) => r.status === "fail" && r.data?.unsafePath === true)).toBe(true);
+    },
+  );
 
   it("still reads the store for an ordinary local path", async () => {
     // Positive control. Without it a guard that refused unconditionally — or a
