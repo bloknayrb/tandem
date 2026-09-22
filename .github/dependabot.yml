@@ -70,6 +70,26 @@ updates:
     ignore:
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
+      # The three holds below have the TypeScript shape: a major that is known
+      # red and already tracked, which the update-types split would otherwise
+      # re-file every week as a PR nobody can merge. Each is a MIGRATION with
+      # its own issue; the PR doing that migration removes its entry. Held in
+      # this file rather than by `@dependabot ignore` comments, which live on
+      # GitHub and are invisible to anyone reading the repo.
+      #
+      # REMOVE with #2098 (zod 3 -> 4 migration).
+      - dependency-name: "zod"
+        update-types: ["version-update:semver-major"]
+      # REMOVE with #2099. Server and provider must move in ONE PR -- a lone
+      # provider major can typecheck and still break at runtime against the
+      # older server -- so the hold covers the whole scope.
+      - dependency-name: "@hocuspocus/*"
+        update-types: ["version-update:semver-major"]
+      # REMOVE per #2100, once prosemirror-markdown's dependency range accepts
+      # markdown-it 15 (1.13.8 still requires ^14, so a root bump bundles two
+      # copies and feeds a v15 tokenizer to a v14-typed MarkdownParser).
+      - dependency-name: "markdown-it"
+        update-types: ["version-update:semver-major"]
 
   # Split by update-type for the same reason as npm above. Cargo has not yet hit
   # the hostage failure, but the shape is identical -- and a Rust major is worse
