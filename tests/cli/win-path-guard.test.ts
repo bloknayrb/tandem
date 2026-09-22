@@ -20,35 +20,37 @@ import { LOCAL_EXTENDED_PATHS, NETWORK_PATHS } from "../helpers/unc-fixtures.js"
 describe("assertSafeWorkspacePath — UNC is rejected before any syscall (#1417)", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(
-    NETWORK_PATHS,
-  )("%s: refuses %s without calling lstat or realpath", async (_label, candidate) => {
-    const lstat = vi.spyOn(fsp, "lstat");
-    const realpath = vi.spyOn(fsp, "realpath");
+  it.each(NETWORK_PATHS)(
+    "%s: refuses %s without calling lstat or realpath",
+    async (_label, candidate) => {
+      const lstat = vi.spyOn(fsp, "lstat");
+      const realpath = vi.spyOn(fsp, "realpath");
 
-    await expect(assertSafeWorkspacePath(candidate, os.tmpdir())).resolves.toBeNull();
+      await expect(assertSafeWorkspacePath(candidate, os.tmpdir())).resolves.toBeNull();
 
-    expect(lstat).not.toHaveBeenCalled();
-    expect(realpath).not.toHaveBeenCalled();
-  });
+      expect(lstat).not.toHaveBeenCalled();
+      expect(realpath).not.toHaveBeenCalled();
+    },
+  );
 
-  it.each(
-    LOCAL_EXTENDED_PATHS,
-  )("still permits the extended-length LOCAL prefix it deliberately allows: %s", async (_label, candidate) => {
-    // `\?\C:\…` is NOT network. This guard permits it on purpose — Tauri's
-    // path APIs hand it back, and containment under %LOCALAPPDATA% is what
-    // confines it. Sharing the stricter shared predicate here would reject
-    // legitimate local paths, so (a0) reuses this file's own `isUncPath`.
-    //
-    // These paths ARE still rejected — the fixtures do not exist, so the step
-    // (a) walk fails closed before `realpath`. The point is *where*: reaching
-    // the lstat walk at all proves (a0) passed them through rather than
-    // refusing the prefix outright, which is what a shared-predicate
-    // "cleanup" — or a narrower allowlist — would silently break.
-    const lstat = vi.spyOn(fsp, "lstat");
-    await assertSafeWorkspacePath(candidate, os.tmpdir());
-    expect(lstat).toHaveBeenCalled();
-  });
+  it.each(LOCAL_EXTENDED_PATHS)(
+    "still permits the extended-length LOCAL prefix it deliberately allows: %s",
+    async (_label, candidate) => {
+      // `\?\C:\…` is NOT network. This guard permits it on purpose — Tauri's
+      // path APIs hand it back, and containment under %LOCALAPPDATA% is what
+      // confines it. Sharing the stricter shared predicate here would reject
+      // legitimate local paths, so (a0) reuses this file's own `isUncPath`.
+      //
+      // These paths ARE still rejected — the fixtures do not exist, so the step
+      // (a) walk fails closed before `realpath`. The point is *where*: reaching
+      // the lstat walk at all proves (a0) passed them through rather than
+      // refusing the prefix outright, which is what a shared-predicate
+      // "cleanup" — or a narrower allowlist — would silently break.
+      const lstat = vi.spyOn(fsp, "lstat");
+      await assertSafeWorkspacePath(candidate, os.tmpdir());
+      expect(lstat).toHaveBeenCalled();
+    },
+  );
 
   it("walks ancestors shallowest-first", async () => {
     // Ascending touched the deepest component first — the one carrying the

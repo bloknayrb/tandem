@@ -108,20 +108,18 @@ describe("markdownToSlice", () => {
   // validator drops the link token entirely (preferred — link mark never
   // created) or our `sanitizeHref` returns null at attr-build time. Both
   // outcomes are safe; assert no link mark carries the literal unsafe href.
-  it.each([
-    "javascript:alert(1)",
-    "JavaScript:alert(1)",
-    "data:text/html,x",
-    "vbscript:msgbox",
-  ])("blocks unsafe link scheme: %s", (href) => {
-    const doc = parseToDoc(`click [me](${href})`);
-    const observedHrefs: unknown[] = [];
-    doc.descendants((node) => {
-      const link = node.marks.find((m) => m.type.name === "link");
-      if (link) observedHrefs.push(link.attrs.href);
-    });
-    expect(observedHrefs.every((h) => h !== href && h !== href.toLowerCase())).toBe(true);
-  });
+  it.each(["javascript:alert(1)", "JavaScript:alert(1)", "data:text/html,x", "vbscript:msgbox"])(
+    "blocks unsafe link scheme: %s",
+    (href) => {
+      const doc = parseToDoc(`click [me](${href})`);
+      const observedHrefs: unknown[] = [];
+      doc.descendants((node) => {
+        const link = node.marks.find((m) => m.type.name === "link");
+        if (link) observedHrefs.push(link.attrs.href);
+      });
+      expect(observedHrefs.every((h) => h !== href && h !== href.toLowerCase())).toBe(true);
+    },
+  );
 
   it("preserves a safe link href when adjacent to an unsafe one", () => {
     const doc = parseToDoc("[good](https://example.com) and [bad](javascript:alert(1))");

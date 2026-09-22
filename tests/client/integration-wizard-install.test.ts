@@ -252,16 +252,17 @@ describe("IntegrationWizardModal — empty-state headline", () => {
   it.each([
     { presence: "INSTALLED_ON_PATH" as ClaudeCliPresence, label: "INSTALLED_ON_PATH" },
     { presence: "INSTALLED_NOT_ON_PATH" as ClaudeCliPresence, label: "INSTALLED_NOT_ON_PATH" },
-  ])("says Claude is installed when presence is $label but no target exists yet", async ({
-    presence,
-  }) => {
-    cliStub.presence = presence;
-    const { container } = mount();
-    await tick();
-    expect(headline(container)).toBe(
-      "Claude Code is installed, but hasn't connected to Tandem yet.",
-    );
-  });
+  ])(
+    "says Claude is installed when presence is $label but no target exists yet",
+    async ({ presence }) => {
+      cliStub.presence = presence;
+      const { container } = mount();
+      await tick();
+      expect(headline(container)).toBe(
+        "Claude Code is installed, but hasn't connected to Tandem yet.",
+      );
+    },
+  );
 
   it.each([
     { presence: "NOT_INSTALLED" as ClaudeCliPresence, label: "NOT_INSTALLED" },

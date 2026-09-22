@@ -189,21 +189,21 @@ function ruleBody(css: string, selector: string): string | null {
 }
 
 describe("notification messages can break inside a long path (#1269)", () => {
-  it.each(SURFACES)("$selector declares a breaking overflow-wrap in source", ({
-    file,
-    selector,
-  }) => {
-    const css = styleBlock(file);
-    const body = ruleBody(css, selector);
-    expect(body, `${selector} rule not found in ${file}`).not.toBeNull();
-    const value = (body as string).match(/overflow-wrap\s*:\s*([a-z-]+)/)?.[1];
-    expect(
-      value,
-      `${selector} in ${file} has no overflow-wrap — a path with no space in it ` +
-        `will render at full min-content width and leave the box`,
-    ).toBeDefined();
-    expect(BREAKING_VALUES).toContain(value);
-  });
+  it.each(SURFACES)(
+    "$selector declares a breaking overflow-wrap in source",
+    ({ file, selector }) => {
+      const css = styleBlock(file);
+      const body = ruleBody(css, selector);
+      expect(body, `${selector} rule not found in ${file}`).not.toBeNull();
+      const value = (body as string).match(/overflow-wrap\s*:\s*([a-z-]+)/)?.[1];
+      expect(
+        value,
+        `${selector} in ${file} has no overflow-wrap — a path with no space in it ` +
+          `will render at full min-content width and leave the box`,
+      ).toBeDefined();
+      expect(BREAKING_VALUES).toContain(value);
+    },
+  );
 
   it.each(SURFACES)("$selector keeps it through lightningcss", ({ file, selector }) => {
     const compiled = minify(styleBlock(file), file);

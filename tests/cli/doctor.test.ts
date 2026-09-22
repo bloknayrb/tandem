@@ -2851,16 +2851,16 @@ describe("evaluateNodeVersion", () => {
     expect(outcome.status).toBe("pass");
   });
 
-  it.each([
-    "v25.0.0-nightly20250101abcdef",
-    "v23.0.0-rc.1",
-  ])("parses the leading numeric triplet of a nightly/RC build (%s) rather than failing closed on it", (version) => {
-    // The parser is prefix-anchored only (no trailing `$`) precisely so a
-    // build tag suffix doesn't make an otherwise-current Node version
-    // unparseable. Both of these are well above the floor once parsed.
-    const outcome = evaluateNodeVersion(version);
-    expect(outcome.status).toBe("pass");
-  });
+  it.each(["v25.0.0-nightly20250101abcdef", "v23.0.0-rc.1"])(
+    "parses the leading numeric triplet of a nightly/RC build (%s) rather than failing closed on it",
+    (version) => {
+      // The parser is prefix-anchored only (no trailing `$`) precisely so a
+      // build tag suffix doesn't make an otherwise-current Node version
+      // unparseable. Both of these are well above the floor once parsed.
+      const outcome = evaluateNodeVersion(version);
+      expect(outcome.status).toBe("pass");
+    },
+  );
 
   it("fails closed on an unparseable version string (preserves the pre-existing NaN-fails behavior)", () => {
     // Deliberately a `fail` while a parseable below-floor version is only a

@@ -163,22 +163,22 @@ describe("link target attribute", () => {
     expect(anchor?.getAttribute("target")).toBe("_blank");
   });
 
-  it.each([
-    "./notes.md",
-    "docs/spec.md",
-  ])("still carries rel and the hover title on the internal link %s", (href) => {
-    // Positive control: proves the anchor really went through
-    // LinkWithHoverTitle's post-processing rather than failing to render a
-    // link at all, which would satisfy the absence-assertions above.
-    //
-    // `docs/spec.md` additionally pins the SECOND symptom of #1377 that the
-    // issue body omits: with `href=""` the `attrs.href.length > 0` gate in
-    // editor-extensions.ts also suppressed the tooltip, so a href-only fix
-    // would pass every other assertion in this file.
-    const anchor = renderLink(href);
-    expect(anchor?.getAttribute("rel")).toBe("noopener noreferrer");
-    expect(anchor?.getAttribute("title")).toBe(href);
-  });
+  it.each(["./notes.md", "docs/spec.md"])(
+    "still carries rel and the hover title on the internal link %s",
+    (href) => {
+      // Positive control: proves the anchor really went through
+      // LinkWithHoverTitle's post-processing rather than failing to render a
+      // link at all, which would satisfy the absence-assertions above.
+      //
+      // `docs/spec.md` additionally pins the SECOND symptom of #1377 that the
+      // issue body omits: with `href=""` the `attrs.href.length > 0` gate in
+      // editor-extensions.ts also suppressed the tooltip, so a href-only fix
+      // would pass every other assertion in this file.
+      const anchor = renderLink(href);
+      expect(anchor?.getAttribute("rel")).toBe("noopener noreferrer");
+      expect(anchor?.getAttribute("title")).toBe(href);
+    },
+  );
 });
 
 describe("the premise of #1377 (Tiptap's default guard)", () => {
@@ -191,14 +191,12 @@ describe("the premise of #1377 (Tiptap's default guard)", () => {
   // outcome is unchanged, and the end-to-end rows below still pin it. If a
   // future upgrade narrows the default again, these flip back and the union
   // earns its keep twice over — either direction stays green here.
-  it.each([
-    "docs/spec.md",
-    "a/b.md",
-    "Docs/spec.md",
-    "example.com/path",
-  ])("v3 accepts %j itself; the union's schemeless half carries it", (href) => {
-    expect(tiptapDefaultIsAllowedUri(href, [])).toBeTruthy();
-  });
+  it.each(["docs/spec.md", "a/b.md", "Docs/spec.md", "example.com/path"])(
+    "v3 accepts %j itself; the union's schemeless half carries it",
+    (href) => {
+      expect(tiptapDefaultIsAllowedUri(href, [])).toBeTruthy();
+    },
+  );
 
   it.each([
     "notes.md",

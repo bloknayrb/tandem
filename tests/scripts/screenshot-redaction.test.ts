@@ -234,12 +234,12 @@ describe("redactHomePaths — ordinary UI copy is not collateral", () => {
     expect(collapse(read(source))).toContain(collapse(copy));
   });
 
-  it.each(COPY_SAMPLES)("leaves it byte-identical when the account is $account", ({
-    account,
-    copy,
-  }) => {
-    expect(redact(`/home/${account}`, copy)).toBe(copy);
-  });
+  it.each(COPY_SAMPLES)(
+    "leaves it byte-identical when the account is $account",
+    ({ account, copy }) => {
+      expect(redact(`/home/${account}`, copy)).toBe(copy);
+    },
+  );
 
   it("redacts the path and leaves the prose, in the same text run", () => {
     // One text node, both halves: this is what `.itc-status` looks like when the

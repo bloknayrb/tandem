@@ -404,22 +404,23 @@ describe("findCoworkWorkspaces reparse-point handling", () => {
     _lstatSpy.mockImplementation(async (p: string) => (p === plantedAt ? junction() : dir()));
   }
 
-  it.each(
-    NETWORK_PATHS,
-  )("refuses a UNC %%LOCALAPPDATA%% (%s) without reading anything", async (_label, hostile) => {
-    // The screen the file's own docblock calls the consequential one: every
-    // path here is a `path.join` off this value, and the scrub runs during an
-    // MSIX uninstall that can be elevated. Nothing covered it, and deleting
-    // `usableLocalAppData`'s `assertPathSafe` left the whole suite green.
-    plantJunction(null);
-    vi.stubEnv("LOCALAPPDATA", hostile);
-    const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
+  it.each(NETWORK_PATHS)(
+    "refuses a UNC %%LOCALAPPDATA%% (%s) without reading anything",
+    async (_label, hostile) => {
+      // The screen the file's own docblock calls the consequential one: every
+      // path here is a `path.join` off this value, and the scrub runs during an
+      // MSIX uninstall that can be elevated. Nothing covered it, and deleting
+      // `usableLocalAppData`'s `assertPathSafe` left the whole suite green.
+      plantJunction(null);
+      vi.stubEnv("LOCALAPPDATA", hostile);
+      const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
 
-    expect(await findCoworkWorkspaces(logger as never)).toEqual([]);
-    expect(_readdirSpy).not.toHaveBeenCalled();
-    expect(_lstatSpy).not.toHaveBeenCalled();
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("LOCALAPPDATA"));
-  });
+      expect(await findCoworkWorkspaces(logger as never)).toEqual([]);
+      expect(_readdirSpy).not.toHaveBeenCalled();
+      expect(_lstatSpy).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("LOCALAPPDATA"));
+    },
+  );
 
   it("descends a clean chain and returns the validated workspace", async () => {
     plantJunction(null);

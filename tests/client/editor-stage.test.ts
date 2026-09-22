@@ -240,14 +240,12 @@ describe("resolveSideMode — presence-collapse (non-docx) vs docx exemption", (
       why: "docx exempt — no collapse",
     },
     { base: "off", isDocx: true, hasPending: true, expected: "off", why: "docx follows base only" },
-  ])("base=$base docx=$isDocx pending=$hasPending → $expected ($why)", ({
-    base,
-    isDocx,
-    hasPending,
-    expected,
-  }) => {
-    expect(resolveSideMode(base, isDocx, hasPending)).toBe(expected);
-  });
+  ])(
+    "base=$base docx=$isDocx pending=$hasPending → $expected ($why)",
+    ({ base, isDocx, hasPending, expected }) => {
+      expect(resolveSideMode(base, isDocx, hasPending)).toBe(expected);
+    },
+  );
 
   it("non-docx full mode: the four presence combos (both/left/right/neither)", () => {
     const base: MarginMode = "full";

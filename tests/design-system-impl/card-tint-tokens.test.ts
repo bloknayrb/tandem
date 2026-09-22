@@ -33,20 +33,21 @@ const INDEX_HTML = readFileSync(join(import.meta.dirname, "..", "..", "index.htm
 const AUTHORS: Record<Annotation["author"], true> = { user: true, claude: true, import: true };
 
 describe("card tint tokens are declared", () => {
-  it.each(
-    Object.keys(AUTHORS) as Annotation["author"][],
-  )("%s's tint token exists in index.html", (author) => {
-    const token = getCardTint(author);
-    const name = /^var\((--[a-z0-9-]+)\)$/.exec(token)?.[1];
-    expect(
-      name,
-      `getCardTint("${author}") returned ${token}, which is not a bare var()`,
-    ).toBeTruthy();
-    // A DECLARATION (`--x:`), not merely a mention — a token that only ever
-    // appears inside some other rule's `var(--x)` is exactly the broken case.
-    expect(
-      INDEX_HTML.includes(`${name}:`),
-      `${name} is never declared in index.html, so a ${author} card renders with no background`,
-    ).toBe(true);
-  });
+  it.each(Object.keys(AUTHORS) as Annotation["author"][])(
+    "%s's tint token exists in index.html",
+    (author) => {
+      const token = getCardTint(author);
+      const name = /^var\((--[a-z0-9-]+)\)$/.exec(token)?.[1];
+      expect(
+        name,
+        `getCardTint("${author}") returned ${token}, which is not a bare var()`,
+      ).toBeTruthy();
+      // A DECLARATION (`--x:`), not merely a mention — a token that only ever
+      // appears inside some other rule's `var(--x)` is exactly the broken case.
+      expect(
+        INDEX_HTML.includes(`${name}:`),
+        `${name} is never declared in index.html, so a ${author} card renders with no background`,
+      ).toBe(true);
+    },
+  );
 });
