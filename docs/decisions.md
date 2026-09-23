@@ -2097,10 +2097,11 @@ since given Tandem a go-ahead (see *Licence record*), which is why this ADR exis
   License" (version 2026-07-14; the package's `NOTICE.md` gives its SHA-256 as
   `cb750acaec9e1fa7b106d326d0a7db0f3811c022048b09affc73842258419172`),
   about 103 MB unpacked. This package does the actual OOXML work.
-- `@superdoc-dev/sdk@1.21.3` — a headless Node SDK that drives a per-platform native binary
-  (`superdoc.exe` is 141 MB on Windows x64), shipped as optional dependencies for win-x64,
-  darwin-x64/arm64 and linux-x64/arm64. The SDK's own `package.json` has **no `license` field**;
-  the platform packages carry AGPL-3.0 text.
+- `@superdoc/sdk@2.14.0` (AGPL-3.0; the 1.x line was published as `@superdoc-dev/sdk`) — a
+  headless Node SDK that drives a per-platform native binary, shipped as optional dependencies
+  for windows-x64, darwin-x64/arm64 and linux-x64/arm64. The linux-x64 binary package is 223 MB
+  unpacked and licensed "SEE LICENSE IN bin/LICENSES.md", so its terms are read from that file,
+  not from the SDK's AGPL field.
 - v2 has stopped treating ProseMirror as its source of truth. Its ProseMirror surface is
   deprecated in favour of an `editor.doc` "Document API".
 - **Inferred from v1 docs, not yet confirmed on v2:** telemetry is on by default (a POST to

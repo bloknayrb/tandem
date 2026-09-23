@@ -99,17 +99,22 @@ Those move to the implementation's Windows smoke test.
    - Its own worktree (`../tandem-superdoc-spike`, branch `spike/superdoc-engine`) off step 1's
      branch, so the spike does not wait for that PR to merge. On the host, `npm ci --ignore-scripts` from master's lockfile, then
      `npx husky`, and assert `.husky/_/pre-commit` exists before the first commit.
-   - The engine goes into that branch's `package.json`. Its lockfile is produced on the host with
-     `npm install --package-lock-only --ignore-scripts`, which writes metadata only and unpacks
-     nothing.
+   - The engine goes into its own package, `scripts/spikes/superdoc/engine/`, with its own
+     `package.json` and lockfile, not into the root one. The root lockfile stays master's, and
+     the engine's peer ranges (`yjs`, `@hocuspocus/provider` ^2) cannot fight Tandem's. A second
+     `yjs` copy is harmless because only plain data crosses between the two. The lockfile is
+     produced on the host with `npm install --package-lock-only --ignore-scripts`, which writes
+     metadata only and unpacks nothing.
    - Spike code lives under `scripts/spikes/superdoc/` and is not wired into `src/`.
    - **The branch is never pushed and never opened as a PR.** `ci.yml` and
      `claude-code-review.yml` run on PRs in a public repo, and CI's `npm ci` would install the
      engine.
-3. **Pin versions.** `superdoc@2.17.0`, `@superdoc/docx-engine@0.16.0` and
-   `@superdoc-dev/sdk@1.21.3`, exact. The `acquired` build hashes the packed
-   `DOCX-ENGINE-LICENSE.md`; it must equal
-   `cb750acaec9e1fa7b106d326d0a7db0f3811c022048b09affc73842258419172`, or stop.
+3. **Pin versions.** `superdoc@2.17.0`, `@superdoc/docx-engine@0.16.0`, `@superdoc/sdk@2.14.0`
+   and its platform binary `@superdoc/sdk-linux-x64@2.14.0`, exact. (The SDK moved from
+   `@superdoc-dev/sdk`, whose last 1.x this plan first named.) The `acquired` build hashes the
+   packed `DOCX-ENGINE-LICENSE.md`; it must equal
+   `cb750acaec9e1fa7b106d326d0a7db0f3811c022048b09affc73842258419172`, or stop. The binary's
+   licence is `bin/LICENSES.md`; its hash is recorded, and it is read before host B runs.
 4. **Legacy baseline**, in the `ready` image so both pipelines run on the same machine. For every
    corpus and GenOffice fixture except the hostile ones (the 400 KB OOM file belongs to S8 only),
    spawn one fresh container per fixture running import → the fixed
@@ -133,10 +138,13 @@ Those move to the implementation's Windows smoke test.
 ## Tier 1 — S1: can it run headless inside the sidecar? (kill gate)
 
 **Two possible hosts:**
-- **A:** the `superdoc` package in Node, which brings in `jsdom` and `y-websocket`.
-- **B:** `@superdoc-dev/sdk`, which drives a native binary.
+- **A:** the `superdoc` package in Node, which brings in `jsdom` and `y-websocket`. **NOT RUN:**
+  SuperDoc documents no headless Node use of this package, and rule 3 forbids improvising one.
+- **B:** `@superdoc/sdk`, which drives a native binary.
 
-**Where.** A `--network none` container from `ready`, with documented telemetry off.
+**Where.** A `--network none` container from `ready`, with documented telemetry off. The only
+documented switch is the CLI's: `SUPERDOC_TELEMETRY=0` (or `--no-telemetry`). Every SDK run sets
+the variable; whether the SDK honours it is S2's question, not an assumption.
 
 **Method.** Run exactly the setup step 4 procedure for each host, then check:
 
