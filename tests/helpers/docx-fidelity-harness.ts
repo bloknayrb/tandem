@@ -27,7 +27,10 @@ import * as Y from "yjs";
 import type { Capture, NodeSnapshot } from "../../src/server/file-io/docx-capture.js";
 import { captureModel } from "../../src/server/file-io/docx-capture.js";
 import { type FormatAdapter, getAdapter } from "../../src/server/file-io/index.js";
+import { refreshAllRanges } from "../../src/server/positions.js";
+import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { transactForTest } from "../../src/shared/origins.js";
+import type { Annotation } from "../../src/shared/types.js";
 
 export type {
   AnnotationSnapshot,
@@ -94,6 +97,13 @@ export async function runRoundTrip(bytes: Buffer, opts: RoundTripOptions = {}): 
   if (opts.edit) {
     const edit = opts.edit;
     transactForTest(first.doc, () => edit(first.doc));
+    // `captureModel` scores STORED flat offsets, and an edit that shifts text
+    // leaves them pointing at pre-edit positions until something refreshes them
+    // from their RelativePositions. Export refreshes its own read-only copy, so
+    // without this gen2 would carry true anchors and gen1 stale ones: drift the
+    // harness caused, not the adapter.
+    const map = first.doc.getMap(Y_MAP_ANNOTATIONS);
+    refreshAllRanges([...map.values()] as Annotation[], first.doc, map);
   }
   const exported = await adapter.saveBinary(first.doc, bytes);
   const second = await importGeneration(adapter, Buffer.from(exported));

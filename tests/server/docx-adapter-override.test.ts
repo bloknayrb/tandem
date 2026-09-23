@@ -6,11 +6,12 @@
  * imported `getAdapter` through another route) would let a later test "pass"
  * against the production adapter while believing it drove another. So each row
  * opens a real `.docx` on disk through one path and asserts the COUNTING adapter
- * ran, and the negative row asserts it does not run once the hook is cleared.
+ * ran. The last row installs an adapter whose parse throws, so the open fails
+ * only if the override is live, and then clears the hook and opens cleanly.
  *
- * "Restart" is not its own code path: a restart re-opens through `openFromDisk`
- * with the durable envelope already on disk, which the "reopen after close" row
- * covers.
+ * A process restart is not covered here: it re-opens through `openFromDisk`,
+ * which the rows below reach, but with a fresh module graph this file cannot
+ * build.
  */
 
 import fs from "node:fs/promises";
@@ -110,7 +111,7 @@ describe("the .docx adapter override reaches each real open path", () => {
     expect(calls).toEqual({ parse: 1, apply: 1 });
   });
 
-  it("reopen after close, which is the restart path", async () => {
+  it("reopen after the document leaves the registry", async () => {
     const filePath = await writeFixture();
     await openFromDisk(filePath);
     removeDoc(docIdFromPath(filePath));
@@ -138,12 +139,17 @@ describe("the .docx adapter override reaches each real open path", () => {
     expect(calls).toEqual({ parse: 1, apply: 1 });
   });
 
-  it("does not run once the hook is cleared (positive control for the rows above)", async () => {
+  it("an installed adapter decides the open, and clearing the hook restores production", async () => {
     const filePath = await writeFixture();
-    const { calls } = countingAdapter();
-    // The counting adapter exists but is NOT installed: the open must not touch it.
+    docxHook.adapter = {
+      ...getAdapter("docx"),
+      async parse() {
+        throw new Error("override adapter reached");
+      },
+    };
+    await expect(openFromDisk(filePath)).rejects.toThrow("override adapter reached");
+    docxHook.adapter = undefined;
     await openFromDisk(filePath);
-    expect(calls).toEqual({ parse: 0, apply: 0 });
     expect(getOpenDocs().has(docIdFromPath(filePath))).toBe(true);
   });
 });

@@ -20,6 +20,8 @@
  */
 
 import { describe, expect, it } from "vitest";
+import * as Y from "yjs";
+import { getAdapter } from "../../src/server/file-io/index.js";
 import * as corpus from "../helpers/docx-corpus.js";
 import {
   hasNode,
@@ -391,4 +393,49 @@ describe("docx round-trip fidelity scoreboard (0d)", () => {
       fixture.check(rt);
     });
   }
+});
+
+describe("runRoundTrip options", () => {
+  /** Inserts at the start of the first paragraph, shifting every later offset. */
+  function prependToFirstParagraph(text: string) {
+    return (doc: Y.Doc): void => {
+      const paragraph = doc.getXmlFragment("default").get(0);
+      if (!(paragraph instanceof Y.XmlElement)) throw new Error("fixture has no first paragraph");
+      const run = paragraph.get(0);
+      if (!(run instanceof Y.XmlText)) throw new Error("first paragraph has no text run");
+      run.insert(0, text);
+    };
+  }
+
+  it("scores gen1 after an edit that shifts text ahead of a comment", async () => {
+    const rt = await runRoundTrip(await corpus.buildComment(), {
+      edit: prependToFirstParagraph("Inserted. "),
+    });
+    expect(rt.gen1.flatText.startsWith("Inserted. Before ")).toBe(true);
+    // Without the harness refreshing stored ranges after the edit, gen1 scores
+    // the pre-edit offsets and reads ten characters to the left of the comment.
+    expect(rt.gen1.annotations.map((a) => a.anchorText)).toEqual(["anchored text"]);
+    expect(rt.gen2.annotations.map((a) => a.anchorText)).toEqual(["anchored text"]);
+    expectStable(rt);
+  });
+
+  it("drives the adapter it is given", async () => {
+    const real = getAdapter("docx");
+    const calls = { parse: 0, save: 0 };
+    const rt = await runRoundTrip(await corpus.buildComment(), {
+      adapter: {
+        ...real,
+        async parse(content) {
+          calls.parse++;
+          return real.parse(content);
+        },
+        async saveBinary(doc) {
+          calls.save++;
+          return real.saveBinary!(doc);
+        },
+      },
+    });
+    expect(calls).toEqual({ parse: 2, save: 1 });
+    expect(rt.gen2.annotations).toHaveLength(1);
+  });
 });
