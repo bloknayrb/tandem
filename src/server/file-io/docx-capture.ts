@@ -65,6 +65,16 @@ export interface AnnotationSnapshot {
   anchorText: string;
   /** Whether the range is CRDT-anchorable (not landing on a separator/prefix). */
   fullyAnchored: boolean;
+  /**
+   * Imported Word comments only: the Word author (`importSource.author`) and the
+   * comment body. A scoreboard that compares generations of an import it cannot
+   * key by id — the id hashes the offsets and is re-minted when they move — keys
+   * by these instead, because the anchor is the thing under test. The Word date
+   * is deliberately absent: a comment with no `w:date` is stamped `Date.now()`
+   * at import, so it differs between generations of the same file.
+   */
+  wordAuthor?: string;
+  body?: string;
 }
 
 export interface Capture {
@@ -199,6 +209,10 @@ export function captureModel(doc: Y.Doc): Capture {
     // refreshed range can legitimately end mid-pair (Word's own offsets are
     // UTF-16) — rejecting it here would score a real comment as lost. The new
     // surrogate rule is for the caller-supplied tool boundary (#1752).
+    const importKey =
+      ann.author === "import"
+        ? { wordAuthor: ann.importSource?.author ?? "", body: ann.content ?? "" }
+        : {};
     const resolved = anchoredRange(doc, ann.range.from, ann.range.to, undefined, {
       allowEmpty: true,
       surrogates: "ignore",
@@ -216,6 +230,7 @@ export function captureModel(doc: Y.Doc): Capture {
         to: -1,
         anchorText: "",
         fullyAnchored: false,
+        ...importKey,
       });
       continue;
     }
@@ -227,6 +242,7 @@ export function captureModel(doc: Y.Doc): Capture {
       to,
       anchorText: flatText.slice(from, to),
       fullyAnchored: resolved.fullyAnchored,
+      ...importKey,
     });
   }
   annotations.sort((a, b) => a.from - b.from || a.to - b.to);

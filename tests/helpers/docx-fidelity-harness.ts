@@ -1,8 +1,8 @@
 /**
  * .docx round-trip fidelity harness (Phase 0d — the "scoreboard").
  *
- * Drives a .docx buffer through the REAL production adapter (`getAdapter("docx")`)
- * — import (mammoth → html → Y.Doc + Word-comment injection), export
+ * Drives a .docx buffer through the REAL production adapter (`getAdapter("docx")`;
+ * a caller may pass another, see `RoundTripOptions`) — import (mammoth → html → Y.Doc + Word-comment injection), export
  * (Y.Doc → .docx), then re-import the produced buffer — and captures a
  * structure-and-anchor-aware model of each generation so a test can assert:
  *
@@ -26,7 +26,7 @@
 import * as Y from "yjs";
 import type { Capture, NodeSnapshot } from "../../src/server/file-io/docx-capture.js";
 import { captureModel } from "../../src/server/file-io/docx-capture.js";
-import { getAdapter } from "../../src/server/file-io/index.js";
+import { type FormatAdapter, getAdapter } from "../../src/server/file-io/index.js";
 import { transactForTest } from "../../src/shared/origins.js";
 
 export type {
@@ -49,8 +49,31 @@ export interface RoundTrip {
   importWarnings: string[];
 }
 
-async function importGeneration(bytes: Buffer): Promise<{ doc: Y.Doc; warnings: string[] }> {
-  const adapter = getAdapter("docx");
+/**
+ * The adapter shape the harness drives. It widens `saveBinary` to accept the
+ * original bytes, which a splicing engine (ADR-052) needs and today's
+ * regenerating export ignores, without touching production's `FormatAdapter`.
+ * `getAdapter("docx")` still assigns to it.
+ */
+export type HarnessAdapter = Omit<FormatAdapter, "saveBinary"> & {
+  saveBinary?(doc: Y.Doc, original: Buffer): Promise<Buffer>;
+};
+
+export interface RoundTripOptions {
+  /** Defaults to the production adapter, `getAdapter("docx")`. */
+  adapter?: HarnessAdapter;
+  /**
+   * Applied to the first generation after import and before export, and `gen1`
+   * is captured after it. Without an edit, a splicing save of zero changes
+   * returns the input bytes, so the stability gate would pass by construction.
+   */
+  edit?: (doc: Y.Doc) => void;
+}
+
+async function importGeneration(
+  adapter: HarnessAdapter,
+  bytes: Buffer,
+): Promise<{ doc: Y.Doc; warnings: string[] }> {
   const prepared = await adapter.parse(bytes);
   const doc = new Y.Doc();
   // adapter.apply runs htmlToYDoc + injectCommentsAsAnnotations; the latter
@@ -63,13 +86,17 @@ async function importGeneration(bytes: Buffer): Promise<{ doc: Y.Doc; warnings: 
   return { doc, warnings };
 }
 
-export async function runRoundTrip(bytes: Buffer): Promise<RoundTrip> {
-  const adapter = getAdapter("docx");
+export async function runRoundTrip(bytes: Buffer, opts: RoundTripOptions = {}): Promise<RoundTrip> {
+  const adapter: HarnessAdapter = opts.adapter ?? getAdapter("docx");
   if (!adapter.saveBinary) throw new Error("docx adapter is missing saveBinary");
 
-  const first = await importGeneration(bytes);
-  const exported = await adapter.saveBinary(first.doc);
-  const second = await importGeneration(Buffer.from(exported));
+  const first = await importGeneration(adapter, bytes);
+  if (opts.edit) {
+    const edit = opts.edit;
+    transactForTest(first.doc, () => edit(first.doc));
+  }
+  const exported = await adapter.saveBinary(first.doc, bytes);
+  const second = await importGeneration(adapter, Buffer.from(exported));
 
   const gen1 = captureModel(first.doc);
   const gen2 = captureModel(second.doc);
