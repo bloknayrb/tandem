@@ -49,8 +49,10 @@ export const REMAPPABLE_SHORTCUT_IDS = [
   "annotation-prev",
   "select-block",
   "new-tab-menu",
-  // Appended last on purpose: REMAPPABLE_SHORTCUT_IDS order is the dedupe
-  // priority, so a user who already bound Ctrl+Alt+F elsewhere keeps it.
+  // Appended last: REMAPPABLE_SHORTCUT_IDS order is the dedupe priority when two
+  // OVERRIDES share a chord, so a new id should never outrank existing ones. (A
+  // legacy override on Ctrl+Alt+F beats this id's DEFAULT regardless of order —
+  // the override-first loop in `matchShortcut` handles that.)
   "toggle-formatting-bar",
 ] as const;
 

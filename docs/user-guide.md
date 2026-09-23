@@ -426,7 +426,7 @@ Press `?` to open the in-app shortcuts reference at any time — it always refle
 | `Enter` | Send message (chat panel) |
 | `?` | Show/hide keyboard shortcuts |
 
-> **On Hungarian, Czech, Slovak, Croatian, Slovenian, Bosnian and Serbian (Latin) keyboards, `AltGr+F` types `[`.** Windows and Linux report AltGr as `Ctrl+Alt`, so Tandem ignores `Ctrl+Alt+F` when the browser flags the press as AltGr. If `[` still toggles the formatting bar instead of typing, remap **Toggle formatting bar** in **Settings → Shortcuts**.
+> **On Hungarian, Czech, Slovak, Croatian, Slovenian, Bosnian and Serbian (Latin) keyboards, `AltGr+F` types `[`.** Windows (and some Linux setups) report AltGr as `Ctrl+Alt`, so Tandem ignores `Ctrl+Alt+F` when the browser flags the press as AltGr. If `[` still toggles the formatting bar instead of typing, remap **Toggle formatting bar** in **Settings → Shortcuts**.
 
 > **In the browser build, `Ctrl+N`, `Ctrl+T` and `Ctrl+W` belong to the browser** — it opens a window, opens a tab, or closes your Tandem tab before the page ever sees the key. Use the **+** button in the tab bar and the command palette (`Ctrl+Shift+P`) instead, or remap New Scratchpad, New tab menu and Close active tab in **Settings → Shortcuts**. The desktop app owns its own window, so all three work there.
 

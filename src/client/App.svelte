@@ -1048,7 +1048,8 @@ function setAuthorshipVisible(visible: boolean): void {
 }
 
 // Show/hide the floating formatting bar — shared by the palette action, the
-// selection popup's swap button and the Ctrl+Alt+F shortcut. Hiding unmounts
+// selection popup's swap button, the bar's own hide button (only reachable while
+// visible, so it always hides) and the Ctrl+Alt+F shortcut. Hiding unmounts
 // the bar (`{#if}` below), so if focus was on one of its buttons it would fall
 // to <body>; hand it back to the editor instead.
 function toggleFormattingBar(): void {
@@ -1747,12 +1748,14 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   },
   "toggle-formatting-bar": (e) => {
     // Deliberately stricter than `toggle-authorship`, which fires everywhere:
-    // AltGr arrives as Ctrl+Alt on Windows/Linux, and AltGr+F types `[` on
-    // hu/cs/sk/hr/sl/bs/sr-Latin. `shouldIgnoreShortcut` keeps INPUT/TEXTAREA
-    // typing intact; the AltGraph check is what protects the contenteditable
-    // editor, which that guard does not cover. Not verified on every
-    // OS/browser — affected users can also remap in Settings → Shortcuts.
-    if (e.getModifierState?.("AltGraph")) return;
+    // AltGr arrives as Ctrl+Alt on Windows (and some Linux setups), and AltGr+F
+    // types `[` on hu/cs/sk/hr/sl/bs/sr-Latin. `shouldIgnoreShortcut` keeps
+    // INPUT/TEXTAREA typing intact; the AltGraph check is what protects the
+    // contenteditable editor, which that guard does not cover. `!metaKey`
+    // because Firefox/macOS may flag Option as AltGraph, which would make ⌘⌥F
+    // dead. Not verified on every OS/browser — affected users can remap in
+    // Settings → Shortcuts.
+    if (!e.metaKey && e.getModifierState?.("AltGraph")) return;
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
     toggleFormattingBar();
@@ -2419,7 +2422,7 @@ const shouldShowModelPicker = $derived(
         onToggleSourceView={documentWorkspace.canSourceView || documentWorkspace.inSourceView
           ? () => void documentWorkspace.requestToggleSourceView()
           : null}
-        onHide={() => settingsState.updateSettings({ formattingBarVisible: false })}
+        onHide={toggleFormattingBar}
         onNotify={(n) => notifications.push(n)}
       />
     {/if}

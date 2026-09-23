@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Keyboard shortcut for the formatting bar.** `Ctrl+Alt+F` shows or hides the floating formatting bar. You can remap it in **Settings → Shortcuts**, and the Help modal shows your current key. On keyboards where `AltGr+F` types `[` (Hungarian, Czech, Slovak, Croatian, Slovenian, Bosnian, Serbian Latin), Tandem skips presses the browser reports as AltGr. If yours still collides, remap the shortcut.
+- **Keyboard shortcut for the formatting bar.** `Ctrl+Alt+F` shows or hides the floating formatting bar. You can remap it in **Settings → Shortcuts**, and the Help modal shows your current key. On keyboards where `AltGr+F` types `[` (Hungarian, Czech, Slovak, Croatian, Slovenian, Bosnian, Serbian Latin), Tandem skips presses the browser reports as AltGr (without ⌘). If yours still collides, remap the shortcut.
 
 ## [0.27.0] - 2026-09-21
 
