@@ -255,7 +255,7 @@ describe("matchShortcut — IME composition guard", () => {
 describe("matchShortcut — AltGr must not fire app shortcuts (#1777 item 2)", () => {
   // Windows and Linux deliver AltGr as `ctrlKey && altKey`, so the ungated
   // legacy branches swallowed ordinary characters on pl/ro/cs/de layouts. Every
-  // branch in the ctrl/meta block now carries `!e.altKey` EXCEPT the three
+  // branch in the ctrl/meta block now carries `!e.altKey` EXCEPT the four
   // deliberate Ctrl+Alt chords, which are pinned as positives further down.
   it("Ctrl+Alt+S no longer matches save (AltGr+S → ś)", () => {
     expect(matchShortcut(evt({ code: "KeyS", ctrlKey: true, altKey: true }))).toBeNull();
@@ -295,8 +295,10 @@ describe("matchShortcut — AltGr must not fire app shortcuts (#1777 item 2)", (
   it("Ctrl+Alt+O no longer matches open-file (AltGr+O → ó)", () => {
     expect(matchShortcut(evt({ code: "KeyO", ctrlKey: true, altKey: true }))).toBeNull();
   });
-  it("Ctrl+Alt+F no longer matches find", () => {
-    expect(matchShortcut(evt({ code: "KeyF", ctrlKey: true, altKey: true }))).toBeNull();
+  it("Ctrl+Alt+Shift+F matches nothing (free for the user to bind)", () => {
+    expect(
+      matchShortcut(evt({ code: "KeyF", ctrlKey: true, altKey: true, shiftKey: true })),
+    ).toBeNull();
   });
   it("Ctrl+Alt+G no longer matches find-nav", () => {
     expect(matchShortcut(evt({ code: "KeyG", ctrlKey: true, altKey: true }))).toBeNull();
@@ -338,7 +340,7 @@ describe("matchShortcut — AltGr must not fire app shortcuts (#1777 item 2)", (
     expect(matchShortcut(evt({ key: "Enter", ctrlKey: true, altKey: true }))).toBeNull();
   });
 
-  // The three deliberate Ctrl+Alt chords keep firing — these are what kill a
+  // The deliberate Ctrl+Alt chords keep firing — these are what kill a
   // blanket `if (e.altKey) return` in the ctrl/meta block.
   it("Ctrl+Alt+T still matches reopen-closed-tab", () => {
     expect(matchShortcut(evt({ code: "KeyT", ctrlKey: true, altKey: true }))).toEqual({
@@ -348,6 +350,20 @@ describe("matchShortcut — AltGr must not fire app shortcuts (#1777 item 2)", (
   it("Ctrl+Alt+M still matches comment-on-selection", () => {
     expect(matchShortcut(evt({ code: "KeyM", ctrlKey: true, altKey: true }))).toEqual({
       id: "comment-on-selection",
+    });
+  });
+  it("Ctrl+Alt+F matches toggle-formatting-bar, not find", () => {
+    expect(matchShortcut(evt({ code: "KeyF", ctrlKey: true, altKey: true }))).toEqual({
+      id: "toggle-formatting-bar",
+    });
+  });
+  // Accepted collision, pinned so it is a decision rather than an accident:
+  // AltGr+F types `[` on hu/cs/sk/hr/sl/bs/sr-Latin and still matches here.
+  // The pure matcher cannot see AltGr; App.svelte's dispatch entry skips when
+  // `getModifierState("AltGraph")` reports it.
+  it("hu/cs AltGr+F (`[`) still matches toggle-formatting-bar at the matcher level", () => {
+    expect(matchShortcut(evt({ code: "KeyF", key: "[", ctrlKey: true, altKey: true }))).toEqual({
+      id: "toggle-formatting-bar",
     });
   });
 });

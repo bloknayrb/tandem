@@ -171,6 +171,7 @@ test("Help modal advertises the new shortcuts", async ({ page }) => {
   await expect(modal.getByText("Heading 6")).toBeVisible();
   await expect(modal.getByText("Select containing block")).toBeVisible();
   await expect(modal.getByText("Toggle authorship colors")).toBeVisible();
+  await expect(modal.getByText("Toggle formatting bar")).toBeVisible();
 });
 
 test("Ctrl+Shift+F opens the find bar pre-scoped to Open tabs", async ({ page }) => {

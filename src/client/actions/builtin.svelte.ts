@@ -1339,12 +1339,13 @@ const BUILTINS: Action[] = [
     },
   },
   {
-    // Palette-only (no keyboard shortcut): Ctrl+Alt+F is a Linux VT switch, so
-    // it's deliberately not bound. Restoring a hidden bar is via this action,
-    // the Appearance setting, or the always-full selection popup.
+    // Remappable (ADR-041); default Ctrl+Alt+F. Restoring a hidden bar is also
+    // possible via this action, the Appearance setting, or the always-full
+    // selection popup.
     id: "toggle-formatting-bar",
     label: "Toggle formatting bar",
     group: "view",
+    shortcut: "Ctrl+Alt+F",
     run() {
       runBoundAction("toggle-formatting-bar", (d) => d.toggleFormattingBar());
     },

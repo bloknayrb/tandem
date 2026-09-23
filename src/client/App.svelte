@@ -1025,10 +1025,7 @@ const actionExecutor = mountActionExecutor({
   },
   selectBlock: () => editor?.chain().focus().selectParentNode().run(),
   toggleAuthorship: () => setAuthorshipVisible(!settingsState.settings.showAuthorship),
-  toggleFormattingBar: () =>
-    settingsState.updateSettings({
-      formattingBarVisible: !settingsState.settings.formattingBarVisible,
-    }),
+  toggleFormattingBar,
   toggleSourceView: () => documentWorkspace.requestToggleSourceView(),
   focusChat,
   save: async () => documentWorkspace.saveDocumentTarget(yjsSync.activeTabId, "save"),
@@ -1048,6 +1045,19 @@ function setAuthorshipVisible(visible: boolean): void {
     showAuthorship: visible,
     ...(settingsState.settings.decorationsMuted ? { decorationsMuted: false } : {}),
   });
+}
+
+// Show/hide the floating formatting bar — shared by the palette action, the
+// selection popup's swap button, the bar's own hide button (only reachable while
+// visible, so it always hides) and the Ctrl+Alt+F shortcut. Hiding unmounts
+// the bar (`{#if}` below), so if focus was on one of its buttons it would fall
+// to <body>; hand it back to the editor instead.
+function toggleFormattingBar(): void {
+  const hiding = settingsState.settings.formattingBarVisible;
+  const focusInBar =
+    hiding && document.activeElement?.closest("[data-testid='formatting-bar']") != null;
+  settingsState.updateSettings({ formattingBarVisible: !hiding });
+  if (focusInBar) editor?.commands.focus();
 }
 
 // The authorship plugin reads its initial visibility from localStorage at
@@ -1736,6 +1746,20 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     e.preventDefault();
     setAuthorshipVisible(!settingsState.settings.showAuthorship);
   },
+  "toggle-formatting-bar": (e) => {
+    // Deliberately stricter than `toggle-authorship`, which fires everywhere:
+    // AltGr arrives as Ctrl+Alt on Windows (and some Linux setups), and AltGr+F
+    // types `[` on hu/cs/sk/hr/sl/bs/sr-Latin. `shouldIgnoreShortcut` keeps
+    // INPUT/TEXTAREA typing intact; the AltGraph check is what protects the
+    // contenteditable editor, which that guard does not cover. `!metaKey`
+    // because Firefox/macOS may flag Option as AltGraph, which would make ⌘⌥F
+    // dead. Not verified on every OS/browser — affected users can remap in
+    // Settings → Shortcuts.
+    if (!e.metaKey && e.getModifierState?.("AltGraph")) return;
+    if (shouldIgnoreShortcut(e)) return;
+    e.preventDefault();
+    toggleFormattingBar();
+  },
   "toggle-left-panel": (e) => {
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
@@ -2374,10 +2398,7 @@ const shouldShowModelPicker = $derived(
       editorMeasure={settingsState.settings.editorMeasure}
       onUpdateDisplay={(partial) => settingsState.updateSettings(partial)}
       formattingBarVisible={settingsState.settings.formattingBarVisible}
-      onToggleFormattingBar={() =>
-        settingsState.updateSettings({
-          formattingBarVisible: !settingsState.settings.formattingBarVisible,
-        })}
+      onToggleFormattingBar={toggleFormattingBar}
       reduceMotion={settingsState.settings.reduceMotion}
       tandemMode={modeState.tandemMode}
       onNotify={(n) => notifications.push(n)}
@@ -2401,7 +2422,7 @@ const shouldShowModelPicker = $derived(
         onToggleSourceView={documentWorkspace.canSourceView || documentWorkspace.inSourceView
           ? () => void documentWorkspace.requestToggleSourceView()
           : null}
-        onHide={() => settingsState.updateSettings({ formattingBarVisible: false })}
+        onHide={toggleFormattingBar}
         onNotify={(n) => notifications.push(n)}
       />
     {/if}

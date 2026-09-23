@@ -74,7 +74,8 @@ describe("claimedByFixedShortcut", () => {
 
   // #1777 item 2 gave `find`, `find-nav` and `pick-tab` an `!e.altKey` gate so
   // AltGr (delivered as ctrl+alt) stops firing app shortcuts. These five chords
-  // were claimed before that and are now free for the user to bind. This is an
+  // were claimed by a FIXED branch before that and no longer are (Ctrl+Alt+F is
+  // now the remappable formatting-bar default — see findConflict below). This is an
   // intended behavioural change; repairing it by reverting the alt gate would
   // half-land item 2 while leaving the whole suite green.
   it.each([
@@ -133,6 +134,12 @@ describe("RESERVED_CHORDS composition", () => {
 describe("findConflict", () => {
   it("names the remappable owner of a default chord", () => {
     expect(findConflict(DEFAULT_BINDINGS.save, empty, "save-as")).toBe("Save document");
+  });
+
+  it("Ctrl+Alt+F is owned by the formatting-bar default", () => {
+    expect(findConflict(chord({ ctrlOrMeta: true, alt: true, code: "KeyF" }), empty, "save")).toBe(
+      "Toggle formatting bar",
+    );
   });
 
   it("excludes the id being edited", () => {
