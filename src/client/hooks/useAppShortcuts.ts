@@ -58,6 +58,7 @@ export type ShortcutId =
   | "annotation-accept-or-dismiss"
   | "comment-on-selection"
   | "toggle-authorship"
+  | "toggle-formatting-bar"
   // alt-only (no ctrl/meta)
   | "toggle-left-panel"
   | "toggle-right-panel"
@@ -165,11 +166,14 @@ export function matchShortcut(
   // shortcuts instead of typing a letter, which contradicts the
   // layout-independence guarantees in this file's header.
   //
-  // The three DELIBERATE Ctrl+Alt chords keep their `e.altKey` requirement and
+  // The four DELIBERATE Ctrl+Alt chords keep their `e.altKey` requirement and
   // must not be gated: reopen-closed-tab (Alt+KeyT), comment-on-selection
-  // (Alt+KeyM) and toggle-authorship (Alt+KeyA). AltGr+T/M/A therefore remain
-  // live collisions on those layouts — distinguishing a real Ctrl+Alt press
-  // from AltGr via `getModifierState("AltGraph")` is out of scope for #1777.
+  // (Alt+KeyM), toggle-authorship (Alt+KeyA) and toggle-formatting-bar
+  // (Alt+KeyF). AltGr+T/M/A/F therefore remain live collisions on those
+  // layouts at the matcher level. The matcher is pure and cannot tell AltGr
+  // apart; toggle-formatting-bar's DISPATCH entry in App.svelte does, via
+  // `getModifierState("AltGraph")`, because AltGr+F types `[` on
+  // hu/cs/sk/hr/sl/bs/sr-Latin and the WYSIWYG editor is contenteditable.
   if (mod) {
     // Ctrl+, → Settings (the single consolidated modal). Rejects shift so the
     // shifted form is left unbound, and alt since #1777.
@@ -260,8 +264,9 @@ export function matchShortcut(
       if (!isOverridden("new-tab-menu", overrides)) return { id: "new-tab-menu" };
     }
 
-    // Ctrl+F / Ctrl+Shift+F → find. `!altKey` since #1777, so Ctrl+Alt+F and
-    // Ctrl+Alt+Shift+F become user-bindable.
+    // Ctrl+F / Ctrl+Shift+F → find. `!altKey` since #1777; Ctrl+Alt+F is now
+    // the toggle-formatting-bar default (below) and Ctrl+Alt+Shift+F stays
+    // user-bindable.
     if (!e.altKey && e.code === "KeyF") {
       return { id: "find", context: { shift: e.shiftKey } };
     }
@@ -292,6 +297,13 @@ export function matchShortcut(
     // routes here rather than to select-all.
     if (e.altKey && e.code === "KeyA") {
       if (!isOverridden("toggle-authorship", overrides)) return { id: "toggle-authorship" };
+    }
+
+    // Ctrl+Alt+F → show/hide the formatting bar. Exact `!shiftKey` gate (unlike
+    // the legacy Ctrl+Alt chords above) so Ctrl+Alt+Shift+F stays free for the
+    // user to bind. `find` requires `!altKey`, so ordering is immaterial.
+    if (e.altKey && !e.shiftKey && e.code === "KeyF") {
+      if (!isOverridden("toggle-formatting-bar", overrides)) return { id: "toggle-formatting-bar" };
     }
   }
 

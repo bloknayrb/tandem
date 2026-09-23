@@ -49,6 +49,9 @@ export const REMAPPABLE_SHORTCUT_IDS = [
   "annotation-prev",
   "select-block",
   "new-tab-menu",
+  // Appended last on purpose: REMAPPABLE_SHORTCUT_IDS order is the dedupe
+  // priority, so a user who already bound Ctrl+Alt+F elsewhere keeps it.
+  "toggle-formatting-bar",
 ] as const;
 
 export type RemappableShortcutId = (typeof REMAPPABLE_SHORTCUT_IDS)[number];
@@ -83,6 +86,7 @@ export const REMAPPABLE_LABELS: Record<RemappableShortcutId, string> = {
   "annotation-prev": "Previous annotation",
   "select-block": "Select containing block",
   "new-tab-menu": "New tab menu",
+  "toggle-formatting-bar": "Toggle formatting bar",
 };
 
 /**
@@ -115,6 +119,7 @@ export const DEFAULT_BINDINGS: Record<RemappableShortcutId, ShortcutChord> = {
   "annotation-prev": { ctrlOrMeta: false, alt: true, shift: false, code: "BracketLeft" },
   "select-block": { ctrlOrMeta: false, alt: true, shift: false, code: "KeyL" },
   "new-tab-menu": { ctrlOrMeta: true, alt: false, shift: false, code: "KeyT" },
+  "toggle-formatting-bar": { ctrlOrMeta: true, alt: true, shift: false, code: "KeyF" },
 };
 
 /**
@@ -191,6 +196,7 @@ export const REGISTRY_TO_SHORTCUT_ID: Record<string, RemappableShortcutId> = {
   "annotation-next": "annotation-next",
   "annotation-previous": "annotation-prev",
   "select-block": "select-block",
+  "toggle-formatting-bar": "toggle-formatting-bar",
 };
 
 const KEYBOARD_EVENT_MODIFIER_CODES = /^(Control|Shift|Alt|Meta|OS)/;

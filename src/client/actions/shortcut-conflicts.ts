@@ -7,7 +7,8 @@
  * would otherwise do. The protection must therefore know every chord a fixed
  * branch claims — including the loose branches (`pick-tab` ignores Shift, the
  * `?` help branch has no modifier gate at all; `find`/`find-nav` gained an alt
- * gate in #1777, so Ctrl+Alt+F/G are now free rather than claimed). Rather
+ * gate in #1777, so Ctrl+Alt+G is free and Ctrl+Alt+F went to the remappable
+ * toggle-formatting-bar rather than staying claimed by find). Rather
  * than hand-transcribe that gating (which is exactly the drift
  * that motivated this fix), `claimedByFixedShortcut` asks the matcher itself:
  * synthesize an event from the chord, run `matchShortcut` with NO overrides,

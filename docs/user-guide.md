@@ -54,7 +54,7 @@ Open documents appear as tabs along the top. Each tab shows the file name, a dot
 
 Select text to reveal formatting buttons: **Bold**, **Italic**, **Strikethrough**, **Code**, **Link** (`Ctrl+K`), **Headings** (H1/H2/H3), **Bullet List**, **Ordered List**, **Blockquote**, and **Code Block**. Standard keyboard shortcuts also work (`Ctrl+B`, `Ctrl+I`, etc.). The toolbar wraps to a second row on narrow windows.
 
-The persistent formatting bar (Settings → Appearance → **Show formatting bar**) carries two extra controls the selection popup deliberately leaves out: **Undo** / **Redo**, and **Horizontal Rule** — inserting a rule while text is selected makes little sense.
+The persistent formatting bar (Settings → Appearance → **Show formatting bar**, or `Ctrl+Alt+F`) carries two extra controls the selection popup deliberately leaves out: **Undo** / **Redo**, and **Horizontal Rule** — inserting a rule while text is selected makes little sense.
 
 The bar's **Display** menu (the `Aa` button) sets the text size and reading measure for the formatted editor without opening Settings. It changes the same settings as Settings → Appearance and Settings → Editor, so the two always agree. The Markdown source view keeps its own fixed size and width.
 
@@ -355,7 +355,7 @@ Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
 | **Accessibility** | High contrast, and pattern fills for annotations (**Reduce motion** lives under Appearance) |
 | **Collaboration** | Your display name, and whether the side panel hides itself in Solo mode |
 | **AI Assistant** | Working directory, the margin annotation view, **Real-time updates** (how a session you started yourself hears about your comments as they happen, including the Tandem plugin's install commands with a Copy button), the integration wizard, Replay tutorial, and Cowork enablement (desktop app only) |
-| **Shortcuts** | A **Customizable** section with click-to-record remapping (19 app-level shortcuts), per-row reset and a reset-all, followed by read-only **(fixed)** sections — text formatting, undo/redo, heading levels, tab jumps and the help key are not remappable |
+| **Shortcuts** | A **Customizable** section with click-to-record remapping (20 app-level shortcuts), per-row reset and a reset-all, followed by read-only **(fixed)** sections — text formatting, undo/redo, heading levels, tab jumps and the help key are not remappable |
 | **License** | Activation and current license or trial status |
 | **About** | Version, Copy Diagnostics, and Open log folder (desktop app only) |
 
@@ -373,7 +373,7 @@ Most of what shapes the reading surface lives here.
 
 ## Keyboard Shortcuts
 
-Press `?` to open the in-app shortcuts reference at any time — it always reflects your effective bindings. Nineteen app-level shortcuts are remappable in **Settings → Shortcuts** (click-to-record); the rest — text formatting, undo/redo, heading levels, tab jumps and `?` itself — are fixed. The defaults are listed below.
+Press `?` to open the in-app shortcuts reference at any time — it always reflects your effective bindings. Twenty app-level shortcuts are remappable in **Settings → Shortcuts** (click-to-record); the rest — text formatting, undo/redo, heading levels, tab jumps and `?` itself — are fixed. The defaults are listed below.
 
 ### Editor
 
@@ -419,11 +419,14 @@ Press `?` to open the in-app shortcuts reference at any time — it always refle
 | `Ctrl+1`–`Ctrl+9` | Jump to tab 1–9 |
 | `Alt+Left` / `Alt+Right` | Reorder the focused tab |
 | `Alt+Shift+Left` / `Alt+Shift+Right` | Toggle the outline panel / the Annotations + Chat panel |
+| `Ctrl+Alt+F` | Show / hide the formatting bar |
 | `Ctrl+Shift+M` | Toggle Solo / Tandem mode |
 | `Ctrl+Shift+J` | Focus chat |
 | `Ctrl+,` | Settings |
 | `Enter` | Send message (chat panel) |
 | `?` | Show/hide keyboard shortcuts |
+
+> **On Hungarian, Czech, Slovak, Croatian, Slovenian, Bosnian and Serbian (Latin) keyboards, `AltGr+F` types `[`.** Windows and Linux report AltGr as `Ctrl+Alt`, so Tandem ignores `Ctrl+Alt+F` when the browser flags the press as AltGr. If `[` still toggles the formatting bar instead of typing, remap **Toggle formatting bar** in **Settings → Shortcuts**.
 
 > **In the browser build, `Ctrl+N`, `Ctrl+T` and `Ctrl+W` belong to the browser** — it opens a window, opens a tab, or closes your Tandem tab before the page ever sees the key. Use the **+** button in the tab bar and the command palette (`Ctrl+Shift+P`) instead, or remap New Scratchpad, New tab menu and Close active tab in **Settings → Shortcuts**. The desktop app owns its own window, so all three work there.
 

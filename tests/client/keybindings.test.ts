@@ -52,6 +52,23 @@ describe("DEFAULT_BINDINGS drift guard", () => {
 // Override-aware matcher behavior.
 // ---------------------------------------------------------------------------
 describe("matchShortcut — override layer", () => {
+  it("an existing override on Ctrl+Alt+F keeps winning over the formatting-bar default", () => {
+    const chord = DEFAULT_BINDINGS["toggle-formatting-bar"];
+    const overrides = overridesOf([["save", chord]]);
+    expect(matchShortcut(eventForChord(chord), overrides)).toEqual({ id: "save" });
+  });
+
+  it("remapping toggle-formatting-bar moves it off Ctrl+Alt+F", () => {
+    const moved: ShortcutChord = { ctrlOrMeta: true, alt: true, shift: false, code: "KeyB" };
+    const overrides = overridesOf([["toggle-formatting-bar", moved]]);
+    expect(matchShortcut(eventForChord(moved), overrides)).toEqual({
+      id: "toggle-formatting-bar",
+    });
+    expect(
+      matchShortcut(eventForChord(DEFAULT_BINDINGS["toggle-formatting-bar"]), overrides),
+    ).toBeNull();
+  });
+
   it("a remapped combo wins and returns the remapped id", () => {
     const chord: ShortcutChord = { ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" };
     const overrides = overridesOf([["new-scratchpad", chord]]);
