@@ -2,6 +2,7 @@
 
 **Plan:** [superdoc-engine-spike-plan.md](superdoc-engine-spike-plan.md)
 **Run:** 2026-09-23 to 2026-09-24, in Docker containers only.
+**Status:** Shelved (2026-09-24). ADR-052 is shelved and `.docx` ships dark (ADR-053).
 **Decision it serves:** [ADR-052](../decisions.md#adr-052-superdoc-replaces-the-docx-readwrite-pipeline-server-side-behind-the-existing-editor)
 
 The plan's Output section limits this report to one verdict per question: GO, NO-GO or NOT RUN.

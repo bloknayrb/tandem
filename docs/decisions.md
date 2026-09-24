@@ -18,7 +18,7 @@
 **Original decision:** .docx files open in review-only mode. Never overwrite the original.
 **Original rationale:** mammoth.js import is lossy (no complex tables, tracked changes, footnotes). Review-only prevents accidental data loss.
 **Supersession (#576):** mammoth import is still lossy, so the data-loss concern is real — but it's addressed by *explicit-save gating* rather than by blocking edits. `.docx` opens writable; edits are held in the Y.Doc and serialized back to `.docx` (body content only — comments/tracked-changes are v1.1) **only on an explicit user/agent save** via the `docx` package (`saveBinary` adapter capability + `atomicWriteBuffer`). Auto-save never writes `.docx` (`BINARY_SAVE_FORMATS` is disjoint from `AUTO_SAVE_FORMATS`). Lossy-import warnings surface at open; export-downgrade warnings surface on save. The export is trust-boundary-gated (scrubbed hyperlinks, inline-only image embeds, no OLE objects, plain-text fallback for unknown nodes). See `src/server/file-io/docx-export.ts`.
-**Engine replaced by ADR-052 (decided, not implemented):** SuperDoc's engine takes over reading and writing `.docx`, and save becomes a splice into the original file. The explicit-save gate described here stays.
+**Engine replacement proposed by ADR-052 (shelved 2026-09-24; `.docx` ships dark under ADR-053):** SuperDoc's engine takes over reading and writing `.docx`, and save becomes a splice into the original file. The explicit-save gate described here stays.
 
 ## ADR-005: Node-Anchored Ranges for Overlays
 **Decision:** Overlays use node-relative anchors (nodeId + offset) instead of character offsets.
@@ -2062,10 +2062,11 @@ acceptance-harness step's unconditional shape), #1529 (`windows-acl-proof`),
 
 ## ADR-052: SuperDoc Replaces the `.docx` Read/Write Pipeline, Server-Side, Behind the Existing Editor
 
-**Status:** Accepted, conditional on the licence record below (decided 2026-09-18; recorded
-2026-09-23). **Not implemented.** Nothing
-changes in `src/` until the spike in
-[docs/spikes/superdoc-engine-spike-plan.md](spikes/superdoc-engine-spike-plan.md) reports.
+**Status:** **Shelved (2026-09-24).** The spike reported NO-GO on S1 and S3–S10 (S2 not run;
+[verdicts](spikes/superdoc-engine-spike.md)), and `.docx` support itself now ships dark
+(ADR-053). Nothing below is being implemented; it is kept as the record of what was decided and
+why, should `.docx` work resume. Previously: accepted, conditional on the licence record below
+(decided 2026-09-18; recorded 2026-09-23), not implemented.
 
 **Context.** Tandem's `.docx` support is three libraries plus a lot of hand-written OOXML code:
 

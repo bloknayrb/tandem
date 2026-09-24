@@ -1,6 +1,6 @@
 # Spike plan: SuperDoc as Tandem's `.docx` engine (ADR-052)
 
-**Status:** Run 2026-09-23 to 2026-09-24. Verdicts: [superdoc-engine-spike.md](superdoc-engine-spike.md).
+**Status:** Run 2026-09-23 to 2026-09-24; the work is **shelved** (2026-09-24). Verdicts: [superdoc-engine-spike.md](superdoc-engine-spike.md).
 **Decision it serves:** [ADR-052](../decisions.md#adr-052-superdoc-replaces-the-docx-readwrite-pipeline-server-side-behind-the-existing-editor)
 **Prior art to reuse:**
 - the [GenOffice spike](genoffice-docx-engine-spike.md), for its fixtures and its `w:ind` /
