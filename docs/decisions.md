@@ -2058,3 +2058,64 @@ required would not buy for free.
 **Cross-references:** #1229 (a gate needs a third outcome), #1399 (the
 acceptance-harness step's unconditional shape), #1529 (`windows-acl-proof`),
 #1616 (`typecheck:tests`), #1728 (should `coverage` be required).
+
+## ADR-052: Adopt SuperDoc as the .docx Engine (Replacing mammoth + `docx` npm)
+
+**Status:** Decided 2026-09-18. **Not yet implemented — no code has changed.** This ADR records
+the decision to move; the integration architecture, migration plan, and timeline are unresolved
+and are follow-up work, not part of this decision.
+
+**Context:** Tandem's current `.docx` pipeline (ADR-004, ADR-036, #576) imports via mammoth.js
+(`.docx` → HTML → Y.Doc) and exports by rebuilding a brand-new file from scratch through the
+`docx` npm package — full regeneration, not a true round trip, with known silent formatting loss
+(`w:ind`/`w:shd`/`w:rFonts` dropped) and a defect where `applyChanges → save` erases the tracked
+changes it just wrote (#1754 and related, see `docs/spikes/genoffice-docx-engine-spike.md`). The
+GenOffice spike concluded the right architecture was "splice, don't rebuild" and left
+vendor-vs-extend-our-own explicitly open, with adversarial review leaning toward extending
+Tandem's own `walkDocumentBody`/`docx-apply.ts`. On a 2026-09-18 call, Joshua Elkes (co-founder/CEO
+of SuperDoc, superdoc.dev) offered SuperDoc's engine directly — a purpose-built `.docx` editor
+that edits OOXML directly with no intermediary format, the product of years of dedicated
+engineering by a team that pivoted its entire business (originally a contract-management
+platform, Harbour) to solving exactly this problem.
+
+**Decision:** Replace Tandem's own `.docx` pipeline — mammoth import, the `docx`-npm-based
+export/rebuild, `docx-comments.ts`, `docx-apply.ts`, and `walkDocumentBody`'s coordinate-bridging
+role — with SuperDoc's engine as the `.docx` read/write/render substrate.
+
+**Rationale:** SuperDoc's whole business is solving exactly the fidelity and round-trip problems
+Tandem has been fighting piecemeal (mammoth's silent losses, the coordinate-bridge reconciliation
+burden, tracked-changes erasure on resave). Building an equivalent OOXML-native engine in-house is
+a multi-year effort by Elkes's own account — SuperDoc is years in and still finds new cases.
+Vendoring a purpose-built, actively maintained engine is a better use of a solo founder's time than
+continuing to extend `walkDocumentBody`/`docx-apply.ts` one defect at a time.
+
+**Licensing, as understood from the call (Elkes's statements, not independently verified against
+the license text):** SuperDoc is AGPL-licensed and free/unrestricted to use in another open-source
+project. An unlisted solo-builder commercial tier exists ($50/mo or $500/yr, GitHub + Discord
+support) for when a product stops being open-source-only. Elkes was explicitly noncommittal on
+whether Tandem's planned model — stay open source, add a one-time payment at v1.0 — satisfies
+AGPL's terms; he said it's Bryan's call to make. **That determination is still open and is Bryan's
+to complete, not something this decision resolves.**
+
+**Explicitly not decided here — tracked as follow-up, not yet designed:**
+- Integration architecture: how SuperDoc's own editing surface (OOXML-native; V2 has no
+  ProseMirror) relates to Tandem's Tiptap/ProseMirror editor and `Y.Map('annotations')` model, and
+  whether annotations can live *above* SuperDoc's document model rather than inside it.
+- Whether SuperDoc runs fully offline in the Tauri webview with no network calls, required for
+  Tandem's local-first posture.
+- The AGPL compliance question above.
+- Migration plan for existing `.docx` users/data, and the disposition of `mammoth`,
+  `docx-comments.ts`, `docx-apply.ts`, `walkDocumentBody`, `docx-verify.ts`, and the "splice, don't
+  rebuild" plan documented in `docs/spikes/genoffice-docx-engine-spike.md` — all superseded in
+  intent, none yet removed.
+- Target version and timeline — none set.
+
+**Supersedes:** the vendor-vs-extend-our-own question left open in
+`docs/spikes/genoffice-docx-engine-spike.md`. This resolves it in favor of neither option
+considered there: adopt SuperDoc instead of building a splice engine in-house at all.
+
+**Consequences observed:** none yet — no code has changed as of this ADR.
+
+**Cross-references:** ADR-004, ADR-036, #576, #1754, `docs/spikes/genoffice-docx-engine-spike.md`,
+`docs/spikes/docx-npm-spike.md`, `docs/spikes/docx-libreoffice-spike.md`. Call record: Trunked
+meeting "Josh (SuperDoc) - Tandem and DOCX", 2026-09-18.
