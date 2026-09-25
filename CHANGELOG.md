@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Word (`.docx`) files can no longer be opened, and the desktop app is no longer offered as a handler for `.docx` (ADR-053, #2111).** Word support wasn't reliable enough for serious work, so it is out of the app for now. Your `.docx` files on disk are untouched. Opening one shows a message suggesting you save a copy from Word as Plain Text (`.txt`) to edit it, or as Web Page (`.html`) to review it read-only. Word documents you had open aren't reopened after the upgrade. Tandem lists them once, and any unsaved edits to them are discarded. The two Word-only AI tools, applying tracked changes and converting to Markdown, are gone from the tool list too. The bundled Tandem skill moves to version 27 to match; it refreshes on the next desktop or `tandem` server start, or with `tandem setup`.
 
+### Security
+
+- **One high-severity advisory cleared in the desktop test harness (#2083, GHSA-7pqw-9j4j-h8q3 and GHSA-jmr9-qjv8-65gv).** `extract-zip` allowed arbitrary file writes through symlink entries in an archive, and no patched release exists, so the harness now uses a browser-download library that doesn't depend on it. **Neither ships:** the harness has its own dependency list, is never published, and never exercised the download path that reaches `extract-zip`.
+
+### Internal
+
+- **Test and lint tooling moved to vitest 5 and Biome 2.5 (#2081, #2078), and the zod, Hocuspocus and markdown-it major versions are held pending their migrations (#2101).** Nothing in the shipped app changes.
+
 ## [0.27.0] - 2026-09-21
 
 ### What's New
