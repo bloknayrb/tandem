@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { builtinModules, createRequire } from "node:module";
 import { join } from "node:path";
 import { defineConfig } from "tsup";
+import { DOCX_ENABLED } from "./src/shared/constants.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("./package.json") as { version: string };
@@ -18,6 +19,11 @@ const mcpSdkPkg = JSON.parse(readFileSync(join(sdkRoot, "package.json"), "utf8")
 // into every bundle whose tree imports src/server/license/* (server + cli today).
 // Flip to `true` at v1.0 once commercial-readiness exit criteria are met.
 const LICENSE_GATE_ENABLED = false;
+
+// .docx support (ADR-053): ships DARK. The value lives in src/shared/constants.ts,
+// because the client reads it there directly; this only carries it into the
+// server + cli bundles as __DOCX_ENABLED__ so a release ignores TANDEM_DOCX.
+const DOCX_DEFINE = JSON.stringify(DOCX_ENABLED);
 
 // Node builtins must stay external — CJS deps that call require("fs") etc.
 // fail with "Dynamic require not supported" if bundled into ESM.
@@ -83,6 +89,7 @@ export default defineConfig([
       // spec; define it in the server bundle too so it isn't a bare free global.
       __TANDEM_VERSION__: JSON.stringify(pkg.version),
       __LICENSE_GATE_ENABLED__: JSON.stringify(LICENSE_GATE_ENABLED),
+      __DOCX_ENABLED__: DOCX_DEFINE,
     },
   },
   sidecarBundle("channel"),
@@ -93,7 +100,7 @@ export default defineConfig([
   //
   // No `define` block, like its siblings: nothing in this entry's import
   // closure reads `__TANDEM_VERSION__` / `__APP_VERSION__` /
-  // `__LICENSE_GATE_ENABLED__`. If that changes, add them — esbuild leaves an
+  // `__LICENSE_GATE_ENABLED__` / `__DOCX_ENABLED__`. If that changes, add them — esbuild leaves an
   // absent define as a bare free global, a runtime ReferenceError with no
   // build error.
   sidecarBundle("stdio-bridge"),
@@ -119,6 +126,7 @@ export default defineConfig([
     define: {
       __TANDEM_VERSION__: JSON.stringify(pkg.version),
       __LICENSE_GATE_ENABLED__: JSON.stringify(LICENSE_GATE_ENABLED),
+      __DOCX_ENABLED__: DOCX_DEFINE,
     },
   },
 ]);

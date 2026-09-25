@@ -1,11 +1,12 @@
-import { SUPPORTED_EXTENSIONS } from "../../../shared/constants.js";
+import { BASE_EXTENSIONS } from "../../../shared/constants.js";
 import { rejectUnsafeWindowsPrefix } from "../../../shared/windows-path-safety.js";
 
 /**
  * File extensions that open as new Tandem tabs when clicked as relative links.
- * `.docx` excluded — not navigable as a link target.
+ * `.docx` excluded (it is not in `BASE_EXTENSIONS`) — not navigable as a link
+ * target, whether or not `.docx` support is enabled.
  */
-const INTERNAL_LINK_EXTS = new Set([...SUPPORTED_EXTENSIONS].filter((e) => e !== ".docx"));
+const INTERNAL_LINK_EXTS: ReadonlySet<string> = BASE_EXTENSIONS;
 
 /**
  * The same set as prose, for error copy. Derived rather than written out so a

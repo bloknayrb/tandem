@@ -14,7 +14,7 @@
  *      argv on Windows/Linux and to macOS `RunEvent::Opened` URLs alike. The
  *      argv branch gates `TANDEM_OPEN_FILE`; the Opened branch POSTs
  *      `/api/open` directly and never touches that env var.
- *   3. `SUPPORTED_EXTENSIONS` in `src/shared/constants.ts` — the server, which
+ *   3. `BASE_EXTENSIONS` (plus `.docx` behind `DOCX_ENABLED`) in `src/shared/constants.ts` — the server, which
  *      is the authority; `resolveAndValidatePath` throws UNSUPPORTED_FORMAT.
  *
  * The failure this pins is silent by construction. `maybeOpenStartupFile`
@@ -40,7 +40,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { SUPPORTED_EXTENSIONS } from "../../src/shared/constants.js";
+import { BASE_EXTENSIONS, DOCX_ENABLED } from "../../src/shared/constants.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
 
@@ -54,13 +54,22 @@ function registeredAssociationExts(): string[] {
   return [...new Set(assoc.flatMap((a) => a.ext ?? []))].map((e) => e.toLowerCase());
 }
 
+function openCandidateSrc(): string {
+  return readFileSync(path.join(repoRoot, "src-tauri/src/open_candidate.rs"), "utf-8");
+}
+
+function rustDocxEnabled(): boolean {
+  const m = openCandidateSrc().match(/pub const DOCX_ENABLED:\s*bool\s*=\s*(true|false)\s*;/);
+  expect(m, "DOCX_ENABLED const not found in open_candidate.rs").toBeTruthy();
+  return (m as RegExpMatchArray)[1] === "true";
+}
+
 function rustAssocExts(): string[] {
   // Moved out of `lib.rs` by #1415 along with the rest of the open-candidate
   // cluster, so `ScreenedOpenPath`'s tuple field has a module boundary to be
   // private to. The move failed both assertions below rather than silently
   // stopping the check, which is exactly what this docblock promises.
-  const src = readFileSync(path.join(repoRoot, "src-tauri/src/open_candidate.rs"), "utf-8");
-  const m = src.match(/SUPPORTED_FILE_ASSOC_EXTS:\s*&\[&str\]\s*=\s*&\[([^\]]*)\]/);
+  const m = openCandidateSrc().match(/SUPPORTED_FILE_ASSOC_EXTS:\s*&\[&str\]\s*=\s*&\[([^\]]*)\]/);
   expect(m, "SUPPORTED_FILE_ASSOC_EXTS literal not found in open_candidate.rs").toBeTruthy();
   return [...(m as RegExpMatchArray)[1].matchAll(/"([^"]+)"/g)].map((x) => x[1].toLowerCase());
 }
@@ -68,14 +77,20 @@ function rustAssocExts(): string[] {
 describe("OS file associations align with the server's accepted extensions", () => {
   it("every extension tauri.conf.json registers is accepted by the server", () => {
     const registered = registeredAssociationExts();
-    const unsupported = registered.filter((ext) => !SUPPORTED_EXTENSIONS.has(`.${ext}`));
+    // `docx` is the one registration that may exist outside the base set, and
+    // only while `.docx` is enabled; the flag-coupling block below pins that.
+    const unsupported = registered.filter(
+      (ext) => !BASE_EXTENSIONS.has(`.${ext}`) && !(DOCX_ENABLED && ext === "docx"),
+    );
     expect(unsupported).toEqual([]);
   });
 
   it("every extension tauri.conf.json registers passes the Rust shell filter", () => {
     const registered = registeredAssociationExts();
     const rust = new Set(rustAssocExts());
-    const rejected = registered.filter((ext) => !rust.has(ext));
+    const rejected = registered.filter(
+      (ext) => !rust.has(ext) && !(rustDocxEnabled() && ext === "docx"),
+    );
     expect(rejected).toEqual([]);
   });
 
@@ -85,7 +100,27 @@ describe("OS file associations align with the server's accepted extensions", () 
     // the #1344 bug: the shell refuses a file the app can actually open, and
     // the user just lands on welcome.md.
     const rust = rustAssocExts().slice().sort();
-    const server = [...SUPPORTED_EXTENSIONS].map((e) => e.replace(/^\./, "")).sort();
+    // Both sides exclude `.docx` from the base list; each adds it behind its own
+    // flag, and the block below keeps those flags equal.
+    const server = [...BASE_EXTENSIONS].map((e) => e.replace(/^\./, "")).sort();
     expect(rust).toEqual(server);
+  });
+});
+
+// `.docx` ships dark (ADR-053) behind three coupled switches in two languages
+// and a config file. Flipping one without the others is a half-enabled build:
+// the OS offers Tandem for Word files the app then refuses, or the reverse.
+describe(".docx flag coupling (ADR-053)", () => {
+  it("the TS flag, the Rust flag and the tauri.conf.json association agree", () => {
+    const registersDocx = registeredAssociationExts().includes("docx");
+    expect({ rust: rustDocxEnabled(), conf: registersDocx }).toEqual({
+      rust: DOCX_ENABLED,
+      conf: DOCX_ENABLED,
+    });
+  });
+
+  it("neither base list carries .docx, whichever way the flag is set", () => {
+    expect(BASE_EXTENSIONS.has(".docx")).toBe(false);
+    expect(rustAssocExts()).not.toContain("docx");
   });
 });

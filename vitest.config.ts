@@ -115,6 +115,10 @@ export default defineConfig({
     env: {
       TANDEM_TEST_APP_DATA_ROOT: TEST_APP_DATA_ROOT,
       TANDEM_APP_DATA_DIR: TEST_APP_DATA_ROOT,
+      // `.docx` ships dark (ADR-053), but its code and suites stay: under
+      // vitest there is no build define, so this env fallback keeps the dark
+      // code exercised. The release path is tested by stubbing it back to "".
+      TANDEM_DOCX: "1",
     },
     projects: [
       {

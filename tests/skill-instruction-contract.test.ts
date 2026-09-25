@@ -31,8 +31,8 @@ function gettingWokenSection(skill: string): string {
   return namedSection(skill, "Getting Woken While Idle");
 }
 
-function docxWorkflow(skill: string): string {
-  return namedSection(skill, ".docx Review Workflow");
+function reviewWorkflow(skill: string): string {
+  return namedSection(skill, "Review Workflow");
 }
 
 function hardRules(skill: string): string {
@@ -114,7 +114,10 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // orchestrator, and the "Wakes are best-effort" bullet carries the same qualifier — so the
   // orchestrator-only assertion below is part of the wake contract, not an extra. Every wake
   // assertion here was re-read against the bumped file.
-  expect(skill).toMatch(/^version:\s*26$/m);
+  // 27 is the .docx ship-dark group (ADR-053): the .docx Review Workflow became a plain
+  // Review Workflow and Hard Rule 8 now says Word files do not open. Outside the wake
+  // section; every wake assertion below was re-read against the bumped file.
+  expect(skill).toMatch(/^version:\s*27$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
   // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
@@ -200,8 +203,8 @@ describe("shipped Tandem skill instruction contract", () => {
     expect(collab).toMatch(/precondition for annotating/i);
     expect(collab).toMatch(/not\*\* enforced on what you write|not enforced on what you write/i);
 
-    // The `.docx` review path annotates at its own step 3 and touches neither status nor inbox.
-    expect(namedSection(skill, ".docx Review Workflow")).toMatch(/after you know `mode`/i);
+    // The review path annotates at its own step 2 and touches neither status nor inbox.
+    expect(reviewWorkflow(skill)).toMatch(/after you know `mode`/i);
   });
 
   it("attempts one session-local persistent wake watch on first hand-started use", () => {
@@ -303,61 +306,11 @@ describe("shipped Tandem skill instruction contract", () => {
     expect(troubleshooting).toMatch(/plugin-only or double-installed session/i);
   });
 
-  it("names the real two-step Word-comment recipe instead of the dead author:import filter (#1771)", () => {
-    const workflow = docxWorkflow(readShippedSkill());
-
-    // The dead framing this issue names: the recipe must not tell Claude to "read and act
-    // on" an author:"import" result, since an un-promoted import never survives the
-    // note-type filter. The literal call stays as the notesExcluded probe — this is not an
-    // absence check on the call itself.
-    expect(workflow).not.toMatch(/read and act on/i);
-
-    // The one real signal (notesExcluded) plus the actual promoted-state discriminator
-    // (importSource) must both be present.
-    expect(workflow).toContain("notesExcluded");
-    expect(workflow).toContain("importSource");
-
-    // promotedFrom is stamped on every promoted note, including the user's own personal
-    // notes — the recipe must say it is not a reliable import marker. `\b` word-boundaries
-    // on "not"/"never" are load-bearing: a bare substring match is satisfied by the word
-    // "note" itself (promotedFrom's own value), which is exactly the inverted claim this
-    // guards against.
-    expect(workflow).toMatch(
-      /promotedFrom[\s\S]{0,200}\b(?:not|never)\b[\s\S]{0,60}(?:reliable|discriminat)/i,
-    );
-
-    // Solo mode holds the promotion like any other user comment. Anchored on the actual
-    // disclosure sentence, not a bare /solo/i scan — the workflow's export step separately
-    // mentions "withheld Solo-held annotations", which would satisfy a loose match even
-    // with this sentence deleted.
-    expect(workflow).toMatch(/the promotion is held like any other user comment/i);
-  });
-
-  /**
-   * Review finding (annotation-model-reviewer-3): the promoted-import recipe
-   * presented `tandem_getAnnotations({author:"user"})` + `importSource` as a
-   * full read of a Word comment, but every threaded Word reply is stamped
-   * `private: true` at import (docx-comments.ts) and `channelVisibleReplies`
-   * (annotations.ts) strips it permanently — including after promotion — so
-   * a Word thread's follow-ups never reach Claude via this recipe. The
-   * recipe must disclose that, not just note-count `heldFromExport`, which
-   * doesn't count withheld replies either.
-   */
-  it("discloses that Word thread replies never reach Claude, even promoted (annotation-model-reviewer-3)", () => {
-    const workflow = docxWorkflow(readShippedSkill());
-    expect(workflow).toMatch(
-      /repl(?:y|ies)[\s\S]{0,200}never reach Claude|never reach Claude[\s\S]{0,200}repl(?:y|ies)/i,
-    );
-    expect(workflow).toMatch(
-      /promot(?:ed|ion)[\s\S]{0,150}replies|replies[\s\S]{0,150}promot(?:ed|ion)/i,
-    );
-  });
-
   it("closes the four SKILL.md content gaps (#1820)", () => {
     const skill = readShippedSkill();
     const rules = hardRules(skill);
     const annotationGuide = annotationGuideSection(skill);
-    const workflow = docxWorkflow(skill);
+    const workflow = reviewWorkflow(skill);
 
     // Rule 4: format-conditional newline handling, not the stale unconditional claim.
     // Scoped to Rule 4's own text (not the whole Hard Rules block) — Rule 5, added in the
@@ -399,7 +352,7 @@ describe("shipped Tandem skill instruction contract", () => {
     expect(skill).toContain("EXTERNAL_CONFLICT");
     expect(skill).toContain("NO_DOCUMENT");
 
-    // .docx Review Workflow: heldFromExport noted on the export step.
+    // Review Workflow: heldFromExport noted on the export step.
     expect(workflow).toContain("heldFromExport");
   });
 
@@ -435,7 +388,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "26", bodyHash: "08e4029c527e" });
+    ).toEqual({ version: "27", bodyHash: "d43a4b79ffe5" });
   });
 
   // #1770: the skill is the only surface that tells Claude what it may NOT do with a card

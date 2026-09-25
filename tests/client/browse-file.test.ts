@@ -52,7 +52,8 @@ describe("browseNativeFile (Tauri native picker)", () => {
         filters: [
           expect.objectContaining({
             name: "Documents",
-            extensions: expect.arrayContaining(["md", "txt", "html", "htm", "docx"]),
+            // Exact, so the absence of docx (ADR-053: .docx ships dark) is asserted.
+            extensions: ["htm", "html", "markdown", "md", "txt"],
           }),
         ],
       }),

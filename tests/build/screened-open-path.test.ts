@@ -326,9 +326,14 @@ describe("validate_open_candidate keeps its load-bearing check order", () => {
   });
 
   it("checks the extension allowlist and is_file after the UNC refusal", () => {
-    const extAt = body.indexOf("SUPPORTED_FILE_ASSOC_EXTS.contains");
+    const extAt = body.indexOf("extension_supported(&ext)");
     const fileAt = body.indexOf(".is_file()");
     expect(extAt).toBeGreaterThan(uncAt);
     expect(fileAt).toBeGreaterThan(uncAt);
+    // The allowlist check moved into a helper when .docx went behind DOCX_ENABLED
+    // (ADR-053); pin that the helper still consults the allowlist.
+    expect(fnBody(OPEN_CANDIDATE, "extension_supported")).toMatch(
+      /SUPPORTED_FILE_ASSOC_EXTS\.contains\(&ext\)/,
+    );
   });
 });

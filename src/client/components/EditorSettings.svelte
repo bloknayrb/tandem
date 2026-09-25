@@ -1,4 +1,5 @@
 <script lang="ts">
+import { DOCX_ENABLED } from "../../shared/constants.js";
 import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { createRadioGroup } from "../hooks/useRadioGroup.svelte";
 import {
@@ -39,12 +40,16 @@ function cardStyle(selected: boolean, disabled?: boolean): string {
 
 // #811: per-format editor font. Keyed by the normalized `format` string
 // (matches `detectFormat`: `.markdown`→md, `.htm`→html).
-const FONT_FORMAT_ROWS = [
-  { format: "md", label: "Markdown (.md)" },
-  { format: "docx", label: "Word (.docx)" },
-  { format: "html", label: "HTML (.html)" },
-  { format: "txt", label: "Plain text (.txt)" },
-] as const;
+// The Word row is hidden while `.docx` ships dark (ADR-053); a stored `docx`
+// override is left in settings untouched.
+const FONT_FORMAT_ROWS = (
+  [
+    { format: "md", label: "Markdown (.md)" },
+    { format: "docx", label: "Word (.docx)" },
+    { format: "html", label: "HTML (.html)" },
+    { format: "txt", label: "Plain text (.txt)" },
+  ] as const
+).filter((row) => DOCX_ENABLED || row.format !== "docx");
 const FONT_OPTIONS = [
   ["sans", "Sans"],
   ["serif", "Serif"],

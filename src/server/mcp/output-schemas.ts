@@ -99,10 +99,10 @@ const annotationBaseShape = {
     .object({
       author: z.string(),
       file: z.string(),
-      commentId: z.string().optional().describe("Word comment id (round-trip identity on save)"),
+      commentId: z.string().optional().describe("Source comment id (round-trip identity on save)"),
     })
     .optional()
-    .describe("Original Word author/file for imported .docx comments"),
+    .describe("Original author/file for an imported comment"),
   color: HighlightColorSchema.optional().describe("Highlight annotations only"),
   suggestedText: z.string().optional().describe("Replacement proposal (comment annotations only)"),
 };

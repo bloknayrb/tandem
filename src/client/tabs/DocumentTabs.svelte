@@ -11,6 +11,7 @@ import { isInActiveDragRegion } from "../utils/dismiss-outside.js";
 import {
   addRecentFile,
   loadRecentFilesCached,
+  openableRecentFiles,
   type RecentFileEntry,
   saveRecentFiles,
 } from "../utils/recentFiles.js";
@@ -1019,7 +1020,7 @@ const singleTab = $derived(tabs.length <= 1);
 function toggleNewTabMenu() {
   const opening = !showRecent;
   if (opening) {
-    recentFiles = loadRecentFilesCached();
+    recentFiles = openableRecentFiles(loadRecentFilesCached());
     previouslyFocused = document.activeElement as HTMLElement | null;
     openRight = shouldOpenRight();
   } else {

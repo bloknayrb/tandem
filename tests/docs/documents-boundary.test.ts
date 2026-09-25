@@ -427,6 +427,8 @@ const FAN_OUT = [
   "server/documents/autosave.ts -> server/yjs/provider.ts (value) x1",
   "server/documents/autosave.ts -> shared/utils.ts (value) x1",
   "server/documents/open.ts -> server/file-io/index.ts (value) x1",
+  // The .docx ship-dark flag (ADR-053): open.ts asks it which extensions a build accepts.
+  "server/documents/open.ts -> server/file-io/docx-flag.ts (value) x1",
   // Two edges from the seam back into mcp/, both ADR-034 residue: format
   // detection/id derivation, and the welcome-doc tutorial annotations.
   "server/documents/open.ts -> server/mcp/document-model.ts (value) x1",

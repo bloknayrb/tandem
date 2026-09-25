@@ -19,6 +19,7 @@
 **Original rationale:** mammoth.js import is lossy (no complex tables, tracked changes, footnotes). Review-only prevents accidental data loss.
 **Supersession (#576):** mammoth import is still lossy, so the data-loss concern is real — but it's addressed by *explicit-save gating* rather than by blocking edits. `.docx` opens writable; edits are held in the Y.Doc and serialized back to `.docx` (body content only — comments/tracked-changes are v1.1) **only on an explicit user/agent save** via the `docx` package (`saveBinary` adapter capability + `atomicWriteBuffer`). Auto-save never writes `.docx` (`BINARY_SAVE_FORMATS` is disjoint from `AUTO_SAVE_FORMATS`). Lossy-import warnings surface at open; export-downgrade warnings surface on save. The export is trust-boundary-gated (scrubbed hyperlinks, inline-only image embeds, no OLE objects, plain-text fallback for unknown nodes). See `src/server/file-io/docx-export.ts`.
 **Engine replacement proposed by ADR-052 (shelved 2026-09-24; `.docx` ships dark under ADR-053):** SuperDoc's engine takes over reading and writing `.docx`, and save becomes a splice into the original file. The explicit-save gate described here stays.
+**See ADR-053:** `.docx` ships dark as of 2026-09-24, so none of this is reachable in a release.
 
 ## ADR-005: Node-Anchored Ranges for Overlays
 **Decision:** Overlays use node-relative anchors (nodeId + offset) instead of character offsets.
@@ -2519,3 +2520,69 @@ export, and the `.md` / `.txt` / `.html` paths.
 the June 2026 "study, don't adopt" verdict on SuperDoc; both remain in force. **Relates to:**
 the GenOffice spike ([docs/spikes/genoffice-docx-engine-spike.md](spikes/genoffice-docx-engine-spike.md)),
 whose "splice, don't rebuild" finding is Decision 3; #1142 (umbrella); #1754.
+
+## ADR-053: .docx Ships Dark
+
+**Status:** Accepted (2026-09-24)
+
+**Context.** Bryan decided on 2026-09-24 that `.docx` support leaves the live build "for the time being": it "is currently not really in a state that is suitable for serious work". The SuperDoc engine evaluation that was meant to replace the mammoth-based pipeline (ADR-052) was shelved the same day after its spike came back NO-GO. That leaves no engine worth shipping, so a release should not offer `.docx` at all.
+
+**Decision.** Ship `.docx` dark behind a build flag, the way the license gate ships (ADR-040). Don't delete it. The code stays merged and its suites keep running, so re-enabling is a checklist and not a rewrite.
+
+- **The flag.** `DOCX_ENABLED` is a literal `false` in `src/shared/constants.ts`. The client reads it directly. `tsup.config.ts` injects it into the server and cli bundles as `__DOCX_ENABLED__`. `docxEnabled()` in `src/server/file-io/docx-flag.ts` returns the define when it is present, so **no environment variable can re-enable `.docx` in a release**. `TANDEM_DOCX=1` stands in only when the define is absent (tsx and vitest), and vitest's root `test.env` sets it so the existing `.docx` suites keep exercising the dark code. `docxEnabled()` is evaluated on every call, never cached, so release-path tests can flip it with `vi.stubEnv`.
+- **What a release does.**
+  - It refuses a `.docx` on open and upload with `DOCX_UNSUPPORTED_MESSAGE`, which points the user at saving a copy as `.txt` to edit or `.html` to review read-only. The internal code is `UNSUPPORTED_FORMAT`, which reaches MCP as `FORMAT_ERROR` and `/api` as `400 BAD_REQUEST`. The client's Tauri drop and startup-rejection surfaces show the same message without asking the server; the browser drop and the file dialog relay the server's refusal text, which is that message.
+  - It doesn't register `tandem_applyChanges` or `tandem_convertToMarkdown`. `tandem_restoreBackup` shares their registrar and stays registered. `tandem_save`'s `allowImageLoss` parameter isn't registered.
+  - No tool, parameter or output-schema description mentions `.docx` or Word.
+  - Recents and Recent sessions omit `.docx` entries, and Settings has no Word font row.
+  - The desktop app is no longer a `.docx` handler. `tauri.conf.json` has no `.docx` association, and the Rust `DOCX_ENABLED` const makes `validate_open_candidate` reject a `.docx` with the reason code `docx-unsupported`.
+- **Coupled surfaces.** These must move together on a flip:
+  - the TS literal;
+  - the define;
+  - the Rust const;
+  - the `tauri.conf.json` association;
+  - the shipped skill's `.docx` content and its `version`;
+  - the tool and schema wording;
+  - the E2E skip list.
+
+  `tests/build/file-association-alignment.test.ts` fails if the TS literal, the Rust const and the conf's association disagree in either direction, so a half-flip turns `check` red.
+- **Unsaved `.docx` sessions are dropped at upgrade.** This was Bryan's decision. The alternatives were leaving them to the normal 30-day expiry, or keeping them indefinitely.
+  - The drop runs only on an HTTP-mode start with a writable store: `restoreOpenDocuments(…, { dropDarkDocx })` from `src/server/index.ts`. A stdio start has no `/api` to tell anyone through and usually holds the store read-only, so it leaves `.docx` sessions alone.
+  - `restoreOpenDocuments` deletes every `.docx` session in the listing, in or out of the restore window, and names those that would have reopened (in-window or dirty). When any of them held unsaved edits, it adds "Unsaved edits to them were discarded."
+  - The notice goes to stderr at boot. That reaches `tandem.log` on desktop, but only the terminal on an npm start. It is also held in `src/server/startup-notices.ts` and replayed by `handleNotifyStream` to every subscriber that connects during this server process, with a fixed `dedupKey`. It is sent to every subscriber because a stale tab can reconnect before the fresh one, and tabs don't share tray state.
+  - The records are gone after that boot, so the notice doesn't repeat. The exception is a delete that fails with an error other than ENOENT: that file survives, and the next boot names it again.
+  - An MCP-only user who never opens a tab sees only the terminal line, and this ADR accepts that.
+  - The listing already leaves out upload paths, unparseable files and quarantined files. Those stay with the 30-day session GC.
+  - Annotation envelopes and document backups aren't touched. The mtime-based cleanups reclaim them after 30 days.
+  - **The drop is not reversible.** Re-enabling `.docx` does not bring those sessions back. (The client's recent-files list only HIDES `.docx` rows, at the two places it is shown, so they do come back.) The files on disk were never changed.
+- **The `/api` twins stay mounted.** `POST /api/apply-changes` and `POST /api/convert` are inert rather than removed, because both need an open `.docx` and a release cannot open one. This is not a Critical Rule 9 gap: the gate tables scan source, and the MCP halves come back with the flag. [#2027](security.md#open-findings) (`allowImageLoss` on `/api/save`) is dormant for the same reason, and its acceptance stands for the re-enable.
+- **E2E.** CI's E2E backend is the built `dist/server`, where the define is `false` and the env is ignored. The three tests that need a real `.docx` are skipped with `test.skip(!DOCX_ENABLED, …)`: `batch-promote`, `batch-promote-width`, and one test in `margin-view`. `tests/scripts/e2e-docx-skip-wiring.test.ts` pins that list, so it can't grow silently.
+
+**Consequences.**
+- A mixed multi-select from the OS (a `.docx` among supported files) still collapses to the generic `multiple-rejected` code rather than the Word message.
+- No client test exercises the enabled path until the flip. The checklist below requires one.
+- A `tsx` dev server (`dev:server`, `dev:standalone`) started without `TANDEM_DOCX=1` has no define, so it is dark too, and on an HTTP start it runs the upgrade drop against whatever session store it points at, including a developer's real one. Set `TANDEM_DOCX=1` to work on `.docx` locally.
+- `tests/build/docx-define-wiring.test.ts` pins the define into the server and cli entries of `tsup.config.ts`. Every release-path unit test models a release by stubbing the env, which exercises the missing-define branch, so nothing else would notice the define being dropped.
+- User-facing docs no longer describe `.docx` support. Internal docs (`architecture.md`, `gotchas.md`, `mcp-tools.md`) keep describing the code under a ships-dark banner, because the code is still there and still tested.
+- The "Reviewing a .docx" recipe was removed from `docs/workflows.md`, and the `.docx` Review Workflow was removed from `skills/tandem/SKILL.md` (version 27), along with the tests that pinned them. Git history holds both.
+
+**Re-enable checklist.**
+1. Flip `DOCX_ENABLED` in `src/shared/constants.ts` and in `src-tauri/src/open_candidate.rs`, and restore the `.docx` association block in `src-tauri/tauri.conf.json`. The alignment test checks all three together.
+2. Un-skip the E2E list: delete the `test.skip(!DOCX_ENABLED, …)` lines and `tests/scripts/e2e-docx-skip-wiring.test.ts`. Its second case fails on the flip for exactly this reason.
+3. Add a client test for the enabled path: the file dialog lists `.docx`, a Tauri drop accepts it, and Settings shows the Word font row.
+4. Move `tandem_applyChanges` and `tandem_convertToMarkdown` out of `DARK_TOOLS` in `tests/docs/tool-count-drift.test.ts`, and update the counts it pins in `docs/mcp-tools.md` and `CLAUDE.md`.
+5. Restore the user-facing docs from the PR that shipped this ADR:
+   - `README.md`
+   - `docs/user-guide.md`
+   - the `docs/workflows.md` recipe and `tests/docs/workflows-import-recipe-claims.test.ts`
+   - `docs/troubleshooting.md`
+   - `docs/licensing-explained.md`
+   - `docs/integrations.md`
+   - `docs/positioning.md`
+   - the `docs/release-smoke-checklist.md` restart row, which moved from a `.docx` to a `.md`
+   - `sample/welcome.md` and `tests/fixtures/welcome-snapshot.md`
+6. Restore the skill's `.docx` content and the contract tests that pinned it, then bump the skill's frontmatter `version`.
+7. Drop the ships-dark banners. Decide whether the upgrade-drop code and `src/server/startup-notices.ts` still have a job; with the flag on, the drop is a no-op.
+8. Close the tracking issue ("Re-enable .docx support (ADR-053)").
+
+**Cross-references:** ADR-004 and #576 (the `.docx` write-back this hides), ADR-040 (the flag pattern), ADR-052 (SuperDoc, shelved), #2027.

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addRecentFile,
   formatWhen,
+  openableRecentFiles,
   type RecentFileEntry,
   recentFilePaths,
 } from "../../src/client/utils/recentFiles.js";
@@ -68,6 +69,19 @@ describe("addRecentFile", () => {
 describe("recentFilePaths", () => {
   it("projects entries to paths newest-first", () => {
     expect(recentFilePaths([entry("/a.md"), entry("/b.md")])).toEqual(["/a.md", "/b.md"]);
+  });
+});
+
+describe("openableRecentFiles while .docx ships dark (ADR-053)", () => {
+  it("hides .docx rows from display but keeps them in storage across a write", async () => {
+    vi.resetModules();
+    localStorage.clear();
+    const mod = await import("../../src/client/utils/recentFiles.js");
+    mod.saveRecentFiles([entry("/r.DOCX"), entry("/a.md")]);
+    expect(openableRecentFiles(mod.loadRecentFiles()).map((e) => e.path)).toEqual(["/a.md"]);
+    // A writer saves what load returns; the .docx row must survive that round-trip.
+    mod.saveRecentFiles(mod.addRecentFile(mod.loadRecentFiles(), "/b.md"));
+    expect(mod.loadRecentFiles().map((e) => e.path)).toContain("/r.DOCX");
   });
 });
 

@@ -3,6 +3,7 @@ import {
   messageForStartupRejection,
   wireStartupRejection,
 } from "../../src/client/utils/startup-rejection.js";
+import { DOCX_UNSUPPORTED_MESSAGE } from "../../src/shared/constants.js";
 
 /**
  * A fake of the Rust buffer, including the property the whole design rests on:
@@ -58,6 +59,8 @@ describe("messageForStartupRejection", () => {
     expect(messageForStartupRejection("not-a-file")).toContain("moved or been deleted");
     expect(messageForStartupRejection("non-file-url")).toContain("moved or been deleted");
     expect(messageForStartupRejection("suspicious-path")).toContain("safety reasons");
+    // ADR-053: a `.docx` refused because `.docx` ships dark says why.
+    expect(messageForStartupRejection("docx-unsupported")).toBe(DOCX_UNSUPPORTED_MESSAGE);
     expect(messageForStartupRejection("multiple-rejected")).toBe(
       "Some of those files couldn't be opened in Tandem.",
     );

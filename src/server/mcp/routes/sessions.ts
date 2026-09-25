@@ -5,6 +5,7 @@ import type { Request, Response } from "express";
 import { API_SESSIONS_CLEAR, API_SESSIONS_DELETE } from "../../../shared/api-paths.js";
 import { isStoreReadOnly } from "../../annotations/store.js";
 import { isLoopback } from "../../auth/middleware.js";
+import { isDarkDocx } from "../../file-io/docx-flag.js";
 import {
   assertLoopbackForMutation,
   assertOriginAllowlisted,
@@ -22,7 +23,11 @@ import { sendApiError } from "./_shared.js";
  */
 export async function handleListSessions(req: Request, res: Response): Promise<void> {
   try {
-    const sessions = await listSessionsMetadata();
+    // A `.docx` session can't reopen while `.docx` ships dark (ADR-053); an
+    // HTTP start normally deletes them, and this covers the starts that don't.
+    const sessions = (await listSessionsMetadata()).filter(
+      (s) => !isDarkDocx(path.extname(s.filePath).toLowerCase()),
+    );
     const loopback = isLoopback(req.socket.remoteAddress);
     const data = loopback
       ? sessions

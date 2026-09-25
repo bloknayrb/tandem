@@ -1,5 +1,7 @@
 # Gotchas — the silent-failure catalogue
 
+> **`.docx` ships dark ([ADR-053](decisions.md#adr-053-docx-ships-dark), 2026-09-24).** A release build refuses `.docx` files and registers neither `.docx`-only MCP tool. The `.docx` material below still describes the code accurately, because the code stays merged and tested behind `DOCX_ENABLED`, but none of it is reachable in a shipped Tandem until the flag flips.
+
 > Mechanism and evidence for the rules listed under **Gotchas** in
 > [CLAUDE.md](../CLAUDE.md#gotchas). Each rule stays inline there because violating it
 > fails silently; the *why* lives here so it is one link away rather than ambient

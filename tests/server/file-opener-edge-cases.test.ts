@@ -5,10 +5,11 @@ import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openFromDisk, openFromUpload } from "../../src/server/documents/open.js";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
+import { supportedExtensions } from "../../src/server/file-io/docx-flag.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { handleOpen } from "../../src/server/mcp/routes/open.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
-import { SUPPORTED_EXTENSIONS, Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
+import { Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
 
 let tmpDir: string;
 
@@ -208,7 +209,8 @@ describe("openFromUpload — Buffer content", () => {
   });
 });
 
-describe("SUPPORTED_EXTENSIONS", () => {
+describe("supportedExtensions()", () => {
+  const SUPPORTED_EXTENSIONS = supportedExtensions();
   it("contains expected extensions", () => {
     expect(SUPPORTED_EXTENSIONS.has(".md")).toBe(true);
     expect(SUPPORTED_EXTENSIONS.has(".txt")).toBe(true);

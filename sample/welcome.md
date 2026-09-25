@@ -16,7 +16,7 @@ Tandem has three kinds of annotation, each with its own color in the margin and 
 - **Notes** — private thoughts kept to yourself; your AI never reads them.
 - **Comments** — questions or remarks on a passage, shared with your AI.
 
-Two variants are worth naming. A **suggestion** is a comment from your AI that also proposes replacement text you can accept in one click. An **imported comment** is a Word comment carried in from a `.docx` file; it arrives as a note, so it stays private until you promote it.
+One variant is worth naming. A **suggestion** is a comment from your AI that also proposes replacement text you can accept in one click.
 
 Open the side panel to review any pending annotation, or switch on the margin view to see them anchored beside the text.
 

@@ -2,7 +2,11 @@
 
 These tools are exposed over the MCP protocol. **Claude Code is Tandem's default and most-tested client** ([ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)), but the tools are available to any MCP-capable client connecting to `http://127.0.0.1:3479/mcp`.
 
-Tandem exposes 33 tools via MCP HTTP (30 active, 3 deprecated stubs that return MCP error responses with code `DEPRECATED`). The channel shim also exposes `tandem_reply` for real-time push contexts — the shim itself is a Claude-specific stdio transport on top of the MCP contract; other MCP clients discover the HTTP transport automatically and subscribe to `/api/events` directly for the same real-time stream. All tools use flat text offsets for positions, counted in **UTF-16 code units** rather than characters — use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem registers 33 tools in source (28 active, 2 shipped dark, 3 deprecated stubs); a release exposes 31 over MCP HTTP. The deprecated stubs return MCP error responses with code `DEPRECATED`. The two dark tools, `tandem_applyChanges` and `tandem_convertToMarkdown`, are `.docx`-only and are registered only when `.docx` is enabled ([ADR-053](decisions.md#adr-053-docx-ships-dark)). 
+
+**`.docx` ships dark.** A release refuses `.docx` files, so every `.docx` behaviour described below (Word comment import and export, `allowImageLoss`, the `.docx` sidecar backup, the error codes only the two dark tools return) is reachable only in a build with `.docx` enabled. It stays documented so the re-enable starts from an accurate reference.
+
+The channel shim also exposes `tandem_reply` for real-time push contexts — the shim itself is a Claude-specific stdio transport on top of the MCP contract; other MCP clients discover the HTTP transport automatically and subscribe to `/api/events` directly for the same real-time stream. All tools use flat text offsets for positions, counted in **UTF-16 code units** rather than characters — use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -149,7 +153,7 @@ tandem_open({ filePath: "C:\\Users\\bkolb\\Documents\\progress-report-feb.md" })
 ```
 
 **Notes:**
-- Supported formats: `.md`, `.markdown`, `.txt`, `.html`, `.htm`, `.docx`. `.md`/`.txt` auto-save; `.docx` is editable but written back only on an explicit save (auto-save skips it); **`.html`/`.htm` open read-only (#1798)** — they are in neither save set, so nothing can write them back, and opening them editable meant edits that looked accepted and then vanished on tab close. Annotating an `.html` still works. `.markdown` and `.htm` are aliases — `detectFormat` folds them into `md` and `html`; a `.markdown` keeps its own extension on save.
+- Supported formats: `.md`, `.markdown`, `.txt`, `.html`, `.htm`. `.docx` is refused while it ships dark, with a message saying Word files aren't supported in this version ([ADR-053](decisions.md#adr-053-docx-ships-dark)); with `.docx` enabled it is editable but written back only on an explicit save (auto-save skips it). `.md`/`.txt` auto-save; **`.html`/`.htm` open read-only (#1798)** — they are in neither save set, so nothing can write them back, and opening them editable meant edits that looked accepted and then vanished on tab close. Annotating an `.html` still works. `.markdown` and `.htm` are aliases — `detectFormat` folds them into `md` and `html`; a `.markdown` keeps its own extension on save.
 - **Nothing is launched.** Browser auto-open was removed in #477 (`src/cli/start.ts`), and no code path from this tool shows or focuses the desktop window -- `show_main_window` (`src-tauri/src/lib.rs:805`) is reached only from startup, the tray and app menu, a second-instance launch, and macOS's own file-open event. The document appears as a new tab in an editor that is already open. If none is, open one yourself: the desktop app, or the URL `tandem` prints on startup -- `http://127.0.0.1:3479` in a normal install, or `http://127.0.0.1:5173` when you are running the Vite dev server.
 - Opening a file that's already open switches to its tab (returns `alreadyOpen: true`).
 - **Auto-reload:** Open documents are automatically reloaded when the file changes on disk (e.g., Claude's Edit tool, `git pull`). Annotations are preserved. A toast notification appears in the editor.
@@ -408,7 +412,7 @@ Save the current document back to disk. Uses atomic write (temp file + rename).
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `documentId` | string | no | Target document ID (defaults to active document) |
-| `allowImageLoss` | boolean | no | **Destructive.** Save a `.docx` whose body pictures the import dropped, permanently removing them from the file on disk. Defaults to `false` — the save is refused (#1755, #1941). Ask the user first; `tandem_convertToMarkdown` keeps both the pictures and the edits |
+| `allowImageLoss` | boolean | no | **Registered only when `.docx` is enabled (ADR-053).** **Destructive.** Save a `.docx` whose body pictures the import dropped, permanently removing them from the file on disk. Defaults to `false` — the save is refused (#1755, #1941). Ask the user first; `tandem_convertToMarkdown` keeps both the pictures and the edits |
 
 **Returns:**
 ```json
@@ -576,6 +580,8 @@ Switch the active document. Tools will operate on this document by default.
 ---
 
 ### tandem_convertToMarkdown
+
+> **Ships dark ([ADR-053](decisions.md#adr-053-docx-ships-dark)).** Not registered in a release build, because `.docx` support is out of the live build for now. This entry documents the tool as it behaves with `.docx` enabled.
 
 Convert a `.docx` document to an editable Markdown file. Writes the `.md` file to disk and opens it as a new tab.
 
@@ -880,6 +886,8 @@ The sidecar and the response carry `heldFromExport` and `privateExcluded` as **t
 ## Apply Tools
 
 ### tandem_applyChanges
+
+> **Ships dark ([ADR-053](decisions.md#adr-053-docx-ships-dark)).** Not registered in a release build, because `.docx` support is out of the live build for now. This entry documents the tool as it behaves with `.docx` enabled.
 
 **EXPERIMENTAL** (#1754). Apply all accepted suggestions back to the `.docx` file as tracked changes. The original file is backed up before modification. It refuses any document whose flat text it cannot reproduce from `word/document.xml` — some Word documents are a known limitation, and that refusal arrives as `INTERNAL_ERROR`.
 

@@ -131,8 +131,8 @@ Claude: tandem_status({ text: "Done" })
 Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\progress-report-feb.md" })
 → { documentId: "progress-report-f-1a2b3c", fileName: "progress-report-feb.md", ... }
 
-Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\invoice-feb.docx" })
-→ { documentId: "invoice-feb-d4e5f6", fileName: "invoice-feb.docx", readOnly: false, ... }
+Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\invoice-feb.txt" })
+→ { documentId: "invoice-feb-d4e5f6", fileName: "invoice-feb.txt", readOnly: false, ... }
 ```
 
 Bryan sees two tabs in the editor. Claude verifies both are open:
@@ -141,7 +141,7 @@ Bryan sees two tabs in the editor. Claude verifies both are open:
 Claude: tandem_listDocuments()
 → { documents: [
     { id: "progress-report-f-1a2b3c", fileName: "progress-report-feb.md", isActive: false },
-    { id: "invoice-feb-d4e5f6", fileName: "invoice-feb.docx", isActive: true }
+    { id: "invoice-feb-d4e5f6", fileName: "invoice-feb.txt", isActive: true }
   ], count: 2 }
 ```
 
@@ -287,50 +287,6 @@ The **Solo / Tandem** toggle in the title bar (`Ctrl+Shift+M`) holds work back i
 - **Solo** — the AI's pending annotations are held back from the document, *and* the comments and replies you author are withheld from the AI. Each held item shows an amber **Held** pill, and the status bar keeps a running count. Resolved annotations are always visible regardless of mode. Solo also hides the right rail, so the annotation list is out of sight while you write.
 
 Switching back to Tandem releases the whole set at once, in both directions. See [User Guide → Solo / Tandem Mode](user-guide.md#solo--tandem-mode) for exactly which surfaces the hold covers.
-
-## Reviewing a .docx with Imported Word Comments
-
-**Setup:** Bryan receives a .docx file from a colleague that already contains Word comments. He wants Claude to review the document while seeing the existing comments.
-
-```
-Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\contract-review.docx" })
-→ { documentId: "contract-review-x1y2z3", readOnly: false, format: "docx", ... }
-```
-
-The .docx opens editable — edits are held in the session and written back to the original only on an explicit save, and auto-save skips `.docx` entirely. Word comments (`<w:comment>` elements) are automatically extracted and imported as Tandem annotations with `author: "import"`, landing as private notes (invisible to Claude, ADR-027) until Bryan batch-promotes them from the SidePanel.
-
-```
-Claude: tandem_getAnnotations({ author: "import" })
-→ { annotations: [], count: 0, notesExcluded: 2 }
-```
-
-The empty `annotations` array here is expected, not a bug — the two imports are private notes until promoted. `notesExcluded` is the probe: it reports how many Word comments are awaiting promotion.
-
-Bryan promotes both from the SidePanel. Claude picks them up on its next `tandem_checkInbox` poll, then reads the promoted comments:
-
-```
-Claude: tandem_getAnnotations({ author: "user" })
-→ { annotations: [
-    { id: "ann_...", author: "user", type: "comment", content: "Please verify this figure", range: { from: 120, to: 135 }, importSource: { author: "Legal Reviewer", file: "contract-review.docx" }, promotedFrom: "note" },
-    { id: "ann_...", author: "user", type: "comment", content: "Legal needs to review this clause", range: { from: 890, to: 920 }, importSource: { author: "Legal Reviewer", file: "contract-review.docx" }, promotedFrom: "note" }
-  ], count: 2 }
-```
-
-`importSource` is what identifies these as promoted Word comments — `promotedFrom: "note"` is also present, but it's stamped on every promoted note (including one Bryan sends to Claude personally), so it's not a reliable import marker on its own.
-
-Claude reads the imported comments and acts on them:
-
-```
-Claude: tandem_getContext({ from: 120, to: 135, documentId: "contract-review-x1y2z3" })
-// Reads the context around the flagged figure
-
-Claude: tandem_comment({
-  from: 120, to: 135,
-  text: "Imported note flagged this figure. Cross-checked: the correct amount per Q3 report is $4.2M, not $3.8M.",
-})
-```
-
-Bryan filters annotations by author in the SidePanel — "Imported" shows the original Word comments, "Claude" shows new findings. Accept/dismiss, the review queue, and their shortcuts apply to both Claude's comments and an unpromoted import (both have `author !== "user"`); once promoted, an import becomes Bryan's own `author: "user"` annotation, which drops out of the review queue and switches from accept/dismiss to Edit/Remove/Reply.
 
 ## Onboarding Tutorial (First Run)
 

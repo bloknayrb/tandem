@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Keyboard shortcut for the formatting bar.** `Ctrl+Alt+F` shows or hides the floating formatting bar. You can remap it in **Settings → Shortcuts**, and the Help modal shows your current key. On keyboards where `AltGr+F` types `[` (Hungarian, Czech, Slovak, Croatian, Slovenian, Bosnian, Serbian Latin), Tandem skips presses the browser reports as AltGr (without ⌘). If yours still collides, remap the shortcut.
 
+### Removed
+
+- **Word (`.docx`) files can no longer be opened, and the desktop app is no longer offered as a handler for `.docx` (ADR-053).** Word support wasn't reliable enough for serious work, so it is out of the app for now. Your `.docx` files on disk are untouched. Opening one shows a message suggesting you save a copy from Word as Plain Text (`.txt`) to edit it, or as Web Page (`.html`) to review it read-only. Word documents you had open aren't reopened after the upgrade. Tandem lists them once, and any unsaved edits to them are discarded. The two Word-only AI tools, applying tracked changes and converting to Markdown, are gone from the tool list too. The bundled Tandem skill moves to version 27 to match; it refreshes on the next desktop or `tandem` server start, or with `tandem setup`.
+
 ## [0.27.0] - 2026-09-21
 
 ### What's New

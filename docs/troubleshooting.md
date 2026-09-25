@@ -471,7 +471,7 @@ A link Tandem will not treat as safe also no longer *looks* clickable: it stays 
 
 If Tandem is your registered handler and you open a file it can't accept — an unsupported type, a path that no longer exists, or a folder — it now tells you so. Older builds sat on the welcome document with no message and recorded the reason only in the log.
 
-Tandem opens `.md`, `.markdown`, `.txt`, `.docx`, `.html` and `.htm`. Both routes a file can arrive by — the command line on Windows and Linux, an Apple Event on macOS — now run the same checks, so a file accepted one way is no longer silently dropped the other. If the refusal happens before the window exists, the message is held and shown once the window is ready.
+Tandem opens `.md`, `.markdown`, `.txt`, `.html` and `.htm`. Word (`.docx`) files aren't supported in this version and are refused with a message saying so; save a copy from Word as Plain Text (`.txt`) to edit it, or as Web Page (`.html`) to review it read-only, instead. Both routes a file can arrive by — the command line on Windows and Linux, an Apple Event on macOS — now run the same checks, so a file accepted one way is no longer silently dropped the other. If the refusal happens before the window exists, the message is held and shown once the window is ready.
 
 ## Reset session state
 
@@ -499,7 +499,7 @@ If a saved session file is corrupt, Tandem quarantines it instead of failing the
 
 ## Recovering a previous version of a document
 
-Before Tandem's **first** write to a `.md`/`.txt`/`.docx` file in a server run, it copies the file's current on-disk bytes to a backup folder (for `.docx` this is a verbatim, byte-identical copy of the ZIP). If a save ever mangles your file — especially a `.docx`, where exporting can drop Word features Tandem doesn't model — or you just want yesterday's version back, there are three ways to restore:
+Before Tandem's **first** write to a `.md` or `.txt` file in a server run, it copies the file's current on-disk bytes to a backup folder. If a save ever mangles your file, or you just want yesterday's version back, there are three ways to restore:
 
 - **In the app:** open the command palette (Ctrl+Shift+P) and run "Restore a backup of this document…" — it lists the available snapshots and restores the most recent one. The document reloads in place; annotations are preserved.
 - **Ask Claude:** the `tandem_restoreBackup` MCP tool lists a document's snapshots (call it without `backup`) and restores any of them by name — including older snapshots the palette action doesn't reach.
@@ -516,7 +516,6 @@ Notes:
 
 - Backups are taken once per document per server run, and skipped when nothing changed since the newest backup — so the folder stays small.
 - Snapshots older than 30 days are cleaned up automatically at startup, and the whole folder is capped at 500 MB (backups pause with a notification if it fills).
-- `.docx` files get the same pre-overwrite snapshots as text (verbatim byte-identical copies of the ZIP) and are additionally never auto-saved — only explicit saves overwrite them. `tandem_applyChanges` also writes a `.backup.docx` sidecar next to the original; it is listed alongside the snapshots and restored by name like any of them.
 
 ## Reading server logs
 

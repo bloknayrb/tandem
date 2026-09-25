@@ -1,3 +1,5 @@
+import { DOCX_UNSUPPORTED_MESSAGE } from "../../shared/constants.js";
+
 /**
  * OS file-association open failures, surfaced as a toast.
  *
@@ -30,6 +32,10 @@ export function messageForStartupRejection(code: string): string {
   switch (code) {
     case "unsupported-extension":
       return "That file type can't be opened in Tandem.";
+    case "docx-unsupported":
+      // `.docx` ships dark (ADR-053); an OS association left over from an
+      // earlier install can still hand Tandem one.
+      return DOCX_UNSUPPORTED_MESSAGE;
     case "not-a-file":
     case "non-file-url":
       return "That file couldn't be opened — it may have moved or been deleted.";

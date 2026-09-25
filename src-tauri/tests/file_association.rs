@@ -184,6 +184,28 @@ fn key_equals_value_flag_is_skipped_not_parsed() {
 }
 
 #[test]
+fn docx_follows_its_ship_dark_flag() {
+    // `.docx` ships dark (ADR-053): outside the literal, and accepted only when
+    // the flag is on. Asserting both directions keeps a future flip honest.
+    assert!(!app_lib::SUPPORTED_FILE_ASSOC_EXTS.contains(&app_lib::DOCX_FILE_ASSOC_EXT));
+    let dir = TempDir::new().unwrap();
+    let cwd = std::env::current_dir().unwrap();
+    let p = touch(&dir, "report.docx");
+    let result = inner(extract_file_arg(&args(&[p.to_str().unwrap()]), &cwd));
+    if app_lib::DOCX_ENABLED {
+        assert_eq!(result, Ok(Some(p)));
+    } else {
+        assert!(
+            matches!(
+                result,
+                Err(app_lib::RejectionReason::UnsupportedExtension { ref ext, .. }) if ext == "docx"
+            ),
+            "a .docx must be refused while .docx ships dark, got {result:?}"
+        );
+    }
+}
+
+#[test]
 fn each_supported_extension_is_accepted() {
     let dir = TempDir::new().unwrap();
     let cwd = std::env::current_dir().unwrap();

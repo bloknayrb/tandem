@@ -72,11 +72,11 @@ import type * as Y from "yjs";
 import {
   AUTO_SAVE_FORMATS,
   CHARS_PER_PAGE,
+  DOCX_UNSUPPORTED_MESSAGE,
   LARGE_FILE_PAGE_THRESHOLD,
   MAX_FILE_SIZE,
   mayHoldUnsavedWork,
   SAVEABLE_FORMATS,
-  SUPPORTED_EXTENSIONS,
   VERY_LARGE_FILE_PAGE_THRESHOLD,
   Y_MAP_ANNOTATION_REPLIES,
   Y_MAP_ANNOTATIONS,
@@ -95,6 +95,7 @@ import { withFileSync, withInternal, withMcp } from "../../shared/origins.js";
 import { SCRATCHPAD_PREFIX, UPLOAD_PREFIX } from "../../shared/paths.js";
 import type { Annotation, ExternalConflictState, FlatOffset } from "../../shared/types.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
+import { isDarkDocx, supportedExtensions } from "../file-io/docx-flag.js";
 import { getAdapter } from "../file-io/index.js";
 import { detectFormat, docIdFromPath, extractText } from "../mcp/document-model.js";
 import { injectTutorialAnnotations } from "../mcp/tutorial-annotations.js";
@@ -581,14 +582,7 @@ export async function openFromUpload(
   // `fileName` -- the surfaces a user actually sees.
   const fileName = crossBasename(rawFileName);
   const ext = path.extname(fileName).toLowerCase();
-  if (!SUPPORTED_EXTENSIONS.has(ext)) {
-    throw Object.assign(
-      new Error(
-        `Unsupported file format: ${ext}. Supported: ${[...SUPPORTED_EXTENSIONS].join(", ")}`,
-      ),
-      { code: "UNSUPPORTED_FORMAT" },
-    );
-  }
+  assertSupportedExtension(ext);
 
   const contentSize =
     content instanceof Buffer ? content.length : Buffer.byteLength(content as string);
@@ -732,14 +726,7 @@ async function resolveAndValidatePath(filePath: string): Promise<ResolvedPath> {
   assertSafePathPrefix(resolved);
 
   const ext = path.extname(resolved).toLowerCase();
-  if (!SUPPORTED_EXTENSIONS.has(ext)) {
-    throw Object.assign(
-      new Error(
-        `Unsupported file format: ${ext}. Supported: ${[...SUPPORTED_EXTENSIONS].join(", ")}`,
-      ),
-      { code: "UNSUPPORTED_FORMAT" },
-    );
-  }
+  assertSupportedExtension(ext);
 
   const stat = await fs.stat(resolved);
   if (stat.size > MAX_FILE_SIZE) {
@@ -765,7 +752,7 @@ async function resolveAndValidatePath(filePath: string): Promise<ResolvedPath> {
   // .docx via BINARY_SAVE_FORMATS being disjoint from AUTO_SAVE_FORMATS.)
   //
   // Keyed on the save sets rather than `format === "html"` because the set
-  // membership is the reason: a future extension added to SUPPORTED_EXTENSIONS
+  // membership is the reason: a future extension added to BASE_EXTENSIONS
   // without a save-set entry would otherwise reintroduce #1798 silently.
   const readOnly = !SAVEABLE_FORMATS.has(format);
   const id = docIdFromPath(resolved);
@@ -1546,4 +1533,18 @@ export function kindOfOpenResult(result: OpenFileResult): OpenResultKind {
   if (result.alreadyOpen) return "already-open";
   if (result.restoredFromSession) return "restored";
   return "fresh";
+}
+
+/**
+ * The one allowlist check both open paths share. A `.docx` refused only because
+ * `.docx` ships dark (ADR-053) gets its own message, so the user learns it is a
+ * build decision rather than a wrong file; the code stays `UNSUPPORTED_FORMAT`.
+ */
+function assertSupportedExtension(ext: string): void {
+  const supported = supportedExtensions();
+  if (supported.has(ext)) return;
+  const message = isDarkDocx(ext)
+    ? DOCX_UNSUPPORTED_MESSAGE
+    : `Unsupported file format: ${ext}. Supported: ${[...supported].join(", ")}`;
+  throw Object.assign(new Error(message), { code: "UNSUPPORTED_FORMAT" });
 }

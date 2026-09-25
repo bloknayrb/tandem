@@ -288,7 +288,7 @@ setSettingsWriteRefusedHandler(() => {
   });
 });
 let activityOpen = $state(false);
-const fileDrop = createFileDrop();
+const fileDrop = createFileDrop(notifications.push);
 initTauriFileDrop(notifications.push);
 
 // Surface sidecar restart failures (Tauri-only) as a generic toast. The

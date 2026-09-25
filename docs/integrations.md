@@ -27,9 +27,9 @@ Client compatibility:
 
 Tandem's MCP tools span six capability areas. Full reference: [docs/mcp-tools.md](mcp-tools.md).
 
-- **Document.** Open, switch, list, close, rename, and convert documents; read text content and outlines; edit text ranges; append content; save back to disk.
+- **Document.** Open, switch, list, close and rename documents; read text content and outlines; edit text ranges; append content; save back to disk.
 - **Annotation.** Create, resolve, remove, and edit annotations and replies; query the annotation list; export a review report.
-- **Apply.** Write accepted suggestions into a `.docx` as Word tracked changes, and restore a document from a pre-write snapshot.
+- **Apply.** Restore a document from a pre-write snapshot. (Writing accepted suggestions into a `.docx` as Word tracked changes ships dark with the rest of `.docx` support; see [ADR-053](decisions.md#adr-053-docx-ships-dark).)
 - **Navigation.** Search the document, resolve a match to a range, and pull surrounding context.
 - **Awareness.** Read user presence and Solo/Tandem mode; check the inbox for selection events, chat messages, and annotation actions; reply in the chat sidebar.
 - **Diagnostics.** Report connection and boot health over MCP itself, so a client that can't reach loopback can still self-diagnose.

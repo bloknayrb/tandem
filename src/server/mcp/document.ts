@@ -26,6 +26,7 @@ import { generateAuthorshipId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { isStoreReadOnly } from "../annotations/store.js";
 import { type OpenSuccess, openFromDisk, openScratchpad, toWireResult } from "../documents/open.js";
+import { docxEnabled } from "../file-io/docx-flag.js";
 import { mdParser } from "../file-io/markdown.js";
 import { appendMdast, buildListItemsFromTree } from "../file-io/mdast-ydoc.js";
 import { readModeProvenance } from "../mode.js";
@@ -1086,7 +1087,7 @@ export function registerDocumentTools(server: McpServer): void {
     "Change the SHAPE of a list: add an item, remove one, or tick a checkbox. Does not change " +
       "the wording of an item — use tandem_edit for that. Target an item by a flat offset " +
       "anywhere inside it; call tandem_getOutline({ includeBlocks: true }) to see the list's " +
-      "items and their offsets. Markdown and .docx documents only.",
+      `items and their offsets. ${docxEnabled() ? "Markdown and .docx documents only." : "Markdown documents only."}`,
     {
       at: z
         .number()
@@ -1118,7 +1119,7 @@ export function registerDocumentTools(server: McpServer): void {
         .optional()
         .describe(
           "setChecked only. true ticks the box, false unticks it, null removes the checkbox and " +
-            "leaves an ordinary bullet. Markdown only — Word lists have no checkbox state.",
+            `leaves an ordinary bullet. ${docxEnabled() ? "Markdown only — Word lists have no checkbox state." : "Markdown only."}`,
         ),
       documentId: z
         .string()
@@ -1317,9 +1318,13 @@ export function registerDocumentTools(server: McpServer): void {
     "tandem_save",
     "Write the document's current content back to its file on disk. Tandem snapshots the file's " +
       "original bytes before its first write each server run, so a save is reversible via " +
-      "tandem_restoreBackup. On .docx this also writes shared comments back as native Word " +
-      "comments and returns `fidelityWarnings` when the export downgraded anything — report those " +
-      "rather than claiming a clean round-trip. If the file changed on disk since it was opened " +
+      "tandem_restoreBackup. " +
+      (docxEnabled()
+        ? "On .docx this also writes shared comments back as native Word " +
+          "comments and returns `fidelityWarnings` when the export downgraded anything — report those " +
+          "rather than claiming a clean round-trip. "
+        : "") +
+      "If the file changed on disk since it was opened " +
       "the save is REFUSED and a conflict is reported instead; it is never silently overwritten. " +
       "Uploaded (upload://) documents have no path, so the save is session-only.",
     {
@@ -1327,17 +1332,22 @@ export function registerDocumentTools(server: McpServer): void {
         .string()
         .optional()
         .describe("Target document ID (defaults to active document)"),
-      allowImageLoss: z
-        .boolean()
-        .optional()
-        .describe(
-          "DESTRUCTIVE. A .docx whose body pictures Tandem couldn't import refuses to save, " +
-            "because the regenerated file would drop them. Pass true to save anyway, " +
-            "permanently removing those pictures from the file on disk. Ask the user first — " +
-            "tandem_convertToMarkdown keeps both the pictures and the edits. Ignored for " +
-            "documents with no dropped pictures, and never overrides a failed post-write " +
-            "verification.",
-        ),
+      // `.docx`-only, so a build with `.docx` dark doesn't offer it (ADR-053).
+      ...(docxEnabled()
+        ? {
+            allowImageLoss: z
+              .boolean()
+              .optional()
+              .describe(
+                "DESTRUCTIVE. A .docx whose body pictures Tandem couldn't import refuses to save, " +
+                  "because the regenerated file would drop them. Pass true to save anyway, " +
+                  "permanently removing those pictures from the file on disk. Ask the user first — " +
+                  "tandem_convertToMarkdown keeps both the pictures and the edits. Ignored for " +
+                  "documents with no dropped pictures, and never overrides a failed post-write " +
+                  "verification.",
+              ),
+          }
+        : {}),
     },
     withErrorBoundary("tandem_save", async ({ documentId, allowImageLoss }) => {
       // path.basename eliminates directory components so CodeQL does not trace
@@ -1687,64 +1697,67 @@ export function registerDocumentTools(server: McpServer): void {
     }),
   );
 
-  server.tool(
-    "tandem_convertToMarkdown",
-    "Convert a .docx document to an editable Markdown file. Writes the .md file to disk and opens it as a new tab.",
-    {
-      documentId: z
-        .string()
-        .optional()
-        .describe("Document ID of the .docx to convert (defaults to active document)"),
-      outputPath: z
-        .string()
-        .optional()
-        .describe(
-          "Custom output DIRECTORY for the .md file (must already exist; defaults to the .docx's own directory). The filename is always derived from the source document and cannot be chosen.",
-        ),
-    },
-    withErrorBoundary("tandem_convertToMarkdown", async ({ documentId, outputPath }) => {
-      // path.basename eliminates directory components so CodeQL does not trace
-      // user input through Map.get(id) to existing.filePath (js/path-injection).
-      const safeDocId = documentId !== undefined ? path.basename(documentId) : undefined;
-      try {
-        const result = await convertToMarkdown(safeDocId, outputPath);
-        return mcpSuccess({
-          converted: true,
-          outputPath: result.outputPath,
-          documentId: result.documentId,
-          fileName: result.fileName,
-          message: `Converted to Markdown: ${result.fileName}`,
-        });
-      } catch (err: unknown) {
-        const e = err as NodeJS.ErrnoException;
-        if (e.code === "NO_DOCUMENT") {
-          // `safeDocId` is what `convertToMarkdown` actually received. A
-          // named-but-closed id gets a message echoing the (possibly
-          // basename-rewritten) id itself, like `tandem_switchDocument` above —
-          // `convertToMarkdown`'s own thrown message is the generic "No
-          // document is open, or..." sentence, which never names the id that
-          // was actually looked up.
-          //
-          // TRUTHINESS, not `!== undefined`: `getCurrentDoc` (registry.ts)
-          // resolves `"" ?? activeDocId` to `""`, then returns null from its
-          // `if (!id)` guard WITHOUT consulting the open-document map — so an
-          // empty id genuinely took the no-document-at-all path and belongs on
-          // the shared text. Treating it as "named" printed
-          // `"Document  is not open."`: a sentence with a hole and a double
-          // space, naming an id the server never looked up.
-          return safeDocId
-            ? mcpError("NO_DOCUMENT", `Document ${safeDocId} is not open.`)
-            : noDocumentError();
+  // `.docx`-only, so it is not registered while `.docx` ships dark (ADR-053).
+  // Its `/api/convert` twin stays mounted and is inert: it needs an open `.docx`.
+  if (docxEnabled())
+    server.tool(
+      "tandem_convertToMarkdown",
+      "Convert a .docx document to an editable Markdown file. Writes the .md file to disk and opens it as a new tab.",
+      {
+        documentId: z
+          .string()
+          .optional()
+          .describe("Document ID of the .docx to convert (defaults to active document)"),
+        outputPath: z
+          .string()
+          .optional()
+          .describe(
+            "Custom output DIRECTORY for the .md file (must already exist; defaults to the .docx's own directory). The filename is always derived from the source document and cannot be chosen.",
+          ),
+      },
+      withErrorBoundary("tandem_convertToMarkdown", async ({ documentId, outputPath }) => {
+        // path.basename eliminates directory components so CodeQL does not trace
+        // user input through Map.get(id) to existing.filePath (js/path-injection).
+        const safeDocId = documentId !== undefined ? path.basename(documentId) : undefined;
+        try {
+          const result = await convertToMarkdown(safeDocId, outputPath);
+          return mcpSuccess({
+            converted: true,
+            outputPath: result.outputPath,
+            documentId: result.documentId,
+            fileName: result.fileName,
+            message: `Converted to Markdown: ${result.fileName}`,
+          });
+        } catch (err: unknown) {
+          const e = err as NodeJS.ErrnoException;
+          if (e.code === "NO_DOCUMENT") {
+            // `safeDocId` is what `convertToMarkdown` actually received. A
+            // named-but-closed id gets a message echoing the (possibly
+            // basename-rewritten) id itself, like `tandem_switchDocument` above —
+            // `convertToMarkdown`'s own thrown message is the generic "No
+            // document is open, or..." sentence, which never names the id that
+            // was actually looked up.
+            //
+            // TRUTHINESS, not `!== undefined`: `getCurrentDoc` (registry.ts)
+            // resolves `"" ?? activeDocId` to `""`, then returns null from its
+            // `if (!id)` guard WITHOUT consulting the open-document map — so an
+            // empty id genuinely took the no-document-at-all path and belongs on
+            // the shared text. Treating it as "named" printed
+            // `"Document  is not open."`: a sentence with a hole and a double
+            // space, naming an id the server never looked up.
+            return safeDocId
+              ? mcpError("NO_DOCUMENT", `Document ${safeDocId} is not open.`)
+              : noDocumentError();
+          }
+          if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
+          if (e.code === "INVALID_PATH") return mcpError("INVALID_PATH", e.message);
+          if (e.code === "PERMISSION_DENIED") return mcpError("PERMISSION_DENIED", e.message);
+          if (e.code === "EMPTY_CONVERSION") return mcpError("EMPTY_CONVERSION", e.message);
+          if (e.code === "CONFLICT") return mcpError("CONFLICT", e.message);
+          if (e.code === "OPEN_FAILED") return mcpError("OPEN_FAILED", e.message);
+          if (e.code === "UNSUPPORTED_FORMAT") return mcpError("FORMAT_ERROR", e.message);
+          throw err; // Let withErrorBoundary handle unexpected errors
         }
-        if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
-        if (e.code === "INVALID_PATH") return mcpError("INVALID_PATH", e.message);
-        if (e.code === "PERMISSION_DENIED") return mcpError("PERMISSION_DENIED", e.message);
-        if (e.code === "EMPTY_CONVERSION") return mcpError("EMPTY_CONVERSION", e.message);
-        if (e.code === "CONFLICT") return mcpError("CONFLICT", e.message);
-        if (e.code === "OPEN_FAILED") return mcpError("OPEN_FAILED", e.message);
-        if (e.code === "UNSUPPORTED_FORMAT") return mcpError("FORMAT_ERROR", e.message);
-        throw err; // Let withErrorBoundary handle unexpected errors
-      }
-    }),
-  );
+      }),
+    );
 }

@@ -1,5 +1,7 @@
 # Architecture
 
+> **`.docx` ships dark ([ADR-053](decisions.md#adr-053-docx-ships-dark), 2026-09-24).** A release build refuses `.docx` files and registers neither `.docx`-only MCP tool. The `.docx` material below still describes the code accurately, because the code stays merged and tested behind `DOCX_ENABLED`, but none of it is reachable in a shipped Tandem until the flag flips.
+
 ## Integration Compatibility
 
 > Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same MCP tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today. See [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration).
@@ -1052,7 +1054,7 @@ Tauri v2 uses a capabilities model to grant permissions:
 
 ## Design Decisions
 
-See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-052), covering:
+See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-053), covering:
 
 - Tiptap over ProseMirror direct
 - Hocuspocus for Yjs WebSocket

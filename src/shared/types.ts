@@ -697,7 +697,8 @@ export interface TandemNotification {
     | "file-reloaded"
     | "review-pending"
     | "external-conflict"
-    | "launcher";
+    | "launcher"
+    | "documents-not-reopened";
   /** Also selects the notice's lifetime, and therefore its tense. Only `info`
    *  expires (`ACTIVITY_INFO_TTL_MS`); `warning` and `error` persist in the
    *  activity tray, which is a LOG. A present-tense observation at those two

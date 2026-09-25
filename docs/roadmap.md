@@ -35,6 +35,11 @@ The v0.12.0 prep batch (8 parallel units, PRs #634–#641) shipped 2026-05-14. W
 
 **Out of scope for v1.0:** authorship gutter (D2 picked per-character only), annotation thread reactions (D5), inline diff hunk-staging UI (D3 surface deferred — option B locked for v1.1 revisit), mobile/responsive (D7), author chip/avatar (D8), compact density (D9), most §1D refactors except #313, **cloud BYO-models (OpenAI/Gemini API keys) + their adapter — v1.1 per the D4 amendments (the *local*-model slice is back in v1.0 as Wave 5M/#1123; cloud rows stay behind `BYO_MODELS_ENABLED` until v1.1; canonical record in [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11))**, concurrent multi-agent (Claude + local simultaneously — #438/#452).
 
+## Shelved
+
+- **`.docx` support (2026-09-24, [ADR-053](decisions.md#adr-053-docx-ships-dark)).** Out of the live build behind the `DOCX_ENABLED` flag, because it wasn't in a state suitable for serious work. The code stays merged and tested. ADR-053 holds the re-enable checklist, and Step 5b and the Word Comment Import entry below describe what it did while it shipped.
+- **SuperDoc as the `.docx` engine (2026-09-24, ADR-052).** Shelved after the engine spike reported NO-GO on nine of its ten questions.
+
 ## Integration Policy (ADR-038)
 
 > Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same MCP tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.

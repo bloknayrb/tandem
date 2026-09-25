@@ -39,7 +39,7 @@ I built Tandem for one person working on their own documents. Those three are ex
 
 ## Install
 
-**[Download the installer for your platform →](https://github.com/bloknayrb/tandem/releases/latest)** Windows, macOS, and Linux. The desktop app bundles the editor, its server, and its own updates. Double-click a `.md`, `.markdown`, `.txt`, `.html`, or `.docx` file and it opens in Tandem.
+**[Download the installer for your platform →](https://github.com/bloknayrb/tandem/releases/latest)** Windows, macOS, and Linux. The desktop app bundles the editor, its server, and its own updates. Double-click a `.md`, `.markdown`, `.txt`, or `.html` file and it opens in Tandem.
 
 Then connect your AI. Tandem opens a setup wizard the first time you run it. If [Claude Code](https://claude.com/claude-code) isn't installed it can install it for you in one click on all three platforms, and it writes the connection settings itself. You can reopen the wizard any time from **Settings → AI Assistant**. Two things before you start. **A Claude Pro or Max subscription includes Claude Code** (pay-as-you-go API billing works too). And **the Claude you use at claude.ai in a browser can't connect**, because a web page has no way to reach a file on your disk. The subscription alone doesn't do it: you need Claude Code, or Claude Desktop, installed locally as well.
 
@@ -99,8 +99,9 @@ Either way, the rest is the same:
 
 ## What you get
 
-- Multiple documents open in tabs, with `.md`, `.markdown`, `.txt`, `.html`, and `.docx` support (Word files are editable, and the original is only written when you explicitly save; HTML opens read-only, for reading and annotating). Markdown means CommonMark plus GitHub Flavored Markdown; `[[wikilinks]]` and `![[embeds]]` are saved as literal text, so Obsidian, Logseq and Foam vaults are not a supported input for this release.
-- Word round-trip: edit a `.docx` and save it back as a real Word file, with the comments you sent your AI written back as native Word comments. Tandem snapshots a file before its first write, so you can restore the original from inside the app.
+- Multiple documents open in tabs, with `.md`, `.markdown`, `.txt` and `.html` support (HTML opens read-only, for reading and annotating). Markdown means CommonMark plus GitHub Flavored Markdown; `[[wikilinks]]` and `![[embeds]]` are saved as literal text, so Obsidian, Logseq and Foam vaults are not a supported input for this release.
+- Tandem snapshots a file before its first write, so you can restore the original from inside the app.
+- Word (`.docx`) files are not supported in this version. Word support wasn't reliable enough for serious work, so it has been taken out of the app for now; to bring a Word document in, save a copy from Word as Plain Text (`.txt`) to edit it, or as Web Page (`.html`) to review it read-only.
 - A scratchpad (`Ctrl+N` on desktop; the **+** button in the tab bar in the browser build, where the browser itself owns `Ctrl+N`) for drafts you don't want to save to disk.
 - A command palette (`Ctrl+Shift+P`) with fuzzy search, ranked by how well each result matches.
 - Find and replace, including across all open tabs.

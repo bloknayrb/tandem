@@ -1,4 +1,5 @@
 import { API_UPLOAD } from "../../shared/api-paths.js";
+import type { TandemNotification } from "../../shared/types.js";
 import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { API_BASE, readFileForUpload } from "../utils/fileUpload.js";
 
@@ -14,9 +15,23 @@ export interface FileDropState {
  *
  * Manages file drag-and-drop on the editor area.
  * Uploads dropped files to the Tandem server via POST /api/upload.
+ *
+ * `push` is required so a refused upload reaches a toast rather than only the
+ * console. The server's message is shown as-is: for a `.docx` while `.docx` ships
+ * dark (ADR-053) that is `DOCX_UNSUPPORTED_MESSAGE`.
  */
-export function createFileDrop(): FileDropState {
+export function createFileDrop(push: (n: TandemNotification) => void): FileDropState {
   let fileDragOver = $state(false);
+
+  const notify = (message: string) =>
+    push({
+      id: `file-drop-failed-${Date.now()}`,
+      type: "general-error",
+      severity: "warning",
+      message,
+      dedupKey: "file-drop-failed",
+      timestamp: Date.now(),
+    });
 
   const handleEditorDragOver = (e: DragEvent) => {
     // In Tauri with dragDropEnabled: true, native drops are routed through
@@ -54,14 +69,14 @@ export function createFileDrop(): FileDropState {
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({ message: "Upload failed" }));
-        console.error(
-          "[useFileDrop] Upload failed:",
-          response.status,
-          (body as Record<string, string>).message ?? (body as Record<string, string>).error,
-        );
+        const reason =
+          (body as Record<string, string>).message ?? (body as Record<string, string>).error;
+        console.error("[useFileDrop] Upload failed:", response.status, reason);
+        notify(`Couldn't open ${file.name}: ${reason ?? "the upload was refused."}`);
       }
     } catch {
       console.error("[useFileDrop] Server unreachable — file drop ignored");
+      notify(`Couldn't open ${file.name}: Tandem's server isn't reachable.`);
     }
   };
 

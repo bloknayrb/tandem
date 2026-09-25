@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as coworkHelpers from "../../src/client/cowork/cowork-helpers.js";
 import * as serverPaths from "../../src/client/utils/server-paths.js";
-import { SUPPORTED_EXTENSIONS } from "../../src/shared/constants.js";
+import { CLIENT_EXTENSIONS } from "../../src/shared/constants.js";
 
 vi.mock(import("../../src/client/cowork/cowork-helpers.js"), () => ({
   isTauriRuntime: vi.fn(() => false),
@@ -236,7 +236,7 @@ describe("useTauriFileDrop", { timeout: RELOAD_BUDGET_MS }, () => {
     expect(push.mock.calls[0][0].dedupKey).toBe("tauri-drop-unsupported");
 
     const msg = push.mock.calls[0][0].message as string;
-    for (const ext of SUPPORTED_EXTENSIONS) {
+    for (const ext of CLIENT_EXTENSIONS) {
       // Delimited-token match: ext must NOT be followed by another letter.
       // Rejects substring-only matches like `.htm` inside `.html` (the very
       // hazard that hid the original bug 8e73059 fixed) or `.md` inside a

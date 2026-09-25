@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import path from "path";
+import { DOCX_ENABLED } from "../../src/shared/constants";
 import type { ToolResponse } from "../../src/shared/types";
 import {
   cleanupAllOpenDocuments,
@@ -33,6 +34,10 @@ import {
  */
 
 test.setTimeout(60_000);
+// `.docx` ships dark (ADR-053): CI's backend is the built bundle, where the
+// define turns `.docx` off and no env can turn it back on. Pinned by
+// tests/scripts/e2e-docx-skip-wiring.test.ts; un-skip on the re-enable.
+test.skip(!DOCX_ENABLED, ".docx ships dark (ADR-053)");
 
 let mcp: McpTestClient;
 let tmpDir: string;
