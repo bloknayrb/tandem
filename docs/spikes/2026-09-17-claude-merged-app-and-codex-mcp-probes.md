@@ -1,6 +1,6 @@
 # Compatibility probes — merged Claude desktop app and Codex CLI (2026-09-17)
 
-**Status:** working note, landed as-is on 2026-09-24. No other doc was updated from its findings.
+**Status:** working note, landed on 2026-09-24 with personal details removed. No other doc was updated from its findings. The defects it reports are filed as #2112 and #2113 (§5j, the markdown export), #2114 (§5e, resolveRange ambiguity) and #2115 (§5i, author attribution).
 
 **Executor:** a Claude **Cowork** session (cloud container linked to Bryan's desktop), *not* a
 Claude Code terminal session. That is a deviation from the plan's ground rule 2 and it is why §2
