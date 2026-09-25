@@ -2397,8 +2397,14 @@ same day he directed the spike to proceed on the basis that Tandem may use Super
 telemetry off and no data leaving the user's machine, with Claude running it; that covers the
 spike, not the implementation. This repo is public, so the agreement itself does not live here. What the written terms must cover is
 listed below, citing the standalone licence at its canonical URL
-(`https://docs.superdoc.dev/resources/docx-engine-license`). **The implementation PR must not
-merge until Bryan has confirmed each line against the signed text:**
+(`https://docs.superdoc.dev/resources/docx-engine-license`).
+
+**Update (2026-09-25).** There is no signed text. In Bryan's words: "There are no signed terms,
+just a verbal statement that they are fine with it because they want to see people build cool
+things with superdoc". Publishing the spike's verdict table rests on that statement; the results
+behind it stay in `private/`. With no Base Agreement, §11.3's mutual-written-agreement rule does
+not apply, so Decision 8's gap stands. **Should `.docx` work resume on SuperDoc, the
+implementation PR must not merge until each line below is covered in writing:**
 
 *Scope of use:*
 
@@ -2446,7 +2452,8 @@ merge until Bryan has confirmed each line against the signed text:**
 *Publication and operation:*
 
 - **Publishing test results and fidelity numbers** in this public repo and in public CI logs.
-  §5.1 classes "benchmarks, test results" as confidential.
+  §5.1 classes "benchmarks, test results" as confidential. The published verdict table rests on
+  the verbal statement above; nothing more detailed has been published.
 - **Offline operation**, with no licence server, and the terms of any licence key.
 - **Turning telemetry off.** §3.1(g) bars circumventing "any … license-enforcement measure", and
   §7.2 makes circumventing technical protections an automatic termination. The v1 telemetry
@@ -2507,7 +2514,8 @@ waits a full minor.
 **Out of scope:** SuperDoc's editor UI, its collaboration layer, its AI features, `.doc`, PDF
 export, and the `.md` / `.txt` / `.html` paths.
 
-**Supersedes:** the #576 engine choice recorded in ADR-004's supersession note (the `docx`
-package write-back), and the June 2026 "study, don't adopt" verdict on SuperDoc. **Relates to:**
+**Supersedes:** nothing while shelved. Had it been implemented, it would have superseded the
+#576 engine choice recorded in ADR-004's supersession note (the `docx` package write-back) and
+the June 2026 "study, don't adopt" verdict on SuperDoc; both remain in force. **Relates to:**
 the GenOffice spike ([docs/spikes/genoffice-docx-engine-spike.md](spikes/genoffice-docx-engine-spike.md)),
 whose "splice, don't rebuild" finding is Decision 3; #1142 (umbrella); #1754.

@@ -120,7 +120,7 @@ The bind is synchronous — no `await` between the check and the mutation — so
 >
 > During any of these windows the user's **Release / Assign** control (Phase 1, §3.4, §3.11) is the remedy, and it is why the control ships with enforcement rather than after it.
 
-**Stateless clients.** A `2026-07-28` client has no transport to bind. Tandem does not serve that era (ADR-045 amendment, `decisions.md:1610-1630`), so there is no such caller today. When dual-era lands, the fallback is the per-call `ownerHandle` on every mutating tool — recorded here so it is a known future row.
+**Stateless clients.** A `2026-07-28` client has no transport to bind. Tandem does not serve that era (ADR-045 amendment, `decisions.md:1611-1631`), so there is no such caller today. When dual-era lands, the fallback is the per-call `ownerHandle` on every mutating tool — recorded here so it is a known future row.
 
 ### 3.3 Default `documentId`
 
@@ -262,7 +262,7 @@ These three literals widen `WakeFrame.type` (`wake-scope.ts:44-48`) beyond `Tand
   3. Any successful reply on an open doc D by owner X marks every chat message on D delivered to X before now as handled (`handledChat`), so a model that answers three questions with one message and no `replyTo` leaves nothing to resurface.
   4. The reply is stamped with the resolved `documentId` **and with the sender's `ownerLabel`** — a new optional `ChatMessage.ownerLabel` field (`types.ts:655-671`), written by `appendClaudeChatMessage` (`awareness.ts:194-218`, `withMcp`, `Y_MAP_CHAT` from constants) in **Phase 1** and rendered in Phase 2 (OWN-UPG-06). A label is a public per-run id, not token-derived, so §3.7's "no token-derived data reaches a Y.Map" holds; the field persists with the CTRL_ROOM session like every other chat field. Text containing a live owner handle or watch id is refused with `INVALID_ARGUMENT` (§6).
 - `POST /api/channel-reply` (`channel-routes.ts:130-143`) is the shim's path, takes a caller-chosen `documentId`, and stays as it is (§6). **It carries no record identity, so it stamps no `ownerLabel` and marks a message handled only through `replyTo`** (OWN-CHAT-09, known limitation); the shim already sends `replyTo` when it has one. §5.5-B is the option that would thread identity.
-- The chat thread stays global (`decisions.md:1807` declined per-document chat); replies from two owners interleave with the per-document label #1264 already renders.
+- The chat thread stays global (`decisions.md:1808` declined per-document chat); replies from two owners interleave with the per-document label #1264 already renders.
 
 ### 3.7 Non-owner write handling
 
@@ -321,9 +321,9 @@ Pull (`tandem_checkInbox`) remains authoritative over all four.
 
 | Conflict | Where | What changes |
 |---|---|---|
-| **ADR-011** — optional `documentId` "defaulting to the active document… single-document scripts work unchanged" | `decisions.md:46` | **Superseded by ADR-054.** The singleton read fallback keeps single-document scripts working; multi-doc scripts must pass an id. |
-| **ADR-049 Decision 1** — the inbox ledger arbitrates between N sessions | `decisions.md:1832-1845`; cites `awareness.ts:55`, now `:57` | Arbitration moves to ownership; the ledger arbitrates only doc-less and detached items, and claim-on-delivery is the arbitration for unowned docs. Its refusal of a *session-bound* tier is not contradicted: ownership never suppresses a wake on presence, and release is driven by transport death. Amend. |
-| **ADR-049 Decision 2** — frames carry no `documentId` | `decisions.md:1847-1859`; `wake-scope.ts:73-80` | Frames still carry none, and the URL carries only a private per-record watch id — neither a filename nor the public label. Amendment: "unchanged; `?watch=` is the only parameter, and it identifies the session, not a document", plus M8's `alreadyPushed` note. |
+| **ADR-011** — optional `documentId` "defaulting to the active document… single-document scripts work unchanged" | `decisions.md:47` | **Superseded by ADR-054.** The singleton read fallback keeps single-document scripts working; multi-doc scripts must pass an id. |
+| **ADR-049 Decision 1** — the inbox ledger arbitrates between N sessions | `decisions.md:1834-1847`; cites `awareness.ts:55`, now `:57` | Arbitration moves to ownership; the ledger arbitrates only doc-less and detached items, and claim-on-delivery is the arbitration for unowned docs. Its refusal of a *session-bound* tier is not contradicted: ownership never suppresses a wake on presence, and release is driven by transport death. Amend. |
+| **ADR-049 Decision 2** — frames carry no `documentId` | `decisions.md:1849-1861`; `wake-scope.ts:73-80` | Frames still carry none, and the URL carries only a private per-record watch id — neither a filename nor the public label. Amendment: "unchanged; `?watch=` is the only parameter, and it identifies the session, not a document", plus M8's `alreadyPushed` note. |
 | **#1588 idle-reaper pin** | `transport-registry.ts:75`, `:231-265`; CLAUDE.md "An open `GET /mcp` stream pins its session" | **Phase 3:** a live wake socket resolving to a record is a second pin source (§5.11). Same shape as `openStreams` — evidence of attachment, not of use; LRU stays pin-blind. |
 | **`McpRequestContext`** | `context.ts:37-59`; `server.ts:700-703`, `:717-718` | Gains `ownerId` and `peerIsLoopback`. |
 | **`#1952`** | `security.md:191`; `wake-url.ts:55-58`; `auth/middleware.ts:164-165` | **Phase 1:** `wakeUrlField()` suppresses per request on `peerIsLoopback === false`. The register's "per-request loopback detection is not available inside a tool handler" becomes false and is a sequenced edit (§8). |

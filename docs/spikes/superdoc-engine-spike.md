@@ -14,6 +14,10 @@ The results behind each verdict are kept locally, and publishing any of them is 
 
 The verdicts are against the plan's criteria as written.
 
+**The kill-gate rule was waived.** The plan makes S1 and S2 kill gates ("If either fails, stop and
+go back to Bryan"). S1 failed, and Bryan directed the spike to keep testing past it, so S3–S10
+were run and their verdicts are measured, not inferred from S1.
+
 | question | verdict |
 |---|---|
 | S1 — headless in the sidecar (kill gate) | **NO-GO** |

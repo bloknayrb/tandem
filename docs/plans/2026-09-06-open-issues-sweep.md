@@ -1474,6 +1474,14 @@ data-integrity defect with a one-predicate fix — and it shipped with an explic
 refactor `docx-apply.ts`. If ADR-052 is reversed or re-scoped, that blocked set is the first thing
 to re-triage.
 
+**Re-triaged 2026-09-25: that trigger fired.** ADR-052 was shelved on 2026-09-24 after the
+SuperDoc spike's NO-GO, and `.docx` itself ships dark (ADR-053). The mammoth / docx-npm pipeline
+is no longer scheduled for deletion. It is the only `.docx` pipeline, and releases switch it off.
+So #1142, #1693, #1754, #1950, #1951 and #1954 are no longer blocked on a replacement. They are
+real defects or features in a format that doesn't ship, and they wait on the re-enable work
+tracked in #2110. Fixing one before then is allowed, but reaches no user. #2037's instruction not
+to refactor `docx-apply.ts` no longer has a reason behind it.
+
 **Groups were scheduled file-disjoint against every unmerged PR, not against each other in the
 abstract**, and launched as slots freed: at most one `e2e` group at a time, and a group's notes
 named the files an unmerged PR owned so its planner could not wander into them. It held with one
