@@ -2577,7 +2577,9 @@ whose "splice, don't rebuild" finding is Decision 3; #1142 (umbrella); #1754.
    - the `docs/workflows.md` recipe and `tests/docs/workflows-import-recipe-claims.test.ts`
    - `docs/troubleshooting.md`
    - `docs/licensing-explained.md`
+   - `docs/integrations.md`
    - `docs/positioning.md`
+   - the `docs/release-smoke-checklist.md` restart row, which moved from a `.docx` to a `.md`
    - `sample/welcome.md` and `tests/fixtures/welcome-snapshot.md`
 6. Restore the skill's `.docx` content and the contract tests that pinned it, then bump the skill's frontmatter `version`.
 7. Drop the ships-dark banners. Decide whether the upgrade-drop code and `src/server/startup-notices.ts` still have a job; with the flag on, the drop is a no-op.
