@@ -1054,7 +1054,7 @@ Tauri v2 uses a capabilities model to grant permissions:
 
 ## Design Decisions
 
-See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-052), covering:
+See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-053), covering:
 
 - Tiptap over ProseMirror direct
 - Hocuspocus for Yjs WebSocket
