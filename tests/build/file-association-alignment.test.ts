@@ -119,6 +119,15 @@ describe(".docx flag coupling (ADR-053)", () => {
     });
   });
 
+  it("the Linux package smoke expects the .docx MIME exactly when the flag is on", () => {
+    // A tag-only CI step: nothing else runs it, so drift here surfaces only as a
+    // red release build. v0.28.0's first tag build failed on exactly this.
+    const src = readFileSync(path.join(repoRoot, "scripts/smoke/linux-package-smoke.sh"), "utf-8");
+    const m = src.match(/^DOCX_EXPECTED=([01])$/m);
+    expect(m, "DOCX_EXPECTED not found in linux-package-smoke.sh").toBeTruthy();
+    expect((m as RegExpMatchArray)[1] === "1").toBe(DOCX_ENABLED);
+  });
+
   it("neither base list carries .docx, whichever way the flag is set", () => {
     expect(BASE_EXTENSIONS.has(".docx")).toBe(false);
     expect(rustAssocExts()).not.toContain("docx");
