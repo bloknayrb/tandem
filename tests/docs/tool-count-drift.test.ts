@@ -38,9 +38,18 @@ const read = (relative: string): string => readFileSync(join(REPO_ROOT, relative
  */
 const DEPRECATED_STUBS = ["tandem_highlight", "tandem_suggest", "tandem_flag"];
 
+/**
+ * `.docx`-only tools that are not registered while `.docx` ships dark (ADR-053). The
+ * source scan still sees them, so they count toward the total but not the active figure,
+ * and a release exposes TOTAL − DARK. The companion assertion below fails if a name here
+ * stops being gated, which is what should force a look at this list on the re-enable.
+ */
+const DARK_TOOLS = ["tandem_applyChanges", "tandem_convertToMarkdown"];
+
 const REGISTERED = registeredToolNames(SRC);
 const TOTAL = REGISTERED.size;
-const ACTIVE = TOTAL - DEPRECATED_STUBS.length;
+const ACTIVE = TOTAL - DEPRECATED_STUBS.length - DARK_TOOLS.length;
+const EXPOSED = TOTAL - DARK_TOOLS.length;
 
 describe("MCP tool count stated in docs", () => {
   it("every named deprecated stub is registered and still returns DEPRECATED", () => {
@@ -54,16 +63,27 @@ describe("MCP tool count stated in docs", () => {
     }
   });
 
+  it("every named dark tool is registered and gated on the .docx flag", () => {
+    for (const name of DARK_TOOLS) {
+      expect(REGISTERED, `${name} is no longer registered`).toContain(name);
+      expect(SRC, `${name} is no longer gated on docxEnabled()`).toMatch(
+        new RegExp(String.raw`if \(docxEnabled\(\)\)\s*server\.tool\(\s*"${name}"`),
+      );
+    }
+  });
+
   it("docs/mcp-tools.md states the counts that source actually registers", () => {
     expect(read("docs/mcp-tools.md")).toContain(
-      `Tandem exposes ${TOTAL} tools via MCP HTTP (${ACTIVE} active, ${DEPRECATED_STUBS.length} deprecated stubs`,
+      `Tandem registers ${TOTAL} tools in source (${ACTIVE} active, ${DARK_TOOLS.length} shipped dark, ` +
+        `${DEPRECATED_STUBS.length} deprecated stubs); a release exposes ${EXPOSED} over MCP HTTP`,
     );
   });
 
   it("CLAUDE.md mirrors the same counts", () => {
     const claudeMd = read("CLAUDE.md");
     expect(claudeMd).toContain(
-      `All ${TOTAL} MCP tools (${ACTIVE} active, ${DEPRECATED_STUBS.length} deprecated stubs)`,
+      `All ${TOTAL} MCP tools (${ACTIVE} active, ${DARK_TOOLS.length} shipped dark, ` +
+        `${DEPRECATED_STUBS.length} deprecated stubs)`,
     );
     expect(claudeMd).toContain(`${ACTIVE} active MCP tools`);
   });

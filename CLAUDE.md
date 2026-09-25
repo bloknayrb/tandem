@@ -47,7 +47,7 @@ These WILL break things if violated:
 
 | Working on… | Read first |
 |---|---|
-| MCP tools, `/api` routes, channel API | [docs/mcp-tools.md](docs/mcp-tools.md) — All 33 MCP tools (30 active, 3 deprecated stubs) |
+| MCP tools, `/api` routes, channel API | [docs/mcp-tools.md](docs/mcp-tools.md) — All 33 MCP tools (28 active, 2 shipped dark, 3 deprecated stubs) |
 | Data flows, coordinate systems, file map, Tauri layer | [docs/architecture.md](docs/architecture.md) |
 | Colors, spacing, radii, elevation | [docs/semantic-tokens.md](docs/semantic-tokens.md) |
 | `data-testid` / E2E selectors | [docs/design-system-impl/testid-manifest.md](docs/design-system-impl/testid-manifest.md) |
@@ -55,7 +55,7 @@ These WILL break things if violated:
 | Network posture, CORS, auth, privacy | [docs/security.md](docs/security.md) |
 | Why a hook just fired | [.claude/hooks/README.md](.claude/hooks/README.md) |
 | "Why is it like this?" — 99 numbered lessons | [docs/lessons-learned.md](docs/lessons-learned.md) |
-| Architectural decisions, ADR-001–052 | [docs/decisions.md](docs/decisions.md) |
+| Architectural decisions, ADR-001–053 | [docs/decisions.md](docs/decisions.md) |
 | What shipped / what's left to v1.0 | [CHANGELOG.md](CHANGELOG.md), [docs/roadmap.md](docs/roadmap.md) |
 | Cutting a release | [.claude/skills/release/SKILL.md](.claude/skills/release/SKILL.md) |
 | Chaining dependent PRs | [docs/stacked-prs.md](docs/stacked-prs.md) — `gh stack`; hand-chaining `--base` silently closes children |
@@ -284,11 +284,12 @@ nothing and the marker is cleared on both paths — the check is one-sided and n
 watching the window. And the **`MayHaveFailed` arm — the half that should show the banner —
 is still untested.**
 
-Core is complete — 30 active MCP tools, multi-doc tabs, CRDT-anchored annotations, chat, four
+Core is complete — 28 active MCP tools (2 more ship dark), multi-doc tabs, CRDT-anchored annotations, chat, four
 push paths (self-armed wake, plugin monitor, opt-in channel shim, supervisor stdin),
-`.md`/`.docx`/`.txt`/`.html`, npm global install, Tauri desktop app.
+`.md`/`.txt`/`.html` (`.docx` ships dark), npm global install, Tauri desktop app.
 
 - **The acceptance harness runs in CI's `check` job (#1399).** `npm test` is vitest and the pre-push hook is biome + vitest + `cargo test`, so CI and a hand-run `npm run test:acceptance-harness` are its only two runners. **The step is deliberately unconditional** — no `if:`, no `continue-on-error` on the step *or the job*, and a bare `run:` with no `|| true`, because a gate that reports success when it could not evaluate is worse than no gate. It is preceded by `git fetch --no-tags --depth=1 origin tag v0.21.0`: the harness reads its immutable v9 skill baseline via `git show`, and `actions/checkout` is depth-1 and tagless. `tests/scripts/acceptance-harness-wiring.test.ts` parses `ci.yml` and fails if any of that changes, and `scripts/spikes/run_acceptance_tests.py` is what stops `unittest`'s exit-0-on-zero-collected and exit-0-on-all-skipped. **`check` IS a required status check on `master` (#1547, measured 2026-08-28), so a red `check` genuinely blocks the merge** — alongside the three `rust-test` legs and `windows-acl-proof`, with `strict: true` (a stale branch must rebase) and `enforce_admins: true`, meaning there is no admin bypass and a red required check blocks Bryan too. **`coverage` and CodeQL are NOT in the required set**, so their red is still advisory. This is a repo setting rather than a tracked file, which is why it carries a measurement date: re-measure with `gh api repos/bloknayrb/tandem/branches/master/protection` rather than trusting this line if the answer decides something. First-use arming is measured, not argued: v0.22.0 took natural arming from 3 of 6 to 6 of 6. **Two measurement facts constrain any arming/dispatch check you build**, because getting either wrong yields a passing-looking wrong verdict: the plugin arm reports its skill as `tandem:tandem`, so an exact-match name check scores every plugin session a false decline; and a typed `/tandem` emits **no** `PreToolUse Skill` event at all, so the control arm is invisible unless you also read `UserPromptExpansion`.
+- **`.docx` ships dark behind `DOCX_ENABLED` (ADR-053, 2026-09-24).** The literal in `src/shared/constants.ts` is read by the client directly and injected into the server and cli bundles as `__DOCX_ENABLED__`; `docxEnabled()` (`src/server/file-io/docx-flag.ts`) lets `TANDEM_DOCX=1` stand in **only when the define is absent** (tsx/vitest — vitest's root `test.env` sets it so the `.docx` suites keep running), so no env var re-enables `.docx` in a release. It is read per call, never cached, and the Rust `DOCX_ENABLED` const plus the `tauri.conf.json` association must agree with it (pinned by `tests/build/file-association-alignment.test.ts`). A release refuses `.docx` with `DOCX_UNSUPPORTED_MESSAGE`, registers neither `tandem_applyChanges` nor `tandem_convertToMarkdown`, never says "Word" or ".docx" in any tool text, and at an HTTP-mode boot with a writable store deletes every `.docx` session and replays a one-time notice to every notify-stream subscriber. **The E2E suite runs against the built bundle, so `.docx` specs are skipped on `!DOCX_ENABLED`, and `tests/scripts/e2e-docx-skip-wiring.test.ts` pins that list.** Re-enabling is ADR-053's checklist, not a one-line flip.
 - **Two systems are merged but runtime-inert, and must stay that way until their flag flips.** Licensing (ADR-040, #1116) — `LICENSE_GATE_ENABLED` in `tsup.config.ts`, section above. Local-model collaborator (ADR-039, #1123) — `BYO_MODELS_ENABLED` is a literal `const false` in `src/shared/constants.ts`; the whole M1a→M4 mechanism is merged dark, and it gates UI too — the Settings **Models** tab is filtered out entirely while false, so do not document or test it as a visible surface.
 - **Blocking v1.0:** the cross-platform install matrix and #316 Cowork macOS/Linux (both hardware-gated), the two flag flips, and the v1.0 exit gates. Prior per-feature version pins are void; both systems ship incrementally dark across minors.
 

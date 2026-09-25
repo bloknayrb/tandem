@@ -6,6 +6,7 @@ import {
   AUTO_SAVE_FORMATS,
   BINARY_SAVE_FORMATS,
   CTRL_ROOM,
+  DOCX_EXTENSION,
   Y_MAP_ACTIVE_DOCUMENT_EPOCH,
   Y_MAP_ACTIVE_DOCUMENT_ID,
   Y_MAP_DOCUMENT_META,
@@ -44,6 +45,7 @@ import { snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
 import { commentExportDowngrades, prepareExportComments } from "../file-io/docx-comment-export.js";
 import { reconcileImportCommentIds } from "../file-io/docx-comments.js";
 import { detectExportFidelityIssues } from "../file-io/docx-export.js";
+import { docxEnabled, isDarkDocx } from "../file-io/docx-flag.js";
 import {
   type BlockReason,
   blockReasonMessage,
@@ -69,6 +71,7 @@ import {
   stopAutoSave,
   touchSession,
 } from "../session/manager.js";
+import { addStartupNotice } from "../startup-notices.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 
 // --- Multi-document state (ADR-033: moved to src/server/documents/registry.ts) ---
@@ -2059,20 +2062,81 @@ function partitionByRestoreWindow(sessions: SessionFileEntry[]): {
 }
 
 /**
+ * `.docx` ships dark (ADR-053), so a `.docx` session can never reopen. Bryan
+ * chose (2026-09-24) to drop that state at upgrade rather than keep it or let
+ * it age out: every such session is deleted, and the documents that would have
+ * reopened are named once. The records are gone afterwards, so the notice does
+ * not repeat on the next boot — except for a delete that fails, whose record
+ * survives and is honestly named again.
+ *
+ * Only `restoreOpenDocuments`'s caller decides whether this runs: an HTTP start
+ * with a writable store, the one start where a tab can be told. Annotation
+ * envelopes and doc backups are left to their own mtime-based cleanups.
+ */
+async function dropDarkDocxSessions(
+  wouldReopen: SessionFileEntry[],
+  outOfWindow: SessionFileEntry[],
+): Promise<void> {
+  // `deleteSession` catches and logs per unlink, so it never rejects.
+  await Promise.all([...wouldReopen, ...outOfWindow].map((s) => deleteSession(s.filePath)));
+  if (wouldReopen.length === 0) return;
+
+  const names = wouldReopen.map((s) => path.basename(s.filePath)).join(", ");
+  const count = wouldReopen.length;
+  const discarded = wouldReopen.some((s) => s.holdsUnsavedWork)
+    ? " Unsaved edits to them were discarded."
+    : "";
+  const message =
+    `Word documents aren't supported in this version of Tandem, so ${count} ` +
+    `document${count === 1 ? " wasn't" : "s weren't"} reopened: ${names}. ` +
+    `Their files on disk were not changed.${discarded}`;
+  console.error(`[Tandem] ${message}`);
+  addStartupNotice({
+    id: generateNotificationId(),
+    type: "documents-not-reopened",
+    severity: "warning",
+    message,
+    dedupKey: "docx-not-reopened",
+    timestamp: Date.now(),
+  });
+}
+
+/**
  * Scan sessions and re-open previously open documents.
  * Called during startup to restore the working set.
  */
-export async function restoreOpenDocuments(previousActiveDocId: string | null): Promise<number> {
+export async function restoreOpenDocuments(
+  previousActiveDocId: string | null,
+  options: { dropDarkDocx?: boolean } = {},
+): Promise<number> {
   const sessions = await listSessionFilePaths();
   if (sessions.length === 0) return 0;
 
-  const { newest, restore, skip } = partitionByRestoreWindow(sessions);
+  // Partition over EVERY session, `.docx` included, so the window the others
+  // are measured against is the same one they had before `.docx` went dark.
+  const partition = partitionByRestoreWindow(sessions);
+  const { newest } = partition;
+  let { restore, skip } = partition;
+
+  if (options.dropDarkDocx && !docxEnabled()) {
+    const isDocx = (s: SessionFileEntry) =>
+      path.extname(s.filePath).toLowerCase() === DOCX_EXTENSION;
+    await dropDarkDocxSessions(restore.filter(isDocx), skip.filter(isDocx));
+    restore = restore.filter((s) => !isDocx(s));
+    skip = skip.filter((s) => !isDocx(s));
+  }
 
   for (const skipped of skip) {
+    // Only reached for a `.docx` when the drop didn't run (stdio, read-only
+    // store); Recent sessions hides it while `.docx` is dark, so don't point there.
+    const where = isDarkDocx(path.extname(skipped.filePath).toLowerCase())
+      ? "Word documents aren't supported in this version, so it stays closed."
+      : "It remains available under Recent sessions.";
     console.error(
-      "[Tandem] Not reopening %s: its session predates the last working set by more than %d minutes. It remains available under Recent sessions.",
+      "[Tandem] Not reopening %s: its session predates the last working set by more than %d minutes. %s",
       path.basename(skipped.filePath),
       RESTORE_WINDOW_MS / 60_000,
+      where,
     );
   }
 

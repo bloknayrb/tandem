@@ -148,17 +148,18 @@ You can open a file a few ways:
 ### Supported Formats
 
 - **Markdown** (`.md`) — Full read-write support. Your content round-trips exactly; some *formatting style* is canonicalized on the first save. See [Markdown formatting](#markdown-formatting) below.
-- **Word** (`.docx`) — Read-write. Saving writes your edits back to the `.docx` body, and pending comments are written back as real Word comments. Existing Word comments (`<w:comment>` elements) are imported as annotations with author "import". External edits (e.g. from Word) are detected: a clean document reloads in place, while a document with unsaved edits shows a keep-vs-reload banner instead of losing anything. A **Convert to Markdown** option is also available if you prefer working in Markdown. See [Word fidelity](#word-fidelity) below.
 - **Plain text** (`.txt`) — Full read-write support. One behaviour differs from Markdown:
   see [Line breaks in plain text](#line-breaks-in-plain-text) below.
 - **HTML** (`.html`, `.htm`) — Read-only. It opens for reading and annotating, and the file is never written back: HTML is the one supported format with no save path at all, so it opens read-only rather than accepting edits it would silently drop on tab close.
+
+**Word (`.docx`) isn't supported in this version.** Word support wasn't reliable enough for serious work, so it has been taken out of the app for now, and a `.docx` is refused with a message saying so. To work on a Word document, save a copy from Word as Plain Text (`.txt`) to edit it, or as Web Page (`.html`) to review it read-only, and open that.
 
 ### Line breaks in plain text
 
 In a Markdown document a line break inside a paragraph and a break *between* paragraphs are
 different things, and the file records which is which. **A plain-text file has only one
 kind of line break.** So in a `.txt` document — or any file Tandem treats as plain text,
-which is everything that is not `.md` or `.docx` — pressing **Shift+Enter** starts a new
+which is everything that is not `.md` — pressing **Shift+Enter** starts a new
 paragraph rather than adding a break inside the current one, and a pasted line break does
 the same.
 
@@ -208,16 +209,6 @@ If a save ever looks wrong, the original is recoverable. Tandem copies the file'
 verbatim before its first write to it in a session; see
 [troubleshooting → Recovering a previous version](troubleshooting.md#recovering-a-previous-version-of-a-document).
 
-### Word Fidelity
-
-Tandem does not model every Word feature, and it tells you which ones rather than letting you find out after a save.
-
-When you open a `.docx` that uses something Tandem can't carry, a notice appears above the document: *"Some Word features in this file aren't fully supported… the items below won't survive a save back to .docx."* Expand **Details** for the list — it names the feature and a count (for example, "3 tracked deletions were applied automatically"), never the content itself. The notice is server-authoritative and stays until the losses are gone; you can collapse it, but not dismiss it.
-
-Saving raises a toast summarising what was simplified on export, and what the backed-up original still has that the saved file doesn't. It repeats on every save on purpose: the comparison is against a copy you can still recover.
-
-**Your original is always backed up first.** Before Tandem's first write to a `.docx` in a session it copies the file's bytes verbatim, so nothing here is one-way. If a save looks wrong, run **"Restore a backup of this document…"** from the command palette (`Ctrl+Shift+P`) — see [troubleshooting → Recovering a previous version](troubleshooting.md#recovering-a-previous-version-of-a-document). `.docx` files are also never auto-saved; only an explicit save overwrites them.
-
 ### Multi-Document Tabs
 
 Each open file gets its own tab and its own collaboration room. Tabs scroll horizontally when they overflow. Reorder tabs by dragging or with `Alt+Left` / `Alt+Right`.
@@ -246,7 +237,7 @@ The AI's comments may carry a **replacement suggestion** (`suggestedText`) — a
 
 ### Note
 
-A private note to yourself. Notes are never sent to the AI — it cannot read them through any MCP tool or event ([ADR-027](decisions.md#adr-027-annotation-system-redesign--audience-based-model)). Use them for personal reminders while you work. A note can later be **promoted** to a comment if you decide the AI should see it (imported Word comments arrive as notes too, and can be batch-promoted).
+A private note to yourself. Notes are never sent to the AI — it cannot read them through any MCP tool or event ([ADR-027](decisions.md#adr-027-annotation-system-redesign--audience-based-model)). Use them for personal reminders while you work. A note can later be **promoted** to a comment if you decide the AI should see it.
 
 ### Creating Annotations
 
@@ -365,7 +356,7 @@ Most of what shapes the reading surface lives here.
 
 - **Reading measure** — The line length of the text: Narrow (58 characters), Comfortable (68), Wide (82), or Full (fills the editor). A fixed measure keeps lines readable no matter which panels are open. The formatting bar's **Display** menu sets it too.
 - **Editor font** — Sans-serif, Serif, or Monospace for the document text.
-- **Default font by file type** — Overrides the editor font per format (`.md`, `.docx`, `.html`, `.txt`). Anything you don't set falls back to the editor font; **Reset to defaults** clears every override at once.
+- **Default font by file type** — Overrides the editor font per format (`.md`, `.html`, `.txt`). Anything you don't set falls back to the editor font; **Reset to defaults** clears every override at once.
 - **Default save folder** — Where **Save As** puts new files. Leave it empty to fall back to your AI's working directory, then your home folder. In the desktop app a **Choose…** button opens a native folder picker; in the browser you type the path, and browser Save As is a download that ignores this setting.
 - **Smart typography** — Converts straight quotes, dashes, and `...` to typographic characters as you type. Opt-in.
 - **Spellcheck** — Shows the browser's spelling underlines. Opt-in.
@@ -524,8 +515,6 @@ If the annotations are there but anchored to the wrong text, that is a re-anchor
 ### Document won't load
 
 Verify the file path exists and is readable. The server logs (terminal where you started Tandem) will show errors for missing files or permission issues.
-
-For `.docx` files, mammoth.js handles the conversion. Corrupted or password-protected `.docx` files will fail to open.
 
 ### Claude isn't responding
 

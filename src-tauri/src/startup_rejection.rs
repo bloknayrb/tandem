@@ -301,6 +301,19 @@ mod startup_rejection_tests {
             }),
             "unsupported-extension"
         );
+        // `.docx` while it ships dark (ADR-053): the client maps this code to
+        // the Word-specific message, so the string is part of the contract.
+        assert_eq!(
+            rejection_reason_code(&RejectionReason::UnsupportedExtension {
+                ext: "docx".into(),
+                path: PathBuf::from("/secret/place/file.docx"),
+            }),
+            if crate::open_candidate::DOCX_ENABLED {
+                "unsupported-extension"
+            } else {
+                "docx-unsupported"
+            }
+        );
         assert_eq!(
             rejection_reason_code(&RejectionReason::NotAFile {
                 path: PathBuf::from("/secret/place/dir"),

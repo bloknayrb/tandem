@@ -1,4 +1,9 @@
-import { RECENT_FILES_CAP, RECENT_FILES_KEY } from "../../shared/constants.js";
+import {
+  DOCX_ENABLED,
+  DOCX_EXTENSION,
+  RECENT_FILES_CAP,
+  RECENT_FILES_KEY,
+} from "../../shared/constants.js";
 
 export interface RecentFileEntry {
   path: string;
@@ -8,6 +13,18 @@ export interface RecentFileEntry {
    * entry coerced on load. The launcher UI omits the "when" label for `0`.
    */
   openedAt: number;
+}
+
+/**
+ * The rows worth offering: a `.docx` can't open while `.docx` ships dark (ADR-053),
+ * so its row could only fail. Applied where the list is SHOWN, never on load, because
+ * every writer saves what `loadRecentFiles` returns — filtering there would delete
+ * the rows for good instead of hiding them until `.docx` comes back.
+ */
+export function openableRecentFiles(entries: RecentFileEntry[]): RecentFileEntry[] {
+  return DOCX_ENABLED
+    ? entries
+    : entries.filter((e) => !e.path.toLowerCase().endsWith(DOCX_EXTENSION));
 }
 
 /**

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { CTRL_ROOM, SUPPORTED_EXTENSIONS } from "../../src/shared/constants.js";
+import { BASE_EXTENSIONS, CTRL_ROOM } from "../../src/shared/constants.js";
 
 /**
  * #1782: `docs/troubleshooting.md` and `docs/configuration.md` named a
@@ -37,12 +37,12 @@ describe("session/config file-name claims (#1782)", () => {
     expect(doc).not.toContain("CTRL_ROOM.json");
   });
 
-  it("docs/troubleshooting.md lists every SUPPORTED_EXTENSIONS member as a backticked token", () => {
+  it("docs/troubleshooting.md lists every BASE_EXTENSIONS member as a backticked token", () => {
     const doc = read("docs/troubleshooting.md");
     const line = /^Tandem opens.*$/m.exec(doc)?.[0];
     expect(line, "docs/troubleshooting.md has no 'Tandem opens ...' line").toBeDefined();
 
-    for (const ext of SUPPORTED_EXTENSIONS) {
+    for (const ext of BASE_EXTENSIONS) {
       expect(line, `expected the backticked token \`${ext}\` in: ${line}`).toContain(`\`${ext}\``);
     }
   });

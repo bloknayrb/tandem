@@ -40,8 +40,8 @@
 You buy Tandem once. You get a **license key** by email — a long block of
 letters and numbers, plus a `tandem.license` file attached. You paste the key in
 (**double-clicking the file does nothing** — Tandem registers no `.license` file
-association; its only associations are `.md`/`.markdown`, `.txt`, `.html` and `.docx`,
-`src-tauri/tauri.conf.json:74-102`), and Tandem is yours: it keeps working forever, on
+association; its only associations are `.md`/`.markdown`, `.txt` and `.html`,
+`src-tauri/tauri.conf.json:74-96`), and Tandem is yours: it keeps working forever, on
 any computer you personally use, with no internet connection required to prove
 it. For the first year you also get new versions as they're released.
 

@@ -20,7 +20,11 @@
  * idempotent init, HMR-safe disposal, `_resetForTests()` for unit-test
  * isolation.
  */
-import { SUPPORTED_EXTENSIONS } from "../../shared/constants.js";
+import {
+  CLIENT_EXTENSIONS,
+  DOCX_EXTENSION,
+  DOCX_UNSUPPORTED_MESSAGE,
+} from "../../shared/constants.js";
 import type { TandemNotification } from "../../shared/types.js";
 import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { openServerPath } from "../utils/server-paths.js";
@@ -37,18 +41,23 @@ export const tauriFileDrop = {
   },
 };
 
-function extensionAllowed(path: string): boolean {
+function extensionOf(path: string): string | null {
   const basename = path.split(/[/\\]/).at(-1) ?? "";
   const dot = basename.lastIndexOf(".");
-  if (dot <= 0) return false; // ≤ 0: no extension or leading-dot dotfiles (.md, .bashrc)
-  return SUPPORTED_EXTENSIONS.has(basename.slice(dot).toLowerCase());
+  if (dot <= 0) return null; // ≤ 0: no extension or leading-dot dotfiles (.md, .bashrc)
+  return basename.slice(dot).toLowerCase();
+}
+
+function extensionAllowed(path: string): boolean {
+  const ext = extensionOf(path);
+  return ext !== null && CLIENT_EXTENSIONS.has(ext);
 }
 
 // Derived once at module load so the unsupported-drop toast lists exactly
-// what SUPPORTED_EXTENSIONS contains — no hand-maintained duplicate that
+// what CLIENT_EXTENSIONS contains — no hand-maintained duplicate that
 // can drift (the original literal omitted .htm; caught in 8e73059).
 const SUPPORTED_EXTENSION_LIST = (() => {
-  const exts = Array.from(SUPPORTED_EXTENSIONS).sort();
+  const exts = Array.from(CLIENT_EXTENSIONS).sort();
   if (exts.length <= 1) return exts[0] ?? "";
   if (exts.length === 2) return `${exts[0]} or ${exts[1]}`;
   return `${exts.slice(0, -1).join(", ")}, or ${exts.at(-1)}`;
@@ -101,8 +110,12 @@ export function initTauriFileDrop(push: (n: TandemNotification) => void): void {
                   return; // only open the first valid file (folder drag, multi-select)
                 }
               }
+              // A `.docx` refused only because `.docx` ships dark (ADR-053)
+              // says so, rather than listing formats at the user.
               toast(
-                `Tandem can only open ${SUPPORTED_EXTENSION_LIST} files`,
+                payload.paths.some((p) => extensionOf(p) === DOCX_EXTENSION)
+                  ? DOCX_UNSUPPORTED_MESSAGE
+                  : `Tandem can only open ${SUPPORTED_EXTENSION_LIST} files`,
                 "warning",
                 "tauri-drop-unsupported",
               );

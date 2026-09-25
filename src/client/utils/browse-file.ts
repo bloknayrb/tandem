@@ -1,9 +1,9 @@
-import { SUPPORTED_EXTENSIONS } from "../../shared/constants.js";
+import { CLIENT_EXTENSIONS } from "../../shared/constants.js";
 import { resolveDefaultDirectory } from "./default-directory.js";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./recentFiles.js";
 import { openServerPath } from "./server-paths.js";
 
-const filterExtensions = Array.from(SUPPORTED_EXTENSIONS)
+const filterExtensions = Array.from(CLIENT_EXTENSIONS)
   .sort()
   .map((ext) => ext.replace(/^\./, ""));
 

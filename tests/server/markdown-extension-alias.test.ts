@@ -12,11 +12,11 @@ import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { getAdapter } from "../../src/server/file-io/index.js";
 import { detectFormat } from "../../src/server/mcp/document-model.js";
-import { AUTO_SAVE_FORMATS, SUPPORTED_EXTENSIONS } from "../../src/shared/constants.js";
+import { AUTO_SAVE_FORMATS, BASE_EXTENSIONS } from "../../src/shared/constants.js";
 
 describe(".markdown is a first-class alias for .md", () => {
   it("passes the server's open-time extension allowlist", () => {
-    expect(SUPPORTED_EXTENSIONS.has(".markdown")).toBe(true);
+    expect(BASE_EXTENSIONS.has(".markdown")).toBe(true);
   });
 
   it("detects as the md format, not the txt fallback", () => {

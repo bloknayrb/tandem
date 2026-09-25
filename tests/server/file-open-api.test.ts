@@ -4,12 +4,13 @@ import path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openFromDisk, openFromUpload } from "../../src/server/documents/open.js";
 import { removeDoc } from "../../src/server/documents/registry-testing.js";
+import { supportedExtensions } from "../../src/server/file-io/docx-flag.js";
 import { docIdFromPath, extractText } from "../../src/server/mcp/document-model.js";
 import { getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { sourceFileChanged } from "../../src/server/session/manager.js";
 import { getOrCreateDocument, removeDocument } from "../../src/server/yjs/provider.js";
 import {
-  SUPPORTED_EXTENSIONS,
+  DOCX_UNSUPPORTED_MESSAGE,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
   Y_MAP_DOCUMENT_META,
@@ -333,17 +334,67 @@ describe("session guards for upload paths", () => {
   });
 });
 
-describe("SUPPORTED_EXTENSIONS", () => {
+describe("supportedExtensions()", () => {
+  // vitest's root `test.env` sets TANDEM_DOCX=1, the dark-code configuration.
   it("includes expected formats", () => {
-    expect(SUPPORTED_EXTENSIONS.has(".md")).toBe(true);
-    expect(SUPPORTED_EXTENSIONS.has(".txt")).toBe(true);
-    expect(SUPPORTED_EXTENSIONS.has(".docx")).toBe(true);
-    expect(SUPPORTED_EXTENSIONS.has(".html")).toBe(true);
-    expect(SUPPORTED_EXTENSIONS.has(".htm")).toBe(true);
+    const supported = supportedExtensions();
+    expect(supported.has(".md")).toBe(true);
+    expect(supported.has(".txt")).toBe(true);
+    expect(supported.has(".docx")).toBe(true);
+    expect(supported.has(".html")).toBe(true);
+    expect(supported.has(".htm")).toBe(true);
   });
 
   it("excludes unsupported formats", () => {
-    expect(SUPPORTED_EXTENSIONS.has(".csv")).toBe(false);
-    expect(SUPPORTED_EXTENSIONS.has(".pdf")).toBe(false);
+    const supported = supportedExtensions();
+    expect(supported.has(".csv")).toBe(false);
+    expect(supported.has(".pdf")).toBe(false);
+  });
+});
+
+// The release configuration: no build define and no env override, which is
+// what a shipped bundle's `__DOCX_ENABLED__ = false` resolves to (ADR-053).
+describe(".docx while it ships dark", () => {
+  let tmpDir: string | undefined;
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    if (tmpDir) await fs.rm(tmpDir, { recursive: true, force: true });
+    tmpDir = undefined;
+  });
+
+  it("the allowlist drops .docx and keeps everything else", () => {
+    vi.stubEnv("TANDEM_DOCX", "");
+    const supported = supportedExtensions();
+    expect(supported.has(".docx")).toBe(false);
+    for (const ext of [".md", ".markdown", ".txt", ".html", ".htm"]) {
+      expect(supported.has(ext), ext).toBe(true);
+    }
+  });
+
+  it("an upload of a .docx is refused with the Word message", async () => {
+    vi.stubEnv("TANDEM_DOCX", "");
+    await expect(openFromUpload("report.docx", Buffer.from("PK"))).rejects.toMatchObject({
+      code: "UNSUPPORTED_FORMAT",
+      message: DOCX_UNSUPPORTED_MESSAGE,
+    });
+  });
+
+  it("opening a .docx from disk is refused with the Word message", async () => {
+    vi.stubEnv("TANDEM_DOCX", "");
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tandem-docx-dark-"));
+    const file = path.join(tmpDir, "report.docx");
+    await fs.writeFile(file, "PK");
+    await expect(openFromDisk(file)).rejects.toMatchObject({
+      code: "UNSUPPORTED_FORMAT",
+      message: DOCX_UNSUPPORTED_MESSAGE,
+    });
+  });
+
+  it("any other unsupported format keeps the generic message", async () => {
+    vi.stubEnv("TANDEM_DOCX", "");
+    await expect(openFromUpload("data.csv", "a,b")).rejects.toMatchObject({
+      code: "UNSUPPORTED_FORMAT",
+      message: expect.stringMatching(/^Unsupported file format: \.csv\. Supported: /),
+    });
   });
 });

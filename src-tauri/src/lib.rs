@@ -71,7 +71,8 @@ pub mod open_candidate;
 // these as `app_lib::…`, and this file's `#[cfg(test)]` submodules reach them
 // through `use super::*`.
 pub use open_candidate::{
-    extract_file_arg, RejectionReason, ScreenedOpenPath, SUPPORTED_FILE_ASSOC_EXTS,
+    extract_file_arg, RejectionReason, ScreenedOpenPath, DOCX_ENABLED, DOCX_FILE_ASSOC_EXT,
+    SUPPORTED_FILE_ASSOC_EXTS,
 };
 
 // `rejection_reason_code` has unconditional call sites here (the

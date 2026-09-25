@@ -97,7 +97,33 @@ export const TANDEM_SUPPORT_EMAIL = "support@tandem.ink";
 export const BYO_MODELS_ENABLED = false;
 
 /**
- * File extensions the server accepts for opening.
+ * `.docx` support ships DARK (ADR-053, 2026-09-24): it isn't fit for serious
+ * work, and its replacement engine (ADR-052) is shelved. The code and its
+ * tests stay; a released build refuses `.docx` everywhere.
+ *
+ * This literal is what the client reads, and `tsup.config.ts` injects it into
+ * the server and cli bundles as `__DOCX_ENABLED__` (read by
+ * `src/server/file-io/docx-flag.ts`, where the define wins and the
+ * `TANDEM_DOCX=1` env fallback exists only for tsx/vitest). It is coupled to
+ * the Rust `DOCX_ENABLED` in `src-tauri/src/open_candidate.rs` and to the
+ * `docx` entry in `tauri.conf.json`'s `fileAssociations`;
+ * `tests/build/file-association-alignment.test.ts` fails on a half-flip.
+ * ADR-053 carries the full re-enable checklist.
+ */
+export const DOCX_ENABLED = false;
+
+export const DOCX_EXTENSION = ".docx";
+
+/** What a flag-refused `.docx` tells the user, on every surface that refuses one. */
+export const DOCX_UNSUPPORTED_MESSAGE =
+  "Word (.docx) files aren't supported in this version of Tandem. " +
+  "In Word, save a copy as Plain Text (.txt) to edit it here, or as Web Page (.html) to review it read-only.";
+
+/**
+ * File extensions the server accepts for opening, excluding `.docx`, which is
+ * added only while `.docx` support is enabled: the server's full set is
+ * `supportedExtensions()` in `src/server/file-io/docx-flag.ts`, the client's
+ * is `CLIENT_EXTENSIONS` below.
  *
  * This set is the authority, and `src-tauri/tauri.conf.json`'s
  * `bundle.fileAssociations` is a PROMISE made against it: once an extension is
@@ -114,7 +140,24 @@ export const BYO_MODELS_ENABLED = false;
  * PLAINTEXT adapter, render its syntax literally, and then auto-save back
  * through `extractText` instead of `saveMarkdown`, rewriting the user's file.
  */
-export const SUPPORTED_EXTENSIONS = new Set([".md", ".markdown", ".txt", ".html", ".htm", ".docx"]);
+export const BASE_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".md",
+  ".markdown",
+  ".txt",
+  ".html",
+  ".htm",
+]);
+
+/**
+ * The client's view of the allowlist. It reads the source literal because the
+ * client bundle gets no define; the two are one const, so they cannot differ.
+ */
+/** The base set, plus `.docx` when `docxOn`. Each side passes its own flag reading. */
+export function extensionsFor(docxOn: boolean): ReadonlySet<string> {
+  return docxOn ? new Set([...BASE_EXTENSIONS, DOCX_EXTENSION]) : BASE_EXTENSIONS;
+}
+
+export const CLIENT_EXTENSIONS: ReadonlySet<string> = extensionsFor(DOCX_ENABLED);
 
 /**
  * Inline marks the `.docx` import path (`docx-html.ts#htmlToYDoc`) can emit onto

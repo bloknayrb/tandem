@@ -22,6 +22,7 @@ import {
   listDocBackups,
   snapshotBeforeFirstWrite,
 } from "../file-io/doc-backup.js";
+import { docxEnabled } from "../file-io/docx-flag.js";
 import {
   type AcceptedSuggestion,
   applyTrackedChanges,
@@ -517,79 +518,88 @@ async function docxSidecarEntry(filePath: string): Promise<DocBackupSnapshot | n
 // ---------------------------------------------------------------------------
 
 export function registerApplyTools(server: McpServer): void {
-  server.tool(
-    "tandem_applyChanges",
-    "EXPERIMENTAL. Apply all accepted suggestions to the .docx file as tracked changes " +
-      "(w:del + w:ins). It refuses documents whose flat text it cannot reproduce; some Word " +
-      "documents are a known limitation. " +
-      "Creates a backup before writing. Only works on .docx files opened from disk.",
-    {
-      documentId: z.string().optional().describe("Target document ID (defaults to active doc)"),
-      author: z
-        .string()
-        .optional()
-        .describe("Author name for tracked changes (default: 'Tandem Review')"),
-      backupPath: z
-        .string()
-        .optional()
-        .describe("Custom backup path (default: {name}.backup.docx)"),
-    },
-    gatedTool("tandem_applyChanges", async (args) => {
-      try {
-        const result = await applyChangesCore(args.documentId, args.author, args.backupPath);
-        return mcpSuccess(result);
-      } catch (err) {
-        const e = err as Error & { code?: string };
-        if (e.code === "NO_DOCUMENT") return noDocumentError();
-        if (e.code === "NO_SUGGESTIONS") return mcpError("NO_SUGGESTIONS", e.message);
-        if (e.code === "UNSUPPORTED_FORMAT") return mcpError("FORMAT_ERROR", e.message);
-        // A UNC `backupPath` or an upload/scratchpad source: a path the caller
-        // must change, answered with the same code every tool uses for it
-        // (#1823). It was FORMAT_ERROR, which is not what either condition is.
-        if (e.code === "INVALID_PATH") return mcpError("INVALID_PATH", e.message);
-        // The backup directory does not exist (`applyChangesCore` throws it
-        // before touching anything). With no arm it rethrew as INTERNAL_ERROR.
-        if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
-        if (e.code === "BACKUP_FAILED") return mcpError("BACKUP_FAILED", e.message);
-        // Its own internal code, and it must stay distinguishable on BOTH
-        // surfaces: the `/api` label table keys on it. Collapsing it onto
-        // BACKUP_FAILED is the mistake this line used to make: it would put
-        // "move the symlink or pass a different backupPath", which the caller
-        // CAN fix and should retry, in the same bucket as a failed size
-        // verification, which it must not retry.
-        if (e.code === "BACKUP_SYMLINK") return mcpError("INVALID_PATH", e.message);
-        // The write guards (#1448 W1). Every one of these is an expected policy
-        // refusal, so it has to come back as a structured error the AI can read
-        // and act on. Rethrowing would surface "the file changed on disk" as an
-        // unhandled MCP protocol failure.
-        if (e.code === "READ_ONLY") return mcpError("READ_ONLY", e.message);
-        if (e.code === "EXTERNAL_CONFLICT") return mcpError("EXTERNAL_CONFLICT", e.message);
-        if (e.code === "FILE_MODIFIED") return mcpError("FILE_MODIFIED", e.message);
-        if (e.code === "SOURCE_MISSING") return mcpError("SOURCE_MISSING", e.message);
-        // A concurrent Hocuspocus Y.Doc swap mid-apply (#2037). Without this arm
-        // the refusal escapes as an unhandled MCP protocol failure — exactly what
-        // the comment above forbids. Reuses the existing wire code: a doc swap is
-        // a reload in the caller's terms, and `routes/_shared.ts` already maps it
-        // to 409 on the `/api` side.
-        if (e.code === "RELOAD_IN_PROGRESS") return mcpError("RELOAD_IN_PROGRESS", e.message);
-        // A locked or unreadable source keeps its own errno rather than a code of
-        // ours, so it is matched by code here too — same reasoning as the stat guard.
-        // A permission refusal is not a lock (#1823), the same split `tandem_open`
-        // and `tandem_save` draw; see `lockOrPermissionCode` for Windows' EPERM.
-        const lockOrPermission = lockOrPermissionCode(e as NodeJS.ErrnoException);
-        if (lockOrPermission) return mcpError(lockOrPermission, e.message);
-        throw err;
-      }
-    }),
-  );
+  // `.docx`-only, so it is not registered while `.docx` ships dark (ADR-053).
+  // Only this call is gated: `tandem_restoreBackup` below serves every format.
+  // Its `/api/apply-changes` twin stays mounted and is inert: it needs an open `.docx`.
+  if (docxEnabled())
+    server.tool(
+      "tandem_applyChanges",
+      "EXPERIMENTAL. Apply all accepted suggestions to the .docx file as tracked changes " +
+        "(w:del + w:ins). It refuses documents whose flat text it cannot reproduce; some Word " +
+        "documents are a known limitation. " +
+        "Creates a backup before writing. Only works on .docx files opened from disk.",
+      {
+        documentId: z.string().optional().describe("Target document ID (defaults to active doc)"),
+        author: z
+          .string()
+          .optional()
+          .describe("Author name for tracked changes (default: 'Tandem Review')"),
+        backupPath: z
+          .string()
+          .optional()
+          .describe("Custom backup path (default: {name}.backup.docx)"),
+      },
+      gatedTool("tandem_applyChanges", async (args) => {
+        try {
+          const result = await applyChangesCore(args.documentId, args.author, args.backupPath);
+          return mcpSuccess(result);
+        } catch (err) {
+          const e = err as Error & { code?: string };
+          if (e.code === "NO_DOCUMENT") return noDocumentError();
+          if (e.code === "NO_SUGGESTIONS") return mcpError("NO_SUGGESTIONS", e.message);
+          if (e.code === "UNSUPPORTED_FORMAT") return mcpError("FORMAT_ERROR", e.message);
+          // A UNC `backupPath` or an upload/scratchpad source: a path the caller
+          // must change, answered with the same code every tool uses for it
+          // (#1823). It was FORMAT_ERROR, which is not what either condition is.
+          if (e.code === "INVALID_PATH") return mcpError("INVALID_PATH", e.message);
+          // The backup directory does not exist (`applyChangesCore` throws it
+          // before touching anything). With no arm it rethrew as INTERNAL_ERROR.
+          if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
+          if (e.code === "BACKUP_FAILED") return mcpError("BACKUP_FAILED", e.message);
+          // Its own internal code, and it must stay distinguishable on BOTH
+          // surfaces: the `/api` label table keys on it. Collapsing it onto
+          // BACKUP_FAILED is the mistake this line used to make: it would put
+          // "move the symlink or pass a different backupPath", which the caller
+          // CAN fix and should retry, in the same bucket as a failed size
+          // verification, which it must not retry.
+          if (e.code === "BACKUP_SYMLINK") return mcpError("INVALID_PATH", e.message);
+          // The write guards (#1448 W1). Every one of these is an expected policy
+          // refusal, so it has to come back as a structured error the AI can read
+          // and act on. Rethrowing would surface "the file changed on disk" as an
+          // unhandled MCP protocol failure.
+          if (e.code === "READ_ONLY") return mcpError("READ_ONLY", e.message);
+          if (e.code === "EXTERNAL_CONFLICT") return mcpError("EXTERNAL_CONFLICT", e.message);
+          if (e.code === "FILE_MODIFIED") return mcpError("FILE_MODIFIED", e.message);
+          if (e.code === "SOURCE_MISSING") return mcpError("SOURCE_MISSING", e.message);
+          // A concurrent Hocuspocus Y.Doc swap mid-apply (#2037). Without this arm
+          // the refusal escapes as an unhandled MCP protocol failure — exactly what
+          // the comment above forbids. Reuses the existing wire code: a doc swap is
+          // a reload in the caller's terms, and `routes/_shared.ts` already maps it
+          // to 409 on the `/api` side.
+          if (e.code === "RELOAD_IN_PROGRESS") return mcpError("RELOAD_IN_PROGRESS", e.message);
+          // A locked or unreadable source keeps its own errno rather than a code of
+          // ours, so it is matched by code here too — same reasoning as the stat guard.
+          // A permission refusal is not a lock (#1823), the same split `tandem_open`
+          // and `tandem_save` draw; see `lockOrPermissionCode` for Windows' EPERM.
+          const lockOrPermission = lockOrPermissionCode(e as NodeJS.ErrnoException);
+          if (lockOrPermission) return mcpError(lockOrPermission, e.message);
+          throw err;
+        }
+      }),
+    );
 
   server.tool(
     "tandem_restoreBackup",
     "Restore a document from a backup. Tandem snapshots a document's on-disk bytes before its " +
-      "first overwrite each server run (.md/.txt/.docx). Call without `backup` to list available " +
+      `first overwrite each server run (${docxEnabled() ? ".md/.txt/.docx" : ".md/.txt"}). ` +
+      "Call without `backup` to list available " +
       "snapshots (newest first), then call again with `backup` set to a snapshot name to restore " +
-      "it. For .docx the list also includes the {name}.backup.docx sidecar written by " +
-      "tandem_applyChanges, listed last; restore it by name like any snapshot. Restoring " +
+      "it. " +
+      (docxEnabled()
+        ? "For .docx the list also includes the {name}.backup.docx sidecar written by " +
+          "tandem_applyChanges, listed last; restore it by name like any snapshot. "
+        : "") +
+      "Restoring " +
       "reloads the open document in place — annotations are preserved and re-anchored.",
     {
       documentId: z.string().optional().describe("Target document ID (defaults to active doc)"),

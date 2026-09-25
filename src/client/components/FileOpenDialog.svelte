@@ -1,6 +1,6 @@
 <script lang="ts">
 import { API_UPLOAD } from "../../shared/api-paths.js";
-import { SUPPORTED_EXTENSIONS } from "../../shared/constants.js";
+import { CLIENT_EXTENSIONS } from "../../shared/constants.js";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { pickNativeFilePath } from "../utils/browse-file.js";
@@ -10,6 +10,7 @@ import {
   addRecentFile,
   clearRecentFiles,
   loadRecentFiles,
+  openableRecentFiles,
   recentFilePaths,
   saveRecentFiles,
 } from "../utils/recentFiles.js";
@@ -31,7 +32,7 @@ let error = $state<string | null>(null);
 let loading = $state(false);
 let fileInputEl: HTMLInputElement | undefined = $state();
 let dialogEl: HTMLDivElement | undefined = $state();
-let recentFiles = $state<string[]>(recentFilePaths(loadRecentFiles()));
+let recentFiles = $state<string[]>(recentFilePaths(openableRecentFiles(loadRecentFiles())));
 
 // --- Saved sessions (#103) ---
 let sessions = $state<SessionMetadata[]>([]);
@@ -178,13 +179,13 @@ function formatRelativeTime(ms: number): string {
   return `${days}d ago`;
 }
 
-const extensionList = Array.from(SUPPORTED_EXTENSIONS).sort();
+const extensionList = Array.from(CLIENT_EXTENSIONS).sort();
 const acceptAttr = extensionList.join(",");
 
 function pushRecent(path: string) {
   const updated = addRecentFile(loadRecentFiles(), path);
   saveRecentFiles(updated);
-  recentFiles = recentFilePaths(updated);
+  recentFiles = recentFilePaths(openableRecentFiles(updated));
 }
 
 function handleClearRecent() {

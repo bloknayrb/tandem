@@ -422,7 +422,7 @@ export function registerAnnotationTools(server: McpServer): void {
     "tandem_getAnnotations",
     {
       description:
-        'Read annotations, optionally filtered by author/type/status. User notes are always excluded — they are private (ADR-027); notesExcluded reports how many were filtered, including imported Word comments awaiting user promotion (promoted ones surface as user comments). Every record whose stored audience is not outbound is excluded too and counted in privateExcluded (#1619/#1710) — user highlights are always private, so type: "highlight" returns nothing. For new user actions, prefer tandem_checkInbox.',
+        'Read annotations, optionally filtered by author/type/status. User notes are always excluded — they are private (ADR-027); notesExcluded reports how many were filtered, including imported comments awaiting user promotion (promoted ones surface as user comments). Every record whose stored audience is not outbound is excluded too and counted in privateExcluded (#1619/#1710) — user highlights are always private, so type: "highlight" returns nothing. For new user actions, prefer tandem_checkInbox.',
       inputSchema: {
         author: AuthorSchema.optional().describe("Filter by author"),
         type: z
@@ -1000,7 +1000,7 @@ export function registerAnnotationTools(server: McpServer): void {
   server.tool(
     "tandem_annotationReply",
     "Reply to a thread on an annotation Claude authored. Only works on pending annotations. " +
-      "A user-authored or imported record — including a promoted note or Word comment, which is " +
+      "A user-authored or imported record — including a promoted note or imported comment, which is " +
       "stored as a user comment — is refused with NOT_OWNED (#1770); answer in chat with " +
       "tandem_reply, or leave a fresh tandem_comment. Private notes and private comments are " +
       "refused ahead of that (ADR-027).",

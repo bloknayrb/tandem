@@ -2,6 +2,8 @@
 
 _Last updated: 2026-08-13 (reconciled against v0.22.1)_
 
+> **Markdown-first; Word support shelved ([ADR-053](decisions.md#adr-053-docx-ships-dark), 2026-09-24).** `.docx` support is out of the live build for now because it wasn't reliable enough for serious work, and the SuperDoc engine evaluation ([ADR-052](decisions.md)) was shelved after its spike came back NO-GO. The positioning below still names the `.docx` review loop as part of the moat; read that as the direction Word support would return to, not as something a current release offers. Tandem today is a Markdown, plain-text and HTML editor.
+
 > **Audience & monetization direction ([ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license)):** Tandem targets **individuals** working on their own documents — not institutions. The moat is the **same-canvas / no-copy-paste** review experience backed by **persistent, queryable annotations + the .docx review-record loop**. Monetization is **free during public beta → a one-time paid license at v1.0** (offline signed-license activation; beta users grandfathered). That reframe is complete: the institutional roles below survive only as example *contexts* for the work, never as the target buyer.
 
 ## What Tandem Is
@@ -37,6 +39,8 @@ No shipping product does this today. Word Copilot generates rewrite suggestions,
 The AI has a cursor, a status indicator, and awareness of what the user is doing (Claude, in the default integration; the cursor label is settable by any MCP client that wires it up). It's not a button in a toolbar that you invoke — it's a collaborator in the session. The user can see when the AI is reading, what paragraph it's focused on, and what its current status is. This is built on Yjs/Hocuspocus CRDT collaboration, the same infrastructure that powers real-time multi-user editing in tools like Notion and Figma.
 
 ### The .docx review workflow
+
+> **Shelved (ADR-053).** Not available in current releases; kept as the design this loop would return to.
 
 Tandem opens .docx files via mammoth.js. Claude annotates the content; the user accepts or dismisses annotations; session persistence preserves them across restarts, and `tandem_exportAnnotations` outputs a Markdown review report. Since #576 the round-trip is complete: a `.docx` opens editable, and an explicit save writes the body back as a real Word file with shared comments written back as native Word comments. The original is never overwritten implicitly — auto-save skips `.docx`, Tandem snapshots the file's bytes before its first write so a save is reversible, and conversion losses are reported rather than swallowed.
 

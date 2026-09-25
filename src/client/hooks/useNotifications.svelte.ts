@@ -289,6 +289,14 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
   const url = `${MCP_BASE_URL}${API_NOTIFY_STREAM}`;
   const es = new EventSource(url);
 
+  // The server replays its startup notices to every stream that connects
+  // (src/server/startup-notices.ts), and EventSource reconnects on its own after
+  // a sleep or a network blip. A replayed notice keeps its id, so an id this page
+  // has already ingested, or already holds in the persisted tray, is the same
+  // notice again: without this it would re-toast and bump the tray count on
+  // every reconnect. Live pushes carry a fresh id each, so they never match.
+  const seenStreamIds = new Set<string>(activity.map((a) => a.id));
+
   es.onmessage = (event) => {
     let notification: TandemNotification;
     try {
@@ -297,6 +305,8 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
       console.warn("[useNotifications] Malformed SSE data:", event.data);
       return;
     }
+    if (seenStreamIds.has(notification.id)) return;
+    seenStreamIds.add(notification.id);
     ingest(notification, false);
   };
 

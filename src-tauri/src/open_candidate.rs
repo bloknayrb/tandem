@@ -178,8 +178,25 @@ impl AsRef<Path> for ScreenedOpenPath {
 ///
 /// `pub` rather than `pub(crate)` so `tests/file_association.rs` can iterate it
 /// instead of keeping a hand-copied duplicate.
-pub const SUPPORTED_FILE_ASSOC_EXTS: &[&str] =
-    &["md", "markdown", "txt", "html", "htm", "docx"];
+///
+/// `docx` is not in the literal: it is accepted only while [`DOCX_ENABLED`],
+/// because `.docx` ships dark (ADR-053). The literal keeps one shape so the
+/// alignment test can parse it; the flag coupling is asserted there too.
+pub const SUPPORTED_FILE_ASSOC_EXTS: &[&str] = &["md", "markdown", "txt", "html", "htm"];
+
+/// `.docx` support ships DARK (ADR-053). The Rust twin of `DOCX_ENABLED` in
+/// `src/shared/constants.ts`; `tests/build/file-association-alignment.test.ts`
+/// fails unless the two agree with each other and with the presence of the
+/// `docx` entry in `tauri.conf.json`'s `fileAssociations`.
+pub const DOCX_ENABLED: bool = false;
+
+/// The extension `DOCX_ENABLED` governs, lowercased and without its dot.
+pub const DOCX_FILE_ASSOC_EXT: &str = "docx";
+
+/// Whether the candidate extension (lowercased, no dot) is openable right now.
+fn extension_supported(ext: &str) -> bool {
+    SUPPORTED_FILE_ASSOC_EXTS.contains(&ext) || (DOCX_ENABLED && ext == DOCX_FILE_ASSOC_EXT)
+}
 
 /// Why `extract_file_arg` rejected a candidate path. Carried in the `Err`
 /// variant of its return so callers can log a typed reason (and, in the
@@ -236,6 +253,12 @@ impl std::fmt::Display for RejectionReason {
     }
 }
 
+/// The wire code for a `.docx` refused only because `.docx` ships dark
+/// (ADR-053). A named const, not an inline literal, so the client-parity walk in
+/// `tests/docs/startup-open-failure-wiring-claims.test.ts` requires the client's
+/// message map to handle it.
+pub(crate) const CODE_DOCX_UNSUPPORTED: &str = "docx-unsupported";
+
 /// Map a typed [`RejectionReason`] to a stable, path-free reason code for the
 /// WebView toast bus. The code travels to the client through
 /// `get_startup_rejection`, never through the event payload; `App.svelte`'s
@@ -243,6 +266,13 @@ impl std::fmt::Display for RejectionReason {
 pub(crate) fn rejection_reason_code(reason: &RejectionReason) -> &'static str {
     match reason {
         RejectionReason::SuspiciousColon { .. } => "suspicious-path",
+        // A `.docx` refused only because `.docx` ships dark (ADR-053) gets its
+        // own code, so the toast can say why instead of "can't be opened".
+        RejectionReason::UnsupportedExtension { ext, .. }
+            if !DOCX_ENABLED && ext == DOCX_FILE_ASSOC_EXT =>
+        {
+            CODE_DOCX_UNSUPPORTED
+        }
         RejectionReason::UnsupportedExtension { .. } => "unsupported-extension",
         RejectionReason::NotAFile { .. } => "not-a-file",
     }
@@ -387,8 +417,8 @@ pub(crate) fn classify_opened_url(
 /// it wrapped in a [`ScreenedOpenPath`] — the only constructor of that type, and
 /// the reason this module exists (#1415).
 ///
-/// `SUPPORTED_FILE_ASSOC_EXTS` must MATCH the server's `SUPPORTED_EXTENSIONS`
-/// exactly — asserted as set equality by
+/// `SUPPORTED_FILE_ASSOC_EXTS` (plus `docx` while [`DOCX_ENABLED`]) must MATCH
+/// the server's accepted set exactly — `BASE_EXTENSIONS`, asserted as set equality by
 /// `tests/build/file-association-alignment.test.ts`. Making this the shared
 /// validator is what turned that list into a contract: an extension the server
 /// opens but this list omits becomes unopenable via "Open With" or a Dock drop
@@ -456,7 +486,7 @@ pub(crate) fn validate_open_candidate(
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
-    if !SUPPORTED_FILE_ASSOC_EXTS.contains(&ext.as_str()) {
+    if !extension_supported(&ext) {
         return Err(RejectionReason::UnsupportedExtension { ext, path: absolute });
     }
 

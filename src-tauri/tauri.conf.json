@@ -92,13 +92,6 @@
         "description": "HTML Document",
         "role": "Editor",
         "mimeType": "text/html"
-      },
-      {
-        "ext": ["docx"],
-        "name": "com.tandem.docx",
-        "description": "Word Document",
-        "role": "Editor",
-        "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
       }
     ]
   },

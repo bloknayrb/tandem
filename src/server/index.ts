@@ -596,8 +596,13 @@ async function main() {
     return null;
   });
 
-  // Re-open documents from previous session before Hocuspocus starts
-  await restoreOpenDocuments(previousActiveDocId).catch((err) => {
+  // Re-open documents from previous session before Hocuspocus starts.
+  // `.docx` sessions are dropped (ADR-053) only where a tab can be told: an
+  // HTTP start that holds the store. stdio mounts no `/api`, so no notice
+  // could reach anyone, and it usually runs read-only beside a desktop app.
+  await restoreOpenDocuments(previousActiveDocId, {
+    dropDarkDocx: transportMode === "http" && !isStoreReadOnly(),
+  }).catch((err) => {
     console.error("[Tandem] Failed to restore open documents:", err);
   });
 

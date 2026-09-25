@@ -171,9 +171,9 @@ test("a link that renders live but cannot be opened SAYS so (#1377 render/click 
   // Tauri release build ships no `devtools` feature, and `diagnostics.ts` has
   // no console ring buffer, so it reached neither the user nor a bug report.
   //
-  // `report.docx` is the shape that will actually bite: .docx is first-class
-  // in drag-drop, the file dialog and `tandem_open`, but excluded from
-  // INTERNAL_LINK_EXTS (see #1421).
+  // `report.docx` is the shape that will actually bite: a Word file is what
+  // people link to, and it is excluded from INTERNAL_LINK_EXTS (see #1421). It
+  // stays excluded whether or not `.docx` ships dark (ADR-053).
   const dir = createFixtureDir("link-unopenable.md");
   try {
     await mcp.callTool("tandem_open", { filePath: path.join(dir, "link-unopenable.md") });

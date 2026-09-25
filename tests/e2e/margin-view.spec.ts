@@ -1,7 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import path from "path";
 import { estimateHeightPx } from "../../src/client/panels/marginPressure";
-import { TANDEM_SETTINGS_KEY } from "../../src/shared/constants";
+import { DOCX_ENABLED, TANDEM_SETTINGS_KEY } from "../../src/shared/constants";
 import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
@@ -1063,6 +1063,8 @@ test("C-1: narrowing the viewport steps the margin track full→narrow→stub→
  * display:contents, off cliff). Either way: never a grid.
  */
 test("C-1: docx keeps its legacy path — stage is never a grid", async ({ page }) => {
+  // `.docx` ships dark (ADR-053); see tests/scripts/e2e-docx-skip-wiring.test.ts.
+  test.skip(!DOCX_ENABLED, ".docx ships dark (ADR-053)");
   const docxDir = createFixtureDir("single-paragraph.docx");
   try {
     await mcp.callTool("tandem_open", { filePath: path.join(docxDir, "single-paragraph.docx") });
