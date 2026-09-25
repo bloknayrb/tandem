@@ -18,6 +18,7 @@
 **Original decision:** .docx files open in review-only mode. Never overwrite the original.
 **Original rationale:** mammoth.js import is lossy (no complex tables, tracked changes, footnotes). Review-only prevents accidental data loss.
 **Supersession (#576):** mammoth import is still lossy, so the data-loss concern is real — but it's addressed by *explicit-save gating* rather than by blocking edits. `.docx` opens writable; edits are held in the Y.Doc and serialized back to `.docx` (body content only — comments/tracked-changes are v1.1) **only on an explicit user/agent save** via the `docx` package (`saveBinary` adapter capability + `atomicWriteBuffer`). Auto-save never writes `.docx` (`BINARY_SAVE_FORMATS` is disjoint from `AUTO_SAVE_FORMATS`). Lossy-import warnings surface at open; export-downgrade warnings surface on save. The export is trust-boundary-gated (scrubbed hyperlinks, inline-only image embeds, no OLE objects, plain-text fallback for unknown nodes). See `src/server/file-io/docx-export.ts`.
+**Engine replacement proposed by ADR-052 (shelved 2026-09-24; `.docx` ships dark under ADR-053):** SuperDoc's engine takes over reading and writing `.docx`, and save becomes a splice into the original file. The explicit-save gate described here stays.
 
 ## ADR-005: Node-Anchored Ranges for Overlays
 **Decision:** Overlays use node-relative anchors (nodeId + offset) instead of character offsets.
@@ -2058,3 +2059,463 @@ required would not buy for free.
 **Cross-references:** #1229 (a gate needs a third outcome), #1399 (the
 acceptance-harness step's unconditional shape), #1529 (`windows-acl-proof`),
 #1616 (`typecheck:tests`), #1728 (should `coverage` be required).
+
+## ADR-052: SuperDoc Replaces the `.docx` Read/Write Pipeline, Server-Side, Behind the Existing Editor
+
+**Status:** **Shelved (2026-09-24).** The spike reported NO-GO on S1 and S3–S10 (S2 not run;
+[verdicts](spikes/superdoc-engine-spike.md)), and `.docx` support itself now ships dark
+(ADR-053). Nothing below is being implemented; it is kept as the record of what was decided and
+why, should `.docx` work resume. Previously: accepted, conditional on the licence record below
+(decided 2026-09-18; recorded 2026-09-23), not implemented.
+
+**Context.** Tandem's `.docx` support is three libraries plus a lot of hand-written OOXML code:
+
+- **Import:** `mammoth` converts docx → HTML (`docx.ts`), and `docx-html.ts` turns that HTML
+  into the Y.Doc.
+- **Save:** the `docx` npm package regenerates the whole file (`docx-export.ts`).
+- **Everything else:** JSZip-level code in `docx-comments.ts`, `docx-footnotes.ts`,
+  `docx-lost-features.ts`, `docx-walker.ts` and `src/server/file-io/docx-apply.ts` covers what
+  neither library does.
+
+The Phase 0 confidence work made the losses honest — backups, the fidelity banner, the
+pre-overwrite verify — but did not stop them. The save regenerates the file from the Y.Doc, so
+anything the Y.Doc does not model is gone after the first save: headers and footers, tracked
+changes, comment resolved state, indentation, shading and fonts. Reply threads are imported
+(#1000), but on export they are flattened into the parent comment's body. Two parsers that disagree about the same file are
+also the root of a whole class of anchoring bugs (#1754). The 2026-09-06 sweep held five open
+issues as blocked on this decision (#1142, #1693, #1754, #1951, #1954).
+
+Every earlier engine review rejected SuperDoc on licence grounds (June 2026, AGPL). SuperDoc has
+since given Tandem a go-ahead (see *Licence record*), which is why this ADR exists.
+
+**What SuperDoc is, measured 2026-09-23 from the npm registry and the published package files**
+(not from marketing copy):
+
+- `superdoc@2.17.0` — the editor package, **AGPL-3.0**. It has a **required** dependency on
+  `@superdoc/docx-engine@0.16.0`, and it also pulls in `jsdom`, `vue`, `konva`, `pinia` and
+  `y-websocket`.
+- `@superdoc/docx-engine` — **proprietary, not open source**, under the "DOCX Engine Proprietary
+  License" (version 2026-07-14; the package's `NOTICE.md` gives its SHA-256 as
+  `cb750acaec9e1fa7b106d326d0a7db0f3811c022048b09affc73842258419172`),
+  about 103 MB unpacked. This package does the actual OOXML work.
+- `@superdoc/sdk@2.14.0` (AGPL-3.0; the 1.x line was published as `@superdoc-dev/sdk`) — a
+  headless Node SDK that drives a per-platform native binary, shipped as optional dependencies
+  for windows-x64, darwin-x64/arm64 and linux-x64/arm64. The linux-x64 binary package is 223 MB
+  unpacked and licensed "SEE LICENSE IN bin/LICENSES.md", so its terms are read from that file,
+  not from the SDK's AGPL field.
+- v2 has stopped treating ProseMirror as its source of truth. Its ProseMirror surface is
+  deprecated in favour of an `editor.doc` "Document API".
+- **Inferred from v1 docs, not yet confirmed on v2:** telemetry is on by default (a POST to
+  `ingest.superdoc.dev` on every document open, carrying the licence key, hostname and
+  user-agent), and tracked changes at paragraph or table level are imported as
+  already-accepted.
+
+**Decision.**
+
+1. **SuperDoc's engine becomes the only code that imports or saves `.docx`.** It replaces
+   `mammoth` and `docx.ts`, `docx-html.ts`'s HTML step, the `docx` package, and the JSZip-level
+   parsing in `docx-comments.ts`, `docx-footnotes.ts` and `src/server/file-io/docx-apply.ts`.
+   `docx-walker.ts` stops being an import path but survives as a read-only helper, because
+   `docx-lost-features.ts` imports it. The route layer `src/server/mcp/docx-apply.ts` stays.
+   The engine runs **server-side**, in or beside the Node sidecar. Which package hosts it (the
+   `superdoc` package under jsdom, or the SDK's native binary) is spike question S1. **The
+   engine is handed bytes, never a path**, so Tandem's UNC, symlink and extension checks stay
+   the only thing that opens a file. If a host can only take a path, it gets a copy in a
+   private temp directory that Tandem creates, owns and deletes. The engine opens **no listening
+   socket**, and talks to Tandem only over in-process calls or a child's piped stdio: a local
+   port would sit outside every loopback, Origin and CORS check (Critical Rule 8).
+   **Two read-only checks deliberately stay off the engine**,
+   so the engine is never the only witness to its own output:
+   - `docx-lost-features.ts`, the JSZip scan behind the honesty banner;
+   - an independent flat-text reader, used only by the verify step and by the spike, never for
+     import or save.
+
+   How the independent reader is used:
+   - **Differentially only.** It diffs its reading of the original file against its reading of
+     the saved file, and the same diff algorithm runs over `extractText()` before and after the
+     edits. The two hunk-string sequences must be equal. Both sides go through one algorithm
+     because a minimal diff does not reproduce the edit strings (replacing "abc" with "abd"
+     diffs as −c +d, and adjacent edits merge). The reader's own rules then cancel out, while an
+     edit in the wrong place still shows as a wrong hunk.
+   - **Never for equality.** It is never compared for equality with the engine or with
+     `extractText()`: it has no heading prefixes, and it skips deletions, moves and field
+     instructions. `docx-walker.ts` mirrors mammoth, so it disagrees with the engine on exactly
+     the #1754 classes, and an equality check would reproduce #1754 one level over.
+   - **Location by textblock ordinal.** The document-order position of the textblock
+     `resolveToTextblock` returns is compared with the reader's ordinal of body `w:p` elements
+     (headers, footers, notes and text boxes left out). `resolveToElement` would not do, because
+     it counts a whole list or table as one element. This check runs only where, before the
+     edit, the two paragraph counts agree and the text leading up to the paragraph agrees
+     after the reading table's normalisations; elsewhere it is NOT RUN, never PASS. A
+     disagreement that no row of the reading table explains is a failure, not NOT RUN. In the
+     production verify, a hunk whose location cannot be checked this way does not block the save
+     on that ground alone, but is logged. The exact-text check and the hunk-string check still
+     apply to it. Character context around a hunk is compared only
+     inside paragraphs made of plain runs.
+   - **Its per-element reading table is written down before first use** (the spike's S4).
+
+2. **The editor does not change.** Tiptap + Yjs, the flat-offset annotation model, the
+   Hocuspocus room and every client extension stay exactly as they are. SuperDoc's editor UI,
+   collaboration layer, AI features and MCP server are **not** adopted. The reason is that
+   everything Tandem is sits on the Tiptap document — CRDT-anchored annotations, three
+   coordinate systems, the margin column, the testid contract. And v2's own direction, away
+   from ProseMirror, means hosting its editor would leave two editing engines in one app with
+   no shared model.
+
+3. **Save becomes a splice, not a regeneration.** Content the Y.Doc never modelled survives
+   because Tandem's edits are applied to the original file, never a rebuilt one. The diff source
+   is defined so that it exists after a session restore, a force-open or a watcher reload:
+   - At save time, re-read the file's bytes from disk and compare them to the file's last-known
+     hash. If they differ, refuse the save through the existing external-conflict path. The hash
+     is computed over the same buffer the engine parsed (never a second read, which could see a
+     different file), at every open and every watcher reload. It is reset after every
+     self-write and after the user resolves an external conflict. **At a session restore, the Y.Doc comes from the
+     session, not from those bytes.** A change made on disk while Tandem was closed stays the job
+     of the existing `sourceFileMtime` / `sourceFileChanged` check and the carried-conflict flag
+     (`documents/open.ts`). Once that check passes, a restore sets the hash from the bytes on
+     disk, since nothing is parsed then. Implementation step 2 lists every place that sets the
+     hash.
+   - **The session records which engine built its Y.Doc, and every restore checks it.** Today
+     three kinds of session restore verbatim without re-reading the file: a dirty one
+     (`sessionModelIsStale` returns false for it), one carrying a conflict, and a clean one at the
+     current model revision with an unchanged mtime (`documents/open.ts`). Under the other engine,
+     any of them would make every #1754-class paragraph diff as edited. On a mismatch, a clean
+     session re-parses from the file. A dirty or conflicted one raises the unsaved-restore
+     conflict, and the save refuses with a reason. This is a tag, not a baseline.
+   - **One synchronous snapshot per save.** The comment set (`prepareExportComments`), the body
+     serialization and the dirty-version marker are taken together in one synchronous block, as
+     today's save does with no `await` between them (`document-service.ts`). The engine work that
+     follows is asynchronous, so a browser or MCP edit can land mid-save. The splice and the
+     verify both work from that snapshot, never from "the live doc" at some later moment, and an
+     edit that landed mid-save leaves the document dirty.
+   - Diff one synchronous serialization of the live Y.Doc against a fresh engine reading of
+     those bytes, **after the same mapping and sanitizing the import applies**. Diffing against
+     the raw reading would make the splice delete every mark import dropped and every href it
+     blanked.
+   - Inside an edited paragraph, content the Y.Doc does not model — hidden text, field codes,
+     dropped marks, blanked links — must survive the edit, or the save refuses. Rewriting the
+     paragraph without it is the regeneration loss again, one paragraph at a time.
+   - Apply the differences as Document API operations.
+   - Clear dirty state only for edits made before that serialization.
+   - No import baseline is persisted in session files, so a tampered session cannot hand the
+     splice a false starting point. It can still suppress the offline-change check, because
+     `sourceFileMtime` lives in the session. That is today's exposure, unchanged by this ADR.
+
+   `FormatAdapter.saveBinary(doc)` in `src/server/file-io/types.ts` has to change to receive
+   the original bytes, and `if (adapter.saveBinary)` has to stay a meaningful capability check.
+   **If a splice cannot be expressed safely, the save fails closed**, with a reason; it never
+   silently regenerates. Whether a regenerate fallback exists at all is a spike output, not a
+   default.
+
+4. **One parser, and comment identity specified by invariants, not yet by mechanism.**
+   - Import builds the Y.Doc from the engine's reading of the file. Every offset Tandem stores —
+     Word comment anchors, footnote refs, tracked-change positions — derives from that same
+     reading, so the walker/mammoth disagreement in #1754 is removed by construction.
+   - That moves offsets and body text on exactly the #1754 classes. Imported-comment ids hash
+     both (`importAnnotationId`, `importReplyId` in `docx-comments.ts`), so the switch re-mints
+     them. A splice also keeps Tandem-written comments in the file after Tandem stops exporting
+     them, which regeneration never did. **Comment identity is therefore redesigned, not
+     patched**, and the design is a separate spec. It is written after the spike's S6
+     measurements and gets its own adversarial review before implementation step 3. It rests on
+     engine facts §5.1 makes confidential, so it stays in `private/` until Bryan has settled
+     what may be published; only a version stripped of those facts may be tracked. Seven review
+     rounds on this ADR showed why it has to wait: each
+     mechanism drafted here (a post-merge `commentId` dedup, `w:id`-carrying tombstones,
+     post-save `w:id` stamps) failed on facts only the spike can supply. Those facts are whether
+     the engine and Word keep `w:id` / `w16cid:durableId` stable, and whether Word reuses ids.
+
+   **The invariants that spec must meet**, each testable on every open path (cold open, restart,
+   watcher reload, `force: true`, session restore clean/dirty/conflicted, and the engine flip
+   from legacy to SuperDoc). The reverse flip is covered only as far as Rollback below says.
+   1. **No duplicates.** One record per Word comment, and one `w:comment` per record in a saved
+      file.
+   2. **No resurrection.** A comment the user deleted in Tandem does not come back, whether they
+      saved in between or not. What counts as the file re-adding it from outside Tandem is
+      defined from S6's measured Word facts (id stability and reuse), so that it cannot be
+      confused with Word reusing an id. If those facts are NOT RUN, the spec may not use an id
+      to decide that a comment was re-added.
+   3. **No mistaken identity.** Nothing suppresses, merges into or deletes a *different* comment:
+      not a dedup, not a tombstone, not a removal step. That includes after Word renumbers or
+      reuses ids.
+   4. **The user's work survives.** Where two records collapse into one, the survivor carries
+      every promotion, reply and edit made to either, and no reply is orphaned.
+   5. **Tandem's own comments are updated in place.** A Tandem-written comment that is no longer
+      exportable (deleted, dismissed, accepted) is removed from the file on the next save, and
+      one that still is gets updated in place, never appended as a second copy.
+   6. **Nothing is lost on the way.** Every field the design adds survives rename recovery's
+      tombstone reseed (`annotations/rename-recovery.ts`), durable sync, and a restart. Every
+      write it makes uses a stated origin helper; `withMcp` is the one with durable sync and no
+      channel event.
+   7. **The card still tells the truth.** Imported comments render as imported, and Claude or user
+      comments never pick up an imported-author field.
+   8. **Privacy holds through every merge.** An import record keeps the private shape (see
+      *Annotations* below) on every path, including a record that survives a collapse or is
+      promoted, and no ADR-027-private record reaches the file.
+   9. **Deleting in Tandem has a stated effect on the file.** When the user deletes an imported
+      comment in Tandem, the spec says what the next save does to that reviewer's `w:comment`,
+      and a test pins it. Silently deleting a reviewer's comment from their file is not an
+      acceptable default.
+
+   **Hazards review already found**, which the spec must answer:
+   - The drift-dedup index (`keysDriftIndex`) does not run on a cold open or a force-open, where
+     injection sees an empty map (`docx-comments.ts` says so).
+   - Tombstones carry only `{id, rev, deletedAt}`, and the observer mints one on *every* delete,
+     including a dedup's own.
+   - `writeReconciledCommentId` writes only onto records with `importSource`, and a populated
+     `importSource.author` changes how the card renders.
+   - `reconcileImportCommentIds` is forbidden for writers that edit in place, and a splice is one.
+   - Hash-scoping a tombstone or stamp drops it on Tandem's own save unless it is carried
+     forward.
+   - The #1951 id classes (negative, non-numeric, non-canonical, int32 + 1, at-cap) and
+     pre-#1068 records with no `commentId`.
+
+5. **The engine is asynchronous; `apply` is not.** `adapter.apply` runs inside synchronous
+   `withInternal` / `withReload` transactions (`documents/populate.ts`, `documents/watcher.ts`).
+   Every engine call, including comment-offset resolution, completes in `parse`. `apply` only
+   writes the prepared result: plain data, with no engine handle reachable from it. Three things
+   enforce that:
+   - `apply` lives in a module whose import graph contains no engine module;
+   - `parse` returns `structuredClone(result)`, so `apply` only ever sees a copy that holds no
+     function, class instance or closure. A `SharedArrayBuffer` anywhere in the result is
+     rejected, because a clone shares it rather than copying it;
+   - `parse` awaits the engine's **documented** idle or dispose before it resolves, and the
+     process's active resources afterwards match those before the call. If the engine documents
+     no idle or dispose, this decision cannot be met as written and goes back to Bryan.
+
+6. **It ships dark, then becomes the default, then the legacy pipeline is deleted.**
+   - A build-time `DOCX_ENGINE: "legacy" | "superdoc"` selects the adapter. It uses the tsup
+     `define` form that `LICENSE_GATE_ENABLED` uses, not the plain-literal form of
+     `BYO_MODELS_ENABLED`, so a legacy build can leave the engine out of the bundle entirely.
+   - The legacy pipeline stays intact until SuperDoc has been the default for one released minor.
+   - The deletion date gets a dated issue when the flag first flips. That is the #1308 rule: a
+     tracked home and a criterion answerable from tracked files.
+   - **A dark flag does not keep the engine off anyone's machine.** The define can keep the engine
+     out of the bundle, but a dependency in `package.json` still installs for every npm user and
+     on every `npm ci` in CI, and installing is what binds the installer to the licence. So the
+     dependency does not land on `master` until the licence checklist below is ticked.
+
+7. **Nothing leaves the machine.**
+   - Telemetry is switched off in code, and a test pins that switch.
+   - Every `.docx` operation must work with the network unavailable.
+   - A licence key, if the engine needs one, is supplied locally and never fetched or validated
+     online.
+   - Spike question S2 verifies all of this by capturing every packet the engine's process sends,
+     not by reading configuration.
+
+8. **Exact version pins, plus a licence tripwire.** `superdoc` and `@superdoc/docx-engine` (or
+   the SDK) are pinned to exact versions, not `^`. A test pins the SHA-256 of
+   `DOCX-ENGINE-LICENSE.md`. The standalone licence (§11.3) lets SuperDoc change its terms by
+   publishing a new version, with continued use counting as acceptance. A dependency bump that
+   changes the licence must therefore turn `check` red rather than slip through with Dependabot.
+   **The tripwire's limit:** it sees the file in the package, not terms SuperDoc publishes only
+   at its URL. Under a signed Base Agreement, §11.3 requires mutual written agreement for changes,
+   so the package hash is enough. Without one, no in-repo check can see the URL, and that gap
+   stands.
+
+**Tandem keeps owning the layers around the engine.** Each one is rebuilt against the engine;
+none is inherited from it.
+
+*Before and during import:*
+
+- **The size gate** runs *before* the file reaches the engine (`docx-size-gate.ts`). The
+  GenOffice spike showed a 400 KB file can OOM an OOXML engine at its own sanctioned limits.
+- **The import sanitizers** run on everything the engine emits, before any Y.Doc write: the link
+  href allowlist and `sanitizeImageSrc` (`src/shared/image-src-safety.ts`). The allowlist is
+  currently an inline regex (`^https?://` or `mailto:`) at `docx-html.ts:28`, inside the HTML step
+  being deleted, so it is extracted into a named function before that module goes. This is the `.docx` half of the #1420/#1537 closure. Without
+  it, `search-ms:`, `ms-msdt:`, UNC and `file:` targets reach the Y.Doc.
+- **Origin tagging** of every Y.Doc write the import makes (Critical Rule 2), with a stated
+  helper for any new post-save write, such as stamping ids.
+
+*The process:*
+
+- **stdout discipline** (Critical Rule 3). The redirect in `src/server/index.ts` covers only
+  `console.log/warn/info`, so a child binary must not inherit stdout, and the engine must not
+  write to it in stdio mode.
+
+*On save:*
+
+- **The export trust boundary** for content Tandem *writes*: no external image links, no OLE, no
+  UNC or external hyperlink targets (`docx-export.ts` header). This includes edits to field
+  instructions (`HYPERLINK`, `INCLUDEPICTURE`), through which an edit could create an external
+  target.
+- **The pre-overwrite backup** (`doc-backup.ts`) and the `tandem_applyChanges` backup sidecar
+  (`src/server/mcp/docx-apply.ts`), with its symlink/FIFO refusals, its caller-named
+  `backupPath` (one of the four sites in the #1654 acceptance, `docs/security.md`) and the #2037
+  identity re-check.
+- **The post-write check** (`docx-verify.ts`). Its 0.5 / 0.85 retention thresholds were built for
+  regeneration and cannot see a splice's typical failure, which is a shifted or duplicated span.
+  For a splice save it must require `extractText(reimport) === extractText(live)` exactly, plus a
+  matching block tree. It must also keep one check that does not go through the engine that
+  wrote the file (Decision 1's independent reader), or the writer and the reader share their
+  blind spots. Two parts of today's verify stop holding:
+  - it skips files above `MAX_VERIFY_BYTES` (25 MB), and a splice keeps images, so more files
+    cross that line. A splice save over the cap still gets the exact-text check, or it refuses;
+  - it passes `scanLostFeatures: false` on the grounds that Tandem's own export "emits no
+    revision marks and no header/footer parts" (`types.ts:156`). A splice preserves both, so
+    that justification goes.
+
+*Annotations:*
+
+- **The export rule, stated precisely** (`docx-comment-export.ts`):
+  - User-authored notes, highlights and `{comment, private}` records are never exported
+    (ADR-027, #1803).
+  - Comments that are no longer pending are not exported either.
+  - Imported Word comments, which are stored as notes, *do* round-trip, through
+    `isImportRoundtrip`. That predicate needs `author: "import"` **and** a populated
+    `importSource.author`, and it bypasses the type, audience and status gates.
+  - **Imports stay private.** An imported Word comment lands as `type: "note"`,
+    `audience: "private"`, `author: "import"`, with `importSource.author` set, and replies carry
+    `importAuthor`. It emits no channel event and is absent from `tandem_getAnnotations` and
+    `tandem_checkInbox`. An engine whose natural mapping is `type: "comment"` would hand every
+    reviewer's comment to Claude. The legacy `{import, comment}` migration in `docx-comments.ts`
+    stays.
+
+  Under a splice, an imported comment's original `w:comment` is already in the file, so the
+  implementation must define what happens to the file when one is deleted, promoted, edited, or
+  has its range moved. Word's resolved state gets its own field. It is not mapped onto `status`,
+  which the code defines as "Tandem's review state, not the file's content". An MCP write to that
+  field is refused on any record `isWithheldFromClaude` covers, as the resolve and remove guards
+  already are.
+- **Word-comment tombstones and re-anchoring:** the per-doc tombstone ledger, and
+  `anchoredRange()` re-anchoring of imported comments.
+
+*The file watcher:*
+
+- **The self-write contract:** `recordSelfWrite` → `rearmWatch` after a save, and still no
+  `rearmWatch` in `src/server/mcp/docx-apply.ts` (#1749; `document-write-rearm.test.ts` pins that
+  file by exact list).
+
+*Loss reporting:*
+
+- **The honesty banner.** `docx-lost-features.ts` stays until the spike shows the engine
+  *reports* what it drops. A silently accepted paragraph-level revision is exactly what the
+  banner exists to surface.
+
+**Licence record.** Bryan reports that SuperDoc gave the go-ahead (reported 2026-09-23). On the
+same day he directed the spike to proceed on the basis that Tandem may use SuperDoc with
+telemetry off and no data leaving the user's machine, with Claude running it; that covers the
+spike, not the implementation. This repo is public, so the agreement itself does not live here. What the written terms must cover is
+listed below, citing the standalone licence at its canonical URL
+(`https://docs.superdoc.dev/resources/docx-engine-license`).
+
+**Update (2026-09-25).** There is no signed text. In Bryan's words: "There are no signed terms,
+just a verbal statement that they are fine with it because they want to see people build cool
+things with superdoc". Publishing the spike's verdict table rests on that statement; the results
+behind it stay in `private/`. With no Base Agreement, §11.3's mutual-written-agreement rule does
+not apply, so Decision 8's gap stands. **Should `.docx` work resume on SuperDoc, the
+implementation PR must not merge until each line below is covered in writing:**
+
+*Scope of use:*
+
+- **Scope of the grant.** §2.1 allows use "solely as a dependency of SuperDoc … solely for
+  Authorized Use". Decision 2 bypasses SuperDoc's editor, and host B uses the SDK binary. The
+  agreement must cover *this* integration shape in a BUSL-1.1 product, in production.
+- **The AGPL half.** `superdoc@2.17.0` itself is AGPL-3.0, and so are the SDK platform
+  binaries. Shipping either inside a BUSL-1.1 product needs a commercial licence for the AGPL
+  code too, not only the engine grant.
+
+*Distribution:*
+
+- **Redistribution** inside the Tauri bundle (§3.1(d)).
+- **Proprietary notices must survive bundling** (§3.1(c)). Removing a notice or marker triggers
+  automatic termination under §7.2, so tsup must not strip them.
+
+*Who gets bound:*
+
+- **npm-install users.** Installing any package that incorporates the engine binds the
+  installer. Either the agreement covers every `npm i -g tandem-editor` user, or the npm
+  distribution must not pull in the engine.
+- **Contributors, CI runners and automated code analysis** that run `npm ci` or scan
+  `node_modules` are also "installers".
+
+*AI use:*
+
+- **AI-assisted development, evaluation and benchmarking.** §2.1 excludes using the engine to
+  "validate or benchmark" it. §3.1(e) bars using it to benchmark, validate or assist a Competing
+  Product, and §1.6 / §3.1(f) restrict AI processing of its outputs for reconstruction or
+  competing purposes. Tandem is built by Claude, and the spike measures the engine. The
+  day-to-day exposure is Claude reading the engine's type definitions, documentation and stack
+  traces while building. Probing the engine for anything undocumented is ruled out whatever the
+  agreement says, because §3.1(a) forbids attempting to discover non-public implementation
+  details and §7.2 makes that an automatic termination.
+- **Results passing through the AI provider.** While Claude runs the spike, results pass through
+  Anthropic's API and through local transcripts. §2.2 permits contractors only if they are
+  bound by written obligations.
+- **Runtime AI use.** Tandem's core job is handing imported document text to Claude. §1.6's
+  restriction is purpose-limited, and §1.3 excludes ordinary documents within Authorized Use,
+  so this is probably fine. It is also an automatic-termination class (§7.2), so the signed text
+  should say so explicitly.
+- **Whether Tandem counts as a "Competing Product"** (§1.4 lists "document editor"). §3.1(e)/(f)
+  turn on it.
+
+*Publication and operation:*
+
+- **Publishing test results and fidelity numbers** in this public repo and in public CI logs.
+  §5.1 classes "benchmarks, test results" as confidential. The published verdict table rests on
+  the verbal statement above; nothing more detailed has been published.
+- **Offline operation**, with no licence server, and the terms of any licence key.
+- **Turning telemetry off.** §3.1(g) bars circumventing "any … license-enforcement measure", and
+  §7.2 makes circumventing technical protections an automatic termination. The v1 telemetry
+  carried the licence key, and Decision 7 turns it off and runs offline. The agreement must
+  explicitly permit both.
+- **Whether the go-ahead is a Base Agreement.** If it is, §11.3's mutual-written-agreement rule
+  governs changes to the terms. If it is not, SuperDoc can change them by publishing, and
+  Decision 8's tripwire cannot see that.
+
+**Consequences.**
+
+*Gains (expected, and each one is a spike question rather than a promise):*
+
+- Headers, footers, tracked changes, reply threads, resolved state and paragraph formatting
+  survive a save.
+- #1754 dissolves.
+- The `allowImageLoss` override (#1755, #1941) may become unnecessary if pictures are preserved.
+
+*Costs:*
+
+- A closed-source dependency that Tandem is contractually barred from debugging internally
+  (§3.1(a)), so engine bugs become vendor tickets.
+- Roughly 100 MB or more of install size.
+- An upstream that deprecated its own editor model within the year, so expect API churn.
+- The whole product's `.docx` story depends on a licence relationship with one company.
+
+*Security behaviour that changes (record it in `docs/security.md` at implementation):*
+
+- A regenerated save used to strip whatever the user's file carried: an `attachedTemplate`,
+  external links, field codes. A splice preserves them.
+- Content mammoth dropped, such as hidden `w:vanish` text and field codes, may now reach Claude
+  as prompt-injection surface.
+- If images survive a save, the #2027 acceptance's void conditions need re-reading.
+
+*Documentation and tests that move at implementation:*
+
+- CLAUDE.md Critical Rule 4's enumeration of the `.docx` capture/import/export surrogate callers.
+- The "Word comment offsets need re-anchoring" gotcha.
+- The `rearmWatch` rule, and `tests/server/document-write-rearm.test.ts`'s site table.
+- `tests/server/docx-size-gate-call-sites.test.ts`.
+- `tests/server/docx-import-write-seam.test.ts`: its census of the three module-private writers
+  in `docx-comments.ts`, including `writeReconciledCommentId`, needs a successor. The
+  `reconcileImportCommentIds` path assumes the export re-mints `w:id`s, which a splice may never
+  do.
+- `docs/security.md`.
+- `docs/mcp-tools.md` for `tandem_save`, `tandem_applyChanges` and `tandem_convertToMarkdown`.
+
+**No new MCP tool or `/api` route**, so Critical Rule 9's gate tables do not change.
+
+*Rollback:* until the legacy pipeline is deleted, flipping `DOCX_ENGINE` back is the rollback.
+**It is lossy, and it does not change the legacy code.** Decision 3's session engine tag keeps
+the flip from corrupting a session. But a legacy save regenerates the file, so a file saved
+after the flip loses its headers, tracked changes and threaded replies again. And legacy import
+does not understand fields the comment-identity spec adds, so Decision 4's invariants are not
+promised across it. After deletion there is no rollback short of a revert, which is why deletion
+waits a full minor.
+
+**Out of scope:** SuperDoc's editor UI, its collaboration layer, its AI features, `.doc`, PDF
+export, and the `.md` / `.txt` / `.html` paths.
+
+**Supersedes:** nothing while shelved. Had it been implemented, it would have superseded the
+#576 engine choice recorded in ADR-004's supersession note (the `docx` package write-back) and
+the June 2026 "study, don't adopt" verdict on SuperDoc; both remain in force. **Relates to:**
+the GenOffice spike ([docs/spikes/genoffice-docx-engine-spike.md](spikes/genoffice-docx-engine-spike.md)),
+whose "splice, don't rebuild" finding is Decision 3; #1142 (umbrella); #1754.

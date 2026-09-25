@@ -30,7 +30,7 @@ H4 — doc-less events hit N sockets per session, indistinguishable from a dupli
 - Fix: add ?owner=<label> and deliver doc-less events once per label; or adopt §5.1-B.
 
 H5 — superseded ADRs and contracts missing from §4/§7
-- ADR-011 (decisions.md:46-48): "defaulting to the active document… single-document scripts work unchanged". Must be marked superseded by ADR-052.
+- ADR-011 (decisions.md:46-48): "defaulting to the active document… single-document scripts work unchanged". Must be marked superseded by ADR-054.
 - SKILL.md:
   - :207 Multi-Document ("omitting it targets the active document")
   - :199-203 Session Handoff step 3 (bare getOutline)
