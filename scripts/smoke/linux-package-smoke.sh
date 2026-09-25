@@ -26,6 +26,11 @@ MODE="${1:?usage: linux-package-smoke.sh <deb|rpm> [artifact-path]}"
 ART="${2:-}"
 FAILURES=0
 
+# Mirrors DOCX_ENABLED (src/shared/constants.ts). While .docx ships dark
+# (ADR-053) the package must NOT register the Word MIME type.
+# tests/build/file-association-alignment.test.ts keeps this equal to the flag.
+DOCX_EXPECTED=0
+
 fail() { echo "  !! FAIL: $*"; FAILURES=$((FAILURES + 1)); }
 pass() { echo "  ok: $*"; }
 # Bail immediately rather than accumulating: every check after this point would
@@ -136,7 +141,12 @@ DESKTOP=$(ls /usr/share/applications/*andem*.desktop 2>/dev/null | head -1)
 if [ -n "$DESKTOP" ]; then
   pass "$(basename "$DESKTOP")"
   grep -hE '^(Exec|Name|Icon|MimeType)=' "$DESKTOP"
-  grep -q 'wordprocessingml' "$DESKTOP" && pass ".docx MIME registered" || fail ".docx MIME missing"
+  grep -q 'text/markdown' "$DESKTOP" && pass "markdown MIME registered" || fail "markdown MIME missing"
+  if [ "$DOCX_EXPECTED" = 1 ]; then
+    grep -q 'wordprocessingml' "$DESKTOP" && pass ".docx MIME registered" || fail ".docx MIME missing"
+  else
+    grep -q 'wordprocessingml' "$DESKTOP" && fail ".docx MIME registered while .docx ships dark" || pass ".docx MIME absent (ships dark)"
+  fi
 else
   fail "no .desktop file installed"
 fi
