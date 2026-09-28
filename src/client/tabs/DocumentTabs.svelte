@@ -760,15 +760,9 @@ $effect(() => {
   // Tracked deps. `activeTabId` is load-bearing: the active tab's name renders
   // at font-weight 500 and is measurably wider than the 400 it was measured at.
   void uniformTabWidth;
-  // .map alone registers the dep on every fileName AND every readOnly (the RO
-  // badge is folded into the chrome measurement below) — nothing consumes the
-  // mapped result itself. A single `.map` (not two) keeps both deps tied to
-  // one array walk. Every writer of `tab.readOnly` reassigns the whole
-  // `tabsState` array today, so `fileName` alone would still invalidate this
-  // effect correctly — but that's an implicit convention elsewhere, not a
-  // guarantee this effect should lean on; tracking `readOnly` explicitly here
-  // removes the footgun regardless of how tabsState gets mutated in the future.
-  void tabs.map((t) => [t.fileName, t.readOnly]);
+  // .map alone registers the dep on every fileName — nothing consumes the
+  // mapped result itself.
+  void tabs.map((t) => t.fileName);
   void activeTabId;
   void renamingTabId;
   void fontsSettled;
@@ -1412,11 +1406,9 @@ $effect(() => {
      that are too wide.
 
      The pin deliberately clamps this box rather than sizing the name span,
-     because two pill layouts put width outside that span: a read-only tab adds
-     an RO badge plus a gap (~29px) beside it, and an inline rename replaces the
-     span entirely with an input carrying its own 80px minimum. Measured sparse,
-     sizing the span gave 246.3 / 287.7 / 221.4 for plain / read-only /
-     renaming; clamping here gives 142 / 142 / 142. Clamping the wrapper is
+     because an inline rename replaces the span entirely with an input carrying
+     its own 80px minimum. Measured sparse, sizing the span gave 246.3 / 221.4
+     for plain / renaming; clamping here gives 142 / 142. Clamping the wrapper is
      indifferent to all of it, since the pill and its name span already carry
      `min-width: 0` and simply ellipsize.
 

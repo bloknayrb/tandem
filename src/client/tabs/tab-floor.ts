@@ -35,9 +35,8 @@ export function measureTabFloor(wrapper: HTMLElement): number {
   // (Until #1736 that slack sat after the last child, parked there by
   // `flex-start`; it now lands in the close button's auto margin instead. The
   // conclusion is unchanged — the slack is still not chrome.) Sum the real
-  // boxes — this also self-corrects for the read-only badge and its gap
-  // (~29px together; the badge alone is ~23px and `flex-shrink: 0`) and for
-  // the 2px border delta between an active and an inactive pill.
+  // boxes — this also self-corrects for the 2px border delta between an
+  // active and an inactive pill.
   const cs = getComputedStyle(pill);
   const kids = Array.from(pill.children).filter((k): k is HTMLElement => k instanceof HTMLElement);
   let chrome =
