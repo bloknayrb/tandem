@@ -311,7 +311,11 @@ function handleMouseLeaveClose() {
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <span
       data-testid={`tab-name-${tab.id}`}
-      title={canRename ? `${tab.filePath} — double-click or F2 to rename` : tab.filePath}
+      title={canRename
+        ? `${tab.filePath} — double-click or F2 to rename`
+        : tab.readOnly
+          ? `${tab.filePath} (read-only)`
+          : tab.filePath}
       style={`font-weight: ${isActive ? 500 : 400}; min-width: 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;`}
       ondblclick={(e) => {
         if (!canRename) return;
@@ -320,15 +324,6 @@ function handleMouseLeaveClose() {
       }}
     >
       {tab.fileName}
-    </span>
-  {/if}
-
-  {#if tab.readOnly}
-    <span
-      class="tab-ro-badge"
-      aria-label="Read-only"
-    >
-      RO
     </span>
   {/if}
 
@@ -347,9 +342,8 @@ function handleMouseLeaveClose() {
        above, and `tab-floor.ts` for what growing it would break.
 
        This RELOCATES the whitespace rather than removing it: the gap now sits
-       between the filename (or the RO badge) and the ×, which is the
-       conventional browser-tab layout and keeps the RO badge beside the name
-       it describes. -->
+       between the filename and the ×, which is the conventional browser-tab
+       layout. -->
   <button
     bind:this={closeBtn}
     onclick={(e) => {
@@ -481,17 +475,5 @@ function handleMouseLeaveClose() {
   }
   :global(body.tandem-reduce-motion) .save-indicator .saved-check {
     animation: none;
-  }
-
-  .tab-ro-badge {
-    font-family: var(--tandem-font-mono);
-    font-size: 9.5px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--tandem-fg-faint);
-    background: color-mix(in srgb, var(--tandem-fg) 5%, transparent);
-    padding: 1px 5px;
-    border-radius: var(--tandem-r-1);
-    flex-shrink: 0;
   }
 </style>

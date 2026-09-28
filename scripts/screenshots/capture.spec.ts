@@ -47,7 +47,6 @@ import {
   setRailVisible,
   switchToAnnotationsTab,
 } from "../../tests/e2e/helpers";
-import { E2E_MCP_PORT } from "../test-ports";
 import {
   type AccountRedactionPlan,
   findAccountPathLeaks,
@@ -635,16 +634,7 @@ test("04-toolbar-actions", async ({ page }) => {
   const welcomeId = await openWithAnnotations();
   const [budgetId] = await openExtraDocuments();
 
-  // One read-only tab (RO badge) and one dirty tab (unsaved dot). `tandem_open`
-  // has no readOnly parameter — only `POST /api/open` does — so the read-only
-  // tab is opened over the API from the page's own (loopback) context.
-  const roPath = path.join(tmpDir, "reference-spec.md");
-  fs.writeFileSync(roPath, "# Reference Spec\n\nRead-only reference material.\n");
-  const roRes = await page.request.post(`http://127.0.0.1:${E2E_MCP_PORT}/api/open`, {
-    data: { filePath: roPath.replace(/\\/g, "/"), readOnly: true },
-  });
-  if (!roRes.ok())
-    throw new Error(`read-only open failed: ${roRes.status()} ${await roRes.text()}`);
+  // One dirty tab (unsaved dot).
   await mcp.callTool("tandem_switchDocument", { documentId: welcomeId });
 
   await page.goto("/");
@@ -670,7 +660,6 @@ test("04-toolbar-actions", async ({ page }) => {
 
   // Everything the two captions promise, asserted rather than hoped for.
   await expect(page.locator("[data-testid^='tab-']")).not.toHaveCount(0);
-  await expect(page.locator(".tab-ro-badge").first()).toBeVisible({ timeout: 10_000 });
   // The DIRTY tab's dot, addressed by document id. `unsaved-indicator-*` is a
   // fixed-width slot TabItem renders on every tab so the dot/check/empty states
   // can't shift the strip — on a clean tab it is an empty span with no box, so
