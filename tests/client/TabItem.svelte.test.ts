@@ -38,13 +38,13 @@ const SAVE_CONFIRM_MS = 600;
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const afterArm = () => wait(ARM_MS + 80);
 
-function makeTab(id: string, ydoc: Y.Doc): OpenTab {
+function makeTab(id: string, ydoc: Y.Doc, readOnly = false): OpenTab {
   return {
     id,
     fileName: `${id}.md`,
     filePath: `/tmp/${id}.md`,
     format: "md",
-    readOnly: false,
+    readOnly,
     source: "file",
     ydoc,
     // TabItem never touches the provider on these paths.
@@ -52,10 +52,10 @@ function makeTab(id: string, ydoc: Y.Doc): OpenTab {
   };
 }
 
-function mount(id: string, ydoc: Y.Doc) {
+function mount(id: string, ydoc: Y.Doc, readOnly = false) {
   const result = render(TabItem, {
     props: {
-      tab: makeTab(id, ydoc),
+      tab: makeTab(id, ydoc, readOnly),
       isActive: true,
       onswitch: vi.fn(),
       onclose: vi.fn(),
@@ -274,6 +274,19 @@ describe("TabItem unsaved indicator — accessible name (#1544)", () => {
     await afterArm();
 
     expect(tab.tabAriaLabel()).toBe("a11y-saved.md");
+    tab.unmount();
+  });
+
+  // The visible RO badge (and its aria-label) is gone, so a background tab's
+  // read-only state reaches AT only through this name.
+  it("read-only: the tab's own aria-label names the read-only state", async () => {
+    const ydoc = new Y.Doc();
+    const tab = mount("a11y-ro", ydoc, true);
+
+    setMirror(ydoc, false);
+    await afterArm();
+
+    expect(tab.tabAriaLabel()).toBe("a11y-ro.md, read-only");
     tab.unmount();
   });
 
