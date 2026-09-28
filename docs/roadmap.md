@@ -623,6 +623,7 @@ associations, orphaned-sidecar-after-quit, the AppImage — is still unobserved.
 
 **Functional gates:**
 - Claude Code CLI: loopback-exempt, zero-config, tools work unchanged
+- **Claude Code version compatibility (added 2026-09-28).** The row above tests against whatever Claude Code happens to be installed; this one pins versions. At RC, the connect → tools → wake → reply loop runs against the current stable Claude Code and the latest release of the previous minor, and the report records both version strings. "Wake" means the self-armed `/api/wake` watch where Claude Code offers a Monitor tool, falling back to the channel shim where it does not, and the report says which path each run used. Also required: #1506's monthly modern-only check has a recorded pass dated within the RC window. That check, not this one-time run, is what guards against a *future* Claude Code release breaking a paid build. #1505 (serving MCP `2026-07-28` alongside the legacy protocol) is blocked on the TS SDK, so Claude Code going modern-only would break Tandem outright. #1506 covers the same risk for Cowork, and its only recorded pass (2026-08-20) could not settle Cowork. #316 covers Cowork setup, not protocol compatibility.
 - Tauri update flow: download → install → restart verified on all three platforms; sidecar restart succeeds; no data loss — **macOS observed 2026-08-05** (`v0.19.0 → v0.20.0`, in-app update dot, document editable after restart, so the sidecar respawn held); Windows and Linux still unobserved
 - Tutorial: completes end-to-end on `sample/welcome.md`; tutorial annotation anchors hold (anchor-drift regression test)
 - Dark/light toggle: works in both desktop and browser
@@ -633,7 +634,7 @@ associations, orphaned-sidecar-after-quit, the AppImage — is still unobserved.
 **Soak gates:**
 - Observer soak: 6 docs open, rapid tab switching, Y.Doc swap (load + close), network drop + reconnect — zero leaks, zero broken observers; 1-hour session: 50+ annotations, 20+ tab opens/closes, 5+ network blips
 - ~~Annotation upgrade soak: fresh install of v0.11.2, create 50 annotations across 6 docs, close, upgrade to v1.0 RC, reopen — zero loss, no migration error toasts~~ **Dropped 2026-08-05 (Bryan).** v0.11.2 predates content-hash annotation identity (#313), annotation GC (#318), and the AR5/AR6 hardening pass — the migration paths this would exercise have since been rewritten, and nobody is upgrading from a build that old. The import half of the original bullet is a different concern and stands on its own below.
-- AR5 batch-promote tested end-to-end with a .docx file containing legacy Word reviewer comments
+- ~~AR5 batch-promote tested end-to-end with a .docx file containing legacy Word reviewer comments~~ **Suspended while `.docx` ships dark** ([ADR-053](decisions.md#adr-053-docx-ships-dark)): a build without `.docx` cannot open the fixture this gate needs. Restore this row when `.docx` is re-enabled. ADR-053's re-enable checklist (#2110) un-skips the `batch-promote` E2E specs, the automated half of this gate, but doesn't mention this manual row.
 - `.claude.json` shapes corpus (PR-4): empty, named-pipe transport, `tandem-channel` block, non-Tandem MCP servers, multiple workspace entries, concurrent Claude Desktop write, 5MB+ size
 
 **Security gate (added 2026-06-11):**
@@ -657,7 +658,10 @@ associations, orphaned-sidecar-after-quit, the AppImage — is still unobserved.
 **Commercial readiness (added 2026-06-11; gates the license flag flip — see #1116/#1117):**
 - ADR-040 §5 (BUSL re-scope) **Accepted** — counsel-drafted text landed in `LICENSE` + `docs/decisions.md`
 - MoR checkout live end-to-end: test purchase → issuance webhook → signed license delivered → activates a gate-ON build
-- Grandfather licenses issued to known beta users
+- Grandfather licenses issued to known beta users (the cohort is settled under §8's claim-path item, below)
+- **[licensing-operations.md §8](licensing-operations.md#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay) complete (added 2026-09-28).** That runbook's pre-launch checklist is the operational half of this gate, and §8 owns the item list. Several items fail silently if skipped. For example, the issuance Worker's Ed25519 key import has never run on real Cloudflare, and if it fails, every webhook returns 503. Two §8 items need more than their checkbox says:
+  - **Terms, refund policy and privacy notice.** None exists yet. [docs/licensing-terms.md](licensing-terms.md) is a draft that has not been to counsel, and its §7 lists them all as still to write. One of its §6 questions for counsel bears directly on v1.0 scope: if EU resale law makes a remove-license path mandatory, #1943 (`tandem deactivate`) becomes required and joins this gate.
+  - **Beta-cohort claim path ([§1c](licensing-operations.md#1c-the-cohort-problem-settle-this-before-the-flip)).** The README has a claim path. Still open: deciding who is grandfathered, making `README.md`, ADR-040 §3 and the in-app license copy agree on it, and the banner and wall copy that names the beta offer (§1c item 2). Keys go out privately, never in an issue or comment: verification is offline, so anyone can activate a key that has been posted publicly.
 - If any of these are not ready at code-complete: the date floats (per thesis); **the gate flag does NOT ship enabled**. A v1.0 demanding a license nobody can buy is a brick.
 
 **Accessibility:** — results: [docs/a11y-gate-results.md](a11y-gate-results.md) (run 2026-08-05, 44 automated tests)
@@ -678,6 +682,10 @@ associations, orphaned-sidecar-after-quit, the AppImage — is still unobserved.
 - BSL LICENSE present + change-date confirmed (per `project_bsl_license_decision.md`)
 - All redesign artboards from HANDOFF either shipped or explicitly deferred to v1.1+ with reason
 - All §2 D-decisions linked to ADR or PR comment
+- **Bad-release recovery runbook (added 2026-09-28).** A written procedure for stopping a broken release, rehearsed once before v1.0 without moving the real `latest` pointer. Rehearsing it needs a way to point a build at a staged manifest. [release-smoke-checklist.md](release-smoke-checklist.md) §5 assumes an "updater endpoint override", but none exists in code: the public endpoint is fixed in `tauri.conf.json`, and the licensed one is the compiled `LICENSE_UPDATE_ENDPOINT` const. So either a rehearsal build or a real override is part of this work. The runbook covers two channels:
+  - **Desktop.** The updater reads `releases/latest/download/latest.json`. The license update Worker is configured to proxy that same URL (`PUBLIC_LATEST_JSON_URL`; its `wrangler.toml` holds a placeholder until deployment) and adds no caching of its own. So moving GitHub's `latest` pointer back should stop the broken release on both the public and the licensed route at once. The Worker variable is a licensed-only alternative lever. A rehearsal cannot measure how long real clients take to see the change, because that depends on GitHub's redirect and CDN caching. Record that timing the first time the procedure is used for real.
+  - **npm.** Handle it with `npm dist-tag` and/or `npm deprecate`.
+  - **ADR-043.** The runbook does not conflict with [ADR-043](decisions.md#adr-043-updater--no-rollback-no-in-updater-post-restart-health-probe-v1), which rules out *client-side* rollback. The runbook stops the rollout at the source instead. Neither the release skill nor the smoke checklist has this procedure today.
 
 ### Deferred to Post-v1.0
 
