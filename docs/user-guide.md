@@ -44,7 +44,7 @@ The main editing area is a rich text editor powered by Tiptap. You can type, sel
 
 ### Tab Bar
 
-Open documents appear as tabs along the top. Each tab shows the file name, a dot while there are unsaved changes, and an **RO** badge when the document is read-only.
+Open documents appear as tabs along the top. Each tab shows the file name, and a dot while there are unsaved changes. A read-only document shows **Review Only** in the status bar, and its tab's tooltip ends in "(read-only)".
 
 - Drag tabs to reorder them, or use `Alt+Left` / `Alt+Right`
 - Double-click a tab title (or press `F2`) to rename the file inline

@@ -261,7 +261,7 @@ function handleMouseLeaveClose() {
   role="tab"
   tabindex={0}
   aria-selected={isActive}
-  aria-label={dirty ? `${tab.fileName}, unsaved changes` : tab.fileName}
+  aria-label={`${tab.fileName}${tab.readOnly ? ", read-only" : ""}${dirty ? ", unsaved changes" : ""}`}
   style={tabStyle}
   onclick={() => onswitch(tab.id)}
   onpointerdown={(e) => onpointerdown(e, tab.id)}

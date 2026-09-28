@@ -634,7 +634,6 @@ test("04-toolbar-actions", async ({ page }) => {
   const welcomeId = await openWithAnnotations();
   const [budgetId] = await openExtraDocuments();
 
-  // One dirty tab (unsaved dot).
   await mcp.callTool("tandem_switchDocument", { documentId: welcomeId });
 
   await page.goto("/");
