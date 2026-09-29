@@ -1,761 +1,253 @@
-# Roadmap — Remaining Implementation Steps
+# Roadmap
 
-Steps 0-6 are complete. Phase 1 (document groups + polish) is complete. Sprint 5 (file open + E2E tests) is complete. Channel push (Issue #106) is complete. Step 8 polish items (undo, interruption mode, Word comment import, port polling, session auto-restore) are complete. UX features (tab overflow, toast notifications, connection errors, annotation editing, onboarding tutorial) are complete. Tab close fix (Issue #149) and getTextContent offset fix (Issue #148) are complete. npm global install (Step 9, PR #161) is complete. This document contains the design spec for remaining work.
+This file holds only what is **ahead**. What shipped is in [CHANGELOG.md](../CHANGELOG.md). The
+design history and every older plan are in [roadmap-history.md](roadmap-history.md), a snapshot
+frozen on 2026-09-28.
+
+**Keeping it true.** When something ships, delete its line here. CHANGELOG already records it,
+and a "DONE" left behind is how the old roadmap drifted. When an issue closes, remove it from
+this file in the same PR, or say what replaced it. Every status below carries the date it was
+last checked. Re-check before relying on it, and use `gh issue view` rather than trusting a
+state recorded here.
+
+_Last reconciled against the tracker, flags and CHANGELOG: 2026-09-28 (v0.28.0)._
 
 ## Active — Toward v1.0
 
-The v0.12.0 prep batch (8 parallel units, PRs #634–#641) shipped 2026-05-14. With the foundation in place, all subsequent work is scoped against the **v1.0 thesis** (Bryan, 2026-05-14):
+> Every core feature rock-solid + redesign complete + pending decisions finalized. Quality > speed.
+> — the v1.0 thesis (Bryan, 2026-05-14). The date floats; none is set.
 
-> Every core feature rock-solid + redesign complete + pending decisions finalized. Quality > speed. Date floats; ~2026-06-10 target is soft.
+### Where v1.0 stands
 
-**Triage source of truth:**
+The code is essentially complete. What remains is one engineering reshape, the commercial
+setup, hardware verification, and two flag flips.
 
-- `docs/v10-triage.md` — every row marked Core / Defer / Cut
-- A maintainer-local planning doc (not in the repo) — wave structure, exit criteria, verification gates, risk register. Anything load-bearing from it that a contributor needs belongs in this file or in `docs/v10-triage.md`.
-- [reviews/2026-09-02-v1-review/](reviews/2026-09-02-v1-review/README.md) — the pre-v1.0 code review (base v0.24.1): 84 issues under the `v1-review` label, fix tracks A–K, the next-minor release gate, and the decisions still open. Plan fix work from there.
+1. **The license surface gate (#1521) has to land dark before the flip.** Its policy is
+   **Decision F** (2026-09-06, recorded on #1827 and #1788): restricted mode is *symmetric
+   read-only*, and the annotation mutators move from ungated to gated in both halves.
+   #1521's own acceptance criteria predate that decision and contradict it (see its
+   2026-09-08 comment), so reconcile the issue with Decision F before implementing anything.
+   Flipping `LICENSE_GATE_ENABLED` on today's per-tool gate would ship a shape ADR-040 no
+   longer describes.
+2. **Commercial readiness** — see [the exit criteria](#v100-exit-criteria). The live
+   checklist is [licensing-operations.md §8](licensing-operations.md#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay),
+   and all of it is unchecked. #1117, the old commercial-infra tracker, was closed on
+   2026-06-13 with every box unchecked, so it tracks nothing.
+3. **Hardware verification.** This covers the install matrix (#2034), Cowork on macOS and
+   Linux (#316), and the Cowork transport matrix (#1455, review by 2026-10-15). Windows is
+   the only platform with a machine on hand.
+4. **Two flips at the cut, in two independent systems:**
+   - **Licensing.** `LICENSE_GATE_ENABLED` (`tsup.config.ts`) and `LICENSE_UPDATE_ENDPOINT`
+     (`src-tauri/src/lib.rs`) flip together. `tests/docs/license-flip-consts.test.ts` fails
+     on a half-flip.
+   - **Local models.** `BYO_MODELS_ENABLED` (`src/shared/constants.ts`) flips for #1123. The
+     whole M1a→M4 track is merged dark and has been in the tree since v0.20.0. What remains
+     is the flip and its gates.
+5. **The pre-v1.0 review's remainder.** 10 of 93 `v1-review` issues are open: #1792, #1822,
+   #1823, #1825, #1827, #1920, #1942, #1943, #2001, and #1754 (moot while `.docx` is dark).
+   #1942 (key rotation) is dated 2027-03-01 and does not block.
 
-**Working wave plan** (each ~2–5 days; one Bryan-review pass at end of each wave; max 2 CRITICAL/HIGH PRs per wave):
+### Decisions still owed
 
-| Wave | Focus | Notes |
-|------|-------|-------|
-| 0 | Apple Developer cert procurement (Bryan-led calendar gate); §1H verification audit (done, zero hits) | Done — #428 closed; per-release hardware verification lives in [release-smoke-checklist.md](release-smoke-checklist.md) |
-| 1 | Stability bug-bash + redesign chrome + editor surfaces (shipped 2026-05-15; released in v0.13.0) | #631 #616 #244 done; SettingsModal, status-bar held-count, ConnectionBanner polish, updater banner+dot, slash menu, paged docx, ReplyThreadOverlay, margin view PR1+PR2 shipped via #662–#674, #679. D11 bundled fonts reverted (#678) — see #680 |
-| 1b | Wave-1 follow-ups (released in v0.13.0) | **#680** re-land D11 fonts with BubbleMenu positioning fix; **#681** retrofit `/api/open` callers to `openServerPath`; **#682** strict `SettingsTabContext` registry typing; **#683** #649 margin view PR 3 of 3 (rail-collapse + narrow viewport) |
-| 2 | Settings → Network panel + multi-provider models registry (D4) — released in v0.13.0 | Two-tier UX (Connection visible + Advanced collapsed); models registry CRUDs Anthropic + #477 local + others |
-| 3 | Annotation migration (single coordinated release) | **Shipped:** #313 content-hash identity (v0.13.5); AR5 Word-import batch-promote (v0.13.0, #756); AR6 tutorial annotations (v0.13.0); the **hardening pass** (promote-path + channel-emit + import→promote test coverage; AR6 live-anchor freshness guard) landed early, in **v0.13.6** (not v0.14.0 as planned). The user-visible upgrade-toast and the ADR-034 lifecycle-module refactor remain deferred (not in the hardening tier). |
-| 4 | #477 remainder + #576 | **Shipped in v0.14.0:** PR 3c-ii-c (auto-config removal) + #576 docx body export (plus #1069 conflict detection and #1068 comment writeback beyond plan). #477 PRs 1/3a/3b/3c-i/3c-ii-a/3c-ii-b + auto-launcher 4a/4b had shipped default-on in v0.13.0. The non-MCP-provider adapter (unshipped half of PR 5) moved to **v1.1** per the D4 amendment (2026-06-11, below). |
-| 5 | Cross-platform install + #316 Cowork macOS/Linux | Install matrix, observer soak, accessibility gate. (#428 cert/notarization itself closed in v0.14.0 — what remains here is the real-hardware install verification per the smoke checklist.) |
-| 5L | Licensing (#1116, ADR-040 §3/§4/§6) — **ships dark, incrementally, across minors** (no dedicated release) | Scope owned by §"v1.0 Licensing (ADR-040)" below. Parallelizable with Wave 5 (which is hardware-bound); commercial infra runs alongside as a Bryan-led calendar gate (#1117). |
-| 5M | Local models (#1123, ADR-039) — **ships dark, incrementally, across minors** (no dedicated release) | D4 amendment (b), Bryan 2026-06-11: local-provider slice (Ollama/LM Studio) returns to v1.0. Canonical scope: ADR-039. **M0 spike COMPLETE 2026-06-17** (ahead of the 2026-07-02 kill date): no model cleared the autonomous full-collaborator OR constrained-fallback bar (qwen2.5:7b/llama3.1:8b/qwen2.5:14b), but the shipping decision (Bryan, with evidence) is **GO as opt-in / experimental BYO-model** — chat default-on (100%), comment/replacement opt-in + "experimental" + ≥14B recommended floor, multi-step/50-page out of scope — leaning on Tandem's human-in-the-loop accept/reject as the safety net. M1–M4 ship on this scoping, merged dark behind `BYO_MODELS_ENABLED` (a literal `const false` in `src/shared/constants.ts`) — the Settings → Models tab is filtered out entirely while it is false, so nothing is user-visible until the flip. Cloud BYO keys stay v1.1. |
-| 6 | Final | Gate-flag flip (requires Commercial-readiness criterion), version bump, CHANGELOG `[1.0.0]`, npm publish, Tauri release |
+| Question | Where | Why it blocks |
+|---|---|---|
+| **What `LICENSE` covers.** It names only the npm package, not the desktop app. | #1908 | It has to be decided before the gate flips |
+| **Counsel review of the current `LICENSE`.** #1909 rewrote the grant on 2026-09-08 (free during the beta, then a 14-day trial), after counsel's §5 text. Nothing records counsel reviewing the new wording. | #1909, ADR-040 §5 | The commercial gate treats `LICENSE` as counsel-drafted |
+| **LLC, accountant and pricing.** ADR-040 §6 requires the LLC and accountant before taking money, and pricing is still unset. #1117 tracked both and closed with them unchecked, and licensing-operations.md §8 has neither. | ADR-040 §6 | Nothing else tracks them |
+| **The grandfather cohort.** Who gets a free license, and do `README.md`, ADR-040 §3 and the in-app copy all say the same? | [licensing-operations.md §1c](licensing-operations.md#1c-the-cohort-problem-settle-this-before-the-flip) | The README already makes a public promise |
+| **Whether `tandem deactivate` is required.** It is if EU resale law makes a remove-license path mandatory. | #1943, licensing-terms.md §6 | Counsel's answer decides whether it joins the commercial gate |
+| **Two-window Solo/Tandem policy.** A second window can flip the mode, which lets Solo-held comments reach Claude. | #1899 | Adopt, re-assert, or stay warn-only |
 
-> **Version-numbering reconciliation (2026-07-07):** **v0.15.0 shipped as a general minor** (Find & Replace B4 #1171, setup diagnostics + `tandem_diagnostics` #1174, Cowork dialog clarity + published-plugin refresh #1173, license issuance Worker #1116 infra, Cowork-firewall / .docx / auto-launcher fixes) — **not** the Wave-5 install-matrix release once earmarked for it. The "releases as v0.16.0 / v0.17.0" pins on Waves 5L/5M are now **indicative only**: licensing (#1116, ADR-040) infra and the local-model M1 engine (#1123, ADR-039 — M1.1 #1159, M1.2 #1160) are shipping **dark and incrementally** across minors (landed in v0.14.3/v0.15.0) behind build flags, not as dedicated single-version releases. What still gates v1.0: hardware-bound Wave 5 (install matrix + Cowork macOS/Linux real-device verification), the licensing gate flag-flip, and local-model productionization (M1a→M4). Release-cut note: the version bump now spans **six** guarded/tracked surfaces — see `.claude/skills/release/SKILL.md`; a stale `tauri.conf.json` clobbered the published v0.14.3 release during the v0.15.0 cut before the guard was added.
+**Stale text to fix, not a decision:** the trial is **14 days**. That was decided 2026-09-08 (#1909), and `TRIAL_DAYS`, `LICENSE` and `README.md` all agree. Two documents still say 30: ADR-040 §5 ("up to 30 days") and licensing-terms.md §4 (which claims `LICENSE` grants 30 days).
 
-**v1.0 Core scope** (full table in §"v1.0 Release Plan" below): #477 + #576 + #316 are all Core (was Defer); #313 + #244 + #616 promoted; new surfaces from D-decisions: full-screen first-run modal (D4), ~~multi-provider models registry (D4)~~ (amended twice 2026-06-11 — **local slice back in v1.0** as Wave 5M/#1123; cloud BYO keys v1.1; canonical record in ADR-039), settings-icon update-dot (D6). Licensing (ADR-040, #1116/#1117) added to Core 2026-06-11 as Wave 5L.
+**"At RC" means the build intended to become v1.0.0, checked before the tag.** Under Decision
+G (#1748), any tag containing `-` publishes as a prerelease, and Bryan does not expect RC
+tags in this repo. So wherever a criterion below says "at RC", run it on that build.
 
-**Out of scope for v1.0:** authorship gutter (D2 picked per-character only), annotation thread reactions (D5), inline diff hunk-staging UI (D3 surface deferred — option B locked for v1.1 revisit), mobile/responsive (D7), author chip/avatar (D8), compact density (D9), most §1D refactors except #313, **cloud BYO-models (OpenAI/Gemini API keys) + their adapter — v1.1 per the D4 amendments (the *local*-model slice is back in v1.0 as Wave 5M/#1123; cloud rows stay behind `BYO_MODELS_ENABLED` until v1.1; canonical record in [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11))**, concurrent multi-agent (Claude + local simultaneously — #438/#452).
+### Dated checkpoints
+
+These are recorded here so they surface. Each one has a tracked issue, and at its date the
+outcome is keep, replace or retire.
+
+| Date | Issue | Checkpoint |
+|---|---|---|
+| **monthly — overdue** | #1506 | Has Claude Code gone modern-only? The only recorded pass is 2026-08-20 |
+| 2026-10-15 | #1455 | Run the Cowork transport test matrix |
+| 2026-11-01 | #1345 | Revisit packaged-desktop WebDriver smoke (workflow disabled 2026-08-08) |
+| 2026-11-09 | #1363 | Native theme push on Linux |
+| 2026-11-15 | #1727 | Consolidate the three Cowork enable-confirmations |
+| 2026-11-30 | #1687 | Converge the lifecycle result families |
+| 2026-12-01 | #1728 | Make `coverage` a required check, or record that its floors stay advisory |
+| 2026-12-01 | #1712 | Verify the app.css citations in the design-spec docs |
+| 2026-12-15 | #2015 | Claude Code function hooks as a fifth push path |
+| 2027-02-24 | #1599 | Accepted: config-mutation lost-update race |
+| 2027-02-26 | #1633 | ui-inspector screenshots on Windows |
+| 2027-02-28 | #1671 | Accepted: caller-named write destinations |
+| 2027-03-01 | #1942 | Rotate the license signing key |
+
+### Open work that bears on v1.0
+
+This is a selection, not the full open list: issues judged on 2026-09-28 to affect
+correctness, security, install or a named gate. Not all of them block. Triage each group
+before the flip: fix it, mark it post-v1.0 below, or accept it in
+[security.md](security.md#open-findings). For everything else, run `gh issue list`.
+
+- **Security findings:** #1952 (`wakeUrl` hardcodes `127.0.0.1`), #1884 (the channel permission relay under Cowork), #1885, #1949 (signing-job isolation), #1822 (the v1-review Lows). The RC security sweep is #1199.
+- **Sidecar and process lifecycle:** #1988 (orphaned sidecar after a force-quit on macOS/Linux), #1994, #1869, #2041.
+- **Correctness:** #2001, #1997, #2064, #2069, #2070, #1981 (the 100 kB body parser shadowing `/api`), #1982, #1980, #1662, #1632, #2009, #1920, #2112, #1523.
+- **Distribution and setup:** #1533, #1610, #1704, #1895, #1792, #1354 (the plugin monitor can't be resolved from a GUI launch).
+- **Tutorial gate:** #1696, #1725, #1711.
+- **Accessibility gate:** #1721, #1683.
+- **CI and tests:** #1831 (`claude-code-review.yml` dead since 2026-05-27), #1862, #1911, #1937, #2073, #1333, #1734.
+- **Dependency majors:** #1857 (tiptap 3 + hocuspocus 4 + zod 4 + TS 7), #2098, #2099, #2100.
+- **Docs owed:** #2075.
 
 ## Shelved
 
-- **`.docx` support (2026-09-24, [ADR-053](decisions.md#adr-053-docx-ships-dark)).** Out of the live build behind the `DOCX_ENABLED` flag, because it wasn't in a state suitable for serious work. The code stays merged and tested. ADR-053 holds the re-enable checklist, and Step 5b and the Word Comment Import entry below describe what it did while it shipped.
+- **`.docx` support (2026-09-24, [ADR-053](decisions.md#adr-053-docx-ships-dark)).** It is out of the live build behind `DOCX_ENABLED` because it wasn't ready for serious work. The code stays merged and tested. Re-enabling it is ADR-053's checklist (#2110), not a one-line flip. #576 shipped it, and #1142 is the open umbrella for editing `.docx` with confidence. The history file's Step 5b and Word Comment Import sections describe what it did while it shipped.
 - **SuperDoc as the `.docx` engine (2026-09-24, ADR-052).** Shelved after the engine spike reported NO-GO on nine of its ten questions.
 
 ## Integration Policy (ADR-038)
 
-> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same MCP tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
->
-> **Integration setup** runs through the integration setup wizard (#477 PR 3). Silent auto-configuration of Claude's MCP config on startup was removed in #477 PR 3c-ii-c; setup is now wizard-driven and explicit.
-
-See [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) for the full policy, the four-term glossary, the auto-launch and auto-configuration sub-decisions, and the list of Claude-specific extras vs Claude-side dev tooling. The integration picker work below (#477) is the materialization of this policy in code, not a new direction.
-
-## Step 5: File I/O
-
-### Goal
-Load files into Y.Doc and save Y.Doc back to source files. Lossless for .md/.txt, review-only for .docx.
-
-### 5a: Markdown (lossless round-trip) — DONE
-
-**Files:** `src/server/file-io/markdown.ts`, `src/server/file-io/mdast-ydoc.ts`
-
-Implemented via unified/remark with MDAST↔Y.Doc conversion:
-
-- **Load:** `loadMarkdown()` parses markdown via remark into an MDAST tree, then `mdastToYDoc()` converts it to Y.XmlFragment elements with Tiptap-compatible nodeNames and formatted Y.XmlText for inline marks.
-- **Save:** `saveMarkdown()` converts Y.Doc back to MDAST via `yDocToMdast()`, then serializes with remark-stringify. Round-trip preserves headings, bold/italic/strikethrough, links, inline code, lists (ordered/unordered/nested), blockquotes, code blocks, images, horizontal rules, and hard breaks.
-- **Read:** `extractText()` returns flat text (with heading prefixes) for `tandem_getTextContent` on all file formats, ensuring offset consistency with the annotation coordinate system. `extractMarkdown()` is available for markdown serialization (e.g., `tandem_save`) but is NOT used for `tandem_getTextContent` (see Issue #148).
-- **Key constraint:** Y.XmlText must be attached to the Y.Doc before populating text content — detached nodes reverse insert order (see ADR-009, Lesson 9).
-
-### 5b: .docx (review-only mode) — DONE
-
-**Files:** `src/server/file-io/docx.ts`, `src/server/file-io/docx.worker.ts`
-
-- **Import:** Use mammoth.js to convert .docx to HTML, then parse HTML into Y.Doc via Tiptap's HTML parser (or manual conversion to Y.XmlElements).
-- **Worker thread:** mammoth.js is synchronous and blocks the event loop. Run in `worker_threads` to prevent WebSocket stalls (100-page doc takes 1-3 seconds).
-- **Review-only:** Never overwrite the original .docx. Outputs are:
-  - Change list (Markdown) — what was reviewed, what changed, what was flagged
-  - Annotation export (Markdown/JSON) — all highlights, comments, suggestions with document context
-- **Opt-in lossy save:** For users who explicitly request it, save as .docx with pre-flight warnings about formatting loss.
-- **Known limitations:** Complex tables, tracked changes, footnotes, headers/footers, custom styles do not survive round-trip.
-
-### 5c: File change detection — PARTIAL (v0.2.11, PR #184)
-
-**Implemented:**
-- `fs.watch()` on source `.md`/`.txt`/`.html` files while open in Tandem
-- On external change: auto-reload content, preserve annotations via CRDT re-anchoring + textSnapshot relocation — unless the document has unsaved edits, in which case the reload is held and a keep-vs-reload banner is raised instead (#1069 for `.docx`, every format since #1238)
-- Self-write suppression prevents reload loops when Tandem saves
-- Toast notification on reload
-- Dead `relRange` recovery in `refreshRange` (strips broken CRDT anchors, re-anchors from flat offsets)
-
-**Not yet implemented:**
-- Three-way merge (original snapshot, external change, Tandem edits)
-- Conflict UI: show both versions side-by-side
-- Dirty-document guard (if user has unsaved Tandem edits when external change occurs)
-- `.docx` auto-reload (binary format, `fs.watch` unreliable)
-- Flag annotations on externally-changed text
-
-### Verification
-- Open a .md file, edit in Tandem, save, reopen — content preserved exactly
-- Open a .docx file — content appears, annotations work, original .docx unchanged
-- Edit a .md file externally while open in Tandem — content updates, annotations preserved, toast appears
-
----
-
-## Step 6: Session Persistence — DONE
-
-### Goal
-Close the editor, restart the server, reopen — document and annotations are still there.
-
-**Files:** `src/server/session/manager.ts`
-
-### Design
-
-- **Storage location:** `%LOCALAPPDATA%\tandem\sessions\` (not project directory — avoids syncing document content to OneDrive)
-- **Session key:** Hash of the source file's absolute path
-- **What's persisted:**
-  - Y.Doc state (full Yjs state vector — `Y.encodeStateAsUpdate()`)
-  - Annotation Y.Map contents
-  - Source file path, format, last-accessed timestamp
-- **What's NOT persisted:**
-  - Awareness state (ephemeral by design)
-  - Browser-open tracking
-- **Save triggers:**
-  - On `tandem_save()` — save session alongside file save
-  - On `tandem_close()` — delete session file (so closed docs don't reopen on restart)
-  - Auto-save every 60 seconds while a document is open
-  - On server shutdown (SIGTERM/SIGINT handler)
-- **Resume flow:**
-  1. `tandem_open("file.md")` checks for existing session
-  2. If session exists and source file hasn't changed: restore Y.Doc from session
-  3. If source file changed since session: load fresh from file, warn that annotations may be stale
-  4. If no session: load fresh from file (current behavior)
-- **Cleanup:** Delete sessions older than 30 days (`SESSION_MAX_AGE` in constants.ts)
-
-### Verification
-- Open file, add annotations, restart server, reopen — annotations still there
-- Open file, edit externally, restart server, reopen — fresh load with warning
-- Sessions older than 30 days are cleaned up on startup
-
----
-
-## Step 7: Document Groups — Phase 1 DONE
-
-### 7a: Multi-Document Tabs (DONE)
-
-Implemented in Phase 1:
-
-- **docIdFromPath**: Stable, readable document IDs from file paths (used as Map key + Hocuspocus room name)
-- **openDocs Map**: Server tracks all open documents; `activeDocId` determines tool defaults
-- **documentId parameter**: All 26 existing MCP tools accept optional `documentId` (backward compatible)
-- **New tools**: `tandem_listDocuments`, `tandem_switchDocument` (24 tools total)
-- **DocumentTabs**: Tab bar UI with format icons, active indicator, close buttons
-- **Per-tab Y.Doc**: Editor manages separate Y.Doc + HocuspocusProvider per open document
-- **broadcastOpenDocs**: Server writes open document list to Y.Map('documentMeta') on active doc
-
-### 7b: Document Groups (Future)
-
-Deferred — only if demand appears:
-
-- Named groups (e.g., "February Report Review") with `tandem_createGroup`
-- Cross-reference tools (`tandem_crossReference`, `tandem_searchGroup`)
-- Split-pane UI for side-by-side documents
-- Tab drag-to-split functionality
-
-### Known Issues from Phase 1
-
-- **MCP stdio disconnect (Issue #8):** Resolved. Migrated from stdio to Streamable HTTP transport (ADR-012). MCP HTTP on :3479, Hocuspocus WS on :3478. Stdio fallback via `TANDEM_TRANSPORT=stdio`.
-- **Y.js "Invalid access" warnings:** Appear in stderr during session restore when the browser connects to a room before the MCP-populated Y.Doc is merged. Harmless (data still syncs correctly) but noisy. Could be silenced by deferring session restore until after `onLoadDocument` merge.
-- **Editor tab discovery requires `/mcp` restart:** After restarting the Tandem MCP server, the editor must reload to reconnect its bootstrap provider. No auto-reconnect logic yet.
-
----
-
-## Step 8: Polish
-
-### Goal
-First-run experience, error handling, and UX refinements.
-
-### 8a: Launch Experience — PARTIALLY DONE
-
-- Server auto-starts when Claude Code calls any Tandem tool (check PID in `.tandem/.server-info`)
-- Server auto-stop on idle was planned but not wired up
-- Browser auto-open (removed — `open` package wrote to stdout, corrupting the MCP wire; user opens http://localhost:5173 manually)
-- ~~Browser file open~~ — implemented: "+" button in tab bar opens the new-tab menu (recent files, plus **Browse files…** — a native picker on desktop, a read-only `upload://` dialog in the browser build) and drag-and-drop onto the editor, HTTP API endpoints (`/api/open`, `/api/upload`). There is no typed-path input; that gap is tracked as #1895
-
-### 8b: Onboarding — DONE
-
-**Files:** `src/server/file-io/tutorial.ts`, `src/client/hooks/useTutorial.ts`, `src/client/components/OnboardingTutorial.svelte`
-
-Implemented in PR #147:
-
-- Pre-loaded sample document (`sample/welcome.md`) with 3 pre-placed tutorial annotations (highlight, comment, comment with replacement) via `injectTutorialAnnotations()`
-- `OnboardingTutorial` floating card at bottom-left with 3-step progression
-- Three interactions: (1) accept/dismiss an annotation, (2) create a user annotation, (3) focus editor and type
-- `useTutorial` hook detects step completion via annotation status observers + editor focus events
-- Progress persisted to localStorage (try-catch guarded for incognito/restricted browsers)
-- Idempotent injection — safe across server restarts with session restore
-- Tutorial only activates on `sample/welcome.md`, suppressed for other documents
-
-### 8c: Review Mode — PARTIALLY DONE
-
-Keyboard review mode (Tab/Y/N/Z) is implemented. Annotation filtering (type/author/status), bulk accept/dismiss, review summary overlay, and 10-second undo window (with Z key in review mode) are implemented. Accepted replacement suggestions are reverted atomically on undo. Inline annotation editing (pencil button, Issue #97) is implemented with `tandem_editAnnotation` MCP tool.
-
-Remaining:
-- Configurable threshold banner ("Claude has 14 annotations to review. Review in sequence or filter by type.")
-- Document dimming in review mode
-
-### 8d: Interruption Model — DONE
-
-Superseded by the Wave 4 Solo/Tandem redesign (PRs #226, #227). The All/Urgent/Paused three-mode model was retired in favor of a binary Solo/Tandem toggle exposed in the toolbar:
-
-- Claude never interrupts while the user is actively typing (3-second debounce)
-- Two modes in the toolbar toggle: **Tandem** (default; full collaboration) and **Solo** (hold all pending Claude annotations; only respond to chat)
-- Client broadcasts `mode` to `CTRL_ROOM`'s Y.Map('userAwareness') — Claude reads it via `tandem_status` and `tandem_checkInbox`, both of which return `mode: "solo" | "tandem"`
-- Held annotations surface via the side panel banner (`{n} annotation(s) held`) with a one-click "Show all" affordance that flips back to Tandem
-
-### 8e: Error Handling — PARTIALLY DONE
-
-- Toast notifications (Issue #101): SSE-based notification system via `GET /api/notify-stream`. Server pushes annotation range failures, save errors. Editor renders via `ToastContainer` with type-differentiated auto-dismiss (error 8s, warning 6s, info 4s), dedup with count badge, max 5 visible.
-- Connection error messages (Issue #105): Three-state `ConnectionStatus` (connected/connecting/disconnected), reconnect attempt count + elapsed time in StatusBar, 30s prolonged disconnect banner (dismissible, auto-clears on reconnect).
-- File lock detection: clear message telling user to close Word
-- WebSocket reconnection: automatic, no data loss (Yjs handles this)
-
-Remaining:
-- `RANGE_MOVED` / `RANGE_GONE` auto-retry: re-resolve range automatically when text has shifted
-- Large file warnings: alert at 50+ pages about potential slowness
-
-### 8f: Toolbar Enhancements — PARTIALLY DONE
-
-- ~~Highlight button~~ — implemented (yellow default)
-- ~~Comment button~~ — implemented (unified with Replace toggle and @Claude toggle)
-- Flag markers (red/yellow/green)
-- ~~Accept All / Dismiss All buttons~~ — implemented in SidePanel
-- ~~Review Mode toggle~~ — implemented (Ctrl+Shift+R)
-- ~~"+" File Open button~~ — implemented in DocumentTabs (opens FileOpenDialog)
-- ~~Tab overflow + reorder~~ — implemented: horizontal scroll with arrow buttons, pointer-based drag reorder, Alt+Left/Right keyboard reorder, filename ellipsis with tooltip (Issue #99)
-- ~~Tab cycling~~ — implemented: Ctrl+Tab / Ctrl+Shift+Tab to cycle through tabs (Issue #266)
-- ~~Version indicator in the UI (#435)~~ — **SHIPPED** (PR #460, 2026-04-28). About footer in Settings popover showing version + MCP SDK version via `useAppInfo` hook fetching `/api/info`.
-- ~~"View Changelog" button in Settings panel (#437)~~ — **SHIPPED** (PR #463, 2026-04-28). Opens bundled `CHANGELOG.md` as a read-only document tab via `POST /api/open` with `readOnly: true`.
-- ~~Highlight color picker~~ — **SHIPPED** (`HighlightColorPicker.svelte`; 4-color palette yellow/green/blue/pink)
-
-### Verification
-- First launch shows sample document with annotations
-- Keyboard shortcuts work in review mode
-- Error messages are clear and actionable
-- Server auto-starts and auto-stops correctly
-
----
-
-## E2E Testing — DONE
-
-**Files:** `playwright.config.ts`, `tests/e2e/`
-
-Playwright E2E tests cover the critical annotation lifecycle path. Infrastructure:
-
-- **McpTestClient** (`tests/e2e/helpers.ts`): wraps MCP SDK's `Client` + `StreamableHTTPClientTransport` for tool calls from tests
-- **Fixture management**: `createFixtureDir()` copies sample files to a temp dir per test, `cleanupFixtureDir()` removes it
-- **Config**: `workers: 1` (serial runs — the E2E server binds fixed ports :3478/:3479 and `freePort` kills whatever holds them, so parallel workers would fight over one server; the "one MCP session" rationale predates ADR-045, which made the server multi-session)
-- **CI**: Playwright Chromium install + E2E step after build, report artifact uploaded on failure
-- **13+ tests**: document load, annotation decoration, annotation card, accept, dismiss, replacement apply, tab switching, review mode keyboard, tab overflow, tab reorder, tab scroll
-
-Run: `npm run test:e2e` (auto-starts servers) or `npm run test:e2e:ui` (Playwright UI mode)
-
----
-
-## Channel Push (Issue #106) — DONE
-
-**Files:** `src/channel/index.ts`, `src/channel/event-bridge.ts`, `src/server/events/queue.ts`, `src/server/events/sse.ts`, `src/server/events/types.ts`
-
-Real-time push notifications from editor to Claude Code via the Channels API, replacing polling.
-
-- **Channel shim** (`src/channel/`): Separate stdio subprocess spawned by Claude Code. Low-level MCP `Server` class (not `McpServer`) with `claude/channel` + `claude/channel/permission` capabilities. Exposes `tandem_reply` tool.
-- **Event queue** (`src/server/events/queue.ts`): Y.Map observers on annotations, chat, user awareness, and document metadata. Circular buffer (200 events / 60s). Origin tagging filters MCP-initiated changes.
-- **SSE endpoint** (`GET /api/events`): Server-Sent Events stream with `Last-Event-ID` reconnection replay and 15s keepalive.
-- **Channel API endpoints**: `/api/channel-awareness`, `/api/channel-reply`, `/api/channel-error`, `/api/channel-permission`, `/api/channel-permission-verdict`, `DELETE /api/chat` — the named carve-outs from #1320's loopback invariant, because this transport is documented to run against a non-loopback `TANDEM_URL` (Cowork)
-- **Build**: tsup produces three bundles — `dist/server/index.js` + `dist/channel/index.js` + `dist/cli/index.js`
-- **8 event types**: `annotation:created`, `annotation:accepted`, `annotation:dismissed`, `annotation:reply`, `chat:message`, `document:opened`, `document:closed`, `document:switched`
-
-### Known Issues from Channel Implementation
-
-- **E2E tab switching test stabilized (Issue #116):** Previously flaky due to timing issues with Yjs sync. Rewritten to use `tandem_switchDocument` for deterministic active doc state and `data-active='false'` attribute selector.
-- **`dev:standalone` server startup fixed (Issue #117):** Previously unreliable due to fixed sleep before Hocuspocus bind. Now uses `waitForPort()` polling in `platform.ts` to verify port availability before proceeding. Both HTTP and stdio startup branches updated.
-
----
-
-## Word Comment Import (Issue #85) — DONE
-
-**Files:** `src/server/file-io/docx-comments.ts`
-
-Extracts `<w:comment>` elements from .docx XML (via JSZip) during file open and creates Tandem annotations with `author: "import"` and CRDT-anchored ranges. The SidePanel author dropdown includes an "Imported" filter. This is the import half of Phase 3 (.docx comments) — export (`<w:comment>` generation) is not yet implemented.
-
----
-
-## Session Auto-Restore (Issue #102) — DONE
-
-**Files:** `src/server/session/manager.ts`, `src/server/index.ts`
-
-On server startup, `listSessionFilePaths()` scans the session directory for previously-open files. `restoreOpenDocuments()` calls `openFromRestore()` for each, and `restoreCtrlSession()` returns the previous active document ID. After restore, the version check opens `CHANGELOG.md` on upgrade, or the `sample/welcome.md` fallback opens if zero documents are open — both before servers start. Stale sessions (ENOENT) are cleaned up automatically.
-
----
-
-## Tab Close Fix (Issue #149) — DONE
-
-**Files:** `src/server/mcp/document-service.ts`, `src/server/mcp/api-routes.ts`, `src/server/mcp/document.ts`, `src/client/components/DocumentTabs.svelte`
-
-Closing a tab in the editor now actually closes the document on the server. Previously, tab close only affected the client UI without cleaning up the server-side document state.
-
-- **`closeDocumentById()`** shared helper in `document-service.ts` — single source of truth for document close logic (session save, doc removal, broadcast), used by both `tandem_close` MCP tool and `POST /api/close` HTTP endpoint
-- **`POST /api/close`** HTTP endpoint in `api-routes.ts` — browser-callable close, parallel to `/api/open`
-- **Client `handleTabClose`** calls `POST /api/close` with optimistic adjacent-tab selection
-- **Close button debounced** via `closingIdsRef` in `DocumentTabs.svelte` to prevent double-close from rapid clicks
-- **`saveSession` wrapped in try-catch** so save failure doesn't block close
-- 7 new unit tests for `closeDocumentById`
-
----
-
-## getTextContent Offset Fix (Issue #148) — DONE
-
-**Files:** `src/server/mcp/document.ts`
-
-`tandem_getTextContent` was using `extractMarkdown()` for .md files, which produces markdown syntax (e.g., `> ` prefixes for blockquotes) that differs from the flat text format used by the annotation coordinate system. This caused offset drift — annotations placed using offsets from `tandem_getTextContent` would land in the wrong location after blockquotes.
-
-- Changed `tandem_getTextContent` to always use `extractText()` regardless of file format
-- `extractText()` produces the same flat text format (with heading prefixes like `## ` and `\n` separators) used by all annotation tools
-- 2 new unit tests for blockquote offset consistency
-
----
-
-## Step 9: npm Global Install (PR #161) — DONE
-
-**Files:** `src/cli/index.ts`, `src/cli/setup.ts`, `src/cli/start.ts`, `src/server/open-browser.ts`, `packages/tandem-doc/`
-
-`npm install -g tandem-editor` makes Tandem available as a global CLI command:
-
-- **`tandem`** — Starts the server and opens the editor (Tauri WebView in desktop, or `http://127.0.0.1:5173` in dev)
-- **`tandem setup`** — Auto-detects Claude Code and Claude Desktop, writes MCP config entries with absolute paths to `~/.claude/mcp_settings.json` and/or `claude_desktop_config.json`
-- **`tandem setup --force`** — Writes config to default paths regardless of auto-detection
-- **Static file serving** — Express serves the Vite-built client from `dist/client/` on `:3479`, eliminating the need for a separate Vite dev server in production
-- **Package rename** — Published as `tandem-editor` (npm name availability); `tandem-doc` is a reserved alias stub
-- **Version baked in at build time** — tsup `define` injects `__TANDEM_VERSION__` (no runtime `package.json` lookup in CLI)
-- **Atomic config writes** — `atomicWrite()` with EXDEV fallback for Windows cross-drive scenarios
-- **Doctor updated** — `npm run doctor` checks user-level MCP registration (`~/.claude/mcp_settings.json`)
-- **12 tests** for `buildMcpEntries`, `detectTargets`, and `applyConfig`
-
-> **Current CLI semantics (changed after this milestone):** as of v0.14.0 (#477 PR 3c-ii, ADR-038 §2b) bare `tandem setup` only *prints* guidance — the write path moved behind `tandem setup --apply` (and `tandem setup --apply --force` for the force variant). The `tandem setup` / `tandem setup --force` bullets above describe PR #161's original behavior.
-
----
-
-## Tauri Desktop — DONE (v0.4.0, PR #257)
-
-Native desktop distribution via Tauri v2. The Node.js server runs as a bundled sidecar; the WebView loads the existing web client unchanged.
-
-### Step 1: Scaffold + sidecar wiring — DONE
-
-Tauri project scaffolded (`src-tauri/`), Node.js bundled as `node-sidecar` via `externalBin`, server resources bundled (`dist/server/`, `dist/channel/`, `dist/client/`, `sample/`). Sidecar spawned on launch; `TANDEM_TAURI_SIDECAR=1` toggles production-only suppression for noisy dependency logs.
-
-### Step 2: Origin + permissions — DONE
-
-Production WebView uses `tauri://localhost` origin. Server CORS and DNS-rebinding middleware updated to accept it. CSP configured in `tauri.conf.json`. Capabilities split: `default.json` (core + shell + fs + dialog), `desktop.json` (single-instance + window-state + updater).
-
-### Step 3: Sidecar lifecycle hardening — DONE
-
-Health polling (200ms interval, 30s timeout), exponential backoff restart (up to 3 attempts), early-exit if sidecar dies before healthy, error dialog on exhausted retries — the dialog names the port holder and offers a one-shot retry on Windows. `kill_sidecar()` on `RunEvent::Exit` prevents orphan processes.
-
-### Step 4: MCP auto-setup — SUPERSEDED (removed in #477 PR 3c-ii-c)
-
-Originally `run_setup()` POSTed to `/api/setup` with bundled `nodeBinary` + `channelPath` after health check, on every launch. **Removed in #477 PR 3c-ii-c** (ADR-038 §2b): setup is now wizard-driven, the channel-shim path is injected into the sidecar as `TANDEM_CHANNEL_DIST` on spawn, the "no AI client detected" nudge lives in the wizard's connect step (the #1084 "Install Claude Code" empty state), and the tray "Setup AI Assistant" item re-opens the wizard. The non-interactive CLI equivalent is `tandem setup --apply`.
-
-### Step 5: System tray + window management — DONE
-
-Window hide-on-close (tray "Quit" is the exit path). Tray menu: Open Editor, Setup Claude, Check for Updates (separator), About, Quit. Left-click tray icon shows window. Single-instance plugin: second launch focuses existing window instead of spawning a new one.
-
-### Step 6: Auto-updater — DONE
-
-`tauri-plugin-updater` checks GitHub Releases `latest.json` on launch and every 8 hours. Ed25519-signed artifacts (`TAURI_SIGNING_PRIVATE_KEY` secret). `bundle.createUpdaterArtifacts: true` generates `.sig` files in CI. Before `app.restart()`, kills sidecar and waits for port to clear.
-
-### Step 7: Build pipeline + CI — DONE
-
-GitHub Actions workflow (`.github/workflows/tauri-release.yml`) — builds on Windows/macOS/Linux, signs with `tauri-action`, publishes installers + `latest.json` to GitHub Releases. Cross-platform basename fix and CodeQL security hardening applied post-merge.
-
-Future hardening (not blocking release):
-- Verify end-to-end update flow (download → install → restart) on all three platforms — procedure documented in [release-smoke-checklist.md](release-smoke-checklist.md)
-- Code-sign macOS `.app` + notarization (#428) — requires Apple Developer certificate; without it, Gatekeeper shows "damaged" error on download. v1.0 gate. Per-release hardware verification lives in [release-smoke-checklist.md](release-smoke-checklist.md).
-- Windows installer smoke test — NSIS covered per-release by [release-smoke-checklist.md](release-smoke-checklist.md); the MSI artifact (`targets: "all"` also builds one) is not covered
-- ~~Node.js 20 → 24 GitHub Actions migration (CI-wide, all workflow files) — deadline June 2, 2026~~ **Done 2026-06-11.** This was about the GitHub Actions *runtime* (JS actions), not the project's Node: GitHub forced the node24 default on 2026-06-02 and removes node20 entirely 2026-09-16. First-party actions bumped to node24 majors (`checkout@v6`, `setup-node@v6`, `upload-artifact@v7`) across all five workflow files; `node-version: 22` is unchanged and correct (matches `engines` + the bundled sidecar Node).
-  - *Appended 2026-09-02, not rewritten — the line above records what was done then and should keep saying so.* The current tree runs `upload-artifact@v6`, not `@v7`: v7 was never adopted. Every action in all five workflows is now SHA-pinned rather than tag-pinned (#1745), so the majors named above are what the trailing comment on each pin records, not what the ref resolves.
-  - *Appended 2026-09-06.* `node-version: 22` is no longer unanimous: `publish.yml` runs **24**, because npm Trusted Publishing requires npm ≥ 11.5.1 and Node ≥ 22.14, and 24 is what npm's own example uses. The other four workflows are unchanged at 22.
-
-### Future Tauri Enhancements
-
-- **File association**: Register `.md`/`.docx`/`.txt` file extensions so double-clicking opens in Tandem
-- **Deep link / open-with**: Pass file path from second-instance launch into the running server via `POST /api/open`
-- **Linux tray fallback**: Improve UX when `libappindicator3-dev` is absent (currently logs and continues)
-- **Linux/KDE title bar button placement** (#552): `tauri-plugin-decorum` positions window controls on the right (GNOME convention); KDE Plasma users with left-side decoration preference will see a mismatch. No per-platform config knob in decorum — fix requires a CSS-only `[data-platform="linux"]` mirror or a KDE-specific adjustment. Needs a KDE tester to confirm the issue and validate any fix. Tagged `needs-tester`.
-- **Updater dialog theming** (#561): dialogs now parented to main window (`MessageDialogBuilder::parent()`) so they center over the app and inherit Windows 11 dark-mode chrome from decorum. v1.0 direction (D6, locked 2026-05-14) is an in-app banner + small dot badge on the titlebar settings gear (filed as #660), not a full modal.
-
----
-
-## Durable Annotations + Cowork Auto-Setup — PHASE 1 DONE, PHASE 2 PARTIAL
-
-Plan doc: [`docs/superpowers/plans/2026-04-16-durable-annotations-cowork.md`](superpowers/plans/2026-04-16-durable-annotations-cowork.md). Roadmap issues #313–#322.
-
-### Phase 1 — Durable Annotations in App Data (T1–T8) — DONE
-
-Moves annotation storage from in-memory Y.Doc + session snapshots to explicit per-document durable JSON under `env-paths` app data. Survives editor/tab loss, tandem-editor reinstalls, OS restarts.
-
-- **T1–T6 (PR #323, merged):** Per-doc on-disk store, migration from session snapshots, load/save wiring, in-memory cache, tests.
-- **T7 + T8 (PR #337, merged):** Content-hashed import annotation IDs for idempotent .docx re-import with dedup, plus `npm run doctor` annotation-health checks and CLAUDE.md Rule #2 rewrite.
-- **Retrospective follow-ups (v0.6.3, merged):** GC race fix (#334), annotation module internals (#324, #327, #328, #332), legacy-type sanitization (#329), drop-counter (#330), test coverage (#331, #335), CI gate (#310), settings popover (#306), dark-mode tokens (#307), a11y sweep (#309, #311 partial), stdio bridge silent-failure paths (#336 partial).
-
-### Phase 2 — Tauri Multi-Surface Auto-Setup (PRs a–f)
-
-Each release targets **one coherent concern** so that a bad PR is bisectable and the CHANGELOG entry is unambiguous. Time-to-ship is secondary to blast-radius containment.
-
-#### Completed releases
-
-| Release | Concern | Status |
-|---------|---------|--------|
-| v0.6.4 | Silent-failure patch + flaky E2E (#336 partial, #281) | **DONE** |
-| v0.7.0 | Cowork foundation: auth token storage, auth middleware, `TANDEM_BIND_HOST` bind mode, `tandem rotate-token`, token forwarding in stdio/monitor/channel | **DONE** (PRs a–d) |
-| v0.7.1 | MSIX Claude Desktop detection + stdio entry generation (#372) | **DONE** |
-
-- **PR a (DONE)** — Token storage (`env-paths` data directory, `O_EXCL` file creation, Tauri sidecar passthrough via `TANDEM_AUTH_TOKEN`).
-- **PR b (DONE)** — Auth middleware + OAuth protected-resource metadata. Loopback-exempt, `crypto.timingSafeEqual`, SHA-256 length oracle elimination, rate-limit (5/min) with LRU eviction.
-- **PR c (DONE)** — Bind mode selection (`TANDEM_BIND_HOST`): default `127.0.0.1`. Hocuspocus stays loopback-only. Fail-closed on LAN bind without token. **This line used to read "Cowork mode binds `0.0.0.0`", and that half never shipped** — nothing in the product sets `TANDEM_BIND_HOST`, Cowork included. `integrations_probe.rs:314-326` omits it deliberately ("the launcher MUST NEVER set TANDEM_BIND_HOST=0.0.0.0 … #477 PR 4 out of scope") and `build_launch_env_never_sets_bind_host` (`:407`) is a `cargo test` gate on that, under a required status check. LAN binding is user-set env only, and the stale wording mattered: it is the kind of line someone verifies a security claim against.
-- **PR d (DONE)** — `tandem rotate-token` CLI subcommand with 60s grace window; re-runs setup across detected MCP configs.
-- **PR e (DONE)** — Cowork per-workspace installer (read-modify-write `installed_plugins.json` / `known_marketplaces.json` / `cowork_settings.json`), Windows firewall scoping to detected Hyper-V VM subnet, NSIS uninstaller cleanup (includes #436 PREUNINSTALL binary-name fix). Merged 2026-04-26 (PR #370, v0.8.0).
-- **PR f (DONE)** — Settings UI + onboarding in Tauri. Enable/disable Cowork mode, show detected VM subnet, surface plugin status. Merged 2026-04-26 (PR #371, v0.8.0). ADR-025 decided Svelte Go; the React implementation ships now, Svelte rebuild in v0.13.0.
-
-### Cowork integration status
-
-Cowork integration is **verified end-to-end** as of v0.7.1 (2026-04-20). Both Claude Code CLI and Claude Desktop Cowork workspaces surface `tandem_*` tools via the stdio bridge (`npx -y tandem-editor mcp-stdio`). The Cowork plugin bridge was introduced in tandem-editor@0.6.0 and first cross-platform working in @0.6.2 (Windows `workspaces` packaging bug). See [ADR-023](decisions.md#adr-023-cowork-plugin-bridge--stdio-via-npx-not-http-prs-301-304--claude-default-integration) for the decision trail.
-
-Remaining Cowork work (#316, #317, #322) is polish — making the installer turnkey on macOS/Linux and adding cross-platform firewall scoping. Not a capability blocker. Deferred from v0.9.0 to v0.15.0 (requires macOS/Linux validation hardware).
-
----
-
-## Integration Picker + Browser Deprecation (#477) — v1.0 Wave 6
-
-First-run wizard that lets users choose their AI integration, plus retiring the browser *auto-open* path. The integration choice drives startup behavior, auto-launch strategy, and default layout. Triaged **Core** for v1.0 on 2026-05-14.
-
-> **Decision 2026-08-18 (#1467): the browser UI is KEPT. "Tauri-only going forward" is withdrawn.**
-> This section's original framing — "dropping the browser distribution path entirely" — overstated
-> what PR 2 did and what was ever agreed. Three corrections, so the scope of the shipped work is not
-> re-read as a plan:
->
-> - **PR 2 removed browser *auto-open***, not the browser UI: `TANDEM_OPEN_BROWSER`, `open-browser.ts`,
->   and the CORS `localhost` wildcard. Serving the editor at `http://127.0.0.1:3479` was never removed
->   and is not scheduled to be.
-> - **The npm package was never a candidate** and must not become one. `buildMcpEntries` emits
->   `npx -y tandem-editor@ mcp-stdio` for Claude Desktop and Cowork, and the plugin monitor runs as
->   `npx -y tandem-editor@ monitor` — so retiring it would break integrations *on the desktop app*.
-> - **Nothing was ever announced to users.** `tandem start` prints a recommendation, deliberately not
->   a deprecation notice (`src/cli/start.ts` records why). There is no clock to run out.
->
-> The cost of keeping it is low: the browser path serves the same client bundle over HTTP rather than
-> through the WebView, so almost nothing is browser-specific except the CORS allowlist and the
-> `null`-origin hazard (Critical Rule 8, #1291) — real, small, and well tested. Reopening removal
-> needs a fresh decision, and per #1467 it would need the cross-platform install matrix verified on
-> all three platforms first, plus an actual announcement, since there is no telemetry and any removal
-> would otherwise be blind.
-
-**Motivation:** The integration picker materializes [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) — Tandem speaks MCP; Claude is the default. **The default integration's depth is a flagship feature**, not a constraint to route around: Claude's continuity features (CLAUDE.md, hooks, skills, memory) ride on top of the same `--session-id` + `--resume` spawn primitive Spike A validated, and the wizard's one-click Claude setup is what makes them accessible to non-developers. The wizard also exposes additional integration slots (Claude Desktop, local LLM, OpenAI, Gemini) per D4. The browser *auto-open* path added ongoing maintenance overhead (CORS, Host-header allowlist, `TANDEM_OPEN_BROWSER` branches) without serving the primary Tauri user base — which is what PR 2 removed. The browser UI and the npm global install stay (see the decision note above).
-
-### Phase 0: Required Spikes
-
-All three Phase 0 spikes shipped. The two CLI integration spikes resolved 2026-05-17 (PR #712); the sidecar launcher spike resolved 2026-05-14 (PR #640).
-
-- **Spike A — session resume round-trip: SHIPPED (GO with caveats).** PR #712 (merged 2026-05-17). Validates `--session-id <uuid>` + `--resume <uuid>` against Claude Code v2.1.143 (6/6 scenarios pass). Full report at `docs/spikes/cli-session-resume-spike.md`. PR-4 caveats: launcher must pin `cwd` deterministically (Claude auto-loads CLAUDE.md from parent dir); catch non-zero exit on stale `--resume` and fall back to fresh `--session-id` spawn; session ID is non-secret (visible in `ps aux`); use `crypto.randomUUID()` (RFC 4122 v4) only. anthropics/claude-code#44607 referenced in the original plan is about the *opposite* problem (reading session ID from within a running session) — not relevant to PR 4.
-- **Spike B — plugin monitor viability: SHIPPED (NO-GO on dropping the flag in v1.0).** PR #712 (merged 2026-05-17). `--plugin-dir <path>` does NOT activate `experimental.monitors[].command` in Claude Code v2.1.143 under any tested mode (`-p` print, faked-TTY interactive startup, `claude plugin install` from path-source). `--dangerously-load-development-channels` remains functional in v2.1.143 despite being hidden from `--help`. Full report at `docs/spikes/plugin-monitor-viability-spike.md`. **Decision below at line 442 is overridden by this empirical finding.** **Reversed 2026-07-17 (Claude Code 2.1.212)**, then partly re-opened: the B1 re-test reported `--plugin-dir` activating `experimental.monitors[]` with no flag, but that half was **unreproduced** on 2.1.223 (2026-08-06) and left no primary record. **Reproduced 2026-08-09 on 2.1.226**: F1/F6/F8/F10 in `docs/spikes/plugin-monitor-tty-activation.md` each armed a manifest monitor through `--plugin-dir` in an interactive session, and the 2.1.223 null is now attributed to the print-mode confound. Persistent-install activation still stands only on the v0.18.0 acceptance run. See the reversal banner in `docs/spikes/plugin-monitor-viability-spike.md` and the ADR-028 update in `decisions.md`.
-- **Spike C — sidecar launcher validation: SHIPPED.** PR #640 (merged 2026-05-14). Validates the sidecar launcher path. Review findings addressed in commit cfb154d; #642–#645 filed as the PR-4 hardening quartet (atomic write, mandatory backup, schema validation, backup-or-prompt UX). #646 (`TANDEM_TAURI_SIDECAR` migration cleanup) is a separate Defer per triage.
-
-### PR Sequence (5 PRs)
-
-| PR | Concern | Prerequisite | Status |
-|----|---------|--------------|--------|
-| 1 | Schema + storage + migration framework (`IntegrationConfig` discriminated union, zod validator, atomic writes) | — | **SHIPPED** PR #728 (2026-05-17). Scaffolding only (no production consumer); subsequent PR 3 sub-PRs wire it up. Two integration kinds (`claude-code`, `claude-desktop`); LM Studio / Ollama / `other-mcp` and `tokenSecretRef` deferred to PR 3 migrations per adversarial review. |
-| 2 | **Browser auto-open removal** — remove `TANDEM_OPEN_BROWSER`, `open-browser.ts`, the CLI auto-open branch, CORS localhost wildcard. **Not** removal of the browser UI or the npm package, both of which are kept (#1467). | — (independent) | **SHIPPED** PR #637 |
-| 3 | First-run wizard UI — integration picker (D4 picked **option a, full-screen modal**), existing-user detection via `last-seen-version`, pre-selection from existing MCP config. **Replaces auto-configuration of Claude** per ADR-038 §2b — every integration (Claude included) is configured via the wizard, never silently. `tandem setup` CLI becomes a TTY-mode wrapper around the wizard; auto-configuration code in `src-tauri/src/lib.rs` and `src/cli/setup.ts` is removed in the final sub-PR. **Broken into sub-PRs for review tractability** — each ships independently. | PR 1 | v1.0 wave 6 |
-| 3a | Existing-MCP-config introspection (`readExistingTandemEntries` — reads `~/.claude.json` + Claude Desktop config without mutating them). Foundation for the wizard's pre-population + migration UX. **SHIPPED** PR #729 (2026-05-17). | PR 1 | v1.0 wave 6 |
-| 3b | v1→v2 schema migration: re-adds `tokenSecretRef` to integration kinds + `other-mcp` kind (cut from PR 1 per adversarial review). Keychain backend: `@napi-rs/keyring` (lazy-loaded via `createRequire` so headless CI does not crash on import; dependency-injectable for tests). **SHIPPED** PR #730 (2026-05-17). | PR 3a | v1.0 wave 6 |
-| 3c-i | Wizard UI (full-screen modal, Svelte 5) behind a Settings toggle. Wizard consumes `readExistingTandemEntries` (PR 3a), `IntegrationsStore` (PR 1), and `Keychain` (PR 3b); keychain features gracefully degrade on Tauri (`KeychainUnavailableError` → env-var fallback guidance) pending the Rust bridge follow-up. **SHIPPED** PR #731 (2026-05-17). | PR 3a + PR 3b | v0.13.0 (shipped; first-run auto-open default-on via 3c-ii-b) |
-| 3c-ii | Auto-configuration removal from `src-tauri/src/lib.rs` and `src/cli/setup.ts` per ADR-038 §2b. **Split into three sub-PRs after adversarial review** — see `docs/plans/477-pr-3c-ii-auto-config-removal.md`. ≥1-week soak gate on PR 3c-i was waived by user decision (2026-05-18). | PR 3c-i (soak waived) | v0.13.0 |
-| 3c-ii-a | Server library factor: move `applyConfig`, `applyConfigWithToken`, `detectTargets`, `buildMcpEntries`, `installSkill`, `validateChannelShimPrereq` from `src/cli/setup.ts` to `src/server/integrations/apply.ts`. Pure refactor, zero behavior change. `src/cli/setup.ts` keeps back-compat re-exports until 3c-ii-c. **SHIPPED** PR #747 (2026-05-18). | PR 3c-i | v0.13.0 |
-| 3c-ii-b | Wizard apply path + first-run auto-open. Schema bump v2→v3 (adds `apply: "create" \| "update" \| "skip"` field). New `POST /api/integrations/apply` endpoint separate from persistence. Path-traversal hardening per security review B1 (apply validates `configPath` against `detectTargets()` enumeration, ignores request-body paths; UNC rejected). Existing-entry re-validation per security review B3 (HTTP `url` must be loopback; stdio `command` allowlisted). First-run auto-open driven by `integrations.json` state — transport-agnostic, covers both Tauri AND npm-browser per contrarian review B3. Settings toggle becomes "Reopen wizard" affordance. Channel-shim removal surfaced as confirmation diff item, not silent delete. **Gated on redesign-wave settling** — touches `src/client/App.svelte` and wizard UI surfaces in motion. | PR 3c-ii-a + redesign-wave settling | v0.13.0 |
-| 3c-ii-c | Delete `/api/setup` route, `src-tauri/src/lib.rs:run_setup()`, `SETUP_URL` const. Rewrite `tandem setup` as non-interactive `tandem setup --apply [--target=…]` (per contrarian review S2 — amends ADR-038 §2b wording from "TTY-mode wrapper" to "non-interactive `--apply`"; ADR amendment landed in this PR). Drop back-compat re-exports from `src/cli/setup.ts` (rotate-token repointed to `apply.ts`). Adds `TANDEM_CHANNEL_DIST` sidecar injection so desktop channel-push survives the `/api/setup` deletion, and relocates the "no AI client detected" nudge into the wizard. Full doc sweep across README / architecture / user-guide / workflows / CLAUDE.md / ADR-038 §2b status / CHANGELOG. | PR 3c-ii-a + PR 3c-ii-b + manual Tauri-build confirmation | **SHIPPED** v0.14.0 |
-| 3c-tauri-keychain | `src-tauri/src/keychain.rs` exposes `keychain_get` / `keychain_set` / `keychain_delete` Tauri commands backed by the `keyring` crate (already in `Cargo.toml`). Client-side `ClientKeychainBackend` abstraction picks Tauri commands when `isTauriRuntime()` is true and HTTP loopback otherwise — secrets never traverse the loopback HTTP boundary on the desktop app. **SHIPPED** PR #732 (2026-05-17). | PR 3c-i | v1.0 wave 6 |
-| Phase-3-docs | MCP-first reframe of marketing surfaces per ADR-038: README audience-tier restructure (Just want to use it / Power-user setup / Connecting other MCP clients); `docs/positioning.md` policy quote + distribution-risk resolution; `docs/architecture.md` Integration Compatibility section + four-term glossary + "Claude-default" prefixes on channel-specific sections; framing sentences on `docs/mcp-tools.md` / `docs/user-guide.md` / `docs/workflows.md`; scope note on `docs/lessons-learned.md` and `skills/tandem/SKILL.md`. Pure docs sweep — no code risk. **Post-merge manual task:** update the GitHub repo description and "About" sidebar (set via `gh repo edit` outside the source tree) to match the new framing — neither is in the source tree so this PR cannot do it automatically. **SHIPPED** PR #734 (2026-05-17). | PR 3c-i | v0.13.0 |
-| 4 | Auto-launch + supervisor — spawn Claude Code CLI with correct flags, hook point after `Promise.all([startMcpServerHttp, startHocuspocus])`. **PR-4 quartet (#642–#645) hardens:** atomic `O_EXCL` temp+rename, mandatory `.claude.json` backup, schema validation, "backup-or-prompt" UX. **Claude-specific by design** per ADR-038 §2 — other providers in the registry are user-driven startup for v1.0; per-provider auto-launchers are future work. | PR 1 + #642–#645 quartet | v0.13.0 (shipped; default-on, opt-out via `TANDEM_DISABLE_LAUNCHER=1`) |
-| 5 | Multi-provider model registry (D4) — Anthropic + local LLM (#477) + OpenAI / Gemini / others; CRUD with per-model config; new Settings → Models page beyond the wizard. Non-MCP providers (OpenAI, Gemini) integrate via Tandem's Agent SDK adapter per ADR-038 §3, not as direct MCP clients — adapter design owned by a future ADR (likely ADR-039); ~~whether the adapter ships in v1.0 wave 6 or slips to v1.1 is open~~ **resolved 2026-06-11, twice — canonical record in [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11):** the **local slice ships v1.0** (Wave 5M / v0.17.0, #1123); the cloud slice (OpenAI/Gemini) ships **v1.1**. | PR 4 | **local: v0.17.0 (#1123) · cloud: v1.1** |
-
-### Key Decisions (locked)
-
-- `IntegrationConfig`: discriminated union, zod validator, atomic writes, migration framework
-- Tauri permissions use `core:` prefix
-- Hook point: AFTER `Promise.all([startMcpServerHttp, startHocuspocus])` fires, not at line 255
-- `TANDEM_OPEN_BROWSER` replaced with `TANDEM_TAURI_SIDECAR`
-- **Push transport — settled 2026-08-07; see [ADR-047](decisions.md#adr-047-claude-code-push-transport-activation) for the whole story.** This line previously carried a strikethrough plus four layers of override, and the layering had stopped working: the original bullet was compound (*"plugin monitor is canonical; launcher drops `--dangerously-load-development-channels`"*), and the two conjuncts have now resolved in **opposite** directions — the launcher did drop the flag, while the monitor did not become canonical. No further override layer can express that, so the history is retired here rather than extended. Current state **as of 2026-08-09** — three parts of the 2026-08-07 text have since moved, so read this and not the sentence it replaces: the launcher emits **no** dev-channels flag (it was inert under `-p`, and auto-launched sessions are woken over the supervisor's stdin instead — #1266); the **channel shim is opt-in**, not the registered default (Track E, #1342 — `tandem setup --apply --with-channel-shim`); the **self-armed `ws` watch is what user-facing copy recommends first** (ADR-049), with the shim named as the fallback where the host offers no `Monitor` tool; and the plugin monitor stays installable but now **arms on `on-skill-invoke`, not at session start** (#1354), subject to the same PATH precondition. The `--plugin-dir` activation claim is **no longer unreproduced** — F1/F6/F8/F10 in [`docs/spikes/plugin-monitor-tty-activation.md`](spikes/plugin-monitor-tty-activation.md) each armed a manifest monitor that way on 2.1.226 in an interactive session; the 2.1.223 null was the print-mode confound.
-- Layout coupling server-side via extended `/api/info`; no client-side race
-- Existing users detected via `last-seen-version` file; wizard pre-selects based on existing MCP config
-- **D4 (2026-05-14):** first-run wizard is option (a) full-screen modal **with multi-provider model registry**. Anthropic + #477 local + OpenAI/Gemini/etc.; user CRUDs models with per-model config; the registry lives at Settings → Models, beyond the wizard. Per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) §2, the wizard explicitly surfaces the auto-launch asymmetry — Claude auto-launches in v1.0; other providers require user-driven startup. Per ADR-038 §2b, the wizard *replaces* today's silent auto-configuration of Claude; auto-config code is removed in PR 3. **Amended 2026-06-11:** the multi-provider registry half of D4 moves to **v1.1**. The registry UI shipped in v0.13.0 but was deliberately hidden in v0.14.0 (`BYO_MODELS_ENABLED=false`, #1018/#1022) because no server-side LLM client consumes the stored keys — configuring a model did nothing and users concluded the app was broken. This resolves the question the PR-5 row left open ("whether the adapter ships in v1.0 wave 6 or slips to v1.1 is open"). The wizard half of D4 (one-click Claude Code connect) is v1.0 and shipped. ~~Stated consequence: v1.0 charges (ADR-040) while the reachable audience is Claude-Code users; the multi-provider breadth mechanism of ADR-040 §1 arrives in v1.1.~~ **Amended again same day (b), Bryan: the local-model slice returns to v1.0** (full-collaborator depth, M0 kill-gate + fallback clause, license applies identically with local models) — **canonical record: [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11)**; tracker #1123. Net consequence: v1.0's reachable audience is Claude users + local-model users; cloud BYO keys arrive v1.1.
-
-### Deferred milestones (post-reframe)
-
-Tracked here so #477 PRs know what they inherit; not v1.0-blocking unless noted:
-
-- **Data-model refactor (PR 1):** when `IntegrationConfig` lands, `author: "claude" | "user" | "import"` becomes provider-keyed (or a `provider` sidecar field is added). `src/cli/setup.ts` `TargetKind` becomes registry-driven. CSS tokens `--tandem-author-claude` / `--tandem-claude-focus-bg` renamed when a second provider's authorship color is needed. See ADR-038 §consequences.
-- **Auto-configuration removal (PR 3):** `src-tauri/src/lib.rs` Tauri-startup auto-write + `src/cli/setup.ts` `tandem setup` command both removed in the PR that ships the wizard, per ADR-038 §2b. **Migration UX gap:** existing users have stale Tandem entries in `~/.claude.json` written by earlier Tandem versions; the wizard's first-run flow must detect pre-existing entries and either preserve them as "Claude Code: already configured" or re-prompt. Design decision owned by PR 3.
-- **F5 / F2 — GitHub-marketplace install validation:** ~~Phase 0-extended spike by the docs reframe.~~ **Complete 2026-05-17 — see `docs/spikes/marketplace-install-spike.md`. NO-GO on monitor activation.** Marketplace install delivers MCP servers + skill but does NOT activate `experimental.monitors[]` in v2.1.143. Implication for the v1.0 marketing rewrite: the README leads non-developers with the Tauri desktop app (auto-configures Claude with `--dangerously-load-development-channels` silently); marketplace install is documented as the "MCP + skill" baseline, not the channel-push path. Source-form correction: `claude plugin marketplace add bloknayrb/tandem` (the `github:` prefix is rejected by v2.1.143). **Superseded 2026-07-17 — see the banner atop `docs/spikes/marketplace-install-spike.md`:** that NO-GO was doubly confounded (print mode, where monitors never run, on 2.1.143), AND the marketplace path also failed for a *packaging* reason — the manifest ran `dist/monitor/index.js` but `dist/` is gitignored, so a github clone carried no binary. The packaging fix (`npx -y tandem-editor@<v> monitor`) lands here; whether a real interactive `claude plugin install` on 2.1.212 then activates the monitor was the open **P1** probe — substantiated by the v0.18.0 acceptance run, NOT by #1201, whose body defers it (see the ADR-028 correction, 2026-08-06). The canonical-transport choice is settled as keep-the-channel (2026-07-19, ADR-028 update; now owned by [ADR-047](decisions.md#adr-047-claude-code-push-transport-activation)); the monitor is installable but not canonical. **Caveat on the #1201 citation above, which is circular:** #1201's own body defers the P1 probe it is credited with resolving, so it cannot be the basis for it — the v0.18.0 acceptance run is. ADR-047 §3 carries the corrected standing.
-- **Per-provider auto-launchers:** ADR-038 §2 commits to Claude-only auto-launch for v1.0. If we add auto-launchers for Claude Desktop, local LLM, or OpenAI (via Agent SDK adapter), each gets its own ADR.
-- **MCP-bridge for non-MCP providers:** ADR-038 §3 commits to Agent SDK adapter for OpenAI/Gemini. ~~Whether it ships in v1.0 wave 6 or slips to v1.1 is open~~ **resolved 2026-06-11, twice:** local slice → v1.0 (Wave 5M, #1123; mechanism owned by ADR-039, may diverge from the adapter wording); cloud slice → v1.1.
-- **Other MCP-client validation:** Cursor, Continue.dev, Claude Desktop standalone (not via cowork) — none validated today. Tracked as follow-up; ADR-038 acknowledges the gap.
-
----
-
-## v1.0 Release Plan
-
-**Thesis (Bryan, 2026-05-14):** every core feature rock-solid + redesign complete + pending decisions finalized. Quality > speed. Date is soft (~2026-06-10 target floats).
-
-Triage source of truth: `docs/v10-triage.md` (per-row Core/Defer marks). Wave plan: see "Active — Toward v1.0" section at the top of this doc, and `~/.claude/plans/it-occurs-to-rustling-newt.md` (Bryan-local; not in repo).
-
-### Locked Design Decisions (2026-05-14)
-
-| #   | Decision                                       | Locked outcome                                                                                                                            |
-| --- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| D1  | Density × textSize collision                   | Density controls **interface chrome only**; font-size controls **editor body only**. Verified 2026-05-14 — `useDensity.ts` writes only `[data-density]` (→ `--tandem-space-*`); `App.svelte` writes only `--tandem-editor-font-size`. No collision. |
-| D2  | Authorship visual                              | **Per-character only**. Gutter and hybrid rejected. Defers the §1G gutter row in `docs/v10-triage.md`.                                    |
-| D3  | Diff/Apply-edit hunk staging                   | Option **B (modal-based)** locked for the v1.1 revisit; the surface itself defers from v1.0.                                              |
-| D4  | First-run wizard                               | Option **(a) full-screen modal** + ~~**multi-provider model registry**~~ (Anthropic + #477 local + OpenAI/Gemini/etc.). Settings → Models page beyond the wizard. Per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) §2/§2b: wizard replaces silent auto-configuration of Claude; Claude is the only provider auto-launched in v1.0; non-MCP providers via Agent SDK adapter (ADR-039 TBD). **Amended 2026-06-11 (a): registry half → v1.1; (b) same day: local slice → back in v1.0** (Wave 5M / v0.17.0, #1123). Wizard half shipped v0.13.0–v0.14.0. Canonical record: [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11). |
-| D5  | Annotation reply thread                        | **Expanded thread, no reactions.**                                                                                                        |
-| D6  | Updater UX                                     | **Banner (#561) + small colored dot badge** on titlebar settings gear.                                                                    |
-| D7  | Mobile / narrow-window                         | **Defer.**                                                                                                                                |
-| D8  | Author chip/avatar on cards                    | **Defer.** Current text label is fine.                                                                                                    |
-| D9  | Compact density                                | **Defer.**                                                                                                                                |
-| D10 | Selection mini-toolbar suppression             | Suppress when slash-query active, find bar focused, palette open (per HANDOFF).                                                           |
-| D11 | Editor body fonts                              | **Bundle locally** in `dist/client/fonts/` (Tauri offline-friendly).                                                                      |
-| D12 | macOS / Linux distribution                     | **Full parity** for v1.0 (notarized macOS + AppImage Linux + Windows). Fallbacks: notarized macOS only → Windows-only with macOS in v1.0.1. |
-
-### v1.0 Core Scope Summary
-
-Full per-row table is in `docs/v10-triage.md`. Highlights:
-
-**Strategic (all Core; were TBD in original plan):**
-- **#477 Local LLM** — PR-2 + all three Phase 0 spikes (A/B/C) merged; PRs 1/3a/3b/3c-i/3c-ii-a/3c-ii-b + auto-launcher 4a/4b shipped **default-on in v0.13.0** (no feature-flag soak). PR 3c-ii-c (auto-config removal) landed v0.14.0; the non-MCP-provider work (PR 5) split on 2026-06-11: **local slice → v0.17.0 (#1123), cloud slice → v1.1** (ADR-039). Spike B's NO-GO was later reversed (the monitor activates on 2.1.212+). PR 4 retained `--dangerously-load-development-channels server:tandem-channel` **by decision** (2026-07-19, ADR-028 update — keep the channel canonical), not because the monitor doesn't work; **the launcher then dropped it on 2026-08-07** for a reason unrelated to that decision — the flag is inert under `-p` and had never activated anything ([ADR-047](decisions.md#adr-047-claude-code-push-transport-activation)). The channel remains canonical for hand-launched sessions.
-- **#576 .docx write-back** — body export shipped v0.14.0, and the comment round-trip (planned v1.1) shipped early in the same release (#1068, with #1069 external-conflict detection). The 2026-05-28 kill date was met; LibreOffice fallback never needed.
-- **#316 Cowork macOS/Linux auto-setup** — Core (was Defer). Couples to #428 cert work.
-
-**Bug-bash Core:** #428 macOS install, #631 sidecar restart silent failure, #616 Y.Doc cleanup eviction, #244 E2E Windows Playwright deadlock.
-
-**Polish promoted to Core:** #539 (custom keyboard shortcut UI), #596 (toggle text decorations), #597 (document statistics in status bar), #265 (welcome tutorial update — bundle into AR6), #313 (content-hash annotation identity — sequence with AR5).
-
-**Redesign Core surfaces (§1G in `docs/v10-triage.md`):** selection mini-toolbar (#653 — BubbleMenu in PR #656 awaiting review), slash command menu, editor body fonts (D11 bundle locally), paged .docx layout, annotation reply thread expansion, solo-mode held-count badge → status bar, `SettingsModal.svelte` sibling (sibling-component pattern), Settings → Network panel (two-tier: Connection visible + Advanced collapsed), Settings → Models registry (D4 multi-provider — built in v0.13.0, flag-gated off in v0.14.0; local slice re-enables at the v1.0 `BYO_MODELS_ENABLED` flip per #1123 M2/M4, cloud rows in v1.1), AR5 Word-import batch-promote (shipped v0.13.0; v0.14.0 hardening pass), AR6 tutorial annotations (shipped v0.13.0; v0.14.0 hardening pass), connection-degradation banner polish, first-run wizard (D4), shortcuts modal (⌘/), settings-icon update-dot (D6 sub-piece), empty-state with slash menu.
-
-**Cross-platform Core:** Apple Developer cert + macOS notarization (calendar gate; start NOW), full-parity install matrix (D12), updater banner (#561 — D6 banner direction locked; supersedes PR #647).
-
-### v1.0 Licensing (ADR-040) — Wave 5L
-
-[ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) §3/§4/§6 (Accepted) commit v1.0 to license-to-run: the public build self-trials, requires a valid offline Ed25519-signed license past the trial, and auto-updates from a license-checked endpoint. Previously this work was decided but untracked (the #394 row sat in the Deferred table while declaring itself v1.0 work). Now tracked:
-
-- **#1116** — engineering tracker (PR sequence L1 license format/verify → L2 trial gate + activation UX, dark behind a build flag → L3 license-checked update endpoint → L4 grandfathering + docs). **Merged dark across minors, not as a dedicated release**: `src/server/license/` and both `infra/license-*-worker/` are in the tree today, inert because `LICENSE_GATE_ENABLED` is a `const false` in `tsup.config.ts`. One const flips at v1.0 — **but not over the shape described above.** ADR-040 §3 was amended twice (2026-08-18 / 2026-08-19, #1346): unlicensed is a plain markdown editor with no AI integration at all, a *surface* gate replacing the per-tool content-write gate that is merged today. That reshape is **#1521** and must land, dark, before the flip — flipping the const as the code stands would ship the shape ADR-040 now rejects.
-- **#1117** — commercial infra, Bryan-led calendar gate (MoR checkout, issuance webhook, LLC + accountant, **ADR-040 §5 BUSL re-scope by counsel — Accepted (2026-06-12)**). Mirrors the Wave-0 Apple-cert pattern: external parties own the timeline, so it starts now.
-- The flip rule is owned by the **Commercial-readiness exit criterion** (below) — see it for the conditions and the not-ready fallback. Landing the gate code dark needed nothing from §5 counsel, and it has landed; the flip does.
-
-### Release Cadence
-
-Historical compressed (full detail in CHANGELOG + git log):
-
-| Release   | Concern                                                            | Status              |
-| --------- | ------------------------------------------------------------------ | ------------------- |
-| v0.8.0    | Token hygiene + annotation correctness + Cowork PRs e–f            | Released 2026-04-26 |
-| v0.9.0    | MCP API cleanup + redesign data model + UX polish                  | Released 2026-04-28 |
-| v0.9.1    | ADR-027 surface cleanup + Tiptap round-trip fixes                  | Released 2026-05-01 |
-| v0.10.0   | React → Svelte 5 conversion (39 .tsx files replaced)               | Released 2026-05-03 |
-| v0.10.1   | Plugin URL + auth resolution (hotfix)                              | Released 2026-05-04 |
-| v0.10.2   | Cowork real-time push + `plugin.json` userConfig                   | Released 2026-05-05 |
-| v0.11.0   | Dark theme + toolbar redesign + AR1–AR3 + scratchpad/palette/find/outline | Released 2026-05-11 |
-| v0.11.1   | Titlebar consolidation                                             | Released 2026-05-13 (superseded by v0.11.2) |
-| v0.11.2   | Hotfix: Svelte effect_update_depth_exceeded on Tauri launch        | Released 2026-05-13 |
-| v0.12.0   | 8-unit prep batch (#634–#641): #477 PR-2 browser deprecation, #477 Phase 0 sidecar spike, #576 spikes A+B, AR4, anchor-drift test, release scaffolding | Shipped 2026-05-14 |
-
-v1.0 series (concrete waves; see "Active — Toward v1.0" for the wave-structure table):
-
-| Release    | Concern                                                                                          | Status              |
-| ---------- | ------------------------------------------------------------------------------------------------ | ------------------- |
-| v0.13.0    | Stability bug-bash + redesign chrome + editor surfaces + Settings (Network + Models registry)    | Released 2026-05-25 |
-| v0.13.5    | Design-system re-skin umbrella (`feat/design-system-impl` #939) + customizable keyboard shortcuts (ADR-041) + annotation GC/content-hash rename recovery (#313/#318) | Released 2026-05-29 |
-| v0.13.6    | Motion language (#798 Ph 1–4) + native context menus (#923) + markdown fidelity (#981) + inline images (#153) + `tandem_appendContent` (#979) + Word reply threads (#1000) + `tandem doctor` (#319-partial, incl. `--json`) + **AR5/AR6 annotation-migration hardening (landed here, ahead of the v0.14.0 plan)** | Released 2026-06-04 |
-| v0.14.0    | #477 PR 3c-ii-c (auto-config removal) + #576 docx body export (+ #1069 conflict detection, #1068 comment writeback) + MCP structured output (#1080) + backup restore (#1086) + uninstall scrub + Copy Diagnostics + generation gate + BYO-models flag-off (#1018/#1022) | Released 2026-06-10 |
-| v0.15.0    | **Shipped 2026-07-07 as a general minor, NOT the install matrix** — Find & Replace (#1171), setup diagnostics + `tandem_diagnostics` (#1174), Cowork dialog clarity (#1173), licence issuance Worker infra (#1116) | **Released** |
-| v0.16.0    | **Shipped 2026-07-13 as a general minor, NOT licensing** — editor/paste/palette polish (#1184), desktop first-run wizard fix (#1181). Licensing landed dark and incrementally instead; the "v0.16.0 = licensing" pin is void. | **Released** |
-| v0.17.0    | **Shipped 2026-07-17 as a general minor, NOT local models** — release skill + `tandem doctor` dev-checkout checks (#1191/#1192), settings read-only affordance + Cowork keyboard fix + new-tab fuzzy search (#1186), `state_unsafe_mutation` fix (#1195), selection-popup backdrop-blur fix (#1189). Local models (#1123, ADR-039) did **not** ship here — its M1 engine remains dark and productionization (M1a→M4) is still open toward v1.0. The "v0.17.0 = local models" pin is void (see the 2026-07-07 reconciliation note above; the wave pins are indicative only). | **Released** |
-| v0.18.0 – v0.22.1 | General minors and patches, 2026-07-19 → 2026-08-13. Per-release detail is in [CHANGELOG.md](../CHANGELOG.md); nothing in this window changed the v1.0 gate set below. | **Released** |
-| v1.0.0     | Final verification, observer soak, security + performance + commercial-readiness + local-model gates, accessibility gate, gate-flag flip, version bump | Planned             |
-
-The wave-structure table (top of "Active — Toward v1.0") owns wave numbering and membership; this cadence table maps versions to concerns. Waves recombine across versions based on review bandwidth and merge cadence — Waves 3–4 landed across v0.13.6/v0.14.0; neither v0.15.0 nor v0.16.0 carried its earmarked wave. **Wave 5M (local models, #1123) did NOT land in v0.17.0** — v0.17.0 shipped 2026-07-17 as a general minor (see the cadence table below), and local-model productionization (M1a→M4) is still open toward v1.0; the version→wave pins here are indicative only per the 2026-07-07 reconciliation note. v1.0.0 is Wave 6. The original soft v1.0 target (~2026-06-10) has passed by design — the date floats per the thesis (quality > speed); no new date is set. Wave membership is mirrored from a maintainer-local planning doc; where the two differ, **this table wins** — the 5L and 5M insertions (both 2026-06-11) were never back-ported there.
-
-### v1.0.0 Exit Criteria
-
-**Install matrix (D12 = full parity):**
-- Windows 10 22H2 + Windows 11 23H2 (verify both — older WebView2 may differ)
-- macOS 14 Sonoma (Intel + Apple Silicon) — notarized .app, no Gatekeeper warning
-- macOS 26.1 Apple Silicon (M1 — explicit #428 verification)
-- Ubuntu 22.04 LTS (.AppImage + .deb)
-- Fedora 39 (.rpm)
-
-*Partial evidence as of v0.20.0 (2026-08-05).* Two independent real-hardware
-macOS observations — the first this project has had. Treat them as separate
-data points, not one machine's story; nothing establishes they were the same
-Mac.
-
-1. **Gatekeeper.** A browser-downloaded `.dmg` (so `com.apple.quarantine` was
-   set and Gatekeeper genuinely engaged) installed and launched with **no
-   dialog at all**. First hardware confirmation that the notarization ticket is
-   honored in the wild, and the residual #428 was closed with.
-2. **Updater, `v0.19.0 → v0.20.0`.** The in-app path, not a reinstall:
-   titlebar update dot → install → restart → and a document opened and edited
-   afterward. That last clause is the load-bearing one — the sidecar is killed
-   and respawned across `app.restart()`, and a dead one still shows the new
-   version in About while the editor sits inert.
-
-Neither ticks a row above. Both machines' OS versions and CPU architectures
-went unrecorded, so neither "macOS 14 (Intel + Apple Silicon)" nor "macOS 26.1
-M1" is satisfied; this de-risks those rows rather than closing them. Linux
-`.deb`/`.rpm` install-and-load is separately automated per tag (containers,
-`linux-package-smoke.sh`). Everything else here — all of Windows, macOS file
-associations, orphaned-sidecar-after-quit, the AppImage — is still unobserved.
-
-**Functional gates:**
-- Claude Code CLI: loopback-exempt, zero-config, tools work unchanged
-- **Claude Code version compatibility (added 2026-09-28).** The row above tests against whatever Claude Code happens to be installed; this one pins versions. At RC, the connect → tools → wake → reply loop runs against the current stable Claude Code and the latest release of the previous minor, and the report records both version strings. "Wake" means the self-armed `/api/wake` watch where Claude Code offers a Monitor tool, falling back to the channel shim where it does not, and the report says which path each run used. Also required: #1506's monthly modern-only check has a recorded pass dated within the RC window. That check, not this one-time run, is what guards against a *future* Claude Code release breaking a paid build. #1505 (serving MCP `2026-07-28` alongside the legacy protocol) is blocked on the TS SDK, so Claude Code going modern-only would break Tandem outright. #1506 covers the same risk for Cowork, and its only recorded pass (2026-08-20) could not settle Cowork. #316 covers Cowork setup, not protocol compatibility.
-- Tauri update flow: download → install → restart verified on all three platforms; sidecar restart succeeds; no data loss — **macOS observed 2026-08-05** (`v0.19.0 → v0.20.0`, in-app update dot, document editable after restart, so the sidecar respawn held); Windows and Linux still unobserved
-- Tutorial: completes end-to-end on `sample/welcome.md`; tutorial annotation anchors hold (anchor-drift regression test)
-- Dark/light toggle: works in both desktop and browser
-- ~~Multi-provider models registry (D4): user can add/remove/edit Anthropic + #477 local + at least one third-party provider~~ **Replaced per D4 amendment (2026-06-11):** first-run wizard one-click Claude Code connect works on all three platforms (detect → connect → `/mcp` shows Tandem tools); **cloud** BYO-models surfaces remain hidden until v1.1 (local surfaces re-enable at the v1.0 `BYO_MODELS_ENABLED` flip per #1123 M4); **and** the keychain secrets layer (shipped v0.13.0, still holding live v0.13.x user keys) passes a store→read round-trip against the real OS keychain (Windows Credential Manager + macOS Keychain) on the smoke-checklist machines — CI cannot cover this (no libsecret/keychain in runners), and the struck criterion was previously the only release-time check that touched it
-- Updater: banner appears; settings-icon dot badge clears on settings open or update install
-- **Local model (added 2026-06-11; M0 resolved 2026-06-17 → opt-in/experimental).** **(Verifiable only after the `BYO_MODELS_ENABLED` flip — the Models tab does not render before it.)** With a recommended ≥14B local model via Ollama, fully offline — connect via wizard/Models → **chat round-trip works as a default-on tier (M0: 100%)**; with the experimental editing toggle on → model reads the document → places a comment on user-selected text → proposes a replacement the user **reviews and accepts/rejects** (the human-in-the-loop step is the gate, not autonomous correctness). Multi-step/50-page autonomous flows are explicitly out of scope and not part of the RC demo. See ADR-039 + `docs/spikes/local-llm-capability-spike.md`.
-
-**Soak gates:**
-- Observer soak: 6 docs open, rapid tab switching, Y.Doc swap (load + close), network drop + reconnect — zero leaks, zero broken observers; 1-hour session: 50+ annotations, 20+ tab opens/closes, 5+ network blips
-- ~~Annotation upgrade soak: fresh install of v0.11.2, create 50 annotations across 6 docs, close, upgrade to v1.0 RC, reopen — zero loss, no migration error toasts~~ **Dropped 2026-08-05 (Bryan).** v0.11.2 predates content-hash annotation identity (#313), annotation GC (#318), and the AR5/AR6 hardening pass — the migration paths this would exercise have since been rewritten, and nobody is upgrading from a build that old. The import half of the original bullet is a different concern and stands on its own below.
-- ~~AR5 batch-promote tested end-to-end with a .docx file containing legacy Word reviewer comments~~ **Suspended while `.docx` ships dark** ([ADR-053](decisions.md#adr-053-docx-ships-dark)): a build without `.docx` cannot open the fixture this gate needs. Restore this row when `.docx` is re-enabled. ADR-053's re-enable checklist (#2110) un-skips the `batch-promote` E2E specs, the automated half of this gate, but doesn't mention this manual row.
-- `.claude.json` shapes corpus (PR-4): empty, named-pipe transport, `tandem-channel` block, non-Tandem MCP servers, multiple workspace entries, concurrent Claude Desktop write, 5MB+ size
-
-**Security gate (added 2026-06-11):**
-- `security-reviewer` agent sweep over **all HTTP routes added since v0.13.0**, enumerated at RC time by diffing route registrations in `src/shared/api-paths.ts` / `src/server/mcp/api-routes.ts` / `src/server/mcp/routes/` / `src/server/integrations/api-routes.ts` — the enumerated diff is the floor, not a fixed list. Initial floor (v0.13.6–v0.14.0): store/reclaim-lock, diagnostics, backups + backups/restore, rename, document/raw, document/reload, external-conflict/resolve, integrations/install-claude-code, integrations/claude-cli-status, sessions + sessions/delete + sessions/clear, shutdown, plus the `/api/info` generationId and `/health` hasSession fields.
-- Method: the three-surface audit pattern from lessons-learned (CORS allowlist × Host-header validation × loopback-vs-LAN exposure), plus path validation on filesystem-touching routes. **Outbound surfaces are explicitly in scope even though the route-diff enumeration cannot produce them** — at RC this means the v0.17.0 outbound LLM client (#1123 M1: user-supplied endpoint SSRF posture, redirect/DNS handling, response size/time bounds).
-- Threshold: **zero unresolved HIGH findings**; findings recorded as linked issues. Self-graded by the security-reviewer agent — accepted at two-person scale.
-- **First run 2026-06-11: PASS** — zero HIGH/MEDIUM; two LOW consistency findings + one INFO filed as #1121 (loopback-gate uniformity on four document-mutation routes; path disclosure to token-authenticated LAN on `GET /api/sessions`). #1121 closed 2026-08-05, which unblocked the RC re-run below.
-- **RC re-run 2026-08-05: FAIL at the time of the run** — two HIGH, so the zero-unresolved-HIGH threshold was not met. Four `security-reviewer` agents, partitioned by surface (document/filesystem routes; license+launcher+lifecycle; outbound local-model client; integrations), over the 17 route constants added since v0.13.0 — four more than the "initial floor" above listed, which is the enumerated-diff-is-the-floor clause working as intended.
-- **Status as of 2026-08-06: one HIGH outstanding, and it does not gate this release.** #1291 was fixed and closed the same day by `8596240` (PR #1296). That leaves #1292, which is reachable only with `BYO_MODELS_ENABLED` on — so it blocks the local-model flag flip, not the RC. The gate's own threshold is still formally unmet until #1292 is resolved; what has changed is that nothing outstanding is reachable in a shipped build.
-  - **~~HIGH #1291~~ — FIXED 2026-08-05 (`8596240`, PR #1296).** `Access-Control-Allow-Origin: null` (`mcp/api-routes.ts:122`) was written as a deny value but is the origin serialization of *opaque* contexts, so a sandboxed iframe on any public page could read every loopback-gated GET — licensee name/email/licenseId, absolute paths, `hasSession`. Mutations were unaffected and the `generationId` escalation was blocked by the WS layer, which rejects `"null"` explicitly. Read disclosure only. The fix emits the header only for an allowlisted origin (absence is the denial) and adds `Vary: Origin`; `/api/events` was exposed identically and is covered because `res.writeHead` merges rather than replaces — a rewrite to a replacing write would silently drop that coverage.
-  - **~~HIGH #1292~~ — FIXED and CLOSED 2026-09-08, so the gate's zero-unresolved-HIGH threshold is now MET.** The local-model streaming sink re-`set` the whole chat message into CTRL_ROOM every 80 chars, so a 16 MB stream cost O(n²) in Yjs encoding and broadcast. #1340 replaced the whole-value re-`set` with delta splices into a per-message `Y.Text`; the severity re-decision the register used to say was still owed was made on review, and the issue was closed. **Read the status line above as of its own date** — it says the threshold "is still formally unmet until #1292 is resolved", and #1292 is now resolved. Closing it retires this HIGH and #1292's own BYO-model blocker; it does **not** clear the other BYO-models gates, and `BYO_MODELS_ENABLED` remains a literal `const false`. Mechanism and the write-volume assertions that keep it fixed: [docs/security.md](security.md#open-findings).
-  - **~~MEDIUM #1293~~ — FIXED (PR #1322).** `assertLoopbackForMutation` *was* a no-op unless `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1`, while ~10 comments and CLAUDE.md claimed it gated — found independently by three of the four agents. It now rejects every non-loopback peer in every configuration. The routes that never called it at all are separately tracked as #1320 (the four path-taking ones) and #1318 (`scratchpad`). MEDIUM #1294 (absolute paths reach non-loopback callers on four surfaces the existing basename convention missed), LOW batch #1295.
-  - Verified sound, worth recording: the local-model SSRF posture (allowlist correct against 26 URL encodings, validate-at-use, `redirect: "error"` on the single shared fetch site, pre-decode byte cap); the installer's pinned host re-validated per redirect hop with an allowlist-built env, so the auth token cannot reach the wire-fetched script; no path traversal on any of the eight document routes; no CSRF path to `/api/shutdown`; and the launcher's deferred-autostart-before-nonce ordering creating no bypass of `TANDEM_DISABLE_LAUNCHER=1`.
-
-**Performance gate (added 2026-06-11):**
-- Fixture: a ~50-page markdown document produced by a checked-in generator script (to be added with the gate's first run; until then, generate ad hoc and note the seed).
-- Pass conditions on the smoke-checklist machines (the same hardware set as §1–§3 of [release-smoke-checklist.md](release-smoke-checklist.md)): open-to-interactive < 3s; annotation create/accept reflects in the editor < 500ms; no frame stall > 100ms during a scripted top-to-bottom scroll (DevTools performance trace).
-- Existing partial coverage acknowledged: annotation-store perf is pinned by `tests/server/annotations/perf.test.ts` (#335) and the #609 atomic-update freeze fix has a regression pin — this gate covers the *render/scroll/interaction* path those don't.
-- Risk, stated: measurements now exist — see [docs/perf-gate-results.md](perf-gate-results.md) (runs 1–3, the last of which is #1734's post-fix run); if a future run's fixture fails, that is a finding to fix, not a reason to relax the numbers. Verifies the "~50 pages" Known-Limitations envelope.
-
-**Commercial readiness (added 2026-06-11; gates the license flag flip — see #1116/#1117):**
-- ADR-040 §5 (BUSL re-scope) **Accepted** — counsel-drafted text landed in `LICENSE` + `docs/decisions.md`
-- MoR checkout live end-to-end: test purchase → issuance webhook → signed license delivered → activates a gate-ON build
-- Grandfather licenses issued to known beta users (the cohort is settled under §8's claim-path item, below)
-- **[licensing-operations.md §8](licensing-operations.md#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay) complete (added 2026-09-28).** That runbook's pre-launch checklist is the operational half of this gate, and §8 owns the item list. Several items fail silently if skipped. For example, the issuance Worker's Ed25519 key import has never run on real Cloudflare, and if it fails, every webhook returns 503. Two §8 items need more than their checkbox says:
-  - **Terms, refund policy and privacy notice.** None exists yet. [docs/licensing-terms.md](licensing-terms.md) is a draft that has not been to counsel, and its §7 lists them all as still to write. One of its §6 questions for counsel bears directly on v1.0 scope: if EU resale law makes a remove-license path mandatory, #1943 (`tandem deactivate`) becomes required and joins this gate.
-  - **Beta-cohort claim path ([§1c](licensing-operations.md#1c-the-cohort-problem-settle-this-before-the-flip)).** The README has a claim path. Still open: deciding who is grandfathered, making `README.md`, ADR-040 §3 and the in-app license copy agree on it, and the banner and wall copy that names the beta offer (§1c item 2). Keys go out privately, never in an issue or comment: verification is offline, so anyone can activate a key that has been posted publicly.
-- If any of these are not ready at code-complete: the date floats (per thesis); **the gate flag does NOT ship enabled**. A v1.0 demanding a license nobody can buy is a brick.
-
-**Accessibility:** — results: [docs/a11y-gate-results.md](a11y-gate-results.md) (run 2026-08-05, 44 automated tests)
-- Windows Narrator full editor walkthrough — **unrun** (needs a human at a real OS; no automated substitute)
-- macOS VoiceOver full editor walkthrough — **unrun** (same)
-- Forced-colors mode (Windows high-contrast) — **pass** (`tests/e2e/forced-colors.spec.ts`; the 16 existing `@media (forced-colors: active)` blocks had never once been executed before this)
-- axe-core scan zero CRITICAL findings — **pass**, zero violations at any severity across 15 surfaces x 2 themes. Qualified: the scans exclude `[contenteditable]`/`.ProseMirror`, so this is a claim about the chrome, not the document; the excluded colours are measured directly in `tests/e2e/editor-contrast.spec.ts`
-- Keyboard-only navigation (Tab through all surfaces) — **pass** after fixes (`tests/e2e/keyboard-a11y.spec.ts`). Three `role="menu"` widgets had no arrow-key handling at all: correct markup, so axe could not see it, and reachable by Tab, so a Tab-only walk could not either
-- WCAG AA contrast verified across all status colors and themes (re-verify post-redesign) — **pass** after 14 fixes (`tests/e2e/token-contrast.spec.ts`, `tests/e2e/editor-contrast.spec.ts`). axe alone cannot answer this criterion: it only evaluates elements painted at scan time, so it reports green on error/toast/suggestion colours purely because nothing errored
-
-**Cleanup gates:**
-- Uninstaller strips all integration entries cleanly (Windows + macOS .app removal — no orphan `.claude.json` entries)
-- Zero open position-related bugs (#260 completed in v0.8.0; residual issues #425, #426 stay non-blocking)
-- Inline annotation decorations visible on pending annotations after MCP creates them — verified in Tauri build
-
-**Documentation gates:**
-- CHANGELOG `[1.0.0]` section finalized with every Core item linked to the row in `docs/v10-triage.md`
-- BSL LICENSE present + change-date confirmed (per `project_bsl_license_decision.md`)
-- All redesign artboards from HANDOFF either shipped or explicitly deferred to v1.1+ with reason
-- All §2 D-decisions linked to ADR or PR comment
-- **Bad-release recovery runbook (added 2026-09-28).** A written procedure for stopping a broken release, rehearsed once before v1.0 without moving the real `latest` pointer. Rehearsing it needs a way to point a build at a staged manifest. [release-smoke-checklist.md](release-smoke-checklist.md) §5 assumes an "updater endpoint override", but none exists in code: the public endpoint is fixed in `tauri.conf.json`, and the licensed one is the compiled `LICENSE_UPDATE_ENDPOINT` const. So either a rehearsal build or a real override is part of this work. The runbook covers two channels:
-  - **Desktop.** The updater reads `releases/latest/download/latest.json`. The license update Worker is configured to proxy that same URL (`PUBLIC_LATEST_JSON_URL`; its `wrangler.toml` holds a placeholder until deployment) and adds no caching of its own. So moving GitHub's `latest` pointer back should stop the broken release on both the public and the licensed route at once. The Worker variable is a licensed-only alternative lever. A rehearsal cannot measure how long real clients take to see the change, because that depends on GitHub's redirect and CDN caching. Record that timing the first time the procedure is used for real.
-  - **npm.** Handle it with `npm dist-tag` and/or `npm deprecate`.
-  - **ADR-043.** The runbook does not conflict with [ADR-043](decisions.md#adr-043-updater--no-rollback-no-in-updater-post-restart-health-probe-v1), which rules out *client-side* rollback. The runbook stops the rollout at the source instead. Neither the release skill nor the smoke checklist has this procedure today.
-
-### Deferred to Post-v1.0
-
-Per Bryan's 2026-05-14 triage marks. Rows not listed here are Core (see "v1.0 Core Scope Summary" above and `docs/v10-triage.md` for full per-row detail).
-
-| Item | Reason |
-|------|--------|
-| ~~#260 Coordinate system refactoring~~ | **Completed v0.8.0** (PR #423). Residual #425, #426 stay non-blocking. |
-| #24 Tailwind CSS 4 | Token system is correct. Tailwind is a code-style question. |
-| ~~#153 Inline images~~ | **Completed v0.13.6.** Markdown and .docx inline images render in the editor. |
-| #299 "Show in file explorer" | Bryan triage Defer. |
-| #314 Export annotations as sharable file | Bryan triage Defer. |
-| ~~#319 Diagnostics dashboard~~ | **Completed v0.13.6.** Shipped as `tandem doctor` + `--json`, Settings → About → Copy Diagnostics / Open log folder, and the `tandem_diagnostics` MCP tool — the issue's scope, minus the tray entry point. |
-| #103 Session management browser | Bryan triage Defer. |
-| #269 §2.1-2.4/§3.1/§3.4 desktop UI tier 2 polish | Identity decisions; v1.1+. |
-| Three-way merge / conflict UI | Complex; reload behavior acceptable for v1.0. |
-| RANGE_MOVED auto-retry | Edge case. |
-| #321 WS LAN auth | Rare use case. |
-| #315 DocumentStore interface | ~~Architecture cleanup; refactor for refactor.~~ Resolved the other way by ADR-035 Unit 8j: the interface was deleted, not extracted, and the escape hatches it would have papered over were closed. |
-| #320 Annotation schema v2 framework | Bryan triage Defer. |
-| ~~#318 Tombstone / GC for annotation store~~ | **Completed v0.13.5** (with #313 content-hash rename recovery). |
-| #438 Per-client identity (Code + Cowork) | **Partially shipped v0.20.0**: transport multiplexing landed (ADR-045, #1233), so two sessions no longer evict each other. Still open — per-client inbox state (`surfacedIds`), client-type identity, and event routing are not done. Remains the prereq for #452. |
-| #452 Multi-Claude concurrent | Depends on the unshipped half of #438 (per-client inbox + identity), not the transport work already landed. |
-| #433 Cowork installer TOCTOU | Bryan triage Defer. |
-| #552 Linux/KDE titlebar verification | Bryan triage Defer. |
-| ~~#378 Windows file picker~~ | **Completed v0.13.0.** Native OS picker plus drag-and-drop. |
-| #560 tauri-driver E2E harness | Test-infra polish. |
-| #632 Workflow-nudge perf | Hooks/CI polish. |
-| #633 Extract `matchShortcut` helper | Refactor for refactor. |
-| #282 Extract SSE consumer | Refactor for refactor. |
-| #630 PR #628 follow-ups | Bryan triage Defer (originally bundled with #428). |
-| #646 `TANDEM_TAURI_SIDECAR` migration cleanup | Bryan triage Defer. |
-| Authorship gutter (per-paragraph thread) | D2 picked per-character only. |
-| Authorship gutter pulses (Claude reading indicator) | D2-adjacent; defer. |
-| Author chip/avatar on annotation cards | D8 defer. |
-| Compact density artboard | D9 defer (depends on D1). |
-| Mobile / narrow-window responsive | D7 defer. |
-| Annotation thread emoji reactions | D5 — explicit cut, not just defer. |
-| Diff/Apply-edit hunk staging surface | D3 option B locked for v1.1 revisit; surface defers from v1.0. |
-| #316/#317 firewall scoping (#317 only) | #316 is now Core; #317 paired-defer. |
-| ~~#394 Monetization~~ | **Moved out of this table 2026-06-11 — it was never post-v1.0 work.** This row's own text said "in-app license verification + server-side trial gate + license-checked updater are v1.0 features" while sitting in the deferred table, leaving the work decided ([ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license)) but untracked. Now scheduled as Wave 5L / v0.16.0 — see §"v1.0 Licensing (ADR-040)" above; tracked in #1116 (engineering) + #1117 (commercial infra, Bryan-led). |
-| Desktop UI Tier 3 remainder (§3.2 tray, §3.3 context menus) | Polish. |
-| Desktop UI deferred (frameless window, vibrancy, multi-window, file explorer sidebar) | Out of scope per HANDOFF. |
-| Smaller follow-ups (#283, #284, #287, #292, #300) | Rolling maintenance; not blocking v1.0 quality. |
-
----
+Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code
+and Claude Desktop). It is what we recommend and test against, and Claude-specific extras
+are built around it. Any MCP-capable client can connect to the same endpoint and use the same
+tools. Other clients are best-effort: compatible with the MCP contract, but not validated.
+
+Four push paths wake a Claude session, and none is the default at setup:
+- **Self-armed `/api/wake` watch** (ADR-049). It is recommended first, but only where Claude Code offers a Monitor tool.
+- **Plugin monitor.**
+- **Opt-in channel shim** (`--with-channel-shim`), which is the fallback.
+- **Supervisor stdin**, for auto-launched sessions.
+
+Pull (`tandem_checkInbox`) is always authoritative. Integration setup runs through the
+wizard, and Tandem never adds an integration without it. (The boot sweep does rewrite Tandem's
+own existing MCP entries to keep them converged.) The browser UI stays: removing it would need
+a fresh decision, the install matrix, and an announcement (#1467). Full policy:
+[ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration).
+
+## v1.0.0 Exit Criteria
+
+Each criterion below carries a status, checked 2026-09-28. The last recorded hardware smoke is
+[the v0.25.0 run](release-smoke-checklist.md#what-the-v0250-run-settled). None is recorded for
+v0.26.0, v0.27.0 or v0.28.0.
+
+**Install matrix (D12 = full parity). UNMET. Tracker: #2034.**
+- Windows 10 22H2 and Windows 11 23H2. Only Windows 11 build 26200 has been observed. On it, a fresh install passed on the v0.22.1 run. The updater and file association (cold and warm) passed on the v0.22.1 and v0.23.0 runs, and the updater passed again on v0.25.0.
+- macOS 14 Sonoma, on both Intel and Apple Silicon, as a notarized `.app` with no Gatekeeper warning. The v0.25.0 build notarized with "Accepted". Two real-hardware observations exist (Gatekeeper silent, updater v0.19.0→v0.20.0), but the OS and CPU went unrecorded, so neither ticks this row.
+- macOS 26.1 on Apple Silicon (M1). Unobserved.
+- Ubuntu 22.04 LTS (`.AppImage` and `.deb`). `.deb` install-and-load is automated per tag in an `ubuntu:22.04` container. The AppImage is unobserved.
+- Fedora 39 (`.rpm`). The per-tag container is **Fedora 44**, not 39. Either change the criterion or run 39.
+- Windows `.msi`. `bundle.targets` is `"all"`, so an MSI ships, but no smoke row covers it.
+
+**Functional gates**
+- **Claude Code CLI works zero-config:** loopback-exempt, and tools work unchanged. Checked at RC.
+- **Claude Code version compatibility.** UNMET. At RC, the connect → tools → wake → reply loop runs against the current stable Claude Code and the latest release of the previous minor, and the report records both versions. "Wake" means the self-armed `/api/wake` watch where a Monitor tool exists, falling back to the channel shim where it does not, and the report says which path each run used. It also needs a #1506 pass dated within the RC window; that check is what guards against a *future* Claude Code release. #1505 (serving MCP `2026-07-28` alongside the legacy protocol) is blocked on the TS SDK, so a modern-only Claude Code would break Tandem outright. #1506 covers Cowork too, and its one pass could not settle Cowork.
+- **Tauri update flow.** PARTIAL. Download → install → restart must work on all three platforms, with the sidecar restarting and no data loss. Observed on macOS once and on Windows three times, most recently v0.24.1→v0.25.0 (closing #1596). Linux has not been observed. The `MayHaveFailed` arm, which should show the banner, is untested. A successful update writes nothing to `tandem.log` at the release log level, so someone has to watch the window.
+- **Tutorial.** PARTIAL. It must complete end to end on `sample/welcome.md` with anchors holding. The anchor regression test exists (`tests/design-system-impl/tutorial-anchor.test.ts`). Open: #1696, #1725, #1711.
+- **Dark/light toggle** works on desktop and in the browser. No recorded run.
+- **First-run wizard and keychain.** UNMET. One-click Claude Code connect has to work on all three platforms (detect → connect → `/mcp` shows Tandem's tools). The OS keychain must also pass a store→read round-trip on Windows Credential Manager and macOS Keychain, which CI cannot do. The rows exist in the smoke checklist (§1–§2, #1761), but no run of them is recorded.
+- **Updater banner and dot.** PARTIAL. The dot was observed on the macOS update run, and the Windows runs recorded the in-app banner. The dot clearing, on opening settings or on install, was not recorded.
+- **Local model.** UNMET, and verifiable only after the `BYO_MODELS_ENABLED` flip. Run a ≥14B model via Ollama, fully offline. The chat round-trip is the default-on tier. With the experimental editing toggle on, the model reads the document, comments on the user's selected text, and proposes a replacement that the user accepts or rejects. Multi-step and 50-page autonomous flows are out of scope. See ADR-039.
+
+**Soak gates**
+- **Observer soak.** UNMET, with no recorded run. Six docs open, rapid tab switching, Y.Doc swaps, and network drop and reconnect, with zero leaks and zero broken observers. Then a one-hour session with 50+ annotations, 20+ tab opens and closes, and 5+ network blips.
+- **Claude config JSON shapes corpus.** PARTIAL. It is automated in `tests/server/integrations/apply-malformed.test.ts` (#645). The named-pipe transport, 5 MB+ and concurrent Claude Desktop write shapes have not been confirmed individually.
+- **AR5 `.docx` batch-promote soak.** Suspended while `.docx` ships dark. Restore it with ADR-053's re-enable checklist (#2110), which un-skips the automated `batch-promote` E2E specs but does not mention this manual row.
+
+**Security gate.** The threshold is **zero unresolved HIGH findings**, self-graded by the `security-reviewer` agent.
+- The last full run, on 2026-08-05, failed with two HIGHs. Both are now fixed: #1291 by PR #1296, and #1292 through the #1340 work. The threshold has been met since #1292 closed on 2026-09-08.
+- The RC re-run (#1199) is still owed. It covers every HTTP route added since v0.13.0, enumerated by diffing the route registrations, plus outbound surfaces the diff cannot find (the local-model client's SSRF posture). The method is the three-surface audit (CORS × Host header × loopback-vs-LAN) plus path validation.
+- The open findings listed above in *Open work that bears on v1.0* are in scope.
+- Full history is in [security.md](security.md#open-findings) and in the history file.
+
+**Performance gate.** PARTIAL. See [perf-gate-results.md](perf-gate-results.md).
+- **Pass conditions** on the smoke-checklist machines, using the ~50-page fixture from `scripts/fixtures/make-perf-doc.mjs`:
+  - open-to-interactive under 3 s
+  - an annotation create or accept reflected in the editor under 500 ms
+  - no frame stall over 100 ms during a scripted scroll
+- **Run 3 (2026-09-11)** passed every condition on one Windows 11 workstation. macOS and Linux were never measured.
+- **Open:** #1333 (condition 3 uncharacterised on Windows) and #1734 (its last comment calls it closeable).
+- **If a run fails, that is a finding to fix, not a reason to relax the numbers.** [perf-gate-results.md](perf-gate-results.md) relies on this rule.
+
+**Commercial readiness.** UNMET. This gates the license flip. If it is not ready at code-complete, the date floats and **the gate flag does not ship enabled**. A v1.0 demanding a license nobody can buy is a brick.
+- ADR-040 §5 (BUSL re-scope) is Accepted. `LICENSE` has been rewritten since counsel's text (#1909), and #1908 and the counsel-review row above still apply.
+- LLC, accountant and pricing settled (ADR-040 §6; see above).
+- **MoR checkout live end to end:** a test purchase goes through the issuance webhook, the signed license is delivered, and it activates a gate-ON build.
+- Grandfather licenses issued to the cohort decided under §1c.
+- **[licensing-operations.md §8](licensing-operations.md#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay) is complete.** §8 owns the item list, and several of its items fail silently if skipped. For example, the issuance Worker's Ed25519 key import has never run on real Cloudflare, and a failure there returns 503 on every webhook. Two items need more than their checkbox says:
+  - **Terms, refund policy and privacy notice.** None exists. [licensing-terms.md](licensing-terms.md) is a working draft that has not been to counsel.
+  - **The beta-cohort claim path.** Decide who is grandfathered, and make the banner and wall copy name the beta offer (§1c item 2). Keys go out privately, never in an issue or comment: verification is offline, so anyone can activate a key that has been posted publicly.
+
+**Accessibility.** PARTIAL. See [a11y-gate-results.md](a11y-gate-results.md).
+- Windows Narrator and macOS VoiceOver full walkthroughs are both **unrun**. Each needs a human at a real OS.
+- Forced colors, the axe-core scan, keyboard-only navigation, and WCAG AA contrast across all status colors and themes all **pass**. Contrast must be re-verified after any redesign. The axe scans exclude the editable document, whose colours are measured separately.
+- Open: #1721 (axe contrast failures land in `incomplete` and go unasserted) and #1683 (dark-theme pressed state).
+
+**Cleanup gates**
+- **The uninstaller strips all integration entries** on Windows and on macOS `.app` removal, leaving no orphan entries in the Claude config JSON. Unverified: the v0.23.0 run skipped uninstall.
+- **Zero open position- or anchor-related bugs.** UNMET. #2001, #1997, #2112, #2114, #1523, #1632 and #2070 are open.
+- **Inline decorations show on pending annotations** after MCP creates them, in the Tauri build. No recorded run.
+
+**Documentation gates**
+- CHANGELOG `[1.0.0]` section finalized.
+- `LICENSE` present, with the BUSL change date confirmed and #1908 decided.
+- Every redesign artboard is either shipped or deferred with a reason.
+- Every locked design decision (D1–D12, in the history file) is linked to an ADR or PR.
+- **A bad-release recovery runbook**, written and rehearsed once without moving the real `latest` pointer. None exists today.
+  - **Rehearsal build.** Rehearsing needs a way to point a build at a staged manifest. The smoke checklist assumes an "updater endpoint override", but none exists in code: the public endpoint is fixed in `tauri.conf.json`, and the licensed one is a compiled const.
+  - **Desktop.** The license update Worker is meant to proxy the same `releases/latest/download/latest.json` (its `wrangler.toml` holds a placeholder until it is deployed), and it adds no caching of its own. So moving GitHub's `latest` pointer back should stop a broken release on both routes. Record how long real clients take to see the change the first time the procedure is used.
+  - **npm.** `npm dist-tag` and/or `npm deprecate`.
+  - **ADR-043.** This doesn't conflict with [ADR-043](decisions.md#adr-043-updater--no-rollback-no-in-updater-post-restart-health-probe-v1), which rules out *client-side* rollback.
+
+## After v1.0
+
+What is deliberately not in v1.0 and is still open. Closed and shipped rows from the old
+deferred table are in the history file.
+
+**v1.1 (committed)**
+- **Cloud BYO-model providers** (OpenAI, Gemini, Anthropic API keys) and their adapter. Behind `BYO_MODELS_ENABLED` per [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11).
+
+**Deferred, open**
+- **Diff/Apply-edit hunk staging.** D3 locked option B (modal-based) for a v1.1 *revisit*, which is not a commitment. The surface is the `.docx` Apply-changes flow, so it waits on #2110.
+- **Merge and conflicts.** Three-way merge and a side-by-side conflict UI. Keep-vs-reload is what v1.0 has.
+- **RANGE_MOVED auto-retry.** The caller retries with relocated coordinates today.
+- **Provider-keyed annotation authorship.** Every MCP client is stored as author `"claude"` (#2115). Local models have provider-keyed authorship (M3); other MCP clients don't.
+- **Per-provider auto-launchers, and validating MCP clients other than Claude.**
+- **Obsidian vaults**, out of scope for v1 (Decision A, #1827). The README says so. Tandem warns once per open when a `.md` file contains a `[[…]]` wikilink.
+- **Document groups**, only if demand appears: named groups, cross-reference tools, split panes.
+- **Server auto-stop on idle.** Never wired.
+- **Review mode:** a threshold banner and document dimming.
+- **Platform follow-ups:** #552 (KDE titlebar), #317 (firewall rule scoping for Cowork on macOS/Linux), #630 (a `startup-file-error` event for `request_open_file` POST failures, plus its HTTP tests).
+- **Linux tray fallback** when libappindicator is absent. Today the app exits cleanly with no tray.
+- **Flag annotations on externally changed text.** Degraded anchors are surfaced to Claude (`anchor: "degraded"`), but the user sees no flag.
+- **Design decisions deferred by D2, D5 and D7–D9:**
+  - an authorship gutter and its pulses (D2 picked per-character)
+  - mobile/responsive (D7)
+  - author chip or avatar (D8)
+  - compact density (D9)
+  - annotation emoji reactions, which are an explicit cut, not a deferral (D5)
+- **Desktop shell:** frameless window, vibrancy, multi-window, and a file-explorer sidebar are out of scope per HANDOFF.
+- **Re-enabling `.docx`** (#2110).
 
 ## Known Limitations (v1)
 
 These are intentional scope boundaries, not bugs:
 
-- .docx round-trips but is lossy at the edges — the body and comments write back, but tracked changes and page headers/footers are not carried across (they are detected and reported, not preserved). Use Word for final formatting/production.
+- **No `.docx`.** Release builds open `.md`, `.txt` and `.html` (`.html` opens read-only). `.docx` is shelved (ADR-053).
 - No formula support in tables
-- No .xlsx/.csv support (deferred to v2)
-- No drawing/freeform annotation (deferred to v2)
-- Single user + Claude only (no multi-human collaboration)
-- Documents over ~50 pages may be slow to render
+- No `.xlsx`/`.csv` support
+- No drawing/freeform annotation
+- **One human per document.** Several Claude sessions can connect at once (ADR-045), but there is no multi-human collaboration.
+- **Documents over ~50 pages.** Tandem warns Claude when one opens. The perf gate passed at ~50 pages on one Windows machine, and larger documents are unmeasured.
 - No plugin/extension architecture — custom extensions require code changes
-- No synchronized scrolling between split panes
-
----
 
 ## Future Extensions (v2+)
 
 - **Progressive Web App (PWA)** — Lower priority now that the desktop app ships. Would still be useful as a lighter-weight alternative for users who prefer not to install a native app.
-- **Additional model providers** — local providers (Ollama/LM Studio) ship in v1.0 (Wave 5M, #1123); cloud BYO keys (Anthropic API / OpenAI / Gemini) in **v1.1** per the D4 amendments (ADR-039 is the canonical record); v2 adds providers as needed via the same registry surface.
+- Further model providers beyond v1.1's cloud slice, through the same registry surface (ADR-039)
 - Spreadsheet component (Handsontable/AG Grid)
-- Claude Desktop support (MCP server already exists)
 - Drawing/freeform annotation layer
-- Exportable annotated documents (PDF with annotations)
-- LibreOffice headless for high-fidelity .docx round-trip
+- Exportable annotated documents as PDF (Markdown and JSON annotation export already ship)
 - Code editing mode (CodeMirror 6)
-- Standalone mode with direct Anthropic API connection (no MCP client required — an alternative to the MCP integration path, not a replacement)
+- Standalone mode with a direct Anthropic API connection (no MCP client required) — an alternative to the MCP integration path, not a replacement

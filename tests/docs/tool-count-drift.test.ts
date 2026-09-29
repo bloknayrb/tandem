@@ -112,15 +112,15 @@ const DE_NUMBERED = [
 const COUNT_PATTERN = /\b\d+\s+(?:active\s+)?(?:MCP\s+)?tools\b/g;
 
 /**
- * Occurrences that are not drift, keyed by file. Both are statements about something other
- * than "how many tools Tandem has today", which is the only claim this guard protects:
- * a CI assertion threshold, and a roadmap entry recording the count at a past milestone.
- * Exempting the surrounding phrase rather than the bare number keeps the exemption narrow —
- * if the sentence changes, the guard speaks up again.
+ * Occurrences that are not drift, keyed by file. Each is a statement about something other
+ * than "how many tools Tandem has today", which is the only claim this guard protects;
+ * the one left is a CI assertion threshold. Exempting the surrounding phrase rather than
+ * the bare number keeps the exemption narrow — if the sentence changes, the guard speaks up
+ * again. (The roadmap's past-milestone count moved to the unscanned roadmap-history.md
+ * snapshot on 2026-09-28.)
  */
 const ALLOWED: Record<string, string[]> = {
   "docs/architecture.md": ["asserts ≥20 tools registered"],
-  "docs/roadmap.md": ["(24 tools total)"],
 };
 
 describe("de-numbered docs do not reacquire a tool count", () => {
