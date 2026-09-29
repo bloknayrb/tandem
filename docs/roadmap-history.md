@@ -1,3 +1,13 @@
+# Roadmap history (frozen 2026-09-28)
+
+> **This is a snapshot, not a plan.** It is `docs/roadmap.md` exactly as it stood on
+> 2026-09-28, when the roadmap was rewritten to hold only what is ahead. Nothing below
+> has been updated since, and much of it is out of date: step-by-step design history,
+> wave plans, version pins, and statuses that have since changed. For what is still
+> open, read [roadmap.md](roadmap.md). For what shipped when, read
+> [CHANGELOG.md](../CHANGELOG.md). Its links and anchors are left as they were, and
+> "above" and "below" refer to this file.
+
 # Roadmap — Remaining Implementation Steps
 
 Steps 0-6 are complete. Phase 1 (document groups + polish) is complete. Sprint 5 (file open + E2E tests) is complete. Channel push (Issue #106) is complete. Step 8 polish items (undo, interruption mode, Word comment import, port polling, session auto-restore) are complete. UX features (tab overflow, toast notifications, connection errors, annotation editing, onboarding tutorial) are complete. Tab close fix (Issue #149) and getTextContent offset fix (Issue #148) are complete. npm global install (Step 9, PR #161) is complete. This document contains the design spec for remaining work.
