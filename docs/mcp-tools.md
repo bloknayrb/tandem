@@ -613,7 +613,7 @@ Annotations are metadata stored in `Y.Map('annotations')` on the shared document
 
 ### tandem_highlight
 
-> **Deprecated.** Highlights are user-only. Use `tandem_comment` for AI-authored text annotations (the `author` field carries the literal string `"claude"` today as a pre-ADR-038 data-model artifact; see roadmap deferred-milestones for the provider-keyed refactor). Always returns a `DEPRECATED` error.
+> **Deprecated.** Highlights are user-only. Use `tandem_comment` for AI-authored text annotations (the `author` field carries the literal string `"claude"` today as a pre-ADR-038 data-model artifact; the provider-keyed refactor is #2115). Always returns a `DEPRECATED` error.
 
 ---
 

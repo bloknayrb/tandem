@@ -2,15 +2,16 @@
 /**
  * Reproducible generator for the v1.0 performance-gate fixture.
  *
- * The gate (docs/roadmap.md §"Performance gate") calls for "a ~50-page markdown
- * document produced by a checked-in generator script". This is that script.
+ * The gate (docs/roadmap.md §"Performance gate") originally called for "a ~50-page
+ * markdown document produced by a checked-in generator script" (wording preserved in
+ * docs/roadmap-history.md). This is that script.
  *
  * ## What "~50 pages" means here
  *
  * Markdown has no pages, so the scale axis is defined once, here, and must not
  * drift silently: **450 words/page x 50 pages = ~22,500 words**. That matches
- * the "Documents over ~50 pages may be slow to render" entry in the roadmap's
- * Known Limitations, which is the claim this gate exists to verify.
+ * the "Documents over ~50 pages" entry in the roadmap's Known Limitations, which
+ * is the claim this gate exists to verify.
  *
  * ## Why it is not 22,500 words of lorem
  *

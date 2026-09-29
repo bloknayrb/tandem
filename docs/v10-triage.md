@@ -4,7 +4,8 @@
 > Every row below is marked; the wave list it fed is locked in
 > [roadmap.md](roadmap.md#active--toward-v10), which is the live document. Preserved
 > verbatim because the *marks themselves* (and Bryan's phrasing in them) are the
-> decision record — later amendments are recorded in roadmap.md and in
+> decision record — later amendments are recorded in [roadmap-history.md](roadmap-history.md) (up to
+> 2026-09-28), in roadmap.md and in
 > [decisions.md](decisions.md), never by editing a row here.
 
 Each row's `Bryan` cell carries one of **Core** (must ship for v1.0), **Defer** (v1.1+), **Cut** (drop entirely), or **TBD**, against my recommendation in the `Rec` column.
@@ -156,7 +157,7 @@ Per your redesign-complete rule: every shipped feature must have the new design.
 
 Per HANDOFF "Things explicitly NOT designed":
 
-- Document Groups (roadmap 7b)
+- Document Groups (roadmap-history.md 7b)
 - Multi-user collaboration (cursor stacking, presence, conflict resolution)
 - PWA, .xlsx/.csv, freeform annotation
 - MCP tool consolidation #259 (already shipped per CLAUDE.md)

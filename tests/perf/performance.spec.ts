@@ -11,7 +11,7 @@ import { McpTestClient } from "../e2e/helpers";
 /**
  * v1.0 performance gate — the render / scroll / interaction path.
  *
- * Pass conditions, verbatim from docs/roadmap.md §"Performance gate":
+ * Pass conditions, from docs/roadmap.md §"Performance gate":
  *   1. open-to-interactive           < 3s
  *   2. annotation create/accept      < 500ms
  *   3. no frame stall                > 100ms during a scripted scroll

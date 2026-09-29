@@ -325,7 +325,7 @@ function extractEntry(mcp: Record<string, unknown>, name: string): McpEntry | un
  * True iff any detected target already has a `tandem` MCP entry. The
  * wizard uses this to decide whether to show the "Tandem is already
  * configured" branch of the migration UX (ADR-038 §2b migration UX gap,
- * tracked in `docs/roadmap.md` deferred milestones).
+ * recorded under the #477 deferred milestones in `docs/roadmap-history.md`).
  */
 export function hasExistingTandemEntry(installs: ExistingMcpInstall[]): boolean {
   return installs.some((i) => i.tandemEntry !== undefined);

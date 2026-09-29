@@ -51,11 +51,14 @@ setup, hardware verification, and two flag flips.
 
 | Question | Where | Why it blocks |
 |---|---|---|
-| **Trial length.** ADR-040 §5 says evaluation lasts "up to 30 days", `LICENSE` (changed 2026-09-08, #1909) says 14 days for v1.0+, and `docs/licensing-terms.md` §4 says `LICENSE` grants 30 days. | ADR-040, `LICENSE`, licensing-terms.md | The three disagree, and the trial banner, the terms and the license text have to say one thing |
 | **What `LICENSE` covers.** It names only the npm package, not the desktop app. | #1908 | It has to be decided before the gate flips |
+| **Counsel review of the current `LICENSE`.** #1909 rewrote the grant on 2026-09-08 (free during the beta, then a 14-day trial), after counsel's §5 text. Nothing records counsel reviewing the new wording. | #1909, ADR-040 §5 | The commercial gate treats `LICENSE` as counsel-drafted |
+| **LLC, accountant and pricing.** ADR-040 §6 requires the LLC and accountant before taking money, and pricing is still unset. #1117 tracked both and closed with them unchecked, and licensing-operations.md §8 has neither. | ADR-040 §6 | Nothing else tracks them |
 | **The grandfather cohort.** Who gets a free license, and do `README.md`, ADR-040 §3 and the in-app copy all say the same? | [licensing-operations.md §1c](licensing-operations.md#1c-the-cohort-problem-settle-this-before-the-flip) | The README already makes a public promise |
 | **Whether `tandem deactivate` is required.** It is if EU resale law makes a remove-license path mandatory. | #1943, licensing-terms.md §6 | Counsel's answer decides whether it joins the commercial gate |
-| **Two-window Solo/Tandem policy.** | #1899 | It shapes how restricted mode reads across windows |
+| **Two-window Solo/Tandem policy.** A second window can flip the mode, which lets Solo-held comments reach Claude. | #1899 | Adopt, re-assert, or stay warn-only |
+
+**Stale text to fix, not a decision:** the trial is **14 days**. That was decided 2026-09-08 (#1909), and `TRIAL_DAYS`, `LICENSE` and `README.md` all agree. Two documents still say 30: ADR-040 §5 ("up to 30 days") and licensing-terms.md §4 (which claims `LICENSE` grants 30 days).
 
 **"At RC" means the build intended to become v1.0.0, checked before the tag.** Under Decision
 G (#1748), any tag containing `-` publishes as a prerelease, and Bryan does not expect RC
@@ -84,13 +87,15 @@ outcome is keep, replace or retire.
 
 ### Open work that bears on v1.0
 
-These are not all blockers. Triage each group before the flip: fix it, mark it post-v1.0
-below, or accept it in [security.md](security.md#open-findings). Grouped as of 2026-09-28.
+This is a selection, not the full open list: issues judged on 2026-09-28 to affect
+correctness, security, install or a named gate. Not all of them block. Triage each group
+before the flip: fix it, mark it post-v1.0 below, or accept it in
+[security.md](security.md#open-findings). For everything else, run `gh issue list`.
 
 - **Security findings:** #1952 (`wakeUrl` hardcodes `127.0.0.1`), #1884 (the channel permission relay under Cowork), #1885, #1949 (signing-job isolation), #1822 (the v1-review Lows). The RC security sweep is #1199.
 - **Sidecar and process lifecycle:** #1988 (orphaned sidecar after a force-quit on macOS/Linux), #1994, #1869, #2041.
 - **Correctness:** #2001, #1997, #2064, #2069, #2070, #1981 (the 100 kB body parser shadowing `/api`), #1982, #1980, #1662, #1632, #2009, #1920, #2112, #1523.
-- **Distribution and setup:** #1533, #1610, #1704, #1895, #1792.
+- **Distribution and setup:** #1533, #1610, #1704, #1895, #1792, #1354 (the plugin monitor can't be resolved from a GUI launch).
 - **Tutorial gate:** #1696, #1725, #1711.
 - **Accessibility gate:** #1721, #1683.
 - **CI and tests:** #1831 (`claude-code-review.yml` dead since 2026-05-27), #1862, #1911, #1937, #2073, #1333, #1734.
@@ -99,7 +104,7 @@ below, or accept it in [security.md](security.md#open-findings). Grouped as of 2
 
 ## Shelved
 
-- **`.docx` support (2026-09-24, [ADR-053](decisions.md#adr-053-docx-ships-dark)).** It is out of the live build behind `DOCX_ENABLED` because it wasn't ready for serious work. The code stays merged and tested. Re-enabling it is ADR-053's checklist (#2110), not a one-line flip. The engineering tracks that shipped it are #576 and #1142. The history file's Step 5b and Word Comment Import sections describe what it did while it shipped.
+- **`.docx` support (2026-09-24, [ADR-053](decisions.md#adr-053-docx-ships-dark)).** It is out of the live build behind `DOCX_ENABLED` because it wasn't ready for serious work. The code stays merged and tested. Re-enabling it is ADR-053's checklist (#2110), not a one-line flip. #576 shipped it, and #1142 is the open umbrella for editing `.docx` with confidence. The history file's Step 5b and Word Comment Import sections describe what it did while it shipped.
 - **SuperDoc as the `.docx` engine (2026-09-24, ADR-052).** Shelved after the engine spike reported NO-GO on nine of its ten questions.
 
 ## Integration Policy (ADR-038)
@@ -116,7 +121,9 @@ Four push paths wake a Claude session, and none is the default at setup:
 - **Supervisor stdin**, for auto-launched sessions.
 
 Pull (`tandem_checkInbox`) is always authoritative. Integration setup runs through the
-wizard, and Tandem does not silently auto-configure anything. Full policy:
+wizard, and Tandem never adds an integration without it. (The boot sweep does rewrite Tandem's
+own existing MCP entries to keep them converged.) The browser UI stays: removing it would need
+a fresh decision, the install matrix, and an announcement (#1467). Full policy:
 [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration).
 
 ## v1.0.0 Exit Criteria
@@ -126,7 +133,7 @@ Each criterion below carries a status, checked 2026-09-28. The last recorded har
 v0.26.0, v0.27.0 or v0.28.0.
 
 **Install matrix (D12 = full parity). UNMET. Tracker: #2034.**
-- Windows 10 22H2 and Windows 11 23H2. Only Windows 11 build 26200 has been observed. On it, install, updater and file association (cold and warm) passed on the v0.22.1 and v0.23.0 runs, and the updater passed again on v0.25.0.
+- Windows 10 22H2 and Windows 11 23H2. Only Windows 11 build 26200 has been observed. On it, a fresh install passed on the v0.22.1 run. The updater and file association (cold and warm) passed on the v0.22.1 and v0.23.0 runs, and the updater passed again on v0.25.0.
 - macOS 14 Sonoma, on both Intel and Apple Silicon, as a notarized `.app` with no Gatekeeper warning. The v0.25.0 build notarized with "Accepted". Two real-hardware observations exist (Gatekeeper silent, updater v0.19.0→v0.20.0), but the OS and CPU went unrecorded, so neither ticks this row.
 - macOS 26.1 on Apple Silicon (M1). Unobserved.
 - Ubuntu 22.04 LTS (`.AppImage` and `.deb`). `.deb` install-and-load is automated per tag in an `ubuntu:22.04` container. The AppImage is unobserved.
@@ -140,7 +147,7 @@ v0.26.0, v0.27.0 or v0.28.0.
 - **Tutorial.** PARTIAL. It must complete end to end on `sample/welcome.md` with anchors holding. The anchor regression test exists (`tests/design-system-impl/tutorial-anchor.test.ts`). Open: #1696, #1725, #1711.
 - **Dark/light toggle** works on desktop and in the browser. No recorded run.
 - **First-run wizard and keychain.** UNMET. One-click Claude Code connect has to work on all three platforms (detect → connect → `/mcp` shows Tandem's tools). The OS keychain must also pass a store→read round-trip on Windows Credential Manager and macOS Keychain, which CI cannot do. The rows exist in the smoke checklist (§1–§2, #1761), but no run of them is recorded.
-- **Updater banner and dot.** PARTIAL. The dot was observed on the macOS and Windows update runs. Its clearing, on opening settings or on install, was not recorded.
+- **Updater banner and dot.** PARTIAL. The dot was observed on the macOS update run, and the Windows runs recorded the in-app banner. The dot clearing, on opening settings or on install, was not recorded.
 - **Local model.** UNMET, and verifiable only after the `BYO_MODELS_ENABLED` flip. Run a ≥14B model via Ollama, fully offline. The chat round-trip is the default-on tier. With the experimental editing toggle on, the model reads the document, comments on the user's selected text, and proposes a replacement that the user accepts or rejects. Multi-step and 50-page autonomous flows are out of scope. See ADR-039.
 
 **Soak gates**
@@ -149,7 +156,7 @@ v0.26.0, v0.27.0 or v0.28.0.
 - **AR5 `.docx` batch-promote soak.** Suspended while `.docx` ships dark. Restore it with ADR-053's re-enable checklist (#2110), which un-skips the automated `batch-promote` E2E specs but does not mention this manual row.
 
 **Security gate.** The threshold is **zero unresolved HIGH findings**, self-graded by the `security-reviewer` agent.
-- The last full run met the threshold on 2026-09-08. Both HIGHs from the 2026-08-05 run are fixed: #1291 by PR #1296, and #1292 by #1340.
+- The last full run, on 2026-08-05, failed with two HIGHs. Both are now fixed: #1291 by PR #1296, and #1292 through the #1340 work. The threshold has been met since #1292 closed on 2026-09-08.
 - The RC re-run (#1199) is still owed. It covers every HTTP route added since v0.13.0, enumerated by diffing the route registrations, plus outbound surfaces the diff cannot find (the local-model client's SSRF posture). The method is the three-surface audit (CORS × Host header × loopback-vs-LAN) plus path validation.
 - The open findings listed above in *Open work that bears on v1.0* are in scope.
 - Full history is in [security.md](security.md#open-findings) and in the history file.
@@ -161,9 +168,11 @@ v0.26.0, v0.27.0 or v0.28.0.
   - no frame stall over 100 ms during a scripted scroll
 - **Run 3 (2026-09-11)** passed every condition on one Windows 11 workstation. macOS and Linux were never measured.
 - **Open:** #1333 (condition 3 uncharacterised on Windows) and #1734 (its last comment calls it closeable).
+- **If a run fails, that is a finding to fix, not a reason to relax the numbers.** [perf-gate-results.md](perf-gate-results.md) relies on this rule.
 
 **Commercial readiness.** UNMET. This gates the license flip. If it is not ready at code-complete, the date floats and **the gate flag does not ship enabled**. A v1.0 demanding a license nobody can buy is a brick.
-- ADR-040 §5 (BUSL re-scope) is Accepted, and the counsel-drafted text is in `LICENSE`. The trial-length conflict and #1908 above still apply.
+- ADR-040 §5 (BUSL re-scope) is Accepted. `LICENSE` has been rewritten since counsel's text (#1909), and #1908 and the counsel-review row above still apply.
+- LLC, accountant and pricing settled (ADR-040 §6; see above).
 - **MoR checkout live end to end:** a test purchase goes through the issuance webhook, the signed license is delivered, and it activates a gate-ON build.
 - Grandfather licenses issued to the cohort decided under §1c.
 - **[licensing-operations.md §8](licensing-operations.md#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay) is complete.** §8 owns the item list, and several of its items fail silently if skipped. For example, the issuance Worker's Ed25519 key import has never run on real Cloudflare, and a failure there returns 503 on every webhook. Two items need more than their checkbox says:
@@ -172,12 +181,12 @@ v0.26.0, v0.27.0 or v0.28.0.
 
 **Accessibility.** PARTIAL. See [a11y-gate-results.md](a11y-gate-results.md).
 - Windows Narrator and macOS VoiceOver full walkthroughs are both **unrun**. Each needs a human at a real OS.
-- Forced colors, the axe-core scan, keyboard-only navigation and WCAG AA contrast all **pass**. The axe scans exclude the editable document, whose colours are measured separately.
+- Forced colors, the axe-core scan, keyboard-only navigation, and WCAG AA contrast across all status colors and themes all **pass**. Contrast must be re-verified after any redesign. The axe scans exclude the editable document, whose colours are measured separately.
 - Open: #1721 (axe contrast failures land in `incomplete` and go unasserted) and #1683 (dark-theme pressed state).
 
 **Cleanup gates**
 - **The uninstaller strips all integration entries** on Windows and on macOS `.app` removal, leaving no orphan entries in the Claude config JSON. Unverified: the v0.23.0 run skipped uninstall.
-- **Zero open position- or anchor-related bugs.** UNMET. #2001, #1997, #2112, #1523, #1632 and #2070 are open.
+- **Zero open position- or anchor-related bugs.** UNMET. #2001, #1997, #2112, #2114, #1523, #1632 and #2070 are open.
 - **Inline decorations show on pending annotations** after MCP creates them, in the Tauri build. No recorded run.
 
 **Documentation gates**
@@ -187,7 +196,7 @@ v0.26.0, v0.27.0 or v0.28.0.
 - Every locked design decision (D1–D12, in the history file) is linked to an ADR or PR.
 - **A bad-release recovery runbook**, written and rehearsed once without moving the real `latest` pointer. None exists today.
   - **Rehearsal build.** Rehearsing needs a way to point a build at a staged manifest. The smoke checklist assumes an "updater endpoint override", but none exists in code: the public endpoint is fixed in `tauri.conf.json`, and the licensed one is a compiled const.
-  - **Desktop.** The license update Worker is configured to proxy the same `releases/latest/download/latest.json` and adds no caching of its own. So moving GitHub's `latest` pointer back should stop a broken release on both routes. Record how long real clients take to see the change the first time the procedure is used.
+  - **Desktop.** The license update Worker is meant to proxy the same `releases/latest/download/latest.json` (its `wrangler.toml` holds a placeholder until it is deployed), and it adds no caching of its own. So moving GitHub's `latest` pointer back should stop a broken release on both routes. Record how long real clients take to see the change the first time the procedure is used.
   - **npm.** `npm dist-tag` and/or `npm deprecate`.
   - **ADR-043.** This doesn't conflict with [ADR-043](decisions.md#adr-043-updater--no-rollback-no-in-updater-post-restart-health-probe-v1), which rules out *client-side* rollback.
 
@@ -198,18 +207,20 @@ deferred table are in the history file.
 
 **v1.1 (committed)**
 - **Cloud BYO-model providers** (OpenAI, Gemini, Anthropic API keys) and their adapter. Behind `BYO_MODELS_ENABLED` per [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11).
-- **Diff/Apply-edit hunk staging.** Option B (modal-based) is locked for the revisit (D3).
 
 **Deferred, open**
+- **Diff/Apply-edit hunk staging.** D3 locked option B (modal-based) for a v1.1 *revisit*, which is not a commitment. The surface is the `.docx` Apply-changes flow, so it waits on #2110.
 - **Merge and conflicts.** Three-way merge and a side-by-side conflict UI. Keep-vs-reload is what v1.0 has.
 - **RANGE_MOVED auto-retry.** The caller retries with relocated coordinates today.
 - **Provider-keyed annotation authorship.** Every MCP client is stored as author `"claude"` (#2115). Local models have provider-keyed authorship (M3); other MCP clients don't.
 - **Per-provider auto-launchers, and validating MCP clients other than Claude.**
-- **Obsidian vaults**, out of scope for v1 (Decision A, #1827). The README says so, and Tandem warns once on a file containing `[[`.
+- **Obsidian vaults**, out of scope for v1 (Decision A, #1827). The README says so. Tandem warns once per open when a `.md` file contains a `[[…]]` wikilink.
 - **Document groups**, only if demand appears: named groups, cross-reference tools, split panes.
 - **Server auto-stop on idle.** Never wired.
 - **Review mode:** a threshold banner and document dimming.
-- **Platform follow-ups:** #552 (KDE titlebar), #317 (firewall rule scoping for Cowork on macOS/Linux), #630 (macOS hardware pass on the startup-file rejection).
+- **Platform follow-ups:** #552 (KDE titlebar), #317 (firewall rule scoping for Cowork on macOS/Linux), #630 (a `startup-file-error` event for `request_open_file` POST failures, plus its HTTP tests).
+- **Linux tray fallback** when libappindicator is absent. Today the app exits cleanly with no tray.
+- **Flag annotations on externally changed text.** Degraded anchors are surfaced to Claude (`anchor: "degraded"`), but the user sees no flag.
 - **Design decisions deferred by D2, D5 and D7–D9:**
   - an authorship gutter and its pulses (D2 picked per-character)
   - mobile/responsive (D7)
