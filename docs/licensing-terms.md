@@ -33,14 +33,15 @@ Stated as the code behaves, not as marketing:
 | **Organisational use** | **Not available.** See §2. |
 
 Nothing above is live yet: the gate ships **dark** — `LICENSE_GATE_ENABLED` is a
-`const false` in `tsup.config.ts`, so today's builds neither trial nor gate. One
-const flips at v1.0, and these terms must exist before it does.
+`const false` in `tsup.config.ts`, so today's builds neither trial nor gate. It
+flips at v1.0 together with `LICENSE_UPDATE_ENDPOINT` (`src-tauri/src/lib.rs`), and
+these terms must exist before it does.
 
 ## 2. Organisational use is currently unsellable — checkout copy must say so ⚖️
 
 The BUSL Additional Use Grant covers personal use and individual self-hosting,
-and only "solely for evaluation purposes for up to 30 days" — continued or
-production use requires a paid licence. An organisation is outside that grant,
+and for v1.0 and later only "for evaluation for up to 14 days from first launch
+on a given device". Continued use requires a paid licence. An organisation is outside that grant,
 so it needs a **commercial** licence, and this pipeline cannot issue one.
 
 The failure mode is worse than a loud error. `issue()` hardcodes
@@ -78,11 +79,14 @@ grant them is the worst version of this problem.
 - The clock is a local timestamp with **no anti-rollback**, deliberately
   (ADR-040 §3). Deleting `trial.json` restarts it. This is a soft gate; the
   signed licence is the only hard one.
-- Note the gap with the repository licence: [LICENSE](../LICENSE) grants a
-  30-day evaluation *and*, separately, unlimited untimed non-production use —
-  both broader than the 14-day gate. The reconciliation is that the right to
-  **build from source** stays exercisable regardless. Say that where a buyer
-  looks, or the difference reads as a bait-and-switch rather than a decision.
+- The repository licence matches the gate. Since #1909 (2026-09-08),
+  [LICENSE](../LICENSE) grants a **14-day** evaluation for v1.0 and later,
+  from first launch on a given device, the same as the trial clock. The one
+  remaining asymmetry is deliberate: every pre-1.0 (beta) version stays free
+  with no time limit, so someone can keep running a beta build indefinitely.
+  Say that where a buyer looks, so it reads as a decision rather than a
+  loophole. (Decision D on #1827 keeps an older server from sharing the
+  desktop's data directory; it does not revoke the beta grant.)
 
 ## 5. Data and privacy ⚖️
 
