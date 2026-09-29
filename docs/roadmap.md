@@ -58,8 +58,6 @@ setup, hardware verification, and two flag flips.
 | **Whether `tandem deactivate` is required.** It is if EU resale law makes a remove-license path mandatory. | #1943, licensing-terms.md §6 | Counsel's answer decides whether it joins the commercial gate |
 | **Two-window Solo/Tandem policy.** A second window can flip the mode, which lets Solo-held comments reach Claude. | #1899 | Adopt, re-assert, or stay warn-only |
 
-**Stale text to fix, not a decision:** the trial is **14 days**. That was decided 2026-09-08 (#1909), and `TRIAL_DAYS`, `LICENSE` and `README.md` all agree. Two documents still say 30: ADR-040 §5 ("up to 30 days") and licensing-terms.md §4 (which claims `LICENSE` grants 30 days).
-
 **"At RC" means the build intended to become v1.0.0, checked before the tag.** Under Decision
 G (#1748), any tag containing `-` publishes as a prerelease, and Bryan does not expect RC
 tags in this repo. So wherever a criterion below says "at RC", run it on that build.
