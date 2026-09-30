@@ -1926,7 +1926,8 @@ Three reasons, in ascending order of force:
 > forbade the re-arm the host now asks for.
 >
 > The skill (version 28) now arms with `description: "Tandem wake", timeout_ms: 1800000` and
-> re-arms only on an expiry notice naming that watch. Two host behaviours were **measured on
+> re-arms on exactly two events: an expiry notice for that watch, or the user asking. Two host
+> behaviours were **measured on
 > 2.1.284** before the rule was written against them:
 > - an expiry arrives as `Monitor event: "Tandem wake"` / `[Monitor expired after … Re-arm it if
 >   you still need the watch …]`
@@ -1939,12 +1940,15 @@ Three reasons, in ascending order of force:
 > wake, a close and a stand-down. The plugin's own monitor is told apart only by its different
 > description; that part is not measured.
 >
-> The bound is now **one live watch at a time**, with exactly two re-arm exceptions: an expiry
-> notice for the session's own watch, and the user asking to watch while no watch is live. The
-> second covers a Tandem restart that closed the socket. It never applies to a watch stood down as
-> a duplicate. A visible "Tandem launched you" turn wins over an expiry notice. `SERVER_INSTRUCTIONS` ties the re-arm to the client's own expiry notice
-> rather than saying "keep one armed", because that text survives compaction without the skill's
-> fail-closed guard.
+> The bound is now **one live watch at a time**, with exactly two re-arm events: an expiry notice
+> for the session's own watch, and the user asking to watch. Neither event depends on the model
+> remembering whether a watch is live, which a compacted session cannot do. A user request can
+> therefore produce a double, for example after compaction. The existing doubled-wake stand-down
+> removes it: stop the older watch. The inbox de-duplicates, so the cost is a wasted turn.
+>
+> A visible "Tandem launched you" turn wins over both events. `SERVER_INSTRUCTIONS` carries the
+> same two events rather than "keep one armed", because that text survives compaction without the
+> skill's fail-closed guard.
 >
 > **Unmeasured:** a pre-2.1.271 host. The repo's own records show its schema had `timeout_ms`,
 > so it most likely *accepts* the new call and the watch then ends silently at 30 minutes with no

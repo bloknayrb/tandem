@@ -82,14 +82,18 @@ describe("MCP server instructions", () => {
     expect(SERVER_INSTRUCTIONS).toMatch(/at most once/i);
   });
 
-  it("ties re-arming to the client's own expiry notice, not to a standing obligation (#2128)", () => {
+  it("ties re-arming to events the session can see, not to a standing obligation (#2128)", () => {
     // Watches have a deadline since Claude Code 2.1.271, so a re-arm must be allowed. But this
     // text survives compaction without SKILL.md's fail-closed guard, so "keep one armed" would
     // ask a compacted session to maintain state it cannot see, and it would arm a second watch.
     expect(SERVER_INSTRUCTIONS).toMatch(/keep at most one watch live/i);
     expect(SERVER_INSTRUCTIONS).toMatch(
-      /re-arm only when your client ends that watch at a deadline and says so, or when the user asks you to watch and none is live/i,
+      /re-arm only when your client ends that watch at a deadline and says so, or when the user asks you to watch/i,
     );
+    // The user-request path cannot check liveness after compaction, so it carries its own
+    // recovery instead of a condition the session cannot evaluate.
+    expect(SERVER_INSTRUCTIONS).toMatch(/if every wake then arrives twice, stop the older watch/i);
+    expect(SERVER_INSTRUCTIONS).not.toMatch(/none is live/i);
     expect(SERVER_INSTRUCTIONS).not.toMatch(/keep (?:one|a watch) armed|persistent watch/i);
   });
 
