@@ -69,7 +69,7 @@ outcome is keep, replace or retire.
 
 | Date | Issue | Checkpoint |
 |---|---|---|
-| **monthly — overdue** | #1506 | Has Claude Code gone modern-only? The only recorded pass is 2026-08-20 |
+| monthly — next 2026-10-29 | #1506 | Has Claude Code gone modern-only? Last pass 2026-09-29: no |
 | 2026-10-15 | #1455 | Run the Cowork transport test matrix |
 | 2026-11-01 | #1345 | Revisit packaged-desktop WebDriver smoke (workflow disabled 2026-08-08) |
 | 2026-11-09 | #1363 | Native theme push on Linux |
@@ -140,7 +140,7 @@ v0.26.0, v0.27.0 or v0.28.0.
 
 **Functional gates**
 - **Claude Code CLI works zero-config:** loopback-exempt, and tools work unchanged. Checked at RC.
-- **Claude Code version compatibility.** UNMET. At RC, the connect → tools → wake → reply loop runs against the current stable Claude Code and the latest release of the previous minor, and the report records both versions. "Wake" means the self-armed `/api/wake` watch where a Monitor tool exists, falling back to the channel shim where it does not, and the report says which path each run used. It also needs a #1506 pass dated within the RC window; that check is what guards against a *future* Claude Code release. #1505 (serving MCP `2026-07-28` alongside the legacy protocol) is blocked on the TS SDK, so a modern-only Claude Code would break Tandem outright. #1506 covers Cowork too, and its one pass could not settle Cowork.
+- **Claude Code version compatibility.** UNMET. At RC, the connect → tools → wake → reply loop runs against the current stable Claude Code and the latest release of the previous minor, and the report records both versions. "Wake" means the self-armed `/api/wake` watch where a Monitor tool exists, falling back to the channel shim where it does not, and the report says which path each run used. It also needs a #1506 pass dated within the RC window; that check is what guards against a *future* Claude Code release. #1505 (serving MCP `2026-07-28` alongside the legacy protocol) needs a migration to the v2 SDK packages (`@modelcontextprotocol/server` and friends, per #1506's 2026-09-29 pass), so until it lands a modern-only Claude Code would break Tandem outright. #1506 covers Cowork too, and neither pass has been able to settle Cowork.
 - **Tauri update flow.** PARTIAL. Download → install → restart must work on all three platforms, with the sidecar restarting and no data loss. Observed on macOS once and on Windows three times, most recently v0.24.1→v0.25.0 (closing #1596). Linux has not been observed. The `MayHaveFailed` arm, which should show the banner, is untested. A successful update writes nothing to `tandem.log` at the release log level, so someone has to watch the window.
 - **Tutorial.** PARTIAL. It must complete end to end on `sample/welcome.md` with anchors holding. The anchor regression test exists (`tests/design-system-impl/tutorial-anchor.test.ts`). Open: #1696, #1725, #1711.
 - **Dark/light toggle** works on desktop and in the browser. No recorded run.
