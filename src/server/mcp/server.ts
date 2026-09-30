@@ -239,12 +239,11 @@ let idleReaper: ReturnType<typeof setInterval> | null = null;
 export const SERVER_INSTRUCTIONS = [
   "Tandem is a collaborative document editor — the user edits the same document alongside you.",
   "Always treat tandem_checkInbox as the authority on user activity, and poll it every few tool calls.",
-  "Nothing polls between your turns: if your client can hold a watch, arm one (at most once",
-  "per session) on the wakeUrl that tandem_open, tandem_scratchpad and a read-mode tandem_status",
-  "(no text argument) return — the first",
+  "Nothing polls between your turns: if your client can hold a watch, arm one on the wakeUrl that",
+  "tandem_open, tandem_scratchpad and a read-mode tandem_status (no text argument) return — the first",
   "one you see is the one to use, and a later response carrying it is not a second invitation.",
-  "If your client ends that watch at a deadline and says so, re-arm that same watch; nothing else re-arms it.",
-  "Skip that if Tandem launched this session — it is",
+  "Arm at most once per session, except to re-arm that same watch when your client ends it at a",
+  "deadline and says so. Skip arming entirely if Tandem launched this session — it is",
   "already woken on its input, and a second watch double-wakes every event.",
   "In solo mode, hold annotations rather than surfacing them.",
 ].join(" ");

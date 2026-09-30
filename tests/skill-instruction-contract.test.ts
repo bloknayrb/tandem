@@ -149,14 +149,33 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // `persistent` was removed in Claude Code 2.1.271, and the current schema is
   // additionalProperties:false, so a fence carrying it fails validation outright (#2128).
   expect(wake).not.toMatch(/persistent:\s*true/);
-  // The re-arm rule, positively. The host ends every watch at a deadline and sends one notice
-  // naming it; re-arming THAT watch is the only thing that lifts the once-per-session bound.
+  // The re-arm rule, positively. The host ends every watch at a deadline and sends one final
+  // event for it; re-arming THAT watch keeps one live watch rather than adding a second.
   expect(wake).toMatch(/When your watch expires, re-arm it — once per expiry notice/i);
   expect(wake).toMatch(/names \*your\* `Tandem wake` watch/i);
+  expect(wake).toMatch(/Use exactly that `description`/i);
+  // Every event from the watch carries the same `Monitor event: "Tandem wake"` label, so the
+  // label alone cannot identify an expiry. Re-arming on an ordinary wake leaves the first watch
+  // running, doubles every wake, trips the stand-down, and can end with no watch at all.
+  expect(wake).toMatch(/An ordinary wake carries the same `Tandem wake` label/i);
+  expect(wake).toMatch(/only an event whose text says `\[Monitor expired …\]` is an expiry/i);
+  // The bound is one LIVE watch, not one arm per session. That lets a user-requested re-arm
+  // recover after a socket close, rather than losing wake for the rest of the session.
+  expect(wake).toMatch(/never keep more than one watch live at a time/i);
+  expect(wake).toMatch(/The bound is one live watch at a time/i);
+  expect(wake).toMatch(/while no watch of yours is live/i);
   // Measured: a server-side close arrives as `[WebSocket closed: …]`, with no re-arm prompt.
   // Treating that as an expiry would re-arm into a dead or restarted server on every close.
   expect(wake).toMatch(/Only an expiry, and only yours/i);
-  expect(wake).toMatch(/the Tandem plugin's own monitor/i);
+  expect(wake).toMatch(
+    /a socket close \(`\[WebSocket closed: …\]`, which is what a Tandem restart looks like\)/i,
+  );
+  expect(wake).toMatch(/the Tandem plugin's own/i);
+  expect(wake).toMatch(/If the user then asks you to watch, arm again/i);
+  // A single-prompt `-p` run caps the deadline at 10 minutes, so the 30-minute value is scoped.
+  expect(wake).toMatch(/single-prompt `-p` run caps watches at 10 minutes/i);
+  // A watch stood down as a duplicate stays down: re-arming it restores the double.
+  expect(wake).toMatch(/a watch you stood down is never re-armed/i);
   // Precedence: a visible launcher clause beats an expiry notice, so a launched session that
   // wrongly armed stands down instead of reading the notice as proof it was hand-started.
   expect(wake).toMatch(/A turn saying Tandem launched you or wakes you directly wins/i);
@@ -271,6 +290,11 @@ describe("shipped Tandem skill instruction contract", () => {
       // clause, which is what holds the bound once several tools can supply a `wakeUrl`.
       "Arm it at most once per session",
       "Arm a persistent watch for this turn",
+    ],
+    [
+      "the wake-is-not-an-expiry distinction",
+      "only an event whose text says `[Monitor expired …]` is an expiry",
+      "any event carrying that label is an expiry",
     ],
     [
       "the not-a-second-invitation clause",
@@ -428,7 +452,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "28", bodyHash: "560fccbebe47" });
+    ).toEqual({ version: "28", bodyHash: "3bc6bc2866b0" });
   });
 
   // #1770: the skill is the only surface that tells Claude what it may NOT do with a card

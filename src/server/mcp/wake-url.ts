@@ -25,7 +25,8 @@
  * **Why this is a per-tool list rather than a response-wrapper attach.**
  * `response.ts` already wraps every non-error envelope (`withWakeAdvisory`), so
  * a central attach looks like the deeper fix. It is not, and the reason is
- * state: `wakeUrl` is wanted ONCE per session, at the FIRST response. An
+ * state: `wakeUrl` is wanted at the FIRST response (and again only if the
+ * model must re-fetch it to re-arm an expired watch, via `tandem_status`). An
  * unconditional attach is the `tandem_checkInbox` hazard generalized to every
  * tool. A latched attach cannot be written — no per-session identity is
  * available at this layer (`claudeSessionId` is absent on direct HTTP,

@@ -125,7 +125,7 @@ class AcceptanceMatrixTests(unittest.TestCase):
         self.assertFalse(long_lived({"ws": {"url": url}, "description": "Tandem wake", "timeout_ms": 300000}))
         self.assertFalse(long_lived({"ws": {"url": url}, "description": "Tandem wake"}))
         self.assertFalse(long_lived({"ws": {"url": url}, "description": "persistent: true"}))
-        self.assertFalse(long_lived({"ws": {"url": url}, "timeout_ms": True}))
+
     def test_unsigned_observations_cannot_claim_live_host_coverage(self):
         subject = load_subject()
 

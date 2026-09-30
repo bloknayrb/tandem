@@ -621,7 +621,6 @@ def derive_structured_observations(
         monitor_tool_input.get("persistent") is True
         or (
             isinstance(monitor_tool_input.get("timeout_ms"), (int, float))
-            and not isinstance(monitor_tool_input.get("timeout_ms"), bool)
             and monitor_tool_input["timeout_ms"] >= MONITOR_MAX_TIMEOUT_MS
         )
     )

@@ -96,7 +96,7 @@ Polling is the reliable path and stays the authority on what you see. But betwee
 
 **In a multi-agent workflow, only the orchestrator arms a watch.** A sub-agent must not: Hard Rule 7 forbids it the `tandem_checkInbox` call a wake exists to trigger, so its watch could only wake it into the poll that empties the orchestrator's inbox. Everything below is addressed to the session that polls.
 
-In a **hand-started session**, arm one watch on the **first** `tandem_*` response that carries a `wakeUrl`. Read `wakeUrl` from that response — read-mode `tandem_status`, `tandem_open` and `tandem_scratchpad` all return it — and if your host offers a `Monitor` tool, arm then and there. If none of your first few Tandem calls returned one, make a single read-mode `tandem_status` call to fetch it; one such call, not one per turn. **Arm it at most once per session, and keep at most one watch live at a time — a later response carrying `wakeUrl` is not a second invitation. Do not use Tandem's process-global subscriber count to decide whether this session is covered.** Other sessions and inert channel shims appear in that count, and the plugin monitor triggered by this skill can attach after your first Tandem call, so the count is stale by construction.
+In a **hand-started session**, arm one watch on the **first** `tandem_*` response that carries a `wakeUrl`. Read `wakeUrl` from that response — read-mode `tandem_status`, `tandem_open` and `tandem_scratchpad` all return it — and if your host offers a `Monitor` tool, arm then and there. If none of your first few Tandem calls returned one, make a single read-mode `tandem_status` call to fetch it; one such call, not one per turn. **Arm it at most once per session unprompted, and never keep more than one watch live at a time — a later response carrying `wakeUrl` is not a second invitation. Do not use Tandem's process-global subscriber count to decide whether this session is covered.** Other sessions and inert channel shims appear in that count, and the plugin monitor triggered by this skill can attach after your first Tandem call, so the count is stale by construction.
 
 **How to tell which you are.** A session Tandem launched is told so in the turn that started it, and told again on every wake: that turn says Tandem is already waking you directly and that you must not arm a watch. If any turn in this conversation says that, you are not hand-started — do not arm. If you can see the start of this conversation and nothing says it, you are hand-started. **If you cannot see the start — it was compacted or summarised away — do not arm.** Absence proves nothing there: the turn that would have told you is exactly what a compaction drops, and it is also where your own record of having already armed went. A session that has run long enough to compact passed this trigger's moment long ago, so declining costs it almost nothing: keep polling, and if the user asks you to watch, arm then — that request is the recovery.
 
@@ -108,11 +108,19 @@ If the Monitor tool is absent or the attempt fails, say so once and stop trying.
 Monitor({ ws: { url: <the wakeUrl Tandem returned> }, description: "Tandem wake", timeout_ms: 1800000 })
 ```
 
-Use exactly that `description`: it is how you will recognise this watch's expiry notice. `timeout_ms: 1800000` (30 minutes) is the longest deadline Claude Code allows. There is no longer a way to arm a watch that never expires.
+Use exactly that `description`. Every event from this watch carries it as a label (`Monitor event: "Tandem wake"`), and that label is how you tell this watch apart from any other monitor. `timeout_ms: 1800000` (30 minutes) is the longest deadline an interactive session allows. A single-prompt `-p` run caps watches at 10 minutes, so use `timeout_ms: 600000` there. No watch lasts forever any more.
 
-**When your watch expires, re-arm it — once per expiry notice.** Claude Code ends every watch at its deadline and sends one notice for it. The notice names the watch (`Monitor event: "Tandem wake"`) and says it expired and to re-arm it if you still need it. When that notice names *your* `Tandem wake` watch, arm it again with the same call and the same `wakeUrl`. If the address is no longer in view, one read-mode `tandem_status` fetches it. The new watch replaces the expired one, so it is not a second watch, and it is the only thing that lifts the once-per-session bound above. This is also why an expiry notice overrides "if you cannot see the start, do not arm": only a session that armed a watch receives one. Three limits:
+**When your watch expires, re-arm it — once per expiry notice.** Claude Code ends every watch at its deadline and sends one final event for it. **An ordinary wake carries the same `Tandem wake` label, so only an event whose text says `[Monitor expired …]` is an expiry.** When an expiry names *your* `Tandem wake` watch, arm it again with the same call and the same `wakeUrl`. If the address is no longer in view, one read-mode `tandem_status` fetches it. The new watch replaces the expired one, so you still have one live watch.
 
-- **Only an expiry, and only yours.** A socket close (`[WebSocket closed: …]`, which is what a Tandem restart looks like), a failed arm, or a notice about any other monitor is not an expiry. That includes the Tandem plugin's own monitor. Treat it like a failed first attempt: say so once and keep polling.
+**The bound is one live watch at a time.** An expiry notice lets you re-arm. So does the user asking you to watch while no watch of yours is live. An expiry notice also overrides "if you cannot see the start, do not arm", because only a session that armed a watch receives one. Three limits:
+
+- **Only an expiry, and only yours.** None of these is an expiry, so do not re-arm on it:
+  - a wake
+  - a socket close (`[WebSocket closed: …]`, which is what a Tandem restart looks like)
+  - a failed arm
+  - an event from any other monitor, including the Tandem plugin's own
+
+  After a socket close, say once that the watch ended and keep polling. If the user then asks you to watch, arm again.
 - **A turn saying Tandem launched you or wakes you directly wins.** If one is in view, do not re-arm. Stand down as below.
 - **If the re-arm itself fails, say so once and stop trying.** Keep polling.
 

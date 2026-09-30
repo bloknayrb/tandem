@@ -87,10 +87,21 @@ describe("MCP server instructions", () => {
     // text survives compaction without SKILL.md's fail-closed guard, so "keep one armed" would
     // ask a compacted session to maintain state it cannot see, and it would arm a second watch.
     expect(SERVER_INSTRUCTIONS).toMatch(
-      /ends that watch at a deadline and says so, re-arm that same watch/i,
+      /except to re-arm that same watch when your client ends it at a deadline and says so/i,
     );
-    expect(SERVER_INSTRUCTIONS).toMatch(/nothing else re-arms it/i);
     expect(SERVER_INSTRUCTIONS).not.toMatch(/keep (?:one|a watch) armed|persistent watch/i);
+  });
+
+  it("keeps the launcher carve-out after the re-arm clause and scoped to ALL arming (#2128)", () => {
+    // A bare "Skip that" placed right after the re-arm sentence reads as "skip the re-arm",
+    // leaving the initial arm unexempted for launched sessions. The carve-out has to come last
+    // and name arming as a whole.
+    const rearm = SERVER_INSTRUCTIONS.search(/except to re-arm that same watch/i);
+    const carveOut = SERVER_INSTRUCTIONS.search(
+      /Skip arming entirely if Tandem launched this session/i,
+    );
+    expect(rearm).toBeGreaterThan(-1);
+    expect(carveOut).toBeGreaterThan(rearm);
   });
 
   it("states the Solo contract, which gates AI surfacing", () => {
