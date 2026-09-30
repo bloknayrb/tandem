@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 27
+version: 28
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -96,7 +96,7 @@ Polling is the reliable path and stays the authority on what you see. But betwee
 
 **In a multi-agent workflow, only the orchestrator arms a watch.** A sub-agent must not: Hard Rule 7 forbids it the `tandem_checkInbox` call a wake exists to trigger, so its watch could only wake it into the poll that empties the orchestrator's inbox. Everything below is addressed to the session that polls.
 
-In a **hand-started session**, arm one persistent watch on the **first** `tandem_*` response that carries a `wakeUrl`. Read `wakeUrl` from that response — read-mode `tandem_status`, `tandem_open` and `tandem_scratchpad` all return it — and if your host offers a `Monitor` tool, arm then and there. If none of your first few Tandem calls returned one, make a single read-mode `tandem_status` call to fetch it; one such call, not one per turn. **Arm it at most once per session — a later response carrying `wakeUrl` is not a second invitation. Do not use Tandem's process-global subscriber count to decide whether this session is covered.** Other sessions and inert channel shims appear in that count, and the plugin monitor triggered by this skill can attach after your first Tandem call, so the count is stale by construction.
+In a **hand-started session**, arm one watch on the **first** `tandem_*` response that carries a `wakeUrl`. Read `wakeUrl` from that response — read-mode `tandem_status`, `tandem_open` and `tandem_scratchpad` all return it — and if your host offers a `Monitor` tool, arm then and there. If none of your first few Tandem calls returned one, make a single read-mode `tandem_status` call to fetch it; one such call, not one per turn. **Arm it at most once per session, and keep at most one watch live at a time — a later response carrying `wakeUrl` is not a second invitation. Do not use Tandem's process-global subscriber count to decide whether this session is covered.** Other sessions and inert channel shims appear in that count, and the plugin monitor triggered by this skill can attach after your first Tandem call, so the count is stale by construction.
 
 **How to tell which you are.** A session Tandem launched is told so in the turn that started it, and told again on every wake: that turn says Tandem is already waking you directly and that you must not arm a watch. If any turn in this conversation says that, you are not hand-started — do not arm. If you can see the start of this conversation and nothing says it, you are hand-started. **If you cannot see the start — it was compacted or summarised away — do not arm.** Absence proves nothing there: the turn that would have told you is exactly what a compaction drops, and it is also where your own record of having already armed went. A session that has run long enough to compact passed this trigger's moment long ago, so declining costs it almost nothing: keep polling, and if the user asks you to watch, arm then — that request is the recovery.
 
@@ -105,8 +105,16 @@ If the Monitor tool is absent or the attempt fails, say so once and stop trying.
 **Read the URL from Tandem's own response, don't assume it.** `wakeUrl` is the live address of the wake stream, reported by the server that is running it, and comes back on read-mode `tandem_status`, `tandem_open` and `tandem_scratchpad`. It is usually `ws://127.0.0.1:3479/api/wake`, but the port is configurable and guessing it is a *silent* failure: you would open a socket to whatever unrelated service holds 3479 and sit there believing you were armed. If `wakeUrl` is absent, this Tandem has no wake transport and there is nothing to arm — keep polling.
 
 ```
-Monitor({ ws: { url: <the wakeUrl Tandem returned> }, persistent: true })
+Monitor({ ws: { url: <the wakeUrl Tandem returned> }, description: "Tandem wake", timeout_ms: 1800000 })
 ```
+
+Use exactly that `description`: it is how you will recognise this watch's expiry notice. `timeout_ms: 1800000` (30 minutes) is the longest deadline Claude Code allows. There is no longer a way to arm a watch that never expires.
+
+**When your watch expires, re-arm it — once per expiry notice.** Claude Code ends every watch at its deadline and sends one notice for it. The notice names the watch (`Monitor event: "Tandem wake"`) and says it expired and to re-arm it if you still need it. When that notice names *your* `Tandem wake` watch, arm it again with the same call and the same `wakeUrl`. If the address is no longer in view, one read-mode `tandem_status` fetches it. The new watch replaces the expired one, so it is not a second watch, and it is the only thing that lifts the once-per-session bound above. This is also why an expiry notice overrides "if you cannot see the start, do not arm": only a session that armed a watch receives one. Three limits:
+
+- **Only an expiry, and only yours.** A socket close (`[WebSocket closed: …]`, which is what a Tandem restart looks like), a failed arm, or a notice about any other monitor is not an expiry. That includes the Tandem plugin's own monitor. Treat it like a failed first attempt: say so once and keep polling.
+- **A turn saying Tandem launched you or wakes you directly wins.** If one is in view, do not re-arm. Stand down as below.
+- **If the re-arm itself fails, say so once and stop trying.** Keep polling.
 
 Before you arm, know these:
 
@@ -115,7 +123,7 @@ Before you arm, know these:
 - **Wakes are best-effort and can be dropped.** A burst of activity is rate-limited by the host, so some notifications never arrive even though every event reached the server. This is exactly why the point above matters — the inbox has all of them; the wake stream may not. Keep polling every 2-3 tool calls regardless (orchestrator only in a multi-agent workflow).
 - **If every wake arrives twice, you are the second consumer — stand down.** A subscriber count of zero at the moment you check is not a promise it stays zero. If the user has the Tandem plugin installed, dispatching this skill is what starts its monitor, and that takes some seconds to connect — so a count you read in your first tool call can be stale by the time your watch is open. Nothing on Tandem's side can tell the two apart; doubled wakes are the signal. Stop your watch with `TaskStop` and keep polling, rather than leaving both running. No item is lost either way: the inbox de-duplicates, so the cost is a wasted turn, not a duplicate reply.
 
-- **A later turn telling you Tandem wakes you directly retracts your watch.** If you armed one and a turn then arrives saying Tandem is already waking you directly and not to arm, that turn is right and your watch is the duplicate — stop it with `TaskStop` and say so. The once-per-session bound is about not arming twice; it never bars you from standing one down.
+- **A later turn telling you Tandem wakes you directly retracts your watch.** If you armed one and a turn then arrives saying Tandem is already waking you directly and not to arm, that turn is right and your watch is the duplicate — stop it with `TaskStop` and say so. The one-live-watch bound is about never running two at once; it never bars you from standing one down, and a watch you stood down is never re-armed.
 
 If `ws` is unavailable, the equivalent stream is `GET /api/events?filter=wake` on the same host and port as `wakeUrl` (so `ws://127.0.0.1:3479/api/wake` → `http://127.0.0.1:3479/api/events?filter=wake`), which is payload-free in the same way. It needs a shell with `curl` — fine on macOS and Linux, absent on a stock Windows install.
 

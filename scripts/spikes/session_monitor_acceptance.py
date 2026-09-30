@@ -55,7 +55,7 @@ CHAIN_FIELDS = (
     "skill_dispatched",
     "status_succeeded",
     "monitor_attempted",
-    "monitor_persistent",
+    "monitor_long_lived",
     "wake_seen",
     "inbox_checked",
     # These three were in PRECONDITION_FIELDS until 2026-08-11, which made the gate
@@ -90,7 +90,7 @@ PRECONDITION_FIELDS = (
 # require it.
 DISPATCH_CONSEQUENT_FIELDS = (
     "monitor_attempted",
-    "monitor_persistent",
+    "monitor_long_lived",
     "wake_seen",
     "inbox_checked",
     "turn_idle_after_monitor",
@@ -144,7 +144,12 @@ AUTH_TOKEN_FILE = "acceptance-auth-token.txt"
 CAPTURE_ARTIFACT_ROLES = frozenset(
     {"pty_capture", "observation_trace", "server_log", "decoy_log", "process_tree"}
 )
-CAPTURE_SCHEMA_VERSION = 1
+# 2: the `monitor_persistent` chain field became `monitor_long_lived` (#2128). Ingest compares
+# a trace's field set exactly, so a version-1 trace is refused here, by version, rather than
+# with a misleading "belongs to another trial".
+CAPTURE_SCHEMA_VERSION = 2
+# The longest `timeout_ms` Claude Code's Monitor accepts since 2.1.271 (30 minutes).
+MONITOR_MAX_TIMEOUT_MS = 1_800_000
 CAPTURE_PRODUCER = "tandem-session-monitor-conpty-v1"
 # The producer exists, but the release gate remains unproven until all ten
 # authenticated trials have been captured and evaluated successfully.
@@ -530,7 +535,7 @@ def parse_trial_transcript(
         "skill_dispatched": dispatch_marker_seen,
         "status_succeeded": False,
         "monitor_attempted": False,
-        "monitor_persistent": False,
+        "monitor_long_lived": False,
         "wake_seen": False,
         "inbox_checked": False,
         "fixture_onboarded": False,
@@ -588,7 +593,6 @@ def derive_structured_observations(
     ]
     monitor = monitor_events[0] if monitor_events else None
     monitor_at = event_at(monitor) if isinstance(monitor, dict) else None
-    monitor_input = serialized(monitor.get("tool_input")) if isinstance(monitor, dict) else ""
     stop_after_monitor = any(
         event_name(event) == "Stop"
         and event_at(event) is not None
@@ -607,7 +611,20 @@ def derive_structured_observations(
         and event_text in serialized(event.get("tool_response"))
     ]
     prompt_submitted = bool(prompt_events)
-    monitor_persistent = '"persistent":true' in monitor_input.replace(" ", "").lower()
+    # "Armed for as long as the host allows." Claude Code 2.1.271 removed `persistent` and gave
+    # every watch a deadline capped at 30 minutes (#2128), so the current skill asks for
+    # `timeout_ms: 1800000`. `persistent: true` still counts, for a pre-2.1.271 host.
+    # Read structurally: a substring match would also accept the key inside the URL or the
+    # description.
+    monitor_tool_input = monitor.get("tool_input") if isinstance(monitor, dict) else None
+    monitor_long_lived = isinstance(monitor_tool_input, dict) and (
+        monitor_tool_input.get("persistent") is True
+        or (
+            isinstance(monitor_tool_input.get("timeout_ms"), (int, float))
+            and not isinstance(monitor_tool_input.get("timeout_ms"), bool)
+            and monitor_tool_input["timeout_ms"] >= MONITOR_MAX_TIMEOUT_MS
+        )
+    )
     return {
         **transcript_health,
         "fixture_onboarded": prompt_submitted
@@ -624,7 +641,7 @@ def derive_structured_observations(
         ),
         "status_succeeded": wake_url is not None and status_at is not None,
         "monitor_attempted": monitor is not None,
-        "monitor_persistent": monitor_persistent,
+        "monitor_long_lived": monitor_long_lived,
         "wake_seen": bool(inbox_events),
         "inbox_checked": bool(inbox_events),
     }

@@ -227,16 +227,23 @@ let idleReaper: ReturnType<typeof setInterval> | null = null;
  *   is stale by construction since #1354. So this is a standing instruction with an at-most-once
  *   bound, never "you are not covered" — that judgement belongs to `wake-advisory.ts`, which fires
  *   only on the one sound negative (nothing attached at all).
+ * - **Re-arm is event-triggered, never a standing obligation (#2128).** Since Claude Code 2.1.271 every
+ *   Monitor watch has a deadline, and the host says so when one expires. This text survives
+ *   compaction while SKILL.md's "cannot see the start, do not arm" guard may not be in context, so
+ *   a phrasing like "keep one armed" would ask a compacted session to maintain state it can no
+ *   longer see, and it would arm again. Re-arming is therefore tied to the client's own expiry
+ *   notice and nothing else.
  * - **Client-agnostic.** A non-Claude MCP client gets no `SKILL.md`, so this must not require a
- *   Claude-Code-specific tool by name — hence "if your client can hold a persistent watch".
+ *   Claude-Code-specific tool by name — hence "if your client can hold a watch".
  */
 export const SERVER_INSTRUCTIONS = [
   "Tandem is a collaborative document editor — the user edits the same document alongside you.",
   "Always treat tandem_checkInbox as the authority on user activity, and poll it every few tool calls.",
-  "Nothing polls between your turns: if your client can hold a persistent watch, arm one (at most once",
+  "Nothing polls between your turns: if your client can hold a watch, arm one (at most once",
   "per session) on the wakeUrl that tandem_open, tandem_scratchpad and a read-mode tandem_status",
   "(no text argument) return — the first",
   "one you see is the one to use, and a later response carrying it is not a second invitation.",
+  "If your client ends that watch at a deadline and says so, re-arm that same watch; nothing else re-arms it.",
   "Skip that if Tandem launched this session — it is",
   "already woken on its input, and a second watch double-wakes every event.",
   "In solo mode, hold annotations rather than surfacing them.",

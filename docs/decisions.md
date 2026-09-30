@@ -1916,6 +1916,35 @@ Three reasons, in ascending order of force:
 > `SKILL.md` should be expected to fire more often than before. It is the recovery, and it works
 > — but a rise in its rate is a consequence of this change, not evidence of a new fault.
 
+> **Amendment (2026-09-29) — the watch is no longer persistent; it expires and is re-armed (#2128).**
+> Claude Code 2.1.271 (npm 2026-09-14) *"Changed Monitor watches to always have a deadline (at
+> most 30 minutes; 10 in single-prompt `-p` runs) and notify Claude to re-arm, replacing the
+> no-timeout `persistent` option"*. The Monitor schema on 2.1.284 is
+> `additionalProperties: false` with `description` and `timeout_ms` required. So `SKILL.md`'s
+> `persistent: true` call failed validation for every user on a current build, and the skill's
+> once-per-session bound forbade the re-arm the host now asks for.
+>
+> The skill (version 28) now arms with `description: "Tandem wake", timeout_ms: 1800000` and
+> re-arms only on an expiry notice naming that watch. Two host behaviours were **measured on
+> 2.1.284** before the rule was written against them:
+> - an expiry arrives as `Monitor event: "Tandem wake"` / `[Monitor expired after … Re-arm it if
+>   you still need the watch …]`
+> - a server-side close arrives as `[WebSocket closed: 1006 Connection ended]`, with no re-arm
+>   prompt, measured against an isolated probe server
+>
+> `TaskStop` produces `[Monitor stopped]`, not an expiry. So the rule can tell our watch's
+> expiry apart from a close, a stand-down and the plugin's own monitor.
+>
+> The bound is now **one live watch at a time**. A visible "Tandem launched you" turn wins over
+> an expiry notice. `SERVER_INSTRUCTIONS` ties the re-arm to the client's own expiry notice
+> rather than saying "keep one armed", because that text survives compaction without the skill's
+> fail-closed guard.
+>
+> **Unmeasured:** a pre-2.1.271 host. The repo's own records show its schema had `timeout_ms`,
+> so it most likely *accepts* the new call and the watch then ends silently at 30 minutes with no
+> re-arm notice. That is a regression from its old persistent watch, bounded by Claude Code's
+> auto-update.
+
 **Cross-references:** [ADR-045](#adr-045-mcp-transport-multiplexing--one-mcpserver-per-session-keyed-by-mcp-session-id) (why neither session id is a usable key), ADR-027 (the Solo/privacy contract the strip reinforces), #1266 (the supervisor's payload-free wake), `docs/spikes/monitor-self-arm-probe.md` (P-A2, P4, and the burst measurement).
 
 ---

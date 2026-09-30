@@ -32,9 +32,10 @@
  * `mcpSessionId` on MCP `2026-07-28`), so the latch would be process-global and
  * would permanently deny the URL to every session after the first in a server
  * run: strictly worse than the bug it would fix. So this layer stays stateless
- * and deterministic — same tool, same field — and the once-per-session bound
- * lives in the only layer holding session state, the model's own instructions
- * (`SKILL.md`'s "**first** … not a second invitation", pinned by
+ * and deterministic — same tool, same field — and the arming bound (once per
+ * session, re-armed only on the host's expiry notice since #2128) lives in the
+ * only layer holding session state, the model's own instructions (`SKILL.md`'s
+ * "**first** … not a second invitation", pinned by
  * `tests/skill-instruction-contract.test.ts`).
  */
 

@@ -53,7 +53,7 @@ class AcceptanceMatrixTests(unittest.TestCase):
         events = [
             {"harness_at": 1, "hook_event_name": "UserPromptSubmit", "prompt": "neutral"},
             {"harness_at": 2, "hook_event_name": "PostToolUse", "tool_name": "mcp__tandem__tandem_status", "tool_response": {"wakeUrl": "ws://127.0.0.1:43079/api/wake"}},
-            {"harness_at": 3, "hook_event_name": "PreToolUse", "tool_name": "Monitor", "tool_input": {"ws": {"url": "ws://127.0.0.1:43079/api/wake"}, "persistent": True}},
+            {"harness_at": 3, "hook_event_name": "PreToolUse", "tool_name": "Monitor", "tool_input": {"ws": {"url": "ws://127.0.0.1:43079/api/wake"}, "description": "Tandem wake", "timeout_ms": 1800000}},
             {"harness_at": 4, "hook_event_name": "Stop"},
             {"harness_at": 6, "hook_event_name": "PostToolUse", "tool_name": "mcp__tandem__tandem_checkInbox", "tool_response": {"text": event_text}},
         ]
@@ -93,8 +93,39 @@ class AcceptanceMatrixTests(unittest.TestCase):
 
         self.assertFalse(observed["status_succeeded"])
         self.assertFalse(observed["monitor_attempted"])
-        self.assertFalse(observed["monitor_persistent"])
+        self.assertFalse(observed["monitor_long_lived"])
         self.assertFalse(observed["inbox_checked"])
+
+    def test_monitor_long_lived_accepts_the_max_deadline_or_legacy_persistent_only(self):
+        # #2128: Claude Code 2.1.271 removed `persistent` and capped `timeout_ms` at 30 minutes,
+        # so the skill's arm is `timeout_ms: 1800000`. A pre-2.1.271 host's `persistent: true`
+        # still counts. The host's 5-minute default, or any shorter deadline, does not: that
+        # is a skill-fidelity failure, not a long-lived watch.
+        subject = load_subject()
+        url = "ws://127.0.0.1:43079/api/wake"
+
+        def long_lived(tool_input):
+            events = [
+                {"harness_at": 1, "hook_event_name": "UserPromptSubmit", "prompt": "neutral"},
+                {"harness_at": 2, "hook_event_name": "PostToolUse", "tool_name": "mcp__tandem__tandem_status", "tool_response": {"wakeUrl": url}},
+                {"harness_at": 3, "hook_event_name": "PreToolUse", "tool_name": "Monitor", "tool_input": tool_input},
+            ]
+            return subject.derive_structured_observations(
+                events,
+                dispatch_marker_seen=True,
+                event_text="unused",
+                injected_at=5,
+                transcript_health={},
+                decoy_count=0,
+                armed_count=0,
+            )["monitor_long_lived"]
+
+        self.assertTrue(long_lived({"ws": {"url": url}, "description": "Tandem wake", "timeout_ms": 1800000}))
+        self.assertTrue(long_lived({"ws": {"url": url}, "persistent": True}))
+        self.assertFalse(long_lived({"ws": {"url": url}, "description": "Tandem wake", "timeout_ms": 300000}))
+        self.assertFalse(long_lived({"ws": {"url": url}, "description": "Tandem wake"}))
+        self.assertFalse(long_lived({"ws": {"url": url}, "description": "persistent: true"}))
+        self.assertFalse(long_lived({"ws": {"url": url}, "timeout_ms": True}))
     def test_unsigned_observations_cannot_claim_live_host_coverage(self):
         subject = load_subject()
 
@@ -243,7 +274,7 @@ class AcceptanceMatrixTests(unittest.TestCase):
             and item["prompt_kind"] == "natural"
         )
         natural["monitor_attempted"] = False
-        natural["monitor_persistent"] = False
+        natural["monitor_long_lived"] = False
         natural["wake_seen"] = False
         natural["inbox_checked"] = False
 

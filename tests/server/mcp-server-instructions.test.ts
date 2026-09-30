@@ -59,7 +59,7 @@ describe("MCP server instructions", () => {
     // Reaches every MCP client, and a non-Claude client has no SKILL.md and no Monitor tool. Naming
     // one as a requirement would make the text wrong for that population rather than merely
     // inapplicable.
-    expect(SERVER_INSTRUCTIONS).toMatch(/if your client can hold a persistent watch/i);
+    expect(SERVER_INSTRUCTIONS).toMatch(/if your client can hold a watch/i);
     expect(SERVER_INSTRUCTIONS).not.toMatch(/\bskill\b/i);
   });
 
@@ -80,6 +80,17 @@ describe("MCP server instructions", () => {
   it("bounds arming to once per session", () => {
     // A model re-reading an unbounded instruction late in a long session arms a second watch.
     expect(SERVER_INSTRUCTIONS).toMatch(/at most once/i);
+  });
+
+  it("ties re-arming to the client's own expiry notice, not to a standing obligation (#2128)", () => {
+    // Watches have a deadline since Claude Code 2.1.271, so a re-arm must be allowed. But this
+    // text survives compaction without SKILL.md's fail-closed guard, so "keep one armed" would
+    // ask a compacted session to maintain state it cannot see, and it would arm a second watch.
+    expect(SERVER_INSTRUCTIONS).toMatch(
+      /ends that watch at a deadline and says so, re-arm that same watch/i,
+    );
+    expect(SERVER_INSTRUCTIONS).toMatch(/nothing else re-arms it/i);
+    expect(SERVER_INSTRUCTIONS).not.toMatch(/keep (?:one|a watch) armed|persistent watch/i);
   });
 
   it("states the Solo contract, which gates AI surfacing", () => {
