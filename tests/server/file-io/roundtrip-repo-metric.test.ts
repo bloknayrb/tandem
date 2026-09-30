@@ -225,11 +225,15 @@ beforeAll(
       if (JSON.stringify(before) === JSON.stringify(after)) continue;
       renderDifferent.push({ file, kind: classify(before, after) });
     }
-    // 120s normally. Under coverage this hook is measured at 175s -- it parses and
+    // 300s normally. Under coverage this hook is measured at 175s -- it parses and
     // re-renders every tracked `.md` in the repo -- and `--hookTimeout` does not
     // raise an explicit ceiling like this one. Its duration is not asserted.
+    // It was 120s until #2126: alone it takes ~54-58s (Windows, 2026-09-29), but
+    // inside the full parallel pre-push suite it ran past 120s in 3 of 4 runs and
+    // blocked pushes of unrelated work. The budget has to cover suite contention,
+    // not just solo cost, so it now leaves 5x headroom over the solo time.
   },
-  timeoutMs(120_000, 600_000),
+  timeoutMs(300_000, 600_000),
 );
 
 describe("repo-wide round-trip metric", () => {
