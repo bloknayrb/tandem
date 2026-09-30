@@ -242,8 +242,9 @@ export const SERVER_INSTRUCTIONS = [
   "Nothing polls between your turns: if your client can hold a watch, arm one on the wakeUrl that",
   "tandem_open, tandem_scratchpad and a read-mode tandem_status (no text argument) return — the first",
   "one you see is the one to use, and a later response carrying it is not a second invitation.",
-  "Arm at most once per session, except to re-arm that same watch when your client ends it at a",
-  "deadline and says so. Skip arming entirely if Tandem launched this session — it is",
+  "Arm at most once per session on your own and keep at most one watch live; re-arm only when your",
+  "client ends that watch at a deadline and says so, or when the user asks you to watch and none is",
+  "live. Skip arming entirely if Tandem launched this session — it is",
   "already woken on its input, and a second watch double-wakes every event.",
   "In solo mode, hold annotations rather than surfacing them.",
 ].join(" ");

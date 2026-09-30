@@ -1922,8 +1922,7 @@ Three reasons, in ascending order of force:
 > no-timeout `persistent` option"*. The Monitor schema on 2.1.284 is
 > `additionalProperties: false` with `description` and `timeout_ms` required. So `SKILL.md`'s
 > `persistent: true` call does not validate against the current schema. Whether models
-> self-corrected after the validation error went unobserved: a recorded pre-2.1.271 call carried a
-> model-filled `description` and `timeout_ms`. Separately, the skill's once-per-session bound
+> self-corrected after the validation error is unobserved. Separately, the skill's once-per-session bound
 > forbade the re-arm the host now asks for.
 >
 > The skill (version 28) now arms with `description: "Tandem wake", timeout_ms: 1800000` and
@@ -1940,9 +1939,10 @@ Three reasons, in ascending order of force:
 > wake, a close and a stand-down. The plugin's own monitor is told apart only by its different
 > description; that part is not measured.
 >
-> The bound is now **one live watch at a time**. That covers a re-arm after expiry, and a
-> user-requested re-arm when no watch is live, for example after a Tandem restart closed the
-> socket. A visible "Tandem launched you" turn wins over an expiry notice. `SERVER_INSTRUCTIONS` ties the re-arm to the client's own expiry notice
+> The bound is now **one live watch at a time**, with exactly two re-arm exceptions: an expiry
+> notice for the session's own watch, and the user asking to watch while no watch is live. The
+> second covers a Tandem restart that closed the socket. It never applies to a watch stood down as
+> a duplicate. A visible "Tandem launched you" turn wins over an expiry notice. `SERVER_INSTRUCTIONS` ties the re-arm to the client's own expiry notice
 > rather than saying "keep one armed", because that text survives compaction without the skill's
 > fail-closed guard.
 >

@@ -86,8 +86,9 @@ describe("MCP server instructions", () => {
     // Watches have a deadline since Claude Code 2.1.271, so a re-arm must be allowed. But this
     // text survives compaction without SKILL.md's fail-closed guard, so "keep one armed" would
     // ask a compacted session to maintain state it cannot see, and it would arm a second watch.
+    expect(SERVER_INSTRUCTIONS).toMatch(/keep at most one watch live/i);
     expect(SERVER_INSTRUCTIONS).toMatch(
-      /except to re-arm that same watch when your client ends it at a deadline and says so/i,
+      /re-arm only when your client ends that watch at a deadline and says so, or when the user asks you to watch and none is live/i,
     );
     expect(SERVER_INSTRUCTIONS).not.toMatch(/keep (?:one|a watch) armed|persistent watch/i);
   });
@@ -96,7 +97,7 @@ describe("MCP server instructions", () => {
     // A bare "Skip that" placed right after the re-arm sentence reads as "skip the re-arm",
     // leaving the initial arm unexempted for launched sessions. The carve-out has to come last
     // and name arming as a whole.
-    const rearm = SERVER_INSTRUCTIONS.search(/except to re-arm that same watch/i);
+    const rearm = SERVER_INSTRUCTIONS.search(/re-arm only when your client ends that watch/i);
     const carveOut = SERVER_INSTRUCTIONS.search(
       /Skip arming entirely if Tandem launched this session/i,
     );
