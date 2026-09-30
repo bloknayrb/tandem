@@ -245,8 +245,8 @@ export const SERVER_INSTRUCTIONS = [
   "tandem_open, tandem_scratchpad and a read-mode tandem_status (no text argument) return — the first",
   "one you see is the one to use, and a later response carrying it is not a second invitation.",
   "Arm at most once per session on your own and keep at most one watch live; re-arm only when your",
-  "client ends that watch at a deadline and says so, or when the user asks you to watch (if every",
-  "wake then arrives twice, stop the older watch). Skip arming entirely if Tandem launched this session — it is",
+  "client ends that watch at a deadline and says so, or when the user asks you to watch. If every",
+  "wake ever arrives twice, stop one watch. Skip arming entirely if Tandem launched this session — it is",
   "already woken on its input, and a second watch double-wakes every event.",
   "In solo mode, hold annotations rather than surfacing them.",
 ].join(" ");

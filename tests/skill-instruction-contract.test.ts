@@ -179,12 +179,23 @@ function expectPerSessionAutoArmContract(skill: string): void {
     /You cannot always tell whether an older watch is still live, so do not try to/i,
   );
   expect(wake).toMatch(
-    /if every wake then arrives twice, the stand-down below removes the extra one/i,
+    /Arm, and if every wake then arrives twice, the stand-down below removes the extra one/i,
+  );
+  expect(wake).toMatch(/This is how a watch comes back after a Tandem restart/i);
+  // "Keep the newer" could strand a double: after compaction the older watch's task id is gone,
+  // and each surviving watch re-arms itself at every expiry. Stopping either one heals it.
+  expect(wake).toMatch(
+    /If both are your own `Tandem wake` watches, stop one of them: the older if you can identify it, otherwise either one/i,
   );
   expect(wake).toMatch(
-    /If both are your own `Tandem wake` watches, stop the older one and keep the newer/i,
+    /Never re-arm, on your own initiative, a watch you stood down; only the user asking you to watch brings one back/i,
   );
-  expect(wake).toMatch(/only the user asking you to watch brings one back/i);
+  // The operative halves of the stand-down and launcher rules, not just their headings.
+  expect(wake).toMatch(/If every wake arrives twice, you are the second consumer — stand down/i);
+  expect(wake).toMatch(/rather than leaving both running/i);
+  expect(wake).toMatch(/If one is in view, do not re-arm/i);
+  expect(wake).toMatch(/Tandem wakes you directly retracts your watch/i);
+  expect(wake).toMatch(/your watch is the duplicate — stop it with `TaskStop`/i);
   // The launcher retraction is the one case a request must not undo.
   expect(wake).toMatch(/A watch retracted this way is never re-armed, not even when asked/i);
   expect(wake).toMatch(/"stop trying" never outlasts a fresh request/i);
@@ -486,7 +497,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "28", bodyHash: "d4de0ba39ee0" });
+    ).toEqual({ version: "28", bodyHash: "44bbe28f9456" });
   });
 
   // #1770: the skill is the only surface that tells Claude what it may NOT do with a card

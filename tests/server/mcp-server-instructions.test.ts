@@ -92,7 +92,9 @@ describe("MCP server instructions", () => {
     );
     // The user-request path cannot check liveness after compaction, so it carries its own
     // recovery instead of a condition the session cannot evaluate.
-    expect(SERVER_INSTRUCTIONS).toMatch(/if every wake then arrives twice, stop the older watch/i);
+    // Its own sentence, not a parenthetical on the user-request path: a double can also come from
+    // a post-compaction first arm, which this text alone does not guard.
+    expect(SERVER_INSTRUCTIONS).toMatch(/\. If every wake ever arrives twice, stop one watch\./i);
     expect(SERVER_INSTRUCTIONS).not.toMatch(/none is live/i);
     expect(SERVER_INSTRUCTIONS).not.toMatch(/keep (?:one|a watch) armed|persistent watch/i);
   });

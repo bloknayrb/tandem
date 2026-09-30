@@ -1944,7 +1944,9 @@ Three reasons, in ascending order of force:
 > for the session's own watch, and the user asking to watch. Neither event depends on the model
 > remembering whether a watch is live, which a compacted session cannot do. A user request can
 > therefore produce a double, for example after compaction. The existing doubled-wake stand-down
-> removes it: stop the older watch. The inbox de-duplicates, so the cost is a wasted turn.
+> removes it: stop one watch, the older if it can be identified. The inbox de-duplicates, so the
+> cost is a wasted turn. A watch stood down as a duplicate is not re-armed on the model's own
+> initiative.
 >
 > A visible "Tandem launched you" turn wins over both events. `SERVER_INSTRUCTIONS` carries the
 > same two events rather than "keep one armed", because that text survives compaction without the
