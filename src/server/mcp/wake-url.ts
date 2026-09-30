@@ -25,16 +25,18 @@
  * **Why this is a per-tool list rather than a response-wrapper attach.**
  * `response.ts` already wraps every non-error envelope (`withWakeAdvisory`), so
  * a central attach looks like the deeper fix. It is not, and the reason is
- * state: `wakeUrl` is wanted ONCE per session, at the FIRST response. An
+ * state: `wakeUrl` is wanted at the FIRST response (and again only if the
+ * model must re-fetch it to re-arm an expired watch, via `tandem_status`). An
  * unconditional attach is the `tandem_checkInbox` hazard generalized to every
  * tool. A latched attach cannot be written — no per-session identity is
  * available at this layer (`claudeSessionId` is absent on direct HTTP,
  * `mcpSessionId` on MCP `2026-07-28`), so the latch would be process-global and
  * would permanently deny the URL to every session after the first in a server
  * run: strictly worse than the bug it would fix. So this layer stays stateless
- * and deterministic — same tool, same field — and the once-per-session bound
- * lives in the only layer holding session state, the model's own instructions
- * (`SKILL.md`'s "**first** … not a second invitation", pinned by
+ * and deterministic — same tool, same field — and the arming bound (once per
+ * session, re-armed only on the host's expiry notice since #2128) lives in the
+ * only layer holding session state, the model's own instructions (`SKILL.md`'s
+ * "**first** … not a second invitation", pinned by
  * `tests/skill-instruction-contract.test.ts`).
  */
 

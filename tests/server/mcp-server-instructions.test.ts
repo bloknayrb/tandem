@@ -59,7 +59,7 @@ describe("MCP server instructions", () => {
     // Reaches every MCP client, and a non-Claude client has no SKILL.md and no Monitor tool. Naming
     // one as a requirement would make the text wrong for that population rather than merely
     // inapplicable.
-    expect(SERVER_INSTRUCTIONS).toMatch(/if your client can hold a persistent watch/i);
+    expect(SERVER_INSTRUCTIONS).toMatch(/if your client can hold a watch/i);
     expect(SERVER_INSTRUCTIONS).not.toMatch(/\bskill\b/i);
   });
 
@@ -80,6 +80,35 @@ describe("MCP server instructions", () => {
   it("bounds arming to once per session", () => {
     // A model re-reading an unbounded instruction late in a long session arms a second watch.
     expect(SERVER_INSTRUCTIONS).toMatch(/at most once/i);
+  });
+
+  it("ties re-arming to events the session can see, not to a standing obligation (#2128)", () => {
+    // Watches have a deadline since Claude Code 2.1.271, so a re-arm must be allowed. But this
+    // text survives compaction without SKILL.md's fail-closed guard, so "keep one armed" would
+    // ask a compacted session to maintain state it cannot see, and it would arm a second watch.
+    expect(SERVER_INSTRUCTIONS).toMatch(/keep at most one watch live/i);
+    expect(SERVER_INSTRUCTIONS).toMatch(
+      /re-arm only when your client ends that watch at a deadline and says so, or when the user asks you to watch/i,
+    );
+    // The user-request path cannot check liveness after compaction, so it carries its own
+    // recovery instead of a condition the session cannot evaluate.
+    // Its own sentence, not a parenthetical on the user-request path: a double can also come from
+    // a post-compaction first arm, which this text alone does not guard.
+    expect(SERVER_INSTRUCTIONS).toMatch(/\. If every wake ever arrives twice, stop one watch\./i);
+    expect(SERVER_INSTRUCTIONS).not.toMatch(/none is live/i);
+    expect(SERVER_INSTRUCTIONS).not.toMatch(/keep (?:one|a watch) armed|persistent watch/i);
+  });
+
+  it("keeps the launcher carve-out after the re-arm clause and scoped to ALL arming (#2128)", () => {
+    // A bare "Skip that" placed right after the re-arm sentence reads as "skip the re-arm",
+    // leaving the initial arm unexempted for launched sessions. The carve-out has to come last
+    // and name arming as a whole.
+    const rearm = SERVER_INSTRUCTIONS.search(/re-arm only when your client ends that watch/i);
+    const carveOut = SERVER_INSTRUCTIONS.search(
+      /Skip arming entirely if Tandem launched this session/i,
+    );
+    expect(rearm).toBeGreaterThan(-1);
+    expect(carveOut).toBeGreaterThan(rearm);
   });
 
   it("states the Solo contract, which gates AI surfacing", () => {

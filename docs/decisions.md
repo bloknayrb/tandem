@@ -1916,6 +1916,55 @@ Three reasons, in ascending order of force:
 > `SKILL.md` should be expected to fire more often than before. It is the recovery, and it works
 > — but a rise in its rate is a consequence of this change, not evidence of a new fault.
 
+> **Amendment (2026-09-29) — the watch is no longer persistent; it expires and is re-armed (#2128).**
+> Claude Code 2.1.271 (npm 2026-09-14) *"Changed Monitor watches to always have a deadline (at
+> most 30 minutes; 10 in single-prompt `-p` runs) and notify Claude to re-arm, replacing the
+> no-timeout `persistent` option"*. The Monitor schema on 2.1.284 is
+> `additionalProperties: false` with `description` and `timeout_ms` required. So `SKILL.md`'s
+> `persistent: true` call does not validate against the current schema. Whether models
+> self-corrected after the validation error is unobserved. Separately, the skill's once-per-session bound
+> forbade the re-arm the host now asks for.
+>
+> The skill (version 28) now arms with `description: "Tandem wake", timeout_ms: 1800000` and
+> re-arms on exactly two events: an expiry notice for that watch, or the user asking. Two host
+> behaviours were **measured on
+> 2.1.284** before the rule was written against them:
+> - an expiry arrives as `Monitor event: "Tandem wake"` / `[Monitor expired after … Re-arm it if
+>   you still need the watch …]`
+> - a server-side close arrives as `[WebSocket closed: 1006 Connection ended]`, with no re-arm
+>   prompt, measured against an isolated probe server
+>
+> `TaskStop` produces `[Monitor stopped]`, not an expiry. Every event from a watch carries its
+> `description` as the label, ordinary wakes included, so the skill keys the re-arm on the
+> `[Monitor expired …]` text and not on the label alone. That separates our watch's expiry from a
+> wake, a close and a stand-down. The plugin's own monitor is told apart only by its different
+> description; that part is not measured.
+>
+> The bound is now **one live watch at a time**, with exactly two re-arm events: an expiry notice
+> for the session's own watch, and the user asking to watch. Neither event depends on the model
+> remembering whether a watch is live, which a compacted session cannot do. A user request can
+> therefore produce a double, for example after compaction. The existing doubled-wake stand-down
+> removes it: stop one watch, the older if it can be identified. The inbox de-duplicates, so the
+> cost is a wasted turn. A watch stood down as a duplicate is not re-armed on the model's own
+> initiative.
+>
+> A visible "Tandem launched you" turn wins over both events. `SERVER_INSTRUCTIONS` carries the
+> same two events rather than "keep one armed", because that text survives compaction without the
+> skill's fail-closed guard.
+>
+> **Unmeasured:** a pre-2.1.271 host. The repo's own records show its schema had `timeout_ms`,
+> so it most likely *accepts* the new call and the watch then ends silently at 30 minutes with no
+> re-arm notice. That is a regression from its old persistent watch, bounded by Claude Code's
+> auto-update.
+>
+> **Also unmeasured:**
+> - Whether a single-prompt `-p` run rejects or clamps `timeout_ms: 1800000`. The skill says to
+>   use 600000 there.
+> - Whether plugin (manifest) monitors also expire. If they do, a session that stood its own
+>   watch down in favour of the plugin's loses wake at the plugin's deadline.
+>
+> **Cost:** an idle hand-started session now spends one short turn every 30 minutes re-arming.
+
 **Cross-references:** [ADR-045](#adr-045-mcp-transport-multiplexing--one-mcpserver-per-session-keyed-by-mcp-session-id) (why neither session id is a usable key), ADR-027 (the Solo/privacy contract the strip reinforces), #1266 (the supervisor's payload-free wake), `docs/spikes/monitor-self-arm-probe.md` (P-A2, P4, and the burst measurement).
 
 ---

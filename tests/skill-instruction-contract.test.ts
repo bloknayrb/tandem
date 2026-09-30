@@ -117,7 +117,12 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // 27 is the .docx ship-dark group (ADR-053): the .docx Review Workflow became a plain
   // Review Workflow and Hard Rule 8 now says Word files do not open. Outside the wake
   // section; every wake assertion below was re-read against the bumped file.
-  expect(skill).toMatch(/^version:\s*27$/m);
+  // 28 is #2128, and it IS a wake-section change. Claude Code 2.1.271 removed Monitor's
+  // `persistent` option and gave every watch a deadline plus an expiry notice, so the fence
+  // changed shape and a re-arm rule was added, keyed on the `[Monitor expired …]` text. Both
+  // the host's expiry notice and its socket-close notice were measured on 2.1.284 before the
+  // rule was written against them.
+  expect(skill).toMatch(/^version:\s*28$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
   // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
@@ -139,8 +144,77 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // "any URL of that shape", which is the hardcoded-port silent failure this section exists
   // to prevent.
   expect(wake).toContain(
-    "Monitor({ ws: { url: <the wakeUrl Tandem returned> }, persistent: true })",
+    'Monitor({ ws: { url: <the wakeUrl Tandem returned> }, description: "Tandem wake", timeout_ms: 1800000 })',
   );
+  // `persistent` was removed in Claude Code 2.1.271, and the current schema is
+  // additionalProperties:false, so a fence carrying it fails validation outright (#2128).
+  expect(wake).not.toMatch(/persistent:\s*true/);
+  // Re-arming: one bound (one live watch) and exactly two events that allow another arm. Since
+  // Claude Code 2.1.271 every watch has a deadline, so without event 1 a hand-started session
+  // stops being woken after 30 minutes.
+  expect(wake).toMatch(/Arm it at most once per session on your own/i);
+  expect(wake).toMatch(/re-arm only as "Re-arming" below allows/i);
+  expect(wake).toMatch(/never keep more than one watch live at a time/i);
+  expect(wake).toMatch(/\*\*Re-arming\.\*\* The bound is one live watch at a time/i);
+  expect(wake).toMatch(/Exactly two things let you arm again after your first arm/i);
+  expect(wake).toMatch(/Use exactly that `description`/i);
+  expect(wake).toMatch(/Every event from this watch carries it as a label/i);
+  // Every event from the watch carries the same `Monitor event: "Tandem wake"` label, so the
+  // label alone cannot identify an expiry. Re-arming on an ordinary wake leaves the first watch
+  // running, doubles every wake, trips the stand-down, and can end with no watch at all.
+  expect(wake).toMatch(/An ordinary wake carries the same `Tandem wake` label/i);
+  expect(wake).toMatch(/only an event whose text says `\[Monitor expired …\]` is an expiry/i);
+  expect(wake).toMatch(
+    /When an expiry names your `Tandem wake` watch, arm it again with the same call/i,
+  );
+  expect(wake).toMatch(/The new watch replaces the one that expired, so you still have one/i);
+  // Without this override, every compacted session would lose wake at its next 30-minute expiry.
+  expect(wake).toMatch(
+    /An expiry notice overrides "if you cannot see the start, do not arm", because only a session that armed a watch receives one/i,
+  );
+  // Event 2 must not depend on the model knowing whether a watch is live: after a compaction it
+  // cannot know. A resulting double is removed by the doubled-wake stand-down.
+  expect(wake).toMatch(/\*\*The user asking you to watch\.\*\*/i);
+  expect(wake).toMatch(
+    /You cannot always tell whether an older watch is still live, so do not try to/i,
+  );
+  expect(wake).toMatch(
+    /Arm, and if every wake then arrives twice, the stand-down below removes the extra one/i,
+  );
+  expect(wake).toMatch(/This is how a watch comes back after a Tandem restart/i);
+  // "Keep the newer" could strand a double: after compaction the older watch's task id is gone,
+  // and each surviving watch re-arms itself at every expiry. Stopping either one heals it.
+  expect(wake).toMatch(
+    /If both are your own `Tandem wake` watches, stop one of them: the older if you can identify it, otherwise either one/i,
+  );
+  expect(wake).toMatch(
+    /Never re-arm, on your own initiative, a watch you stood down; only the user asking you to watch brings one back/i,
+  );
+  // The operative halves of the stand-down and launcher rules, not just their headings.
+  expect(wake).toMatch(/If every wake arrives twice, you are the second consumer — stand down/i);
+  expect(wake).toMatch(/rather than leaving both running/i);
+  expect(wake).toMatch(/If one is in view, do not re-arm/i);
+  expect(wake).toMatch(/Tandem wakes you directly retracts your watch/i);
+  expect(wake).toMatch(/your watch is the duplicate — stop it with `TaskStop`/i);
+  // The launcher retraction is the one case a request must not undo.
+  expect(wake).toMatch(/A watch retracted this way is never re-armed, not even when asked/i);
+  expect(wake).toMatch(/"stop trying" never outlasts a fresh request/i);
+  // Guessing the port after a restart is the silent failure the section warns about.
+  expect(wake).toMatch(
+    /re-read `wakeUrl` with one read-mode `tandem_status` if it is not in view, or if Tandem restarted since you last read it\. Guessing it is the silent failure described above/i,
+  );
+  // Measured: a server-side close arrives as `[WebSocket closed: …]`, with no re-arm prompt.
+  // Re-arming on it would reconnect into a dead or restarted server on every close.
+  expect(wake).toMatch(
+    /Nothing else is a reason to arm again:\n- a wake\n- a socket close \(`\[WebSocket closed: …\]`, which is what a Tandem restart looks like\)\n- a failed arm\n- an event from any other monitor, including the Tandem plugin's own/i,
+  );
+  expect(wake).toMatch(/After a socket close, say once that the watch ended and keep polling/i);
+  // A single-prompt run caps the deadline at 10 minutes, so the 30-minute value is scoped.
+  expect(wake).toMatch(/watches cap at 10 minutes, so use `timeout_ms: 600000`/i);
+  // Precedence: a visible launcher clause beats an expiry notice, so a launched session that
+  // wrongly armed stands down instead of reading the notice as proof it was hand-started.
+  expect(wake).toMatch(/A turn saying Tandem launched you or wakes you directly wins/i);
+  expect(wake).toMatch(/If the re-arm itself fails, say so once and stop trying/i);
   // The launcher test, stated where arming is decided rather than three paragraphs below it.
   // Mirrors SUPERVISOR_NO_ARM_CLAUSE, which rides both the bootstrap and every wake turn.
   expect(wake).toMatch(/How to tell which you are/i);
@@ -207,7 +281,7 @@ describe("shipped Tandem skill instruction contract", () => {
     expect(reviewWorkflow(skill)).toMatch(/after you know `mode`/i);
   });
 
-  it("attempts one session-local persistent wake watch on first hand-started use", () => {
+  it("attempts one session-local wake watch on first hand-started use, re-armed only on expiry", () => {
     expectPerSessionAutoArmContract(readShippedSkill());
   });
 
@@ -253,6 +327,11 @@ describe("shipped Tandem skill instruction contract", () => {
       "Arm a persistent watch for this turn",
     ],
     [
+      "the wake-is-not-an-expiry distinction",
+      "only an event whose text says `[Monitor expired …]` is an expiry",
+      "any event carrying that label is an expiry",
+    ],
+    [
       "the not-a-second-invitation clause",
       "a later response carrying `wakeUrl` is not a second invitation",
       "each later response carrying `wakeUrl` is a fresh invitation",
@@ -261,6 +340,36 @@ describe("shipped Tandem skill instruction contract", () => {
       "the failed-attempt stop rule",
       "If the Monitor tool is absent or the attempt fails, say so once and stop trying.",
       "If the Monitor tool is absent or the attempt fails, retry it on every turn.",
+    ],
+    [
+      "the re-arm-on-expiry exception",
+      "When an expiry names your `Tandem wake` watch, arm it again",
+      "When an expiry names your `Tandem wake` watch, leave it",
+    ],
+    [
+      "the socket-close keep-polling rule",
+      "After a socket close, say once that the watch ended and keep polling.",
+      "After a socket close, re-arm at once.",
+    ],
+    [
+      "the compaction override for an expiry re-arm",
+      'An expiry notice overrides "if you cannot see the start, do not arm"',
+      'An expiry notice never overrides "if you cannot see the start, do not arm"',
+    ],
+    [
+      "the launcher-retraction no-re-arm rule",
+      "A watch retracted this way is never re-armed, not even when asked",
+      "A watch retracted this way is re-armed when asked",
+    ],
+    [
+      "the launcher-clause precedence over an expiry notice",
+      "A turn saying Tandem launched you or wakes you directly wins.",
+      "An expiry notice wins over a turn saying Tandem launched you.",
+    ],
+    [
+      "the removed persistent option",
+      'description: "Tandem wake", timeout_ms: 1800000 })',
+      "persistent: true })",
     ],
     [
       "the duplicate-watch stand-down direction",
@@ -388,7 +497,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "27", bodyHash: "d43a4b79ffe5" });
+    ).toEqual({ version: "28", bodyHash: "44bbe28f9456" });
   });
 
   // #1770: the skill is the only surface that tells Claude what it may NOT do with a card
