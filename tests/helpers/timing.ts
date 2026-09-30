@@ -66,9 +66,10 @@ export function expectWithinMs(elapsedMs: number, budgetMs: number, proxyFor: st
  * written as the second argument to `it`/`beforeAll` -- the explicit value
  * wins. So the handful of places that set their own ceiling have to opt in, or
  * they fail under instrumentation for a reason that has nothing to do with what
- * they assert. Both current callers are in that position: one builds 1,500
- * editor entries, the other scans every tracked `.md` in the repo (measured at
- * 175s instrumented, against a 120s ceiling).
+ * they assert. Every caller is in that position. For example, one builds 1,500
+ * editor entries, and another scans every tracked `.md` in the repo (measured
+ * at 175s instrumented, against what was then a 120s ceiling; its uninstrumented
+ * ceiling is 300s since #2126, to absorb suite contention).
  *
  * This is only ever safe where duration is NOT the property under test. Where
  * it is, use {@link expectWithinMs}, which suspends the bound and gets the site
