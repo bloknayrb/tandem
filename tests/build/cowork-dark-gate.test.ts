@@ -16,13 +16,21 @@
  *     a twelfth command arriving ungated;
  *   - where the gate sits in each gated arm — `cowork_toggle_integration` is
  *     the one command whose gate must NOT open the arm, because the same
- *     command is the only in-app disable, and a past enabler needs it;
+ *     command is the disable path, and disable only removes;
  *   - the gate's own body — `|| cfg!(debug_assertions)` or an env read would
  *     leave both literals `false` and every row satisfied;
- *   - the heal spawn sits under the const — it is not a command, runs with no
- *     UI, and writes the auth token into Claude Desktop's files;
- *   - a census of who calls the four write primitives — a new caller is the
- *     write path no command row can see.
+ *   - every reference to the gate and the literal, counted — a refusal added
+ *     somewhere no row looks, or a second gate under another name;
+ *   - the heal pass and its spawn sit under the const — the pass is not a
+ *     command, runs with no UI, and writes the auth token into Claude
+ *     Desktop's files;
+ *   - a census of who calls a write primitive or writes meta — a new caller
+ *     is the write path no command row can see.
+ *
+ * WHAT IT CANNOT SEE. These are shape checks. Nothing here invokes a command
+ * and observes a refusal, and a write reached by a route the scanners do not
+ * model (a primitive passed as a function value, a new primitive) is outside
+ * them. They narrow what a careless edit can do; they are not a proof.
  *
  * All extraction runs on `code` (comments and `#[cfg(test)]` modules stripped):
  * two doc comments in the module name `cowork_toggle_integration(`, and a
@@ -150,12 +158,26 @@ describe("Cowork ships dark (ADR-055): the Rust gate", () => {
     );
   });
 
-  it("the gate is called from the gated rows and from nowhere else", () => {
-    // One call per gated row. A stray call in the toggle's disable branch, or
-    // in a helper an ungated command goes through, refuses a removal while
-    // every row above still holds.
+  it("every reference to the gate and the literal is accounted for", () => {
+    // Counted by identifier across the crate, not by the spelling of one call.
+    // A refusal added to the toggle's disable branch, or to a helper an
+    // ungated command goes through, refuses a removal with every row above
+    // still true; so does a second gate built from the same parts under
+    // another name. Each of those adds a reference, and this is where it shows.
     const gated = Object.values(TABLE).filter((row) => row.gate !== "none");
-    expect(COMMANDS.code.split(GATE_CALL).length - 1).toBe(gated.length);
+    const refs = (id: string) =>
+      SOURCES.reduce((n, f) => n + [...f.code.matchAll(new RegExp(`\\b${id}\\b`, "g"))].length, 0);
+    expect({
+      refuse_if_dark: refs("refuse_if_dark"),
+      refuse_if: refs("refuse_if"),
+      COWORK_DARK_ERR: refs("COWORK_DARK_ERR"),
+      COWORK_ENABLED: refs("COWORK_ENABLED"),
+    }).toEqual({
+      refuse_if_dark: gated.length + 1, // one call per gated row, and the definition
+      refuse_if: 2, // the definition, and the call inside `refuse_if_dark`
+      COWORK_DARK_ERR: 2, // the definition, and `refuse_if`'s `Err`
+      COWORK_ENABLED: 4, // the definition, `refuse_if_dark`, the heal pass, the heal spawn
+    });
   });
 
   it("every #[tauri::command] in the module has a row, and every row a command", () => {
@@ -283,8 +305,11 @@ describe("Cowork ships dark (ADR-055): who can write into a workspace", () => {
   });
 
   it("no write primitive is imported under another name", () => {
-    // The census matches calls by name, so `use … as install` hides one.
-    const aliased = new RegExp(String.raw`\b(?:${WRITE_PRIMITIVES.join("|")})\s+as\s+\w+`);
+    // The census matches calls by name, so `use … as install` hides one, and
+    // so does `use cowork_meta::update;` followed by a bare `update(…)`.
+    const aliased = new RegExp(
+      String.raw`\b(?:${WRITE_PRIMITIVES.join("|")})\s+as\s+\w+|\buse\s[^;]*cowork_meta::(?:\{[^}]*\b(?:update|save)\b|(?:update|save)\b)`,
+    );
     expect(SOURCES.filter((f) => aliased.test(f.code)).map((f) => f.rel)).toEqual([]);
   });
 

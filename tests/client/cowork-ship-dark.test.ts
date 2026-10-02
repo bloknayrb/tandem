@@ -214,9 +214,9 @@ describe("Cowork ships dark (ADR-055): who can reach a Cowork surface", () => {
 
   /**
    * The Cowork surface itself: these mount and poll unconditionally by design.
-   * Named one by one. A `Cowork*.svelte` pattern would wave through a new
-   * wrapper component, and whatever imported the wrapper would not be seen
-   * reaching anything.
+   * Named one by one, in every directory. A name pattern or a directory prefix
+   * waves through a new wrapper, and whatever imports the wrapper is then not
+   * seen reaching anything.
    */
   const LEAVES = new Set([
     "components/CoworkSettings.svelte",
@@ -224,15 +224,34 @@ describe("Cowork ships dark (ADR-055): who can reach a Cowork surface", () => {
     "components/CoworkAdminDeclinedModal.svelte",
     "hooks/useCoworkStatus.svelte.ts",
     "hooks/useCoworkPreflight.svelte.ts",
+    "cowork/cowork-helpers.ts",
+    "cowork/cowork-invoke.ts",
+    "cowork/coworkAdminDismiss.svelte.ts",
   ]);
-  const isLeaf = (rel: string) => rel.startsWith("cowork/") || LEAVES.has(rel);
 
-  // Four ways in: importing a Cowork component (as an import specifier, quotes
-  // included, because a bare filename match also catches prose), starting a
-  // status or pre-flight hook, calling a `coworkXxx(` invoke wrapper, or
-  // naming a `cowork_*` command directly.
-  const REACHES =
-    /["'][^"']*\/Cowork\w+\.svelte["']|\bcreate(?:CoworkStatus|SubnetPreflight)\s*\(|\bcowork[A-Z]\w*\s*\(|["']cowork_\w+["']/;
+  /**
+   * The invoke wrappers, read from the module that defines them. Derived so a
+   * new wrapper is covered the day it is exported, and exact so a pure helper
+   * that happens to start with `cowork` (`coworkSettingsVariant`) is not.
+   */
+  const WRAPPERS = [
+    ...readFileSync(join(CLIENT, "cowork", "cowork-invoke.ts"), "utf8").matchAll(
+      /^export (?:async )?function (cowork\w+)/gm,
+    ),
+  ].map((m) => m[1]);
+
+  // Four ways in: importing a Cowork component, starting a status or
+  // pre-flight hook, calling an invoke wrapper, or naming a `cowork_*` command.
+  const REACHES = new RegExp(
+    String.raw`["'][^"']*/Cowork\w+\.svelte["']|\bcreate(?:CoworkStatus|SubnetPreflight)\s*\(|\b(?:${WRAPPERS.join("|")})\s*\(|["']cowork_\w+["']`,
+  );
+
+  /** Comments out, so a module that only MENTIONS a wrapper is not a parent. */
+  const stripComments = (src: string) =>
+    src
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/<!--[\s\S]*?-->/g, "")
+      .replace(/(^|[^:"'`\\])\/\/[^\n]*/g, "$1");
 
   const PARENTS = [
     "App.svelte",
@@ -249,9 +268,16 @@ describe("Cowork ships dark (ADR-055): who can reach a Cowork surface", () => {
     .map((e) => join(e.parentPath, e.name))
     .map((abs) => ({
       rel: abs.slice(CLIENT.length + 1).replace(/\\/g, "/"),
-      text: readFileSync(abs, "utf8"),
+      text: stripComments(readFileSync(abs, "utf8")),
     }))
-    .filter((f) => !isLeaf(f.rel) && REACHES.test(f.text));
+    .filter((f) => !LEAVES.has(f.rel) && REACHES.test(f.text));
+
+  it("finds the wrappers it is meant to look for", () => {
+    // An empty list would turn that alternative into `\b(?:)\s*\(`, which
+    // matches any parenthesis after a word boundary.
+    expect(WRAPPERS).toContain("coworkToggleIntegration");
+    expect(WRAPPERS).toContain("coworkGetStatus");
+  });
 
   it("only the known parents do", () => {
     expect(reaching.map((f) => f.rel).sort()).toEqual([...PARENTS, ...DEV_ONLY].sort());

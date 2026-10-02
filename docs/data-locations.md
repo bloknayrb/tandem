@@ -167,18 +167,23 @@ The desktop app's server listens on this computer only, so none of that exposes 
 while you run the desktop app. There is no in-app switch to turn it off any more. To remove it:
 
 - **Uninstall the desktop app.** Its uninstaller removes the workspace entries and
-  `cowork-meta.json`.
-- **Or run `npx tandem-editor --uninstall-scrub`** (plain `tandem --uninstall-scrub` if
-  you have the npm install). It removes the workspace entries, **and also Tandem's MCP
-  entries and the bundled skill**, so re-run the integration wizard afterwards if you are
-  keeping Tandem. It leaves `cowork-meta.json`, which you can delete by hand.
-- **The firewall rule can survive either one**, because Tandem never runs elevated and
+  `cowork-meta.json`. This is the one route that works for every Claude Desktop install.
+  If you are keeping Tandem, install it again afterwards; your documents, sessions and
+  annotations are not touched.
+- **`tandem --uninstall-scrub` is not a substitute.** It looks for Cowork workspaces only
+  under the Microsoft Store layout of Claude Desktop (`%LOCALAPPDATA%\Packages\Claude_*`),
+  so with the direct-download Claude Desktop, which keeps them under `%APPDATA%\Claude\`,
+  it finds none and leaves the entries where they are (#2136). It also removes Tandem's MCP
+  entries and the bundled skill, and it leaves `cowork-meta.json`.
+- **The firewall rule can survive the uninstall**, because Tandem never runs elevated and
   deleting a rule needs an administrator. Open `wf.msc` as administrator and delete every
-  inbound rule whose name starts with `Tandem Cowork`, or from an administrator prompt:
-  `netsh advfirewall firewall delete rule name="Tandem Cowork"`.
+  inbound rule whose name starts with `Tandem Cowork`. From an administrator prompt,
+  `netsh advfirewall firewall delete rule name="Tandem Cowork"` removes the rule that
+  admits traffic.
 
-The token in the workspace entries is the desktop app's own, kept in the OS keychain.
-`tandem rotate-token` does not change it, so removing the entries is the way to retire it.
+The token in the workspace entries is the desktop app's own. It is normally kept in the OS
+keychain, where `tandem rotate-token` does not reach it, so removing the entries is the way
+to retire it.
 
 ## Uninstalling cleanly
 
