@@ -39,9 +39,9 @@
 ; of `Section Uninstall` — before any $UpdateMode check of its own. Without the
 ; guard, every routine upgrade would run the full scrub: the user's Cowork
 ; registrations, firewall rules, and start-at-login preference would all be
-; wiped on each release. Cowork self-heals within five minutes and firewall
-; rules are re-added on demand, but the autostart preference would silently
-; vanish every time the app updated itself.
+; wiped on each release. While Cowork setup ships dark (ADR-055) nothing would
+; put a past enabler's registrations back, and the autostart preference would
+; silently vanish every time the app updated itself.
 ;
 ; `$UpdateMode` IS populated here: the template's `un.onInit` parses `/UPDATE`
 ; from the command line and `FunctionEnd`s immediately before `Section

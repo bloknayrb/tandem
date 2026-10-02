@@ -86,17 +86,26 @@ use crate::single_flight;
 #[cfg(not(target_os = "windows"))]
 const WINDOWS_ONLY_ERR: &str = "Cowork integration is Windows-only";
 
-/// Tandem's Cowork setup ships DARK (ADR-055, 2026-10-02): the installer route
-/// it builds is unverified under the sidecar's loopback pin, so v1.0 does not
-/// offer it. Mirrors `COWORK_ENABLED` in `src/shared/constants.ts`;
-/// `tests/build/cowork-dark-gate.test.ts` fails on a half-flip.
+/// Tandem's Cowork setup ships DARK (ADR-055): the installer route it builds
+/// is unverified under the sidecar's loopback pin. Mirrors `COWORK_ENABLED` in
+/// `src/shared/constants.ts`; `tests/build/cowork-dark-gate.test.ts` fails on
+/// a half-flip.
 ///
-/// While false, every command that would write into a Cowork workspace, write
-/// `cowork-meta.json` or add a firewall rule refuses, and the heal task is
-/// never spawned. Disable, per-workspace uninstall, the read-only commands and
-/// the uninstall scrub keep working: someone who enabled Cowork in an earlier
-/// version keeps their entries, and removing them must stay possible.
+/// While false, every command that would add Tandem entries to a Cowork
+/// workspace, record an enable or an override in `cowork-meta.json`, or add a
+/// firewall rule refuses, and the heal pass does nothing. The removals
+/// (disable, per-workspace uninstall, the uninstall scrub) and the read-only
+/// commands still answer, though no shipped UI calls them while dark: someone
+/// who enabled Cowork in an earlier version keeps their entries, and nothing
+/// here may stand in the way of removing them.
 pub(crate) const COWORK_ENABLED: bool = false;
+
+/// Whether an earlier version left Cowork recorded as enabled. A meta file
+/// that cannot be read counts as not enabled: this only feeds a log line.
+#[cfg(target_os = "windows")]
+pub(crate) fn cowork_was_enabled() -> bool {
+    cowork_meta::load().map(|m| m.enabled).unwrap_or(false)
+}
 
 /// Error string returned by every enable-side command while dark.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]

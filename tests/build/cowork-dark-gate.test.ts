@@ -49,10 +49,15 @@ const COMMANDS = (() => {
   return hits[0];
 })();
 
-/** Where a command is declared. `g` so the same shape enumerates them all. */
+/**
+ * Where a command is declared. `g` so the same shape enumerates them all.
+ * Tolerates arguments on the attribute (`#[tauri::command(rename_all = …)]`)
+ * and further attributes before the `fn`: either one, on a bare-attribute
+ * matcher, lets a new command arrive with no row.
+ */
 const commandDecl = (name = String.raw`(\w+)`) =>
   new RegExp(
-    String.raw`#\[tauri::command\]\s*(?:pub(?:\(crate\))?\s+)?(?:async\s+)?fn\s+${name}\s*\(`,
+    String.raw`#\[tauri::command(?:\([^\]]*\))?\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\(crate\))?\s+)?(?:async\s+)?fn\s+${name}\s*\(`,
     "g",
   );
 
@@ -132,6 +137,25 @@ describe("Cowork ships dark (ADR-055): the Rust gate", () => {
     const m = /\bconst COWORK_ENABLED\s*:\s*bool\s*=\s*(true|false)\s*;/.exec(COMMANDS.code);
     expect(m, "Rust COWORK_ENABLED is no longer a bare bool literal").not.toBeNull();
     expect(m?.[1]).toBe(String(COWORK_ENABLED));
+  });
+
+  it("the Rust literal has one definition, with no attribute on it", () => {
+    // A `#[cfg(debug_assertions)]` / `#[cfg(not(…))]` pair of definitions
+    // lights release builds while the first match still reads `false`, and
+    // `cargo test` runs the debug one.
+    const defs = SOURCES.flatMap((f) => [...f.code.matchAll(/\bconst COWORK_ENABLED\b/g)]);
+    expect(defs).toHaveLength(1);
+    expect(COMMANDS.code).not.toMatch(
+      /#\[[^\]]*\]\s*(?:pub(?:\([^)]*\))?\s+)?const COWORK_ENABLED\b/,
+    );
+  });
+
+  it("the gate is called from the gated rows and from nowhere else", () => {
+    // One call per gated row. A stray call in the toggle's disable branch, or
+    // in a helper an ungated command goes through, refuses a removal while
+    // every row above still holds.
+    const gated = Object.values(TABLE).filter((row) => row.gate !== "none");
+    expect(COMMANDS.code.split(GATE_CALL).length - 1).toBe(gated.length);
   });
 
   it("every #[tauri::command] in the module has a row, and every row a command", () => {
@@ -215,6 +239,9 @@ const WRITE_PRIMITIVES = [
   "add_cowork_deny_rule",
 ];
 
+/** `enabled: true` is itself a write that matters: it is what a heal pass acts on. */
+const META_WRITE = String.raw`cowork_meta::(?:update|save)`;
+
 const ALLOWED_CALLERS: Record<string, string> = {
   "cowork_commands.rs::cowork_toggle_integration": "gated on its enable branch",
   "cowork_commands.rs::cowork_rescan": "gated at arm start",
@@ -242,7 +269,7 @@ function topLevelFns(code: string): { name: string; body: string }[] {
 
 describe("Cowork ships dark (ADR-055): who can write into a workspace", () => {
   it("only the listed functions call a write primitive", () => {
-    const called = new RegExp(`\\b(?:${WRITE_PRIMITIVES.join("|")})\\s*\\(`);
+    const called = new RegExp(String.raw`\b(?:${WRITE_PRIMITIVES.join("|")}|${META_WRITE})\s*\(`);
     const callers = SOURCES.flatMap((f) =>
       topLevelFns(f.code)
         .filter((fn) => called.test(fn.body))
@@ -253,5 +280,22 @@ describe("Cowork ships dark (ADR-055): who can write into a workspace", () => {
       "the census found no caller at all — the scan is broken",
     ).toBeGreaterThan(0);
     expect([...new Set(callers)].sort()).toEqual(Object.keys(ALLOWED_CALLERS).sort());
+  });
+
+  it("no write primitive is imported under another name", () => {
+    // The census matches calls by name, so `use … as install` hides one.
+    const aliased = new RegExp(String.raw`\b(?:${WRITE_PRIMITIVES.join("|")})\s+as\s+\w+`);
+    expect(SOURCES.filter((f) => aliased.test(f.code)).map((f) => f.rel)).toEqual([]);
+  });
+
+  it("the uninstall scrub deletes cowork-meta.json", () => {
+    // Nothing else pins the call: without it `enabled: true` outlives an
+    // uninstall, and the scrub's own tests do not look.
+    const scrub = SOURCES.find((f) => f.rel === "src-tauri/src/uninstall_scrub.rs");
+    const at = /\bfn run_uninstall_scrub\s*\(/.exec(scrub?.code ?? "");
+    expect(at, "run_uninstall_scrub not found").not.toBeNull();
+    expect(blockAfter(scrub?.code ?? "", at?.index ?? 0)).toContain(
+      "cowork_meta::remove_meta_file()",
+    );
   });
 });

@@ -911,9 +911,8 @@ pub fn add_cowork_allow_rule(cidr: &str) -> Result<(), FirewallError> {
 /// past elevated run may have written). Whether this whole surface survives is
 /// decided by the Cowork-transport matrix,
 /// `docs/plans/archived/cowork-transport-test-matrix.md`, which is **unrun**
-/// despite its `archived/` location. Its dated gate (#1455) was retired when
-/// Cowork setup went dark; running it is now the first item on ADR-055's
-/// re-enable checklist.
+/// despite its `archived/` location. ADR-055 retires the dated gate that
+/// tracked it (#1455); running it is item 1 of that ADR's re-enable checklist.
 ///
 /// Rule: `dir=in, action=block, protocol=TCP, localport=3479, remoteip=<cidr>`.
 #[allow(dead_code)]

@@ -202,7 +202,7 @@ This activates the MCP tools, the bundled skill, and, on Claude Code 2.1.212 or 
 
 [Cowork](https://www.anthropic.com/news/claude-code-on-the-web) is Claude Desktop's local agent mode, where Claude runs in an isolated VM on your machine. **Tandem's Cowork setup is not in this version, and Cowork is not a supported surface.** Earlier versions had an "Enable Cowork" control in the Windows desktop app; it is gone, because the connection it set up was never verified against how the desktop app now runs its server.
 
-If you turned Cowork on in an earlier version, the update leaves what it wrote in place (the Tandem entries in your Cowork workspaces, and the firewall rule if one was added) but no longer maintains it. Uninstalling the desktop app removes the entries. [docs/data-locations.md](docs/data-locations.md#if-you-enabled-cowork-in-an-earlier-version) says exactly what is left and how to remove it by hand.
+If you turned Cowork on in an earlier version, the update leaves what it wrote in place (the Tandem entries in your Cowork workspaces, and the firewall rule if one was added) but no longer maintains it. Uninstalling the desktop app removes the entries. [docs/data-locations.md](docs/data-locations.md#if-you-enabled-cowork-in-an-earlier-version) says exactly what is left and how to remove it.
 
 Claude Desktop itself is still set up by the wizard, as before.
 

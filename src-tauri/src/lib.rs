@@ -1394,8 +1394,9 @@ pub fn run() {
             // workspace created while Tandem was closed heals at launch.
             // No firewall work, no UAC; see `cowork_heal_pass` guards.
             //
-            // Dark under ADR-055: a past enabler's meta still says `enabled`,
-            // and there is no UI left to turn the pass off.
+            // Spawned only when `COWORK_ENABLED`, and `cowork_heal_pass`
+            // re-checks it: a stale `enabled: true` in meta must not drive
+            // writes while no UI exists to turn the pass off (ADR-055).
             #[cfg(target_os = "windows")]
             {
                 if cowork_commands::COWORK_ENABLED {
@@ -1413,6 +1414,14 @@ pub fn run() {
                             }
                         }
                     });
+                } else if cowork_commands::cowork_was_enabled() {
+                    // `warn!` so it clears the release log floor. For someone
+                    // reading tandem.log after "Tandem stopped showing up in
+                    // Cowork", this is the only trace that the entries are
+                    // unmaintained on purpose.
+                    log::warn!(
+                        "[cowork] setup is not in this version (ADR-055); existing workspace entries are no longer maintained"
+                    );
                 }
             }
 

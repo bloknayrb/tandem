@@ -113,10 +113,9 @@ export const BYO_MODELS_ENABLED = false;
 export const DOCX_ENABLED = false;
 
 /**
- * Tandem's Cowork setup ships DARK (ADR-055, 2026-10-02): the route it builds
+ * Tandem's Cowork setup ships DARK (ADR-055): the route it builds
  * (per-workspace plugin entries plus a firewall rule) is unverified under the
- * desktop sidecar's loopback pin, so v1.0 does not offer it. The code and its
- * tests stay.
+ * desktop sidecar's loopback pin. The code and its tests stay.
  *
  * Client-only on the TypeScript side: every site that mounts a Cowork
  * component or starts a status poller reads this literal, so a dark desktop

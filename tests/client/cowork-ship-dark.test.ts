@@ -197,8 +197,9 @@ describe("Cowork ships dark (ADR-055): App.svelte's admin-declined modal", () =>
     const open = app.lastIndexOf("{#if", mount);
     const condition = app.slice(open, app.indexOf("}", open) + 1);
     expect(condition).toBe("{#if COWORK_ENABLED && isTauriRuntime() && !shouldShowWizard}");
-    // Nothing between the `{#if}` and the mount may close it.
-    expect(app.slice(open, mount)).not.toContain("{/if}");
+    // Nothing between the `{#if}` and the mount may close it or branch it:
+    // under an `{:else}` the mount runs exactly when the condition is false.
+    expect(app.slice(open, mount)).not.toMatch(/\{\/if\}|\{:else/);
   });
 });
 
@@ -211,16 +212,27 @@ describe("Cowork ships dark (ADR-055): App.svelte's admin-declined modal", () =>
 describe("Cowork ships dark (ADR-055): who can reach a Cowork surface", () => {
   const CLIENT = join(import.meta.dirname, "..", "..", "src", "client");
 
-  /** The Cowork surface itself: these mount and poll unconditionally by design. */
-  const isLeaf = (rel: string) =>
-    rel.startsWith("cowork/") ||
-    /^components\/Cowork\w+\.svelte$/.test(rel) ||
-    /^hooks\/useCowork\w+\.svelte\.ts$/.test(rel);
+  /**
+   * The Cowork surface itself: these mount and poll unconditionally by design.
+   * Named one by one. A `Cowork*.svelte` pattern would wave through a new
+   * wrapper component, and whatever imported the wrapper would not be seen
+   * reaching anything.
+   */
+  const LEAVES = new Set([
+    "components/CoworkSettings.svelte",
+    "components/CoworkOnboardingStep.svelte",
+    "components/CoworkAdminDeclinedModal.svelte",
+    "hooks/useCoworkStatus.svelte.ts",
+    "hooks/useCoworkPreflight.svelte.ts",
+  ]);
+  const isLeaf = (rel: string) => rel.startsWith("cowork/") || LEAVES.has(rel);
 
-  // The component as an import specifier, quotes included: a bare filename
-  // match also catches prose (`utils/checkbox-sync.ts` names one in a comment).
+  // Four ways in: importing a Cowork component (as an import specifier, quotes
+  // included, because a bare filename match also catches prose), starting a
+  // status or pre-flight hook, calling a `coworkXxx(` invoke wrapper, or
+  // naming a `cowork_*` command directly.
   const REACHES =
-    /["'][^"']*\/Cowork(?:Settings|AdminDeclinedModal|OnboardingStep)\.svelte["']|\bcreate(?:CoworkStatus|SubnetPreflight)\s*\(/;
+    /["'][^"']*\/Cowork\w+\.svelte["']|\bcreate(?:CoworkStatus|SubnetPreflight)\s*\(|\bcowork[A-Z]\w*\s*\(|["']cowork_\w+["']/;
 
   const PARENTS = [
     "App.svelte",
