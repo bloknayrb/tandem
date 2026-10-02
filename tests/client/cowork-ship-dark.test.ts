@@ -208,6 +208,11 @@ describe("Cowork ships dark (ADR-055): App.svelte's admin-declined modal", () =>
  * notices a new one: a module that mounts a Cowork component or starts a
  * status or pre-flight hook is a new way to reach `cowork_*`, and it would
  * pass every other test here while doing so.
+ *
+ * WHAT IT CANNOT SEE. It is a name scan. A wrapper imported under another
+ * name, a new invoking export added to one of the leaves and called from
+ * elsewhere, or a specifier built at runtime all get past it. It catches the
+ * ordinary way a new parent arrives, not a determined one.
  */
 describe("Cowork ships dark (ADR-055): who can reach a Cowork surface", () => {
   const CLIENT = join(import.meta.dirname, "..", "..", "src", "client");
@@ -236,22 +241,52 @@ describe("Cowork ships dark (ADR-055): who can reach a Cowork surface", () => {
    */
   const WRAPPERS = [
     ...readFileSync(join(CLIENT, "cowork", "cowork-invoke.ts"), "utf8").matchAll(
-      /^export (?:async )?function (cowork\w+)/gm,
+      /^export (?:(?:async )?function|const) (cowork\w+)/gm,
     ),
   ].map((m) => m[1]);
 
   // Four ways in: importing a Cowork component, starting a status or
   // pre-flight hook, calling an invoke wrapper, or naming a `cowork_*` command.
+  const Q = "[\"'`]";
   const REACHES = new RegExp(
-    String.raw`["'][^"']*/Cowork\w+\.svelte["']|\bcreate(?:CoworkStatus|SubnetPreflight)\s*\(|\b(?:${WRAPPERS.join("|")})\s*\(|["']cowork_\w+["']`,
+    String.raw`${Q}[^"'\`]*/Cowork\w+\.svelte${Q}|\bcreate(?:CoworkStatus|SubnetPreflight)\s*\(|\b(?:${WRAPPERS.join("|")})\s*\(|${Q}cowork_\w+${Q}`,
   );
 
-  /** Comments out, so a module that only MENTIONS a wrapper is not a parent. */
-  const stripComments = (src: string) =>
-    src
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/<!--[\s\S]*?-->/g, "")
-      .replace(/(^|[^:"'`\\])\/\/[^\n]*/g, "$1");
+  /**
+   * Comments out, so a module that only MENTIONS a wrapper is not a parent.
+   *
+   * One left-to-right pass that knows about strings. Three chained regexes
+   * were the first cut, and they ate code: the block-comment pass ran first,
+   * so a LINE comment containing `/api/*` opened a "comment" that ran to the
+   * next `*\/` and took the wizard's own poller call with it. A reacher
+   * written after any such comment was invisible.
+   */
+  const stripComments = (src: string) => {
+    let out = "";
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === '"' || c === "'" || c === "`") {
+        let j = i + 1;
+        while (j < src.length && src[j] !== c) j += src[j] === "\\" ? 2 : 1;
+        out += src.slice(i, j + 1);
+        i = j + 1;
+      } else if (src.startsWith("//", i)) {
+        const end = src.indexOf("\n", i);
+        i = end === -1 ? src.length : end;
+      } else if (src.startsWith("/*", i)) {
+        const end = src.indexOf("*/", i + 2);
+        i = end === -1 ? src.length : end + 2;
+      } else if (src.startsWith("<!--", i)) {
+        const end = src.indexOf("-->", i + 4);
+        i = end === -1 ? src.length : end + 3;
+      } else {
+        out += c;
+        i++;
+      }
+    }
+    return out;
+  };
 
   const PARENTS = [
     "App.svelte",

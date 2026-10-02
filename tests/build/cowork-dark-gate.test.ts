@@ -160,10 +160,12 @@ describe("Cowork ships dark (ADR-055): the Rust gate", () => {
 
   it("every reference to the gate and the literal is accounted for", () => {
     // Counted by identifier across the crate, not by the spelling of one call.
-    // A refusal added to the toggle's disable branch, or to a helper an
-    // ungated command goes through, refuses a removal with every row above
-    // still true; so does a second gate built from the same parts under
-    // another name. Each of those adds a reference, and this is where it shows.
+    // A refusal BUILT FROM THE GATE'S PARTS and added to a removal path (the
+    // toggle's disable branch, a helper an ungated command goes through, a
+    // second gate under another name) adds a reference, and shows here. A
+    // refusal written from scratch, with its own `Err`, uses none of these
+    // names and is not caught by this; the toggle's row below covers the one
+    // place that matters most.
     const gated = Object.values(TABLE).filter((row) => row.gate !== "none");
     const refs = (id: string) =>
       SOURCES.reduce((n, f) => n + [...f.code.matchAll(new RegExp(`\\b${id}\\b`, "g"))].length, 0);
@@ -192,12 +194,14 @@ describe("Cowork ships dark (ADR-055): the Rust gate", () => {
     } else if (row.gate === "enable-branch") {
       it(`${name} gates the enable branch and nothing before it`, () => {
         const arm = windowsArm(COMMANDS.code, name);
-        const branch = arm.indexOf("if enabled {");
-        expect(branch, "`if enabled {` not found in the arm").toBeGreaterThan(-1);
+        // Nothing at all runs ahead of the branch: after the leading `use`
+        // items, `if enabled {` is the first statement. Anything there runs
+        // for disable too, whether it refuses (by any spelling) or writes.
         expect(
-          arm.slice(0, branch),
-          "a gate ahead of `if enabled` also refuses disable",
-        ).not.toContain("refuse_if_dark");
+          firstStatement(arm).startsWith("if enabled {"),
+          "a statement ahead of `if enabled` runs on the disable path as well",
+        ).toBe(true);
+        const branch = arm.indexOf("if enabled {");
         expect(firstStatement(blockAfter(arm, branch)).startsWith(GATE_CALL)).toBe(true);
       });
     } else {

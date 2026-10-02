@@ -157,8 +157,8 @@ v0.28.0 or earlier, updating leaves what it wrote in place and stops maintaining
   `known_marketplaces.json` and `cowork_settings.json`. The first of those carries
   Tandem's auth token.
 - `%LOCALAPPDATA%\tandem\Data\cowork-meta.json`, recording that it was enabled. The
-  desktop app wrote it, but at the npm location in the tables above, not in
-  `%APPDATA%\com.tandem.editor\`.
+  desktop app wrote it, at the npm location in the tables above. (A copy may also sit
+  under `%APPDATA%\com.tandem.editor\` from the one-time import; nothing reads that one.)
 - A Windows firewall rule named `Tandem Cowork`, only if Tandem was ever run as
   administrator when you enabled it. It admits the Cowork VM's subnet to TCP port 3479
   on every network profile, for whatever program is listening there.
@@ -167,14 +167,15 @@ The desktop app's server listens on this computer only, so none of that exposes 
 while you run the desktop app. There is no in-app switch to turn it off any more. To remove it:
 
 - **Uninstall the desktop app.** Its uninstaller removes the workspace entries and
-  `cowork-meta.json`. This is the one route that works for every Claude Desktop install.
-  If you are keeping Tandem, install it again afterwards; your documents, sessions and
-  annotations are not touched.
-- **`tandem --uninstall-scrub` is not a substitute.** It looks for Cowork workspaces only
-  under the Microsoft Store layout of Claude Desktop (`%LOCALAPPDATA%\Packages\Claude_*`),
-  so with the direct-download Claude Desktop, which keeps them under `%APPDATA%\Claude\`,
-  it finds none and leaves the entries where they are (#2136). It also removes Tandem's MCP
-  entries and the bundled skill, and it leaves `cowork-meta.json`.
+  `%LOCALAPPDATA%\tandem\Data\cowork-meta.json`, wherever Claude Desktop keeps its Cowork
+  workspaces. If you are keeping Tandem, install it again afterwards.
+- **`tandem --uninstall-scrub` covers one of the two places Claude Desktop keeps them.**
+  It finds Cowork workspaces under
+  `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\local-agent-mode-sessions`
+  and not under `%APPDATA%\Claude\local-agent-mode-sessions` (#2136). Check which folder
+  exists on your machine: if it is the second, this command leaves the entries where they
+  are. Either way it also removes Tandem's MCP entries and the bundled skill, so re-run the
+  integration wizard afterwards, and it leaves `cowork-meta.json`.
 - **The firewall rule can survive the uninstall**, because Tandem never runs elevated and
   deleting a rule needs an administrator. Open `wf.msc` as administrator and delete every
   inbound rule whose name starts with `Tandem Cowork`. From an administrator prompt,

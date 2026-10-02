@@ -10,9 +10,10 @@
  * removes the start-at-login registration, and this one alone removes the MCP
  * config entries and the bundled skill — which the desktop bundle cannot reach
  * because the npm CLI is not among the Tauri `resources`. They overlap on the
- * Cowork firewall rules and on Cowork plugin entries under the MSIX layout
- * only: the Rust scan also walks `%APPDATA%\Claude\`, the direct-download
- * layout, which this one never looks at (#2136). Both are idempotent. So a
+ * Cowork firewall rules and on Cowork plugin entries under
+ * `%LOCALAPPDATA%\Packages\Claude_*` only: the Rust scan also walks
+ * `%APPDATA%\Claude\local-agent-mode-sessions`, which this one never looks at
+ * (#2136). Both are idempotent. So a
  * Windows user who only uninstalls the desktop app keeps their
  * `mcpServers.tandem` entries until they run this by hand.
  *
