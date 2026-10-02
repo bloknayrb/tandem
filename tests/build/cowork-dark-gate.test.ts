@@ -73,8 +73,11 @@ type Row = { gate: "arm-start" | "enable-branch"; why: string } | { gate: "none"
 
 /**
  * One row per command. `arm-start`: the gate is the first statement of the
- * Windows arm, after any leading `use` items. `enable-branch`: the gate is the
- * first statement inside `if enabled {` and appears nowhere before it.
+ * Windows arm, after any leading `use` items. `enable-branch`: `if enabled {`
+ * is itself the arm's first statement, so nothing runs ahead of the branch,
+ * and the gate is the first statement inside it. That is stricter than the
+ * property needs (a hoisted read would be harmless) and deliberately so: an
+ * edit that puts anything on the shared path should be looked at.
  */
 const TABLE: Record<string, Row> = {
   cowork_toggle_integration: {
@@ -164,8 +167,10 @@ describe("Cowork ships dark (ADR-055): the Rust gate", () => {
     // toggle's disable branch, a helper an ungated command goes through, a
     // second gate under another name) adds a reference, and shows here. A
     // refusal written from scratch, with its own `Err`, uses none of these
-    // names and is not caught by this; the toggle's row below covers the one
-    // place that matters most.
+    // names (unless it reads the literal) and is not caught by this. The
+    // toggle's row below forbids anything ahead of `if enabled`; a refusal
+    // inside the disable branch itself, or inside an ungated command, written
+    // without these names is caught by nothing here.
     const gated = Object.values(TABLE).filter((row) => row.gate !== "none");
     const refs = (id: string) =>
       SOURCES.reduce((n, f) => n + [...f.code.matchAll(new RegExp(`\\b${id}\\b`, "g"))].length, 0);

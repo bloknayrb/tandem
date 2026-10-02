@@ -173,9 +173,10 @@ while you run the desktop app. There is no in-app switch to turn it off any more
   It finds Cowork workspaces under
   `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\local-agent-mode-sessions`
   and not under `%APPDATA%\Claude\local-agent-mode-sessions` (#2136). Check which folder
-  exists on your machine: if it is the second, this command leaves the entries where they
-  are. Either way it also removes Tandem's MCP entries and the bundled skill, so re-run the
-  integration wizard afterwards, and it leaves `cowork-meta.json`.
+  exists on your machine: entries under the second are left where they are, including when
+  both exist. Either way it also removes Tandem's MCP entries and the bundled skill, so
+  re-run the integration wizard afterwards (Settings → AI Assistant), and it leaves
+  `cowork-meta.json`.
 - **The firewall rule can survive the uninstall**, because Tandem never runs elevated and
   deleting a rule needs an administrator. Open `wf.msc` as administrator and delete every
   inbound rule whose name starts with `Tandem Cowork`. From an administrator prompt,
@@ -210,8 +211,9 @@ tandem --uninstall-scrub        # or: npx tandem-editor --uninstall-scrub
 Then delete the app / `npm uninstall -g tandem-editor`.
 
 The scrub removes the cross-program entries listed above (MCP config keys,
-the bundled skill, Cowork registration, the start-at-login registration, and,
-when run as administrator, the firewall rules). It **deliberately
+the bundled skill, the Cowork registration it can find (see the
+[section above](#if-you-enabled-cowork-in-an-earlier-version)), the start-at-login
+registration, and, when run as administrator, the firewall rules). It **deliberately
 leaves your data**: the app-data directory (your sessions, annotations, and
 document backups) and the keychain entries stay until you delete them
 yourself — uninstalling must never be the thing that destroys a backup you

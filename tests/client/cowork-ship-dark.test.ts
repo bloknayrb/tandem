@@ -213,6 +213,13 @@ describe("Cowork ships dark (ADR-055): App.svelte's admin-declined modal", () =>
  * name, a new invoking export added to one of the leaves and called from
  * elsewhere, or a specifier built at runtime all get past it. It catches the
  * ordinary way a new parent arrives, not a determined one.
+ *
+ * The comment stripper is approximate as well. It does not know regex
+ * literals or Svelte markup: a `//` inside a regex drops the rest of that
+ * line, and an apostrophe in markup text or a regex opens a "string" in which
+ * later comments are kept. Measured against the tree when this was written,
+ * neither hides a reacher nor invents one, and the parents all import or call
+ * from their script, ahead of any markup.
  */
 describe("Cowork ships dark (ADR-055): who can reach a Cowork surface", () => {
   const CLIENT = join(import.meta.dirname, "..", "..", "src", "client");
