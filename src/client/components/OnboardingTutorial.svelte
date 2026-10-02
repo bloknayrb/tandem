@@ -1,5 +1,6 @@
 <script lang="ts">
 import { fade } from "svelte/transition";
+import { COWORK_ENABLED } from "../../shared/constants";
 import {
   isTauriRuntime,
   readCoworkOnboardingSkipped,
@@ -64,7 +65,11 @@ const BASE_STEPS = [
 
 const skipped = readCoworkOnboardingSkipped();
 
-const showCowork = $derived(tauri && shouldShowCoworkOnboarding(coworkStatus, skipped));
+// COWORK_ENABLED here as well as in useTutorial, so this component's step count
+// cannot disagree with the hook's completion index if a status is ever passed in.
+const showCowork = $derived(
+  COWORK_ENABLED && tauri && shouldShowCoworkOnboarding(coworkStatus, skipped),
+);
 const activeSteps = $derived(BASE_STEPS.filter((s) => s.id !== "cowork" || showCowork));
 const totalActionable = $derived(activeSteps.length - 1);
 const step = $derived(activeSteps[currentStep]);

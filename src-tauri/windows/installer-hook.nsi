@@ -9,6 +9,7 @@
 ; The `--uninstall-scrub` subcommand (src-tauri/src/uninstall_scrub.rs):
 ;   - Walks every Cowork workspace and removes the Tandem plugin entry.
 ;   - Deletes the Tandem Cowork firewall rules (allow + deny).
+;   - Deletes cowork-meta.json (ADR-055).
 ;   - Removes the start-at-login registration (HKCU Run + StartupApproved).
 ;   - Exits 0 on clean-or-not-installed; each step is independently
 ;     best-effort so a partial failure never blocks removing Tandem.
@@ -38,9 +39,9 @@
 ; of `Section Uninstall` — before any $UpdateMode check of its own. Without the
 ; guard, every routine upgrade would run the full scrub: the user's Cowork
 ; registrations, firewall rules, and start-at-login preference would all be
-; wiped on each release. Cowork self-heals within five minutes and firewall
-; rules are re-added on demand, but the autostart preference would silently
-; vanish every time the app updated itself.
+; wiped on each release. While Cowork setup ships dark (ADR-055) nothing would
+; put a past enabler's registrations back, and the autostart preference would
+; silently vanish every time the app updated itself.
 ;
 ; `$UpdateMode` IS populated here: the template's `un.onInit` parses `/UPDATE`
 ; from the command line and `FunctionEnd`s immediately before `Section

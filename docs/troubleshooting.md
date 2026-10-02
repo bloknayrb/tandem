@@ -384,7 +384,7 @@ your Applications folder and reopen it. `tandem doctor` names this explicitly.
 manifest cannot carry a path that only makes sense on one machine:
 
 - the **Tandem plugin**'s two MCP servers and two monitors (see the previous section),
-- the **Cowork** guest registry, where a host path would be meaningless anyway.
+- the **Cowork** guest registry, where a host path would be meaningless anyway. (Only a version that offered Cowork setup wrote entries there; it ships dark since ADR-055.)
 
 For those, the remedies are the same as the exit-127 section: start the client from a
 terminal, or put Node on the PATH the GUI launcher provides.

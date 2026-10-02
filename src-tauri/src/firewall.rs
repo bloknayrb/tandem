@@ -908,10 +908,11 @@ pub fn add_cowork_allow_rule(cidr: &str) -> Result<(), FirewallError> {
 /// just denied, so it always failed too, and the server binds 127.0.0.1 anyway —
 /// port 3479 is never network-exposed, so there is nothing to "fail closed" to.
 /// Kept (the disable path's `remove_cowork_rules` still cleans up any deny rule a
-/// past elevated run may have written) and pending the Cowork-transport matrix
-/// outcome: `docs/plans/archived/cowork-transport-test-matrix.md`, which is
-/// **unrun** despite its `archived/` location. The dated gate for running it —
-/// review by 2026-10-15, with the keep/replace/retire rule — is **#1455**.
+/// past elevated run may have written). Whether this whole surface survives is
+/// decided by the Cowork-transport matrix,
+/// `docs/plans/archived/cowork-transport-test-matrix.md`, which is **unrun**
+/// despite its `archived/` location. ADR-055 retires the dated gate that
+/// tracked it (#1455); running it is item 1 of that ADR's re-enable checklist.
 ///
 /// Rule: `dir=in, action=block, protocol=TCP, localport=3479, remoteip=<cidr>`.
 #[allow(dead_code)]

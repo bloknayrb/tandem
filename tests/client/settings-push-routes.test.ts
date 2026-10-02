@@ -32,10 +32,10 @@ import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
 // #1817: SettingsClaudeCodeTab's non-registered push-route arm splits on
 // `isTauriRuntime()`. Mock it with a mutable cell (this file's precedent is
 // `settings-claude-code-tab-cowork.test.ts:25-28`) so individual tests can
-// force either branch; forcing Tauri-true also lazy-mounts CoworkSettings
-// (`SettingsClaudeCodeTab.svelte:481-491`), whose `createCoworkStatus(() =>
-// true)` holds a live `$effect` and a real `invoke` call, so those two are
-// mocked alongside it (copied from that same file, `:25-47`).
+// force either branch. With `COWORK_ENABLED` on, forcing Tauri-true also
+// lazy-mounts CoworkSettings, whose status hook holds a live `$effect` and a
+// real `invoke`; the two mocks below keep that off the network. While Cowork
+// ships dark (ADR-055) the mount does not happen and they are idle.
 let tauri = false;
 vi.mock(import("../../src/client/cowork/cowork-helpers"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/client/cowork/cowork-helpers")>();
