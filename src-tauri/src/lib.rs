@@ -1393,21 +1393,28 @@ pub fn run() {
             // settings visit required. The first tick fires immediately so a
             // workspace created while Tandem was closed heals at launch.
             // No firewall work, no UAC; see `cowork_heal_pass` guards.
+            //
+            // Dark under ADR-055: a past enabler's meta still says `enabled`,
+            // and there is no UI left to turn the pass off.
             #[cfg(target_os = "windows")]
-            tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(COWORK_HEAL_INTERVAL);
-                loop {
-                    interval.tick().await;
-                    match tauri::async_runtime::spawn_blocking(cowork_commands::cowork_heal_pass).await {
-                        Ok(Ok(0)) => {}
-                        Ok(Ok(n)) => {
-                            log::info!("[cowork] heal pass installed into {n} workspace(s)");
+            {
+                if cowork_commands::COWORK_ENABLED {
+                    tauri::async_runtime::spawn(async move {
+                        let mut interval = tokio::time::interval(COWORK_HEAL_INTERVAL);
+                        loop {
+                            interval.tick().await;
+                            match tauri::async_runtime::spawn_blocking(cowork_commands::cowork_heal_pass).await {
+                                Ok(Ok(0)) => {}
+                                Ok(Ok(n)) => {
+                                    log::info!("[cowork] heal pass installed into {n} workspace(s)");
+                                }
+                                Ok(Err(e)) => log::warn!("[cowork] heal pass failed: {e}"),
+                                Err(e) => log::warn!("[cowork] heal task join error: {e}"),
+                            }
                         }
-                        Ok(Err(e)) => log::warn!("[cowork] heal pass failed: {e}"),
-                        Err(e) => log::warn!("[cowork] heal task join error: {e}"),
-                    }
+                    });
                 }
-            });
+            }
 
             let open_i = MenuItem::with_id(app, MENU_OPEN, "Open Editor", true, None::<&str>)?;
             let setup_i = MenuItem::with_id(app, MENU_SETUP, "Setup AI Assistant", true, None::<&str>)?;

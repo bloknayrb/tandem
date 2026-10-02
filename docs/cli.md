@@ -47,7 +47,7 @@ The desktop app's **Settings → About → Copy Diagnostics** button runs the sa
 
 Removes every reference Tandem wrote into other programs' config: `mcpServers.tandem` / `mcpServers["tandem-channel"]` from `~/.claude.json` and any detected Claude Desktop config, the bundled skill at `~/.claude/skills/tandem/` (only when it holds nothing Tandem didn't install), the start-at-login registration on macOS/Linux, and (Windows) Cowork plugin registration plus the `Tandem Cowork*` firewall rules.
 
-**The Windows uninstaller does not run this command.** It runs the desktop binary's own narrower scrub — Cowork workspace entries, the firewall rules, and the start-at-login registration — because this CLI's bundle is not shipped as a Tauri resource. The MCP entries and the bundled skill survive a Windows uninstall unless you run the command yourself. On every platform, run it **before** removing the app, while the binary still exists:
+**The Windows uninstaller does not run this command.** It runs the desktop binary's own narrower scrub — Cowork workspace entries, `cowork-meta.json`, the firewall rules, and the start-at-login registration — because this CLI's bundle is not shipped as a Tauri resource. The MCP entries and the bundled skill survive a Windows uninstall unless you run the command yourself. On every platform, run it **before** removing the app, while the binary still exists:
 
 ```bash
 tandem --uninstall-scrub
@@ -67,7 +67,7 @@ Fails if `TANDEM_AUTH_TOKEN` **or** `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` is set in 
 
 ### `tandem mcp-stdio`
 
-Runs Tandem as a stdio MCP server that proxies to a local HTTP Tandem instance. Used by the Cowork plugin bridge so Claude Desktop can speak MCP over stdio to a running Tandem server.
+Runs Tandem as a stdio MCP server that proxies to a local HTTP Tandem instance. This is how Claude Desktop, which speaks MCP over stdio, reaches a running Tandem server.
 
 ```bash
 tandem mcp-stdio

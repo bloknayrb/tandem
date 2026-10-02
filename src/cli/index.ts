@@ -74,7 +74,7 @@ Usage:
                                     app's own scrub, which leaves MCP entries and
                                     the skill in place
   tandem mcp-stdio                  Run as a stdio MCP server proxying to local HTTP
-                                    (used by the plugin's Cowork bridge; requires
+                                    (used by Claude Desktop and the plugin; requires
                                     tandem server running on the host)
   tandem channel                    Run the Tandem channel shim (stdio MCP)
                                     (used by the plugin's tandem-channel entry)

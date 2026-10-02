@@ -376,6 +376,8 @@ Pull (`tandem_checkInbox`) remains authoritative over all four.
 
 ### 5.5 Channel shim and plugin monitor under Cowork
 
+> Read "Cowork" here as a remote peer under a non-loopback bind. Tandem's Cowork setup ships dark as of 2026-10-02 ([ADR-055](../../decisions.md#adr-055-cowork-setup-ships-dark)); the bind, and so this decision, does not depend on it.
+
 - **A:** unscoped in Phases 1–3; `channel-reply` marks handled via `replyTo` only.
 - **B:** shim registers at connect and sends an owner id on `/api/events` and `/api/channel-reply` — a `NON_LOOPBACK_ALLOWED` row, a security change.
 - **Decided (2026-09-17):** A, as recommended; revisit with #1884.

@@ -22,6 +22,13 @@ import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
 
 let tauri = true;
 
+// Cowork ships dark as a literal `false` (ADR-055); this file covers the lit
+// path, so the flip is deliberate. `cowork-ship-dark.test.ts` covers the dark one.
+vi.mock(import("../../src/shared/constants"), async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/shared/constants")>()),
+  COWORK_ENABLED: true as false,
+}));
+
 vi.mock(import("../../src/client/cowork/cowork-helpers"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/client/cowork/cowork-helpers")>();
   return { ...actual, isTauriRuntime: () => tauri };

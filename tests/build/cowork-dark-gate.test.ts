@@ -1,0 +1,257 @@
+/**
+ * Cowork setup ships dark (ADR-055) — the Rust half of the gate, pinned as text.
+ *
+ * WHY A TEXT TEST. Every command here is `#[cfg(target_os = "windows")]`, and
+ * no cargo test calls a `#[tauri::command]`: the Rust tests exercise inner
+ * helpers (`heal_pass_inner`, `enable_persist_outcome`, the installer's own
+ * functions). So a `refuse_if_dark()?` deleted from one command, or a new
+ * command added without one, leaves `cargo test` green on all three legs. The
+ * pure half (`refuse_if(false)` is an `Err`) is covered in Rust; that a command
+ * actually CALLS the gate is only visible here.
+ *
+ * WHAT IS PINNED, and the defeat each part exists for:
+ *   - the two literals agree — a half-flip lights the UI over commands that
+ *     refuse, or the reverse;
+ *   - one row per `#[tauri::command]`, failing closed on a command with no row —
+ *     a twelfth command arriving ungated;
+ *   - where the gate sits in each gated arm — `cowork_toggle_integration` is
+ *     the one command whose gate must NOT open the arm, because the same
+ *     command is the only in-app disable, and a past enabler needs it;
+ *   - the gate's own body — `|| cfg!(debug_assertions)` or an env read would
+ *     leave both literals `false` and every row satisfied;
+ *   - the heal spawn sits under the const — it is not a command, runs with no
+ *     UI, and writes the auth token into Claude Desktop's files;
+ *   - a census of who calls the four write primitives — a new caller is the
+ *     write path no command row can see.
+ *
+ * All extraction runs on `code` (comments and `#[cfg(test)]` modules stripped):
+ * two doc comments in the module name `cowork_toggle_integration(`, and a
+ * first-hit match over `text` would land on prose.
+ */
+
+import { describe, expect, it } from "vitest";
+import { COWORK_ENABLED } from "../../src/shared/constants.js";
+import { matchRustBrace, rustSources } from "../docs/rust-sources.js";
+
+const GATE_CALL = "refuse_if_dark()?;";
+
+/** One walk of the crate for the whole file; `rustSources()` re-reads and re-strips on every call. */
+const SOURCES = rustSources();
+
+/** The module holding the literal, found by the construct rather than named. */
+const COMMANDS = (() => {
+  const hits = SOURCES.filter((f) => /\bconst COWORK_ENABLED\s*:\s*bool\s*=/.test(f.code));
+  if (hits.length !== 1) {
+    throw new Error(
+      `expected exactly one Rust source to define COWORK_ENABLED, found ${hits.length}: ${hits.map((f) => f.rel).join(", ")}`,
+    );
+  }
+  return hits[0];
+})();
+
+/** Where a command is declared. `g` so the same shape enumerates them all. */
+const commandDecl = (name = String.raw`(\w+)`) =>
+  new RegExp(
+    String.raw`#\[tauri::command\]\s*(?:pub(?:\(crate\))?\s+)?(?:async\s+)?fn\s+${name}\s*\(`,
+    "g",
+  );
+
+type Row = { gate: "arm-start" | "enable-branch"; why: string } | { gate: "none"; why: string };
+
+/**
+ * One row per command. `arm-start`: the gate is the first statement of the
+ * Windows arm, after any leading `use` items. `enable-branch`: the gate is the
+ * first statement inside `if enabled {` and appears nowhere before it.
+ */
+const TABLE: Record<string, Row> = {
+  cowork_toggle_integration: {
+    gate: "enable-branch",
+    why: "enable writes workspaces, meta and a firewall rule; disable only removes, so it is not refused",
+  },
+  cowork_rescan: {
+    gate: "arm-start",
+    why: "force-reinstalls into every workspace and writes meta when meta says enabled",
+  },
+  cowork_apply_token: { gate: "arm-start", why: "rewrites the token in every workspace" },
+  cowork_install_into_workspace: { gate: "arm-start", why: "writes one workspace's entries" },
+  cowork_set_lan_ip_override: {
+    gate: "arm-start",
+    why: "writes meta unconditionally, then re-walks workspaces when enabled",
+  },
+  cowork_retry_admin_elevation: {
+    gate: "none",
+    why: "delegates to cowork_toggle_integration(true) and nothing else (cowork-retry-delegates.test.ts), so the enable branch refuses for it",
+  },
+  cowork_uninstall_from_workspace: { gate: "none", why: "removal only" },
+  cowork_scan_workspaces: {
+    gate: "none",
+    why: "read-only scan; mutates only the in-process handle snapshot",
+  },
+  cowork_get_status: { gate: "none", why: "read-only" },
+  cowork_get_meta: { gate: "none", why: "read-only" },
+  cowork_detect_vethernet_subnet: { gate: "none", why: "read-only advisory probe" },
+};
+
+function commandNames(code: string): string[] {
+  return [...new Set([...code.matchAll(commandDecl())].map((m) => m[1]))].sort();
+}
+
+/** Body of the block whose `{` is the first one at or after `from`, braces excluded. */
+function blockAfter(code: string, from: number): string {
+  const open = code.indexOf("{", from);
+  expect(open, "no opening brace found").toBeGreaterThan(-1);
+  return code.slice(open + 1, matchRustBrace(code, open));
+}
+
+/**
+ * The Windows arm of a cfg-split command. Anchored on the attribute pair, as
+ * `cowork-retry-delegates.test.ts` is: the non-Windows stub has the same name
+ * and would otherwise be a candidate.
+ */
+function windowsArm(code: string, name: string): string {
+  const m = new RegExp(
+    `#\\[cfg\\(target_os = "windows"\\)\\]\\s*#\\[tauri::command\\]\\s*(?:pub(?:\\(crate\\))?\\s+)?fn ${name}\\s*\\(`,
+  ).exec(code);
+  expect(m, `${name}: Windows arm not found — attribute order or signature changed`).not.toBeNull();
+  return blockAfter(code, m?.index ?? 0);
+}
+
+/** First statement of a block, skipping blank lines and leading `use` items. */
+function firstStatement(body: string): string {
+  let rest = body.trimStart();
+  for (;;) {
+    const use = /^use\s[^;]*;/.exec(rest);
+    if (!use) break;
+    rest = rest.slice(use[0].length).trimStart();
+  }
+  return rest;
+}
+
+describe("Cowork ships dark (ADR-055): the Rust gate", () => {
+  it("the TypeScript and Rust literals agree", () => {
+    const m = /\bconst COWORK_ENABLED\s*:\s*bool\s*=\s*(true|false)\s*;/.exec(COMMANDS.code);
+    expect(m, "Rust COWORK_ENABLED is no longer a bare bool literal").not.toBeNull();
+    expect(m?.[1]).toBe(String(COWORK_ENABLED));
+  });
+
+  it("every #[tauri::command] in the module has a row, and every row a command", () => {
+    expect(commandNames(COMMANDS.code)).toEqual(Object.keys(TABLE).sort());
+  });
+
+  for (const [name, row] of Object.entries(TABLE)) {
+    if (row.gate === "arm-start") {
+      it(`${name} opens its Windows arm with the gate`, () => {
+        expect(firstStatement(windowsArm(COMMANDS.code, name)).startsWith(GATE_CALL)).toBe(true);
+      });
+    } else if (row.gate === "enable-branch") {
+      it(`${name} gates the enable branch and nothing before it`, () => {
+        const arm = windowsArm(COMMANDS.code, name);
+        const branch = arm.indexOf("if enabled {");
+        expect(branch, "`if enabled {` not found in the arm").toBeGreaterThan(-1);
+        expect(
+          arm.slice(0, branch),
+          "a gate ahead of `if enabled` also refuses disable",
+        ).not.toContain("refuse_if_dark");
+        expect(firstStatement(blockAfter(arm, branch)).startsWith(GATE_CALL)).toBe(true);
+      });
+    } else {
+      it(`${name} is ungated, as its row says`, () => {
+        const at = commandDecl(name).exec(COMMANDS.code);
+        expect(at, `${name}: declaration not found`).not.toBeNull();
+        expect(blockAfter(COMMANDS.code, at?.index ?? 0)).not.toContain("refuse_if_dark");
+      });
+    }
+  }
+
+  it("the gate reads the literal and nothing else", () => {
+    const squash = (s: string) => s.replace(/\s+/g, " ").trim();
+    const body = (fn: string) => {
+      const at = new RegExp(`\\bfn ${fn}\\s*\\(`).exec(COMMANDS.code);
+      expect(at, `${fn} not found`).not.toBeNull();
+      return squash(blockAfter(COMMANDS.code, at?.index ?? 0));
+    };
+    expect(body("refuse_if_dark")).toBe("refuse_if(COWORK_ENABLED)");
+    // Both arms of `refuse_if` are covered in Rust; here only that it consults
+    // nothing but its argument.
+    expect(body("refuse_if")).not.toMatch(/cfg!|env|debug_assertions|COWORK_ENABLED/);
+  });
+
+  it("the heal pass returns before doing anything while dark", () => {
+    // Gated in the function as well as at its spawn: the spawn guard is one
+    // caller, and a second caller anywhere in the crate would otherwise write
+    // the token into every workspace with both literals false.
+    const at = /\bfn cowork_heal_pass\s*\(/.exec(COMMANDS.code);
+    expect(at, "cowork_heal_pass not found").not.toBeNull();
+    const first = firstStatement(blockAfter(COMMANDS.code, at?.index ?? 0)).replace(/\s+/g, " ");
+    expect(first.startsWith("if !COWORK_ENABLED { return Ok(0); }")).toBe(true);
+  });
+
+  it("the heal task is spawned only under the literal", () => {
+    const lib = SOURCES.find((f) => f.rel === "src-tauri/src/lib.rs");
+    expect(lib, "lib.rs not found").toBeDefined();
+    const code = lib?.code ?? "";
+    const calls = [...code.matchAll(/cowork_commands::cowork_heal_pass\b/g)];
+    expect(calls, "expected exactly one heal-pass spawn site").toHaveLength(1);
+    const guard = code.indexOf("if cowork_commands::COWORK_ENABLED {");
+    expect(guard, "the heal spawn's guard is gone").toBeGreaterThan(-1);
+    const open = code.indexOf("{", guard);
+    const call = calls[0]?.index ?? -1;
+    expect(call > open && call < matchRustBrace(code, open)).toBe(true);
+  });
+});
+
+/**
+ * The functions that write into a Cowork workspace or add a firewall rule.
+ * The census is over calling FUNCTIONS, so a second call inside an
+ * already-listed function is not a new row, and a new function is.
+ * `add_cowork_deny_rule` has no caller today; it is listed so its first one
+ * shows up here.
+ */
+const WRITE_PRIMITIVES = [
+  "install_tandem_plugin_into_workspace",
+  "apply_token_to_all_workspaces",
+  "reconcile_stale_workspace_tokens",
+  "add_cowork_allow_rule",
+  "add_cowork_deny_rule",
+];
+
+const ALLOWED_CALLERS: Record<string, string> = {
+  "cowork_commands.rs::cowork_toggle_integration": "gated on its enable branch",
+  "cowork_commands.rs::cowork_rescan": "gated at arm start",
+  "cowork_commands.rs::cowork_apply_token": "gated at arm start",
+  "cowork_commands.rs::cowork_install_into_workspace": "gated at arm start",
+  "cowork_commands.rs::cowork_set_lan_ip_override": "gated at arm start",
+  "cowork_commands.rs::cowork_heal_pass": "not a command; returns before doing anything while dark",
+};
+
+/** Outermost functions in `code`, with their bodies. */
+function topLevelFns(code: string): { name: string; body: string }[] {
+  const out: { name: string; body: string }[] = [];
+  let covered = 0;
+  for (const m of code.matchAll(/\bfn\s+(\w+)\s*(?:<[^>(]*>)?\s*\(/g)) {
+    const at = m.index ?? 0;
+    if (at < covered) continue;
+    const open = code.indexOf("{", at);
+    if (open === -1) continue;
+    const close = matchRustBrace(code, open);
+    out.push({ name: m[1], body: code.slice(open + 1, close) });
+    covered = close;
+  }
+  return out;
+}
+
+describe("Cowork ships dark (ADR-055): who can write into a workspace", () => {
+  it("only the listed functions call a write primitive", () => {
+    const called = new RegExp(`\\b(?:${WRITE_PRIMITIVES.join("|")})\\s*\\(`);
+    const callers = SOURCES.flatMap((f) =>
+      topLevelFns(f.code)
+        .filter((fn) => called.test(fn.body))
+        .map((fn) => `${f.rel.replace("src-tauri/src/", "")}::${fn.name}`),
+    );
+    expect(
+      callers.length,
+      "the census found no caller at all — the scan is broken",
+    ).toBeGreaterThan(0);
+    expect([...new Set(callers)].sort()).toEqual(Object.keys(ALLOWED_CALLERS).sort());
+  });
+});

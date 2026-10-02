@@ -43,7 +43,7 @@ I built Tandem for one person working on their own documents. Those three are ex
 
 Then connect your AI. Tandem opens a setup wizard the first time you run it. If [Claude Code](https://claude.com/claude-code) isn't installed it can install it for you in one click on all three platforms, and it writes the connection settings itself. You can reopen the wizard any time from **Settings → AI Assistant**. Two things before you start. **A Claude Pro or Max subscription includes Claude Code** (pay-as-you-go API billing works too). And **the Claude you use at claude.ai in a browser can't connect**, because a web page has no way to reach a file on your disk. The subscription alone doesn't do it: you need Claude Code, or Claude Desktop, installed locally as well.
 
-Prefer a different AI? Any MCP-capable client can connect to the same endpoint. [docs/integrations.md](docs/integrations.md) covers what's supported and what's untested. Claude Desktop is set up by the same wizard on all three platforms; [Cowork](#cowork), its local agent mode, is the Windows-only part.
+Prefer a different AI? Any MCP-capable client can connect to the same endpoint. [docs/integrations.md](docs/integrations.md) covers what's supported and what's untested. Claude Desktop is set up by the same wizard on all three platforms; [Cowork](#cowork), its local agent mode, is not supported in this version.
 
 <details>
 <summary><b>System requirements</b></summary>
@@ -187,15 +187,7 @@ Tandem is still early, and I'd rather hear what's wrong with it than not hear. I
 
 ---
 
-## Cowork
-
-[Cowork](https://www.anthropic.com/news/claude-code-on-the-web) is Claude Desktop's local agent mode, where Claude runs in an isolated VM on your machine. Tandem connects to it through Claude's **plugin system**, but you don't add a marketplace or run any `/plugin` commands yourself.
-
-- **How to enable (Windows desktop app):** open the integration wizard (Settings → AI Assistant, or "Set up" next to Cowork) and click **Enable Cowork**, or toggle it on in Settings → Network. Tandem writes the plugin entry into every Cowork workspace it detects and adds a Windows firewall rule so the VM can reach the Tandem server on this computer. That firewall step needs admin once; without it the VM can't connect.
-- **Why it's automated instead of a manual marketplace install:** inside the VM the plugin has to point at `host.docker.internal:3479` and carry a per-machine secret auth token. A published marketplace plugin can't carry that token, so Tandem provisions the workspace entries directly. (The published `tandem@tandem-editor` marketplace plugin is for Claude Code running *on the host*, over `127.0.0.1`. See below.)
-- **Verify:** in a Cowork session, ask Claude to open or list your documents, and Tandem's tools should appear. If they don't, re-run Enable.
-- **Real-time updates:** live annotation and chat push needs the Tandem desktop app plus one of the push transports (see [Real-time updates](#real-time-updates)); the Cowork connection itself is request and response. The self-armed watch is **not** one of the options here, because its wake stream refuses non-loopback peers and a session inside a Cowork VM can't reach it.
-- **macOS / Linux:** not yet, tracked in #316 / #317.
+## Plugin install
 
 For Claude Code on the host, you can add the published plugin from the marketplace instead of using the wizard:
 
@@ -205,6 +197,14 @@ claude plugin install tandem@tandem-editor
 ```
 
 This activates the MCP tools, the bundled skill, and, on Claude Code 2.1.212 or newer, a monitor that delivers real-time events with no extra flag. [Real-time updates](#real-time-updates) covers how that compares to the other two.
+
+## Cowork
+
+[Cowork](https://www.anthropic.com/news/claude-code-on-the-web) is Claude Desktop's local agent mode, where Claude runs in an isolated VM on your machine. **Tandem's Cowork setup is not in this version, and Cowork is not a supported surface.** Earlier versions had an "Enable Cowork" control in the Windows desktop app; it is gone, because the connection it set up was never verified against how the desktop app now runs its server.
+
+If you turned Cowork on in an earlier version, the update leaves what it wrote in place (the Tandem entries in your Cowork workspaces, and the firewall rule if one was added) but no longer maintains it. Uninstalling the desktop app removes the entries. [docs/data-locations.md](docs/data-locations.md#if-you-enabled-cowork-in-an-earlier-version) says exactly what is left and how to remove it by hand.
+
+Claude Desktop itself is still set up by the wizard, as before.
 
 <details>
 <summary><h2>For developers and contributors</h2></summary>

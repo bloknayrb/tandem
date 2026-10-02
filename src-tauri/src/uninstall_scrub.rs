@@ -17,6 +17,8 @@
 //! registration:
 //!   - Cowork plugin entries in every detected workspace (Windows)
 //!   - The Tandem Cowork firewall rules (Windows)
+//!   - `cowork-meta.json`, the one app-data file the scrub removes (Windows;
+//!     ADR-055 — a surviving `enabled: true` would re-arm a later lit build)
 //!   - The start-at-login registration (all platforms)
 //!
 //! MCP config entries in `~/.claude.json` and the bundled skill directory stay
@@ -228,6 +230,12 @@ pub fn run_uninstall_scrub() -> i32 {
 
         if let Err(e) = crate::firewall::remove_cowork_rules() {
             eprintln!("[scrub] firewall rule removal failed: {e}");
+        }
+
+        // ADR-055: a surviving `enabled: true` would re-arm the heal pass of a
+        // later build that ships Cowork lit, with nobody having asked.
+        if let Err(e) = crate::cowork_meta::remove_meta_file() {
+            eprintln!("[scrub] {e}");
         }
     }
 

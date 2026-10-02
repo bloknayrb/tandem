@@ -33,9 +33,8 @@ setup, hardware verification, and two flag flips.
    checklist is [licensing-operations.md §8](licensing-operations.md#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay),
    and all of it is unchecked. #1117, the old commercial-infra tracker, was closed on
    2026-06-13 with every box unchecked, so it tracks nothing.
-3. **Hardware verification.** This covers the install matrix (#2034), Cowork on macOS and
-   Linux (#316), and the Cowork transport matrix (#1455, review by 2026-10-15). Windows is
-   the only platform with a machine on hand.
+3. **Hardware verification.** This covers the install matrix (#2034). Windows is the only
+   platform with a machine on hand.
 4. **Two flips at the cut, in two independent systems:**
    - **Licensing.** `LICENSE_GATE_ENABLED` (`tsup.config.ts`) and `LICENSE_UPDATE_ENDPOINT`
      (`src-tauri/src/lib.rs`) flip together. `tests/docs/license-flip-consts.test.ts` fails
@@ -70,10 +69,8 @@ outcome is keep, replace or retire.
 | Date | Issue | Checkpoint |
 |---|---|---|
 | monthly — next 2026-10-29 | #1506 | Has Claude Code gone modern-only? Last pass 2026-09-29: no |
-| 2026-10-15 | #1455 | Run the Cowork transport test matrix |
 | 2026-11-01 | #1345 | Revisit packaged-desktop WebDriver smoke (workflow disabled 2026-08-08) |
 | 2026-11-09 | #1363 | Native theme push on Linux |
-| 2026-11-15 | #1727 | Consolidate the three Cowork enable-confirmations |
 | 2026-11-30 | #1687 | Converge the lifecycle result families |
 | 2026-12-01 | #1728 | Make `coverage` a required check, or record that its floors stay advisory |
 | 2026-12-01 | #1712 | Verify the app.css citations in the design-spec docs |
@@ -90,7 +87,7 @@ correctness, security, install or a named gate. Not all of them block. Triage ea
 before the flip: fix it, mark it post-v1.0 below, or accept it in
 [security.md](security.md#open-findings). For everything else, run `gh issue list`.
 
-- **Security findings:** #1952 (`wakeUrl` hardcodes `127.0.0.1`), #1884 (the channel permission relay under Cowork), #1885, #1949 (signing-job isolation), #1822 (the v1-review Lows). The RC security sweep is #1199.
+- **Security findings:** #1952 (`wakeUrl` hardcodes `127.0.0.1`), #1884 (the channel permission relay under a non-loopback bind), #1885, #1949 (signing-job isolation), #1822 (the v1-review Lows). The RC security sweep is #1199.
 - **Sidecar and process lifecycle:** #1988 (orphaned sidecar after a force-quit on macOS/Linux), #1994, #1869, #2041.
 - **Correctness:** #2001, #1997, #2064, #2069, #2070, #1981 (the 100 kB body parser shadowing `/api`), #1982, #1980, #1662, #1632, #2009, #1920, #2112, #1523.
 - **Distribution and setup:** #1533, #1610, #1704, #1895, #1792, #1354 (the plugin monitor can't be resolved from a GUI launch).
@@ -103,6 +100,7 @@ before the flip: fix it, mark it post-v1.0 below, or accept it in
 ## Shelved
 
 - **`.docx` support (2026-09-24, [ADR-053](decisions.md#adr-053-docx-ships-dark)).** It is out of the live build behind `DOCX_ENABLED` because it wasn't ready for serious work. The code stays merged and tested. Re-enabling it is ADR-053's checklist (#2110), not a one-line flip. #576 shipped it, and #1142 is the open umbrella for editing `.docx` with confidence. The history file's Step 5b and Word Comment Import sections describe what it did while it shipped.
+- **Tandem's Cowork setup (2026-10-02, [ADR-055](decisions.md#adr-055-cowork-setup-ships-dark)).** It is out of the live build behind `COWORK_ENABLED`, and Cowork is out of v1.0. The route the setup builds was never verified against a desktop app whose server is pinned to loopback. The code stays merged and tested. Re-enabling it is ADR-055's checklist (#2134), which starts with the transport matrix retired from #1455.
 - **SuperDoc as the `.docx` engine (2026-09-24, ADR-052).** Shelved after the engine spike reported NO-GO on nine of its ten questions.
 
 ## Integration Policy (ADR-038)
@@ -140,7 +138,7 @@ v0.26.0, v0.27.0 or v0.28.0.
 
 **Functional gates**
 - **Claude Code CLI works zero-config:** loopback-exempt, and tools work unchanged. Checked at RC.
-- **Claude Code version compatibility.** UNMET. At RC, the connect → tools → wake → reply loop runs against the current stable Claude Code and the latest release of the previous minor, and the report records both versions. "Wake" means the self-armed `/api/wake` watch where a Monitor tool exists, falling back to the channel shim where it does not, and the report says which path each run used. It also needs a #1506 pass dated within the RC window; that check is what guards against a *future* Claude Code release. #1505 (serving MCP `2026-07-28` alongside the legacy protocol) needs a migration to the v2 SDK packages (`@modelcontextprotocol/server` and friends, per #1506's 2026-09-29 pass), so until it lands a modern-only Claude Code would break Tandem outright. #1506 covers Cowork too, and neither pass has been able to settle Cowork.
+- **Claude Code version compatibility.** UNMET. At RC, the connect → tools → wake → reply loop runs against the current stable Claude Code and the latest release of the previous minor, and the report records both versions. "Wake" means the self-armed `/api/wake` watch where a Monitor tool exists, falling back to the channel shim where it does not, and the report says which path each run used. It also needs a #1506 pass dated within the RC window; that check is what guards against a *future* Claude Code release. #1505 (serving MCP `2026-07-28` alongside the legacy protocol) needs a migration to the v2 SDK packages (`@modelcontextprotocol/server` and friends, per #1506's 2026-09-29 pass), so until it lands a modern-only Claude Code would break Tandem outright.
 - **Tauri update flow.** PARTIAL. Download → install → restart must work on all three platforms, with the sidecar restarting and no data loss. Observed on macOS once and on Windows three times, most recently v0.24.1→v0.25.0 (closing #1596). Linux has not been observed. The `MayHaveFailed` arm, which should show the banner, is untested. A successful update writes nothing to `tandem.log` at the release log level, so someone has to watch the window.
 - **Tutorial.** PARTIAL. It must complete end to end on `sample/welcome.md` with anchors holding. The anchor regression test exists (`tests/design-system-impl/tutorial-anchor.test.ts`). Open: #1696, #1725, #1711.
 - **Dark/light toggle** works on desktop and in the browser. No recorded run.
@@ -227,12 +225,14 @@ deferred table are in the history file.
   - annotation emoji reactions, which are an explicit cut, not a deferral (D5)
 - **Desktop shell:** frameless window, vibrancy, multi-window, and a file-explorer sidebar are out of scope per HANDOFF.
 - **Re-enabling `.docx`** (#2110).
+- **Re-enabling Tandem's Cowork setup** (#2134), with Cowork on macOS/Linux (#316) and the pre-flight enum decision (#1373) behind it.
 
 ## Known Limitations (v1)
 
 These are intentional scope boundaries, not bugs:
 
 - **No `.docx`.** Release builds open `.md`, `.txt` and `.html` (`.html` opens read-only). `.docx` is shelved (ADR-053).
+- **No Cowork setup.** Tandem does not set itself up inside Claude Desktop's Cowork, and Cowork is not a supported surface (ADR-055).
 - No formula support in tables
 - No `.xlsx`/`.csv` support
 - No drawing/freeform annotation

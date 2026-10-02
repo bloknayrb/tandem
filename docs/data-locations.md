@@ -134,8 +134,9 @@ These are what go stale if you delete Tandem without cleaning up:
   Microsoft Store installs).
 - `~/.claude/skills/tandem/SKILL.md` — the bundled skill Claude Code
   auto-discovers.
-- Windows only: `Tandem Cowork*` firewall rules and Cowork plugin
-  registration entries.
+- Windows only, and only if you enabled Cowork in v0.28.0 or earlier:
+  `Tandem Cowork*` firewall rules, Cowork plugin registration entries, and
+  `cowork-meta.json` (see [below](#if-you-enabled-cowork-in-an-earlier-version)).
 - The start-at-login registration, **if you turned that setting on**
   (Settings → Network). It lives outside the app-data directory, so deleting
   app data does not remove it, and an orphan makes your OS try to launch a
@@ -147,12 +148,35 @@ These are what go stale if you delete Tandem without cleaning up:
   | macOS | `~/Library/LaunchAgents/Tandem.plist` |
   | Linux | `~/.config/autostart/Tandem.desktop` (always home-relative; `XDG_CONFIG_HOME` is not consulted) |
 
+## If you enabled Cowork in an earlier version
+
+Tandem's Cowork setup is not in this version ([ADR-055](decisions.md#adr-055-cowork-setup-ships-dark)). If you turned it on in
+v0.28.0 or earlier, updating leaves what it wrote in place and stops maintaining it:
+
+- A Tandem entry in three files in each Cowork workspace (`installed_plugins.json`,
+  `known_marketplaces.json`, `cowork_settings.json`), carrying Tandem's auth token.
+- `cowork-meta.json` in Tandem's app-data `Data` folder, recording that it was enabled.
+- A `Tandem Cowork*` Windows firewall rule, only if Tandem was ever run as administrator
+  when you enabled it.
+
+The desktop app's server listens on this computer only, so none of that exposes anything
+while you run the desktop app. There is no in-app switch to turn it off any more. To remove it:
+
+- **Uninstall the desktop app.** Its uninstaller removes the workspace entries and
+  `cowork-meta.json`.
+- **Or run `tandem --uninstall-scrub`**, which removes the workspace entries along with
+  everything else it scrubs, and leaves `cowork-meta.json`.
+- **The firewall rule may survive either one**, because Tandem never runs elevated. From an
+  administrator prompt: `netsh advfirewall firewall delete rule name="Tandem Cowork"`.
+- **To revoke the token without removing anything**, run `tandem rotate-token`. The
+  workspace entries keep the old one.
+
 ## Uninstalling cleanly
 
 **Windows desktop app**: the uninstaller runs a scrub automatically, but a
 **narrower one than the command below**. What it removes is the Cowork plugin
-entries, the `Tandem Cowork*` firewall rules, and the start-at-login
-registration. The MCP entries in `~/.claude.json` and the Claude Desktop config,
+entries, `cowork-meta.json`, the `Tandem Cowork*` firewall rules, and the
+start-at-login registration. The MCP entries in `~/.claude.json` and the Claude Desktop config,
 and the bundled skill at `~/.claude/skills/tandem/`, are **not** touched — that
 half lives in the npm CLI, whose bundle the desktop app does not ship. So run
 the command below yourself as well if you want no traces. The automatic scrub is
@@ -175,7 +199,8 @@ registration). It **deliberately
 leaves your data**: the app-data directory (your sessions, annotations, and
 document backups) and the keychain entries stay until you delete them
 yourself — uninstalling must never be the thing that destroys a backup you
-need next week.
+need next week. The one exception is `cowork-meta.json`, which the Windows desktop
+uninstaller's own scrub deletes; this command leaves it.
 
 ### Full manual cleanup
 

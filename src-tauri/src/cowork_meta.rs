@@ -142,6 +142,21 @@ pub fn save(meta: &CoworkMeta) -> Result<(), String> {
     })
 }
 
+/// Delete `cowork-meta.json`. Called only by the uninstall scrub.
+///
+/// Without this an `enabled: true` outlives the uninstall, and a later build
+/// with Cowork lit would write the auth token into every workspace on its
+/// first heal tick with nobody having asked (ADR-055). A file that is already
+/// absent is success.
+pub(crate) fn remove_meta_file() -> Result<(), String> {
+    let path = meta_path()?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("remove cowork-meta.json: {e}")),
+    }
+}
+
 /// Process-level mutex to serialise concurrent `update()` calls from Tauri
 /// invoke handlers.  Without this, two concurrent invocations could interleave
 /// their load → mutate → save sequences, causing one writer to silently lose

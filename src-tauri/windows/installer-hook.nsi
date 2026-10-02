@@ -9,6 +9,7 @@
 ; The `--uninstall-scrub` subcommand (src-tauri/src/uninstall_scrub.rs):
 ;   - Walks every Cowork workspace and removes the Tandem plugin entry.
 ;   - Deletes the Tandem Cowork firewall rules (allow + deny).
+;   - Deletes cowork-meta.json (ADR-055).
 ;   - Removes the start-at-login registration (HKCU Run + StartupApproved).
 ;   - Exits 0 on clean-or-not-installed; each step is independently
 ;     best-effort so a partial failure never blocks removing Tandem.

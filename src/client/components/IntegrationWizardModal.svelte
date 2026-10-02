@@ -26,7 +26,7 @@
  * per keypress (the Advanced <details> changes the focusable set while open).
  */
 import { untrack } from "svelte";
-import { BYO_MODELS_ENABLED } from "../../shared/constants.js";
+import { BYO_MODELS_ENABLED, COWORK_ENABLED } from "../../shared/constants.js";
 import type { ApplyItemResult, ExistingMcpInstall } from "../../shared/integrations/contract.js";
 import {
   COWORK_PREFLIGHT_CHECKING,
@@ -92,7 +92,8 @@ const wizard = createIntegrationWizard({ baseUrl: MCP_BASE_URL });
 // them) would self-trigger `effect_update_depth_exceeded`. In the browser
 // getActive() is false → the hook's effect early-returns, no interval ever
 // starts; on Tauri the poller lives only while this component is mounted.
-const coworkStatus = createCoworkStatus(() => isTauriRuntime());
+// Same early return while Cowork ships dark (ADR-055).
+const coworkStatus = createCoworkStatus(() => COWORK_ENABLED && isTauriRuntime());
 
 /* Start at login (#1463 step 3). A MITIGATION, not a fix: it reduces how often
    a user reaches Claude Code with Tandem down, and closes nothing — it is
@@ -1247,7 +1248,7 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
           {#if wizard.step === "connect" || wizard.step === "done"}
             <section class="iw-more" data-testid="integration-wizard-more">
               <div class="iw-more-label">More integrations</div>
-              {#if isTauriRuntime()}
+              {#if COWORK_ENABLED && isTauriRuntime()}
                 <div class="iw-more-row">
                   <div class="iw-more-row-text">
                     <span class="iw-more-row-name">Cowork</span>
