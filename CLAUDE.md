@@ -329,3 +329,4 @@ Spawn these for the adversarial review step of the workflow:
 - `svelte-migration-reviewer` -- `.svelte` / `.svelte.ts` Svelte 5 reactive gotchas
 - `crdt-reviewer` -- coordinate-system bugs and range invariant violations
 - `security-reviewer` -- Tandem's threat model specifically
+- `license-reviewer` -- `LICENSE` (BUSL-1.1) and everything that restates it. **Not counsel**: it fixes restatements, and only drafts a Parameter change or a legal question
