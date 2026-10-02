@@ -164,12 +164,12 @@
     "update-notifier": "^7.3.1",
     "ws": "^8.21.0",
     "y-protocols": "1.0.7",
-    "yjs": "13.6.32",
+    "yjs": "13.6.33",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.11.3",
-    "@biomejs/biome": "2.5.13",
+    "@biomejs/biome": "2.5.14",
     "@playwright/test": "^1.58.2",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@tauri-ui-inspector/adapter-svelte": "^0.1.0",
