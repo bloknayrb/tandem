@@ -215,11 +215,13 @@ describe("Cowork ships dark (ADR-055): App.svelte's admin-declined modal", () =>
  * ordinary way a new parent arrives, not a determined one.
  *
  * The comment stripper is approximate as well. It does not know regex
- * literals or Svelte markup: a `//` inside a regex drops the rest of that
- * line, and an apostrophe in markup text or a regex opens a "string" in which
- * later comments are kept. Measured against the tree when this was written,
- * neither hides a reacher nor invents one, and the parents all import or call
- * from their script, ahead of any markup.
+ * literals, and it reads Svelte markup text as code: a `//` inside a regex
+ * drops the rest of that line, and an apostrophe in markup text or a regex
+ * opens a "string" in which later comments are kept. Measured against the tree
+ * when this was written, neither hides a reacher nor invents one. That is a
+ * measurement, not a property: `SettingsClaudeCodeTab.svelte` reaches only
+ * from its markup (the `{#await import(...)}`), below prose that holds
+ * apostrophes, and is seen because string contents are copied through.
  */
 describe("Cowork ships dark (ADR-055): who can reach a Cowork surface", () => {
   const CLIENT = join(import.meta.dirname, "..", "..", "src", "client");

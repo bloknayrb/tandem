@@ -74,7 +74,8 @@ type Row = { gate: "arm-start" | "enable-branch"; why: string } | { gate: "none"
 /**
  * One row per command. `arm-start`: the gate is the first statement of the
  * Windows arm, after any leading `use` items. `enable-branch`: `if enabled {`
- * is itself the arm's first statement, so nothing runs ahead of the branch,
+ * is itself the arm's first statement, after the same leading `use` items,
+ * so nothing runs ahead of the branch,
  * and the gate is the first statement inside it. That is stricter than the
  * property needs (a hoisted read would be harmless) and deliberately so: an
  * edit that puts anything on the shared path should be looked at.
