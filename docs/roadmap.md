@@ -87,7 +87,7 @@ correctness, security, install or a named gate. Not all of them block. Triage ea
 before the flip: fix it, mark it post-v1.0 below, or accept it in
 [security.md](security.md#open-findings). For everything else, run `gh issue list`.
 
-- **Security findings:** #1952 (`wakeUrl` hardcodes `127.0.0.1`), #1884 (the channel permission relay under a non-loopback bind), #1885, #1949 (signing-job isolation), #1822 (the v1-review Lows). The RC security sweep is #1199.
+- **Security findings:** #1884 (the channel permission relay serves its `description` to local callers; its LAN half is dark under ADR-056), #1885, #1949 (signing-job isolation), #1822 (the v1-review Lows). The RC security sweep is #1199.
 - **Sidecar and process lifecycle:** #1988 (orphaned sidecar after a force-quit on macOS/Linux), #1994, #1869, #2041.
 - **Correctness:** #2001, #1997, #2064, #2069, #2070, #1981 (the 100 kB body parser shadowing `/api`), #1982, #1980, #1662, #1632, #2009, #1920, #2112, #1523.
 - **Distribution and setup:** #1533, #1610, #1704, #1895, #1792, #1354 (the plugin monitor can't be resolved from a GUI launch).
@@ -153,7 +153,7 @@ v0.26.0, v0.27.0 or v0.28.0.
 
 **Security gate.** The threshold is **zero unresolved HIGH findings**, self-graded by the `security-reviewer` agent.
 - The last full run, on 2026-08-05, failed with two HIGHs. Both are now fixed: #1291 by PR #1296, and #1292 through the #1340 work. The threshold has been met since #1292 closed on 2026-09-08.
-- The RC re-run (#1199) is still owed. It covers every HTTP route added since v0.13.0, enumerated by diffing the route registrations, plus outbound surfaces the diff cannot find (the local-model client's SSRF posture). The method is the three-surface audit (CORS × Host header × loopback-vs-LAN) plus path validation.
+- The RC re-run (#1199) is still owed. It covers every HTTP route added since v0.13.0, enumerated by diffing the route registrations, plus outbound surfaces the diff cannot find (the local-model client's SSRF posture). The method is the three-surface audit (CORS × Host header × loopback-vs-LAN) plus path validation. The LAN leg now checks that a release build cannot listen beyond the machine (ADR-056), rather than auditing what a LAN peer reaches.
 - The open findings listed above in *Open work that bears on v1.0* are in scope.
 - Full history is in [security.md](security.md#open-findings) and in the history file.
 
@@ -226,6 +226,7 @@ deferred table are in the history file.
 - **Desktop shell:** frameless window, vibrancy, multi-window, and a file-explorer sidebar are out of scope per HANDOFF.
 - **Re-enabling `.docx`** (#2110).
 - **Re-enabling Tandem's Cowork setup** (#2134), with Cowork on macOS/Linux (#316) and the pre-flight enum decision (#1373) behind it.
+- **Re-enabling the non-loopback bind** (ADR-056), with the #1906 decision and the #1952 fix behind it.
 
 ## Known Limitations (v1)
 
@@ -233,6 +234,7 @@ These are intentional scope boundaries, not bugs:
 
 - **No `.docx`.** Release builds open `.md`, `.txt` and `.html` (`.html` opens read-only). `.docx` is shelved (ADR-053).
 - **No Cowork setup.** Tandem does not set itself up inside Claude Desktop's Cowork, and Cowork is not a supported surface (ADR-055).
+- **No LAN exposure.** Tandem listens on this computer only; a non-loopback `TANDEM_BIND_HOST` is refused at start (ADR-056).
 - No formula support in tables
 - No `.xlsx`/`.csv` support
 - No drawing/freeform annotation

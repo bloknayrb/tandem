@@ -1978,6 +1978,8 @@ Three reasons, in ascending order of force:
 
 ## ADR-050: `/api` Is Loopback-Only for Non-GET, Enforced at the Mount
 
+> **Read with [ADR-056](#adr-056-the-non-loopback-bind-ships-dark) (2026-10-05).** The non-loopback bind ships dark, so in a release no caller is non-loopback from another machine. The invariant below still describes the code and holds for the re-enable.
+
 **Status:** Accepted — 2026-08-08
 **Context:** #1320, #1293, #1121 F6/F7, ADR-045
 
@@ -2682,6 +2684,7 @@ So v1.0 would have shipped a Windows toggle, a wizard row and an onboarding step
 - **This supersedes the "Core" mark on #316** in `docs/v10-triage.md`, whose rows are frozen and so still show it. Cowork on macOS and Linux is no longer a v1.0 item.
 - **#1455 and #1727, both dated gates, are retired** into the checklist below rather than kept. #1727's own text says a descope means "consolidate now"; with all three confirmation flows dark there is nothing live to consolidate, so that work moves to re-enable. That overrides one carve-out #1727 marked "NOT deferred", the duplicated `cowork-enable-confirm-btn` testid: neither copy is reachable while dark (`CoworkSettings` is not mounted, and the wizard's Cowork sub-view cannot be opened), so it moves too. Both issues are closed when this ADR's PR merges.
 - **#1952, #1884 and #1906 are not dormant.** They are properties of a non-loopback bind, which `TANDEM_BIND_HOST` produces on an npm-started server with or without Cowork. (The desktop sidecar pins loopback, so they were never reachable there.) `NON_LOOPBACK_ALLOWED` stays for the same reason: the channel shim and the plugin monitor use it.
+  - **Amended 2026-10-05 ([ADR-056](#adr-056-the-non-loopback-bind-ships-dark)).** That bind now ships dark too, so #1952 and #1906 moved to Accepted (bounded) and #1884 stays open for its local-caller half only. The sentence above was true when written: Cowork never set the bind, and ADR-056 is what removes it.
 - User-facing docs no longer describe a Cowork setup. Internal docs (`architecture.md`, `gotchas.md`) keep describing the code under a ships-dark banner.
 - ADR-038's canonical paragraph listed "cowork" among what the Claude integration ships with. It no longer does; see the amendment there.
 
@@ -2696,3 +2699,46 @@ So v1.0 would have shipped a Windows toggle, a wizard row and an onboarding step
 8. Tell the website project that Cowork copy is allowed again, and close #2134.
 
 **Cross-references:** ADR-023 (the plugin-stdio bridge), ADR-044 (workspace detection and the heal pass), ADR-038 (the integration policy this amends), ADR-053 (the flag pattern), #316, #317, #1373, #1455, #1598, #1727, #1827 (decision E), #2134.
+
+## ADR-056: The Non-Loopback Bind Ships Dark
+
+**Status:** Accepted (2026-10-05)
+
+**Context.** Cutting Cowork from v1.0 (ADR-055) left one Cowork-era surface standing: `TANDEM_BIND_HOST`, which lets the npm server listen on a LAN address. Asked whether that mode should leave v1.0 too, Bryan chose to drop it, and then asked what the real use case was. The answer on record:
+
+- It was built in v0.7.0 (2026-04-20) as part of the "Cowork foundation", so a Cowork VM could reach the server. The half that would have set it ("Cowork mode binds `0.0.0.0`") never shipped. Nothing in the product sets the variable; `integrations_probe.rs` asserts the launcher never does, and the desktop sidecar passes `SIDECAR_BIND_HOST = "127.0.0.1"` explicitly.
+- What it gives is narrower than "sharing a session on a LAN", which is what `docs/configuration.md` called it. Hocuspocus is hardcoded to `127.0.0.1`, so nobody on the LAN can open the editor. A token holder on the LAN can read `/api` and call every MCP tool over `POST /mcp`.
+- The one plausible user is Claude Code in a VM, a container or WSL2 with NAT networking, driving a Tandem on the host. That is unverified: no issue or report records anyone doing it.
+- It is where three open findings lived (#1952, #1884's LAN half, #1906), and every security audit has had to reason about the LAN Host allowlist, the `NON_LOOPBACK_ALLOWED` carve-outs and the token-on-LAN checks.
+
+Bryan accepted the recommendation to refuse the bind behind a ships-dark flag, keeping the code, and by approving the plan for this ADR decided the two acceptances recorded below.
+
+**Decision.** A release build of the npm server never listens beyond this computer.
+
+- **The flag.** `LAN_BIND_ENABLED` is a literal `false` in `src/shared/constants.ts`, with no build define and no environment override. An override would be a second opt-in to the exposure this removes.
+- **The refusal runs first.** `resolveBindHostEnv` (`src/server/bind-check.ts`) is called at the top of `main()`, before the #1758 probe, the app-data claim, the store lock and session restore. While dark, a value other than `127.0.0.1`, `localhost`, `::1`, unset or empty is:
+  - **refused** in HTTP mode: the message names ADR-056 and the process exits 1 having claimed, locked and killed nothing;
+  - **ignored** in any other transport (the stdio branch): nothing listens on the bind host there, so refusing would only break an MCP client's start. The effective host becomes `127.0.0.1`, which also keeps the token and multi-homed checks from firing on a bind that never happens, and the stdio probe asks that host rather than the env's.
+  - This changes two edges deliberately. Values that are not an IP (`LOCALHOST`, `[::1]`, garbage) used to exit with "not a valid IP" and now take the same arms. `127.0.0.2` and `::ffff:127.0.0.1` used to work once a token existed and are now refused, the cost of an exact three-value loopback set.
+- **A guard at the listener.** `startMcpServerHttp` throws on a non-loopback host while dark, so a caller that never goes through `main()` cannot open a LAN socket either.
+- **Kept, unreachable from another machine:** `NON_LOOPBACK_ALLOWED`, the `resolvedLanIP` Host allowlist, the `/health` and `/api` non-loopback scrubbing, `TANDEM_LAN_IP` and `TANDEM_ALLOW_UNAUTHENTICATED_LAN`. "Unreachable from another machine" is the precise claim: a same-machine process connecting from another 127/8 source address still counts as non-loopback, needs the token, and reaches strictly less than it would from `127.0.0.1`.
+
+**Consequences.**
+- **Findings.** #1952 and #1906 move to Accepted (bounded), decided by Bryan 2026-10-05, each void if the flag flips. #1952's remaining reach needs a user-built port forwarder with a port mismatch. #1906's hole-or-intended decision is still owed and becomes re-enable item 2; its tracker issue was closed by #2059, which scoped the docs without making it. #1884 stays open: its `GET` half is a local-caller exposure that never needed the bind.
+- **Port forwarding is the new thing to warn about.** A user who needs VM or WSL2-NAT access will reach for `netsh portproxy` or `ssh -L`. A forwarded connection arrives from `127.0.0.1`, so it can look like a local program: no token needed, and write access, which is more than LAN mode gave. `docs/configuration.md` and `docs/troubleshooting.md` say not to do it.
+- **Docs.** User-facing docs (`configuration.md`, `troubleshooting.md`, `CONTRIBUTING.md`, `.env.example`, `cli.md`) no longer describe LAN exposure; `configuration.md` keeps its `## LAN exposure` heading because `cli.md` links to it. Internal docs (`security.md`, `architecture.md`, `mcp-tools.md`, ADR-050) keep describing the code under a ships-dark note. `tests/docs/mcp-mutation-asymmetry-claims.test.ts` no longer reads the two user-facing files.
+- **`tandem doctor`** no longer conditions its non-loopback-url warning on `TANDEM_BIND_HOST`: in this version that url can never be this Tandem.
+- **Ownership stories.** The five remaining Cowork-actor stories in `docs/spikes/multi-session-ownership/stories.md`, all set under a non-loopback bind, are suspended the way OWN-X-02 was under ADR-055.
+- **Desktop.** No behaviour change: the sidecar already passed a constant `127.0.0.1`.
+- **Tests.** `tests/server/lan-bind-ship-dark.test.ts` pins the literal, table-tests `resolveBindHostEnv` dark and lit, checks the listener guard, and spawns the server entry with `TANDEM_BIND_HOST=0.0.0.0` in an isolated home to assert the ADR-056 message. The message is the discriminator: with the refusal unwired the child still exits 1, at the token check, and that was measured.
+
+**Re-enable checklist.**
+1. Flip `LAN_BIND_ENABLED`, and retire `tests/server/lan-bind-ship-dark.test.ts`'s dark assertions.
+2. Decide #1906: gate mutating MCP tools on loopback, carve out an MCP equivalent of `NON_LOOPBACK_ALLOWED`, or record remote writes as intended.
+3. Fix #1952 (suppress `wakeUrl` under a non-loopback bind) and #1884's `POST` half.
+4. Restore the user-facing docs from the PR that shipped this ADR, and put `docs/configuration.md` and `docs/troubleshooting.md` back on the asymmetry test's lists.
+5. Un-suspend the five ownership stories.
+6. Restore `tandem doctor`'s `TANDEM_BIND_HOST` condition on its non-loopback-url warning.
+7. Move #1952 and #1906 back out of Accepted in `docs/security.md` and `CLAUDE.md`.
+
+**Cross-references:** ADR-050 (the `/api` invariant), ADR-055 (Cowork setup ships dark), ADR-053 (the flag pattern), #1758 (the startup probe), #1884, #1906, #1952, #2059.

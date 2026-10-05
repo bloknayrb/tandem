@@ -8,6 +8,59 @@
 
 import type { NetworkInterfaceInfo } from "os";
 import { networkInterfaces as osNetworkInterfaces } from "os";
+import { DEFAULT_BIND_HOST } from "../shared/constants.js";
+
+/**
+ * What to do with `TANDEM_BIND_HOST` before anything else in `main()` runs.
+ *
+ * - `use`: today's behaviour. The value goes on to the IP validation and
+ *   {@link checkBindConfig} exactly as before.
+ * - `refuse`: HTTP mode would listen beyond this computer, which ADR-056 ships
+ *   dark. The caller prints `message` and exits 1 before probing, claiming the
+ *   app-data dir or taking the store lock, so there is nothing to undo.
+ * - `ignore`: stdio mode listens on nothing, so a non-loopback value exposes
+ *   nothing and refusing would only break an MCP client's start. The value is
+ *   replaced with the loopback default, which also keeps the token and
+ *   multi-homed checks from firing on a bind that never happens.
+ */
+export type BindHostDecision =
+  | { kind: "use"; bindHost: string }
+  | { kind: "refuse"; message: string }
+  | { kind: "ignore"; bindHost: string; message: string };
+
+export function resolveBindHostEnv(opts: {
+  /** `process.env.TANDEM_BIND_HOST`, unread and untrimmed. */
+  raw: string | undefined;
+  /** `TANDEM_TRANSPORT`, lowercased. Anything but `"http"` runs the stdio branch. */
+  transportMode: string;
+  lanBindEnabled: boolean;
+}): BindHostDecision {
+  const { raw, transportMode, lanBindEnabled } = opts;
+
+  // Lit: byte-identical to the read this replaced (`??`, so an empty value
+  // still reaches the IP validation and is rejected there).
+  if (lanBindEnabled) return { kind: "use", bindHost: raw ?? DEFAULT_BIND_HOST };
+
+  // Dark: an empty value is treated as unset, as `resolveProbeHost` already does.
+  if (!raw || !isNonLoopback(raw)) return { kind: "use", bindHost: raw || DEFAULT_BIND_HOST };
+
+  if (transportMode === "http") {
+    return {
+      kind: "refuse",
+      message:
+        `[tandem] TANDEM_BIND_HOST="${raw}" is not supported in this version: ` +
+        `Tandem listens on this computer only (ADR-056). ` +
+        `Unset TANDEM_BIND_HOST and start again.\n`,
+    };
+  }
+  return {
+    kind: "ignore",
+    bindHost: DEFAULT_BIND_HOST,
+    message:
+      `[tandem] Ignoring TANDEM_BIND_HOST="${raw}": Tandem listens on this computer ` +
+      `only in this version (ADR-056), and stdio mode does not listen on it.\n`,
+  };
+}
 
 export interface BindCheckOptions {
   /** The value of TANDEM_BIND_HOST (or DEFAULT_BIND_HOST if not set). */

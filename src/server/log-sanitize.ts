@@ -12,7 +12,9 @@
  *   `/api/channel-*` family is carved out of `enforceLoopbackMutation` in
  *   `NON_LOOPBACK_ALLOWED` (`api-routes.ts`), because the shim and the plugin
  *   monitor run against a non-loopback `TANDEM_URL` — so under a Cowork bind a
- *   bearer-authenticated LAN peer writes straight into that terminal.
+ *   bearer-authenticated LAN peer writes straight into that terminal. (That
+ *   bind ships dark under ADR-056, so in a release these routes are unreachable
+ *   from another machine; any local process still reaches them.)
  * - `yjs/provider.ts` logs the rejected `origin` and generation `token` of a
  *   refused WebSocket peer. Hocuspocus always binds 127.0.0.1, so that one is
  *   loopback-only — but it is reached BEFORE authentication, and `origin`/

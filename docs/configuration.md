@@ -1,6 +1,6 @@
 # Configuration
 
-Tandem is configured via environment variables. Defaults work for local single-user use; you only need to override these for non-default ports, LAN exposure, or alternate app-data locations.
+Tandem is configured via environment variables. Defaults work for local single-user use; you only need to override these for non-default ports or alternate app-data locations.
 
 A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 
@@ -32,14 +32,14 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 | `TANDEM_DEFER_LAUNCHER` | unset | Set to `1` by the Tauri runtime on a start-at-login launch, so the auto-launcher holds off until you open the window. **Not the same as `TANDEM_DISABLE_LAUNCHER`:** this one is temporary and self-releasing, and it is ignored unless `TANDEM_TAURI_SIDECAR=1` (otherwise an exported var would permanently disable the launcher on the npm install, which has no way to release it). `TANDEM_DISABLE_LAUNCHER=1` outranks it. Not intended for manual use. |
 | `TANDEM_DISABLE_AUTOSTART` | unset | Set to `1` to make a start-at-login launch behave like an ordinary one — the window shows and the AI launcher is not deferred. Debugging escape hatch; does not remove the OS registration (turn the setting off in Settings → Network for that). Desktop app only. |
 
-### LAN exposure and authentication
+### Binding and authentication
 
 | Variable | Default | Description |
 |---|---|---|
-| `TANDEM_BIND_HOST` | `127.0.0.1` | Address the server binds to. Use `0.0.0.0` to listen on all interfaces, or a specific LAN IP to bind to one interface. **See LAN exposure below.** |
+| `TANDEM_BIND_HOST` | `127.0.0.1` | **Not supported in this version** beyond `127.0.0.1`, `localhost` or `::1`. Any other value is refused at start; see [LAN exposure](#lan-exposure). |
 | `TANDEM_AUTH_TOKEN` | auto-generated | Override the auth token. Tandem auto-generates a 32-byte base64url token on first run and stores it at `{APP_DATA_DIR}/auth-token`; this variable lets you supply an explicit value (set by Tauri; manual use is rare). |
-| `TANDEM_ALLOW_UNAUTHENTICATED_LAN` | unset | Set to `1` to allow binding to a non-loopback host before an auth token has been provisioned; without it that startup is refused. **The name overstates it** — it does not turn authentication off. Non-loopback callers still need a valid Bearer token. See [security.md](security.md#network-posture). **Insecure** — trusted-network development only. |
-| `TANDEM_LAN_IP` | auto-detected | Explicit LAN IP for the welcome banner's "share this URL" message. Useful on multi-homed machines where auto-detection picks the wrong interface. |
+| `TANDEM_ALLOW_UNAUTHENTICATED_LAN` | unset | **Not supported in this version** — it only ever applied to a non-loopback bind. |
+| `TANDEM_LAN_IP` | unset | **Not supported in this version** — it only ever applied to a non-loopback bind. |
 
 **Two variables you don't set, but that outrank the ones you do.** When Claude Code's plugin host runs one of Tandem's stdio subcommands (`tandem mcp-stdio`, `tandem channel`, `tandem monitor`) it injects `CLAUDE_PLUGIN_OPTION_SERVER_URL` and `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` from the plugin's user config. Those take **precedence over** `TANDEM_URL` and `TANDEM_AUTH_TOKEN` respectively; a blank value counts as absent, so an empty plugin option falls through rather than masking your setting. This precedence applies only to those subcommands and to `tandem rotate-token` — the server itself reads `TANDEM_URL` / `TANDEM_AUTH_TOKEN` directly. It is also why `tandem rotate-token` refuses to run when either auth variable is set: whatever injected the token would put the old value back on the next launch.
 
@@ -60,14 +60,11 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 
 ## LAN exposure
 
-By default the server binds to `127.0.0.1` and is unreachable from other machines. To share a Tandem session on a LAN:
+Tandem listens on this computer only. Listening on a LAN address is not in this version ([ADR-056](decisions.md#adr-056-the-non-loopback-bind-ships-dark)): starting the server with any other `TANDEM_BIND_HOST` exits with a message saying so. The desktop app always listens on `127.0.0.1`.
 
-```bash
-export TANDEM_BIND_HOST=0.0.0.0
-tandem
-```
+Don't port-forward around this (`netsh portproxy`, `ssh -L` and the like). A forwarded connection arrives from `127.0.0.1`, so it can look to Tandem like a program on your own computer: no token needed, and write access. That is more than LAN mode ever allowed.
 
-On first launch in this mode, Tandem generates an auth token if one doesn't already exist and prints a connection URL like `http://192.168.1.10:3479?token=...` to stderr. Every non-loopback request must carry that token as `Authorization: Bearer <token>`.
+The auth token still exists. Tandem creates one on first run and stores it at `{APP_DATA_DIR}/auth-token`; Claude's MCP configs carry it, and `tandem rotate-token` replaces it.
 
 ### Rotating the token
 
@@ -77,21 +74,7 @@ tandem rotate-token
 
 Generates a new 32-byte token, posts it to `/api/rotate-token`, and updates Claude's MCP configs. The old token remains valid for a **60-second grace window** so connected clients can pick up the new value without a disconnect. Tokens are stored with mode `0o600`, written atomically (temp file + rename), and compared in constant time against a SHA-256 hash on each request.
 
-**Run it on the computer hosting the server.** Since #1320 `/api` is loopback-only for non-GET methods, so rotation pointed at a remote `TANDEM_URL` returns 403. The CLI rolls the token file back on a refusal rather than leaving you on a credential the server will never accept.
-
-### `TANDEM_ALLOW_UNAUTHENTICATED_LAN` — a misnomer
-
-```bash
-export TANDEM_BIND_HOST=0.0.0.0
-export TANDEM_ALLOW_UNAUTHENTICATED_LAN=1
-tandem
-```
-
-**This does not skip the token requirement**, despite the name and despite what this page said until #1320. A token is always minted, and `authMiddleware` always enforces it for non-loopback callers, flag or not (#1121 F7). Since #1293 the flag does exactly one thing: it lets the server *bind* to a LAN host before a token has been provisioned. It relaxes no guard.
-
-Even with a valid token, a LAN peer can only **read** `/api` — writes are refused by the loopback invariant (#1320). See [security.md](security.md#the-api-invariant-1320).
-
-**That is a property of `/api`, not of the server.** `enforceLoopbackMutation` is mounted on `/api` alone, so the same token-holding LAN peer can still `POST /mcp` and reach every mutating MCP tool with no loopback check — [#1906](https://github.com/bloknayrb/tandem/issues/1906).
+The CLI rolls the token file back if the server refuses the rotation, rather than leaving you on a credential the server will never accept.
 
 See [security.md](security.md) for the full security model.
 

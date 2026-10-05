@@ -127,6 +127,22 @@ export const DOCX_ENABLED = false;
  */
 export const COWORK_ENABLED = false;
 
+/**
+ * Listening beyond this computer ships DARK (ADR-056): a non-loopback
+ * `TANDEM_BIND_HOST` is refused at the top of `main()` in HTTP mode and
+ * ignored in stdio mode, where nothing listens on it. Nothing in the product
+ * ever set it, and the only thing it gave was remote reach into `/api` reads
+ * and every MCP tool. The LAN code (Host allowlist, `NON_LOOPBACK_ALLOWED`,
+ * the token-on-LAN checks) stays merged and tested, unreachable from another
+ * machine while this is false.
+ *
+ * A literal with no build define and no environment override on purpose: an
+ * override would be a second opt-in to the exposure this removes. The lit path
+ * is tested by passing the flag to `resolveBindHostEnv` (`bind-check.ts`).
+ * ADR-056 carries the re-enable checklist.
+ */
+export const LAN_BIND_ENABLED = false;
+
 export const DOCX_EXTENSION = ".docx";
 
 /** What a flag-refused `.docx` tells the user, on every surface that refuses one. */

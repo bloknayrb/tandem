@@ -13,9 +13,15 @@ import { createRequire } from "module";
 
 import { API_HEALTH } from "../../shared/api-paths.js";
 import { CLAUDE_SESSION_HEADER, normalizeSessionId } from "../../shared/cli-runtime.js";
-import { DEFAULT_BIND_HOST, DEFAULT_WS_PORT, TAURI_HOSTNAME } from "../../shared/constants.js";
+import {
+  DEFAULT_BIND_HOST,
+  DEFAULT_WS_PORT,
+  LAN_BIND_ENABLED,
+  TAURI_HOSTNAME,
+} from "../../shared/constants.js";
 import { createAuthMiddleware } from "../auth/middleware.js";
 import { getTokenFilePath, tokenFileIsAuthoritative } from "../auth/token-store.js";
+import { isNonLoopback } from "../bind-check.js";
 import { getDeliveryState } from "../events/delivery-state.js";
 import { getPushConsumerLiveness } from "../events/push-liveness.js";
 import { getSubscriberCount } from "../events/queue.js";
@@ -598,6 +604,14 @@ export async function startMcpServerHttp(
    */
   shutdownWiring?: import("./routes/shutdown.js").ShutdownRouteDeps,
 ): Promise<Server> {
+  // ADR-056: `main()` refuses a non-loopback bind before getting here. This is
+  // the function that calls `listen`, so the guard also covers a future
+  // caller that never goes through `main()`.
+  if (!LAN_BIND_ENABLED && isNonLoopback(host)) {
+    throw new Error(
+      `Refusing to listen on ${host}: listening beyond this computer ships dark (ADR-056)`,
+    );
+  }
   // Typed as the stricter of the two consumers' shapes (the handler requires
   // `version`; the tool deps make it optional), so one literal can feed both
   // the per-session MCP servers and the /api/diagnostics route.
