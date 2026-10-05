@@ -544,10 +544,10 @@ When [filing an issue](https://github.com/bloknayrb/tandem/issues), attach a dia
 The server refuses to start when `TANDEM_BIND_HOST` names anything but `127.0.0.1`, `localhost` or `::1`:
 
 ```
-[tandem] TANDEM_BIND_HOST="0.0.0.0" is not supported in this version: Tandem listens on this computer only (ADR-056). Unset TANDEM_BIND_HOST and start again.
+[tandem] TANDEM_BIND_HOST="0.0.0.0" is not supported in this version: Tandem listens on this computer only (ADR-056). Unset it, or set it to 127.0.0.1, localhost or ::1, and start again.
 ```
 
-Listening on a LAN address is not in this version ([ADR-056](decisions.md#adr-056-the-non-loopback-bind-ships-dark)). Unset the variable, and check your shell profile and any `.env` file for a leftover `export`. In stdio mode the same value is ignored with a one-line note instead, because that mode does not listen on it.
+Listening on a LAN address is not in this version ([ADR-056](decisions.md#adr-056-the-non-loopback-bind-ships-dark)). The match is exact, so `LOCALHOST`, ` 127.0.0.1` with a stray space, or `127.0.0.2` are refused too. Unset the variable, and check your shell profile and any `.env` file for a leftover `export`. In stdio mode the same value is ignored with a one-line note instead, because that mode does not listen on it.
 
 Don't port-forward around the refusal. A forwarded connection arrives from `127.0.0.1`, so it can look to Tandem like a program on your own computer: no token needed, and write access.
 

@@ -606,7 +606,10 @@ export async function startMcpServerHttp(
 ): Promise<Server> {
   // ADR-056: `main()` refuses a non-loopback bind before getting here. This is
   // the function that calls `listen`, so the guard also covers a future
-  // caller that never goes through `main()`.
+  // caller that never goes through `main()`. It is a backstop, not the
+  // refusal: reached from `main()` it would land after the store lock and the
+  // port kills, and its rejection exits through `main().catch` without
+  // `shutdown()`. The early refusal is what keeps that path unreachable.
   if (!LAN_BIND_ENABLED && isNonLoopback(host)) {
     throw new Error(
       `Refusing to listen on ${host}: listening beyond this computer ships dark (ADR-056)`,

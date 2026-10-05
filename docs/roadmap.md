@@ -226,7 +226,7 @@ deferred table are in the history file.
 - **Desktop shell:** frameless window, vibrancy, multi-window, and a file-explorer sidebar are out of scope per HANDOFF.
 - **Re-enabling `.docx`** (#2110).
 - **Re-enabling Tandem's Cowork setup** (#2134), with Cowork on macOS/Linux (#316) and the pre-flight enum decision (#1373) behind it.
-- **Re-enabling the non-loopback bind** (ADR-056), with the #1906 decision and the #1952 fix behind it.
+- **Re-enabling the non-loopback bind** (#2141, ADR-056), with the #1906 decision and the #1952 fix behind it.
 
 ## Known Limitations (v1)
 

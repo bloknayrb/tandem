@@ -1,9 +1,11 @@
+import { writeSync } from "fs";
 import type { Server } from "http";
 import { isIP } from "net";
 import path from "path";
 import { fileURLToPath } from "url";
 import {
   BYO_MODELS_ENABLED,
+  DEFAULT_BIND_HOST,
   DEFAULT_MCP_PORT,
   DEFAULT_WS_PORT,
   LAN_BIND_ENABLED,
@@ -343,11 +345,16 @@ async function main() {
     lanBindEnabled: LAN_BIND_ENABLED,
   });
   if (bindDecision.kind === "refuse") {
-    process.stderr.write(bindDecision.message);
+    // Synchronous: on a Windows terminal stderr is async, and `exit` would
+    // otherwise drop the one line that says why.
+    writeSync(2, bindDecision.message);
     process.exit(1);
   }
   if (bindDecision.kind === "ignore") process.stderr.write(bindDecision.message);
   const bindHost = bindDecision.bindHost;
+  // Lit, an empty value stays empty until the IP validation rejects it; the
+  // probe asks loopback for it, as the env-reading default it replaced did.
+  const probeHost = resolveProbeHost(bindHost || DEFAULT_BIND_HOST);
 
   // Crash reporting (#921) — opt-in, off by default. Enabled only when the
   // Tauri shell forwarded TANDEM_SENTRY_DSN to the sidecar. Awaited so a fatal
@@ -366,7 +373,7 @@ async function main() {
   // sweep → trial → lock. Nothing has been written at this point — no lock
   // taken, no port killed — which is the point of probing first.
   if (transportMode === "http") {
-    const probe = await probeTandemInstance(mcpPort, undefined, resolveProbeHost(bindHost));
+    const probe = await probeTandemInstance(mcpPort, undefined, probeHost);
     const action = decideStartupAction({
       probe,
       mode: "http",
@@ -907,7 +914,7 @@ async function main() {
       // MCP handshake would threaten the client's init timeout.
       // The decided host, not the env's: an ignored LAN value would probe an
       // address no local Tandem answers and read as "nobody here".
-      const probe = await probeTandemInstance(mcpPort, undefined, resolveProbeHost(bindHost));
+      const probe = await probeTandemInstance(mcpPort, undefined, probeHost);
       const action = decideStartupAction({
         probe,
         mode: "stdio",

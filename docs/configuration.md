@@ -36,10 +36,10 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 
 | Variable | Default | Description |
 |---|---|---|
-| `TANDEM_BIND_HOST` | `127.0.0.1` | **Not supported in this version** beyond `127.0.0.1`, `localhost` or `::1`. Any other value is refused at start; see [LAN exposure](#lan-exposure). |
+| `TANDEM_BIND_HOST` | `127.0.0.1` | **Not supported in this version** beyond `127.0.0.1`, `localhost` or `::1`. Any other value stops the server at start (in stdio mode it is ignored with a note instead); see [LAN exposure](#lan-exposure). |
 | `TANDEM_AUTH_TOKEN` | auto-generated | Override the auth token. Tandem auto-generates a 32-byte base64url token on first run and stores it at `{APP_DATA_DIR}/auth-token`; this variable lets you supply an explicit value (set by Tauri; manual use is rare). |
-| `TANDEM_ALLOW_UNAUTHENTICATED_LAN` | unset | **Not supported in this version** — it only ever applied to a non-loopback bind. |
-| `TANDEM_LAN_IP` | unset | **Not supported in this version** — it only ever applied to a non-loopback bind. |
+| `TANDEM_ALLOW_UNAUTHENTICATED_LAN` | unset | **Has no effect in this version** — it only ever applied to a non-loopback bind. |
+| `TANDEM_LAN_IP` | unset | **Has no effect in this version** — it only ever applied to a non-loopback bind. If set, it must still be a valid IP address, or the server will not start. |
 
 **Two variables you don't set, but that outrank the ones you do.** When Claude Code's plugin host runs one of Tandem's stdio subcommands (`tandem mcp-stdio`, `tandem channel`, `tandem monitor`) it injects `CLAUDE_PLUGIN_OPTION_SERVER_URL` and `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` from the plugin's user config. Those take **precedence over** `TANDEM_URL` and `TANDEM_AUTH_TOKEN` respectively; a blank value counts as absent, so an empty plugin option falls through rather than masking your setting. This precedence applies only to those subcommands and to `tandem rotate-token` — the server itself reads `TANDEM_URL` / `TANDEM_AUTH_TOKEN` directly. It is also why `tandem rotate-token` refuses to run when either auth variable is set: whatever injected the token would put the old value back on the next launch.
 
@@ -60,9 +60,9 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 
 ## LAN exposure
 
-Tandem listens on this computer only. Listening on a LAN address is not in this version ([ADR-056](decisions.md#adr-056-the-non-loopback-bind-ships-dark)): starting the server with any other `TANDEM_BIND_HOST` exits with a message saying so. The desktop app always listens on `127.0.0.1`.
+Tandem listens on this computer only. Listening on a LAN address is not in this version ([ADR-056](decisions.md#adr-056-the-non-loopback-bind-ships-dark)): starting the server with any other `TANDEM_BIND_HOST` exits with a message saying so (stdio mode, which does not listen on it, ignores it with a note). The desktop app always listens on `127.0.0.1`.
 
-Don't port-forward around this (`netsh portproxy`, `ssh -L` and the like). A forwarded connection arrives from `127.0.0.1`, so it can look to Tandem like a program on your own computer: no token needed, and write access. That is more than LAN mode ever allowed.
+Don't port-forward around this (an `ssh -L` tunnel and the like). A forwarded connection arrives from `127.0.0.1`, so it can look to Tandem like a program on your own computer: no token needed, and write access. That is more than LAN mode allowed.
 
 The auth token still exists. Tandem creates one on first run and stores it at `{APP_DATA_DIR}/auth-token`; Claude's MCP configs carry it, and `tandem rotate-token` replaces it.
 

@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,7 +16,8 @@ import { DEFAULT_BIND_HOST, LAN_BIND_ENABLED } from "../../src/shared/constants.
  */
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SERVER_ENTRY = path.resolve(__dirname, "../../src/server/index.ts");
+const REPO_ROOT = path.resolve(__dirname, "../..");
+const SERVER_ENTRY = path.join(REPO_ROOT, "src/server/index.ts");
 
 const NON_LOOPBACK = ["0.0.0.0", "::", "192.168.1.50", "127.0.0.2", "::ffff:127.0.0.1"];
 const GARBAGE = ["LOCALHOST", "[::1]", "not-an-ip", " "];
@@ -92,42 +94,81 @@ describe("startMcpServerHttp refuses a non-loopback host while dark", () => {
   });
 });
 
-describe("the server entry refuses a non-loopback bind at start (ADR-056)", () => {
+describe("both probe sites in main() ask the decided host (ADR-056)", () => {
+  // Source pin, because the stdio site's whole point is a value nothing else
+  // observes: an ignored LAN value, probed through the env-reading default,
+  // asks an address no local Tandem answers, reads as "nobody here", and the
+  // port is then killed. A spawn cannot see which address was asked.
+  it("passes probeHost at every probeTandemInstance call and leaves none on the default", async () => {
+    const src = await fs.readFile(SERVER_ENTRY, "utf-8");
+    const calls = [...src.matchAll(/probeTandemInstance\(([^)]*)\)/g)].map((m) => m[1]);
+    expect(calls.length, "found no probe call — the matcher has drifted").toBe(2);
+    for (const args of calls) expect(args).toBe("mcpPort, undefined, probeHost");
+    expect(src).toMatch(/const probeHost = resolveProbeHost\(bindHost \|\| DEFAULT_BIND_HOST\)/);
+  });
+});
+
+/** Two ports nothing is listening on, so a broken refusal cannot touch a real Tandem. */
+async function freePorts(): Promise<[number, number]> {
+  const grab = () =>
+    new Promise<number>((resolve, reject) => {
+      const srv = net.createServer();
+      srv.once("error", reject);
+      srv.listen(0, "127.0.0.1", () => {
+        const { port } = srv.address() as net.AddressInfo;
+        srv.close(() => resolve(port));
+      });
+    });
+  return [await grab(), await grab()];
+}
+
+describe("the server entry honours the decision at start (ADR-056)", () => {
   let child: ChildProcess | null = null;
   let tmp: string | null = null;
 
   afterEach(async () => {
     if (child && child.exitCode === null) child.kill("SIGKILL");
     child = null;
-    if (tmp) await fs.rm(tmp, { recursive: true, force: true });
+    if (tmp) await fs.rm(tmp, { recursive: true, force: true, maxRetries: 5 });
     tmp = null;
   });
 
-  it("exits 1 with the ADR-056 message", async () => {
+  /**
+   * Every inherited TANDEM_* goes, every home-relative root points into
+   * `tmp`, and the ports are ones nothing holds: the token file resolves
+   * through env-paths rather than TANDEM_APP_DATA_DIR, so without these a
+   * broken refusal would read the developer's real token, and could probe or
+   * free the ports of a Tandem they have running.
+   */
+  async function isolatedEnv(extra: Record<string, string>): Promise<NodeJS.ProcessEnv> {
     tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tandem-lan-dark-"));
-    // Every inherited TANDEM_* goes, and every home-relative root points into
-    // `tmp`: the token file resolves through env-paths, not
-    // TANDEM_APP_DATA_DIR, so without these a broken refusal would read the
-    // developer's real token and carry on into their files.
+    const [wsPort, mcpPort] = await freePorts();
     const env: NodeJS.ProcessEnv = {};
     for (const [key, value] of Object.entries(process.env)) {
       if (!key.startsWith("TANDEM_")) env[key] = value;
     }
-    Object.assign(env, {
-      TANDEM_TRANSPORT: "http",
-      TANDEM_BIND_HOST: "0.0.0.0",
+    return Object.assign(env, {
       TANDEM_APP_DATA_DIR: path.join(tmp, "app-data"),
+      TANDEM_PORT: String(wsPort),
+      TANDEM_MCP_PORT: String(mcpPort),
+      TANDEM_NO_SAMPLE: "1",
+      TANDEM_DISABLE_LAUNCHER: "1",
       HOME: tmp,
       USERPROFILE: tmp,
       APPDATA: path.join(tmp, "AppData", "Roaming"),
       LOCALAPPDATA: path.join(tmp, "AppData", "Local"),
       XDG_DATA_HOME: path.join(tmp, ".local", "share"),
       XDG_CONFIG_HOME: path.join(tmp, ".config"),
+      ...extra,
     });
+  }
 
+  it("HTTP mode: exits 1 with the ADR-056 message, having created nothing", async () => {
+    const env = await isolatedEnv({ TANDEM_TRANSPORT: "http", TANDEM_BIND_HOST: "0.0.0.0" });
     const proc = spawn(process.execPath, ["--import", "tsx", SERVER_ENTRY], {
       env,
-      stdio: ["ignore", "pipe", "pipe"],
+      cwd: REPO_ROOT,
+      stdio: ["ignore", "ignore", "pipe"],
     });
     child = proc;
     let stderr = "";
@@ -141,5 +182,33 @@ describe("the server entry refuses a non-loopback bind at start (ADR-056)", () =
     expect(stderr).toContain('TANDEM_BIND_HOST="0.0.0.0" is not supported in this version');
     expect(stderr).toContain("ADR-056");
     expect(code).toBe(1);
+    // And it refused first: the app-data claim, the sweeps and the store lock
+    // all write under this directory, so a refusal that ran after any of them
+    // leaves it behind.
+    await expect(fs.access(env.TANDEM_APP_DATA_DIR as string)).rejects.toThrow();
+  }, 60_000);
+
+  it("stdio mode: says it ignored the value, and keeps running", async () => {
+    const env = await isolatedEnv({ TANDEM_TRANSPORT: "stdio", TANDEM_BIND_HOST: "192.168.1.50" });
+    // stdin stays open: stdio mode exits on EOF before startup completes.
+    const proc = spawn(process.execPath, ["--import", "tsx", SERVER_ENTRY], {
+      env,
+      cwd: REPO_ROOT,
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    child = proc;
+    let stderr = "";
+    const running = new Promise<void>((resolve, reject) => {
+      proc.stderr.on("data", (d: Buffer) => {
+        stderr += d.toString();
+        if (stderr.includes("MCP server running on stdio")) resolve();
+      });
+      proc.on("close", (code) => reject(new Error(`exited ${code} before running:\n${stderr}`)));
+    });
+    await running;
+
+    expect(stderr).toContain('Ignoring TANDEM_BIND_HOST="192.168.1.50"');
+    expect(stderr).toContain("ADR-056");
+    expect(stderr).not.toContain("is not supported in this version");
   }, 60_000);
 });
