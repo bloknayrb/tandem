@@ -184,7 +184,9 @@ export const apiMiddleware: Handler = createApiMiddleware();
  * The channel shim (`src/channel/`) and the plugin monitor (`src/monitor/`) are
  * documented to run against a non-loopback `TANDEM_URL` — that is how Cowork
  * reaches a Tandem running elsewhere — so gating them would break that
- * transport, not harden it.
+ * transport, not harden it. While ADR-056's `LAN_BIND_ENABLED` is false the
+ * server listens on loopback only, so this carve-out is unreachable from
+ * another machine; it stays for the re-enable.
  *
  * The whole `/api/channel-*` family is carved out rather than the subset with a
  * caller in the tree today. Two members (`channel-permission-verdict`, and

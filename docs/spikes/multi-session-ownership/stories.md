@@ -2,7 +2,7 @@
 
 Stories against [the design](./README.md) (v4, 2026-09-16; decisions recorded in v4.1, 2026-09-17), grounded in master `cbccfefd` and the [review set](./reviews/codex-v2.md). 153 stories in 17 areas (141 from the v3 pass, re-statused, plus 11 for behaviour v4 added and 1 for session rename in v4.1); 0 are `GAP`, 0 are `decision-dependent` (the 18 that were in v4 became `covered` when Bryan decided every §5 question on 2026-09-17), 5 are `covered (known limitation)` (OWN-LCH-07, OWN-INB-10, OWN-CHAT-09, OWN-SEC-05, OWN-SEC-10), the rest `covered`. Every one of the 25 v3 GAPs is re-statused in §3 with the v4 section that closes it.
 
-> **"Cowork" in this document means a remote MCP peer under a non-loopback bind.** Tandem's own Cowork *setup* ships dark as of 2026-10-02 and Cowork is out of v1.0 ([ADR-055](../../decisions.md#adr-055-cowork-setup-ships-dark)). The bind itself is `TANDEM_BIND_HOST` and exists with or without that setup, so the Cowork-actor stories about what a non-loopback peer may see or do (OWN-CTL-09, OWN-WAKE-10, OWN-SEC-07, OWN-SEC-08, OWN-SEC-09) stand unchanged. OWN-X-02 is the one that needs a working Cowork session, and it is suspended.
+> **"Cowork" in this document means a remote MCP peer under a non-loopback bind.** Tandem's own Cowork *setup* ships dark as of 2026-10-02 and Cowork is out of v1.0 ([ADR-055](../../decisions.md#adr-055-cowork-setup-ships-dark)). The bind itself is `TANDEM_BIND_HOST`, and as of 2026-10-05 it ships dark as well ([ADR-056](../../decisions.md#adr-056-the-non-loopback-bind-ships-dark)): a release build refuses it at start, so no MCP peer on another machine can reach Tandem's server in v1.0. That is a statement about the bind, not about Cowork: whether a Cowork session reaches Tandem through Claude Desktop's own MCP entry is untouched by it (ADR-055). OWN-X-02 was suspended under ADR-055. The other five Cowork-actor stories (OWN-CTL-09, OWN-WAKE-10, OWN-SEC-07, OWN-SEC-08, OWN-SEC-09) have their remote leg suspended under ADR-056 and stand as design for the re-enable; OWN-CTL-09, OWN-SEC-08 and OWN-SEC-09 also carry a local half, which still applies.
 
 ## 1. Summary
 
@@ -908,7 +908,7 @@ Every v3 GAP, with what v3 lacked, how v4 closes it, and its v4 story status. No
 - **Design refs:** §3.4 `GET /api/ownership/owners` row, §3.11, §6 "Presence and the descriptor", §5.12.
 - **Phase:** 1
 - **Status:** covered — decided 2026-09-17 (§5.12: nickname, kind and client, no cwd; the route also returns `nickname`).
-- **Test:** server integration (loopback and non-loopback peers) + coverage test.
+- **Test:** server integration (loopback and non-loopback peers) + coverage test. **Remote leg suspended 2026-10-05 ([ADR-056](../../decisions.md#adr-056-the-non-loopback-bind-ships-dark)):** no release build has a non-loopback peer. The in-handler loopback check is still built and still tested with a faked peer address.
 
 #### OWN-CTL-10 — Assign to a label whose record is detached inside the grace (new in v4)
 - **Actor:** Bryan
@@ -1317,7 +1317,7 @@ Every v3 GAP, with what v3 lacked, how v4 closes it, and its v4 story status. No
 - **AC:** Given `TANDEM_BIND_HOST` non-loopback, Then `tandem_status`/`tandem_open`/`tandem_scratchpad` responses omit `wakeUrl` entirely (absent, not undefined); `verifyWakeUpgrade` still rejects the remote peer; the remote session can own documents; its items wait for its own poll; the badge shows its label and Bryan can Release.
 - **Design refs:** §4 #1952 row, §6 Cowork.
 - **Phase:** 1
-- **Status:** covered — and see OWN-SEC-07.
+- **Status:** covered — and see OWN-SEC-07. **Suspended 2026-10-05 ([ADR-056](../../decisions.md#adr-056-the-non-loopback-bind-ships-dark)):** the non-loopback bind ships dark, so no remote session exists in a release. The story stands as design, and it is ADR-056's re-enable item 3.
 - **Test:** unit (`wakeUrlField` with bind stub) + manual (Cowork bind).
 
 #### OWN-WAKE-11 — The watch id is unguessable and the label appears in no URL (new in v4)
@@ -1414,7 +1414,7 @@ Every v3 GAP, with what v3 lacked, how v4 closes it, and its v4 story status. No
 - **AC:** Given a non-loopback bind, When a **loopback** session calls `tandem_open`, Then `wakeUrl` is present (`getMcpContext().peerIsLoopback === true`, populated in `dispatchToSession` from `req.socket.remoteAddress`); When a **remote** session calls it, Then `wakeUrl` is absent; in stdio mode `getWakeEndpoint()` is null as today. The `docs/security.md` #1952 sentence "per-request loopback detection is not available inside a tool handler" is corrected in the sequenced edit.
 - **Design refs:** §3.10 "#1952, per request", §3.2 `peerIsLoopback`, §4 #1952 row, §8 sequenced edits.
 - **Phase:** 1
-- **Status:** covered — closed in v4 by per-request suppression; the local session under a Cowork bind loses nothing.
+- **Status:** covered — closed in v4 by per-request suppression; the local session under a Cowork bind loses nothing. **Suspended 2026-10-05 ([ADR-056](../../decisions.md#adr-056-the-non-loopback-bind-ships-dark)):** a release build never has a non-loopback bind, so the condition this story is set under cannot arise. It stands as design for the re-enable.
 - **Test:** unit.
 
 #### OWN-SEC-08 — Presence is a coarse boolean
@@ -1423,7 +1423,7 @@ Every v3 GAP, with what v3 lacked, how v4 closes it, and its v4 story status. No
 - **AC:** Given `NOT_OWNER`, `tandem_listDocuments`, `tandem_status`, `tandem_diagnostics`, `/health`, Then only `ownerLabel` (random, non-ordinal), `ownerConnected: boolean`, and the static `ownerKind` / `ownerClient` words appear; never `lastSeenAt`, `since`, `cwd`, transport id, watch id, handle, or record counts beyond a total; `tandem_status` returns the caller's own record only; the attached-session enumeration exists only behind `GET /api/ownership/owners` (403 off-loopback).
 - **Design refs:** §6 "Presence and the descriptor", §5.12.
 - **Phase:** 1
-- **Status:** covered — decided 2026-09-17 (§5.12: nickname, kind and client, no cwd; a nickname changes only on rename, so it adds no timing). Reconciled with OWN-CTL-06 in v4: the descriptor is static and adds no timing.
+- **Status:** covered — decided 2026-09-17 (§5.12: nickname, kind and client, no cwd; a nickname changes only on rename, so it adds no timing). Reconciled with OWN-CTL-06 in v4: the descriptor is static and adds no timing. **Remote leg suspended 2026-10-05 ([ADR-056](../../decisions.md#adr-056-the-non-loopback-bind-ships-dark)):** no remote caller exists in a release. The hostile-local half still applies.
 - **Test:** `mcp-output-schemas.test.ts` + diagnostics scrub test.
 
 #### OWN-SEC-09 — Loopback rules unchanged
@@ -1432,7 +1432,7 @@ Every v3 GAP, with what v3 lacked, how v4 closes it, and its v4 story status. No
 - **AC:** Given a non-loopback POST to `/api/ownership`, Then 403 by `enforceLoopbackMutation`; `NON_LOOPBACK_ALLOWED` has no new entry; `verifyWakeUpgrade` unchanged; `license-gate-api-coverage.test.ts` gains exactly two rows (`API_OWNERSHIP` POST and `API_OWNERSHIP_OWNERS` GET, both `ungated`, with the §3.4 reasons) and its whole-registrar sweep sees `routes/ownership.ts`; the GET, being outside the non-GET invariant, checks `isLoopback(req.socket.remoteAddress)` in-handler (OWN-CTL-09).
 - **Design refs:** §6 Loopback rules, §3.4 User control row.
 - **Phase:** 1
-- **Status:** covered
+- **Status:** covered. **Remote leg suspended 2026-10-05 ([ADR-056](../../decisions.md#adr-056-the-non-loopback-bind-ships-dark)):** no remote peer exists in a release. The invariants it pins (no new `NON_LOOPBACK_ALLOWED` entry, the in-handler GET check) still apply and are still tested with a faked peer address.
 - **Test:** existing coverage tests + server integration.
 
 #### OWN-SEC-10 — The watch id in the transcript is the accepted residual (new in v4)

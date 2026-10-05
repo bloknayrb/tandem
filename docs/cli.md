@@ -63,7 +63,7 @@ Generates a new 32-byte auth token, posts it to the running server's `/api/rotat
 tandem rotate-token
 ```
 
-Fails if `TANDEM_AUTH_TOKEN` **or** `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` is set in the environment — the rotation routine refuses to overwrite a token it does not manage, because whatever injected it (Tauri, or Claude Code's plugin host) would re-inject the old value on the next launch. See [configuration.md](configuration.md#lan-exposure) for the auth token model.
+Fails if `TANDEM_AUTH_TOKEN` **or** `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` is set in the environment — the rotation routine refuses to overwrite a token it does not manage, because whatever injected it (Tauri, or Claude Code's plugin host) would re-inject the old value on the next launch. See [configuration.md](configuration.md#lan-exposure) for where the token lives and why Tandem listens on this computer only.
 
 ### `tandem mcp-stdio`
 

@@ -8,17 +8,21 @@ import { describe, expect, it } from "vitest";
  * and on nothing else, so `POST /mcp` reaches the same mutations with no
  * loopback check.
  *
- * Five documents now say so in prose — `docs/security.md` (twice: the `/api`
- * invariant section and the Open findings entry), `docs/configuration.md`,
- * `docs/decisions.md` (ADR-046), `docs/mcp-tools.md`'s route index and
- * `docs/troubleshooting.md` — because each stated "LAN peers may read `/api`;
- * their writes are refused" in a way a reader took as a whole-server property.
- * Nothing checked any of it against source.
+ * Three documents now say so in prose — `docs/security.md` (twice: the `/api`
+ * invariant section and the #1906 register entry), `docs/decisions.md`
+ * (ADR-050) and `docs/mcp-tools.md`'s route index — because each stated "LAN
+ * peers may read `/api`; their writes are refused" in a way a reader took as a
+ * whole-server property. Nothing checked any of it against source.
+ *
+ * `docs/configuration.md` and `docs/troubleshooting.md` carried it too until
+ * ADR-056 shipped the non-loopback bind dark: they are user-facing, so they no
+ * longer describe LAN exposure at all, and they left both lists below.
+ * ADR-056's re-enable checklist (item 4) puts them back.
  *
  * **Why a test rather than review.** The claim is deliberately unstable: closing
- * #1906 means mounting a loopback gate on `/mcp`, which makes all five passages
+ * #1906 means mounting a loopback gate on `/mcp`, which makes every passage
  * false at once. That is the *good* outcome, and it is exactly the change most
- * likely to ship without anyone recalling that five documents describe the gap.
+ * likely to ship without anyone recalling which documents describe the gap.
  * Without this, the register would keep announcing an exposure that no longer
  * exists — the rot that left #1420 reading as open for days after it closed.
  *
@@ -77,9 +81,8 @@ describe("the /api-only mount of enforceLoopbackMutation (#1906)", () => {
     expect(
       mounts,
       "enforceLoopbackMutation's mount set changed. If a /mcp gate was added, #1906 is resolved " +
-        "and the prose in docs/security.md, docs/configuration.md, docs/decisions.md, " +
-        "docs/mcp-tools.md and docs/troubleshooting.md now describes an exposure that no longer " +
-        "exists — update all five.",
+        "and the prose in docs/security.md, docs/decisions.md and docs/mcp-tools.md now " +
+        "describes an exposure that no longer exists — update all three.",
     ).toEqual(["/api"]);
   });
 
@@ -96,7 +99,6 @@ describe("the /api-only mount of enforceLoopbackMutation (#1906)", () => {
     // being NAMED rather than on exact wording, so prose stays free to change.
     const carriers: Array<[string, RegExp]> = [
       ["docs/security.md", /scoped to `\/api` and does not reach `\/mcp`/],
-      ["docs/configuration.md", /property of `\/api`, not of the server/],
       ["docs/decisions.md", /scoped to `\/api` on purpose/],
       ["docs/mcp-tools.md", /`enforceLoopbackMutation` is \*\*not\*\*/],
     ];
@@ -115,13 +117,7 @@ describe("the /api-only mount of enforceLoopbackMutation (#1906)", () => {
   it("#1906 is reachable from every file that carries the claim", () => {
     // A scoped claim with no tracker reference is a dead end for the reader who
     // wants to know whether it is still true.
-    for (const rel of [
-      "docs/security.md",
-      "docs/configuration.md",
-      "docs/decisions.md",
-      "docs/mcp-tools.md",
-      "docs/troubleshooting.md",
-    ]) {
+    for (const rel of ["docs/security.md", "docs/decisions.md", "docs/mcp-tools.md"]) {
       expect(read(rel), `${rel} scopes the claim without pointing at #1906`).toMatch(
         /#1906|issues\/1906/,
       );
