@@ -567,9 +567,9 @@ pub(crate) fn cowork_toggle_integration(enabled: bool) -> Result<CoworkToggleRep
             // 127.0.0.1, so the rule buys nothing; but with a routable
             // TANDEM_BIND_HOST an install missing it is one the VM cannot
             // reach, advertised as working. Bailing is correct for both.
-            // (A routable bind also ships dark, under ADR-056, and the desktop
-            // sidecar pins 127.0.0.1 regardless; flipping either flag alone
-            // gives the VM no route.)
+            // (A routable bind also ships dark, under ADR-056, but the desktop
+            // sidecar pins 127.0.0.1 in its own code regardless, so no flag
+            // flip gives the VM a route to the desktop's server.)
             if let firewall::FirewallError::AdminDeclined = e {
                 // The firewall rule needs elevation Tandem does not have (it never
                 // runs elevated, so no UAC prompt ever appears). Do NOT attempt a

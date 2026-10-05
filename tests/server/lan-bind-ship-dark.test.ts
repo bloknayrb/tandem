@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -127,7 +128,14 @@ describe("the server entry honours the decision at start (ADR-056)", () => {
   let tmp: string | null = null;
 
   afterEach(async () => {
-    if (child && child.exitCode === null) child.kill("SIGKILL");
+    const proc = child;
+    if (proc && proc.exitCode === null && proc.signalCode === null) {
+      // Wait for the exit, so Windows has released the child's file handles
+      // before the temp tree is removed.
+      const exited = once(proc, "exit");
+      proc.kill("SIGKILL");
+      await exited;
+    }
     child = null;
     if (tmp) await fs.rm(tmp, { recursive: true, force: true, maxRetries: 5 });
     tmp = null;

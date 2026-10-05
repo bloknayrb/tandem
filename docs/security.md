@@ -1,6 +1,6 @@
 # Security
 
-Tandem is designed local-first. The server binds to `127.0.0.1` (a non-loopback bind ships dark, ADR-056), document content stays on disk, and there are no Tandem-operated servers in the picture.
+Tandem is designed local-first. The server binds to `127.0.0.1` by default and never beyond loopback (a non-loopback bind ships dark, ADR-056), document content stays on disk, and there are no Tandem-operated servers in the picture.
 
 ## Network posture
 
