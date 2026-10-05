@@ -174,6 +174,9 @@
 ## ADR-023: Cowork Plugin Bridge — stdio via npx, not HTTP (PRs #301, #304) — Claude default integration
 **Status:** Accepted
 **See ADR-038:** documents the Cowork plugin bridge for the Claude default integration. Cowork is a Claude Desktop feature; the stdio-via-npx bridge described here is one of the six Claude-specific extras.
+
+> **Read with [ADR-055](#adr-055-cowork-setup-ships-dark) (2026-10-02).** Tandem's Cowork setup ships dark and Cowork is out of v1.0. The bridge decision below stands, and the same stdio bridge is still how Claude Desktop reaches Tandem; what went dark is the setup that writes this plugin entry into Cowork workspaces.
+
 **Context:** Claude Desktop's Cowork tab runs in an isolated VM and does NOT forward `localhost` HTTP MCP servers (either plugin-registered or globally registered in `claude_desktop_config.json`) into the VM. The Cowork support article confirms: *"Local MCP servers configured via claude_desktop_config.json... aren't available in Cowork."* Tandem originally registered a single plugin MCP entry: `{"type": "http", "url": "http://localhost:3479/mcp"}`. Cowork users saw zero `tandem_*` tools. We needed an empirical test and a distribution path that actually works.
 **Decision:** Ship a `tandem mcp-stdio` CLI subcommand (thin stdio↔HTTP proxy that speaks the MCP stdio transport, preflights `/health`, and relays JSON-RPC to `http://localhost:3479/mcp`). Plugin MCP entries use `{"command": "npx", "args": ["-y", "tandem-editor", "mcp-stdio"]}`. Same pattern for the channel shim. Global `claude_desktop_config.json` entries remain HTTP for host Desktop sessions.
 **Empirical findings (Phase 0 probes, 2026-04-15):**
@@ -1218,9 +1221,11 @@ This ADR records the policy that resolves the gap: Tandem is an MCP-first produc
 
 **Decision §1 — canonical policy statement.** Every doc surface that states the policy quotes the following paragraphs verbatim:
 
-> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same MCP tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
+> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same MCP tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
 >
 > **Integration setup** runs through the integration setup wizard (#477 PR 3). The earlier transitional behavior — Tandem auto-writing its MCP entry to Claude's config files on Tauri startup — was **removed in #477 PR 3c-ii-c**. Every integration (Claude included) is now configured via the wizard, never silently; `tandem setup --apply` is the scriptable non-interactive equivalent.
+
+**Amended 2026-10-02 ([ADR-055](#adr-055-cowork-setup-ships-dark)).** The first paragraph listed "cowork" among what the Claude integration ships with. Cowork setup now ships dark, so the word is gone from the paragraph and from every live surface that quotes it. `roadmap-history.md` is frozen and keeps the old wording. The extras table below still counts six, because the Cowork plugin bridge is still in the tree; it is marked dark there.
 
 The canonical paragraph deliberately states **no tool count**. The exact figures live in one
 place — [mcp-tools.md](mcp-tools.md) — with `CLAUDE.md` as the contributor-facing mirror. A
@@ -1234,7 +1239,7 @@ Four terms have precise meanings; every doc surface uses them consistently:
 |---|---|
 | **MCP contract** | The active MCP tools at `http://127.0.0.1:3479` and the SSE event stream at `/api/events`. Available to every MCP client. |
 | **Default integration** | Claude. Recommended in all install flows. Documented, tested, and the target of the first-run wizard's one-click setup. |
-| **Claude-specific extras** | Six features built on top of the MCP contract that only work with Claude today: (1) channel push (channel shim + plugin monitor), (2) `--dangerously-load-development-channels` documentation for hand-launched sessions — the *launcher* wiring was deleted 2026-08-07 as inert under `-p` ([ADR-047](#adr-047-claude-code-push-transport-activation)), (3) auto-launcher (#477 PR 4), (4) Cowork plugin bridge (`tandem mcp-stdio`), (5) Claude Code skill (`skills/tandem/SKILL.md`), (6) plugin marketplace artifacts (`.claude-plugin/`). |
+| **Claude-specific extras** | Six features built on top of the MCP contract that only work with Claude today: (1) channel push (channel shim + plugin monitor), (2) `--dangerously-load-development-channels` documentation for hand-launched sessions — the *launcher* wiring was deleted 2026-08-07 as inert under `-p` ([ADR-047](#adr-047-claude-code-push-transport-activation)), (3) auto-launcher (#477 PR 4), (4) Cowork plugin bridge (`tandem mcp-stdio`) — the workspace setup that uses it ships dark since [ADR-055](#adr-055-cowork-setup-ships-dark), (5) Claude Code skill (`skills/tandem/SKILL.md`), (6) plugin marketplace artifacts (`.claude-plugin/`). |
 | **Best-effort, not validated** | What we say about other MCP clients today. We don't intentionally break them; we don't test them. The MCP HTTP endpoint is the same surface they all use. |
 
 **Claude-side dev tooling** (`CLAUDE.md`, `.claude/hooks/`, `.claude/agents/`, `.claude/skills/`) is contributor-facing automation for working ON Tandem — not user-facing integration. It is listed separately from "Claude-specific extras" to avoid conflation.
@@ -1521,6 +1526,8 @@ Three placement details diverge from this ADR's own sketch above and from #1118'
 **Cross-references:** Audit doc `docs/spikes/updater-rollback-healthpoll-audit.md`, #925, #1118, tauri-apps/tauri #12310 (`restart()` may exit before `RunEvent::Exit`).
 
 ## ADR-044: Cowork Detection — Dual Scan Roots, Shape Guard, Write-Time Revalidation, Background Heal
+
+> **Read with [ADR-055](#adr-055-cowork-setup-ships-dark) (2026-10-02).** Cowork setup ships dark. The detection, guard and revalidation decisions below still describe the code, and the uninstall scrub still relies on them. The background heal of decision 6 does not run while dark.
 
 **Context:** Cowork workspace detection scanned only the MSIX layout (`%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\local-agent-mode-sessions`). The direct-download Claude Desktop installer — the common case — keeps sessions at `%APPDATA%\Claude\local-agent-mode-sessions`, so most real installs showed "Not detected on this computer" in the integration wizard. Closing that gap surfaced four interlocking decisions (plan: `docs/plans/cowork-detection-airtight.md`; adversarially reviewed by security/design/windows-platform agents before implementation).
 
@@ -1970,6 +1977,8 @@ Three reasons, in ascending order of force:
 ---
 
 ## ADR-050: `/api` Is Loopback-Only for Non-GET, Enforced at the Mount
+
+> **Read with [ADR-056](#adr-056-the-non-loopback-bind-ships-dark) (2026-10-05).** The non-loopback bind ships dark, so in a release no caller is non-loopback from another machine. The invariant below still describes the code and holds for the re-enable.
 
 **Status:** Accepted — 2026-08-08
 **Context:** #1320, #1293, #1121 F6/F7, ADR-045
@@ -2635,3 +2644,102 @@ whose "splice, don't rebuild" finding is Decision 3; #1142 (umbrella); #1754.
 8. Close the tracking issue ("Re-enable .docx support (ADR-053)").
 
 **Cross-references:** ADR-004 and #576 (the `.docx` write-back this hides), ADR-040 (the flag pattern), ADR-052 (SuperDoc, shelved), #2027.
+
+## ADR-055: Cowork Setup Ships Dark
+
+**Status:** Accepted (2026-10-02)
+
+ADR-054 is reserved for the multi-session ownership design (`docs/spikes/multi-session-ownership/README.md`) and lands with its Phase 1 implementation, so the numbering skips it here on purpose.
+
+**Context.** Bryan decided on 2026-10-02 to cut Cowork out of v1.0: "im not sure we can make cowork actually function for most of the scenarios in the stories". Asked how deep the cut should go, he chose to ship it dark over a docs-only descope or deleting the code.
+
+What is and is not known matters for how this is worded everywhere else:
+
+- **Cowork reaching Tandem is not the unknown.** It was verified end to end at v0.7.1 (2026-04-20, recorded in `roadmap-history.md`), over the plugin-stdio bridge of ADR-023. #1598 (2026-08-24) measured a Cowork session reaching Tandem 0.24.1 through an MCP entry registered on the desktop and proxied into the session, request and response only.
+- **The route Tandem's "Enable Cowork" setup builds is the unknown.** That setup writes a plugin entry into every Cowork workspace, pointing at `http://host.docker.internal:3479` with the auth token, and adds a Windows firewall rule for the VM subnet. The desktop sidecar has since been pinned to `TANDEM_BIND_HOST=127.0.0.1` (`SIDECAR_BIND_HOST` in `src-tauri/src/sidecar.rs`, passed explicitly so an ambient value cannot move it). Whether a VM can reach a loopback-only listener through that route has never been settled: decision E in the 2026-09-02 review is still "Unknown", and the transport matrix that would decide it (#1455, Test A) was never run. The one measurement there is points the wrong way: #1598 found the Cowork desktop VM with `lo` only and no route to the Windows host. That is evidence, not the Test A verdict.
+- Separately, the firewall rule can only be written from an elevated process and Tandem never elevates, so for a non-admin user Enable has always ended in the admin-declined state, or earlier at the subnet probe when no Cowork session was running.
+
+So v1.0 would have shipped a Windows toggle, a wizard row and an onboarding step for a setup nobody has shown to work on a current build, while polling `cowork_get_status` every 30 seconds on every desktop run.
+
+**Decision.** Ship Tandem's Cowork setup dark behind a flag, the way `.docx` ships (ADR-053). Don't delete it. Make no claim about Cowork in either direction: user-facing text says the setup is not in this version and Cowork is not a supported surface, never that Cowork cannot connect.
+
+- **The flag.** `COWORK_ENABLED` is a literal `false` in `src/shared/constants.ts` and in `src-tauri/src/cowork_commands.rs`. There is no build define and no environment override: no server or CLI behaviour depends on it, and the client reads the literal directly.
+- **Client: nothing Cowork mounts or polls.** Five sites read the literal: the Settings → AI Assistant tab's lazy `CoworkSettings` block, the integration wizard's status poller and its "More integrations" row, `App.svelte`'s `CoworkAdminDeclinedModal`, `useTutorial`, and `OnboardingTutorial`. A dark desktop build sends no `cowork_*` invoke.
+  - `useTutorial` needs more than a gated poller. It holds its completion index at `Infinity` until the Cowork status settles, and on desktop "settled" used to mean a status or an error had arrived. With the poller off neither does, so the settled test is keyed on the same value as the poller. Gate one without the other and the desktop tutorial never completes.
+- **Rust: no new writes into Claude Desktop's files.** `refuse_if_dark()` returns an error from the enable branch of `cowork_toggle_integration` and from `cowork_rescan`, `cowork_apply_token`, `cowork_install_into_workspace` and `cowork_set_lan_ip_override`. `cowork_retry_admin_elevation` only delegates to the toggle's enable branch, so it is refused there. The five-minute heal task is not spawned, and `cowork_heal_pass` itself returns `Ok(0)` before doing anything, so a second caller would stay dark too.
+  - Disable, `cowork_uninstall_from_workspace`, the read-only commands and the uninstall scrub are untouched. The toggle's gate sits inside `if enabled` for that reason: any earlier and it would refuse disable too.
+  - All eleven commands stay registered.
+- **People who already enabled it keep what was written.** This was Bryan's decision; the alternative was a one-time removal pass at first launch. The consequences, stated exactly:
+  - The Tandem entries in each Cowork workspace, `cowork-meta.json` with `enabled: true`, and the firewall rule (where an elevated run ever wrote one) all stay.
+  - Nothing maintains them. A workspace created later gets no entry, and the existing entries stay pinned at the `tandem-editor` version that wrote them.
+  - There is no in-app way to turn it off after the update. The removal is to uninstall the desktop app (and install it again to keep using Tandem). `tandem --uninstall-scrub` is a second route only on some machines: its Cowork scan covers the `%LOCALAPPDATA%\Packages\Claude_*` location and not `%APPDATA%\Claude\local-agent-mode-sessions`, which the desktop scan added under ADR-044 (#2136). Which Claude Desktop installs use which location was not established here: ADR-044 calls the second "the common case", while a winget-installed Claude Desktop measured on 2026-10-02 used the first.
+  - Under the desktop app the leftovers expose nothing, because `:3479` is loopback-only. The same machine running the npm server with a routable `TANDEM_BIND_HOST` is a different composition: the rule then admits the VM subnet to whatever listens on 3479. The token in the entries is usually dead against that server, because the desktop keeps its token in the OS keychain and the npm server uses its own token file; they match only if the desktop had adopted the file token. That composition is user-initiated and predates this ADR; what changed is that only removal, not a toggle, clears it.
+  - **`tandem rotate-token` does not retire the entries' token.** It rotates the npm token file, and a running desktop server refuses the call. The desktop's keychain token has no supported rotation path, so removing the entries is how that token is retired.
+- **The desktop uninstall scrub now deletes `cowork-meta.json`.** It is the one piece of Tandem's own data the scrub removes, at `%LOCALAPPDATA%\tandem\Data\cowork-meta.json` (the npm data location, although the desktop app writes it). Nothing deleted it before, so `enabled: true` outlived an uninstall, and a later build with Cowork lit would have written the token into every workspace on its first heal tick with nobody having asked. The CLI scrub is unchanged and still leaves app data, and an upgrade never runs the scrub, so the file can survive by either route; the second re-enable item covers that.
+  - The scrub's firewall removal runs unelevated like everything else, so a rule that an elevated run wrote can survive an uninstall. `docs/data-locations.md` gives the `netsh` command.
+
+**Consequences.**
+- `tests/build/cowork-dark-gate.test.ts` pins the Rust half as text, because no cargo test calls a command: the two literals agree, every `#[tauri::command]` in the module has a `gated`/`ungated` row (a new command with no row fails), each gate sits where its row says, the gate reads the literal and nothing else, every reference to the gate and the literal across the crate is counted, the heal pass and its spawn both sit under the literal, and a census lists every function that calls a write primitive or writes meta. These are shape checks: nothing invokes a command and observes the refusal, because the commands are Windows-only and no cargo test calls one.
+- `tests/client/cowork-ship-dark.test.ts` and `tests/client/use-tutorial-cowork-dark.svelte.test.ts` run the parents at the shipped literal with Tauri genuinely on. `App.svelte` is pinned from source, since nothing mounts it in tests. A client census lists every module that imports a Cowork component, starts a status or pre-flight hook, calls an invoke wrapper or names a `cowork_*` command, so a new parent is a row to add. The three suites that exercise the lit path mock the literal on.
+- **This supersedes the "Core" mark on #316** in `docs/v10-triage.md`, whose rows are frozen and so still show it. Cowork on macOS and Linux is no longer a v1.0 item.
+- **#1455 and #1727, both dated gates, are retired** into the checklist below rather than kept. #1727's own text says a descope means "consolidate now"; with all three confirmation flows dark there is nothing live to consolidate, so that work moves to re-enable. That overrides one carve-out #1727 marked "NOT deferred", the duplicated `cowork-enable-confirm-btn` testid: neither copy is reachable while dark (`CoworkSettings` is not mounted, and the wizard's Cowork sub-view cannot be opened), so it moves too. Both issues are closed when this ADR's PR merges.
+- **#1952, #1884 and #1906 are not dormant.** They are properties of a non-loopback bind, which `TANDEM_BIND_HOST` produces on an npm-started server with or without Cowork. (The desktop sidecar pins loopback, so they were never reachable there.) `NON_LOOPBACK_ALLOWED` stays for the same reason: the channel shim and the plugin monitor use it.
+  - **Amended 2026-10-05 ([ADR-056](#adr-056-the-non-loopback-bind-ships-dark)).** That bind now ships dark too, so #1952 and #1906 moved to Accepted (bounded) and #1884 stays open for its local-caller half only. The sentence above was true when written: Cowork never set the bind, and ADR-056 is what removes it.
+- User-facing docs no longer describe a Cowork setup. Internal docs (`architecture.md`, `gotchas.md`) keep describing the code under a ships-dark banner.
+- ADR-038's canonical paragraph listed "cowork" among what the Claude integration ships with. It no longer does; see the amendment there.
+
+**Re-enable checklist** (tracked in #2134).
+1. Settle whether the installer route works at all: run Test A in `docs/plans/archived/cowork-transport-test-matrix.md` and answer decision E. A pass on Test A may delete the firewall and per-workspace installer surface rather than re-enable it.
+2. Make a lit build ask again before acting on a `cowork-meta.json` that predates it. `enabled: true` written before the dark release is not consent to a heal pass now.
+3. Decide the `firewall.rs` failure enum on its merits (#1373).
+4. Consolidate the three enable-confirmations (#1727), including the duplicated `cowork-enable-confirm-btn` testid.
+5. Flip both literals together; the gate test checks they agree.
+6. Remove the `COWORK_ENABLED: true as false` mocks from the three lit-path suites and retire the two dark tests.
+7. Undo the docs side. `grep -rn 'ADR-055\|ships dark\|while dark' docs CLAUDE.md README.md src src-tauri/src src-tauri/windows` and resolve every Cowork hit: the user-facing docs restored from the PR that shipped this ADR, the banners and notes on ADR-023, ADR-038 and ADR-044 dropped, `data-locations.md`'s past-enabler section rewritten, and the comments that say "while dark" brought up to date.
+8. Tell the website project that Cowork copy is allowed again, and close #2134.
+
+**Cross-references:** ADR-023 (the plugin-stdio bridge), ADR-044 (workspace detection and the heal pass), ADR-038 (the integration policy this amends), ADR-053 (the flag pattern), #316, #317, #1373, #1455, #1598, #1727, #1827 (decision E), #2134.
+
+## ADR-056: The Non-Loopback Bind Ships Dark
+
+**Status:** Accepted (2026-10-05)
+
+**Context.** Cutting Cowork from v1.0 (ADR-055) left one Cowork-era surface standing: `TANDEM_BIND_HOST`, which lets the npm server listen on a LAN address. Asked whether that mode should leave v1.0 too, Bryan chose to drop it, and then asked what the real use case was. The answer on record:
+
+- It was built in v0.7.0 (2026-04-20) as part of the "Cowork foundation", so a Cowork VM could reach the server. The half that would have set it ("Cowork mode binds `0.0.0.0`") never shipped. Nothing in the product sets it to a non-loopback value: the desktop sidecar passes `SIDECAR_BIND_HOST = "127.0.0.1"` explicitly, and nothing else sets it at all.
+- What it gives is narrower than "sharing a session on a LAN", which is what `docs/configuration.md` called it. Hocuspocus is hardcoded to `127.0.0.1`, so nobody on the LAN can open the editor. A token holder on the LAN can read `/api` and call every MCP tool over `POST /mcp`.
+- The one plausible user is Claude Code in a VM, a container or WSL2 with NAT networking, driving a Tandem on the host. That is unverified: no issue or report records anyone doing it.
+- It is where three open findings lived (#1952, #1884's LAN half, #1906), and every security audit has had to reason about the LAN Host allowlist, the `NON_LOOPBACK_ALLOWED` carve-outs and the token-on-LAN checks.
+
+Bryan accepted the recommendation to refuse the bind behind a ships-dark flag, keeping the code, and by approving the plan for this ADR decided the two acceptances recorded below.
+
+**Decision.** A release build of the npm server never listens beyond this computer.
+
+- **The flag.** `LAN_BIND_ENABLED` is a literal `false` in `src/shared/constants.ts`, with no build define and no environment override. An override would be a second opt-in to the exposure this removes.
+- **The refusal runs first.** `resolveBindHostEnv` (`src/server/bind-check.ts`) is called at the top of `main()`, before the #1758 probe, the app-data claim, the store lock and session restore. While dark, a value other than `127.0.0.1`, `localhost`, `::1`, unset or empty is:
+  - **refused** in HTTP mode: the message names ADR-056 and the process exits 1 having claimed, locked and killed nothing;
+  - **ignored** in any other transport (the stdio branch): nothing listens on the bind host there, so refusing would only break an MCP client's start. The effective host becomes `127.0.0.1`, which also keeps the token and multi-homed checks from firing on a bind that never happens. Both `#1758` probe sites ask the decided host rather than the env's, so an ignored LAN value is not probed and then read as "nobody here".
+  - The refusal is written with `writeSync`, because on a Windows terminal stderr is asynchronous and `process.exit` would drop it. The message quotes the value with `JSON.stringify` and names the three accepted values.
+  - This changes two edges deliberately. Values that are not an IP (`LOCALHOST`, `[::1]`, garbage) used to exit with "not a valid IP" and now take the same arms. `127.0.0.2` and `::ffff:127.0.0.1` used to work once a token existed and are now refused, the cost of an exact three-value loopback set.
+- **A guard at the listener.** `startMcpServerHttp` throws on a non-loopback host while dark, so a caller that never goes through `main()` cannot open a LAN socket either. It is a backstop, not the refusal: reached from `main()` it would fire after the store lock and the port kills, and exit without `shutdown()`. The early refusal keeps that path unreachable.
+- **Kept, unreachable from another machine:** `NON_LOOPBACK_ALLOWED`, the `resolvedLanIP` Host allowlist, the `/health` and `/api` non-loopback scrubbing, `TANDEM_LAN_IP` and `TANDEM_ALLOW_UNAUTHENTICATED_LAN`. "Unreachable from another machine" is the precise claim: a same-machine process connecting from another 127/8 source address still counts as non-loopback, needs the token, and reaches strictly less than it would from `127.0.0.1`.
+
+**Consequences.**
+- **Findings.** #1952 and #1906 move to Accepted (bounded), decided by Bryan 2026-10-05, each void if the flag flips. #1952's remaining reach needs a user-built port forwarder with a port mismatch. #1906's hole-or-intended decision is still owed and becomes re-enable item 2; its tracker issue was closed by #2059, which scoped the docs without making it. #1884 stays open: its `GET` half is a local-caller exposure that never needed the bind.
+- **Port forwarding is the new thing to warn about.** A user who needs VM or WSL2-NAT access will reach for a forwarder. One that connects with a loopback `Host` (an `ssh -L` tunnel, for instance) arrives from `127.0.0.1` and can look like a local program: no token needed, and write access, which is more than LAN mode gave. (A forwarder that passes the client's LAN `Host` through is refused by the `/api` and `/mcp` Host checks.) `docs/configuration.md` and `docs/troubleshooting.md` say not to do it.
+- **Docs.** User-facing docs (`configuration.md`, `troubleshooting.md`, `CONTRIBUTING.md`, `.env.example`, `cli.md`) no longer describe LAN exposure; `configuration.md` keeps its `## LAN exposure` heading because `cli.md` links to it. Internal docs (`security.md`, `architecture.md`, `mcp-tools.md`, ADR-050) keep describing the code under a ships-dark note. `tests/docs/mcp-mutation-asymmetry-claims.test.ts` no longer reads the two user-facing files.
+- **`tandem doctor`** no longer conditions its non-loopback-url warning on `TANDEM_BIND_HOST`: in this version that url can never be this Tandem.
+- **Ownership stories.** The five remaining Cowork-actor stories in `docs/spikes/multi-session-ownership/stories.md`, all set under a non-loopback bind, are suspended the way OWN-X-02 was under ADR-055.
+- **Desktop.** No behaviour change: the sidecar already passed a constant `127.0.0.1`.
+- **Tests.** `tests/server/lan-bind-ship-dark.test.ts` pins the literal, table-tests `resolveBindHostEnv` dark and lit, checks the listener guard, pins both probe sites to the decided host, and spawns the server entry in an isolated home on free ports twice: HTTP mode with `0.0.0.0`, asserting the ADR-056 message and that no app-data directory was created, and stdio mode with a LAN IP, asserting the "Ignoring" line and that it keeps running. The HTTP message is the discriminator: with the refusal unwired the child still exits 1, at the token check, and that was measured.
+
+**Re-enable checklist** (tracked in #2141).
+1. Flip `LAN_BIND_ENABLED`, and retire `tests/server/lan-bind-ship-dark.test.ts`'s dark assertions. Lit, an empty `TANDEM_BIND_HOST` still reaches the IP validation and exits there, as before this ADR; decide whether that should stay.
+2. Decide #1906: gate mutating MCP tools on loopback, carve out an MCP equivalent of `NON_LOOPBACK_ALLOWED`, or record remote writes as intended.
+3. Fix #1952 (suppress `wakeUrl` under a non-loopback bind) and #1884's LAN half (the token-holding `GET` read, since `channel-permission` is absent from the scrub inventory, and the `POST` carve-out).
+4. Restore the user-facing docs from the PR that shipped this ADR, and put `docs/configuration.md` and `docs/troubleshooting.md` back on the asymmetry test's lists.
+5. Un-suspend the five ownership stories.
+6. Restore `tandem doctor`'s `TANDEM_BIND_HOST` condition on its non-loopback-url warning.
+7. Move #1952 and #1906 back out of Accepted in `docs/security.md` and `CLAUDE.md`.
+
+**Cross-references:** ADR-050 (the `/api` invariant), ADR-055 (Cowork setup ships dark), ADR-053 (the flag pattern), #1758 (the startup probe), #1884, #1906, #1952, #2059, #2141.

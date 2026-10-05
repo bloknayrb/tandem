@@ -142,6 +142,56 @@ pub fn save(meta: &CoworkMeta) -> Result<(), String> {
     })
 }
 
+/// Delete `cowork-meta.json`. Called only by the uninstall scrub.
+///
+/// Without this an `enabled: true` outlives the uninstall, and a later build
+/// with Cowork lit would write the auth token into every workspace on its
+/// first heal tick with nobody having asked (ADR-055). A file that is already
+/// absent is success.
+pub(crate) fn remove_meta_file() -> Result<(), String> {
+    remove_meta_file_at(&meta_path()?)
+}
+
+/// Split from [`remove_meta_file`] so the three outcomes are testable without
+/// pointing a test at the real `%LOCALAPPDATA%`.
+fn remove_meta_file_at(path: &std::path::Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("remove cowork-meta.json: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod remove_meta_tests {
+    use super::remove_meta_file_at;
+
+    #[test]
+    fn deletes_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cowork-meta.json");
+        std::fs::write(&path, r#"{"enabled":true}"#).unwrap();
+        assert_eq!(remove_meta_file_at(&path), Ok(()));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_missing_file_is_success() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(remove_meta_file_at(&dir.path().join("cowork-meta.json")), Ok(()));
+    }
+
+    #[test]
+    fn any_other_failure_is_reported() {
+        // A directory at the path: `remove_file` refuses it, and not as NotFound.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cowork-meta.json");
+        std::fs::create_dir(&path).unwrap();
+        let err = remove_meta_file_at(&path).unwrap_err();
+        assert!(err.starts_with("remove cowork-meta.json: "), "{err}");
+    }
+}
+
 /// Process-level mutex to serialise concurrent `update()` calls from Tauri
 /// invoke handlers.  Without this, two concurrent invocations could interleave
 /// their load → mutate → save sequences, causing one writer to silently lose

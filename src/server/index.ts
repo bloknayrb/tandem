@@ -1,3 +1,4 @@
+import { writeSync } from "fs";
 import type { Server } from "http";
 import { isIP } from "net";
 import path from "path";
@@ -7,6 +8,7 @@ import {
   DEFAULT_BIND_HOST,
   DEFAULT_MCP_PORT,
   DEFAULT_WS_PORT,
+  LAN_BIND_ENABLED,
   TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV,
 } from "../shared/constants.js";
 import { docHash } from "./annotations/doc-hash.js";
@@ -17,7 +19,7 @@ import {
   releaseStoreLock,
 } from "./annotations/store.js";
 import { loadOrCreateToken, readTokenFromFile } from "./auth/token-store.js";
-import { checkBindConfig, isNonLoopback } from "./bind-check.js";
+import { checkBindConfig, isNonLoopback, resolveBindHostEnv } from "./bind-check.js";
 import { installTandemLifecycle } from "./bootstrap/hocuspocus-lifecycle.js";
 import { openFromDisk } from "./documents/open.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
@@ -58,6 +60,7 @@ import {
   LAST_SEEN_VERSION_FILE,
   probeTandemInstance,
   resolveAppDataDir,
+  resolveProbeHost,
   SESSION_DIR,
   waitForPort,
 } from "./platform.js";
@@ -333,6 +336,26 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 async function main() {
   console.error(`[Tandem] Starting server (transport: ${transportMode})...`);
 
+  // ADR-056: listening beyond this computer ships dark. Decided before the
+  // probe and every side effect below, so a refused start has claimed,
+  // locked and killed nothing. While lit this is the plain env read it replaced.
+  const bindDecision = resolveBindHostEnv({
+    raw: process.env.TANDEM_BIND_HOST,
+    transportMode,
+    lanBindEnabled: LAN_BIND_ENABLED,
+  });
+  if (bindDecision.kind === "refuse") {
+    // Synchronous: on a Windows terminal stderr is async, and `exit` would
+    // otherwise drop the one line that says why.
+    writeSync(2, bindDecision.message);
+    process.exit(1);
+  }
+  if (bindDecision.kind === "ignore") process.stderr.write(bindDecision.message);
+  const bindHost = bindDecision.bindHost;
+  // Lit, an empty value stays empty until the IP validation rejects it; the
+  // probe asks loopback for it, as the env-reading default it replaced did.
+  const probeHost = resolveProbeHost(bindHost || DEFAULT_BIND_HOST);
+
   // Crash reporting (#921) — opt-in, off by default. Enabled only when the
   // Tauri shell forwarded TANDEM_SENTRY_DSN to the sidecar. Awaited so a fatal
   // error early in startup can still be shipped by handleFatalError. No-op
@@ -350,7 +373,7 @@ async function main() {
   // sweep → trial → lock. Nothing has been written at this point — no lock
   // taken, no port killed — which is the point of probing first.
   if (transportMode === "http") {
-    const probe = await probeTandemInstance(mcpPort);
+    const probe = await probeTandemInstance(mcpPort, undefined, probeHost);
     const action = decideStartupAction({
       probe,
       mode: "http",
@@ -363,7 +386,8 @@ async function main() {
       // desktop's Hocuspocus on the other one — `freePort` keys on the port,
       // not the bind address.
       // `probe.host` is the address actually asked, which is the bind host when
-      // `TANDEM_BIND_HOST` moved it off loopback — naming 127.0.0.1 there would
+      // `TANDEM_BIND_HOST` moved it off loopback (only while `LAN_BIND_ENABLED`
+      // is lit) — naming 127.0.0.1 there would
       // point the user at a port nothing is listening on. `pid` is `null` on
       // that arm (it is loopback-only in `/health`), so the message degrades to
       // the version alone rather than printing "pid null".
@@ -644,9 +668,7 @@ async function main() {
   // BYO_MODELS_ENABLED is false (it never subscribes) — the gate lives inside.
   startLocalModelCollaborator();
 
-  // ── Bind-host selection (MCP only — Hocuspocus always stays loopback) ────────
-  const bindHost = process.env.TANDEM_BIND_HOST ?? DEFAULT_BIND_HOST;
-
+  // ── Bind-host checks (MCP only — Hocuspocus always stays loopback) ──────────
   // Fix 4: Validate TANDEM_BIND_HOST as an IP when it is non-loopback and non-wildcard.
   // Loopback and wildcard values are reserved words handled by checkBindConfig;
   // only concrete IPs need net.isIP validation here.
@@ -890,7 +912,9 @@ async function main() {
       // Probed HERE rather than at the top of `main()` so it runs concurrently
       // with `startMcpServerStdio` below: up to ~3.5s of probing ahead of the
       // MCP handshake would threaten the client's init timeout.
-      const probe = await probeTandemInstance(mcpPort);
+      // The decided host, not the env's: an ignored LAN value would probe an
+      // address no local Tandem answers and read as "nobody here".
+      const probe = await probeTandemInstance(mcpPort, undefined, probeHost);
       const action = decideStartupAction({
         probe,
         mode: "stdio",

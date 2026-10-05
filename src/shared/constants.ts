@@ -114,6 +114,37 @@ export const BYO_MODELS_ENABLED = false;
  */
 export const DOCX_ENABLED = false;
 
+/**
+ * Tandem's Cowork setup ships DARK (ADR-055): the route it builds
+ * (per-workspace plugin entries plus a firewall rule) is unverified under the
+ * desktop sidecar's loopback pin. The code and its tests stay.
+ *
+ * Client-only on the TypeScript side: every site that mounts a Cowork
+ * component or starts a status poller reads this literal, so a dark desktop
+ * build sends no `cowork_*` invoke at all. It is coupled to the Rust
+ * `COWORK_ENABLED` in `src-tauri/src/cowork_commands.rs`, which refuses the
+ * enable-side commands and never spawns the heal task;
+ * `tests/build/cowork-dark-gate.test.ts` fails on a half-flip. ADR-055 carries
+ * the re-enable checklist.
+ */
+export const COWORK_ENABLED = false;
+
+/**
+ * Listening beyond this computer ships DARK (ADR-056): a non-loopback
+ * `TANDEM_BIND_HOST` is refused at the top of `main()` in HTTP mode and
+ * ignored in stdio mode, where nothing listens on it. Nothing in the product
+ * ever set it, and the only thing it gave was remote reach into `/api` reads
+ * and every MCP tool. The LAN code (Host allowlist, `NON_LOOPBACK_ALLOWED`,
+ * the token-on-LAN checks) stays merged and tested, unreachable from another
+ * machine while this is false.
+ *
+ * A literal with no build define and no environment override on purpose: an
+ * override would be a second opt-in to the exposure this removes. The lit path
+ * is tested by passing the flag to `resolveBindHostEnv` (`bind-check.ts`).
+ * ADR-056 carries the re-enable checklist.
+ */
+export const LAN_BIND_ENABLED = false;
+
 export const DOCX_EXTENSION = ".docx";
 
 /** What a flag-refused `.docx` tells the user, on every surface that refuses one. */

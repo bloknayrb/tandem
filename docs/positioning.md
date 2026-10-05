@@ -14,7 +14,7 @@ The core value: **you point at text, the AI sees it, and you iterate together wi
 
 > **Integration policy ([ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)):**
 >
-> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same MCP tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
+> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same MCP tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
 
 ## What Makes It Different
 
@@ -86,7 +86,7 @@ Very little outside legal contracts and e-discovery. The Gartner 2024 Hype Cycle
 
 ### Distribution (medium — narrowed by ADR-038)
 
-**Resolved at the architectural level by [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) (2026-05-17).** Tandem's integration contract is MCP, not Claude Code specifically. Claude remains the default integration because that's the deepest-supported path (channel push, cowork, plugin monitor, auto-launcher), but the architecture is no longer Claude-locked.
+**Resolved at the architectural level by [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) (2026-05-17).** Tandem's integration contract is MCP, not Claude Code specifically. Claude remains the default integration because that's the deepest-supported path (channel push, plugin monitor, auto-launcher), but the architecture is no longer Claude-locked.
 
 The remaining distribution-friction risk is **downstream**, and was resolved in two same-day amendments (2026-06-11, canonical record in [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11)): **local models (Ollama / LM Studio) ship in v1.0** (#1123 — a tool-use loop driving OpenAI-compatible local endpoints; the M0 capability spike closed 2026-06-17 with a GO as an **opt-in, experimental** tier, ≥14B recommended. The whole loop is merged today but **runtime-inert** behind `BYO_MODELS_ENABLED = false`, so no local-model surface is visible in a shipped build), while cloud BYO keys (OpenAI/Gemini API) arrive in v1.1. v1.0's reachable audience is therefore Claude users **plus anyone who can run a local model** — the zero-subscription stack (free local LLM + one-time license) that ADR-040 §2 relies on. The license applies identically with local models (no free tier implied). The desktop app's integration setup wizard (#477 PR 3, shipped) keeps the install path tractable for non-developers.
 

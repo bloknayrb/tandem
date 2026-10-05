@@ -384,7 +384,7 @@ your Applications folder and reopen it. `tandem doctor` names this explicitly.
 manifest cannot carry a path that only makes sense on one machine:
 
 - the **Tandem plugin**'s two MCP servers and two monitors (see the previous section),
-- the **Cowork** guest registry, where a host path would be meaningless anyway.
+- the **Cowork** guest registry, where a host path would be meaningless anyway. (Only a version that offered Cowork setup wrote entries there; it ships dark since ADR-055.)
 
 For those, the remedies are the same as the exit-127 section: start the client from a
 terminal, or put Node on the PATH the GUI launcher provides.
@@ -539,20 +539,16 @@ When [filing an issue](https://github.com/bloknayrb/tandem/issues), attach a dia
 
 > **Privacy note:** the report deliberately omits your machine name, username, home directory path, network interfaces, locale and timezone. Paths that do survive are collapsed — your home directory becomes `~` and Tandem's data directory `<app-data>` — including paths embedded in raw filesystem error messages. Process IDs and port numbers remain. It never contains auth tokens or document content. The `tandem_diagnostics` MCP tool is the exception and is *not* path-collapsed: it serves an agent that may need to act on the real path, and it does not feed an issue form.
 
-## Auth rejection on LAN bind
+## "TANDEM_BIND_HOST=… is not supported in this version"
 
-When `TANDEM_BIND_HOST=0.0.0.0`, every non-loopback request needs a valid Bearer token. Rejections log as:
+The server refuses to start when `TANDEM_BIND_HOST` names anything but `127.0.0.1`, `localhost` or `::1`:
 
 ```
-[tandem] auth: rejected request from <addr> (no/bad token header)
+[tandem] TANDEM_BIND_HOST="0.0.0.0" is not supported in this version: Tandem listens on this computer only (ADR-056). Unset it, or set it to 127.0.0.1, localhost or ::1, and start again.
 ```
 
-Check that:
+Listening on a LAN address is not in this version ([ADR-056](decisions.md#adr-056-the-non-loopback-bind-ships-dark)). The match is exact, so `LOCALHOST`, ` 127.0.0.1` with a stray space, or `127.0.0.2` are refused too. Unset the variable, and check your shell profile and any `.env` file for a leftover `export`. In stdio mode the same value is ignored with a one-line note instead, because that mode does not listen on it.
 
-1. Your client is sending `Authorization: Bearer <token>`.
-2. The token matches the value in `{APP_DATA_DIR}/auth-token`.
-3. You haven't rotated the token without updating the client config — `tandem rotate-token` updates Claude's configs automatically but won't touch other MCP clients.
-
-`TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` does **not** disable the token requirement, despite the name — a token is always minted and always enforced for non-loopback callers (#1121 F7). It only permits a LAN bind before a token exists. And since #1320 a LAN peer can read `/api` but not write to it, so `tandem rotate-token` must be run on the host. (That refusal covers `/api` only — `POST /mcp` carries no loopback gate, so a token-holding LAN peer still reaches the mutating MCP tools: [#1906](https://github.com/bloknayrb/tandem/issues/1906).) See [security.md](security.md#the-api-invariant-1320) for the full model.
+Don't port-forward around the refusal. A forwarded connection arrives from `127.0.0.1`, so it can look to Tandem like a program on your own computer: no token needed, and write access.
 
 > **Note:** Tandem writes the Bearer token into your `.mcp.json` headers. On Claude Code CLI **≥ 2.1.141**, `claude mcp get`/`list` no longer prints that token to the terminal (credential headers and URL secrets are redacted, and `${VAR}` references are no longer expanded) — so inspecting the Tandem entry is safe to share. On older CLI versions the token is echoed in plain text; redact it before pasting output anywhere.

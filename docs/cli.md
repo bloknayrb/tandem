@@ -45,9 +45,9 @@ The desktop app's **Settings → About → Copy Diagnostics** button runs the sa
 
 ### `tandem --uninstall-scrub`
 
-Removes every reference Tandem wrote into other programs' config: `mcpServers.tandem` / `mcpServers["tandem-channel"]` from `~/.claude.json` and any detected Claude Desktop config, the bundled skill at `~/.claude/skills/tandem/` (only when it holds nothing Tandem didn't install), the start-at-login registration on macOS/Linux, and (Windows) Cowork plugin registration plus the `Tandem Cowork*` firewall rules.
+Removes every reference Tandem wrote into other programs' config: `mcpServers.tandem` / `mcpServers["tandem-channel"]` from `~/.claude.json` and any detected Claude Desktop config, the bundled skill at `~/.claude/skills/tandem/` (only when it holds nothing Tandem didn't install), the start-at-login registration on macOS/Linux, and (Windows) Cowork plugin registration plus, when run as administrator, the `Tandem Cowork*` firewall rules. The Cowork scan looks under `%LOCALAPPDATA%\Packages\Claude_*` only. Where Claude Desktop keeps its Cowork workspaces under `%APPDATA%\Claude\local-agent-mode-sessions` instead, this command finds none (#2136), and uninstalling the desktop app is what removes those entries.
 
-**The Windows uninstaller does not run this command.** It runs the desktop binary's own narrower scrub — Cowork workspace entries, the firewall rules, and the start-at-login registration — because this CLI's bundle is not shipped as a Tauri resource. The MCP entries and the bundled skill survive a Windows uninstall unless you run the command yourself. On every platform, run it **before** removing the app, while the binary still exists:
+**The Windows uninstaller does not run this command.** It runs the desktop binary's own narrower scrub — Cowork workspace entries, `cowork-meta.json`, the firewall rules, and the start-at-login registration — because this CLI's bundle is not shipped as a Tauri resource. The MCP entries and the bundled skill survive a Windows uninstall unless you run the command yourself. On every platform, run it **before** removing the app, while the binary still exists:
 
 ```bash
 tandem --uninstall-scrub
@@ -63,11 +63,11 @@ Generates a new 32-byte auth token, posts it to the running server's `/api/rotat
 tandem rotate-token
 ```
 
-Fails if `TANDEM_AUTH_TOKEN` **or** `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` is set in the environment — the rotation routine refuses to overwrite a token it does not manage, because whatever injected it (Tauri, or Claude Code's plugin host) would re-inject the old value on the next launch. See [configuration.md](configuration.md#lan-exposure) for the auth token model.
+Fails if `TANDEM_AUTH_TOKEN` **or** `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` is set in the environment — the rotation routine refuses to overwrite a token it does not manage, because whatever injected it (Tauri, or Claude Code's plugin host) would re-inject the old value on the next launch. See [configuration.md](configuration.md#lan-exposure) for where the token lives and why Tandem listens on this computer only.
 
 ### `tandem mcp-stdio`
 
-Runs Tandem as a stdio MCP server that proxies to a local HTTP Tandem instance. Used by the Cowork plugin bridge so Claude Desktop can speak MCP over stdio to a running Tandem server.
+Runs Tandem as a stdio MCP server that proxies to a local HTTP Tandem instance. It exists for clients that only speak MCP over stdio: the plugin's entries use it, and it is the fallback form of the Claude Desktop entry.
 
 ```bash
 tandem mcp-stdio

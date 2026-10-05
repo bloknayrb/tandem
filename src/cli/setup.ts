@@ -405,8 +405,7 @@ async function readTokenOrWarn(): Promise<string | undefined> {
     console.error(
       `  \x1b[33m⚠\x1b[0m Could not read the auth token file ` +
         `(${err instanceof Error ? err.message : String(err)}) — writing entries\n` +
-        "    without an Authorization header. Loopback clients are unaffected; an\n" +
-        "    off-loopback (Cowork/LAN) client will 401 until this is fixed.",
+        "    without an Authorization header. Clients on this computer are unaffected.",
     );
     return undefined;
   }
@@ -424,7 +423,8 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
   // `if (opts.token)`, and `applyConfig` merges WHOLE-ENTRY at the `tandem`
   // key — so `setup --apply` after a `rotate-token` replaced the authenticated
   // entry with an unauthenticated one. Bounded: the auth middleware exempts
-  // loopback, so only an off-loopback (Cowork/LAN) client then 401s.
+  // loopback, so only an off-loopback (Cowork/LAN) client then 401s, and while
+  // ADR-056 ships the non-loopback bind dark there is none.
   //
   // Behind the SAME env-token refusal `rotate-token.ts` encodes. When the token
   // comes from `TANDEM_AUTH_TOKEN` or `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` (Tauri,

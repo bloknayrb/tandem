@@ -50,9 +50,9 @@ curl http://127.0.0.1:3479/health
 #    "push":{"subscribers":0,"lastEventAt":null,"eventCount":0}}
 ```
 
-For exposing the server on a LAN, set `TANDEM_BIND_HOST`. LAN peers holding the auth token can
-**read** `/api` but not write to it — `/api` is loopback-only for non-GET methods, so
-`tandem rotate-token` has to be run on the machine hosting the server. See
+The server listens on this computer only. A non-loopback `TANDEM_BIND_HOST` is refused at
+start: the LAN bind ships dark behind `LAN_BIND_ENABLED` in `src/shared/constants.ts`
+([ADR-056](docs/decisions.md#adr-056-the-non-loopback-bind-ships-dark)). See
 [docs/security.md](docs/security.md) for the full network posture.
 
 Start the server *before* connecting Claude Code. Vite hot-reloads client code; server changes need

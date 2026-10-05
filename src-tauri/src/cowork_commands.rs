@@ -86,6 +86,62 @@ use crate::single_flight;
 #[cfg(not(target_os = "windows"))]
 const WINDOWS_ONLY_ERR: &str = "Cowork integration is Windows-only";
 
+/// Tandem's Cowork setup ships DARK (ADR-055): the installer route it builds
+/// is unverified under the sidecar's loopback pin. Mirrors `COWORK_ENABLED` in
+/// `src/shared/constants.ts`; `tests/build/cowork-dark-gate.test.ts` fails on
+/// a half-flip.
+///
+/// While false, every command that would add Tandem entries to a Cowork
+/// workspace, record an enable or an override in `cowork-meta.json`, or add a
+/// firewall rule refuses, and the heal pass does nothing. The removals
+/// (disable, per-workspace uninstall, the uninstall scrub) and the read-only
+/// commands still answer, though no shipped UI calls them while dark: someone
+/// who enabled Cowork in an earlier version keeps their entries, and nothing
+/// here may stand in the way of removing them.
+pub(crate) const COWORK_ENABLED: bool = false;
+
+/// Whether an earlier version left Cowork recorded as enabled. A meta file
+/// that cannot be read counts as not enabled: this only feeds a log line.
+#[cfg(target_os = "windows")]
+pub(crate) fn cowork_was_enabled() -> bool {
+    cowork_meta::load().map(|m| m.enabled).unwrap_or(false)
+}
+
+/// Error string returned by every enable-side command while dark.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const COWORK_DARK_ERR: &str = "Cowork integration is not available in this version";
+
+/// The dark gate. Split from [`refuse_if_dark`] so the refusing arm is testable
+/// while the shipped literal is whatever it is.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn refuse_if(enabled: bool) -> Result<(), String> {
+    if enabled {
+        Ok(())
+    } else {
+        Err(COWORK_DARK_ERR.into())
+    }
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn refuse_if_dark() -> Result<(), String> {
+    refuse_if(COWORK_ENABLED)
+}
+
+#[cfg(test)]
+mod dark_gate_tests {
+    use super::{refuse_if, COWORK_DARK_ERR};
+
+    #[test]
+    fn refuses_when_dark() {
+        assert_eq!(refuse_if(false), Err(COWORK_DARK_ERR.to_string()));
+    }
+
+    #[test]
+    fn allows_when_lit() {
+        assert_eq!(refuse_if(true), Ok(()));
+    }
+}
+
 /// Scan for Cowork workspace directories.
 ///
 /// Returns an opaque, validated [`cowork_workspace_scan::WorkspaceHandle`] per
@@ -466,6 +522,10 @@ pub(crate) fn cowork_toggle_integration(enabled: bool) -> Result<CoworkToggleRep
     use cowork_workspace_scan::find_cowork_workspaces;
 
     if enabled {
+        // Inside the enable branch on purpose: any earlier would refuse disable
+        // too, and disable only removes what a past enabler has.
+        refuse_if_dark()?;
+
         // Fetch token.
         let token = token_store::get_or_create_token()?;
 
@@ -507,6 +567,9 @@ pub(crate) fn cowork_toggle_integration(enabled: bool) -> Result<CoworkToggleRep
             // 127.0.0.1, so the rule buys nothing; but with a routable
             // TANDEM_BIND_HOST an install missing it is one the VM cannot
             // reach, advertised as working. Bailing is correct for both.
+            // (A routable bind also ships dark, under ADR-056, but the desktop
+            // sidecar pins 127.0.0.1 in its own code regardless, so no flag
+            // flip gives the VM a route to the desktop's server.)
             if let firewall::FirewallError::AdminDeclined = e {
                 // The firewall rule needs elevation Tandem does not have (it never
                 // runs elevated, so no UAC prompt ever appears). Do NOT attempt a
@@ -665,7 +728,7 @@ pub(crate) fn cowork_toggle_integration(enabled: bool) -> Result<CoworkToggleRep
         // the server binds 127.0.0.1 only, so a leftover rule is inert. This aligns with
         // reconcile_orphan_firewall_rules (cowork_installer.rs), which already treats remove
         // failures as non-fatal. (Caveat: leaving the rule is inert only under the default
-        // loopback bind; a future TANDEM_BIND_HOST=routable + stale VM-CIDR rule is an
+        // loopback bind; a future TANDEM_BIND_HOST=routable (dark under ADR-056) + stale VM-CIDR rule is an
         // untested composition. A later enable *may* clear it via reconcile_orphan_firewall_rules, but
         // that's best-effort — reconcile returns early if its scan fails — and the leftover
         // is an inert allow rule, not a missing protection.)
@@ -768,6 +831,8 @@ pub(crate) fn cowork_rescan() -> Result<String, String> {
     use cowork_installer::{install_tandem_plugin_into_workspace, resolve_tandem_url};
     use cowork_workspace_scan::find_cowork_workspaces;
 
+    refuse_if_dark()?;
+
     let meta = cowork_meta::load().map_err(|e| e.to_string())?;
     if !meta.enabled {
         return Ok("Cowork not enabled — rescan skipped".to_string());
@@ -865,6 +930,13 @@ pub(crate) fn cowork_heal_pass() -> Result<usize, String> {
 
     use cowork_installer::{install_tandem_plugin_into_workspace, resolve_tandem_url, WriteStatus};
     use cowork_workspace_scan::find_cowork_workspaces;
+
+    // Here as well as at the spawn in `lib.rs`, so the pass stays dark for a
+    // caller that is not the spawn. `Ok(0)`, not an error: a periodic caller
+    // would otherwise log a failure on every tick.
+    if !COWORK_ENABLED {
+        return Ok(0);
+    }
 
     static HEAL_ATTEMPTED: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
 
@@ -1388,6 +1460,8 @@ fn detect_subnet_advisory_blocking() -> Result<String, String> {
 #[cfg(target_os = "windows")]
 #[tauri::command]
 pub(crate) fn cowork_apply_token(token: String) -> Result<String, String> {
+    refuse_if_dark()?;
+
     let reports = cowork_installer::apply_token_to_all_workspaces(&token);
     let total = reports.len();
     let success = reports.iter().filter(|r| matches!(
@@ -1453,6 +1527,8 @@ fn cowork_resolve_validated_handle(handle: &str, op: &str) -> Result<std::path::
 pub(crate) fn cowork_install_into_workspace(handle: String) -> Result<String, String> {
     use cowork_installer::{install_tandem_plugin_into_workspace, resolve_tandem_url};
 
+    refuse_if_dark()?;
+
     let validated_path = cowork_resolve_validated_handle(&handle, "cowork_install_into_workspace")?;
 
     let token = token_store::get_or_create_token()?;
@@ -1495,6 +1571,8 @@ pub(crate) fn cowork_uninstall_from_workspace(_handle: String) -> Result<String,
 pub(crate) fn cowork_set_lan_ip_override(enabled: bool) -> Result<String, String> {
     use cowork_installer::{install_tandem_plugin_into_workspace, resolve_tandem_url};
     use cowork_workspace_scan::find_cowork_workspaces;
+
+    refuse_if_dark()?;
 
     cowork_meta::update(|m| { m.use_lan_ip_override = enabled; })
         .map_err(|e| e.to_string())?;

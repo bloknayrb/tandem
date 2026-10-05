@@ -1,5 +1,9 @@
 import type { Editor } from "@tiptap/core";
-import { TUTORIAL_ANNOTATION_PREFIX, TUTORIAL_COMPLETED_KEY } from "../../shared/constants.js";
+import {
+  COWORK_ENABLED,
+  TUTORIAL_ANNOTATION_PREFIX,
+  TUTORIAL_COMPLETED_KEY,
+} from "../../shared/constants.js";
 import type { Annotation, ChatMessage } from "../../shared/types.js";
 import {
   isTauriRuntime,
@@ -82,17 +86,21 @@ export function createTutorial(
   const isWelcome = $derived(getActiveTabFileName() === "welcome.md");
   const tutorialActive = $derived(!completed && isWelcome);
 
-  const tauri = isTauriRuntime();
+  // One value feeds all three readers below. While Cowork ships dark the
+  // poller never runs, so a `coworkStatusSettled` still keyed on Tauri alone
+  // would wait forever on a status that cannot arrive and the desktop
+  // tutorial would never complete.
+  const cowork = COWORK_ENABLED && isTauriRuntime();
 
   // Cowork step eligibility — drives the step count so step 2 advances to
   // the right completion index (3 when no Cowork, 4 when Cowork is inserted).
-  const coworkState = createCoworkStatus(() => tauri && tutorialActive);
+  const coworkState = createCoworkStatus(() => cowork && tutorialActive);
 
   const coworkStatusSettled = $derived(
-    !tauri || coworkState.status !== null || coworkState.error !== null,
+    !cowork || coworkState.status !== null || coworkState.error !== null,
   );
   const includeCoworkStep = $derived(
-    tauri && shouldShowCoworkOnboarding(coworkState.status, coworkSkipped),
+    cowork && shouldShowCoworkOnboarding(coworkState.status, coworkSkipped),
   );
   const completionStep = $derived(coworkStatusSettled ? (includeCoworkStep ? 4 : 3) : Infinity);
 

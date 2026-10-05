@@ -38,6 +38,13 @@ import { coworkStatusFixture } from "../helpers/cowork-status-fixture";
 const toggleIntegration = vi.fn(async (..._args: unknown[]) => ({ message: "Cowork enabled" }));
 const fakeInvoke = vi.fn();
 
+// Cowork ships dark as a literal `false` (ADR-055); this file covers the lit
+// path, so the flip is deliberate. `cowork-ship-dark.test.ts` covers the dark one.
+vi.mock(import("../../src/shared/constants"), async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/shared/constants")>()),
+  COWORK_ENABLED: true as false,
+}));
+
 // isTauriRuntime → true so the Cowork row + sub-view render; everything else
 // in cowork-helpers (coworkSettingsVariant, formatCoworkError) stays real.
 vi.mock(import("../../src/client/cowork/cowork-helpers"), async (importOriginal) => {

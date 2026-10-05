@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### What's New
+
+- Tandem's Cowork setup is out of the app for now, and Cowork is not a supported surface in this version. Claude Code and Claude Desktop setup are unchanged.
+- Tandem now listens on this computer only. Exposing the npm server on a LAN is not in this version.
+
+### Changed
+
+- **The npm server refuses to start with a non-loopback `TANDEM_BIND_HOST` (ADR-056, #2141).** Listening on a LAN address is not in this version. A value other than `127.0.0.1`, `localhost` or `::1` now stops the server at start with a message naming ADR-056; in stdio mode it is ignored with a one-line note, because that mode does not listen on it. `TANDEM_LAN_IP` and `TANDEM_ALLOW_UNAUTHENTICATED_LAN` no longer change anything (a set `TANDEM_LAN_IP` must still be a valid IP address). The desktop app is unaffected: it always listened on `127.0.0.1`. If you used a LAN bind, unset the variable, and do not port-forward around the refusal: a forwarded connection arrives from `127.0.0.1` and can get more access than LAN mode allowed. `tandem doctor` now says plainly that a non-loopback `url` in Claude's config cannot reach this Tandem.
+
+### Removed
+
+- **The "Enable Cowork" setup is gone from the Windows desktop app (ADR-055, #2134).** The Settings toggle, the integration wizard's Cowork row and the tutorial's Cowork step are no longer shown. The connection that setup built was never verified against how the desktop app now runs its server, so v1.0 will not offer it. **If you turned Cowork on in an earlier version, the update removes nothing:** the Tandem entries in your Cowork workspaces stay, and so does the firewall rule if one was ever added, but Tandem no longer adds entries to new workspaces and there is no in-app switch to turn it off. Under the desktop app those leftovers expose nothing, because its server listens on this computer only. Uninstalling the desktop app removes the workspace entries; a firewall rule may need removing by hand. `docs/data-locations.md` lists what is left and how to remove it.
+
 ## [0.28.0] - 2026-09-25
 
 ### What's New
