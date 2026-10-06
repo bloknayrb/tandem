@@ -169,14 +169,15 @@ while you run the desktop app. There is no in-app switch to turn it off any more
 - **Uninstall the desktop app.** Its uninstaller removes the workspace entries and
   `%LOCALAPPDATA%\tandem\Data\cowork-meta.json`, wherever Claude Desktop keeps its Cowork
   workspaces. If you are keeping Tandem, install it again afterwards.
-- **`tandem --uninstall-scrub` covers one of the two places Claude Desktop keeps them.**
-  It finds Cowork workspaces under
+- **`tandem --uninstall-scrub` removes the workspace entries too**, from both places
+  Claude Desktop keeps them:
   `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\local-agent-mode-sessions`
-  and not under `%APPDATA%\Claude\local-agent-mode-sessions` (#2136). Check which folder
-  exists on your machine: entries under the second are left where they are, including when
-  both exist. Either way it also removes Tandem's MCP entries and the bundled skill (the
-  skill folder is left if it holds anything Tandem did not install), so re-run the integration wizard afterwards (Settings → AI Assistant), and it leaves
-  `cowork-meta.json`.
+  and `%APPDATA%\Claude\local-agent-mode-sessions`. Its log names each folder it checked.
+  If your `%APPDATA%` points outside your user folder it skips that folder with a warning,
+  and uninstalling the desktop app is what removes those entries. It also removes Tandem's
+  MCP entries and the bundled skill (the skill folder is left if it holds anything Tandem
+  did not install), so re-run the integration wizard afterwards (Settings → AI Assistant),
+  and it leaves `cowork-meta.json`.
 - **The firewall rule can survive the uninstall**, because Tandem never runs elevated and
   deleting a rule needs an administrator. Open `wf.msc` as administrator and delete every
   inbound rule whose name starts with `Tandem Cowork`. From an administrator prompt,

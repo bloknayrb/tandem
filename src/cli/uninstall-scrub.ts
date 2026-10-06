@@ -9,13 +9,20 @@
  * file. **Neither scrub is a superset of the other**: the Rust one alone
  * removes the start-at-login registration, and this one alone removes the MCP
  * config entries and the bundled skill — which the desktop bundle cannot reach
- * because the npm CLI is not among the Tauri `resources`. They overlap on the
- * Cowork firewall rules and on Cowork plugin entries under
- * `%LOCALAPPDATA%\Packages\Claude_*` only: the Rust scan also walks
- * `%APPDATA%\Claude\local-agent-mode-sessions`, which this one never looks at
- * (#2136). Both are idempotent. So a
- * Windows user who only uninstalls the desktop app keeps their
- * `mcpServers.tandem` entries until they run this by hand.
+ * because the npm CLI is not among the Tauri `resources`. The Rust one also
+ * deletes `cowork-meta.json`, which is app data and so stays out of this
+ * scrub's reach (below). They overlap on the Cowork firewall rules and on
+ * Cowork plugin entries under both of Claude Desktop's session roots,
+ * `%LOCALAPPDATA%\Packages\<claude-package>\…` and `%APPDATA%\Claude\…`
+ * (#2136). Both are idempotent. So a Windows user who only uninstalls the
+ * desktop app keeps their `mcpServers.tandem` entries until they run this by
+ * hand.
+ *
+ * **`%APPDATA%` is read from the environment here, while the Rust scan reads
+ * the Known Folder** (`dirs::config_dir()`), which ignores a modified env var.
+ * ADR-044 accepts that divergence. Either way the value is screened before any
+ * syscall, so a `%APPDATA%` outside the user folder is skipped with a warning
+ * and the desktop uninstall is what covers it.
  *
  * Removes every reference Tandem wrote into other programs' config:
  *   - Cowork workspaces (Windows): `installed_plugins.json`
@@ -88,40 +95,40 @@ type ScrubLogger = {
 };
 
 /**
- * `%LOCALAPPDATA%`, or `undefined` if it is unset or not a safe local path.
+ * `%LOCALAPPDATA%` or `%APPDATA%`, or `undefined` if it is unset or not a safe
+ * local path.
  *
  * **Screened at the source, because every path in this file that touches
- * `%LOCALAPPDATA%` is a `path.join` off this value (#1417).** (`removeSkillDir`
- * and `removeAutostartEntry` build home-derived paths that never touch it.) `logDir`, `packagesDir`, `sessionsRoot`, the
- * workspace dirs and the VM dirs all inherit whatever it holds, and the first
- * thing each does is `mkdir` / `readdir` / `stat`. A UNC value therefore leaks
- * a credential hash from every one of them — and this runs during MSIX
- * uninstall, which can be elevated, so it is a privilege-escalation step rather
- * than a same-privilege annoyance. Guarding the two reads of the variable beats
- * guarding each derived directory, and `assertSafeWorkspacePath` only ever saw
- * the deepest path, long after the damage.
+ * either variable is a `path.join` off this value (#1417).** (`removeSkillDir`
+ * and `removeAutostartEntry` build home-derived paths that never touch them.)
+ * `logDir`, `packagesDir`, both sessions roots, the workspace dirs and the VM
+ * dirs all inherit whatever it holds, and the first thing each does is
+ * `mkdir` / `readdir` / `lstat`. A UNC value therefore leaks a credential hash
+ * from every one of them. The value is process environment, which whoever
+ * launched this command controls, and it flows straight into those syscalls.
+ * Guarding the reads of the variables beats guarding each derived directory,
+ * and `assertSafeWorkspacePath` only ever saw the deepest path, long after the
+ * damage.
  *
  * **Uses `assertPathSafe` rather than a bare prefix test**, matching what
- * `detectTargets` already does to this same variable in `apply.ts`. A prefix
+ * `detectTargets` already does to `%LOCALAPPDATA%` in `apply.ts`. A prefix
  * test alone would leave the name and the caller's log line ("not a safe local
  * path") promising more than they deliver: `LOCALAPPDATA=C:\Users\Public\x`, or
  * a symlinked one, passes a UNC check and still gets scrubbed. `assertPathSafe`
  * adds the symlink rejection and home containment, and since #1417 its own
- * first statement is the UNC test.
+ * first statement is the UNC test, ahead of the `realpathSync` it also runs.
  */
-function usableLocalAppData(logger?: ScrubLogger): string | undefined {
-  const value = process.env.LOCALAPPDATA;
+function usableEnvDir(name: "LOCALAPPDATA" | "APPDATA", logger: ScrubLogger): string | undefined {
+  const value = process.env[name];
   if (!value) return undefined;
   try {
     assertPathSafe(value, { allowedRoots: [homedir()] });
     return value;
   } catch (err) {
-    // Never silent once a logger exists — and `openLogger` is the one caller
-    // without one, because it is what *builds* the logger. This returns the same
-    // `undefined` as "unset", and the two mean very different things to whoever
-    // is reading an uninstall log.
+    // Never silent: this returns the same `undefined` as "unset", and the two
+    // mean very different things to whoever is reading an uninstall log.
     const reason = pathRejectionReason(err);
-    logger?.warn(`%LOCALAPPDATA% rejected (${reason}) — skipping`);
+    logger.warn(`%${name}% rejected (${reason}) — skipping`);
     return undefined;
   }
 }
@@ -156,7 +163,7 @@ async function openLogger(): Promise<ScrubLogger> {
   };
   const stderrLogger = makeScrubLogger(stderrWrite, async () => {});
 
-  const localAppData = usableLocalAppData(stderrLogger);
+  const localAppData = usableEnvDir("LOCALAPPDATA", stderrLogger);
   if (!localAppData) return stderrLogger;
 
   const logDir = path.join(localAppData, "tandem", "Logs");
@@ -180,14 +187,14 @@ async function openLogger(): Promise<ScrubLogger> {
 /**
  * Is this a real directory we may descend into — i.e. not a reparse point?
  *
- * The scan walks six levels down from `%LOCALAPPDATA%` before
- * {@link assertSafeWorkspacePath} gets a say, and `readdir`/`stat` **follow**
- * junctions. A junction planted at any of those levels pointing at
- * `\\attacker\share` therefore made the syscall — and leaked an NTLM
- * handshake — before the guard at the bottom ever ran (#1417). `lstat` does
- * not follow, so checking a level *before* reading it is what shuts that
- * level. The string screens in `usableLocalAppData` cannot help, because the
- * hostile part of the path is on disk rather than in the env var.
+ * The scan walks nine levels down from `%LOCALAPPDATA%` (five from
+ * `%APPDATA%`), down to each `cowork_plugins`, before {@link assertSafeWorkspacePath} gets a say, and
+ * `readdir`/`stat` **follow** junctions. A junction planted at any of those
+ * levels pointing at `\\attacker\share` therefore made the syscall — and
+ * leaked an NTLM handshake — before the guard at the bottom ever ran (#1417).
+ * `lstat` does not follow, so checking a level *before* reading it is what
+ * shuts that level. The string screens in `usableEnvDir` cannot help, because
+ * the hostile part of the path is on disk rather than in the env var.
  *
  * **`lstat` declines to follow only the FINAL component** — measured on
  * Windows, not assumed. So callers must screen every level rather than the leaf
@@ -260,72 +267,171 @@ async function readdirNoFollow(dir: string, logger: ScrubLogger): Promise<string
 }
 
 /**
- * Find all Cowork workspace directories.
+ * MSIX package names that may hold Claude Desktop's sessions. Publisher-anchored
+ * prefixes, never a bare `includes("Claude")`: a foreign package could stage the
+ * sessions layout in its own container.
  *
- * Matches `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\
- * local-agent-mode-sessions\<ws-id>\<vm-id>\`.
+ * This and the two segment lists below are the TS twin of
+ * `is_claude_package_name` and `roots_under` in
+ * `src-tauri/src/cowork_workspace_scan.rs`, and drift between the two scans is
+ * what #2136 was. `tests/build/cowork-scan-alignment.test.ts` reads the Rust
+ * source and fails when they disagree.
  *
- * Each candidate vm-path is validated by the 5-step Windows path guard before
- * being included — callers receive only safe, realpath'd paths.
+ * Deliberately wider than `MSIX_PACKAGE_PATTERN` in `apply.ts` (`Claude_` only),
+ * which decides where Claude Desktop's own config is looked for: a removal pass
+ * must reach every package the Rust installer could have written into.
+ */
+export const CLAUDE_PACKAGE_PREFIXES = ["Claude_", "AnthropicPBC.Claude"] as const;
+
+/** Below `%LOCALAPPDATA%\Packages\<claude-package>`. */
+export const MSIX_SESSIONS_SEGMENTS = [
+  "LocalCache",
+  "Roaming",
+  "Claude",
+  "local-agent-mode-sessions",
+] as const;
+
+/** Below `%APPDATA%`. */
+export const ROAMING_SESSIONS_SEGMENTS = ["Claude", "local-agent-mode-sessions"] as const;
+
+type SessionsRoot = {
+  /** As assembled by the no-follow descent; what gets `readdir`'d. */
+  path: string;
+  /** Its realpath: the containment base for every workspace found under it. */
+  real: string;
+};
+
+/**
+ * Every Claude Desktop sessions root on this machine, each one reached
+ * component by component with {@link descendNoFollow}.
  *
- * Returns an empty array on any error (e.g. Cowork not installed).
+ * Two layouts, mirroring `roots_under` in the Rust scan:
+ *  - MSIX: `%LOCALAPPDATA%\Packages\<claude-package>\LocalCache\Roaming\Claude\
+ *    local-agent-mode-sessions`, one per matching package.
+ *  - Direct install: `%APPDATA%\Claude\local-agent-mode-sessions`.
+ *
+ * **Neither layout's absence ends the scan of the other.** An early return when
+ * no package matched is what kept this scrub from ever looking at `%APPDATA%`
+ * (#2136).
+ *
+ * A root's state is read only from what the descent returned, never from a
+ * separate `exists`/`stat` of the assembled path, which would follow a junction
+ * at any middle component. `null` from the descent means absent OR refused, and
+ * the descent has already logged which, so the lines here never claim absence.
+ */
+async function coworkSessionsRoots(logger: ScrubLogger): Promise<SessionsRoot[]> {
+  const localAppData = usableEnvDir("LOCALAPPDATA", logger);
+  const appData = usableEnvDir("APPDATA", logger);
+
+  const packagesDir = localAppData ? path.join(localAppData, "Packages") : undefined;
+  logger.info(
+    "checking Cowork sessions under " +
+      (packagesDir
+        ? path.join(packagesDir, `{${CLAUDE_PACKAGE_PREFIXES.join("*,")}*}`)
+        : "(%LOCALAPPDATA% unusable — skipped)") +
+      " and " +
+      (appData
+        ? path.join(appData, ROAMING_SESSIONS_SEGMENTS[0])
+        : "(%APPDATA% unusable — skipped)"),
+  );
+
+  const candidates: { base: string; segments: readonly string[] }[] = [];
+  if (packagesDir) {
+    const packages = (await readdirNoFollow(packagesDir, logger)).filter((name) =>
+      CLAUDE_PACKAGE_PREFIXES.some((prefix) => name.startsWith(prefix)),
+    );
+    if (packages.length === 0) {
+      logger.info(
+        `no Claude package directory read under ${packagesDir} (see the line above if it was refused)`,
+      );
+    }
+    for (const pkg of packages) {
+      // Every component, not the join. The package dir, `LocalCache`,
+      // `Roaming` and `Claude` are all user-writable, all inside the tree the
+      // reachable instance of #1417 lived in, and one `lstat` of the assembled
+      // path would follow a junction at any of them.
+      candidates.push({ base: packagesDir, segments: [pkg, ...MSIX_SESSIONS_SEGMENTS] });
+    }
+  }
+  if (appData) {
+    candidates.push({ base: appData, segments: ROAMING_SESSIONS_SEGMENTS });
+  }
+
+  const roots: SessionsRoot[] = [];
+  for (const { base, segments } of candidates) {
+    const sessionsRoot = await descendNoFollow(base, segments, logger);
+    if (sessionsRoot === null) {
+      logger.info(
+        `no usable sessions root at ${path.join(base, ...segments)} (see the line above)`,
+      );
+      continue;
+    }
+    // Safe to resolve now: every level was lstat'd no-follow on the way down.
+    // No fallback to the unresolved path, which Rust's scan skips too: an
+    // unresolved base (8.3 short names, say) would reject every resolved
+    // workspace under it as "outside the scan root".
+    let real: string;
+    try {
+      real = await fsPromises.realpath(sessionsRoot);
+    } catch (err) {
+      logger.warn(`cannot resolve ${sessionsRoot}: ${(err as Error).message} — skipping`);
+      continue;
+    }
+    logger.info(`scanning ${sessionsRoot}`);
+    roots.push({ path: sessionsRoot, real });
+  }
+  return roots;
+}
+
+/**
+ * Find all Cowork workspace directories: `<sessions-root>\<ws-id>\<vm-id>\`
+ * under every root {@link coworkSessionsRoots} returns.
+ *
+ * **A vm dir counts only when its `cowork_plugins` is a real directory**, the
+ * only place any Tandem version wrote the three plugin files. That is the
+ * marker branch of the Rust `workspace_shape_ok`, without its UUID branch: a
+ * removal pass must be at least as wide as every place Tandem wrote, and on a
+ * past enabler's machine `skills-plugin\<uuid>\cowork_plugins` holds Tandem
+ * entries a UUID filter would skip.
+ *
+ * **Order is load-bearing.** The vm dir is screened, then its `cowork_plugins`,
+ * then the path guard. Rust checks shape first with `is_dir()`, which follows
+ * junctions, and copying that order would `lstat` through a junction planted
+ * as the vm dir. Screening `cowork_plugins` itself is what stops
+ * {@link rewriteJson} reading through a junction planted there. This covers
+ * folder levels only: the plugin files and their lockfiles are still followed
+ * if they are themselves symlinks, as in the Rust writer.
+ *
+ * Each candidate is validated by the 5-step Windows path guard, contained
+ * under its own sessions root's realpath, so callers receive only safe,
+ * realpath'd, de-duplicated paths. Returns an empty array when nothing is found
+ * (e.g. Cowork not installed).
  */
 export async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[]> {
-  const localAppData = usableLocalAppData(logger);
-  if (!localAppData) {
-    logger.info("%LOCALAPPDATA% unset or not a safe local path — skipping workspace scan");
-    return [];
-  }
+  const roots = await coworkSessionsRoots(logger);
 
-  // Realpath %LOCALAPPDATA% once for use by the path guard.
-  let realLad: string;
-  try {
-    realLad = await fsPromises.realpath(localAppData);
-  } catch {
-    realLad = localAppData; // best-effort fallback
-  }
-
-  const packagesDir = path.join(localAppData, "Packages");
-  const packageEntries = await readdirNoFollow(packagesDir, logger);
-  const claudePackages = packageEntries.filter((name) => name.startsWith("Claude_"));
-  if (claudePackages.length === 0) {
-    logger.info("no Claude_* package directories found");
-    return [];
-  }
-
-  const workspaces: string[] = [];
-  for (const pkg of claudePackages) {
-    // Every component, not the join. `Claude_*`, `LocalCache`, `Roaming` and
-    // `Claude` are all user-writable, all inside the tree the reachable
-    // instance of #1417 lived in, and one `lstat` of the assembled path would
-    // follow a junction at any of them.
-    const sessionsRoot = await descendNoFollow(
-      packagesDir,
-      [pkg, "LocalCache", "Roaming", "Claude", "local-agent-mode-sessions"],
-      logger,
-    );
-    if (sessionsRoot === null) continue;
-
-    for (const ws of await readdirNoFollow(sessionsRoot, logger)) {
-      const wsPath = path.join(sessionsRoot, ws);
+  const workspaces = new Set<string>();
+  for (const root of roots) {
+    for (const ws of await readdirNoFollow(root.path, logger)) {
+      const wsPath = path.join(root.path, ws);
 
       for (const vm of await readdirNoFollow(wsPath, logger)) {
         const vmPath = path.join(wsPath, vm);
-        // Same no-follow rule as the descent above, one level deeper: `stat`
-        // here would follow a junction planted as the vm dir itself.
+        // Same no-follow rule as the descent, one level deeper: `stat` here
+        // would follow a junction planted as the vm dir itself.
         if (!(await isSafeDirectory(vmPath, logger))) continue;
+        if (!(await isSafeDirectory(path.join(vmPath, "cowork_plugins"), logger))) continue;
 
-        // 5-step path guard — only include validated, realpath'd paths.
-        const safePath = await assertSafeWorkspacePath(vmPath, realLad, logger);
+        const safePath = await assertSafeWorkspacePath(vmPath, root.real, logger);
         if (safePath !== null) {
-          workspaces.push(safePath);
+          workspaces.add(safePath);
         }
       }
     }
   }
 
-  logger.info(`found ${workspaces.length} workspace(s)`);
-  return workspaces;
+  logger.info(`found ${workspaces.size} workspace(s) in ${roots.length} sessions root(s)`);
+  return [...workspaces];
 }
 
 /**

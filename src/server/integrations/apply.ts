@@ -580,7 +580,7 @@ function realpathCached(p: string): string {
  *
  * It uses the STRICT shared predicate, so `\\?\C:\…` is refused too — unlike
  * `src/cli/win-path-guard.ts`, which permits that prefix because containment
- * under %LOCALAPPDATA% confines it. Deliberate: this function's allowed-roots
+ * under its scan root confines it. Deliberate: this function's allowed-roots
  * test compares against `realpath`'d roots, and an extended-length spelling
  * would not match them, so admitting the prefix would produce a confusing
  * "outside-home" rejection one step later rather than a clear one here. The
@@ -828,8 +828,9 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
     try {
       // (#1417) `readdirSync` and `existsSync` FOLLOW reparse points, and this
       // walks the same `%LOCALAPPDATA%\Packages\Claude_*` tree that
-      // `findCoworkWorkspaces` walks — the tree the reachable instance of #1417
-      // was found in. A junction planted at either level by any process running
+      // `findCoworkWorkspaces` walks (one of its two roots) — the tree the
+      // reachable instance of #1417 was found in. A junction planted at either
+      // level by any process running
       // as the user redirects the call to a share. `lstatSync` does not follow,
       // so screening each level before reading it is what closes the window;
       // the env-var screen above cannot, because the hostile part of the path is

@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The "Enable Cowork" setup is gone from the Windows desktop app (ADR-055, #2134).** The Settings toggle, the integration wizard's Cowork row and the tutorial's Cowork step are no longer shown. The connection that setup built was never verified against how the desktop app now runs its server, so v1.0 will not offer it. **If you turned Cowork on in an earlier version, the update removes nothing:** the Tandem entries in your Cowork workspaces stay, and so does the firewall rule if one was ever added, but Tandem no longer adds entries to new workspaces and there is no in-app switch to turn it off. Under the desktop app those leftovers expose nothing, because its server listens on this computer only. Uninstalling the desktop app removes the workspace entries; a firewall rule may need removing by hand. `docs/data-locations.md` lists what is left and how to remove it.
 
+### Fixed
+
+- **`tandem --uninstall-scrub` now removes Tandem's Cowork entries wherever Claude Desktop keeps its workspaces on Windows (#2136).** It used to look only under `%LOCALAPPDATA%\Packages\Claude_*` and missed workspaces under `%APPDATA%\Claude\local-agent-mode-sessions`, leaving their Tandem entries in place, including the one that holds the auth token. Its log now names each folder it checked. It also refuses to read through a folder link planted where Tandem's plugin files live.
+
 ## [0.28.0] - 2026-09-25
 
 ### What's New

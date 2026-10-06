@@ -37,7 +37,7 @@ describe("assertSafeWorkspacePath — UNC is rejected before any syscall (#1417)
     "still permits the extended-length LOCAL prefix it deliberately allows: %s",
     async (_label, candidate) => {
       // `\?\C:\…` is NOT network. This guard permits it on purpose — Tauri's
-      // path APIs hand it back, and containment under %LOCALAPPDATA% is what
+      // path APIs hand it back, and containment under the scan root is what
       // confines it. Sharing the stricter shared predicate here would reject
       // legitimate local paths, so (a0) reuses this file's own `isUncPath`.
       //
