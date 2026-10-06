@@ -385,6 +385,13 @@ describe("scrubCoworkWorkspace", () => {
     _openSpy.mockReset().mockResolvedValue({ close: _closeSpy });
   });
 
+  afterEach(() => {
+    // `withFiles` installs a per-test implementation on a module-level spy;
+    // leaving it would hand the next describe block this one's files.
+    _readFileSpy.mockReset();
+    _openSpy.mockReset().mockResolvedValue({ close: _closeSpy });
+  });
+
   it("names the files it removed Tandem entries from", async () => {
     withFiles({
       "installed_plugins.json": JSON.stringify({ mcpServers: { tandem: {} } }),
@@ -399,7 +406,7 @@ describe("scrubCoworkWorkspace", () => {
     );
   });
 
-  it("says 'no Tandem entries' only when every file was actually checked", async () => {
+  it("says 'no Tandem entries' for a clean workspace", async () => {
     withFiles({ "installed_plugins.json": JSON.stringify({ mcpServers: {} }) });
     const logger = countingLogger();
     const { scrubCoworkWorkspace } = await import("../../src/cli/uninstall-scrub.js");
