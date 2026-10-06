@@ -276,8 +276,8 @@ const CIRCUIT_BREAKER_WINDOW_MS = 5 * 60_000;
  * produce and then release. On Windows a file another process holds open
  * shows up as EBUSY or EPERM; EACCES is kept for access-denied cases that
  * clear once the other process lets go. On POSIX, EPERM and EACCES are
- * usually permanent, so they loop until the breaker trips, and the give-up
- * line in `onRestartFailed` names the cause. Anything else stays down for the
+ * usually permanent, so they loop, usually until the breaker trips; each
+ * retry's log line carries the error. Anything else stays down for the
  * user's Restart, which shows the error. */
 const TRANSIENT_READ_CODES: ReadonlySet<string> = new Set([
   "EPERM",

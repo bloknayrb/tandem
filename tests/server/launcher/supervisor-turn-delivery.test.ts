@@ -1187,7 +1187,8 @@ describe("#2125 — a crash restart whose integrations read fails", () => {
   });
 
   // The three below drive a locked `start()` while a crash restart's read is
-  // held. In production `start()` runs only at boot, so the interleaving is
+  // held. In production `start()` runs once per supervisor, at its first
+  // start, before any crash restart can exist, so the interleaving is
   // artificial, but it is the harness's way to reach these branches.
 
   it("a read that fails after another spawn took over neither retries nor reports", async () => {
