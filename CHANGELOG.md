@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **`tandem --uninstall-scrub` now removes Tandem's Cowork entries wherever Claude Desktop keeps its workspaces on Windows (#2136).** It used to look only under `%LOCALAPPDATA%\Packages\Claude_*` and missed workspaces under `%APPDATA%\Claude\local-agent-mode-sessions`, leaving their Tandem entries in place, including the one that holds the auth token. Its log now names each folder it checked and what it removed, and a folder it could not read counts as a warning rather than reading as absent. It also skips a workspace whose plugin folder is a folder link rather than reading through it, and the path check Tandem uses before touching your Claude config refuses a folder link at the path itself before following it.
+- **Tandem no longer exits when the launcher restarts Claude after a crash and cannot read `integrations.json` (#2125).** Something holding the file at that moment, such as antivirus or a sync client, used to stop the whole server. The launcher now retries with its usual crash-loop backoff. A file that can't be fixed by a retry, such as one written by a newer Tandem, stops the launcher until you click Restart, which shows the reason. Also fixed: clicking Restart at the moment the launcher was restarting Claude after a crash could start Claude from the old settings and report your Restart as failed.
 
 ## [0.28.0] - 2026-09-25
 
