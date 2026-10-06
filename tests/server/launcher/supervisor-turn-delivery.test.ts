@@ -967,14 +967,11 @@ function occurrences(needle: string): number {
 
 describe("#2125 — a crash restart whose integrations read fails", () => {
   // The restart timer runs `startInternal` with nobody awaiting it, so a read
-  // failure there was an unhandled rejection: exit 1 for this file with every
-  // test green, and a `process.exit(1)` from `index.ts` in the server. The
-  // #1867 receipt-kill tests above end with that restart's read still in
-  // flight when afterEach removes the temp dir; on Windows the read can then
-  // fail with EPERM. Each case below waits out a settle window with the
-  // interceptor still armed, so a late retry or spawn is counted.
+  // failure there must not escape as an unhandled rejection: `index.ts` exits
+  // the server on one. Cases that schedule a restart wait out a settle window
+  // with the interceptor still armed, so a late retry or spawn is counted.
 
-  it("retries an I/O error through the crash loop's backoff", async () => {
+  it("retries a transient I/O error through the crash loop's backoff", async () => {
     const { sup } = makeSupervisor();
     await sup.startFresh(cwdDir);
     const reads = interceptIntegrationsReads((n, pass) =>
@@ -982,6 +979,7 @@ describe("#2125 — a crash restart whose integrations read fails", () => {
     );
     try {
       exitChild(children[0], 1);
+      await nthChild(2);
       await sleep(100);
       await settle();
     } finally {
@@ -1008,6 +1006,27 @@ describe("#2125 — a crash restart whose integrations read fails", () => {
 
     expect(occurrences("Restarting Claude in")).toBe(1);
     expect(logText()).toContain("IntegrationsFutureSchemaError");
+    expect(children).toHaveLength(1);
+    expect(sup.status()).toEqual({ running: false, lastError: "spawn-failed" });
+  });
+
+  it("stays down with spawn-failed on an errno a retry cannot fix", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const eisdir = Object.assign(new Error("EISDIR: illegal operation on a directory"), {
+      code: "EISDIR",
+    });
+    const reads = interceptIntegrationsReads(() => Promise.reject(eisdir));
+    try {
+      exitChild(children[0], 1);
+      await sleep(100);
+      await settle();
+    } finally {
+      reads.restore();
+    }
+
+    expect(reads.count()).toBe(1);
+    expect(occurrences("Restarting Claude in")).toBe(1);
     expect(children).toHaveLength(1);
     expect(sup.status()).toEqual({ running: false, lastError: "spawn-failed" });
   });
@@ -1056,10 +1075,47 @@ describe("#2125 — a crash restart whose integrations read fails", () => {
     expect(sup.status()).toEqual({ running: false });
   });
 
+  it("a read that fails while a relaunch's own read is in flight schedules nothing", async () => {
+    // The relaunch has passed `stopInternal` but not spawned, so `child` is
+    // still null here: only the epoch tells this failure it was superseded.
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const staleRead = deferred<string>();
+    const relaunchRead = deferred<string>();
+    let relaunchPass: (() => Promise<string>) | undefined;
+    const reads = interceptIntegrationsReads((n, pass) => {
+      if (n === 1) return staleRead.promise;
+      if (n === 2) {
+        relaunchPass = pass;
+        return relaunchRead.promise;
+      }
+      return pass();
+    });
+    try {
+      exitChild(children[0], 1);
+      await waitFor(() => reads.count() >= 1, "the restart's read");
+      const relaunched = sup.relaunch(cwdDir);
+      await waitFor(() => reads.count() >= 2, "the relaunch's read");
+      staleRead.reject(EPERM());
+      await sleep(50);
+      await settle();
+      relaunchRead.resolve(await (relaunchPass as () => Promise<string>)());
+      await relaunched;
+      await sleep(100);
+      await settle();
+    } finally {
+      reads.restore();
+    }
+
+    expect(occurrences("Restarting Claude in")).toBe(1);
+    expect(children).toHaveLength(2);
+    expect(sup.status().running).toBe(true);
+  });
+
   it("a restart whose read resolves during a relaunch does not spawn over it", async () => {
     // The stale restart's read lands while the relaunch's own read is still in
-    // flight. Before the epoch, the restart spawned from its old plan and the
-    // user's relaunch failed "Supervisor already running".
+    // flight. Without the epoch check, the restart spawns from its old plan and
+    // the user's relaunch fails "Supervisor already running".
     const { sup } = makeSupervisor();
     await sup.startFresh(cwdDir);
     const staleRead = deferred<string>();
@@ -1124,6 +1180,7 @@ describe("#2125 — a crash restart whose integrations read fails", () => {
     }
 
     expect(reads.count()).toBe(10);
+    expect(logText()).toContain("Giving up: integrations.json stayed unreadable");
     expect(children).toHaveLength(1);
     expect(sup.status()).toEqual({ running: false, lastError: "circuit-open" });
   });

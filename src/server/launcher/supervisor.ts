@@ -271,6 +271,19 @@ const RESTART_BACKOFFS_MS = [1_000, 5_000, 30_000];
  * Avoids unbounded restart-loop spam from a permanently-broken Claude binary. */
 const CIRCUIT_BREAKER_MAX_ATTEMPTS = 10;
 const CIRCUIT_BREAKER_WINDOW_MS = 5 * 60_000;
+/** Errno codes a crash restart's `integrations.json` read retries on (#2125):
+ * the ones a scanner, a sync client or a briefly exhausted descriptor table
+ * produce and then release. Windows reports a file held open by another
+ * process as EBUSY, EPERM or EACCES depending on how it was opened. Anything
+ * else stays down for the user's Restart, which shows the error. */
+const TRANSIENT_READ_CODES: ReadonlySet<string> = new Set([
+  "EPERM",
+  "EACCES",
+  "EBUSY",
+  "EAGAIN",
+  "EMFILE",
+  "ENFILE",
+]);
 /** The only text `reportDeliveryTrip` is ever handed: no path, id, count or
  * content, so the opt-in report carries nothing about the user (#1868). */
 const DELIVERY_TRIP_REPORT = "launcher: wake delivery failed on consecutive sessions";
@@ -1805,8 +1818,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   function scheduleRestart(): void {
     // Already given up — nothing to schedule, and re-entering would re-run the
     // trip branch's probe. One failed spawn can reach here TWICE: the "error"
-    // and "exit" handlers both call this, and both firing for a single spawn is
-    // why each carries its own `child === spawned` identity guard.
+    // and "exit" handlers both call this. The "exit" handler's call is behind
+    // its `wasCurrent` identity guard; the "error" handler guards its state
+    // clearing but not this call.
     if (breakerTripped) return;
     if (restartTimer) clearTimeout(restartTimer);
 
@@ -1828,8 +1842,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // and `breakerTripped` above land in the same tick — see `probeCliUsable`.
       // Guarded because this runs inside the child's "error"/"exit" handlers,
       // which Node calls synchronously from `emit()` with no try/catch in this
-      // file. A throw there is not a failed diagnosis — it becomes an
-      // `uncaughtException`, and `index.ts`'s handler exits the process for
+      // file, and inside `onRestartFailed`'s `.catch`. A throw there is not a
+      // failed diagnosis — it becomes an `uncaughtException` (or an
+      // `unhandledRejection`), and `index.ts`'s handler exits the process for
       // anything that isn't a known Hocuspocus error. That would kill the whole
       // editor at the precise moment the launcher was trying to explain itself,
       // which is strictly worse than the bug this branch exists to fix. The
@@ -1862,6 +1877,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // unhandledRejection, and `index.ts` exits the whole server on one
       // (#2125). Caught at this site rather than inside `startInternal`
       // because `start()`'s caller relies on the throw to report a failed boot.
+      // The epoch is read at fire time; a stop before then cleared this timer.
       const epoch = stopEpoch;
       startInternal(epoch).catch((err: unknown) => onRestartFailed(err, epoch));
     }, delay);
@@ -1873,10 +1889,16 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   function onRestartFailed(err: unknown, epoch: number): void {
     if (epoch !== stopEpoch || child !== null) {
       // A stop or relaunch passed through during the read, and it owns the
-      // outcome now. Writing `lastError` here would leave a stale code on the
-      // relaunched supervisor, which resurfaces on its next clean stop. The
-      // `child` half covers a second restart that spawned meanwhile: the
-      // spawned `'error'` handler schedules restarts without an identity guard.
+      // outcome now: a retry would be a second restart chain, and a
+      // `lastError` would be stale on whatever that stop or relaunch left. The
+      // epoch catches the relaunch while its own read is still in flight; the
+      // `child` half covers a second restart that spawned meanwhile (the
+      // spawned `'error'` handler schedules restarts without an identity guard).
+      //
+      // No test for the `child` half or the breaker arm below: both need a
+      // second restart chain running beside this one, which the harness can
+      // only produce through that `'error'` path, and the comment in that
+      // handler argues a superseded spawn cannot emit `'error'`.
       console.error("[Launcher] Superseded restart's plan read failed (ignored):", err);
       return;
     }
@@ -1884,16 +1906,22 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       console.error("[Launcher] Restart plan read failed after the breaker tripped:", err);
       return;
     }
-    if (typeof (err as { code?: unknown } | null)?.code === "string") {
-      // An errno failure (EPERM/EBUSY from antivirus or a sync client holding
-      // the file) is usually transient, so it takes the crash loop's backoff
-      // and breaker. A persistent one trips the breaker as `circuit-open`.
+    const code = (err as { code?: unknown } | null)?.code;
+    if (typeof code === "string" && TRANSIENT_READ_CODES.has(code)) {
+      // Antivirus or a sync client holding the file: usually gone in a moment,
+      // so it takes the crash loop's backoff and breaker. A lock that persists
+      // usually trips the breaker, though a loop already at the longest backoff
+      // can stay under its window and keep retrying, as any crash loop can.
       console.error("[Launcher] Restart could not read integrations.json — retrying:", err);
       scheduleRestart();
+      if (breakerTripped) {
+        console.error("[Launcher] Giving up: integrations.json stayed unreadable");
+      }
       return;
     }
-    // A future schema or a file that fails validation: retrying cannot fix
-    // it, and the user's Restart awaits `buildPlan` and shows the real message.
+    // A future schema, a file that fails validation, or an errno a retry
+    // cannot fix (EISDIR, ENOTDIR…): the user's Restart awaits `buildPlan` and
+    // shows the real message.
     lastError = "spawn-failed";
     console.error("[Launcher] Restart failed — staying down until Restart:", err);
   }
@@ -1928,9 +1956,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       return;
     }
     // Same window, same reason (#1995): the pre-await check above is a read of
-    // a flag that moves DURING the await, exactly like `stopRequested`. Every
-    // trip site fires from a live child's handlers, so the reachable path is
-    // `scheduleRestart` calling this without the op lock.
+    // a flag that moves DURING the await, exactly like `stopRequested`. The
+    // reachable path is `scheduleRestart` calling this without the op lock.
     //
     // No test: `startInternal` has already returned at the `if (child)` line
     // whenever a child is live, and the harness cannot trip the breaker inside
