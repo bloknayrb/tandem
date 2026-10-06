@@ -90,6 +90,13 @@ updates:
       # copies and feeds a v15 tokenizer to a v14-typed MarkdownParser).
       - dependency-name: "markdown-it"
         update-types: ["version-update:semver-major"]
+      # REMOVE with #2148. Not a major, but the same known-red shape: mammoth
+      # 1.13 imports Word move revisions that 1.12 dropped, so docx-walker's
+      # flat text no longer matches the import and the move warning becomes
+      # false. A minor rides in the npm group, so without this hold it would
+      # turn every weekly group PR red.
+      - dependency-name: "mammoth"
+        versions: [">=1.13.0"]
 
   # Split by update-type for the same reason as npm above. Cargo has not yet hit
   # the hostage failure, but the shape is identical -- and a Rust major is worse
