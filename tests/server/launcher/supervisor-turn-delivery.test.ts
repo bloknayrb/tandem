@@ -969,7 +969,8 @@ describe("#2125 — a crash restart whose integrations read fails", () => {
   // The restart timer runs `startInternal` with nobody awaiting it, so a read
   // failure there must not escape as an unhandled rejection: `index.ts` exits
   // the server on one. Cases that schedule a restart wait out a settle window
-  // with the interceptor still armed, so a late retry or spawn is counted.
+  // before asserting (with any interceptor still armed), so a late retry or
+  // spawn is counted.
 
   it("retries a transient I/O error through the crash loop's backoff", async () => {
     const { sup } = makeSupervisor();
@@ -1181,6 +1182,85 @@ describe("#2125 — a crash restart whose integrations read fails", () => {
 
     expect(reads.count()).toBe(10);
     expect(logText()).toContain("Giving up: integrations.json stayed unreadable");
+    expect(children).toHaveLength(1);
+    expect(sup.status()).toEqual({ running: false, lastError: "circuit-open" });
+  });
+
+  // The three below drive a locked `start()` while a crash restart's read is
+  // held. In production `start()` runs only at boot, so the interleaving is
+  // artificial, but it is the harness's way to reach these branches.
+
+  it("a read that fails after another spawn took over neither retries nor reports", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const staleRead = deferred<string>();
+    const reads = interceptIntegrationsReads((n, pass) => (n === 1 ? staleRead.promise : pass()));
+    try {
+      exitChild(children[0], 1);
+      await waitFor(() => reads.count() >= 1, "the restart's read");
+      await sup.start();
+      staleRead.reject(EPERM());
+      await sleep(100);
+      await settle();
+    } finally {
+      reads.restore();
+    }
+
+    expect(occurrences("Superseded restart's plan read failed")).toBe(1);
+    expect(occurrences("Restarting Claude in")).toBe(1);
+    expect(children).toHaveLength(2);
+    expect(sup.status().running).toBe(true);
+  });
+
+  it("a read that fails after the breaker tripped keeps the breaker's code", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const staleRead = deferred<string>();
+    const reads = interceptIntegrationsReads((n, pass) => (n === 1 ? staleRead.promise : pass()));
+    try {
+      exitChild(children[0], 1);
+      await waitFor(() => reads.count() >= 1, "the restart's read");
+      await sup.start();
+      // A missing binary trips the breaker and drops the child.
+      children[1].emit("error", Object.assign(new Error("spawn x ENOENT"), { code: "ENOENT" }));
+      // Non-transient, so without the breaker arm this would overwrite the
+      // breaker's code with spawn-failed.
+      staleRead.reject(Object.assign(new Error("EISDIR"), { code: "EISDIR" }));
+      await sleep(100);
+      await settle();
+    } finally {
+      reads.restore();
+    }
+
+    expect(occurrences("after the breaker tripped")).toBe(1);
+    expect(sup.status()).toEqual({ running: false, lastError: "binary-not-found" });
+  });
+
+  it("a start() whose read straddles a breaker trip does not spawn", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const startRead = deferred<string>();
+    let startPass: (() => Promise<string>) | undefined;
+    const reads = interceptIntegrationsReads((n, pass) => {
+      if (n === 1) {
+        startPass = pass;
+        return startRead.promise;
+      }
+      return Promise.reject(EPERM());
+    });
+    try {
+      exitChild(children[0], 1);
+      const started = sup.start();
+      await waitFor(() => "lastError" in sup.status(), "the trip");
+      startRead.resolve(await (startPass as () => Promise<string>)());
+      await started;
+      await sleep(50);
+      await settle();
+    } finally {
+      reads.restore();
+    }
+
+    expect(occurrences("Breaker tripped while building the spawn plan")).toBe(1);
     expect(children).toHaveLength(1);
     expect(sup.status()).toEqual({ running: false, lastError: "circuit-open" });
   });

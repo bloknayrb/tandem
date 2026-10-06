@@ -273,9 +273,12 @@ const CIRCUIT_BREAKER_MAX_ATTEMPTS = 10;
 const CIRCUIT_BREAKER_WINDOW_MS = 5 * 60_000;
 /** Errno codes a crash restart's `integrations.json` read retries on (#2125):
  * the ones a scanner, a sync client or a briefly exhausted descriptor table
- * produce and then release. Windows reports a file held open by another
- * process as EBUSY, EPERM or EACCES depending on how it was opened. Anything
- * else stays down for the user's Restart, which shows the error. */
+ * produce and then release. On Windows a file another process holds open
+ * shows up as EBUSY or EPERM; EACCES is kept for access-denied cases that
+ * clear once the other process lets go. On POSIX, EPERM and EACCES are
+ * usually permanent, so they loop until the breaker trips, and the give-up
+ * line in `onRestartFailed` names the cause. Anything else stays down for the
+ * user's Restart, which shows the error. */
 const TRANSIENT_READ_CODES: ReadonlySet<string> = new Set([
   "EPERM",
   "EACCES",
@@ -1889,16 +1892,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   function onRestartFailed(err: unknown, epoch: number): void {
     if (epoch !== stopEpoch || child !== null) {
       // A stop or relaunch passed through during the read, and it owns the
-      // outcome now: a retry would be a second restart chain, and a
-      // `lastError` would be stale on whatever that stop or relaunch left. The
-      // epoch catches the relaunch while its own read is still in flight; the
-      // `child` half covers a second restart that spawned meanwhile (the
-      // spawned `'error'` handler schedules restarts without an identity guard).
-      //
-      // No test for the `child` half or the breaker arm below: both need a
-      // second restart chain running beside this one, which the harness can
-      // only produce through that `'error'` path, and the comment in that
-      // handler argues a superseded spawn cannot emit `'error'`.
+      // outcome now: a retry would bring Claude back after a user stop or race
+      // the relaunch, and a `lastError` would be stale on whatever that stop or
+      // relaunch left. The epoch catches the relaunch while its own read is
+      // still in flight; the `child` half covers a spawn that happened
+      // meanwhile without passing through `stopInternal` (a locked `start()`,
+      // or another restart chain).
       console.error("[Launcher] Superseded restart's plan read failed (ignored):", err);
       return;
     }
@@ -1957,11 +1956,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     }
     // Same window, same reason (#1995): the pre-await check above is a read of
     // a flag that moves DURING the await, exactly like `stopRequested`. The
-    // reachable path is `scheduleRestart` calling this without the op lock.
-    //
-    // No test: `startInternal` has already returned at the `if (child)` line
-    // whenever a child is live, and the harness cannot trip the breaker inside
-    // the await without a test-only setter this file deliberately lacks.
+    // trip comes from an unlocked restart chain running beside this call;
+    // since #2125 a loop of failing reads can trip it with no child alive.
+    // Pinned by a `start()` whose read is held while such a loop trips.
     if (breakerTripped) {
       console.error("[Launcher] Breaker tripped while building the spawn plan — not spawning");
       return;
