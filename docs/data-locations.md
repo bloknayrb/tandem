@@ -172,9 +172,12 @@ while you run the desktop app. There is no in-app switch to turn it off any more
 - **`tandem --uninstall-scrub` removes the workspace entries too**, from both places
   Claude Desktop keeps them:
   `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\local-agent-mode-sessions`
-  and `%APPDATA%\Claude\local-agent-mode-sessions`. Its log names each folder it checked.
-  If your `%APPDATA%` points outside your user folder it skips that folder with a warning,
-  and uninstalling the desktop app is what removes those entries. It also removes Tandem's
+  and `%APPDATA%\Claude\local-agent-mode-sessions`. Its log names each folder it checked
+  and what it removed. It looks where the `%APPDATA%` variable points: if that is outside
+  your user folder it skips it with a warning, and if you changed it from the Windows
+  default it may miss entries the desktop app wrote at the default location. Uninstalling
+  the desktop app removes those, unless your profile is redirected to a network share,
+  where neither removes them. It also removes Tandem's
   MCP entries and the bundled skill (the skill folder is left if it holds anything Tandem
   did not install), so re-run the integration wizard afterwards (Settings → AI Assistant),
   and it leaves `cowork-meta.json`.

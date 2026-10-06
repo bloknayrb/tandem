@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`tandem --uninstall-scrub` now removes Tandem's Cowork entries wherever Claude Desktop keeps its workspaces on Windows (#2136).** It used to look only under `%LOCALAPPDATA%\Packages\Claude_*` and missed workspaces under `%APPDATA%\Claude\local-agent-mode-sessions`, leaving their Tandem entries in place, including the one that holds the auth token. Its log now names each folder it checked. It also refuses to read through a folder link planted where Tandem's plugin files live.
+- **`tandem --uninstall-scrub` now removes Tandem's Cowork entries wherever Claude Desktop keeps its workspaces on Windows (#2136).** It used to look only under `%LOCALAPPDATA%\Packages\Claude_*` and missed workspaces under `%APPDATA%\Claude\local-agent-mode-sessions`, leaving their Tandem entries in place, including the one that holds the auth token. Its log now names each folder it checked and what it removed, and a folder it could not read counts as a warning rather than reading as absent. It also skips a workspace whose plugin folder is a folder link rather than reading through it, and the path check Tandem uses before touching your Claude config refuses a folder link at the path itself before following it.
 
 ## [0.28.0] - 2026-09-25
 

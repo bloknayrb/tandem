@@ -20,9 +20,13 @@
  *
  * **`%APPDATA%` is read from the environment here, while the Rust scan reads
  * the Known Folder** (`dirs::config_dir()`), which ignores a modified env var.
- * ADR-044 accepts that divergence. Either way the value is screened before any
- * syscall, so a `%APPDATA%` outside the user folder is skipped with a warning
- * and the desktop uninstall is what covers it.
+ * ADR-044 accepted that divergence for detection, where it only costs an
+ * "undetected"; here it costs entries left behind, because the desktop wrote
+ * where the Known Folder points. So the CLI covers that root only when the env
+ * var and the Known Folder agree, the default. The value is screened for UNC
+ * before any syscall, and a `%APPDATA%` outside the user folder is skipped with
+ * a warning; the desktop uninstall covers that case unless the Known Folder is
+ * itself redirected to a share, which neither scrub will touch.
  *
  * Removes every reference Tandem wrote into other programs' config:
  *   - Cowork workspaces (Windows): `installed_plugins.json`
@@ -204,9 +208,17 @@ async function openLogger(): Promise<ScrubLogger> {
  * applies this per component; do not call this directly on a path built from
  * more than one `path.join` segment.
  *
- * Fail-closed, and logs its own reason.
+ * Fail-closed, and logs its own reason. **Absent is `info`, any other failure is
+ * `warn`**: a permission-denied or locked folder leaves Tandem's entries in place,
+ * and logging it at `info` like a missing one made that run's summary read
+ * `0 warning(s)`. `quietIfAbsent` is for the per-vm `cowork_plugins` check, where
+ * most siblings have none and the caller reports one count instead.
  */
-async function isSafeDirectory(dir: string, logger: ScrubLogger): Promise<boolean> {
+async function isSafeDirectory(
+  dir: string,
+  logger: ScrubLogger,
+  { quietIfAbsent = false }: { quietIfAbsent?: boolean } = {},
+): Promise<boolean> {
   try {
     const stat = await fsPromises.lstat(dir);
     if (stat.isSymbolicLink()) {
@@ -223,7 +235,11 @@ async function isSafeDirectory(dir: string, logger: ScrubLogger): Promise<boolea
     }
     return true;
   } catch (err) {
-    logger.info(`cannot read ${dir}: ${(err as Error).message}`);
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (!quietIfAbsent) logger.info(`not present: ${dir}`);
+    } else {
+      logger.warn(`cannot read ${dir}: ${(err as Error).message}`);
+    }
     return false;
   }
 }
@@ -261,7 +277,9 @@ async function readdirNoFollow(dir: string, logger: ScrubLogger): Promise<string
   try {
     return await fsPromises.readdir(dir);
   } catch (err) {
-    logger.info(`cannot read ${dir}: ${(err as Error).message}`);
+    // The `lstat` just said this is a real directory, so a failure to list it
+    // is never plain absence; anything under it stays unscrubbed.
+    logger.warn(`cannot read ${dir}: ${(err as Error).message}`);
     return [];
   }
 }
@@ -282,6 +300,9 @@ async function readdirNoFollow(dir: string, logger: ScrubLogger): Promise<string
  * must reach every package the Rust installer could have written into.
  */
 export const CLAUDE_PACKAGE_PREFIXES = ["Claude_", "AnthropicPBC.Claude"] as const;
+
+/** Below `%LOCALAPPDATA%`; the MSIX package dirs live in it. */
+export const MSIX_PACKAGES_DIR = "Packages";
 
 /** Below `%LOCALAPPDATA%\Packages\<claude-package>`. */
 export const MSIX_SESSIONS_SEGMENTS = [
@@ -323,7 +344,7 @@ async function coworkSessionsRoots(logger: ScrubLogger): Promise<SessionsRoot[]>
   const localAppData = usableEnvDir("LOCALAPPDATA", logger);
   const appData = usableEnvDir("APPDATA", logger);
 
-  const packagesDir = localAppData ? path.join(localAppData, "Packages") : undefined;
+  const packagesDir = localAppData ? path.join(localAppData, MSIX_PACKAGES_DIR) : undefined;
   logger.info(
     "checking Cowork sessions under " +
       (packagesDir
@@ -411,6 +432,7 @@ export async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[
   const roots = await coworkSessionsRoots(logger);
 
   const workspaces = new Set<string>();
+  let withoutPlugins = 0;
   for (const root of roots) {
     for (const ws of await readdirNoFollow(root.path, logger)) {
       const wsPath = path.join(root.path, ws);
@@ -420,7 +442,11 @@ export async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[
         // Same no-follow rule as the descent, one level deeper: `stat` here
         // would follow a junction planted as the vm dir itself.
         if (!(await isSafeDirectory(vmPath, logger))) continue;
-        if (!(await isSafeDirectory(path.join(vmPath, "cowork_plugins"), logger))) continue;
+        const marker = path.join(vmPath, "cowork_plugins");
+        if (!(await isSafeDirectory(marker, logger, { quietIfAbsent: true }))) {
+          withoutPlugins++;
+          continue;
+        }
 
         const safePath = await assertSafeWorkspacePath(vmPath, root.real, logger);
         if (safePath !== null) {
@@ -430,6 +456,9 @@ export async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[
     }
   }
 
+  if (withoutPlugins > 0) {
+    logger.info(`skipped ${withoutPlugins} dir(s) with no usable cowork_plugins folder`);
+  }
   logger.info(`found ${workspaces.size} workspace(s) in ${roots.length} sessions root(s)`);
   return [...workspaces];
 }
@@ -884,20 +913,23 @@ export async function runUninstallScrub(): Promise<number> {
       for (const ws of workspaces) {
         const pluginsDir = path.join(ws, "cowork_plugins");
         try {
-          await rewriteJson(
-            path.join(pluginsDir, "installed_plugins.json"),
-            removeInstalledPlugins,
-            logger,
-          );
-          await rewriteJson(
-            path.join(pluginsDir, "known_marketplaces.json"),
-            removeKnownMarketplaces,
-            logger,
-          );
-          await rewriteJson(
-            path.join(pluginsDir, "cowork_settings.json"),
-            removeCoworkSettings,
-            logger,
+          // Each result logged, as `scrubMcpConfigs` does: without it the log
+          // could not tell "removed Tandem's entries" from "found none" from a
+          // mutator that matched nothing.
+          const changed: string[] = [];
+          for (const [file, mutate] of [
+            ["installed_plugins.json", removeInstalledPlugins],
+            ["known_marketplaces.json", removeKnownMarketplaces],
+            ["cowork_settings.json", removeCoworkSettings],
+          ] as const) {
+            if (await rewriteJson(path.join(pluginsDir, file), mutate, logger)) {
+              changed.push(file);
+            }
+          }
+          logger.info(
+            changed.length > 0
+              ? `removed Tandem entries from ${changed.join(", ")} in ${ws}`
+              : `no Tandem entries in ${ws}`,
           );
         } catch (err) {
           logger.error(`scrub failed for ${ws}: ${(err as Error).message}`);

@@ -622,11 +622,23 @@ export function assertPathSafe(targetPath: string, opts: { allowedRoots?: string
   // `lstat` a path that may not exist yet (e.g., apply will create the
   // parent dir). Walk up until we find an existing ancestor and validate
   // there — if any walked-through component is a symlink, fail.
+  //
+  // `lstatSync` alone, never `existsSync` first: `existsSync` FOLLOWS a
+  // reparse point at `cursor`, so a junction planted as the path itself (a
+  // `%APPDATA%` folder pointed at `\\host\share`, say) was traversed — an SMB
+  // call — before the symlink test below could refuse it (#2143 review). Any
+  // `lstat` failure reads as "not there", which is what `existsSync` returned
+  // for it, and the walk moves up.
   let cursor = targetPath;
   let existing: string | null = null;
   while (true) {
-    if (existsSync(cursor)) {
-      const st = lstatSync(cursor);
+    let st: ReturnType<typeof lstatSync> | undefined;
+    try {
+      st = lstatSync(cursor);
+    } catch {
+      st = undefined;
+    }
+    if (st) {
       if (st.isSymbolicLink()) {
         throw new PathRejectedError(
           targetPath,

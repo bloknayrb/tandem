@@ -499,10 +499,35 @@ describe("findCoworkWorkspaces", () => {
     expect(await scan()).toEqual([VM, skillsVm]);
   });
 
-  it("skips a vm dir with no cowork_plugins dir", async () => {
-    absent.add(path.join(VM, "cowork_plugins"));
+  it("skips a vm dir with no cowork_plugins dir, counted in one line", async () => {
+    const marker = path.join(VM, "cowork_plugins");
+    absent.add(marker);
 
     expect(await scan()).toEqual([]);
+    // One summary line, not one per sibling: a root can hold many.
+    expect(logger.info).toHaveBeenCalledWith(
+      "skipped 1 dir(s) with no usable cowork_plugins folder",
+    );
+    for (const spy of [logger.info, logger.warn]) {
+      expect(spy).not.toHaveBeenCalledWith(expect.stringContaining(marker));
+    }
+  });
+
+  it("warns, not just notes, when a folder exists but cannot be read", async () => {
+    // Absent is `info`; a permission-denied or locked folder leaves entries
+    // behind, so it must reach the summary's warning count.
+    _lstatSpy.mockImplementation(async (p: string) => {
+      if (p === SESSIONS) {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      }
+      if (absent.has(p)) throw makeNotFoundError();
+      return dir();
+    });
+
+    expect(await scan()).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(`cannot read ${SESSIONS}`));
+    // Absence alone stays below a warning.
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining(ROAMING_CLAUDE));
   });
 
   it("refuses a junction planted as cowork_plugins", async () => {
@@ -544,6 +569,17 @@ describe("findCoworkWorkspaces", () => {
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("%APPDATA%"));
     },
   );
+
+  it("refuses a local APPDATA outside the user folder, not just a UNC one", async () => {
+    // `assertPathSafe` rather than a bare UNC test is the whole reason
+    // `usableEnvDir` exists; a local path outside home is what tells them apart.
+    const outside = path.join(path.parse(homedir()).root, "tandem-outside-home-fixture", "x");
+    vi.stubEnv("APPDATA", outside);
+
+    expect(await scan()).toEqual([VM]);
+    expectNoSyscallNaming("tandem-outside-home-fixture");
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("%APPDATA% rejected"));
+  });
 
   // ── No-follow descent ──
 
@@ -621,6 +657,23 @@ describe("findCoworkWorkspaces", () => {
 
     expect(await scan()).toEqual([]);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("outside the scan root"));
+  });
+
+  it("contains each workspace under the RESOLVED sessions root and returns resolved paths", async () => {
+    // An env var spelled with 8.3 short names, say: the sessions root resolves
+    // to a different string than the one the descent built. Containment must
+    // use the resolved one, or every resolved workspace reads as "outside" and
+    // the scrub leaves the token behind. Identity realpath in every other row
+    // could not tell `root.real` from `root.path`.
+    const resolvedSessions = path.join(homedir(), "AppData", "Local", "resolved-spelling", "s");
+    const resolvedVm = path.join(resolvedSessions, "ws1", "vm1");
+    _realpathSpy.mockImplementation(async (p: string) => {
+      if (p === SESSIONS) return resolvedSessions;
+      if (p === VM) return resolvedVm;
+      return p;
+    });
+
+    expect(await scan()).toEqual([resolvedVm]);
   });
 
   it("skips a sessions root whose realpath fails rather than using it unresolved", async () => {

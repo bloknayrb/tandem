@@ -24,6 +24,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   CLAUDE_PACKAGE_PREFIXES,
+  MSIX_PACKAGES_DIR,
   MSIX_SESSIONS_SEGMENTS,
   ROAMING_SESSIONS_SEGMENTS,
 } from "../../src/cli/uninstall-scrub.js";
@@ -34,9 +35,9 @@ const rustScan = readFileSync(
   "utf-8",
 );
 
-/** The body of a top-level `fn name(...)`, up to its closing column-0 brace. */
+/** The body of a top-level `[pub[(…)]] fn name(...)`, up to its closing column-0 brace. */
 function rustFnBody(name: string): string {
-  const start = rustScan.search(new RegExp(`^fn ${name}\\b`, "m"));
+  const start = rustScan.search(new RegExp(`^(?:pub(?:\\([^)]*\\))? )?fn ${name}\\b`, "m"));
   expect(start, `fn ${name} not found in cowork_workspace_scan.rs`).toBeGreaterThanOrEqual(0);
   const end = rustScan.indexOf("\n}", start);
   expect(end).toBeGreaterThan(start);
@@ -49,9 +50,13 @@ function stringArgs(body: string, method: string): string[] {
 
 describe("CLI and desktop Cowork scans agree (#2136)", () => {
   it("accept the same MSIX package-name prefixes", () => {
-    const rust = stringArgs(rustFnBody("is_claude_package_name"), "starts_with");
+    const body = rustFnBody("is_claude_package_name");
+    const rust = stringArgs(body, "starts_with");
     // Positive control: an empty parse would make the equality vacuous.
     expect(rust.length).toBeGreaterThan(0);
+    // Every `starts_with(` must be a literal the parse can see. A prefix added
+    // through a const would leave this equality green while the TS side drifts.
+    expect(body.split("starts_with(").length - 1).toBe(rust.length);
     expect([...CLAUDE_PACKAGE_PREFIXES].sort()).toEqual([...rust].sort());
   });
 
@@ -60,9 +65,19 @@ describe("CLI and desktop Cowork scans agree (#2136)", () => {
     // The MSIX branch filters on the predicate pinned above; if it stopped,
     // that pin would be checking a function the scan no longer calls.
     expect(body).toContain("is_claude_package_name(");
+    // Exactly the two pushes the literal parse below accounts for. A third
+    // root added through a helper or `extend` is the #2136 shape: Rust gains a
+    // root and the join literals still match.
+    expect(body.split("roots.push(").length - 1).toBe(2);
+    expect(body).not.toContain(".extend(");
     expect(stringArgs(body, "join")).toEqual([
       ...MSIX_SESSIONS_SEGMENTS,
       ...ROAMING_SESSIONS_SEGMENTS,
     ]);
+  });
+
+  it("join the MSIX root under the same Packages folder", () => {
+    // `Packages` is joined in the caller, outside `roots_under`.
+    expect(rustFnBody("cowork_roots")).toContain(`.join("${MSIX_PACKAGES_DIR}")`);
   });
 });
