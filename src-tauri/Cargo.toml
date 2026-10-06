@@ -29,7 +29,7 @@ log = "0.4"
 # re-exported by the plugin (`tauri_plugin_sentry::minidump`); no separate
 # `sentry-rust-minidump` dependency is needed.
 sentry = "0.49"
-tauri-plugin-sentry = "0.6"
+tauri-plugin-sentry = "0.7"
 # linux-libxdo: makes native Cut/Copy/Paste/Select All PredefinedMenuItems work
 # on Linux (muda uses libxdo to synthesize them); off by default. Required by
 # the editor context menu (#923).
