@@ -731,6 +731,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * resurrect a wake a user stop already discarded.
    */
   let userStopped = false;
+  /**
+   * Bumped by every `stopInternal`, so both a user `stop()` and a
+   * `relaunch`/`startFresh` advance it (#2125). An unlocked restart compares it
+   * across its awaits to learn that a stop or relaunch passed through while it
+   * was suspended. `stopRequested` cannot answer that: `respawn` raises it and
+   * then lowers it again before its own spawn, so a restart that slept across
+   * a relaunch reads it as never having been raised.
+   */
+  let stopEpoch = 0;
   let restartIndex = 0;
   let restartTimer: NodeJS.Timeout | null = null;
   /** Confirmation timer for the active spawn. Set in spawnOnce, cancelled in
@@ -1849,13 +1858,50 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     console.error(`[Launcher] Restarting Claude in ${delay}ms (attempt ${restartIndex})`);
     restartTimer = setTimeout(() => {
       restartTimer = null;
-      void startInternal();
+      // Nothing awaits this promise, so a rejection here is an
+      // unhandledRejection, and `index.ts` exits the whole server on one
+      // (#2125). Caught at this site rather than inside `startInternal`
+      // because `start()`'s caller relies on the throw to report a failed boot.
+      const epoch = stopEpoch;
+      startInternal(epoch).catch((err: unknown) => onRestartFailed(err, epoch));
     }, delay);
   }
 
+  /** A crash restart's `buildPlan` threw: `integrations.json` could not be
+   * read or did not validate. MUST be total, because it runs in the `.catch`
+   * whose whole job is that nothing escapes. */
+  function onRestartFailed(err: unknown, epoch: number): void {
+    if (epoch !== stopEpoch || child !== null) {
+      // A stop or relaunch passed through during the read, and it owns the
+      // outcome now. Writing `lastError` here would leave a stale code on the
+      // relaunched supervisor, which resurfaces on its next clean stop. The
+      // `child` half covers a second restart that spawned meanwhile: the
+      // spawned `'error'` handler schedules restarts without an identity guard.
+      console.error("[Launcher] Superseded restart's plan read failed (ignored):", err);
+      return;
+    }
+    if (breakerTripped) {
+      console.error("[Launcher] Restart plan read failed after the breaker tripped:", err);
+      return;
+    }
+    if (typeof (err as { code?: unknown } | null)?.code === "string") {
+      // An errno failure (EPERM/EBUSY from antivirus or a sync client holding
+      // the file) is usually transient, so it takes the crash loop's backoff
+      // and breaker. A persistent one trips the breaker as `circuit-open`.
+      console.error("[Launcher] Restart could not read integrations.json — retrying:", err);
+      scheduleRestart();
+      return;
+    }
+    // A future schema or a file that fails validation: retrying cannot fix
+    // it, and the user's Restart awaits `buildPlan` and shows the real message.
+    lastError = "spawn-failed";
+    console.error("[Launcher] Restart failed — staying down until Restart:", err);
+  }
+
   /** Internal start without lock acquisition — called by scheduleRestart and
-   * the public `start()` wrapper. */
-  async function startInternal(): Promise<void> {
+   * the public `start()` wrapper. `epoch` is the `stopEpoch` this start
+   * belongs to; the restart timer passes the one its failure handler checks. */
+  async function startInternal(epoch = stopEpoch): Promise<void> {
     if (child) return;
     if (breakerTripped) return;
     stopRequested = false;
@@ -1870,8 +1916,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // lock, finds `child` already null, and resolves successfully. Without this
     // re-check the restart then spawns anyway: `stop()` reported success and
     // Claude silently comes back, event subscription and all.
-    if (stopRequested) {
-      console.error("[Launcher] Stop requested while building the spawn plan — not spawning");
+    //
+    // The epoch half covers a `relaunch`/`startFresh` in the same window
+    // (#2125). `respawn` lowers `stopRequested` before its own `buildPlan`, so
+    // the flag alone reads as untouched, and this stale restart would spawn
+    // from its old plan and make the user's Restart fail "already running".
+    if (stopRequested || epoch !== stopEpoch) {
+      console.error(
+        "[Launcher] Stop or relaunch requested while building the spawn plan — not spawning",
+      );
       return;
     }
     // Same window, same reason (#1995): the pre-await check above is a read of
@@ -1949,6 +2002,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   }
 
   async function stopInternal(): Promise<void> {
+    stopEpoch++;
     stopRequested = true;
     if (restartTimer) {
       clearTimeout(restartTimer);

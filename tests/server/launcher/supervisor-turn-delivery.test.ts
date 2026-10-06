@@ -9,7 +9,8 @@
  * against a real pipe. So `spawn` is mocked here, for the whole file (a
  * `vi.mock` is file-scoped, which is why this is its own file), and each child
  * is a fake whose write callbacks, stream errors and exits the test fires by
- * hand.
+ * hand. The same mock makes restart-path ordering observable, which is why the
+ * #2125 cases (a crash restart whose integrations read fails) live here too.
  *
  * The fake follows real Node where the supervisor depends on it:
  *   - `kill()` sets `killed` synchronously but `signalCode` and `exit` only on a
@@ -923,5 +924,207 @@ describe("a killed child whose exit lands after a relaunch replaced it", () => {
     expect(logText()).not.toContain("Restarting Claude in");
     expect(children).toHaveLength(2);
     expect(sup.status().running).toBe(true);
+  });
+});
+
+// --- #2125 --------------------------------------------------------------------
+
+/** Routes every `integrations.json` read to `handler`, which receives the read's
+ * 1-based index and a `pass` that performs the real read. Other files pass
+ * through. Arm it AFTER the first spawn so only restart reads are affected,
+ * and restore it in a `finally`. */
+function interceptIntegrationsReads(
+  handler: (n: number, pass: () => Promise<string>) => Promise<string>,
+): { restore: () => void; count: () => number } {
+  let n = 0;
+  const realReadFile = fs.promises.readFile;
+  const spy = vi.spyOn(fs.promises, "readFile").mockImplementation(((
+    ...args: Parameters<typeof realReadFile>
+  ) => {
+    if (!String(args[0]).endsWith("integrations.json")) return realReadFile(...args);
+    n++;
+    return handler(n, () => realReadFile(...args) as Promise<string>);
+  }) as typeof realReadFile);
+  return { restore: () => spy.mockRestore(), count: () => n };
+}
+
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+const EPERM = (): NodeJS.ErrnoException =>
+  Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" });
+
+function occurrences(needle: string): number {
+  return logText().split(needle).length - 1;
+}
+
+describe("#2125 — a crash restart whose integrations read fails", () => {
+  // The restart timer runs `startInternal` with nobody awaiting it, so a read
+  // failure there was an unhandled rejection: exit 1 for this file with every
+  // test green, and a `process.exit(1)` from `index.ts` in the server. The
+  // #1867 receipt-kill tests above end with that restart's read still in
+  // flight when afterEach removes the temp dir; on Windows the read can then
+  // fail with EPERM. Each case below waits out a settle window with the
+  // interceptor still armed, so a late retry or spawn is counted.
+
+  it("retries an I/O error through the crash loop's backoff", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const reads = interceptIntegrationsReads((n, pass) =>
+      n === 1 ? Promise.reject(EPERM()) : pass(),
+    );
+    try {
+      exitChild(children[0], 1);
+      await sleep(100);
+      await settle();
+    } finally {
+      reads.restore();
+    }
+
+    expect(reads.count()).toBe(2);
+    expect(occurrences("Restarting Claude in")).toBe(2);
+    expect(children).toHaveLength(2);
+    expect(sup.status().running).toBe(true);
+  });
+
+  it("stays down with spawn-failed on a file a retry cannot fix", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const file = path.join(baseDir, "integrations.json");
+    const json = JSON.parse(fs.readFileSync(file, "utf8")) as { schemaVersion: number };
+    json.schemaVersion = 99;
+    fs.writeFileSync(file, JSON.stringify(json));
+
+    exitChild(children[0], 1);
+    await sleep(100);
+    await settle();
+
+    expect(occurrences("Restarting Claude in")).toBe(1);
+    expect(logText()).toContain("IntegrationsFutureSchemaError");
+    expect(children).toHaveLength(1);
+    expect(sup.status()).toEqual({ running: false, lastError: "spawn-failed" });
+  });
+
+  it("a stop during the read leaves no error, no retry and no spawn", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const read = deferred<string>();
+    const reads = interceptIntegrationsReads((n, pass) => (n === 1 ? read.promise : pass()));
+    try {
+      exitChild(children[0], 1);
+      await waitFor(() => reads.count() >= 1, "the restart's read");
+      await sup.stop();
+      read.reject(EPERM());
+      await sleep(100);
+      await settle();
+    } finally {
+      reads.restore();
+    }
+
+    expect(reads.count()).toBe(1);
+    expect(occurrences("Restarting Claude in")).toBe(1);
+    expect(children).toHaveLength(1);
+    expect(sup.status()).toEqual({ running: false });
+  });
+
+  it("a relaunch during a failing read leaves no stale error behind", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const read = deferred<string>();
+    const reads = interceptIntegrationsReads((n, pass) => (n === 1 ? read.promise : pass()));
+    try {
+      exitChild(children[0], 1);
+      await waitFor(() => reads.count() >= 1, "the restart's read");
+      await sup.relaunch(cwdDir);
+      read.reject(EPERM());
+      await sleep(100);
+      await settle();
+    } finally {
+      reads.restore();
+    }
+
+    expect(sup.status().running).toBe(true);
+    expect(children).toHaveLength(2);
+    await sup.stop();
+    expect(sup.status()).toEqual({ running: false });
+  });
+
+  it("a restart whose read resolves during a relaunch does not spawn over it", async () => {
+    // The stale restart's read lands while the relaunch's own read is still in
+    // flight. Before the epoch, the restart spawned from its old plan and the
+    // user's relaunch failed "Supervisor already running".
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const staleRead = deferred<string>();
+    const relaunchRead = deferred<string>();
+    const passes: (() => Promise<string>)[] = [];
+    const reads = interceptIntegrationsReads((n, pass) => {
+      passes.push(pass);
+      if (n === 1) return staleRead.promise;
+      if (n === 2) return relaunchRead.promise;
+      return pass();
+    });
+    let relaunchResult: string;
+    try {
+      exitChild(children[0], 1);
+      await waitFor(() => reads.count() >= 1, "the restart's read");
+      const relaunched = sup.relaunch(cwdDir).then(
+        () => "ok",
+        (err: unknown) => `rejected: ${String(err)}`,
+      );
+      await waitFor(() => reads.count() >= 2, "the relaunch's read");
+      staleRead.resolve(await passes[0]());
+      await sleep(50);
+      await settle();
+      relaunchRead.resolve(await passes[1]());
+      relaunchResult = await relaunched;
+      await settle();
+    } finally {
+      reads.restore();
+    }
+
+    expect(relaunchResult).toBe("ok");
+    expect(children).toHaveLength(2);
+    expect(sup.status().running).toBe(true);
+  });
+
+  it("a boot start() still rejects on a read failure", async () => {
+    // Pins the catch at the restart timer: `index.ts` reports a failed boot
+    // only because `start()` throws.
+    const { sup } = makeSupervisor();
+    const reads = interceptIntegrationsReads(() => Promise.reject(EPERM()));
+    try {
+      await expect(sup.start()).rejects.toMatchObject({ code: "EPERM" });
+    } finally {
+      reads.restore();
+    }
+  });
+
+  it("a persistent I/O error trips the breaker instead of looping", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const reads = interceptIntegrationsReads(() => Promise.reject(EPERM()));
+    try {
+      exitChild(children[0], 1);
+      await waitFor(
+        () => sup.status().running === false && "lastError" in sup.status(),
+        "the trip",
+      );
+      await sleep(100);
+      await settle();
+    } finally {
+      reads.restore();
+    }
+
+    expect(reads.count()).toBe(10);
+    expect(children).toHaveLength(1);
+    expect(sup.status()).toEqual({ running: false, lastError: "circuit-open" });
   });
 });
