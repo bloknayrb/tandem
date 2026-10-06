@@ -79,7 +79,7 @@ tauri-plugin-window-state = "2"
 # grant and no @tauri-apps/plugin-autostart npm dependency are needed.
 tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
-tauri-plugin-prevent-default = "5"
+tauri-plugin-prevent-default = "6"
 tauri-plugin-decorum = "1"
 
 # Windows-only DWM bindings: force rounded window corners (DWMWCP_ROUND) so
@@ -135,4 +135,4 @@ ui-inspector = ["dep:tauri-plugin-ui-inspector", "tauri/dynamic-acl"]
 
 [dev-dependencies]
 tempfile = "3"
-tauri-plugin-prevent-default = "5"
+tauri-plugin-prevent-default = "6"
