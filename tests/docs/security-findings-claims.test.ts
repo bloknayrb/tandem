@@ -122,7 +122,9 @@ function acceptedSubsection(): string {
 
 /** The single CLAUDE.md bullet that carries the count and the enumeration. */
 function claimBullet(): string {
-  const start = CLAUDE_MD.indexOf("security findings are open");
+  // Singular too: under ADR-056 one finding is open, and "One security
+  // findings are open" would be the price of a plural-only anchor.
+  const start = CLAUDE_MD.search(/security findings? (?:are|is) open/);
   expect(start, "CLAUDE.md no longer states an open-findings count").toBeGreaterThan(-1);
   const lineStart = CLAUDE_MD.lastIndexOf("\n", start) + 1;
   const lineEnd = CLAUDE_MD.indexOf("\n", start);
@@ -170,7 +172,8 @@ describe("open security-findings claims (CLAUDE.md vs docs/security.md)", () => 
 
     const word = NUMBER_WORDS[open.length];
     expect(word, `no number word for ${open.length} findings`).toBeTruthy();
-    expect(claimBullet()).toContain(`**${word} security findings are open`);
+    const phrase = open.length === 1 ? "security finding is open" : "security findings are open";
+    expect(claimBullet()).toContain(`**${word} ${phrase}`);
   });
 
   it("CLAUDE.md's ACCEPTED count word matches the register's Accepted subsection", () => {

@@ -567,6 +567,9 @@ pub(crate) fn cowork_toggle_integration(enabled: bool) -> Result<CoworkToggleRep
             // 127.0.0.1, so the rule buys nothing; but with a routable
             // TANDEM_BIND_HOST an install missing it is one the VM cannot
             // reach, advertised as working. Bailing is correct for both.
+            // (A routable bind also ships dark, under ADR-056, but the desktop
+            // sidecar pins 127.0.0.1 in its own code regardless, so no flag
+            // flip gives the VM a route to the desktop's server.)
             if let firewall::FirewallError::AdminDeclined = e {
                 // The firewall rule needs elevation Tandem does not have (it never
                 // runs elevated, so no UAC prompt ever appears). Do NOT attempt a
@@ -725,7 +728,7 @@ pub(crate) fn cowork_toggle_integration(enabled: bool) -> Result<CoworkToggleRep
         // the server binds 127.0.0.1 only, so a leftover rule is inert. This aligns with
         // reconcile_orphan_firewall_rules (cowork_installer.rs), which already treats remove
         // failures as non-fatal. (Caveat: leaving the rule is inert only under the default
-        // loopback bind; a future TANDEM_BIND_HOST=routable + stale VM-CIDR rule is an
+        // loopback bind; a future TANDEM_BIND_HOST=routable (dark under ADR-056) + stale VM-CIDR rule is an
         // untested composition. A later enable *may* clear it via reconcile_orphan_firewall_rules, but
         // that's best-effort — reconcile returns early if its scan fails — and the leftover
         // is an inert allow rule, not a missing protection.)

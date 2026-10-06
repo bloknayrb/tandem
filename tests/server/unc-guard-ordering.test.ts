@@ -1,3 +1,4 @@
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import fsp from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,6 +51,30 @@ describe("assertPathSafe rejects UNC before any filesystem call (#1417)", () => 
   it("still accepts an ordinary local path under an allowed root", () => {
     // The guard must not have become a blanket refusal.
     expect(() => assertPathSafe(process.cwd(), { allowedRoots: [process.cwd()] })).not.toThrow();
+  });
+
+  it("refuses a junction planted as the path itself without following it first", () => {
+    // `existsSync` follows a reparse point; `lstatSync` does not. The guard
+    // used to call the first and then the second, so a junction at the path
+    // itself (one pointed at a share, in the real attack) was traversed before
+    // it was refused. A real junction, not a mock: what matters is which call
+    // the guard makes on it. `"junction"` needs no privilege on Windows and is
+    // ignored elsewhere, where it makes a directory symlink.
+    const base = mkdtempSync(join(tmpdir(), "tandem-junction-"));
+    try {
+      const target = join(base, "real");
+      const link = join(base, "link");
+      mkdirSync(target);
+      symlinkSync(target, link, "junction");
+      _existsSyncSpy.mockClear();
+
+      expect(() => assertPathSafe(link, { allowedRoots: [base] })).toThrow(
+        expect.objectContaining({ name: "PathRejectedError", reason: "symlink" }),
+      );
+      expect(_existsSyncSpy).not.toHaveBeenCalledWith(link);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });
 

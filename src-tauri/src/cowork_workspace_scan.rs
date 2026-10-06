@@ -1,8 +1,11 @@
 //! Cowork workspace path discovery.
 //!
-//! Walks `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\
-//! local-agent-mode-sessions\<workspace-id>\<vm-id>\` and returns the list of
-//! VM-level directories that are safe to write Cowork plugin-registry files into.
+//! Walks `<sessions-root>\<workspace-id>\<vm-id>\` under every Claude Desktop
+//! sessions root (the MSIX `%LOCALAPPDATA%\Packages\<claude-package>\LocalCache\
+//! Roaming\Claude\local-agent-mode-sessions` and the direct-install
+//! `%APPDATA%\Claude\local-agent-mode-sessions`, see [`roots_under`]) and
+//! returns the list of VM-level directories that are safe to write Cowork
+//! plugin-registry files into.
 //!
 //! **Security invariant §3 — defense-in-depth path guard:**
 //! Every candidate path goes through four checks (in order):
@@ -189,8 +192,9 @@ pub(crate) fn clear_snapshot_for_test() {
 /// cloud-synced AppData setups get honest messaging ("found but can't safely
 /// configure") instead of a perpetual "no workspace yet".
 ///
-/// `rejected_by_shape` counts expected non-workspace siblings (e.g.
-/// `skills-plugin\…` under the Roaming root) and is log-only.
+/// `rejected_by_shape` counts expected non-workspace siblings and is log-only.
+/// `skills-plugin\<uuid>` counts here only while it has no `cowork_plugins` dir
+/// (see [`workspace_shape_ok`]).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ScanStats {
     pub rejected_by_guard: usize,
@@ -365,9 +369,12 @@ fn is_uuid_like(name: &str) -> bool {
 /// (forward-compat escape hatch if a future Claude Desktop renames session
 /// dirs; the marker branch can only widen the UUID branch, never narrow it).
 ///
-/// Non-workspace siblings under the Roaming root — e.g.
-/// `skills-plugin\<uuid>\<uuid>` — fail both branches and are skipped, which
-/// prevents plugin-registry files from being written into them.
+/// A non-workspace sibling such as `skills-plugin\<uuid>` (at the
+/// `<ws>\<vm>` level) fails the UUID branch, so it is skipped **only while it
+/// has no `cowork_plugins` dir**. Measured 2026-10-05 on a past enabler's
+/// machine: `skills-plugin\<uuid>\cowork_plugins` existed and held Tandem
+/// entries, so the marker branch admits it. The CLI scrub
+/// (`src/cli/uninstall-scrub.ts`) relies on reaching it for that reason (#2136).
 fn workspace_shape_ok(vm_path: &Path) -> bool {
     let vm_name = vm_path
         .file_name()
