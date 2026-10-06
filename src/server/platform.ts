@@ -167,8 +167,10 @@ export function resolveProbeHost(
  * SIGKILLing a live instance is not.
  *
  * `schedule` exists so the absence tests run in ~150ms rather than ~3.5s;
- * `host` defaults to {@link resolveProbeHost}. No production call site passes
- * either.
+ * `host` defaults to {@link resolveProbeHost}. Both production call sites
+ * pass `host`, resolved from the bind host `main()` decided (ADR-056), so none
+ * relies on the env-reading default: stdio mode ignores a non-loopback value
+ * that the default would still read.
  */
 export async function probeTandemInstance(
   mcpPort: number,
