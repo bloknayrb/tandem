@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The "Enable Cowork" setup is gone from the Windows desktop app (ADR-055, #2134).** The Settings toggle, the integration wizard's Cowork row and the tutorial's Cowork step are no longer shown. The connection that setup built was never verified against how the desktop app now runs its server, so v1.0 will not offer it. **If you turned Cowork on in an earlier version, the update removes nothing:** the Tandem entries in your Cowork workspaces stay, and so does the firewall rule if one was ever added, but Tandem no longer adds entries to new workspaces and there is no in-app switch to turn it off. Under the desktop app those leftovers expose nothing, because its server listens on this computer only. Uninstalling the desktop app removes the workspace entries; a firewall rule may need removing by hand. `docs/data-locations.md` lists what is left and how to remove it.
 
+### Fixed
+
+- **Tandem no longer exits when the launcher restarts Claude after a crash and cannot read `integrations.json` (#2125).** Something holding the file at that moment, such as antivirus or a sync client, used to stop the whole server. The launcher now retries with its usual crash-loop backoff. A file that can't be fixed by a retry, such as one written by a newer Tandem, stops the launcher until you click Restart, which shows the reason. Also fixed: clicking Restart at the moment the launcher was restarting Claude after a crash could start Claude from the old settings and report your Restart as failed.
+
 ## [0.28.0] - 2026-09-25
 
 ### What's New
