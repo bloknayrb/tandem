@@ -627,8 +627,10 @@ export function assertPathSafe(targetPath: string, opts: { allowedRoots?: string
   // reparse point at `cursor`, so a junction planted as the path itself (a
   // `%APPDATA%` folder pointed at `\\host\share`, say) was traversed — an SMB
   // call — before the symlink test below could refuse it (#2143 review). Any
-  // `lstat` failure reads as "not there", which is what `existsSync` returned
-  // for it, and the walk moves up.
+  // `lstat` failure reads as "not there" and the walk moves up to validate the
+  // parent; the write that follows fails on its own if the path really is
+  // unreadable. A dangling link at the path, which `existsSync` reported as
+  // absent and walked past, is now refused as the symlink it is.
   let cursor = targetPath;
   let existing: string | null = null;
   while (true) {

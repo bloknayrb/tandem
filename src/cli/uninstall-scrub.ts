@@ -899,6 +899,43 @@ export async function removeAutostartEntry(
   return 0;
 }
 
+/**
+ * Remove Tandem's entries from one workspace's three plugin files. Returns
+ * false on an I/O failure (already logged as an error), true otherwise.
+ *
+ * Each outcome is logged, as `scrubMcpConfigs` does, so the log tells
+ * "removed Tandem's entries" from "found none". `rewriteJson` also returns
+ * false for a file it could not read or parse (already warned), so "none" is
+ * claimed only when nothing warned, and a failure part-way through still
+ * reports what it had removed.
+ */
+export async function scrubCoworkWorkspace(ws: string, logger: ScrubLogger): Promise<boolean> {
+  const pluginsDir = path.join(ws, "cowork_plugins");
+  const changed: string[] = [];
+  const warningsBefore = logger.warnings();
+  let ok = true;
+  try {
+    for (const [file, mutate] of [
+      ["installed_plugins.json", removeInstalledPlugins],
+      ["known_marketplaces.json", removeKnownMarketplaces],
+      ["cowork_settings.json", removeCoworkSettings],
+    ] as const) {
+      if (await rewriteJson(path.join(pluginsDir, file), mutate, logger)) {
+        changed.push(file);
+      }
+    }
+  } catch (err) {
+    logger.error(`scrub failed for ${ws}: ${(err as Error).message}`);
+    ok = false;
+  }
+  if (changed.length > 0) {
+    logger.info(`removed Tandem entries from ${changed.join(", ")} in ${ws}`);
+  } else if (ok && logger.warnings() === warningsBefore) {
+    logger.info(`no Tandem entries in ${ws}`);
+  }
+  return ok;
+}
+
 export async function runUninstallScrub(): Promise<number> {
   const logger = await openLogger();
 
@@ -909,32 +946,8 @@ export async function runUninstallScrub(): Promise<number> {
 
   try {
     if (isWindows) {
-      const workspaces = await findCoworkWorkspaces(logger);
-      for (const ws of workspaces) {
-        const pluginsDir = path.join(ws, "cowork_plugins");
-        try {
-          // Each result logged, as `scrubMcpConfigs` does: without it the log
-          // could not tell "removed Tandem's entries" from "found none" from a
-          // mutator that matched nothing.
-          const changed: string[] = [];
-          for (const [file, mutate] of [
-            ["installed_plugins.json", removeInstalledPlugins],
-            ["known_marketplaces.json", removeKnownMarketplaces],
-            ["cowork_settings.json", removeCoworkSettings],
-          ] as const) {
-            if (await rewriteJson(path.join(pluginsDir, file), mutate, logger)) {
-              changed.push(file);
-            }
-          }
-          logger.info(
-            changed.length > 0
-              ? `removed Tandem entries from ${changed.join(", ")} in ${ws}`
-              : `no Tandem entries in ${ws}`,
-          );
-        } catch (err) {
-          logger.error(`scrub failed for ${ws}: ${(err as Error).message}`);
-          failures++;
-        }
+      for (const ws of await findCoworkWorkspaces(logger)) {
+        if (!(await scrubCoworkWorkspace(ws, logger))) failures++;
       }
     } else {
       logger.info(`platform ${process.platform}: Cowork + firewall scrub is Windows-only`);

@@ -349,6 +349,99 @@ describe("rewriteJson — takes the Cowork lock (#1600)", () => {
   });
 });
 
+// ── scrubCoworkWorkspace: what the log says per workspace ─────────────────────
+
+describe("scrubCoworkWorkspace", () => {
+  const WS = path.join("/fake", "ws", "vm");
+  const file = (name: string) => path.join(WS, "cowork_plugins", name);
+
+  /** A logger that counts warnings, as the real one does. */
+  function countingLogger() {
+    let warns = 0;
+    return {
+      info: vi.fn(),
+      warn: vi.fn(() => {
+        warns++;
+      }),
+      error: vi.fn(),
+      warnings: () => warns,
+      close: async () => {},
+    };
+  }
+
+  /** `readFile` content by file name; anything unlisted is ENOENT. */
+  function withFiles(contents: Record<string, string>): void {
+    _readFileSpy.mockImplementation(async (p: string) => {
+      const name = path.basename(p);
+      if (name in contents) return contents[name];
+      throw makeNotFoundError();
+    });
+  }
+
+  beforeEach(() => {
+    _readFileSpy.mockReset();
+    _writeFileSpy.mockReset().mockResolvedValue(undefined);
+    _renameSpy.mockReset().mockResolvedValue(undefined);
+    _openSpy.mockReset().mockResolvedValue({ close: _closeSpy });
+  });
+
+  it("names the files it removed Tandem entries from", async () => {
+    withFiles({
+      "installed_plugins.json": JSON.stringify({ mcpServers: { tandem: {} } }),
+      "cowork_settings.json": JSON.stringify({ enabledPlugins: ["tandem@tandem"] }),
+    });
+    const logger = countingLogger();
+    const { scrubCoworkWorkspace } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await scrubCoworkWorkspace(WS, logger)).toBe(true);
+    expect(logger.info).toHaveBeenCalledWith(
+      `removed Tandem entries from installed_plugins.json, cowork_settings.json in ${WS}`,
+    );
+  });
+
+  it("says 'no Tandem entries' only when every file was actually checked", async () => {
+    withFiles({ "installed_plugins.json": JSON.stringify({ mcpServers: {} }) });
+    const logger = countingLogger();
+    const { scrubCoworkWorkspace } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await scrubCoworkWorkspace(WS, logger)).toBe(true);
+    expect(logger.info).toHaveBeenCalledWith(`no Tandem entries in ${WS}`);
+  });
+
+  it("does not claim 'no Tandem entries' for a file it could not parse", async () => {
+    // `rewriteJson` returns false for an unreadable file as well as for a clean
+    // one; the warning above is the truth, and the summary must not contradict it.
+    withFiles({ "installed_plugins.json": '{"mcpServers": {"tandem"' });
+    const logger = countingLogger();
+    const { scrubCoworkWorkspace } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await scrubCoworkWorkspace(WS, logger)).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(file("installed_plugins.json")),
+    );
+    expect(logger.info).not.toHaveBeenCalledWith(`no Tandem entries in ${WS}`);
+  });
+
+  it("still reports what it removed when a later file fails", async () => {
+    withFiles({
+      "installed_plugins.json": JSON.stringify({ mcpServers: { tandem: {} } }),
+      "known_marketplaces.json": JSON.stringify({ marketplaces: { tandem: {} } }),
+    });
+    _openSpy.mockReset();
+    _openSpy
+      .mockResolvedValueOnce({ close: _closeSpy })
+      .mockRejectedValueOnce(Object.assign(new Error("EACCES"), { code: "EACCES" }));
+    const logger = countingLogger();
+    const { scrubCoworkWorkspace } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await scrubCoworkWorkspace(WS, logger)).toBe(false);
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining(`scrub failed for ${WS}`));
+    expect(logger.info).toHaveBeenCalledWith(
+      `removed Tandem entries from installed_plugins.json in ${WS}`,
+    );
+  });
+});
+
 // ── findCoworkWorkspaces: both roots, no-follow descent (#1417, #2136) ────────
 
 /**
@@ -528,6 +621,18 @@ describe("findCoworkWorkspaces", () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(`cannot read ${SESSIONS}`));
     // Absence alone stays below a warning.
     expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining(ROAMING_CLAUDE));
+  });
+
+  it("warns when a folder lstats as a directory but cannot be listed", async () => {
+    _readdirSpy.mockImplementation(async (p: string) => {
+      if (p === SESSIONS) {
+        throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" });
+      }
+      return tree[p] ?? [];
+    });
+
+    expect(await scan()).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(`cannot read ${SESSIONS}`));
   });
 
   it("refuses a junction planted as cowork_plugins", async () => {
