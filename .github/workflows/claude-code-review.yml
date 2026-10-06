@@ -31,7 +31,7 @@ jobs:
         with:
           fetch-depth: 1 # bundled /code-review skill uses `gh pr diff`; no history needed
 
-      - uses: anthropics/claude-code-action@7b0b255830a1fab6e602658672acad11c12d841d # v1.0.226
+      - uses: anthropics/claude-code-action@cab360f6565aa35a51d6ce9e43f1f4287c0a32ea # v1.0.241
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
