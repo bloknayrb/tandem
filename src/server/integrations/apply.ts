@@ -580,7 +580,7 @@ function realpathCached(p: string): string {
  *
  * It uses the STRICT shared predicate, so `\\?\C:\…` is refused too — unlike
  * `src/cli/win-path-guard.ts`, which permits that prefix because containment
- * under %LOCALAPPDATA% confines it. Deliberate: this function's allowed-roots
+ * under its scan root confines it. Deliberate: this function's allowed-roots
  * test compares against `realpath`'d roots, and an extended-length spelling
  * would not match them, so admitting the prefix would produce a confusing
  * "outside-home" rejection one step later rather than a clear one here. The
@@ -622,11 +622,25 @@ export function assertPathSafe(targetPath: string, opts: { allowedRoots?: string
   // `lstat` a path that may not exist yet (e.g., apply will create the
   // parent dir). Walk up until we find an existing ancestor and validate
   // there — if any walked-through component is a symlink, fail.
+  //
+  // `lstatSync` alone, never `existsSync` first: `existsSync` FOLLOWS a
+  // reparse point at `cursor`, so a junction planted as the path itself (a
+  // `%APPDATA%` folder pointed at `\\host\share`, say) was traversed — an SMB
+  // call — before the symlink test below could refuse it (#2143 review). Any
+  // `lstat` failure reads as "not there" and the walk moves up to validate the
+  // parent; the write that follows fails on its own if the path really is
+  // unreadable. A dangling link at the path, which `existsSync` reported as
+  // absent and walked past, is now refused as the symlink it is.
   let cursor = targetPath;
   let existing: string | null = null;
   while (true) {
-    if (existsSync(cursor)) {
-      const st = lstatSync(cursor);
+    let st: ReturnType<typeof lstatSync> | undefined;
+    try {
+      st = lstatSync(cursor);
+    } catch {
+      st = undefined;
+    }
+    if (st) {
       if (st.isSymbolicLink()) {
         throw new PathRejectedError(
           targetPath,
@@ -828,8 +842,9 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
     try {
       // (#1417) `readdirSync` and `existsSync` FOLLOW reparse points, and this
       // walks the same `%LOCALAPPDATA%\Packages\Claude_*` tree that
-      // `findCoworkWorkspaces` walks — the tree the reachable instance of #1417
-      // was found in. A junction planted at either level by any process running
+      // `findCoworkWorkspaces` walks (one of its two roots) — the tree the
+      // reachable instance of #1417 was found in. A junction planted at either
+      // level by any process running
       // as the user redirects the call to a share. `lstatSync` does not follow,
       // so screening each level before reading it is what closes the window;
       // the env-var screen above cannot, because the hostile part of the path is

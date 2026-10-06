@@ -1133,12 +1133,11 @@ const HOME_CLAUDE_JSON = `~/.${"claude"}.json`;
  */
 /**
  * Hostnames a `tandem` MCP url may name without a warn. The server binds
- * `127.0.0.1` by default, so anything else is unreachable, somebody else's
- * machine, or — the one case doctor cannot tell apart from its own shell — a
- * deliberate `TANDEM_BIND_HOST` LAN bind. The warn's wording carries that
- * caveat; the set does not widen for it, because doctor has no way to learn
- * the bind host and a LAN IP it cannot verify is exactly the shape it must
- * not certify green.
+ * `127.0.0.1`, so anything else is unreachable or somebody else's machine.
+ * (A deliberate `TANDEM_BIND_HOST` LAN bind was a third case until ADR-056
+ * shipped that bind dark; the set never widened for it, because doctor has no
+ * way to learn the bind host and a LAN IP it cannot verify is exactly the
+ * shape it must not certify green.)
  *
  * `TAURI_HOSTNAME` is deliberately NOT here (round-2 review). It was, on the
  * grounds that the desktop WebView's own origin is that name — but this arm
@@ -1235,19 +1234,15 @@ function validateUserTandemEntry(
   // governs every part of this url, and an internal host name is exactly the
   // kind of thing the Report-a-bug prefill must not carry into a public issue.
   //
-  // Still a warn, never a pass — but the sentence must be TRUE. The server
-  // listens on loopback only by DEFAULT: `TANDEM_BIND_HOST` (docs/configuration.md)
-  // binds it to a LAN address, and `server.ts` then puts the resolved LAN IP
-  // into the SDK's `allowedHosts`, so an entry naming that IP is a working
-  // setup. Doctor runs in the user's shell, which need not carry the server's
-  // env, so it cannot know which case this is — it says so rather than
-  // asserting "loopback-only" and prescribing a rewrite that breaks the LAN one.
+  // Still a warn, never a pass. Under ADR-056 the server refuses a
+  // non-loopback `TANDEM_BIND_HOST`, so no release build serves this url and
+  // the remedy is unconditional (re-enable item 6 restores the condition).
   if (!LOOPBACK_MCP_HOSTNAMES.has(parsed.hostname)) {
     return {
-      message: `${HOME_CLAUDE_JSON} tandem: url names a non-loopback host — Tandem's MCP server listens on loopback unless it was started with TANDEM_BIND_HOST`,
+      message: `${HOME_CLAUDE_JSON} tandem: url names a non-loopback host — Tandem's MCP server listens on this computer only`,
       // Not `setupApplyRemedy`: it rewrites the url at the DEFAULT port, so on
       // a moved MCP port it trades this warn for the port one below.
-      fix: `If Tandem was not started with TANDEM_BIND_HOST, edit the tandem entry's url in ${HOME_CLAUDE_JSON} to point at 127.0.0.1:${mcpPort} — a remote host on that port is not this Tandem.`,
+      fix: `Edit the tandem entry's url in ${HOME_CLAUDE_JSON} to point at 127.0.0.1:${mcpPort} — a remote host on that port is not this Tandem.`,
     };
   }
 

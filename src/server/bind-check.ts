@@ -2,12 +2,70 @@
  * Bind-mode safety checks for TANDEM_BIND_HOST.
  *
  * Extracted from index.ts main() so the logic is fully unit-testable without
- * spawning a process. index.ts calls checkBindConfig(), acts on the result,
- * then passes resolvedLanIP to startMcpServerHttp for the Host-header allowlist.
+ * spawning a process. index.ts first calls resolveBindHostEnv() (the ADR-056
+ * dark refusal), then checkBindConfig() on the host it decided, and passes
+ * resolvedLanIP to startMcpServerHttp for the Host-header allowlist.
  */
 
 import type { NetworkInterfaceInfo } from "os";
 import { networkInterfaces as osNetworkInterfaces } from "os";
+import { DEFAULT_BIND_HOST } from "../shared/constants.js";
+
+/**
+ * What to do with `TANDEM_BIND_HOST` before anything else in `main()` runs.
+ *
+ * - `use`: the value goes on to the IP validation and {@link checkBindConfig}.
+ *   Lit, exactly as before; dark, an empty value has become the default.
+ * - `refuse`: HTTP mode would listen beyond this computer, which ADR-056 ships
+ *   dark. The caller prints `message` and exits 1 before probing, claiming the
+ *   app-data dir or taking the store lock, so there is nothing to undo.
+ * - `ignore`: stdio mode never listens on the bind host (only Hocuspocus
+ *   listens, hardcoded to loopback), so a non-loopback value exposes nothing
+ *   and refusing would only break an MCP client's start. The value is replaced
+ *   with the loopback default, which also keeps the token and multi-homed
+ *   checks from firing on a bind that never happens.
+ *
+ * Messages quote the value with `JSON.stringify`, so a newline or padding in
+ * it shows up rather than forging or hiding a log line.
+ */
+export type BindHostDecision =
+  | { kind: "use"; bindHost: string }
+  | { kind: "refuse"; message: string }
+  | { kind: "ignore"; bindHost: string; message: string };
+
+export function resolveBindHostEnv(opts: {
+  /** `process.env.TANDEM_BIND_HOST`, unread and untrimmed. */
+  raw: string | undefined;
+  /** `TANDEM_TRANSPORT`, lowercased. Anything but `"http"` runs the stdio branch. */
+  transportMode: string;
+  lanBindEnabled: boolean;
+}): BindHostDecision {
+  const { raw, transportMode, lanBindEnabled } = opts;
+
+  // Lit: byte-identical to the read this replaced (`??`, so an empty value
+  // still reaches the IP validation and is rejected there).
+  if (lanBindEnabled) return { kind: "use", bindHost: raw ?? DEFAULT_BIND_HOST };
+
+  // Dark: an empty value is treated as unset, as `resolveProbeHost` already does.
+  if (!raw || !isNonLoopback(raw)) return { kind: "use", bindHost: raw || DEFAULT_BIND_HOST };
+
+  if (transportMode === "http") {
+    return {
+      kind: "refuse",
+      message:
+        `[tandem] TANDEM_BIND_HOST=${JSON.stringify(raw)} is not supported in this version: ` +
+        `Tandem listens on this computer only (ADR-056). ` +
+        `Unset it, or set it to 127.0.0.1, localhost or ::1, and start again.\n`,
+    };
+  }
+  return {
+    kind: "ignore",
+    bindHost: DEFAULT_BIND_HOST,
+    message:
+      `[tandem] Ignoring TANDEM_BIND_HOST=${JSON.stringify(raw)}: Tandem listens on this ` +
+      `computer only in this version (ADR-056), and stdio mode does not listen on it.\n`,
+  };
+}
 
 export interface BindCheckOptions {
   /** The value of TANDEM_BIND_HOST (or DEFAULT_BIND_HOST if not set). */

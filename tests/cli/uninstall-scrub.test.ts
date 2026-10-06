@@ -349,48 +349,170 @@ describe("rewriteJson — takes the Cowork lock (#1600)", () => {
   });
 });
 
-// ── findCoworkWorkspaces: no-follow descent (#1417) ───────────────────────────
+// ── scrubCoworkWorkspace: what the log says per workspace ─────────────────────
+
+describe("scrubCoworkWorkspace", () => {
+  const WS = path.join("/fake", "ws", "vm");
+  const file = (name: string) => path.join(WS, "cowork_plugins", name);
+
+  /** A logger that counts warnings, as the real one does. */
+  function countingLogger() {
+    let warns = 0;
+    return {
+      info: vi.fn(),
+      warn: vi.fn(() => {
+        warns++;
+      }),
+      error: vi.fn(),
+      warnings: () => warns,
+      close: async () => {},
+    };
+  }
+
+  /** `readFile` content by file name; anything unlisted is ENOENT. */
+  function withFiles(contents: Record<string, string>): void {
+    _readFileSpy.mockImplementation(async (p: string) => {
+      const name = path.basename(p);
+      if (name in contents) return contents[name];
+      throw makeNotFoundError();
+    });
+  }
+
+  beforeEach(() => {
+    _readFileSpy.mockReset();
+    _writeFileSpy.mockReset().mockResolvedValue(undefined);
+    _renameSpy.mockReset().mockResolvedValue(undefined);
+    _openSpy.mockReset().mockResolvedValue({ close: _closeSpy });
+  });
+
+  afterEach(() => {
+    // `withFiles` installs a per-test implementation on a module-level spy;
+    // leaving it would hand the next describe block this one's files.
+    _readFileSpy.mockReset();
+    _openSpy.mockReset().mockResolvedValue({ close: _closeSpy });
+  });
+
+  it("names the files it removed Tandem entries from", async () => {
+    withFiles({
+      "installed_plugins.json": JSON.stringify({ mcpServers: { tandem: {} } }),
+      "cowork_settings.json": JSON.stringify({ enabledPlugins: ["tandem@tandem"] }),
+    });
+    const logger = countingLogger();
+    const { scrubCoworkWorkspace } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await scrubCoworkWorkspace(WS, logger)).toBe(true);
+    expect(logger.info).toHaveBeenCalledWith(
+      `removed Tandem entries from installed_plugins.json, cowork_settings.json in ${WS}`,
+    );
+  });
+
+  it("says 'no Tandem entries' for a clean workspace", async () => {
+    withFiles({ "installed_plugins.json": JSON.stringify({ mcpServers: {} }) });
+    const logger = countingLogger();
+    const { scrubCoworkWorkspace } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await scrubCoworkWorkspace(WS, logger)).toBe(true);
+    expect(logger.info).toHaveBeenCalledWith(`no Tandem entries in ${WS}`);
+  });
+
+  it("does not claim 'no Tandem entries' for a file it could not parse", async () => {
+    // `rewriteJson` returns false for an unreadable file as well as for a clean
+    // one; the warning above is the truth, and the summary must not contradict it.
+    withFiles({ "installed_plugins.json": '{"mcpServers": {"tandem"' });
+    const logger = countingLogger();
+    const { scrubCoworkWorkspace } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await scrubCoworkWorkspace(WS, logger)).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(file("installed_plugins.json")),
+    );
+    expect(logger.info).not.toHaveBeenCalledWith(`no Tandem entries in ${WS}`);
+  });
+
+  it("still reports what it removed when a later file fails", async () => {
+    withFiles({
+      "installed_plugins.json": JSON.stringify({ mcpServers: { tandem: {} } }),
+      "known_marketplaces.json": JSON.stringify({ marketplaces: { tandem: {} } }),
+    });
+    _openSpy.mockReset();
+    _openSpy
+      .mockResolvedValueOnce({ close: _closeSpy })
+      .mockRejectedValueOnce(Object.assign(new Error("EACCES"), { code: "EACCES" }));
+    const logger = countingLogger();
+    const { scrubCoworkWorkspace } = await import("../../src/cli/uninstall-scrub.js");
+
+    expect(await scrubCoworkWorkspace(WS, logger)).toBe(false);
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining(`scrub failed for ${WS}`));
+    expect(logger.info).toHaveBeenCalledWith(
+      `removed Tandem entries from installed_plugins.json in ${WS}`,
+    );
+  });
+});
+
+// ── findCoworkWorkspaces: both roots, no-follow descent (#1417, #2136) ────────
 
 /**
- * These assert the SYSCALL, not the return value.
+ * The descent rows assert the SYSCALL, not just the return value.
  *
- * The bug being pinned is that `readdir`/`stat` **follow** reparse points, so a
- * junction planted anywhere on the four-level descent leaked an SMB handshake
- * before `assertSafeWorkspacePath` at the bottom got a say. Here the result is
- * `[]` either way — see `tests/helpers/unc-fixtures.ts` for why that makes the
- * return value worthless as an observable.
+ * The bug those pin is that `readdir`/`stat` **follow** reparse points, so a
+ * junction planted anywhere on the descent leaked an SMB handshake before
+ * `assertSafeWorkspacePath` at the bottom got a say. There the result is `[]`
+ * either way — see `tests/helpers/unc-fixtures.ts` for why that makes the
+ * return value worthless as an observable. The #2136 rows are the opposite
+ * case: the return value IS the bug (a root never scanned), so they assert it.
  */
-describe("findCoworkWorkspaces reparse-point handling", () => {
-  // Anchored under the real homedir because `usableLocalAppData` runs the real
+describe("findCoworkWorkspaces", () => {
+  // Anchored under the real homedir because `usableEnvDir` runs the real
   // (unmocked, sync) `assertPathSafe`, which requires containment there. No
   // directory has to exist: that guard walks up to the first existing ancestor.
   const FAKE_LAD = path.join(homedir(), "AppData", "Local");
+  const FAKE_APPDATA = path.join(homedir(), "AppData", "Roaming");
   const PACKAGES = path.join(FAKE_LAD, "Packages");
-  const SESSIONS = path.join(
-    PACKAGES,
-    "Claude_abc",
-    "LocalCache",
-    "Roaming",
-    "Claude",
-    "local-agent-mode-sessions",
-  );
+  const msixSessions = (pkg: string) =>
+    path.join(PACKAGES, pkg, "LocalCache", "Roaming", "Claude", "local-agent-mode-sessions");
+  const SESSIONS = msixSessions("Claude_abc");
   const WS = path.join(SESSIONS, "ws1");
   const VM = path.join(WS, "vm1");
+
+  // Root B, the direct-install layout. UUID names because that is the observed
+  // shape there; the scan does not depend on it.
+  const ROAMING_CLAUDE = path.join(FAKE_APPDATA, "Claude");
+  const SESSIONS_B = path.join(ROAMING_CLAUDE, "local-agent-mode-sessions");
+  const WS_B = path.join(SESSIONS_B, "0c2a7e52-1f3b-4c8d-9e0a-5b6c7d8e9f01");
+  const VM_B = path.join(WS_B, "7d1e4b2a-6c3f-4a9e-8b0d-2f1e3c4b5a69");
 
   const dir = () => ({ isSymbolicLink: () => false, isDirectory: () => true });
   const junction = () => ({ isSymbolicLink: () => true, isDirectory: () => false });
 
+  /** `readdir` results by path; anything unlisted reads as empty. */
+  let tree: Record<string, string[]>;
+  /** Paths that `lstat` as a junction. */
+  let planted: Set<string>;
+  /** Paths that `lstat` as ENOENT. Everything else is a plain directory. */
+  let absent: Set<string>;
   let logger: { info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
     for (const spy of [_readdirSpy, _lstatSpy, _realpathSpy, _statSpy]) spy.mockReset();
+    // Both stubbed, always: an unstubbed `%APPDATA%` is the host's real one on
+    // a Windows box and unset on Linux CI, so the same row would scan a
+    // different set of roots depending on where it ran.
     vi.stubEnv("LOCALAPPDATA", FAKE_LAD);
+    vi.stubEnv("APPDATA", FAKE_APPDATA);
+    tree = {
+      [PACKAGES]: ["Claude_abc"],
+      [SESSIONS]: ["ws1"],
+      [WS]: ["vm1"],
+    };
+    planted = new Set();
+    // Root B absent unless a row calls `withRootB()`.
+    absent = new Set([ROAMING_CLAUDE]);
     _realpathSpy.mockImplementation(async (p: string) => p);
-    _readdirSpy.mockImplementation(async (p: string) => {
-      if (p === PACKAGES) return ["Claude_abc"];
-      if (p === SESSIONS) return ["ws1"];
-      if (p === WS) return ["vm1"];
-      return [];
+    _readdirSpy.mockImplementation(async (p: string) => tree[p] ?? []);
+    _lstatSpy.mockImplementation(async (p: string) => {
+      if (planted.has(p)) return junction();
+      if (absent.has(p)) throw makeNotFoundError();
+      return dir();
     });
     logger = { info: vi.fn(), warn: vi.fn() };
   });
@@ -399,82 +521,284 @@ describe("findCoworkWorkspaces reparse-point handling", () => {
     vi.unstubAllEnvs();
   });
 
-  /** Every path is a plain directory except `plantedAt`, which is a junction. */
-  function plantJunction(plantedAt: string | null): void {
-    _lstatSpy.mockImplementation(async (p: string) => (p === plantedAt ? junction() : dir()));
+  function withRootB(): void {
+    absent.delete(ROAMING_CLAUDE);
+    tree[SESSIONS_B] = [path.basename(WS_B)];
+    tree[WS_B] = [path.basename(VM_B)];
   }
 
-  it.each(NETWORK_PATHS)(
-    "refuses a UNC %%LOCALAPPDATA%% (%s) without reading anything",
-    async (_label, hostile) => {
-      // The screen the file's own docblock calls the consequential one: every
-      // path here is a `path.join` off this value, and the scrub runs during an
-      // MSIX uninstall that can be elevated. Nothing covered it, and deleting
-      // `usableLocalAppData`'s `assertPathSafe` left the whole suite green.
-      plantJunction(null);
-      vi.stubEnv("LOCALAPPDATA", hostile);
-      const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
+  /** No readdir/lstat/realpath call named anything containing `fragment`.
+   *  Matched by substring, because posix `path.join` normalises `//attacker/x`
+   *  to `/attacker/x`, which a `startsWith(hostile)` check would miss. */
+  function expectNoSyscallNaming(fragment: string): void {
+    for (const spy of [_readdirSpy, _lstatSpy, _realpathSpy]) {
+      expect(spy).not.toHaveBeenCalledWith(expect.stringContaining(fragment));
+    }
+  }
 
-      expect(await findCoworkWorkspaces(logger as never)).toEqual([]);
-      expect(_readdirSpy).not.toHaveBeenCalled();
-      expect(_lstatSpy).not.toHaveBeenCalled();
-      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("LOCALAPPDATA"));
+  async function scan(): Promise<string[]> {
+    const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
+    return findCoworkWorkspaces(logger as never);
+  }
+
+  // ── Which roots are scanned (#2136) ──
+
+  it("descends a clean chain and returns the validated workspace", async () => {
+    expect(await scan()).toEqual([VM]);
+  });
+
+  it("scans %APPDATA%\\Claude when no Claude package exists — the reported bug", async () => {
+    tree[PACKAGES] = [];
+    withRootB();
+
+    expect(await scan()).toEqual([VM_B]);
+    // The package-family line no longer ends the scan, and the log names the
+    // root it went on to read.
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("no Claude package directory read"),
+    );
+    expect(logger.info).toHaveBeenCalledWith(`scanning ${SESSIONS_B}`);
+    expect(logger.info).toHaveBeenCalledWith("found 1 workspace(s) in 1 sessions root(s)");
+  });
+
+  it("scans both roots when both exist", async () => {
+    withRootB();
+
+    expect(await scan()).toEqual([VM, VM_B]);
+  });
+
+  it("scans an AnthropicPBC.Claude* package as well as Claude_*", async () => {
+    const pkgSessions = msixSessions("AnthropicPBC.Claude_x");
+    tree[PACKAGES] = ["AnthropicPBC.Claude_x"];
+    tree[pkgSessions] = ["ws1"];
+    tree[path.join(pkgSessions, "ws1")] = ["vm1"];
+
+    expect(await scan()).toEqual([path.join(pkgSessions, "ws1", "vm1")]);
+  });
+
+  it("never descends into a package that only contains 'Claude'", async () => {
+    // Publisher-anchored on purpose: a foreign package could stage the
+    // sessions layout inside its own container and be handed the scrub.
+    tree[PACKAGES] = ["EvilCorp.TotallyClaude_x", "Claude_abc"];
+
+    // Positive control: the real package is still scanned.
+    expect(await scan()).toEqual([VM]);
+    expectNoSyscallNaming("EvilCorp");
+  });
+
+  // ── Which vm dirs count ──
+
+  it("returns a skills-plugin sibling that holds a cowork_plugins dir", async () => {
+    // Measured on a past enabler's machine (2026-10-05): this sibling's
+    // `cowork_plugins` held Tandem entries in all three files. A UUID-pair
+    // filter, as the Rust scan's first branch is, would leave them behind.
+    const skillsVm = path.join(SESSIONS, "skills-plugin", "ca28ad17-dcdb-4ea1-8178-8a8861613939");
+    tree[SESSIONS] = ["ws1", "skills-plugin"];
+    tree[path.join(SESSIONS, "skills-plugin")] = [path.basename(skillsVm)];
+
+    expect(await scan()).toEqual([VM, skillsVm]);
+  });
+
+  it("skips a vm dir with no cowork_plugins dir, counted in one line", async () => {
+    const marker = path.join(VM, "cowork_plugins");
+    absent.add(marker);
+
+    expect(await scan()).toEqual([]);
+    // One summary line, not one per sibling: a root can hold many.
+    expect(logger.info).toHaveBeenCalledWith(
+      "skipped 1 dir(s) with no usable cowork_plugins folder",
+    );
+    for (const spy of [logger.info, logger.warn]) {
+      expect(spy).not.toHaveBeenCalledWith(expect.stringContaining(marker));
+    }
+  });
+
+  it("warns, not just notes, when a folder exists but cannot be read", async () => {
+    // Absent is `info`; a permission-denied or locked folder leaves entries
+    // behind, so it must reach the summary's warning count.
+    _lstatSpy.mockImplementation(async (p: string) => {
+      if (p === SESSIONS) {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      }
+      if (absent.has(p)) throw makeNotFoundError();
+      return dir();
+    });
+
+    expect(await scan()).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(`cannot read ${SESSIONS}`));
+    // Absence alone stays below a warning.
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining(ROAMING_CLAUDE));
+  });
+
+  it("warns when a folder lstats as a directory but cannot be listed", async () => {
+    _readdirSpy.mockImplementation(async (p: string) => {
+      if (p === SESSIONS) {
+        throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" });
+      }
+      return tree[p] ?? [];
+    });
+
+    expect(await scan()).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(`cannot read ${SESSIONS}`));
+  });
+
+  it("refuses a junction planted as cowork_plugins", async () => {
+    // `rewriteJson` reads and locks files inside this dir, and `readFile` /
+    // `open` follow a junction there. Screening it here is what stops that.
+    const marker = path.join(VM, "cowork_plugins");
+    planted.add(marker);
+
+    expect(await scan()).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(`refusing to descend into reparse point: ${marker}`);
+  });
+
+  // ── Screening the env vars (#1417) ──
+
+  it.each(NETWORK_PATHS)(
+    "refuses a UNC LOCALAPPDATA (%s) without reading anything derived from it",
+    async (_label, hostile) => {
+      // Every root-A path is a `path.join` off this value. Nothing covered it,
+      // and deleting the `assertPathSafe` screen left the whole suite green.
+      withRootB();
+      vi.stubEnv("LOCALAPPDATA", hostile);
+
+      // Positive control, and the #2136 half: an unusable %LOCALAPPDATA% must
+      // not end the scan before %APPDATA% is read.
+      expect(await scan()).toEqual([VM_B]);
+      expectNoSyscallNaming("attacker");
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("%LOCALAPPDATA%"));
     },
   );
 
-  it("descends a clean chain and returns the validated workspace", async () => {
-    plantJunction(null);
-    const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
+  it.each(NETWORK_PATHS)(
+    "refuses a UNC APPDATA (%s) without reading anything derived from it",
+    async (_label, hostile) => {
+      vi.stubEnv("APPDATA", hostile);
 
-    expect(await findCoworkWorkspaces(logger as never)).toEqual([VM]);
+      // Positive control: root A is still scanned.
+      expect(await scan()).toEqual([VM]);
+      expectNoSyscallNaming("attacker");
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("%APPDATA%"));
+    },
+  );
+
+  it("refuses a local APPDATA outside the user folder, not just a UNC one", async () => {
+    // `assertPathSafe` rather than a bare UNC test is the whole reason
+    // `usableEnvDir` exists; a local path outside home is what tells them apart.
+    const outside = path.join(path.parse(homedir()).root, "tandem-outside-home-fixture", "x");
+    vi.stubEnv("APPDATA", outside);
+
+    expect(await scan()).toEqual([VM]);
+    expectNoSyscallNaming("tandem-outside-home-fixture");
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("%APPDATA% rejected"));
   });
+
+  // ── No-follow descent ──
 
   it.each([
     ["the Packages dir", PACKAGES],
     ["a Claude_* sessions root", SESSIONS],
     ["a workspace dir", WS],
-  ])("refuses to readdir through a junction at %s", async (_label, planted) => {
-    plantJunction(planted);
-    const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
+  ])("refuses to readdir through a junction at %s", async (_label, at) => {
+    planted.add(at);
 
-    expect(await findCoworkWorkspaces(logger as never)).toEqual([]);
+    expect(await scan()).toEqual([]);
     // The load-bearing assertion: the following call never happened.
-    expect(_readdirSpy).not.toHaveBeenCalledWith(planted);
+    expect(_readdirSpy).not.toHaveBeenCalledWith(at);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("reparse point"));
   });
 
   // **`path.join`, not a hardcoded separator**, and this is a correctness
-  // requirement rather than tidiness. `plantJunction` matches by string
-  // equality against the path `descendNoFollow` builds — with `path.join`. A
-  // backslash literal here matches on win32 and matches NOTHING on posix, so
-  // the junction is never planted, the descent runs clean, and the test asserts
-  // the guard works while never having exercised it. The first version of these
-  // four rows was written that way; it passed on Windows and CI caught it.
+  // requirement rather than tidiness. `planted` matches by string equality
+  // against the path `descendNoFollow` builds — with `path.join`. A backslash
+  // literal here matches on win32 and matches NOTHING on posix, so the junction
+  // is never planted, the descent runs clean, and the test asserts the guard
+  // works while never having exercised it. The first version of these rows was
+  // written that way; it passed on Windows and CI caught it.
+  //
+  // `lstat` declines to follow only the FINAL component, so screening an
+  // assembled sessions root checks one level and traverses the rest. All of
+  // these are user-writable. Each table keeps the OTHER root present as its
+  // positive control: a junction refuses one root and must not end the scan.
   it.each([
     ["a Claude_* package root", path.join(PACKAGES, "Claude_abc")],
     ["LocalCache", path.join(PACKAGES, "Claude_abc", "LocalCache")],
     ["Roaming", path.join(PACKAGES, "Claude_abc", "LocalCache", "Roaming")],
     ["Claude", path.join(PACKAGES, "Claude_abc", "LocalCache", "Roaming", "Claude")],
-  ])("refuses to traverse a junction at %s, mid-join", async (_label, planted) => {
-    // `lstat` declines to follow only the FINAL component, so screening the
-    // assembled six-segment `sessionsRoot` checked one level and traversed
-    // these four. All are user-writable and all sit inside the tree the
-    // reachable instance of #1417 lived in.
-    plantJunction(planted);
-    const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
+  ])("refuses to traverse a junction at the MSIX root's %s", async (_label, at) => {
+    withRootB();
+    planted.add(at);
 
-    expect(await findCoworkWorkspaces(logger as never)).toEqual([]);
+    expect(await scan()).toEqual([VM_B]);
     expect(_readdirSpy).not.toHaveBeenCalledWith(SESSIONS);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("reparse point"));
   });
 
-  it("refuses to stat a junction at the vm level", async () => {
-    plantJunction(VM);
-    const { findCoworkWorkspaces } = await import("../../src/cli/uninstall-scrub.js");
+  it.each([
+    ["Claude dir", ROAMING_CLAUDE],
+    ["sessions root", SESSIONS_B],
+  ])("refuses to traverse a junction at the APPDATA root's %s", async (_label, at) => {
+    withRootB();
+    planted.add(at);
 
-    expect(await findCoworkWorkspaces(logger as never)).toEqual([]);
+    expect(await scan()).toEqual([VM]);
+    expect(_readdirSpy).not.toHaveBeenCalledWith(SESSIONS_B);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("reparse point"));
+  });
+
+  it("refuses to stat a junction at the vm level", async () => {
+    planted.add(VM);
+
+    expect(await scan()).toEqual([]);
     // `stat` follows; the fix is that only `lstat` ever sees this path.
     expect(_statSpy).not.toHaveBeenCalled();
+    // And the vm is screened BEFORE its `cowork_plugins`: checking the marker
+    // first (the Rust order) would `lstat` through the junction.
+    expect(_lstatSpy).not.toHaveBeenCalledWith(path.join(VM, "cowork_plugins"));
+  });
+
+  // ── Containment ──
+
+  it("rejects a workspace that resolves outside its own sessions root", async () => {
+    // Inside %APPDATA% but outside the sessions root: only a sessions-root
+    // containment base rejects this. An env-var base would accept it.
+    withRootB();
+    tree[PACKAGES] = [];
+    const elsewhere = path.join(ROAMING_CLAUDE, "elsewhere", "a", "b");
+    _realpathSpy.mockImplementation(async (p: string) => (p === VM_B ? elsewhere : p));
+
+    expect(await scan()).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("outside the scan root"));
+  });
+
+  it("contains each workspace under the RESOLVED sessions root and returns resolved paths", async () => {
+    // An env var spelled with 8.3 short names, say: the sessions root resolves
+    // to a different string than the one the descent built. Containment must
+    // use the resolved one, or every resolved workspace reads as "outside" and
+    // the scrub leaves the token behind. Identity realpath in every other row
+    // could not tell `root.real` from `root.path`.
+    const resolvedSessions = path.join(homedir(), "AppData", "Local", "resolved-spelling", "s");
+    const resolvedVm = path.join(resolvedSessions, "ws1", "vm1");
+    _realpathSpy.mockImplementation(async (p: string) => {
+      if (p === SESSIONS) return resolvedSessions;
+      if (p === VM) return resolvedVm;
+      return p;
+    });
+
+    expect(await scan()).toEqual([resolvedVm]);
+  });
+
+  it("skips a sessions root whose realpath fails rather than using it unresolved", async () => {
+    withRootB();
+    tree[PACKAGES] = [];
+    _realpathSpy.mockImplementation(async (p: string) => {
+      if (p === SESSIONS_B) throw makeNotFoundError();
+      return p;
+    });
+
+    expect(await scan()).toEqual([]);
+    expect(_readdirSpy).not.toHaveBeenCalledWith(SESSIONS_B);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("cannot resolve"));
   });
 });
 
@@ -493,7 +817,7 @@ describe("assertSafeWorkspacePath", () => {
     vi.restoreAllMocks();
   });
 
-  it("accepts a valid path inside LOCALAPPDATA", async () => {
+  it("accepts a valid path inside the scan root", async () => {
     // lstat returns non-symlink for all components.
     _lstatSpy.mockResolvedValue(notSymlink());
     _realpathSpy.mockResolvedValue(VALID_PATH);
@@ -526,7 +850,7 @@ describe("assertSafeWorkspacePath", () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("symlink/reparse point"));
   });
 
-  it("rejects a path outside LOCALAPPDATA", async () => {
+  it("rejects a path outside the scan root", async () => {
     const outsidePath = "C:\\Users\\test\\AppData\\Roaming\\evil\\ws\\vm";
     _lstatSpy.mockResolvedValue(notSymlink());
     _realpathSpy.mockResolvedValue(outsidePath);
@@ -535,6 +859,6 @@ describe("assertSafeWorkspacePath", () => {
     const { assertSafeWorkspacePath } = await import("../../src/cli/win-path-guard.js");
     const result = await assertSafeWorkspacePath(outsidePath, FAKE_LAD, logger);
     expect(result).toBeNull();
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("outside %LOCALAPPDATA%"));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("outside the scan root"));
   });
 });

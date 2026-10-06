@@ -2,7 +2,7 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
 import { API_SCRATCHPAD } from "../shared/api-paths";
-import { BYO_MODELS_ENABLED } from "../shared/constants";
+import { BYO_MODELS_ENABLED, COWORK_ENABLED } from "../shared/constants";
 import { isUploadPath } from "../shared/paths";
 import type { Annotation, ChatMessage, TandemNotification } from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
@@ -2777,11 +2777,14 @@ const shouldShowModelPicker = $derived(
       }}
     />
 
-    {#if isTauriRuntime() && !shouldShowWizard}
+    {#if COWORK_ENABLED && isTauriRuntime() && !shouldShowWizard}
       <!-- Gated off while the wizard is open so only ONE createCoworkStatus
            poller is live at a time and the wizard's Cowork sub-view owns the
            declined state inline. On wizard close this re-mounts and re-derives
-           uacDeclined from its own poller (no App-level armed state). -->
+           uacDeclined from its own poller (no App-level armed state).
+           COWORK_ENABLED (ADR-055): this modal's poller runs unconditionally
+           once mounted, so the mount is what keeps a dark desktop build from
+           invoking cowork_get_status every 30 s. -->
       <CoworkAdminDeclinedModal />
     {/if}
 

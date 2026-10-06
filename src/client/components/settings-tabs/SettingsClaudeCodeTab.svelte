@@ -1,7 +1,11 @@
 <script lang="ts">
 import { onDestroy } from "svelte";
 import { API_LAUNCHER_WORKING_DIRECTORY } from "../../../shared/api-paths";
-import { SELECTION_DWELL_MAX_MS, SELECTION_DWELL_MIN_MS } from "../../../shared/constants";
+import {
+  COWORK_ENABLED,
+  SELECTION_DWELL_MAX_MS,
+  SELECTION_DWELL_MIN_MS,
+} from "../../../shared/constants";
 import {
   API_INTEGRATIONS_EXISTING,
   type ExistingMcpInstall,
@@ -276,7 +280,7 @@ function handleReset() {
 >
   Tandem connects to any MCP-capable AI client over its MCP endpoint. Claude (Claude Code and
   Claude Desktop) is the default integration — auto-configured, tested, and the only client whose
-  channel-push, cowork, and auto-launch extras are validated today. Other clients can connect
+  channel-push and auto-launch extras are validated today. Other clients can connect
   manually using the MCP endpoint on the Network tab.
 </p>
 
@@ -489,7 +493,7 @@ function handleReset() {
   {showConnectCallout ? "Open integration wizard…" : "Reopen integration wizard…"}
 </button>
 
-{#if isTauriRuntime()}
+{#if COWORK_ENABLED && isTauriRuntime()}
   {#await import("../CoworkSettings.svelte")}
     <div
       data-testid="settings-modal-cowork-suspense-fallback"

@@ -2,7 +2,7 @@
 
 A complete guide to using Tandem — from first launch to advanced workflows.
 
-> **Scope:** Examples use Claude Code as the default AI, per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). The editor itself is AI-client-agnostic — any MCP-capable client connecting to `http://127.0.0.1:3479/mcp` gets the same MCP tools. The Claude-specific transports (channel push, cowork, auto-launcher) don't apply to other clients.
+> **Scope:** Examples use Claude Code as the default AI, per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). The editor itself is AI-client-agnostic — any MCP-capable client connecting to `http://127.0.0.1:3479/mcp` gets the same MCP tools. The Claude-specific transports (channel push, auto-launcher) don't apply to other clients.
 
 > **Setting up an AI integration rather than learning the editor?** Skip to [Working with Claude Code](#working-with-claude-code) for the Claude default, or see [Integrations → The MCP integration policy](integrations.md#the-mcp-integration-policy) for the generic MCP path.
 
@@ -12,7 +12,7 @@ Tandem lets you work on documents with an AI without the constant copy-paste. Yo
 
 Tandem runs as a local server with two surfaces: an **editor** where you read and edit documents, and an **MCP client** (Claude Code by default) where the AI connects via MCP tools. Changes sync instantly between them through Yjs CRDT collaboration.
 
-Tandem is available as a [desktop app](https://github.com/bloknayrb/tandem/releases/latest) (macOS, Linux, Windows) or as an [npm package](https://www.npmjs.com/package/tandem-editor) (`npm install -g tandem-editor`), which opens the same editor in your browser. The desktop app manages the server automatically; the npm install requires starting it from the terminal. Editing, annotations, chat and the integration wizard work the same in both. The desktop app adds what only a native shell can do: a system tray, native right-click menus and file dialogs, start-at-login, Cowork, in-app log access, and automatic updates. Instructions below that apply to only one of the two say so.
+Tandem is available as a [desktop app](https://github.com/bloknayrb/tandem/releases/latest) (macOS, Linux, Windows) or as an [npm package](https://www.npmjs.com/package/tandem-editor) (`npm install -g tandem-editor`), which opens the same editor in your browser. The desktop app manages the server automatically; the npm install requires starting it from the terminal. Editing, annotations, chat and the integration wizard work the same in both. The desktop app adds what only a native shell can do: a system tray, native right-click menus and file dialogs, start-at-login, in-app log access, and automatic updates. Instructions below that apply to only one of the two say so.
 
 ## First Launch
 
@@ -345,7 +345,7 @@ Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
 | **Network** | Connection details, start-at-login (desktop app only), and the advanced retry/delay controls |
 | **Accessibility** | High contrast, and pattern fills for annotations (**Reduce motion** lives under Appearance) |
 | **Collaboration** | Your display name, and whether the side panel hides itself in Solo mode |
-| **AI Assistant** | Working directory, the margin annotation view, **Real-time updates** (how a session you started yourself hears about your comments as they happen, including the Tandem plugin's install commands with a Copy button), the integration wizard, Replay tutorial, and Cowork enablement (desktop app only) |
+| **AI Assistant** | Working directory, the margin annotation view, **Real-time updates** (how a session you started yourself hears about your comments as they happen, including the Tandem plugin's install commands with a Copy button), the integration wizard, and Replay tutorial |
 | **Shortcuts** | A **Customizable** section with click-to-record remapping (20 app-level shortcuts), per-row reset and a reset-all, followed by read-only **(fixed)** sections — text formatting, undo/redo, heading levels, tab jumps and the help key are not remappable |
 | **License** | Activation and current license or trial status |
 | **About** | Version, Copy Diagnostics, and Open log folder (desktop app only) |

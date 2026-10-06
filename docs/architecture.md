@@ -4,7 +4,7 @@
 
 ## Integration Compatibility
 
-> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same MCP tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today. See [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration).
+> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same MCP tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today. See [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration).
 
 Four terms — **MCP contract**, **default integration**, **Claude-specific extras**, and **best-effort, not validated** — are used throughout this document with the precise meanings defined in [ADR-038's term glossary](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) (the single source of truth).
 
@@ -801,7 +801,7 @@ Browser renders OnboardingTutorial floating card (bottom-left)
     → Step 2: "Ask a question"       — annotate a selection, or use Chat
     → Step 3: "Make an edit"         — type in the document
     → Step "Claude Desktop Cowork detected" — inserted between 3 and the last
-      card only on the Tauri build when shouldShowCoworkOnboarding() passes
+      card only on the Tauri build when COWORK_ENABLED is on (it ships dark, ADR-055) and shouldShowCoworkOnboarding() passes
     → Final card: "You're ready!" — not an actionable step; totalActionable is
       activeSteps.length - 1, so the card ends on a completion panel rather
       than vanishing at the end of step 3
@@ -814,7 +814,7 @@ Browser renders OnboardingTutorial floating card (bottom-left)
 
 ## Security
 
-- Binds to `127.0.0.1` **by default**. A non-loopback bind is supported and gated -- see [security.md](security.md#network-posture) and `src/server/bind-check.ts`. Non-loopback callers need a Bearer token and, since #1320, may only *read* `/api`.
+- Binds to `127.0.0.1`. **A non-loopback bind ships dark** ([ADR-056](decisions.md#adr-056-the-non-loopback-bind-ships-dark)): `resolveBindHostEnv` (`src/server/bind-check.ts`) refuses one at the top of `main()` in HTTP mode and ignores it in stdio mode, and `startMcpServerHttp` refuses one too, while `LAN_BIND_ENABLED` is false. The gated LAN path stays merged for the re-enable: non-loopback callers need a Bearer token and, since #1320, may only *read* `/api` -- see [security.md](security.md#network-posture).
 - WebSocket origin validation rejects non-localhost connections (prevents DNS rebinding)
 - UNC paths rejected (prevents NTLM credential hash leakage via SMB) -- **and the rejection is order-dependent, which is the part that regresses silently.** The screen is worthless unless it runs *before* the `stat`/`realpath`/`readdir`/`existsSync`/`canonicalize` it protects, because on Windows those perform the SMB handshake themselves. [#1417](https://github.com/bloknayrb/tandem/issues/1417) fixed seven sites where they ran in the wrong order. A new site needs a new ordering test -- the static duplication detector cannot see ordering, and a return-value assertion passes against the broken code. See [security.md](security.md#open-findings).
 - Symlinks resolved before path validation -- and, where a reparse point could be planted mid-descent, `lstat` before `readdir` rather than after (`readdirNoFollow` in `src/cli/uninstall-scrub.ts`).
@@ -1054,7 +1054,7 @@ Tauri v2 uses a capabilities model to grant permissions:
 
 ## Design Decisions
 
-See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-053), covering:
+See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-056; 054 is reserved for the multi-session ownership design), covering:
 
 - Tiptap over ProseMirror direct
 - Hocuspocus for Yjs WebSocket
@@ -1083,7 +1083,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `mode.ts` -- Solo/Tandem authority (CTRL_ROOM `Y_MAP_MODE`), read by `shouldForwardExternally`
 - `chat-stream-staleness.ts` -- Abandoned-`chatStream`-entry tripwire (#1340): the ledger + warn-once sweep shared by `mcp/awareness.ts` (seeds) and `session/manager.ts`'s `foldChatStream` (checks). A leaf module with no project imports — `session/manager.ts` cannot import `mcp/awareness.ts` without a cycle
 - `startup-file.ts` -- `maybeOpenStartupFile()`; consumes `TANDEM_OPEN_FILE` before HTTP bind
-- `bind-check.ts` -- Bind-host policy: `TANDEM_BIND_HOST`, `TANDEM_LAN_IP`, wildcard handling, the token-provisioned refusal
+- `bind-check.ts` -- Bind-host policy: `resolveBindHostEnv` (the ADR-056 dark refusal, decided before anything else in `main()`), then `TANDEM_BIND_HOST`, `TANDEM_LAN_IP`, wildcard handling, the token-provisioned refusal
 - `documents/` -- Per-document state helpers. `registry.ts` owns `openDocs`, `activeDocId`, the activation epoch and `broadcastOpenDocs` (ADR-033); its whole mutating surface is `openDocument` / `openDocumentWhenReady` / `activateDocument` / `updateDocumentWhenReady` / `closeDocument`, each ending in exactly one `documentMeta` broadcast, with the primitives private. `registry-testing.ts` is the test-only seam onto those primitives and is banned from `src/`. **Since ADR-034 Unit 7a this directory also holds the file-open pipeline**, split out of `mcp/file-opener.ts`: `open.ts` (the pipeline plus the four named entries `openFromDisk` / `openFromUpload` / `openScratchpad` / `openFromRestore`, the `OpenSuccess` union Unit 7b promoted the result to, and the `toWireResult` / `kindOfOpenResult` pair that encodes it onto the wire and reads it back), `populate.ts` (content into and out of a Y.Doc — `prepareContent`, `applyPreparedContent`, `clearDocMaps`, `clearAndReload`), `watcher.ts` (the reload lifecycle — `reloadFromDisk`, `wireFileWatcher`, and the per-document concurrent-reload guard exposed as `acquireReloadGuard` / `releaseReloadGuard` / `isReloadInProgress`), `conflict.ts` (`readPendingConflict` + `flagExternalConflict` — the read and write halves of `Y_MAP_EXTERNAL_CONFLICT`, which used to live in different files), `annotation-wiring.ts` (`wireAnnotationStore`), `autosave.ts` (`ensureAutoSave`, its own module because both the open pipeline and the reload family arm it) and — **since ADR-034 Unit 7c** — `reload-family.ts` (`reloadDocumentFromMarkdown`, `restoreDocumentFromBackup`, `resolveExternalConflict`, each replacing the content of an ALREADY-open document; this is all `mcp/file-opener.ts` had left before it was deleted). `reload-family.ts` stays separate from `watcher.ts` on purpose: the watcher owns the watch loop and `reloadFromDisk`, while these three are caller-initiated replacements that *use* its guard, and merging them would stop that acquire/release contract being a published interface with named external callers. `tests/docs/documents-boundary.test.ts` pins every import edge into and out of this directory as an exact set, and `tests/server/documents-open.test.ts` pins which four modules may import the reload family and which symbols each may take.
 - `integrations/` -- `IntegrationConfig` schema, atomic storage, keychain, `apply.ts` (writes the MCP entries), HTTP routes, the Claude CLI installer
 - `launcher/` -- Auto-launcher and `supervisor.ts` (writes wake turns on the child's stdin)
@@ -1136,7 +1136,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 
 ### Client (`src/client/`)
 
-- `cowork/` -- Cowork onboarding, admin-declined and settings surfaces (ADR-044)
+- `cowork/` -- Cowork onboarding, admin-declined and settings surfaces (ADR-044); none is mounted while Cowork setup ships dark ([ADR-055](decisions.md#adr-055-cowork-setup-ships-dark))
 - `shell/` -- Window chrome: `TitleBar.svelte` (Solo/Tandem toggle) and siblings
 - `layout/`, `status/`, `annotations/`, `keychain/`, `tauri/` -- layout model, status surfaces, annotation UI, keychain bridge, Tauri IPC wrappers
 - `layout/model.svelte.ts` -- `createLayoutModel`: both rails' **persisted** visibility, and the right rail's tab selection + pending badge (ADR-037 + Unit 10b). `rightVisible` is not "on screen" -- the float and chat-reveal terms live in `App.svelte`
@@ -1196,7 +1196,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 - `src/autostart.rs` -- Start-at-login: the registration commands (ADR-046, #1236) and, since Unit 11f, the launch-mode detection that reads the `--tandem-autostart` flag those commands write (`is_autostart_launch`, `should_start_hidden`, the Linux first-launch marker)
 - `src/bounded_command.rs`, `src/single_flight.rs` -- Deadline-bounded external process spawns, and the in-flight guard that keeps a slow probe from piling up once it is off the main thread (#1371)
 - `src/context_menu.rs` -- Editor context-menu specifications and their id space (Unit 11b)
-- `src/cowork_commands.rs` -- The eleven Cowork Tauri invoke commands, their non-Windows stubs and the pure decision helpers (Unit 11d). Most of it is `#[cfg(target_os = "windows")]`, and its `use crate::{…}` block is gated to match, because five of the sibling modules it calls are themselves Windows-only `mod` declarations
+- `src/cowork_commands.rs` -- **Ships dark behind `COWORK_ENABLED` ([ADR-055](decisions.md#adr-055-cowork-setup-ships-dark)): the enable-side commands refuse and the heal task is never spawned.** The eleven Cowork Tauri invoke commands, their non-Windows stubs and the pure decision helpers (Unit 11d). Most of it is `#[cfg(target_os = "windows")]`, and its `use crate::{…}` block is gated to match, because five of the sibling modules it calls are themselves Windows-only `mod` declarations
 - `src/cowork_installer.rs`, `cowork_workspace_scan.rs`, `cowork_meta.rs`, `cowork_atomic_json.rs` -- Cowork per-workspace plugin registration and the five-step path guard (ADR-044); paired with `src/client/cowork/` on the client
 - `src/native_theme.rs` -- Native theme application and the app-mode decisions behind it (Unit 11c)
 - `src/open_candidate.rs` -- `ScreenedOpenPath` and the shared validator for argv and macOS `RunEvent::Opened` (#1415)
@@ -1209,7 +1209,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 - `src/sentry_reporting.rs` -- Opt-in crash reporting (`TANDEM_SENTRY_DSN`)
 - `src/sidecar.rs` -- The Node sidecar's process lifecycle (Unit 11e): spawn with health-poll and exponential backoff, graceful `/api/shutdown` stop then hard kill, `restart_sidecar`, the port/exe-lock waits the updater uses, `resolve_channel_dist()` / `resolve_stdio_bridge_dist()` (which inject `TANDEM_CHANNEL_DIST` / `TANDEM_STDIO_BRIDGE_DIST` so the shim and the Claude Desktop stdio entry resolve from the resource dir; replaced `run_setup()`/`/api/setup` in #477 PR 3c-ii-c), and the Windows port-holder diagnostic that names what is squatting :3478/:3479. `SIDECAR_HEALTHY` and the pending-opens queue stay in `lib.rs` -- they are read and written under the `PendingOpens` mutex, not by this module
 - `src/sidecar_job.rs` -- Windows job-object containment for the sidecar
-- `src/uninstall_scrub.rs` -- The scrub the NSIS uninstaller hook invokes (Cowork entries, firewall rules, start-at-login). Distinct from `src/cli/uninstall-scrub.ts`, which is the npm CLI's scrub (MCP entries + skill) and is never invoked by NSIS.
+- `src/uninstall_scrub.rs` -- The scrub the NSIS uninstaller hook invokes (Cowork entries, `cowork-meta.json`, firewall rules, start-at-login). Distinct from `src/cli/uninstall-scrub.ts`, which is the npm CLI's scrub (MCP entries + skill, plus Cowork entries under both Claude Desktop session roots) and is never invoked by NSIS.
 - `src/win_app_mode.rs` -- Windows app-mode detection
 
 ### stdio bridge (`src/stdio-bridge/`)

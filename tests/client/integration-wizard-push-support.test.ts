@@ -149,6 +149,14 @@ vi.mock(import("../../src/client/hooks/useCoworkStatus.svelte"), () => ({
 // defaulting to `false`. `afterEach` resets this to `null` so those two keep
 // their `coworkStub.status`-derived behavior.
 let tauriOverride: boolean | null = null;
+
+// Cowork ships dark as a literal `false` (ADR-055). Two cases below click the
+// Cowork row, which exists only on the lit path, so the flip is deliberate.
+vi.mock(import("../../src/shared/constants.js"), async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/shared/constants.js")>()),
+  COWORK_ENABLED: true as false,
+}));
+
 vi.mock(import("../../src/client/cowork/cowork-helpers"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/client/cowork/cowork-helpers")>();
   return {
