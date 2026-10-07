@@ -17,9 +17,12 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::cowork_atomic_json::{with_locked_json, CoworkError};
+use crate::cowork_atomic_json::{
+    ensure_plugins_dir, plugin_file_exists, read_plugin_file, sweep_orphaned_temps_in,
+    with_locked_json, CoworkError, SweepOutcome, ORPHAN_MIN_AGE,
+};
 use crate::cowork_meta::CoworkMeta;
-use crate::cowork_workspace_scan::find_cowork_workspaces;
+use crate::cowork_workspace_scan::{find_cowork_workspaces, probe, walk_below, Probe, Walk};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -113,16 +116,30 @@ fn check_acl(path: &Path) -> Result<(), CoworkError> {
         }
     }
 
-    // Allowed root candidates (see doc comment).
-    let allowed_roots: Vec<PathBuf> = [
-        dirs::data_local_dir(),
-        dirs::config_dir().map(|c| c.join("Claude").join("local-agent-mode-sessions")),
+    // Allowed root candidates (see doc comment), each with the Known Folder it
+    // sits under, which is where the no-follow walk starts.
+    let allowed_roots: Vec<AllowedRoot> = [
+        dirs::data_local_dir().map(|d| AllowedRoot {
+            base: d.clone(),
+            root: d,
+        }),
+        dirs::config_dir().map(|c| AllowedRoot {
+            root: c.join("Claude").join("local-agent-mode-sessions"),
+            base: c,
+        }),
     ]
     .into_iter()
     .flatten()
     .collect();
 
     check_acl_against(path, &allowed_roots)
+}
+
+/// An allowed root for [`check_acl_against`], and the Known Folder above it.
+#[derive(Debug)]
+struct AllowedRoot {
+    base: PathBuf,
+    root: PathBuf,
 }
 
 /// Core ACL containment check against an explicit allowed-root set.
@@ -144,14 +161,24 @@ fn check_acl(path: &Path) -> Result<(), CoworkError> {
 /// is if `%LOCALAPPDATA%` itself is unresolvable — in which case a token write
 /// there is impossible anyway. So the dropped optimistic allow cannot reject a
 /// legitimate workspace.
-fn check_acl_against(path: &Path, allowed_roots: &[PathBuf]) -> Result<(), CoworkError> {
+///
+/// A root is canonicalized only after [`walk_below`] has inspected it from its
+/// Known Folder down (#2144). For an MSIX workspace the Roaming sessions root
+/// is not in the candidate's ancestry, so nothing else screens it, and
+/// `canonicalize` follows a junction at any of its components. A root that
+/// fails the walk is skipped, so a candidate it alone would have admitted is
+/// `InsecureAcl`.
+fn check_acl_against(path: &Path, allowed_roots: &[AllowedRoot]) -> Result<(), CoworkError> {
     let canonical_path = match std::fs::canonicalize(path) {
         Ok(p) => p,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e.into()),
     };
 
-    for root in allowed_roots {
+    for AllowedRoot { base, root } in allowed_roots {
+        if !matches!(walk_below(base, root), Walk::Safe) {
+            continue;
+        }
         if let Ok(canonical_root) = std::fs::canonicalize(root) {
             if is_strict_component_child(&canonical_path, &canonical_root) {
                 return Ok(());
@@ -195,6 +222,11 @@ fn warn_if_onedrive(path: &Path) {
 /// same exposure class as the wizard's `claude_desktop_config.json` write.
 fn warn_if_roaming(path: &Path) {
     if let Some(config) = dirs::config_dir() {
+        // (#2144) `canonicalize` would follow the Known Folder if it were a
+        // junction or reach out to it if it were a share; inspect it first.
+        if !matches!(walk_below(&config, &config), Walk::Safe) {
+            return;
+        }
         if let (Ok(canonical_path), Ok(canonical_config)) =
             (std::fs::canonicalize(path), std::fs::canonicalize(&config))
         {
@@ -228,9 +260,11 @@ fn warn_if_roaming(path: &Path) {
 /// error is wire-safe.
 pub(crate) fn workspace_has_tandem_entry(ws_path: &Path) -> bool {
     let path = ws_path.join("cowork_plugins").join("installed_plugins.json");
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+    // No-follow read (#2144); a reparse point at the file or its folder is
+    // refused, logged like any other unreadable file, and reads as "no entry".
+    let content = match read_plugin_file(&path) {
+        Ok(Some(c)) => c,
+        Ok(None) => return false,
         Err(e) => {
             log::warn!(
                 "[cowork] could not read {} ({e}) — treating as not configured",
@@ -318,12 +352,14 @@ pub fn install_tandem_plugin_into_workspace(
 
     // Create the cowork_plugins subdirectory only after ACL check passes.
     // Creating the dir before we know the ACL is safe leaves a directory behind
-    // even when the write is rejected.
+    // even when the write is rejected. `ensure_plugins_dir`, not
+    // `create_dir_all`, whose already-exists branch follows a junction planted
+    // there (#2144); a refusal propagates as `Err`, as a mkdir failure does.
     let plugins_dir = ws_path.join("cowork_plugins");
     if acl_result.is_ok() {
-        std::fs::create_dir_all(&plugins_dir).map_err(|e| {
-            log::warn!("[cowork-install] mkdir cowork_plugins failed: {e}");
-            CoworkError::from(e)
+        ensure_plugins_dir(&plugins_dir).map_err(|e| {
+            log::warn!("[cowork-install] cowork_plugins unusable: {e}");
+            e
         })?;
     }
 
@@ -408,32 +444,20 @@ pub fn uninstall_tandem_plugin_from_workspace(
 
     let plugins_dir = ws_path.join("cowork_plugins");
 
-    let installed_status = {
-        let path = plugins_dir.join("installed_plugins.json");
-        if !path.exists() {
-            WriteStatus::AlreadyPresent // nothing to remove
-        } else {
-            write_status_from(with_locked_json(&path, remove_installed_plugins))
+    // `plugin_file_exists`, not `exists()`, which follows a link at the file
+    // or at `cowork_plugins` (#2144). Absent is "nothing to remove"; a link is
+    // refused and reported as `Failed`.
+    let remove_from = |name: &str, remove: fn(&mut Value) -> Result<WriteStatus, CoworkError>| {
+        let path = plugins_dir.join(name);
+        match plugin_file_exists(&path) {
+            Ok(false) => WriteStatus::AlreadyPresent,
+            Ok(true) => write_status_from(with_locked_json(&path, remove)),
+            Err(e) => write_status_from(Err(e)),
         }
     };
-
-    let known_status = {
-        let path = plugins_dir.join("known_marketplaces.json");
-        if !path.exists() {
-            WriteStatus::AlreadyPresent
-        } else {
-            write_status_from(with_locked_json(&path, remove_known_marketplaces))
-        }
-    };
-
-    let settings_status = {
-        let path = plugins_dir.join("cowork_settings.json");
-        if !path.exists() {
-            WriteStatus::AlreadyPresent
-        } else {
-            write_status_from(with_locked_json(&path, remove_cowork_settings))
-        }
-    };
+    let installed_status = remove_from("installed_plugins.json", remove_installed_plugins);
+    let known_status = remove_from("known_marketplaces.json", remove_known_marketplaces);
+    let settings_status = remove_from("cowork_settings.json", remove_cowork_settings);
 
     Ok(WorkspaceWriteReport {
         workspace_id,
@@ -442,6 +466,26 @@ pub fn uninstall_tandem_plugin_from_workspace(
         known_marketplaces: known_status,
         cowork_settings: settings_status,
     })
+}
+
+/// Delete the temp files a Cowork write leaves when it dies between writing
+/// and renaming, from one workspace's `cowork_plugins` (#2144).
+///
+/// An install or token-apply temp holds the whole `installed_plugins.json`,
+/// auth token included, and neither scrub removed one before. Run by the
+/// desktop uninstall scrub; see `cowork_atomic_json::sweep_orphaned_temps_in`
+/// for why it holds all three registry locks. Scrub-only on purpose, as #2144
+/// scopes it: the in-app disable path does not call it, because Cowork setup
+/// ships dark and re-enabling it is ADR-055's checklist. A workspace with no
+/// `cowork_plugins` (the scan admits UUID-pair dirs without one) is `Ok`, with
+/// nothing done.
+pub fn sweep_orphaned_temps(ws_path: &Path) -> Result<SweepOutcome, String> {
+    let ws_path = crate::cowork_workspace_scan::revalidate_resolved_path(ws_path)?;
+    let plugins_dir = ws_path.join("cowork_plugins");
+    match probe(&plugins_dir) {
+        Probe::Absent | Probe::Other => Ok(SweepOutcome::default()),
+        _ => sweep_orphaned_temps_in(&plugins_dir, ORPHAN_MIN_AGE).map_err(|e| e.to_string()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -491,13 +535,17 @@ pub fn apply_token_to_all_workspaces(token: &str) -> Vec<WorkspaceWriteReport> {
             let plugins_dir = ws_path.join("cowork_plugins");
             let path = plugins_dir.join("installed_plugins.json");
 
-            let installed_status = if !path.exists() {
-                WriteStatus::AlreadyPresent // no entry to update
-            } else {
-                let token_owned = token.to_string();
-                write_status_from(with_locked_json(&path, move |json| {
-                    update_token_in_installed_plugins(json, &token_owned)
-                }))
+            // No-follow existence check (#2144): a link here must not receive
+            // the rotated token.
+            let installed_status = match plugin_file_exists(&path) {
+                Ok(false) => WriteStatus::AlreadyPresent, // no entry to update
+                Ok(true) => {
+                    let token_owned = token.to_string();
+                    write_status_from(with_locked_json(&path, move |json| {
+                        update_token_in_installed_plugins(json, &token_owned)
+                    }))
+                }
+                Err(e) => write_status_from(Err(e)),
             };
 
             WorkspaceWriteReport {
@@ -586,13 +634,12 @@ pub fn reconcile_stale_workspace_tokens(workspaces: &[PathBuf], current_token: &
         };
         let plugins_dir = ws_path.join("cowork_plugins");
         let path = plugins_dir.join("installed_plugins.json");
-        if !path.exists() {
-            continue;
-        }
 
-        // Check if the token is stale without modifying the file.
-        let needs_update = match std::fs::read_to_string(&path) {
-            Ok(content) => match serde_json::from_str::<Value>(&content) {
+        // Check if the token is stale without modifying the file. No-follow
+        // read (#2144): absent → nothing to do; a link → refused below.
+        let needs_update = match read_plugin_file(&path) {
+            Ok(None) => continue,
+            Ok(Some(content)) => match serde_json::from_str::<Value>(&content) {
                 Ok(json) => {
                     let stored = json
                         .get("mcpServers")
@@ -1099,7 +1146,7 @@ mod tests {
         // %APPDATA%\Claude tree (the old tests touched a live Claude install).
         let root_dir = TempDir::new().unwrap();
         let other_dir = TempDir::new().unwrap();
-        let allowed = vec![root_dir.path().to_path_buf()];
+        let allowed = allowed_root(root_dir.path());
 
         // A path strictly under the allowed root passes.
         let inside = root_dir.path().join("ws").join("vm");
@@ -1130,7 +1177,10 @@ mod tests {
         let sibling = base.path().join("sessions-evil").join("vm");
         fs::create_dir_all(&root).unwrap();
         fs::create_dir_all(&sibling).unwrap();
-        let allowed = vec![root];
+        let allowed = vec![AllowedRoot {
+            base: base.path().to_path_buf(),
+            root,
+        }];
         assert!(
             matches!(
                 check_acl_against(&sibling, &allowed),
@@ -1145,9 +1195,125 @@ mod tests {
         // A candidate that doesn't exist yet (new workspace dir) is allowed —
         // the only fail-open in the fail-closed core.
         let base = TempDir::new().unwrap();
-        let allowed = vec![base.path().to_path_buf()];
+        let allowed = allowed_root(base.path());
         let ghost = base.path().join("does-not-exist-yet").join("vm");
         assert!(check_acl_against(&ghost, &allowed).is_ok());
+    }
+
+    /// An allowed root that is its own Known Folder (the `%LOCALAPPDATA%` shape).
+    fn allowed_root(root: &Path) -> Vec<AllowedRoot> {
+        vec![AllowedRoot {
+            base: root.to_path_buf(),
+            root: root.to_path_buf(),
+        }]
+    }
+
+    #[test]
+    fn test_check_acl_against_skips_a_root_that_is_a_junction() {
+        // #2144: for an MSIX workspace the Roaming sessions root is not in the
+        // candidate's ancestry, so nothing else screens it, and `canonicalize`
+        // followed a junction there. Old code: the root resolved to the
+        // junction's target, the candidate sat under it, and this was `Ok`.
+        let base = TempDir::new().unwrap();
+        let real = base.path().join("real");
+        fs::create_dir_all(real.join("ws").join("vm")).unwrap();
+        let link = base.path().join("sessions");
+        crate::cowork_workspace_scan::test_fs::junction(&link, &real);
+        // Must exist: a missing candidate takes the fail-open before the root loop.
+        let candidate = link.join("ws").join("vm");
+
+        let result = check_acl_against(
+            &candidate,
+            &[AllowedRoot {
+                base: base.path().to_path_buf(),
+                root: link.clone(),
+            }],
+        );
+        let _ = fs::remove_dir(&link);
+        assert!(
+            matches!(result, Err(CoworkError::InsecureAcl { .. })),
+            "a junctioned allowed root must not admit anything: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_uninstall_refuses_a_junction_at_a_registry_file_name() {
+        // #2144: a junction to a LIVE dir at the file's name. Old code:
+        // `exists()` followed it (true), the locked read failed with "Access is
+        // denied" — also `Failed`, so the message is what tells them apart.
+        let (_guard, dir, ws_path) = temp_ws();
+        let plugins = ws_path.join("cowork_plugins");
+        fs::create_dir_all(&plugins).unwrap();
+        let target = dir.path().join("live-target");
+        fs::create_dir_all(&target).unwrap();
+        let link = plugins.join("installed_plugins.json");
+        crate::cowork_workspace_scan::test_fs::junction(&link, &target);
+        fs::write(
+            plugins.join("known_marketplaces.json"),
+            r#"{"marketplaces":{"tandem":{}}}"#,
+        )
+        .unwrap();
+
+        let report = uninstall_tandem_plugin_from_workspace(&ws_path).unwrap();
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+        let _ = fs::remove_dir(&link);
+
+        match &report.installed_plugins {
+            WriteStatus::Failed(msg) => assert!(msg.contains("reparse point"), "got: {msg}"),
+            other => panic!("expected a reparse-point refusal, got {other:?}"),
+        }
+        // The other two files are still handled.
+        assert_eq!(report.known_marketplaces, WriteStatus::Ok);
+        assert_eq!(report.cowork_settings, WriteStatus::AlreadyPresent);
+    }
+
+    /// Back-date a file so the sweep's age gate treats it as an orphan.
+    fn age(path: &Path) {
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(7200))
+            .unwrap();
+    }
+
+    #[test]
+    fn test_sweep_removes_old_orphans_and_keeps_everything_else() {
+        let (_guard, _dir, ws_path) = temp_ws();
+        let plugins = ws_path.join("cowork_plugins");
+        fs::create_dir_all(&plugins).unwrap();
+        for name in crate::cowork_atomic_json::PLUGIN_FILES {
+            fs::write(plugins.join(name), "{}").unwrap();
+            fs::write(plugins.join(format!(".{name}.tandem-lock")), "").unwrap();
+        }
+        let rust_orphan = plugins.join(".tandem-tmp-1a2b-18f0c3d2e4-0");
+        let cli_orphan = plugins.join(".tandem-scrub-tmp-0b30dd94-eb52-48e2-851c-025e7b9a45ad");
+        let fresh = plugins.join(".tandem-tmp-ff-ee-1");
+        for p in [&rust_orphan, &cli_orphan, &fresh] {
+            fs::write(p, r#"{"mcpServers":{"tandem":{"env":{"TANDEM_AUTH_TOKEN":"x"}}}}"#).unwrap();
+        }
+        age(&rust_orphan);
+        age(&cli_orphan);
+
+        let outcome = sweep_orphaned_temps(&ws_path).unwrap();
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+
+        assert_eq!(outcome, SweepOutcome { removed: 2, left: 1 });
+        assert!(!rust_orphan.exists() && !cli_orphan.exists());
+        assert!(fresh.exists(), "a temp younger than the gate may be a live write");
+        for name in crate::cowork_atomic_json::PLUGIN_FILES {
+            assert!(plugins.join(name).exists(), "{name} removed");
+            assert!(plugins.join(format!(".{name}.tandem-lock")).exists());
+        }
+    }
+
+    #[test]
+    fn test_sweep_of_a_workspace_without_cowork_plugins_does_nothing() {
+        let (_guard, _dir, ws_path) = temp_ws();
+        let outcome = sweep_orphaned_temps(&ws_path);
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+        assert_eq!(outcome, Ok(SweepOutcome::default()));
+        assert!(!ws_path.join("cowork_plugins").exists(), "nothing may be created");
     }
 
     #[test]

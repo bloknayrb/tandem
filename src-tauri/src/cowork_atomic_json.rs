@@ -10,16 +10,42 @@
 //! - Acquires an exclusive file lock with exponential backoff before reading.
 //! - Schema-drift guard: raises `CoworkError::SchemaDriftSuspected` if the
 //!   top-level JSON shape does not match an expected `Object`.
+//! - Follows no reparse point (#2144): the `cowork_plugins` folder, the
+//!   lockfile and the data file are each inspected before use, and the two
+//!   files are opened with `FILE_FLAG_OPEN_REPARSE_POINT`, so a link swapped
+//!   in after the inspection is opened as itself and refused rather than
+//!   followed. Opening a reparse point that way is the only no-follow open
+//!   Windows has: an exclusive create (`CREATE_NEW`, Node's `O_CREAT|O_EXCL`)
+//!   creates the target of a dangling symlink.
 
 #![cfg(target_os = "windows")]
 
 use std::fmt;
-use std::io;
+use std::io::{self, Read};
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use fs2::FileExt;
 use serde_json::Value;
+
+use crate::cowork_workspace_scan::{is_reparse, is_uuid_like, probe, Probe};
+
+/// `FILE_FLAG_OPEN_REPARSE_POINT`: open a reparse point itself rather than
+/// what it points at. On a regular file it changes nothing.
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+/// The three Cowork registry files, in the order every multi-file lock holder
+/// takes their locks (the sweeps below and the CLI's
+/// `PLUGIN_FILES` in `src/cli/uninstall-scrub.ts`; the two lists are pinned
+/// equal by `tests/build/cowork-scan-alignment.test.ts`). One shared order is
+/// what lets two concurrent sweeps wait for each other instead of each holding
+/// one lock and timing out on the other.
+pub(crate) const PLUGIN_FILES: [&str; 3] = [
+    "installed_plugins.json",
+    "known_marketplaces.json",
+    "cowork_settings.json",
+];
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -45,6 +71,11 @@ pub enum CoworkError {
     /// The parent directory's ACL indicates it may grant write access to
     /// identities beyond the current user — write refused for security.
     InsecureAcl { path: PathBuf },
+    /// A junction, symlink or other reparse point sits where a plain folder or
+    /// file was expected (#2144). Refused rather than followed; maps to
+    /// `WriteStatus::Failed`, which the heal pass retries, so a planted link
+    /// stays visible in the log instead of going quiet.
+    ReparsePoint { path: PathBuf },
 }
 
 impl fmt::Display for CoworkError {
@@ -69,6 +100,11 @@ impl fmt::Display for CoworkError {
                 "Insecure ACL on {} — write refused (path may be outside %LOCALAPPDATA% or OneDrive-synced)",
                 path.display()
             ),
+            CoworkError::ReparsePoint { path } => write!(
+                f,
+                "Refusing to follow a reparse point (junction or symlink) at {}",
+                path.display()
+            ),
         }
     }
 }
@@ -79,6 +115,14 @@ impl std::error::Error for CoworkError {
             CoworkError::IoError(e) => Some(e),
             CoworkError::JsonError(e) => Some(e),
             _ => None,
+        }
+    }
+}
+
+impl CoworkError {
+    fn reparse(path: &Path) -> Self {
+        CoworkError::ReparsePoint {
+            path: path.to_path_buf(),
         }
     }
 }
@@ -126,86 +170,30 @@ const LOCK_BUDGET: Duration = Duration::from_secs(30);
 /// - `path`'s parent directory must already exist; this function will not
 ///   create it (callers should create it if needed).
 /// - The caller is responsible for path-traversal validation (invariant §3)
-///   before supplying `path`.
+///   before supplying `path`. That validation covers the vm dir; this function
+///   refuses a reparse point at `path`'s folder, its lockfile or `path`
+///   itself (#2144), none of which the vm-dir guard can see.
 pub fn with_locked_json<T, F>(path: &Path, mutate: F) -> Result<T, CoworkError>
 where
     F: FnOnce(&mut Value) -> Result<T, CoworkError>,
 {
-    let dir = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
+    let dir = parent_of(path)?;
 
-    // Use a SIBLING lock file, NOT the data file itself.
-    //
-    // On Windows, holding an exclusive fs2 lock on the data file blocks
-    // `std::fs::rename` from replacing it (os error 33 — "The process cannot
-    // access the file because another process has locked a portion of the
-    // file"). Locking a separate sidecar file decouples mutual exclusion from
-    // the rename-over-path operation, letting the atomic swap succeed while
-    // still serializing concurrent writers against the same data file.
-    let file_name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("unknown");
-    //
-    // **This name is a cross-language contract (#1600).** The npm CLI's
-    // `rewriteJson` (`src/cli/uninstall-scrub.ts`) builds the same sibling name
-    // and excludes this function by opening it with share mode 0. Renaming the
-    // lockfile on either side silently removes the exclusion.
-    let lock_path = dir.join(format!(".{file_name}.tandem-lock"));
+    // A junction planted as `cowork_plugins` would take every file below,
+    // token included, wherever it points.
+    require_plain_dir(dir)?;
 
-    // Open/create the sibling lock file AND acquire the exclusive lock, both
-    // inside the backoff loop. The open is inside deliberately: while the npm
-    // scrub holds its share-mode-0 handle, `open` itself fails with sharing
-    // violation 32. Outside the loop that was an immediate hard failure, and
-    // the Cowork install writes its three files in separate calls with no
-    // rollback, so one such failure left a partial registration.
-    //
-    // Only builds that contain this change get that protection. A desktop app
-    // released before #1600 still hard-fails here while a newer npm scrub holds
-    // the lockfile, and the two ship separately. That version-skew residual is
-    // recorded in `docs/security.md`.
-    let start = Instant::now();
-    let mut delay_idx = 0usize;
-    let lock_file = loop {
-        let attempt =
-            open_lockfile(&lock_path).and_then(|file| file.try_lock_exclusive().map(|()| file));
-        match attempt {
-            Ok(file) => break file,
-            Err(e) if is_lock_contention(&e) => {
-                let elapsed = start.elapsed();
-                if elapsed >= LOCK_BUDGET {
-                    return Err(CoworkError::LockTimeout {
-                        path: path.to_path_buf(),
-                        elapsed,
-                    });
-                }
-                let delay_ms = BACKOFF_DELAYS_MS.get(delay_idx).copied().unwrap_or(5_000);
-                log::debug!(
-                    "[cowork] waiting for lock on {} (elapsed={:.1}s, backoff={}ms)",
-                    lock_path.display(),
-                    elapsed.as_secs_f64(),
-                    delay_ms
-                );
-                std::thread::sleep(Duration::from_millis(delay_ms));
-                if delay_idx + 1 < BACKOFF_DELAYS_MS.len() {
-                    delay_idx += 1;
-                }
-            }
-            Err(e) => return Err(e.into()),
-        }
-    };
+    let lock_file = acquire_plugin_lock(path)?;
 
     // --- Critical section: read → mutate → atomic write ---
     let result = (|| -> Result<T, CoworkError> {
-        // Read existing content; absent file = empty object. `read_to_string`
-        // opens and closes its own handle, so no data-file handle is held
-        // across the rename below.
-        let mut json_value: Value = match std::fs::read_to_string(path) {
-            Ok(s) if s.is_empty() => Value::Object(serde_json::Map::new()),
-            Ok(s) => serde_json::from_str(&s)?,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Value::Object(serde_json::Map::new()),
-            Err(e) => return Err(e.into()),
+        // Read existing content; absent file = empty object. The handle is
+        // closed before returning, so no data-file handle is held across the
+        // rename below.
+        let mut json_value: Value = match read_plugin_file(path)? {
+            None => Value::Object(serde_json::Map::new()),
+            Some(s) if s.is_empty() => Value::Object(serde_json::Map::new()),
+            Some(s) => serde_json::from_str(&s)?,
         };
 
         // Schema guard: top-level must be an object.
@@ -223,10 +211,14 @@ where
         let mutation_result = mutate(&mut json_value)?;
 
         // Write to temp file in the same directory (same volume — atomic rename).
-        let tmp_path = dir.join(format!(".tandem-tmp-{}", unique_suffix()));
+        let tmp_path = dir.join(temp_name());
 
         let serialised = serde_json::to_string_pretty(&json_value)?;
 
+        // `create_new` does not follow a link at the temp name: std adds
+        // `FILE_FLAG_OPEN_REPARSE_POINT` whenever it is set (std
+        // `sys/fs/windows.rs`, `get_flags_and_attributes`), so a name planted
+        // ahead of time fails this write rather than redirecting it.
         let write_result: std::io::Result<()> = (|| {
             use std::io::Write;
             let mut tmp_file = std::fs::OpenOptions::new()
@@ -266,6 +258,321 @@ where
     result
 }
 
+/// Take the cross-language lock on `path`'s sibling `.<file>.tandem-lock`,
+/// with the backoff schedule above. The returned handle holds the lock until
+/// it is unlocked or dropped.
+fn acquire_plugin_lock(path: &Path) -> Result<std::fs::File, CoworkError> {
+    let dir = parent_of(path)?;
+
+    // Use a SIBLING lock file, NOT the data file itself.
+    //
+    // On Windows, holding an exclusive fs2 lock on the data file blocks
+    // `std::fs::rename` from replacing it (os error 33 — "The process cannot
+    // access the file because another process has locked a portion of the
+    // file"). Locking a separate sidecar file decouples mutual exclusion from
+    // the rename-over-path operation, letting the atomic swap succeed while
+    // still serializing concurrent writers against the same data file.
+    let file_name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown");
+    //
+    // **This name is a cross-language contract (#1600).** The npm CLI's
+    // `rewriteJson` (`src/cli/uninstall-scrub.ts`) builds the same sibling name
+    // and excludes this function by opening it with share mode 0. Renaming the
+    // lockfile on either side silently removes the exclusion.
+    let lock_path = dir.join(format!(".{file_name}.tandem-lock"));
+
+    // Open/create the sibling lock file AND acquire the exclusive lock, both
+    // inside the backoff loop. The open is inside deliberately: while the npm
+    // scrub holds its share-mode-0 handle, `open` itself fails with sharing
+    // violation 32. Outside the loop that was an immediate hard failure, and
+    // the Cowork install writes its three files in separate calls with no
+    // rollback, so one such failure left a partial registration.
+    //
+    // Only builds that contain this change get that protection. A desktop app
+    // released before #1600 still hard-fails here while a newer npm scrub holds
+    // the lockfile, and the two ship separately. That version-skew residual is
+    // recorded in `docs/security.md`.
+    let start = Instant::now();
+    let mut delay_idx = 0usize;
+    loop {
+        // (#2144) Inspected before each open. A junction at the lock name
+        // fails the open with error 5, which would read as an I/O fault rather
+        // than the refusal it is; a symlink would be followed (and, dangling,
+        // created through) by an open without the reparse flag.
+        refuse_link(&lock_path)?;
+        let attempt =
+            open_lockfile(&lock_path).and_then(|file| file.try_lock_exclusive().map(|()| file));
+        match attempt {
+            Ok(file) => {
+                // A link swapped in after the inspection was opened as itself
+                // (the reparse flag), so this sees it.
+                refuse_reparse_handle(&file, &lock_path)?;
+                return Ok(file);
+            }
+            Err(e) if is_lock_contention(&e) => {
+                let elapsed = start.elapsed();
+                if elapsed >= LOCK_BUDGET {
+                    return Err(CoworkError::LockTimeout {
+                        path: path.to_path_buf(),
+                        elapsed,
+                    });
+                }
+                let delay_ms = BACKOFF_DELAYS_MS.get(delay_idx).copied().unwrap_or(5_000);
+                log::debug!(
+                    "[cowork] waiting for lock on {} (elapsed={:.1}s, backoff={}ms)",
+                    lock_path.display(),
+                    elapsed.as_secs_f64(),
+                    delay_ms
+                );
+                std::thread::sleep(Duration::from_millis(delay_ms));
+                if delay_idx + 1 < BACKOFF_DELAYS_MS.len() {
+                    delay_idx += 1;
+                }
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// No-follow file access (#2144)
+// ---------------------------------------------------------------------------
+//
+// Every Rust read or existence check of the three registry files goes through
+// these, never `exists()` / `is_dir()` / `read_to_string`, all of which follow
+// a junction or symlink at the path.
+
+fn parent_of(path: &Path) -> Result<&Path, CoworkError> {
+    path.parent().ok_or_else(|| {
+        CoworkError::IoError(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path has no parent",
+        ))
+    })
+}
+
+/// `Err` when a reparse point sits at `path`, or when it cannot be inspected
+/// (fails closed); `Ok` when it is absent or not a link.
+fn refuse_link(path: &Path) -> Result<(), CoworkError> {
+    match probe(path) {
+        Probe::Reparse => Err(CoworkError::reparse(path)),
+        Probe::Unreadable(e) => Err(e.into()),
+        Probe::Absent | Probe::Dir | Probe::Other => Ok(()),
+    }
+}
+
+/// Refuse a handle that was opened on a reparse point (only possible with
+/// `FILE_FLAG_OPEN_REPARSE_POINT`, which is why every open here sets it).
+fn refuse_reparse_handle(file: &std::fs::File, path: &Path) -> Result<(), CoworkError> {
+    if is_reparse(&file.metadata()?) {
+        return Err(CoworkError::reparse(path));
+    }
+    Ok(())
+}
+
+/// `dir` must be a plain directory: not a reparse point, not a file, present.
+pub(crate) fn require_plain_dir(dir: &Path) -> Result<(), CoworkError> {
+    match probe(dir) {
+        Probe::Dir => Ok(()),
+        Probe::Reparse => Err(CoworkError::reparse(dir)),
+        Probe::Absent => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{} does not exist", dir.display()),
+        )
+        .into()),
+        Probe::Other => Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("{} is not a directory", dir.display()),
+        )
+        .into()),
+        Probe::Unreadable(e) => Err(e.into()),
+    }
+}
+
+/// Create `cowork_plugins` if it is absent, then require it to be a plain
+/// directory. Replaces `create_dir_all`, whose already-exists branch calls
+/// `is_dir()` and so followed a junction planted there.
+pub(crate) fn ensure_plugins_dir(dir: &Path) -> Result<(), CoworkError> {
+    if matches!(probe(dir), Probe::Absent) {
+        match std::fs::create_dir(dir) {
+            Ok(()) => {}
+            // Another writer (Claude Desktop, say) made it in between.
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    require_plain_dir(dir)
+}
+
+/// Is there a registry file at `path`, looked at without following anything?
+///
+/// `Ok(false)` when it or its folder is absent (or the folder is not a
+/// directory); `Err(ReparsePoint)` when either is a link. A folder that is a
+/// link is refused even though the file "exists" through it: the answer would
+/// describe wherever the link points.
+pub(crate) fn plugin_file_exists(path: &Path) -> Result<bool, CoworkError> {
+    let dir = parent_of(path)?;
+    match probe(dir) {
+        Probe::Dir => {}
+        Probe::Absent | Probe::Other => return Ok(false),
+        Probe::Reparse => return Err(CoworkError::reparse(dir)),
+        Probe::Unreadable(e) => return Err(e.into()),
+    }
+    match probe(path) {
+        Probe::Absent => Ok(false),
+        Probe::Reparse => Err(CoworkError::reparse(path)),
+        Probe::Unreadable(e) => Err(e.into()),
+        Probe::Dir | Probe::Other => Ok(true),
+    }
+}
+
+/// Read a registry file without following a link at it or at its folder.
+/// `Ok(None)` when absent.
+///
+/// The open sets `FILE_FLAG_OPEN_REPARSE_POINT`, so a symlink swapped in after
+/// [`plugin_file_exists`] looked is opened as itself and refused below, and a
+/// junction swapped in fails the open with error 5. Neither is followed.
+pub(crate) fn read_plugin_file(path: &Path) -> Result<Option<String>, CoworkError> {
+    if !plugin_file_exists(path)? {
+        return Ok(None);
+    }
+    let mut file = match open_for_read_no_follow(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    refuse_reparse_handle(&file, path)?;
+    let mut content = String::new();
+    file.read_to_string(&mut content)?;
+    Ok(Some(content))
+}
+
+/// Open for reading; a reparse point at `path` is opened as itself.
+fn open_for_read_no_follow(path: &Path) -> io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+// ---------------------------------------------------------------------------
+// Orphaned temp files (#2144)
+// ---------------------------------------------------------------------------
+
+/// The temp-file name [`with_locked_json`] writes beside its target.
+/// `tests/build/cowork-scan-alignment.test.ts` reads this literal and the
+/// `unique_suffix` format below, because the CLI's sweep matches the same shape.
+fn temp_name() -> String {
+    format!(".tandem-tmp-{}", unique_suffix())
+}
+
+/// The npm CLI scrub's temp prefix (`SCRUB_TEMP_PREFIX` in
+/// `src/cli/uninstall-scrub.ts`, followed by a `randomUUID()`), pinned equal by
+/// the same alignment test.
+const CLI_SCRUB_TEMP_PREFIX: &str = ".tandem-scrub-tmp-";
+
+/// Is `name` a temp file one of the two Cowork writers leaves when it dies
+/// between writing and renaming? Exact shapes only, because the match is what
+/// keeps the sweep off every other file in Claude's folder:
+/// - `.tandem-tmp-<hex>-<hex>-<hex>` ([`temp_name`]; the only shape any
+///   released desktop build wrote);
+/// - `.tandem-scrub-tmp-<uuid>` (the npm CLI).
+///
+/// `.tandem-meta-tmp-*` (`cowork_meta.rs`) is deliberately not matched: it
+/// lives in Tandem's app data, not here, and holds no token.
+pub(crate) fn is_orphaned_temp_name(name: &str) -> bool {
+    if let Some(rest) = name.strip_prefix(CLI_SCRUB_TEMP_PREFIX) {
+        return is_uuid_like(rest);
+    }
+    if let Some(rest) = name.strip_prefix(".tandem-tmp-") {
+        let groups: Vec<&str> = rest.split('-').collect();
+        return groups.len() == 3
+            && groups.iter().all(|g| {
+                !g.is_empty() && g.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            });
+    }
+    false
+}
+
+/// A temp younger than this is left alone. Every current writer creates and
+/// renames its temp while holding that file's lock, and the sweep holds all
+/// three, so for them no age is needed. npm CLIs v0.8.0–v0.25.x wrote theirs
+/// with no lock; a live temp lives milliseconds, so a minute outlasts it.
+pub(crate) const ORPHAN_MIN_AGE: Duration = Duration::from_secs(60);
+
+/// What a sweep did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SweepOutcome {
+    /// Orphaned temp files deleted.
+    pub removed: usize,
+    /// Orphan-named entries left in place: not a regular file, or too new.
+    pub left: usize,
+}
+
+/// Delete orphaned temp files from `plugins_dir`, holding all three registry
+/// locks while it does.
+///
+/// **The locks are the safety argument.** A temp exists only while its own
+/// file's lock is held, so with all three held nothing can be mid-write, and
+/// neither race a lock-free sweep has can happen: deleting a live temp (its
+/// rename then fails, and a Tandem entry its writer was removing stays), or a
+/// delete landing on the name the temp was just renamed to. The listing is
+/// done once unlocked first, so a folder with nothing to sweep gets no new
+/// lockfiles.
+///
+/// Precondition: the caller has validated the vm dir above `plugins_dir`.
+pub(crate) fn sweep_orphaned_temps_in(
+    plugins_dir: &Path,
+    min_age: Duration,
+) -> Result<SweepOutcome, CoworkError> {
+    let list = || -> Result<Vec<PathBuf>, CoworkError> {
+        require_plain_dir(plugins_dir)?;
+        Ok(std::fs::read_dir(plugins_dir)?
+            .flatten()
+            .filter(|e| is_orphaned_temp_name(&e.file_name().to_string_lossy()))
+            .map(|e| e.path())
+            .collect())
+    };
+    if list()?.is_empty() {
+        return Ok(SweepOutcome::default());
+    }
+
+    // All three, in the shared order. A failure part-way drops the handles
+    // already taken, which releases them.
+    let _locks = PLUGIN_FILES
+        .iter()
+        .map(|name| acquire_plugin_lock(&plugins_dir.join(name)))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut outcome = SweepOutcome::default();
+    for path in list()? {
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e.into()),
+        };
+        let plain_file = meta.is_file() && !is_reparse(&meta);
+        // A future mtime reads as fresh.
+        let old_enough = meta
+            .modified()
+            .ok()
+            .and_then(|m| SystemTime::now().duration_since(m).ok())
+            .is_some_and(|age| age >= min_age);
+        if !plain_file || !old_enough {
+            outcome.left += 1;
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => outcome.removed += 1,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(outcome)
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -288,12 +595,19 @@ fn is_lock_contention(e: &io::Error) -> bool {
 }
 
 /// Open (creating if absent) the sibling lockfile, without truncating it.
+///
+/// `FILE_FLAG_OPEN_REPARSE_POINT` (#2144): without it, this open-or-create
+/// creates the target of a dangling symlink at the lock name (measured). With
+/// it, the link itself is opened, which the caller refuses. A share-mode-0
+/// holder still fails it with 32, so the #1600 contention handling is
+/// unchanged.
 fn open_lockfile(lock: &Path) -> io::Result<std::fs::File> {
     std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(lock)
 }
 
@@ -491,5 +805,301 @@ mod lock_interop_tests {
         assert_eq!(String::from_utf8_lossy(&held.stdout).trim(), "EBUSY");
         assert_eq!(String::from_utf8_lossy(&after.stdout).trim(), "opened");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod reparse_tests {
+    //! #2144: the folder, the lockfile and the data file are never followed.
+    //! Several of these fixtures also failed on the old code, but with an
+    //! `IoError` after following, so each row asserts the `ReparsePoint`
+    //! variant, which is what changed.
+
+    use super::*;
+    use crate::cowork_workspace_scan::test_fs::Scratch;
+
+    /// A fresh scratch dir with an empty `cowork_plugins` in it.
+    fn plugins(s: &Scratch) -> PathBuf {
+        let p = s.dir.join("cowork_plugins");
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn write_tandem(v: &mut Value) -> Result<(), CoworkError> {
+        v["mcpServers"] = serde_json::json!({ "tandem": { "env": { "TANDEM_AUTH_TOKEN": "t" } } });
+        Ok(())
+    }
+
+    fn assert_refused<T: std::fmt::Debug>(result: Result<T, CoworkError>, at: &Path) {
+        match result {
+            Err(CoworkError::ReparsePoint { path }) => assert_eq!(path, at),
+            other => panic!("expected ReparsePoint at {at:?}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_junction_planted_as_cowork_plugins_receives_nothing() {
+        let mut s = Scratch::new("atomic");
+        let target = s.dir.join("elsewhere");
+        std::fs::create_dir_all(&target).unwrap();
+        let plugins = s.dir.join("cowork_plugins");
+        s.junction(&plugins, &target);
+
+        let result = with_locked_json(&plugins.join("installed_plugins.json"), write_tandem);
+
+        assert_refused(result, &plugins);
+        // Old: the token was written through the junction into its target.
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_junction_at_the_data_file_name_is_refused_by_name() {
+        let mut s = Scratch::new("atomic");
+        let plugins = plugins(&s);
+        let target = s.dir.join("live");
+        std::fs::create_dir_all(&target).unwrap();
+        let data = plugins.join("installed_plugins.json");
+        s.junction(&data, &target);
+
+        // Old: `IoError` ("Access is denied") from the read that followed it.
+        assert_refused(with_locked_json(&data, write_tandem), &data);
+    }
+
+    #[test]
+    fn a_junction_at_the_lockfile_name_is_refused_by_name() {
+        let mut s = Scratch::new("atomic");
+        let plugins = plugins(&s);
+        let target = s.dir.join("live");
+        std::fs::create_dir_all(&target).unwrap();
+        let lock = plugins.join(".installed_plugins.json.tandem-lock");
+        s.junction(&lock, &target);
+
+        // Old: `IoError` 5 from the open, which followed it to get there.
+        assert_refused(
+            with_locked_json(&plugins.join("installed_plugins.json"), write_tandem),
+            &lock,
+        );
+    }
+
+    #[test]
+    fn a_dangling_symlink_at_the_lockfile_name_is_not_created_through() {
+        let mut s = Scratch::new("atomic");
+        let plugins = plugins(&s);
+        let target = s.dir.join("created-through-the-link");
+        let lock = plugins.join(".installed_plugins.json.tandem-lock");
+        s.file_symlink(&lock, &target);
+
+        let result = with_locked_json(&plugins.join("installed_plugins.json"), write_tandem);
+
+        assert_refused(result, &lock);
+        // Old: the open-or-create made the link's target (the issue's O_CREAT sentence).
+        assert!(
+            !target.exists(),
+            "the lock open created the symlink's target"
+        );
+    }
+
+    #[test]
+    fn a_dangling_symlink_at_the_data_file_name_is_refused() {
+        let mut s = Scratch::new("atomic");
+        let plugins = plugins(&s);
+        let target = s.dir.join("nowhere.json");
+        let data = plugins.join("installed_plugins.json");
+        s.file_symlink(&data, &target);
+
+        // Old: read as absent (`{}`) and silently replaced by the rename.
+        assert_refused(with_locked_json(&data, write_tandem), &data);
+        assert!(!target.exists());
+    }
+
+    // The next two pin the opens themselves. A link that appears after the
+    // lstat cannot be staged deterministically, so these call the open helpers
+    // directly on a link: without the reparse flag each would open (or create)
+    // the target, and the handle would carry no reparse attribute.
+
+    #[test]
+    fn the_data_file_open_sees_a_symlink_as_itself() {
+        let mut s = Scratch::new("atomic");
+        let plugins = plugins(&s);
+        let real = s.dir.join("real.json");
+        std::fs::write(&real, "{}").unwrap();
+        let data = plugins.join("installed_plugins.json");
+        s.file_symlink(&data, &real);
+        let file = open_for_read_no_follow(&data).unwrap();
+        assert_refused(refuse_reparse_handle(&file, &data), &data);
+    }
+
+    #[test]
+    fn the_lockfile_open_sees_a_dangling_symlink_as_itself() {
+        let mut s = Scratch::new("atomic");
+        let plugins = plugins(&s);
+        let target = s.dir.join("created-through-the-link");
+        let lock = plugins.join(".installed_plugins.json.tandem-lock");
+        s.file_symlink(&lock, &target);
+        let file = open_lockfile(&lock).unwrap();
+        assert_refused(refuse_reparse_handle(&file, &lock), &lock);
+        assert!(!target.exists(), "open-or-create made the link's target");
+    }
+
+    #[test]
+    fn absent_files_and_folders_read_as_absent() {
+        let s = Scratch::new("atomic");
+        let in_missing_dir = s.dir.join("cowork_plugins").join("installed_plugins.json");
+        assert!(!plugin_file_exists(&in_missing_dir).unwrap());
+        assert!(read_plugin_file(&in_missing_dir).unwrap().is_none());
+        let plugins = plugins(&s);
+        let data = plugins.join("installed_plugins.json");
+        assert!(!plugin_file_exists(&data).unwrap());
+        std::fs::write(&data, r#"{"a":1}"#).unwrap();
+        assert_eq!(
+            read_plugin_file(&data).unwrap().as_deref(),
+            Some(r#"{"a":1}"#)
+        );
+    }
+
+    #[test]
+    fn ensure_plugins_dir_creates_once_and_refuses_a_junction_or_a_file() {
+        let mut s = Scratch::new("atomic");
+        let fresh = s.dir.join("cowork_plugins");
+        ensure_plugins_dir(&fresh).unwrap();
+        ensure_plugins_dir(&fresh).unwrap();
+        assert!(fresh.is_dir());
+
+        let target = s.dir.join("elsewhere");
+        std::fs::create_dir_all(&target).unwrap();
+        let link = s.dir.join("linked_plugins");
+        s.junction(&link, &target);
+        assert_refused(ensure_plugins_dir(&link), &link);
+
+        // A FILE there still fails, as `create_dir_all` made it fail.
+        let file = s.dir.join("file_plugins");
+        std::fs::write(&file, "").unwrap();
+        assert!(matches!(
+            ensure_plugins_dir(&file),
+            Err(CoworkError::IoError(_))
+        ));
+    }
+
+    #[test]
+    fn orphaned_temp_names_match_exactly_the_two_writers_shapes() {
+        // The generator's own output, not a copy of its format string.
+        assert!(is_orphaned_temp_name(&temp_name()));
+        assert!(is_orphaned_temp_name(
+            ".tandem-scrub-tmp-0b30dd94-eb52-48e2-851c-025e7b9a45ad"
+        ));
+        for name in [
+            ".tandem-tmp-",
+            ".tandem-tmp-xyz",
+            ".tandem-tmp-1-2",
+            ".tandem-tmp-1-2-3-4",
+            ".tandem-tmp-1--3",
+            ".tandem-tmp-1A-2-3",
+            ".tandem-scrub-tmp-",
+            ".tandem-scrub-tmp-not-a-uuid",
+            ".tandem-meta-tmp-0b30dd94-eb52-48e2-851c-025e7b9a45ad",
+            ".installed_plugins.json.tandem-lock",
+            "installed_plugins.json",
+            "x.tandem-tmp-1-2-3",
+        ] {
+            assert!(!is_orphaned_temp_name(name), "{name} must not match");
+        }
+    }
+
+    fn seed_registry(plugins: &Path) {
+        for name in PLUGIN_FILES {
+            std::fs::write(plugins.join(name), "{}").unwrap();
+            std::fs::write(plugins.join(format!(".{name}.tandem-lock")), "").unwrap();
+        }
+    }
+
+    #[test]
+    fn the_sweep_removes_orphans_and_leaves_a_directory_named_like_one() {
+        let s = Scratch::new("atomic");
+        let plugins = plugins(&s);
+        seed_registry(&plugins);
+        std::fs::write(plugins.join(".tandem-tmp-a-b-c"), "{}").unwrap();
+        std::fs::write(plugins.join(".tandem-tmp-1-2-3"), "{}").unwrap();
+        std::fs::create_dir(plugins.join(".tandem-tmp-d-e-f")).unwrap();
+
+        let outcome = sweep_orphaned_temps_in(&plugins, Duration::ZERO).unwrap();
+
+        assert_eq!(
+            outcome,
+            SweepOutcome {
+                removed: 2,
+                left: 1
+            }
+        );
+        assert!(plugins.join(".tandem-tmp-d-e-f").is_dir());
+        for name in PLUGIN_FILES {
+            assert!(plugins.join(name).exists());
+        }
+    }
+
+    #[test]
+    fn the_sweep_creates_no_lockfile_when_there_is_nothing_to_sweep() {
+        let s = Scratch::new("atomic");
+        let plugins = plugins(&s);
+        std::fs::write(plugins.join("installed_plugins.json"), "{}").unwrap();
+
+        assert_eq!(
+            sweep_orphaned_temps_in(&plugins, Duration::ZERO).unwrap(),
+            SweepOutcome::default()
+        );
+        let names: Vec<_> = std::fs::read_dir(&plugins)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["installed_plugins.json".to_string()]);
+    }
+
+    #[test]
+    fn the_sweep_keeps_a_temp_younger_than_the_gate() {
+        let s = Scratch::new("atomic");
+        let plugins = plugins(&s);
+        seed_registry(&plugins);
+        let fresh = plugins.join(".tandem-tmp-1-2-3");
+        std::fs::write(&fresh, "{}").unwrap();
+
+        let outcome = sweep_orphaned_temps_in(&plugins, ORPHAN_MIN_AGE).unwrap();
+
+        assert_eq!(
+            outcome,
+            SweepOutcome {
+                removed: 0,
+                left: 1
+            }
+        );
+        assert!(fresh.exists());
+    }
+
+    #[test]
+    fn the_sweep_waits_while_a_writer_holds_one_of_the_three_locks() {
+        // Holding all three is the safety argument, so a held lock must stall it.
+        let s = Scratch::new("atomic");
+        let plugins = plugins(&s);
+        seed_registry(&plugins);
+        std::fs::write(plugins.join(".tandem-tmp-1-2-3"), "{}").unwrap();
+        let holder = open_lockfile(&plugins.join(".known_marketplaces.json.tandem-lock")).unwrap();
+        holder.try_lock_exclusive().unwrap();
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let sweep_dir = plugins.clone();
+        let sweeper = std::thread::spawn(move || {
+            let r = sweep_orphaned_temps_in(&sweep_dir, Duration::ZERO);
+            let _ = done_tx.send(());
+            r
+        });
+        // The first two backoff sleeps sum to 700 ms.
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(700)).is_err(),
+            "the sweep ran while a writer held a lock"
+        );
+        assert!(plugins.join(".tandem-tmp-1-2-3").exists());
+
+        FileExt::unlock(&holder).unwrap();
+        drop(holder);
+        assert_eq!(sweeper.join().unwrap().unwrap().removed, 1);
     }
 }

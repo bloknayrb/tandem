@@ -178,6 +178,8 @@ source: `y-prosemirror.cjs:834` merges adjacent Y.Text nodes in an untagged tran
   touch src-tauri/binaries/{node-sidecar,tandem-reaper}-$TRIPLE{,.exe}
   apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libxdo-dev
   ```
+  **On Windows it also needs permission to create file symlinks** (Developer Mode, or an elevated shell, which the CI runner is). The #2144 tests in `cowork_atomic_json.rs` plant real file symlinks, and they fail with a message saying so rather than skipping, so a machine without it cannot push. Junction rows need no privilege.
+
   **`libxdo-dev` is required to link and is easy to miss** — it is pulled in by a Cargo feature, so the failure is a bare `rust-lld: error: unable to find library -lxdo` thousands of lines into linker output, long after the GTK packages everyone remembers are installed. Same dependency as the #1227 runtime bug.
 
 ### Windows / Cross-platform

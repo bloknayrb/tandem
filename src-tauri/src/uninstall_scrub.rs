@@ -208,7 +208,16 @@ pub fn run_uninstall_scrub() -> i32 {
             .all(|s| matches!(s, WriteStatus::Ok | WriteStatus::AlreadyPresent))
         }
 
-        let workspaces = crate::cowork_workspace_scan::find_cowork_workspaces();
+        // With stats: the scan's refusals go to `log::`, which is not
+        // initialised here, so without this line a refused folder (#2144) read
+        // as "cleared 0/0".
+        let (workspaces, stats) = crate::cowork_workspace_scan::find_cowork_workspaces_with_stats();
+        if stats.rejected_by_guard > 0 {
+            eprintln!(
+                "[scrub] {} Cowork folder(s) refused by the path guard (junction, symlink, network path or unreadable) and left untouched",
+                stats.rejected_by_guard
+            );
+        }
         let mut removed = 0usize;
         for ws in &workspaces {
             match crate::cowork_installer::uninstall_tandem_plugin_from_workspace(ws) {
@@ -221,6 +230,28 @@ pub fn run_uninstall_scrub() -> i32 {
                     report.cowork_settings
                 ),
                 Err(e) => eprintln!("[scrub] workspace uninstall failed: {e}"),
+            }
+            // Separate from `removed`, which `fully_cleared` defines by the
+            // three registry files: a crashed write's temp copy can hold the
+            // token too (#2144).
+            match crate::cowork_installer::sweep_orphaned_temps(ws) {
+                Ok(outcome) => {
+                    if outcome.removed > 0 {
+                        eprintln!(
+                            "[scrub] removed {} leftover temp file(s) from {}",
+                            outcome.removed,
+                            ws.display()
+                        );
+                    }
+                    if outcome.left > 0 {
+                        eprintln!(
+                            "[scrub] left {} temp-named entr(y/ies) in {} (not a plain file, or written in the last minute)",
+                            outcome.left,
+                            ws.display()
+                        );
+                    }
+                }
+                Err(e) => eprintln!("[scrub] temp sweep failed for {}: {e}", ws.display()),
             }
         }
         eprintln!(
