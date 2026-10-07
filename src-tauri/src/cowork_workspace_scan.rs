@@ -240,10 +240,15 @@ pub(crate) fn clear_snapshot_for_test() {
 /// `rejected_by_shape` counts expected non-workspace siblings and is log-only.
 /// `skills-plugin\<uuid>` counts here only while it has no `cowork_plugins` dir
 /// (see [`workspace_shape_ok`]).
-#[derive(Debug, Default, Clone, Copy)]
+///
+/// `refused` holds one "path — reason" line per guard rejection, so a caller
+/// with no logger (the desktop uninstall scrub runs before `log` is set up)
+/// can still say WHICH folder it left untouched.
+#[derive(Debug, Default, Clone)]
 pub struct ScanStats {
     pub rejected_by_guard: usize,
     pub rejected_by_shape: usize,
+    pub refused: Vec<String>,
 }
 
 /// Discover all Cowork workspace directories on this machine.
@@ -276,6 +281,7 @@ pub fn find_cowork_workspaces_with_stats() -> (Vec<PathBuf>, ScanStats) {
 /// (avoids WARN-per-candidate-per-poll on redirected-AppData machines).
 fn note_guard_rejection(stats: &mut ScanStats, detail: &str) {
     stats.rejected_by_guard += 1;
+    stats.refused.push(detail.to_string());
     if stats.rejected_by_guard == 1 {
         log::warn!("[cowork-scan] skipping {detail}");
     } else {
@@ -644,6 +650,17 @@ pub(crate) fn cowork_roots() -> SessionRoots {
         log::warn!("[cowork-scan] cannot resolve %LOCALAPPDATA% or %APPDATA%");
     }
     roots_under(packages_dir.as_deref(), roaming_config_dir.as_deref())
+}
+
+/// The Known Folders the scan will not enter because they are network paths
+/// (refused by string, so never counted in [`ScanStats`]). For the desktop
+/// uninstall scrub, which has no other way to say it did not look there.
+pub fn unc_known_folders() -> Vec<PathBuf> {
+    [dirs::data_local_dir(), dirs::config_dir()]
+        .into_iter()
+        .flatten()
+        .filter(|p| is_unc_path(p))
+        .collect()
 }
 
 /// Enumerate Claude session roots under the given base directories. Split from
@@ -1476,6 +1493,18 @@ mod tests {
 
         // Should find the vm-level directory.
         assert_eq!(results.len(), 1, "expected 1 workspace, got {:?}", results);
+    }
+
+    #[test]
+    fn an_uninspectable_path_is_a_refusal_not_an_absence() {
+        // #2144 fails closed: "could not look" must never read as "nothing there".
+        let path = Path::new(r"C:\x\cowork_plugins");
+        let p = Probe::Unreadable(std::io::Error::from_raw_os_error(5));
+        assert!(p.refusal(path).is_some_and(|r| r.contains("cannot inspect")));
+        for benign in [Probe::Absent, Probe::Dir, Probe::Other] {
+            assert!(benign.refusal(path).is_none(), "{benign:?}");
+        }
+        assert!(Probe::Reparse.refusal(path).is_some());
     }
 
     #[test]

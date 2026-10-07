@@ -15,7 +15,8 @@
 //!
 //! Exactly what the `.nsi` hook's own comment promises, plus the new autostart
 //! registration:
-//!   - Cowork plugin entries in every detected workspace (Windows)
+//!   - Cowork plugin entries in every detected workspace, and the temp copies
+//!     an interrupted Cowork write leaves beside them (Windows; #2144)
 //!   - The Tandem Cowork firewall rules (Windows)
 //!   - `cowork-meta.json`, the one app-data file the scrub removes (Windows;
 //!     ADR-055 — a surviving `enabled: true` would re-arm a later lit build)
@@ -212,10 +213,16 @@ pub fn run_uninstall_scrub() -> i32 {
         // initialised here, so without this line a refused folder (#2144) read
         // as "cleared 0/0".
         let (workspaces, stats) = crate::cowork_workspace_scan::find_cowork_workspaces_with_stats();
-        if stats.rejected_by_guard > 0 {
+        // Each one named: a refused folder can still hold Tandem's entries,
+        // token included, and this is the only line that says where.
+        for refused in &stats.refused {
+            eprintln!("[scrub] refused, left untouched: {refused}");
+        }
+        // Never entered, so the scan neither counts nor names what is there.
+        for folder in crate::cowork_workspace_scan::unc_known_folders() {
             eprintln!(
-                "[scrub] {} Cowork folder(s) refused by the path guard (junction, symlink, network path or unreadable) and left untouched",
-                stats.rejected_by_guard
+                "[scrub] {} is a network path and was not inspected; any Cowork entries there are left untouched",
+                folder.display()
             );
         }
         let mut removed = 0usize;

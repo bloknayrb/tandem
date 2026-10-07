@@ -214,7 +214,14 @@ describe("detectRemovalTargets — wider than detectTargets, for removal only (#
   beforeEach(() => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-2144-detect-"));
     localAppData = path.join(home, "AppData", "Local");
-    for (const pkg of ["Claude_pzs8sxrjxfjjc", "AnthropicPBC.Claude_8wekyb3d8bbwe"]) {
+    // The last two are foreign packages staging Claude's layout: the removal
+    // set is publisher-anchored, so a substring match would reach them.
+    for (const pkg of [
+      "Claude_pzs8sxrjxfjjc",
+      "AnthropicPBC.Claude_8wekyb3d8bbwe",
+      "EvilCorp.TotallyClaude_x1",
+      "NotClaude_x1",
+    ]) {
       const dir = path.join(localAppData, "Packages", pkg, "LocalCache", "Roaming", "Claude");
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, "claude_desktop_config.json"), "{}");

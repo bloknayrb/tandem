@@ -20,4 +20,14 @@ describe("detectRemovalTargets seam", () => {
       "src/server/integrations/apply.ts",
     ]);
   });
+
+  it("is what the uninstall scrub's MCP pass uses by default", () => {
+    // Every behavioural test injects its own `detect`, so the default is
+    // pinned here: back to `detectTargets` and the scrub would stop reaching
+    // the wider package set while every other test stayed green.
+    const scrub = SRC_FILES.get("src/cli/uninstall-scrub.ts") ?? "";
+    expect(scrub).toMatch(
+      /export async function scrubMcpConfigs\(\s*logger: ScrubLogger,\s*detect: \(\) => DetectedTarget\[\] = detectRemovalTargets,/,
+    );
+  });
 });

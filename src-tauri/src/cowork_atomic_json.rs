@@ -155,8 +155,9 @@ const LOCK_BUDGET: Duration = Duration::from_secs(30);
 /// Atomically read-modify-write a JSON file under an exclusive file lock.
 ///
 /// # Contract
-/// 1. Opens (or creates) `path` and acquires a non-blocking exclusive lock
-///    with exponential backoff (200 ms → 500 ms → 1.5 s → 5 s cap, 30 s total).
+/// 1. Refuses a link at `path`'s folder, then opens (or creates) the sibling
+///    `.<file>.tandem-lock` and takes a non-blocking exclusive lock on it with
+///    exponential backoff (200 ms → 500 ms → 1.5 s → 5 s cap, 30 s total).
 /// 2. Reads and deserialises the file.  An absent file is treated as an empty
 ///    JSON object `{}`.
 /// 3. Asserts the top-level value is a JSON object; returns
@@ -173,6 +174,9 @@ const LOCK_BUDGET: Duration = Duration::from_secs(30);
 ///   before supplying `path`. That validation covers the vm dir; this function
 ///   refuses a reparse point at `path`'s folder, its lockfile or `path`
 ///   itself (#2144), none of which the vm-dir guard can see.
+/// - `path` is one of [`PLUGIN_FILES`]. The orphan sweep's safety rests on
+///   that: it holds those three locks, so a temp written under any other
+///   file's lock would be protected only by the sweep's age gate.
 pub fn with_locked_json<T, F>(path: &Path, mutate: F) -> Result<T, CoworkError>
 where
     F: FnOnce(&mut Value) -> Result<T, CoworkError>,
@@ -478,13 +482,18 @@ const CLI_SCRUB_TEMP_PREFIX: &str = ".tandem-scrub-tmp-";
 /// keeps the sweep off every other file in Claude's folder:
 /// - `.tandem-tmp-<hex>-<hex>-<hex>` ([`temp_name`]; the only shape any
 ///   released desktop build wrote);
-/// - `.tandem-scrub-tmp-<uuid>` (the npm CLI).
+/// - `.tandem-scrub-tmp-<uuid>` (the npm CLI since v0.14.0), and
+///   `.tandem-scrub-tmp-<1–8 base-36 chars>` (v0.8.0–v0.13.x, which used
+///   `Math.random().toString(36).slice(2, 10)`). A removal pass must match every
+///   shape any version wrote.
 ///
 /// `.tandem-meta-tmp-*` (`cowork_meta.rs`) is deliberately not matched: it
 /// lives in Tandem's app data, not here, and holds no token.
 pub(crate) fn is_orphaned_temp_name(name: &str) -> bool {
     if let Some(rest) = name.strip_prefix(CLI_SCRUB_TEMP_PREFIX) {
-        return is_uuid_like(rest);
+        let legacy = (1..=8).contains(&rest.len())
+            && rest.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'z'));
+        return is_uuid_like(rest) || legacy;
     }
     if let Some(rest) = name.strip_prefix(".tandem-tmp-") {
         let groups: Vec<&str> = rest.split('-').collect();
@@ -527,13 +536,18 @@ pub(crate) fn sweep_orphaned_temps_in(
     plugins_dir: &Path,
     min_age: Duration,
 ) -> Result<SweepOutcome, CoworkError> {
+    // An unreadable entry is an error, not an absence: dropping it would read
+    // as "nothing to sweep" while an orphan stayed.
     let list = || -> Result<Vec<PathBuf>, CoworkError> {
         require_plain_dir(plugins_dir)?;
-        Ok(std::fs::read_dir(plugins_dir)?
-            .flatten()
-            .filter(|e| is_orphaned_temp_name(&e.file_name().to_string_lossy()))
-            .map(|e| e.path())
-            .collect())
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(plugins_dir)? {
+            let entry = entry?;
+            if is_orphaned_temp_name(&entry.file_name().to_string_lossy()) {
+                found.push(entry.path());
+            }
+        }
+        Ok(found)
     };
     if list()?.is_empty() {
         return Ok(SweepOutcome::default());
@@ -546,12 +560,17 @@ pub(crate) fn sweep_orphaned_temps_in(
         .map(|name| acquire_plugin_lock(&plugins_dir.join(name)))
         .collect::<Result<Vec<_>, _>>()?;
 
+    // A failure on one entry counts it as left and moves on, so one file an
+    // antivirus holds open does not leave every other orphan behind.
     let mut outcome = SweepOutcome::default();
     for path in list()? {
         let meta = match std::fs::symlink_metadata(&path) {
             Ok(m) => m,
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e.into()),
+            Err(_) => {
+                outcome.left += 1;
+                continue;
+            }
         };
         let plain_file = meta.is_file() && !is_reparse(&meta);
         // A future mtime reads as fresh.
@@ -567,7 +586,7 @@ pub(crate) fn sweep_orphaned_temps_in(
         match std::fs::remove_file(&path) {
             Ok(()) => outcome.removed += 1,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
+            Err(_) => outcome.left += 1,
         }
     }
     Ok(outcome)
@@ -987,6 +1006,9 @@ mod reparse_tests {
         assert!(is_orphaned_temp_name(
             ".tandem-scrub-tmp-0b30dd94-eb52-48e2-851c-025e7b9a45ad"
         ));
+        // npm CLIs v0.8.0–v0.13.x: `Math.random().toString(36).slice(2, 10)`.
+        assert!(is_orphaned_temp_name(".tandem-scrub-tmp-k3j9x2ab"));
+        assert!(is_orphaned_temp_name(".tandem-scrub-tmp-4f"));
         for name in [
             ".tandem-tmp-",
             ".tandem-tmp-xyz",
@@ -996,6 +1018,8 @@ mod reparse_tests {
             ".tandem-tmp-1A-2-3",
             ".tandem-scrub-tmp-",
             ".tandem-scrub-tmp-not-a-uuid",
+            ".tandem-scrub-tmp-k3j9x2ab9",
+            ".tandem-scrub-tmp-K3J9X2AB",
             ".tandem-meta-tmp-0b30dd94-eb52-48e2-851c-025e7b9a45ad",
             ".installed_plugins.json.tandem-lock",
             "installed_plugins.json",

@@ -172,8 +172,9 @@ while you run the desktop app. There is no in-app switch to turn it off any more
 - **`tandem --uninstall-scrub` removes the workspace entries too**, from both places
   Claude Desktop keeps them:
   `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\local-agent-mode-sessions`
-  and `%APPDATA%\Claude\local-agent-mode-sessions`. Its log names each folder it checked
-  and what it removed. It looks where the `%APPDATA%` variable points: if that is outside
+  (or an `AnthropicPBC.Claude*` package) and `%APPDATA%\Claude\local-agent-mode-sessions`,
+  along with the temporary copy an interrupted Cowork settings write can leave there, which
+  may hold the auth token. Its log names each folder it checked and what it removed. It looks where the `%APPDATA%` variable points: if that is outside
   your user folder it skips it with a warning, and if you changed it from the Windows
   default it may miss entries the desktop app wrote at the default location. Uninstalling
   the desktop app removes those, unless your profile is redirected to a network share,

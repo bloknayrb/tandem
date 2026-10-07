@@ -594,7 +594,7 @@ async function readJsonObject(
  * Take the cross-language Cowork lock on `filePath`'s sibling lockfile.
  *
  * Resolves the held handle, or `null` when the directory vanished (`ENOENT`)
- * or the lockfile is a link {@link screenPluginFile} refused (already warned:
+ * or {@link screenPluginFile} refused the lockfile or its folder (already warned:
  * a refusal is a warning, not a failure). `EBUSY` — Rust holding the lockfile
  * open — is retried on Rust's own backoff schedule; past the budget, or on any
  * other error, this THROWS, so the caller never writes without the lock.
@@ -724,8 +724,14 @@ export async function rewriteJson(
 
 /** The desktop writer's temp (`temp_name` in `cowork_atomic_json.rs`). */
 const DESKTOP_TEMP_NAME = /^\.tandem-tmp-[0-9a-f]+-[0-9a-f]+-[0-9a-f]+$/;
-/** What follows {@link SCRUB_TEMP_PREFIX} in this scrub's temp: a `randomUUID()`. */
+/**
+ * What follows {@link SCRUB_TEMP_PREFIX} in this scrub's temp: a `randomUUID()`
+ * since v0.14.0, or, in v0.8.0–v0.13.x, `Math.random().toString(36).slice(2, 10)`
+ * (one to eight base-36 characters). A removal pass must match every shape any
+ * version wrote.
+ */
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const LEGACY_SUFFIX = /^[0-9a-z]{1,8}$/;
 
 /**
  * Is `name` a temp file one of the two Cowork writers leaves when it dies
@@ -736,7 +742,10 @@ const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a
  * deliberately not matched: it lives in Tandem's app data and holds no token.
  */
 export function isOrphanedTempName(name: string): boolean {
-  if (name.startsWith(SCRUB_TEMP_PREFIX)) return UUID.test(name.slice(SCRUB_TEMP_PREFIX.length));
+  if (name.startsWith(SCRUB_TEMP_PREFIX)) {
+    const suffix = name.slice(SCRUB_TEMP_PREFIX.length);
+    return UUID.test(suffix) || LEGACY_SUFFIX.test(suffix);
+  }
   return DESKTOP_TEMP_NAME.test(name);
 }
 
@@ -1164,8 +1173,10 @@ export async function scrubCoworkWorkspace(
   if (swept.removed > 0) {
     logger.info(`removed ${swept.removed} leftover temp file(s) from ${ws.path}`);
   }
+  // A warning, so the run's summary counts it: one of these may still hold
+  // the token.
   if (swept.left > 0) {
-    logger.info(
+    logger.warn(
       `left ${swept.left} temp-named entr(y/ies) in ${ws.path} (not a plain file, or written in the last minute)`,
     );
   }

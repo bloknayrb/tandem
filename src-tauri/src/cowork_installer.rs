@@ -1403,6 +1403,26 @@ mod tests {
     }
 
     #[test]
+    fn test_workspace_has_tandem_entry_does_not_read_through_a_junction() {
+        // #2144, the read side: the status and heal checks read through the
+        // no-follow helper too. Old code: `read_to_string` followed the
+        // junction, found the entry, and said `true`.
+        let mut s = crate::cowork_workspace_scan::test_fs::Scratch::new("has_entry");
+        let ws = s.dir.join("vm");
+        fs::create_dir_all(&ws).unwrap();
+        let target = s.dir.join("elsewhere");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(
+            target.join("installed_plugins.json"),
+            r#"{"mcpServers":{"tandem":{"type":"stdio"}}}"#,
+        )
+        .unwrap();
+        s.junction(&ws.join("cowork_plugins"), &target);
+
+        assert!(!workspace_has_tandem_entry(&ws));
+    }
+
+    #[test]
     fn test_workspace_has_tandem_entry_states() {
         let dir = TempDir::new().unwrap();
         let ws = dir.path();

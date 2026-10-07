@@ -1327,7 +1327,11 @@ pub(crate) fn cowork_get_status() -> Result<serde_json::Value, String> {
                         Ok(_) => "ok",
                         Err(_) => "failed",
                     },
-                    Err(_) => "failed",
+                    Err(e) => {
+                        // Path and error only; never the contents.
+                        log::warn!("[cowork] cannot read {}: {e}", path.display());
+                        "failed"
+                    }
                 }
             };
             let marketplaces_status = file_status("known_marketplaces.json");

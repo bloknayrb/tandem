@@ -615,7 +615,14 @@ describe("sweepOrphanedTemps", () => {
     // The CLI generator's own shape, not a copy of it.
     expect(isOrphanedTempName(`${SCRUB_TEMP_PREFIX}${randomUUID()}`)).toBe(true);
     expect(isOrphanedTempName(rustOrphan)).toBe(true);
+    // v0.8.0–v0.13.x CLIs: the old generator's own output, then an edge case.
+    expect(
+      isOrphanedTempName(`${SCRUB_TEMP_PREFIX}${Math.random().toString(36).slice(2, 10)}`),
+    ).toBe(true);
+    expect(isOrphanedTempName(`${SCRUB_TEMP_PREFIX}4f`)).toBe(true);
     for (const name of [
+      ".tandem-scrub-tmp-k3j9x2ab9",
+      ".tandem-scrub-tmp-K3J9X2AB",
       ".tandem-tmp-",
       ".tandem-tmp-xyz",
       ".tandem-tmp-1-2",
