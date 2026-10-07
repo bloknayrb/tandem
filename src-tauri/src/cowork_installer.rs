@@ -1298,7 +1298,7 @@ mod tests {
         let outcome = sweep_orphaned_temps(&ws_path).unwrap();
         std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
 
-        assert_eq!(outcome, SweepOutcome { removed: 2, left: 1 });
+        assert_eq!(outcome, SweepOutcome { removed: 2, left: 1, ..Default::default() });
         assert!(!rust_orphan.exists() && !cli_orphan.exists());
         assert!(fresh.exists(), "a temp younger than the gate may be a live write");
         for name in crate::cowork_atomic_json::PLUGIN_FILES {

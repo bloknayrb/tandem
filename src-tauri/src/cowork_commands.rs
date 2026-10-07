@@ -1329,7 +1329,8 @@ pub(crate) fn cowork_get_status() -> Result<serde_json::Value, String> {
                     },
                     Err(e) => {
                         // Path and error only; never the contents.
-                        log::warn!("[cowork] cannot read {}: {e}", path.display());
+                        // Debug: this runs on every 30 s status poll.
+                        log::debug!("[cowork] cannot read {}: {e}", path.display());
                         "failed"
                     }
                 }

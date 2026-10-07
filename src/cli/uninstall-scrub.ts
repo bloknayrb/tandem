@@ -1177,7 +1177,7 @@ export async function scrubCoworkWorkspace(
   // the token.
   if (swept.left > 0) {
     logger.warn(
-      `left ${swept.left} temp-named entr(y/ies) in ${ws.path} (not a plain file, or written in the last minute)`,
+      `left ${swept.left} temp-named entr(y/ies) in ${ws.path} (not a plain file, written in the last minute, or could not be removed: see the lines above)`,
     );
   }
 

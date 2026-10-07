@@ -516,8 +516,12 @@ pub(crate) const ORPHAN_MIN_AGE: Duration = Duration::from_secs(60);
 pub struct SweepOutcome {
     /// Orphaned temp files deleted.
     pub removed: usize,
-    /// Orphan-named entries left in place: not a regular file, or too new.
+    /// Orphan-named entries left on purpose: not a regular file, or too new.
     pub left: usize,
+    /// "path — error" for each orphan that could not be inspected or deleted
+    /// (an antivirus holding it, access denied). Path and error only; such a
+    /// file may hold the token, so the caller must say which one.
+    pub failed: Vec<String>,
 }
 
 /// Delete orphaned temp files from `plugins_dir`, holding all three registry
@@ -567,8 +571,8 @@ pub(crate) fn sweep_orphaned_temps_in(
         let meta = match std::fs::symlink_metadata(&path) {
             Ok(m) => m,
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-            Err(_) => {
-                outcome.left += 1;
+            Err(e) => {
+                outcome.failed.push(format!("{} — {e}", path.display()));
                 continue;
             }
         };
@@ -586,7 +590,7 @@ pub(crate) fn sweep_orphaned_temps_in(
         match std::fs::remove_file(&path) {
             Ok(()) => outcome.removed += 1,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(_) => outcome.left += 1,
+            Err(e) => outcome.failed.push(format!("{} — {e}", path.display())),
         }
     }
     Ok(outcome)
@@ -1051,7 +1055,8 @@ mod reparse_tests {
             outcome,
             SweepOutcome {
                 removed: 2,
-                left: 1
+                left: 1,
+                ..Default::default()
             }
         );
         assert!(plugins.join(".tandem-tmp-d-e-f").is_dir());
@@ -1092,7 +1097,8 @@ mod reparse_tests {
             outcome,
             SweepOutcome {
                 removed: 0,
-                left: 1
+                left: 1,
+                ..Default::default()
             }
         );
         assert!(fresh.exists());

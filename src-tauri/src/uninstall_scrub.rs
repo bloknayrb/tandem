@@ -250,6 +250,9 @@ pub fn run_uninstall_scrub() -> i32 {
                             ws.display()
                         );
                     }
+                    for failed in &outcome.failed {
+                        eprintln!("[scrub] could not remove leftover temp file (may hold the token): {failed}");
+                    }
                     if outcome.left > 0 {
                         eprintln!(
                             "[scrub] left {} temp-named entr(y/ies) in {} (not a plain file, or written in the last minute)",
