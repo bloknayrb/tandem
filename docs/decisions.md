@@ -2696,7 +2696,8 @@ So v1.0 would have shipped a Windows toggle, a wizard row and an onboarding step
 5. Flip both literals together; the gate test checks they agree.
 6. Remove the `COWORK_ENABLED: true as false` mocks from the three lit-path suites and retire the two dark tests.
 7. Undo the docs side. `grep -rn 'ADR-055\|ships dark\|while dark' docs CLAUDE.md README.md src src-tauri/src src-tauri/windows` and resolve every Cowork hit: the user-facing docs restored from the PR that shipped this ADR, the banners and notes on ADR-023, ADR-038 and ADR-044 dropped, `data-locations.md`'s past-enabler section rewritten, and the comments that say "while dark" brought up to date.
-8. Tell the website project that Cowork copy is allowed again, and close #2134.
+8. Give the Cowork status UI a state for an AppData folder on a network share. Since #2144 the workspace scan never enters a UNC Known Folder, so such a machine reads as "no Claude" or "no workspace yet" rather than "blocked"; the old "blocked" answer came from touching the share.
+9. Tell the website project that Cowork copy is allowed again, and close #2134.
 
 **Cross-references:** ADR-023 (the plugin-stdio bridge), ADR-044 (workspace detection and the heal pass), ADR-038 (the integration policy this amends), ADR-053 (the flag pattern), #316, #317, #1373, #1455, #1598, #1727, #1827 (decision E), #2134.
 

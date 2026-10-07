@@ -14,7 +14,8 @@
  * scrub's reach (below). They overlap on the Cowork firewall rules and on
  * Cowork plugin entries under both of Claude Desktop's session roots,
  * `%LOCALAPPDATA%\Packages\<claude-package>\…` and `%APPDATA%\Claude\…`
- * (#2136). Both are idempotent. So a Windows user who only uninstalls the
+ * (#2136), and on sweeping the temp files a crashed Cowork write leaves there
+ * (#2144). Both are idempotent. So a Windows user who only uninstalls the
  * desktop app keeps their `mcpServers.tandem` entries until they run this by
  * hand.
  *
@@ -32,10 +33,12 @@
  *   - Cowork workspaces (Windows): `installed_plugins.json`
  *     (`mcpServers.tandem`), `known_marketplaces.json`
  *     (`marketplaces.tandem`), `cowork_settings.json` (`tandem@tandem` in
- *     `enabledPlugins`)
+ *     `enabledPlugins`), plus the `.tandem-tmp-*` / `.tandem-scrub-tmp-*`
+ *     copies a write killed mid-way leaves beside them
  *   - MCP configs (all platforms): `mcpServers.tandem` /
  *     `mcpServers["tandem-channel"]` from `~/.claude.json` and every
- *     detected Claude Desktop config (incl. Windows MSIX)
+ *     detected Claude Desktop config (incl. Windows MSIX, under the wider
+ *     removal set of package names: `detectRemovalTargets`)
  *   - The bundled skill dir `~/.claude/skills/tandem/` (only when it
  *     contains nothing Tandem didn't install)
  *   - `Tandem Cowork*` Windows Firewall rules via `netsh`
@@ -70,8 +73,10 @@ import path from "node:path";
 import { promisify } from "node:util";
 import {
   assertPathSafe,
+  CLAUDE_PACKAGE_PREFIXES,
   type DetectedTarget,
-  detectTargets,
+  detectRemovalTargets,
+  isClaudePackageName,
   pathRejectionReason,
   removeConfigEntries,
 } from "../server/integrations/apply.js";
@@ -285,23 +290,12 @@ async function readdirNoFollow(dir: string, logger: ScrubLogger): Promise<string
 }
 
 /**
- * MSIX package names that may hold Claude Desktop's sessions. Publisher-anchored
- * prefixes, never a bare `includes("Claude")`: a foreign package could stage the
- * sessions layout in its own container.
- *
- * This and the two segment lists below are the TS twin of
- * `is_claude_package_name` and `roots_under` in
- * `src-tauri/src/cowork_workspace_scan.rs`, and drift between the two scans is
- * what #2136 was. `tests/build/cowork-scan-alignment.test.ts` reads the Rust
- * source and fails when they disagree.
- *
- * Deliberately wider than `MSIX_PACKAGE_PATTERN` in `apply.ts` (`Claude_` only),
- * which decides where Claude Desktop's own config is looked for: a removal pass
- * must reach every package the Rust installer could have written into.
+ * Below `%LOCALAPPDATA%`; the MSIX package dirs live in it. This and the two
+ * segment lists below, with `isClaudePackageName` in `apply.ts`, are the TS
+ * twin of `roots_under` and `is_claude_package_name` in
+ * `src-tauri/src/cowork_workspace_scan.rs`; drift between them is what #2136
+ * was, and `tests/build/cowork-scan-alignment.test.ts` fails on it.
  */
-export const CLAUDE_PACKAGE_PREFIXES = ["Claude_", "AnthropicPBC.Claude"] as const;
-
-/** Below `%LOCALAPPDATA%`; the MSIX package dirs live in it. */
 export const MSIX_PACKAGES_DIR = "Packages";
 
 /** Below `%LOCALAPPDATA%\Packages\<claude-package>`. */
@@ -358,9 +352,7 @@ async function coworkSessionsRoots(logger: ScrubLogger): Promise<SessionsRoot[]>
 
   const candidates: { base: string; segments: readonly string[] }[] = [];
   if (packagesDir) {
-    const packages = (await readdirNoFollow(packagesDir, logger)).filter((name) =>
-      CLAUDE_PACKAGE_PREFIXES.some((prefix) => name.startsWith(prefix)),
-    );
+    const packages = (await readdirNoFollow(packagesDir, logger)).filter(isClaudePackageName);
     if (packages.length === 0) {
       logger.info(
         `no Claude package directory read under ${packagesDir} (see the line above if it was refused)`,
@@ -419,19 +411,20 @@ async function coworkSessionsRoots(logger: ScrubLogger): Promise<SessionsRoot[]>
  * then the path guard. Rust checks shape first with `is_dir()`, which follows
  * junctions, and copying that order would `lstat` through a junction planted
  * as the vm dir. Screening `cowork_plugins` itself is what stops
- * {@link rewriteJson} reading through a junction planted there. This covers
- * folder levels only: the plugin files and their lockfiles are still followed
- * if they are themselves symlinks, as in the Rust writer.
+ * {@link rewriteJson} reading through a junction planted there. That screen
+ * runs at scan time, and the whole scan finishes before any rewrite, so
+ * {@link scrubCoworkWorkspace} re-screens each workspace before it touches it,
+ * and {@link screenPluginFile} re-screens `cowork_plugins` and the files (#2144).
  *
  * Each candidate is validated by the 5-step Windows path guard, contained
  * under its own sessions root's realpath, so callers receive only safe,
- * realpath'd, de-duplicated paths. Returns an empty array when nothing is found
- * (e.g. Cowork not installed).
+ * realpath'd, de-duplicated paths, each with that root for the re-screen.
+ * Returns an empty array when nothing is found (e.g. Cowork not installed).
  */
-export async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[]> {
+export async function findCoworkWorkspaces(logger: ScrubLogger): Promise<CoworkWorkspace[]> {
   const roots = await coworkSessionsRoots(logger);
 
-  const workspaces = new Set<string>();
+  const workspaces = new Map<string, CoworkWorkspace>();
   let withoutPlugins = 0;
   for (const root of roots) {
     for (const ws of await readdirNoFollow(root.path, logger)) {
@@ -449,8 +442,8 @@ export async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[
         }
 
         const safePath = await assertSafeWorkspacePath(vmPath, root.real, logger);
-        if (safePath !== null) {
-          workspaces.add(safePath);
+        if (safePath !== null && !workspaces.has(safePath)) {
+          workspaces.set(safePath, { path: safePath, realRoot: root.real });
         }
       }
     }
@@ -460,8 +453,16 @@ export async function findCoworkWorkspaces(logger: ScrubLogger): Promise<string[
     logger.info(`skipped ${withoutPlugins} dir(s) with no usable cowork_plugins folder`);
   }
   logger.info(`found ${workspaces.size} workspace(s) in ${roots.length} sessions root(s)`);
-  return [...workspaces];
+  return [...workspaces.values()];
 }
+
+/** A workspace the scan validated, and the realpath of the root it sits under. */
+export type CoworkWorkspace = {
+  /** The realpath'd vm dir. */
+  path: string;
+  /** Its sessions root's realpath: the containment base for the re-screen. */
+  realRoot: string;
+};
 
 /**
  * libuv's raw open flag for an exclusive-share open (`UV_FS_O_EXLOCK`): on
@@ -485,12 +486,81 @@ export interface RewriteJsonOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
+/** This scrub's temp prefix; `CLI_SCRUB_TEMP_PREFIX` in `cowork_atomic_json.rs`
+ *  matches it, pinned equal by `tests/build/cowork-scan-alignment.test.ts`. */
+export const SCRUB_TEMP_PREFIX = ".tandem-scrub-tmp-";
+
+const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The three Cowork registry files, in the order every holder of more than one
+ * lock takes them: the same list and order as `PLUGIN_FILES` in
+ * `src-tauri/src/cowork_atomic_json.rs`, pinned equal by
+ * `tests/build/cowork-scan-alignment.test.ts`. One shared order lets two
+ * concurrent sweeps wait for each other instead of each holding one lock and
+ * timing out on the other.
+ */
+export const PLUGIN_FILES = [
+  "installed_plugins.json",
+  "known_marketplaces.json",
+  "cowork_settings.json",
+] as const;
+
+type ScreenResult = "absent" | "ok" | "refused";
+
+/**
+ * Look at a registry file or lockfile, and at the `cowork_plugins` folder
+ * holding it, without following either (#2144).
+ *
+ * `readFile` and `open` follow a link at the path, and `open` with `O_CREAT`
+ * creates the target of a dangling one. A junction needs no privilege and can
+ * sit at a FILE's name. The folder is screened again because the scan's check
+ * of it can be stale by the time a later workspace is rewritten, and because
+ * an `lstat` of the file traverses, so follows, the folder.
+ *
+ * ENOENT at either level is `absent`; a link, a non-folder parent, a
+ * non-regular file or any other `lstat` error is `refused` and warned, path
+ * only. **Residual:** Node has no no-follow open on Windows (`O_NOFOLLOW` is
+ * undefined there, and `O_EXCL` creates through a dangling link too), so a link
+ * swapped in between this `lstat` and the open is followed. The Rust writer
+ * closes that window with `FILE_FLAG_OPEN_REPARSE_POINT`; this one cannot.
+ */
+async function screenPluginFile(filePath: string, logger: ScrubLogger): Promise<ScreenResult> {
+  const dir = path.dirname(filePath);
+  for (const [target, wantDirectory] of [
+    [dir, true],
+    [filePath, false],
+  ] as const) {
+    try {
+      const stat = await fsPromises.lstat(target);
+      if (stat.isSymbolicLink()) {
+        logger.warn(`refusing to follow a reparse point: ${target}`);
+        return "refused";
+      }
+      if (wantDirectory ? !stat.isDirectory() : !stat.isFile()) {
+        logger.warn(`not a ${wantDirectory ? "folder" : "regular file"}, skipping: ${target}`);
+        return "refused";
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return "absent";
+      logger.warn(`cannot inspect ${target}: ${(err as Error).message}`);
+      return "refused";
+    }
+  }
+  return "ok";
+}
+
 /** Read and parse `filePath` as a JSON object. `null` means "skip": absent
- * (silently), unreadable, malformed or not an object (each warned, path only). */
+ * (silently), refused by {@link screenPluginFile}, unreadable, malformed or
+ * not an object (each warned, path only). */
 async function readJsonObject(
   filePath: string,
   logger: ScrubLogger,
 ): Promise<Record<string, unknown> | null> {
+  if ((await screenPluginFile(filePath, logger)) !== "ok") {
+    return null;
+  }
+
   let content: string;
   try {
     content = await fsPromises.readFile(filePath, "utf8");
@@ -523,20 +593,27 @@ async function readJsonObject(
 /**
  * Take the cross-language Cowork lock on `filePath`'s sibling lockfile.
  *
- * Resolves the held handle, or `null` when the directory vanished (`ENOENT`).
- * `EBUSY` — Rust holding the lockfile open — is retried on Rust's own backoff
- * schedule; past the budget, or on any other error, this THROWS, so the caller
- * never writes without the lock.
+ * Resolves the held handle, or `null` when the directory vanished (`ENOENT`)
+ * or {@link screenPluginFile} refused the lockfile or its folder (already warned:
+ * a refusal is a warning, not a failure). `EBUSY` — Rust holding the lockfile
+ * open — is retried on Rust's own backoff schedule; past the budget, or on any
+ * other error, this THROWS, so the caller never writes without the lock.
  */
 async function acquireCoworkLock(
   filePath: string,
   sleep: (ms: number) => Promise<void>,
+  logger: ScrubLogger,
 ): Promise<FileHandle | null> {
   // Byte-identical to Rust's `format!(".{file_name}.tandem-lock")`. Renaming
   // it on either side silently removes the exclusion.
   const lockPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.tandem-lock`);
   let slept = 0;
   for (let attempt = 0; ; attempt++) {
+    // Before every attempt, not once: the open below follows a link and, with
+    // `O_CREAT`, creates through a dangling one (#2144).
+    if ((await screenPluginFile(lockPath, logger)) === "refused") {
+      return null;
+    }
     try {
       return await fsPromises.open(
         lockPath,
@@ -589,7 +666,12 @@ async function acquireCoworkLock(
  * 3. Under the lock: re-read, re-parse, re-`mutate`, write a tmp file, rename.
  *    The lockfile is left in place, as Rust leaves it.
  *
- * Precondition: `filePath` has already been validated by the path guard.
+ * Neither the data file nor the lockfile is followed if it is a link, and
+ * neither is `cowork_plugins` (#2144); see {@link screenPluginFile} for the
+ * window Node cannot close.
+ *
+ * Precondition: `filePath`'s workspace has already been validated by the path
+ * guard.
  *
  * Returns true if the mutation changed something and was written, false if
  * the file was absent or unchanged.
@@ -600,15 +682,14 @@ export async function rewriteJson(
   logger: ScrubLogger,
   opts: RewriteJsonOptions = {},
 ): Promise<boolean> {
-  const sleep =
-    opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const sleep = opts.sleep ?? realSleep;
 
   const preview = await readJsonObject(filePath, logger);
   if (preview === null || !mutate(preview)) {
     return false;
   }
 
-  const lock = await acquireCoworkLock(filePath, sleep);
+  const lock = await acquireCoworkLock(filePath, sleep, logger);
   if (lock === null) {
     return false;
   }
@@ -623,8 +704,10 @@ export async function rewriteJson(
 
     const dir = path.dirname(filePath);
     // randomUUID, not Math.random: same path-prediction rationale as
-    // apply.ts#atomicWrite — these files can hold bearer tokens.
-    const tmpPath = path.join(dir, `.tandem-scrub-tmp-${randomUUID()}`);
+    // apply.ts#atomicWrite — these files can hold bearer tokens. It is also
+    // the only reason this `writeFile`, which follows a link at the name, is
+    // safe: nobody can plant a link at a name they cannot predict.
+    const tmpPath = path.join(dir, `${SCRUB_TEMP_PREFIX}${randomUUID()}`);
 
     try {
       await fsPromises.writeFile(tmpPath, JSON.stringify(parsed, null, 2), "utf8");
@@ -636,6 +719,136 @@ export async function rewriteJson(
     return true;
   } finally {
     await lock.close();
+  }
+}
+
+/** The desktop writer's temp (`temp_name` in `cowork_atomic_json.rs`). */
+const DESKTOP_TEMP_NAME = /^\.tandem-tmp-[0-9a-f]+-[0-9a-f]+-[0-9a-f]+$/;
+/**
+ * What follows {@link SCRUB_TEMP_PREFIX} in this scrub's temp: a `randomUUID()`
+ * since v0.14.0, or, in v0.8.0–v0.13.x, `Math.random().toString(36).slice(2, 10)`
+ * (one to eight base-36 characters). A removal pass must match every shape any
+ * version wrote.
+ */
+const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const LEGACY_SUFFIX = /^[0-9a-z]{1,8}$/;
+
+/**
+ * Is `name` a temp file one of the two Cowork writers leaves when it dies
+ * between writing and renaming? Anchored to the exact shapes, because the
+ * match is what keeps the sweep off every other file in Claude's folder, the
+ * same boundary `reaper.ts` and `sweepStaleSetupTemps` draw. The twin of
+ * `is_orphaned_temp_name` in `cowork_atomic_json.rs`. `.tandem-meta-tmp-*` is
+ * deliberately not matched: it lives in Tandem's app data and holds no token.
+ */
+export function isOrphanedTempName(name: string): boolean {
+  if (name.startsWith(SCRUB_TEMP_PREFIX)) {
+    const suffix = name.slice(SCRUB_TEMP_PREFIX.length);
+    return UUID.test(suffix) || LEGACY_SUFFIX.test(suffix);
+  }
+  return DESKTOP_TEMP_NAME.test(name);
+}
+
+/**
+ * A temp younger than this is left alone. Every current writer creates and
+ * renames its temp while holding that file's lock, and the sweep holds all
+ * three, so for them no age is needed. npm CLIs v0.8.0–v0.25.x wrote theirs
+ * with no lock; a live temp lives milliseconds, so a minute outlasts it. Mirrors
+ * `ORPHAN_MIN_AGE` in `cowork_atomic_json.rs`.
+ */
+export const ORPHAN_MIN_AGE_MS = 60_000;
+
+export interface SweepOptions extends RewriteJsonOptions {
+  /** Injectable for tests. */
+  now?: () => number;
+  minAgeMs?: number;
+}
+
+export type SweepOutcome = {
+  /** Orphaned temp files deleted. */
+  removed: number;
+  /**
+   * Orphan-named entries left in place: not a regular file, too new, or one
+   * that could not be inspected or removed (each of those is warned by path).
+   */
+  left: number;
+};
+
+/**
+ * Delete orphaned temp files from one workspace's `cowork_plugins`, holding
+ * all three registry locks while it does (#2144).
+ *
+ * A desktop install or token-apply temp holds the whole `installed_plugins.json`,
+ * auth token included; an uninstall temp, or one of this scrub's, holds the
+ * post-removal JSON. Neither scrub removed them before.
+ *
+ * **The locks are the safety argument**, as in the Rust sweep: a temp exists
+ * only while its own file's lock is held, so with all three held nothing can
+ * be mid-write. Deleting a live temp would make its writer's rename fail, and
+ * a Tandem entry that writer was removing would stay. The listing is done once
+ * unlocked first, so a folder with nothing to sweep gets no new lockfiles.
+ * Deletes with `unlink`, never `rm`/`rename`, which
+ * `tests/docs/config-writer-set-claims.test.ts` would count as writes.
+ */
+export async function sweepOrphanedTemps(
+  pluginsDir: string,
+  logger: ScrubLogger,
+  opts: SweepOptions = {},
+): Promise<SweepOutcome> {
+  const sleep = opts.sleep ?? realSleep;
+  const now = opts.now ?? Date.now;
+  const minAgeMs = opts.minAgeMs ?? ORPHAN_MIN_AGE_MS;
+  const outcome: SweepOutcome = { removed: 0, left: 0 };
+  const candidates = async () =>
+    (await readdirNoFollow(pluginsDir, logger)).filter(isOrphanedTempName);
+
+  if ((await candidates()).length === 0) {
+    return outcome;
+  }
+
+  const locks: FileHandle[] = [];
+  try {
+    for (const name of PLUGIN_FILES) {
+      const lock = await acquireCoworkLock(path.join(pluginsDir, name), sleep, logger);
+      if (lock === null) {
+        logger.warn(`not sweeping ${pluginsDir}: could not take the ${name} lock`);
+        return outcome;
+      }
+      locks.push(lock);
+    }
+
+    for (const name of await candidates()) {
+      const file = path.join(pluginsDir, name);
+      let stat: Awaited<ReturnType<typeof fsPromises.lstat>>;
+      try {
+        stat = await fsPromises.lstat(file);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          logger.warn(`cannot inspect ${file}: ${(err as Error).message}`);
+          outcome.left++;
+        }
+        continue;
+      }
+      // A future mtime reads as fresh.
+      if (stat.isSymbolicLink() || !stat.isFile() || now() - stat.mtimeMs < minAgeMs) {
+        outcome.left++;
+        continue;
+      }
+      try {
+        await fsPromises.unlink(file);
+        outcome.removed++;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          logger.warn(`cannot remove ${file}: ${(err as Error).message}`);
+          outcome.left++;
+        }
+      }
+    }
+    return outcome;
+  } finally {
+    for (const lock of locks) {
+      await lock.close().catch(() => {});
+    }
   }
 }
 
@@ -702,7 +915,7 @@ export function removeCoworkSettings(obj: Record<string, unknown>): boolean {
  */
 export async function scrubMcpConfigs(
   logger: ScrubLogger,
-  detect: () => DetectedTarget[] = detectTargets,
+  detect: () => DetectedTarget[] = detectRemovalTargets,
 ): Promise<number> {
   let failures = 0;
   let targets: DetectedTarget[];
@@ -899,39 +1112,87 @@ export async function removeAutostartEntry(
   return 0;
 }
 
+const MUTATORS: Record<(typeof PLUGIN_FILES)[number], (obj: Record<string, unknown>) => boolean> = {
+  "installed_plugins.json": removeInstalledPlugins,
+  "known_marketplaces.json": removeKnownMarketplaces,
+  "cowork_settings.json": removeCoworkSettings,
+};
+
 /**
- * Remove Tandem's entries from one workspace's three plugin files. Returns
- * false on an I/O failure (already logged as an error), true otherwise.
+ * Remove Tandem's entries from one workspace's three plugin files, then sweep
+ * the temp files a crashed write left there. Returns false on an I/O failure
+ * (already logged as an error), true otherwise, including when the workspace
+ * is refused (a warning, not a failure).
  *
  * Each outcome is logged, as `scrubMcpConfigs` does, so the log tells
  * "removed Tandem's entries" from "found none". `rewriteJson` also returns
  * false for a file it could not read or parse (already warned), so "none" is
- * claimed only when nothing warned, and a failure part-way through still
- * reports what it had removed.
+ * claimed only when nothing warned, nothing was swept and nothing was left,
+ * and a failure part-way through still reports what it had removed.
+ *
+ * The workspace is re-screened by the path guard before the rewrites and
+ * again before the sweep (#2144), because the scan screened it before any
+ * workspace was touched. The Rust writer re-validates on every call too.
  */
-export async function scrubCoworkWorkspace(ws: string, logger: ScrubLogger): Promise<boolean> {
-  const pluginsDir = path.join(ws, "cowork_plugins");
-  const changed: string[] = [];
+export async function scrubCoworkWorkspace(
+  ws: CoworkWorkspace,
+  logger: ScrubLogger,
+  opts: SweepOptions = {},
+): Promise<boolean> {
+  const stillSafe = async () => {
+    if ((await assertSafeWorkspacePath(ws.path, ws.realRoot, logger)) !== null) return true;
+    logger.warn(`skipping ${ws.path}: it no longer passes the path guard`);
+    return false;
+  };
   const warningsBefore = logger.warnings();
+  if (!(await stillSafe())) {
+    return true;
+  }
+
+  const pluginsDir = path.join(ws.path, "cowork_plugins");
+  const changed: string[] = [];
   let ok = true;
   try {
-    for (const [file, mutate] of [
-      ["installed_plugins.json", removeInstalledPlugins],
-      ["known_marketplaces.json", removeKnownMarketplaces],
-      ["cowork_settings.json", removeCoworkSettings],
-    ] as const) {
-      if (await rewriteJson(path.join(pluginsDir, file), mutate, logger)) {
+    for (const file of PLUGIN_FILES) {
+      if (await rewriteJson(path.join(pluginsDir, file), MUTATORS[file], logger, opts)) {
         changed.push(file);
       }
     }
   } catch (err) {
-    logger.error(`scrub failed for ${ws}: ${(err as Error).message}`);
+    logger.error(`scrub failed for ${ws.path}: ${(err as Error).message}`);
     ok = false;
   }
+
+  // After the try, so it still runs when a rewrite threw. Never reported as
+  // "removed Tandem entries": only some of these temps hold one.
+  let swept: SweepOutcome = { removed: 0, left: 0 };
+  if (await stillSafe()) {
+    try {
+      swept = await sweepOrphanedTemps(pluginsDir, logger, opts);
+    } catch (err) {
+      logger.warn(`temp sweep failed for ${ws.path}: ${(err as Error).message}`);
+    }
+  }
+  if (swept.removed > 0) {
+    logger.info(`removed ${swept.removed} leftover temp file(s) from ${ws.path}`);
+  }
+  // A warning, so the run's summary counts it: one of these may still hold
+  // the token.
+  if (swept.left > 0) {
+    logger.warn(
+      `left ${swept.left} temp-named entr(y/ies) in ${ws.path} (not a plain file, written in the last minute, or could not be removed: see the lines above)`,
+    );
+  }
+
   if (changed.length > 0) {
-    logger.info(`removed Tandem entries from ${changed.join(", ")} in ${ws}`);
-  } else if (ok && logger.warnings() === warningsBefore) {
-    logger.info(`no Tandem entries in ${ws}`);
+    logger.info(`removed Tandem entries from ${changed.join(", ")} in ${ws.path}`);
+  } else if (
+    ok &&
+    swept.removed === 0 &&
+    swept.left === 0 &&
+    logger.warnings() === warningsBefore
+  ) {
+    logger.info(`no Tandem entries in ${ws.path}`);
   }
   return ok;
 }
