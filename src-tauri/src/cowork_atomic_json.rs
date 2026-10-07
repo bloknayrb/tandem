@@ -564,8 +564,8 @@ pub(crate) fn sweep_orphaned_temps_in(
         .map(|name| acquire_plugin_lock(&plugins_dir.join(name)))
         .collect::<Result<Vec<_>, _>>()?;
 
-    // A failure on one entry counts it as left and moves on, so one file an
-    // antivirus holds open does not leave every other orphan behind.
+    // A failure on one entry records it in `failed` and moves on, so one file
+    // an antivirus holds open does not leave every other orphan behind.
     let mut outcome = SweepOutcome::default();
     for path in list()? {
         let meta = match std::fs::symlink_metadata(&path) {
@@ -1102,6 +1102,38 @@ mod reparse_tests {
             }
         );
         assert!(fresh.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_sweep_names_a_temp_it_cannot_delete_and_still_removes_the_rest() {
+        // The scrub has no logger, so `failed` is the only place a temp that
+        // may hold the token gets named. Holding it open with no sharing makes
+        // the delete fail the way an antivirus scan does.
+        use std::os::windows::fs::OpenOptionsExt;
+        let s = Scratch::new("atomic");
+        let plugins = plugins(&s);
+        seed_registry(&plugins);
+        let held = plugins.join(".tandem-tmp-a-b-c");
+        std::fs::write(&held, "{}").unwrap();
+        std::fs::write(plugins.join(".tandem-tmp-1-2-3"), "{}").unwrap();
+        let _holder = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&held)
+            .unwrap();
+
+        let outcome = sweep_orphaned_temps_in(&plugins, Duration::ZERO).unwrap();
+
+        assert_eq!((outcome.removed, outcome.left), (1, 0));
+        assert_eq!(outcome.failed.len(), 1, "{:?}", outcome.failed);
+        assert!(
+            outcome.failed[0].contains(".tandem-tmp-a-b-c"),
+            "{:?}",
+            outcome.failed
+        );
+        assert!(held.exists());
+        assert!(!plugins.join(".tandem-tmp-1-2-3").exists());
     }
 
     #[test]

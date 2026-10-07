@@ -767,7 +767,10 @@ export interface SweepOptions extends RewriteJsonOptions {
 export type SweepOutcome = {
   /** Orphaned temp files deleted. */
   removed: number;
-  /** Orphan-named entries left in place: not a regular file, or too new. */
+  /**
+   * Orphan-named entries left in place: not a regular file, too new, or one
+   * that could not be inspected or removed (each of those is warned by path).
+   */
   left: number;
 };
 
