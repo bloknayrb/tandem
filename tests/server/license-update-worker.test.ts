@@ -77,6 +77,25 @@ describe("handleUpdateRequest (license-update Worker)", () => {
     expect(res.status).toBe(200);
   });
 
+  it("serves the exact entitlement the issuance Worker now mints for a PAID key", async () => {
+    // Since 2026-10-09 (ADR-040, decision A5) every paid key is minted with a
+    // null window and `status: "personal"`. That is now the most common live
+    // entitlement, so pin it as the full shape rather than infer it from the
+    // grandfathered row above, which carries no `status` at all.
+    const fetchFn = okFetch();
+    const res = await handleUpdateRequest(req("lic-paid"), {
+      kv: kvWith({
+        "lic-paid": JSON.stringify({ updateWindowEnd: null, status: "personal", version: "1.0" }),
+      }),
+      latestJsonUrl: URL_LATEST,
+      fetchFn,
+      now: () => NOW + 9999 * DAY,
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(MANIFEST);
+    expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
   it("returns 204 no-update for an unknown id WITHOUT fetching upstream", async () => {
     const fetchFn = okFetch();
     const res = await handleUpdateRequest(req("nope"), {
@@ -529,8 +548,9 @@ describe("the silent-no-update detector: alerting (#1786)", () => {
 
 describe("the revocation tombstone (#1786)", () => {
   it("a null-window tombstone is refused, NOT grandfathered into a served manifest", async () => {
-    // This row pins the check's EXISTENCE. `updateWindowEnd: null` is what a
-    // grandfathered entitlement carries, so with no `status` check at all the
+    // This row pins the check's EXISTENCE. `updateWindowEnd: null` is what every
+    // live entitlement carries (paid keys too since 2026-10-09, decision A5),
+    // so with no `status` check at all the
     // tombstone is never `expired`, falls through to the upstream fetch, and
     // serves the manifest to a refunded customer.
     const out = await reasonFor("lic-rev", {

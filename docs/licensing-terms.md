@@ -25,7 +25,7 @@ Stated as the code behaves, not as marketing:
 
 | | Behaviour |
 |---|---|
-| **Right to run** | Perpetual. The run gate checks the Ed25519 signature only (`verifyLicenseSignature`, never `verifyLicense`), so a paid licence runs **forever** — including after the update window ends, and including after a refund. |
+| **Right to run** | Perpetual. The run gate checks the Ed25519 signature only (`verifyLicenseSignature`, never `verifyLicense`), so a paid licence runs **forever** — including after any update window ends (only a hand-signed key has one), and including after a refund. |
 | **Updates** | All future updates included, with no guarantee that any will be released (decided 2026-10-09, A5). Paid and grandfathered keys alike are issued with `expiresAt` / `updateWindowEnd` null. There is no renewal product (B6). |
 | **Activation** | Fully offline. No server contact, no activation call, no device count, no seat check. |
 | **Devices** | Technically unlimited — nothing enforces a device count. The email says "any device you personally use", which is an **honour-system** limit, not a technical one. Terms should say the same thing, or say something different and be honest that it isn't enforced. |
@@ -179,8 +179,9 @@ Roughly in priority order:
    technical protection measure. Nothing customer-facing states either today.
 5. **DCD 2019/770 Art. 8(2)** — what update obligation attaches to a sale whose
    terms say no future update is guaranteed? There is no paid window to lapse
-   any more (A5), so the old question of security updates owed past it is
-   moot, but whether "no guarantee" can disclaim the statutory duty is not. The
+   any more (A5), so the old question of security updates owed past it no
+   longer arises in that form. Whether "no guarantee" can disclaim the
+   statutory duty is still open. The
    update Worker proxies a *single* manifest, so it can serve every key the same
    build and nothing narrower.
 6. **EU exhaustion / resale** (*UsedSoft*) versus the email's "any device you
