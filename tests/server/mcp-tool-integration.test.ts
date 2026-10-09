@@ -21,6 +21,7 @@ import {
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import {
   CHAT_ACK_DIRECTIVE,
+  REPLY_TO_UNMATCHED_WARNING,
   registerAwarenessTools,
   resetInbox,
 } from "../../src/server/mcp/awareness.js";
@@ -53,6 +54,12 @@ import {
   Y_MAP_SELECTION,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
+import {
+  CHAT_ACK_RULE,
+  SUPERVISOR_ACK_CLAUSE,
+  SUPERVISOR_INITIAL_PROMPT,
+  SUPERVISOR_WAKE_PROMPT,
+} from "../../src/shared/launcher/contract.js";
 import { MCP_ORIGIN, withInternal } from "../../src/shared/origins.js";
 import { SNAPSHOT_CAP } from "../../src/shared/snapshot.js";
 import type { Annotation, ChatMessage } from "../../src/shared/types.js";
@@ -1715,6 +1722,33 @@ describe("MCP tool integration — awareness tools", () => {
     expect(ack.inProgress).toBe(true);
     expect(ack.replyTo).toBe(userMsg.id);
     expect((chat.get(userMsg.id) as ChatMessage).read).toBe(true);
+    expect(parsed.data.warning).toBeUndefined();
+
+    const stray = parseResult(
+      await client.callTool({
+        name: "tandem_reply",
+        arguments: { text: "Done.", replyTo: "msg_does_not_exist" },
+      }),
+    );
+    expect(stray.error).toBe(false);
+    expect(stray.data.warning).toBe(REPLY_TO_UNMATCHED_WARNING);
+  });
+
+  it("tandem_reply and both supervisor turns carry the ack rule", async () => {
+    const { tools } = await client.listTools();
+    const reply = tools.find((t) => t.name === "tandem_reply");
+    expect(reply?.description).toContain(CHAT_ACK_RULE);
+    expect(Object.keys(reply?.inputSchema.properties ?? {})).toEqual(
+      expect.arrayContaining(["replyTo", "inProgress"]),
+    );
+    expect(CHAT_ACK_DIRECTIVE).toContain(CHAT_ACK_RULE);
+    expect(SUPERVISOR_INITIAL_PROMPT).toContain(SUPERVISOR_ACK_CLAUSE);
+    expect(SUPERVISOR_WAKE_PROMPT).toContain(SUPERVISOR_ACK_CLAUSE);
+    // The rule itself must keep the two literals the editor keys on.
+    for (const text of [CHAT_ACK_RULE, SUPERVISOR_ACK_CLAUSE]) {
+      expect(text).toContain("replyTo");
+      expect(text).toContain("inProgress: true");
+    }
   });
 });
 

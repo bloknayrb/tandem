@@ -320,7 +320,7 @@ Toggle between the **Annotations** and **Chat** views using the tabs at the top 
 
 Type in the input box and press `Enter` to send. Messages go to your AI via the server.
 
-A line under your latest message shows where it is: **waiting for your AI to pick it up** (with how long it has waited), then **your AI has your message**, then **your AI is working on it** once it has said it is starting. The line goes away when the answer arrives.
+A line under your latest message shows where it is: **waiting for your AI to pick it up** (after a few seconds, with how long it has waited; after two minutes it says **still waiting**), then **your AI has your message**, then **your AI is working on it** once it has said it is starting. The line goes away when the answer arrives, or after ten minutes either way.
 
 ### Text Anchors
 

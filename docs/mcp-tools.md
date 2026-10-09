@@ -1113,7 +1113,7 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
 **Returns:**
 ```json
 {
-  "summary": "1 new: 1 comment. 1 accepted. 1 new chat message. The user sees nothing until you reply: answer each chat message with tandem_reply (replyTo = its id) before starting the work it asks for, with inProgress: true when work follows, then reply again with the result. If several arrived together, reply to the latest. Skip any you have already answered.",
+  "summary": "1 new: 1 comment. 1 accepted. 1 new chat message. The user sees nothing in chat until you reply. When a chat message asks for work, reply with tandem_reply BEFORE starting it: a one-line acknowledgement with replyTo set to that message's id (a channel event's message_id) and inProgress: true. When the work is done, reply again with the result, same replyTo, no inProgress. If one reply fully answers the message, just answer it. If several arrived together, reply to the latest. Skip any you have already answered.",
   "hasNew": true,
   "mode": "tandem",
   "modeProvenance": { "source": "client", "connection": "a1b2c3d4", "at": 1710936000000, "value": "tandem" },
@@ -1158,6 +1158,8 @@ Send a chat message to the user via the ChatPanel sidebar. Session-scoped (lives
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
 When a chat message asks for work, the expected shape is two replies: an acknowledgement with `replyTo` and `inProgress: true` before starting, then the result with the same `replyTo`. A message one reply fully answers gets just that reply.
+
+When `replyTo` matches no user chat message the reply is still sent, and the result carries a `warning` saying so.
 
 **Returns:**
 ```json

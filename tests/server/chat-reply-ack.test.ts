@@ -10,7 +10,11 @@
  * stamp" case below is that caller's exact call shape.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import { appendClaudeChatMessage, markUserChatRead } from "../../src/server/mcp/awareness.js";
+import {
+  appendClaudeChatMessage,
+  markUserChatRead,
+  REPLY_TO_UNMATCHED_WARNING,
+} from "../../src/server/mcp/awareness.js";
 import { registerChannelRoutes } from "../../src/server/mcp/channel-routes.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { API_CHANNEL_REPLY } from "../../src/shared/api-paths.js";
@@ -55,10 +59,17 @@ describe("appendClaudeChatMessage", () => {
 });
 
 describe("markUserChatRead", () => {
-  it("stamps an unread user message", () => {
+  it("stamps an unread user message and reports the match", () => {
     seedUser("u1");
-    markUserChatRead("u1");
+    expect(markUserChatRead("u1")).toBe(true);
     expect(row("u1")?.read).toBe(true);
+  });
+
+  it("reports a match for an already-read user message without writing", () => {
+    seedUser("read", true);
+    const before = row("read");
+    expect(markUserChatRead("read")).toBe(true);
+    expect(row("read")).toBe(before);
   });
 
   it("writes nothing for an unknown, Claude-authored or already-read message", () => {
@@ -66,8 +77,8 @@ describe("markUserChatRead", () => {
     const claudeId = appendClaudeChatMessage("earlier");
     const before = { read: row("read"), claude: row(claudeId) };
 
-    markUserChatRead("nope");
-    markUserChatRead(claudeId);
+    expect(markUserChatRead("nope")).toBe(false);
+    expect(markUserChatRead(claudeId)).toBe(false);
     markUserChatRead("read");
 
     expect(row("nope")).toBeUndefined();
@@ -77,10 +88,16 @@ describe("markUserChatRead", () => {
 });
 
 describe("POST /api/channel-reply", () => {
-  function post(body: unknown): { messageId?: string } {
+  type ReplyBody = { messageId?: string; warning?: string; error?: string };
+
+  function postRaw(body: unknown) {
     const { app, routes } = makeRecorderApp();
     registerChannelRoutes(app as never, (() => {}) as never);
-    return callRoute(routes, `POST ${API_CHANNEL_REPLY}`, body)._body as { messageId?: string };
+    return callRoute(routes, `POST ${API_CHANNEL_REPLY}`, body);
+  }
+
+  function post(body: unknown): ReplyBody {
+    return postRaw(body)._body as ReplyBody;
   }
 
   it("forwards inProgress and stamps the answered message", () => {
@@ -91,9 +108,29 @@ describe("POST /api/channel-reply", () => {
     expect(row("u1")?.read).toBe(true);
   });
 
-  it("accepts only a literal true for inProgress", () => {
-    const { messageId } = post({ text: "x", inProgress: "true" });
+  it("refuses a non-boolean inProgress rather than storing the ack as an answer", () => {
+    const before = chatMap().size;
+    const res = postRaw({ text: "x", inProgress: "true" });
+    expect(res._status).toBe(400);
+    expect(chatMap().size).toBe(before);
+  });
+
+  it("stores nothing extra for inProgress: false", () => {
+    const { messageId } = post({ text: "x", inProgress: false });
     expect(row(messageId!)).not.toHaveProperty("inProgress");
+  });
+
+  it("warns when replyTo names no user message, and still sends", () => {
+    const body = post({ text: "x", replyTo: "nope" });
+    expect(body.warning).toBe(REPLY_TO_UNMATCHED_WARNING);
+    expect(row(body.messageId!)?.author).toBe("claude");
+  });
+
+  it("ignores a non-string replyTo", () => {
+    seedUser("u1");
+    const body = post({ text: "x", replyTo: 42 });
+    expect(row("u1")?.read).toBe(false);
+    expect(body.warning).toBeUndefined();
   });
 
   it("stamps nothing without a replyTo", () => {

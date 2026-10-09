@@ -19,6 +19,10 @@ import {
  * so this spec never touches `tandem_status`.
  */
 
+// Raised, not retried, like keyboard-a11y.spec.ts: when this file runs first it
+// pays Vite's cold module compile (measured ~27 s) inside its first `page.goto`.
+test.describe.configure({ timeout: 90_000 });
+
 let mcp: McpTestClient;
 let tmpDir: string;
 
@@ -32,14 +36,20 @@ test.beforeEach(async () => {
 
 test.afterEach(async () => {
   // Chat lives in CTRL_ROOM and outlives the page, so clear it for the next spec.
+  // Best-effort — a failure must not mask the assertion that just ran — but said
+  // out loud, because a later chat spec would otherwise inherit stale messages.
   try {
-    await fetch(`http://127.0.0.1:${E2E_MCP_PORT}/api/chat`, { method: "DELETE" });
-  } catch {
-    // Best-effort: a failure here must not mask the assertion that just ran.
+    const res = await fetch(`http://127.0.0.1:${E2E_MCP_PORT}/api/chat`, { method: "DELETE" });
+    if (!res.ok) console.warn(`[chat-pickup] clearing chat answered ${res.status}`);
+  } catch (err) {
+    console.warn("[chat-pickup] clearing chat failed:", err);
   }
-  await cleanupAllOpenDocuments(mcp);
-  await mcp.close();
-  cleanupFixtureDir(tmpDir);
+  try {
+    await cleanupAllOpenDocuments(mcp);
+    await mcp.close();
+  } finally {
+    cleanupFixtureDir(tmpDir);
+  }
 });
 
 interface InboxChat {

@@ -8,8 +8,9 @@ import type { ChatMessage } from "../../shared/types";
  * Every state is something the server or Claude actually recorded: `read` is
  * `tandem_checkInbox`'s stamp (or a `tandem_reply` that named the message), and
  * `working` is an ack Claude sent with `inProgress: true`. Nothing here reads
- * `claudeActive` or `claudeWorking`: the first stays true for five minutes after
- * Claude last set a status and the second lasts one tool call, so neither says
+ * `claudeActive` or `claudeWorking`: the first is set by `tandem_status` and stays
+ * true for up to five minutes after Claude's last presence-wrapped tool call, and the
+ * second is set only around a few wrapped tool calls (30 s cap), so neither says
  * "Claude is working on this message", and a row built on them was the stale
  * "thinking…" this replaces.
  */
@@ -41,16 +42,20 @@ export function chatPickup(messages: readonly ChatMessage[], now: number): ChatP
     const acks = replies.filter((m) => m.inProgress === true);
     const lastAck = acks[acks.length - 1];
     if (lastAck === undefined) return null;
-    // Any later Claude message that is not itself an ack ends "working", whatever
-    // its `replyTo`: a result sent untagged must not leave the dots running beside it.
-    const ended = after.some((m) => m.inProgress !== true && m.timestamp > lastAck.timestamp);
+    // Any Claude message from the ack onward that is not itself an ack ends
+    // "working", whatever its `replyTo`: a result sent untagged must not leave the
+    // dots running beside it. `>=`, so a result stamped in the ack's millisecond counts.
+    const ended = after.some((m) => m.inProgress !== true && m.timestamp >= lastAck.timestamp);
     return ended ? null : { kind: "working" };
   }
 
   // An untagged Claude message after it makes no claim either way: it may be the
   // answer from a session on an older skill, or an unrelated note. Saying "waiting"
-  // beside a visible answer would be worse than saying nothing.
-  if (after.some((m) => m.replyTo === undefined)) return null;
+  // beside a visible answer would be worse than saying nothing. A `replyTo` naming
+  // no user message (a wrong id) is untagged too; one naming an EARLIER user
+  // message is not, so an answer to A never clears B.
+  const userIds = new Set(messages.filter((m) => m.author === "user").map((m) => m.id));
+  if (after.some((m) => m.replyTo === undefined || !userIds.has(m.replyTo))) return null;
 
   return latest.read ? { kind: "received" } : { kind: "waiting", waitedMs: now - latest.timestamp };
 }

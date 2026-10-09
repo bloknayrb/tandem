@@ -79,26 +79,22 @@ $effect(() => {
   inputEl = internalInputEl ?? null;
 });
 
-// The pickup row (see `chat-pickup.ts`). `now` is written only from the interval
-// callback below — never `Date.now()` inside a `$derived`, which would not re-run.
+// The pickup row (see `chat-pickup.ts`). `now` is the reactive clock, written only
+// by the interval below; it is stale whenever that tick is stopped. The
+// `Math.max` with `Date.now()` is what keeps a stale value from counting an
+// hours-old restored message as young: a chat change re-runs this derived and
+// reads the real time then, in the same evaluation that sees the new message.
 let now = $state(Date.now());
-const pickup = $derived(chatPickup(messages, now));
+const pickup = $derived(chatPickup(messages, Math.max(now, Date.now())));
 const pickupKind = $derived(pickup?.kind ?? null);
 
-// `now` is stale whenever the tick below is stopped, so refresh it on the two
-// events that can make a row appear — a chat change, or the panel coming back —
-// before the stale value can count an hours-old restored message as young.
+// Tick only while a row is showing in a panel that is not hidden, so the elapsed
+// count moves and the age cap can retire the row. Keyed on the primitive kind, so
+// the timer survives message churn and stops the moment the row goes away.
+// `visible === false`, not `!visible`: a mount that never passes `visible` is one
+// where the panel is always shown.
 $effect(() => {
-  void messages;
-  void visible;
-  now = Date.now();
-});
-
-// Tick only while a row is showing in a visible panel, so the elapsed count moves
-// and the age cap can retire the row. Keyed on the primitive kind, so the timer
-// survives message churn and stops the moment the row goes away.
-$effect(() => {
-  if (!visible || pickupKind === null) return;
+  if (visible === false || pickupKind === null) return;
   const timer = setInterval(() => {
     now = Date.now();
   }, 1000);

@@ -54,6 +54,17 @@ describe("chatPickup", () => {
     expect(chatPickup([user("a", 0, true), ack, untagged], T0 + 4_000)).toBeNull();
   });
 
+  it("ends working on a result stamped in the ack's millisecond", () => {
+    const ack = claude("ack", 1_000, { replyTo: "a", inProgress: true });
+    const result = claude("res", 1_000, { replyTo: "a" });
+    expect(chatPickup([user("a", 0, true), ack, result], T0 + 2_000)).toBeNull();
+  });
+
+  it("treats a replyTo naming no user message as untagged", () => {
+    const stray = claude("c", 1_000, { replyTo: "not-a-message" });
+    expect(chatPickup([user("a", 0), stray], T0 + 2_000)).toBeNull();
+  });
+
   it("keeps working while only further acks arrive", () => {
     const ack = claude("ack", 1_000, { replyTo: "a", inProgress: true });
     const again = claude("ack2", 2_000, { replyTo: "a", inProgress: true });

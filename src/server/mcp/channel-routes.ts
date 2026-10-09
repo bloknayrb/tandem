@@ -16,7 +16,11 @@ import { sanitizeForLog } from "../log-sanitize.js";
 import { clearCtrlChatDurably } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import type { Handler } from "./api-routes.js";
-import { appendClaudeChatMessage, markUserChatRead } from "./awareness.js";
+import {
+  appendClaudeChatMessage,
+  markUserChatRead,
+  REPLY_TO_UNMATCHED_WARNING,
+} from "./awareness.js";
 
 const pendingPermissions = new Map<
   string,
@@ -133,6 +137,12 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
       res.status(400).json({ error: "BAD_REQUEST", message: "text is required" });
       return;
     }
+    // Strict, unlike the lenient pre-existing fields: a dropped `inProgress` would
+    // silently turn an acknowledgement into what reads as the final answer.
+    if (inProgress !== undefined && typeof inProgress !== "boolean") {
+      res.status(400).json({ error: "BAD_REQUEST", message: "inProgress must be a boolean" });
+      return;
+    }
     // Narrow the untrusted body fields, then route through the shared Claude-chat
     // write path that `tandem_reply` and the local-model collaborator also use.
     const id = appendClaudeChatMessage(text, {
@@ -140,8 +150,12 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
       ...(typeof replyTo === "string" ? { replyTo } : {}),
       ...(inProgress === true ? { inProgress: true } : {}),
     });
-    if (typeof replyTo === "string") markUserChatRead(replyTo);
-    res.json({ sent: true, messageId: id });
+    const unmatched = typeof replyTo === "string" && !markUserChatRead(replyTo);
+    res.json({
+      sent: true,
+      messageId: id,
+      ...(unmatched ? { warning: REPLY_TO_UNMATCHED_WARNING } : {}),
+    });
   });
 
   // Channel permission relay: the shim forwards Claude Code's tool approval

@@ -76,9 +76,9 @@ const replySurfacedIds = new Set<string>();
  * is the one place every population converges (supervisor child, hand-launched
  * poller, monitor and ws wakes), so it is the carrier that cannot be missed; the
  * skill, the `tandem_reply` description and the supervisor prompts restate it.
- * The rule itself is `CHAT_ACK_RULE`, shared with those carriers.
- * Phrased as a statement about the editor, not a command, for the reason in
- * `wake-advisory.ts`: tool output shares a channel with document text.
+ * The rule itself is `CHAT_ACK_RULE`, shared with those carriers; this adds a
+ * leading reason (the user sees nothing until Claude replies) and the two
+ * inbox-specific clauses about batches and repeats.
  */
 export const CHAT_ACK_DIRECTIVE = `The user sees nothing in chat until you reply. ${CHAT_ACK_RULE} If several arrived together, reply to the latest. Skip any you have already answered`;
 
@@ -247,14 +247,25 @@ export function appendClaudeChatMessage(
  *
  * Only an unread USER message is touched; an unknown id, a Claude row or an
  * already-read one writes nothing.
+ *
+ * @returns whether `messageId` names a user message at all (read or not), so a
+ *   caller can tell Claude its `replyTo` pointed nowhere instead of letting the
+ *   mismatch pass silently.
  */
-export function markUserChatRead(messageId: string): void {
+export function markUserChatRead(messageId: string): boolean {
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
   const target = chatMap.get(messageId) as ChatMessage | undefined;
-  if (target?.author !== "user" || target.read) return;
-  withMcp(ctrlDoc, () => chatMap.set(messageId, { ...target, read: true }));
+  if (target?.author !== "user") return false;
+  if (!target.read) withMcp(ctrlDoc, () => chatMap.set(messageId, { ...target, read: true }));
+  return true;
 }
+
+/** Shown to Claude when a `replyTo` named no user chat message. */
+export const REPLY_TO_UNMATCHED_WARNING =
+  "replyTo did not match any user chat message, so the editor cannot tie this reply to " +
+  "the message it answers. Pass the `id` from tandem_checkInbox's chatMessages (or a " +
+  "channel event's message_id).";
 
 /**
  * Stream the text of an existing Claude-authored chat message, for the
@@ -667,8 +678,12 @@ export function registerAwarenessTools(server: McpServer): void {
           replyTo,
           inProgress,
         });
-        if (replyTo) markUserChatRead(replyTo);
-        return mcpSuccess({ sent: true, messageId: id });
+        const unmatched = replyTo !== undefined && !markUserChatRead(replyTo);
+        return mcpSuccess({
+          sent: true,
+          messageId: id,
+          ...(unmatched ? { warning: REPLY_TO_UNMATCHED_WARNING } : {}),
+        });
       });
     }),
   );

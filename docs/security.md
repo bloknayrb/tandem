@@ -157,8 +157,10 @@ Two things sit outside it, for two different reasons:
   message `read: true`, so it no longer surfaces in `tandem_checkInbox`. That lets a caller
   who knows a message id hide it from the inbox. Bound: any caller that reaches the route can
   already write Claude-authored chat, the message stays visible in the editor, and
-  `tandem_checkInbox`'s own stamp is the same process-global kind. The stamp is an
-  unconditional call in the handler (`markUserChatRead`), never controlled by the body.
+  `tandem_checkInbox`'s own stamp is the same process-global kind. The stamp runs whenever
+  the body carries a string `replyTo` and targets that id (`markUserChatRead`); no other
+  body field gates it, and it writes nothing for an unknown id, a Claude row or a message
+  already read.
 - **`/api/wake`** is a WebSocket upgrade registered on the `http.Server` upgrade event
   (`events/wake-socket.ts`), so `app.use("/api", …)` structurally never sees it. It carries
   its own Origin guard. This is an exception to the middleware's *reach*, not to the policy.

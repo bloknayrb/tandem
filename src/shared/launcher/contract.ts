@@ -313,9 +313,11 @@ export const SUPERVISOR_NO_ARM_CLAUSE =
 
 /** The ack-before-work rule as one sentence. The `tandem_checkInbox` summary,
  * both `tandem_reply` descriptions (server and channel shim) and the shim's
- * instructions are built from it, so the carriers cannot drift apart and hand
- * Claude conflicting guidance depending on which one it read. `SKILL.md` restates
- * it in prose (it is pinned by a body hash, not built). */
+ * instructions are built from it, so those cannot drift apart and hand Claude
+ * conflicting guidance depending on which one it read. Three restatements are
+ * NOT built from it and must be kept in step by hand: `SUPERVISOR_ACK_CLAUSE`
+ * below (a shorter turn-sized version), `SKILL.md` (pinned by a body hash) and
+ * `docs/mcp-tools.md`. */
 export const CHAT_ACK_RULE =
   "When a chat message asks for work, reply with tandem_reply BEFORE starting it: a " +
   "one-line acknowledgement with replyTo set to that message's id (a channel event's " +
