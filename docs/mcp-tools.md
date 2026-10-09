@@ -1113,7 +1113,7 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
 **Returns:**
 ```json
 {
-  "summary": "1 new: 1 comment. 1 accepted. 1 new chat message.",
+  "summary": "1 new: 1 comment. 1 accepted. 1 new chat message. The user sees nothing until you reply: answer each chat message with tandem_reply (replyTo = its id) before starting the work it asks for, with inProgress: true when work follows, then reply again with the result. If several arrived together, reply to the latest. Skip any you have already answered.",
   "hasNew": true,
   "mode": "tandem",
   "modeProvenance": { "source": "client", "connection": "a1b2c3d4", "at": 1710936000000, "value": "tandem" },
@@ -1153,8 +1153,11 @@ Send a chat message to the user via the ChatPanel sidebar. Session-scoped (lives
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `text` | string | yes | Message text to send |
-| `replyTo` | string | no | ID of the user message being replied to |
+| `replyTo` | string | no | `id` of the user message being answered (a channel event's `message_id`). An unread user message named here is also marked read, so it does not surface again in `tandem_checkInbox`. |
+| `inProgress` | boolean | no | `true` when the reply acknowledges work about to start. The editor shows "Your AI is working on it" under the user's message until a later reply without it arrives. |
 | `documentId` | string | no | Target document ID (defaults to active document) |
+
+When a chat message asks for work, the expected shape is two replies: an acknowledgement with `replyTo` and `inProgress: true` before starting, then the result with the same `replyTo`. A message one reply fully answers gets just that reply.
 
 **Returns:**
 ```json

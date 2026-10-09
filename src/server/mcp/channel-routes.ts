@@ -16,7 +16,7 @@ import { sanitizeForLog } from "../log-sanitize.js";
 import { clearCtrlChatDurably } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import type { Handler } from "./api-routes.js";
-import { appendClaudeChatMessage } from "./awareness.js";
+import { appendClaudeChatMessage, markUserChatRead } from "./awareness.js";
 
 const pendingPermissions = new Map<
   string,
@@ -128,7 +128,7 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
   // Channel reply: shim forwards Claude's chat replies
   app.options(API_CHANNEL_REPLY, apiMiddleware);
   app.post(API_CHANNEL_REPLY, apiMiddleware, (req: Request, res: Response) => {
-    const { text, documentId, replyTo } = (req.body ?? {}) as Record<string, unknown>;
+    const { text, documentId, replyTo, inProgress } = (req.body ?? {}) as Record<string, unknown>;
     if (typeof text !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "text is required" });
       return;
@@ -138,7 +138,9 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     const id = appendClaudeChatMessage(text, {
       ...(typeof documentId === "string" ? { documentId } : {}),
       ...(typeof replyTo === "string" ? { replyTo } : {}),
+      ...(inProgress === true ? { inProgress: true } : {}),
     });
+    if (typeof replyTo === "string") markUserChatRead(replyTo);
     res.json({ sent: true, messageId: id });
   });
 

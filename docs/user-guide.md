@@ -312,13 +312,15 @@ Use **Solo** during focused writing to avoid interruption, or when you want to m
 
 ## Chat
 
-![Chat sidebar with messages and typing indicator](screenshots/02-chat-sidebar.png)
+![Chat sidebar with messages](screenshots/02-chat-sidebar.png)
 
 Toggle between the **Annotations** and **Chat** views using the tabs at the top of the side panel.
 
 ### Sending Messages
 
 Type in the input box and press `Enter` to send. Messages go to your AI via the server.
+
+A line under your latest message shows where it is: **waiting for your AI to pick it up** (with how long it has waited), then **your AI has your message**, then **your AI is working on it** once it has said it is starting. The line goes away when the answer arrives.
 
 ### Text Anchors
 

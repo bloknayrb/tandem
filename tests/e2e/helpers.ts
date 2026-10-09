@@ -139,6 +139,24 @@ export function cleanupFixtureDir(dir: string): void {
 }
 
 /**
+ * Reveal the chat composer.
+ *
+ * `ChatPanel` is always mounted (CSS display toggle, so local state survives
+ * panel switches), which means "not visible" here is a layout state, not an
+ * unmounted component — hence checking visibility rather than presence, and
+ * toggling only when it is actually hidden.
+ */
+export async function openChat(page: Page): Promise<void> {
+  const composer = page.locator("[data-testid='chat-composer-input']");
+  if (await composer.isVisible()) return;
+  const rail = page.locator("[data-testid='titlebar-toggle-right']");
+  if ((await rail.count()) > 0) await rail.click();
+  const tab = page.locator("[data-testid='chat-tab']");
+  if ((await tab.count()) > 0) await tab.click();
+  await expect(composer).toBeVisible({ timeout: 10_000 });
+}
+
+/**
  * Switch the side panel to the Annotations tab and expand the filter bar.
  *
  * The SidePanel (which holds annotation cards) is always mounted and hidden

@@ -46,6 +46,8 @@ chat-anchor-quote-{*}
 chat-author-{*}
 chat-composer-input
 chat-panel
+chat-pickup-live
+chat-pickup-status
 chat-send-btn
 chat-tab
 claude-typing-indicator-{*}

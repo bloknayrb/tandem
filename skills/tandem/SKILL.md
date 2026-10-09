@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 28
+version: 29
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -66,7 +66,7 @@ Choose the right type for each finding:
 
 **User comments.** When scanning `tandem_checkInbox` or `tandem_getAnnotations`, user-authored `type: "comment"` annotations are the ones you should respond to. A reply **on the annotation thread itself** goes through `tandem_annotationReply` — that's what keeps the reply visible on the thread rather than only in chat. Reserve `tandem_reply` for chat messages, and a fresh `tandem_comment` for a new textual annotation on different text. `tandem_annotationReply` refuses a resolved, note (ADR-027), highlight, private (non-outbound), or **user-authored** parent — fall back to `tandem_reply` for those. So the reply tool is for continuing *your own* threads; a user comment is answered in chat or with a new comment of your own. A reply may also carry `suggestedText`: a refined replacement proposed over the **parent's** range — the user accepts it in the editor, and doing so supersedes the parent's original proposal.
 
-**Before responding, check whether you already did.** None of `tandem_reply`, `tandem_comment`, or `tandem_annotationReply` is idempotent — replying twice leaves two chat bubbles or two annotation cards on the same text, which the user sees. Your own memory of the conversation is the primary check: if you recognize the comment's text, you have probably already answered it.
+**Before responding, check whether you already did.** None of `tandem_reply`, `tandem_comment`, or `tandem_annotationReply` is idempotent — sending the same answer twice leaves two chat bubbles or two annotation cards saying the same thing, which the user sees. A chat acknowledgement followed by the result (see Collaboration Etiquette) is the expected pair, not a duplicate. Your own memory of the conversation is the primary check: if you recognize the comment's text, you have probably already answered it.
 
 `alreadyPushed: true` is a weak secondary hint, not a verdict. It means the server handed the item to a real-time consumer — not that the consumer's host showed it to you, and not that you saw it. It is also dropped once the event leaves the channel buffer, so its absence proves nothing either. Never skip a comment on the strength of this flag alone. To check for a prior *annotation* reply, read the thread via `tandem_getAnnotations`; a prior `tandem_reply` is a chat message and won't appear there.
 
@@ -89,6 +89,7 @@ Selections are **not** sent as standalone events. Instead, when the user sends a
 - Use `tandem_status({ text: "..." })` to show what you're working on — the user sees it in the editor status bar.
 - **Call `tandem_checkInbox` every 2-3 tool calls** (orchestrator only in a multi-agent workflow), not just at the end of a task. You cannot tell from your side whether real-time push is reaching you — the channel is often not connected, and Tandem can only tell you when *nothing at all* is subscribed, not whether the thing that is subscribed reaches you — so steady polling is the reliable path, always. It's cheap: repeat polls de-duplicate against what you've already been shown, so frequent calls don't double-report. An item that also went out as a real-time push carries `alreadyPushed: true` and still appears — the server can't confirm a push reached you, so it shows you everything rather than risk dropping it. See "User comments" above before acting on a flagged item twice. When in doubt, poll.
 - Reply to chat messages with `tandem_reply`, not annotations.
+- **Acknowledge a chat request before doing the work.** The user sees nothing in chat until you reply, and the work can take minutes. So when a chat message asks for work, first send a one-line `tandem_reply` saying what you are about to do, with `replyTo` set to that message's `id` (a channel event's `message_id`) and `inProgress: true` — the editor then shows the user it is in progress. When you finish, reply again with the result, same `replyTo`, no `inProgress`. If several messages arrived together, use the latest one's `id`. If a single reply fully answers the message, just answer it (no `inProgress`).
 
 ## Getting Woken While Idle
 

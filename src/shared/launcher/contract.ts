@@ -311,6 +311,27 @@ export const SUPERVISOR_NO_ARM_CLAUSE =
   "Tandem is already waking you directly, so do NOT arm a Monitor watch on " +
   "Tandem's event stream in this session — it would double every wake.";
 
+/** The ack-before-work rule as one sentence. The `tandem_checkInbox` summary,
+ * both `tandem_reply` descriptions (server and channel shim) and the shim's
+ * instructions are built from it, so the carriers cannot drift apart and hand
+ * Claude conflicting guidance depending on which one it read. `SKILL.md` restates
+ * it in prose (it is pinned by a body hash, not built). */
+export const CHAT_ACK_RULE =
+  "When a chat message asks for work, reply with tandem_reply BEFORE starting it: a " +
+  "one-line acknowledgement with replyTo set to that message's id (a channel event's " +
+  "message_id) and inProgress: true. When the work is done, reply again with the result, " +
+  "same replyTo, no inProgress. If one reply fully answers the message, just answer it.";
+
+/** Ack-before-work, on both supervisor turns for the same reason as
+ * {@link SUPERVISOR_NO_ARM_CLAUSE}: a resumed session only ever receives the
+ * wake prompt, and a rule stated once at spawn is lost at the first compaction.
+ * The auto-launched child is the population where the user waits longest
+ * (a cold start) with nothing on screen, so it is the one that most needs to
+ * say something before it goes quiet doing the work. */
+export const SUPERVISOR_ACK_CLAUSE =
+  "If the user chatted, acknowledge each request with tandem_reply (replyTo + " +
+  "inProgress: true) before starting the work, then reply with the result.";
+
 /** The bootstrap turn the supervisor writes immediately on a fresh spawn.
  *
  * Written on spawn, NOT after the CLI's `init` line: under these flags the CLI
@@ -322,7 +343,7 @@ export const SUPERVISOR_NO_ARM_CLAUSE =
 export const SUPERVISOR_INITIAL_PROMPT =
   "A document has been opened in Tandem for review. " +
   "Call tandem_checkInbox to see what needs attention, then begin reviewing. " +
-  SUPERVISOR_NO_ARM_CLAUSE;
+  `${SUPERVISOR_ACK_CLAUSE} ${SUPERVISOR_NO_ARM_CLAUSE}`;
 
 /** The turn the supervisor writes when Tandem activity should wake an idle
  * session.
@@ -335,7 +356,7 @@ export const SUPERVISOR_INITIAL_PROMPT =
  * the last word even if the queue's Solo gate were ever wrong. A content-free
  * nudge is also what makes coalescing trivial: N events collapse to one turn
  * instead of a concatenation that grows without bound. */
-export const SUPERVISOR_WAKE_PROMPT = `Activity in Tandem needs your attention. Call tandem_checkInbox. ${SUPERVISOR_NO_ARM_CLAUSE}`;
+export const SUPERVISOR_WAKE_PROMPT = `Activity in Tandem needs your attention. Call tandem_checkInbox. ${SUPERVISOR_ACK_CLAUSE} ${SUPERVISOR_NO_ARM_CLAUSE}`;
 
 /** One `stream-json` user turn as the Claude CLI accepts it on stdin. */
 export interface StreamJsonUserTurn {

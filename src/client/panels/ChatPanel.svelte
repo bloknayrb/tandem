@@ -4,11 +4,13 @@ import { untrack } from "svelte";
 import type { FlatOffset } from "../../shared/positions/types";
 import type { CapturedAnchor, ChatMessage } from "../../shared/types";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
+import LiveRegion from "../components/LiveRegion.svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { flatOffsetToPmPos } from "../positions";
 import { agentColor } from "../utils/agent-color";
 import { localChatDateLabel } from "./chat-export";
 import { renderMarkdown } from "./chat-markdown";
+import { chatPickup, chatPickupAnnouncement, chatPickupLabel } from "./chat-pickup";
 import "./markdown-body.css";
 
 const TYPING_DOT_DELAYS = [0, 0.2, 0.4];
@@ -30,8 +32,6 @@ interface Props {
   editor: TiptapEditor | null;
   activeDocId: string | null;
   openDocs: Array<{ id: string; fileName: string }>;
-  claudeActive?: boolean;
-  claudeStatus?: string | null;
   visible?: boolean;
   capturedAnchor: CapturedAnchor | null;
   onCapturedAnchorChange: (anchor: CapturedAnchor | null) => void;
@@ -51,8 +51,6 @@ let {
   editor,
   activeDocId,
   openDocs,
-  claudeActive,
-  claudeStatus,
   visible,
   capturedAnchor,
   onCapturedAnchorChange,
@@ -81,20 +79,44 @@ $effect(() => {
   inputEl = internalInputEl ?? null;
 });
 
-// Auto-scroll to bottom on new messages or when typing indicator appears
-let prevClaudeActive = false;
+// The pickup row (see `chat-pickup.ts`). `now` is written only from the interval
+// callback below — never `Date.now()` inside a `$derived`, which would not re-run.
+let now = $state(Date.now());
+const pickup = $derived(chatPickup(messages, now));
+const pickupKind = $derived(pickup?.kind ?? null);
+
+// `now` is stale whenever the tick below is stopped, so refresh it on the two
+// events that can make a row appear — a chat change, or the panel coming back —
+// before the stale value can count an hours-old restored message as young.
 $effect(() => {
-  void messages; // track message changes
-  const active = !!claudeActive;
+  void messages;
+  void visible;
+  now = Date.now();
+});
+
+// Tick only while a row is showing in a visible panel, so the elapsed count moves
+// and the age cap can retire the row. Keyed on the primitive kind, so the timer
+// survives message churn and stops the moment the row goes away.
+$effect(() => {
+  if (!visible || pickupKind === null) return;
+  const timer = setInterval(() => {
+    now = Date.now();
+  }, 1000);
+  return () => clearInterval(timer);
+});
+
+// Auto-scroll to bottom on new messages or when the pickup row appears or changes
+// state — but not when the row going away is the ONLY change, which would yank a
+// reader who scrolled up. The result reply usually clears the row in the same
+// update that adds it, and that one must still scroll.
+let prevMessages: ChatMessage[] | null = null;
+$effect(() => {
+  const kind = pickupKind;
   // untrack: reduceMotion pref change shouldn't re-trigger scroll.
   const sb = untrack(() => scrollBehavior);
-
-  if (!active && prevClaudeActive) {
-    prevClaudeActive = false;
-    return;
-  }
-  prevClaudeActive = active;
-  messagesEndEl?.scrollIntoView({ behavior: sb });
+  const messagesChanged = messages !== prevMessages;
+  prevMessages = messages;
+  if (messagesChanged || kind !== null) messagesEndEl?.scrollIntoView({ behavior: sb });
 });
 
 // Scroll to bottom when panel becomes visible
@@ -385,24 +407,32 @@ async function exportChat() {
       </div>
     {/each}
 
-    {#if claudeActive}
+    {#if pickup}
       <div
-        style="padding: var(--tandem-space-2) var(--tandem-space-3); margin-bottom: var(--tandem-space-2); font-size: 12px; color: var(--tandem-author-claude); display: flex; align-items: center; gap: var(--tandem-space-2);"
+        aria-hidden="true"
+        data-testid="chat-pickup-status"
+        data-pickup={pickup.kind}
+        style="padding: var(--tandem-space-2) var(--tandem-space-3); margin-bottom: var(--tandem-space-2); font-size: 12px; color: {pickup.kind === 'waiting' ? 'var(--tandem-fg-muted)' : 'var(--tandem-author-claude)'}; display: flex; align-items: center; gap: var(--tandem-space-2);"
       >
-        <span style="display: inline-flex; gap: 3px;">
-          {#each TYPING_DOT_DELAYS as delay (delay)}
-            <!-- Only the per-dot delay stays inline: it is the one value that
-                 varies across the three dots, and it is what makes them bounce
-                 in sequence rather than in unison. Everything else moved into
-                 `.chat-typing-dot` so the reduce-motion guard has a rule to
-                 beat — an inline `animation` shorthand can only be overridden
-                 with `!important`. -->
-            <span class="chat-typing-dot" style="animation-delay: {delay}s"></span>
-          {/each}
-        </span>
-        <span>{claudeStatus ?? "Your AI is thinking..."}</span>
+        {#if pickup.kind === "working"}
+          <span style="display: inline-flex; gap: 3px;">
+            {#each TYPING_DOT_DELAYS as delay (delay)}
+              <!-- Only the per-dot delay stays inline: it is the one value that
+                   varies across the three dots, and it is what makes them bounce
+                   in sequence rather than in unison. Everything else moved into
+                   `.chat-typing-dot` so the reduce-motion guard has a rule to
+                   beat — an inline `animation` shorthand can only be overridden
+                   with `!important`. -->
+              <span class="chat-typing-dot" style="animation-delay: {delay}s"></span>
+            {/each}
+          </span>
+        {/if}
+        <span>{chatPickupLabel(pickup)}</span>
       </div>
     {/if}
+    <!-- Announcer, not host: the row is a gapped flex item that comes and goes.
+         Keyed on the kind only, so the ticking seconds are never read out. -->
+    <LiveRegion srOnly message={chatPickupAnnouncement(pickupKind)} data-testid="chat-pickup-live" />
     <div bind:this={messagesEndEl}></div>
   </div>
 
