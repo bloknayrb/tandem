@@ -678,6 +678,14 @@ export interface ChatMessage {
   replyTo?: string;
   read: boolean;
   /**
+   * Set on a Claude reply that acknowledges work it is about to do (`tandem_reply`
+   * with `inProgress: true`). The editor's pickup row reads "working on it" from
+   * this, not from tool traffic: `claudeActive` and `claudeWorking` are presence
+   * signals and neither means "working on this message". Only ever `true` or
+   * absent, so a row written without it stays byte-identical to the old shape.
+   */
+  inProgress?: true;
+  /**
    * The specific AI agent that authored this message (#1123 M3). Set only by the
    * local-model collaborator's streamed reply; absent on user messages and real
    * Claude (`tandem_reply`). Chat is read raw from the Y.Map (NOT allowlist-

@@ -16,7 +16,11 @@ import { sanitizeForLog } from "../log-sanitize.js";
 import { clearCtrlChatDurably } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import type { Handler } from "./api-routes.js";
-import { appendClaudeChatMessage } from "./awareness.js";
+import {
+  appendClaudeChatMessage,
+  markUserChatRead,
+  REPLY_TO_UNMATCHED_WARNING,
+} from "./awareness.js";
 
 const pendingPermissions = new Map<
   string,
@@ -128,9 +132,15 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
   // Channel reply: shim forwards Claude's chat replies
   app.options(API_CHANNEL_REPLY, apiMiddleware);
   app.post(API_CHANNEL_REPLY, apiMiddleware, (req: Request, res: Response) => {
-    const { text, documentId, replyTo } = (req.body ?? {}) as Record<string, unknown>;
+    const { text, documentId, replyTo, inProgress } = (req.body ?? {}) as Record<string, unknown>;
     if (typeof text !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "text is required" });
+      return;
+    }
+    // Strict, unlike the lenient pre-existing fields: a dropped `inProgress` would
+    // silently turn an acknowledgement into what reads as the final answer.
+    if (inProgress !== undefined && typeof inProgress !== "boolean") {
+      res.status(400).json({ error: "BAD_REQUEST", message: "inProgress must be a boolean" });
       return;
     }
     // Narrow the untrusted body fields, then route through the shared Claude-chat
@@ -138,8 +148,14 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     const id = appendClaudeChatMessage(text, {
       ...(typeof documentId === "string" ? { documentId } : {}),
       ...(typeof replyTo === "string" ? { replyTo } : {}),
+      ...(inProgress === true ? { inProgress: true } : {}),
     });
-    res.json({ sent: true, messageId: id });
+    const unmatched = typeof replyTo === "string" && !markUserChatRead(replyTo);
+    res.json({
+      sent: true,
+      messageId: id,
+      ...(unmatched ? { warning: REPLY_TO_UNMATCHED_WARNING } : {}),
+    });
   });
 
   // Channel permission relay: the shim forwards Claude Code's tool approval

@@ -31,6 +31,7 @@ import {
   fetchWithTimeout,
   isAbortOrTimeoutError,
 } from "../shared/fetch-with-timeout.js";
+import { CHAT_ACK_RULE } from "../shared/launcher/contract.js";
 import { startEventBridge } from "./event-bridge.js";
 
 export interface RunChannelOptions {
@@ -64,6 +65,7 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
         "Chat messages may include a 'selection' field with buffered selection context.",
         "Use your tandem MCP tools (tandem_getTextContent, tandem_comment, tandem_edit, etc.) to act on them.",
         "Reply to chat messages using tandem_reply. Pass document_id from the tag attributes.",
+        CHAT_ACK_RULE,
         "Do not reply to non-chat events — just act on them using tools.",
         "If you haven't received channel notifications recently, call tandem_checkInbox as a fallback.",
       ].join(" "),
@@ -74,7 +76,7 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
     tools: [
       {
         name: "tandem_reply",
-        description: "Reply to a chat message in Tandem",
+        description: `Reply to a chat message in Tandem. ${CHAT_ACK_RULE}`,
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -85,7 +87,13 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
             },
             replyTo: {
               type: "string",
-              description: "Message ID being replied to (optional)",
+              description:
+                "The chat event's message_id (optional). If several arrived together, use the latest.",
+            },
+            inProgress: {
+              type: "boolean",
+              description:
+                "true when this reply acknowledges work you are about to do (optional); send the result later without it.",
             },
           },
           required: ["text"],

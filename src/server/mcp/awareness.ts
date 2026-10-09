@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as Y from "yjs";
 import { z } from "zod";
 import { CTRL_ROOM, Y_MAP_CHAT, Y_MAP_CHAT_STREAM } from "../../shared/constants.js";
+import { CHAT_ACK_RULE } from "../../shared/launcher/contract.js";
 import { withInternal, withMcp } from "../../shared/origins.js";
 import type {
   AgentIdentity,
@@ -69,6 +70,17 @@ const surfacedIds = new Map<string, number>();
  * server run.
  */
 const replySurfacedIds = new Set<string>();
+
+/**
+ * Appended to the `tandem_checkInbox` summary whenever chat is present. The inbox
+ * is the one place every population converges (supervisor child, hand-launched
+ * poller, monitor and ws wakes), so it is the carrier that cannot be missed; the
+ * skill, the `tandem_reply` description and the supervisor prompts restate it.
+ * The rule itself is `CHAT_ACK_RULE`, shared with those carriers; this adds a
+ * leading reason (the user sees nothing until Claude replies) and the two
+ * inbox-specific clauses about batches and repeats.
+ */
+export const CHAT_ACK_DIRECTIVE = `The user sees nothing in chat until you reply. ${CHAT_ACK_RULE} If several arrived together, reply to the latest. Skip any you have already answered`;
 
 /** Ledger key. See `surfacedIds` for why the document scope is required. */
 function ledgerKey(documentId: string, itemId: string): string {
@@ -193,7 +205,12 @@ export function resetInbox(): void {
  */
 export function appendClaudeChatMessage(
   text: string,
-  opts: { documentId?: string; replyTo?: string; agentIdentity?: AgentIdentity } = {},
+  opts: {
+    documentId?: string;
+    replyTo?: string;
+    agentIdentity?: AgentIdentity;
+    inProgress?: boolean;
+  } = {},
 ): string {
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
@@ -211,11 +228,44 @@ export function appendClaudeChatMessage(
     // chatStream sidecar), and finalizeClaudeChatMessage's `{...existing}`
     // fold carries it into the final re-set.
     ...(opts.agentIdentity ? { agentIdentity: opts.agentIdentity } : {}),
+    ...(opts.inProgress === true ? { inProgress: true as const } : {}),
     read: true,
   };
   withMcp(ctrlDoc, () => chatMap.set(id, msg));
   return id;
 }
+
+/**
+ * Stamp a user chat message `read: true` because Claude answered it, so a session
+ * that got the message PUSHED (never stamped by `tandem_checkInbox`) is not handed
+ * it again on its next poll, and the editor's pickup row moves off "waiting".
+ *
+ * Called by `tandem_reply` and `/api/channel-reply` only — deliberately NOT folded
+ * into `appendClaudeChatMessage`, whose third caller, the local-model collaborator,
+ * replies to every chat in Tandem mode: stamping on its behalf would hide every
+ * message from Claude's inbox the moment `BYO_MODELS_ENABLED` flips.
+ *
+ * Only an unread USER message is touched; an unknown id, a Claude row or an
+ * already-read one writes nothing.
+ *
+ * @returns whether `messageId` names a user message at all (read or not), so a
+ *   caller can tell Claude its `replyTo` pointed nowhere instead of letting the
+ *   mismatch pass silently.
+ */
+export function markUserChatRead(messageId: string): boolean {
+  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+  const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+  const target = chatMap.get(messageId) as ChatMessage | undefined;
+  if (target?.author !== "user") return false;
+  if (!target.read) withMcp(ctrlDoc, () => chatMap.set(messageId, { ...target, read: true }));
+  return true;
+}
+
+/** Shown to Claude when a `replyTo` named no user chat message. */
+export const REPLY_TO_UNMATCHED_WARNING =
+  "replyTo did not match any user chat message, so the editor cannot tie this reply to " +
+  "the message it answers. Pass the `id` from tandem_checkInbox's chatMessages (or a " +
+  "channel event's message_id).";
 
 /**
  * Stream the text of an existing Claude-authored chat message, for the
@@ -559,6 +609,7 @@ export function registerAwarenessTools(server: McpServer): void {
           parts.push(
             `${chatMessages.length} new chat message${chatMessages.length > 1 ? "s" : ""}`,
           );
+          parts.push(CHAT_ACK_DIRECTIVE);
         }
         const summary = parts.length > 0 ? parts.join(". ") + "." : "No new actions.";
 
@@ -594,23 +645,45 @@ export function registerAwarenessTools(server: McpServer): void {
   );
   server.tool(
     "tandem_reply",
-    "Send a chat message to the user in the Tandem sidebar. Use this to respond to chat messages from tandem_checkInbox.",
+    `Send a chat message to the user in the Tandem sidebar. For a chat message you received (from tandem_checkInbox or a channel event): ${CHAT_ACK_RULE}`,
     {
       text: z.string().describe("Your message to the user"),
-      replyTo: z.string().optional().describe("ID of the user message you are replying to"),
+      replyTo: z
+        .string()
+        .optional()
+        .describe(
+          "The `id` of the user message you are answering (a channel event's message_id). " +
+            "If several arrived together, use the latest one's id.",
+        ),
+      inProgress: z
+        .boolean()
+        .optional()
+        .describe(
+          "true when this reply acknowledges work you are about to do; the editor shows the " +
+            "user it is in progress until you send the result without it.",
+        ),
       documentId: z
         .string()
         .optional()
         .describe("Document context for this reply (defaults to active document)"),
     },
-    withErrorBoundary("tandem_reply", async ({ text, replyTo, documentId }) => {
+    withErrorBoundary("tandem_reply", async ({ text, replyTo, inProgress, documentId }) => {
       // #651 presence: tandem_reply is a chat send — no annotationId — so the
       // marker is the generic "Claude is working" status-bar indicator.
       return withTypingPresence({ tool: "tandem_reply", documentId }, async () => {
         const current = getCurrentDoc(documentId);
         const docId = documentId ?? current?.id ?? undefined;
-        const id = appendClaudeChatMessage(text, { documentId: docId, replyTo });
-        return mcpSuccess({ sent: true, messageId: id });
+        const id = appendClaudeChatMessage(text, {
+          documentId: docId,
+          replyTo,
+          inProgress,
+        });
+        const unmatched = replyTo !== undefined && !markUserChatRead(replyTo);
+        return mcpSuccess({
+          sent: true,
+          messageId: id,
+          ...(unmatched ? { warning: REPLY_TO_UNMATCHED_WARNING } : {}),
+        });
       });
     }),
   );

@@ -4,6 +4,8 @@ This is an independent review of the repository `LICENSE` (Business Source Licen
 
 Revised 2026-10-08 after a second review by the `license-reviewer` agent (`.claude/agents/license-reviewer.md`, which landed the day after this file was first written). That review found several drafted Parameters would change more than their findings said, and a set of restatements the first pass missed. The findings now carry that spec's tags, including `build` and `enforcement`.
 
+Every `LICENSE:N` citation refers to the file as reviewed, at commit 585c069f. #2164 later removed lines 18 and 19 (a blank line and the resale sentence), so in the current file subtract two from any citation of line 20 or later.
+
 ## Summary
 
 The Terms section of `LICENSE` matches the governing text word for word. The differences are all in the parts around it: the header line, a missing closing paragraph and the missing Covenants section, and a Notice heading with nothing under it. None of those were changed: adding or removing sections of the licence file is the licensor's call.
