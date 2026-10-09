@@ -7,7 +7,7 @@
     "frontendDist": "../dist/client",
     "devUrl": "http://127.0.0.1:5173",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "npm run build && node scripts/third-party-notices/generate.mjs desktop"
   },
   "app": {
     "windows": [
@@ -65,7 +65,8 @@
       "../skills/": "skills/",
       "../CHANGELOG.md": "CHANGELOG.md",
       "../LICENSE": "LICENSE.txt",
-      "../docs/workflows.md": "docs/workflows.md"
+      "../docs/workflows.md": "docs/workflows.md",
+      "../dist/desktop/THIRD_PARTY_NOTICES.txt": "THIRD_PARTY_NOTICES.txt"
     },
     "windows": {
       "nsis": {

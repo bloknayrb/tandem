@@ -98,7 +98,10 @@ jobs:
       - name: Create stubs for tauri_build resource checks
         shell: bash
         run: |
-          mkdir -p src-tauri/binaries dist/channel dist/server dist/client dist/stdio-bridge
+          mkdir -p src-tauri/binaries dist/channel dist/server dist/client dist/stdio-bridge dist/desktop
+          # A bundle resource since the third-party notices work; generated for
+          # real by tauri.conf.json's beforeBuildCommand.
+          touch dist/desktop/THIRD_PARTY_NOTICES.txt
           TRIPLE="$(rustc -Vv | grep '^host' | cut -d' ' -f2)"
           touch "src-tauri/binaries/node-sidecar-${TRIPLE}"
           touch "src-tauri/binaries/node-sidecar-${TRIPLE}.exe"
@@ -374,6 +377,13 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # The build generated dist/THIRD_PARTY_NOTICES.txt (and failed if it could
+      # not). This checks the other half: that the file actually reaches the npm
+      # tarball, and that the build-only files beside it (dist/.third-party,
+      # the desktop placeholder) do not. A `files` edit could drop either.
+      - name: Verify third-party notices ship in the npm tarball
+        run: node scripts/third-party-notices/generate.mjs verify-pack
 
       - name: Test
         run: npm test -- --run --reporter=default --reporter=json --outputFile.json=.vitest-report.json

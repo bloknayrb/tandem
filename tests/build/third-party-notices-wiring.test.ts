@@ -1,0 +1,136 @@
+/**
+ * Pins where scripts/third-party-notices/generate.mjs is wired in, so the
+ * notices cannot silently stop shipping.
+ *
+ * WHAT THIS IS: the cross-file couplings. The generator itself fails the build
+ * when the notices would be empty, partial or stale (see its header), and
+ * `verify-pack` / `verify-desktop` check the shipped result in CI. What none of
+ * those can see is the generator not being RUN, or its output not being SHIPPED
+ * — a build script, `files` entry, Tauri resource or workflow step quietly
+ * dropped. Each assertion here is one of those links.
+ *
+ * Workflow steps are found by their `run` value in the PARSED file, never by
+ * name or substring, for the reasons acceptance-harness-wiring.test.ts gives: a
+ * commented-out step must not exist, and `if:` / `continue-on-error` must not be
+ * able to neuter one.
+ */
+
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
+
+const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "../..");
+const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
+
+const GEN = "node scripts/third-party-notices/generate.mjs";
+
+type Step = { run?: string; uses?: string; if?: unknown; "continue-on-error"?: unknown };
+type Job = { steps: Step[]; "continue-on-error"?: unknown; if?: unknown };
+const workflow = (p: string) => parse(read(p)) as { jobs: Record<string, Job> };
+
+function stepIndex(job: Job, pred: (s: Step) => boolean): number {
+  return job.steps.findIndex(pred);
+}
+
+function expectUnconditional(job: Job, step: Step) {
+  expect(step.if).toBeUndefined();
+  expect(step["continue-on-error"]).toBeUndefined();
+  expect(job["continue-on-error"]).toBeUndefined();
+}
+
+describe("npm tarball", () => {
+  const pkg = JSON.parse(read("package.json")) as {
+    scripts: Record<string, string>;
+    files: string[];
+  };
+
+  it("`build` generates the notices as its LAST step, after every bundle exists", () => {
+    expect(pkg.scripts.build.endsWith(`&& tsup && ${GEN} npm`)).toBe(true);
+  });
+
+  it("`files` ships dist/ and excludes the build-only notices inputs", () => {
+    expect(pkg.files).toContain("dist/");
+    expect(pkg.files).toContain("!dist/.third-party");
+    expect(pkg.files).toContain("!dist/desktop");
+  });
+
+  it("CI `check` verifies the tarball contents after the build", () => {
+    const check = workflow(".github/workflows/ci.yml").jobs.check;
+    const build = stepIndex(check, (s) => s.run === "npm run build");
+    const verify = stepIndex(check, (s) => s.run === `${GEN} verify-pack`);
+    expect(build).toBeGreaterThanOrEqual(0);
+    expect(verify).toBeGreaterThan(build);
+    expectUnconditional(check, check.steps[verify]);
+  });
+});
+
+describe("bundle traces", () => {
+  it("every tsup bundle keeps the sourcemap its package list is read from", async () => {
+    const configs = (await import("../../tsup.config.ts")).default as Array<{
+      sourcemap?: unknown;
+      outDir?: string;
+    }>;
+    expect(configs.length).toBeGreaterThan(0);
+    for (const c of configs)
+      expect({ outDir: c.outDir, sourcemap: c.sourcemap }).toEqual({
+        outDir: c.outDir,
+        sourcemap: true,
+      });
+  });
+
+  it("the Vite client build carries the trace plugin, writing after the files land", () => {
+    const vite = read("vite.config.ts");
+    expect(vite).toMatch(/plugins:\s*\[[^\]]*\bthirdPartyTrace\(\)/);
+    expect(vite).toMatch(/writeBundle\(/);
+  });
+});
+
+describe("desktop bundle", () => {
+  const conf = JSON.parse(read("src-tauri/tauri.conf.json")) as {
+    build: { beforeBuildCommand: string };
+    bundle: { resources: Record<string, string> };
+  };
+
+  it("beforeBuildCommand runs desktop mode after the npm build", () => {
+    expect(conf.build.beforeBuildCommand).toBe(`npm run build && ${GEN} desktop`);
+  });
+
+  it("ships the desktop notices as a bundle resource", () => {
+    expect(conf.bundle.resources["../dist/desktop/THIRD_PARTY_NOTICES.txt"]).toBe(
+      "THIRD_PARTY_NOTICES.txt",
+    );
+  });
+
+  it("rust-test stubs the resource, since tauri_build refuses a missing one", () => {
+    const job = workflow(".github/workflows/ci.yml").jobs["rust-test"];
+    const stub = job.steps.find((s) =>
+      s.run?.includes("touch dist/desktop/THIRD_PARTY_NOTICES.txt"),
+    );
+    const test = stepIndex(job, (s) => s.run?.startsWith("cargo test") ?? false);
+    expect(stub).toBeDefined();
+    expect(job.steps.indexOf(stub as Step)).toBeLessThan(test);
+  });
+
+  it("the release matrix verifies the bundled file after tauri-action", () => {
+    const wf = workflow(".github/workflows/tauri-release.yml");
+    const [name, job] = Object.entries(wf.jobs).find(([, j]) =>
+      j.steps?.some((s) => s.uses?.startsWith("tauri-apps/tauri-action@")),
+    ) as [string, Job];
+    expect(name).toBeTruthy();
+    const action = stepIndex(job, (s) => s.uses?.startsWith("tauri-apps/tauri-action@") ?? false);
+    const verify = stepIndex(
+      job,
+      (s) => s.run === `${GEN} verify-desktop --target \${{ matrix.node-target }}`,
+    );
+    expect(verify).toBeGreaterThan(action);
+    expectUnconditional(job, job.steps[verify]);
+  });
+
+  it("the sidecar download extracts Node's LICENSE, which desktop mode requires", () => {
+    const dl = read("scripts/download-node-sidecar.mjs");
+    expect(dl).toContain("node-sidecar-${targetTriple}.LICENSE");
+    expect(dl).toMatch(/--strip-components=1 "\$\{prefix\}\/LICENSE"/);
+  });
+});

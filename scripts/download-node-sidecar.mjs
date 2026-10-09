@@ -171,7 +171,7 @@ async function verifyChecksum(archivePath, archiveName, nodeVersion) {
   console.log(`Checksum verified: ${archiveName}`);
 }
 
-function extractTarGz(archivePath, nodeVersion, info, outputPath) {
+function extractTarGz(archivePath, nodeVersion, info, outputPath, licencePath) {
   const prefix = `node-v${nodeVersion}-${info.platform}-${info.arch}`;
   const entryPath = `${prefix}/${info.binary}`;
 
@@ -195,9 +195,25 @@ function extractTarGz(archivePath, nodeVersion, info, outputPath) {
     renameSync(extractedName, outputPath);
   }
   chmodSync(outputPath, 0o755);
+
+  // Node's LICENSE sits at the archive root (<prefix>/LICENSE), one level up from
+  // bin/node, so it needs its own extraction with --strip-components=1 — the
+  // binary's =2 would strip it away entirely.
+  try {
+    execSync(
+      `tar -xzf "${archivePath}" -C "${dirname(licencePath)}" --strip-components=1 "${prefix}/LICENSE"`,
+      { stdio: "inherit" },
+    );
+  } catch (err) {
+    throw new Error(
+      `Failed to extract ${prefix}/LICENSE from the Node.js archive.\n` +
+        `Original error: ${err.message} (exit code ${err.status})`,
+    );
+  }
+  renameSync(join(dirname(licencePath), "LICENSE"), licencePath);
 }
 
-function extractZip(archivePath, nodeVersion, info, outputPath) {
+function extractZip(archivePath, nodeVersion, info, outputPath, licencePath) {
   const prefix = `node-v${nodeVersion}-win-${info.arch}`;
   const tempDir = join(dirname(archivePath), "_node_extract");
 
@@ -217,6 +233,7 @@ function extractZip(archivePath, nodeVersion, info, outputPath) {
   try {
     const extracted = join(tempDir, prefix, info.binary);
     renameSync(extracted, outputPath);
+    renameSync(join(tempDir, prefix, "LICENSE"), licencePath);
   } finally {
     // Clean up temp dir using Node.js API (cross-platform, no shell quoting issues)
     rmSync(tempDir, { recursive: true, force: true });
@@ -251,13 +268,22 @@ const outputPath = join(BINARIES_DIR, sidecarName);
 // the bug survive everywhere it currently lives.
 const versionMarkerPath = `${outputPath}.version`;
 
+// Node's own LICENSE (Node's terms plus those of everything it bundles: V8,
+// ICU, OpenSSL, libuv, ...), extracted from the same verified archive. The
+// desktop build ships it in THIRD_PARTY_NOTICES.txt via
+// scripts/third-party-notices/generate.mjs, which refuses to run without it.
+// A missing one counts as stale for the same reason a missing marker does:
+// every tree that predates it would otherwise keep a sidecar with no licence.
+const licencePath = join(BINARIES_DIR, `node-sidecar-${targetTriple}.LICENSE`);
+
 // Validate existing binary — a truncated file from an interrupted build must be re-downloaded
 if (existsSync(outputPath)) {
   const size = statSync(outputPath).size;
   const recorded = existsSync(versionMarkerPath)
     ? readFileSync(versionMarkerPath, "utf-8").trim()
     : null;
-  if (size >= MIN_SIDECAR_SIZE && recorded === nodeVersion) {
+  const hasLicence = existsSync(licencePath);
+  if (size >= MIN_SIDECAR_SIZE && recorded === nodeVersion && hasLicence) {
     console.log(
       `Sidecar already exists (v${recorded}, ${(size / 1e6).toFixed(1)}MB): ${outputPath}`,
     );
@@ -265,6 +291,8 @@ if (existsSync(outputPath)) {
   }
   if (size < MIN_SIDECAR_SIZE) {
     console.warn(`Existing sidecar is suspiciously small (${size} bytes) — re-downloading`);
+  } else if (recorded === nodeVersion) {
+    console.warn("Existing sidecar has no Node.js LICENSE beside it — re-downloading");
   } else {
     console.warn(
       `Existing sidecar is v${recorded ?? "unknown"}, want v${nodeVersion} — re-downloading`,
@@ -276,6 +304,7 @@ if (existsSync(outputPath)) {
   } catch {
     /* no marker to remove */
   }
+  rmSync(licencePath, { force: true });
 }
 
 mkdirSync(BINARIES_DIR, { recursive: true });
@@ -292,9 +321,9 @@ try {
   await verifyChecksum(archivePath, archiveName, nodeVersion);
 
   if (isWindows) {
-    extractZip(archivePath, nodeVersion, info, outputPath);
+    extractZip(archivePath, nodeVersion, info, outputPath, licencePath);
   } else {
-    extractTarGz(archivePath, nodeVersion, info, outputPath);
+    extractTarGz(archivePath, nodeVersion, info, outputPath, licencePath);
   }
 
   writeFileSync(versionMarkerPath, `${nodeVersion}\n`);
