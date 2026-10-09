@@ -25,6 +25,7 @@ matrix across OS versions, observer soak, accessibility) live in
 - [ ] SmartScreen: if the warning appears, **More info** shows the verified publisher name — *"Unknown publisher" is a signing failure, stop the release* (see [troubleshooting.md → SmartScreen](troubleshooting.md#windows-smartscreen-warning)).
 - [ ] Install → launch. App window appears with titlebar chrome intact.
 - [ ] Sidecar healthy: **Settings → About → Copy Diagnostics** — paste shows the new version, `desktop` in the header, and all checks `[ok]` (warnings acceptable, failures are not).
+- [ ] **The license ships.** Settings → **View license** opens the license read-only, and Settings → About's **License file** row ends in `LICENSE.txt`. The resource name and the button were tested only against temp trees and the dev tree, never a built installer.
 - [ ] File association, cold start: with Tandem closed, double-click a `.md` file — Tandem opens **with that file** (not `welcome.md`).
 - [ ] File association, warm start: with Tandem running, double-click another `.md` — it opens as a new tab in the existing window (single-instance).
 - [ ] Updater: on a machine/VM with the **previous** version installed, launch and wait for the titlebar update dot → install → app restarts → About shows the new version → open a document and type (sidecar survived the restart). **And no "Tandem may not have finished updating" banner appears** — that banner firing after a *successful* update is #1118's false-positive mode, and it would reach every user at once.

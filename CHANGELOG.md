@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tandem now listens on this computer only. Exposing the npm server on a LAN is not in this version.
 - The desktop app now includes Tandem's license, and Settings has a View license link that opens it.
 
+### Added
+
+- **The desktop app ships its license, and Settings can open it.** The license says it must be displayed on every copy, and no desktop build had included it. The app now bundles it, and the Settings sidebar has a **View license** link that opens it read-only, the way the changelog opens. Settings → About also shows where the license file is. The npm package already carried the license; the View license link does not appear there, because Tandem opens only files with an extension it knows, such as `.md` or `.txt`, and the package's copy has none. The About row still shows its location.
+
 ### Changed
 
 - **The npm server refuses to start with a non-loopback `TANDEM_BIND_HOST` (ADR-056, #2141).** Listening on a LAN address is not in this version. A value other than `127.0.0.1`, `localhost` or `::1` now stops the server at start with a message naming ADR-056; in stdio mode it is ignored with a one-line note, because that mode does not listen on it. `TANDEM_LAN_IP` and `TANDEM_ALLOW_UNAUTHENTICATED_LAN` no longer change anything (a set `TANDEM_LAN_IP` must still be a valid IP address). The desktop app is unaffected: it always listened on `127.0.0.1`. If you used a LAN bind, unset the variable, and do not port-forward around the refusal: a forwarded connection arrives from `127.0.0.1` and can get more access than LAN mode allowed. `tandem doctor` now says plainly that a non-loopback `url` in Claude's config cannot reach this Tandem.

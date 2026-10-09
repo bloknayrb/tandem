@@ -6,13 +6,15 @@
  * would report the one name Settings cannot open.
  *
  * The temp trees mirror the real layouts: the server runs from
- * `<root>/dist/server/` (npm and bundle) and the file sits at `<root>`, which
- * findRepoFile's `../..` probe reaches.
+ * `<root>/dist/server/` (npm and bundle) and the file sits at `<root>`, two
+ * levels up: findLicensePath's own direct probe for LICENSE.txt, and
+ * findRepoFile's first direct probe for LICENSE.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { findLicensePath } from "../../src/server/mcp/server.js";
 
@@ -29,6 +31,20 @@ function makeTree(files: string[]): string {
 afterEach(() => {
   if (root) rmSync(root, { recursive: true, force: true });
   root = undefined;
+});
+
+describe("the bundled resource name findLicensePath probes", () => {
+  it("tauri.conf.json bundles the repo LICENSE as LICENSE.txt", () => {
+    // findLicensePath looks for LICENSE.txt two levels above dist/server, i.e.
+    // in the resource dir. Renaming this target (to a bare LICENSE, say) would
+    // make the bundle fall back to the walk, find nothing, and drop the
+    // View license button from every desktop build with every other test green.
+    const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
+    const conf = JSON.parse(readFileSync(join(repoRoot, "src-tauri/tauri.conf.json"), "utf8")) as {
+      bundle: { resources: Record<string, string> };
+    };
+    expect(conf.bundle.resources["../LICENSE"]).toBe("LICENSE.txt");
+  });
 });
 
 describe("findLicensePath", () => {

@@ -84,8 +84,10 @@ export interface InfoHandlerDeps {
  * That "breaks those buttons" reason no longer holds on its own: since #1320
  * `enforceLoopbackMutation` refuses a non-loopback `POST /api/open`, so those
  * buttons already fail for a remote browser. What bounds the residual today is
- * that no non-loopback caller exists while the LAN bind ships dark (ADR-056,
- * `LAN_BIND_ENABLED = false`). Revisit scrubbing all four before that flips.
+ * that the route is unreachable from another machine while the LAN bind ships
+ * dark (ADR-056, `LAN_BIND_ENABLED = false`). A same-machine process connecting
+ * from another 127/8 address still counts as non-loopback and still gets all
+ * four paths.
  */
 export function makeInfoHandler(deps: InfoHandlerDeps): Handler {
   return async (req: Request, res: Response): Promise<void> => {
