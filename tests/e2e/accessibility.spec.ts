@@ -291,6 +291,34 @@ const SURFACES: Surface[] = [
     },
   },
   {
+    name: "chat pickup row",
+    // The row under the user's latest message only exists once a USER message does, and
+    // no MCP tool writes one, so this surface sends through the composer — accepting that
+    // a UI send can also raise the push-delivery notice, which is then scanned too. Kept
+    // separate from "chat panel (with messages)" so that surface's scan stays unambiguous.
+    // The waiting row is the one scanned: it is the muted-colour variant, the contrast risk.
+    open: async (page) => {
+      await bootEditor(page);
+      const tab = page.locator("[data-testid='chat-tab']");
+      if ((await tab.count()) > 0) await tab.click();
+      const input = page.locator("[data-testid='chat-composer-input']");
+      await input.fill("Contrast probe for the pickup row");
+      await input.press("Enter");
+      await expect(page.locator("[data-testid='chat-pickup-status']")).toHaveAttribute(
+        "data-pickup",
+        "waiting",
+        { timeout: 10_000 },
+      );
+    },
+    close: async () => {
+      try {
+        await fetch(`http://127.0.0.1:${E2E_MCP_PORT}/api/chat`, { method: "DELETE" });
+      } catch {
+        // Best-effort: a failure here must not mask the assertion that just ran.
+      }
+    },
+  },
+  {
     name: "annotations panel (empty)",
     open: async (page) => {
       await bootWithContent(page);

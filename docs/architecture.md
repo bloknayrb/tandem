@@ -1182,7 +1182,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 - `panels/AnnotationEditForm.svelte` -- Inline edit form for pending annotations (extracted from AnnotationCard)
 - `panels/ReplyThread.svelte` -- Reply thread display and reply input for an annotation (extracted from AnnotationCard)
 - `ChatPanel` + `SidePanel` are both always mounted (CSS display toggle, not conditional rendering) so local state (filters, scroll position) persists across panel switches
-- `ChatPanel` -- Shows Claude typing indicator (animated dots + status text) when `claudeActive` is true
+- `ChatPanel` -- Shows a pickup row under the user's latest message (`panels/chat-pickup.ts`): "waiting" until `tandem_checkInbox` stamps it `read`, "has your message" after, animated "working on it" after a `tandem_reply` with `inProgress: true`, gone once answered or after 10 min. Derived from the chat map only; it deliberately does not read `claudeActive` (set by `tandem_status`, true for up to 5 min after Claude's last presence-wrapped tool call) or `claudeWorking` (set only around a few wrapped tool calls, 30 s cap)
 - `StatusBar` -- Connection status (three-state: connected/connecting/disconnected with reconnect attempt count + elapsed time) and Claude activity indicator. Prolonged disconnect (>30s) shows a dismissible banner that auto-clears on reconnect. The Solo/Tandem mode toggle lives in the title bar (`src/client/shell/TitleBar.svelte`), not the StatusBar or the Toolbar; client broadcasts `mode` via `Y_MAP_MODE` key to `Y_MAP_USER_AWARENESS` on `CTRL_ROOM`.
 
 ### Tauri Desktop (`src-tauri/`)

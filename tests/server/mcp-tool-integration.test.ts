@@ -19,7 +19,12 @@ import {
   resetDeliveryStateForTests,
 } from "../../src/server/events/delivery-state.js";
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
-import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
+import {
+  CHAT_ACK_DIRECTIVE,
+  REPLY_TO_UNMATCHED_WARNING,
+  registerAwarenessTools,
+  resetInbox,
+} from "../../src/server/mcp/awareness.js";
 import {
   getOrCreateXmlText,
   populateYDoc,
@@ -44,13 +49,20 @@ import {
   Y_MAP_ACTIVITY,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AUTHORSHIP,
+  Y_MAP_CHAT,
   Y_MAP_MODE,
   Y_MAP_SELECTION,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
+import {
+  CHAT_ACK_RULE,
+  SUPERVISOR_ACK_CLAUSE,
+  SUPERVISOR_INITIAL_PROMPT,
+  SUPERVISOR_WAKE_PROMPT,
+} from "../../src/shared/launcher/contract.js";
 import { MCP_ORIGIN, withInternal } from "../../src/shared/origins.js";
 import { SNAPSHOT_CAP } from "../../src/shared/snapshot.js";
-import type { Annotation } from "../../src/shared/types.js";
+import type { Annotation, ChatMessage } from "../../src/shared/types.js";
 import { parseResult, setupMcpServer } from "../helpers/mcp-harness.js";
 import { off, range } from "../helpers/positions.js";
 import { createAnnotation, rangeOf } from "../helpers/ydoc-factory.js";
@@ -1664,6 +1676,79 @@ describe("MCP tool integration — awareness tools", () => {
     expect(parsed.error).toBe(false);
     expect(parsed.data.sent).toBe(true);
     expect(parsed.data.messageId).toMatch(/^msg_/);
+  });
+
+  it("tandem_checkInbox tells Claude to acknowledge chat, and only when chat is present", async () => {
+    setupDoc("mcp-aw-ack", "Hello world");
+    const empty = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+    expect(empty.data.summary).not.toContain(CHAT_ACK_DIRECTIVE);
+
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    const userMsg: ChatMessage = {
+      id: "msg_ack_user",
+      author: "user",
+      text: "tighten section 2",
+      timestamp: Date.now(),
+      read: false,
+    };
+    withInternal(ctrl, () => ctrl.getMap(Y_MAP_CHAT).set(userMsg.id, userMsg));
+    const withChat = parseResult(
+      await client.callTool({ name: "tandem_checkInbox", arguments: {} }),
+    );
+    expect(withChat.data.summary).toContain(CHAT_ACK_DIRECTIVE);
+  });
+
+  it("tandem_reply records inProgress and marks the answered message read", async () => {
+    setupDoc("mcp-aw-ack-2", "Hello world");
+    const ctrl = getOrCreateDocument(CTRL_ROOM);
+    const chat = ctrl.getMap(Y_MAP_CHAT);
+    const userMsg: ChatMessage = {
+      id: "msg_ack_pushed",
+      author: "user",
+      text: "pushed, never polled",
+      timestamp: Date.now(),
+      read: false,
+    };
+    withInternal(ctrl, () => chat.set(userMsg.id, userMsg));
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_reply",
+        arguments: { text: "On it.", replyTo: userMsg.id, inProgress: true },
+      }),
+    );
+    expect(parsed.error).toBe(false);
+    const ack = chat.get(parsed.data.messageId) as ChatMessage;
+    expect(ack.inProgress).toBe(true);
+    expect(ack.replyTo).toBe(userMsg.id);
+    expect((chat.get(userMsg.id) as ChatMessage).read).toBe(true);
+    expect(parsed.data.warning).toBeUndefined();
+
+    const stray = parseResult(
+      await client.callTool({
+        name: "tandem_reply",
+        arguments: { text: "Done.", replyTo: "msg_does_not_exist" },
+      }),
+    );
+    expect(stray.error).toBe(false);
+    expect(stray.data.warning).toBe(REPLY_TO_UNMATCHED_WARNING);
+  });
+
+  it("tandem_reply and both supervisor turns carry the ack rule", async () => {
+    const { tools } = await client.listTools();
+    const reply = tools.find((t) => t.name === "tandem_reply");
+    expect(reply?.description).toContain(CHAT_ACK_RULE);
+    expect(Object.keys(reply?.inputSchema.properties ?? {})).toEqual(
+      expect.arrayContaining(["replyTo", "inProgress"]),
+    );
+    expect(CHAT_ACK_DIRECTIVE).toContain(CHAT_ACK_RULE);
+    expect(SUPERVISOR_INITIAL_PROMPT).toContain(SUPERVISOR_ACK_CLAUSE);
+    expect(SUPERVISOR_WAKE_PROMPT).toContain(SUPERVISOR_ACK_CLAUSE);
+    // The rule itself must keep the two literals the editor keys on.
+    for (const text of [CHAT_ACK_RULE, SUPERVISOR_ACK_CLAUSE]) {
+      expect(text).toContain("replyTo");
+      expect(text).toContain("inProgress: true");
+    }
   });
 });
 

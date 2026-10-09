@@ -2604,8 +2604,6 @@ const shouldShowModelPicker = $derived(
             {editor}
             activeDocId={yjsSync.activeTabId}
             {openDocs}
-            claudeActive={yjsSync.claudeActive}
-            claudeStatus={yjsSync.claudeStatus}
             capturedAnchor={railContent.capturedAnchor}
             onCapturedAnchorChange={(a) => railContent.setCapturedAnchor(a)}
             onSend={sendChatMessage}

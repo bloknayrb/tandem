@@ -152,7 +152,15 @@ Two things sit outside it, for two different reasons:
   left in the design; adding to it is a security change. Nothing in CI exercises the shim
   against a non-loopback host and `channel/run.ts` logs a 403 to stderr and continues, so
   the positive-control cases in `tests/server/api-loopback-invariant.test.ts` are the only
-  detector a broken carve-out has.
+  detector a broken carve-out has. One effect inside the family to know about:
+  `POST /api/channel-reply` with a `replyTo` naming an unread user chat message stamps that
+  message `read: true`, so it no longer surfaces in `tandem_checkInbox`. That lets a caller
+  who knows a message id hide it from the inbox. Bound: any caller that reaches the route can
+  already write Claude-authored chat, the message stays visible in the editor, and
+  `tandem_checkInbox`'s own stamp is the same process-global kind. The stamp runs whenever
+  the body carries a string `replyTo` and targets that id (`markUserChatRead`); no other
+  body field can cause it, an invalid `text` or `inProgress` refuses the request before it,
+  and it writes nothing for an unknown id, a Claude row or a message already read.
 - **`/api/wake`** is a WebSocket upgrade registered on the `http.Server` upgrade event
   (`events/wake-socket.ts`), so `app.use("/api", …)` structurally never sees it. It carries
   its own Origin guard. This is an exception to the middleware's *reach*, not to the policy.
