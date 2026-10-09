@@ -457,10 +457,10 @@ describe("GET /api/info — welcomePath field (unit)", () => {
 });
 
 describe("GET /api/info — licensePath field (unit)", () => {
-  // licensePath feeds Settings' "License" button (the LICENSE must be
+  // licensePath feeds Settings' "View license" button (the LICENSE must be
   // displayable on every copy). Same public, present-only-when-resolved
-  // contract as changelogPath, and non-loopback browsers hand it back to
-  // /api/open just like the others.
+  // contract as changelogPath, including for non-loopback callers (see the
+  // #1294 note in routes/info.ts for why it is sent unscrubbed).
   const invoke = async (deps: Parameters<typeof makeInfoHandler>[0], remote: string) => {
     const handler = makeInfoHandler(deps);
     const res = makeMockRes();

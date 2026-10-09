@@ -148,7 +148,7 @@ const aboutRows = $derived.by(() => {
   if (info.changelogPath) rows.push({ label: "Changelog", value: info.changelogPath });
   // Shown even where the sidebar offers no License button (a dev or npm tree's
   // bare LICENSE, which /api/open refuses), so every copy says where it is.
-  if (info.licensePath) rows.push({ label: "License", value: info.licensePath });
+  if (info.licensePath) rows.push({ label: "License file", value: info.licensePath });
 
   // Crash reporting (#921) is opt-in via the TANDEM_SENTRY_DSN env var and off
   // by default; surface its status read-only (no toggle — the env var is the

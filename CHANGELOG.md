@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Tandem's Cowork setup is out of the app for now, and Cowork is not a supported surface in this version. Claude Code and Claude Desktop setup are unchanged.
 - Tandem now listens on this computer only. Exposing the npm server on a LAN is not in this version.
+- The desktop app now includes Tandem's license, and Settings has a View license link that opens it.
 
 ### Changed
 

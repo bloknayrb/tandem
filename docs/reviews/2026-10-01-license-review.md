@@ -116,7 +116,7 @@ Count: 11. Fixed: 8. They are C1 to C4, C9 to C11, and one carrier of C7. Enforc
 
 ### C6. The desktop app ships no copy of the licence (partly fixed after this review)
 
-- Update, 2026-10-09: after the licensor's B7 decision, the desktop bundle carries the repository `LICENSE` as the resource `LICENSE.txt`, and Settings has a "View license" link that opens it read-only. The resource is named `LICENSE.txt`, not the `LICENSE` proposed below, because `/api/open` refuses an extensionless file. Still not done: `bundle.licenseFile`, so no installer shows a licence page and the `.deb` still installs no licence file. The rest of this entry is the review as written, and it describes releases up to v0.28.0.
+- Update, 2026-10-09: the licensor decided the desktop app ships `LICENSE`. The desktop bundle now carries the repository `LICENSE` as the resource `LICENSE.txt` (on Linux that lands in the package's install tree with the other resources), and Settings has a "View license" link that opens it read-only. The resource is named `LICENSE.txt`, not the `LICENSE` proposed below, because `/api/open` refuses an extensionless file. Still not done: `bundle.licenseFile` is unset, so no installer is expected to show a licence page (not checked), and the `.deb` still has no Debian copyright file or `License` field. Not verified on a built installer. The rest of this entry is the review as written, and it describes releases up to v0.28.0.
 
 - Tag: build
 - Location: `src-tauri/tauri.conf.json:59-68`

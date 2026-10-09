@@ -553,7 +553,7 @@ $effect(() => {
   return () => window.removeEventListener("keydown", handler);
 });
 
-// Clear stale view-changelog / replay-tutorial errors when tab changes.
+// Clear stale view-changelog / view-license / replay-tutorial errors when tab changes.
 $effect(() => {
   activeTabId;
   changelogError = null;

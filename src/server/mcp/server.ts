@@ -196,7 +196,7 @@ const LICENSE_PATH: string | undefined = findLicensePath(__dirname);
  * resolves to the copy Settings can open. A bare `LICENSE` is still reported
  * (the About tab shows its path) but the client offers no open action for it.
  *
- * `LICENSE.txt` gets only the direct probes, never `findRepoFile`'s ancestor
+ * `LICENSE.txt` gets only the one direct probe, never `findRepoFile`'s ancestor
  * walk: the bundle is the one layout that has it, always at `../..`, and the
  * walk accepts any ancestor holding `package.json` beside the file. For an npm
  * install inside a project that walk would reach the project root, so a
@@ -204,10 +204,8 @@ const LICENSE_PATH: string | undefined = findLicensePath(__dirname);
  * (and opened) as Tandem's.
  */
 export function findLicensePath(startDir: string): string | undefined {
-  for (const prefix of ["../..", ".."]) {
-    const candidate = join(startDir, prefix, "LICENSE.txt");
-    if (existsSync(candidate)) return candidate;
-  }
+  const bundled = join(startDir, "../..", "LICENSE.txt");
+  if (existsSync(bundled)) return bundled;
   return findRepoFile(startDir, "LICENSE");
 }
 
