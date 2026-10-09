@@ -8,15 +8,15 @@ Every `LICENSE:N` citation refers to the file as reviewed, at commit 585c069f. #
 
 ## Summary
 
-The Terms section of `LICENSE` matches the governing text word for word. The differences are all in the parts around it: the header line, a missing closing paragraph and the missing Covenants section, and a Notice heading with nothing under it. None of those were changed: adding or removing sections of the licence file is the licensor's call.
+The Terms section of `LICENSE` matches the governing text word for word. The differences are all in the parts around it: the header line, a missing closing paragraph and the missing Covenants section, and a Notice heading with nothing under it. None of those were changed: adding or removing sections of the licence file is the licensor's call. *Update 2026-10-09:* the licensor restored all three (A8), applied in #2174.
 
 Eight restating places disagreed with `LICENSE` and were fixed. The other consistency and build findings are reported without a fix, each with the reason. Two gaps between `LICENSE` and what the product enforces are recorded under L4 and L5.
 
-Nine findings need a decision from the licensor, because they change a Parameter. Drafted wording is given for each. None has been applied, except that #2164 removed the resale sentence (L3). *Update 2026-10-09:* the licensor decided them all, and #2174 applies the decisions. Each finding below carries a dated note saying what was applied. Four legal questions are left to the licensor; they are listed under Questions left to the licensor. No counsel is being consulted (2026-10-09).
+Nine findings need a decision from the licensor, because they change a Parameter. Drafted wording is given for each. None has been applied, except that #2164 removed the resale sentence (L3). *Update 2026-10-09:* the licensor decided them all, and #2174 applies the `LICENSE` changes. Each finding below carries a dated note saying what was applied and what was not: L5's update-window half lands in a stacked PR, A7's plugin `ref` pin is not done, and L8 needed no change to `LICENSE`. Four legal questions are left to the licensor; they are listed under Questions left to the licensor. No counsel is being consulted (2026-10-09).
 
 Legal judgements are out of scope for this file. The licensor makes them.
 
-The three findings that matter most:
+The three findings that matter most (all three decided on 2026-10-09; see the notes under L2, L3, L4 and C5, and C6 for the build half):
 
 1. The Change Date has a cliff. Read as written, any version released on or after 2029-06-10 would be MIT on the day it ships, and protection shrinks below two years for anything released after 2027-06-10 (finding L2).
 2. The desktop app, which is the main distribution, ships no copy of the licence and shows it nowhere (finding C6).
@@ -141,7 +141,7 @@ Count: 11. Fixed: 8. They are C1 to C4, C9 to C11, and one carrier of C7. Enforc
 ### C8. Earlier releases shipped different terms from the ones the docs now describe (not fixed)
 
 - Tag: consistency
-- Decided 2026-10-09 and applied in #2174 (A9, C2): the beta grant now also covers every pre-1.0 version released under an earlier wording, and the README and the explainer say which releases shipped which terms. The MIT-era desktop builds are accepted as MIT.
+- Decided 2026-10-09 and applied in #2174 (A9, and decision C2 of 2026-10-09, not this file's finding C2): the beta grant now also covers every pre-1.0 version released under an earlier wording, and the README and the explainer say which releases shipped which terms. The MIT-era desktop builds are accepted as MIT.
 - Location: `README.md:178`, `docs/licensing-explained.md:85-88`, `docs/licensing-terms.md:85-87`, `docs/decisions.md:1329`
 - What is wrong: all four say every pre-1.0 release is free with no time limit, and the explainer adds that the grant "says so in as many words". That is true of the current file. It is not what each release's own file said:
   - v0.1.0 to v0.10.x shipped the MIT licence. On npm that range is 0.1.0 to 0.9.1; no 0.10 version was published there.
@@ -401,6 +401,8 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
   ```
 
 ## Questions left to the licensor
+
+*Update 2026-10-09:* three of the four are settled. The L3 prohibitions are gone, because the grant is recast (A0). Transfer is left out of the terms (A2), which leaves only the narrower question of whether terms of sale could limit devices. The earlier desktop releases are accepted as MIT (decision C2). Contribution rights remain open.
 
 Four legal questions are left to the licensor. They are noted where they arise: whether the grant's two prohibitions restrict the base grant (L3), whether terms of sale could still limit devices or transfer (L3), and the position of the earlier desktop releases (C8). The fourth has no finding of its own here:
 

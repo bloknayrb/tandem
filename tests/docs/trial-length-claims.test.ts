@@ -23,7 +23,8 @@ import { TRIAL_DAYS } from "../../src/shared/constants.js";
  *
  * **Paragraph-scoped, not file-scoped**, because these files legitimately carry
  * other day counts (a rotate-token grace window, a backup retention) that have
- * nothing to do with the trial. A paragraph mentioning "trial" or "evaluation"
+ * nothing to do with the trial. A paragraph mentioning "trial", "evaluation" or
+ * "first launch"
  * is scoped tightly enough that any `N day` inside it is about the trial, and
  * loosely enough to survive rewording — which a fixed-substring assertion would
  * not, and a reworded claim is precisely the moment drift gets introduced.
@@ -89,7 +90,7 @@ describe("trial-length claims track TRIAL_DAYS", () => {
     ).toEqual([]);
   });
 
-  it("the BUSL Additional Use Grant names the trial and the one-time purchase", () => {
+  it("the BUSL Additional Use Grant names the beta boundary and the one-time purchase", () => {
     const license = readFileSync(path.join(ROOT, "LICENSE"), "utf8");
     // Not a substring check on the whole sentence — just the two commitments
     // the README makes on the licence's behalf, so the two cannot part ways.

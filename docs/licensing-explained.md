@@ -117,7 +117,7 @@ stops you opening them anywhere else.
 
 **The shipped strings still describe the old gate.** The in-product copy for
 the restricted state was written for the earlier design, where documents went
-read-only and chat stayed open: the license wall
+read-only and chat and Claude's MCP read tools stayed open: the license wall
 (`src/client/components/LicenseWall.svelte`), the MCP refusal
 (`src/server/mcp/license-gate.ts`) and the CLI status text
 (`src/cli/license.ts`). Neither the code nor that copy has changed yet; both
