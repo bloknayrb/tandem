@@ -122,7 +122,7 @@
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@napi-rs/keyring": "^2.0.0",
     "@sentry/browser": "^10.8.0",
-    "@sentry/node": "^10.8.0",
+    "@sentry/node": "^11.4.0",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tiptap/core": "^3.30.5",
