@@ -83,7 +83,8 @@ $effect(() => {
 // by the interval below; it is stale whenever that tick is stopped. The
 // `Math.max` with `Date.now()` is what keeps a stale value from counting an
 // hours-old restored message as young: a chat change re-runs this derived and
-// reads the real time then, in the same evaluation that sees the new message.
+// reads the real time in the same evaluation. (Re-showing a hidden panel also
+// lands on the current time; `chat-panel-pickup.test.ts` pins that outcome.)
 let now = $state(Date.now());
 const pickup = $derived(chatPickup(messages, Math.max(now, Date.now())));
 const pickupKind = $derived(pickup?.kind ?? null);

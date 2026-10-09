@@ -77,6 +77,17 @@ describe("ChatPanel pickup row — clock", () => {
     expect(row(container)?.textContent).not.toContain("11 s");
   });
 
+  it("shows the current wait the moment a hidden panel is shown again", async () => {
+    const { container, rerender } = renderChat([user("a", T0)], false);
+    vi.setSystemTime(T0 + 45_000);
+    await tick();
+    // Precondition: the hidden row really is showing a stale wait.
+    expect(row(container)?.textContent).not.toContain("45 s");
+    await rerender({ visible: true });
+    await tick();
+    expect(row(container)?.textContent).toContain("· 45 s");
+  });
+
   it("ticks when visible is never passed (an always-shown mount)", async () => {
     const { container } = renderChat([user("a", T0)], "omit");
     await vi.advanceTimersByTimeAsync(11_000);
@@ -122,7 +133,7 @@ describe("ChatPanel pickup row — auto-scroll", () => {
     expect(scrollSpy).not.toHaveBeenCalled();
   });
 
-  it("scrolls when the row changes state", async () => {
+  it("scrolls when a chat change moves the row to a new state", async () => {
     const { rerender } = renderChat([user("a", T0)], "omit");
     scrollSpy.mockClear();
     await rerender({ messages: [user("a", T0, true)] });
