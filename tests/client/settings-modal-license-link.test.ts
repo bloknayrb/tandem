@@ -27,14 +27,14 @@ const BASE_INFO = {
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
-/** Answer /api/info with `info` and /api/open with 200; leave anything else pending. */
-function stubFetch(info: Record<string, unknown>): void {
+/** Answer /api/info with `info` and /api/open with `openStatus`; leave anything else pending. */
+function stubFetch(info: Record<string, unknown>, openStatus = 200): void {
   fetchMock = vi.fn((url: string) => {
     if (url.endsWith(API_INFO)) {
       return Promise.resolve(new Response(JSON.stringify(info), { status: 200 }));
     }
     if (url.endsWith(API_OPEN)) {
-      return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+      return Promise.resolve(new Response(JSON.stringify({}), { status: openStatus }));
     }
     return new Promise(() => {});
   });
@@ -97,6 +97,23 @@ describe("SettingsModal License link", () => {
       readOnly: true,
       force: false,
     });
+  });
+
+  it("shows an error and keeps the modal open when the open fails", async () => {
+    stubFetch({ ...BASE_INFO, licensePath: "/opt/tandem/LICENSE.txt" }, 404);
+    const { container, onClose } = renderModal();
+    const btn = await waitFor(() => {
+      const el = byTestId(container, "settings-modal-view-license-btn") as HTMLButtonElement;
+      expect(el?.disabled).toBe(false);
+      return el;
+    });
+    await fireEvent.click(btn);
+    await waitFor(() =>
+      expect(byTestId(container, "settings-modal-license-error")?.textContent).toContain(
+        "License file not found.",
+      ),
+    );
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("offers no button for the bare LICENSE of a dev or npm tree", async () => {
