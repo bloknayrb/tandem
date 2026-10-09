@@ -26,7 +26,7 @@ Stated as the code behaves, not as marketing:
 | | Behaviour |
 |---|---|
 | **Right to run** | Perpetual. The run gate checks the Ed25519 signature only (`verifyLicenseSignature`, never `verifyLicense`), so a paid licence runs **forever** — including after the update window ends, and including after a refund. |
-| **Updates** | One year from issuance (`expiresAt` / `updateWindowEnd`). After that the app keeps running; it is simply no longer offered new releases. |
+| **Updates** | All future updates included, with no guarantee that any will be released (decided 2026-10-09, A5). Paid and grandfathered keys alike are issued with `expiresAt` / `updateWindowEnd` null. There is no renewal product (B6). |
 | **Activation** | Fully offline. No server contact, no activation call, no device count, no seat check. |
 | **Devices** | Technically unlimited — nothing enforces a device count. The email says "any device you personally use", which is an **honour-system** limit, not a technical one. Terms should say the same thing, or say something different and be honest that it isn't enforced. |
 | **Transfer** | Not restricted (left out of the terms by decision, 2026-10-09). |
@@ -165,19 +165,24 @@ Open questions:
 
 Roughly in priority order:
 
-1. **Paid-licence terms**: update-window duration, warranty, liability,
-   governing law. *Transferability decided 2026-10-09 (A2): not restricted, and
+1. **Paid-licence terms**: warranty, liability, governing law. *Update-window
+   duration decided 2026-10-09 (A5): none. Every key includes all future
+   updates, with no guarantee of any (Bryan: "tandem is a one-time purchase for a
+   key with all future updates included in that purchase, but with no guarantee
+   of future updates").* *Transferability decided 2026-10-09 (A2): not restricted, and
    left out of the terms (Bryan: "im fine with transfers, leave it out").*
 2. **`LEDGER_KV` erasure**: lawful basis. *Retention decided 2026-10-09 (B5):
    kept while keys are reissued, erased on request (§5).*
 3. **Withdrawal-right waiver** availability alongside a trial (§3).
-4. **Pre-contractual disclosure** (CRD Art. 6) of the one-year update window and
-   of the licence gate as a technical protection measure. Nothing
-   customer-facing states either today.
-5. **DCD 2019/770 Art. 8(2)** — are security updates owed past the paid window?
-   **Ask early.** The update Worker proxies a *single* manifest and is
-   architecturally incapable of serving security-only builds to a
-   lapsed-window buyer. That door closes when v1.0 ships.
+4. **Pre-contractual disclosure** (CRD Art. 6) of the update terms (all future
+   updates included, none guaranteed; A5) and of the licence gate as a
+   technical protection measure. Nothing customer-facing states either today.
+5. **DCD 2019/770 Art. 8(2)** — what update obligation attaches to a sale whose
+   terms say no future update is guaranteed? There is no paid window to lapse
+   any more (A5), so the old question of security updates owed past it is
+   moot, but whether "no guarantee" can disclaim the statutory duty is not. The
+   update Worker proxies a *single* manifest, so it can serve every key the same
+   build and nothing narrower.
 6. **EU exhaustion / resale** (*UsedSoft*) versus the email's "any device you
    personally use". If a lawful resale requires the buyer to be able to make
    their own copy unusable, that makes copy-key and a remove-licence path

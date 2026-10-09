@@ -118,7 +118,7 @@ The desktop equivalent is Settings → License. Licensing ships dark until v1.0;
 
 ### `tandem license`
 
-Prints the current license or trial status: whether enforcement is on at all (it is off until v1.0), then either the licensee name and type plus the update window, or the days remaining on the trial. An expired update window is called out explicitly, because "Tandem keeps running but new releases are no longer offered" otherwise shows up only as the app saying you are up to date forever.
+Prints the current license or trial status: whether enforcement is on at all (it is off until v1.0), then either the licensee name and type plus what updates the key includes, or the days remaining on the trial. Every issued key includes all future updates, and the command says so; only a key hand-signed with a dated window shows one. An expired window is called out explicitly, because "Tandem keeps running but new releases are no longer offered" otherwise shows up only as the app saying you are up to date forever.
 
 ```bash
 tandem license
