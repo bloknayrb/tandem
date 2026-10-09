@@ -1308,6 +1308,7 @@ Returns app metadata for the client's About panel and version indicator. Sensiti
 | `changelogPath` | string | no | Absolute path to `CHANGELOG.md`; present only when the file exists. Drives the changelog auto-open on upgrade. |
 | `workflowsPath` | string | no | Absolute path to the bundled `docs/workflows.md`; present only when the file exists |
 | `welcomePath` | string | no | Absolute path to `sample/welcome.md`; present only when the file exists |
+| `licensePath` | string | no | Absolute path to the licence text: `LICENSE.txt` in the desktop bundle, otherwise the bare `LICENSE` of a dev checkout or the npm package. Present only when one exists. Settings offers to open it only when the path has an openable extension, because `/api/open` refuses an extensionless file. |
 | `storagePath` | string | yes | Absolute path to session storage directory |
 | `tokenRotatedAt` | number \| null | yes | Auth token file mtime in epoch ms; `null` if token file absent or unreadable. **Omitted entirely** — not `null` — when `TANDEM_AUTH_TOKEN` supplied the running token, because the file is then not this server's source (#1946). |
 | `generationId` | string \| null | yes | Identifies this server run. Browser clients pin it as their Hocuspocus auth token so a tab that survived a restart is rejected instead of CRDT-merging stale state. Loopback-only because Hocuspocus binds `127.0.0.1`, so no one else could use it. |

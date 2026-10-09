@@ -89,7 +89,7 @@ import { createAppInfo } from "../hooks/useAppInfo.svelte";
 import { createBugReportUrl } from "../hooks/useBugReportUrl.svelte";
 import { focusablesWithin, trapTab } from "../utils/focus-trap";
 import { activationKeydown } from "../utils/keyboard-activate";
-import { openServerPath } from "../utils/server-paths";
+import { hasOpenableExtension, openServerPath } from "../utils/server-paths";
 import SettingsReadonlyBanner from "./SettingsReadonlyBanner.svelte";
 import AccessibilitySettings from "./AccessibilitySettings.svelte";
 import AppearanceSettings from "./AppearanceSettings.svelte";
@@ -249,6 +249,16 @@ let changelogLoading = $state(false);
 let changelogError = $state<string | null>(null);
 let replayLoading = $state(false);
 let replayError = $state<string | null>(null);
+let licenseLoading = $state(false);
+let licenseError = $state<string | null>(null);
+// The licence must be displayable on every copy (LICENSE). The desktop bundle
+// ships it as LICENSE.txt so `/api/open` will take it; a dev or npm tree only
+// has the bare LICENSE, which `/api/open` refuses, so no button is offered
+// there rather than one that always fails. The About tab still shows the path.
+const licenseOpenPath = $derived.by(() => {
+  const p = appInfo.info?.licensePath;
+  return p && hasOpenableExtension(p) ? p : undefined;
+});
 // W9: narrow-viewport sidebar drawer. At <860px the sidebar collapses out
 // of the grid into an absolute drawer toggled by the header hamburger.
 // Reset to closed each time the modal opens.
@@ -315,7 +325,7 @@ $effect(() => {
  *     required to blur inert content — same for closing the drawer from a nav
  *     click or Escape;
  *   - narrow → wide flips the hamburger to `display: none`;
- *   - View Changelog / Replay tutorial `disabled` the button that was just
+ *   - View Changelog / License / Replay tutorial `disabled` the button that was just
  *     activated, and on the error branch the dialog stays open around it;
  *   - a delete-confirm button removes the row it lives in, and
  *     `{#key activeTab.id}` destroys the whole tab body.
@@ -547,6 +557,7 @@ $effect(() => {
 $effect(() => {
   activeTabId;
   changelogError = null;
+  licenseError = null;
   replayError = null;
 });
 
@@ -568,6 +579,27 @@ async function handleViewChangelog(): Promise<void> {
     onClose();
   } else {
     changelogError = result.error;
+  }
+}
+
+async function handleViewLicense(): Promise<void> {
+  const filePath = licenseOpenPath;
+  if (!filePath) {
+    licenseError = "License file not found.";
+    return;
+  }
+  licenseLoading = true;
+  licenseError = null;
+  const result = await openServerPath(filePath, {
+    readOnly: true,
+    notFoundMessage: "License file not found.",
+    failureMessage: "Failed to open the license.",
+  });
+  licenseLoading = false;
+  if (result.ok) {
+    onClose();
+  } else {
+    licenseError = result.error;
   }
 }
 
@@ -699,6 +731,26 @@ async function handleReplayTutorial(): Promise<void> {
           >
             {changelogError}
           </div>
+        {/if}
+        {#if licenseOpenPath}
+          <button
+            type="button"
+            data-testid="settings-modal-view-license-btn"
+            onclick={() => void handleViewLicense()}
+            disabled={licenseLoading || appInfo.loading}
+            class="settings-modal-sidebar-link"
+          >
+            {licenseLoading ? "Opening…" : "License"}
+          </button>
+          {#if licenseError}
+            <div
+              role="alert"
+              data-testid="settings-modal-license-error"
+              style="font-size: 11px; color: var(--tandem-error-fg-strong); padding: 0 var(--tandem-space-2);"
+            >
+              {licenseError}
+            </div>
+          {/if}
         {/if}
         <!-- Replay tutorial (WS-E). Shown only when fully wired: the server
              exposes welcomePath (stripped prod builds may lack it — same

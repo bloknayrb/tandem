@@ -14,7 +14,7 @@ export type Handler = (req: Request, res: Response, next: NextFunction) => void;
  * here so the next route inherits it instead of re-deciding it.
  *
  * `GET /api/info` is a deliberate exception, NOT an example: it returns
- * `changelogPath` / `workflowsPath` / `welcomePath` absolute to every
+ * `changelogPath` / `workflowsPath` / `welcomePath` / `licensePath` absolute to every
  * authenticated caller, because the remote browser client feeds them straight
  * back to `/api/open` and a basename would not resolve. See the note in
  * `routes/info.ts`. Do not read this helper's existence as a claim that every

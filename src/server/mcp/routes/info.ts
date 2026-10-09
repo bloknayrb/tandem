@@ -38,6 +38,13 @@ export interface InfoHandlerDeps {
    * Consumed by the "Replay tutorial" affordance to reopen the welcome doc.
    */
   welcomePath?: string;
+  /**
+   * Absolute path to the licence text on disk, resolved at server startup:
+   * `LICENSE.txt` in the desktop bundle, the bare `LICENSE` in a dev or npm
+   * tree. Undefined if neither exists. Consumed by Settings' "License" link,
+   * which offers to open it only when the path has an openable extension.
+   */
+  licensePath?: string;
   /** Active MCP transport mode. */
   transport?: "http" | "stdio";
   /**
@@ -56,18 +63,18 @@ export interface InfoHandlerDeps {
  * GET /api/info — returns app metadata for the client About panel.
  *
  * Public fields (always returned): version, toolCount, mcpSdkVersion, transport,
- * changelogPath, workflowsPath, welcomePath.
+ * changelogPath, workflowsPath, welcomePath, licensePath.
  * Sensitive fields (loopback-only): storagePath, tokenRotatedAt, generationId.
  * `tokenRotatedAt` is additionally omitted — not null — when the token file is
  * not this server's token source (#1946); both client surfaces already gate on
  * `tokenRotatedAt !== undefined`.
  *
  * #1294 note — this route deliberately does NOT apply `scrubPathForCaller` to
- * the three `*Path` fields, and it is the one documented exception to that
+ * the four `*Path` fields, and it is the one documented exception to that
  * convention. They are absolute install paths, so they do disclose the username
  * and install layout to a token-holding LAN caller. They are still sent whole
  * because the client hands each one straight back to `POST /api/open`
- * ("View Changelog", "Replay tutorial", the About panel's workflows link) — a
+ * ("View Changelog", "Replay tutorial", "License", the About panel's workflows link) — a
  * basename would not resolve, so scrubbing them breaks those buttons for every
  * non-loopback browser rather than hardening anything the caller could not
  * already learn from `/api/info`'s version + platform. Recorded as an accepted
@@ -116,7 +123,7 @@ export function makeInfoHandler(deps: InfoHandlerDeps): Handler {
       body.bindPort = deps.bindPort;
     }
 
-    // These three are absolute and unscrubbed on purpose — see the accepted
+    // These four are absolute and unscrubbed on purpose — see the accepted
     // residual in the handler docstring above. Include whenever the file exists.
     if (deps.changelogPath !== undefined) {
       body.changelogPath = deps.changelogPath;
@@ -126,6 +133,9 @@ export function makeInfoHandler(deps: InfoHandlerDeps): Handler {
     }
     if (deps.welcomePath !== undefined) {
       body.welcomePath = deps.welcomePath;
+    }
+    if (deps.licensePath !== undefined) {
+      body.licensePath = deps.licensePath;
     }
 
     if (loopback) {

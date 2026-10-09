@@ -225,7 +225,10 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   persistent "Real-time updates" section; the `-shim` paragraph is route three,
   whose two arms are the honesty-critical copy),
   `settings-modal-view-{changelog,documentation}-btn`,
-  `settings-modal-changelog-error`, `settings-modal-report-bug-link`
+  `settings-modal-changelog-error`, `settings-modal-report-bug-link`,
+  `settings-modal-view-license-btn`, `settings-modal-license-error` (the
+  sidebar "License" link; rendered only when `/api/info`'s `licensePath` has
+  an openable extension, i.e. the desktop bundle's `LICENSE.txt`)
 
 ### Settings — Appearance tab
 - `theme-{*}-btn`, `default-tab-{chat,annotations}-btn`,

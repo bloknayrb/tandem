@@ -10,9 +10,23 @@
  * the modal open after opening documentation.
  */
 import { API_OPEN } from "../../shared/api-paths";
+import { CLIENT_EXTENSIONS } from "../../shared/constants";
 import { API_BASE } from "./fileUpload";
 
 export type OpenServerPathResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Whether `/api/open` would accept this server path's extension. The server's
+ * check (`assertSupportedExtension`) runs on the same allowlist, so a path that
+ * fails here would only come back `UNSUPPORTED_FORMAT`. Used to keep a button
+ * off screen rather than offer an open that cannot succeed, e.g. the bare
+ * `LICENSE` of a dev or npm tree. Either separator, since the path comes from
+ * the server host and may be a Windows path.
+ */
+export function hasOpenableExtension(filePath: string): boolean {
+  const ext = /\.[^./\\]+$/.exec(filePath)?.[0].toLowerCase();
+  return ext !== undefined && CLIENT_EXTENSIONS.has(ext);
+}
 
 export async function openServerPath(
   filePath: string,

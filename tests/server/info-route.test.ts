@@ -180,6 +180,17 @@ describe("GET /api/info — public shape contract", () => {
     expect(typeof b.changelogPath).toBe("string");
     expect(String(b.changelogPath)).toMatch(/CHANGELOG\.md$/);
   });
+
+  it("includes licensePath resolved to the repo's bare LICENSE in a dev tree", async () => {
+    // The dev checkout has no LICENSE.txt (that name exists only inside the
+    // desktop bundle), so the wired server must fall back to LICENSE.
+    const { status, body } = await rawGet(port, "/api/info", `127.0.0.1:${port}`);
+    const b = body as Record<string, unknown>;
+
+    expect(status).toBe(200);
+    expect(typeof b.licensePath).toBe("string");
+    expect(String(b.licensePath)).toMatch(/[\\/]LICENSE$/);
+  });
 });
 
 // ── Unit tests for handler branches not reachable via loopback integration ────
@@ -442,6 +453,35 @@ describe("GET /api/info — welcomePath field (unit)", () => {
     expect("welcomePath" in body).toBe(true);
     expect(body.welcomePath).toBe("/tmp/sample/welcome.md");
     expect("storagePath" in body).toBe(false);
+  });
+});
+
+describe("GET /api/info — licensePath field (unit)", () => {
+  // licensePath feeds Settings' "License" button (the LICENSE must be
+  // displayable on every copy). Same public, present-only-when-resolved
+  // contract as changelogPath, and non-loopback browsers hand it back to
+  // /api/open just like the others.
+  const invoke = async (deps: Parameters<typeof makeInfoHandler>[0], remote: string) => {
+    const handler = makeInfoHandler(deps);
+    const res = makeMockRes();
+    await (handler as (req: unknown, res: unknown, next: unknown) => Promise<void>)(
+      makeMockReq(remote),
+      res,
+      () => {},
+    );
+    return res._body as Record<string, unknown>;
+  };
+
+  it("includes licensePath when the dep is set, for loopback and non-loopback callers", async () => {
+    const deps = { ...BASE_DEPS, licensePath: "/opt/tandem/LICENSE.txt" };
+    expect((await invoke(deps, "127.0.0.1")).licensePath).toBe("/opt/tandem/LICENSE.txt");
+    const remote = await invoke(deps, "192.168.1.100");
+    expect(remote.licensePath).toBe("/opt/tandem/LICENSE.txt");
+    expect("storagePath" in remote).toBe(false);
+  });
+
+  it("omits licensePath when the dep is undefined", async () => {
+    expect("licensePath" in (await invoke(BASE_DEPS, "127.0.0.1"))).toBe(false);
   });
 });
 
