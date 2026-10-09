@@ -30,10 +30,6 @@ import { writeLicenseEntitlement } from "../src/server/license/kv-store.js";
 import type { LicenseMetadata, SignedLicense } from "../src/server/license/license-types.js";
 import { canonicalize } from "../src/server/license/verifier.js";
 
-/** Default update window for a paid/complimentary license, in days. Matches the
- *  issuance Worker's `YEAR_MS`. A `grandfathered` license never expires. */
-const DEFAULT_EXPIRES_DAYS = 365;
-
 const LICENSE_TYPES = ["personal", "commercial", "grandfathered"] as const;
 
 const USAGE =
@@ -77,38 +73,31 @@ function fail(message: string, showUsage = false): never {
 }
 
 /**
- * Resolve the update-window end from `--expires` and the license type.
+ * Resolve the update-window end from `--expires`.
  *
- * The default is load-bearing: the pre-fix script left `expiresAt` as `null`
- * whenever `--expires` was omitted, which reads downstream as "update window
- * never ends" and is the exact state D1 describes. Only `grandfathered`
- * (or an explicit `--expires never`) legitimately means null.
+ * Omitting `--expires` means `null` (no update window) for every license type,
+ * because every key includes all future updates (ADR-040, amended 2026-10-09,
+ * decision A5) and the issuance Worker mints paid keys with a null window too.
+ * The default used to be 365 days for `personal`/`commercial`, matching the
+ * one-year window that decision removed; a null default was the D1 bug then,
+ * and is the intended state now. `--expires <days>` still mints a windowed key,
+ * for a test or a deliberate exception; nothing sells one.
  *
  * Throws (rather than exiting) on bad input so it stays unit-testable.
  */
-export function resolveExpiresAt(
-  rawExpires: string | undefined,
-  type: LicenseMetadata["type"],
-  now: Date,
-): string | null {
-  if (rawExpires === "never") return null;
+export function resolveExpiresAt(rawExpires: string | undefined, now: Date): string | null {
+  if (rawExpires === undefined || rawExpires === "never") return null;
 
-  let days: number;
-  if (rawExpires === undefined) {
-    if (type === "grandfathered") return null;
-    days = DEFAULT_EXPIRES_DAYS;
-  } else {
-    // Strict, not `parseInt`: the prefix-lenient version silently read
-    // `--expires 30days` as 30 and `--expires 1e5` as 1.
-    if (!/^\d+$/.test(rawExpires)) {
-      throw new RangeError(
-        `--expires must be a whole number of days, or "never" (got "${rawExpires}")`,
-      );
-    }
-    days = Number(rawExpires);
-    if (days <= 0) {
-      throw new RangeError(`--expires must be greater than zero (got "${rawExpires}")`);
-    }
+  // Strict, not `parseInt`: the prefix-lenient version silently read
+  // `--expires 30days` as 30 and `--expires 1e5` as 1.
+  if (!/^\d+$/.test(rawExpires)) {
+    throw new RangeError(
+      `--expires must be a whole number of days, or "never" (got "${rawExpires}")`,
+    );
+  }
+  const days = Number(rawExpires);
+  if (days <= 0) {
+    throw new RangeError(`--expires must be greater than zero (got "${rawExpires}")`);
   }
 
   const d = new Date(now);
@@ -143,7 +132,7 @@ async function generateLicense(): Promise<void> {
   const createdAt = new Date().toISOString();
   let expiresAt: string | null;
   try {
-    expiresAt = resolveExpiresAt(str(options, "expires"), type, new Date());
+    expiresAt = resolveExpiresAt(str(options, "expires"), new Date());
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
   }

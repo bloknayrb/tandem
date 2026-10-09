@@ -52,7 +52,6 @@ import {
  * bytes, so keep it in lockstep with the server (`webhook.ts` used "1.0"). */
 export const LICENSE_VERSION = "1.0";
 
-const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 /** Standard-Webhooks freshness tolerance (svix guidance; each attempt is
  * freshly timestamped, so this does not reject legitimate retries). */
 export const TIMESTAMP_TOLERANCE_S = 300;
@@ -371,7 +370,12 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Even
   const licenseId = deps.newLicenseId();
   const type: LedgerRecord["type"] = grandfathered ? "grandfathered" : "personal";
   const createdAt = new Date(nowMs).toISOString();
-  const updateWindowEnd = grandfathered ? null : new Date(nowMs + YEAR_MS).toISOString();
+  // Every key includes all future updates (ADR-040 §3 amendment, 2026-10-09,
+  // decision A5): there is no update window and no renewal product, so a paid
+  // key carries the same null window a grandfathered one always has. A null
+  // window is "never ends"; refunds are told apart by `status: "revoked"`, not
+  // by the window (see `applyRefund`).
+  const updateWindowEnd = null;
 
   const rec: LedgerRecord = {
     orderId,
@@ -464,8 +468,9 @@ function isFreeOrder(data: any): boolean {
  * deliberately not alerted on.
  *
  * `{updateWindowEnd: null, status: "revoked"}` is NOT a `LicenseEntitlement`:
- * the null window is what a grandfathered entitlement carries, so the update
- * Worker MUST read `status` before it compares the window or it grandfathers a
+ * the null window is what EVERY live entitlement carries since every key
+ * includes all future updates (2026-10-09, decision A5), so the update Worker
+ * MUST read `status` before it compares the window, or it serves updates to a
  * refunded customer forever. See that file's own placement comment. */
 async function applyRefund(rec: LedgerRecord, deps: IssuanceDeps): Promise<EventOutcome> {
   if (!deps.isTest && rec.licenseId) {
@@ -887,8 +892,9 @@ export function licenseEmailText(name: string, blob: string, supportEmail: strin
     wrapBlob(blob),
     "",
     "Keep this email - it's your proof of purchase, and it lets you",
-    "re-activate on any device you personally use. Your license runs the",
-    "version you have forever; your first year also includes new releases.",
+    "re-activate on any device you personally use. Your license never",
+    "expires: it runs every version of Tandem, and it includes all future",
+    "updates. There is no guarantee that future updates will be released.",
     "",
     "Please don't post the key publicly - it contains your name and email",
     "address.",
