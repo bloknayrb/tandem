@@ -300,7 +300,7 @@ push paths (self-armed wake, plugin monitor, opt-in channel shim, supervisor std
 - `.claude/skills/dev-server/SKILL.md` -- Start dev environment (server + client) and verify MCP connection
 - `.claude/skills/e2e/SKILL.md` -- Run Playwright E2E tests safely (warns about dev server conflicts)
 - `.claude/skills/e2e-debug/SKILL.md` -- Debug Playwright E2E test failures (port conflicts, server startup, post-mortem)
-- `.claude/skills/release/SKILL.md` -- Cut a Tandem release (six-surface version bump, tag, GitHub Release publish, smoke checklist)
+- `.claude/skills/release/SKILL.md` -- Cut a Tandem release (seven-surface version bump, tag, GitHub Release publish, smoke checklist)
 - `.claude/skills/screenshots/SKILL.md` -- Capture README screenshots via Playwright + MCP
 - `.claude/skills/ui-inspector/SKILL.md` -- Resolve a `@ui_<ULID>` reference from the desktop element picker into its source location, metadata and locators (screenshots are off — see the skill)
 

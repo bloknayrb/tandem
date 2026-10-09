@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a Tandem release — six-surface version bump, changelog, tag, GitHub Release publish, smoke checklist
+description: Cut a Tandem release — seven-surface version bump, changelog, tag, GitHub Release publish, smoke checklist
 disable-model-invocation: true
 ---
 
@@ -10,12 +10,14 @@ Codifies the release sequence used from v0.14.3 onward, and refined by every cut
 through v0.22.0 — including the global-install upgrade step, the two changelog
 gaps, the rebuild-before-retest step, and the duplicate-draft race described
 below. The version
-bump has **SIX surfaces**, none of which bump automatically. Surfaces 1–4 are
+bump has **SEVEN surfaces**, none of which bump automatically. Surfaces 1–4 are
 CI-guarded by `tests/plugin/plugin-version-pin.test.ts` (any divergence from
 `package.json` fails CI); surfaces 5–6 are **not guarded** — this skill is what
-prevents them drifting.
+prevents them drifting. Surface 7 is guarded more loosely and is bumped **last,
+in its own PR, after the release is published** (step 10), never with the
+other six.
 
-## The six version surfaces
+## The seven version surfaces
 
 1. `package.json` — `version` (the reference value the CI guard compares against)
 2. `.claude-plugin/plugin.json` — **FIVE** values in one file: the top-level
@@ -69,10 +71,33 @@ prevents them drifting.
    green. (`tauri-webdriver.yml` does pass `--locked`, but only to
    `cargo install` for its own tooling — unrelated to `src-tauri/Cargo.lock`.)
    The tree still goes dirty on the next local build if you skip this.
+7. `.claude-plugin/marketplace.json` — the `tandem` entry's `source.ref`, the
+   release tag the Claude Code plugin installs from (`"ref": "v<version>"`).
+   **Do NOT bump it with surfaces 1–6.** It must name a tag that exists, and
+   the tag is cut from master after the bump PR merges (step 6), so it moves
+   in its own PR at step 10, once the release is published and npm serves the
+   version. Why it exists at all: the licensor decided on 2026-10-09 (A7; the
+   analysis is L1 in `docs/reviews/2026-10-01-license-review.md`) that a
+   version of the Licensed Work is a release on the Releases page, and
+   without a `ref` the plugin installs from the default branch, a copy that
+   belongs to no version.
+   Claude Code clones the tag (measured 2026-10-09: an isolated install with
+   `ref: v0.28.0` recorded the tag's commit and version 0.28.0). Per the
+   plugin docs, a user's client refreshes the marketplace from master and
+   detects an update by the cloned `plugin.json`'s `version`, so users should
+   get the new plugin once master's marketplace names the new tag. Neither
+   the refresh nor the update has been exercised.
+
+   `plugin-version-pin.test.ts` allows this ref to be `v<package.json version>`
+   or the previous stable release (by `CHANGELOG.md` heading), so the bump PR
+   stays green with the old ref and a forgotten step 10 fails CI at the next
+   release's bump. It cannot check that the tag exists (CI is tagless), and it
+   refuses a prerelease ref: on an RC (`v1.0.0-rc.1`), skip step 10 and leave
+   the plugin on the last stable release.
 
 ## Steps
 
-1. Bump all six surfaces (above), then run the catch-all: grep the tree for the
+1. Bump surfaces 1–6 (above), then run the catch-all: grep the tree for the
    OUTGOING version and confirm zero source stragglers remain:
    ```bash
    git grep -F <old-version> -- ':!CHANGELOG.md' ':!*.lock' ':!package-lock.json' ':!tests/**' ':!docs/**'
@@ -85,7 +110,8 @@ prevents them drifting.
    prose — all expected.)
 
    **Read the survivors, don't just count them — they are not all bugs.**
-   Expect three kinds: the six surfaces themselves (before you bump them);
+   Expect three kinds: the surfaces themselves (before you bump them; surface
+   7's `"ref": "v<old-version>"` is SUPPOSED to survive until step 10);
    deliberate prose naming the outgoing version as history (this skill's
    header, CLAUDE.md's Status); and source comments, which the exclusions do
    NOT hide — `src/server/license/gate-flag.ts` carries a
@@ -128,7 +154,9 @@ prevents them drifting.
    ```
 
 4. Verify the full test suite is green — `plugin-version-pin.test.ts` proves
-   surfaces 1–4 agree (it also checks `plugin.json`'s pinned npx specs);
+   surfaces 1–4 agree (it also checks `plugin.json`'s pinned npx specs, that
+   surface 7 is at most one release behind, and that `CHANGELOG.md` has a
+   `## [<version>]` heading, which step 2 provides);
    `tests/plugin-manifest.test.ts` additionally fails if `package.json` and
    `plugin.json` diverge — treat either failure as "you bumped some, not all":
    ```bash
@@ -246,6 +274,23 @@ prevents them drifting.
 9. Update project memory: the CLAUDE.md **Status** section (what shipped in
    this version) and the project memory SHIPPED entry (per the archive
    rotation discipline).
+
+10. Bump surface 7 in its own PR: set the `tandem` entry's `source.ref` in
+   `.claude-plugin/marketplace.json` to `v<version>`. Only after all three hold:
+   - the tag exists on the remote: `git ls-remote --tags origin v<version>`;
+   - the release is published (step 7), not a draft;
+   - npm serves the version: `npm view tandem-editor@<version> version --prefer-online`. The
+     tagged `plugin.json` launches `npx -y tandem-editor@<version>`, so
+     pointing the plugin at the tag before npm has it ships an MCP server that
+     cannot start. The registry has lagged ~7 minutes behind a green publish
+     before (v0.26.0), so check with `--prefer-online` and don't merge on the
+     first green workflow alone.
+
+   Branch → PR → CI green → merge, like any change. Until it merges, plugin
+   users stay on the previous release, which is the intended state between the
+   tag and this step. **Skip this step for a prerelease** (a version with a
+   hyphen): the plugin stays on the last stable release, like
+   `releases/latest`, and the CI guard refuses a prerelease ref.
 
 ## Important
 

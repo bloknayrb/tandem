@@ -372,7 +372,7 @@ pub(crate) fn evaluate_pending_update_marker(app: &tauri::AppHandle) {
     // tauri-plugin-updater `updater.rs:169`. They agree today only because
     // `tests/plugin/plugin-version-pin.test.ts` pins both to package.json, and
     // reading a different field than the updater compares would turn a missed
-    // surface in the six-surface version bump into a warning banner on every
+    // surface in the release version bump into a warning banner on every
     // user's machine after every successful update.
     let running = app.package_info().version.to_string();
 
