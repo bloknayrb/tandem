@@ -2397,7 +2397,8 @@ fn show_update_withheld_dialog(app: &tauri::AppHandle, reason: WithheldReason) {
 /// test` reaches the copy without an `AppHandle`.
 ///
 /// The body reports THIS DEVICE'S OWN VIEW, never a verdict. `expiresAt` is
-/// read out of the locally stored license, so after a KV-only renewal the
+/// read out of the locally stored license, so after the entitlement is extended
+/// KV-side by hand (there is no renewal product, ADR-040 decision B6) the
 /// Worker may still consider the device entitled while this flag says the
 /// window ended. That is accepted rather than papered over: `SettingsLicenseTab`
 /// already asserts the same thing from the same field, and the authoritative
@@ -2607,7 +2608,8 @@ fn update_route(endpoint: &str, probe: Option<&LicenseStatusResponse>) -> Update
 ///
 /// **This is the LOCAL view, never a verdict** (#1819). `update_window_current`
 /// is computed from the `expiresAt` inside the stored license, so after a
-/// KV-only renewal the Worker may still consider the device entitled while this
+/// KV-side extension by hand (no renewal product exists, decision B6) the
+/// Worker may still consider the device entitled while this
 /// says the window ended. That disagreement is accepted rather than papered
 /// over: `SettingsLicenseTab`'s `license-update-window-ended` line already
 /// asserts the same thing from the same field, and the authoritative detector

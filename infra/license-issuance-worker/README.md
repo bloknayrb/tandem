@@ -93,6 +93,17 @@ after its recheck. Cloudflare KV's eventual consistency (propagation lag
 across edge locations) means this isn't only a contrived race — an ordinary
 Polar retry landing on a different PoP can trigger it.
 
+A second route has no recheck at all: `reDrive()` re-asserts the live
+entitlement from a ledger record read at the start of the request, so a
+redelivered `order.paid` that overlaps a refund can write the live entitlement
+back over the refund's tombstone, and when the order's `emailSent` is still
+false it also rewrites the ledger with `refunded: false`.
+
+**Since every key includes all future updates (2026-10-09, ADR-040 decision
+A5), a live entitlement that survives a refund this way never runs out.**
+Before, it carried a one-year window and expired with it. The check below is now
+the only backstop, so it matters more than it did.
+
 **Operational mitigation until this is closed:** after refunding a
 higher-value order, verify with `npx wrangler kv key get "order:live:<orderId>"
 --remote --namespace-id <LEDGER_KV id>` that `refunded: true`, then read the
