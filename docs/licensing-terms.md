@@ -83,7 +83,9 @@ grant them is the worst version of this problem.
   [LICENSE](../LICENSE) grants a **14-day** evaluation for v1.0 and later,
   from first launch on a given device, the same as the trial clock. The one
   remaining asymmetry is deliberate: every pre-1.0 (beta) version stays free
-  with no time limit, so someone can keep running a beta build indefinitely.
+  for personal use and individual self-hosting with no time limit (releases
+  before v0.11.0 are MIT, which allows any use), so someone can keep running a
+  beta build indefinitely.
   Say that where a buyer looks, so it reads as a decision rather than a
   loophole. (Decision D on #1827 keeps an older server from sharing the
   desktop's data directory; it does not revoke the beta grant.)
