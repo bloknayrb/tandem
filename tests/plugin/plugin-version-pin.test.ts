@@ -47,6 +47,7 @@ const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as 
 const expected = pkg.version;
 
 const plugin = JSON.parse(readFileSync(join(repoRoot, ".claude-plugin/plugin.json"), "utf8")) as {
+  name: string;
   version: string;
   mcpServers: Record<string, { command?: string; args?: string[] }>;
   experimental?: { monitors?: Array<{ command?: string }> };
