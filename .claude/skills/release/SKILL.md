@@ -76,14 +76,17 @@ other six.
    **Do NOT bump it with surfaces 1–6.** It must name a tag that exists, and
    the tag is cut from master after the bump PR merges (step 6), so it moves
    in its own PR at step 10, once the release is published and npm serves the
-   version. Why it exists at all: the LICENSE defines a version of the Licensed
-   Work as a release on the Releases page, and without a `ref` the plugin
-   installs from the default branch, a copy that belongs to no version.
+   version. Why it exists at all: the licensor decided on 2026-10-09 (A7; the
+   analysis is L1 in `docs/reviews/2026-10-01-license-review.md`) that a
+   version of the Licensed Work is a release on the Releases page, and
+   without a `ref` the plugin installs from the default branch, a copy that
+   belongs to no version.
    Claude Code clones the tag (measured 2026-10-09: an isolated install with
    `ref: v0.28.0` recorded the tag's commit and version 0.28.0). Per the
-   plugin docs, updates are detected by the cloned `plugin.json`'s `version`,
-   so users should get the new plugin once master's marketplace names the new
-   tag; that update path has not been exercised.
+   plugin docs, a user's client refreshes the marketplace from master and
+   detects an update by the cloned `plugin.json`'s `version`, so users should
+   get the new plugin once master's marketplace names the new tag. Neither
+   the refresh nor the update has been exercised.
 
    `plugin-version-pin.test.ts` allows this ref to be `v<package.json version>`
    or the previous stable release (by `CHANGELOG.md` heading), so the bump PR
@@ -151,7 +154,9 @@ other six.
    ```
 
 4. Verify the full test suite is green — `plugin-version-pin.test.ts` proves
-   surfaces 1–4 agree (it also checks `plugin.json`'s pinned npx specs);
+   surfaces 1–4 agree (it also checks `plugin.json`'s pinned npx specs, that
+   surface 7 is at most one release behind, and that `CHANGELOG.md` has a
+   `## [<version>]` heading, which step 2 provides);
    `tests/plugin-manifest.test.ts` additionally fails if `package.json` and
    `plugin.json` diverge — treat either failure as "you bumped some, not all":
    ```bash

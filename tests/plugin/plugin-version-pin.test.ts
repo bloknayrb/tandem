@@ -24,9 +24,9 @@
  *
  *   - `.claude-plugin/marketplace.json` — the plugin entry's `source.ref`, the
  *     release tag the marketplace installs the plugin from. Without it the
- *     plugin installs from the default branch, which under the LICENSE's
- *     Licensed Work definition (a version is a published release) is a copy
- *     that belongs to no version. This surface is the one exception to
+ *     plugin installs from the default branch, which under the licensor's
+ *     2026-10-09 decision (A7: a version of the Licensed Work is a published
+ *     release) is a copy that belongs to no version. This surface is the one exception to
  *     "matches package.json": see its test below for why it may lag by one.
  *
  * This test fails CI the moment any of them diverges from package.json
