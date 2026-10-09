@@ -603,4 +603,5 @@ Worth stating plainly, because they look like bugs:
   which narrows the race to one KV round trip but does not close it. Closing it
   needs a Durable Object per order.
 - **The legal documents.** See [licensing-terms.md](licensing-terms.md) — a
-  working draft exists; the real ones need counsel.
+  working draft exists. No counsel is being consulted, so the licensor writes
+  the real ones.

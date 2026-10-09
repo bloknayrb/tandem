@@ -58,8 +58,8 @@ describe("formatLicenseStatus", () => {
   it("shows trial days remaining", () => {
     const out = formatLicenseStatus(trial, true).join("\n");
     // "of 14" states the trial length: the LICENSE file's Additional Use Grant
-    // says 30 days while the gate enforces 14, so leaving the number implicit
-    // turns a documented decision into an apparent contradiction.
+    // names the same 14 days the gate enforces, so the status line says the
+    // number outright and a reader can check one against the other.
     expect(out).toContain("trial (9 of 14 days remaining)");
     expect(out).toContain("Enforcement:   on");
   });

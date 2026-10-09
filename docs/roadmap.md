@@ -51,10 +51,10 @@ setup, hardware verification, and two flag flips.
 | Question | Where | Why it blocks |
 |---|---|---|
 | **What `LICENSE` covers.** It names only the npm package, not the desktop app. | #1908 | It has to be decided before the gate flips |
-| **Counsel review of the current `LICENSE`.** #1909 rewrote the grant on 2026-09-08 (free during the beta, then a 14-day trial), after counsel's §5 text. Nothing records counsel reviewing the new wording. | #1909, ADR-040 §5 | The commercial gate treats `LICENSE` as counsel-drafted |
+| **The licensor's decisions on the current `LICENSE`.** #1909 rewrote the grant on 2026-09-08 (free during the beta, then a 14-day trial), after counsel's §5 text. The [2026-10-01 licence review](reviews/2026-10-01-license-review.md) left Parameter decisions open on the new wording. No counsel is being consulted (2026-10-09), so each is the licensor's to make. | #1909, ADR-040 §5 | The commercial gate sells against `LICENSE` as written |
 | **LLC, accountant and pricing.** ADR-040 §6 requires the LLC and accountant before taking money, and pricing is still unset. #1117 tracked both and closed with them unchecked, and licensing-operations.md §8 has neither. | ADR-040 §6 | Nothing else tracks them |
 | **The grandfather cohort.** Who gets a free license, and do `README.md`, ADR-040 §3 and the in-app copy all say the same? | [licensing-operations.md §1c](licensing-operations.md#1c-the-cohort-problem-settle-this-before-the-flip) | The README already makes a public promise |
-| **Whether `tandem deactivate` is required.** It is if EU resale law makes a remove-license path mandatory. | #1943, licensing-terms.md §6 | Counsel's answer decides whether it joins the commercial gate |
+| **Whether `tandem deactivate` is required.** It is if EU resale law makes a remove-license path mandatory. | #1943, licensing-terms.md §6 | The licensor's reading of that law decides whether it joins the commercial gate |
 | **Two-window Solo/Tandem policy.** A second window can flip the mode, which lets Solo-held comments reach Claude. | #1899 | Adopt, re-assert, or stay warn-only |
 
 **"At RC" means the build intended to become v1.0.0, checked before the tag.** Under Decision
@@ -167,12 +167,12 @@ v0.26.0, v0.27.0 or v0.28.0.
 - **If a run fails, that is a finding to fix, not a reason to relax the numbers.** [perf-gate-results.md](perf-gate-results.md) relies on this rule.
 
 **Commercial readiness.** UNMET. This gates the license flip. If it is not ready at code-complete, the date floats and **the gate flag does not ship enabled**. A v1.0 demanding a license nobody can buy is a brick.
-- ADR-040 §5 (BUSL re-scope) is Accepted. `LICENSE` has been rewritten since counsel's text (#1909), and #1908 and the counsel-review row above still apply.
+- ADR-040 §5 (BUSL re-scope) is Accepted. `LICENSE` has been rewritten since counsel's text (#1909), and #1908 and the licensor-decisions row above still apply.
 - LLC, accountant and pricing settled (ADR-040 §6; see above).
 - **MoR checkout live end to end:** a test purchase goes through the issuance webhook, the signed license is delivered, and it activates a gate-ON build.
 - Grandfather licenses issued to the cohort decided under §1c.
 - **[licensing-operations.md §8](licensing-operations.md#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay) is complete.** §8 owns the item list, and several of its items fail silently if skipped. For example, the issuance Worker's Ed25519 key import has never run on real Cloudflare, and a failure there returns 503 on every webhook. Two items need more than their checkbox says:
-  - **Terms, refund policy and privacy notice.** None exists. [licensing-terms.md](licensing-terms.md) is a working draft that has not been to counsel.
+  - **Terms, refund policy and privacy notice.** None exists. [licensing-terms.md](licensing-terms.md) is a working draft. No counsel is being consulted, so the licensor writes the final versions.
   - **The beta-cohort claim path.** Decide who is grandfathered, and make the banner and wall copy name the beta offer (§1c item 2). Keys go out privately, never in an issue or comment: verification is offline, so anyone can activate a key that has been posted publicly.
 
 **Accessibility.** PARTIAL. See [a11y-gate-results.md](a11y-gate-results.md).

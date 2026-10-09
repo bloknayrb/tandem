@@ -1,6 +1,6 @@
 # Tandem licence terms — working draft
 
-_Drafted 2026-08-06 · reviewed 2026-08-13 · no item below has been to counsel._
+_Drafted 2026-08-06 · reviewed 2026-08-13 · no counsel is being consulted; the ⚖️ items are the licensor's decisions (2026-10-09)._
 
 > **Status: DRAFT. Not legal advice, and not yet published.** This file exists
 > because nothing did: there is still no EULA, terms of sale, refund policy, or
@@ -9,9 +9,9 @@ _Drafted 2026-08-06 · reviewed 2026-08-13 · no item below has been to counsel.
 > is nine lines of email body in the issuance Worker.
 >
 > Everything below is a statement of *what the software actually does*, written
-> so that a lawyer can turn it into terms without having to reverse-engineer the
+> so that terms can be drafted from it without having to reverse-engineer the
 > code, and so that nothing is promised that the implementation doesn't deliver.
-> **Items marked ⚖️ need professional review before the first sale.**
+> **Items marked ⚖️ are legal decisions the licensor must make before the first sale.**
 
 Related: [ADR-040](decisions.md), [licensing-operations.md](licensing-operations.md),
 [security.md](security.md), [data-locations.md](data-locations.md), and the
@@ -83,7 +83,8 @@ grant them is the worst version of this problem.
   [LICENSE](../LICENSE) grants a **14-day** evaluation for v1.0 and later,
   from first launch on a given device, the same as the trial clock. The one
   remaining asymmetry is deliberate: every pre-1.0 (beta) version stays free
-  with no time limit, so someone can keep running a beta build indefinitely.
+  for personal use and individual self-hosting with no time limit, so someone
+  can keep running a beta build indefinitely.
   Say that where a buyer looks, so it reads as a decision rather than a
   loophole. (Decision D on #1827 keeps an older server from sharing the
   desktop's data directory; it does not revoke the beta grant.)
@@ -126,7 +127,7 @@ Open questions:
 > `email:<hash>` index entry must be deleted **before** the ledger record's email
 > is redacted, or it becomes underivable and therefore undeletable.
 
-## 6. Needs counsel — the full list ⚖️
+## 6. Open legal questions — the full list ⚖️
 
 Roughly in priority order:
 
