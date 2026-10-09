@@ -120,7 +120,8 @@ function trialBodyIsUsable(tf: unknown, nowMs: number): boolean {
  *
  * `verify` is injectable for tests; production uses signature-only verification
  * so an expired *update window* never drops a paid user to `restricted`
- * (ADR-040: run forever, updates windowed). The update window is read from
+ * (ADR-040: run forever; updates are windowed only on a key hand-signed with
+ * `--expires`, since every issued key includes all future updates). The update window is read from
  * `expiresAt` into `updateWindowCurrent`.
  */
 export function resolveLicenseState(deps: {

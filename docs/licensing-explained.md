@@ -43,7 +43,8 @@ letters and numbers, plus a `tandem.license` file attached. You paste the key in
 association; its only associations are `.md`/`.markdown`, `.txt` and `.html`,
 `src-tauri/tauri.conf.json:74-96`), and Tandem is yours: it keeps working forever, on
 any computer you personally use, with no internet connection required to prove
-it. For the first year you also get new versions as they're released.
+it. Every future update is included too, with no time limit, though no one can
+promise that future updates will come.
 
 **Where you paste it depends on which Tandem you're running.** On the desktop app
 the only route is Settings → License; the desktop bundle ships no `tandem`
@@ -61,15 +62,15 @@ is still the only route, and it stops offering the command accordingly.
 | | |
 |---|---|
 | **The version you have** | Yours forever. No subscription, no expiry, and no licence check over the network. |
-| **New versions** | For one year from purchase. |
-| **After that year** | Tandem keeps running exactly as it is. You're just not offered new releases until you renew. |
+| **New versions** | All future updates are included, for as long as they are released. There is no update year, no renewal and no paid upgrade. No future update is guaranteed. |
 | **Devices** | Any computer you personally use. |
 | **Offline** | Activation and running work with the network unplugged — no server is ever asked whether your licence is valid. (Checking for *updates* does contact us, and sends an opaque id. See Part 2.) |
 
 ## Why the key is so long
 
 It's a **signed document**, not a password. Inside it are your name, your email,
-what kind of license it is, and when your update year ends — all sealed with a
+what kind of license it is, and an update-window field that issued keys leave
+empty — all sealed with a
 cryptographic signature that Tandem can check by itself, offline.
 
 That's the whole trick. Tandem doesn't need to ask a server "is this key real?",
@@ -206,7 +207,7 @@ Four moving parts:
     "email": "jane@example.com",
     "type": "personal",       // personal | commercial | grandfathered
     "createdAt": "2026-07-26T…",
-    "expiresAt": "2027-07-26T…", // END OF UPDATE WINDOW — not end of the license
+    "expiresAt": null,        // END OF UPDATE WINDOW (null = none, every issued key) — never end of the license
     "version": "1.0"
   },
   "signature": "…Ed25519 over canonicalize(metadata)…"
@@ -225,7 +226,10 @@ update window and nothing else. The run gate deliberately calls
 `SignatureVerified` branded type that only the signature-only function can
 produce, so wiring in the stricter one is a **compile error**. Without that,
 someone "tidying up" the two near-identical verifiers would silently lock out
-every paid user the day their update year ended.
+every holder of a dated key the day its window ended. Since 2026-10-09 every
+issued key has `expiresAt: null` (all future updates included, ADR-040 decision
+A5), so a date appears only on a key hand-signed with `--expires`; the guard
+stays, because the field and the stricter verifier both still exist.
 
 ## On-device state resolution
 

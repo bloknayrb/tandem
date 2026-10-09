@@ -74,6 +74,8 @@ npx tsx scripts/generate-keys.ts        # writes keys/tandem-private-key.pem (+ 
 
 Grandfathered licenses are ordinary signed licenses with `type: "grandfathered"`
 and `expiresAt: null` — they run forever **and** never lose the update window.
+Since 2026-10-09 paid keys carry the same null window (every key includes all
+future updates, ADR-040 decision A5), so the two types differ only in `type`.
 There is no separate on-device grandfather code path; a tester activates one
 exactly like a paid license.
 
@@ -166,22 +168,25 @@ Before flipping, decide and do:
 
 ## 2. Issuing a paid license manually (fallback)
 
-Same script, default type. A one-year update window is now the **default**, so
-`--expires` is only needed to override it:
+Same script, default type. No update window is the **default** for every type,
+because every key includes all future updates (ADR-040, decision A5, 2026-10-09);
+it was one year until then:
 
 ```bash
 npx tsx scripts/sign-license.ts --name "Buyer" --email "buyer@example.com"
 ```
 
-`personal`/`commercial` licenses run the current version forever; `--expires`
-sets only the **update window** (`expiresAt`). After it lapses the app keeps
-running; it simply stops being offered new updates until renewal.
+Every license runs forever. `--expires <days>` sets an **update window**
+(`expiresAt`) and is now only for a test or a deliberate exception: nothing sells
+a windowed key, and there is no renewal product (decision B6), so a buyer whose
+window lapsed would have no way to extend it. After a window lapses the app
+keeps running; it simply stops being offered new updates.
 
-> **`--expires never` is almost always wrong for a paid license.** It's the
-> flag's honest spelling of "no update window ever ends", and it is only correct
-> for a genuinely perpetual grant (which is what `--type grandfathered` gives
-> you by default). Omitting `--expires` used to *silently* mean `never` — that
-> was D1, and it made every manually-issued license permanently un-updatable.
+> **Omitting `--expires` now means `null` on purpose.** It used to *silently*
+> mean `never` while the intended default was a year — that was D1. What made D1
+> leave a license permanently un-updatable was the missing KV entitlement, not
+> the null window, and the script now writes the entitlement and exits non-zero
+> if it can't.
 
 Same KV requirement as §1a: the script writes the update entitlement and exits
 non-zero if it can't. Don't deliver a key it refused to entitle.
@@ -238,8 +243,9 @@ Two paths write `KV[licenseId] = { updateWindowEnd, status, version }`:
   `src/server/license/kv-store.ts`, over the KV REST API, using the
   `TANDEM_CF_*` env vars (§1a). Failure there exits non-zero.
 
-> Grandfathered entitlements store `updateWindowEnd: null` ⇒ the Worker treats
-> them as always-current.
+> Every issued entitlement, paid or grandfathered, stores `updateWindowEnd: null`
+> (decision A5) ⇒ the Worker treats it as always-current. A refund is told apart
+> by `status: "revoked"`, which the Worker checks before the window.
 
 > **A missing entitlement is the worst failure mode in this system, because it
 > looks exactly like health.** An earlier version of this runbook said a skipped
@@ -261,7 +267,8 @@ Two paths write `KV[licenseId] = { updateWindowEnd, status, version }`:
 > up-to-date arm no matter what KV holds, which is precisely the scenario above:
 > a missing entitlement against a still-current local license is still told
 > "You're up to date." The new dialog covers the opposite mismatch (local
-> window ended, entitlement possibly renewed KV-side), and the Worker's `reason`
+> window ended, entitlement possibly extended KV-side by hand, since no renewal
+> product exists), and the Worker's `reason`
 > remains the only detector for this one.
 >
 > The same dead state is reachable at least five ways: a failed write, a
@@ -307,11 +314,13 @@ its secrets.
    (`webhook-signature` = HMAC-SHA256 over `${id}.${timestamp}.${body}`, key =
    base64-decoded `whsec_` secret) and rejects stale timestamps — before any
    side effect.
-2. On **`order.paid`**: mints + signs a license (`personal` with a 1-year update
-   window, or `grandfathered`/`expiresAt: null` for a listed email), writes the
+2. On **`order.paid`**: mints + signs a license (`personal`, or `grandfathered`
+   for a listed email; both with `expiresAt: null`, all future updates included),
+   writes the
    **ledger** (`LEDGER_KV`), writes the update **entitlement** (`LICENSE_KV` —
    the same namespace §3's update Worker reads), and emails the blob via Resend.
-3. On **`order.refunded`**: deletes the update entitlement (the offline
+3. On **`order.refunded`**: overwrites the update entitlement with a `revoked`
+   tombstone, `{updateWindowEnd: null, status: "revoked"}` (the offline
    run-license stays perpetual by design) and marks the ledger refunded — gated
    on the payload's `refunded` field being **exactly** `true`; an explicit
    `false` is ignored, and a missing/non-boolean field is treated as
@@ -673,7 +682,8 @@ Then walk §5a steps 2–4 with that order number.
       `docs/licensing-terms.md`).
 - [ ] Beta-cohort claim path and copy settled (§1c).
 - [ ] **A license whose update window has ENDED reaches the Worker and is
-      refused there** — not served public builds. `update_route` classifies it
+      refused there** — not served public builds. Only a key hand-signed with
+      `--expires` can carry a window now (decision A5); sign one for this check. `update_route` classifies it
       `Licensed`, so the check carries `X-Tandem-License-Id` and the Worker's KV
       is what decides; expect the 204 and an `expired` reason in the Worker log
       (#1785). Serving that device a public manifest is the defect the route
@@ -695,7 +705,7 @@ Then walk §5a steps 2–4 with that order number.
 |---|---|
 | Generate keypair | `npx tsx scripts/generate-keys.ts` |
 | Sign grandfathered license | `npx tsx scripts/sign-license.ts --name N --email E --type grandfathered` |
-| Sign paid license (1y updates) | `npx tsx scripts/sign-license.ts --name N --email E --type personal --expires 365` |
+| Sign paid license (all future updates) | `npx tsx scripts/sign-license.ts --name N --email E --type personal` |
 | Activate (tester) | `tandem activate <key-or-path>` |
 | Check status (tester) | `tandem license` |
 | Deploy update Worker | `cd infra/license-update-worker && npx wrangler@4.130.0 deploy` |

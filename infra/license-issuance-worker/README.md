@@ -23,8 +23,9 @@ endpoint to a server that binds to loopback.
    verifies `webhook-signature` (HMAC-SHA256 over `${id}.${timestamp}.${body}`,
    key = base64-decoded `whsec_` secret) and rejects stale timestamps — **before**
    any parse or side effect.
-2. On **`order.paid`** it mints a license: `personal` (1-year update window) or,
-   for a grandfather-listed email, `grandfathered` (`expiresAt: null`). It signs
+2. On **`order.paid`** it mints a license: `personal`, or, for a
+   grandfather-listed email, `grandfathered`. Both carry `expiresAt: null`:
+   every key includes all future updates (ADR-040, decision A5, 2026-10-09). It signs
    the canonical metadata (byte-compatible with `verifier.ts`), writes the
    issuance **ledger** record, writes the update **entitlement** (`LICENSE_KV`,
    the same namespace the update Worker reads), and emails the blob via Resend.
@@ -103,8 +104,9 @@ deleting the key (a deletion is indistinguishable from an eviction or a failed
 write, and the update Worker pages on that), so a successful revocation and the
 failure this check exists to catch both return a value:
 
-- pass — the tombstone, exactly `{"updateWindowEnd":null,"status":"revoked"}`;
-- fail — a live entitlement, `{"updateWindowEnd":"<date>","status":"personal",…}`,
+- pass — the tombstone, exactly `{"updateWindowEnd":null,"status":"revoked"}`.
+  Both shapes carry a null window, so read `status`, never the window;
+- fail — a live entitlement, `{"updateWindowEnd":null,"status":"personal",…}`,
   i.e. a mint that landed after the refund's recheck. Re-run the §7 revocation
   procedure by hand.
 
