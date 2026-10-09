@@ -30,7 +30,7 @@ Stated as the code behaves, not as marketing:
 | **Activation** | Fully offline. No server contact, no activation call, no device count, no seat check. |
 | **Devices** | Technically unlimited — nothing enforces a device count. The email says "any device you personally use", which is an **honour-system** limit, not a technical one. Terms should say the same thing, or say something different and be honest that it isn't enforced. |
 | **Transfer** | Not restricted (left out of the terms by decision, 2026-10-09). |
-| **Organisational use** | One natural person's use only, as `LICENSE` defines personal use and individual self-hosting. An employee using Tandem on their own device is inside; a deployment one installation serves to several people is not. See §2. |
+| **Organisational use** | One natural person's use only, as `LICENSE` defines personal use and individual self-hosting. An employee using Tandem for their own work is inside; a deployment one installation serves to several people is not. See §2. |
 
 Nothing above is live yet: the gate ships **dark** — `LICENSE_GATE_ENABLED` is a
 `const false` in `tsup.config.ts`, so today's builds neither trial nor gate. It
@@ -50,8 +50,9 @@ a key, and without a key for use that leaves out the AI features.
 **Employees are inside** (decision A1, 2026-10-09). The definitions say nothing
 about who employs the person or whose documents they are, and the
 employee-exclusion sentence the 2026-10-01 review drafted (L6) was not adopted.
-So an employee using Tandem for their employer, on a device they use, is personal
-use, and a key bought for them by the employer covers them. What stays outside
+So an employee using Tandem on documents they work on for their employer is
+personal use. (Whether a key an employer buys for an employee counts as one the
+employee holds is not decided.) What stays outside
 is use that is not one natural person's: one installation serving several people,
 or Tandem run as a service for others. That needs a **commercial** licence, and
 this pipeline cannot issue one.
@@ -184,8 +185,8 @@ Roughly in priority order:
    whether the remove-licence path (#1943) is required.
 7. **BUSL Change Date** ([LICENSE](../LICENSE)) — *decided 2026-10-09 (A6):*
    four years from the date each version is first made publicly available, and
-   a version is a release on the repository's Releases page, so the release date
-   is the tracking record. Still open: on that date the *code* becomes MIT while
+   a version is a release on the repository's Releases page, so the date that
+   release (or its tag, if earlier) became public is the tracking record. Still open: on that date the *code* becomes MIT while
    the shipped v1.0 binary still hard-gates. Answering that support ticket
    requires shipping something.
 

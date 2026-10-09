@@ -80,7 +80,7 @@ The cost is length: you can't make a self-proving document short. So we made
 sure you never have to type it. The email attaches it as a file, and you can
 paste it in one go.
 
-## Before any of that: the public beta is free
+## Before any of that: the public beta is free for personal use
 
 Everything on this page describes v1.0 and later. **Every pre-1.0 release is free
 for personal use and individual self-hosting, with no time limit and nothing to
@@ -615,7 +615,7 @@ Worth stating plainly, because they look like bugs:
 - **A commercial SKU.** `issue()` hardcodes the type to `personal` (or
   `grandfathered`), so a commercial purchase would be **silently issued a
   personal licence** rather than rejected. A personal key already covers an
-  employee on their own device (`LICENSE` defines personal use as one natural
+  employee doing their own work (`LICENSE` defines personal use as one natural
   person's), so what is unsellable today is a shared or hosted deployment, and
   checkout copy must exclude that explicitly until an SKU→type map exists.
 - **Atomicity on concurrent deliveries.** Workers KV has no compare-and-swap.
