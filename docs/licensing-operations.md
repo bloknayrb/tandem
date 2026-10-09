@@ -382,7 +382,7 @@ it, so a fix is only prompted by Polar's delivery log (§5b).
 Point the Polar webhook endpoint (subscribed to `order.paid` + `order.refunded`)
 at the deployed URL. Deploy a **separate sandbox instance** (the sandbox Polar
 secret, its own namespaces) to test end-to-end — the sandbox needs no Polar KYC,
-so this is unblocked before any LLC/payout setup.
+so this is unblocked before any payout setup.
 
 > **Which `TANDEM_ISSUANCE_ENV` the sandbox gets depends on what you're testing.**
 > `sandbox` writes the ledger but suppresses the entitlement `put`, which is
