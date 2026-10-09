@@ -10,9 +10,9 @@ The Terms section of `LICENSE` matches the governing text word for word. The dif
 
 Eight restating places disagreed with `LICENSE` and were fixed. The other consistency and build findings are reported without a fix, each with the reason. Two gaps between `LICENSE` and what the product enforces are recorded under L4 and L5.
 
-Nine findings need a decision from the licensor, because they change a Parameter. Drafted wording is given for each. None has been applied. Four questions have been referred to counsel; they are listed under Counsel referrals and kept outside the repository.
+Nine findings need a decision from the licensor, because they change a Parameter. Drafted wording is given for each. None has been applied, except that #2164 removed the resale sentence (L3). Four legal questions are left to the licensor; they are listed under Questions left to the licensor. No counsel is being consulted (2026-10-09).
 
-Legal judgements are out of scope for this file. They are kept separately for counsel.
+Legal judgements are out of scope for this file. The licensor makes them.
 
 The three findings that matter most:
 
@@ -146,8 +146,8 @@ Count: 11. Fixed: 8. They are C1 to C4, C9 to C11, and one carrier of C7. Enforc
   - No desktop build has shipped the licence text (C6), and Licensed Work names only the npm package (L1).
 - `CHANGELOG.md` has no entry for either relicensing (v0.11.0, v0.14.2). The v0.26.0 entry for #1909 says the README now states the licensing terms. Reported as history, not edited.
 - Source: `git show <tag>:LICENSE` and `git show <tag>:src-tauri/Cargo.toml` for each tag. The `.rpm` release assets' `License` header. `npm view tandem-editor versions`. `LICENSE:46-49`, "This License applies separately for each version". The MariaDB FAQ: "the licensor's edits would be forward-looking only and would not apply retroactively." Verified by reading.
-- Why not fixed: the docs agree with the current `LICENSE`, and the files in old tags are history and cannot be edited. The position of the earlier desktop releases has been referred to counsel (kept outside the repository).
-- Proposed wording, once counsel has said which terms govern the earlier releases: a sentence in the README saying which releases shipped which terms, and that the current grant is meant to cover all of them.
+- Why not fixed: the docs agree with the current `LICENSE`, and the files in old tags are history and cannot be edited. Which terms govern the earlier desktop releases is left to the licensor.
+- Proposed wording, once the licensor has decided which terms govern the earlier releases: a sentence in the README saying which releases shipped which terms, and that the current grant is meant to cover all of them.
 
 ### C9. ADR-040 calls BUSL's four-year limit a floor (fixed)
 
@@ -238,12 +238,12 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
 
 - Tag: licensor decision
 - Location: `LICENSE:15-16`, `LICENSE:19`
-- What is wrong: "continued use after that requires a paid license from the Licensor" and "Commercial hosting or resale of the Licensed Work is not permitted." The constraint that governs this is the second Covenant of Licensor: the Additional Use Grant must be "an additional grant of rights to use that does not impose any additional restriction on the right granted in this License". The first sentence may restrict the base grant's unlimited non-production use, and the second may restrict its right to "redistribute". Whether either does has been referred to counsel (kept outside the repository). The other projects read write their limits as conditions on the extra grant, not as free-standing prohibitions: Terraform, "You may make production use of the Licensed Work, provided Your use does not include"; Sentry, "You may make use of the Licensed Work, provided that you do not". The drafting choice is the licensor's.
+- What is wrong: "continued use after that requires a paid license from the Licensor" and "Commercial hosting or resale of the Licensed Work is not permitted." The constraint that governs this is the second Covenant of Licensor: the Additional Use Grant must be "an additional grant of rights to use that does not impose any additional restriction on the right granted in this License". The first sentence may restrict the base grant's unlimited non-production use, and the second may restrict its right to "redistribute". Whether either does is left to the licensor. #2164 removed the second sentence on this reading; the first remains. The other projects read write their limits as conditions on the extra grant, not as free-standing prohibitions: Terraform, "You may make production use of the Licensed Work, provided Your use does not include"; Sentry, "You may make use of the Licensed Work, provided that you do not". The drafting choice is the licensor's.
 - Source: the SPDX text, Covenants of Licensor, item 2 (lines 65-67). Terraform's and Sentry's `LICENSE` files. `LICENSE:9-19`. Verified by reading.
 - Drafted wording. It is not a pure restyle. It differs from today's text in seven ways, each a decision. Two of them, transfer and revocation, are left as bracketed choices in the draft, because no wording settles them without deciding them:
   - "a paid license" becomes "a license key the Licensor issued", which also covers free grandfathered keys (wider; see L5). If the Licensor later becomes a company (L8), keys issued earlier by the individual are not keys "the Licensor issued", so the wording would need to name both.
-  - Transfer. "Issued to you" would keep a copied key out, but it would also keep out a key that was resold, given away, or bought by an employer for staff. Transfer is undefined today (`docs/licensing-terms.md:32`) and is on that file's counsel list. "Issued by the Licensor" alone, as the 2026-10-01 draft said, lets a copied key in. The draft brackets three choices.
-  - Paid use moves out of the separate commercial licence the Terms refer to ("purchase a commercial license from the Licensor") and into the Additional Use Grant itself. Whether the terms of sale could then still limit devices or transfer, or whether those limits would have to be written into the grant or the key, has been referred to counsel. This is the largest change of the seven.
+  - Transfer. "Issued to you" would keep a copied key out, but it would also keep out a key that was resold, given away, or bought by an employer for staff. Transfer is undefined today (`docs/licensing-terms.md:32`) and is on that file's list of open legal questions. "Issued by the Licensor" alone, as the 2026-10-01 draft said, lets a copied key in. The draft brackets three choices.
+  - Paid use moves out of the separate commercial licence the Terms refer to ("purchase a commercial license from the Licensor") and into the Additional Use Grant itself. Whether the terms of sale could then still limit devices or transfer, or whether those limits would have to be written into the grant or the key, is left to the licensor. This is the largest change of the seven.
   - Revocation. Today's text has no revocation clause, so a key once issued runs, and the product agrees: a refund ends only the update entitlement, the issuance Worker's comment calls the run-license "perpetual by design" (`infra/license-issuance-worker/src/worker.ts:446-479`), and `docs/licensing-terms.md:28` says a key runs "including after a refund". The draft brackets a clause for the case where the licensor wants a key to be endable. It needs stated grounds, notice, and a fixed version of the terms, or it is an unconditional power to end a key that "does not expire"; a licensee cannot see a revocation offline. The terms of sale cannot supply grounds for grandfathered keys, which involve no sale. And "revoked" already means something narrower in this project: on a refund the issuance Worker writes `status: "revoked"`, and the update Worker refuses with reason `revoked` (`infra/license-update-worker/src/worker.ts:152`), while the key keeps running. If a revocation clause is adopted, that label has to be renamed (for example to `refunded`) or defined in the terms of sale. That is an enforcement item; the code is not edited here.
   - The 14 days run once, from the first launch of any 1.0.0-or-later version, where today's text can be read as restarting with each version (narrower; see L4).
   - "Commercial hosting" becomes offering the work to third parties as a hosted service, paid or not (narrower).
@@ -382,15 +382,15 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
   Licensed Work, please contact support@tandem.ink.
   ```
 
-## Counsel referrals
+## Questions left to the licensor
 
-Questions referred to counsel are kept outside the repository. Four are noted where they arise: whether the grant's two prohibitions restrict the base grant (L3), whether terms of sale could still limit devices or transfer (L3), and the position of the earlier desktop releases (C8). The fourth has no finding of its own here:
+Four legal questions are left to the licensor. They are noted where they arise: whether the grant's two prohibitions restrict the base grant (L3), whether terms of sale could still limit devices or transfer (L3), and the position of the earlier desktop releases (C8). The fourth has no finding of its own here:
 
 ### Contribution rights
 
-- Tag: counsel
+- Tag: licensor decision
 - Location: `LICENSE:6-8`, `CONTRIBUTING.md:3`
-- A question on contribution rights has been referred to counsel.
+- A question on contribution rights is left to the licensor.
 
 ## What was not checked
 
