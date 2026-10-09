@@ -66,7 +66,14 @@ describe("published Claude Code plugin manifest", () => {
     const plugins = marketplace.plugins as Array<{ name: string; source?: unknown }>;
     const tandem = plugins.find((p) => p.name === "tandem");
     expect(tandem).toBeDefined();
-    expect(tandem?.source).toEqual({ source: "github", repo: "bloknayrb/tandem" });
+    // The `ref` value is guarded in tests/plugin/plugin-version-pin.test.ts;
+    // here it only has to be present, and no other key (a `sha`, say) may
+    // appear without a test that keeps it in step with the ref.
+    expect(tandem?.source).toEqual({
+      source: "github",
+      repo: "bloknayrb/tandem",
+      ref: expect.any(String),
+    });
   });
 
   it("the shared install commands spell the identities the manifests declare", () => {

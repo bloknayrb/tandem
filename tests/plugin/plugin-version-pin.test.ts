@@ -22,6 +22,13 @@
  *     one is what this assertion still guards, and this surface has no
  *     CARGO_PKG_VERSION-style derivation, so it silently rots.
  *
+ *   - `.claude-plugin/marketplace.json` — the plugin entry's `source.ref`, the
+ *     release tag the marketplace installs the plugin from. Without it the
+ *     plugin installs from the default branch, which under the LICENSE's
+ *     Licensed Work definition (a version is a published release) is a copy
+ *     that belongs to no version. This surface is the one exception to
+ *     "matches package.json": see its test below for why it may lag by one.
+ *
  * This test fails CI the moment any of them diverges from package.json.
  * (`src/server/integrations/apply.ts` build-injects the version from package.json
  * via tsup defines, so it cannot drift and needs no assertion here.)
@@ -49,6 +56,15 @@ const cargoToml = readFileSync(join(repoRoot, "src-tauri/Cargo.toml"), "utf8");
 const tauriConf = JSON.parse(readFileSync(join(repoRoot, "src-tauri/tauri.conf.json"), "utf8")) as {
   version: string;
 };
+
+const marketplace = JSON.parse(
+  readFileSync(join(repoRoot, ".claude-plugin/marketplace.json"), "utf8"),
+) as { plugins: Array<{ name: string; source?: { ref?: string } }> };
+
+/** Every `## [x.y.z]` release heading in CHANGELOG.md, newest first. */
+const changelogVersions = [
+  ...readFileSync(join(repoRoot, "CHANGELOG.md"), "utf8").matchAll(/^## \[(\d[^\]]*)\]/gm),
+].map((m) => m[1]);
 
 /** Pull the version from the first `[package]` table in Cargo.toml. */
 function cargoPackageVersion(toml: string): string {
@@ -122,5 +138,37 @@ describe("plugin/version pin drift guard", () => {
         `monitor command "${m.command}" must pin tandem-editor@${expected}`,
       ).toBe(expected);
     }
+  });
+
+  it("marketplace.json pins the plugin to a published stable release tag, at most one release behind", () => {
+    // Not equality with package.json, on purpose. The ref must never name a
+    // tag that does not exist yet, and the tag is cut from master AFTER the
+    // version-bump PR merges, so the bump PR has to leave the ref on the
+    // previous release. The release skill bumps it in a follow-up once the
+    // new release is published and on npm (the tagged plugin.json pins
+    // `npx tandem-editor@<that version>`, so an earlier ref bump would ship a
+    // plugin whose MCP server cannot be fetched). Tightening this to equality
+    // would turn every release-bump PR red.
+    //
+    // What this CAN guard: the ref is present (a dropped ref silently goes back
+    // to installing from the default branch), it is a `v<x.y.z>` tag with no
+    // prerelease suffix (plugin users stay on stable, like `releases/latest`),
+    // and it lags package.json by at most one stable release, so a forgotten
+    // follow-up fails CI at the next bump. What it CANNOT guard: that the tag
+    // exists. CI's checkout is depth-1 and tagless, so the CHANGELOG heading
+    // stands in for "this version was released".
+    const entry = marketplace.plugins.find((p) => p.name === plugin.name);
+    const ref = entry?.source?.ref;
+    expect(ref, "marketplace.json's plugin entry must set source.ref").toBeDefined();
+    const refVersion = /^v(\d+\.\d+\.\d+)$/.exec(ref ?? "")?.[1];
+    expect(refVersion, `source.ref "${ref}" must be a stable v<x.y.z> release tag`).toBeDefined();
+
+    const current = changelogVersions.indexOf(expected);
+    expect(current, `CHANGELOG.md has no ## [${expected}] heading`).toBeGreaterThanOrEqual(0);
+    const previousStable = changelogVersions.slice(current + 1).find((v) => !v.includes("-"));
+    const allowed = [expected, previousStable].filter(
+      (v): v is string => v !== undefined && !v.includes("-"),
+    );
+    expect(allowed).toContain(refVersion);
   });
 });

@@ -184,7 +184,7 @@ This is the shape that goes wrong. The entry compresses; the bounds do not.
 ## Releasing
 
 See `.claude/skills/release/SKILL.md` for the full release sequence (version bump across all
-six surfaces, tag, GitHub Release publish, smoke checklist).
+seven surfaces, tag, GitHub Release publish, smoke checklist).
 
 ## Conventions
 
