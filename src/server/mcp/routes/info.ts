@@ -41,7 +41,7 @@ export interface InfoHandlerDeps {
   /**
    * Absolute path to the licence text on disk, resolved at server startup:
    * `LICENSE.txt` in the desktop bundle, the bare `LICENSE` in a dev or npm
-   * tree. Undefined if neither exists. Consumed by Settings' "License" link,
+   * tree. Undefined if neither exists. Consumed by Settings' "View license" link,
    * which offers to open it only when the path has an openable extension.
    */
   licensePath?: string;
@@ -74,7 +74,7 @@ export interface InfoHandlerDeps {
  * convention. They are absolute install paths, so they do disclose the username
  * and install layout to a token-holding LAN caller. They are still sent whole
  * because the client hands each one straight back to `POST /api/open`
- * ("View Changelog", "Replay tutorial", "License", the About panel's workflows link) — a
+ * ("View Changelog", "Replay tutorial", "View license", the About panel's workflows link) — a
  * basename would not resolve, so scrubbing them breaks those buttons for every
  * non-loopback browser rather than hardening anything the caller could not
  * already learn from `/api/info`'s version + platform. Recorded as an accepted

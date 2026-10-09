@@ -47,6 +47,22 @@ describe("findLicensePath", () => {
     expect(findLicensePath(serverDir)).toBe(join(root as string, "LICENSE.txt"));
   });
 
+  it("ignores an ancestor project's LICENSE.txt in favour of the package's own LICENSE", () => {
+    // An npm install as a project dependency:
+    // <project>/node_modules/tandem-editor/dist/server. The project root has
+    // package.json + LICENSE.txt, which findRepoFile's ancestor walk accepts.
+    // The package's own LICENSE must win.
+    root = mkdtempSync(join(tmpdir(), "tandem-license-path-"));
+    const pkgRoot = join(root, "node_modules", "tandem-editor");
+    const serverDir = join(pkgRoot, "dist", "server");
+    mkdirSync(serverDir, { recursive: true });
+    writeFileSync(join(root, "package.json"), "{}\n");
+    writeFileSync(join(root, "LICENSE.txt"), "the user's own project licence\n");
+    writeFileSync(join(pkgRoot, "package.json"), "{}\n");
+    writeFileSync(join(pkgRoot, "LICENSE"), "Business Source License 1.1\n");
+    expect(findLicensePath(serverDir)).toBe(join(pkgRoot, "LICENSE"));
+  });
+
   it("returns undefined when neither exists", () => {
     // Leaf kept >= 3 levels below the temp root so findRepoFile's capped walk
     // cannot escape into the real filesystem (see changelog-path.test.ts).

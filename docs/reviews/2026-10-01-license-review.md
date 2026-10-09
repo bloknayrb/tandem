@@ -114,7 +114,9 @@ Count: 11. Fixed: 8. They are C1 to C4, C9 to C11, and one carrier of C7. Enforc
 - Neither option makes the claim true for v0.14.2 to v0.25, whose own `LICENSE` granted only a 30-day evaluation. Widening the current grant does not reach shipped versions either (C8). The proposed wording below therefore depends on the licensor's decision on earlier releases (C8).
 - Proposed wording, if the README moves: "Tandem is free for personal use and individual self-hosting during the public beta, with no time limit and nothing to activate. Releases before v0.11.0 were published under the MIT License, which allows any use." And in the explainer: "Every pre-1.0 release is free for personal use and individual self-hosting, with no time limit and nothing to activate". The first draft of this sentence said "free for personal use … every pre-1.0 release", which would have misdescribed the MIT releases and dropped "individual self-hosting".
 
-### C6. The desktop app ships no copy of the licence (not fixed)
+### C6. The desktop app ships no copy of the licence (partly fixed after this review)
+
+- Update, 2026-10-09: after the licensor's B7 decision, the desktop bundle carries the repository `LICENSE` as the resource `LICENSE.txt`, and Settings has a "View license" link that opens it read-only. The resource is named `LICENSE.txt`, not the `LICENSE` proposed below, because `/api/open` refuses an extensionless file. Still not done: `bundle.licenseFile`, so no installer shows a licence page and the `.deb` still installs no licence file. The rest of this entry is the review as written, and it describes releases up to v0.28.0.
 
 - Tag: build
 - Location: `src-tauri/tauri.conf.json:59-68`

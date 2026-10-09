@@ -195,9 +195,20 @@ const LICENSE_PATH: string | undefined = findLicensePath(__dirname);
  * repository's bare `LICENSE`. The `.txt` name is tried first so the bundle
  * resolves to the copy Settings can open. A bare `LICENSE` is still reported
  * (the About tab shows its path) but the client offers no open action for it.
+ *
+ * `LICENSE.txt` gets only the direct probes, never `findRepoFile`'s ancestor
+ * walk: the bundle is the one layout that has it, always at `../..`, and the
+ * walk accepts any ancestor holding `package.json` beside the file. For an npm
+ * install inside a project that walk would reach the project root, so a
+ * project's own `LICENSE.txt` would beat this package's `LICENSE` and be shown
+ * (and opened) as Tandem's.
  */
 export function findLicensePath(startDir: string): string | undefined {
-  return findRepoFile(startDir, "LICENSE.txt") ?? findRepoFile(startDir, "LICENSE");
+  for (const prefix of ["../..", ".."]) {
+    const candidate = join(startDir, prefix, "LICENSE.txt");
+    if (existsSync(candidate)) return candidate;
+  }
+  return findRepoFile(startDir, "LICENSE");
 }
 
 // One McpServer per live transport session, keyed by Mcp-Session-Id (#438

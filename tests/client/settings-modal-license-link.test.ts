@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 /**
- * Settings' "License" link. The LICENSE says it must be displayed on each
+ * Settings' "View license" link. The LICENSE says it must be displayed on each
  * copy, and the desktop bundle ships it as LICENSE.txt so `/api/open` will
  * take it. A dev or npm tree only has the bare LICENSE, which `/api/open`
  * refuses (`UNSUPPORTED_FORMAT`), so the button must not appear there: a

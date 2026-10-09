@@ -325,7 +325,7 @@ $effect(() => {
  *     required to blur inert content — same for closing the drawer from a nav
  *     click or Escape;
  *   - narrow → wide flips the hamburger to `display: none`;
- *   - View Changelog / License / Replay tutorial `disabled` the button that was just
+ *   - View Changelog / View license / Replay tutorial `disabled` the button that was just
  *     activated, and on the error branch the dialog stays open around it;
  *   - a delete-confirm button removes the row it lives in, and
  *     `{#key activeTab.id}` destroys the whole tab body.
@@ -740,7 +740,7 @@ async function handleReplayTutorial(): Promise<void> {
             disabled={licenseLoading || appInfo.loading}
             class="settings-modal-sidebar-link"
           >
-            {licenseLoading ? "Opening…" : "License"}
+            {licenseLoading ? "Opening…" : "View license"}
           </button>
           {#if licenseError}
             <div

@@ -227,7 +227,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `settings-modal-view-{changelog,documentation}-btn`,
   `settings-modal-changelog-error`, `settings-modal-report-bug-link`,
   `settings-modal-view-license-btn`, `settings-modal-license-error` (the
-  sidebar "License" link; rendered only when `/api/info`'s `licensePath` has
+  sidebar "View license" link; rendered only when `/api/info`'s `licensePath` has
   an openable extension, i.e. the desktop bundle's `LICENSE.txt`)
 
 ### Settings — Appearance tab
