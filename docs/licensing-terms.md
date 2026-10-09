@@ -51,9 +51,10 @@ a key, and without a key for use that leaves out the AI features.
 about who employs the person or whose documents they are, and the
 employee-exclusion sentence the 2026-10-01 review drafted (L6) was not adopted.
 So an employee using Tandem on documents they work on for their employer is
-personal use. (Whether a key an employer buys for an employee counts as one the
-employee holds is not decided.) What stays outside
-is use that is not one natural person's: one installation serving several people,
+personal use. On a plain reading, a key an employer buys for an employee also
+works: clause (b) needs only "a license key the Licensor issued", with no "to
+you", and A2 left transfer out. That is a reading of the text, not a separate
+decision. What stays outside is use that is not one natural person's: one installation serving several people,
 or Tandem run as a service for others. That needs a **commercial** licence, and
 this pipeline cannot issue one.
 
@@ -108,7 +109,7 @@ doesn't grant is the worst version of this problem.
 - After the 14 days, `LICENSE` grants keyless use that leaves out the AI
   features (decision A4). That matches ADR-040's 2026-08-18 amendment
   (unlicensed = an editor with no AI), not the gate merged today, which makes
-  documents read-only and keeps chat open. Until #1521 lands, the dark build's
+  documents read-only and keeps chat and Claude's MCP read tools open. Until #1521 lands, the dark build's
   restricted mode and its copy disagree with the licence in both directions.
 - One asymmetry is deliberate: every pre-1.0 (beta) version stays free
   for personal use and individual self-hosting with no time limit, including
@@ -185,9 +186,11 @@ Roughly in priority order:
    whether the remove-licence path (#1943) is required.
 7. **BUSL Change Date** ([LICENSE](../LICENSE)) — *decided 2026-10-09 (A6):*
    four years from the date each version is first made publicly available, and
-   a version is a release on the repository's Releases page, so the date that
-   release (or its tag, if earlier) became public is the tracking record. Still open: on that date the *code* becomes MIT while
-   the shipped v1.0 binary still hard-gates. Answering that support ticket
+   a version is a release on the repository's Releases page, so that release's
+   publication date is the tracking record. (Reading "first made publicly
+   available" as the earlier of the release and its tag is the conservative
+   reading; the decision does not settle it.) Still open: on that date the
+   *code* becomes MIT while the shipped v1.0 binary still hard-gates. Answering that support ticket
    requires shipping something.
 
 ## 7. Documents still to write
