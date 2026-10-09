@@ -10,7 +10,7 @@ The Terms section of `LICENSE` matches the governing text word for word. The dif
 
 Eight restating places disagreed with `LICENSE` and were fixed. The other consistency and build findings are reported without a fix, each with the reason. Two gaps between `LICENSE` and what the product enforces are recorded under L4 and L5.
 
-Nine findings need a decision from the licensor, because they change a Parameter. Drafted wording is given for each. None has been applied. One more question, on contribution rights, has been referred to counsel.
+Nine findings need a decision from the licensor, because they change a Parameter. Drafted wording is given for each. None has been applied. Four questions have been referred to counsel; they are listed under Counsel referrals and kept outside the repository.
 
 Legal judgements are out of scope for this file. They are kept separately for counsel.
 
@@ -108,7 +108,8 @@ Count: 11. Fixed: 8. They are C1 to C4, C9 to C11, and one carrier of C7. Enforc
 - Location: `README.md:178`, `docs/licensing-explained.md:85-87`, `docs/positioning.md:7`, `docs/positioning.md:106`, `docs/security.md:193`, `docs/roadmap.md:54`, `docs/decisions.md:1325`
 - What is wrong: the README says "Tandem is free during the public beta — every pre-1.0 release, with no time limit and nothing to activate." The explainer says "Every pre-1.0 release is free to use, with no time limit". `docs/positioning.md` says "free during public beta" (line 7) and "free during the public beta" (line 106), `docs/security.md:193` says "during the public beta Tandem is free", and ADR-040 §3 says "Free during public beta." (`docs/roadmap.md:54` repeats it.) `LICENSE:9-11` grants that only for "Personal use and individual self-hosting". An organisation reading the README would think it is covered. `docs/licensing-terms.md:42-45` already says an organisation is outside the grant.
 - Source: `LICENSE:9-11`. Verified by reading.
-- Why not fixed: the fix narrows a public promise. The licensor may prefer to widen the grant to match the README instead, which is a Parameter change (see L6). That choice is his. The one non-public carrier of the same claim was fixed under C11.
+- Why not fixed: the README, the explainer and `docs/positioning.md` are public promises in the sense of the agent spec, and the fix narrows them. The licensor may prefer to widen the grant to match the README instead, which is a Parameter change (see L6). That choice is his. The ADR, roadmap and security carriers are not promises, but they restate the same choice, so they are left to move with it. The unpublished draft terms were fixed under C11.
+- Neither option makes the claim true for v0.14.2 to v0.25, whose own `LICENSE` granted only a 30-day evaluation. Widening the current grant does not reach shipped versions either (C8). The proposed wording below therefore depends on the answer counsel gives on earlier releases.
 - Proposed wording, if the README moves: "Tandem is free for personal use and individual self-hosting during the public beta, with no time limit and nothing to activate. Releases before v0.11.0 were published under the MIT License, which allows any use." And in the explainer: "Every pre-1.0 release is free for personal use and individual self-hosting, with no time limit and nothing to activate". The first draft of this sentence said "free for personal use … every pre-1.0 release", which would have misdescribed the MIT releases and dropped "individual self-hosting".
 
 ### C6. The desktop app ships no copy of the licence (not fixed)
@@ -134,7 +135,7 @@ Count: 11. Fixed: 8. They are C1 to C4, C9 to C11, and one carrier of C7. Enforc
 ### C8. Earlier releases shipped different terms from the ones the docs now describe (not fixed)
 
 - Tag: consistency
-- Location: `README.md:178`, `docs/licensing-explained.md:85-88`, `docs/licensing-terms.md:85-89`, `docs/decisions.md:1329`
+- Location: `README.md:178`, `docs/licensing-explained.md:85-88`, `docs/licensing-terms.md:85-87`, `docs/decisions.md:1329`
 - What is wrong: all four say every pre-1.0 release is free with no time limit, and the explainer adds that the grant "says so in as many words". That is true of the current file. It is not what each release's own file said:
   - v0.1.0 to v0.10.x shipped the MIT licence. On npm that range is 0.1.0 to 0.9.1; no 0.10 version was published there.
   - v0.11.0 to v0.14.1 shipped BUSL-1.1 with "Personal use and individual self-hosting are permitted; commercial hosting or resale of the Licensed Work is not."
@@ -167,10 +168,10 @@ Count: 11. Fixed: 8. They are C1 to C4, C9 to C11, and one carrier of C7. Enforc
 ### C11. The draft terms say the beta is free with no personal-use limit (fixed)
 
 - Tag: consistency
-- Location: `docs/licensing-terms.md:85-89`
+- Location: `docs/licensing-terms.md:85-87`
 - What is wrong: "every pre-1.0 (beta) version stays free with no time limit". The file is marked "not yet published", so it is not a public promise, and `LICENSE:9-11` limits the beta grant to personal use and individual self-hosting.
 - Source: `LICENSE:9-11`. Verified by reading.
-- Edit made: now says the beta "stays free for personal use and individual self-hosting with no time limit", and that releases before v0.11.0 are MIT, which allows any use. If the licensor widens the grant under C5 instead, revert this edit. `docs/decisions.md:1329` makes the same statement, but inside §5's description of a grant already scoped to personal use and self-hosting, so it was left as it is.
+- Edit made: now says the beta "stays free for personal use and individual self-hosting with no time limit". That describes the current grant. What earlier releases' own files said is C8, and the sentence makes no claim about them. If the licensor widens the grant under C5 instead, revert this edit. `docs/decisions.md:1329` makes the same statement, but inside §5's description of a grant already scoped to personal use and self-hosting, so it was left as it is.
 
 ## Findings that need a licensor decision
 
@@ -203,6 +204,8 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
 
   The version sentence is there because once the repository is the Licensed Work, every pushed commit is "publicly available", which would leave "version" unclear for L2 option A and for the BUSL four-year clause. It ties a version to a published release rather than to a git tag, because some tags (v0.5.0.1, v0.5.1, v0.6.4) have no release. It does not settle source published between releases, which on this wording is Licensed Work that belongs to no version. These readings are inferred, not settled.
 
+  One named artifact is distributed exactly that way. The Claude Code plugin's marketplace entry (`.claude-plugin/marketplace.json`) points at `bloknayrb/tandem` with no `ref`, so the plugin installs from the default branch, not from a release (inferred from the entry, not tested; `skills/tandem/SKILL.md` has changed on `master` since v0.28.0). Under this sentence that copy belongs to no version, so no Additional Use Grant or Change Date attaches to it. This is a build item: pin the marketplace entry's `ref` to the release tag. The entry is not changed here.
+
 ### L2. The Change Date has a cliff at 2029-06-10, and "general availability" has no meaning for a beta
 
 - Tag: licensor decision
@@ -227,7 +230,7 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
                         available.
   ```
 
-- Option C, a plain date that is updated in `LICENSE` at each release, as Sentry and MaxScale do. This needs a release step and a record of which version got which date. `docs/licensing-terms.md:150-153` already notes that per-version conversion needs a tracking artefact.
+- Option C, a plain date that is updated in `LICENSE` at each release, as Sentry and MaxScale do. This needs a release step and a record of which version got which date. `docs/licensing-terms.md:149-152` already notes that per-version conversion needs a tracking artefact.
 
   Two things to weigh. Option A starts each beta release's clock on the day it shipped, so a beta released in mid-2026 would convert in mid-2028, earlier than the 2029-06-10 that option B keeps. That comparison assumes a beta has no "general availability release" under today's text and so falls back to the fixed date. If a beta's own release does count as general availability, today's text already converts it in mid-2028, and option A changes nothing for it. And whichever option is chosen applies to releases made after the change; versions already shipped keep the wording they shipped with.
 
@@ -237,11 +240,12 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
 - Location: `LICENSE:15-16`, `LICENSE:19`
 - What is wrong: "continued use after that requires a paid license from the Licensor" and "Commercial hosting or resale of the Licensed Work is not permitted." The constraint that governs this is the second Covenant of Licensor: the Additional Use Grant must be "an additional grant of rights to use that does not impose any additional restriction on the right granted in this License". The first sentence may restrict the base grant's unlimited non-production use, and the second may restrict its right to "redistribute". Whether either does has been referred to counsel (kept outside the repository). The other projects read write their limits as conditions on the extra grant, not as free-standing prohibitions: Terraform, "You may make production use of the Licensed Work, provided Your use does not include"; Sentry, "You may make use of the Licensed Work, provided that you do not". The drafting choice is the licensor's.
 - Source: the SPDX text, Covenants of Licensor, item 2 (lines 65-67). Terraform's and Sentry's `LICENSE` files. `LICENSE:9-19`. Verified by reading.
-- Drafted wording. It is not a pure restyle. It differs from today's text in six ways, each a decision:
-  - "a paid license" becomes "a license key the Licensor issued to you and has not revoked under the Licensor's terms of sale", which also covers free grandfathered keys (wider; see L5). "Issued to you" keeps a copied key out; "issued by the Licensor" alone, as the first draft said, would have let it in. If the Licensor later becomes a company (L8), keys issued earlier by the individual are not keys "the Licensor issued", so the wording would need to name both.
-  - Paid use moves out of the separate commercial licence the Terms refer to ("purchase a commercial license from the Licensor") and into the Additional Use Grant itself. Whether the terms of sale could then still limit devices or transfer, or whether those limits would have to be written into the grant or the key, has been referred to counsel. This is the larger change of the six.
-  - Revocation would end the right to run. The draft ties it to the terms of sale so that the grounds are stated somewhere; a bare "has not revoked", as the first redraft said, gave the Licensor an unconditional power to end a key that "does not expire", and a licensee cannot see a revocation offline. Refunds are the case that matters. Today a refund revokes only the update entitlement, and the issuance Worker's comment calls the run-license "perpetual by design" (`infra/license-issuance-worker/src/worker.ts:446-479`); the product runs a refunded key forever (`docs/licensing-terms.md:28`). Whether a refunded key keeps running is the licensor's decision, and the terms of sale would then have to say it. If it stops, the product cannot enforce that offline, which is an enforcement gap to record against §4.
-  - The 14 days run from the first launch of any 1.0.0-or-later version, where today's text can be read as restarting with each version (narrower; see L4).
+- Drafted wording. It is not a pure restyle. It differs from today's text in seven ways, each a decision. Two of them, transfer and revocation, are left as bracketed choices in the draft, because no wording settles them without deciding them:
+  - "a paid license" becomes "a license key the Licensor issued", which also covers free grandfathered keys (wider; see L5). If the Licensor later becomes a company (L8), keys issued earlier by the individual are not keys "the Licensor issued", so the wording would need to name both.
+  - Transfer. "Issued to you" would keep a copied key out, but it would also keep out a key that was resold, given away, or bought by an employer for staff. Transfer is undefined today (`docs/licensing-terms.md:32`) and is on that file's counsel list. "Issued by the Licensor" alone, as the 2026-10-01 draft said, lets a copied key in. The draft brackets three choices.
+  - Paid use moves out of the separate commercial licence the Terms refer to ("purchase a commercial license from the Licensor") and into the Additional Use Grant itself. Whether the terms of sale could then still limit devices or transfer, or whether those limits would have to be written into the grant or the key, has been referred to counsel. This is the largest change of the seven.
+  - Revocation. Today's text has no revocation clause, so a key once issued runs, and the product agrees: a refund ends only the update entitlement, the issuance Worker's comment calls the run-license "perpetual by design" (`infra/license-issuance-worker/src/worker.ts:446-479`), and `docs/licensing-terms.md:28` says a key runs "including after a refund". The draft brackets a clause for the case where the licensor wants a key to be endable. It needs stated grounds, notice, and a fixed version of the terms, or it is an unconditional power to end a key that "does not expire"; a licensee cannot see a revocation offline. The terms of sale cannot supply grounds for grandfathered keys, which involve no sale. And "revoked" already means something narrower in this project: on a refund the issuance Worker writes `status: "revoked"`, and the update Worker refuses with reason `revoked` (`infra/license-update-worker/src/worker.ts:152`), while the key keeps running. If a revocation clause is adopted, that label has to be renamed (for example to `refunded`) or defined in the terms of sale. That is an enforcement item; the code is not edited here.
+  - The 14 days run once, from the first launch of any 1.0.0-or-later version, where today's text can be read as restarting with each version (narrower; see L4).
   - "Commercial hosting" becomes offering the work to third parties as a hosted service, paid or not (narrower).
   - "Resale … is not permitted" becomes "This Additional Use Grant does not extend to … selling". As an exclusion from the extra grant, it no longer even claims to limit the base grant's right to redistribute copies, so on copies it is wider, not narrower. On hosting, it is narrower.
 
@@ -256,11 +260,17 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
                         any later version, for personal use or individual
                         self-hosting, (a) for evaluation, for up to 14 days
                         from the first launch of any such version on a
-                        given device, and (b) after that, for as long as
-                        you hold a license key the Licensor issued to you
-                        and has not revoked under the Licensor's terms of
-                        sale. A license key the Licensor issues in return
-                        for payment is a one-time purchase and does not
+                        given device, counted once across all such
+                        versions, and (b) after that, for as long as you
+                        hold a license key the Licensor issued
+                        [to you | for your use, or that was transferred to
+                        you as the Licensor's terms of sale allow | (no
+                        words)]
+                        [, unless the Licensor has ended your right to use
+                        it, by notice to you, on a ground stated in the
+                        terms of sale in effect when the key was issued].
+                        A license key the Licensor issues in return for
+                        payment is a one-time purchase and does not
                         expire.
 
                         This Additional Use Grant does not extend to
@@ -268,9 +278,9 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
                         hosted service, or to selling the Licensed Work.
   ```
 
-  "Issues in return for payment" replaces the first redraft's "bought from the Licensor", because checkout runs through a merchant of record (`docs/decisions.md:1331`) and `LICENSE:43-44` treats the Licensor and its resellers as different sellers. Note that "does not expire" and "has not revoked" now sit side by side: a key does not lapse with time, but it can be revoked on the grounds the terms of sale state.
+  The 2026-10-01 draft said "A purchased license key". "Issues in return for payment" names who issues the key, because checkout runs through a merchant of record (`docs/decisions.md:1331`) and `LICENSE:43-44` treats the Licensor and its resellers as different sellers. If the revocation bracket is adopted, "does not expire" and the revocation clause sit side by side: a key does not lapse with time, but it can be ended on the stated grounds.
 
-  The draft folds in L4 and L5. L6 would add definitions under it. It keeps the phrases "one-time purchase" and "before version 1.0.0" and only 14-day counts, so `tests/docs/trial-length-claims.test.ts` still passes.
+  The draft folds in L4's clock and L5's wording. It does not add L4's restricted-mode sentence, and it takes L5's first option (no version scope in `LICENSE`) by leaving the scope out. L6 would add definitions under it. It keeps the phrases "one-time purchase" and "before version 1.0.0" and only 14-day counts, so `tests/docs/trial-length-claims.test.ts` still passes.
 
 ### L4. The evaluation clock in the licence is not the clock in the product
 
@@ -284,7 +294,7 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
 - Source: the lines quoted. `src/server/license/license-state.ts:192`. The documents were read. That one `trial.json` carries across versions is inferred from the code, not tested.
 - The second point, a clock in a deletable file, is a deliberate soft gate (ADR-040 §3, `docs/licensing-terms.md:79-81`), and neither fix below addresses it. The two fixes are for the third point, restricted mode. Either closes it:
   - Change the product so nothing runs past day 14 without a key. That contradicts ADR-040's amendment and the three strings above.
-  - Grant restricted mode in `LICENSE`. Clause (a) of the L3 draft is meant to make the clock run once; to remove doubt, end it with "counted once across all such versions". Then add a sentence listing what stays allowed after the evaluation period without a license key. Key that list to the #1346 design, not to the explainer, which describes the gate that is being replaced. Be aware that such a sentence is a perpetual, free grant of production use for v1.0 and later, which is a larger Parameter decision than closing a wording gap.
+  - Grant restricted mode in `LICENSE`. Clause (a) of the L3 draft already makes the clock run once ("counted once across all such versions"). Then add a sentence listing what stays allowed after the evaluation period without a license key. Key that list to the #1346 design, not to the explainer, which describes the gate that is being replaced. Be aware that such a sentence is a perpetual, free grant of production use for v1.0 and later, which is a larger Parameter decision than closing a wording gap.
 
 ### L5. "Paid license" leaves out the free licences the README promises, and "does not expire" has no stated scope
 
@@ -329,11 +339,17 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
                         Neither personal use nor individual self-hosting
                         includes use by or on behalf of an organization,
                         including by its employees in the course of their
-                        employment. Work a person does as an independent
-                        contractor for a client, including through a
-                        company that person wholly owns, is not use on
-                        behalf of that client.
+                        employment. Use by a natural person in the course
+                        of work that person does as an independent
+                        contractor, directly or through a company that
+                        person wholly owns, is personal use, and is not
+                        use by or on behalf of that company or of the
+                        client.
   ```
+
+  The carve-out has to name the person's own company as well as the client. An earlier wording said only that such work "is not use on behalf of that client", which left the freelancer excluded as use by or on behalf of their own company.
+
+  The cost of this option: under the L3 draft a license key extends only personal use and individual self-hosting, so no key sold at v1.0 would cover an employee using Tandem for their employer. The employed buyers `docs/positioning.md:58` names ("an analyst… legal, compliance, or consulting role… Tandem is bought by the individual doing it") would need a commercial licence, which `docs/licensing-terms.md` §2 says cannot be issued yet.
 
   To put the employee inside the grant, add nothing, and change `docs/licensing-terms.md`, which currently reads organizations out.
 
@@ -368,13 +384,13 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
 
 ## Counsel referrals
 
-Count: 1.
+Questions referred to counsel are kept outside the repository. Four are noted where they arise: whether the grant's two prohibitions restrict the base grant (L3), whether terms of sale could still limit devices or transfer (L3), and the position of the earlier desktop releases (C8). The fourth has no finding of its own here:
 
-### Q1. Contribution rights
+### Contribution rights
 
 - Tag: counsel
 - Location: `LICENSE:6-8`, `CONTRIBUTING.md:3`
-- A question on contribution rights has been referred to counsel. It is kept outside the repository.
+- A question on contribution rights has been referred to counsel.
 
 ## What was not checked
 
