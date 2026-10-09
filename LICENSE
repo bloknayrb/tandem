@@ -1,28 +1,68 @@
-License text copyright (c) 2020 MariaDB Corporation Ab, All Rights Reserved.
-"Business Source License" is a trademark of MariaDB Corporation Ab.
+Business Source License 1.1
+
+License text copyright © 2024 MariaDB plc, All Rights Reserved.
+"Business Source License" is a trademark of MariaDB plc.
 
 Parameters
 
 Licensor:             Bryan Kolb
-Licensed Work:        Tandem (tandem-editor npm package).
+Licensed Work:        Tandem: the source code in the repository at
+                      https://github.com/bloknayrb/tandem, and every
+                      artifact built from it and distributed by the
+                      Licensor, including the tandem-editor npm package,
+                      the Tandem desktop application and the Tandem
+                      plugin for Claude Code, excluding third-party
+                      components, which remain under their own licenses.
+                      Each version of the Licensed Work is a release
+                      published on that repository's Releases page.
                       The Licensed Work is (c) 2026 Bryan Kolb.
-Additional Use Grant: Personal use and individual self-hosting of any version of
-                      the Licensed Work released before version 1.0.0 — the public
-                      beta — are permitted without charge and without a time limit.
+Additional Use Grant: You may make production use of any version of the
+                      Licensed Work released before version 1.0.0 (the
+                      public beta), without charge and without a time
+                      limit, provided that the use is personal use or
+                      individual self-hosting. This grant also applies to
+                      every version released before 1.0.0 under an
+                      earlier wording of this License.
 
-                      For version 1.0.0 and later, personal use and individual
-                      self-hosting are permitted for evaluation for up to 14 days
-                      from first launch on a given device; continued use after that
-                      requires a paid license from the Licensor. A paid license is
-                      a one-time purchase and does not expire.
-Change Date:          The earlier of 2029-06-10 or two years after the public
-                      general availability release of this specific version of the
-                      Licensed Work.
-Change License:       MIT License
+                      You may make production use of version 1.0.0 or
+                      any later version, for personal use or individual
+                      self-hosting, (a) for up to 14 days from the first
+                      launch of any such version on a given device,
+                      counted once across all such versions, and (b)
+                      after that, for as long as you hold a license key
+                      the Licensor issued. A license key the Licensor
+                      issues in return for payment is a one-time purchase
+                      and does not expire.
+
+                      You may also make production use of version 1.0.0
+                      or any later version, for personal use or
+                      individual self-hosting, without a license key,
+                      provided that you do not use its AI features.
+
+                      "AI features" means any feature through which an AI
+                      model or agent reads, changes, or exchanges
+                      messages about documents opened in the Licensed
+                      Work, including its MCP server, its chat panel, and
+                      any support for local models.
+
+                      "Personal use" means use by one natural person on
+                      documents that person works on, including in the
+                      course of that person's own paid work for clients.
+                      "Individual self-hosting" means one natural person
+                      running the Licensed Work on a device that person
+                      controls, for that person's use only.
+Change Date:          Four years from the date each version of the
+                      Licensed Work is first made publicly available.
+Change License:       MIT License (SPDX identifier: MIT)
+
+For information about alternative licensing arrangements for the
+Licensed Work, please contact support@tandem.ink.
 
 Notice
 
-Business Source License 1.1
+The Business Source License (this document, or the "License") is not an Open
+Source license. However, the Licensed Work will eventually be made available
+under an Open Source License, as stated in this License.
 
 Terms
 
@@ -64,3 +104,28 @@ AN "AS IS" BASIS. LICENSOR HEREBY DISCLAIMS ALL WARRANTIES AND CONDITIONS,
 EXPRESS OR IMPLIED, INCLUDING (WITHOUT LIMITATION) WARRANTIES OF
 MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND
 TITLE.
+
+MariaDB hereby grants you permission to use this License's text to license
+your works, and to refer to it using the trademark "Business Source License",
+as long as you comply with the Covenants of Licensor below.
+
+Covenants of Licensor
+
+In consideration of the right to use this License's text and the "Business
+Source License" name and trademark, Licensor covenants to MariaDB, and to all
+other recipients of the licensed work to be provided by Licensor:
+
+1. To specify as the Change License the GPL Version 2.0 or any later version,
+   or a license that is compatible with GPL Version 2.0 or a later version,
+   where "compatible" means that software provided under the Change License can
+   be included in a program with software provided under GPL Version 2.0 or a
+   later version. Licensor may specify additional Change Licenses without
+   limitation.
+
+2. To either: (a) specify an additional grant of rights to use that does not
+   impose any additional restriction on the right granted in this License, as
+   the Additional Use Grant; or (b) insert the text "None".
+
+3. To specify a Change Date.
+
+4. Not to modify this License in any other way.

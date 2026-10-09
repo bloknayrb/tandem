@@ -28,6 +28,13 @@ import { TRIAL_DAYS } from "../../src/shared/constants.js";
  * loosely enough to survive rewording — which a fixed-substring assertion would
  * not, and a reworded claim is precisely the moment drift gets introduced.
  *
+ * "First launch" is the third context word because `LICENSE` names the period
+ * by its clock rather than by its purpose: since the 2026-10-09 rewrite its
+ * clause reads "for up to 14 days from the first launch", with neither "trial"
+ * nor "evaluation" in the paragraph. Without that word the LICENSE presence
+ * check below would fail, and dropping LICENSE from `CLAIM_FILES` instead would
+ * stop checking the one file that is the reason this test exists.
+ *
  * The presence assertion is the other half: without it, deleting the sentence
  * passes. A file that stops stating the trial length at all is a change
  * someone should make on purpose.
@@ -38,8 +45,10 @@ const ROOT = path.resolve(__dirname, "../..");
 /** Files that state the trial length to a human. */
 const CLAIM_FILES = ["LICENSE", "README.md", "docs/licensing-explained.md"] as const;
 
-/** A paragraph is about the trial if it says so. */
-const TRIAL_CONTEXT = /trial|evaluat/i;
+/** A paragraph is about the trial if it says so, or names the trial's clock. */
+// `\s+`, not a space: LICENSE wraps its Parameters at a fixed column, and the
+// phrase falls across a line break there ("the first\n<indent>launch").
+const TRIAL_CONTEXT = /trial|evaluat|first\s+launch/i;
 
 /** `14 days`, `14-day`, `14 day` — the shapes prose actually uses. */
 const DAY_COUNT = /(\d+)[\s-]+day/gi;
@@ -66,7 +75,7 @@ describe("trial-length claims track TRIAL_DAYS", () => {
   it.each(CLAIM_FILES)("%s states the trial length at least once", (file) => {
     expect(
       collectClaims(file).length,
-      `${file} no longer states a trial length in any paragraph mentioning a trial or evaluation. ` +
+      `${file} no longer states a trial length in any paragraph mentioning a trial, evaluation or first launch. ` +
         `If that is deliberate, remove it from CLAIM_FILES in this test and say why.`,
     ).toBeGreaterThan(0);
   });

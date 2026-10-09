@@ -83,11 +83,16 @@ paste it in one go.
 ## Before any of that: the public beta is free
 
 Everything on this page describes v1.0 and later. **Every pre-1.0 release is free
-to use, with no time limit and nothing to activate** — the BUSL Additional Use
-Grant in [LICENSE](../LICENSE) says so in as many words, so this is a term you
-are granted rather than an enforcement gap you are getting away with. It is also
-not enforced: the gate ships dark, so a beta build has no trial clock running at
-all and the three states below are unreachable in it.
+for personal use and individual self-hosting, with no time limit and nothing to
+activate.** That is the first paragraph of the BUSL Additional Use Grant in
+[LICENSE](../LICENSE), so it is a term you are granted rather than an enforcement
+gap you are getting away with. The grant also reaches back: it covers every
+pre-1.0 release that shipped under an earlier wording of the licence, including
+v0.14.2 to v0.25, whose own `LICENSE` offered only a thirty-day evaluation. Releases
+before v0.11.0, and the v0.11.0 to v0.14.3 desktop builds whose package metadata
+said MIT, are MIT-licensed. None of it is enforced: the gate ships dark, so a
+beta build has no trial clock running at all and the three states below are
+unreachable in it.
 
 At v1.0 the gate flips and the 14-day trial starts for new installs. **Beta users
 are grandfathered with a free license and skip the trial entirely** — see the
@@ -99,12 +104,26 @@ and therefore no list of beta users to work from.
 1. **Trial** — 14 days from first launch. Everything works. A banner counts down.
 2. **Licensed** — you activated a key. Everything works, forever.
 3. **Restricted** — the trial ended and there's no license. **Your documents are
-   never held hostage:** you can still open them, read them, export them, and
-   talk to Claude about them. What stops is Tandem's own editing.
+   never held hostage:** Tandem stays a working editor. You can open, edit, save
+   and export your documents. What a key adds is the AI features: Claude (or any
+   other agent) over the MCP server, the chat panel and local models. The
+   [LICENSE](../LICENSE) grants exactly that: v1.0 and later may be used without
+   a key, for personal use and individual self-hosting, provided you do not use
+   the AI features.
 
 That third one matters and is easy to get wrong, so to be blunt: **we do not
-lock you out of your own files.** They're plain files on your disk. Tandem is
-the thing that stops editing them; nothing stops you opening them anywhere else.
+lock you out of your own files.** They're plain files on your disk, and nothing
+stops you opening them anywhere else.
+
+**The shipped strings still describe the old gate.** The in-product copy for
+the restricted state was written for the earlier design, where documents went
+read-only and chat stayed open: the license wall
+(`src/client/components/LicenseWall.svelte`), the MCP refusal
+(`src/server/mcp/license-gate.ts`) and the CLI status text
+(`src/cli/license.ts`). Neither the code nor that copy has changed yet; both
+move with #1521, which implements ADR-040's 2026-08-18 amendment. Until then
+this section describes the licence and the target design, not the build. None
+of it is reachable while the gate ships dark.
 
 ## If something goes wrong
 
@@ -595,9 +614,10 @@ Worth stating plainly, because they look like bugs:
   actually prompts it (mail quarantine).
 - **A commercial SKU.** `issue()` hardcodes the type to `personal` (or
   `grandfathered`), so a commercial purchase would be **silently issued a
-  personal licence** rather than rejected. Organisational use is therefore
-  unsellable today and checkout copy must exclude it explicitly, until an
-  SKU→type map exists.
+  personal licence** rather than rejected. A personal key already covers an
+  employee on their own device (`LICENSE` defines personal use as one natural
+  person's), so what is unsellable today is a shared or hosted deployment, and
+  checkout copy must exclude that explicitly until an SKU→type map exists.
 - **Atomicity on concurrent deliveries.** Workers KV has no compare-and-swap.
   `issue()` and `revoke()` each re-read immediately before their first commit,
   which narrows the race to one KV round trip but does not close it. Closing it
