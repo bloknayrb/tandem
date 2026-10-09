@@ -73,7 +73,7 @@ jobs:
           CONF=$(node -p "require('./src-tauri/tauri.conf.json').version")
           echo "tag=$TAG  tauri.conf.json=$CONF"
           if [ "$TAG" != "v$CONF" ]; then
-            echo "::error::tag $TAG does not match tauri.conf.json version $CONF — bump all six surfaces before tagging"
+            echo "::error::tag $TAG does not match tauri.conf.json version $CONF — bump version surfaces 1-6 (release skill) before tagging"
             exit 1
           fi
 

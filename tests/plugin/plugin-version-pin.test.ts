@@ -29,7 +29,8 @@
  *     that belongs to no version. This surface is the one exception to
  *     "matches package.json": see its test below for why it may lag by one.
  *
- * This test fails CI the moment any of them diverges from package.json.
+ * This test fails CI the moment any of them diverges from package.json
+ * (the marketplace ref aside, which may trail it by one release).
  * (`src/server/integrations/apply.ts` build-injects the version from package.json
  * via tsup defines, so it cannot drift and needs no assertion here.)
  */
@@ -126,7 +127,7 @@ describe("plugin/version pin drift guard", () => {
     // gitignored — a github plugin clone carries no built monitor binary, while
     // npm ships dist, so npx delivers it. The pin lives in a shell-string
     // `command`, invisible to the mcpServers args-walker above, so it needs its
-    // own guard or it silently rots on the next six-surface release bump.
+    // own guard or it silently rots on the next release bump.
     const monitors = plugin.experimental?.monitors ?? [];
     const npxMonitors = monitors.filter((m) => m.command?.includes("tandem-editor"));
     // Guards against the pin being dropped to a bare `tandem-editor`, or the

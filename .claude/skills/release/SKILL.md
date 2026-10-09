@@ -79,9 +79,11 @@ other six.
    version. Why it exists at all: the LICENSE defines a version of the Licensed
    Work as a release on the Releases page, and without a `ref` the plugin
    installs from the default branch, a copy that belongs to no version.
-   Claude Code clones the tag, and detects the update by the tagged
-   `plugin.json`'s `version`, so users get the new plugin once master's
-   marketplace names the new tag.
+   Claude Code clones the tag (measured 2026-10-09: an isolated install with
+   `ref: v0.28.0` recorded the tag's commit and version 0.28.0). Per the
+   plugin docs, updates are detected by the cloned `plugin.json`'s `version`,
+   so users should get the new plugin once master's marketplace names the new
+   tag; that update path has not been exercised.
 
    `plugin-version-pin.test.ts` allows this ref to be `v<package.json version>`
    or the previous stable release (by `CHANGELOG.md` heading), so the bump PR
@@ -272,10 +274,12 @@ other six.
    `.claude-plugin/marketplace.json` to `v<version>`. Only after all three hold:
    - the tag exists on the remote: `git ls-remote --tags origin v<version>`;
    - the release is published (step 7), not a draft;
-   - npm serves the version: `npm view tandem-editor@<version> version`. The
+   - npm serves the version: `npm view tandem-editor@<version> version --prefer-online`. The
      tagged `plugin.json` launches `npx -y tandem-editor@<version>`, so
      pointing the plugin at the tag before npm has it ships an MCP server that
-     cannot start.
+     cannot start. The registry has lagged ~7 minutes behind a green publish
+     before (v0.26.0), so check with `--prefer-online` and don't merge on the
+     first green workflow alone.
 
    Branch → PR → CI green → merge, like any change. Until it merges, plugin
    users stay on the previous release, which is the intended state between the
