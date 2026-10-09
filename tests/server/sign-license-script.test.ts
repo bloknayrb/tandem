@@ -9,6 +9,11 @@
  * `Ok(None)`, and the app says **"You're up to date."** permanently while
  * starved of updates.
  *
+ * The cause was the missing KV entitlement, not the null window itself: since
+ * 2026-10-09 (ADR-040, decision A5) every key includes all future updates, so a
+ * null window is the intended default for every type, and what keeps D1 closed
+ * is that the script now writes the entitlement and exits non-zero if it can't.
+ *
  * Both halves are tested here: the expiry default, and the entitlement write.
  */
 import { describe, expect, it, vi } from "vitest";
@@ -18,11 +23,10 @@ import { writeLicenseEntitlement } from "../../src/server/license/kv-store.js";
 const NOW = new Date("2026-01-01T00:00:00.000Z");
 
 describe("resolveExpiresAt", () => {
-  it("defaults a personal license to a 365-day update window, NOT null", () => {
-    // The whole point: an omitted --expires must not mean "forever".
-    const got = resolveExpiresAt(undefined, "personal", NOW);
-    expect(got).not.toBeNull();
-    expect(got).toBe(new Date("2027-01-01T00:00:00.000Z").toISOString());
+  it("defaults to a null update window: every key includes all future updates", () => {
+    // Decision A5 (2026-10-09). This asserted a 365-day default until then; the
+    // issuance Worker mints paid keys with the same null window.
+    expect(resolveExpiresAt(undefined, NOW)).toBeNull();
   });
 
   it('rejects a literal "true" rather than silently treating it as omitted', () => {
@@ -30,36 +34,30 @@ describe("resolveExpiresAt", () => {
     // leaked the parser's encoding into this otherwise-pure date function. It
     // now yields a boolean, and `str()` maps that to `undefined` — so anything
     // reaching here as the string "true" is genuinely bad input.
-    expect(() => resolveExpiresAt("true", "personal", NOW)).toThrow(RangeError);
+    expect(() => resolveExpiresAt("true", NOW)).toThrow(RangeError);
   });
 
   it("rejects prefix-numeric input instead of silently truncating it", () => {
     // `parseInt` read "30days" as 30 and "1e5" as 1 — both silently wrong for a
     // flag that decides how long a customer receives updates.
-    expect(() => resolveExpiresAt("30days", "personal", NOW)).toThrow(RangeError);
-    expect(() => resolveExpiresAt("1e5", "personal", NOW)).toThrow(RangeError);
-  });
-
-  it("gives a grandfathered license a null window — it never expires", () => {
-    // Matches the issuance Worker: `updateWindowEnd = grandfathered ? null : …`.
-    expect(resolveExpiresAt(undefined, "grandfathered", NOW)).toBeNull();
+    expect(() => resolveExpiresAt("30days", NOW)).toThrow(RangeError);
+    expect(() => resolveExpiresAt("1e5", NOW)).toThrow(RangeError);
   });
 
   it("honours an explicit day count", () => {
-    expect(resolveExpiresAt("30", "personal", NOW)).toBe(
-      new Date("2026-01-31T00:00:00.000Z").toISOString(),
-    );
+    expect(resolveExpiresAt("30", NOW)).toBe(new Date("2026-01-31T00:00:00.000Z").toISOString());
   });
 
-  it("honours an explicit `never`, including for a paid type", () => {
-    expect(resolveExpiresAt("never", "personal", NOW)).toBeNull();
+  it("honours an explicit `never`", () => {
+    expect(resolveExpiresAt("never", NOW)).toBeNull();
   });
 
   it("rejects nonsense rather than silently falling back to null", () => {
-    // Silently defaulting to null here would reintroduce D1 through the back door.
-    expect(() => resolveExpiresAt("soon", "personal", NOW)).toThrow(RangeError);
-    expect(() => resolveExpiresAt("0", "personal", NOW)).toThrow(RangeError);
-    expect(() => resolveExpiresAt("-5", "personal", NOW)).toThrow(RangeError);
+    // An operator who typed a window meant one; reading a typo as "no window"
+    // would silently discard what they asked for.
+    expect(() => resolveExpiresAt("soon", NOW)).toThrow(RangeError);
+    expect(() => resolveExpiresAt("0", NOW)).toThrow(RangeError);
+    expect(() => resolveExpiresAt("-5", NOW)).toThrow(RangeError);
   });
 });
 

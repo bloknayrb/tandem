@@ -197,9 +197,14 @@ function expectRevoked(deps: TestDeps, licenseId: string): void {
  *  reason — `toBeDefined()` stopped discriminating the moment revocation began
  *  writing a key instead of removing one. */
 function expectLive(deps: TestDeps, licenseId: string): void {
-  const value = JSON.parse(deps.entitlementKv.map.get(licenseId) as string);
-  expect(value.status).toBe("personal");
-  expect(value.updateWindowEnd).not.toBeNull();
+  // Since every key includes all future updates (2026-10-09, A5) a live paid
+  // entitlement has a null window too, so the window no longer tells live from
+  // revoked: `status` does, and the exact value pins both.
+  expect(JSON.parse(deps.entitlementKv.map.get(licenseId) as string)).toEqual({
+    updateWindowEnd: null,
+    status: "personal",
+    version: LICENSE_VERSION,
+  });
 }
 
 // ===========================================================================
@@ -366,7 +371,8 @@ describe("handleIssuance: order.paid happy path", () => {
     expect(rec.type).toBe("personal");
     expect(rec.email).toBe("buyer@example.com");
     expect(rec.emailSent).toBe(true);
-    expect(rec.updateWindowEnd).not.toBeNull();
+    // Every key includes all future updates (ADR-040, 2026-10-09, A5): no window.
+    expect(rec.updateWindowEnd).toBeNull();
 
     // entitlement (no PII) written under the licenseId — typed as the canonical
     // LicenseEntitlement so shape drift is a compile error (kv-store ↔ worker
@@ -428,6 +434,25 @@ describe("handleIssuance: order.paid happy path", () => {
     for (const [entry] of deps.log.mock.calls) {
       expect(Object.keys(entry as object).sort()).toEqual(["result", "ts"]);
     }
+  });
+
+  it("a PAID key carries no update window: ledger, entitlement and signed blob all null", async () => {
+    // Positive half of decision A5 (2026-10-09): a paid key includes all future
+    // updates, so the window is null in all three places it is recorded. Before
+    // that it was one year from purchase, and this asserted the opposite.
+    await handleIssuance(makeRequest(paidBody("ord_paid"), { id: "evt_paid" }), deps);
+    const rec = ledgerRec(deps, "ord_paid");
+    expect(rec.type).toBe("personal");
+    expect(rec.updateWindowEnd).toBeNull();
+    expect(JSON.parse(deps.entitlementKv.map.get(rec.licenseId) as string)).toEqual({
+      updateWindowEnd: null,
+      status: "personal",
+      version: LICENSE_VERSION,
+    });
+    const blob = deps.sendEmail.mock.calls[0][2] as string;
+    expect(blobVerifies(blob)).toBe(true);
+    expect(decodeBlob(blob).metadata.type).toBe("personal");
+    expect(decodeBlob(blob).metadata.expiresAt).toBeNull();
   });
 
   it("grandfathered email → type grandfathered, null update window", async () => {
