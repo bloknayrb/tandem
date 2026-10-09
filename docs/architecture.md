@@ -1209,7 +1209,7 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 - `src/sentry_reporting.rs` -- Opt-in crash reporting (`TANDEM_SENTRY_DSN`)
 - `src/sidecar.rs` -- The Node sidecar's process lifecycle (Unit 11e): spawn with health-poll and exponential backoff, graceful `/api/shutdown` stop then hard kill, `restart_sidecar`, the port/exe-lock waits the updater uses, `resolve_channel_dist()` / `resolve_stdio_bridge_dist()` (which inject `TANDEM_CHANNEL_DIST` / `TANDEM_STDIO_BRIDGE_DIST` so the shim and the Claude Desktop stdio entry resolve from the resource dir; replaced `run_setup()`/`/api/setup` in #477 PR 3c-ii-c), and the Windows port-holder diagnostic that names what is squatting :3478/:3479. `SIDECAR_HEALTHY` and the pending-opens queue stay in `lib.rs` -- they are read and written under the `PendingOpens` mutex, not by this module
 - `src/sidecar_job.rs` -- Windows job-object containment for the sidecar
-- `src/uninstall_scrub.rs` -- The scrub the NSIS uninstaller hook invokes (Cowork entries, `cowork-meta.json`, firewall rules, start-at-login). Distinct from `src/cli/uninstall-scrub.ts`, which is the npm CLI's scrub (MCP entries + skill) and is never invoked by NSIS.
+- `src/uninstall_scrub.rs` -- The scrub the NSIS uninstaller hook invokes (Cowork entries, `cowork-meta.json`, firewall rules, start-at-login). Distinct from `src/cli/uninstall-scrub.ts`, which is the npm CLI's scrub (MCP entries + skill, plus Cowork entries under both Claude Desktop session roots) and is never invoked by NSIS.
 - `src/win_app_mode.rs` -- Windows app-mode detection
 
 ### stdio bridge (`src/stdio-bridge/`)

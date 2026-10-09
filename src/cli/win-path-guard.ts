@@ -10,8 +10,9 @@
  *   b.  fs.realpath() to canonicalize (safe: symlinks already rejected in (a)).
  *   c.  Reject UNC on the canonical path too (\\server\share or \\?\UNC\...;
  *       allow \\?\C:\... — see {@link isUncPath}).
- *   d.  Component-wise containment check under realpath'd %LOCALAPPDATA%
- *       (case-insensitive on Windows).
+ *   d.  Component-wise containment check under the caller's realpath'd scan
+ *       root (case-insensitive on Windows). The uninstall scrub passes each
+ *       Cowork sessions root, mirroring the Rust scan's canonical root.
  *
  * **(a0) is the #1417 fix.** The UNC check used to exist only at (c), testing
  * `real` — the *output* of `realpath` — so `lstat` and `realpath` both touched
@@ -33,14 +34,14 @@ import path from "node:path";
 type Logger = { warn: (msg: string) => void };
 
 /**
- * Validate that `candidate` is a safe workspace path contained within `realLocalAppData`.
+ * Validate that `candidate` is a safe workspace path contained within `realRoot`.
  *
  * @returns the realpath'd canonical path string on success, or null if rejected.
- * Callers are responsible for supplying a realpath'd `realLocalAppData`.
+ * Callers are responsible for supplying a realpath'd `realRoot`.
  */
 export async function assertSafeWorkspacePath(
   candidate: string,
-  realLocalAppData: string,
+  realRoot: string,
   logger?: Logger,
 ): Promise<string | null> {
   const warn = (msg: string) => logger?.warn(`[path-guard] ${msg}`);
@@ -49,7 +50,7 @@ export async function assertSafeWorkspacePath(
   // Deliberately reuses this file's own `isUncPath` and NOT the shared
   // `rejectUnsafeWindowsPrefix`: that one also rejects `\\?\C:\…`, which this
   // guard allows on purpose — Tauri's path APIs hand back extended-length local
-  // paths, and containment under %LOCALAPPDATA% is what confines them. Sharing
+  // paths, and containment under the scan root is what confines them. Sharing
   // the stricter predicate here would reject legitimate local paths, which is
   // the mirror-image of the drift #1417 is about.
   if (isUncPath(candidate)) {
@@ -78,9 +79,9 @@ export async function assertSafeWorkspacePath(
     return null;
   }
 
-  // (d) Component-wise containment under realLocalAppData (case-insensitive).
-  if (!isComponentWiseChild(real, realLocalAppData)) {
-    warn(`path outside %LOCALAPPDATA%: ${real}`);
+  // (d) Component-wise containment under realRoot (case-insensitive).
+  if (!isComponentWiseChild(real, realRoot)) {
+    warn(`path outside the scan root ${realRoot}: ${real}`);
     return null;
   }
 
@@ -138,7 +139,7 @@ async function hasSymlinkInChain(p: string, warn: (m: string) => void): Promise<
  * **Allowlist, not blacklist.** Every `\\`-rooted path is unsafe except one
  * shape: the extended-length LOCAL drive path `\\?\C:\…` that Tauri's path
  * APIs hand back on Windows, which this guard permits on purpose and then
- * confines by realpath'd containment under %LOCALAPPDATA%.
+ * confines by realpath'd containment under the caller's scan root.
  *
  * The previous version enumerated the bad forms, and its defect was that it
  * treated the whole `\\?\` namespace as allowed once a literal-cased `UNC\`

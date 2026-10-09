@@ -818,8 +818,9 @@ export async function startMcpServerHttp(
   // reaches that line, /api/* included, passes through the SDK's Host check, and it is
   // registered before registerApiRoutes attaches lanAwareApiMiddleware per route. The
   // real /api chain is therefore:
-  //     authMiddleware -> enforceLoopbackMutation -> mcpApp's express.json +
-  //     hostHeaderValidation -> the route's lanAwareApiMiddleware -> handler
+  //     authMiddleware -> enforceLoopbackMutation -> mcpApp's hostHeaderValidation +
+  //     express.json -> the route's lanAwareApiMiddleware -> handler
+  // (SDK 1.31 moved express.json after the Host check; before that it ran first.)
   // The SDK check fires first and answers with a JSON-RPC body ("Invalid Host: evil.com");
   // lanAwareApiMiddleware narrows it further per route, rejecting hosts the SDK's list
   // admits (e.g. "localhost:PORT" and "[::1]:PORT") with {"error":"FORBIDDEN"}. Reading a

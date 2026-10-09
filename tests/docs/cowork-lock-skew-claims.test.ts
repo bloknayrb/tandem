@@ -47,9 +47,16 @@ describe("Cowork lock version-skew residual (#1600)", () => {
     expect(file, "positive control: cowork_atomic_json.rs must be in the walk").toBeDefined();
     const code = file?.code ?? "";
 
-    const fnAt = code.indexOf("pub fn with_locked_json");
+    // Since #2144 the loop lives in `acquire_plugin_lock`, which the temp
+    // sweep shares; `with_locked_json` must still take its lock through it.
+    const writerAt = code.indexOf("pub fn with_locked_json");
+    expect(writerAt).toBeGreaterThan(-1);
+    const writer = code.slice(writerAt, code.indexOf("\nfn ", writerAt));
+    expect(writer).toContain("acquire_plugin_lock(path)?");
+
+    const fnAt = code.indexOf("fn acquire_plugin_lock");
     expect(fnAt).toBeGreaterThan(-1);
-    const body = code.slice(fnAt, code.indexOf("\nfn ", fnAt));
+    const body = code.slice(fnAt, code.indexOf("\n}\n", fnAt));
     const loopAt = body.indexOf("loop {");
     const openAt = body.indexOf("open_lockfile(&lock_path)");
     expect(loopAt, "backoff loop not found").toBeGreaterThan(-1);

@@ -1315,33 +1315,28 @@ pub(crate) fn cowork_get_status() -> Result<serde_json::Value, String> {
                 absent_status
             };
 
-            // Read-only check: does known_marketplaces.json exist?
-            let marketplaces_file = ws_path.join("cowork_plugins").join("known_marketplaces.json");
-            let marketplaces_status = if marketplaces_file.exists() {
-                match std::fs::read_to_string(&marketplaces_file)
-                    .ok()
-                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                {
-                    Some(_) => "ok",
-                    _ => "failed",
+            // Read-only checks: do known_marketplaces.json and
+            // cowork_settings.json exist and parse? No-follow reads (#2144):
+            // `exists()` and `read_to_string` followed a link at either file or
+            // at `cowork_plugins`. A link is refused and reads as "failed".
+            let file_status = |name: &str| {
+                let path = ws_path.join("cowork_plugins").join(name);
+                match crate::cowork_atomic_json::read_plugin_file(&path) {
+                    Ok(None) => absent_status,
+                    Ok(Some(s)) => match serde_json::from_str::<serde_json::Value>(&s) {
+                        Ok(_) => "ok",
+                        Err(_) => "failed",
+                    },
+                    Err(e) => {
+                        // Path and error only; never the contents.
+                        // Debug: this runs on every 30 s status poll.
+                        log::debug!("[cowork] cannot read {}: {e}", path.display());
+                        "failed"
+                    }
                 }
-            } else {
-                absent_status
             };
-
-            // Read-only check: does cowork_settings.json exist?
-            let settings_file = ws_path.join("cowork_plugins").join("cowork_settings.json");
-            let cowork_settings_status = if settings_file.exists() {
-                match std::fs::read_to_string(&settings_file)
-                    .ok()
-                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                {
-                    Some(_) => "ok",
-                    _ => "failed",
-                }
-            } else {
-                absent_status
-            };
+            let marketplaces_status = file_status("known_marketplaces.json");
+            let cowork_settings_status = file_status("cowork_settings.json");
 
             serde_json::json!({
                 "workspaceId": workspace_id,
