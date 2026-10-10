@@ -110,8 +110,9 @@ tandem activate ./jane.license
 ```
 
 …or, once the GUI ships, **Settings → License → Activate** (paste field). Confirm
-with `tandem license` — it prints `Status: licensed`, the licensee, and the
-update window even while enforcement still ships dark.
+with `tandem license` — it prints `Status: licensed`, the licensee, and
+`Updates: all future updates included` (a hand-signed `--expires` key shows its
+window instead) even while enforcement still ships dark.
 
 > **Privacy:** the local signing script prints the licensee email to *your*
 > console (fine). Any **server/log** record of issuance must log the license
