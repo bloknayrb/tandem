@@ -402,7 +402,7 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
 
 ## Questions left to the licensor
 
-*Update 2026-10-09:* three of the four are settled. The L3 prohibitions are gone, because the grant is recast (A0). Transfer is left out of the terms (A2), which leaves only the narrower question of whether terms of sale could limit devices. The earlier desktop releases are accepted as MIT (decision C2). Contribution rights remain open.
+*Update 2026-10-09:* two are settled, one is narrowed and one is open. Settled: the L3 prohibitions are gone, because the grant is recast (A0), and the earlier desktop releases are accepted as MIT (decision C2). Narrowed: transfer is left out of the terms (A2), which leaves only whether terms of sale could limit devices. Open: contribution rights.
 
 Four legal questions are left to the licensor. They are noted where they arise: whether the grant's two prohibitions restrict the base grant (L3), whether terms of sale could still limit devices or transfer (L3), and the position of the earlier desktop releases (C8). The fourth has no finding of its own here:
 
