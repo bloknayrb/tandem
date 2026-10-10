@@ -1,11 +1,15 @@
 {
-  "$comment": "Linked crates that ship prebuilt native objects (.a/.dll/.dylib/.lib/.o/.obj/.so). Root licence files say nothing about whose code those objects are, so the build fails on any such crate not listed here. `extraText` names an override-format file under overrides/ whose text is added to the crate's entry; `why` says whose code the objects are. See applyNativeCode() in generate.mjs.",
+  "$comment": "Linked crates that ship prebuilt native objects (.a/.dll/.dylib/.lib/.o/.obj/.so) or compile in a non-Rust code file over 4 KB (include_str!/include_bytes! of .js/.mjs/.wasm/.css/.html). Root licence files say nothing about whose code that is, so the build fails on any such crate not listed here. `extraText` names an override-format file under overrides/ whose text is added to the crate's entry; `why` says whose code it is. See applyNativeCode() in generate.mjs.",
   "entries": {
     "ring": {
       "why": "pregenerated/*.o are assembled from ring's own crypto/ perlasm sources (OpenSSL/BoringSSL-derived, Apache-2.0), which its root LICENSE, LICENSE-BoringSSL and LICENSE-other-bits already cover."
     },
     "windows_x86_64_msvc": {
       "why": "lib/windows.*.lib is the windows-rs project's import library for Windows system DLLs (description: \"Import lib for Windows\"), under the crate's own license-mit / license-apache-2.0."
+    },
+    "tauri-plugin-sentry": {
+      "why": "src/lib.rs include_str!s dist/inject.min.js, a minified @sentry/browser 10.8.0 build by Sentry, compiled into the binary.",
+      "extraText": "native/tauri-plugin-sentry.txt"
     },
     "webview2-com-sys": {
       "why": "x64/arm64/x86 WebView2LoaderStatic.lib and WebView2Loader.dll are Microsoft's, from the WebView2 SDK NuGet package; the MSVC build links the static loader.",

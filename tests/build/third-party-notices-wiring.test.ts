@@ -183,7 +183,10 @@ describe("desktop bundle", () => {
       (j.strategy?.matrix?.include ?? []).map((e) => e.args ?? ""),
     );
     expect(args.length).toBeGreaterThan(0);
-    for (const a of args) expect(a).not.toMatch(/--features|--all-features|(^|\s)-F/);
+    // --config / -c merges extra Tauri config the generator does not read.
+    for (const a of args) {
+      expect(a).not.toMatch(/--features|--all-features|(^|\s)-F|--config|(^|\s)-c(\s|$)/);
+    }
     // ...and tauri-action passes exactly those args, nothing added.
     const [, job] = Object.entries(
       workflow(".github/workflows/tauri-release.yml").jobs as Record<string, Job>,

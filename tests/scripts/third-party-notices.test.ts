@@ -161,6 +161,10 @@ describe("licenceCovered", () => {
     expect(licenceCovered("LGPL-2.1-or-later", [MIT])).toBe(true);
     expect(licenceCovered("MIT", [])).toBe(false);
   });
+
+  it("licenceFullyCovered never counts an unknown id as reproduced", () => {
+    expect(licenceFullyCovered("MIT OR LGPL-2.1-only", [MIT])).toBe(false);
+  });
 });
 
 describe("licence file discovery", () => {
@@ -177,6 +181,8 @@ describe("licence file discovery", () => {
   writeFileSync(join(pkg, "NOTICE.md"), "notice");
   writeFileSync(join(pkg, "README.md"), "not a licence");
   writeFileSync(join(pkg, "licenseChecker.js"), "code, not a licence");
+  writeFileSync(join(pkg, "license_header.js"), "code that matches the name pattern"); // jszip's case
+  writeFileSync(join(pkg, "UNLICENSE"), "an Unlicense option");
   writeFileSync(join(pkg, "build", "THIRD-PARTY-LICENSES.txt"), "vendored");
   writeFileSync(join(pkg, "LICENSE-THIRD-PARTY"), "vendored too");
   mkdirSync(join(pkg, "src", "spin"), { recursive: true });
@@ -189,6 +195,7 @@ describe("licence file discovery", () => {
       "LICENSE",
       "LICENSE-THIRD-PARTY",
       "NOTICE.md",
+      "UNLICENSE",
       "license-apache-2.0",
     ]);
     expect(files[0].text).toBe("MIT License\n\nCopyright (c) Someone");

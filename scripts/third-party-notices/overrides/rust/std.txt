@@ -1,10 +1,9 @@
 Source: https://github.com/rust-lang/rust/blob/1.98.1/COPYRIGHT, LICENSE-MIT and LICENSE-APACHE
 License: MIT OR Apache-2.0
 Note: the Rust standard library is statically linked into the desktop app and tandem-reaper. The texts were copied
-from Rust 1.98.1; the version above is the compiler that built this file. Not listed separately: the crates the
-standard library itself links (hashbrown, libc, compiler_builtins, memchr, addr2line, gimli, object, miniz_oxide,
-adler2, rustc-demangle, cfg-if, unwind), whose licences are MIT and/or Apache-2.0, with compiler_builtins also
-carrying LLVM compiler-rt code under Apache-2.0 WITH LLVM-exception.
+from Rust 1.98.1; the version above is the rustc on the machine that generated this file. This entry does not
+reproduce the separate licences of the crates the standard library itself links (among them hashbrown, libc,
+compiler_builtins, memchr, addr2line, gimli, object, miniz_oxide, adler2, rustc-demangle, cfg-if and unwind).
 ---
 Short version for non-lawyers:
 
