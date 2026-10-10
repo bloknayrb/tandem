@@ -15,7 +15,7 @@
  * able to neuter one.
  */
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -23,6 +23,10 @@ import { parse } from "yaml";
 
 const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "../..");
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
+const walk = (dir: string): string[] =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)],
+  );
 
 const GEN = "node scripts/third-party-notices/generate.mjs";
 
@@ -69,6 +73,29 @@ describe("npm tarball", () => {
 // No pin on tsup's `sourcemap: true`: the generator refuses any dist bundle
 // without an index.js.map, at build time, which is stronger than a config read.
 describe("bundle traces", () => {
+  it("client CSS pulls nothing from node_modules by @import or url(), which the trace cannot see", () => {
+    // A JS import of a package's CSS shows up in the chunk trace; a CSS
+    // `@import` does not (verified in a scratch Vite 8 build), and the
+    // generator accepts assets/*.css without a trace on the strength of this.
+    const files = [
+      join(ROOT, "index.html"),
+      ...walk(join(ROOT, "src", "client")).filter((f) => /\.(css|svelte|html)$/.test(f)),
+    ];
+    expect(files.length).toBeGreaterThan(10);
+    const offenders: string[] = [];
+    for (const f of files) {
+      const text = readFileSync(f, "utf8");
+      for (const m of text.matchAll(/@import\s+(?:url\()?\s*["']?([^"')\s;]+)/g)) {
+        if (!/^\.\.?\//.test(m[1]) || m[1].includes("node_modules"))
+          offenders.push(`${f}: ${m[0]}`);
+      }
+      for (const m of text.matchAll(/url\(\s*["']?[^"')]*node_modules[^"')]*/g)) {
+        offenders.push(`${f}: ${m[0]}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it("the Vite client build carries the trace plugin, writing after the files land", () => {
     const vite = read("vite.config.ts");
     expect(vite).toMatch(/plugins:\s*\[[^\]]*\bthirdPartyTrace\(\)/);
@@ -136,6 +163,19 @@ describe("desktop bundle", () => {
     const listed = [...block.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
     expect(matrix.length).toBeGreaterThan(0);
     expect([...listed].sort()).toEqual([...new Set(matrix)].sort());
+  });
+
+  it("no release leg passes cargo features, which the crate walk would not see", () => {
+    // walkCrates resolves default features only; a `--features` in the matrix
+    // `args` would link crates the notices never list.
+    const wf = workflow(".github/workflows/tauri-release.yml") as unknown as {
+      jobs: Record<string, { strategy?: { matrix?: { include?: Array<{ args?: string }> } } }>;
+    };
+    const args = Object.values(wf.jobs).flatMap((j) =>
+      (j.strategy?.matrix?.include ?? []).map((e) => e.args ?? ""),
+    );
+    expect(args.length).toBeGreaterThan(0);
+    for (const a of args) expect(a).not.toMatch(/--features|(^|\s)-F(\s|$)|--all-features/);
   });
 
   it("the sidecar download extracts Node's LICENSE, which desktop mode requires", () => {

@@ -1,8 +1,7 @@
 Source: https://github.com/spdx/license-list-data/blob/main/text/MPL-2.0.txt
 License: MPL-2.0
-Note: selectors (https://github.com/servo/stylo, directory selectors/) is MPL-2.0 and its crate ships
-no licence file; the licence text given for it is the standard MPL-2.0 text. Its source code is available at
-https://crates.io/crates/selectors and in that repository.
+Note: selectors (https://github.com/servo/stylo, directory selectors/) is MPL-2.0 and its crate ships no
+licence file; the licence text given for it is the standard MPL-2.0 text.
 ---
 Mozilla Public License Version 2.0
 ==================================

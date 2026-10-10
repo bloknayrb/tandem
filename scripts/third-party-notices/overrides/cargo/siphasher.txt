@@ -1,8 +1,8 @@
 Source: https://github.com/jedisct1/rust-siphash/blob/master/COPYING (copyright lines) and https://github.com/spdx/license-list-data/blob/main/text/MIT.txt (licence body)
 License: MIT/Apache-2.0
-Note: siphasher ships only a COPYING file naming its copyright holders and saying "Apache-2.0 or MIT",
-with neither licence text. Tandem elects MIT: the copyright lines are COPYING's, the body is the standard
-MIT text.
+Note: siphasher ships only a COPYING file naming its copyright holders and saying "Apache-2.0 or MIT", with
+neither licence text. The licence text reproduced for it is MIT: the copyright lines are COPYING's, the body
+is the standard MIT text.
 ---
 Copyright 2012-2016 The Rust Project Developers.
 Copyright 2016-2026 Frank Denis.

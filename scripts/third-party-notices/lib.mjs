@@ -74,23 +74,47 @@ export function readLicenceFiles(dir, extraFiles = []) {
 
 /**
  * An aggregate notices file a package ships for code it vendored, e.g.
- * @sentry/server-utils' build/THIRD-PARTY-LICENSES.txt. Searched a few levels
- * deep because such files live beside the build output, not at the root.
+ * @sentry/server-utils' build/THIRD-PARTY-LICENSES.txt.
  */
 export const BUNDLED_NOTICES_RE = /^third[-_ ]?party[-_ ]?(licen[cs]es?|notices?)(\.(txt|md))?$/i;
 
-export function findBundledNoticeFiles(root, depth = 3, prefix = "") {
+/**
+ * Licence files that cover code a package or crate VENDORED rather than its
+ * own: an aggregate third-party notices file anywhere, a root file whose name
+ * says third-party (LICENSE-THIRD-PARTY), and any licence-shaped file BELOW the
+ * root (tracing-core's src/spin/LICENSE, regex-syntax's
+ * src/unicode_tables/LICENSE-UNICODE, ring's third_party/fiat/LICENSE). That
+ * code ships, so these texts are reproduced; they never count as the
+ * component's own licence. Searched four levels deep, never into node_modules.
+ */
+export function findVendoredLicenceFiles(root, depth = 4, prefix = "") {
   const found = [];
   for (const entry of readdirSync(join(root, prefix), { withFileTypes: true })) {
     const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
     if (entry.isDirectory()) {
-      if (depth > 1 && entry.name !== "node_modules")
-        found.push(...findBundledNoticeFiles(root, depth - 1, rel));
-    } else if (BUNDLED_NOTICES_RE.test(entry.name)) {
+      if (depth > 1 && entry.name !== "node_modules" && !entry.name.startsWith(".")) {
+        found.push(...findVendoredLicenceFiles(root, depth - 1, rel));
+      }
+    } else if (
+      BUNDLED_NOTICES_RE.test(entry.name) ||
+      (prefix === "" && /third[-_ ]?party/i.test(entry.name) && LICENCE_FILE_RE.test(entry.name)) ||
+      (prefix !== "" && LICENCE_FILE_RE.test(entry.name))
+    ) {
       found.push(rel);
     }
   }
   return found.sort(byCodeUnit);
+}
+
+/**
+ * A component's licence texts: its root licence files plus `extraFiles`
+ * (own), and every vendored licence file, marked `vendored: true`.
+ */
+export function readComponentTexts(root, extraFiles = []) {
+  const vendored = new Set(findVendoredLicenceFiles(root));
+  return readLicenceFiles(root, [...extraFiles, ...vendored]).map((t) =>
+    vendored.has(t.file) ? { ...t, vendored: true } : t,
+  );
 }
 
 /** Read an npm package's identity and licence material from its root. */
@@ -111,14 +135,7 @@ export function readNpmPackage(root) {
     version: pkg.version,
     license: license || "UNKNOWN",
     repository: repository || pkg.homepage || "",
-    texts: (() => {
-      // A vendored-code notices file ships alongside, but it holds OTHER
-      // packages' licences, so it is marked and never counts as this one's.
-      const vendored = new Set(findBundledNoticeFiles(root));
-      return readLicenceFiles(root, [...vendored]).map((t) =>
-        vendored.has(t.file) ? { ...t, vendored: true } : t,
-      );
-    })(),
+    texts: readComponentTexts(root),
   };
 }
 
@@ -247,31 +264,88 @@ export function classifyLicence(expr) {
 // ── Licence text presence ───────────────────────────────────────────────────
 
 /**
- * Phrases that occur only in the FULL text of a licence. A component counts as
- * covered only when one of its texts carries one: a COPYING file that just says
- * "licensed under MIT or Apache-2.0, see LICENSE-MIT" (siphasher), or a package
- * whose only licence-shaped file is the notices of code IT vendored
- * (@sentry/server-utils), reproduces no licence and must not pass.
+ * Phrases that occur only in the FULL text of a licence, by licence family. A
+ * COPYING file that just says "licensed under MIT or Apache-2.0, see
+ * LICENSE-MIT" (siphasher), or a package whose only licence-shaped file is the
+ * notices of code IT vendored (@sentry/server-utils), carries none of them.
  */
 export const LICENCE_FINGERPRINTS = [
-  /permission is hereby granted,? free of charge/i, // MIT
-  /terms and conditions for use,? reproduction,? and distribution/i, // Apache-2.0
-  /permission to use,? copy,? modify,? and\/or distribute this software/i, // ISC, 0BSD
-  /redistribution and use in source and binary forms/i, // BSD-*
-  /mozilla public license,? version 2\.0/i, // MPL-2.0
-  /provided ['‘’]as[- ]is['‘’],? without any express or implied/i, // Zlib
-  /this is free and unencumbered software released into the public domain/i, // Unlicense
-  /cc0 1\.0 universal|creative commons legal code/i, // CC0-1.0
-  /boost software license/i, // BSL-1.0
-  /unicode license v3|unicode,? inc\.? license agreement/i, // Unicode
-  /community data license agreement/i, // CDLA
-  /blue oak model license/i,
-  /do what the fuck you want to/i, // WTFPL
-  /python software foundation license/i,
+  ["mit", /permission is hereby granted,? free of charge/i],
+  ["apache", /terms and conditions for use,? reproduction,? and distribution/i],
+  ["isc", /permission to use,? copy,? modify,? and\/or distribute this software/i],
+  ["bsd", /redistribution and use in source and binary forms/i],
+  ["mpl", /mozilla public license,? version 2\.0/i],
+  ["zlib", /provided ['‘’]as[- ]is['‘’],? without any express or implied/i],
+  ["unlicense", /this is free and unencumbered software released into the public domain/i],
+  ["cc0", /cc0 1\.0 universal|creative commons legal code/i],
+  ["bsl", /boost software license/i],
+  ["unicode", /unicode license v3|unicode,? inc\.? license agreement/i],
+  ["cdla", /community data license agreement/i],
+  ["blueoak", /blue oak model license/i],
+  ["wtfpl", /do what the fuck you want to/i],
+  ["python", /python software foundation license/i],
 ];
 
+/** Which family's text satisfies an SPDX id. An id not listed here is satisfied by any full text. */
+const ID_FAMILY = {
+  MIT: "mit",
+  "MIT-0": "mit",
+  "Apache-2.0": "apache",
+  ISC: "isc",
+  "0BSD": "isc",
+  "BSD-1-Clause": "bsd",
+  "BSD-2-Clause": "bsd",
+  "BSD-3-Clause": "bsd",
+  "MPL-2.0": "mpl",
+  Zlib: "zlib",
+  Unlicense: "unlicense",
+  "CC0-1.0": "cc0",
+  "BSL-1.0": "bsl",
+  "Unicode-3.0": "unicode",
+  "Unicode-DFS-2016": "unicode",
+  "CDLA-Permissive-2.0": "cdla",
+  "BlueOak-1.0.0": "blueoak",
+  WTFPL: "wtfpl",
+  "Python-2.0": "python",
+};
+
+/** Families whose full text appears in the component's OWN (non-vendored) texts. */
+function ownFamilies(texts) {
+  const found = new Set();
+  for (const t of texts) {
+    if (t.vendored) continue;
+    for (const [family, re] of LICENCE_FINGERPRINTS) if (re.test(t.text)) found.add(family);
+  }
+  return found;
+}
+
 export function hasFullLicenceText(texts) {
-  return texts.some((t) => !t.vendored && LICENCE_FINGERPRINTS.some((re) => re.test(t.text)));
+  return ownFamilies(texts).size > 0;
+}
+
+/**
+ * True when the component's own texts reproduce a licence for every term the
+ * expression requires: each term of an AND, at least one option of an OR.
+ * "(MIT AND Zlib)" with only an MIT file is NOT covered. An unparseable or
+ * unknown expression needs at least one full text.
+ */
+export function licenceCovered(expr, texts) {
+  const families = ownFamilies(texts);
+  if (families.size === 0) return false;
+  let tree;
+  try {
+    tree = parseSpdx(expr);
+  } catch {
+    return true;
+  }
+  const walk = (node) => {
+    if (node.id) {
+      const family = ID_FAMILY[node.id];
+      return family === undefined || families.has(family);
+    }
+    return node.op === "AND" ? node.args.every(walk) : node.args.some(walk);
+  };
+  return walk(tree);
 }
 
 // ── Rendering ───────────────────────────────────────────────────────────────

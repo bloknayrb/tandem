@@ -12,8 +12,9 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   classifyLicence,
-  findBundledNoticeFiles,
+  findVendoredLicenceFiles,
   hasFullLicenceText,
+  licenceCovered,
   packageRootOf,
   readLicenceFiles,
   readNpmPackage,
@@ -102,6 +103,44 @@ describe("hasFullLicenceText", () => {
   });
 });
 
+describe("licenceCovered", () => {
+  const MIT = {
+    file: "LICENSE",
+    text: "Permission is hereby granted, free of charge, to any person",
+  };
+  const APACHE = {
+    file: "LICENSE-APACHE",
+    text: "TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION",
+  };
+  const ZLIB = {
+    file: "z",
+    text: "This software is provided 'as-is', without any express or implied warranty.",
+  };
+
+  it("needs every AND term", () => {
+    expect(licenceCovered("(MIT AND Zlib)", [MIT])).toBe(false);
+    expect(licenceCovered("(MIT AND Zlib)", [MIT, ZLIB])).toBe(true);
+  });
+
+  it("needs one OR option, and slash means OR", () => {
+    expect(licenceCovered("MIT OR Apache-2.0", [APACHE])).toBe(true);
+    expect(licenceCovered("MIT/Apache-2.0", [MIT])).toBe(true);
+  });
+
+  it("is not satisfied by a different licence's text", () => {
+    expect(licenceCovered("Apache-2.0", [MIT])).toBe(false);
+  });
+
+  it("ignores vendored texts", () => {
+    expect(licenceCovered("MIT", [{ ...MIT, vendored: true }])).toBe(false);
+  });
+
+  it("accepts any full text for an id it has no family for, and none for nothing", () => {
+    expect(licenceCovered("LGPL-2.1-or-later", [MIT])).toBe(true);
+    expect(licenceCovered("MIT", [])).toBe(false);
+  });
+});
+
 describe("licence file discovery", () => {
   const pkg = join(tmp, "node_modules", "fixture");
   mkdirSync(join(pkg, "LICENSE-dir-not-file"), { recursive: true });
@@ -117,24 +156,39 @@ describe("licence file discovery", () => {
   writeFileSync(join(pkg, "README.md"), "not a licence");
   writeFileSync(join(pkg, "licenseChecker.js"), "code, not a licence");
   writeFileSync(join(pkg, "build", "THIRD-PARTY-LICENSES.txt"), "vendored");
+  writeFileSync(join(pkg, "LICENSE-THIRD-PARTY"), "vendored too");
+  mkdirSync(join(pkg, "src", "spin"), { recursive: true });
+  writeFileSync(join(pkg, "src", "spin", "LICENSE"), "a vendored crate's licence");
   writeFileSync(join(pkg, "node_modules", "dep", "THIRD-PARTY-LICENSES.txt"), "not ours");
 
   it("reads only licence-shaped files, sorted, with text normalised", () => {
     const files = readLicenceFiles(pkg);
-    expect(files.map((f) => f.file)).toEqual(["LICENSE", "NOTICE.md", "license-apache-2.0"]);
+    expect(files.map((f) => f.file)).toEqual([
+      "LICENSE",
+      "LICENSE-THIRD-PARTY",
+      "NOTICE.md",
+      "license-apache-2.0",
+    ]);
     expect(files[0].text).toBe("MIT License\n\nCopyright (c) Someone");
   });
 
-  it("finds a vendored-code notices file below the root but not inside node_modules", () => {
-    expect(findBundledNoticeFiles(pkg)).toEqual(["build/THIRD-PARTY-LICENSES.txt"]);
+  it("finds vendored licence files: aggregates, a third-party root file, anything below the root; never node_modules", () => {
+    expect(findVendoredLicenceFiles(pkg)).toEqual([
+      "LICENSE-THIRD-PARTY",
+      "build/THIRD-PARTY-LICENSES.txt",
+      "src/spin/LICENSE",
+    ]);
   });
 
-  it("readNpmPackage carries both", () => {
+  it("readNpmPackage reproduces vendored files but marks them, so they never count as the package's own", () => {
     const p = readNpmPackage(pkg);
     expect(p).toMatchObject({ name: "fixture", version: "1.2.3", license: "MIT" });
-    expect(p.texts.map((t: { file: string }) => t.file)).toContain(
+    const vendored = p.texts.filter((t) => "vendored" in t && t.vendored).map((t) => t.file);
+    expect(vendored).toEqual([
+      "LICENSE-THIRD-PARTY",
       "build/THIRD-PARTY-LICENSES.txt",
-    );
+      "src/spin/LICENSE",
+    ]);
   });
 
   it("reports a package with no licence field as UNKNOWN rather than dropping it", () => {
