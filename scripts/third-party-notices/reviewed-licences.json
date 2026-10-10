@@ -1,0 +1,49 @@
+{
+  "$comment": "Components whose licence is outside the permissive allowlist in scripts/third-party-notices/lib.mjs. The build fails on any such component missing from this list, or listed under a different licence expression, so a new copyleft or unknown licence cannot ship unnoticed. Keys are <section>:<name>. An entry records that the component was brought to the project owner, not that it was approved: `status` says which.",
+  "entries": {
+    "npm:jszip": {
+      "license": "(MIT OR GPL-3.0-or-later)",
+      "status": "flagged 2026-10-09, awaiting the owner's decision (dual licence; MIT is available)"
+    },
+    "crate:cssparser": {
+      "license": "MPL-2.0",
+      "status": "flagged 2026-10-09, awaiting the owner's decision"
+    },
+    "crate:cssparser-macros": {
+      "license": "MPL-2.0",
+      "status": "flagged 2026-10-09, awaiting the owner's decision"
+    },
+    "crate:dtoa-short": {
+      "license": "MPL-2.0",
+      "status": "flagged 2026-10-09, awaiting the owner's decision"
+    },
+    "crate:freedesktop_entry_parser": {
+      "license": "MPL-2.0",
+      "status": "flagged 2026-10-09, awaiting the owner's decision (Linux build only)"
+    },
+    "crate:linicon": {
+      "license": "MPL-2.0",
+      "status": "flagged 2026-10-09, awaiting the owner's decision (Linux build only)"
+    },
+    "crate:linicon-theme": {
+      "license": "MPL-2.0",
+      "status": "flagged 2026-10-09, awaiting the owner's decision (Linux build only)"
+    },
+    "crate:option-ext": {
+      "license": "MPL-2.0",
+      "status": "flagged 2026-10-09, awaiting the owner's decision"
+    },
+    "crate:selectors": {
+      "license": "MPL-2.0",
+      "status": "flagged 2026-10-09, awaiting the owner's decision"
+    },
+    "crate:webpki-root-certs": {
+      "license": "CDLA-Permissive-2.0",
+      "status": "flagged 2026-10-09, awaiting the owner's decision (permissive data licence, not on the allowlist)"
+    },
+    "crate:webpki-roots": {
+      "license": "CDLA-Permissive-2.0",
+      "status": "flagged 2026-10-09, awaiting the owner's decision (permissive data licence, not on the allowlist)"
+    }
+  }
+}

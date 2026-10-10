@@ -141,8 +141,8 @@ describe("the bundled Node pin is checked for drift (#1747)", () => {
         "const url = `https://nodejs.org/dist/v${nodeVersion}/${archiveName}`;",
         "verifyCommittedChecksum(archivePath, archiveName, nodeVersion, targetTriple);",
         "await verifyChecksum(archivePath, archiveName, nodeVersion);",
-        "extractZip(archivePath, nodeVersion, info, outputPath);",
-        "extractTarGz(archivePath, nodeVersion, info, outputPath);",
+        "extractZip(archivePath, nodeVersion, info, outputPath, licencePath);",
+        "extractTarGz(archivePath, nodeVersion, info, outputPath, licencePath);",
         "recorded === nodeVersion",
       ]) {
         expect(source, `a version consumer no longer reads \`nodeVersion\`: ${consumer}`).toContain(
