@@ -8,15 +8,15 @@ Every `LICENSE:N` citation refers to the file as reviewed, at commit 585c069f. #
 
 ## Summary
 
-The Terms section of `LICENSE` matches the governing text word for word. The differences are all in the parts around it: the header line, a missing closing paragraph and the missing Covenants section, and a Notice heading with nothing under it. None of those were changed: adding or removing sections of the licence file is the licensor's call.
+The Terms section of `LICENSE` matches the governing text word for word. The differences are all in the parts around it: the header line, a missing closing paragraph and the missing Covenants section, and a Notice heading with nothing under it. None of those were changed: adding or removing sections of the licence file is the licensor's call. *Update 2026-10-09:* the licensor restored all three (A8), applied in #2174.
 
 Eight restating places disagreed with `LICENSE` and were fixed. The other consistency and build findings are reported without a fix, each with the reason. Two gaps between `LICENSE` and what the product enforces are recorded under L4 and L5.
 
-Nine findings need a decision from the licensor, because they change a Parameter. Drafted wording is given for each. None has been applied, except that #2164 removed the resale sentence (L3). Four legal questions are left to the licensor; they are listed under Questions left to the licensor. No counsel is being consulted (2026-10-09).
+Nine findings need a decision from the licensor, because they change a Parameter. Drafted wording is given for each. None has been applied, except that #2164 removed the resale sentence (L3). *Update 2026-10-09:* the licensor decided them all, and #2174 applies the `LICENSE` changes. Each finding below carries a dated note saying what was applied and what was not: L5's update-window half lands in a stacked PR, A7's plugin `ref` pin is not done, and L8 needed no change to `LICENSE`. Four legal questions are left to the licensor; they are listed under Questions left to the licensor. No counsel is being consulted (2026-10-09).
 
 Legal judgements are out of scope for this file. The licensor makes them.
 
-The three findings that matter most:
+The three findings that matter most (all three decided on 2026-10-09; see the notes under L2, L3, L4 and C5, and C6 for the build half):
 
 1. The Change Date has a cliff. Read as written, any version released on or after 2029-06-10 would be MIT on the day it ships, and protection shrinks below two years for anything released after 2027-06-10 (finding L2).
 2. The desktop app, which is the main distribution, ships no copy of the licence and shows it nowhere (finding C6).
@@ -47,6 +47,7 @@ The Terms body, from "The Licensor hereby grants" to "AND TITLE.", was compared 
 ### T1. The header line matches neither source
 
 - Tag: text (reported, not fixed)
+- Applied 2026-10-09 in #2174 (decision A8): the header is now MariaDB's current line, and `Business Source License 1.1` is the first line of the file.
 - Location: `LICENSE:1-2`
 - What is wrong: the repository says `License text copyright (c) 2020 MariaDB Corporation Ab, All Rights Reserved.` SPDX says `License text copyright © 2017 MariaDB Corporation Ab, All Rights Reserved.` The MariaDB page says `License text copyright © 2024 MariaDB plc, All Rights Reserved.` and names `MariaDB plc` as the trademark owner. So there are three years and two company names. The repository's line is the same as Terraform's. Sentry's uses 2017 and MaxScale's uses `2023 MariaDB plc`. The title line `Business Source License 1.1` also sits first in SPDX and in Sentry's file, and under `Notice` here.
 - Source: the SPDX text, line 3. The MariaDB page. Verified by reading.
@@ -55,6 +56,7 @@ The Terms body, from "The Licensor hereby grants" to "AND TITLE.", was compared 
 ### T2. The closing permission paragraph and the Covenants of Licensor are missing
 
 - Tag: text (reported, not fixed)
+- Applied 2026-10-09 in #2174 (A8): the closing permission paragraph and the Covenants of Licensor are restored from the SPDX text, with quotes normalised to the file's straight ASCII style.
 - Location: `LICENSE:68`, the end of the file
 - What is wrong: both sources continue after "AND TITLE." with a paragraph beginning `MariaDB hereby grants you permission to use this License's text to license your works`, then a section `Covenants of Licensor` with four numbered covenants. The fourth is `Not to modify this License in any other way.` The repository file stops at "AND TITLE." Terraform's file stops in the same place. Sentry's file includes the paragraph and the covenants.
 - Source: the SPDX text, final 23 lines. The MariaDB page. Verified by reading.
@@ -63,6 +65,7 @@ The Terms body, from "The Licensor hereby grants" to "AND TITLE.", was compared 
 ### T3. The Notice heading has no notice under it, and the sources disagree about whether it should
 
 - Tag: text (reported, not fixed)
+- Applied 2026-10-09 in #2174 (A8): the MariaDB Notice sentence now sits under `Notice`.
 - Location: `LICENSE:25-27`
 - What is wrong: `Notice` is followed directly by `Business Source License 1.1`. The MariaDB page puts this under Notice: `The Business Source License (this document, or the "License") is not an Open Source license. However, the Licensed Work will eventually be made available under an Open Source License, as stated in this License.` Sentry and MaxScale carry that sentence. Terraform does not. SPDX has no Notice section in the licence text at all, and holds the same sentence in its `<notes>` field, outside the text.
 - Source: the MariaDB page. The SPDX template, `<notes>`. Verified by reading.
@@ -107,6 +110,7 @@ Count: 11. Fixed: 8. They are C1 to C4, C9 to C11, and one carrier of C7. Enforc
 ### C5. The README and the explainer say the beta is free without the limit the licence puts on it (not fixed)
 
 - Tag: consistency
+- Applied 2026-10-09 in #2174 (A9): the README, the explainer, `docs/positioning.md` and `docs/security.md` now say personal use and individual self-hosting. ADR-040 §3's "Free during public beta" is left as written, and the 2026-10-09 amendment in §5 records the change.
 - Location: `README.md:178`, `docs/licensing-explained.md:85-87`, `docs/positioning.md:7`, `docs/positioning.md:106`, `docs/security.md:193`, `docs/roadmap.md:54`, `docs/decisions.md:1325`
 - What is wrong: the README says "Tandem is free during the public beta — every pre-1.0 release, with no time limit and nothing to activate." The explainer says "Every pre-1.0 release is free to use, with no time limit". `docs/positioning.md` says "free during public beta" (line 7) and "free during the public beta" (line 106), `docs/security.md:193` says "during the public beta Tandem is free", and ADR-040 §3 says "Free during public beta." (`docs/roadmap.md:54` repeats it.) `LICENSE:9-11` grants that only for "Personal use and individual self-hosting". An organisation reading the README would think it is covered. `docs/licensing-terms.md:42-45` already says an organisation is outside the grant.
 - Source: `LICENSE:9-11`. Verified by reading.
@@ -137,6 +141,7 @@ Count: 11. Fixed: 8. They are C1 to C4, C9 to C11, and one carrier of C7. Enforc
 ### C8. Earlier releases shipped different terms from the ones the docs now describe (not fixed)
 
 - Tag: consistency
+- Decided 2026-10-09 and applied in #2174 (A9, and decision C2 of 2026-10-09, not this file's finding C2): the beta grant now also covers every pre-1.0 version released under an earlier wording, and the README and the explainer say which releases shipped which terms. The MIT-era desktop builds are accepted as MIT.
 - Location: `README.md:178`, `docs/licensing-explained.md:85-88`, `docs/licensing-terms.md:85-87`, `docs/decisions.md:1329`
 - What is wrong: all four say every pre-1.0 release is free with no time limit, and the explainer adds that the grant "says so in as many words". That is true of the current file. It is not what each release's own file said:
   - v0.1.0 to v0.10.x shipped the MIT licence. On npm that range is 0.1.0 to 0.9.1; no 0.10 version was published there.
@@ -184,6 +189,7 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
 ### L1. Licensed Work names only the npm package
 
 - Tag: licensor decision
+- Applied 2026-10-09 in #2174 (A7): the drafted wording, unchanged. Pinning the plugin marketplace `ref` is not done; `docs/roadmap.md` tracks it with the other build items.
 - Location: `LICENSE:7-8`
 - What is wrong: "Tandem (tandem-editor npm package)." The desktop app, the `tandem-reaper` binary bundled with it (`src-tauri/tauri.conf.json:44-47`), the Claude Code plugin and the source repository are not named. Issue #1908 already tracks this.
 - Source: `LICENSE:7`. Issue #1908. Terraform's Parameter, for comparison: "Terraform Version 1.6.0 or later."
@@ -211,6 +217,7 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
 ### L2. The Change Date has a cliff at 2029-06-10, and "general availability" has no meaning for a beta
 
 - Tag: licensor decision
+- Decided 2026-10-09 and applied in #2174 (A6): none of the three options. The Change Date is "Four years from the date each version of the Licensed Work is first made publicly available", with no fixed date. This equals BUSL's own four-year limit. Versions already released keep the Change Date in their own `LICENSE`.
 - Location: `LICENSE:20-22`
 - What is wrong: "The earlier of 2029-06-10 or two years after the public general availability release of this specific version". Read as written, this does three things that ADR-040 section 5 does not intend. A version released after 2027-06-10 gets less than two years. A version released on or after 2029-06-10 has a Change Date that has already passed, so it is MIT on release. And a 0.x release is, by the licence's own words at `LICENSE:10-11`, "the public beta", so it is unclear whether it ever has a "general availability release" for the two years to run from. ADR-040 says the per-version clock is there for "ensuring commercial protection remains current across subsequent releases". Issue #1908 says the fixed date "never binds" if v1.0 lands in 2027. That is only true for versions released before 2027-06-10.
 - Source: `LICENSE:20-22`. `docs/decisions.md:1329`. The BUSL Terms also convert each version at "the fourth anniversary of the first publicly available distribution of a specific version", whichever is first, so no wording can go past four years. The MariaDB FAQ recommends four years for most software. Terraform uses "Four years from the date the Licensed Work is published." Sentry and MaxScale use a plain date per release. Inferred from the text; the dates were worked out by hand.
@@ -239,6 +246,7 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
 ### L3. Two sentences of the Additional Use Grant are prohibitions, not grants
 
 - Tag: licensor decision
+- Applied 2026-10-09 in #2174 (A0, A2): the draft is adopted without its closing exclusion paragraph, without "for evaluation" in clause (a), and with neither bracket. There is no transfer wording and no revocation clause.
 - Location: `LICENSE:15-16`, `LICENSE:19`
 - What is wrong: "continued use after that requires a paid license from the Licensor" and "Commercial hosting or resale of the Licensed Work is not permitted." The constraint that governs this is the second Covenant of Licensor: the Additional Use Grant must be "an additional grant of rights to use that does not impose any additional restriction on the right granted in this License". The first sentence may restrict the base grant's unlimited non-production use, and the second may restrict its right to "redistribute". Whether either does is left to the licensor. #2164 removed the second sentence on this reading; the first remains. The other projects read write their limits as conditions on the extra grant, not as free-standing prohibitions: Terraform, "You may make production use of the Licensed Work, provided Your use does not include"; Sentry, "You may make use of the Licensed Work, provided that you do not". The drafting choice is the licensor's.
 - Source: the SPDX text, Covenants of Licensor, item 2 (lines 65-67). Terraform's and Sentry's `LICENSE` files. `LICENSE:9-19`. Verified by reading.
@@ -289,6 +297,7 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
 ### L4. The evaluation clock in the licence is not the clock in the product
 
 - Tag: enforcement (the clock) and licensor decision (the wording)
+- Applied 2026-10-09 in #2174 (A4): clause (a) counts the 14 days once across versions. A new paragraph grants keyless use of v1.0 and later without the AI features, which are defined. This is keyed to the #1346 design. The merged gate and its strings still differ until #1521.
 - Location: `LICENSE:13-16`
 - What is wrong: "for evaluation for up to 14 days from first launch on a given device; continued use after that requires a paid license". Three points differ from `src/server/license/`.
   - The licence applies to each version separately (`LICENSE:47-49`), so "first launch" can be read as starting again with every new version. The product keeps one `trial.json` across versions.
@@ -303,6 +312,7 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
 ### L5. "Paid license" leaves out the free licences the README promises, and "does not expire" has no stated scope
 
 - Tag: licensor decision (the wording) and enforcement (the version scope)
+- Applied 2026-10-09 in #2174: "a license key the Licensor issued", with no version scope in `LICENSE` (the first option). The update-window side is decision A5 and lands in the stacked PR.
 - Location: `LICENSE:16-17`
 - What is wrong: continued use "requires a paid license". `README.md:178` says "Beta users are grandfathered with a free license". A grandfathered user holds a licence that is not paid. Separately, "A paid license is a one-time purchase and does not expire" does not say which versions it covers. ADR-040 section 3 intends an update window and "paid major-version upgrades" (`docs/decisions.md:1325`), and `docs/licensing-explained.md:64` says new versions come "For one year from purchase."
 - Source: the lines quoted. Verified by reading.
@@ -319,6 +329,7 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
 ### L6. "Personal use", "individual self-hosting" and "commercial hosting" are not defined
 
 - Tag: licensor decision
+- Applied 2026-10-09 in #2174 (A1, L6): both definitions as drafted, without the employee-exclusion sentence, so employees are inside. `docs/licensing-terms.md` §2 now says so.
 - Location: `LICENSE:9`, `LICENSE:13-14`, `LICENSE:19`
 - What is wrong: the grant turns on three terms it does not define. #2164 has since removed "commercial hosting", so two remain undefined. The open cases are a freelancer or employee using Tandem on paid work, a person running it on their own machine for an employer, and an organisation running it for its staff. `docs/licensing-terms.md:42-45` reads the grant as excluding organisations. `docs/decisions.md:1321` names the audience as "individuals (writers, editors, researchers, developers) on their own documents", and many of those people write for a living. `docs/positioning.md:47` and `:58` name the core use as reviewing someone else's document: "a freelancer reviewing a client's brief, an analyst checking a colleague's report", adding "Tandem is bought by the individual doing it". Terraform and Sentry both define their key terms inside the Parameter.
 - Source: the lines quoted. Verified by reading.
@@ -360,6 +371,7 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
 ### L7. The Change License is named loosely
 
 - Tag: licensor decision
+- Applied 2026-10-09 in #2174: `MIT License (SPDX identifier: MIT)`.
 - Location: `LICENSE:23`
 - What is wrong: "MIT License". The GNU list says of the Expat licence: "Some people call this license 'the MIT License,' but that term is misleading, since MIT has used many licenses". The first covenant requires a Change License compatible with GPL 2.0 or later. The GNU list calls Expat "a lax, permissive non-copyleft free software license, compatible with the GNU GPL".
 - Source: the GNU licence list. The SPDX text, covenant 1. Verified by reading.
@@ -368,6 +380,7 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
 ### L8. The Licensor is an individual, and ADR-040 plans a company
 
 - Tag: licensor decision
+- Decided 2026-10-09 (A10): no company will be formed, and Bryan stays the Licensor. `LICENSE` is unchanged on this point, and ADR-040 §6 is amended in #2174.
 - Location: `LICENSE:6`, `LICENSE:8`
 - What is wrong: "Licensor: Bryan Kolb". `docs/decisions.md:1331` says "LLC + accountant before taking money." If the company sells licences, either it becomes the Licensor or it sells on the individual's behalf. `LICENSE:43-44` allows purchase from "the Licensor, its affiliated entities, or authorized resellers". Other names in the manifests differ too: `package.json:9` says `"author": "bloknayrb"`, and `.claude-plugin/plugin.json:5-7` says the author is "Tandem".
 - Source: the lines quoted. Verified by reading.
@@ -376,6 +389,7 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
 ### L9. There is no line saying how to get a different licence
 
 - Tag: licensor decision
+- Applied 2026-10-09 in #2174 (A11): the drafted line, after `Change License`.
 - Location: `LICENSE:23-25`
 - What is wrong: `LICENSE:41-44` tells a user outside the grant to "purchase a commercial license from the Licensor". The file gives no contact. Terraform, Sentry and MaxScale each add a line after the Parameters, for example Sentry's "For information about alternative licensing arrangements for the Software, please visit:". `docs/licensing-terms.md:59-61` says organisational licences cannot be sold yet, so the line would lead to a conversation and not a checkout.
 - Source: the three project files. Verified by reading.
@@ -387,6 +401,8 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
   ```
 
 ## Questions left to the licensor
+
+*Update 2026-10-09:* two are settled, one is narrowed and one is open. Settled: the L3 prohibitions are gone, because the grant is recast (A0), and the earlier desktop releases are accepted as MIT (decision C2). Narrowed: transfer is left out of the terms (A2), which leaves only whether terms of sale could limit devices. Open: contribution rights.
 
 Four legal questions are left to the licensor. They are noted where they arise: whether the grant's two prohibitions restrict the base grant (L3), whether terms of sale could still limit devices or transfer (L3), and the position of the earlier desktop releases (C8). The fourth has no finding of its own here:
 
