@@ -18,7 +18,7 @@ import { join } from "node:path";
  * crates ship lower-case names.
  */
 export const LICENCE_FILE_RE =
-  /^(?!.*\.(?:[cm]?[jt]sx?|json|map|d\.ts|rs|py|html?|css)$)(licen[cs]e|copying|notice|copyright)([.\-_].*)?$/i;
+  /^(?!.*\.(?:[cm]?[jt]sx?|json|map|d\.ts|rs|py|html?|css)$)(un)?(licen[cs]e|copying|notice|copyright)([.\-_].*)?$/i;
 // (The lookahead keeps code out: jszip ships lib/license_header.js.)
 
 /** Code-unit comparison: `localeCompare` varies with the machine's ICU data. */
@@ -342,7 +342,8 @@ export function licenceFullyCovered(expr, texts) {
   const walk = (node) => {
     if (node.id) {
       const family = ID_FAMILY[node.id];
-      return family === undefined ? families.size > 0 : families.has(family);
+      // An id with no known family cannot be shown reproduced, so it fails.
+      return family !== undefined && families.has(family);
     }
     return node.args.every(walk);
   };
@@ -422,7 +423,7 @@ export function renderSection(key, title, components) {
     const fmt = (ids) => ids.map((r) => `[${key} text ${r}]`).join(", ");
     lines.push(`  Licence text: ${fmt(refs)}`);
     if (vendoredRefs.length > 0) {
-      lines.push(`  Licence texts of third-party code it includes: ${fmt(vendoredRefs)}`);
+      lines.push(`  Licence texts its package carries for code it vendors: ${fmt(vendoredRefs)}`);
     }
     lines.push("");
   }

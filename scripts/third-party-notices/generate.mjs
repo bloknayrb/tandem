@@ -346,15 +346,21 @@ function collectClientModules(dir) {
   const { chunks } = JSON.parse(readFileSync(tracePath, "utf8"));
   const onDisk = walkFiles(dir).map((f) => relative(dir, f).split("\\").join("/"));
   // The header says each bundled font's OFL text ships beside it; hold it to that.
-  const fonts = onDisk.filter((f) => /^fonts\/[^/]+\.(woff2?|ttf|otf)$/.test(f));
-  const ofl = onDisk.filter((f) => /^fonts\/OFL-[^/]+\.txt$/.test(f));
-  if (fonts.length !== ofl.length) {
-    fail(`dist/client/fonts holds ${fonts.length} font file(s) but ${ofl.length} OFL text(s)`);
-  }
-  for (const f of ofl) {
+  // Pairs by family: inter-tight-latin.woff2 needs OFL-InterTight.txt.
+  const family = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const ofl = new Map(
+    onDisk
+      .filter((f) => /^fonts\/OFL-[^/]+\.txt$/.test(f))
+      .map((f) => [family(f.slice("fonts/OFL-".length, -".txt".length)), f]),
+  );
+  for (const f of ofl.values()) {
     if (!/SIL OPEN FONT LICENSE/i.test(readFileSync(join(dir, f), "utf8"))) {
       fail(`dist/client/${f} is not an SIL Open Font License text`);
     }
+  }
+  for (const f of onDisk.filter((x) => /^fonts\/[^/]+\.(woff2?|ttf|otf)$/.test(x))) {
+    const name = family(f.slice("fonts/".length).replace(/-latin.*$|\.[^.]+$/, ""));
+    if (!ofl.has(name)) fail(`dist/client/${f} has no OFL text for its family beside it`);
   }
   for (const file of onDisk) {
     if (/\.[cm]?js$/.test(file)) {
@@ -519,8 +525,26 @@ function collectNpm() {
   return { components, byBundle };
 }
 
+/**
+ * Tauri merges tauri.<platform>.conf.json (and TAURI_CONFIG / --config) over
+ * tauri.conf.json. This script reads only tauri.conf.json, so an overlay
+ * could add resources or features it never sees. Refuse rather than guess.
+ */
+function refuseTauriConfigOverlays() {
+  const overlays = readdirSync(join(REPO, "src-tauri")).filter(
+    (f) => /^tauri\..+\.conf\.json5?$/.test(f) || f === "Tauri.toml",
+  );
+  if (overlays.length > 0 || process.env.TAURI_CONFIG) {
+    fail(
+      `Tauri config overlays present (${[...overlays, process.env.TAURI_CONFIG ? "TAURI_CONFIG" : ""].filter(Boolean).join(", ")}); ` +
+        "the notices read only tauri.conf.json. Teach desktopBundles and walkCrates to merge them first.",
+    );
+  }
+}
+
 /** Bundles the desktop app ships, read from tauri.conf.json's resources so a new one cannot be missed. */
 function desktopBundles(npm) {
+  refuseTauriConfigOverlays();
   const conf = JSON.parse(readFileSync(join(REPO, "src-tauri", "tauri.conf.json"), "utf8"));
   const names = [];
   const resources = conf.bundle?.resources ?? {};
@@ -575,6 +599,7 @@ function walkCrates(triple) {
   // `cargo metadata` resolves default features. Features passed to the Tauri
   // build (tauri.conf.json build.features; the release matrix args are pinned
   // by the wiring test) would link crates this walk never sees.
+  refuseTauriConfigOverlays();
   const tauriConf = JSON.parse(readFileSync(join(REPO, "src-tauri", "tauri.conf.json"), "utf8"));
   if (tauriConf.build?.features?.length) {
     fail(
@@ -639,6 +664,33 @@ function crateNamesOnlyElsewhere(triple, linkedHere) {
 
 const NATIVE_OBJECT_RE = /\.(a|dll|dylib|lib|o|obj|so)$/i;
 
+/**
+ * Code a crate compiles INTO the binary from a non-Rust file: tauri-plugin-sentry
+ * include_str!s a 351 KB minified @sentry/browser build. Only code-like targets
+ * over 4 KB count; README and test-data includes are not shipped code.
+ */
+const EMBEDDED_CODE_RE = /\.(c?js|mjs|wasm|css|html?)$/i;
+
+/** crate dir → ships native objects or embedded code; check-crates walks four triples. */
+const foreignCodeScan = new Map();
+
+function embedsCode(dir) {
+  const rs = walkFiles(dir).filter(
+    (f) =>
+      f.endsWith(".rs") &&
+      !/[\\/](target|tests?|examples|benches)[\\/]/.test(`/${relative(dir, f)}`),
+  );
+  for (const f of rs) {
+    const src = readFileSync(f, "utf8");
+    for (const m of src.matchAll(/include_(?:str|bytes)!\s*\(\s*"([^"]+)"\s*\)/g)) {
+      if (!EMBEDDED_CODE_RE.test(m[1])) continue;
+      const target = resolve(dirname(f), m[1]);
+      if (existsSync(target) && statSync(target).size > 4096) return true;
+    }
+  }
+  return false;
+}
+
 function hasNativeObjects(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
@@ -669,7 +721,10 @@ function applyNativeCode(crates, elsewhere) {
   const used = new Set();
   const missing = [];
   for (const c of crates) {
-    if (!hasNativeObjects(c.dir)) continue;
+    if (!foreignCodeScan.has(c.dir)) {
+      foreignCodeScan.set(c.dir, hasNativeObjects(c.dir) || embedsCode(c.dir));
+    }
+    if (!foreignCodeScan.get(c.dir)) continue;
     const entry = entries[c.name];
     if (!entry) {
       missing.push(`${c.name}@${c.version}`);
@@ -688,7 +743,7 @@ function applyNativeCode(crates, elsewhere) {
   }
   if (missing.length > 0) {
     fail(
-      `linked crate(s) ship prebuilt native objects not recorded in ${relative(REPO, NATIVE_CODE)}:\n  ` +
+      `linked crate(s) ship prebuilt native objects or embed non-Rust code not recorded in ${relative(REPO, NATIVE_CODE)}:\n  ` +
         `${missing.join("\n  ")}\nFind out whose code the objects are, and record their licence or why the crate's covers them.`,
     );
   }
@@ -818,14 +873,6 @@ function header(kind, extra = [], extraNotes = []) {
 }
 
 /**
- * Every component whose licence is not plainly permissive must be recorded in
- * reviewed-licences.json under its exact licence expression, so a new
- * copyleft, unknown or unallowlisted dependency fails the build instead of
- * shipping without anyone having looked at it. Recording one is a decision for
- * the project owner, not for this script. The full list is also written to
- * dist/.third-party/report-<mode>.json.
- */
-/**
  * The crate half of desktop mode, for every release triple, with no Node
  * sidecar needed. CI `check` runs it so a dependency bump that needs a new
  * override, native-code or reviewed-licence entry (or leaves one stale) fails
@@ -835,11 +882,19 @@ function header(kind, extra = [], extraNotes = []) {
 function runCheckCrates() {
   for (const triple of RELEASE_TRIPLES) {
     const { crates, elsewhere } = collectCrates(triple);
-    checkFlagged("crates", [["crate", crates]], elsewhere);
+    checkFlagged(`crates-${triple}`, [["crate", crates]], elsewhere);
     process.stderr.write(`[third-party-notices] ${triple}: ${crates.length} crates checked\n`);
   }
 }
 
+/**
+ * Every component whose licence is not plainly permissive must be recorded in
+ * reviewed-licences.json under its exact licence expression, so a new
+ * copyleft, unknown or unallowlisted dependency fails the build instead of
+ * shipping without anyone having looked at it. Recording one is a decision for
+ * the project owner, not for this script. The full list is also written to
+ * dist/.third-party/report-<mode>.json.
+ */
 function checkFlagged(mode, sections, onlyElsewhere = new Set()) {
   const flagged = [];
   for (const [section, components] of sections) {
@@ -954,8 +1009,12 @@ function runDesktop() {
       [`Target: ${triple}`],
       [
         "",
-        "Also not listed: code the installer formats themselves carry (the NSIS and WiX",
-        "installer runtimes on Windows, the AppImage runtime on Linux).",
+        ...(triple.includes("windows")
+          ? ["Also not listed: code the NSIS and WiX installers themselves carry."]
+          : []),
+        ...(triple.includes("linux")
+          ? ["Also not listed: the AppImage runtime, which the AppImage format itself carries."]
+          : []),
         ...(triple.includes("linux")
           ? [
               "The Linux AppImage also bundles system libraries (GTK, WebKitGTK and their",
