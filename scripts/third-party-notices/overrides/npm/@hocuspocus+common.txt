@@ -1,4 +1,5 @@
 Source: https://github.com/ueberdosis/hocuspocus/blob/main/LICENSE.md
+License: MIT
 Note: the published @hocuspocus packages ship no licence file; this is the monorepo's.
 ---
 MIT License

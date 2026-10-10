@@ -1,4 +1,5 @@
 Source: https://github.com/wravery/webview2-rs/blob/main/LICENSE
+License: MIT
 ---
 MIT License
 

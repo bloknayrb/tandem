@@ -1,4 +1,5 @@
 Source: https://github.com/OpenByteDev/dlopen2/blob/master/LICENSE
+License: MIT
 ---
 MIT License
 

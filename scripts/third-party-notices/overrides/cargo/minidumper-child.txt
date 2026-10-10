@@ -1,7 +1,8 @@
 Source: https://github.com/spdx/license-list-data/blob/main/text/Apache-2.0.txt
+License: MIT OR Apache-2.0
 Note: minidumper-child is licensed "MIT OR Apache-2.0" (its package metadata), but neither its published
 package nor its repository (https://github.com/timfish/minidumper-child) contains a licence file or copyright notice. Tandem
-elects Apache-2.0, which requires a copy of the licence and no copyright line; the text below is
+elects Apache-2.0, which requires a copy of the licence and no copyright line; the licence text given for it is
 the standard SPDX Apache-2.0 text.
 ---
 Apache License

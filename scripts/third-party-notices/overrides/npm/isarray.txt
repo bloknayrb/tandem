@@ -1,4 +1,5 @@
 Source: the License section of isarray@1.0.0's own README.md (the package ships no licence file)
+License: MIT
 ---
 (MIT)
 

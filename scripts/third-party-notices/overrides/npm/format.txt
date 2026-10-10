@@ -1,4 +1,5 @@
 Source: https://github.com/samsonjs/format/blob/main/License.md
+License: MIT
 ---
 The MIT License (MIT)
 

@@ -20,6 +20,7 @@ import {
   createWriteStream,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -198,19 +199,23 @@ function extractTarGz(archivePath, nodeVersion, info, outputPath, licencePath) {
 
   // Node's LICENSE sits at the archive root (<prefix>/LICENSE), one level up from
   // bin/node, so it needs its own extraction with --strip-components=1 — the
-  // binary's =2 would strip it away entirely.
+  // binary's =2 would strip it away entirely. A private temp dir, because a bare
+  // binaries/LICENSE would collide between two targets downloading at once.
+  const licenceTmp = mkdtempSync(join(dirname(licencePath), "_licence-"));
   try {
     execSync(
-      `tar -xzf "${archivePath}" -C "${dirname(licencePath)}" --strip-components=1 "${prefix}/LICENSE"`,
+      `tar -xzf "${archivePath}" -C "${licenceTmp}" --strip-components=1 "${prefix}/LICENSE"`,
       { stdio: "inherit" },
     );
+    renameSync(join(licenceTmp, "LICENSE"), licencePath);
   } catch (err) {
     throw new Error(
       `Failed to extract ${prefix}/LICENSE from the Node.js archive.\n` +
         `Original error: ${err.message} (exit code ${err.status})`,
     );
+  } finally {
+    rmSync(licenceTmp, { recursive: true, force: true });
   }
-  renameSync(join(dirname(licencePath), "LICENSE"), licencePath);
 }
 
 function extractZip(archivePath, nodeVersion, info, outputPath, licencePath) {

@@ -1,4 +1,5 @@
 Source: https://github.com/madsmtm/objc2/blob/main/LICENSE-MIT.txt
+License: Zlib OR Apache-2.0 OR MIT
 Note: objc2-exception-helper is "Zlib OR Apache-2.0 OR MIT" and its crate ships no licence file; Tandem elects MIT,
 whose text is the objc2 repository's.
 ---

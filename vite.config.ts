@@ -30,8 +30,11 @@ function thirdPartyTrace(): Plugin {
       const chunks: Record<string, { sha256: string; modules: string[] }> = {};
       for (const [fileName, output] of Object.entries(bundle)) {
         if (output.type !== "chunk") continue;
+        // Zero-length modules are dropped, except under node_modules: a CSS
+        // import's JS stub renders to nothing while its styles ship in a CSS
+        // asset, and over-listing a package is harmless where missing one is not.
         const modules = Object.entries(output.modules)
-          .filter(([, info]) => info.renderedLength > 0)
+          .filter(([id, info]) => info.renderedLength > 0 || id.includes("/node_modules/"))
           .map(([id]) => {
             const bare = id.split("?")[0];
             // Virtual modules (`\0vite/...`) keep their id; real files go repo-relative
