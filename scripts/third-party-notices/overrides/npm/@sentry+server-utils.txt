@@ -1,7 +1,7 @@
 Source: https://github.com/getsentry/sentry-javascript/blob/develop/LICENSE
 License: MIT
-Note: the published package ships only build/THIRD-PARTY-LICENSES.txt, which covers the code it vendors,
-not its own; this is the sentry-javascript monorepo's licence.
+Note: the published package ships only build/THIRD-PARTY-LICENSES.txt, which covers the code it vendors, not
+its own; this is the sentry-javascript monorepo's licence.
 ---
 MIT License
 

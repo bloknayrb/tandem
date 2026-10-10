@@ -1,6 +1,7 @@
 Source: https://github.com/tauri-apps/libappindicator-rs/blob/main/LICENSE-APACHE
 License: Apache-2.0 OR MIT
-Note: libappindicator-sys is "Apache-2.0 OR MIT" and its crate ships no licence file; Tandem elects Apache-2.0.
+Note: libappindicator-sys is "Apache-2.0 OR MIT" and its crate ships no licence file; The licence text
+reproduced for it is Apache-2.0.
 ---
 Apache License
                         Version 2.0, January 2004

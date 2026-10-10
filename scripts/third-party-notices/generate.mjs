@@ -42,7 +42,9 @@
  * trace, a desktop resource or externalBin it does not know, a component with
  * no FULL licence text (see LICENCE_FINGERPRINTS) and no override, an override
  * whose licence no longer matches or that nothing uses, a licence outside the
- * permissive allowlist that reviewed-licences.json does not record, a missing
+ * permissive allowlist that reviewed-licences.json does not record, a linked
+ * crate shipping prebuilt native objects that native-code.json does not
+ * record, a client file that is neither a traced chunk nor a known asset, a missing
  * positive anchor, an empty Rust closure, or a missing Node LICENSE.
  * A notices file that is silently empty or partial is the outcome this exists
  * to prevent; a red build is the cheap one.
@@ -58,11 +60,12 @@ import { DEFAULT_NODE_VERSION } from "../node-sidecar-version.mjs";
 import {
   byCodeUnit,
   classifyLicence,
-  findBundledNoticeFiles,
+  findVendoredLicenceFiles,
   hasFullLicenceText,
+  licenceCovered,
   normalizeText,
   packageRootOf,
-  readLicenceFiles,
+  readComponentTexts,
   readNpmPackage,
   renderSection,
 } from "./lib.mjs";
@@ -75,6 +78,7 @@ const NPM_NOTICES = join(DIST, "THIRD_PARTY_NOTICES.txt");
 const DESKTOP_NOTICES = join(DIST, "desktop", "THIRD_PARTY_NOTICES.txt");
 const DESKTOP_PLACEHOLDER_MARKER = "DESKTOP-SECTIONS-NOT-GENERATED";
 const REVIEWED_LICENCES = join(REPO, "scripts", "third-party-notices", "reviewed-licences.json");
+const NATIVE_CODE = join(REPO, "scripts", "third-party-notices", "native-code.json");
 
 /** dist/ subdirectories that are not shipped bundles. perf-client is excluded from `files`. */
 const NOT_BUNDLES = new Set([".third-party", "desktop", "perf-client"]);
@@ -101,10 +105,27 @@ const FIRST_PARTY_RESOURCES = new Map([
   ["../skills/", "Tandem's own Claude skill"],
   ["../CHANGELOG.md", "Tandem's own changelog"],
   ["../docs/workflows.md", "Tandem's own documentation"],
+  // No LICENSE resource ships yet; these rows let one be added without
+  // tripping this check.
   ["../LICENSE", "Tandem's own licence"],
   ["../LICENSE.txt", "Tandem's own licence"],
   ["../dist/desktop/THIRD_PARTY_NOTICES.txt", "this file"],
 ]);
+
+/**
+ * Non-script files the client build emits, and why none needs a trace:
+ * first-party HTML and images, the fonts (their OFL texts ship beside them),
+ * and the CSS Vite extracts. CSS can only carry third-party styles by import:
+ * an import from JS shows up in the chunk trace, and the wiring test refuses an
+ * `@import` from node_modules in client CSS, which the trace cannot see.
+ */
+const CLIENT_KNOWN_ASSETS = [
+  /^index\.html$/,
+  /^(favicon|logo)\.png$/,
+  /^fonts\/[^/]+\.(woff2?|ttf|otf)$/,
+  /^fonts\/OFL-[^/]+\.txt$/,
+  /^assets\/[^/]+\.css$/,
+];
 
 /** The desktop externalBins, each covered by a section of the desktop notices. */
 const EXPECTED_EXTERNAL_BINS = ["binaries/node-sidecar", "binaries/tandem-reaper"];
@@ -163,40 +184,40 @@ function walkFiles(dir) {
  * text is added to whatever partial files it does ship. An override no
  * component uses fails the build, so the set cannot rot.
  */
+function parseOverrideFile(path, label) {
+  const raw = readFileSync(path, "utf8").replace(/\r\n?/g, "\n");
+  const sep = raw.indexOf("\n---\n");
+  if (sep === -1) fail(`override ${label} has no "---" separator`);
+  const headers = {};
+  let last = null;
+  for (const line of raw.slice(0, sep).split("\n")) {
+    const m = /^(Source|License|Note):\s*(.*)$/.exec(line);
+    if (m) {
+      last = m[1];
+      headers[last] = m[2].trim();
+    } else if (last === "Note" && line.trim()) {
+      headers.Note += ` ${line.trim()}`;
+    } else if (line.trim()) {
+      fail(`override ${label} has an unknown header line: ${line}`);
+    }
+  }
+  if (!headers.Source) fail(`override ${label} has no Source: line`);
+  if (!headers.License) fail(`override ${label} has no License: line`);
+  const text = normalizeText(raw.slice(sep + 5));
+  if (!hasFullLicenceText([{ text }]))
+    fail(`override ${label} does not contain a full licence text`);
+  return { source: headers.Source, license: headers.License, note: headers.Note, text };
+}
+
 function loadOverrides(ecosystem) {
   const dir = join(OVERRIDES_DIR, ecosystem);
   const map = new Map();
   if (!existsSync(dir)) return map;
   for (const file of readdirSync(dir).sort(byCodeUnit)) {
     if (!file.endsWith(".txt")) continue;
-    const raw = readFileSync(join(dir, file), "utf8").replace(/\r\n?/g, "\n");
-    const sep = raw.indexOf("\n---\n");
-    if (sep === -1) fail(`override ${ecosystem}/${file} has no "---" separator`);
-    const headers = {};
-    let last = null;
-    for (const line of raw.slice(0, sep).split("\n")) {
-      const m = /^(Source|License|Note):\s*(.*)$/.exec(line);
-      if (m) {
-        last = m[1];
-        headers[last] = m[2].trim();
-      } else if (last === "Note" && line.trim()) {
-        headers.Note += ` ${line.trim()}`;
-      } else if (line.trim()) {
-        fail(`override ${ecosystem}/${file} has an unknown header line: ${line}`);
-      }
-    }
-    if (!headers.Source) fail(`override ${ecosystem}/${file} has no Source: line`);
-    if (!headers.License) fail(`override ${ecosystem}/${file} has no License: line`);
-    const text = normalizeText(raw.slice(sep + 5));
-    if (!hasFullLicenceText([{ text }])) {
-      fail(`override ${ecosystem}/${file} does not contain a full licence text`);
-    }
     map.set(file.slice(0, -4).replace(/\+/g, "/"), {
       file,
-      source: headers.Source,
-      license: headers.License,
-      note: headers.Note,
-      text,
+      ...parseOverrideFile(join(dir, file), `${ecosystem}/${file}`),
       used: false,
     });
   }
@@ -211,7 +232,7 @@ function loadOverrides(ecosystem) {
 function applyOverrides(components, overrides, ecosystem, otherTargets = new Set()) {
   const missing = [];
   for (const c of components) {
-    if (hasFullLicenceText(c.texts)) continue;
+    if (licenceCovered(c.license, c.texts)) continue;
     const o = overrides.get(c.name);
     if (!o) {
       const had = c.texts.length > 0 ? `only ${c.texts.map((t) => t.file).join(", ")}` : "nothing";
@@ -226,8 +247,13 @@ function applyOverrides(components, overrides, ecosystem, otherTargets = new Set
     }
     o.used = true;
     c.texts = [...c.texts, { file: `overrides/${ecosystem}/${o.file}`, text: o.text }];
+    if (!licenceCovered(c.license, c.texts)) {
+      fail(
+        `override ${ecosystem}/${o.file} still leaves a term of "${c.license}" without its licence text`,
+      );
+    }
     c.textSource = o.source;
-    if (o.note) c.notes = [o.note];
+    if (o.note) c.notes = [...(c.notes ?? []), o.note];
   }
   if (missing.length > 0) {
     fail(
@@ -307,11 +333,18 @@ function collectClientModules(dir) {
     );
   }
   const { chunks } = JSON.parse(readFileSync(tracePath, "utf8"));
-  const onDisk = walkFiles(dir)
-    .filter((f) => f.endsWith(".js"))
-    .map((f) => relative(dir, f).split("\\").join("/"));
+  const onDisk = walkFiles(dir).map((f) => relative(dir, f).split("\\").join("/"));
   for (const file of onDisk) {
-    if (!chunks[file]) fail(`dist/client/${file} has no record in the client trace — stale trace`);
+    if (/\.[cm]?js$/.test(file)) {
+      if (!chunks[file])
+        fail(`dist/client/${file} has no record in the client trace — stale trace`);
+    } else if (!CLIENT_KNOWN_ASSETS.some((re) => re.test(file))) {
+      // A worker, wasm file or stylesheet dropped into public/ ships with no
+      // trace at all. Know each kind of file, or trace it.
+      fail(
+        `dist/client/${file} is neither a traced chunk nor a known first-party asset (CLIENT_KNOWN_ASSETS)`,
+      );
+    }
   }
   const modules = [];
   for (const [file, chunk] of Object.entries(chunks)) {
@@ -362,7 +395,7 @@ function inlinedComponent(name, bundle, mod) {
   }
   inlinedTable.used.add(name);
   const hostRoot = join(REPO, "node_modules", entry.inlinedBy);
-  const hostFiles = existsSync(hostRoot) ? findBundledNoticeFiles(hostRoot) : [];
+  const hostFiles = existsSync(hostRoot) ? findVendoredLicenceFiles(hostRoot) : [];
   const esc = name.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
   for (const file of hostFiles) {
     const text = readFileSync(join(hostRoot, file), "utf8").replace(/\r\n?/g, "\n");
@@ -379,7 +412,7 @@ function inlinedComponent(name, bundle, mod) {
       name,
       version: m[1].trim(),
       license: m[2].trim(),
-      repository: /^Repository: (.+)$/m.exec(m[3])?.[1]?.trim() ?? "",
+      repository: (/^Repository: (.+)$/m.exec(m[3])?.[1]?.trim() ?? "").replace(/^undefined$/, ""),
       texts: [{ file, text: normalizeText(body) }],
       textSource: `${entry.inlinedBy}/${file} (inlined by ${entry.inlinedBy})`,
       includedIn: [],
@@ -572,6 +605,69 @@ function crateNamesOnlyElsewhere(triple, linkedHere) {
   return names;
 }
 
+const NATIVE_OBJECT_RE = /\.(a|dll|dylib|lib|o|obj|so)$/i;
+
+function hasNativeObjects(dir) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      // Test fixtures and examples never link (libloading ships tests/*.dll).
+      if (/^(target|tests?|examples|benches)$/.test(entry.name) || entry.name.startsWith(".")) {
+        continue;
+      }
+      if (hasNativeObjects(join(dir, entry.name))) return true;
+    } else if (NATIVE_OBJECT_RE.test(entry.name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * A crate can ship prebuilt native objects whose code is not the crate
+ * author's: webview2-com-sys statically links Microsoft's
+ * WebView2LoaderStatic.lib. Licence files at the crate root say nothing about
+ * that, so every linked crate that ships a native object must be recorded in
+ * native-code.json, either with the text of whoever wrote those objects
+ * (`extraText`, an override-format file under overrides/) or with why its own
+ * licence already covers them. An entry no release target needs fails too.
+ */
+function applyNativeCode(crates, elsewhere) {
+  const doc = JSON.parse(readFileSync(NATIVE_CODE, "utf8"));
+  const entries = doc.entries ?? {};
+  const used = new Set();
+  const missing = [];
+  for (const c of crates) {
+    if (!hasNativeObjects(c.dir)) continue;
+    const entry = entries[c.name];
+    if (!entry) {
+      missing.push(`${c.name}@${c.version}`);
+      continue;
+    }
+    if (!entry.why) fail(`native-code.json entry ${c.name} has no "why"`);
+    used.add(c.name);
+    if (entry.extraText) {
+      const extra = parseOverrideFile(join(OVERRIDES_DIR, entry.extraText), entry.extraText);
+      c.texts = [
+        ...c.texts,
+        { file: `overrides/${entry.extraText}`, text: extra.text, vendored: true },
+      ];
+      c.notes = [...(c.notes ?? []), extra.note ?? entry.why];
+    }
+  }
+  if (missing.length > 0) {
+    fail(
+      `linked crate(s) ship prebuilt native objects not recorded in ${relative(REPO, NATIVE_CODE)}:\n  ` +
+        `${missing.join("\n  ")}\nFind out whose code the objects are, and record their licence or why the crate's covers them.`,
+    );
+  }
+  const stale = Object.keys(entries).filter((name) => !used.has(name) && !elsewhere.has(name));
+  if (stale.length > 0) {
+    fail(
+      `stale ${relative(REPO, NATIVE_CODE)} entries (no linked crate ships native objects under them): ${stale.join(", ")}`,
+    );
+  }
+}
+
 function collectCrates(triple) {
   const byId = new Map();
   for (const { pkg: p, label } of walkCrates(triple)) {
@@ -581,7 +677,8 @@ function collectCrates(triple) {
         version: p.version,
         license: p.license ?? (p.license_file ? `SEE LICENSE IN ${p.license_file}` : "UNKNOWN"),
         repository: p.repository ?? "",
-        texts: readLicenceFiles(dirname(p.manifest_path), p.license_file ? [p.license_file] : []),
+        dir: dirname(p.manifest_path),
+        texts: readComponentTexts(dirname(p.manifest_path), p.license_file ? [p.license_file] : []),
         includedIn: [],
       });
     }
@@ -593,6 +690,7 @@ function collectCrates(triple) {
     triple,
     crates.map((c) => c.name),
   );
+  applyNativeCode(crates, elsewhere);
   applyOverrides(crates, loadOverrides("cargo"), "cargo", elsewhere);
   const tauri = crates.find((c) => c.name === "tauri");
   if (!tauri) fail("anchor crate tauri not found — the cargo walk is broken");
@@ -673,9 +771,9 @@ function header(kind, extra = [], extraNotes = []) {
     "Generated at build time by scripts/third-party-notices/generate.mjs from what this build",
     "actually contains. Do not edit.",
     "",
-    "Tandem itself is licensed under the Business Source License 1.1; see the LICENSE file",
-    "distributed with it. The software listed below is not Tandem's: each component is",
-    "included under its own licence, reproduced here as that licence requires.",
+    "Tandem itself is licensed under the Business Source License 1.1, published at",
+    "https://github.com/bloknayrb/tandem/blob/master/LICENSE. The software listed below is",
+    "not Tandem's: each component is included under its own licence, whose text follows.",
     "",
     "Not repeated here: the bundled fonts' licences (SIL Open Font License 1.1), which ship",
     "beside the font files in the client's fonts/ folder.",
@@ -736,11 +834,12 @@ function checkFlagged(mode, sections, onlyElsewhere = new Set()) {
         "Bring them to the project owner; record each only once someone has looked.",
     );
   }
-  // npm entries are checked in every mode (each mode sees every npm bundle);
+  // npm entries only in npm mode, the one that sees every npm bundle (desktop
+  // mode sees only the bundles the desktop ships);
   // crate entries only in desktop mode, and not for crates only another target links.
   const stale = Object.keys(reviewed).filter((key) => {
     if (used.has(key)) return false;
-    if (key.startsWith("npm:")) return true;
+    if (key.startsWith("npm:")) return mode === "npm";
     return mode === "desktop" && !onlyElsewhere.has(key.slice("crate:".length));
   });
   if (stale.length > 0) {

@@ -1,7 +1,7 @@
 Source: https://github.com/madsmtm/objc2/blob/main/LICENSE-MIT.txt
 License: Zlib OR Apache-2.0 OR MIT
-Note: objc2-core-foundation is "Zlib OR Apache-2.0 OR MIT" and its crate ships no licence file; Tandem elects MIT,
-whose text is the objc2 repository's.
+Note: objc2-core-foundation is "Zlib OR Apache-2.0 OR MIT" and its crate ships no licence file; The licence
+text reproduced for it is MIT, the objc2 repository's.
 ---
 Copyright 2026 Mads Marquart
 
