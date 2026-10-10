@@ -1,4 +1,5 @@
 Source: https://github.com/SSheldon/malloc_buf/blob/master/LICENSE
+License: MIT
 ---
 MIT License
 

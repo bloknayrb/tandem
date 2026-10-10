@@ -13,6 +13,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
   classifyLicence,
   findBundledNoticeFiles,
+  hasFullLicenceText,
   packageRootOf,
   readLicenceFiles,
   readNpmPackage,
@@ -56,11 +57,11 @@ describe("classifyLicence", () => {
     ["Apache-2.0 WITH LLVM-exception", "permissive"],
     ["(MIT OR GPL-3.0-or-later)", "permissive-option"],
     ["MIT OR Apache-2.0 OR LGPL-2.1-or-later", "permissive-option"],
-    ["MPL-2.0", "non-permissive"],
-    ["MIT AND MPL-2.0", "non-permissive"], // AND: every term must hold
-    ["LGPL-2.1-or-later", "non-permissive"],
-    ["GPL-2.0+", "non-permissive"],
-    ["CDLA-Permissive-2.0", "non-permissive"], // not on the allowlist, so reported
+    ["MPL-2.0", "not-allowlisted"],
+    ["MIT AND MPL-2.0", "not-allowlisted"], // AND: every term must hold
+    ["LGPL-2.1-or-later", "not-allowlisted"],
+    ["GPL-2.0+", "not-allowlisted"],
+    ["CDLA-Permissive-2.0", "not-allowlisted"], // not on the allowlist, so reported
     ["UNKNOWN", "unknown"],
     ["UNLICENSED", "unknown"],
     ["SEE LICENSE IN LICENSE.md", "unknown"],
@@ -69,6 +70,35 @@ describe("classifyLicence", () => {
     ["(MIT", "unknown"],
   ])("%s → %s", (expr, expected) => {
     expect(classifyLicence(expr)).toBe(expected);
+  });
+});
+
+describe("hasFullLicenceText", () => {
+  const t = (text: string) => [{ file: "LICENSE", text }];
+
+  it.each([
+    ["MIT", "Permission is hereby granted, free of charge, to any person obtaining a copy"],
+    ["Apache-2.0", "TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION"],
+    ["ISC", "Permission to use, copy, modify, and/or distribute this software for any purpose"],
+    ["BSD", "Redistribution and use in source and binary forms, with or without"],
+    ["MPL-2.0", "Mozilla Public License Version 2.0"],
+    ["Zlib", "This software is provided 'as-is', without any express or implied warranty."],
+  ])("accepts a full %s text", (_id, text) => {
+    expect(hasFullLicenceText(t(text))).toBe(true);
+  });
+
+  it("rejects a pointer file that only names the licences (siphasher's COPYING)", () => {
+    expect(
+      hasFullLicenceText(
+        t(
+          "Copyright 2012-2016 The Rust Project Developers.\nLicensed under the Apache License, Version 2.0 or the MIT license, at your option.",
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects having no text at all", () => {
+    expect(hasFullLicenceText([])).toBe(false);
   });
 });
 

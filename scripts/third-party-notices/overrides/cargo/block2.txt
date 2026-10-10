@@ -1,4 +1,5 @@
 Source: https://github.com/madsmtm/objc2/blob/main/LICENSE-MIT.txt
+License: MIT
 Note: the objc2 repository's LICENSE.md licenses block2 under MIT; its crate ships no licence file.
 ---
 Copyright 2026 Mads Marquart

@@ -38,9 +38,12 @@
  *   - Node.js: the LICENSE file from the pinned Node archive, which
  *     scripts/download-node-sidecar.mjs extracts beside the sidecar.
  *
- * FAILS CLOSED (exit 1) on: an unknown dist bundle, a stale client trace, a
- * component with no licence text and no override, an override nothing uses, a
- * missing positive anchor, an empty Rust closure, or a missing Node LICENSE.
+ * FAILS CLOSED (exit 1) on: an unknown dist file or bundle, a stale client
+ * trace, a desktop resource or externalBin it does not know, a component with
+ * no FULL licence text (see LICENCE_FINGERPRINTS) and no override, an override
+ * whose licence no longer matches or that nothing uses, a licence outside the
+ * permissive allowlist that reviewed-licences.json does not record, a missing
+ * positive anchor, an empty Rust closure, or a missing Node LICENSE.
  * A notices file that is silently empty or partial is the outcome this exists
  * to prevent; a red build is the cheap one.
  */
@@ -48,6 +51,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_NODE_VERSION } from "../node-sidecar-version.mjs";
@@ -55,6 +59,7 @@ import {
   byCodeUnit,
   classifyLicence,
   findBundledNoticeFiles,
+  hasFullLicenceText,
   normalizeText,
   packageRootOf,
   readLicenceFiles,
@@ -69,9 +74,40 @@ const OVERRIDES_DIR = join(REPO, "scripts", "third-party-notices", "overrides");
 const NPM_NOTICES = join(DIST, "THIRD_PARTY_NOTICES.txt");
 const DESKTOP_NOTICES = join(DIST, "desktop", "THIRD_PARTY_NOTICES.txt");
 const DESKTOP_PLACEHOLDER_MARKER = "DESKTOP-SECTIONS-NOT-GENERATED";
+const REVIEWED_LICENCES = join(REPO, "scripts", "third-party-notices", "reviewed-licences.json");
 
 /** dist/ subdirectories that are not shipped bundles. perf-client is excluded from `files`. */
 const NOT_BUNDLES = new Set([".third-party", "desktop", "perf-client"]);
+
+/**
+ * Triples the release matrix builds (tauri-release.yml `node-target`; the
+ * wiring test pins the two lists together). Used to tell an override for a
+ * crate another platform links from one nothing links any more.
+ */
+const RELEASE_TRIPLES = [
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+  "x86_64-unknown-linux-gnu",
+];
+
+/**
+ * Every `bundle.resources` key that is NOT a traced dist bundle, with why it
+ * needs no third-party notice. A resource missing from both this list and the
+ * dist-bundle pattern fails the build rather than shipping unattributed.
+ */
+const FIRST_PARTY_RESOURCES = new Map([
+  ["../sample/", "Tandem's own sample documents"],
+  ["../skills/", "Tandem's own Claude skill"],
+  ["../CHANGELOG.md", "Tandem's own changelog"],
+  ["../docs/workflows.md", "Tandem's own documentation"],
+  ["../LICENSE", "Tandem's own licence"],
+  ["../LICENSE.txt", "Tandem's own licence"],
+  ["../dist/desktop/THIRD_PARTY_NOTICES.txt", "this file"],
+]);
+
+/** The desktop externalBins, each covered by a section of the desktop notices. */
+const EXPECTED_EXTERNAL_BINS = ["binaries/node-sidecar", "binaries/tandem-reaper"];
 
 /** Rust roots linked into the desktop bundle: the app itself and the reaper externalBin. */
 const RUST_ROOTS = [
@@ -114,12 +150,18 @@ function walkFiles(dir) {
 // ── Overrides ───────────────────────────────────────────────────────────────
 
 /**
- * Licence text for components whose published package/crate carries none.
- * Each file is `overrides/<ecosystem>/<name>.txt` (`/` in a scoped npm name
- * becomes `+`), a `Source:` header naming where the text was copied from, a
- * `---` line, then the text. Applied only when the component has no file of
- * its own, and any override no component used fails the build, so the set
- * cannot rot.
+ * Licence text for components whose published package/crate carries no FULL
+ * licence text of its own. Each file is `overrides/<ecosystem>/<name>.txt`
+ * (`/` in a scoped npm name becomes `+`): header lines, a `---` line, then the
+ * text. Headers:
+ *   Source:  where the text was copied from (required)
+ *   License: the component's declared licence expression, exactly (required).
+ *            The override stops applying, loudly, if a new version changes it.
+ *   Note:    shown in the notices beside the component (optional; following
+ *            lines that are not another header continue it)
+ * Applied only when the component has no full text of its own; the override's
+ * text is added to whatever partial files it does ship. An override no
+ * component uses fails the build, so the set cannot rot.
  */
 function loadOverrides(ecosystem) {
   const dir = join(OVERRIDES_DIR, ecosystem);
@@ -130,36 +172,66 @@ function loadOverrides(ecosystem) {
     const raw = readFileSync(join(dir, file), "utf8").replace(/\r\n?/g, "\n");
     const sep = raw.indexOf("\n---\n");
     if (sep === -1) fail(`override ${ecosystem}/${file} has no "---" separator`);
-    const source = /^Source:\s*(.+)$/m.exec(raw.slice(0, sep))?.[1]?.trim();
-    if (!source) fail(`override ${ecosystem}/${file} has no Source: line`);
+    const headers = {};
+    let last = null;
+    for (const line of raw.slice(0, sep).split("\n")) {
+      const m = /^(Source|License|Note):\s*(.*)$/.exec(line);
+      if (m) {
+        last = m[1];
+        headers[last] = m[2].trim();
+      } else if (last === "Note" && line.trim()) {
+        headers.Note += ` ${line.trim()}`;
+      } else if (line.trim()) {
+        fail(`override ${ecosystem}/${file} has an unknown header line: ${line}`);
+      }
+    }
+    if (!headers.Source) fail(`override ${ecosystem}/${file} has no Source: line`);
+    if (!headers.License) fail(`override ${ecosystem}/${file} has no License: line`);
     const text = normalizeText(raw.slice(sep + 5));
-    if (!text) fail(`override ${ecosystem}/${file} is empty`);
-    map.set(file.slice(0, -4).replace(/\+/g, "/"), { file, source, text, used: false });
+    if (!hasFullLicenceText([{ text }])) {
+      fail(`override ${ecosystem}/${file} does not contain a full licence text`);
+    }
+    map.set(file.slice(0, -4).replace(/\+/g, "/"), {
+      file,
+      source: headers.Source,
+      license: headers.License,
+      note: headers.Note,
+      text,
+      used: false,
+    });
   }
   return map;
 }
 
 /**
- * `otherTargets` names components that exist for some other build target (a
+ * `otherTargets` names components some other release target links (a
  * Windows-only crate on a Linux build): their overrides are not "unused" just
- * because this target does not link them.
+ * because this target does not.
  */
 function applyOverrides(components, overrides, ecosystem, otherTargets = new Set()) {
   const missing = [];
   for (const c of components) {
-    if (c.texts.length > 0) continue;
+    if (hasFullLicenceText(c.texts)) continue;
     const o = overrides.get(c.name);
     if (!o) {
-      missing.push(`${c.name}@${c.version} (${c.license})`);
+      const had = c.texts.length > 0 ? `only ${c.texts.map((t) => t.file).join(", ")}` : "nothing";
+      missing.push(`${c.name}@${c.version} (${c.license}) — ships ${had}`);
       continue;
     }
+    if (o.license !== c.license) {
+      fail(
+        `override ${ecosystem}/${o.file} is for licence "${o.license}", but ${c.name}@${c.version} ` +
+          `declares "${c.license}". Re-check the upstream text and update the override.`,
+      );
+    }
     o.used = true;
-    c.texts = [{ file: `overrides/${ecosystem}/${o.file}`, text: o.text }];
+    c.texts = [...c.texts, { file: `overrides/${ecosystem}/${o.file}`, text: o.text }];
     c.textSource = o.source;
+    if (o.note) c.notes = [o.note];
   }
   if (missing.length > 0) {
     fail(
-      `${missing.length} ${ecosystem} component(s) ship no licence file and have no override in ` +
+      `${missing.length} ${ecosystem} component(s) ship no full licence text and have no override in ` +
         `scripts/third-party-notices/overrides/${ecosystem}/:\n  ${missing.join("\n  ")}\n` +
         "Copy the text from the component's upstream repository; the file format is described at loadOverrides().",
     );
@@ -170,7 +242,7 @@ function applyOverrides(components, overrides, ecosystem, otherTargets = new Set
   if (unused.length > 0) {
     fail(
       `unused ${ecosystem} override(s): ${unused.join(", ")} — the component now ships its own ` +
-        "licence file or is no longer bundled. Delete the override.",
+        "licence text or no release target includes it. Delete the override.",
     );
   }
 }
@@ -181,7 +253,19 @@ function applyOverrides(components, overrides, ecosystem, otherTargets = new Set
 function collectBundleModules() {
   if (!existsSync(DIST)) fail("dist/ does not exist — run the build first");
   const bundles = new Map();
-  const dirs = readdirSync(DIST, { withFileTypes: true })
+  const entries = readdirSync(DIST, { withFileTypes: true });
+  // Anything shipped straight under dist/ is outside every bundle trace.
+  for (const e of entries) {
+    if (!e.isDirectory() && e.name !== "THIRD_PARTY_NOTICES.txt") {
+      fail(`dist/${e.name} sits outside every bundle, so nothing records what it contains`);
+    }
+  }
+  // esbuild injects its own runtime helpers (__commonJS, __export, …) into
+  // every tsup bundle; resolve the copy tsup actually runs.
+  const esbuildPkg = createRequire(join(REPO, "node_modules", "tsup", "package.json")).resolve(
+    "esbuild/package.json",
+  );
+  const dirs = entries
     .filter((d) => d.isDirectory() && !NOT_BUNDLES.has(d.name))
     .map((d) => d.name)
     .sort(byCodeUnit);
@@ -191,17 +275,25 @@ function collectBundleModules() {
       bundles.set(name, collectClientModules(dir));
       continue;
     }
-    const mapPath = join(dir, "index.js.map");
-    if (!existsSync(mapPath)) {
-      fail(
-        `dist/${name}/ has no index.js.map and is not the client — this script does not know what ` +
-          "it contains. Teach collectBundleModules about it rather than skipping it.",
-      );
+    // Every script file in the directory, not just index.js: a second entry or
+    // a split chunk ships too. Each must carry the sourcemap tsup writes in the
+    // same pass, which is what lists its inputs.
+    const scripts = walkFiles(dir).filter((f) => /\.[cm]?js$/.test(f));
+    if (scripts.length === 0)
+      fail(`dist/${name}/ holds no script — this script does not know what it is`);
+    const modules = [esbuildPkg];
+    for (const script of scripts) {
+      const mapPath = `${script}.map`;
+      if (!existsSync(mapPath)) {
+        fail(
+          `${relative(REPO, script)} has no sourcemap beside it and is not the client — nothing records ` +
+            "what it contains. Keep `sourcemap: true` on every tsup entry.",
+        );
+      }
+      const map = JSON.parse(readFileSync(mapPath, "utf8"));
+      const base = dirname(script);
+      for (const s of map.sources) modules.push(resolve(base, map.sourceRoot ?? "", s));
     }
-    const map = JSON.parse(readFileSync(mapPath, "utf8"));
-    const modules = map.sources.map((s) => resolve(dir, map.sourceRoot ?? "", s));
-    // esbuild injects its own runtime helpers (__commonJS, __export, …) into every bundle.
-    modules.push(join(REPO, "node_modules", "esbuild", "package.json"));
     bundles.set(name, modules);
   }
   return bundles;
@@ -301,18 +393,22 @@ function collectNpm() {
   const bundles = collectBundleModules();
   const byKey = new Map();
   const byBundle = new Map();
+  const pkgCache = new Map(); // ~2,300 modules but ~270 package roots
   for (const [bundle, modules] of bundles) {
     const keys = new Set();
     for (const mod of modules) {
       const hit = packageRootOf(mod);
       if (!hit) {
         // esbuild chains a dependency's own sourcemap, so a source can name a
-        // file from the dependency's repo. One that resolves outside both
-        // node_modules and our src/ would be mis-read as first-party and its
-        // package silently dropped.
+        // file from the dependency's repo, and a crafted one can even resolve
+        // into our src/. So first-party means a REAL file under src/: anything
+        // else would be mis-read as ours and its package silently dropped.
         const rel = relative(REPO, mod).split("\\").join("/");
-        if (!rel.startsWith("src/"))
-          fail(`bundle ${bundle} has a source outside node_modules and src/: ${rel}`);
+        if (!rel.startsWith("src/") || !existsSync(mod)) {
+          fail(
+            `bundle ${bundle} has a source that is neither in node_modules nor a file in src/: ${rel}`,
+          );
+        }
         continue;
       }
       let root = hit.root;
@@ -331,7 +427,8 @@ function collectNpm() {
           continue;
         }
       }
-      const pkg = readNpmPackage(root);
+      if (!pkgCache.has(root)) pkgCache.set(root, readNpmPackage(root));
+      const pkg = pkgCache.get(root);
       const key = `${pkg.name}@${pkg.version}`;
       if (!byKey.has(key)) byKey.set(key, { ...pkg, includedIn: [] });
       const c = byKey.get(key);
@@ -371,13 +468,29 @@ function collectNpm() {
 function desktopBundles(npm) {
   const conf = JSON.parse(readFileSync(join(REPO, "src-tauri", "tauri.conf.json"), "utf8"));
   const names = [];
-  for (const src of Object.keys(conf.bundle?.resources ?? {})) {
-    const m = /^\.\.\/dist\/([^/]+)\/?$/.exec(src);
-    if (!m || m[1] === "desktop") continue;
+  const resources = conf.bundle?.resources ?? {};
+  if (Array.isArray(resources))
+    fail("tauri.conf.json bundle.resources is a list; expected the map form");
+  for (const src of Object.keys(resources)) {
+    if (FIRST_PARTY_RESOURCES.has(src)) continue;
+    const m = /^\.\.\/dist\/([^/]+)\/$/.exec(src);
+    if (!m) {
+      fail(
+        `tauri.conf.json ships resource ${src}, which is neither a traced dist bundle nor in ` +
+          "FIRST_PARTY_RESOURCES. Trace it, or add it there with why it needs no notice.",
+      );
+    }
     if (!npm.byBundle.has(m[1])) fail(`tauri.conf.json ships dist/${m[1]}/ but no trace covers it`);
     names.push(m[1]);
   }
   if (names.length === 0) fail("tauri.conf.json bundle.resources names no dist bundle");
+  const bins = [...(conf.bundle?.externalBin ?? [])].sort(byCodeUnit);
+  if (JSON.stringify(bins) !== JSON.stringify(EXPECTED_EXTERNAL_BINS)) {
+    fail(
+      `tauri.conf.json externalBin is ${JSON.stringify(bins)}; the notices cover exactly ` +
+        `${JSON.stringify(EXPECTED_EXTERNAL_BINS)}. A new binary needs its own section.`,
+    );
+  }
   return names.sort(byCodeUnit);
 }
 
@@ -396,8 +509,15 @@ function hostTriple() {
   return m[1].trim();
 }
 
-function collectCrates(triple) {
-  const byId = new Map();
+/**
+ * The crates linked for one target: `[{ pkg, label }]`, one per root that
+ * reaches the crate. Follows only edges with a normal (kind: null) entry, so
+ * build- and dev-dependencies, and anything reachable only through them, are
+ * left out. Proc-macro crates stay in: they are normal dependencies that run at
+ * compile time, and listing them over-attributes harmlessly.
+ */
+function walkCrates(triple) {
+  const out = [];
   for (const { manifest, label } of RUST_ROOTS) {
     const meta = JSON.parse(
       execFileSync(
@@ -418,8 +538,6 @@ function collectCrates(triple) {
     const packages = new Map(meta.packages.map((p) => [p.id, p]));
     const nodes = new Map(meta.resolve.nodes.map((n) => [n.id, n]));
     const rootId = meta.resolve.root;
-    // Follow only edges with a normal (kind: null) entry: build- and
-    // dev-dependencies, and anything reachable only through them, never ship.
     const seen = new Set([rootId]);
     const queue = [rootId];
     while (queue.length > 0) {
@@ -433,41 +551,55 @@ function collectCrates(triple) {
     }
     seen.delete(rootId);
     if (seen.size === 0) fail(`${manifest} resolved to zero dependencies for ${triple}`);
-    for (const id of seen) {
-      const p = packages.get(id);
-      if (!byId.has(id)) {
-        const dir = dirname(p.manifest_path);
-        byId.set(id, {
-          name: p.name,
-          version: p.version,
-          license: p.license ?? (p.license_file ? `SEE LICENSE IN ${p.license_file}` : "UNKNOWN"),
-          repository: p.repository ?? "",
-          texts: readLicenceFiles(dir, p.license_file ? [p.license_file] : []),
-          includedIn: [],
-        });
-      }
-      const c = byId.get(id);
-      if (!c.includedIn.includes(label)) c.includedIn.push(label);
+    for (const id of seen) out.push({ pkg: packages.get(id), label });
+  }
+  return out;
+}
+
+/**
+ * Crate names another release target links but this one does not: an override
+ * for one of those is "used elsewhere". A crate linked HERE whose override went
+ * unused is never exempt — its published files are the same on every target, so
+ * it now ships its own text and the override is stale.
+ */
+function crateNamesOnlyElsewhere(triple, linkedHere) {
+  const here = new Set(linkedHere);
+  const names = new Set();
+  for (const t of RELEASE_TRIPLES) {
+    if (t === triple) continue;
+    for (const { pkg } of walkCrates(t)) if (!here.has(pkg.name)) names.add(pkg.name);
+  }
+  return names;
+}
+
+function collectCrates(triple) {
+  const byId = new Map();
+  for (const { pkg: p, label } of walkCrates(triple)) {
+    if (!byId.has(p.id)) {
+      byId.set(p.id, {
+        name: p.name,
+        version: p.version,
+        license: p.license ?? (p.license_file ? `SEE LICENSE IN ${p.license_file}` : "UNKNOWN"),
+        repository: p.repository ?? "",
+        texts: readLicenceFiles(dirname(p.manifest_path), p.license_file ? [p.license_file] : []),
+        includedIn: [],
+      });
     }
+    const c = byId.get(p.id);
+    if (!c.includedIn.includes(label)) c.includedIn.push(label);
   }
   const crates = [...byId.values()];
-  applyOverrides(crates, loadOverrides("cargo"), "cargo", lockedCrateNames());
+  const elsewhere = crateNamesOnlyElsewhere(
+    triple,
+    crates.map((c) => c.name),
+  );
+  applyOverrides(crates, loadOverrides("cargo"), "cargo", elsewhere);
   const tauri = crates.find((c) => c.name === "tauri");
   if (!tauri) fail("anchor crate tauri not found — the cargo walk is broken");
   if (!tauri.texts.some((t) => t.text.includes("Apache License"))) {
     fail("anchor crate tauri has no Apache-2.0 text — crate licence files are not being read");
   }
-  return crates;
-}
-
-/** Every crate name in the two lockfiles, across all targets. */
-function lockedCrateNames() {
-  const names = new Set();
-  for (const { manifest } of RUST_ROOTS) {
-    const lock = readFileSync(join(REPO, dirname(manifest), "Cargo.lock"), "utf8");
-    for (const m of lock.matchAll(/^name = "([^"]+)"$/gm)) names.add(m[1]);
-  }
-  return names;
+  return { crates, elsewhere };
 }
 
 /**
@@ -532,7 +664,7 @@ function nodeRuntime(triple) {
 
 // ── Output ──────────────────────────────────────────────────────────────────
 
-function header(kind, extra = []) {
+function header(kind, extra = [], extraNotes = []) {
   const { version } = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8"));
   return [
     `THIRD-PARTY SOFTWARE NOTICES — Tandem ${version} (${kind})`,
@@ -547,12 +679,21 @@ function header(kind, extra = []) {
     "",
     "Not repeated here: the bundled fonts' licences (SIL Open Font License 1.1), which ship",
     "beside the font files in the client's fonts/ folder.",
+    ...extraNotes,
     "",
     "",
   ].join("\n");
 }
 
-function writeReport(name, sections) {
+/**
+ * Every component whose licence is not plainly permissive must be recorded in
+ * reviewed-licences.json under its exact licence expression, so a new
+ * copyleft, unknown or unallowlisted dependency fails the build instead of
+ * shipping without anyone having looked at it. Recording one is a decision for
+ * the project owner, not for this script. The full list is also written to
+ * dist/.third-party/report-<mode>.json.
+ */
+function checkFlagged(mode, sections, onlyElsewhere = new Set()) {
   const flagged = [];
   for (const [section, components] of sections) {
     for (const c of components) {
@@ -576,14 +717,41 @@ function writeReport(name, sections) {
       byCodeUnit(a.version, b.version),
   );
   mkdirSync(TRACE_DIR, { recursive: true });
-  writeFileSync(join(TRACE_DIR, `report-${name}.json`), `${JSON.stringify(flagged, null, 2)}\n`);
+  writeFileSync(join(TRACE_DIR, `report-${mode}.json`), `${JSON.stringify(flagged, null, 2)}\n`);
+
+  const reviewed = JSON.parse(readFileSync(REVIEWED_LICENCES, "utf8")).entries ?? {};
+  const unrecorded = [];
+  const used = new Set();
+  for (const f of flagged) {
+    const key = `${f.section}:${f.name}`;
+    used.add(key);
+    if (reviewed[key]?.license !== f.license) {
+      unrecorded.push(`[${f.class}] ${key}@${f.version} — ${f.license}`);
+    }
+  }
+  if (unrecorded.length > 0) {
+    fail(
+      `${unrecorded.length} component(s) carry a licence outside the permissive allowlist and are not ` +
+        `recorded, with that exact licence, in ${relative(REPO, REVIEWED_LICENCES)}:\n  ${unrecorded.join("\n  ")}\n` +
+        "Bring them to the project owner; record each only once someone has looked.",
+    );
+  }
+  // npm entries are checked in every mode (each mode sees every npm bundle);
+  // crate entries only in desktop mode, and not for crates only another target links.
+  const stale = Object.keys(reviewed).filter((key) => {
+    if (used.has(key)) return false;
+    if (key.startsWith("npm:")) return true;
+    return mode === "desktop" && !onlyElsewhere.has(key.slice("crate:".length));
+  });
+  if (stale.length > 0) {
+    fail(
+      `stale ${relative(REPO, REVIEWED_LICENCES)} entries (nothing ships them now): ${stale.join(", ")}`,
+    );
+  }
   if (flagged.length > 0) {
     process.stderr.write(
-      `[third-party-notices] ${flagged.length} component(s) not plainly permissive (for review, not an error):\n`,
+      `[third-party-notices] ${flagged.length} component(s) outside the permissive allowlist, all recorded in reviewed-licences.json\n`,
     );
-    for (const f of flagged) {
-      process.stderr.write(`  [${f.class}] ${f.section}: ${f.name}@${f.version} — ${f.license}\n`);
-    }
   }
 }
 
@@ -597,13 +765,16 @@ function writeFile(path, content) {
 
 const NPM_TITLE = "JavaScript packages bundled into Tandem";
 
+// Every check runs before the first write, so a failing run leaves no
+// freshly written file that looks like a good one.
 function runNpm() {
   const npm = collectNpm();
+  const desktop = npmForBundles(npm, desktopBundles(npm));
+  checkFlagged("npm", [["npm", npm.components]]);
   writeFile(NPM_NOTICES, header("npm package") + renderSection("npm", NPM_TITLE, npm.components));
   // Placeholder so a plain `npm run build` leaves a desktop resource in place for
   // `cargo test`'s tauri_build check. It carries the marker that verify-desktop
   // refuses, so it can never pass for the real file in a release.
-  const desktop = npmForBundles(npm, desktopBundles(npm));
   writeFile(
     DESKTOP_NOTICES,
     header("desktop app — INCOMPLETE", [
@@ -611,31 +782,49 @@ function runNpm() {
       "beforeBuildCommand replaces this file with the complete notices.",
     ]) + renderSection("npm", NPM_TITLE, desktop),
   );
-  writeReport("npm", [["npm", npm.components]]);
 }
 
 function runDesktop() {
   const triple = process.env.TAURI_ENV_TARGET_TRIPLE || getArg("--target") || hostTriple();
   const npm = collectNpm();
   const desktop = npmForBundles(npm, desktopBundles(npm));
-  const crates = collectCrates(triple);
+  const { crates, elsewhere } = collectCrates(triple);
   const std = rustStd();
   const node = nodeRuntime(triple);
+  checkFlagged(
+    "desktop",
+    [
+      ["npm", desktop],
+      ["crate", crates],
+    ],
+    elsewhere,
+  );
   writeFile(
     DESKTOP_NOTICES,
-    header("desktop app", [`Target: ${triple}`]) +
+    header(
+      "desktop app",
+      [`Target: ${triple}`],
+      triple.includes("linux")
+        ? [
+            "",
+            "Also not listed: the Linux AppImage additionally bundles system libraries (GTK,",
+            "WebKitGTK and their dependencies) taken from the build machine's distribution. Their",
+            "licences are those of the distribution's packages.",
+          ]
+        : [],
+    ) +
       renderSection("npm", NPM_TITLE, desktop) +
       "\n" +
-      renderSection("crate", "Rust crates linked into the desktop app and tandem-reaper", crates) +
+      renderSection(
+        "crate",
+        "Rust crates linked into the desktop app and tandem-reaper (with their compile-time proc-macro crates)",
+        crates,
+      ) +
       "\n" +
       renderSection("rust", "Rust standard library", [std]) +
       "\n" +
       renderSection("node", "Node.js runtime (binaries/node-sidecar)", [node]),
   );
-  writeReport("desktop", [
-    ["npm", desktop],
-    ["crate", crates],
-  ]);
 }
 
 function runVerifyDesktop() {
@@ -656,8 +845,9 @@ function runVerifyDesktop() {
   ]) {
     if (!text.includes(needle)) fail(`desktop notices lack ${JSON.stringify(needle)}`);
   }
-  // Tauri stages each resource beside the binary before bundling; that copy is
-  // what the installers package.
+  // tauri-build copies each declared resource into the target directory at
+  // compile time. A byte-identical copy there proves the resource path in
+  // tauri.conf.json resolved to this file for this build.
   const staged = [
     join(REPO, "src-tauri", "target", triple, "release", "THIRD_PARTY_NOTICES.txt"),
     join(REPO, "src-tauri", "target", "release", "THIRD_PARTY_NOTICES.txt"),

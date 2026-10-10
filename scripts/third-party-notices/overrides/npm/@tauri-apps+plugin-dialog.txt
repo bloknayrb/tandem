@@ -1,10 +1,11 @@
-Source: https://github.com/ueberdosis/hocuspocus/blob/main/LICENSE.md
-License: MIT
-Note: the published @hocuspocus packages ship no licence file; this is the monorepo's.
+Source: https://github.com/tauri-apps/plugins-workspace/blob/v2/LICENSE_MIT
+License: MIT OR Apache-2.0
+Note: the published package ships only an SPDX pointer (LICENSE.spdx); Tandem elects MIT, whose text is the
+plugins-workspace repository's.
 ---
 MIT License
 
-Copyright (c) 2023, Tiptap GmbH
+Copyright (c) 2017 - Present Tauri Apps Contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

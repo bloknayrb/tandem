@@ -1,10 +1,9 @@
 Source: https://github.com/spdx/license-list-data/blob/main/text/MIT.txt
+License: MIT
 Note: sigchld declares "MIT" but neither its crate nor its repository (https://github.com/oconnor663/sigchld.rs) publishes a licence file or
-copyright notice. Its Cargo.toml names the author as Jack O'Connor. The text below is the standard MIT text.
+copyright notice. Its Cargo.toml names the author as Jack O'Connor. The licence text given for it is the standard MIT text.
 ---
 MIT License
-
-Copyright (c) <year> <copyright holders>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
 associated documentation files (the "Software"), to deal in the Software without restriction, including

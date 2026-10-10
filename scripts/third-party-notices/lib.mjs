@@ -111,7 +111,14 @@ export function readNpmPackage(root) {
     version: pkg.version,
     license: license || "UNKNOWN",
     repository: repository || pkg.homepage || "",
-    texts: readLicenceFiles(root, findBundledNoticeFiles(root)),
+    texts: (() => {
+      // A vendored-code notices file ships alongside, but it holds OTHER
+      // packages' licences, so it is marked and never counts as this one's.
+      const vendored = new Set(findBundledNoticeFiles(root));
+      return readLicenceFiles(root, [...vendored]).map((t) =>
+        vendored.has(t.file) ? { ...t, vendored: true } : t,
+      );
+    })(),
   };
 }
 
@@ -217,7 +224,9 @@ function whollyPermissive(node) {
  * - "permissive": every option is permissive.
  * - "permissive-option": a dual/multi licence where a permissive choice exists
  *   (e.g. "MIT OR GPL-3.0-or-later") — still reported, marked as such.
- * - "non-permissive": no all-permissive way to comply.
+ * - "not-allowlisted": no way to comply using only PERMISSIVE licences. That
+ *   includes copyleft (MPL, LGPL, GPL) and also permissive-in-spirit licences
+ *   nobody has added to the allowlist yet (CDLA-Permissive-2.0).
  * - "unknown": missing, UNLICENSED, SEE LICENSE IN, or unparseable.
  */
 export function classifyLicence(expr) {
@@ -232,7 +241,37 @@ export function classifyLicence(expr) {
   }
   if (whollyPermissive(tree)) return "permissive";
   if (satisfiablePermissively(tree)) return "permissive-option";
-  return "non-permissive";
+  return "not-allowlisted";
+}
+
+// ── Licence text presence ───────────────────────────────────────────────────
+
+/**
+ * Phrases that occur only in the FULL text of a licence. A component counts as
+ * covered only when one of its texts carries one: a COPYING file that just says
+ * "licensed under MIT or Apache-2.0, see LICENSE-MIT" (siphasher), or a package
+ * whose only licence-shaped file is the notices of code IT vendored
+ * (@sentry/server-utils), reproduces no licence and must not pass.
+ */
+export const LICENCE_FINGERPRINTS = [
+  /permission is hereby granted,? free of charge/i, // MIT
+  /terms and conditions for use,? reproduction,? and distribution/i, // Apache-2.0
+  /permission to use,? copy,? modify,? and\/or distribute this software/i, // ISC, 0BSD
+  /redistribution and use in source and binary forms/i, // BSD-*
+  /mozilla public license,? version 2\.0/i, // MPL-2.0
+  /provided ['‘’]as[- ]is['‘’],? without any express or implied/i, // Zlib
+  /this is free and unencumbered software released into the public domain/i, // Unlicense
+  /cc0 1\.0 universal|creative commons legal code/i, // CC0-1.0
+  /boost software license/i, // BSL-1.0
+  /unicode license v3|unicode,? inc\.? license agreement/i, // Unicode
+  /community data license agreement/i, // CDLA
+  /blue oak model license/i,
+  /do what the fuck you want to/i, // WTFPL
+  /python software foundation license/i,
+];
+
+export function hasFullLicenceText(texts) {
+  return texts.some((t) => !t.vendored && LICENCE_FINGERPRINTS.some((re) => re.test(t.text)));
 }
 
 // ── Rendering ───────────────────────────────────────────────────────────────
@@ -240,7 +279,7 @@ export function classifyLicence(expr) {
 /**
  * Render one section. `key` prefixes the licence-text labels ("npm text 3"),
  * so the sections of one file never share a label. `components` are
- * `{ name, version, license, includedIn: string[], repository, texts: [{file, text}], textSource? }`.
+ * `{ name, version, license, includedIn: string[], repository, texts: [{file, text}], textSource?, notes? }`.
  *
  * Licence texts are deduplicated by exact (normalised) content and numbered in
  * first-appearance order over the sorted index, so hundreds of crates carrying
@@ -277,6 +316,7 @@ export function renderSection(key, title, components) {
     if (c.includedIn?.length) lines.push(`  Included in: ${c.includedIn.join(", ")}`);
     if (c.repository) lines.push(`  Source: ${c.repository}`);
     if (c.textSource) lines.push(`  Licence text from: ${c.textSource}`);
+    for (const note of c.notes ?? []) lines.push(`  Note: ${note}`);
     lines.push(`  Licence text: ${refs.map((r) => `[${key} text ${r}]`).join(", ")}`);
     lines.push("");
   }

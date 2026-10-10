@@ -1,4 +1,5 @@
 Source: https://github.com/rust-lang/rust/blob/1.98.1/COPYRIGHT, LICENSE-MIT and LICENSE-APACHE
+License: MIT OR Apache-2.0
 Note: the Rust standard library is statically linked into the desktop app and tandem-reaper.
 ---
 Short version for non-lawyers:

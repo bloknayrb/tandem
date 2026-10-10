@@ -66,20 +66,9 @@ describe("npm tarball", () => {
   });
 });
 
+// No pin on tsup's `sourcemap: true`: the generator refuses any dist bundle
+// without an index.js.map, at build time, which is stronger than a config read.
 describe("bundle traces", () => {
-  it("every tsup bundle keeps the sourcemap its package list is read from", async () => {
-    const configs = (await import("../../tsup.config.ts")).default as Array<{
-      sourcemap?: unknown;
-      outDir?: string;
-    }>;
-    expect(configs.length).toBeGreaterThan(0);
-    for (const c of configs)
-      expect({ outDir: c.outDir, sourcemap: c.sourcemap }).toEqual({
-        outDir: c.outDir,
-        sourcemap: true,
-      });
-  });
-
   it("the Vite client build carries the trace plugin, writing after the files land", () => {
     const vite = read("vite.config.ts");
     expect(vite).toMatch(/plugins:\s*\[[^\]]*\bthirdPartyTrace\(\)/);
@@ -126,6 +115,27 @@ describe("desktop bundle", () => {
     );
     expect(verify).toBeGreaterThan(action);
     expectUnconditional(job, job.steps[verify]);
+  });
+
+  it("the generator's RELEASE_TRIPLES are exactly the release matrix's targets", () => {
+    // The cargo "unused override" and stale reviewed-licence checks exempt
+    // crates only another release target links; a drifted list would either
+    // exempt a dead override or fail a live one.
+    const wf = workflow(".github/workflows/tauri-release.yml") as unknown as {
+      jobs: Record<
+        string,
+        { strategy?: { matrix?: { include?: Array<{ "node-target"?: string }> } } }
+      >;
+    };
+    const matrix = Object.values(wf.jobs)
+      .flatMap((j) => j.strategy?.matrix?.include ?? [])
+      .map((e) => e["node-target"])
+      .filter((t): t is string => typeof t === "string");
+    const src = read("scripts/third-party-notices/generate.mjs");
+    const block = /const RELEASE_TRIPLES = \[([^\]]*)\]/.exec(src)?.[1] ?? "";
+    const listed = [...block.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    expect(matrix.length).toBeGreaterThan(0);
+    expect([...listed].sort()).toEqual([...new Set(matrix)].sort());
   });
 
   it("the sidecar download extracts Node's LICENSE, which desktop mode requires", () => {
