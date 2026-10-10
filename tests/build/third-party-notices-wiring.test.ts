@@ -185,7 +185,7 @@ describe("desktop bundle", () => {
     expect(args.length).toBeGreaterThan(0);
     // --config / -c merges extra Tauri config the generator does not read.
     for (const a of args) {
-      expect(a).not.toMatch(/--features|--all-features|(^|\s)-F|--config|(^|\s)-c(\s|$)/);
+      expect(a).not.toMatch(/--features|--all-features|(^|\s)-F|--config|(^|\s)-c/);
     }
     // ...and tauri-action passes exactly those args, nothing added.
     const [, job] = Object.entries(

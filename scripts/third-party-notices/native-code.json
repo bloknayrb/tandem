@@ -1,5 +1,5 @@
 {
-  "$comment": "Linked crates that ship prebuilt native objects (.a/.dll/.dylib/.lib/.o/.obj/.so) or compile in a non-Rust code file over 4 KB (include_str!/include_bytes! of .js/.mjs/.wasm/.css/.html). Root licence files say nothing about whose code that is, so the build fails on any such crate not listed here. `extraText` names an override-format file under overrides/ whose text is added to the crate's entry; `why` says whose code it is. See applyNativeCode() in generate.mjs.",
+  "$comment": "Linked crates that ship prebuilt native objects (.a/.dll/.dylib/.lib/.o/.obj/.so) or compile in a non-Rust code file over 4 KB (an include_str!/include_bytes! of a literal .js/.mjs/.wasm/.css/.html path; see embedsCode() for what that does not see). Root licence files say nothing about whose code that is, so the build fails on any such crate not listed here. `extraText` names an override-format file under overrides/ whose text is added to the crate's entry; `why` says whose code it is. See applyNativeCode() in generate.mjs.",
   "entries": {
     "ring": {
       "why": "pregenerated/*.o are assembled from ring's own crypto/ perlasm sources (OpenSSL/BoringSSL-derived, Apache-2.0), which its root LICENSE, LICENSE-BoringSSL and LICENSE-other-bits already cover."

@@ -532,7 +532,7 @@ function collectNpm() {
  */
 function refuseTauriConfigOverlays() {
   const overlays = readdirSync(join(REPO, "src-tauri")).filter(
-    (f) => /^tauri\..+\.conf\.json5?$/.test(f) || f === "Tauri.toml",
+    (f) => /^tauri\..+\.conf\.json5?$/.test(f) || /^Tauri(\..+)?\.toml$/.test(f),
   );
   if (overlays.length > 0 || process.env.TAURI_CONFIG) {
     fail(
@@ -668,6 +668,12 @@ const NATIVE_OBJECT_RE = /\.(a|dll|dylib|lib|o|obj|so)$/i;
  * Code a crate compiles INTO the binary from a non-Rust file: tauri-plugin-sentry
  * include_str!s a 351 KB minified @sentry/browser build. Only code-like targets
  * over 4 KB count; README and test-data includes are not shipped code.
+ *
+ * Scope, deliberately narrow: an include_str!/include_bytes! of a LITERAL path.
+ * It does not see include!/concat!(env!("OUT_DIR"), ...), proc-macro templates
+ * (tauri's own serialize-to-javascript #[default_template("...js")]), or
+ * build.rs output. What those reach today is tauri's own code, under tauri's own
+ * licence; a third-party file arriving that way would go unseen.
  */
 const EMBEDDED_CODE_RE = /\.(c?js|mjs|wasm|css|html?)$/i;
 
