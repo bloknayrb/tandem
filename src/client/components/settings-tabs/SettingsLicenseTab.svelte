@@ -149,8 +149,8 @@ function onActivated(): void {
        whose sidecar somehow resolved the npm root anyway. -->
   <div class="settings-hint" style="margin-top: var(--tandem-space-1);">
     Paste a license key you received by email{#if !isDesktop && cliActivateEffective}, or run
-      <code>tandem activate &lt;file&gt;</code> from the command line{/if}. A valid license unlocks
-    editing, runs forever and includes all future updates.
+      <code>tandem activate &lt;file&gt;</code> from the command line{/if}. A valid license runs
+    forever and includes all future updates.
   </div>
   <div class="settings-hint" style="margin-top: var(--tandem-space-2);">
     Don't have one yet?
