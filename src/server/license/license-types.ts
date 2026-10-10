@@ -102,7 +102,9 @@ export type LicenseState =
  * (out-of-band path). Canonical shape shared by the REST writer; the
  * update Worker (`infra/license-update-worker/`) keeps a structurally-identical
  * local copy (separate Cloudflare build) kept in lockstep by a parity test.
- * `updateWindowEnd: null` ⇒ never expires (grandfathered).
+ * `updateWindowEnd: null` ⇒ never expires — every issued key, paid or
+ * grandfathered, since every key includes all future updates (ADR-040,
+ * 2026-10-09). A date appears only on a key hand-signed with `--expires`.
  */
 export interface LicenseEntitlement {
   updateWindowEnd: string | null;

@@ -79,15 +79,19 @@ function onActivated(): void {
     <!-- The only in-app signal that updates have stopped. The updater itself
          reports "You're up to date" in this state, because a lapsed window is
          served the same no-update response as having nothing to install — so
-         without this line the user has no way to learn it. -->
+         without this line the user has no way to learn it.
+
+         There is no renewal link (removed 2026-10-09, ADR-040 decision B6):
+         every key Tandem issues includes all future updates, so a dated window
+         exists only on a key hand-signed with `--expires`, and there is no
+         renewal product to sell. Support is the way out, because reaching this
+         state with a sold key means something went wrong. -->
     <div class="license-warning" data-testid="license-update-window-ended">
-      Your update window has ended. Tandem keeps running exactly as it is, forever — but new
-      releases are no longer offered on this device.
-      <a
-        data-testid="license-renew-link"
-        href={TANDEM_PURCHASE_URL}
-        target="_blank"
-        rel="noopener noreferrer">Renew to receive updates again</a
+      This license's update window has ended. Tandem keeps running exactly as it is, forever — but
+      new releases are no longer offered on this device. Licenses normally include all future
+      updates, so if you didn't expect this, email
+      <a data-testid="license-window-support-link" href="mailto:{TANDEM_SUPPORT_EMAIL}"
+        >{TANDEM_SUPPORT_EMAIL}</a
       >.
     </div>
   {/if}
@@ -145,8 +149,8 @@ function onActivated(): void {
        whose sidecar somehow resolved the npm root anyway. -->
   <div class="settings-hint" style="margin-top: var(--tandem-space-1);">
     Paste a license key you received by email{#if !isDesktop && cliActivateEffective}, or run
-      <code>tandem activate &lt;file&gt;</code> from the command line{/if}. A valid license unlocks
-    editing and runs forever; the update window is separate and is shown above once activated.
+      <code>tandem activate &lt;file&gt;</code> from the command line{/if}. A valid license runs
+    forever and includes all future updates.
   </div>
   <div class="settings-hint" style="margin-top: var(--tandem-space-2);">
     Don't have one yet?

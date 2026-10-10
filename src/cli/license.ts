@@ -72,11 +72,15 @@ export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean)
     lines.push("  Status:        licensed");
     if (state.gateActive && state.status === "licensed") {
       lines.push(`  Licensee:      ${state.license.name} (${state.license.type})`);
-      const window = state.updateWindowCurrent ? "current" : "expired";
-      const through = state.license.expiresAt
-        ? ` (through ${state.license.expiresAt.slice(0, 10)})`
-        : "";
-      lines.push(`  Update window: ${window}${through}`);
+      if (state.license.expiresAt === null) {
+        // Every issued key since ADR-040's 2026-10-09 amendment (decision A5):
+        // no window at all, so "current" with no date would understate it.
+        lines.push("  Updates:       all future updates included");
+      } else {
+        // Only a key hand-signed with `--expires` still carries a dated window.
+        const window = state.updateWindowCurrent ? "current" : "expired";
+        lines.push(`  Update window: ${window} (through ${state.license.expiresAt.slice(0, 10)})`);
+      }
       if (!state.updateWindowCurrent) {
         // The single most confusing state in the whole system: the app keeps
         // saying "You're up to date" because the update endpoint is returning
@@ -163,6 +167,8 @@ export async function runActivate(args: string[]): Promise<void> {
     console.log(`\n✓ License activated for ${who}.`);
     if (lic?.expiresAt) {
       console.log(`  Updates included through ${lic.expiresAt.slice(0, 10)}.`);
+    } else if (lic) {
+      console.log("  All future updates are included.");
     }
     console.log("");
   } catch (err) {

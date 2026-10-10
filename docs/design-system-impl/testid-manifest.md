@@ -391,6 +391,8 @@ site.
 - `license-wall` (restricted-mode activation overlay)
 - `license-activate-input`, `license-activate-error`, `license-activate-submit` (shared activation form)
 - `license-settings-section`, `license-status-pill` (Settings → License tab)
+- `license-update-window-ended` (Settings → License warning for a lapsed update window) and `license-window-support-link` (its support mailto link)
+- `license-renew-link` removed 2026-10-09, deliberately: every key now includes all future updates and there is no renewal product (ADR-040 decisions A5 and B6), so the lapsed-window warning links to support instead (`license-window-support-link`).
 
 ### Test harnesses (not user-facing, kept for vitest)
 - `notifications-harness`, `throw-on-render-ok`,

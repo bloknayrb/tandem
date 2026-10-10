@@ -18,7 +18,7 @@ import { render } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
 import type { LicenseStatusResponse } from "../../src/client/utils/license-ui";
-import { TANDEM_PURCHASE_URL } from "../../src/shared/constants";
+import { TANDEM_SUPPORT_EMAIL } from "../../src/shared/constants";
 
 // Set BEFORE mount — the tab captures it once at init, which is the point of
 // the fix (the runtime never changes under a live component).
@@ -243,13 +243,15 @@ describe("Settings → License — the CLI hint is browser/npm only (#1789)", ()
 });
 
 /**
- * Review round 2. `window_ended_copy` (src-tauri/src/lib.rs) tells a licensed
- * user whose window has lapsed to "renew from Settings -> License", and its
- * docblock justifies naming that surface with the claim that the tab holds the
- * clickable link a native message box cannot. Before this, the only outbound
- * link on the tab was `license-buy-link`, framed "Don't have one yet? Buy a
- * license" — an offer to buy what the reader already owns. The dialog closed a
- * loop with no exit. This is the test that keeps the Rust docblock honest.
+ * Review round 2 (#1819), revised 2026-10-09. `window_ended_copy`
+ * (src-tauri/src/lib.rs) points a licensed user whose window has lapsed at
+ * Settings -> License, and its docblock justifies naming that surface with the
+ * claim that the tab holds the clickable way out a native message box cannot.
+ * That way out used to be a "Renew" link to the purchase page. Since ADR-040's
+ * decisions A5 and B6 (2026-10-09) every key includes all future updates and
+ * there is no renewal product, so the way out is support: a lapsed window on a
+ * sold key means something went wrong. This is the test that keeps the Rust
+ * docblock honest, and keeps a renewal link from coming back unnoticed.
  */
 describe("Settings → License — the ended update window offers a way out (#1819)", () => {
   const LAPSED: LicenseStatusResponse = {
@@ -259,26 +261,26 @@ describe("Settings → License — the ended update window offers a way out (#18
     license: { name: "Paying Customer", type: "paid" },
   };
 
-  it("the ended-window warning carries a renewal link", () => {
+  it("the ended-window warning carries a support link, and no renewal link", () => {
     licenseStore.set(LAPSED);
     const { container } = render(SettingsLicenseTab, { props: makeProps() });
 
     const warning = byTestId(container, "license-update-window-ended");
     expect(warning).toBeTruthy();
-    const renew = byTestId(container, "license-renew-link") as HTMLAnchorElement | null;
-    expect(renew).toBeTruthy();
+    const support = byTestId(container, "license-window-support-link") as HTMLAnchorElement | null;
+    expect(support).toBeTruthy();
     // Inside the warning, not somewhere else on the tab: the "Buy a license"
-    // link already existed further down and is not an answer for a holder.
-    expect(warning?.contains(renew)).toBe(true);
-    expect(renew?.getAttribute("href")).toBe(TANDEM_PURCHASE_URL);
-    expect(renew?.getAttribute("rel")).toContain("noopener");
-    expect(flat(renew).toLowerCase()).toContain("renew");
+    // link further down is not an answer for someone who already holds a key.
+    expect(warning?.contains(support)).toBe(true);
+    expect(support?.getAttribute("href")).toBe(`mailto:${TANDEM_SUPPORT_EMAIL}`);
+    expect(byTestId(container, "license-renew-link")).toBeNull();
+    expect(flat(warning).toLowerCase()).not.toContain("renew");
   });
 
-  it("a current window shows neither the warning nor the renewal link", () => {
+  it("a current window shows neither the warning nor its support link", () => {
     licenseStore.set({ ...LAPSED, updateWindowCurrent: true });
     const { container } = render(SettingsLicenseTab, { props: makeProps() });
     expect(byTestId(container, "license-update-window-ended")).toBeNull();
-    expect(byTestId(container, "license-renew-link")).toBeNull();
+    expect(byTestId(container, "license-window-support-link")).toBeNull();
   });
 });

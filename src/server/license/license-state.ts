@@ -120,7 +120,8 @@ function trialBodyIsUsable(tf: unknown, nowMs: number): boolean {
  *
  * `verify` is injectable for tests; production uses signature-only verification
  * so an expired *update window* never drops a paid user to `restricted`
- * (ADR-040: run forever, updates windowed). The update window is read from
+ * (ADR-040: run forever; updates are windowed only on a key hand-signed with
+ * `--expires`, since every issued key includes all future updates). The update window is read from
  * `expiresAt` into `updateWindowCurrent`.
  */
 export function resolveLicenseState(deps: {
@@ -349,8 +350,10 @@ export async function ensureTrialStarted(
 /**
  * Activate a license: verify its signature + known version, persist atomically,
  * and return the freshly-resolved state. Does NOT reject an expired update
- * window — a user may activate an older license and still run forever; they
- * simply won't receive new updates until they renew.
+ * window — a user may activate an older license and still run forever. Issued
+ * keys carry no window since every key includes all future updates (ADR-040,
+ * 2026-10-09); a dated one exists only if hand-signed with `--expires`, and
+ * there is no renewal product to extend it.
  */
 export async function activateLicense(
   appDataDir: string,
