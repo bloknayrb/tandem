@@ -68,6 +68,14 @@ describe("npm tarball", () => {
     expect(verify).toBeGreaterThan(build);
     expectUnconditional(check, check.steps[verify]);
   });
+
+  it("CI `check` runs the desktop crate checks for every release target, on every PR", () => {
+    // Desktop mode otherwise first runs inside the tag-triggered release matrix.
+    const check = workflow(".github/workflows/ci.yml").jobs.check;
+    const crates = stepIndex(check, (s) => s.run === `${GEN} check-crates`);
+    expect(crates).toBeGreaterThanOrEqual(0);
+    expectUnconditional(check, check.steps[crates]);
+  });
 });
 
 // No pin on tsup's `sourcemap: true`: the generator refuses any dist bundle
@@ -89,9 +97,9 @@ describe("bundle traces", () => {
         if (!/^\.\.?\//.test(m[1]) || m[1].includes("node_modules"))
           offenders.push(`${f}: ${m[0]}`);
       }
-      for (const m of text.matchAll(/url\(\s*["']?[^"')]*node_modules[^"')]*/g)) {
-        offenders.push(`${f}: ${m[0]}`);
-      }
+      // Any other route in (a <link href> in index.html or <svelte:head>) names
+      // node_modules too; nothing in client markup or styles has reason to.
+      if (text.includes("node_modules")) offenders.push(`${f}: mentions node_modules`);
     }
     expect(offenders).toEqual([]);
   });
@@ -175,7 +183,24 @@ describe("desktop bundle", () => {
       (j.strategy?.matrix?.include ?? []).map((e) => e.args ?? ""),
     );
     expect(args.length).toBeGreaterThan(0);
-    for (const a of args) expect(a).not.toMatch(/--features|(^|\s)-F(\s|$)|--all-features/);
+    for (const a of args) expect(a).not.toMatch(/--features|--all-features|(^|\s)-F/);
+    // ...and tauri-action passes exactly those args, nothing added.
+    const [, job] = Object.entries(
+      workflow(".github/workflows/tauri-release.yml").jobs as Record<string, Job>,
+    ).find(([, j]) => j.steps?.some((s) => s.uses?.startsWith("tauri-apps/tauri-action@"))) as [
+      string,
+      Job,
+    ];
+    const action = job.steps.find((s) => s.uses?.startsWith("tauri-apps/tauri-action@")) as Step & {
+      with?: { args?: string };
+    };
+    expect(action.with?.args).toBe("${{ matrix.args }}");
+    // The other route to features: tauri.conf.json's build.features (the
+    // generator refuses it too, at build time).
+    expect(
+      (JSON.parse(read("src-tauri/tauri.conf.json")) as { build: { features?: unknown } }).build
+        .features,
+    ).toBeUndefined();
   });
 
   it("the sidecar download extracts Node's LICENSE, which desktop mode requires", () => {

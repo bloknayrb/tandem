@@ -15,6 +15,7 @@ import {
   findVendoredLicenceFiles,
   hasFullLicenceText,
   licenceCovered,
+  licenceFullyCovered,
   packageRootOf,
   readLicenceFiles,
   readNpmPackage,
@@ -78,7 +79,8 @@ describe("hasFullLicenceText", () => {
   const t = (text: string) => [{ file: "LICENSE", text }];
 
   it.each([
-    ["MIT", "Permission is hereby granted, free of charge, to any person obtaining a copy"],
+    // htmlparser2's LICENSE breaks the line between "to" and "deal".
+    ["MIT", 'the Software"), to\ndeal in the Software without restriction, including'],
     ["Apache-2.0", "TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION"],
     ["ISC", "Permission to use, copy, modify, and/or distribute this software for any purpose"],
     ["BSD", "Redistribution and use in source and binary forms, with or without"],
@@ -101,12 +103,32 @@ describe("hasFullLicenceText", () => {
   it("rejects having no text at all", () => {
     expect(hasFullLicenceText([])).toBe(false);
   });
+
+  it("does not read the Unicode licence's shared phrase as MIT", () => {
+    const unicode =
+      'Permission is hereby granted, free of charge, to any person obtaining a copy of data files and any associated documentation (the "Data Files") or software and any associated documentation (the "Software") to deal in the Data Files or Software without restriction';
+    expect(licenceCovered("MIT", t(unicode))).toBe(false);
+  });
+});
+
+describe("licenceFullyCovered", () => {
+  const mit = { file: "a", text: "to deal in the Software without restriction" };
+  const apache = {
+    file: "b",
+    text: "TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION",
+  };
+
+  it("needs every OR option, unlike licenceCovered", () => {
+    expect(licenceCovered("MIT OR Apache-2.0", [mit])).toBe(true);
+    expect(licenceFullyCovered("MIT OR Apache-2.0", [mit])).toBe(false);
+    expect(licenceFullyCovered("MIT OR Apache-2.0", [mit, apache])).toBe(true);
+  });
 });
 
 describe("licenceCovered", () => {
   const MIT = {
     file: "LICENSE",
-    text: "Permission is hereby granted, free of charge, to any person",
+    text: "Permission is hereby granted ... to deal in the Software without restriction",
   };
   const APACHE = {
     file: "LICENSE-APACHE",

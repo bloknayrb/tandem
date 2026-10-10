@@ -63,6 +63,7 @@ import {
   findVendoredLicenceFiles,
   hasFullLicenceText,
   licenceCovered,
+  licenceFullyCovered,
   normalizeText,
   packageRootOf,
   readComponentTexts,
@@ -247,9 +248,12 @@ function applyOverrides(components, overrides, ecosystem, otherTargets = new Set
     }
     o.used = true;
     c.texts = [...c.texts, { file: `overrides/${ecosystem}/${o.file}`, text: o.text }];
-    if (!licenceCovered(c.license, c.texts)) {
+    // With an override in play, EVERY option must end up reproduced: carrying
+    // one text of "MIT OR Apache-2.0" would pick a licence on the owner's behalf.
+    if (!licenceFullyCovered(c.license, c.texts)) {
       fail(
-        `override ${ecosystem}/${o.file} still leaves a term of "${c.license}" without its licence text`,
+        `with override ${ecosystem}/${o.file}, ${c.name} still lacks the text of a licence in ` +
+          `"${c.license}" — reproduce every option, so the notices make no choice between them`,
       );
     }
     c.textSource = o.source;
@@ -304,7 +308,14 @@ function collectBundleModules() {
     // Every script file in the directory, not just index.js: a second entry or
     // a split chunk ships too. Each must carry the sourcemap tsup writes in the
     // same pass, which is what lists its inputs.
-    const scripts = walkFiles(dir).filter((f) => /\.[cm]?js$/.test(f));
+    const files = walkFiles(dir);
+    const strays = files.filter((f) => !/\.[cm]?js(\.map)?$/.test(f));
+    if (strays.length > 0) {
+      fail(
+        `dist/${name}/ holds files no sourcemap describes: ${strays.map((f) => relative(REPO, f)).join(", ")}`,
+      );
+    }
+    const scripts = files.filter((f) => /\.[cm]?js$/.test(f));
     if (scripts.length === 0)
       fail(`dist/${name}/ holds no script — this script does not know what it is`);
     const modules = [esbuildPkg];
@@ -334,6 +345,17 @@ function collectClientModules(dir) {
   }
   const { chunks } = JSON.parse(readFileSync(tracePath, "utf8"));
   const onDisk = walkFiles(dir).map((f) => relative(dir, f).split("\\").join("/"));
+  // The header says each bundled font's OFL text ships beside it; hold it to that.
+  const fonts = onDisk.filter((f) => /^fonts\/[^/]+\.(woff2?|ttf|otf)$/.test(f));
+  const ofl = onDisk.filter((f) => /^fonts\/OFL-[^/]+\.txt$/.test(f));
+  if (fonts.length !== ofl.length) {
+    fail(`dist/client/fonts holds ${fonts.length} font file(s) but ${ofl.length} OFL text(s)`);
+  }
+  for (const f of ofl) {
+    if (!/SIL OPEN FONT LICENSE/i.test(readFileSync(join(dir, f), "utf8"))) {
+      fail(`dist/client/${f} is not an SIL Open Font License text`);
+    }
+  }
   for (const file of onDisk) {
     if (/\.[cm]?js$/.test(file)) {
       if (!chunks[file])
@@ -550,6 +572,16 @@ function hostTriple() {
  * compile time, and listing them over-attributes harmlessly.
  */
 function walkCrates(triple) {
+  // `cargo metadata` resolves default features. Features passed to the Tauri
+  // build (tauri.conf.json build.features; the release matrix args are pinned
+  // by the wiring test) would link crates this walk never sees.
+  const tauriConf = JSON.parse(readFileSync(join(REPO, "src-tauri", "tauri.conf.json"), "utf8"));
+  if (tauriConf.build?.features?.length) {
+    fail(
+      `tauri.conf.json build.features is ${JSON.stringify(tauriConf.build.features)}; walkCrates resolves ` +
+        "default features only. Pass those features to cargo metadata here before enabling them.",
+    );
+  }
   const out = [];
   for (const { manifest, label } of RUST_ROOTS) {
     const meta = JSON.parse(
@@ -719,6 +751,7 @@ function rustStd() {
     repository: "https://github.com/rust-lang/rust",
     texts: [{ file: "overrides/rust/std.txt", text: std.text }],
     textSource: std.source,
+    notes: std.note ? [std.note] : [],
     includedIn: RUST_ROOTS.map((r) => r.label),
   };
 }
@@ -764,6 +797,7 @@ function nodeRuntime(triple) {
 
 function header(kind, extra = [], extraNotes = []) {
   const { version } = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8"));
+  // The release's own tag, not master: each version's licence terms are its own.
   return [
     `THIRD-PARTY SOFTWARE NOTICES — Tandem ${version} (${kind})`,
     ...extra,
@@ -772,7 +806,7 @@ function header(kind, extra = [], extraNotes = []) {
     "actually contains. Do not edit.",
     "",
     "Tandem itself is licensed under the Business Source License 1.1, published at",
-    "https://github.com/bloknayrb/tandem/blob/master/LICENSE. The software listed below is",
+    `https://github.com/bloknayrb/tandem/blob/v${version}/LICENSE. The software listed below is`,
     "not Tandem's: each component is included under its own licence, whose text follows.",
     "",
     "Not repeated here: the bundled fonts' licences (SIL Open Font License 1.1), which ship",
@@ -791,6 +825,21 @@ function header(kind, extra = [], extraNotes = []) {
  * the project owner, not for this script. The full list is also written to
  * dist/.third-party/report-<mode>.json.
  */
+/**
+ * The crate half of desktop mode, for every release triple, with no Node
+ * sidecar needed. CI `check` runs it so a dependency bump that needs a new
+ * override, native-code or reviewed-licence entry (or leaves one stale) fails
+ * the PR, not the release matrix after tagging. Writes only its report under
+ * dist/.third-party/.
+ */
+function runCheckCrates() {
+  for (const triple of RELEASE_TRIPLES) {
+    const { crates, elsewhere } = collectCrates(triple);
+    checkFlagged("crates", [["crate", crates]], elsewhere);
+    process.stderr.write(`[third-party-notices] ${triple}: ${crates.length} crates checked\n`);
+  }
+}
+
 function checkFlagged(mode, sections, onlyElsewhere = new Set()) {
   const flagged = [];
   for (const [section, components] of sections) {
@@ -840,7 +889,7 @@ function checkFlagged(mode, sections, onlyElsewhere = new Set()) {
   const stale = Object.keys(reviewed).filter((key) => {
     if (used.has(key)) return false;
     if (key.startsWith("npm:")) return mode === "npm";
-    return mode === "desktop" && !onlyElsewhere.has(key.slice("crate:".length));
+    return mode !== "npm" && !onlyElsewhere.has(key.slice("crate:".length));
   });
   if (stale.length > 0) {
     fail(
@@ -903,14 +952,18 @@ function runDesktop() {
     header(
       "desktop app",
       [`Target: ${triple}`],
-      triple.includes("linux")
-        ? [
-            "",
-            "Also not listed: the Linux AppImage additionally bundles system libraries (GTK,",
-            "WebKitGTK and their dependencies) taken from the build machine's distribution. Their",
-            "licences are those of the distribution's packages.",
-          ]
-        : [],
+      [
+        "",
+        "Also not listed: code the installer formats themselves carry (the NSIS and WiX",
+        "installer runtimes on Windows, the AppImage runtime on Linux).",
+        ...(triple.includes("linux")
+          ? [
+              "The Linux AppImage also bundles system libraries (GTK, WebKitGTK and their",
+              "dependencies) taken from the build machine's distribution, under the licences of",
+              "that distribution's packages.",
+            ]
+          : []),
+      ],
     ) +
       renderSection("npm", NPM_TITLE, desktop) +
       "\n" +
@@ -984,6 +1037,7 @@ function runVerifyPack() {
 }
 
 const MODES = {
+  "check-crates": runCheckCrates,
   npm: runNpm,
   desktop: runDesktop,
   "verify-desktop": runVerifyDesktop,

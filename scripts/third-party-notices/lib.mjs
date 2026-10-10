@@ -17,7 +17,9 @@ import { join } from "node:path";
  * NOTICE, COPYRIGHT and the like. Case-insensitive because the `windows`
  * crates ship lower-case names.
  */
-export const LICENCE_FILE_RE = /^(licen[cs]e|copying|notice|copyright)([.\-_].*)?$/i;
+export const LICENCE_FILE_RE =
+  /^(?!.*\.(?:[cm]?[jt]sx?|json|map|d\.ts|rs|py|html?|css)$)(licen[cs]e|copying|notice|copyright)([.\-_].*)?$/i;
+// (The lookahead keeps code out: jszip ships lib/license_header.js.)
 
 /** Code-unit comparison: `localeCompare` varies with the machine's ICU data. */
 export function byCodeUnit(a, b) {
@@ -270,7 +272,8 @@ export function classifyLicence(expr) {
  * notices of code IT vendored (@sentry/server-utils), carries none of them.
  */
 export const LICENCE_FINGERPRINTS = [
-  ["mit", /permission is hereby granted,? free of charge/i],
+  // Not "permission is hereby granted": the Unicode and Boost licences say that too.
+  ["mit", /to\s+deal\s+in\s+the\s+software\s+without\s+restriction/i],
   ["apache", /terms and conditions for use,? reproduction,? and distribution/i],
   ["isc", /permission to use,? copy,? modify,? and\/or distribute this software/i],
   ["bsd", /redistribution and use in source and binary forms/i],
@@ -324,6 +327,29 @@ export function hasFullLicenceText(texts) {
 }
 
 /**
+ * Like licenceCovered, but every OR option too. Overrides are held to this:
+ * reproducing one option of "MIT OR Apache-2.0" would choose a licence on the
+ * project's behalf, and that choice is the owner's, not the build's.
+ */
+export function licenceFullyCovered(expr, texts) {
+  const families = ownFamilies(texts);
+  let tree;
+  try {
+    tree = parseSpdx(expr);
+  } catch {
+    return families.size > 0;
+  }
+  const walk = (node) => {
+    if (node.id) {
+      const family = ID_FAMILY[node.id];
+      return family === undefined ? families.size > 0 : families.has(family);
+    }
+    return node.args.every(walk);
+  };
+  return walk(tree);
+}
+
+/**
  * True when the component's own texts reproduce a licence for every term the
  * expression requires: each term of an AND, at least one option of an OR.
  * "(MIT AND Zlib)" with only an MIT file is NOT covered. An unparseable or
@@ -373,6 +399,7 @@ export function renderSection(key, title, components) {
   for (const c of sorted) {
     const label = `${c.name}@${c.version}`;
     const refs = [];
+    const vendoredRefs = [];
     for (const t of c.texts) {
       if (!textIds.has(t.text)) {
         const id = `${textIds.size + 1}`;
@@ -380,8 +407,9 @@ export function renderSection(key, title, components) {
         textUsers.set(id, []);
       }
       const id = textIds.get(t.text);
-      if (!refs.includes(id)) {
-        refs.push(id);
+      const bucket = t.vendored ? vendoredRefs : refs;
+      if (!refs.includes(id) && !vendoredRefs.includes(id)) {
+        bucket.push(id);
         textUsers.get(id).push(label);
       }
     }
@@ -391,7 +419,11 @@ export function renderSection(key, title, components) {
     if (c.repository) lines.push(`  Source: ${c.repository}`);
     if (c.textSource) lines.push(`  Licence text from: ${c.textSource}`);
     for (const note of c.notes ?? []) lines.push(`  Note: ${note}`);
-    lines.push(`  Licence text: ${refs.map((r) => `[${key} text ${r}]`).join(", ")}`);
+    const fmt = (ids) => ids.map((r) => `[${key} text ${r}]`).join(", ");
+    lines.push(`  Licence text: ${fmt(refs)}`);
+    if (vendoredRefs.length > 0) {
+      lines.push(`  Licence texts of third-party code it includes: ${fmt(vendoredRefs)}`);
+    }
     lines.push("");
   }
   lines.push("-".repeat(78));
