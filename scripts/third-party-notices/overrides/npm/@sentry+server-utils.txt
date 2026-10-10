@@ -1,4 +1,4 @@
-Source: https://github.com/getsentry/sentry-javascript/blob/develop/LICENSE
+Source: https://github.com/getsentry/sentry-javascript/blob/10.74.0/LICENSE
 License: MIT
 Note: the published package ships only build/THIRD-PARTY-LICENSES.txt, which covers the code it vendors, not
 its own; this is the sentry-javascript monorepo's licence.
@@ -24,13 +24,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-Third-Party Dependency Notice
-
-The MIT License above applies to the code in this repository. Some packages
-published from this repository have the Sentry CLI (the `sentry` package on npm,
-https://github.com/getsentry/cli) as a direct or transitive dependency. The
-Sentry CLI is not part of this repository and is not covered by the MIT License
-above. It is licensed under the Functional Source License, Version 1.1, Apache
-2.0 Future License (FSL-1.1-Apache-2.0):
-https://github.com/getsentry/cli/blob/main/LICENSE.md

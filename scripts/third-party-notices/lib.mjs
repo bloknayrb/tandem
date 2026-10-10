@@ -289,7 +289,10 @@ export const LICENCE_FINGERPRINTS = [
   ["python", /python software foundation license/i],
 ];
 
-/** Which family's text satisfies an SPDX id. An id not listed here is satisfied by any full text. */
+/**
+ * Which family's text satisfies an SPDX id. For an id not listed here,
+ * licenceCovered accepts any full text and licenceFullyCovered accepts none.
+ */
 const ID_FAMILY = {
   MIT: "mit",
   "MIT-0": "mit",
@@ -423,7 +426,7 @@ export function renderSection(key, title, components) {
     const fmt = (ids) => ids.map((r) => `[${key} text ${r}]`).join(", ");
     lines.push(`  Licence text: ${fmt(refs)}`);
     if (vendoredRefs.length > 0) {
-      lines.push(`  Licence texts its package carries for code it vendors: ${fmt(vendoredRefs)}`);
+      lines.push(`  Licence texts of code it vendors or compiles in: ${fmt(vendoredRefs)}`);
     }
     lines.push("");
   }
