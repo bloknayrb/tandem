@@ -412,6 +412,7 @@ settings-modal-copy-diagnostics-btn
 settings-modal-cowork-suspense-fallback
 settings-modal-display-name
 settings-modal-dwell-time-slider
+settings-modal-license-error
 settings-modal-margin-view-hint
 settings-modal-margin-view-toggle
 settings-modal-mcp-status
@@ -432,6 +433,7 @@ settings-modal-solo-rail-hidden-toggle
 settings-modal-tab-{*}
 settings-modal-view-changelog-btn
 settings-modal-view-documentation-btn
+settings-modal-view-license-btn
 settings-modal-working-directory
 settings-modal-working-directory-input
 settings-modal-working-directory-load-error

@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Tandem's Cowork setup is out of the app for now, and Cowork is not a supported surface in this version. Claude Code and Claude Desktop setup are unchanged.
 - Tandem now listens on this computer only. Exposing the npm server on a LAN is not in this version.
+- The desktop app now includes Tandem's license, and Settings has a View license link that opens it.
+
+### Added
+
+- **The desktop app ships its license, and Settings can open it.** The license says it must be displayed on every copy, and no desktop build had included it. The app now bundles it, and the Settings sidebar has a **View license** link that opens it read-only, the way the changelog opens. Settings → About also shows where the license file is. The npm package already carried the license; the View license link does not appear there, because Tandem opens only files with an extension it knows, such as `.md` or `.txt`, and the package's copy has none. The About row still shows its location.
 
 ### Changed
 

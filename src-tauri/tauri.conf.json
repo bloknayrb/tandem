@@ -64,6 +64,7 @@
       "../sample/": "sample/",
       "../skills/": "skills/",
       "../CHANGELOG.md": "CHANGELOG.md",
+      "../LICENSE": "LICENSE.txt",
       "../docs/workflows.md": "docs/workflows.md"
     },
     "windows": {

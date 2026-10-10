@@ -186,6 +186,28 @@ const WORKFLOWS_PATH: string | undefined = findRepoFile(__dirname, "docs/workflo
 // Exposed via /api/info so the "Replay tutorial" affordance can reopen the
 // welcome doc (force-reload → server re-injects the seed annotations).
 const WELCOME_PATH: string | undefined = findRepoFile(__dirname, "sample/welcome.md");
+const LICENSE_PATH: string | undefined = findLicensePath(__dirname);
+
+/**
+ * The licence text this copy ships with. The desktop bundle carries it as
+ * `LICENSE.txt` (tauri.conf.json `bundle.resources`), because `/api/open`
+ * refuses an extensionless file; a dev checkout and the npm package carry the
+ * repository's bare `LICENSE`. The `.txt` name is tried first so the bundle
+ * resolves to the copy Settings can open. A bare `LICENSE` is still reported
+ * (the About tab shows its path) but the client offers no open action for it.
+ *
+ * `LICENSE.txt` gets only the one direct probe, never `findRepoFile`'s ancestor
+ * walk: the bundle is the one layout that has it, always at `../..`, and the
+ * walk accepts any ancestor holding `package.json` beside the file. For an npm
+ * install inside a project that walk would reach the project root, so a
+ * project's own `LICENSE.txt` would beat this package's `LICENSE` and be shown
+ * (and opened) as Tandem's.
+ */
+export function findLicensePath(startDir: string): string | undefined {
+  const bundled = join(startDir, "../..", "LICENSE.txt");
+  if (existsSync(bundled)) return bundled;
+  return findRepoFile(startDir, "LICENSE");
+}
 
 // One McpServer per live transport session, keyed by Mcp-Session-Id (#438
 // §3.2). The SDK's Protocol.connect() throws if a server already has a
@@ -912,6 +934,7 @@ export async function startMcpServerHttp(
       changelogPath: CHANGELOG_PATH,
       workflowsPath: WORKFLOWS_PATH,
       welcomePath: WELCOME_PATH,
+      licensePath: LICENSE_PATH,
       transport: "http",
       bindHost: host,
       bindPort: port,
