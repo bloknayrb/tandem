@@ -1291,3 +1291,161 @@ describe("createAiReadiness — push consumer", () => {
     });
   });
 });
+
+describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
+  let originalFetch: typeof fetch;
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+  afterEach(() => {
+    cleanup();
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  const runningWith =
+    (extra: Record<string, unknown> = {}) =>
+    () =>
+      mkResponse({
+        available: true,
+        running: true,
+        reaperPid: 1,
+        cwd: "/home/ana/notes",
+        sessionId: "<set>",
+        resuming: false,
+        ...extra,
+      });
+
+  it("reports the running launcher, its folder and its busy flag", async () => {
+    globalThis.fetch = routedFetch({
+      launcher: runningWith({ busy: true }),
+      health: mkResponse({ status: "ok", hasSession: false }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().launcherRunning).toBe(true);
+    expect(h.get().launcherCwd).toBe("/home/ana/notes");
+    expect(h.get().launcherBusy).toBe(true);
+  });
+
+  it("reads a missing busy/cwd as not busy / unknown folder (older server, off-loopback)", async () => {
+    globalThis.fetch = routedFetch({
+      launcher: RUNNING_LAUNCHER,
+      health: mkResponse({ status: "ok", hasSession: false }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().launcherRunning).toBe(true);
+    expect(h.get().launcherCwd).toBeNull();
+    expect(h.get().launcherBusy).toBe(false);
+  });
+
+  it("is not running for a stopped or unavailable launcher", async () => {
+    globalThis.fetch = routedFetch({
+      launcher: STOPPED_LAUNCHER,
+      health: mkResponse({ status: "ok", hasSession: false }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().launcherRunning).toBe(false);
+    expect(h.get().launcherBusy).toBe(false);
+  });
+
+  it("drops the running claim when /health strikes out but the launcher route keeps answering non-OK", async () => {
+    // The squatter shape: something on :3479 answers every request non-OK. The
+    // launcher reader resets its strikes on ANY HTTP answer and keeps the last
+    // `status` (still `running: true`), so only the `serverUnreachable` gate can
+    // turn this off. A kill-both-routes fixture would clear `status` itself and
+    // pass with the gate deleted.
+    let squatted = false;
+    globalThis.fetch = routedFetch({
+      launcher: () => (squatted ? mkResponse({}, false, 500) : runningWith({ busy: true })()),
+      health: () =>
+        squatted ? mkResponse({}, false, 500) : mkResponse({ status: "ok", hasSession: true }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().launcherRunning).toBe(true);
+
+    squatted = true;
+    h.get().refresh();
+    await settle();
+    h.get().refresh();
+    await settle();
+
+    expect(h.get().serverUnreachable).toBe(true);
+    expect(h.get().launcherRunning).toBe(false);
+    expect(h.get().launcherCwd).toBeNull();
+    expect(h.get().launcherBusy).toBe(false);
+  });
+
+  describe("launcherFailure", () => {
+    const tripped = (lastError: string) => () =>
+      mkResponse({ available: true, running: false, lastError });
+
+    for (const [lastError, expected] of [
+      ["needs-login", "sign-in"],
+      ["cli-unusable", "setup"],
+      ["circuit-open", "restart"],
+      ["binary-not-found", "restart"],
+      ["wake-delivery-failed", "restart"],
+    ] as const) {
+      it(`${lastError} beside a live session → ${expected}, while chip/state stay as before`, async () => {
+        globalThis.fetch = routedFetch({
+          launcher: tripped(lastError),
+          health: mkResponse({ status: "ok", hasSession: true }),
+        });
+        const h = mount();
+        await settle();
+        expect(h.get().launcherFailure).toBe(expected);
+        // #1054 unchanged: the session still promotes to ready with no chip, so
+        // EmptyState and the send path see exactly what they saw before.
+        expect(h.get().state).toBe("ready");
+        expect(h.get().chip).toBeNull();
+      });
+    }
+
+    for (const lastError of ["spawn-failed", "status-check-failed", "stop-failed"]) {
+      it(`${lastError} is not a tripped failure`, async () => {
+        globalThis.fetch = routedFetch({
+          launcher: tripped(lastError),
+          health: mkResponse({ status: "ok", hasSession: true }),
+        });
+        const h = mount();
+        await settle();
+        expect(h.get().launcherFailure).toBeNull();
+      });
+    }
+
+    it("is null with no lastError", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: STOPPED_LAUNCHER,
+        health: mkResponse({ status: "ok", hasSession: true }),
+      });
+      const h = mount();
+      await settle();
+      expect(h.get().launcherFailure).toBeNull();
+    });
+
+    it("is null with no session (the ordinary chip covers that case)", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: tripped("circuit-open"),
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      const h = mount();
+      await settle();
+      expect(h.get().launcherFailure).toBeNull();
+      expect(h.get().chip).toBe("restart");
+    });
+
+    it("is null in Solo", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: tripped("circuit-open"),
+        health: mkResponse({ status: "ok", hasSession: true }),
+      });
+      const h = mount({ soloMode: true });
+      await settle();
+      expect(h.get().launcherFailure).toBeNull();
+    });
+  });
+});

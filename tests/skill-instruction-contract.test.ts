@@ -126,7 +126,11 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // with `tandem_reply` (`replyTo` + `inProgress: true`) before doing the work, and the
   // idempotency paragraph names ack + result as the expected pair. Outside the wake
   // section; every wake assertion below was re-read against the bumped file.
-  expect(skill).toMatch(/^version:\s*29$/m);
+  // 30 softens the `tandem_status({ text })` bullet in Collaboration Etiquette from "the user
+  // sees it" to "may see it": the status bar now hides presence text beside Tandem's own
+  // launched Claude, because it can't be attributed to the chat's session (#2167). Outside the
+  // wake section; every wake assertion below was re-read against the bumped file.
+  expect(skill).toMatch(/^version:\s*30$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
   // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
@@ -501,7 +505,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "29", bodyHash: "6ccbb6a52e44" });
+    ).toEqual({ version: "30", bodyHash: "fcc0d23e07f0" });
   });
 
   // The editor's pickup row shows "working on it" only from an `inProgress` ack, and the

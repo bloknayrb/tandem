@@ -32,18 +32,22 @@
  * (the green "Synced" dot) and NOT `claudeActive` (Claude's *activity* presence:
  * it flaps to `false` every few seconds when Claude is idle between tool calls,
  * so gating a setup CTA on it would make a working user's chip oscillate).
- * `claudeActive` stays the idle/working animation on the status dot.
+ * `claudeActive` stays the idle/working animation on the status dot — except
+ * beside Tandem's own launched Claude, where the status pill shows only the
+ * supervisor's `busy` (`launcherBusy`), because presence can't be attributed to
+ * the chat's session (#2167).
  *
  * States:
  *   - `booting`      — not yet known (still connecting / first status read
  *                      pending). Render nothing; never flash a CTA on boot.
- *   - `unconfigured` — launcher unavailable (`available: false`: stdio mode,
- *                      disabled, or no claude-code integration) AND no active
- *                      MCP session. Prompt setup.
- *   - `stopped`      — configured but not running (`available: true,
- *                      running: false` — crashed/stopped) AND no active MCP
- *                      session. Prompt restart, NOT the setup wizard (the user
- *                      is already set up).
+ *   - `unconfigured` — launcher unavailable (`available: false`: stdio mode or
+ *                      disabled) AND no active MCP session. Prompt setup.
+ *   - `stopped`      — `available: true, running: false` AND no active MCP
+ *                      session. Prompt restart, NOT the setup wizard. Known gap:
+ *                      HTTP mode creates the supervisor even with NO claude-code
+ *                      integration, so a never-configured user also lands here
+ *                      and is offered "Restart Claude Code" (tracked as the
+ *                      launcher-CTA follow-up to the "AI connected" pill change).
  *   - `ready`        — Claude Code running OR an MCP session is active.
  *
  * `chip` folds in Solo-mode suppression: in Solo mode the user has deliberately
@@ -271,6 +275,69 @@ export const AI_CTA: Record<
   },
 };
 
+/** A stopped launcher's CTA — also a tripped Tandem Claude surfaced beside a
+ *  session that is still attached (`launcherFailure`). */
+export type LauncherFailure = Exclude<AiChip, null | "connect">;
+
+/**
+ * The `lastError` → CTA decision for a stopped launcher. ONE function, used by
+ * both `chip` and `launcherFailure`, so the two cannot drift apart (#1268).
+ * See `AiChip` for why `cli-unusable` and not `circuit-open` means "install".
+ */
+function chipForStoppedLauncher(lastError: LauncherErrorCode | undefined): LauncherFailure {
+  if (lastError === "cli-unusable") return "setup";
+  if (lastError === "needs-login") return "sign-in";
+  return "restart";
+}
+
+/**
+ * The `lastError` codes that mean Tandem's own Claude has stopped for good.
+ *
+ * Each is set together with `breakerTripped = true` in the supervisor, so while
+ * one is reported no restart timer is pending and no child is alive — the client
+ * needs no `restarting` flag to avoid claiming "stopped" while Tandem retries.
+ * The one exception is a user-initiated relaunch, which lowers the breaker and
+ * then awaits the spawn plan before `spawn()` clears the code: milliseconds,
+ * user-initiated, and the action is idempotent under the supervisor's lock.
+ *
+ * `spawn-failed` is deliberately absent: one of its two call sites sets it with
+ * a restart already scheduled.
+ */
+const TRIPPED_FAILURES: ReadonlySet<LauncherErrorCode> = new Set<LauncherErrorCode>([
+  "needs-login",
+  "binary-not-found",
+  "circuit-open",
+  "cli-unusable",
+  "wake-delivery-failed",
+]);
+
+/**
+ * Copy for the "Tandem's Claude isn't running" button, which renders BESIDE
+ * another attached session — so, unlike `AI_CTA`, every line says the click
+ * concerns Tandem's own Claude and leaves the user's own one alone. The action
+ * comes from `AI_CTA[failure].action`, never from a second lookup here.
+ *
+ * `restart` says "isn't running" rather than "stopped" because
+ * `binary-not-found` maps to it and that Claude may never have started.
+ */
+export const TANDEM_CLAUDE_DOWN: Record<LauncherFailure, { label: string; title: string }> = {
+  restart: {
+    label: "Tandem's Claude isn't running",
+    title:
+      "Tandem's background Claude isn't running. Restart it — any Claude you started yourself is unaffected.",
+  },
+  "sign-in": {
+    label: "Tandem's Claude: sign in",
+    title:
+      "Tandem's background Claude isn't signed in. Run “claude” in a terminal to sign in, then click to check again — any Claude you started yourself is unaffected.",
+  },
+  setup: {
+    label: "Tandem's Claude can't start",
+    title:
+      "Tandem can't start its background Claude: the Claude CLI is missing or won't run. Click to set it up — already have it? Run “Relaunch Claude in this folder” from the command palette",
+  },
+};
+
 /**
  * The affirmative "an agent is connected" indicator, or `null` when there's
  * nothing positive to assert (no session, or still booting). Distinct from
@@ -345,6 +412,28 @@ export interface AiReadiness {
    * single failed read, so a blip cannot raise an alarm about data loss.
    */
   readonly serverUnreachable: boolean;
+  /**
+   * Tandem's own launched Claude is running: launcher status says
+   * `available && running`, and the server is not unreachable. The
+   * `serverUnreachable` gate is load-bearing — `pollLauncherStatus` resets its
+   * strikes on ANY HTTP answer and keeps the last `status`, so a squatter on the
+   * port that answers non-OK would otherwise pin this `true` forever.
+   */
+  readonly launcherRunning: boolean;
+  /** The launched Claude's working folder, or `null` when not running or when
+   *  the field is absent (off-loopback, or an older server). */
+  readonly launcherCwd: string | null;
+  /** The launched Claude has a turn in flight — see `SupervisorStatus.busy`.
+   *  A missing field reads `false`, which is how an older server is silent. */
+  readonly launcherBusy: boolean;
+  /**
+   * Tandem's Claude has tripped (see `TRIPPED_FAILURES`) while ANOTHER session
+   * keeps `hasSession` true — the case `chip` hides, because a live session
+   * promotes `state` to `ready` (#1054). `null` otherwise, and in Solo.
+   * Deliberately separate from `chip`, which keeps its meaning for EmptyState
+   * and the send path.
+   */
+  readonly launcherFailure: LauncherFailure | null;
   /**
    * How long the user's last message has gone unanswered, in ms — or `null`
    * when there is nothing sound to say.
@@ -737,12 +826,28 @@ export function createAiReadiness(deps: {
       : state === "unconfigured"
         ? "connect"
         : state === "stopped"
-          ? lastError === "cli-unusable"
-            ? "setup"
-            : lastError === "needs-login"
-              ? "sign-in"
-              : "restart"
+          ? chipForStoppedLauncher(lastError)
           : null,
+  );
+
+  // The running arm of `status`, or null. One gate, narrowed once, so the three
+  // getters below cannot drift apart. `serverUnreachable` is load-bearing — see
+  // `AiReadiness.launcherRunning`.
+  const runningStatus = $derived(
+    status !== null && status.available && status.running && !serverUnreachable ? status : null,
+  );
+  const launcherRunning = $derived(runningStatus !== null);
+  // `?? null` is load-bearing: the contract types `cwd` as required, but the
+  // off-loopback body and older servers omit it.
+  const launcherCwd = $derived(runningStatus?.cwd ?? null);
+  const launcherBusy = $derived(runningStatus?.busy === true);
+  const launcherFailure = $derived<LauncherFailure | null>(
+    !deps.soloMode() &&
+      mcpSessionActive &&
+      lastError !== undefined &&
+      TRIPPED_FAILURES.has(lastError)
+      ? chipForStoppedLauncher(lastError)
+      : null,
   );
 
   // The affirmative indicator keys on `mcpSessionActive` (an open MCP transport,
@@ -783,6 +888,18 @@ export function createAiReadiness(deps: {
     },
     get serverUnreachable() {
       return serverUnreachable;
+    },
+    get launcherRunning() {
+      return launcherRunning;
+    },
+    get launcherCwd() {
+      return launcherCwd;
+    },
+    get launcherBusy() {
+      return launcherBusy;
+    },
+    get launcherFailure() {
+      return launcherFailure;
     },
     // A getter over raw `$state` rather than a `$derived`, matching
     // `serverUnreachable` directly above and `yjsSync.connected`. Reactivity in

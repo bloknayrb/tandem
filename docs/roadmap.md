@@ -92,6 +92,7 @@ before the flip: fix it, mark it post-v1.0 below, or accept it in
 - **Sidecar and process lifecycle:** #1988 (orphaned sidecar after a force-quit on macOS/Linux), #1994, #1869, #2041.
 - **Correctness:** #2001, #1997, #2064, #2069, #2070, #1981 (the 100 kB body parser shadowing `/api`), #1982, #1980, #1662, #1632, #2009, #1920, #2112, #1523.
 - **Distribution and setup:** #1533, #1610, #1704, #1895, #1792, #1354 (the plugin monitor can't be resolved from a GUI launch).
+- **Honest AI status:** #2167 (attribute chat-UI activity to the session that picked up the chat; until it lands, the status bar hides presence activity beside Tandem's own Claude and shows unattributed activity elsewhere). Wanted as soon as possible for v1.0.
 - **Tutorial gate:** #1696, #1725, #1711.
 - **Accessibility gate:** #1721, #1683.
 - **CI and tests:** #1831 (`claude-code-review.yml` dead since 2026-05-27), #1862, #1911, #1937, #2073, #1333, #1734.

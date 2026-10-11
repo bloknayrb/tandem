@@ -55,7 +55,7 @@ import ScrollPill from "./editor/ScrollPill.svelte";
 import SourceView from "./editor/SourceView.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
-import { AI_CTA, createAiReadiness } from "./hooks/useAiReadiness.svelte";
+import { AI_CTA, createAiReadiness, type LauncherFailure } from "./hooks/useAiReadiness.svelte";
 import {
   nextAnnotationId,
   prevAnnotationId,
@@ -132,7 +132,7 @@ import {
   optOutOfDriftNudge,
 } from "./status/cwdDriftDismiss.svelte";
 import StatusBar from "./status/StatusBar.svelte";
-import { cwdDriftPill } from "./status/status-ai-view";
+import { cwdDriftPill, visibleLauncherFailure } from "./status/status-ai-view";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
 import { isRenamable } from "./types.js";
 import { MCP_BASE_URL } from "./utils/backend-ports";
@@ -449,7 +449,24 @@ const visibleCwdDrift = $derived.by(() => {
   if (d === null) return null;
   return driftDismissed(d.claudeCwd, d.suggestedCwd) ? null : d;
 });
-const cwdDriftView = $derived(cwdDriftPill(visibleCwdDrift, aiReadiness.chip));
+// The RAW failure, not the dismissed-filtered one: the drift gate is a
+// staleness check (the launcher is not running), which a dismissal doesn't change.
+const cwdDriftView = $derived(
+  cwdDriftPill(visibleCwdDrift, aiReadiness.chip, aiReadiness.launcherFailure),
+);
+
+/**
+ * In-memory dismissal of the "Tandem's Claude isn't running" button (rule in
+ * `visibleLauncherFailure`). `lastError` persists until the next spawn, so
+ * without it the button would sit beside a working terminal session all day.
+ */
+let dismissedLauncherFailure = $state<LauncherFailure | null>(null);
+const launcherFailureShown = $derived(
+  visibleLauncherFailure(aiReadiness.launcherFailure, dismissedLauncherFailure),
+);
+function dismissLauncherFailure(): void {
+  dismissedLauncherFailure = aiReadiness.launcherFailure;
+}
 
 /** All three drift notices share the launcher channel and envelope; only the
  * severity and the words differ. */
@@ -593,7 +610,7 @@ function startFreshClaude(): void {
 //      session. It can read the document; it just won't be TOLD, so the comment
 //      waits for the next `tandem_checkInbox`. This was previously silent: the
 //      handler returned as soon as a session existed, which is exactly the
-//      common case. "AI connected" is true and says nothing about delivery.
+//      common case. "AI attached" is true and says nothing about delivery.
 //
 // Both AFFIRM the save and frame the gap as deferred delivery, never
 // "failed/lost". State is read imperatively at event time (no reactive
@@ -607,6 +624,7 @@ $effect(() => {
   // while the probe is in flight; a call the compiler cannot narrow is what
   // makes the re-read real rather than decorative.
   const isSoloNow = (): boolean => modeState.tandemMode === "solo";
+  let busyRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   const handleAddressedAi = async (e: Event) => {
     const via = (e as CustomEvent<{ via?: string }>).detail?.via;
     const viaKey = via ?? "chat";
@@ -614,6 +632,14 @@ $effect(() => {
     // Solo short-circuits before the probe so those sends don't pay for a
     // fetch whose answer `addressedAiNotice` would discard anyway.
     if (isSoloNow()) return;
+    // A send usually starts a turn for Tandem's Claude; re-read the launcher
+    // shortly so "Tandem's Claude is working…" doesn't wait out a whole poll.
+    // One trailing timer, so a burst of sends costs one re-read.
+    if (busyRefreshTimer !== null) clearTimeout(busyRefreshTimer);
+    busyRefreshTimer = setTimeout(() => {
+      busyRefreshTimer = null;
+      aiReadiness.refresh();
+    }, 750);
 
     // Fast path: the polled state already proves silence — an agent is attached
     // (`chip === null`) and a consumer is confirmed. Staleness here can only
@@ -690,16 +716,16 @@ $effect(() => {
     // expectation, not a failure, hence `info` rather than `warning` and no CTA.
     //
     // The copy names the contradiction on purpose. The status pill says "AI
-    // connected" (truthfully — Claude CAN read the document), so a bare "it'll
-    // be seen later" reads as a non-sequitur: the user has just been told the
-    // AI is right there. Saying "connected, but not being notified" is the
-    // whole point of the notice; without it we report a delay and leave the
-    // user to reconcile it with the indicator themselves.
+    // attached" (truthfully — something IS connected), so a bare "it'll be seen
+    // later" reads as a non-sequitur. Saying "connected, but not being notified"
+    // is the whole point of the notice. Same voice as the pill's
+    // `CONNECTED_NO_PUSH`: "something", and a conditional check-in, because the
+    // attached client may be a script or a dead session's leftover connection.
     notifications.push({
       id: `ai-no-push-${viaKey}-${Date.now()}`,
       type: "launcher",
       severity: "info",
-      message: `${noun} saved. Claude is connected but isn't being notified in real time, so it'll see this the next time it checks in.`,
+      message: `${noun} saved. Something is connected to Tandem but isn't being notified. If it's a session you're using, it'll see this the next time it checks in.`,
       dedupKey: `ai-no-push-${viaKey}`,
       timestamp: Date.now(),
     });
@@ -718,7 +744,10 @@ $effect(() => {
     );
   };
   window.addEventListener("tandem:addressed-ai", onAddressedAi);
-  return () => window.removeEventListener("tandem:addressed-ai", onAddressedAi);
+  return () => {
+    window.removeEventListener("tandem:addressed-ai", onAddressedAi);
+    if (busyRefreshTimer !== null) clearTimeout(busyRefreshTimer);
+  };
 });
 
 const WIZARD_DISMISSED_KEY = "tandem:wizard-dismissed";
@@ -2659,6 +2688,11 @@ const shouldShowModelPicker = $derived(
       claudeActive={yjsSync.claudeActive}
       aiLiveIndicator={aiReadiness.liveIndicator}
       aiState={aiReadiness.state}
+      aiLauncherRunning={aiReadiness.launcherRunning}
+      aiLauncherCwd={aiReadiness.launcherCwd}
+      aiLauncherBusy={aiReadiness.launcherBusy}
+      aiLauncherFailure={launcherFailureShown}
+      onDismissLauncherFailure={dismissLauncherFailure}
       aiChip={aiReadiness.chip}
       onConnectAi={connectAi}
       onRestartClaude={restartClaude}

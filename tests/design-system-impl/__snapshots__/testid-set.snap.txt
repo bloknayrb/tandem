@@ -457,6 +457,8 @@ source-view-live
 source-view-textarea
 status-ai-indicator
 status-held-count
+status-tandem-claude-down
+status-tandem-claude-down-dismiss
 status-word-count
 store-readonly-banner
 store-readonly-dismiss

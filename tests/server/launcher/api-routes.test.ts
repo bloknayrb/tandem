@@ -36,6 +36,7 @@ type WrittenIntegrationsFile = { integrations: Array<{ workingDirectory?: string
 interface FakeSupervisorOpts {
   running?: boolean;
   cwd?: string;
+  busy?: boolean;
   relaunchHook?: (cwd?: string) => Promise<void>;
   startFreshHook?: (cwd?: string) => Promise<void>;
 }
@@ -58,6 +59,7 @@ function makeFakeSupervisor(opts: FakeSupervisorOpts = {}): Supervisor {
             cwd: opts.cwd ?? os.homedir(),
             sessionId: "11111111-1111-4111-8111-111111111111",
             resuming: false,
+            busy: opts.busy ?? false,
           }
         : { running: false },
   };
@@ -190,10 +192,19 @@ describe("GET /api/launcher/status", () => {
     expect(body.cwd).toBe("/home/test");
     // sessionId is redacted — the real UUID never crosses the wire.
     expect(body.sessionId).toBe("<set>");
+    expect(body.busy).toBe(false);
+  });
+
+  it("passes the supervisor's busy flag through to loopback callers", async () => {
+    const sup = makeFakeSupervisor({ running: true, busy: true });
+    const { app } = makeApp(baseDeps(sup));
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect((res.body as Extract<LauncherStatus, { running: true }>).busy).toBe(true);
   });
 
   it("returns the minimal { available, running } shape to non-loopback callers", async () => {
-    const sup = makeFakeSupervisor({ running: true });
+    // busy: true so the exact-shape assertion below would catch it leaking.
+    const sup = makeFakeSupervisor({ running: true, busy: true });
     const { app } = makeApp(baseDeps(sup), { remoteAddress: "192.168.1.50" });
     const res = await request(app, "GET", "/api/launcher/status");
     expect(res.status).toBe(200);

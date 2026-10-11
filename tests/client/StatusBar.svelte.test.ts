@@ -91,7 +91,7 @@ describe("StatusBar AI action indicator", () => {
     const indicator = getByTestId("status-ai-indicator");
     expect(indicator.tagName).toBe("DIV");
     expect(indicator.getAttribute("role")).toBe("img");
-    expect(indicator.getAttribute("aria-label")).toContain("Claude is connected");
+    expect(indicator.getAttribute("aria-label")).toContain("Something is connected to Tandem");
   });
   // #1287: the Solo qualifier is only meaningful when it renders from the real
   // component. An earlier draft asserted it via `page.setContent()` in an E2E
@@ -134,5 +134,147 @@ describe("StatusBar AI action indicator", () => {
     // assertion below is about the gate and not about an empty pill.
     expect(indicator.textContent).toContain("reviewing scratchpad…");
     expect(indicator.textContent).not.toContain("not your comments");
+  });
+});
+
+/**
+ * The chat UI shows status only for the chat's attached session (Bryan,
+ * 2026-10-09). Beside "Tandem's Claude", presence activity may be another
+ * session's, so only the supervisor's own `busy` renders.
+ */
+describe("StatusBar — Tandem's Claude activity", () => {
+  const foreignActivity = {
+    claudeStatus: "reviewing scratchpad…",
+    claudeActive: true,
+    claudeWorkingTool: "tandem_edit",
+  };
+
+  it("suppresses another session's activity while Tandem's Claude runs", () => {
+    const { getByTestId, queryByTestId } = render(StatusBar, {
+      props: {
+        ...baseProps,
+        ...foreignActivity,
+        aiState: "ready" as const,
+        aiLiveIndicator: "connected" as const,
+        aiLauncherRunning: true,
+      },
+    });
+    const indicator = getByTestId("status-ai-indicator");
+    expect(indicator.textContent).toContain("Tandem's Claude");
+    expect(indicator.textContent).not.toContain("reviewing scratchpad…");
+    expect(queryByTestId("claude-working-indicator")).toBeNull();
+    // `claudeActive` would pulse the dot without the `pulse` override.
+    const dot = indicator.querySelector(".claude-dot") as HTMLElement;
+    expect(dot.getAttribute("style")).toContain("animation: none");
+  });
+
+  it("positive control: the same activity renders when the launcher is not running", () => {
+    const { getByTestId } = render(StatusBar, {
+      props: {
+        ...baseProps,
+        ...foreignActivity,
+        aiState: "ready" as const,
+        aiLiveIndicator: "connected" as const,
+      },
+    });
+    const indicator = getByTestId("status-ai-indicator");
+    expect(indicator.textContent).toContain("reviewing scratchpad…");
+    expect(getByTestId("claude-working-indicator").textContent).toContain("is editing");
+    const dot = indicator.querySelector(".claude-dot") as HTMLElement;
+    expect(dot.getAttribute("style")).toContain("tandem-status-pulse");
+  });
+
+  it("re-sources the working pill to the launcher's busy flag", () => {
+    const { getByTestId } = render(StatusBar, {
+      props: {
+        ...baseProps,
+        ...foreignActivity,
+        aiState: "ready" as const,
+        aiLiveIndicator: "connected" as const,
+        aiLauncherRunning: true,
+        aiLauncherBusy: true,
+      },
+    });
+    const pill = getByTestId("claude-working-indicator");
+    expect(pill.textContent).toContain("Tandem's Claude is working…");
+    expect(pill.getAttribute("role")).toBe("status");
+  });
+});
+
+describe("StatusBar — Tandem's Claude isn't running", () => {
+  const attached = {
+    aiState: "ready" as const,
+    aiLiveIndicator: "connected" as const,
+  };
+
+  it("renders nothing when there is no failure", () => {
+    const { queryByTestId } = render(StatusBar, { props: { ...baseProps, ...attached } });
+    expect(queryByTestId("status-tandem-claude-down")).toBeNull();
+  });
+
+  it("restart: says the user's own Claude is unaffected and calls restart", async () => {
+    const onRestartClaude = vi.fn();
+    const onConnectAi = vi.fn();
+    const { getByTestId } = render(StatusBar, {
+      props: {
+        ...baseProps,
+        ...attached,
+        aiLauncherFailure: "restart" as const,
+        onRestartClaude,
+        onConnectAi,
+      },
+    });
+    const btn = getByTestId("status-tandem-claude-down");
+    expect(btn.textContent).toContain("Tandem's Claude isn't running");
+    expect(btn.getAttribute("aria-label")).toContain(
+      "any Claude you started yourself is unaffected",
+    );
+    await fireEvent.click(btn);
+    expect(onRestartClaude).toHaveBeenCalledOnce();
+    expect(onConnectAi).not.toHaveBeenCalled();
+  });
+
+  it("setup: opens the wizard, not a restart (the #1268 handler pairing)", async () => {
+    const onRestartClaude = vi.fn();
+    const onConnectAi = vi.fn();
+    const { getByTestId } = render(StatusBar, {
+      props: {
+        ...baseProps,
+        ...attached,
+        aiLauncherFailure: "setup" as const,
+        onRestartClaude,
+        onConnectAi,
+      },
+    });
+    const btn = getByTestId("status-tandem-claude-down");
+    expect(btn.textContent).toContain("Tandem's Claude can't start");
+    await fireEvent.click(btn);
+    expect(onConnectAi).toHaveBeenCalledOnce();
+    expect(onRestartClaude).not.toHaveBeenCalled();
+  });
+
+  it("sign-in: names the sign-in and checks again via restart", async () => {
+    const onRestartClaude = vi.fn();
+    const { getByTestId } = render(StatusBar, {
+      props: { ...baseProps, ...attached, aiLauncherFailure: "sign-in" as const, onRestartClaude },
+    });
+    const btn = getByTestId("status-tandem-claude-down");
+    expect(btn.textContent).toContain("Tandem's Claude: sign in");
+    await fireEvent.click(btn);
+    expect(onRestartClaude).toHaveBeenCalledOnce();
+  });
+
+  it("dismiss calls the caller's handler", async () => {
+    const onDismissLauncherFailure = vi.fn();
+    const { getByTestId } = render(StatusBar, {
+      props: {
+        ...baseProps,
+        ...attached,
+        aiLauncherFailure: "restart" as const,
+        onDismissLauncherFailure,
+      },
+    });
+    await fireEvent.click(getByTestId("status-tandem-claude-down-dismiss"));
+    expect(onDismissLauncherFailure).toHaveBeenCalledOnce();
   });
 });

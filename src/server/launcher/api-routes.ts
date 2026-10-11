@@ -5,6 +5,10 @@
  *   - `GET /status` — read-only; loopback returns full struct (with
  *     `sessionId` redacted to "<set>"), non-loopback returns the minimal
  *     `{ available, running }` shape (mirrors `/health`'s redaction pattern).
+ *     `cwd`, `resuming`, `reaperPid` and `busy` are loopback-only for the
+ *     same reason as `/health`'s session-presence fields: `busy` in
+ *     particular is an activity trace of the person at this machine, and the
+ *     port-wildcarded CORS allowlist lets any 127.0.0.1 page read it.
  *   - `GET /nonce` — issues a one-shot single-use nonce that mutating
  *     routes require. Rotates on consumption (success or failure).
  *   - `POST /relaunch` — body `{ cwd, nonce }`. Origin + loopback gates,
@@ -246,6 +250,9 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
         res.json({ available: true, running: true });
         return;
       }
+      // An explicit field list, never `{ ...raw }`: that copy is the only thing
+      // keeping a future internal `SupervisorStatus` field off the wire, and
+      // `raw.sessionId` is the real UUID.
       const body: LauncherStatus = {
         available: true,
         running: true,
@@ -253,6 +260,7 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
         cwd: raw.cwd,
         sessionId: "<set>",
         resuming: raw.resuming,
+        busy: raw.busy,
         skillRefresh,
       };
       res.json(body);

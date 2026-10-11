@@ -44,6 +44,10 @@ export type LauncherStatus =
       /** Always the literal string "<set>" — the real UUID never crosses the wire. */
       sessionId: "<set>";
       resuming: boolean;
+      /** Loopback-only. Tandem's Claude has a turn in flight — see
+       * `SupervisorStatus.busy`. Optional because an older server omits it,
+       * which reads as not busy. */
+      busy?: boolean;
       /** Loopback-only. `null` when last refresh succeeded. */
       skillRefresh?: SkillRefreshError | null;
     };

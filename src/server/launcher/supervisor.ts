@@ -383,6 +383,21 @@ export type SupervisorStatus =
       cwd: string;
       sessionId: string;
       resuming: boolean;
+      /**
+       * A turn written to the child has not yet been closed — the spawn's
+       * `turnInFlight`. Cleared by ANY `result` envelope (they carry no
+       * correlation id), by the `WAKE_LATCH_MAX_MS` expiry, by a failed write,
+       * by `onNoReceipt`, and by teardown; `flushPendingWake` can set it straight
+       * back on a `result` or a latch expiry when a wake was owed. True during
+       * the bootstrap turn and a resumed spawn's login-recheck turn too.
+       *
+       * It inherits both limitations documented on `WAKE_LATCH_MAX_MS`: a slow
+       * turn whose latch broke reads idle while still working, and a reaper that
+       * stopped forwarding reads busy until the receipt check or the latch. It
+       * says nothing about WHICH message the turn serves — the chat pickup row
+       * (#2165) owns that.
+       */
+      busy: boolean;
       /** Never set: a running supervisor has, by construction, no pending
        * fatal error. Present as an explicit `undefined` so `status.lastError`
        * type-checks on the un-narrowed union. */
@@ -778,7 +793,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * Paired with `spawned` rather than stored bare so a late release from a
    * superseded spawn cannot detach the subscription of the one that replaced it.
    */
-  let activeTurnDelivery: { spawned: ChildProcess; teardown: () => void } | null = null;
+  let activeTurnDelivery: {
+    spawned: ChildProcess;
+    teardown: () => void;
+    /** This spawn's `turnInFlight` — read by `status()` as `busy`. */
+    isBusy: () => boolean;
+  } | null = null;
 
   /** Release the active spawn's subscription, whatever state its process is in.
    * Idempotent — the `exit` handler normally gets here first. */
@@ -1473,7 +1493,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       if (activeTurnDelivery?.spawned === spawned) activeTurnDelivery = null;
     }
 
-    activeTurnDelivery = { spawned, teardown: teardownTurnDelivery };
+    activeTurnDelivery = {
+      spawned,
+      teardown: teardownTurnDelivery,
+      isBusy: () => turnInFlight,
+    };
 
     // Written on spawn, NOT gated on the CLI's `init` line. Measured against a
     // real `claude` binary on 2026-08-04 (docs/spikes/channel-push-stream-json.md):
@@ -2126,6 +2150,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         cwd: currentCwd,
         sessionId: currentSessionId,
         resuming: currentResuming,
+        // No `spawned === child` identity check: `child` and
+        // `activeTurnDelivery` are assigned in one synchronous stretch of
+        // `spawnOnce`, and every exit path tears delivery down before nulling
+        // `child`, so there is no observable window where they disagree.
+        busy: activeTurnDelivery !== null && activeTurnDelivery.isBusy(),
       };
     }
     return lastError ? { running: false, lastError } : { running: false };

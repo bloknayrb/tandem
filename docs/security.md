@@ -118,7 +118,9 @@ evicts TTL-expired entries, so it mutates, and a mutation-shaped rule would requ
 the per-route inventory this replaces. Reads keep their existing per-route posture —
 `document/raw` and `diagnostics` refuse a non-loopback caller by hand, while `info`,
 `sessions`, `backups`, `launcher/status`, `models` and `integrations` scrub their payload
-instead. That scrubbing is what the LAN Host accommodation (`createApiMiddleware`'s
+instead. (`launcher/status`'s loopback-only fields include `busy`, whether Tandem's launched
+Claude has a turn in flight — an activity trace of the person at the machine, scrubbed for the
+same reason as `/health`'s `delivery`.) That scrubbing is what the LAN Host accommodation (`createApiMiddleware`'s
 `extraHosts`, wired from `resolvedLanIP`) exists for, and it is now exactly scoped: LAN
 hosts may **read** `/api`; their writes are refused.
 

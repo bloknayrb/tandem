@@ -187,7 +187,13 @@ If you close that dialog, Settings → Network → **Restart server** does the s
 
 ## I sent a chat message (or left a comment) and nothing happened
 
-The status bar says **AI connected** and Claude never reacts. This is the most common new-user snag, and the status bar is genuinely not lying — it's answering a different question than the one you're asking.
+First, read the status bar's AI label — it says who is attached:
+
+- **Tandem's Claude** — the Claude session Tandem started for you is running, and Tandem wakes it when you send a message. It works in the background, so a reply can take a while; "Tandem's Claude is working…" means it is mid-turn and will be woken again when that turn ends. If the hover text says Tandem **hasn't seen it connect**, the session has not connected to Tandem's tools (check that your Claude Code config still has Tandem's MCP entry).
+- **AI attached** — *something else* is connected: a Claude Code session you started, Claude Desktop, another MCP client, or a session that has since closed (Tandem keeps a closed connection for up to about 35 minutes). Tandem can't wake it. The rest of this section is about that case.
+- A separate **Tandem's Claude isn't running** button means Tandem's own session stopped (crashed, signed out, or the Claude CLI won't start) while something else is still attached. Clicking it restarts Tandem's session only; any Claude you started yourself is unaffected.
+
+**AI attached** with no reaction is the most common new-user snag, and the label is not lying — it's answering a different question than the one you're asking.
 
 Tandem has **two independent connections** to Claude:
 
@@ -196,7 +202,7 @@ Tandem has **two independent connections** to Claude:
 | **Pull** | The MCP server | Lets Claude read and edit your document when it decides to look |
 | **Push** | A real-time event stream | Tells Claude the moment you comment or send a message |
 
-"AI connected" reports the **pull** path only. Chat and comments need the **push** path, and the two can be in completely different states. A session with a working pull path and a dead push path looks perfectly healthy and does nothing when you type.
+"AI attached" reports the **pull** path only. Chat and comments need the **push** path, and the two can be in completely different states. A session with a working pull path and a dead push path looks perfectly healthy and does nothing when you type.
 
 **Diagnose it.** In the desktop app: **Settings → About → Copy Diagnostics** (the desktop app does not install the `tandem` command). From a terminal, if you installed via npm:
 

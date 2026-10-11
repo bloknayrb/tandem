@@ -452,11 +452,11 @@ Three further skip codes exist on `SaveResult` but **cannot reach `tandem_save`'
 
 ### tandem_status
 
-Check editor status (running state, open documents, active document) and optionally update the AI's status text shown in the editor (Claude's, in the default integration; any connected MCP client can set it).
+Check editor status (running state, open documents, active document) and optionally update the AI's status text, which the editor may show (Claude's, in the default integration; any connected MCP client can set it). The status bar hides it while Tandem's own launched Claude is running, because it can't tell which session set it ([#2167](https://github.com/bloknayrb/tandem/issues/2167)).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `text` | string | no | Status text to show in the editor status bar (e.g., `"Reviewing cost figures..."`). When omitted, read-only mode. |
+| `text` | string | no | Status text the editor status bar may show (e.g., `"Reviewing cost figures..."`). When omitted, read-only mode. |
 | `focusParagraph` | number | no | Index of paragraph Claude is focusing on (renders blue tint + animated gutter bar). Only used when `text` is provided. |
 | `focusOffset` | number | no | Flat text offset alternative to `focusParagraph` for paragraph targeting. Only used when `text` is provided. |
 | `documentId` | string | no | Target document ID for status display (defaults to active document). Only used when `text` is provided. |

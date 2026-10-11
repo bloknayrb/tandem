@@ -1489,7 +1489,7 @@ export function registerDocumentTools(server: McpServer): void {
     "tandem_status",
     {
       description:
-        "Read editor status (no params) or set your visible status text (pass text), shown in the editor's status bar.",
+        "Read editor status (no params) or set your status text (pass text), which may be shown in the editor's status bar.",
       inputSchema: {
         text: z.string().optional().describe("Status text to display — omit for read-only"),
         focusParagraph: z
