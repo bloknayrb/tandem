@@ -108,8 +108,10 @@ and therefore no list of beta users to work from.
    and export your documents. What a key adds is the AI features: Claude (or any
    other agent) over the MCP server, the chat panel and local models. The
    [LICENSE](../LICENSE) grants exactly that: v1.0 and later may be used without
-   a key, for personal use and individual self-hosting, provided you do not use
-   the AI features.
+   a key, for personal use and individual self-hosting, provided the use does
+   not include the AI features. The condition is on the use, not the person:
+   using the AI features without a key is outside the grant, but it doesn't
+   disqualify your later use of the editor without them.
 
 That third one matters and is easy to get wrong, so to be blunt: **we do not
 lock you out of your own files.** They're plain files on your disk, and nothing
