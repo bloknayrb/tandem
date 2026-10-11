@@ -76,7 +76,7 @@ const ALLOWED_ACTIONS = [
 ];
 
 const RUST_TOOLCHAIN = "dtolnay/rust-toolchain";
-const RUST_TOOLCHAIN_SITES = 4;
+const RUST_TOOLCHAIN_SITES = 5;
 
 const SHA_PINNED = /^[\w.-]+\/[\w./-]+@[0-9a-f]{40}$/;
 
