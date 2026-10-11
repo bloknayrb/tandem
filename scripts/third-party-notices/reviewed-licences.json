@@ -1,0 +1,49 @@
+{
+  "$comment": "Components whose licence is outside the permissive allowlist in scripts/third-party-notices/lib.mjs. The build fails on any such component missing from this list, or listed under a different licence expression, so a new copyleft or unknown licence cannot ship unnoticed. Keys are <section>:<name>. An entry records that the component was brought to the project owner, not that it was approved: `status` says which.",
+  "entries": {
+    "npm:jszip": {
+      "license": "(MIT OR GPL-3.0-or-later)",
+      "status": "accepted 2026-10-11: used under the MIT option"
+    },
+    "crate:cssparser": {
+      "license": "MPL-2.0",
+      "status": "accepted 2026-10-11: unmodified; the desktop notices state where the source is (MPL-2.0 3.2(a))"
+    },
+    "crate:cssparser-macros": {
+      "license": "MPL-2.0",
+      "status": "accepted 2026-10-11: unmodified; the desktop notices state where the source is (MPL-2.0 3.2(a))"
+    },
+    "crate:dtoa-short": {
+      "license": "MPL-2.0",
+      "status": "accepted 2026-10-11: unmodified; the desktop notices state where the source is (MPL-2.0 3.2(a))"
+    },
+    "crate:freedesktop_entry_parser": {
+      "license": "MPL-2.0",
+      "status": "accepted 2026-10-11: unmodified; the desktop notices state where the source is (MPL-2.0 3.2(a)) (Linux build only)"
+    },
+    "crate:linicon": {
+      "license": "MPL-2.0",
+      "status": "accepted 2026-10-11: unmodified; the desktop notices state where the source is (MPL-2.0 3.2(a)) (Linux build only)"
+    },
+    "crate:linicon-theme": {
+      "license": "MPL-2.0",
+      "status": "accepted 2026-10-11: unmodified; the desktop notices state where the source is (MPL-2.0 3.2(a)) (Linux build only)"
+    },
+    "crate:option-ext": {
+      "license": "MPL-2.0",
+      "status": "accepted 2026-10-11: unmodified; the desktop notices state where the source is (MPL-2.0 3.2(a))"
+    },
+    "crate:selectors": {
+      "license": "MPL-2.0",
+      "status": "accepted 2026-10-11: unmodified; the desktop notices state where the source is (MPL-2.0 3.2(a))"
+    },
+    "crate:webpki-root-certs": {
+      "license": "CDLA-Permissive-2.0",
+      "status": "accepted 2026-10-11: permissive; its licence text ships in the notices"
+    },
+    "crate:webpki-roots": {
+      "license": "CDLA-Permissive-2.0",
+      "status": "accepted 2026-10-11: permissive; its licence text ships in the notices"
+    }
+  }
+}

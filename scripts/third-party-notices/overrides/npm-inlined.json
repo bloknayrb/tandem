@@ -1,0 +1,8 @@
+{
+  "$comment": "Packages a dependency inlined into its own build and that are not installed anywhere, mapped to the host package that inlined them. Version, licence and text are read from the host's THIRD-PARTY-LICENSES file. See scripts/third-party-notices/generate.mjs inlinedComponent().",
+  "@apm-js-collab/code-transformer": { "inlinedBy": "@sentry/server-utils" },
+  "@apm-js-collab/tracing-hooks": { "inlinedBy": "@sentry/server-utils" },
+  "has-flag": { "inlinedBy": "@sentry/server-utils" },
+  "semifies": { "inlinedBy": "@sentry/server-utils" },
+  "supports-color": { "inlinedBy": "@sentry/server-utils" }
+}
