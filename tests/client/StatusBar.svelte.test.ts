@@ -12,6 +12,8 @@ const baseProps = {
   claudeStatus: null,
   claudeActive: false,
   aiLiveIndicator: null,
+  aiLauncherAttached: false,
+  aiSessionCount: null as number | null,
   aiState: "unconfigured" as const,
   soloMode: false,
 };
@@ -198,6 +200,9 @@ describe("StatusBar — Tandem's Claude activity", () => {
     const pill = getByTestId("claude-working-indicator");
     expect(pill.textContent).toContain("Tandem's Claude is working…");
     expect(pill.getAttribute("role")).toBe("status");
+    // The dot pulses from `busy` through the `pulse` override, not from presence.
+    const dot = getByTestId("status-ai-indicator").querySelector(".claude-dot") as HTMLElement;
+    expect(dot.getAttribute("style")).toContain("tandem-status-pulse");
   });
 });
 
@@ -276,5 +281,68 @@ describe("StatusBar — Tandem's Claude isn't running", () => {
     });
     await fireEvent.click(getByTestId("status-tandem-claude-down-dismiss"));
     expect(onDismissLauncherFailure).toHaveBeenCalledOnce();
+  });
+
+  it("sits beside the attached pill rather than replacing it", () => {
+    const { getByTestId } = render(StatusBar, {
+      props: { ...baseProps, ...attached, aiLauncherFailure: "restart" as const },
+    });
+    expect(getByTestId("status-tandem-claude-down")).toBeTruthy();
+    expect(getByTestId("status-ai-indicator").textContent).toContain("AI attached");
+  });
+
+  it("a dismissal hides the button but keeps the pill's leftover-connection hint", () => {
+    const { getByTestId, queryByTestId } = render(StatusBar, {
+      props: {
+        ...baseProps,
+        ...attached,
+        aiLauncherFailure: "restart" as const,
+        aiLauncherFailureDismissed: true,
+      },
+    });
+    expect(queryByTestId("status-tandem-claude-down")).toBeNull();
+    expect(getByTestId("status-ai-indicator").getAttribute("title")).toContain(
+      "leftover connection",
+    );
+  });
+});
+
+/** Bryan, 2026-10-11: "i do want the colors to be honest. the status pill
+ * should indicate how many sessions are connected as well". */
+describe("StatusBar — honest colour and session count", () => {
+  const launcher = {
+    aiState: "ready" as const,
+    aiLiveIndicator: "connected" as const,
+    aiLauncherRunning: true,
+  };
+
+  it("keeps the dot neutral beside Tandem's Claude when the connection isn't matched to it", () => {
+    const { getByTestId } = render(StatusBar, { props: { ...baseProps, ...launcher } });
+    const dot = getByTestId("status-ai-indicator").querySelector(".claude-dot") as HTMLElement;
+    expect(dot.classList.contains("pending-ring")).toBe(true);
+  });
+
+  it("turns it green only when the server matched the connection to Tandem's Claude", () => {
+    const { getByTestId } = render(StatusBar, {
+      props: { ...baseProps, ...launcher, aiLauncherAttached: true },
+    });
+    const dot = getByTestId("status-ai-indicator").querySelector(".claude-dot") as HTMLElement;
+    expect(dot.classList.contains("pending-ring")).toBe(false);
+  });
+
+  it("shows the session count beside the label and in the tooltip", () => {
+    const { getByTestId } = render(StatusBar, {
+      props: { ...baseProps, ...launcher, aiSessionCount: 2 },
+    });
+    expect(getByTestId("status-ai-session-count").textContent).toBe(" · 2 sessions");
+    const pill = getByTestId("status-ai-indicator");
+    expect(pill.textContent).toContain("Tandem's Claude · 2 sessions");
+    expect(pill.getAttribute("title")).toContain("2 sessions are connected to Tandem");
+    expect(pill.getAttribute("aria-label")).toContain("2 sessions are connected to Tandem");
+  });
+
+  it("shows no count when it is unknown", () => {
+    const { queryByTestId } = render(StatusBar, { props: { ...baseProps, ...launcher } });
+    expect(queryByTestId("status-ai-session-count")).toBeNull();
   });
 });

@@ -6,14 +6,17 @@ import type { Handler } from "./_shared.js";
 export interface HealthHandlerDeps {
   version: string;
   /**
-   * True when at least one MCP transport has completed `initialize`.
+   * How many MCP clients have completed `initialize` and are still in the
+   * registry — `countDistinctClients`, an upper bound whose limits are on that
+   * function. `hasSession` is derived from it (`> 0`), so the two can never
+   * disagree within one response.
    *
    * Scoped to handshake-era clients by construction: MCP `2026-07-28` removed
    * both the handshake and protocol-level sessions, so a client on that revision
    * never increments this. Supplementing it without inverting its failure mode
    * is #1249; see ADR-045's 2026-07-30 amendment.
    */
-  hasSession: () => boolean;
+  sessionCount: () => number;
   /** Live count of event-queue subscribers (the SSE fan-out). */
   getSubscriberCount: () => number;
   /** Consumer heartbeat counters — see events/push-liveness.ts. */
@@ -44,7 +47,7 @@ export interface HealthHandlerDeps {
  * GET /health — public liveness, plus loopback-only diagnostics.
  *
  * Public: `status`, `version`, `transport`. Loopback-only: `pid`, `hasSession`,
- * `push` and `delivery`.
+ * `sessionCount`, `push` and `delivery`.
  *
  * `status` is `"ok"` until `shutdown()` starts and `"shutting-down"` after, and
  * the response stays a 200 in both states. That distinction is what stops a
@@ -63,7 +66,8 @@ export interface HealthHandlerDeps {
  * provider's auth token, so that would hand a connection credential to any
  * loopback page.
  *
- * The other three gated fields are session-presence signals — whether an AI is attached,
+ * The other gated fields are session-presence signals — whether an AI is attached
+ * and how many,
  * whether a real-time consumer is receiving, and whether a model has polled since
  * something was handed out — so they are withheld from LAN callers for the same
  * reason. `delivery` is the most sensitive of them, not the least: its counters
@@ -116,7 +120,9 @@ export function makeHealthHandler(deps: HealthHandlerDeps): Handler {
       // one possible value for it in this process.
       body.pid = process.pid;
       const subscribers = deps.getSubscriberCount();
-      body.hasSession = deps.hasSession();
+      const sessionCount = deps.sessionCount();
+      body.hasSession = sessionCount > 0;
+      body.sessionCount = sessionCount;
       body.push = {
         subscribers,
         ...deps.getPushLiveness(),

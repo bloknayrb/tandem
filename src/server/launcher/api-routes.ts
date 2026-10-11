@@ -5,10 +5,11 @@
  *   - `GET /status` — read-only; loopback returns full struct (with
  *     `sessionId` redacted to "<set>"), non-loopback returns the minimal
  *     `{ available, running }` shape (mirrors `/health`'s redaction pattern).
- *     `cwd`, `resuming`, `reaperPid` and `busy` are loopback-only for the
- *     same reason as `/health`'s session-presence fields: `busy` in
+ *     `cwd`, `resuming`, `reaperPid`, `busy` and `attached` are loopback-only
+ *     for the same reason as `/health`'s session-presence fields: `busy` in
  *     particular is an activity trace of the person at this machine, and the
- *     port-wildcarded CORS allowlist lets any 127.0.0.1 page read it.
+ *     CORS allowlist admits any 127.0.0.1 port, so any local page can read
+ *     it (docs/security.md#cors-allowlist).
  *   - `GET /nonce` — issues a one-shot single-use nonce that mutating
  *     routes require. Rotates on consumption (success or failure).
  *   - `POST /relaunch` — body `{ cwd, nonce }`. Origin + loopback gates,
@@ -157,6 +158,11 @@ export interface LauncherRoutesDeps {
    * when `claude-code` integration is absent.
    */
   getSupervisor: () => Supervisor | null;
+  /** Whether a live MCP connection from this Claude session id, opened at or
+   * after `sinceMs`, is in the transport registry (`isClaudeSessionAttached` in
+   * `mcp/server.ts`). Called with the supervisor's real UUID, which never leaves
+   * the server: only the boolean is sent. */
+  isClaudeSessionAttached: (claudeSessionId: string, sinceMs: number) => boolean;
   /** Reason the supervisor is unavailable (stdio mode, disabled, no integration).
    * Surfaced via GET /status. */
   unavailableReason: () => LauncherUnavailableReason;
@@ -250,9 +256,17 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
         res.json({ available: true, running: true });
         return;
       }
+      // Green beside "Tandem's Claude" hangs on this, so a throw reads as "not
+      // attached" (an honest neutral) rather than escaping with the UUID in hand.
+      let attached = false;
+      try {
+        attached = deps.isClaudeSessionAttached(raw.sessionId, raw.spawnedAt);
+      } catch {
+        // stays false
+      }
       // An explicit field list, never `{ ...raw }`: that copy is the only thing
       // keeping a future internal `SupervisorStatus` field off the wire, and
-      // `raw.sessionId` is the real UUID.
+      // `raw.sessionId` is the real UUID (`raw.spawnedAt` stays internal too).
       const body: LauncherStatus = {
         available: true,
         running: true,
@@ -261,6 +275,7 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
         sessionId: "<set>",
         resuming: raw.resuming,
         busy: raw.busy,
+        attached,
         skillRefresh,
       };
       res.json(body);

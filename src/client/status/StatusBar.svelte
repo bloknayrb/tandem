@@ -19,6 +19,7 @@ import {
   type AiIndicatorView,
   aiIndicatorView,
   type CwdDriftPill as CwdDriftPillView,
+  sessionCountLabel,
 } from "./status-ai-view";
 import { getCount, loadMode, modeLabel, nextMode, saveMode } from "./word-count-cycle";
 
@@ -45,8 +46,18 @@ interface Props {
   aiLauncherCwd?: string | null;
   /** It has a turn in flight — the only activity shown beside "Tandem's Claude". */
   aiLauncherBusy?: boolean;
-  /** It tripped while another session is attached → the sibling button. */
+  /** The server matched a live connection to it — the only thing that turns
+   *  "Tandem's Claude" green. Required (as is `aiSessionCount`) so a mount that
+   *  forgets to wire it is a type error, not a permanently neutral dot. */
+  aiLauncherAttached: boolean;
+  /** `/health`'s session count, or null when unknown. */
+  aiSessionCount: number | null;
+  /** It tripped while another session is attached → the sibling button, and
+   *  the tooltip's leftover hint. Always the raw value, dismissed or not. */
   aiLauncherFailure?: LauncherFailure | null;
+  /** The user dismissed the sibling button for this failure (the caller owns
+   *  the rule — `visibleLauncherFailure`). Hides the button only. */
+  aiLauncherFailureDismissed?: boolean;
   /** Hide the sibling button (the caller tracks which failure was dismissed). */
   onDismissLauncherFailure?: () => void;
   /**
@@ -121,7 +132,10 @@ let {
   aiLauncherRunning = false,
   aiLauncherCwd = null,
   aiLauncherBusy = false,
+  aiLauncherAttached,
+  aiSessionCount,
   aiLauncherFailure = null,
+  aiLauncherFailureDismissed = false,
   onDismissLauncherFailure,
   aiChip = null,
   onConnectAi,
@@ -264,8 +278,10 @@ const aiView = $derived(
     launcherRunning: aiLauncherRunning,
     launcherCwd: aiLauncherCwd,
     launcherBusy: aiLauncherBusy,
+    launcherAttached: aiLauncherAttached,
     launcherFailure: aiLauncherFailure,
     docSyncConnected: connected,
+    sessionCount: aiSessionCount,
   }),
 );
 
@@ -273,7 +289,7 @@ const aiView = $derived(
 // handler choice from `AI_CTA[failure].action` — one lookup each, never a
 // parallel ternary (#1268).
 const launcherDown = $derived(
-  aiLauncherFailure
+  aiLauncherFailure && !aiLauncherFailureDismissed
     ? {
         ...TANDEM_CLAUDE_DOWN[aiLauncherFailure],
         onclick: AI_CTA[aiLauncherFailure].action === "restart" ? onRestartClaude : onConnectAi,
@@ -522,7 +538,7 @@ function cycleWordMode() {
              Never appended while a `pulse` override is set: beside Tandem's
              Claude, `claudeStatus` may be another session's, and the chat UI
              shows status only for the chat's attached session. -->
-        {view.label}{#if claudeStatus && view.canAnimate && view.pulse === null} · {claudeStatus}{#if view.tone === "solo"} (not your comments){/if}{/if}
+        {view.label}{#if view.sessionCount !== null}<span data-testid="status-ai-session-count">{` · ${sessionCountLabel(view.sessionCount)}`}</span>{/if}{#if claudeStatus && view.canAnimate && view.pulse === null} · {claudeStatus}{#if view.tone === "solo"} (not your comments){/if}{/if}
       </span>
   {/snippet}
   {#if aiView}

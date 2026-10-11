@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   closeMcpSession,
   getPinnedMcpSessionCount,
+  isClaudeSessionAttached,
   reapIdleMcpSessions,
   startMcpServerHttp,
 } from "../../src/server/mcp/server.js";
@@ -273,6 +274,39 @@ describe("an open standalone stream pins its session against the reaper", () => 
     expect(getPinnedMcpSessionCount()).toBe(0);
     expect(await forceReap()).toBe(1);
     expect((await toolsList(session.sessionId)).status).toBe(404);
+  });
+
+  // The real wiring behind `/health`'s count and the launcher's `attached`,
+  // against the registry the route populates — the route and handler tests
+  // use fakes for both, so this is the only place a stubbed closure would fail.
+  it("counts one Claude session's two connections once on /health", async () => {
+    await openSession("bridge-a", "claude-session-uuid-1");
+    await openSession("bridge-a-reinit", "claude-session-uuid-1");
+    await openSession("direct-http");
+    const body = (await (await fetch(`${baseUrl}/health`)).json()) as {
+      sessionCount?: number;
+      hasSession?: boolean;
+    };
+    expect(body.sessionCount).toBe(2);
+    expect(body.hasSession).toBe(true);
+  });
+
+  it("reports a Claude session attached only while it is live and newer than the spawn", async () => {
+    const id = "claude-session-uuid-1";
+    const spawnedAt = Date.now();
+    const session = await openSession("bridge", id);
+    // Initialized, but no standalone stream yet: not provably live.
+    expect(isClaudeSessionAttached(id, spawnedAt)).toBe(false);
+
+    const stream = await openStream(session.sessionId);
+    expect(isClaudeSessionAttached(id, spawnedAt)).toBe(true);
+    expect(isClaudeSessionAttached(id.toUpperCase(), spawnedAt)).toBe(true);
+    // A spawn after this connection opened: it belongs to an earlier child.
+    expect(isClaudeSessionAttached(id, Date.now() + 1_000)).toBe(false);
+    expect(isClaudeSessionAttached("some-other-session", spawnedAt)).toBe(false);
+
+    await stream.close();
+    expect(isClaudeSessionAttached(id, spawnedAt)).toBe(false);
   });
 
   it("does not leave a session pinned when the SDK rejects a second stream", async () => {

@@ -3,6 +3,7 @@ import {
   aiIndicatorView,
   cwdDriftPill,
   displayPath,
+  sessionCountLabel,
   visibleLauncherFailure,
 } from "../../src/client/status/status-ai-view.js";
 
@@ -18,8 +19,10 @@ function view(over: Partial<ViewInput> = {}) {
     launcherRunning: false,
     launcherCwd: null,
     launcherBusy: false,
+    launcherAttached: false,
     launcherFailure: null,
     docSyncConnected: true,
+    sessionCount: null,
     ...over,
   });
 }
@@ -119,8 +122,8 @@ describe("aiIndicatorView", () => {
 describe("aiIndicatorView — Tandem's Claude", () => {
   const running = { launcherRunning: true, launcherCwd: "/home/ana/notes" } as const;
 
-  it("running + a session → connected tone, wake claim, folder shown home-shortened", () => {
-    const v = view({ ...running, liveIndicator: "connected" });
+  it("running + matched to its own connection → connected tone, wake claim, folder home-shortened", () => {
+    const v = view({ ...running, liveIndicator: "connected", launcherAttached: true });
     expect(v).toMatchObject({
       label: "Tandem's Claude",
       tone: "connected",
@@ -133,6 +136,22 @@ describe("aiIndicatorView — Tandem's Claude", () => {
     );
     // No reply/latency promise: the attached session may not be this child.
     expect(v?.title).not.toMatch(/reply|minute/i);
+  });
+
+  // Bryan: "i do want the colors to be honest". A session that may be some
+  // other client says nothing about this child, so the dot stays neutral.
+  it("running + an unattributed session → pending tone, says it can't confirm which", () => {
+    const v = view({ ...running, liveIndicator: "connected" });
+    expect(v).toMatchObject({ label: "Tandem's Claude", tone: "pending", canAnimate: false });
+    expect(v?.title).toBe(
+      "Tandem's Claude is running in ~/notes. Tandem wakes it when you send a message. Tandem can't confirm that any connection is this Claude.",
+    );
+  });
+
+  it("a match on the launcher read counts as seen before /health catches up", () => {
+    const v = view({ ...running, launcherAttached: true });
+    expect(v?.tone).toBe("connected");
+    expect(v?.title).not.toContain("hasn't seen it connect");
   });
 
   it("running with no session → pending tone, no wake claim, 'hasn't seen it connect'", () => {
@@ -179,8 +198,48 @@ describe("aiIndicatorView — Tandem's Claude", () => {
   });
 
   it("drops the folder clause when the cwd is unknown", () => {
-    const v = view({ launcherRunning: true, liveIndicator: "connected" });
+    const v = view({ launcherRunning: true, liveIndicator: "connected", launcherAttached: true });
     expect(v?.title).toBe("Tandem's Claude is running. Tandem wakes it when you send a message.");
+  });
+});
+
+describe("aiIndicatorView — session count", () => {
+  it("adds the count to the view, title and screen-reader label", () => {
+    const v = view({ liveIndicator: "connected", sessionCount: 3 });
+    expect(v?.sessionCount).toBe(3);
+    expect(v?.title).toContain("3 sessions are connected to Tandem");
+    expect(v?.ariaLabel).toContain("3 sessions are connected to Tandem");
+    // The main overcount is named where the number is.
+    expect(v?.title).toContain("closed in the last half hour");
+  });
+
+  it("uses the singular for one", () => {
+    expect(view({ liveIndicator: "connected", sessionCount: 1 })?.title).toContain(
+      "1 session is connected to Tandem",
+    );
+  });
+
+  it("shows on Tandem's Claude and in Solo too", () => {
+    expect(view({ launcherRunning: true, sessionCount: 2 })?.sessionCount).toBe(2);
+    expect(
+      view({ liveIndicator: "solo-paused", soloMode: true, sessionCount: 2 })?.sessionCount,
+    ).toBe(2);
+  });
+
+  it("shows nothing at zero, when unknown, or on 'AI not connected'", () => {
+    expect(view({ launcherRunning: true, sessionCount: 0 })?.sessionCount).toBeNull();
+    expect(view({ launcherRunning: true, sessionCount: null })?.sessionCount).toBeNull();
+    const down = view({ state: "stopped", sessionCount: 2 });
+    expect(down?.dataState).toBe("not-connected");
+    expect(down?.sessionCount).toBeNull();
+    expect(down?.title).not.toContain("session");
+  });
+});
+
+describe("sessionCountLabel", () => {
+  it("pluralises", () => {
+    expect(sessionCountLabel(1)).toBe("1 session");
+    expect(sessionCountLabel(2)).toBe("2 sessions");
   });
 });
 
@@ -256,6 +315,11 @@ describe("displayPath", () => {
     expect(displayPath("/Users/ana")).toBe("~");
   });
 
+  it("matches Windows homes in any case and behind an extended-length prefix", () => {
+    expect(displayPath("c:\\users\\ana\\notes")).toBe("~\\notes");
+    expect(displayPath("\\\\?\\C:\\Users\\ana\\notes")).toBe("~\\notes");
+  });
+
   it("leaves other paths alone, including a lookalike prefix", () => {
     expect(displayPath("D:\\work\\notes")).toBe("D:\\work\\notes");
     expect(displayPath("/srv/notes")).toBe("/srv/notes");
@@ -320,21 +384,27 @@ describe("cwdDriftPill", () => {
 });
 
 describe("visibleLauncherFailure", () => {
+  const dismissedRestart = { failure: "restart" as const, epoch: 3 };
+
   it("shows an undismissed failure", () => {
-    expect(visibleLauncherFailure("restart", null)).toBe("restart");
+    expect(visibleLauncherFailure("restart", null, 3)).toBe("restart");
   });
 
-  it("hides the dismissed failure, including when the same code comes back", () => {
-    // Same value after a trip → relaunch → trip: still the same problem.
-    expect(visibleLauncherFailure("restart", "restart")).toBeNull();
+  it("hides the dismissed failure while Tandem's Claude has not run since", () => {
+    expect(visibleLauncherFailure("restart", dismissedRestart, 3)).toBeNull();
+  });
+
+  it("re-shows the same failure once Tandem's Claude has run again in between", () => {
+    // Trip → dismiss → relaunch works (epoch moves) → trips again: a second outage.
+    expect(visibleLauncherFailure("restart", dismissedRestart, 4)).toBe("restart");
   });
 
   it("re-shows when a different failure appears", () => {
-    expect(visibleLauncherFailure("sign-in", "restart")).toBe("sign-in");
+    expect(visibleLauncherFailure("sign-in", dismissedRestart, 3)).toBe("sign-in");
   });
 
   it("shows nothing with no failure", () => {
-    expect(visibleLauncherFailure(null, "restart")).toBeNull();
-    expect(visibleLauncherFailure(null, null)).toBeNull();
+    expect(visibleLauncherFailure(null, dismissedRestart, 3)).toBeNull();
+    expect(visibleLauncherFailure(null, null, 3)).toBeNull();
   });
 });

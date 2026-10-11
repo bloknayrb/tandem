@@ -456,6 +456,7 @@ source-view-exit-btn
 source-view-live
 source-view-textarea
 status-ai-indicator
+status-ai-session-count
 status-held-count
 status-tandem-claude-down
 status-tandem-claude-down-dismiss

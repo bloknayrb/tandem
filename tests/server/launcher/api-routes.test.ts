@@ -41,6 +41,9 @@ interface FakeSupervisorOpts {
   startFreshHook?: (cwd?: string) => Promise<void>;
 }
 
+const FAKE_SESSION_ID = "11111111-1111-4111-8111-111111111111";
+const FAKE_SPAWNED_AT = 1_700_000_000_000;
+
 function makeFakeSupervisor(opts: FakeSupervisorOpts = {}): Supervisor {
   return {
     start: async () => {},
@@ -57,9 +60,10 @@ function makeFakeSupervisor(opts: FakeSupervisorOpts = {}): Supervisor {
             running: true,
             reaperPid: 12345,
             cwd: opts.cwd ?? os.homedir(),
-            sessionId: "11111111-1111-4111-8111-111111111111",
+            sessionId: FAKE_SESSION_ID,
             resuming: false,
             busy: opts.busy ?? false,
+            spawnedAt: FAKE_SPAWNED_AT,
           }
         : { running: false },
   };
@@ -140,6 +144,7 @@ const baseDeps = (
   unavailableReason: () => reason,
   startSupervisor: async () => {},
   store: store ?? makeStubStore(),
+  isClaudeSessionAttached: () => false,
 });
 
 beforeEach(() => {
@@ -193,6 +198,54 @@ describe("GET /api/launcher/status", () => {
     // sessionId is redacted — the real UUID never crosses the wire.
     expect(body.sessionId).toBe("<set>");
     expect(body.busy).toBe(false);
+    expect(body.attached).toBe(false);
+    // The exact key set: an explicit field list is what keeps `spawnedAt` and
+    // any future internal field off the wire, and naming fields one by one
+    // cannot catch an extra one.
+    expect(Object.keys(body).sort()).toEqual(
+      [
+        "attached",
+        "available",
+        "busy",
+        "cwd",
+        "reaperPid",
+        "resuming",
+        "running",
+        "sessionId",
+        "skillRefresh",
+      ].sort(),
+    );
+    expect(JSON.stringify(body)).not.toContain(FAKE_SESSION_ID);
+  });
+
+  it("asks the registry about the REAL session id and spawn time", async () => {
+    const calls: Array<[string, number]> = [];
+    const sup = makeFakeSupervisor({ running: true });
+    const { app } = makeApp({
+      ...baseDeps(sup),
+      isClaudeSessionAttached: (id, since) => {
+        calls.push([id, since]);
+        return true;
+      },
+    });
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect((res.body as Extract<LauncherStatus, { running: true }>).attached).toBe(true);
+    // Not the "<set>" placeholder the wire body carries.
+    expect(calls).toEqual([[FAKE_SESSION_ID, FAKE_SPAWNED_AT]]);
+  });
+
+  it("reads a throwing attachment check as not attached, without leaking the id", async () => {
+    const sup = makeFakeSupervisor({ running: true });
+    const { app } = makeApp({
+      ...baseDeps(sup),
+      isClaudeSessionAttached: (id) => {
+        throw new Error(`boom ${id}`);
+      },
+    });
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.status).toBe(200);
+    expect((res.body as Extract<LauncherStatus, { running: true }>).attached).toBe(false);
+    expect(JSON.stringify(res.body)).not.toContain(FAKE_SESSION_ID);
   });
 
   it("passes the supervisor's busy flag through to loopback callers", async () => {
@@ -203,9 +256,13 @@ describe("GET /api/launcher/status", () => {
   });
 
   it("returns the minimal { available, running } shape to non-loopback callers", async () => {
-    // busy: true so the exact-shape assertion below would catch it leaking.
+    // busy and attached true so the exact-shape assertion below would catch
+    // either leaking.
     const sup = makeFakeSupervisor({ running: true, busy: true });
-    const { app } = makeApp(baseDeps(sup), { remoteAddress: "192.168.1.50" });
+    const { app } = makeApp(
+      { ...baseDeps(sup), isClaudeSessionAttached: () => true },
+      { remoteAddress: "192.168.1.50" },
+    );
     const res = await request(app, "GET", "/api/launcher/status");
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ available: true, running: true });
@@ -798,6 +855,7 @@ describe("POST /api/launcher/start — autostart deferral (#1236)", () => {
         sup = makeFakeSupervisor();
       },
       store: makeStubStore(),
+      isClaudeSessionAttached: () => false,
       calls: () => calls,
       ...overrides,
     };

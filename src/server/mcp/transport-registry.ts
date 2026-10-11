@@ -128,10 +128,71 @@ export interface McpSessionRegistry<S extends ClosableServer = ClosableServer, T
   reapIdle(idleTtlMsOverride?: number): Promise<number>;
   /** Close and drop everything (graceful shutdown). */
   closeAll(): Promise<void>;
-  /** Live session count — backs `/health`'s `hasSession`. */
+  /** Number of registry entries. `/health` reports `countDistinctClients` instead. */
   readonly size: number;
   /** Snapshot for diagnostics and the connected-sessions surface. */
   list(): ReadonlyArray<McpSessionEntry<S, T>>;
+}
+
+/**
+ * How many clients the registry's entries represent — backs `/health`'s
+ * `sessionCount`. Entries sharing a `claudeSessionId` are one Claude session (a
+ * stdio bridge that re-initializes leaves its old entry behind under the same
+ * id); entries without one count individually.
+ *
+ * An upper bound, not a census: an entry outlives a client that vanished
+ * without `DELETE /mcp` until the reaper takes it (up to ~35 min), a hung
+ * client holding its stream open stays counted, and one Claude session wired
+ * through both the plugin bridge and a direct-HTTP entry counts twice. It also
+ * undercounts in one case — two live processes sharing a Claude id count once —
+ * and stateless `2026-07-28` clients are never in the registry at all (#1249).
+ */
+/** The one identity rule `countDistinctClients` and `hasLiveEntryFor` share, so
+ *  the count and the attachment match can never disagree on what "the same
+ *  Claude session" means. Case-folded because `normalizeSessionId` preserves
+ *  case and a UUID may round-trip through the session file in either. */
+function claudeIdKey(id: string): string {
+  return id.toLowerCase();
+}
+
+export function countDistinctClients(
+  entries: ReadonlyArray<Pick<McpSessionEntry, "claudeSessionId">>,
+): number {
+  const ids = new Set<string>();
+  let anonymous = 0;
+  for (const e of entries) {
+    if (e.claudeSessionId === undefined) anonymous += 1;
+    else ids.add(claudeIdKey(e.claudeSessionId));
+  }
+  return ids.size + anonymous;
+}
+
+/**
+ * Whether a LIVE connection from a specific Claude session, opened at or after
+ * `sinceMs`, is in the registry — how the launcher status route decides that
+ * Tandem's own child is attached.
+ *
+ * All three conjuncts are load-bearing. The stdio bridge never sends
+ * `DELETE /mcp`, so a dead child's entry lingers until reaped, and a Restart
+ * resumes the next child under the SAME Claude session id: `createdAt` rules
+ * out the previous child's entry, and `openStreams > 0` rules out one whose
+ * bridge has died (the SDK client opens its standalone GET stream right after
+ * initialize, and the bridge re-opens it on reconnect). Ids compare by
+ * `claudeIdKey`.
+ */
+export function hasLiveEntryFor(
+  entries: ReadonlyArray<Pick<McpSessionEntry, "claudeSessionId" | "createdAt" | "openStreams">>,
+  claudeSessionId: string,
+  sinceMs: number,
+): boolean {
+  const want = claudeIdKey(claudeSessionId);
+  return entries.some(
+    (e) =>
+      e.claudeSessionId !== undefined &&
+      claudeIdKey(e.claudeSessionId) === want &&
+      e.createdAt >= sinceMs &&
+      e.openStreams > 0,
+  );
 }
 
 const DEFAULT_MAX_SESSIONS = 16;

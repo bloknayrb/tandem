@@ -55,7 +55,7 @@ import ScrollPill from "./editor/ScrollPill.svelte";
 import SourceView from "./editor/SourceView.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
-import { AI_CTA, createAiReadiness, type LauncherFailure } from "./hooks/useAiReadiness.svelte";
+import { AI_CTA, createAiReadiness } from "./hooks/useAiReadiness.svelte";
 import {
   nextAnnotationId,
   prevAnnotationId,
@@ -132,7 +132,11 @@ import {
   optOutOfDriftNudge,
 } from "./status/cwdDriftDismiss.svelte";
 import StatusBar from "./status/StatusBar.svelte";
-import { cwdDriftPill, visibleLauncherFailure } from "./status/status-ai-view";
+import {
+  cwdDriftPill,
+  type LauncherFailureDismissal,
+  visibleLauncherFailure,
+} from "./status/status-ai-view";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
 import { isRenamable } from "./types.js";
 import { MCP_BASE_URL } from "./utils/backend-ports";
@@ -460,12 +464,18 @@ const cwdDriftView = $derived(
  * `visibleLauncherFailure`). `lastError` persists until the next spawn, so
  * without it the button would sit beside a working terminal session all day.
  */
-let dismissedLauncherFailure = $state<LauncherFailure | null>(null);
+let dismissedLauncherFailure = $state<LauncherFailureDismissal | null>(null);
 const launcherFailureShown = $derived(
-  visibleLauncherFailure(aiReadiness.launcherFailure, dismissedLauncherFailure),
+  visibleLauncherFailure(
+    aiReadiness.launcherFailure,
+    dismissedLauncherFailure,
+    aiReadiness.launcherRunEpoch,
+  ),
 );
 function dismissLauncherFailure(): void {
-  dismissedLauncherFailure = aiReadiness.launcherFailure;
+  const failure = aiReadiness.launcherFailure;
+  dismissedLauncherFailure =
+    failure === null ? null : { failure, epoch: aiReadiness.launcherRunEpoch };
 }
 
 /** All three drift notices share the launcher channel and envelope; only the
@@ -638,7 +648,7 @@ $effect(() => {
     if (busyRefreshTimer !== null) clearTimeout(busyRefreshTimer);
     busyRefreshTimer = setTimeout(() => {
       busyRefreshTimer = null;
-      aiReadiness.refresh();
+      aiReadiness.refreshLauncherStatus();
     }, 750);
 
     // Fast path: the polled state already proves silence — an agent is attached
@@ -2691,7 +2701,10 @@ const shouldShowModelPicker = $derived(
       aiLauncherRunning={aiReadiness.launcherRunning}
       aiLauncherCwd={aiReadiness.launcherCwd}
       aiLauncherBusy={aiReadiness.launcherBusy}
-      aiLauncherFailure={launcherFailureShown}
+      aiLauncherAttached={aiReadiness.launcherAttached}
+      aiSessionCount={aiReadiness.sessionCount}
+      aiLauncherFailure={aiReadiness.launcherFailure}
+      aiLauncherFailureDismissed={launcherFailureShown === null}
       onDismissLauncherFailure={dismissLauncherFailure}
       aiChip={aiReadiness.chip}
       onConnectAi={connectAi}

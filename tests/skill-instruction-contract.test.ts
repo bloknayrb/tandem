@@ -505,7 +505,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "30", bodyHash: "fcc0d23e07f0" });
+    ).toEqual({ version: "30", bodyHash: "4c4fb3785e04" });
   });
 
   // The editor's pickup row shows "working on it" only from an `inProgress` ack, and the

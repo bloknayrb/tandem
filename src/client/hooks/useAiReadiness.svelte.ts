@@ -46,8 +46,7 @@
  *                      session. Prompt restart, NOT the setup wizard. Known gap:
  *                      HTTP mode creates the supervisor even with NO claude-code
  *                      integration, so a never-configured user also lands here
- *                      and is offered "Restart Claude Code" (tracked as the
- *                      launcher-CTA follow-up to the "AI connected" pill change).
+ *                      and is offered "Restart Claude Code" (#2180).
  *   - `ready`        — Claude Code running OR an MCP session is active.
  *
  * `chip` folds in Solo-mode suppression: in Solo mode the user has deliberately
@@ -96,6 +95,9 @@ import { API_BASE } from "../utils/fileUpload.js";
 interface HealthResponse {
   status?: string;
   hasSession?: boolean;
+  /** Distinct MCP clients in the registry — an upper bound; see
+   *  `countDistinctClients` in `server/mcp/transport-registry.ts`. */
+  sessionCount?: number;
   push?: { subscribers?: number };
   /** The push↔pull join — see `server/events/delivery-state.ts`. */
   delivery?: { state?: string; waitingMs?: number | null };
@@ -125,6 +127,7 @@ type HealthRead =
   | {
       answered: true;
       hasSession: boolean | null;
+      sessionCount: number | null;
       pushAttached: boolean | null;
       /** The join's state string, verbatim. Unknown values pass through as-is
        *  and are simply not matched by `deliveryStall` — an older or newer
@@ -290,6 +293,12 @@ function chipForStoppedLauncher(lastError: LauncherErrorCode | undefined): Launc
   return "restart";
 }
 
+type RunningLauncherStatus = Extract<LauncherStatus, { running: true }>;
+
+function isRunning(s: LauncherStatus): s is RunningLauncherStatus {
+  return s.available && s.running;
+}
+
 /**
  * The `lastError` codes that mean Tandem's own Claude has stopped for good.
  *
@@ -300,21 +309,28 @@ function chipForStoppedLauncher(lastError: LauncherErrorCode | undefined): Launc
  * then awaits the spawn plan before `spawn()` clears the code: milliseconds,
  * user-initiated, and the action is idempotent under the supervisor's lock.
  *
- * `spawn-failed` is deliberately absent: one of its two call sites sets it with
- * a restart already scheduled.
+ * `spawn-failed` is deliberately false: one of its two call sites sets it with
+ * a restart already scheduled, and the client cannot tell the two apart. The
+ * cost is that the other site's permanent stop shows no button (#2180).
+ *
+ * A `Record` rather than a `Set` so a new server code fails to compile here
+ * until someone decides whether it means "stopped for good".
  */
-const TRIPPED_FAILURES: ReadonlySet<LauncherErrorCode> = new Set<LauncherErrorCode>([
-  "needs-login",
-  "binary-not-found",
-  "circuit-open",
-  "cli-unusable",
-  "wake-delivery-failed",
-]);
+const TRIPPED_FAILURE: Record<LauncherErrorCode, boolean> = {
+  "needs-login": true,
+  "binary-not-found": true,
+  "circuit-open": true,
+  "cli-unusable": true,
+  "wake-delivery-failed": true,
+  "spawn-failed": false,
+  "stop-failed": false,
+  "status-check-failed": false,
+};
 
 /**
  * Copy for the "Tandem's Claude isn't running" button, which renders BESIDE
- * another attached session — so, unlike `AI_CTA`, every line says the click
- * concerns Tandem's own Claude and leaves the user's own one alone. The action
+ * another attached session — so, unlike `AI_CTA`, every line names Tandem's
+ * own Claude, so the click can't be read as acting on the user's. The action
  * comes from `AI_CTA[failure].action`, never from a second lookup here.
  *
  * `restart` says "isn't running" rather than "stopped" because
@@ -414,20 +430,32 @@ export interface AiReadiness {
   readonly serverUnreachable: boolean;
   /**
    * Tandem's own launched Claude is running: launcher status says
-   * `available && running`, and the server is not unreachable. The
-   * `serverUnreachable` gate is load-bearing — `pollLauncherStatus` resets its
+   * `available && running` on the latest answered read, and the server is not
+   * unreachable. Both gates are load-bearing: `pollLauncherStatus` resets its
    * strikes on ANY HTTP answer and keeps the last `status`, so a squatter on the
-   * port that answers non-OK would otherwise pin this `true` forever.
+   * port that answers non-OK, or a launcher route erroring while `/health` is
+   * fine, would otherwise pin this (and a stale `busy`) `true` forever.
    */
   readonly launcherRunning: boolean;
+  /** Increments each time Tandem's Claude is seen to start running. Lets a
+   *  dismissal of `launcherFailure` expire on the next successful run. */
+  readonly launcherRunEpoch: number;
   /** The launched Claude's working folder, or `null` when not running or when
    *  the field is absent (off-loopback, or an older server). */
   readonly launcherCwd: string | null;
   /** The launched Claude has a turn in flight — see `SupervisorStatus.busy`.
    *  A missing field reads `false`, which is how an older server is silent. */
   readonly launcherBusy: boolean;
+  /** The server matched a live MCP connection to this spawn of Tandem's Claude
+   *  (`LauncherStatus.attached`). `false` means "can't confirm", not "not
+   *  connected": it is only reachable when the child's connection forwards its
+   *  Claude session id. Gated like `launcherRunning`. */
+  readonly launcherAttached: boolean;
+  /** How many MCP clients `/health` counts (an upper bound — see
+   *  `countDistinctClients`), or `null` when unknown or unreachable. */
+  readonly sessionCount: number | null;
   /**
-   * Tandem's Claude has tripped (see `TRIPPED_FAILURES`) while ANOTHER session
+   * Tandem's Claude has tripped (see `TRIPPED_FAILURE`) while ANOTHER session
    * keeps `hasSession` true — the case `chip` hides, because a live session
    * promotes `state` to `ready` (#1054). `null` otherwise, and in Solo.
    * Deliberately separate from `chip`, which keeps its meaning for EmptyState
@@ -447,6 +475,10 @@ export interface AiReadiness {
   readonly deliveryStalledMs: number | null;
   /** Re-poll launcher status + session now (e.g. just after a restart). */
   refresh: () => void;
+  /** Re-poll launcher status alone. For the post-send `busy` read: it leaves
+   *  `/health` out so a user-triggered read never counts toward its strike run
+   *  (see `readHasSession`'s `fromPoll`). */
+  refreshLauncherStatus: () => void;
   /**
    * Fresh, awaitable MCP-session check for moment-of-send decisions (#1083).
    *
@@ -487,6 +519,9 @@ export function createAiReadiness(deps: {
   // Whether `/health` reported any SSE consumer. `null` = not yet known or
   // redacted, which is NOT the same as "none".
   let pushAttached = $state<boolean | null>(null);
+  // `/health`'s `sessionCount`; `null` = unknown (not yet read, redacted, or
+  // the server is unreachable).
+  let sessionCount = $state<number | null>(null);
   // Has `/health` gone quiet for a full strike run — i.e. is the SERVER gone,
   // as distinct from an AI not being attached to a server that is fine? The
   // send path needs the difference: with the server down, a chat message is
@@ -508,6 +543,12 @@ export function createAiReadiness(deps: {
   // PROMOTES to ready (never demotes), so a missing first `/health` read can't
   // surface a false CTA.
   let settledOnce = $state(false);
+  // Did the LAST launcher read that the server answered carry a valid body?
+  // Gates `runningStatus` only; the CTA path keeps the prior status as before.
+  let launcherFresh = $state(false);
+  // Counts each observed start of Tandem's Claude (not-running → running), so
+  // a dismissal of its failure button lasts only until it next runs.
+  let launcherRunEpoch = $state(0);
 
   // Drop stale async resolves for LAUNCHER reads (a poll that resolves after
   // the component is gone, or after a newer poll superseded it). Mirrors
@@ -570,20 +611,34 @@ export function createAiReadiness(deps: {
     }
     launcherStrikes.record(true);
     if (mine !== gen) return;
-    if (!res.ok) return; // real server error (e.g. 503 deferred) — keep prior status
+    // A non-OK, malformed or invalid answer keeps the prior `status` for the
+    // CTA (see above), but it is NOT a fresh sighting of a running launcher:
+    // `runningStatus` stops vouching for it, so a stale `busy: true` cannot keep
+    // "Tandem's Claude is working…" on screen while the route errors.
+    if (!res.ok) {
+      launcherFresh = false; // real server error (e.g. 503 deferred) — keep prior status
+      return;
+    }
     let body: unknown;
     try {
       body = await res.json();
     } catch {
-      return; // malformed body — keep prior status
+      launcherFresh = false; // malformed body — keep prior status
+      return;
     }
     // Validate before trusting. An unchecked cast here is not cosmetic: any
     // parseable non-`LauncherStatus` body — `{}` from a port squatter, an error
     // envelope — makes `available === false` and `running === true` both false,
     // which lands on `state === "stopped"` with no `lastError`, which renders a
     // working "Restart Claude Code" button derived from a body nobody checked.
-    if (typeof (body as LauncherStatus | null)?.available !== "boolean") return;
-    status = body as LauncherStatus;
+    if (typeof (body as LauncherStatus | null)?.available !== "boolean") {
+      launcherFresh = false;
+      return;
+    }
+    const next = body as LauncherStatus;
+    if (isRunning(next) && !(status !== null && isRunning(status))) launcherRunEpoch++;
+    status = next;
+    launcherFresh = true;
     settledOnce = true;
   }
 
@@ -652,6 +707,12 @@ export function createAiReadiness(deps: {
     return {
       answered: true,
       hasSession: typeof body.hasSession === "boolean" ? body.hasSession : null,
+      sessionCount:
+        typeof body.sessionCount === "number" &&
+        Number.isInteger(body.sessionCount) &&
+        body.sessionCount >= 0
+          ? body.sessionCount
+          : null,
       pushAttached: typeof body.push?.subscribers === "number" ? body.push.subscribers > 0 : null,
       deliveryState: typeof body.delivery?.state === "string" ? body.delivery.state : null,
       deliveryWaitingMs:
@@ -727,9 +788,13 @@ export function createAiReadiness(deps: {
       // outliving its evidence" failure this whole surface exists to remove.
       deliveryState = fresh.deliveryState;
       deliveryWaitingMs = fresh.deliveryWaitingMs;
+      // Unconditional for the same reason: a count the server no longer
+      // vouches for must not stay on the pill.
+      sessionCount = fresh.sessionCount;
     } else if (runIsLongEnough) {
       serverUnreachable = true;
       mcpSessionActive = false;
+      sessionCount = null;
       // NOT `false`. A server we cannot reach tells us nothing about how many
       // consumers are attached to it, and `pushAttached === false` is a load-
       // bearing claim: it is the confirmed zero that drives the "nothing is
@@ -834,18 +899,19 @@ export function createAiReadiness(deps: {
   // getters below cannot drift apart. `serverUnreachable` is load-bearing — see
   // `AiReadiness.launcherRunning`.
   const runningStatus = $derived(
-    status !== null && status.available && status.running && !serverUnreachable ? status : null,
+    status !== null && isRunning(status) && launcherFresh && !serverUnreachable ? status : null,
   );
   const launcherRunning = $derived(runningStatus !== null);
   // `?? null` is load-bearing: the contract types `cwd` as required, but the
   // off-loopback body and older servers omit it.
   const launcherCwd = $derived(runningStatus?.cwd ?? null);
   const launcherBusy = $derived(runningStatus?.busy === true);
+  // Off `runningStatus`, never `status`: `status` keeps a stale running body
+  // for the CTA after a failed read, and a stale `attached: true` is a false
+  // green.
+  const launcherAttached = $derived(runningStatus?.attached === true);
   const launcherFailure = $derived<LauncherFailure | null>(
-    !deps.soloMode() &&
-      mcpSessionActive &&
-      lastError !== undefined &&
-      TRIPPED_FAILURES.has(lastError)
+    !deps.soloMode() && mcpSessionActive && lastError !== undefined && TRIPPED_FAILURE[lastError]
       ? chipForStoppedLauncher(lastError)
       : null,
   );
@@ -892,11 +958,20 @@ export function createAiReadiness(deps: {
     get launcherRunning() {
       return launcherRunning;
     },
+    get launcherRunEpoch() {
+      return launcherRunEpoch;
+    },
     get launcherCwd() {
       return launcherCwd;
     },
     get launcherBusy() {
       return launcherBusy;
+    },
+    get launcherAttached() {
+      return launcherAttached;
+    },
+    get sessionCount() {
+      return sessionCount;
     },
     get launcherFailure() {
       return launcherFailure;
@@ -916,6 +991,7 @@ export function createAiReadiness(deps: {
       });
     },
     refresh: () => poll(),
+    refreshLauncherStatus: () => void pollLauncherStatus(++gen),
     probeSession,
   };
 }
