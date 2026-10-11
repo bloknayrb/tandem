@@ -53,7 +53,7 @@ export interface AiIndicatorView {
   /** Drives dot + text color. */
   tone: AiIndicatorTone;
   /** `data-ai-state` attribute. */
-  dataState: "connected" | "solo-paused" | "not-connected" | "tandem-claude";
+  dataState: "connected" | "connected-stale" | "solo-paused" | "not-connected" | "tandem-claude";
   /**
    * Whether this state may animate its dot off presence activity. Only ever
    * true when a session is live (connected/solo) — a disconnected indicator
@@ -127,6 +127,30 @@ const CONNECTED_NO_PUSH: BaseView = {
     "Something is connected to Tandem, but nothing is notifying it. If it's a session you're using, it sees your messages only when it next checks in, so you may need to prompt it.",
   ariaLabel:
     "AI attached, but nothing is notifying it. If it's a session you're using, it sees your messages only when it next checks in.",
+};
+
+/**
+ * A session is in Tandem's list but none is live: no open stream and no request
+ * in the last minute (`isLiveEntry`, server-side). Almost always a client that
+ * went away without disconnecting, kept until the reaper takes it (~35 min).
+ *
+ * Same label as `CONNECTED` because something did attach and the claim is
+ * hedged in the copy; the hollow ring is what stops the colour claiming it is
+ * still there. Measured clients (Claude Code, the plugin bridge) hold a stream
+ * for their whole life, so for them this means gone; a client that never opens
+ * a stream lands here between calls, which "may be" covers.
+ */
+const CONNECTED_STALE: BaseView = {
+  label: "AI attached",
+  tone: "pending",
+  dataState: "connected-stale",
+  canAnimate: false,
+  // Its presence activity is no more trustworthy than its connection.
+  ...QUIET,
+  title:
+    "Something connected to Tandem earlier, but Tandem can't see that it's still there. It may be a session that has since closed.",
+  ariaLabel:
+    "AI attached earlier, but Tandem can't see that it's still there. It may be a session that has since closed.",
 };
 
 /** Appended while Tandem's own Claude has tripped (the sibling button is up):
@@ -275,7 +299,7 @@ function withSessionCount(view: BaseView, count: number | null): AiIndicatorView
   if (count == null || count < 1 || view.dataState === "not-connected") {
     return { ...view, sessionCount: null };
   }
-  const sentence = `${sessionCountLabel(count)} ${count === 1 ? "is" : "are"} connected to Tandem. A session that closed can stay counted for up to about 35 minutes, and a frozen one until it closes.`;
+  const sentence = `${sessionCountLabel(count)} ${count === 1 ? "is" : "are"} connected to Tandem. One that just closed can still count for about a minute, a frozen one until it closes, and one Claude connected two ways counts twice.`;
   return {
     ...view,
     sessionCount: count,
@@ -324,7 +348,9 @@ function baseIndicatorView(input: AiIndicatorInput): BaseView | null {
       attached: input.launcherAttached,
       // The two come from separate polls; a match on the launcher read is a
       // session seen even if `/health` has not caught up yet.
-      sessionSeen: input.liveIndicator === "connected" || input.launcherAttached,
+      // A leftover session (count 0) is not a sighting of this child.
+      sessionSeen:
+        (input.liveIndicator === "connected" && input.sessionCount !== 0) || input.launcherAttached,
       cwd: input.launcherCwd,
       busy: input.launcherBusy,
       docSyncConnected: input.docSyncConnected,
@@ -333,6 +359,10 @@ function baseIndicatorView(input: AiIndicatorInput): BaseView | null {
 
   // Rule 3: anything else attached.
   if (input.liveIndicator === "connected") {
+    // Green only for a live session. A `null` count (not reported) trusts
+    // `hasSession`, the same fallback the hook's `sessionLive` uses. The stale
+    // view's own copy already says what LEFTOVER_HINT would.
+    if (input.sessionCount === 0) return CONNECTED_STALE;
     const view = input.pushDelivery === "none" ? CONNECTED_NO_PUSH : CONNECTED;
     if (input.launcherFailure === null) return view;
     return {

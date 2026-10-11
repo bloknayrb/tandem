@@ -210,7 +210,8 @@ describe("aiIndicatorView — session count", () => {
     expect(v?.title).toContain("3 sessions are connected to Tandem");
     expect(v?.ariaLabel).toContain("3 sessions are connected to Tandem");
     // The main overcount is named where the number is.
-    expect(v?.title).toContain("can stay counted for up to about 35 minutes");
+    expect(v?.title).toContain("One that just closed can still count for about a minute");
+    expect(v?.title).toContain("a frozen one until it closes");
   });
 
   it("uses the singular for one", () => {
@@ -233,6 +234,39 @@ describe("aiIndicatorView — session count", () => {
     expect(down?.dataState).toBe("not-connected");
     expect(down?.sessionCount).toBeNull();
     expect(down?.title).not.toContain("session");
+  });
+});
+
+describe("aiIndicatorView — leftover sessions", () => {
+  it("a session with none live → hollow 'AI attached', says it may have closed", () => {
+    const v = view({ liveIndicator: "connected", sessionCount: 0 });
+    expect(v).toMatchObject({
+      label: "AI attached",
+      tone: "pending",
+      dataState: "connected-stale",
+      canAnimate: false,
+      pulse: false,
+      sessionCount: null,
+    });
+    expect(v?.title).toContain("can't see that it's still there");
+  });
+
+  it("is stale even when push is confirmed absent, and adds no second leftover hint", () => {
+    expect(
+      view({ liveIndicator: "connected", sessionCount: 0, pushDelivery: "none" })?.dataState,
+    ).toBe("connected-stale");
+    expect(
+      view({ liveIndicator: "connected", sessionCount: 0, launcherFailure: "restart" })?.title,
+    ).not.toContain("stopped Claude's leftover");
+  });
+
+  it("an unreported count trusts hasSession and stays green", () => {
+    expect(view({ liveIndicator: "connected", sessionCount: null })?.tone).toBe("connected");
+  });
+
+  it("a leftover is not a sighting of Tandem's Claude", () => {
+    const v = view({ launcherRunning: true, liveIndicator: "connected", sessionCount: 0 });
+    expect(v?.title).toContain("hasn't seen it connect");
   });
 });
 

@@ -6,16 +6,18 @@ import type { Handler } from "./_shared.js";
 export interface HealthHandlerDeps {
   version: string;
   /**
-   * How many MCP clients have completed `initialize` and are still in the
-   * registry — `countDistinctClients`, an upper bound whose limits are on that
-   * function. `hasSession` is derived from it (`> 0`), so the two can never
-   * disagree within one response.
+   * True when any MCP transport that completed `initialize` is still in the
+   * registry — including one whose client has gone away without `DELETE /mcp`
+   * and is waiting to be reaped. `sessionCount` is the live subset, so
+   * `hasSession: true` beside `sessionCount: 0` means "only leftovers".
    *
    * Scoped to handshake-era clients by construction: MCP `2026-07-28` removed
    * both the handshake and protocol-level sessions, so a client on that revision
-   * never increments this. Supplementing it without inverting its failure mode
-   * is #1249; see ADR-045's 2026-07-30 amendment.
+   * never increments either. Supplementing them without inverting their failure
+   * mode is #1249; see ADR-045's 2026-07-30 amendment.
    */
+  hasSession: () => boolean;
+  /** Distinct LIVE MCP clients (`isLiveEntry` + `countDistinctClients`). */
   sessionCount: () => number;
   /** Live count of event-queue subscribers (the SSE fan-out). */
   getSubscriberCount: () => number;
@@ -120,9 +122,8 @@ export function makeHealthHandler(deps: HealthHandlerDeps): Handler {
       // one possible value for it in this process.
       body.pid = process.pid;
       const subscribers = deps.getSubscriberCount();
-      const sessionCount = deps.sessionCount();
-      body.hasSession = sessionCount > 0;
-      body.sessionCount = sessionCount;
+      body.hasSession = deps.hasSession();
+      body.sessionCount = deps.sessionCount();
       body.push = {
         subscribers,
         ...deps.getPushLiveness(),

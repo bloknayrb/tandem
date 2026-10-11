@@ -346,3 +346,22 @@ describe("StatusBar — honest colour and session count", () => {
     expect(queryByTestId("status-ai-session-count")).toBeNull();
   });
 });
+
+describe("StatusBar — a leftover session", () => {
+  it("shows 'AI attached' hollow, without a count, when no session is live", () => {
+    const { getByTestId, queryByTestId } = render(StatusBar, {
+      props: {
+        ...baseProps,
+        aiState: "ready" as const,
+        aiLiveIndicator: "connected" as const,
+        aiSessionCount: 0,
+      },
+    });
+    const pill = getByTestId("status-ai-indicator");
+    expect(pill.getAttribute("data-ai-state")).toBe("connected-stale");
+    expect(pill.textContent).toContain("AI attached");
+    const dot = pill.querySelector(".claude-dot") as HTMLElement;
+    expect(dot.classList.contains("pending-ring")).toBe(true);
+    expect(queryByTestId("status-ai-session-count")).toBeNull();
+  });
+});

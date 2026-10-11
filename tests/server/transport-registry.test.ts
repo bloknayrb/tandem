@@ -4,6 +4,8 @@ import {
   countDistinctClients,
   createMcpSessionRegistry,
   hasLiveEntryFor,
+  isLiveEntry,
+  LIVE_RECENT_MS,
 } from "../../src/server/mcp/transport-registry.js";
 
 /** Minimal stand-in for an McpServer — the registry only ever calls close(). */
@@ -368,5 +370,23 @@ describe("hasLiveEntryFor", () => {
 
   it("compares ids case-insensitively", () => {
     expect(hasLiveEntryFor([{ ...live, claudeSessionId: ID.toUpperCase() }], ID, SPAWN)).toBe(true);
+  });
+});
+
+describe("isLiveEntry", () => {
+  const NOW = 1_000_000;
+
+  it("is live while a stream is open, however long since the last request", () => {
+    expect(isLiveEntry({ openStreams: 1, lastSeenAt: NOW - 10 * LIVE_RECENT_MS }, NOW)).toBe(true);
+  });
+
+  it("is live with no stream while a request started recently", () => {
+    expect(isLiveEntry({ openStreams: 0, lastSeenAt: NOW - LIVE_RECENT_MS + 1 }, NOW)).toBe(true);
+  });
+
+  // The ghost: a client that exited without DELETE closes its stream and stops
+  // making requests, but the reaper keeps the entry for up to ~35 min.
+  it("is not live with no stream once the recent window has passed", () => {
+    expect(isLiveEntry({ openStreams: 0, lastSeenAt: NOW - LIVE_RECENT_MS }, NOW)).toBe(false);
   });
 });

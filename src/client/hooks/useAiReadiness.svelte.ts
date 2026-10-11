@@ -488,8 +488,10 @@ export interface AiReadiness {
    * live. Callers about to alarm on `chip !== null` should confirm with this
    * probe first.
    *
-   * `sessionLive` is `true` only when a fresh `/health` read confirms an open
-   * MCP transport. On fetch failure or a redacted body (no `hasSession` field)
+   * `sessionLive` is `true` only when a fresh `/health` read confirms a LIVE
+   * MCP session (`sessionCount > 0`, or `hasSession` when no count is
+   * reported) — a leftover from a client that went away does not count. On
+   * fetch failure or a redacted body (no `hasSession` field)
    * it falls back to the last-known polled value — mirroring the poll's "keep
    * prior value on a blip" fail-safe in both directions.
    *
@@ -522,6 +524,12 @@ export function createAiReadiness(deps: {
   // `/health`'s `sessionCount`; `null` = unknown (not yet read, redacted, or
   // the server is unreachable).
   let sessionCount = $state<number | null>(null);
+  // An AI session that is still THERE: `/health` saw a session and counts at
+  // least one live one. `hasSession` alone includes a client that went away
+  // without disconnecting, for up to ~35 min. A `null` count (not reported,
+  // e.g. a redacted or stubbed body) falls back to `hasSession` rather than
+  // demoting on the strength of a missing field.
+  const sessionLive = $derived(mcpSessionActive && sessionCount !== 0);
   // Has `/health` gone quiet for a full strike run — i.e. is the SERVER gone,
   // as distinct from an AI not being attached to a server that is fine? The
   // send path needs the difference: with the server down, a chat message is
@@ -731,7 +739,7 @@ export function createAiReadiness(deps: {
    *  the same thing — `hasSession: null` alone cannot tell them apart. */
   async function readHasSession(
     fromPoll: boolean,
-  ): Promise<{ answered: boolean; hasSession: boolean | null }> {
+  ): Promise<{ answered: boolean; hasSession: boolean | null; sessionCount: number | null }> {
     const mine = ++healthSeq;
     const fresh = await fetchHealth();
 
@@ -772,6 +780,7 @@ export function createAiReadiness(deps: {
     const out = {
       answered: fresh.answered,
       hasSession: fresh.answered ? fresh.hasSession : null,
+      sessionCount: fresh.answered ? fresh.sessionCount : null,
     };
     if (mine !== healthSeq || destroyed) return out;
 
@@ -822,7 +831,11 @@ export function createAiReadiness(deps: {
    *  saying which of the two happened. */
   async function probeSession(): Promise<{ answered: boolean; sessionLive: boolean }> {
     const fresh = await readHasSession(false);
-    return { answered: fresh.answered, sessionLive: fresh.hasSession ?? mcpSessionActive };
+    // Same rule as `sessionLive`, applied to this read: a session that is only
+    // a leftover is not one the send path may call connected.
+    const live =
+      fresh.hasSession === null ? sessionLive : fresh.hasSession && fresh.sessionCount !== 0;
+    return { answered: fresh.answered, sessionLive: live };
   }
 
   function poll(): void {
@@ -853,7 +866,7 @@ export function createAiReadiness(deps: {
     }
     // An active MCP session means an agent is connected and AI works, whether
     // or not the launcher spawned it. Promote to ready and skip the CTA.
-    if (mcpSessionActive) return "ready";
+    if (sessionLive) return "ready";
     if (status.available === false) {
       // Autostart deferral (#1236): the app was launched by the OS at login and
       // deliberately held the Claude launcher back. Nothing is misconfigured —
@@ -911,7 +924,7 @@ export function createAiReadiness(deps: {
   // green.
   const launcherAttached = $derived(runningStatus?.attached === true);
   const launcherFailure = $derived<LauncherFailure | null>(
-    !deps.soloMode() && mcpSessionActive && lastError !== undefined && TRIPPED_FAILURE[lastError]
+    !deps.soloMode() && sessionLive && lastError !== undefined && TRIPPED_FAILURE[lastError]
       ? chipForStoppedLauncher(lastError)
       : null,
   );
@@ -923,8 +936,13 @@ export function createAiReadiness(deps: {
   // connected. When no session is open there is nothing affirmative to say
   // (`null`); Solo-with-no-session is still `null` — "AI won't see your edits"
   // only makes sense once an AI is actually connected.
+  //
+  // "connected" keys on ANY session so the pill can still show a leftover one
+  // (hollow, with copy saying it may have closed — the view reads
+  // `sessionCount`). Solo keys on a LIVE one: its pill exists only to say an AI
+  // is attached but held, which a leftover is not.
   const liveIndicator = $derived<AiLiveIndicator>(
-    !mcpSessionActive ? null : deps.soloMode() ? "solo-paused" : "connected",
+    !mcpSessionActive ? null : deps.soloMode() ? (sessionLive ? "solo-paused" : null) : "connected",
   );
 
   // Deliberately NOT folded into `liveIndicator` or `state`. Push delivery is

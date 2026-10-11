@@ -52,6 +52,7 @@ let shuttingDown = false;
 let sessionCount = 2;
 const DEPS = {
   version: "0.0.0-test",
+  hasSession: () => true,
   sessionCount: () => sessionCount,
   getSubscriberCount: () => 3,
   getPushLiveness: () => ({ lastEventAt: 1_700_000_000_000, eventCount: 42 }),
@@ -114,13 +115,13 @@ describe("GET /health — loopback gate", () => {
   // covers fields nobody has written yet. `delivery` is the case that motivated
   // widening it: its counters trace when a human's messages arrive and whether
   // anyone answers, so it is the most sensitive field on the route, not the least.
-  // `hasSession` is derived from the count, so the two cannot disagree — and a
-  // hardcoded `true` would survive the positive case above alone.
-  it("derives hasSession false from a zero count", () => {
+  // The two are separate reads on purpose: `hasSession` includes a leftover
+  // session, `sessionCount` only live ones, so "true beside 0" must pass through.
+  it("reports a leftover-only registry as hasSession true with a zero count", () => {
     sessionCount = 0;
     try {
       const body = callWith("127.0.0.1");
-      expect(body.hasSession).toBe(false);
+      expect(body.hasSession).toBe(true);
       expect(body.sessionCount).toBe(0);
     } finally {
       sessionCount = 2;

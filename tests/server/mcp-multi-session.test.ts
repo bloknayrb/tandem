@@ -11,7 +11,7 @@
  */
 
 import type { Server } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeMcpSession,
   getPinnedMcpSessionCount,
@@ -307,6 +307,32 @@ describe("an open standalone stream pins its session against the reaper", () => 
 
     await stream.close();
     expect(isClaudeSessionAttached(id, spawnedAt)).toBe(false);
+  });
+
+  // The real wiring for "live": an open stream keeps a quiet client counted,
+  // and once its stream closes it drops out of `sessionCount` while staying in
+  // `hasSession`. Positive arm first, anchored, so a session that never
+  // registered cannot pass the negative.
+  it("counts a quiet client while its stream is open, and not once it closes", async () => {
+    const session = await openSession("quiet-but-attached");
+    const stream = await openStream(session.sessionId);
+    const health = async () =>
+      (await (await fetch(`${baseUrl}/health`)).json()) as {
+        hasSession?: boolean;
+        sessionCount?: number;
+      };
+    try {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.now() + 2 * 60_000);
+      expect(getPinnedMcpSessionCount()).toBe(1);
+      expect(await health()).toMatchObject({ hasSession: true, sessionCount: 1 });
+
+      await stream.close();
+      vi.setSystemTime(Date.now() + 2 * 60_000);
+      expect(await health()).toMatchObject({ hasSession: true, sessionCount: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not leave a session pinned when the SDK rejects a second stream", async () => {

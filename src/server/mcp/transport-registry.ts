@@ -142,18 +142,42 @@ function claudeIdKey(id: string): string {
   return id.toLowerCase();
 }
 
+/** How recently a request must have STARTED for an entry with no open stream
+ *  to still count as live. See `isLiveEntry`. */
+export const LIVE_RECENT_MS = 60_000;
+
 /**
- * How many clients the registry's entries represent — backs `/health`'s
- * `sessionCount`. Entries sharing a `claudeSessionId` are one Claude session (a
- * stdio bridge that re-initializes leaves its old entry behind under the same
- * id); entries without one count individually.
+ * Whether an entry is evidence of a client that is still there, as opposed to
+ * one that went away without `DELETE /mcp` and is waiting for the reaper (up to
+ * ~35 min). An open standalone GET stream is the main signal: Claude Code holds
+ * it for the life of the session, quiet stretches included (measured
+ * 2026-10-11), and it closes when the process exits. The recency arm keeps a
+ * client that never opens a stream counted while it is actually calling tools.
  *
- * An upper bound, not a census: an entry outlives a client that vanished
- * without `DELETE /mcp` until the reaper takes it (up to ~35 min), a hung
- * client holding its stream open stays counted, and one Claude session wired
- * through both the plugin bridge and a direct-HTTP entry counts twice. It also
- * undercounts in one case — two live processes sharing a Claude id count once —
- * and stateless `2026-07-28` clients are never in the registry at all (#1249).
+ * `lastSeenAt` moves only at the START of a request (`dispatchToSession`), never
+ * on SSE traffic, so a stream-less client reads as gone 60 s after its last
+ * request began. That is the one population this misreads, and it is unmeasured.
+ */
+export function isLiveEntry(
+  entry: Pick<McpSessionEntry, "openStreams" | "lastSeenAt">,
+  now: number,
+): boolean {
+  return entry.openStreams > 0 || now - entry.lastSeenAt < LIVE_RECENT_MS;
+}
+
+/**
+ * How many clients a set of entries represents — `/health`'s `sessionCount`
+ * passes only the live ones (`isLiveEntry`). Entries sharing a
+ * `claudeSessionId` are one Claude session (a stdio bridge that re-initializes
+ * leaves its old entry behind under the same id); entries without one count
+ * individually.
+ *
+ * Over the live entries it can still overcount: a client that just exited
+ * counts until `LIVE_RECENT_MS` after its last request, a hung client holding
+ * its stream open stays counted, and one Claude session wired through both the
+ * plugin bridge and a direct-HTTP entry counts twice. It undercounts when two
+ * live processes share a Claude id, and stateless `2026-07-28` clients are
+ * never in the registry at all (#1249).
  */
 export function countDistinctClients(
   entries: ReadonlyArray<Pick<McpSessionEntry, "claudeSessionId">>,

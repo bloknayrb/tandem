@@ -56,6 +56,7 @@ import {
   countDistinctClients,
   createMcpSessionRegistry,
   hasLiveEntryFor,
+  isLiveEntry,
   type McpSessionEntry,
   type McpSessionRegistry,
 } from "./transport-registry.js";
@@ -516,11 +517,20 @@ export async function closeMcpSession(): Promise<void> {
   await sessions?.closeAll();
 }
 
-/** Distinct MCP clients in the registry — `/health`'s loopback-only
- * `sessionCount` (and `hasSession`, derived from it). See `countDistinctClients`
- * for why it is an upper bound. */
+/** Distinct LIVE MCP clients (`isLiveEntry`) — `/health`'s loopback-only
+ * `sessionCount`. See `countDistinctClients` for what it can still miscount. */
 export function getMcpClientCount(): number {
-  return sessions ? countDistinctClients(sessions.list()) : 0;
+  if (!sessions) return 0;
+  // One `now` for the whole pass, and never `filter(isLiveEntry)` bare: filter
+  // would pass the array index as `now` and every entry would read live.
+  const now = Date.now();
+  return countDistinctClients(sessions.list().filter((e) => isLiveEntry(e, now)));
+}
+
+/** Whether ANY MCP session is in the registry, live or left over — `/health`'s
+ * `hasSession`, which readiness, `doctor` and the setup wizard read. */
+export function hasAnyMcpSession(): boolean {
+  return (sessions?.size ?? 0) > 0;
 }
 
 /** Whether a live MCP connection from `claudeSessionId`, opened at or after
@@ -887,6 +897,7 @@ export async function startMcpServerHttp(
     lanAwareApiMiddleware,
     makeHealthHandler({
       version: APP_VERSION,
+      hasSession: hasAnyMcpSession,
       sessionCount: getMcpClientCount,
       getSubscriberCount,
       getPushLiveness: getPushConsumerLiveness,

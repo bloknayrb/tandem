@@ -1481,6 +1481,63 @@ describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
     }
   });
 
+  // A session in the registry with none live is a client that went away
+  // without disconnecting. It must not stand in for a connected AI anywhere a
+  // claim or a remedy hangs on it; only the pill still shows it (hollow).
+  describe("a leftover-only session (hasSession true, sessionCount 0)", () => {
+    const leftover = () => mkResponse({ status: "ok", hasSession: true, sessionCount: 0 });
+
+    it("does not promote state to ready, so the stopped remedy can show", async () => {
+      globalThis.fetch = routedFetch({ launcher: STOPPED_LAUNCHER, health: leftover() });
+      const h = mount();
+      await settle();
+      expect(h.get().state).toBe("stopped");
+      // …while the pill can still say something was attached.
+      expect(h.get().liveIndicator).toBe("connected");
+    });
+
+    it("tells the send path no session is live", async () => {
+      globalThis.fetch = routedFetch({ launcher: STOPPED_LAUNCHER, health: leftover() });
+      const h = mount();
+      await settle();
+      await expect(h.get().probeSession()).resolves.toEqual({
+        answered: true,
+        sessionLive: false,
+      });
+    });
+
+    it("does not show the Solo pill", async () => {
+      globalThis.fetch = routedFetch({ launcher: STOPPED_LAUNCHER, health: leftover() });
+      const h = mount({ soloMode: true });
+      await settle();
+      expect(h.get().liveIndicator).toBeNull();
+    });
+
+    it("does not raise the 'another session is attached' failure button", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: () => mkResponse({ available: true, running: false, lastError: "needs-login" }),
+        health: leftover(),
+      });
+      const h = mount();
+      await settle();
+      expect(h.get().launcherFailure).toBeNull();
+    });
+
+    it("a live count restores all of it", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: STOPPED_LAUNCHER,
+        health: mkResponse({ status: "ok", hasSession: true, sessionCount: 1 }),
+      });
+      const h = mount();
+      await settle();
+      expect(h.get().state).toBe("ready");
+      await expect(h.get().probeSession()).resolves.toEqual({
+        answered: true,
+        sessionLive: true,
+      });
+    });
+  });
+
   describe("sessionCount", () => {
     it("reads the count from /health", async () => {
       globalThis.fetch = routedFetch({
