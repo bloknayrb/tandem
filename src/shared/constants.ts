@@ -3,8 +3,8 @@ export const DEFAULT_MCP_PORT = 3479;
 
 /**
  * Trial length in days (ADR-040 §5: equal to clause (a) of the `LICENSE`
- * Additional Use Grant, the 14 days from first launch of v1.0 or later before a
- * key is needed, which `tests/docs/trial-length-claims.test.ts` pins to this number).
+ * Additional Use Grant, the 14 days of full use from first launch of v1.0 or
+ * later, after which the AI features need a key, which `tests/docs/trial-length-claims.test.ts` pins to this number).
  *
  * Lives in `shared` so the *client* copy ("N of 14 days left") is generated from
  * the same number the server clock uses, rather than hand-written in each
