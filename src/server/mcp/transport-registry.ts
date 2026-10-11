@@ -134,6 +134,14 @@ export interface McpSessionRegistry<S extends ClosableServer = ClosableServer, T
   list(): ReadonlyArray<McpSessionEntry<S, T>>;
 }
 
+/** The one identity rule `countDistinctClients` and `hasLiveEntryFor` share, so
+ *  the count and the attachment match can never disagree on what "the same
+ *  Claude session" means. Case-folded because `normalizeSessionId` preserves
+ *  case and a UUID may round-trip through the session file in either. */
+function claudeIdKey(id: string): string {
+  return id.toLowerCase();
+}
+
 /**
  * How many clients the registry's entries represent — backs `/health`'s
  * `sessionCount`. Entries sharing a `claudeSessionId` are one Claude session (a
@@ -147,14 +155,6 @@ export interface McpSessionRegistry<S extends ClosableServer = ClosableServer, T
  * undercounts in one case — two live processes sharing a Claude id count once —
  * and stateless `2026-07-28` clients are never in the registry at all (#1249).
  */
-/** The one identity rule `countDistinctClients` and `hasLiveEntryFor` share, so
- *  the count and the attachment match can never disagree on what "the same
- *  Claude session" means. Case-folded because `normalizeSessionId` preserves
- *  case and a UUID may round-trip through the session file in either. */
-function claudeIdKey(id: string): string {
-  return id.toLowerCase();
-}
-
 export function countDistinctClients(
   entries: ReadonlyArray<Pick<McpSessionEntry, "claudeSessionId">>,
 ): number {

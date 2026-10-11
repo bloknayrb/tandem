@@ -210,7 +210,7 @@ describe("aiIndicatorView — session count", () => {
     expect(v?.title).toContain("3 sessions are connected to Tandem");
     expect(v?.ariaLabel).toContain("3 sessions are connected to Tandem");
     // The main overcount is named where the number is.
-    expect(v?.title).toContain("closed in the last half hour");
+    expect(v?.title).toContain("can stay counted for up to about 35 minutes");
   });
 
   it("uses the singular for one", () => {

@@ -272,10 +272,10 @@ export function sessionCountLabel(count: number): string {
  * zero or unknown, and never on "AI not connected", whose label already says it.
  */
 function withSessionCount(view: BaseView, count: number | null): AiIndicatorView {
-  if (count === null || count < 1 || view.dataState === "not-connected") {
+  if (count == null || count < 1 || view.dataState === "not-connected") {
     return { ...view, sessionCount: null };
   }
-  const sentence = `${sessionCountLabel(count)} ${count === 1 ? "is" : "are"} connected to Tandem (this can include one that closed in the last half hour).`;
+  const sentence = `${sessionCountLabel(count)} ${count === 1 ? "is" : "are"} connected to Tandem. A session that closed can stay counted for up to about 35 minutes, and a frozen one until it closes.`;
   return {
     ...view,
     sessionCount: count,
