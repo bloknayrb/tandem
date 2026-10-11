@@ -1028,6 +1028,15 @@ function runDesktop() {
               "that distribution's packages.",
             ]
           : []),
+        // MPL-2.0 §3.2(a): an executable must tell recipients where the source is.
+        ...(crates.some((c) => /\bMPL-2\.0\b/.test(c.license))
+          ? [
+              "",
+              "Components licensed under the Mozilla Public License 2.0 are included unmodified.",
+              "Their source code is available from crates.io at the name and version listed",
+              "below (https://crates.io/crates/<name>/<version>).",
+            ]
+          : []),
       ],
     ) +
       renderSection("npm", NPM_TITLE, desktop) +

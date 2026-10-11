@@ -3,47 +3,47 @@
   "entries": {
     "npm:jszip": {
       "license": "(MIT OR GPL-3.0-or-later)",
-      "status": "flagged 2026-10-09, awaiting the owner's decision (dual licence; MIT is available)"
+      "status": "accepted 2026-10-11: used under the MIT option"
     },
     "crate:cssparser": {
       "license": "MPL-2.0",
-      "status": "flagged 2026-10-09, awaiting the owner's decision"
+      "status": "accepted 2026-10-11: unmodified; the desktop notices state where the source is (MPL-2.0 3.2(a))"
     },
     "crate:cssparser-macros": {
       "license": "MPL-2.0",
-      "status": "flagged 2026-10-09, awaiting the owner's decision"
+      "status": "accepted 2026-10-11: unmodified; the desktop notices state where the source is (MPL-2.0 3.2(a))"
     },
     "crate:dtoa-short": {
       "license": "MPL-2.0",
-      "status": "flagged 2026-10-09, awaiting the owner's decision"
+      "status": "accepted 2026-10-11: unmodified; the desktop notices state where the source is (MPL-2.0 3.2(a))"
     },
     "crate:freedesktop_entry_parser": {
       "license": "MPL-2.0",
-      "status": "flagged 2026-10-09, awaiting the owner's decision (Linux build only)"
+      "status": "accepted 2026-10-11: unmodified; the desktop notices state where the source is (MPL-2.0 3.2(a)) (Linux build only)"
     },
     "crate:linicon": {
       "license": "MPL-2.0",
-      "status": "flagged 2026-10-09, awaiting the owner's decision (Linux build only)"
+      "status": "accepted 2026-10-11: unmodified; the desktop notices state where the source is (MPL-2.0 3.2(a)) (Linux build only)"
     },
     "crate:linicon-theme": {
       "license": "MPL-2.0",
-      "status": "flagged 2026-10-09, awaiting the owner's decision (Linux build only)"
+      "status": "accepted 2026-10-11: unmodified; the desktop notices state where the source is (MPL-2.0 3.2(a)) (Linux build only)"
     },
     "crate:option-ext": {
       "license": "MPL-2.0",
-      "status": "flagged 2026-10-09, awaiting the owner's decision"
+      "status": "accepted 2026-10-11: unmodified; the desktop notices state where the source is (MPL-2.0 3.2(a))"
     },
     "crate:selectors": {
       "license": "MPL-2.0",
-      "status": "flagged 2026-10-09, awaiting the owner's decision"
+      "status": "accepted 2026-10-11: unmodified; the desktop notices state where the source is (MPL-2.0 3.2(a))"
     },
     "crate:webpki-root-certs": {
       "license": "CDLA-Permissive-2.0",
-      "status": "flagged 2026-10-09, awaiting the owner's decision (permissive data licence, not on the allowlist)"
+      "status": "accepted 2026-10-11: permissive; its licence text ships in the notices"
     },
     "crate:webpki-roots": {
       "license": "CDLA-Permissive-2.0",
-      "status": "flagged 2026-10-09, awaiting the owner's decision (permissive data licence, not on the allowlist)"
+      "status": "accepted 2026-10-11: permissive; its licence text ships in the notices"
     }
   }
 }
