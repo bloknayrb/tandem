@@ -11,7 +11,8 @@
       "name": "tandem",
       "source": {
         "source": "github",
-        "repo": "bloknayrb/tandem"
+        "repo": "bloknayrb/tandem",
+        "ref": "v0.28.0"
       },
       "description": "Edit and iterate on documents with any MCP-capable AI. Claude is the default and best-supported client today."
     }
