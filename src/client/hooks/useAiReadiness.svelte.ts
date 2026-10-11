@@ -11,9 +11,12 @@
  *
  * Readiness therefore folds in TWO signals:
  *   1. The launcher's `GET /api/launcher/status` — the supervised process.
- *   2. The server's `GET /health` `hasSession` field (loopback-only) — whether
- *      ANY MCP client transport is currently open, supervised or not. This is
- *      the authoritative "an agent is actually connected" signal for clients
+ *   2. The server's `GET /health` `hasSession` and `sessionCount` fields
+ *      (loopback-only). `hasSession` says whether ANY MCP session is in the
+ *      registry, supervised or not, including a client that went away without
+ *      disconnecting; `sessionCount` counts the LIVE ones. Together they are
+ *      the "an agent is actually connected" signal (`sessionLive`: a session
+ *      and a live count, or a session with no count reported) for clients
  *      that perform an MCP `initialize` handshake. MCP `2026-07-28` removed
  *      that handshake and protocol-level sessions, so the field goes silent
  *      about clients on that revision — see #1249 before treating a `false`
@@ -22,7 +25,7 @@
  *      `false` demotes both `state` and `liveIndicator` — as does a sustained
  *      inability to reach the server at all (see the fail-safe note below).
  *
- * An active MCP session means AI works regardless of launcher state, so it
+ * A live MCP session means AI works regardless of launcher state, so it
  * promotes readiness to `ready` and suppresses both the restart CTA and the
  * "no AI is connected" send notice. Without it, a manually-launched session
  * would show "Restart Claude Code" — and clicking it would spawn a SECOND agent
@@ -41,13 +44,13 @@
  *   - `booting`      — not yet known (still connecting / first status read
  *                      pending). Render nothing; never flash a CTA on boot.
  *   - `unconfigured` — launcher unavailable (`available: false`: stdio mode or
- *                      disabled) AND no active MCP session. Prompt setup.
- *   - `stopped`      — `available: true, running: false` AND no active MCP
+ *                      disabled) AND no live MCP session. Prompt setup.
+ *   - `stopped`      — `available: true, running: false` AND no live MCP
  *                      session. Prompt restart, NOT the setup wizard. Known gap:
  *                      HTTP mode creates the supervisor even with NO claude-code
  *                      integration, so a never-configured user also lands here
  *                      and is offered "Restart Claude Code" (#2180).
- *   - `ready`        — Claude Code running OR an MCP session is active.
+ *   - `ready`        — Claude Code running OR an MCP session is live.
  *
  * `chip` folds in Solo-mode suppression: in Solo mode the user has deliberately
  * chosen to work without AI surfacing, so a persistent "Connect AI" nag would
