@@ -108,10 +108,11 @@ doesn't grant is the worst version of this problem.
   to an app-data directory; that is the deliberate soft gate above.
 - After the 14 days, `LICENSE` grants keyless use that leaves out the AI
   features (decision A4). That matches ADR-040's 2026-08-18 amendment
-  (unlicensed = an editor with no AI), and Bryan confirmed it as #1521's policy on
-  2026-10-11, superseding Decision F's read-only mode. It is not the gate merged today, which makes
-  documents read-only and keeps chat and Claude's MCP read tools open. Until #1521 lands, the dark build's
-  restricted mode and its copy disagree with the licence in both directions.
+  (unlicensed = an editor with no AI), which Bryan confirmed on 2026-10-11 as
+  #1521's policy, superseding Decision F's read-only mode. The gate merged today
+  differs: it makes documents read-only and keeps chat and Claude's MCP read
+  tools open. Until #1521 lands, the dark build's restricted mode and its copy
+  disagree with the licence in both directions.
 - One asymmetry is deliberate: every pre-1.0 (beta) version stays free
   for personal use and individual self-hosting with no time limit, including
   the releases that shipped under an earlier wording, so someone can keep
