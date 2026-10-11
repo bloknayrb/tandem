@@ -105,13 +105,11 @@ and therefore no list of beta users to work from.
 2. **Licensed** — you activated a key. Everything works, forever.
 3. **Restricted** — the trial ended and there's no license. **Your documents are
    never held hostage:** Tandem stays a working editor. You can open, edit, save
-   and export your documents. What a key adds is the AI features: Claude (or any
-   other agent) over the MCP server, the chat panel and local models. The
+   and export your documents. What a key adds is the AI features, such as Claude
+   (or any other agent) over the MCP server, the chat panel and local models. The
    [LICENSE](../LICENSE) grants exactly that: v1.0 and later may be used without
    a key, for personal use and individual self-hosting, provided the use does
-   not include the AI features. The condition is on the use, not the person:
-   using the AI features without a key is outside the grant, but it doesn't
-   disqualify your later use of the editor without them.
+   not include the AI features.
 
 That third one matters and is easy to get wrong, so to be blunt: **we do not
 lock you out of your own files.** They're plain files on your disk, and nothing

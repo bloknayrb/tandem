@@ -25,6 +25,9 @@ setup, hardware verification, and two flag flips.
 1. **The license surface gate (#1521) has to land dark before the flip.** Its policy is
    **Decision F** (2026-09-06, recorded on #1827 and #1788): restricted mode is *symmetric
    read-only*, and the annotation mutators move from ungated to gated in both halves.
+   Since decision A4 (2026-10-09) `LICENSE` grants keyless editing, so restricted mode
+   must keep the user's editor editable: Decision F's read-only rule now covers only the
+   AI features (MCP writes, chat, local models), as ADR-040's 2026-08-18 amendment says.
    #1521's own acceptance criteria predate that decision and contradict it (see its
    2026-09-08 comment), so reconcile the issue with Decision F before implementing anything.
    Flipping `LICENSE_GATE_ENABLED` on today's per-tool gate would ship a shape ADR-040 no

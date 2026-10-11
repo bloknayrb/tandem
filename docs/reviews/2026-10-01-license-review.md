@@ -122,6 +122,8 @@ Count: 11. Fixed: 8. They are C1 to C4, C9 to C11, and one carrier of C7. Enforc
 
 - Update, 2026-10-09: the licensor decided the desktop app ships `LICENSE`. The desktop bundle now carries the repository `LICENSE` as the resource `LICENSE.txt` (on Linux that lands in the package's install tree with the other resources), and Settings has a "View license" link that opens it read-only. The resource is named `LICENSE.txt`, not the `LICENSE` proposed below, because `/api/open` refuses an extensionless file. Still not done: `bundle.licenseFile` is unset, so no installer is expected to show a licence page (not checked), and the `.deb` still has no Debian copyright file or `License` field. Not verified on a built installer. The rest of this entry is the review as written, and it describes releases up to v0.28.0.
 
+- Decided 2026-10-09 (B7): ship `LICENSE` in the desktop app. A build change, not in #2174; done in #2178.
+
 - Tag: build
 - Location: `src-tauri/tauri.conf.json:59-68`
 - What is wrong: `LICENSE:51-52` says "You must conspicuously display this License on each original or modified copy of the Licensed Work." The npm package does carry it: the published `tandem-editor-0.28.0.tgz` contains `package/LICENSE`. The plugin installs from the GitHub repository, which has `LICENSE` at its root (inferred from `.claude-plugin/marketplace.json`, not tested). The desktop bundle's `resources` map lists the server, channel, bridge and client bundles, `sample/`, `skills/`, `CHANGELOG.md` and `docs/workflows.md`, and no `LICENSE`. There is no `licenseFile` setting for the installers, and a search of `src/client` found no screen that shows the licence or links to it.
