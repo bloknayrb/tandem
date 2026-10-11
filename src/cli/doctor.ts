@@ -2414,6 +2414,8 @@ interface HttpGetResult {
     version?: string;
     transport?: string;
     hasSession?: boolean;
+    /** Loopback-only. Live MCP sessions; `hasSession` also counts leftovers. */
+    sessionCount?: number;
     /** Loopback-only. Diagnostics for the PUSH path — see `evaluatePushPath`. */
     push?: { subscribers?: number; lastEventAt?: number | null; eventCount?: number };
   } | null;
@@ -2490,6 +2492,33 @@ async function isViteDevServer(port: number): Promise<boolean> {
   return result?.status === 200;
 }
 
+/**
+ * How `doctor` describes `/health`'s session fields. Exported for unit testing.
+ * `hasSession` includes a client that went away without disconnecting and is
+ * waiting to be reaped; `sessionCount` is the live subset, so "true beside 0"
+ * is a leftover, not an active session. A missing count (older server) trusts
+ * `hasSession`.
+ */
+export function describeHealthSession(d: { hasSession?: boolean; sessionCount?: number }): {
+  label: string;
+  warning: string | null;
+} {
+  if (!d.hasSession) {
+    return {
+      label: "no MCP session",
+      warning: "No active MCP session — Claude Code hasn't connected yet",
+    };
+  }
+  if (d.sessionCount === 0) {
+    return {
+      label: "only a leftover MCP session",
+      warning:
+        "No live MCP session — the one Tandem still lists looks like a client that has gone away",
+    };
+  }
+  return { label: "session active", warning: null };
+}
+
 async function checkHealth(r: Recorder, mcpPort: number, startHint: string): Promise<boolean> {
   const result = await httpGet(`http://127.0.0.1:${mcpPort}/health`);
 
@@ -2510,15 +2539,13 @@ async function checkHealth(r: Recorder, mcpPort: number, startHint: string): Pro
 
   const d = result.data;
   if (d) {
-    const session = d.hasSession ? "session active" : "no MCP session";
-    r.pass(`Server healthy (v${d.version}, ${d.transport}, ${session})`, undefined, {
+    const session = describeHealthSession(d);
+    r.pass(`Server healthy (v${d.version}, ${d.transport}, ${session.label})`, undefined, {
       version: d.version,
       transport: d.transport,
       hasSession: !!d.hasSession,
     });
-    if (!d.hasSession) {
-      r.warn("No active MCP session — Claude Code hasn't connected yet");
-    }
+    if (session.warning) r.warn(session.warning);
     recordEvaluation(r, evaluatePushPath(d.push));
   } else {
     r.pass("Server responded on /health (could not parse body)");

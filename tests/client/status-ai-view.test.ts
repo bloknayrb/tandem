@@ -260,6 +260,16 @@ describe("aiIndicatorView — leftover sessions", () => {
     ).not.toContain("stopped Claude's leftover");
   });
 
+  // With nothing live the pill is the setup/restart button, whose hover and
+  // screen-reader text say no AI is connected; the label must agree.
+  it("says 'AI not connected' when a setup or restart remedy is up", () => {
+    for (const state of ["stopped", "unconfigured"] as const) {
+      const v = view({ state, liveIndicator: "connected", sessionCount: 0 });
+      expect(v?.dataState).toBe("not-connected");
+      expect(v?.label).toBe("AI not connected");
+    }
+  });
+
   it("an unreported count trusts hasSession and stays green", () => {
     expect(view({ liveIndicator: "connected", sessionCount: null })?.tone).toBe("connected");
   });

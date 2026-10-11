@@ -357,13 +357,16 @@ export const TANDEM_CLAUDE_DOWN: Record<LauncherFailure, { label: string; title:
 /**
  * The affirmative "an agent is connected" indicator, or `null` when there's
  * nothing positive to assert (no session, or still booting). Distinct from
- * `chip` (which is the *negative*-state CTA): `chip` and `liveIndicator` are
- * mutually exclusive in practice and MUST stay separate — folding an
+ * `chip` (which is the *negative*-state CTA). They MUST stay separate — folding an
  * affirmative value into `chip` would break the `chip === null` guards that
  * gate the "no AI is connected" send notice (App.svelte) and collide with the
- * titlebar CTA/default-model branches.
- *   - `connected`   — an MCP session is open and mode is Tandem: events flow.
- *   - `solo-paused` — an MCP session is open but mode is Solo: chat still works,
+ * titlebar CTA/default-model branches. They are NOT mutually exclusive: a
+ * leftover-only session (`hasSession` true, live `sessionCount` 0) gives
+ * `connected` beside a non-null `chip`, and the view renders that pair as "AI
+ * not connected" so the label agrees with the CTA (`aiIndicatorView` Rule 3).
+ *   - `connected`   — an MCP session is in the registry and mode is Tandem. It
+ *                     may be a leftover; `sessionCount` says whether one is live.
+ *   - `solo-paused` — a LIVE MCP session and mode is Solo: chat still works,
  *                     but the AI won't see the user's edits/comments (the server
  *                     withholds them — `server/events/queue.ts`
  *                     `isUserPrivacyHeld` + `shouldForwardExternally`).
@@ -385,8 +388,8 @@ export interface AiReadiness {
   /** Last scrubbed error code from supervisor when state is stopped. */
   readonly lastError?: LauncherErrorCode;
   /**
-   * The affirmative connected indicator, keyed on the authoritative MCP-session
-   * signal (`hasSession`) — NOT on `state`, which also reaches `ready` from the
+   * The affirmative connected indicator, keyed on `hasSession` (Solo: on a live
+   * session) — NOT on `state`, which also reaches `ready` from the
    * launcher's `running: true` with no open session (auto-launched desktop
    * startup window), where an "AI connected" badge would be a false green.
    */
@@ -451,12 +454,12 @@ export interface AiReadiness {
    *  connected": it is only reachable when the child's connection forwards its
    *  Claude session id. Gated like `launcherRunning`. */
   readonly launcherAttached: boolean;
-  /** How many MCP clients `/health` counts (an upper bound — see
+  /** How many LIVE MCP clients `/health` counts (`isLiveEntry` +
    *  `countDistinctClients`), or `null` when unknown or unreachable. */
   readonly sessionCount: number | null;
   /**
-   * Tandem's Claude has tripped (see `TRIPPED_FAILURE`) while ANOTHER session
-   * keeps `hasSession` true — the case `chip` hides, because a live session
+   * Tandem's Claude has tripped (see `TRIPPED_FAILURE`) while ANOTHER live
+   * session is attached — the case `chip` hides, because a live session
    * promotes `state` to `ready` (#1054). `null` otherwise, and in Solo.
    * Deliberately separate from `chip`, which keeps its meaning for EmptyState
    * and the send path.

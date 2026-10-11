@@ -47,6 +47,8 @@ import { API_HEALTH } from "../../shared/api-paths.js";
 interface HealthResponse {
   status?: string;
   hasSession?: boolean;
+  /** Live MCP sessions; absent on an older or redacted body. */
+  sessionCount?: number;
 }
 
 export type ReachabilityStatus = "reachable" | "unreachable" | "not-applicable" | "verifying";
@@ -145,7 +147,14 @@ export function createReachabilityCheck(
     } catch {
       body = null; // malformed body
     }
-    const hasSession = body && typeof body.hasSession === "boolean" ? body.hasSession : null;
+    // A session counts only while it is live: `hasSession` alone includes a
+    // client that just exited (the very restart this wizard asks for), which
+    // would latch "connected" before the new one arrives. A missing count
+    // falls back to `hasSession`, the same rule as `useAiReadiness`.
+    const hasSession =
+      body && typeof body.hasSession === "boolean"
+        ? body.hasSession && body.sessionCount !== 0
+        : null;
     if (hasSession === true && mine === healthSeq && mounted) claudeConnected = true;
     return { ok: true, hasSession };
   }

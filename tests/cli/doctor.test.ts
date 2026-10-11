@@ -32,6 +32,7 @@ const SCAN_CAP_TIMEOUT_MS = timeoutMs(90_000, 300_000);
 
 import {
   CWD_DEPENDENT_CHECKS,
+  describeHealthSession,
   detectEnabledTandemPluginKey,
   evaluateAbsentChannelEntry,
   evaluateAppTranslocation,
@@ -3083,4 +3084,31 @@ describe("resolveDoctorPortsFromEnv (#1806)", () => {
     },
     WIRING_TIMEOUT_MS,
   );
+});
+
+describe("describeHealthSession", () => {
+  it("reports an active session when one is live", () => {
+    expect(describeHealthSession({ hasSession: true, sessionCount: 1 })).toEqual({
+      label: "session active",
+      warning: null,
+    });
+  });
+
+  // A client that exited without disconnecting stays listed until reaped.
+  it("calls a leftover-only registry a leftover, and warns", () => {
+    const out = describeHealthSession({ hasSession: true, sessionCount: 0 });
+    expect(out.label).toBe("only a leftover MCP session");
+    expect(out.warning).toMatch(/No live MCP session/);
+  });
+
+  it("trusts hasSession when the server sends no count", () => {
+    expect(describeHealthSession({ hasSession: true }).label).toBe("session active");
+  });
+
+  it("warns that nothing has connected when there is no session", () => {
+    expect(describeHealthSession({ hasSession: false, sessionCount: 0 })).toEqual({
+      label: "no MCP session",
+      warning: "No active MCP session — Claude Code hasn't connected yet",
+    });
+  });
 });

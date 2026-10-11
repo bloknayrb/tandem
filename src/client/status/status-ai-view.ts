@@ -362,14 +362,22 @@ function baseIndicatorView(input: AiIndicatorInput): BaseView | null {
     // Green only for a live session. A `null` count (not reported) trusts
     // `hasSession`, the same fallback the hook's `sessionLive` uses. The stale
     // view's own copy already says what LEFTOVER_HINT would.
-    if (input.sessionCount === 0) return CONNECTED_STALE;
-    const view = input.pushDelivery === "none" ? CONNECTED_NO_PUSH : CONNECTED;
-    if (input.launcherFailure === null) return view;
-    return {
-      ...view,
-      title: view.title + LEFTOVER_HINT,
-      ariaLabel: view.ariaLabel + LEFTOVER_HINT,
-    };
+    if (input.sessionCount === 0) {
+      // With nothing live, `state` is no longer promoted to ready, so in
+      // `unconfigured` / `stopped` the pill is the setup or restart button.
+      // Its hover and screen-reader text come from that CTA, so the label must
+      // agree with it: fall through to "AI not connected". The hollow
+      // leftover view is for the states with no CTA (booting, ready).
+      if (input.state === "booting" || input.state === "ready") return CONNECTED_STALE;
+    } else {
+      const view = input.pushDelivery === "none" ? CONNECTED_NO_PUSH : CONNECTED;
+      if (input.launcherFailure === null) return view;
+      return {
+        ...view,
+        title: view.title + LEFTOVER_HINT,
+        ariaLabel: view.ariaLabel + LEFTOVER_HINT,
+      };
+    }
   }
 
   // Rule 4: gate the negative/absent states so we never flash "not connected".
