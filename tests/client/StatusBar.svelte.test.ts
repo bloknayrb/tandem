@@ -291,7 +291,7 @@ describe("StatusBar — Tandem's Claude isn't running", () => {
     expect(getByTestId("status-ai-indicator").textContent).toContain("AI attached");
   });
 
-  it("a dismissal hides the button but keeps the pill's leftover-connection hint", () => {
+  it("a dismissal hides the button and leaves the pill as it was", () => {
     const { getByTestId, queryByTestId } = render(StatusBar, {
       props: {
         ...baseProps,
@@ -301,9 +301,7 @@ describe("StatusBar — Tandem's Claude isn't running", () => {
       },
     });
     expect(queryByTestId("status-tandem-claude-down")).toBeNull();
-    expect(getByTestId("status-ai-indicator").getAttribute("title")).toContain(
-      "leftover connection",
-    );
+    expect(getByTestId("status-ai-indicator").textContent).toContain("AI attached");
   });
 });
 

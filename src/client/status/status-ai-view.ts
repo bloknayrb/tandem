@@ -153,10 +153,6 @@ const CONNECTED_STALE: BaseView = {
     "AI attached earlier, but Tandem can't see that it's still there. It may be a session that has since closed.",
 };
 
-/** Appended while Tandem's own Claude has tripped (the sibling button is up):
- *  the "something" may be that dead Claude's leftover connection. */
-const LEFTOVER_HINT = " It may be the stopped Claude's leftover connection.";
-
 /**
  * #1287: the label used to read "Solo · edits held", which overstates what
  * Solo actually withholds. Solo gates *forwarding* of annotation
@@ -328,7 +324,6 @@ export interface AiIndicatorInput {
   launcherBusy: boolean;
   /** The server matched a live connection to this spawn of Tandem's Claude. */
   launcherAttached: boolean;
-  launcherFailure: LauncherFailure | null;
   docSyncConnected: boolean;
   /** `/health`'s session count, or `null` when unknown. */
   sessionCount: number | null;
@@ -360,8 +355,7 @@ function baseIndicatorView(input: AiIndicatorInput): BaseView | null {
   // Rule 3: anything else attached.
   if (input.liveIndicator === "connected") {
     // Green only for a live session. A `null` count (not reported) trusts
-    // `hasSession`, the same fallback the hook's `sessionLive` uses. The stale
-    // view's own copy already says what LEFTOVER_HINT would.
+    // `hasSession`, the same fallback the hook's `sessionLive` uses.
     if (input.sessionCount === 0) {
       // With nothing live, `state` is no longer promoted to ready, so in
       // `unconfigured` / `stopped` the pill is the setup or restart button.
@@ -370,13 +364,7 @@ function baseIndicatorView(input: AiIndicatorInput): BaseView | null {
       // leftover view is for the states with no CTA (booting, ready).
       if (input.state === "booting" || input.state === "ready") return CONNECTED_STALE;
     } else {
-      const view = input.pushDelivery === "none" ? CONNECTED_NO_PUSH : CONNECTED;
-      if (input.launcherFailure === null) return view;
-      return {
-        ...view,
-        title: view.title + LEFTOVER_HINT,
-        ariaLabel: view.ariaLabel + LEFTOVER_HINT,
-      };
+      return input.pushDelivery === "none" ? CONNECTED_NO_PUSH : CONNECTED;
     }
   }
 
@@ -401,9 +389,6 @@ export interface LauncherFailureDismissal {
  * failure is new information, and so is the same one after Tandem's Claude has
  * run again in between (`launcherRunEpoch`), because that is a second outage,
  * not the one the user waved away. In memory only — a reload shows it again.
- *
- * Only the button obeys this. The tooltip's leftover hint keeps the raw failure,
- * since dismissing a button does not change the fact it reports.
  */
 export function visibleLauncherFailure(
   failure: LauncherFailure | null,

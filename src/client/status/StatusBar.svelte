@@ -52,8 +52,8 @@ interface Props {
   aiLauncherAttached: boolean;
   /** `/health`'s session count, or null when unknown. */
   aiSessionCount: number | null;
-  /** It tripped while another session is attached → the sibling button, and
-   *  the tooltip's leftover hint. Always the raw value, dismissed or not. */
+  /** It tripped while another live session is attached → the sibling button.
+   *  The raw value; `aiLauncherFailureDismissed` decides whether it shows. */
   aiLauncherFailure?: LauncherFailure | null;
   /** The user dismissed the sibling button for this failure (the caller owns
    *  the rule — `visibleLauncherFailure`). Hides the button only. */
@@ -279,7 +279,6 @@ const aiView = $derived(
     launcherCwd: aiLauncherCwd,
     launcherBusy: aiLauncherBusy,
     launcherAttached: aiLauncherAttached,
-    launcherFailure: aiLauncherFailure,
     docSyncConnected: connected,
     sessionCount: aiSessionCount,
   }),

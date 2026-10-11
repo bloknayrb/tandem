@@ -20,7 +20,6 @@ function view(over: Partial<ViewInput> = {}) {
     launcherCwd: null,
     launcherBusy: false,
     launcherAttached: false,
-    launcherFailure: null,
     docSyncConnected: true,
     sessionCount: null,
     ...over,
@@ -67,13 +66,6 @@ describe("aiIndicatorView", () => {
       expect(copy).not.toMatch(/can't wake/i);
       expect(copy).not.toMatch(/receiving/i);
     }
-  });
-
-  it("names a possible leftover connection while Tandem's Claude has tripped", () => {
-    const v = view({ liveIndicator: "connected", launcherFailure: "restart" });
-    expect(v?.title).toContain("leftover connection");
-    expect(v?.ariaLabel).toContain("leftover connection");
-    expect(view({ liveIndicator: "connected" })?.title).not.toContain("leftover");
   });
 
   it("ready + solo-paused (Solo, session open) → Solo · comments held, has a11y copy", () => {
@@ -251,13 +243,10 @@ describe("aiIndicatorView — leftover sessions", () => {
     expect(v?.title).toContain("can't see that it's still there");
   });
 
-  it("is stale even when push is confirmed absent, and adds no second leftover hint", () => {
+  it("is stale even when push is confirmed absent", () => {
     expect(
       view({ liveIndicator: "connected", sessionCount: 0, pushDelivery: "none" })?.dataState,
     ).toBe("connected-stale");
-    expect(
-      view({ liveIndicator: "connected", sessionCount: 0, launcherFailure: "restart" })?.title,
-    ).not.toContain("stopped Claude's leftover");
   });
 
   // With nothing live the pill is the setup/restart button, whose hover and
