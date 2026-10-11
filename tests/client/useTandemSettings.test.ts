@@ -343,7 +343,25 @@ describe("useTandemSettings — updateSettings write path", () => {
     spellcheck: true,
     uniformTabWidth: true,
     scrollPill: true,
+    chatNotifications: true,
+    chatNotificationContent: "document",
+    chatAttentionFlash: true,
+    chatSound: "chime",
+    chatSoundVolume: 60,
   } as TandemSettings;
+
+  it("clamps chat-notification values on write (#2168)", () => {
+    const next = mergeAndClampSettings(BASE, {
+      chatSoundVolume: -5,
+      chatSound: "airhorn" as unknown as TandemSettings["chatSound"],
+      chatNotificationContent: "all" as unknown as TandemSettings["chatNotificationContent"],
+    });
+    expect(next.chatSoundVolume).toBe(0);
+    expect(next.chatSound).toBe("chime");
+    expect(next.chatNotificationContent).toBe("document");
+    expect(mergeAndClampSettings(BASE, { chatSoundVolume: Number.NaN }).chatSoundVolume).toBe(60);
+    expect(mergeAndClampSettings(BASE, { chatSoundVolume: 250 }).chatSoundVolume).toBe(100);
+  });
 
   it("merges a new editorMeasure preset through write", () => {
     const next = mergeAndClampSettings(BASE, { editorMeasure: "narrow" });

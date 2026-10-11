@@ -215,3 +215,55 @@ describe("streamed message composition (#1340)", () => {
     });
   });
 });
+
+// #2168: the live-reply hook the notification dispatcher hangs off.
+describe("chat state live Claude replies", () => {
+  afterEach(() => cleanup());
+
+  const live = (id: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({
+    ...claude(id, Date.now()),
+    ...extra,
+  });
+
+  it("announces a reply arriving after sync, never the synced history", async () => {
+    const doc = new Y.Doc();
+    doc.getMap(Y_MAP_CHAT).set("history", live("history"));
+    const announced: string[] = [];
+    const onClaudeReplies = (replies: ChatMessage[]) => announced.push(...replies.map((r) => r.id));
+    const view = render(ChatStateHarness, {
+      props: { doc, synced: false, visible: false, onClaudeReplies },
+    });
+    await view.rerender({
+      doc,
+      synced: true,
+      visible: false,
+      initialClaudeIds: ["history"],
+      onClaudeReplies,
+    });
+    doc.getMap(Y_MAP_CHAT).set("fresh", live("fresh"));
+    await waitFor(() => expect(announced).toEqual(["fresh"]));
+  });
+
+  it("skips inProgress acks and user messages, and holds a streaming reply until it finishes", async () => {
+    const doc = new Y.Doc();
+    const announced: string[] = [];
+    render(ChatStateHarness, {
+      props: {
+        doc,
+        synced: true,
+        visible: false,
+        onClaudeReplies: (replies: ChatMessage[]) => announced.push(...replies.map((r) => r.id)),
+      },
+    });
+    const chat = doc.getMap(Y_MAP_CHAT);
+    chat.set("ack", live("ack", { inProgress: true }));
+    chat.set("mine", { ...live("mine"), author: "user", read: false });
+    const stream = doc.getMap(Y_MAP_CHAT_STREAM);
+    stream.set("streamed", new Y.Text("partial"));
+    chat.set("streamed", live("streamed"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(announced).toEqual([]);
+    stream.delete("streamed");
+    await waitFor(() => expect(announced).toEqual(["streamed"]));
+  });
+});

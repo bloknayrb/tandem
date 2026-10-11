@@ -1080,4 +1080,61 @@ describe("loadSettings — migration chain", () => {
       expect(s.spellcheck, `spellcheck dropped starting at v${v}`).toBe(false);
     }
   });
+
+  it("v20→v21: the chat-notification fields default when absent (#2168)", () => {
+    writeRaw({ schemaVersion: 20, theme: "dark" });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    // Default-TRUE booleans: catches the `parsed.x === true` idiom.
+    expect(s.chatNotifications).toBe(true);
+    expect(s.chatAttentionFlash).toBe(true);
+    expect(s.chatNotificationContent).toBe("document");
+    expect(s.chatSound).toBe("chime");
+    expect(s.chatSoundVolume).toBe(60);
+    expect(s.theme).toBe("dark");
+    expect(s._readOnly).toBeUndefined();
+  });
+
+  it("v20→v21: explicit chat-notification values survive the bump", () => {
+    writeRaw({
+      schemaVersion: 20,
+      chatNotifications: false,
+      chatAttentionFlash: false,
+      chatNotificationContent: "generic",
+      chatSound: "none",
+      chatSoundVolume: 0,
+    });
+    const s = loadSettings();
+    expect(s.chatNotifications).toBe(false);
+    expect(s.chatAttentionFlash).toBe(false);
+    expect(s.chatNotificationContent).toBe("generic");
+    expect(s.chatSound).toBe("none");
+    expect(s.chatSoundVolume).toBe(0);
+  });
+
+  it("chat-notification fields are sanitized on load", () => {
+    writeRaw({
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      chatNotificationContent: "everything",
+      chatSound: "airhorn",
+      chatSoundVolume: 900,
+    });
+    const s = loadSettings();
+    expect(s.chatNotificationContent).toBe("document");
+    expect(s.chatSound).toBe("chime");
+    expect(s.chatSoundVolume).toBe(100);
+    writeRaw({ schemaVersion: CURRENT_SCHEMA_VERSION, chatSoundVolume: "loud" });
+    expect(loadSettings().chatSoundVolume).toBe(60);
+  });
+
+  it("chatNotifications=false is preserved across EVERY in-range schemaVersion bump", () => {
+    for (let v = 2; v < CURRENT_SCHEMA_VERSION; v++) {
+      store.clear();
+      writeRaw({ schemaVersion: v, chatNotifications: false, chatSound: "pop" });
+      const s = loadSettings();
+      expect(s.schemaVersion, `start v${v}`).toBe(CURRENT_SCHEMA_VERSION);
+      expect(s.chatNotifications, `chatNotifications dropped starting at v${v}`).toBe(false);
+      expect(s.chatSound, `chatSound dropped starting at v${v}`).toBe("pop");
+    }
+  });
 });

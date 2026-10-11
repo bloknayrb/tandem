@@ -334,6 +334,24 @@ Replies are rendered as Markdown in the chat panel. Your AI can respond to chat 
 
 An unread badge appears on the Chat tab when a reply arrives while you're viewing the Annotations panel. Switch to Chat to clear it.
 
+A reply counts as read only once you've seen it in the Tandem window you're using, so a reply that arrives while you're in another app still shows as unread when you come back.
+
+### Reply Notifications
+
+When your AI replies in chat and Tandem isn't the window you're using, Tandem shows a notification and draws attention to itself. In the desktop app the taskbar icon flashes (Windows) or the dock icon bounces (macOS) until you switch back. In the browser, the tab title shows the number of unread replies. Clicking the notification brings Tandem forward and opens chat on that reply's document. A chime plays for every reply, including while you're using Tandem. Several replies in quick succession produce one notification.
+
+The "working on it" message your AI sends before starting longer work doesn't notify. The answer that follows does.
+
+Change any of this under **Settings → Notifications**:
+
+- **Show a notification** — on by default. In the browser, notifications also need your browser's permission. Tandem asks only when you click **Allow notifications** in this tab, or turn the setting on.
+- **Notification content** — what the notification says: *Generic* ("Claude replied"), *Document name* (the default, "Claude replied in report.md"), or *Message preview* (adds the start of the reply). Notifications can appear on your lock screen, so the reply text is off unless you choose it.
+- **Flash the taskbar icon** (desktop) / **Show the unread count in the tab title** (browser).
+- **Sound** — Chime, Bell, Pop, Ping or None, with a **Preview** button and a volume slider.
+- **Send a test notification** — check that notifications reach you.
+
+In the desktop app, whether notifications appear at all is up to your operating system's notification settings, such as Focus Assist or Do Not Disturb. A desktop app hidden to the tray has no taskbar icon to flash, so you get the notification and chime only. If several Tandem windows are open, the one you're using plays the chime. A window you're not using stays quiet once the reply has been read in another window.
+
 ## Settings
 
 Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
@@ -347,6 +365,7 @@ Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
 | **Network** | Connection details, start-at-login (desktop app only), and the advanced retry/delay controls |
 | **Accessibility** | High contrast, and pattern fills for annotations (**Reduce motion** lives under Appearance) |
 | **Collaboration** | Your display name, and whether the side panel hides itself in Solo mode |
+| **Notifications** | Reply notifications, what they say, the taskbar flash or tab-title count, and the reply sound and its volume — see [Reply Notifications](#reply-notifications) |
 | **AI Assistant** | Working directory, the margin annotation view, **Real-time updates** (how a session you started yourself hears about your comments as they happen, including the Tandem plugin's install commands with a Copy button), the integration wizard, and Replay tutorial |
 | **Shortcuts** | A **Customizable** section with click-to-record remapping (20 app-level shortcuts), per-row reset and a reset-all, followed by read-only **(fixed)** sections — text formatting, undo/redo, heading levels, tab jumps and the help key are not remappable |
 | **License** | Activation and current license or trial status |

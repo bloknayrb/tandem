@@ -333,7 +333,16 @@ new-tab-no-match
 new-tab-recent-{*}
 new-tab-reopen-closed
 new-tab-search
+notifications-allow-button
+notifications-content-select
+notifications-enable-toggle
+notifications-flash-toggle
 notifications-harness
+notifications-permission-status
+notifications-sound-preview
+notifications-sound-select
+notifications-test-button
+notifications-volume-slider
 onboarding-tutorial
 open-file-btn
 outline-heading-{*}-{*}

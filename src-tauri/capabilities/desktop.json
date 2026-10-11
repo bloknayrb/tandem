@@ -12,6 +12,7 @@
     "window-state:default",
     "updater:default",
     "core:webview:allow-set-webview-zoom",
-    "sentry:default"
+    "sentry:default",
+    "notification:allow-is-permission-granted"
   ]
 }

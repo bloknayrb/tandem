@@ -230,6 +230,16 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   sidebar "View license" link; rendered only when `/api/info`'s `licensePath` has
   an openable extension, i.e. the desktop bundle's `LICENSE.txt`)
 
+### Settings — Notifications tab (#2168)
+- `notifications-enable-toggle`, `notifications-content-select`,
+  `notifications-flash-toggle`, `notifications-sound-select`,
+  `notifications-sound-preview`, `notifications-volume-slider`,
+  `notifications-test-button`
+- `notifications-permission-status` — the platform line (desktop: managed by
+  the OS; browser: granted / denied / unsupported / ask), and
+  `notifications-allow-button`, rendered only while the browser permission is
+  `"default"`
+
 ### Settings — Appearance tab
 - `theme-{*}-btn`, `default-tab-{chat,annotations}-btn`,
   `text-size-{*}-btn`, `accent-hue-slider`,

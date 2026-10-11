@@ -2,6 +2,7 @@ mod autostart;
 mod context_menu;
 mod cowork_commands;
 mod native_theme;
+mod notifications;
 mod pending_update;
 pub mod keychain;
 mod sentry_reporting;
@@ -1113,6 +1114,9 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![AUTOSTART_FLAG]),
         ))
+        // Chat-reply notifications (#2168). Order-insensitive; it only has to
+        // be registered before `setup()`, which installs its click handler.
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(SidecarState(Mutex::new(None)))
@@ -1200,6 +1204,12 @@ pub fn run() {
                         .build(),
                 )?;
             }
+
+            // Chat-reply notification clicks (#2168). Registered once, here, and
+            // early: the plugin reports nothing for notifications shown before a
+            // handler exists. After the log plugin so a registration warning is
+            // not lost.
+            notifications::register_click_handler(app.handle());
 
             // UI element inspector permission grant (`ui-inspector` feature).
             //
@@ -1714,6 +1724,8 @@ pub fn run() {
             keychain::keychain_delete,
             autostart::autostart_get_status,
             autostart::autostart_set_enabled,
+            notifications::notify_chat_reply,
+            notifications::request_attention,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| panic!("Failed to build Tauri application: {e}"))

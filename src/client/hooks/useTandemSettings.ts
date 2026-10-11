@@ -67,6 +67,27 @@ export type SystemLightVariant = "light" | "warm";
 export type SidecarRetryStrategy = "exponential" | "constant-2s";
 
 /**
+ * How much a chat-reply notification says (#2168). It shows on screen and, on
+ * most OSes, on the lock screen, so the message text is opt-in: `"generic"` is
+ * "Claude replied", `"document"` adds the file name, `"preview"` adds the text.
+ */
+export const CHAT_NOTIFICATION_CONTENTS = ["generic", "document", "preview"] as const;
+export type ChatNotificationContent = (typeof CHAT_NOTIFICATION_CONTENTS)[number];
+/** App-played reply chimes (#2168), synthesized in `notifications/chimes.ts`. */
+export const CHAT_SOUNDS = ["none", "chime", "bell", "pop", "ping"] as const;
+export type ChatSound = (typeof CHAT_SOUNDS)[number];
+
+function isOneOf<T extends string>(values: readonly T[], value: unknown): value is T {
+  return typeof value === "string" && (values as readonly string[]).includes(value);
+}
+
+function clampVolume(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.min(100, Math.round(value)))
+    : fallback;
+}
+
+/**
  * Provider tag for entries in the Models registry (#659). The source of truth
  * moved to `src/shared/models/contract.ts` (#1123 M1a) so the server-side
  * registry (`src/server/models/`) and the client agree on one enum; re-exported
@@ -248,6 +269,25 @@ export interface TandemSettings {
    */
   scrollPill: boolean;
   /**
+   * OS notification when a Claude chat reply arrives while Tandem is not the
+   * focused window (#2168). Desktop: `tauri-plugin-notification`. Browser: the
+   * Web Notifications API, which additionally needs the browser's permission —
+   * requested only from an explicit click in Settings → Notifications.
+   */
+  chatNotifications: boolean;
+  /** What the notification says. Default `"document"`; see `ChatNotificationContent`. */
+  chatNotificationContent: ChatNotificationContent;
+  /**
+   * Draw attention to an unfocused window on a Claude reply: flash the taskbar
+   * icon / bounce the dock until focused (desktop), or an `(N)` unread count in
+   * the tab title (browser).
+   */
+  chatAttentionFlash: boolean;
+  /** Chime played on a Claude reply, focused or not. `"none"` is silent. */
+  chatSound: ChatSound;
+  /** Chime volume, 0–100. */
+  chatSoundVolume: number;
+  /**
    * **DO NOT** set this from product code. Internal marker stamped by
    * `loadSettings` when the on-disk `schemaVersion` is newer than this
    * client knows how to migrate. `createTandemSettings` short-circuits
@@ -276,7 +316,7 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 20,
+  schemaVersion: 21,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorMeasure: "comfortable",
@@ -313,6 +353,11 @@ const DEFAULTS: TandemSettings = {
   spellcheck: true,
   uniformTabWidth: true,
   scrollPill: true,
+  chatNotifications: true,
+  chatNotificationContent: "document",
+  chatAttentionFlash: true,
+  chatSound: "chime",
+  chatSoundVolume: 60,
 };
 
 /** Max length of an opaque keychain ref (matches server-side `REF_MAX_LENGTH`). */
@@ -531,8 +576,14 @@ function parseFontByExtension(raw: unknown): Partial<Record<string, EditorFont>>
  *   persisting the toggle already expresses the same intent, and two sources
  *   for one preference can only disagree. The field is deleted on read and
  *   listed in REMOVED_FIELDS so it cannot resurrect via forward-compat.
+ * v20→v21: introduce the chat-reply notification fields (#2168) —
+ *   `chatNotifications: true`, `chatNotificationContent: "document"`,
+ *   `chatAttentionFlash: true`, `chatSound: "chime"`, `chatSoundVolume: 60` —
+ *   in one combined bump. Pure version bump — do NOT set the fields here;
+ *   `normalizeKnownFields` fills each missing one with its default and
+ *   preserves explicit values.
  */
-export const CURRENT_SCHEMA_VERSION = 20;
+export const CURRENT_SCHEMA_VERSION = 21;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -666,6 +717,13 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
     // an absent key must load as `true`, or the shipped default never applies.
     uniformTabWidth: parsed.uniformTabWidth === false ? false : DEFAULTS.uniformTabWidth,
     scrollPill: parsed.scrollPill === false ? false : DEFAULTS.scrollPill,
+    chatNotifications: parsed.chatNotifications === false ? false : DEFAULTS.chatNotifications,
+    chatNotificationContent: isOneOf(CHAT_NOTIFICATION_CONTENTS, parsed.chatNotificationContent)
+      ? parsed.chatNotificationContent
+      : DEFAULTS.chatNotificationContent,
+    chatAttentionFlash: parsed.chatAttentionFlash === false ? false : DEFAULTS.chatAttentionFlash,
+    chatSound: isOneOf(CHAT_SOUNDS, parsed.chatSound) ? parsed.chatSound : DEFAULTS.chatSound,
+    chatSoundVolume: clampVolume(parsed.chatSoundVolume, DEFAULTS.chatSoundVolume),
   };
 }
 
@@ -896,6 +954,12 @@ export function loadSettings(): TandemSettings {
         delete next.defaultMode;
         parsed = next;
       }
+      if (parsed.schemaVersion === 20) {
+        // v20→v21: introduce the chat-reply notification fields (#2168).
+        // Pure version bump — do NOT set them here (that would clobber an
+        // explicit override); normalizeKnownFields fills the defaults.
+        parsed = { ...parsed, schemaVersion: 21 };
+      }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`
       // is the contract `createTandemSettings.updateSettings` checks.
@@ -1013,6 +1077,11 @@ export function mergeAndClampSettings(
       ? merged.editorMeasure
       : DEFAULTS.editorMeasure,
     degradedBannerDelayMs: Math.max(5000, Math.min(120000, merged.degradedBannerDelayMs)),
+    chatNotificationContent: isOneOf(CHAT_NOTIFICATION_CONTENTS, merged.chatNotificationContent)
+      ? merged.chatNotificationContent
+      : DEFAULTS.chatNotificationContent,
+    chatSound: isOneOf(CHAT_SOUNDS, merged.chatSound) ? merged.chatSound : DEFAULTS.chatSound,
+    chatSoundVolume: clampVolume(merged.chatSoundVolume, DEFAULTS.chatSoundVolume),
     // Re-run the shape filter on `models` so an unsafe partial update (e.g.
     // hand-rolled call site that pushes an object missing `enabled`) can't
     // corrupt the array between persisted reads. `parseModels` strips

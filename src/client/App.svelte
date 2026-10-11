@@ -104,10 +104,15 @@ import { createUpdateAvailable } from "./hooks/useUpdateAvailable.svelte";
 import { createUpdaterBanner } from "./hooks/useUpdaterBanner.svelte";
 import { createViewportWidth } from "./hooks/useViewportWidth.svelte";
 import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
+import { createWindowAttention } from "./hooks/useWindowAttention.svelte";
 import { createYjsSync } from "./hooks/yjsSync.svelte";
 import { createEditorStageModel } from "./layout/editor-stage.svelte";
 import { createLayoutModel } from "./layout/model.svelte";
 import { createRailContentModel } from "./layout/rail-content.svelte";
+import { createChatAttention } from "./notifications/chat-attention";
+import { armChimes, playChime } from "./notifications/chimes";
+import { createTauriNotifier } from "./notifications/tauri-notifier";
+import { createWebNotifier } from "./notifications/web-notifier";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
 import {
   editAnnotation as marginEditAnnotation,
@@ -134,6 +139,7 @@ import {
 import StatusBar from "./status/StatusBar.svelte";
 import { cwdDriftPill } from "./status/status-ai-view";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
+import { loadInvoke, NOTIFICATION_ACTIVATED_EVENT } from "./tauri/notifications-invoke";
 import { isRenamable } from "./types.js";
 import { MCP_BASE_URL } from "./utils/backend-ports";
 import { openFileForRuntime } from "./utils/browse-file";
@@ -2025,12 +2031,47 @@ const chatVisible = $derived(
 const chatCanInsert = $derived(
   !!editor && !!activeTab && !editorReadOnly && !documentWorkspace.inSourceView,
 );
+// #2168: is the user looking at THIS window? Chat counts as seen only then —
+// a background window with chat open used to acknowledge every reply, so the
+// user came back to no unread count.
+const windowAttention = createWindowAttention();
+const chatAttention = createChatAttention({
+  getSettings: () => settingsState.settings,
+  isActive: () => windowAttention.active,
+  isSeen: (id) => chatState.isSeen(id),
+  documentName: (id) =>
+    chatState.documentFileNames.get(id) ?? openDocs.find((d) => d.id === id)?.fileName ?? null,
+  // Tauri first: the notification plugin replaces `window.Notification` there.
+  backend: isTauriRuntime() ? createTauriNotifier(loadInvoke) : createWebNotifier(),
+  playChime,
+  openChat: (documentId) => {
+    if (documentId && yjsSync.tabs.some((tab) => tab.id === documentId)) {
+      yjsSync.setActiveTabId(documentId);
+    }
+    focusChat();
+  },
+});
+onDestroy(() => chatAttention.destroy());
+armChimes();
+$effect(() => {
+  if (windowAttention.active) untrack(() => chatAttention.windowActivated());
+});
+if (isTauriRuntime()) {
+  onDestroy(
+    listenTauriEvent({
+      loadEvent: () => import("@tauri-apps/api/event"),
+      event: NOTIFICATION_ACTIVATED_EVENT,
+      onEvent: () => chatAttention.notificationActivated(),
+    }),
+  );
+}
 const chatState = createChatState({
   getCtrlYdoc: () => yjsSync.bootstrapYdoc,
   getInitialSyncComplete: () => yjsSync.ctrlInitialSyncComplete,
   getInitialClaudeMessageIds: () => yjsSync.ctrlInitialClaudeMessageIds,
   getOpenDocuments: () => openDocs,
-  getVisible: () => chatVisible,
+  getVisible: () => chatVisible && windowAttention.active,
+  onClaudeReplies: (replies) => chatAttention.push(replies),
 });
 
 function sendChatMessage(text: string): boolean {
