@@ -40,11 +40,18 @@ export function createWindowAttention(): WindowAttention {
     let unlistenTauri: (() => void) | null = null;
     if (isTauriRuntime()) {
       import("@tauri-apps/api/window")
-        .then(({ getCurrentWindow }) =>
-          getCurrentWindow().onFocusChanged(({ payload }) => {
+        .then(async ({ getCurrentWindow }) => {
+          const win = getCurrentWindow();
+          const unlisten = await win.onFocusChanged(({ payload }) => {
             focused = payload === true;
-          }),
-        )
+          });
+          // The listener reports CHANGES only, and the WebView's
+          // `document.hasFocus()` seed can disagree with the native window at
+          // cold start. Read the native state once, after subscribing so a
+          // change in between is not lost.
+          if (!destroyed) focused = await win.isFocused();
+          return unlisten;
+        })
         .then((unlisten) => {
           if (destroyed) unlisten();
           else unlistenTauri = unlisten;

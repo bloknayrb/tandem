@@ -30,12 +30,23 @@ pub const ERR_UNAVAILABLE: &str = "notification-unavailable";
 const MAX_TITLE_CHARS: usize = 120;
 const MAX_BODY_CHARS: usize = 300;
 
-/// Trim, drop control characters (newlines become spaces), and cap at `max`
-/// characters with an ellipsis. Character-based, so a cap never splits a code
-/// point.
+/// Bidi controls and zero-width characters: invisible, and able to reorder or
+/// disguise the visible text (a file name carrying U+202E reads backwards).
+/// `char::is_control` covers only category Cc, so these need naming.
+fn is_invisible_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
+    )
+}
+
+/// Trim, drop control characters (newlines become spaces) and invisible format
+/// characters, and cap at `max` characters with an ellipsis. Character-based,
+/// so a cap never splits a code point.
 fn clean(text: &str, max: usize) -> String {
     let flattened: String = text
         .chars()
+        .filter(|c| !is_invisible_format(*c))
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect();
     let trimmed = flattened.trim();
@@ -48,6 +59,34 @@ fn clean(text: &str, max: usize) -> String {
     out
 }
 
+/// Escape the three characters a freedesktop notification server reads as
+/// markup. The spec lets a server parse `<b>`, `<a href>` and `<img>` in the
+/// body (and dunst parses the summary too), so without this a reply previewed
+/// into a notification could render as a clickable link attributed to Tandem.
+/// Linux/BSD only: Windows sets the toast text as inner text and macOS takes
+/// plain text, so escaping there would show literal entities.
+fn escape_markup(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// What reaches the notification server on this platform.
+fn for_platform(text: String) -> String {
+    if cfg!(all(unix, not(target_os = "macos"))) {
+        escape_markup(&text)
+    } else {
+        text
+    }
+}
+
 /// Post a chat-reply notification. Posted without a sound: the client plays
 /// its own chime, so an OS sound would double it.
 #[tauri::command]
@@ -56,8 +95,9 @@ pub async fn notify_chat_reply(
     title: String,
     body: String,
 ) -> Result<(), &'static str> {
-    let title = clean(&title, MAX_TITLE_CHARS);
-    let body = clean(&body, MAX_BODY_CHARS);
+    // Cap first, then escape: the caps count visible characters.
+    let title = for_platform(clean(&title, MAX_TITLE_CHARS));
+    let body = for_platform(clean(&body, MAX_BODY_CHARS));
     let mut builder = app.notification().builder().title(title);
     if !body.is_empty() {
         builder = builder.body(body);
@@ -134,6 +174,32 @@ mod tests {
         let out = clean(&"é🙂".repeat(100), 7);
         assert_eq!(out.chars().count(), 7);
         assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn clean_drops_bidi_and_zero_width_characters() {
+        assert_eq!(
+            clean("report\u{202E}dm.exe\u{200B}\u{2066}x\u{FEFF}", 120),
+            "reportdm.exex"
+        );
+    }
+
+    #[test]
+    fn escape_markup_neutralises_tags_and_entities() {
+        assert_eq!(
+            escape_markup(r#"<a href="https://x">sign in</a> & <img src=y>"#),
+            r#"&lt;a href="https://x"&gt;sign in&lt;/a&gt; &amp; &lt;img src=y&gt;"#
+        );
+    }
+
+    #[test]
+    fn for_platform_escapes_only_on_freedesktop_servers() {
+        let out = for_platform("<b>x</b>".to_owned());
+        if cfg!(all(unix, not(target_os = "macos"))) {
+            assert_eq!(out, "&lt;b&gt;x&lt;/b&gt;");
+        } else {
+            assert_eq!(out, "<b>x</b>");
+        }
     }
 
     #[test]

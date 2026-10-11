@@ -55,6 +55,9 @@ export interface ChatAttentionDeps {
   /** Bring the user to the reply: switch to its document if open, open chat. */
   openChat(documentId: string | undefined): void;
   coalesceMs?: number;
+  /** Minimum gap between OS notifications while unfocused. */
+  notifyIntervalMs?: number;
+  now?: () => number;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
 }
@@ -73,14 +76,25 @@ const PREVIEW_MAX_CHARS = 140;
 
 export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
   const coalesceMs = deps.coalesceMs ?? 750;
+  const notifyIntervalMs = deps.notifyIntervalMs ?? 30_000;
+  const now = deps.now ?? Date.now;
   const setTimer = deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
   const clearTimer =
     deps.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
   let queue: ChatMessage[] = [];
   let timer: unknown = null;
   let pendingCount = 0;
-  // Where a click should take the user. Held here, never sent over IPC.
+  // Where a click should take the user: the NEWEST announced reply's document,
+  // whichever notification is clicked (an older one may still sit in the OS
+  // notification centre). Held here, never sent over IPC.
   let pendingDocumentId: string | undefined;
+  // Rate limit. An MCP client looping `tandem_reply` while the user is away
+  // would otherwise post one OS notification per coalescing window — and on
+  // macOS each unclicked one parks a thread plus a main-run-loop timer in the
+  // plugin. Replies held back here ride along in the next notification; the
+  // flash / title count still tracks every one.
+  let lastNotifiedAt = Number.NEGATIVE_INFINITY;
+  let unnotified: ChatMessage[] = [];
 
   function flush(): void {
     timer = null;
@@ -97,21 +111,30 @@ export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
     pendingCount += replies.length;
     pendingDocumentId = replies[replies.length - 1].documentId;
     if (settings.chatNotifications) {
-      const text = buildNotificationText(
-        replies,
-        settings.chatNotificationContent,
-        deps.documentName,
-      );
-      const documentId = pendingDocumentId;
-      deps.backend.notify(text, () => {
-        deps.openChat(documentId);
-        reset();
-      });
+      unnotified.push(...replies);
+      const at = now();
+      if (at - lastNotifiedAt >= notifyIntervalMs) {
+        lastNotifiedAt = at;
+        const text = buildNotificationText(
+          unnotified,
+          settings.chatNotificationContent,
+          deps.documentName,
+        );
+        unnotified = [];
+        const documentId = pendingDocumentId;
+        deps.backend.notify(text, () => {
+          deps.openChat(documentId);
+          reset();
+        });
+      }
     }
     if (settings.chatAttentionFlash) deps.backend.attention(pendingCount);
   }
 
   function reset(): void {
+    // The user is back: the next absence starts with a fresh notification.
+    lastNotifiedAt = Number.NEGATIVE_INFINITY;
+    unnotified = [];
     if (pendingCount === 0) return;
     pendingCount = 0;
     deps.backend.clearAttention();

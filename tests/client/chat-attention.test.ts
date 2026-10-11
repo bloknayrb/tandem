@@ -25,6 +25,7 @@ function setup(
   opts: { active?: boolean; seen?: string[]; settings?: Partial<ChatAttentionSettings> } = {},
 ) {
   let active = opts.active ?? false;
+  let clock = 0;
   const seen = new Set(opts.seen ?? []);
   const timers: Array<() => void> = [];
   const backend = {
@@ -42,6 +43,7 @@ function setup(
     backend,
     playChime,
     openChat,
+    now: () => clock,
     setTimer: (fn) => {
       timers.push(fn);
       return timers.length;
@@ -60,6 +62,9 @@ function setup(
     seen,
     setActive: (v: boolean) => {
       active = v;
+    },
+    advance: (ms: number) => {
+      clock += ms;
     },
   };
 }
@@ -150,6 +155,39 @@ describe("createChatAttention (#2168)", () => {
     t.flush();
     t.attention.notificationActivated();
     expect(t.openChat).toHaveBeenCalledWith("doc-1");
+  });
+
+  it("posts at most one OS notification per 30 s while away, carrying held replies forward", () => {
+    const t = setup();
+    t.attention.push([reply("a")]);
+    t.flush();
+    t.advance(1_000);
+    t.attention.push([reply("b")]);
+    t.flush();
+    t.advance(1_000);
+    t.attention.push([reply("c")]);
+    t.flush();
+    expect(t.backend.notify).toHaveBeenCalledTimes(1);
+    // The flash / title count still tracks every reply.
+    expect(t.backend.attention).toHaveBeenLastCalledWith(3);
+    expect(t.playChime).toHaveBeenCalledTimes(3);
+    t.advance(30_000);
+    t.attention.push([reply("d")]);
+    t.flush();
+    expect(t.backend.notify).toHaveBeenCalledTimes(2);
+    expect(t.backend.notify.mock.calls[1][0].title).toBe("Claude sent 3 replies");
+  });
+
+  it("a fresh absence notifies immediately, whatever the last notification's age", () => {
+    const t = setup();
+    t.attention.push([reply("a")]);
+    t.flush();
+    t.attention.windowActivated();
+    t.advance(1_000);
+    t.attention.push([reply("b")]);
+    t.flush();
+    expect(t.backend.notify).toHaveBeenCalledTimes(2);
+    expect(t.backend.notify.mock.calls[1][0].title).toBe("Claude replied");
   });
 
   it("reads focus at flush time, not push time", () => {
