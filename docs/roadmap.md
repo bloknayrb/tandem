@@ -22,15 +22,14 @@ _Last reconciled against the tracker, flags and CHANGELOG: 2026-09-28 (v0.28.0).
 The code is essentially complete. What remains is one engineering reshape, the commercial
 setup, hardware verification, and two flag flips.
 
-1. **The license surface gate (#1521) has to land dark before the flip.** Its policy is
-   **Decision F** (2026-09-06, recorded on #1827 and #1788): restricted mode is *symmetric
-   read-only*, and the annotation mutators move from ungated to gated in both halves.
-   **Decision A4 (2026-10-09) now conflicts with it:** `LICENSE` and the README promise
-   that v1.0 and later stay usable without a key as an editor without the AI features,
-   which a read-only restricted editor would break. Whether Decision F is superseded is
-   Bryan's call and is not recorded yet; settle it before the reconciliation below.
-   #1521's own acceptance criteria predate Decision F and contradict it (see its
-   2026-09-08 comment), so reconcile the issue with Decision F before implementing anything.
+1. **The license surface gate (#1521) has to land dark before the flip.** Its policy:
+   after the 14-day trial with no key, Tandem stays a usable editor with no AI features:
+   no MCP reads or writes, no chat, no push paths, no local models. Bryan decided this on
+   2026-10-11, superseding **Decision F** (2026-09-06, recorded on #1827 and #1788), whose
+   *symmetric read-only* restricted mode would withhold the editing `LICENSE` grants
+   (decision A4) and the README promises. It is #1521's original design and ADR-040's
+   2026-08-18 amendment; the issue's 2026-09-08 comment, which says Decision F supersedes
+   it, is now itself superseded.
    Flipping `LICENSE_GATE_ENABLED` on today's per-tool gate would ship a shape ADR-040 no
    longer describes.
 2. **Commercial readiness** — see [the exit criteria](#v100-exit-criteria). The live
