@@ -678,6 +678,13 @@ Then walk §5a steps 2–4 with that order number.
       order fires `order.paid` (governs §1b), the exact `refunded` field shape,
       and that the Worker's Ed25519 import works on real Cloudflare — it never
       has, and a key-import failure fails closed to 503 on *every* webhook.
+- [ ] **The refund race is fixed or accepted.** A refund overlapping a
+      redelivered `order.paid` can leave a live entitlement behind, through
+      `issue()`'s recheck window or `reDrive()`, which has no recheck at all
+      (`infra/license-issuance-worker/README.md`). Since keys carry no update
+      window (decision A5), that entitlement never runs out. Either serialise
+      per order (the Durable Object fix the README names) or record an
+      acceptance in `docs/security.md`'s register. It is neither yet.
 - [ ] `LEDGER_KV` backup scheduled (§6).
 - [ ] Terms, refund policy and privacy notice published (see
       `docs/licensing-terms.md`).

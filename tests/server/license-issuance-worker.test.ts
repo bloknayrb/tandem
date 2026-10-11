@@ -1409,6 +1409,14 @@ describe("default fetch wiring (env → deps)", () => {
     expect(supportEmailProblem(`a${atCeiling}`)).toBe("too-long");
   });
 
+  it("the license email promises all future updates and no window or renewal (A5)", () => {
+    // Joined so a reflow of the copy cannot split a phrase across lines.
+    const text = licenseEmailText("Ada", "QUJD", "support@tandem.ink").replace(/\s+/g, " ");
+    expect(text).toContain("never expires");
+    expect(text).toContain("includes all future updates");
+    expect(text).not.toMatch(/first year|renew|one year|update window/i);
+  });
+
   it("an unset RESEND_API_KEY → retryable 500, not a silent drop", async () => {
     // RESEND_API_KEY is a *secret*, deliberately NOT validated up front (the
     // fetch handler only guards `[vars]`), so this is still the point-of-use
