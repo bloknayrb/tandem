@@ -12,7 +12,7 @@ The Terms section of `LICENSE` matches the governing text word for word. The dif
 
 Eight restating places disagreed with `LICENSE` and were fixed. The other consistency and build findings are reported without a fix, each with the reason. Two gaps between `LICENSE` and what the product enforces are recorded under L4 and L5.
 
-Nine findings need a decision from the licensor, because they change a Parameter. Drafted wording is given for each. None has been applied, except that #2164 removed the resale sentence (L3). *Update 2026-10-09:* the licensor decided them all, and #2174 applies the `LICENSE` changes. Each finding below carries a dated note saying what was applied and what was not: L5's update-window half lands in a stacked PR, A7's plugin `ref` pin is not done, and L8 needed no change to `LICENSE`. Four legal questions are left to the licensor; they are listed under Questions left to the licensor. No counsel is being consulted (2026-10-09).
+Nine findings need a decision from the licensor, because they change a Parameter. Drafted wording is given for each. None has been applied, except that #2164 removed the resale sentence (L3). *Update 2026-10-09:* the licensor decided them all, and #2174 applies the `LICENSE` changes. Each finding below carries a dated note saying what was applied and what was not: L5's update-window half landed in #2175, A7's plugin `ref` pin landed in #2173, and L8 needed no change to `LICENSE`. Four legal questions are left to the licensor; they are listed under Questions left to the licensor. No counsel is being consulted (2026-10-09).
 
 Legal judgements are out of scope for this file. The licensor makes them.
 
@@ -133,6 +133,7 @@ Count: 11. Fixed: 8. They are C1 to C4, C9 to C11, and one carrier of C7. Enforc
 ### C7. "Renew" and "no renewal" both appear (not fixed)
 
 - Tag: consistency
+- Applied 2026-10-09 (A5, B6; #2175): no renewal product exists. The explainer, the runbook, the Settings link, the `license-state.ts` comment and the update-window dialog no longer mention renewing; the Settings warning points to support.
 - Location: `docs/licensing-explained.md:65`, `docs/licensing-operations.md:178`, `src/client/components/settings-tabs/SettingsLicenseTab.svelte:90`, `src/server/license/license-state.ts:353`, `docs/licensing-operations.md:264` ("entitlement possibly renewed"), `README.md:178`; fixed at `docs/positioning.md:106`
 - What is wrong: the explainer says "You're just not offered new releases until you renew" and the runbook says "until renewal". The Settings licence tab links "Renew to receive updates again", and a code comment says users "won't receive new updates until they renew". The README says "There is no subscription and no renewal." `LICENSE:16-17` says "A paid license is a one-time purchase and does not expire." The licence does not mention updates at all, so it cannot settle which of the two is right.
 - Source: the lines quoted. Verified by reading.
@@ -191,7 +192,7 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
 ### L1. Licensed Work names only the npm package
 
 - Tag: licensor decision
-- Applied 2026-10-09 in #2174 (A7): the drafted wording, unchanged. Pinning the plugin marketplace `ref` is not done; `docs/roadmap.md` tracks it with the other build items.
+- Applied 2026-10-09 in #2174 (A7): the drafted wording, unchanged. The plugin marketplace `ref` is pinned to the release tag by #2173.
 - Location: `LICENSE:7-8`
 - What is wrong: "Tandem (tandem-editor npm package)." The desktop app, the `tandem-reaper` binary bundled with it (`src-tauri/tauri.conf.json:44-47`), the Claude Code plugin and the source repository are not named. Issue #1908 already tracks this.
 - Source: `LICENSE:7`. Issue #1908. Terraform's Parameter, for comparison: "Terraform Version 1.6.0 or later."
@@ -314,7 +315,7 @@ Any new Additional Use Grant wording has to keep the phrases "one-time purchase"
 ### L5. "Paid license" leaves out the free licences the README promises, and "does not expire" has no stated scope
 
 - Tag: licensor decision (the wording) and enforcement (the version scope)
-- Applied 2026-10-09 in #2174: "a license key the Licensor issued", with no version scope in `LICENSE` (the first option). The update-window side is decision A5 and lands in the stacked PR.
+- Applied 2026-10-09 in #2174: "a license key the Licensor issued", with no version scope in `LICENSE` (the first option). The update-window side is decision A5 and landed in #2175.
 - Location: `LICENSE:16-17`
 - What is wrong: continued use "requires a paid license". `README.md:178` says "Beta users are grandfathered with a free license". A grandfathered user holds a licence that is not paid. Separately, "A paid license is a one-time purchase and does not expire" does not say which versions it covers. ADR-040 section 3 intends an update window and "paid major-version upgrades" (`docs/decisions.md:1325`), and `docs/licensing-explained.md:64` says new versions come "For one year from purchase."
 - Source: the lines quoted. Verified by reading.
