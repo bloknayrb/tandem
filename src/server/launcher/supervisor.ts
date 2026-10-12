@@ -435,8 +435,9 @@ export type SupervisorStatus =
       restartPending?: true;
       /** The last spawn plan found no launchable claude-code integration
        * (#2180). Refreshed only by a plan (start, relaunch, crash restart, a
-       * wizard Apply), never per status poll: a hand edit of
-       * `integrations.json` shows up at the next plan. */
+       * wizard Apply that wrote a claude-code entry), never per status poll.
+       * Any other change to `integrations.json` (a hand edit, or a wizard run
+       * that removes the entry) shows up at the next plan. */
       configured?: false;
     }
   | {
@@ -2007,9 +2008,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     if (breakerTripped) return;
     if (restartTimer) {
       clearTimeout(restartTimer);
-      // Null it too: the breaker branch below returns without setting a new
-      // one, and a dead handle would make `restartPending` read true forever
-      // beside a tripped breaker (#2180).
+      // Null it too, so the handle never outlives the timer it named. The
+      // breaker branch below returns without setting a new one;
+      // `restartPending` already ignores the timer once the breaker trips, so
+      // this is hygiene, not a fix (#2180).
       restartTimer = null;
     }
 

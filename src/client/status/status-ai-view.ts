@@ -164,7 +164,9 @@ const CONNECTED_STALE: BaseView = {
 
 /**
  * Tandem is already bringing its own Claude back (#2180): a crash restart is
- * scheduled, a start or relaunch is running, or a killed child is exiting. No
+ * scheduled, a start or relaunch is running (including one the user just
+ * clicked, so the copy does not claim Tandem did it on its own), or a killed
+ * child is exiting. No
  * button — a Restart here would race the retry — and no pulse, because
  * nothing is working yet. The hollow ring is the same "not confirmed" signal
  * the leftover view uses.
@@ -175,10 +177,8 @@ const RESTARTING: BaseView = {
   dataState: "restarting",
   canAnimate: false,
   ...QUIET,
-  title:
-    "Tandem's Claude stopped, and Tandem is starting it again on its own. There's nothing you need to do.",
-  ariaLabel:
-    "Restarting Claude. Tandem's Claude stopped, and Tandem is starting it again on its own.",
+  title: "Tandem is starting its Claude. There's nothing you need to do.",
+  ariaLabel: "Restarting Claude. Tandem is starting its Claude.",
 };
 
 /**

@@ -55,7 +55,7 @@ describe("aiIndicatorView", () => {
       expect(v?.dataState).toBe("restarting");
     });
 
-    it("yields to a running launcher and to Solo", () => {
+    it("guard: yields to a running launcher and to Solo", () => {
       expect(view({ launcherRunning: true, launcherRestarting: true })?.dataState).toBe(
         "tandem-claude",
       );

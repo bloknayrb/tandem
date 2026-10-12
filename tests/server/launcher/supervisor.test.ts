@@ -113,7 +113,7 @@ describe("supervisor — no launchable integration (#2180)", () => {
     await sup.stop();
   });
 
-  it("says nothing about configuration before any plan has run", () => {
+  it("guard: says nothing about configuration before any plan has run", () => {
     const sup = createSupervisor({ integrationsBase: tmpDir });
     expect(sup.status()).toEqual({ running: false });
   });

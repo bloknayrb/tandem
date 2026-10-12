@@ -286,8 +286,8 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
       res.json(body);
       return;
     }
-    // A restart in progress outranks "not configured": the start a wizard
-    // Apply triggers re-plans, and must not flash "Connect AI" meanwhile.
+    // A restart in progress outranks "not configured": a start or relaunch
+    // in flight is re-planning, so don't flash "Connect AI" meanwhile.
     if (raw.restartPending) {
       const body: LauncherStatus = loopback
         ? {
