@@ -628,7 +628,7 @@ export async function startMcpServerStdio(
   ports: { wsPort: number; mcpPort: number },
   transport: Transport = new StdioServerTransport(),
 ): Promise<void> {
-  // Licence admission (#1521 §2g). Stdio server mode is reached only by
+  // Licence admission (#1521). Stdio server mode is reached only by
   // hand-setting `TANDEM_TRANSPORT=stdio`; refused at start with a raw
   // responder that answers every request with the same error `/mcp` sends.
   // Not re-checked mid-session — an accepted residual for an env-only mode.

@@ -3,7 +3,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * The licence module seam (#1521 §8), keyed on modules, not names.
+ * The licence module seam (#1521), keyed on modules, not names.
  *
  * Pins **module → importer files** for every module under `src/server/license/`
  * — static imports, `import()` strings and re-exports — read off the code as

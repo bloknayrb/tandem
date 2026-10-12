@@ -27,7 +27,7 @@ import { allocPort } from "../helpers/alloc-port.js";
 
 /**
  * The licence decision for Tandem's AI surfaces (#1521) — its pure core, and
- * "behaviour-identical when dark" (§4): with the gate dark, every admission
+ * "behaviour-identical when dark": with the gate dark, every admission
  * point admits, even over a `trial.json` that would refuse on an armed build.
  *
  * The armed half is `license-armed-restricted.test.ts`. The supervisor and the
@@ -93,7 +93,7 @@ describe("aiRefusalFor (pure)", () => {
   );
 });
 
-describe("dark: every admission point admits (#1521 §4)", () => {
+describe("dark: every admission point admits (#1521)", () => {
   const DAY = 86_400_000;
   let dir: string;
   let saved: string | undefined;

@@ -9,7 +9,7 @@ import {
 } from "./fetch-harness.js";
 
 /**
- * The shared SSE consumer under a licence refusal (#1521 §2d), driven through
+ * The shared SSE consumer under a licence refusal (#1521), driven through
  * the plugin monitor. A 403 whose body says `LICENSE_REQUIRED` is NOT an
  * outage: no retry ladder, no exhaustion report, no `channel-error` POST, a
  * long flat wait — and the monitor tells the model once, on stdout, why its

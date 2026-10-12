@@ -1,5 +1,5 @@
 /**
- * The launcher's licence contract (#1521 §2e).
+ * The launcher's licence contract (#1521).
  *
  * An unlicensed Tandem does not spawn Claude Code: at boot, on the deferred
  * start, on a crash-respawn, or on a relaunch / start-fresh. The two refusal
@@ -166,7 +166,7 @@ function makeSupervisor(): Supervisor {
   return sup;
 }
 
-describe("supervisor licence refusal (#1521 §2e)", () => {
+describe("supervisor licence refusal (#1521)", () => {
   it("a refused boot spawns nothing and records `unlicensed`, not `spawn-failed`", async () => {
     refused = true;
     const sup = makeSupervisor();
@@ -271,7 +271,7 @@ describe("supervisor licence refusal (#1521 §2e)", () => {
   });
 });
 
-describe("launcher routes answer a licence refusal with 403 (#1521 §2e)", () => {
+describe("launcher routes answer a licence refusal with 403 (#1521)", () => {
   function fakeSupervisor(overrides: Partial<Supervisor>): Supervisor {
     return {
       start: async () => {},

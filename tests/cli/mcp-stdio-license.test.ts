@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { licenseRefusalError } from "../../src/cli/mcp-stdio.js";
 
 /**
- * The stdio bridge under a licence refusal (#1521 §2b) — relay, never
+ * The stdio bridge under a licence refusal (#1521) — relay, never
  * synthesize, and heal.
  *
  * The fake upstream refuses the way the real server does: a refused POST

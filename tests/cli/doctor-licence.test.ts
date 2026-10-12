@@ -8,7 +8,7 @@ import {
 } from "../../src/cli/doctor.js";
 
 /**
- * Doctor's licence row (#1521 §2d). It reads `GET /api/license/status` once,
+ * Doctor's licence row (#1521). It reads `GET /api/license/status` once,
  * is SILENT on a dark build and on any non-answer (so a dark build's report is
  * unchanged), and while AI is refused it is the one warning — the push row and
  * the SSE probe defer to it rather than each going yellow.

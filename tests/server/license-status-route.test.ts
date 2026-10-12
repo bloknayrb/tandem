@@ -240,7 +240,7 @@ describe("handleActivateLicense", () => {
   });
 });
 
-describe("activation resumes a launcher the licence refused (#1521 §2e)", () => {
+describe("activation resumes a launcher the licence refused (#1521)", () => {
   let dir: string;
   let saved: string | undefined;
   let verifySpy: ReturnType<typeof vi.spyOn>;
