@@ -333,6 +333,24 @@ cut at its next request or event, not at the instant of expiry; stdio server mod
 mid-session; and events buffered while unlicensed — including the user's own chat — replay to the
 first consumer admitted after activation.
 
+These are **licence-enforcement residuals, not security findings**, so none of them is owed a row in
+[security.md's register](security.md#open-findings). An AI with shell access acts with the user's own
+privileges, on the user's own files and the user's own loopback server; nothing in any of them crosses
+a trust boundary. What they bound is how completely the licence is enforced, not who can do what.
+
+Two more, of the same kind:
+
+- **A licence file that exists but cannot be read is treated as unverifiable, for that moment.**
+  `resolveLicenseState` re-reads `license.json` on every call, and a read error that is not ENOENT (an
+  antivirus or sync-client lock: `EBUSY`, `EPERM`), an unparseable body, or a body with no `blob` all
+  resolve `unverifiable` — the fix-or-reissue copy, never the purchase link, and never an unlock. A
+  transient lock therefore refuses the AI only for as long as it lasts, with one side effect each: an
+  SSE consumer refused in that window backs off 5 minutes before retrying, and a launcher refused at
+  boot stays down until the restart chip (or an activation) brings it back.
+- **A local-model run that started while licensed keeps streaming after expiry.** The collaborator is
+  checked per run, not per token, so one in-flight reply finishes. Behind `BYO_MODELS_ENABLED`, so
+  unreachable today; revisit if that flag flips.
+
 ## AI surfaces — the #1346 inventory
 
 > **The axis the surface gate is drawn on.** #1346 asked whether every AI surface could share one
