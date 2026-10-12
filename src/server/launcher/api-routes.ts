@@ -27,7 +27,11 @@
  *
  * The supervisor singleton is bridged via `() => Supervisor | null`. The
  * MUTATING routes return 503 + `NOT_AVAILABLE` when the getter returns null
- * (stdio mode, disabled-by-env, or no claude-code integration). The two
+ * (stdio mode, disabled-by-env, a deferred autostart, or a supervisor that
+ * failed to start). A supervisor that exists but found no launchable
+ * claude-code integration is NOT null: `GET /status` reports it as
+ * `available: false, reason: "not-configured"`, and relaunch / start-fresh
+ * answer 404 `NO_CLAUDE_INTEGRATION` (#2180). The two
  * read-only ones do not: `GET /status` answers `{ available: false }`, and
  * `POST /cwd-preview` answers `{ drifted: false }` — for both, "there is no
  * launcher" is a fact worth reporting rather than an error.
@@ -163,8 +167,9 @@ export interface LauncherRoutesDeps {
    * `mcp/server.ts`). Called with the supervisor's real UUID, which never leaves
    * the server: only the boolean is sent. */
   isClaudeSessionAttached: (claudeSessionId: string, sinceMs: number) => boolean;
-  /** Reason the supervisor is unavailable (stdio mode, disabled, no integration).
-   * Surfaced via GET /status. */
+  /** Reason the supervisor is null (stdio mode, disabled, deferred, failed to
+   * start). Surfaced via GET /status. `not-configured` is NOT produced here: it
+   * comes from a live supervisor's own status (#2180). */
   unavailableReason: () => LauncherUnavailableReason;
   /** Create + start the supervisor from null. Idempotent and single-flighted in
    * `src/server/index.ts`. Only reachable via `POST /start` and only in the
@@ -281,11 +286,51 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
       res.json(body);
       return;
     }
+    // A restart in progress outranks "not configured": the start a wizard
+    // Apply triggers re-plans, and must not flash "Connect AI" meanwhile.
+    if (raw.restartPending) {
+      const body: LauncherStatus = loopback
+        ? {
+            available: true,
+            running: false,
+            lastError: raw.lastError,
+            restartPending: true,
+            skillRefresh,
+          }
+        : { available: true, running: false };
+      res.json(body);
+      return;
+    }
+    if (raw.configured === false) {
+      // No launchable claude-code entry: there is nothing to restart, so this
+      // reads as unavailable and the client offers setup (#2180). Same
+      // loopback-only `reason` as the null-supervisor branch above.
+      const body: LauncherStatus = loopback
+        ? {
+            available: false,
+            reason: "not-configured",
+            ...(skillRefresh ? { skillRefresh } : {}),
+          }
+        : { available: false };
+      res.json(body);
+      return;
+    }
     const body: LauncherStatus = loopback
       ? { available: true, running: false, lastError: raw.lastError, skillRefresh }
       : { available: true, running: false };
     res.json(body);
   };
+}
+
+/** 404 for a relaunch / start-fresh whose plan found no launchable claude-code
+ * entry (#2180). The message is shown to the user verbatim by the client's
+ * launcher toast, so it says what to do. */
+function sendNoIntegration(res: Response): void {
+  res.status(404).json({
+    error: "NOT_FOUND",
+    code: LAUNCHER_ERROR_NO_INTEGRATION,
+    message: "Claude Code isn't set up in Tandem yet. Use Connect AI to set it up.",
+  });
 }
 
 function makeNonceHandler(): Handler {
@@ -469,7 +514,11 @@ function makeRelaunchHandler(deps: LauncherRoutesDeps): Handler {
     inflight.relaunch = true;
     try {
       if (deps.relaunchHook) await deps.relaunchHook();
-      await sup.relaunch(cwd, { persistCwd: parsePersistCwd(body) });
+      const result = await sup.relaunch(cwd, { persistCwd: parsePersistCwd(body) });
+      if (!result.spawned) {
+        sendNoIntegration(res);
+        return;
+      }
       res.json({ ok: true, cwd: landedCwd(sup, cwd) });
     } catch (err) {
       sendUnexpected(res, err, "relaunch failed");
@@ -517,7 +566,11 @@ function makeStartFreshHandler(deps: LauncherRoutesDeps): Handler {
     inflight.startFresh = true;
     try {
       if (deps.startFreshHook) await deps.startFreshHook();
-      await sup.startFresh(cwd, { persistCwd: parsePersistCwd(body) });
+      const result = await sup.startFresh(cwd, { persistCwd: parsePersistCwd(body) });
+      if (!result.spawned) {
+        sendNoIntegration(res);
+        return;
+      }
       res.json({ ok: true, cwd: landedCwd(sup, cwd) });
     } catch (err) {
       sendUnexpected(res, err, "start-fresh failed");

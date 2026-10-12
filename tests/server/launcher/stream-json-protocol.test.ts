@@ -1045,8 +1045,8 @@ describe("supervisor restart lifecycle after relaunch/startFresh (#1267)", () =>
     const sup = createSupervisor({ integrationsBase: tmpDir });
     try {
       await sup.startFresh(spawnDir);
-      await expect(sup.startFresh(spawnDir)).resolves.toBeUndefined();
-      await expect(sup.relaunch(spawnDir)).resolves.toBeUndefined();
+      await expect(sup.startFresh(spawnDir)).resolves.toEqual({ spawned: true });
+      await expect(sup.relaunch(spawnDir)).resolves.toEqual({ spawned: true });
       expect(sup.status().running).toBe(true);
     } finally {
       await sup.stop();

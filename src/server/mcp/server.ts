@@ -980,6 +980,21 @@ export async function startMcpServerHttp(
     keychain: createKeychain(),
     readExisting: readExistingTandemEntries,
     serverVersion: APP_VERSION,
+    // A wizard Apply that wrote a claude-code entry refreshes the launcher's
+    // "configured" answer (#2180), so the pill stops offering setup the user
+    // just finished. It does not start Claude: whether it should is still
+    // open. The `.catch` is load-bearing: an unhandled rejection exits the
+    // server (#2125).
+    onClaudeCodeApplied: launcher
+      ? () => {
+          launcher
+            .getSupervisor()
+            ?.refreshConfigured()
+            .catch((err: unknown) => {
+              console.error("[Tandem] Refreshing the launcher after setup failed:", err);
+            });
+        }
+      : undefined,
   });
 
   // --- Auto-launcher endpoints (#477 PR 4b) ---

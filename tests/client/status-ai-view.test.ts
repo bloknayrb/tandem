@@ -20,6 +20,7 @@ function view(over: Partial<ViewInput> = {}) {
     launcherCwd: null,
     launcherBusy: false,
     launcherAttached: false,
+    launcherRestarting: false,
     docSyncConnected: true,
     sessionCount: null,
     ...over,
@@ -33,6 +34,35 @@ function view(over: Partial<ViewInput> = {}) {
  * any other connection, and copy that claims only what each signal proves.
  */
 describe("aiIndicatorView", () => {
+  describe("restarting Tandem's Claude (#2180)", () => {
+    it("shows 'Restarting Claude…' with no button and no pulse", () => {
+      const v = view({ state: "stopped", launcherRestarting: true });
+      expect(v?.label).toBe("Restarting Claude…");
+      expect(v?.dataState).toBe("restarting");
+      expect(v?.tone).toBe("pending");
+      expect(v?.pulse).toBe(false);
+    });
+
+    it("outranks the dead child's own still-live session", () => {
+      // Its MCP entry reads live for up to a minute after it exits; rule 3
+      // would call that "AI attached" for the whole retry.
+      const v = view({
+        state: "ready",
+        liveIndicator: "connected",
+        sessionCount: 1,
+        launcherRestarting: true,
+      });
+      expect(v?.dataState).toBe("restarting");
+    });
+
+    it("yields to a running launcher and to Solo", () => {
+      expect(view({ launcherRunning: true, launcherRestarting: true })?.dataState).toBe(
+        "tandem-claude",
+      );
+      expect(view({ soloMode: true, launcherRestarting: true })).toBeNull();
+    });
+  });
+
   it("booting with NO session → nothing (never flash a negative state on boot)", () => {
     expect(view({ state: "booting" })).toBeNull();
   });
@@ -373,7 +403,7 @@ describe("cwdDriftPill", () => {
   };
 
   it("renders when nothing else objects", () => {
-    expect(cwdDriftPill(DRIFT, null, null)?.label).toBe("Claude in notes");
+    expect(cwdDriftPill(DRIFT, null, null, false)?.label).toBe("Claude in notes");
   });
 
   it("yields to a CTA rather than sitting next to one", () => {
@@ -381,7 +411,7 @@ describe("cwdDriftPill", () => {
     // and the server reports drift only when it is. Overlap is staleness, and a
     // stale folder note beside a live "Restart Claude Code" is #1268's shape.
     for (const chip of ["connect", "setup", "restart"] as const) {
-      expect(cwdDriftPill(DRIFT, chip, null)).toBeNull();
+      expect(cwdDriftPill(DRIFT, chip, null, false)).toBeNull();
     }
   });
 
@@ -389,16 +419,22 @@ describe("cwdDriftPill", () => {
     // `useCwdDrift` does not poll, so a drift answer from before an unattended
     // trip stays live while `aiChip` is null (another session is attached).
     for (const failure of ["restart", "sign-in", "setup"] as const) {
-      expect(cwdDriftPill(DRIFT, null, failure)).toBeNull();
+      expect(cwdDriftPill(DRIFT, null, failure, false)).toBeNull();
     }
   });
 
+  it("yields while Tandem restarts its Claude (#2180)", () => {
+    // During a restart neither CTA shows, so nothing else would hide a drift
+    // answer from before the crash.
+    expect(cwdDriftPill(DRIFT, null, null, true)).toBeNull();
+  });
+
   it("says nothing when there is no drift", () => {
-    expect(cwdDriftPill(null, null, null)).toBeNull();
+    expect(cwdDriftPill(null, null, null, false)).toBeNull();
   });
 
   it("names the consequence rather than a connection state", () => {
-    const pill = cwdDriftPill(DRIFT, null, null);
+    const pill = cwdDriftPill(DRIFT, null, null, false);
     expect(pill?.title).toContain("CLAUDE.md");
     expect(pill?.title).toContain("git history");
     expect(pill?.title).toContain("read and edit this document");
@@ -406,13 +442,13 @@ describe("cwdDriftPill", () => {
 
   it("carries both full paths in the aria-label, not only the title", () => {
     // `title` is unreachable by keyboard, touch and assistive tech.
-    const pill = cwdDriftPill(DRIFT, null, null);
+    const pill = cwdDriftPill(DRIFT, null, null, false);
     expect(pill?.ariaLabel).toContain(DRIFT.claudeCwd);
     expect(pill?.ariaLabel).toContain(DRIFT.suggestedCwd);
   });
 
   it("names the destination folder in the action row", () => {
-    expect(cwdDriftPill(DRIFT, null, null)?.actionLabel).toBe("Restart Claude in alpha…");
+    expect(cwdDriftPill(DRIFT, null, null, false)?.actionLabel).toBe("Restart Claude in alpha…");
   });
 });
 

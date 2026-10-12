@@ -43,13 +43,14 @@
  * States:
  *   - `booting`      — not yet known (still connecting / first status read
  *                      pending). Render nothing; never flash a CTA on boot.
- *   - `unconfigured` — launcher unavailable (`available: false`: stdio mode or
- *                      disabled) AND no live MCP session. Prompt setup.
+ *   - `unconfigured` — launcher unavailable (`available: false`: stdio mode,
+ *                      disabled, or `not-configured` — no launchable claude-code
+ *                      integration, #2180) AND no live MCP session. Prompt setup.
  *   - `stopped`      — `available: true, running: false` AND no live MCP
- *                      session. Prompt restart, NOT the setup wizard. Known gap:
- *                      HTTP mode creates the supervisor even with NO claude-code
- *                      integration, so a never-configured user also lands here
- *                      and is offered "Restart Claude Code" (#2180).
+ *                      session. Prompt restart, NOT the setup wizard — unless
+ *                      the server says a restart is already under way
+ *                      (`restartPending`), when `chip` is null and the pill
+ *                      shows "Restarting Claude…" (`launcherRestarting`).
  *   - `ready`        — Claude Code running OR an MCP session is live.
  *
  * `chip` folds in Solo-mode suppression: in Solo mode the user has deliberately
@@ -305,16 +306,21 @@ function isRunning(s: LauncherStatus): s is RunningLauncherStatus {
 /**
  * The `lastError` codes that mean Tandem's own Claude has stopped for good.
  *
- * Each is set together with `breakerTripped = true` in the supervisor, so while
- * one is reported no restart timer is pending and no child is alive — the client
- * needs no `restarting` flag to avoid claiming "stopped" while Tandem retries.
- * The one exception is a user-initiated relaunch, which lowers the breaker and
- * then awaits the spawn plan before `spawn()` clears the code: milliseconds,
- * user-initiated, and the action is idempotent under the supervisor's lock.
+ * A code alone does not say whether Tandem is still retrying: `spawn-failed`
+ * is set both with a restart scheduled and on a permanent stop, and a relaunch
+ * leaves the old code in place until its spawn clears it. The server's
+ * `restartPending` answers that (#2180), so `launcherFailure` also requires it
+ * to be absent; this table only says which codes mean "stopped" once nothing is
+ * retrying.
  *
- * `spawn-failed` is deliberately false: one of its two call sites sets it with
- * a restart already scheduled, and the client cannot tell the two apart. The
- * cost is that the other site's permanent stop shows no button (#2180).
+ * `stop-failed` is set only when a reaper survived SIGKILL and was abandoned,
+ * and survives only through a relaunch whose plan then found no integration
+ * (which reads as `not-configured`, masking it). The abandoned process may
+ * still be alive, so "isn't running" can be imprecise there; Restart is still
+ * the right remedy.
+ *
+ * `status-check-failed` is the status ROUTE failing, not the supervisor, so it
+ * is not a stop.
  *
  * A `Record` rather than a `Set` so a new server code fails to compile here
  * until someone decides whether it means "stopped for good".
@@ -325,8 +331,8 @@ const TRIPPED_FAILURE: Record<LauncherErrorCode, boolean> = {
   "circuit-open": true,
   "cli-unusable": true,
   "wake-delivery-failed": true,
-  "spawn-failed": false,
-  "stop-failed": false,
+  "spawn-failed": true,
+  "stop-failed": true,
   "status-check-failed": false,
 };
 
@@ -457,6 +463,13 @@ export interface AiReadiness {
    *  connected": it is only reachable when the child's connection forwards its
    *  Claude session id. Gated like `launcherRunning`. */
   readonly launcherAttached: boolean;
+  /** Tandem is already bringing its Claude back — a restart is scheduled, a
+   *  start or relaunch is running, or a killed child's exit is on its way
+   *  (`LauncherStatus.restartPending`, #2180). Drives the "Restarting Claude…"
+   *  view. Gated like `launcherRunning`; `chip` and `launcherFailure` instead
+   *  read the raw retained status, so a failed read mid-restart cannot bring a
+   *  Restart button back. */
+  readonly launcherRestarting: boolean;
   /** How many LIVE MCP clients `/health` counts (`isLiveEntry` +
    *  `countDistinctClients`), or `null` when unknown or unreachable. */
   readonly sessionCount: number | null;
@@ -898,6 +911,13 @@ export function createAiReadiness(deps: {
   const lastError = $derived<LauncherErrorCode | undefined>(
     status !== null && status.available && !status.running ? status.lastError : undefined,
   );
+  // Off the RAW retained status, not the fresh-gated view flag below: a single
+  // failed read during a restart keeps the last status but clears
+  // `launcherFresh`, and keying the chip on the gated flag would put a Restart
+  // button back mid-restart — one that relaunches over the automatic retry.
+  const restartPending = $derived(
+    status !== null && status.available && !status.running && status.restartPending === true,
+  );
 
   // `chip` is the ONE place the `lastError` → CTA decision is made (see the
   // `AiChip` doc comment for why `cli-unusable` — a server-side probe taken at
@@ -909,7 +929,7 @@ export function createAiReadiness(deps: {
       ? null
       : state === "unconfigured"
         ? "connect"
-        : state === "stopped"
+        : state === "stopped" && !restartPending
           ? chipForStoppedLauncher(lastError)
           : null,
   );
@@ -929,8 +949,13 @@ export function createAiReadiness(deps: {
   // for the CTA after a failed read, and a stale `attached: true` is a false
   // green.
   const launcherAttached = $derived(runningStatus?.attached === true);
+  const launcherRestarting = $derived(restartPending && launcherFresh && !serverUnreachable);
   const launcherFailure = $derived<LauncherFailure | null>(
-    !deps.soloMode() && sessionLive && lastError !== undefined && TRIPPED_FAILURE[lastError]
+    !deps.soloMode() &&
+      sessionLive &&
+      !restartPending &&
+      lastError !== undefined &&
+      TRIPPED_FAILURE[lastError]
       ? chipForStoppedLauncher(lastError)
       : null,
   );
@@ -993,6 +1018,9 @@ export function createAiReadiness(deps: {
     },
     get launcherAttached() {
       return launcherAttached;
+    },
+    get launcherRestarting() {
+      return launcherRestarting;
     },
     get sessionCount() {
       return sessionCount;

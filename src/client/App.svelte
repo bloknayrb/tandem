@@ -456,7 +456,12 @@ const visibleCwdDrift = $derived.by(() => {
 // The RAW failure, not the dismissed-filtered one: the drift gate is a
 // staleness check (the launcher is not running), which a dismissal doesn't change.
 const cwdDriftView = $derived(
-  cwdDriftPill(visibleCwdDrift, aiReadiness.chip, aiReadiness.launcherFailure),
+  cwdDriftPill(
+    visibleCwdDrift,
+    aiReadiness.chip,
+    aiReadiness.launcherFailure,
+    aiReadiness.launcherRestarting,
+  ),
 );
 
 /**
@@ -2702,6 +2707,7 @@ const shouldShowModelPicker = $derived(
       aiLauncherCwd={aiReadiness.launcherCwd}
       aiLauncherBusy={aiReadiness.launcherBusy}
       aiLauncherAttached={aiReadiness.launcherAttached}
+      aiLauncherRestarting={aiReadiness.launcherRestarting}
       aiSessionCount={aiReadiness.sessionCount}
       aiLauncherFailure={aiReadiness.launcherFailure}
       aiLauncherFailureDismissed={launcherFailureShown === null}

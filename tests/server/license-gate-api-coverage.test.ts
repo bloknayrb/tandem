@@ -166,7 +166,11 @@ const ROUTE_GATES: RouteGate[] = [
     gate: "ungated",
     why: "AI-client connection config; a restricted user must still be able to fix a broken connection",
   },
-  { constant: "API_INTEGRATIONS_APPLY", gate: "ungated", why: "writes MCP config, not documents" },
+  {
+    constant: "API_INTEGRATIONS_APPLY",
+    gate: "ungated",
+    why: "writes MCP config, not documents; then refreshes the launcher's configured state",
+  },
   {
     constant: "API_INTEGRATIONS_SECRET",
     gate: "ungated",

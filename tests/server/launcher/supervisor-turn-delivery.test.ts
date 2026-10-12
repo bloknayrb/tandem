@@ -561,6 +561,98 @@ describe("#2181 — an event while no spawn is subscribed", () => {
     await sup.start();
     const child2 = await nthChild(2);
     expect(texts(child2)).toEqual([]);
+// --- #2180 --------------------------------------------------------------------
+
+describe("#2180 — status().restartPending: Tandem is already bringing Claude back", () => {
+  function pending(sup: Supervisor): boolean {
+    const st = sup.status();
+    return !st.running && st.restartPending === true;
+  }
+
+  /** Stop this child's `kill()` from exiting on its own; the test fires it. */
+  function holdExit(child: FakeChild): void {
+    child.kill = (sig: NodeJS.Signals = "SIGTERM") => {
+      child.kills.push(sig);
+      child.killed = true;
+      return true;
+    };
+  }
+
+  it("is true during a crash restart's backoff", async () => {
+    const { sup } = makeSupervisor({ restartBackoffsMs: [5_000] });
+    await sup.startFresh(cwdDir);
+    exitChild(children[0], 1);
+    expect(sup.status().running).toBe(false);
+    expect(pending(sup)).toBe(true);
+  });
+
+  it("is true while a relaunch waits for the old child to exit", async () => {
+    // `kill()` marks the child killed at once, so status already reads
+    // not-running for the whole SIGTERM wait: the window that used to offer a
+    // Restart button.
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    holdExit(child1);
+    const relaunched = sup.relaunch(cwdDir);
+    await waitFor(() => child1.kills.length > 0, "the relaunch's SIGTERM");
+    expect(sup.status().running).toBe(false);
+    expect(pending(sup)).toBe(true);
+
+    exitChild(child1, null, "SIGTERM");
+    await relaunched;
+    expect(sup.status().running).toBe(true);
+  });
+
+  it("is true while the relaunch builds its next spawn", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    let seen: boolean | null = null;
+    onSpawn = (_child, index) => {
+      if (index === 1) seen = pending(sup);
+    };
+    await sup.relaunch(cwdDir);
+    expect(seen).toBe(true);
+  });
+
+  it("is true between a delivery kill and its exit", async () => {
+    const { sup, emit } = makeSupervisor({ turnReceiptMs: 100 });
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    succeedWrites(held(child1));
+    pushJson(child1, RESULT_OK);
+    await settle();
+    holdExit(child1);
+    emit(annotationEvent());
+    succeedWrites(held(child1));
+    await waitFor(() => child1.kills.length > 0, "the receipt kill", 2_000);
+    expect(pending(sup)).toBe(true);
+    exitChild(child1, null, "SIGTERM");
+  });
+
+  it("guard: false once the new child is running", async () => {
+    const { sup } = makeSupervisor({ restartBackoffsMs: [0] });
+    await sup.startFresh(cwdDir);
+    exitChild(children[0], 1);
+    await nthChild(2);
+    await waitFor(() => sup.status().running, "the restart");
+    expect(pending(sup)).toBe(false);
+  });
+
+  it("guard: false once the breaker trips, so the failure can show", async () => {
+    const { sup } = makeSupervisor({ restartBackoffsMs: [0] });
+    await sup.startFresh(cwdDir);
+    for (let n = 1; ; n++) {
+      exitChild(children[n - 1], 1);
+      const st = sup.status();
+      if (!st.running && st.lastError !== undefined) break;
+      await nthChild(n + 1);
+      await waitFor(() => sup.status().running, `restart ${n}`);
+    }
+    const st = sup.status();
+    expect(st.running).toBe(false);
+    expect(st.running === false && st.lastError).toBe("circuit-open");
+    expect(pending(sup)).toBe(false);
   });
 });
 

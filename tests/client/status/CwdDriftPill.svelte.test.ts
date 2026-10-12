@@ -32,6 +32,7 @@ const baseProps = {
   claudeActive: false,
   aiLiveIndicator: null,
   aiLauncherAttached: false,
+  aiLauncherRestarting: false,
   aiSessionCount: null as number | null,
   aiState: "ready" as const,
   soloMode: false,

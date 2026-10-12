@@ -20,7 +20,7 @@ import {
   type LauncherRoutesDeps,
   registerLauncherRoutes,
 } from "../../../src/server/launcher/api-routes.js";
-import type { Supervisor } from "../../../src/server/launcher/supervisor.js";
+import type { RespawnResult, Supervisor } from "../../../src/server/launcher/supervisor.js";
 import { TAURI_HOSTNAME } from "../../../src/shared/constants.js";
 import {
   LAUNCHER_ERROR_REAPER_NOT_FOUND,
@@ -39,6 +39,8 @@ interface FakeSupervisorOpts {
   busy?: boolean;
   relaunchHook?: (cwd?: string) => Promise<void>;
   startFreshHook?: (cwd?: string) => Promise<void>;
+  /** What relaunch / start-fresh report; defaults to a spawn (#2180). */
+  respawnResult?: RespawnResult;
 }
 
 const FAKE_SESSION_ID = "11111111-1111-4111-8111-111111111111";
@@ -50,10 +52,13 @@ function makeFakeSupervisor(opts: FakeSupervisorOpts = {}): Supervisor {
     stop: async () => {},
     relaunch: async (cwd?: string) => {
       await opts.relaunchHook?.(cwd);
+      return opts.respawnResult ?? { spawned: true };
     },
     startFresh: async (cwd?: string) => {
       await opts.startFreshHook?.(cwd);
+      return opts.respawnResult ?? { spawned: true };
     },
+    refreshConfigured: async () => {},
     status: () =>
       opts.running
         ? {
@@ -762,13 +767,82 @@ describe("per-route 429 inflight gates (T2)", () => {
   });
 });
 
+describe("#2180 — a supervisor with nothing to launch, and one already restarting", () => {
+  function supWith(status: ReturnType<Supervisor["status"]>, result?: RespawnResult): Supervisor {
+    return {
+      ...makeFakeSupervisor({ respawnResult: result }),
+      status: () => status,
+    };
+  }
+  const SKILL = { code: "write-failed" as const, message: "EACCES" };
+
+  it("not configured → unavailable/not-configured on loopback, keeping skillRefresh", async () => {
+    const { app } = makeApp({
+      ...baseDeps(supWith({ running: false, configured: false })),
+      getSkillRefreshError: () => SKILL,
+    });
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.body).toEqual({ available: false, reason: "not-configured", skillRefresh: SKILL });
+  });
+
+  it("not configured → bare unavailable off loopback", async () => {
+    const { app } = makeApp(baseDeps(supWith({ running: false, configured: false })), {
+      remoteAddress: "192.168.1.50",
+    });
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.body).toEqual({ available: false });
+  });
+
+  it("restartPending is passed through on loopback", async () => {
+    const { app } = makeApp(
+      baseDeps(supWith({ running: false, lastError: "spawn-failed", restartPending: true })),
+    );
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.body).toMatchObject({
+      available: true,
+      running: false,
+      lastError: "spawn-failed",
+      restartPending: true,
+    });
+  });
+
+  it("restartPending outranks not-configured (a start re-plans meanwhile)", async () => {
+    const { app } = makeApp(
+      baseDeps(supWith({ running: false, restartPending: true, configured: false })),
+    );
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.body).toMatchObject({ available: true, running: false, restartPending: true });
+  });
+
+  it("guard: restartPending is loopback-only", async () => {
+    const { app } = makeApp(baseDeps(supWith({ running: false, restartPending: true })), {
+      remoteAddress: "192.168.1.50",
+    });
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.body).toEqual({ available: true, running: false });
+  });
+
+  for (const route of ["relaunch", "start-fresh"] as const) {
+    it(`${route} with no integration answers 404 NO_CLAUDE_INTEGRATION`, async () => {
+      const sup = supWith({ running: false }, { spawned: false, why: "no-integration" });
+      const { app } = makeApp(baseDeps(sup));
+      const nonce = (await request(app, "GET", "/api/launcher/nonce")).body as { nonce: string };
+      const res = await request(app, "POST", `/api/launcher/${route}`, { nonce: nonce.nonce });
+      expect(res.status).toBe(404);
+      expect(res.body).toMatchObject({ code: "NO_CLAUDE_INTEGRATION" });
+      expect((res.body as { message: string }).message).toContain("Connect AI");
+    });
+  }
+});
+
 describe("loopback vs LAN redaction for running:false (T6)", () => {
   it("loopback sees lastError; non-loopback does not", async () => {
     const sup: Supervisor = {
       start: async () => {},
       stop: async () => {},
-      relaunch: async () => {},
-      startFresh: async () => {},
+      relaunch: async () => ({ spawned: true }),
+      startFresh: async () => ({ spawned: true }),
+      refreshConfigured: async () => {},
       status: () => ({ running: false, lastError: "spawn-failed" as const }),
     };
     const { app: appLoop } = makeApp(baseDeps(sup));
@@ -806,8 +880,9 @@ describe("/status try/catch on supervisor throw (B4)", () => {
     const sup: Supervisor = {
       start: async () => {},
       stop: async () => {},
-      relaunch: async () => {},
-      startFresh: async () => {},
+      relaunch: async () => ({ spawned: true }),
+      startFresh: async () => ({ spawned: true }),
+      refreshConfigured: async () => {},
       status: () => {
         throw new Error("simulated supervisor crash");
       },
@@ -826,8 +901,9 @@ describe("/status try/catch on supervisor throw (B4)", () => {
     const sup: Supervisor = {
       start: async () => {},
       stop: async () => {},
-      relaunch: async () => {},
-      startFresh: async () => {},
+      relaunch: async () => ({ spawned: true }),
+      startFresh: async () => ({ spawned: true }),
+      refreshConfigured: async () => {},
       status: () => {
         throw new Error("simulated");
       },

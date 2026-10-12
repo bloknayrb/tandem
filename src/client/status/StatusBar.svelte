@@ -50,6 +50,9 @@ interface Props {
    *  "Tandem's Claude" green. Required (as is `aiSessionCount`) so a mount that
    *  forgets to wire it is a type error, not a permanently neutral dot. */
   aiLauncherAttached: boolean;
+  /** Tandem is restarting its own Claude → "Restarting Claude…" (#2180).
+   *  Required for the same reason as `aiLauncherAttached`. */
+  aiLauncherRestarting: boolean;
   /** `/health`'s session count, or null when unknown. */
   aiSessionCount: number | null;
   /** It tripped while another live session is attached → the sibling button.
@@ -133,6 +136,7 @@ let {
   aiLauncherCwd = null,
   aiLauncherBusy = false,
   aiLauncherAttached,
+  aiLauncherRestarting,
   aiSessionCount,
   aiLauncherFailure = null,
   aiLauncherFailureDismissed = false,
@@ -279,6 +283,7 @@ const aiView = $derived(
     launcherCwd: aiLauncherCwd,
     launcherBusy: aiLauncherBusy,
     launcherAttached: aiLauncherAttached,
+    launcherRestarting: aiLauncherRestarting,
     docSyncConnected: connected,
     sessionCount: aiSessionCount,
   }),

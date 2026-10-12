@@ -86,7 +86,68 @@ describe("supervisor.start — gating", () => {
     const sup = createSupervisor({ integrationsBase: tmpDir });
     await sup.start();
     expect(sup.status().running).toBe(false);
+    // #2180: and it says so, rather than reading as a stopped Claude to restart.
+    expect(sup.status()).toEqual({ running: false, configured: false });
     await sup.stop();
+  });
+});
+
+describe("supervisor — no launchable integration (#2180)", () => {
+  function claudeCode(): IntegrationsFile["integrations"][number] {
+    return {
+      kind: "claude-code",
+      id: "cc",
+      label: "Claude Code",
+      configPath: path.join(tmpDir, "cc-config.json"),
+      transport: "http",
+      url: "http://127.0.0.1:3479/mcp",
+      apply: "create",
+    };
+  }
+
+  it("reports configured:false after a start finds nothing", async () => {
+    await writeIntegrations(emptyIntegrationsFile());
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    await sup.start();
+    expect(sup.status()).toEqual({ running: false, configured: false });
+    await sup.stop();
+  });
+
+  it("says nothing about configuration before any plan has run", () => {
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    expect(sup.status()).toEqual({ running: false });
+  });
+
+  it("relaunch and start-fresh report that nothing was spawned", async () => {
+    await writeIntegrations(emptyIntegrationsFile());
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    await expect(sup.relaunch()).resolves.toEqual({ spawned: false, why: "no-integration" });
+    await expect(sup.startFresh()).resolves.toEqual({ spawned: false, why: "no-integration" });
+    expect(sup.status().running).toBe(false);
+    await sup.stop();
+  });
+
+  it("refreshConfigured picks up an entry written after boot, and starts nothing", async () => {
+    await writeIntegrations(emptyIntegrationsFile());
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    await sup.start();
+    expect(sup.status()).toEqual({ running: false, configured: false });
+
+    await writeIntegrations({ schemaVersion: 3, integrations: [claudeCode()] });
+    await sup.refreshConfigured();
+    expect(sup.status()).toEqual({ running: false });
+    await sup.stop();
+  });
+
+  it("refreshConfigured notices an entry that was removed", async () => {
+    await writeIntegrations({ schemaVersion: 3, integrations: [claudeCode()] });
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    await sup.refreshConfigured();
+    expect(sup.status()).toEqual({ running: false });
+
+    await writeIntegrations(emptyIntegrationsFile());
+    await sup.refreshConfigured();
+    expect(sup.status()).toEqual({ running: false, configured: false });
   });
 });
 

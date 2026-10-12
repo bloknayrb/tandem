@@ -29,7 +29,10 @@ import type { CwdDrift } from "../hooks/useCwdDrift.svelte";
  *   2. Tandem's own Claude (`launcherRunning`). The supervisor wakes it over
  *      stdin, so this is the one tier whose wake claim the server can back. It
  *      outranks `booting`, as a live session does: gating it on `state` would
- *      blank a running launcher during a doc-sync blip.
+ *      blank a running launcher during a doc-sync blip. Its restarting state
+ *      (`launcherRestarting`, #2180) sits at the same tier: the dead child's
+ *      own MCP entry reads live for up to a minute after it exits, and rule 3
+ *      would otherwise call that "AI attached" for the whole retry.
  *   3. Any other attached session (`liveIndicator === "connected"`) — a proven
  *      `initialize`, which also outranks `booting` (#1054). Its copy claims only
  *      what that proves: something is connected.
@@ -53,7 +56,13 @@ export interface AiIndicatorView {
   /** Drives dot + text color. */
   tone: AiIndicatorTone;
   /** `data-ai-state` attribute. */
-  dataState: "connected" | "connected-stale" | "solo-paused" | "not-connected" | "tandem-claude";
+  dataState:
+    | "connected"
+    | "connected-stale"
+    | "solo-paused"
+    | "not-connected"
+    | "tandem-claude"
+    | "restarting";
   /**
    * Whether this state may animate its dot off presence activity. Only ever
    * true when a session is live (connected/solo) — a disconnected indicator
@@ -151,6 +160,25 @@ const CONNECTED_STALE: BaseView = {
     "Something connected to Tandem earlier, but Tandem can't see that it's still there. It may be a session that has since closed.",
   ariaLabel:
     "AI attached earlier, but Tandem can't see that it's still there. It may be a session that has since closed.",
+};
+
+/**
+ * Tandem is already bringing its own Claude back (#2180): a crash restart is
+ * scheduled, a start or relaunch is running, or a killed child is exiting. No
+ * button — a Restart here would race the retry — and no pulse, because
+ * nothing is working yet. The hollow ring is the same "not confirmed" signal
+ * the leftover view uses.
+ */
+const RESTARTING: BaseView = {
+  label: "Restarting Claude…",
+  tone: "pending",
+  dataState: "restarting",
+  canAnimate: false,
+  ...QUIET,
+  title:
+    "Tandem's Claude stopped, and Tandem is starting it again on its own. There's nothing you need to do.",
+  ariaLabel:
+    "Restarting Claude. Tandem's Claude stopped, and Tandem is starting it again on its own.",
 };
 
 /**
@@ -324,6 +352,8 @@ export interface AiIndicatorInput {
   launcherBusy: boolean;
   /** The server matched a live connection to this spawn of Tandem's Claude. */
   launcherAttached: boolean;
+  /** Tandem is restarting its own Claude (`AiReadiness.launcherRestarting`). */
+  launcherRestarting: boolean;
   docSyncConnected: boolean;
   /** `/health`'s session count, or `null` when unknown. */
   sessionCount: number | null;
@@ -351,6 +381,7 @@ function baseIndicatorView(input: AiIndicatorInput): BaseView | null {
       docSyncConnected: input.docSyncConnected,
     });
   }
+  if (input.launcherRestarting) return RESTARTING;
 
   // Rule 3: anything else attached.
   if (input.liveIndicator === "connected") {
@@ -430,7 +461,8 @@ export interface CwdDriftPill {
  * `aiChip` is non-null only for `unconfigured` / `stopped`, and
  * `launcherFailure` only for a tripped launcher beside another session — both
  * mean the supervised launcher is not running, and the server reports drift only
- * when it IS. They can overlap only through staleness: `useCwdDrift` does not
+ * when it IS. A restart in progress (`launcherRestarting`, #2180) hides it for
+ * the same reason: no CTA is shown then, so nothing else would. They can overlap only through staleness: `useCwdDrift` does not
  * poll, so a drift answer from before an unattended trip stays live. So either
  * one wins outright. This is a staleness gate, not a second copy of the server's
  * predicate: it never turns a `false` into a `true`.
@@ -444,9 +476,10 @@ export function cwdDriftPill(
   drift: CwdDrift | null,
   aiChip: AiChip,
   launcherFailure: LauncherFailure | null,
+  launcherRestarting: boolean,
 ): CwdDriftPill | null {
   if (drift === null) return null;
-  if (aiChip !== null || launcherFailure !== null) return null;
+  if (aiChip !== null || launcherFailure !== null || launcherRestarting) return null;
   // Names the consequence, not the state. "AI · other folder" reads as a
   // connection status and leaves the user with no idea what is actually
   // degraded — the document syncs fine and Claude can still edit it; what it

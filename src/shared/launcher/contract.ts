@@ -6,7 +6,8 @@
  *
  * The launcher routes are HTTP-mode-only and only useful when a
  * `claude-code` integration with `apply !== "skip"` exists in
- * `integrations.json`.
+ * `integrations.json`. Without one, status reports `available: false` with
+ * reason `not-configured` (#2180).
  */
 
 // --- Status ---------------------------------------------------------------
@@ -33,6 +34,12 @@ export type LauncherStatus =
       running: false;
       /** Last fatal error from the supervisor, scrubbed to a small enum. */
       lastError?: LauncherErrorCode;
+      /** Loopback-only. Tandem is already bringing its Claude back (a restart
+       * is scheduled, a start or relaunch is running, or a killed child's exit
+       * is on its way), so the client shows "Restarting Claude…" rather than
+       * a Restart button that would race it (#2180). Absent from an older
+       * server, which reads as today's behaviour. */
+      restartPending?: true;
       /** Loopback-only. `null` when last refresh succeeded. */
       skillRefresh?: SkillRefreshError | null;
     }
@@ -69,19 +76,27 @@ export type LauncherStatus =
  * Because it is recoverable it is also a presence oracle — it means "this
  * machine auto-booted and nobody has opened the window yet" — so
  * `GET /api/launcher/status` redacts the whole `reason` field off-loopback.
+ *
+ * `not-configured` (#2180): unlike the others, a supervisor DOES exist — it
+ * found no launchable `claude-code` entry (none at all, a Claude Desktop-only
+ * setup, or a legacy `apply: "skip"` one), so there is nothing to restart. It
+ * resolves when the user completes setup: the wizard's Apply starts Claude.
  */
 export type LauncherUnavailableReason =
   | "stdio-mode"
   | "disabled-by-env"
   | "spawn-failed"
-  | "deferred-autostart";
+  | "deferred-autostart"
+  | "not-configured";
 
 /**
  * True when `available: false` is a *transient phase* the launcher will leave on
  * its own, rather than a terminal explanation.
  *
- * Every other reason means "this runtime will never have a launcher"; only
- * `deferred-autostart` resolves without the user changing anything. The UI must
+ * Only `deferred-autostart` resolves without the user changing anything.
+ * `not-configured` is recoverable too, but only by the user setting Claude Code
+ * up, so it is NOT transient: setup is exactly the CTA it needs. The rest mean
+ * "this runtime will not have a launcher". The UI must
  * not offer a fix-it CTA for a state that fixes itself — a fully-configured user
  * who booted hidden would otherwise be told to re-run the integration wizard.
  *

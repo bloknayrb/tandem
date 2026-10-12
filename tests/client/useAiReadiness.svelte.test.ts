@@ -1626,6 +1626,72 @@ describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
     expect(seen[0]).toContain(API_LAUNCHER_STATUS);
   });
 
+  describe("restartPending (#2180)", () => {
+    const restarting = () => mkResponse({ available: true, running: false, restartPending: true });
+
+    it("a restart under way shows 'restarting' and offers no Restart button", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: restarting,
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      const h = mount();
+      await settle();
+      expect(h.get().state).toBe("stopped");
+      expect(h.get().launcherRestarting).toBe(true);
+      expect(h.get().chip).toBeNull();
+    });
+
+    it("control: the same stopped launcher without it offers Restart", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: STOPPED_LAUNCHER,
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      const h = mount();
+      await settle();
+      expect(h.get().launcherRestarting).toBe(false);
+      expect(h.get().chip).toBe("restart");
+    });
+
+    it("still restarting beside the dead child's own live session", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: restarting,
+        health: mkResponse({ status: "ok", hasSession: true, sessionCount: 1 }),
+      });
+      const h = mount();
+      await settle();
+      expect(h.get().launcherRestarting).toBe(true);
+    });
+
+    it("a failed read mid-restart does not bring the Restart button back", async () => {
+      // The chip reads the RETAINED status; only the pill view is fresh-gated.
+      let erroring = false;
+      globalThis.fetch = routedFetch({
+        launcher: () => (erroring ? mkResponse({}, false, 503) : restarting()),
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      const h = mount();
+      await settle();
+      expect(h.get().chip).toBeNull();
+
+      erroring = true;
+      h.get().refreshLauncherStatus();
+      await settle();
+      expect(h.get().launcherRestarting).toBe(false);
+      expect(h.get().chip).toBeNull();
+    });
+
+    it("not-configured offers setup, not a restart", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: () => mkResponse({ available: false, reason: "not-configured" }),
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      const h = mount();
+      await settle();
+      expect(h.get().state).toBe("unconfigured");
+      expect(h.get().chip).toBe("connect");
+    });
+  });
+
   describe("launcherFailure", () => {
     const tripped = (lastError: string) => () =>
       mkResponse({ available: true, running: false, lastError });
@@ -1636,6 +1702,9 @@ describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
       ["circuit-open", "restart"],
       ["binary-not-found", "restart"],
       ["wake-delivery-failed", "restart"],
+      // #2180: a stop for good once nothing is retrying (`restartPending`).
+      ["spawn-failed", "restart"],
+      ["stop-failed", "restart"],
     ] as const) {
       it(`${lastError} beside a live session → ${expected}, while chip/state stay as before`, async () => {
         globalThis.fetch = routedFetch({
@@ -1652,10 +1721,21 @@ describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
       });
     }
 
-    for (const lastError of ["spawn-failed", "status-check-failed", "stop-failed"]) {
-      it(`${lastError} is not a tripped failure`, async () => {
+    it("status-check-failed is not a tripped failure (the route failed, not Claude)", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: tripped("status-check-failed"),
+        health: mkResponse({ status: "ok", hasSession: true }),
+      });
+      const h = mount();
+      await settle();
+      expect(h.get().launcherFailure).toBeNull();
+    });
+
+    for (const lastError of ["spawn-failed", "circuit-open"]) {
+      it(`${lastError} while a restart is pending is not a failure yet (#2180)`, async () => {
         globalThis.fetch = routedFetch({
-          launcher: tripped(lastError),
+          launcher: () =>
+            mkResponse({ available: true, running: false, lastError, restartPending: true }),
           health: mkResponse({ status: "ok", hasSession: true }),
         });
         const h = mount();

@@ -295,6 +295,13 @@ const SESSION_FILE_NAME = "launcher-session.json";
  * the stale session to never be cleared (issue #1169). */
 export const RESUME_CONFIRM_MS = 30_000;
 const RESTART_BACKOFFS_MS = [1_000, 5_000, 30_000];
+
+/** How long after a delivery kill (#1867/#1868) the status keeps reading
+ * "restarting" while it waits for the exit that schedules the restart. Matches
+ * `stopInternal`'s SIGTERM grace. Bounded so a reaper that never exits (the
+ * unverified macOS case `spawnOnce` notes) cannot hold the pill on
+ * "Restarting Claude…" forever with no button (#2180). */
+const DELIVERY_KILL_EXIT_GRACE_MS = 6_000;
 /** Circuit breaker: if Claude crashes this many times within
  * CIRCUIT_BREAKER_WINDOW_MS, the supervisor gives up and surfaces via status.
  * Avoids unbounded restart-loop spam from a permanently-broken Claude binary. */
@@ -380,19 +387,34 @@ export interface Supervisor {
    * see `persistRequestedCwd` for why a cwd on the wire is not evidence that
    * the user chose that folder.
    */
-  relaunch(newCwd?: string, opts?: RelocateOpts): Promise<void>;
+  relaunch(newCwd?: string, opts?: RelocateOpts): Promise<RespawnResult>;
   /** Idempotent — safe to call when not running. */
   stop(): Promise<void>;
   /** Drop any persisted session and respawn fresh. Omit `cwdOverride` to use the
    * integration's configured directory; `opts.persistCwd` behaves as in
    * `relaunch`. Single atomic stop+clear+spawn under the supervisor lock. */
-  startFresh(cwdOverride?: string, opts?: RelocateOpts): Promise<void>;
+  startFresh(cwdOverride?: string, opts?: RelocateOpts): Promise<RespawnResult>;
   /** Current state for /api/launcher/status. */
   status(): SupervisorStatus;
+  /** Re-read whether a launchable claude-code entry exists, WITHOUT starting
+   * anything (#2180). Called after the setup wizard writes one, so the status
+   * stops reporting `not-configured` without waiting for the next start.
+   * Whether finishing the wizard should also start Tandem's Claude is an open
+   * product question, deliberately not answered here. */
+  refreshConfigured(): Promise<void>;
 }
 
-/** Discriminated union: when `running === false` the only extra field is the
- * (optional) `lastError`; when `running === true` all process-level fields are
+/** What `relaunch` / `startFresh` did. `no-integration`: the plan found no
+ * launchable claude-code entry, so nothing was spawned (#2180). Both stop the
+ * running Claude before they plan, and `startFresh` also drops the saved
+ * session, so either one ACTS and then reports this: a relaunch after the
+ * entry was removed ends Claude, and a start-fresh discards the conversation
+ * pointer. Acceptable, because the alternative is reading the store under the
+ * lock before stopping, and a removed entry is a deliberate act. */
+export type RespawnResult = { spawned: true } | { spawned: false; why: "no-integration" };
+
+/** Discriminated union: when `running === false` the extra fields are the
+ * optional `lastError`, `restartPending` and `configured`; when `running === true` all process-level fields are
  * guaranteed present.
  *
  * `lastError` is deliberately absent from the `running: true` branch, and that
@@ -403,7 +425,20 @@ export interface Supervisor {
  * perfectly healthy supervisor. The explicit `lastError?: undefined` below
  * encodes that invariant instead of leaving it to the reader. */
 export type SupervisorStatus =
-  | { running: false; lastError?: LauncherErrorCode }
+  | {
+      running: false;
+      lastError?: LauncherErrorCode;
+      /** Tandem is already bringing Claude back: a restart timer is set, a
+       * start or relaunch is in progress, or a delivery kill's exit is still
+       * on its way (#2180). The client shows "Restarting Claude…" instead of
+       * a Restart button, which would race the retry. */
+      restartPending?: true;
+      /** The last spawn plan found no launchable claude-code integration
+       * (#2180). Refreshed only by a plan (start, relaunch, crash restart, a
+       * wizard Apply), never per status poll: a hand edit of
+       * `integrations.json` shows up at the next plan. */
+      configured?: false;
+    }
   | {
       running: true;
       /** PID of the reaper process. Claude's own PID is intentionally not
@@ -810,6 +845,16 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    */
   let stopEpoch = 0;
   let restartIndex = 0;
+  /** Starts and relaunches in progress, for `restartPending` (#2180). A count,
+   * because an unlocked crash restart can overlap a locked `start()`. */
+  let launching = 0;
+  /** The last plan's answer to "is there a launchable claude-code entry?"
+   * (#2180). `undefined` until a plan has been built. Written only by
+   * `buildPlan`, so a status poll never reads the integrations store. */
+  let configured: boolean | undefined;
+  /** When the current spawn was ended for refusing turns, if it was. Cleared
+   * at each spawn. See `DELIVERY_KILL_EXIT_GRACE_MS`. */
+  let deliveryKillAt: number | undefined;
   let restartTimer: NodeJS.Timeout | null = null;
   /** Confirmation timer for the active spawn. Set in spawnOnce, cancelled in
    * stopInternal and the exit handler. Module-scoped so stopInternal can
@@ -1232,6 +1277,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
   async function buildPlan(cwdOverride?: string): Promise<SpawnPlan | null> {
     const integration = await readIntegration();
+    configured = integration !== null;
     if (!integration) return null;
 
     const { cwd, fromOverride } = resolveCwd(integration, cwdOverride);
@@ -1319,6 +1365,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     let killedForDelivery = false;
     function markDeliveryKill(): void {
       killedForDelivery = true;
+      // First kill only: the handler may run more than once for one child.
+      if (child === spawned && deliveryKillAt === undefined) deliveryKillAt = Date.now();
     }
     const onStdinGone = makeStdinGoneHandler(spawned, () => child === spawned, markDeliveryKill);
     attachChildStreamErrorHandlers(spawned, onStdinGone);
@@ -1327,6 +1375,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // leaving the old code set would make it resurface on the next clean stop
     // (see the note on SupervisorStatus).
     lastError = undefined;
+    deliveryKillAt = undefined;
 
     // One timestamp for the spawn: the exit handler's `ranFor` and the status
     // route's attachment match must agree on when this child started.
@@ -1956,7 +2005,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // its `wasCurrent` identity guard; the "error" handler guards its state
     // clearing but not this call.
     if (breakerTripped) return;
-    if (restartTimer) clearTimeout(restartTimer);
+    if (restartTimer) {
+      clearTimeout(restartTimer);
+      // Null it too: the breaker branch below returns without setting a new
+      // one, and a dead handle would make `restartPending` read true forever
+      // beside a tripped breaker (#2180).
+      restartTimer = null;
+    }
 
     // Circuit breaker: drop attempts older than the window, then check count.
     const now = Date.now();
@@ -2060,6 +2115,17 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * the public `start()` wrapper. `epoch` is the `stopEpoch` this start
    * belongs to; the restart timer passes the one its failure handler checks. */
   async function startInternal(epoch = stopEpoch): Promise<void> {
+    // Counted for `restartPending` (#2180). The restart timer nulls itself and
+    // calls this synchronously, so no status poll lands between the two.
+    launching++;
+    try {
+      await planAndSpawn(epoch);
+    } finally {
+      launching--;
+    }
+  }
+
+  async function planAndSpawn(epoch: number): Promise<void> {
     if (child) return;
     if (breakerTripped) return;
     stopRequested = false;
@@ -2121,7 +2187,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   // the chip CTAs fire from surfaces that legitimately have no document open.
   // Requiring one here is what made the empty state's safe recovery unreachable
   // while its session-destroying secondary kept working.
-  async function relaunch(newCwd?: string, opts?: RelocateOpts): Promise<void> {
+  async function relaunch(newCwd?: string, opts?: RelocateOpts): Promise<RespawnResult> {
     return withLock(() => respawn(newCwd, opts, { clearSession: false }));
   }
 
@@ -2142,7 +2208,23 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     cwdOverride: string | undefined,
     opts: RelocateOpts | undefined,
     { clearSession }: { clearSession: boolean },
-  ): Promise<void> {
+  ): Promise<RespawnResult> {
+    // Counted from BEFORE the stop (#2180): `kill()` marks the child killed at
+    // once, so `status()` reads not-running for the whole SIGTERM wait, and
+    // that is exactly the window that used to offer a Restart button.
+    launching++;
+    try {
+      return await stopAndSpawn(cwdOverride, opts, clearSession);
+    } finally {
+      launching--;
+    }
+  }
+
+  async function stopAndSpawn(
+    cwdOverride: string | undefined,
+    opts: RelocateOpts | undefined,
+    clearSession: boolean,
+  ): Promise<RespawnResult> {
     await stopInternal();
     if (clearSession) clearSavedSession();
     // relaunch/startFresh always mean "user is actively asking" → clear breaker.
@@ -2157,9 +2239,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // `stopInternal` above has nulled `child`; see `startInternal` (#2181).
     armGapWatch();
     const plan = await buildPlan(cwdOverride);
-    if (!plan) return;
+    if (!plan) return { spawned: false, why: "no-integration" };
     await persistRequestedCwd(plan, cwdOverride, opts?.persistCwd);
     await spawnOnce(plan);
+    return { spawned: true };
   }
 
   async function stopInternal(): Promise<void> {
@@ -2249,7 +2332,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     });
   }
 
-  async function startFresh(cwdOverride?: string, opts?: RelocateOpts): Promise<void> {
+  async function startFresh(cwdOverride?: string, opts?: RelocateOpts): Promise<RespawnResult> {
     return withLock(() => respawn(cwdOverride, opts, { clearSession: true }));
   }
 
@@ -2276,10 +2359,39 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         spawnedAt: currentSpawnedAt,
       };
     }
-    return lastError ? { running: false, lastError } : { running: false };
+    const stopped: Extract<SupervisorStatus, { running: false }> = { running: false };
+    if (lastError) stopped.lastError = lastError;
+    if (restartPending()) stopped.restartPending = true;
+    if (configured === false) stopped.configured = false;
+    return stopped;
   }
 
-  return { start, relaunch, stop, startFresh, status };
+  /** Tandem is already bringing Claude back, so a Restart button would race it
+   * (#2180). Never true beside a tripped breaker: that is "stopped for good",
+   * and the failure state must show. */
+  function restartPending(): boolean {
+    if (breakerTripped) return false;
+    if (restartTimer !== null || launching > 0) return true;
+    // A delivery kill (#1867/#1868) marks the child killed before its exit
+    // schedules the restart; bounded, see `DELIVERY_KILL_EXIT_GRACE_MS`.
+    return (
+      child !== null &&
+      child.killed &&
+      !stopRequested &&
+      deliveryKillAt !== undefined &&
+      Date.now() - deliveryKillAt < DELIVERY_KILL_EXIT_GRACE_MS
+    );
+  }
+
+  async function refreshConfigured(): Promise<void> {
+    // Under the lock so it cannot interleave with a respawn's own plan.
+    // `buildPlan` writes `configured`; the plan itself is discarded.
+    return withLock(async () => {
+      await buildPlan();
+    });
+  }
+
+  return { start, relaunch, stop, startFresh, status, refreshConfigured };
 }
 
 /** Exported for unit testing. Resolves a cwd candidate to a canonical path,
