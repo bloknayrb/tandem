@@ -49,6 +49,43 @@ function readJson<T>(filePath: string): T | null {
 }
 
 /**
+ * Read `license.json`, telling ABSENT apart from PRESENT-BUT-UNUSABLE (#1521).
+ * `readJson` cannot: it maps every failure to `null`, which is right for
+ * `trial.json` (a soft clock) and wrong for a licence a user paid for.
+ *
+ * - `absent`: ENOENT only.
+ * - `unreadable`: any other read error (`UNKNOWN` — it is usually a transient
+ *   lock, and the copy for it says to re-activate or write to support, never
+ *   to buy), or a body that parses to something with no string `blob`, or
+ *   does not parse at all (`MALFORMED`).
+ */
+function readLicenseFile(
+  filePath: string,
+):
+  | { kind: "absent" }
+  | { kind: "unreadable"; code: LicenseUnverifiableCode }
+  | { kind: "parsed"; value: LicenseFile } {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return { kind: "absent" };
+    return { kind: "unreadable", code: "UNKNOWN" };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { kind: "unreadable", code: "MALFORMED" };
+  }
+  const blob = (parsed as Partial<LicenseFile> | null)?.blob;
+  if (typeof blob !== "string" || blob.length === 0) {
+    return { kind: "unreadable", code: "MALFORMED" };
+  }
+  return { kind: "parsed", value: parsed as LicenseFile };
+}
+
+/**
  * The epoch ms the trial clock starts from, given a parsed `trial.json` body
  * (#1788). `NaN` when the body is present but cannot run a clock — `NaN` makes
  * `nowMs < expiresAt` false ⇒ restricted (decision 5).
@@ -158,7 +195,23 @@ export function resolveLicenseState(deps: {
   // damaged" and "update Tandem" are three different user actions, and a
   // boolean forced every surface to hedge across all three in one sentence.
   let licenseUnverifiable: LicenseUnverifiableCode | undefined;
-  const lf = readJson<LicenseFile>(licenseFilePath(appDataDir));
+  const lfRead = readLicenseFile(licenseFilePath(appDataDir));
+  // A licence file that EXISTS but cannot be used — a read error that is not
+  // ENOENT (an AV or sync-client lock: EBUSY, EPERM), unparseable JSON, or a
+  // body with no `blob` — is UNVERIFIABLE, not absent (#1521). Treating it as
+  // absent told a paying user, mid-session, that Tandem was unlicensed and
+  // where to buy it. It still never unlocks anything: making the file
+  // unreadable cannot gain AI, because it falls through to the trial clock
+  // exactly like a licence that fails to verify.
+  if (lfRead.kind === "unreadable") {
+    licenseUnverifiable = lfRead.code;
+    warnOnce(
+      `read:${lfRead.code}`,
+      `[license] license.json exists but could not be used (${lfRead.code}) — treating this ` +
+        "device as unlicensed until it can be read.",
+    );
+  }
+  const lf = lfRead.kind === "parsed" ? lfRead.value : null;
   if (lf?.blob) {
     try {
       const meta = verify(lf.blob);
