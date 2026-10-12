@@ -113,8 +113,7 @@ describe("StatusBar AI action indicator", () => {
 
     const indicator = getByTestId("status-ai-indicator");
     expect(indicator.textContent).toContain("Solo · comments held");
-    expect(indicator.textContent).toContain("reviewing scratchpad…");
-    expect(indicator.textContent).toContain("reviewing scratchpad… (not your comments)");
+    expect(indicator.textContent).toContain(" · reviewing scratchpad… (not your comments)");
     // The label already says "held"; the qualifier must add the missing fact,
     // not restate it on a status strip whose scarcest resource is width.
     expect(indicator.textContent).not.toContain("comments still held");
@@ -136,9 +135,26 @@ describe("StatusBar AI action indicator", () => {
     // assertion below is about the gate and not about an empty pill.
     expect(indicator.textContent).toContain("reviewing scratchpad…");
     expect(indicator.textContent).not.toContain("not your comments");
-    // The separator keeps its leading space: Svelte trims a text node's leading
-    // whitespace after an `{#if}`, which rendered "AI connected· reviewing…".
+    // The separator keeps its leading space: Svelte trims whitespace at the start
+    // of an `{#if}` body, which rendered "AI connected· reviewing…".
     expect(indicator.textContent).toContain(" · reviewing scratchpad…");
+  });
+
+  it("spaces the activity after the session count too", () => {
+    const { getByTestId } = render(StatusBar, {
+      props: {
+        ...baseProps,
+        aiLiveIndicator: "connected" as const,
+        aiState: "ready" as const,
+        aiSessionCount: 2,
+        claudeStatus: "reviewing scratchpad…",
+        claudeActive: true,
+      },
+    });
+
+    expect(getByTestId("status-ai-indicator").textContent).toContain(
+      "2 sessions · reviewing scratchpad…",
+    );
   });
 });
 

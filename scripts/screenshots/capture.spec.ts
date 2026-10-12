@@ -134,8 +134,7 @@ test.afterEach(async () => {
  *
  * A user-private record (the tutorial's note, a user highlight) is refused to
  * Claude by design (ADR-027), so it goes through the route the user's
- * own Archive button uses instead. Until this fallback, that refusal failed
- * every step in this file.
+ * own Archive button uses instead.
  */
 async function removeAnnotation(documentId: string, id: string): Promise<void> {
   // The parameter is `id`, not `annotationId` (src/server/mcp/annotations.ts).
