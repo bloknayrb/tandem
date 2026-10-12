@@ -45,9 +45,9 @@ const TESTS = path.join(ROOT, "tests");
  *    hand-rolled copy fails closed.
  *
  * 4. **The exemption pins its REASON, not just its path.**
- *    `mcp-stdio-ports.test.ts` hands `serverTransport` to
- *    `startMcpServerStdio` and so has no registrar list to pass — the harness
- *    cannot express it. If that stops being true, the carve-out should be
+ *    `mcp-stdio-ports.test.ts` (and, since #1521, the two licence suites that
+ *    probe stdio server mode) hand `serverTransport` to `startMcpServerStdio`
+ *    and so have no registrar list to pass — the harness cannot express it. If that stops being true, the carve-out should be
  *    re-examined rather than inherited.
  *
  * Scope (ADR-051's one-owner-per-fact rule): this file owns "who links a
@@ -55,7 +55,13 @@ const TESTS = path.join(ROOT, "tests");
  */
 
 /** Files that may link a transport pair without going through the harness. */
-const ALLOWLIST = ["tests/server/mcp-stdio-ports.test.ts"];
+const ALLOWLIST = [
+  // #1521: both drive `startMcpServerStdio` to pin stdio server mode's licence
+  // refusal (armed) and its admission (dark) — the same no-registrar reason.
+  "tests/server/license-ai-refusal.test.ts",
+  "tests/server/license-armed-restricted.test.ts",
+  "tests/server/mcp-stdio-ports.test.ts",
+];
 
 /** Defines the pair; excluded because it cannot import itself. */
 const HARNESS = "tests/helpers/mcp-harness.ts";
