@@ -50,8 +50,26 @@ import {
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { shouldForwardExternally, subscribe, unsubscribe } from "../events/queue.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
+import { type AiRefusal, aiRefusal } from "../license/ai-refusal.js";
 import { sanitizeForLog } from "../log-sanitize.js";
 import { isTauriSidecar } from "../platform.js";
+
+/**
+ * Thrown by `relaunch` / `startFresh` when Tandem is unlicensed (#1521), BEFORE
+ * anything is stopped — a refused relaunch never kills a running child. Carries
+ * the refusal's own fields so the launcher route can answer 403 with the
+ * envelope without importing the licence module.
+ */
+export class LicenseRefusedError extends Error {
+  readonly kind: AiRefusal["kind"];
+  readonly refusal: AiRefusal;
+  constructor(refusal: AiRefusal) {
+    super(refusal.message);
+    this.name = "LicenseRefusedError";
+    this.kind = refusal.kind;
+    this.refusal = refusal;
+  }
+}
 
 interface SupervisorOpts {
   /** Directory containing `integrations.json` (typically `resolveAppDataDir()`). */
@@ -101,6 +119,11 @@ interface SupervisorOpts {
    * window silently, with nothing in the type to warn the next editor.
    */
   probeCliUsable?: () => boolean;
+  /**
+   * Seam onto the licence decision (#1521). Defaults to the live `aiRefusal`,
+   * which admits on its first line while the gate ships dark.
+   */
+  aiRefusal?: () => AiRefusal | null;
   /**
    * Override for `RESTART_BACKOFFS_MS`, so a test can drive the eleven crashes
    * the circuit breaker needs without waiting out the real 1s/5s/30s ladder.
@@ -402,6 +425,15 @@ export interface Supervisor {
    * Whether finishing the wizard should also start Tandem's Claude is an open
    * product question, deliberately not answered here. */
   refreshConfigured(): Promise<void>;
+  /**
+   * Resume a launcher the licence refused (#1521). Spawns only when no child
+   * is alive, `lastError === "unlicensed"`, no breaker is tripped and the
+   * user has not stopped it — so it can never stop or double-spawn anything.
+   * Its one caller is `POST /api/license/activate`'s success path.
+   */
+  resumeAfterLicence(): Promise<void>;
+  /** The refusal behind `lastError === "unlicensed"`, or null when there is none. */
+  licenceRefusal(): AiRefusal | null;
 }
 
 /** What `relaunch` / `startFresh` did. `no-integration`: the plan found no
@@ -816,6 +848,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const restartBackoffs = opts.restartBackoffsMs?.length
     ? opts.restartBackoffsMs
     : RESTART_BACKOFFS_MS;
+  const decideRefusal = opts.aiRefusal ?? aiRefusal;
+  /** The refusal stored beside `lastError = "unlicensed"`; cleared with it. */
+  let lastRefusal: AiRefusal | null = null;
   let child: ChildProcess | null = null;
   let currentCwd: string | undefined;
   let currentSessionId: string | undefined;
@@ -2168,6 +2203,25 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       console.error("[Launcher] Breaker tripped while building the spawn plan — not spawning");
       return;
     }
+    // Licence admission (#1521). Covers boot, the deferred start route and the
+    // crash-respawn timer, which all come through here. It REFUSES BY
+    // RETURNING, never by throwing: a throw would reach the crash timer's
+    // `onRestartFailed` (→ `lastError = "spawn-failed"`) and boot's
+    // `startLauncherSupervisor` (→ `launcherUnavailableReason = "spawn-failed"`),
+    // both of which misname the cause. It touches no breaker state and
+    // schedules no restart; `resumeAfterLicence` is what brings it back.
+    //
+    // After `buildPlan`'s await, where another spawn can land — so the code is
+    // recorded only when no child is alive, and it returns either way.
+    const refusal = decideRefusal();
+    if (refusal) {
+      if (child === null) {
+        lastError = "unlicensed";
+        lastRefusal = refusal;
+      }
+      console.error("[Launcher] Not starting Claude Code: AI features are unlicensed");
+      return;
+    }
     try {
       await spawnOnce(plan);
       // Reset backoff once a spawn runs long enough to be considered stable.
@@ -2213,6 +2267,21 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     opts: RelocateOpts | undefined,
     { clearSession }: { clearSession: boolean },
   ): Promise<RespawnResult> {
+    // Licence admission (#1521), at the very top — BEFORE `stopInternal`,
+    // `clearSavedSession` and `persistRequestedCwd`, so a refused relaunch
+    // never kills a running child, drops a session or moves the cwd. It
+    // refuses by THROWING (the routes map it to 403). `lastError` is recorded
+    // only with no child alive and no breaker tripped: a running child would
+    // carry a stale code into its healthy run (see `SupervisorStatus`), and
+    // overwriting `circuit-open` / `cli-unusable` would hide a real diagnosis.
+    const refusal = decideRefusal();
+    if (refusal) {
+      if (child === null && !breakerTripped) {
+        lastError = "unlicensed";
+        lastRefusal = refusal;
+      }
+      throw new LicenseRefusedError(refusal);
+    }
     // Counted from BEFORE the stop (#2180): `kill()` marks the child killed at
     // once, so `status()` reads not-running for the whole SIGTERM wait, and
     // that is exactly the window that used to offer a Restart button.
@@ -2395,7 +2464,29 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     });
   }
 
-  return { start, relaunch, stop, startFresh, status, refreshConfigured };
+  /** See `Supervisor.resumeAfterLicence`. Under the op lock, and idempotent. */
+  async function resumeAfterLicence(): Promise<void> {
+    return withLock(async () => {
+      if (child !== null || lastError !== "unlicensed" || userStopped || breakerTripped) return;
+      console.error("[Launcher] Licence activated — starting Claude Code");
+      await startInternal();
+    });
+  }
+
+  function licenceRefusal(): AiRefusal | null {
+    return lastError === "unlicensed" ? lastRefusal : null;
+  }
+
+  return {
+    start,
+    relaunch,
+    stop,
+    startFresh,
+    status,
+    refreshConfigured,
+    resumeAfterLicence,
+    licenceRefusal,
+  };
 }
 
 /** Exported for unit testing. Resolves a cwd candidate to a canonical path,

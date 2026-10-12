@@ -2519,7 +2519,95 @@ export function describeHealthSession(d: { hasSession?: boolean; sessionCount?: 
   return { label: "session active", warning: null };
 }
 
-async function checkHealth(r: Recorder, mcpPort: number, startHint: string): Promise<boolean> {
+// ── Check: license (AI features on/off) ─────────────────────────────
+
+/**
+ * The only licence fields doctor ever records (#1521). The loopback
+ * `/api/license/status` body also carries the licence holder's name and email,
+ * and `runDoctor` backs the shareable `/api/diagnostics` report — so nothing
+ * outside this picklist may reach a row's `data`.
+ */
+export interface DoctorLicenceState {
+  gateActive: true;
+  status: string;
+  licenseUnverifiable: string | null;
+}
+
+/**
+ * Narrow a `GET /api/license/status` result to the picklist, or `null` when the
+ * row should be silent: a dark build (`gateActive: false`), an older server
+ * (404), an unreachable or unparsable answer. Silence on all four keeps a dark
+ * build's report byte-for-byte what it was, and keeps a 404-everything test
+ * listener from changing warning counts.
+ */
+export function parseDoctorLicence(result: HttpGetResult | null): DoctorLicenceState | null {
+  if (!result || result.error || result.status !== 200) return null;
+  const d = result.data as {
+    gateActive?: unknown;
+    status?: unknown;
+    licenseUnverifiable?: unknown;
+  };
+  if (!d || typeof d !== "object" || d.gateActive !== true || typeof d.status !== "string") {
+    return null;
+  }
+  return {
+    gateActive: true,
+    status: d.status,
+    licenseUnverifiable: typeof d.licenseUnverifiable === "string" ? d.licenseUnverifiable : null,
+  };
+}
+
+/** "(unlicensed)" / "(license not verified)" when AI is refused, else `null`. */
+export function licenceOffLabel(licence: DoctorLicenceState | null): string | null {
+  if (licence?.status !== "restricted") return null;
+  return licence.licenseUnverifiable ? "(license not verified)" : "(unlicensed)";
+}
+
+/** The licence row. `null` (no row) whenever `parseDoctorLicence` was silent. */
+export function evaluateLicence(licence: DoctorLicenceState | null): EvalOutcome | null {
+  if (!licence) return null;
+  const data = {
+    gateActive: licence.gateActive,
+    status: licence.status,
+    licenseUnverifiable: licence.licenseUnverifiable,
+  };
+  const off = licenceOffLabel(licence);
+  if (off) {
+    return {
+      status: "warn",
+      message: `AI features off ${off} — the editor is unaffected`,
+      fix: licence.licenseUnverifiable
+        ? "A license is installed but could not be verified. Open Tandem's Settings → License for what to do."
+        : "Activate a license in Tandem's Settings → License to turn Claude back on.",
+      data,
+    };
+  }
+  return { status: "pass", message: `AI features on (license: ${licence.status})`, data };
+}
+
+/** What the push / SSE rows say instead of pass or fault while AI is refused. */
+function licenceDeferred(what: string, off: string): EvalOutcome {
+  return {
+    status: "skip",
+    message: `${what} not checked — AI features off ${off}`,
+    data: { reason: "license" },
+  };
+}
+
+async function checkLicence(r: Recorder, mcpPort: number): Promise<DoctorLicenceState | null> {
+  const licence = parseDoctorLicence(
+    await httpGet(`http://127.0.0.1:${mcpPort}/api/license/status`),
+  );
+  recordEvaluation(r, evaluateLicence(licence));
+  return licence;
+}
+
+async function checkHealth(
+  r: Recorder,
+  mcpPort: number,
+  startHint: string,
+  licenceOff: string | null = null,
+): Promise<boolean> {
   const result = await httpGet(`http://127.0.0.1:${mcpPort}/health`);
 
   if (!result) {
@@ -2546,7 +2634,12 @@ async function checkHealth(r: Recorder, mcpPort: number, startHint: string): Pro
       hasSession: !!d.hasSession,
     });
     if (session.warning) r.warn(session.warning);
-    recordEvaluation(r, evaluatePushPath(d.push));
+    // #1521: an unlicensed server refuses push, so the push row defers to the
+    // licence row rather than reporting an attached-but-refused consumer.
+    recordEvaluation(
+      r,
+      licenceOff ? licenceDeferred("Push path", licenceOff) : evaluatePushPath(d.push),
+    );
   } else {
     r.pass("Server responded on /health (could not parse body)");
   }
@@ -3306,11 +3399,21 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   }
 
   if (mcp) {
+    // Licence first (#1521), fetched once, so the push row and the SSE probe
+    // can defer to it. Silent (no row) on a dark build, an older server, or no
+    // answer — see `parseDoctorLicence`.
+    const licence = (await r.check("license", () => checkLicence(r, mcpPort))) ?? null;
+    const licenceOff = licenceOffLabel(licence);
     // A crashed health check means we never established health — don't run
     // the SSE check on an unverified server.
-    const healthy = (await r.check("health", () => checkHealth(r, mcpPort, startHint))) ?? false;
+    const healthy =
+      (await r.check("health", () => checkHealth(r, mcpPort, startHint, licenceOff))) ?? false;
     if (healthy) {
-      await r.check("sse", () => checkSseEndpoint(r, mcpPort));
+      if (licenceOff) {
+        recordEvaluation(r, licenceDeferred("SSE event stream", licenceOff));
+      } else {
+        await r.check("sse", () => checkSseEndpoint(r, mcpPort));
+      }
     }
   }
 

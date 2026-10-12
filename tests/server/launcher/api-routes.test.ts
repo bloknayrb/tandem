@@ -59,6 +59,8 @@ function makeFakeSupervisor(opts: FakeSupervisorOpts = {}): Supervisor {
       return opts.respawnResult ?? { spawned: true };
     },
     refreshConfigured: async () => {},
+    resumeAfterLicence: async () => {},
+    licenceRefusal: () => null,
     status: () =>
       opts.running
         ? {
@@ -843,6 +845,8 @@ describe("loopback vs LAN redaction for running:false (T6)", () => {
       relaunch: async () => ({ spawned: true }),
       startFresh: async () => ({ spawned: true }),
       refreshConfigured: async () => {},
+      resumeAfterLicence: async () => {},
+      licenceRefusal: () => null,
       status: () => ({ running: false, lastError: "spawn-failed" as const }),
     };
     const { app: appLoop } = makeApp(baseDeps(sup));
@@ -883,6 +887,8 @@ describe("/status try/catch on supervisor throw (B4)", () => {
       relaunch: async () => ({ spawned: true }),
       startFresh: async () => ({ spawned: true }),
       refreshConfigured: async () => {},
+      resumeAfterLicence: async () => {},
+      licenceRefusal: () => null,
       status: () => {
         throw new Error("simulated supervisor crash");
       },
@@ -904,6 +910,8 @@ describe("/status try/catch on supervisor throw (B4)", () => {
       relaunch: async () => ({ spawned: true }),
       startFresh: async () => ({ spawned: true }),
       refreshConfigured: async () => {},
+      resumeAfterLicence: async () => {},
+      licenceRefusal: () => null,
       status: () => {
         throw new Error("simulated");
       },

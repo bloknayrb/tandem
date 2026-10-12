@@ -259,10 +259,9 @@ export function resolveLicenseState(deps: {
 
 /**
  * Production-wired `resolveLicenseState`: the single place the live deps (real
- * app-data dir, wall clock, build-time gate flag) are assembled. Shared by both
- * enforcement surfaces — Hocuspocus `onAuthenticate` (Surface A) and the MCP
- * `gatedTool` / `licenseGateMiddleware` (Surface B) — plus the status route, so
- * a future deps change lands in one spot. Still cache-free: every call re-reads disk.
+ * app-data dir, wall clock, build-time gate flag) are assembled. Shared by the
+ * AI-surface decision (`ai-refusal.ts`, #1521) and the status route, so a
+ * future deps change lands in one spot. Still cache-free: every call re-reads disk.
  */
 export function resolveLiveLicenseState(): LicenseState {
   return resolveLicenseState({

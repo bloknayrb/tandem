@@ -19,11 +19,9 @@
  *     clamp to 1 (information-free on a unique quote; the count===1 gate makes
  *     collapsing two distinct spans structurally impossible).
  *
- * License (ADR-040 §3 / #1116): the loop is a write surface that bypasses both
- * license enforcement surfaces (no Hocuspocus connection; not an MCP tool), so
- * the THREE mutating tools consult the gate here. Reads + chat are the read-only
- * escape hatch and are never gated. `isLicenseRestricted` is injectable for
- * tests; it defaults to the live `licenseGate()` (a no-op while the gate is dark).
+ * License (#1521): nothing here. The local model is an AI surface, and an
+ * unlicensed install runs no turn at all — the collaborator refuses per run
+ * before this dispatcher is ever reached (`collaborator.ts`).
  */
 import type * as Y from "yjs";
 
@@ -38,16 +36,12 @@ import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { captureSnapshot } from "../mcp/annotations.js";
 import { getOutline, getSection } from "../mcp/document.js";
 import { extractText } from "../mcp/document-model.js";
-import { licenseGate } from "../mcp/license-gate.js";
 import { countOccurrences, findOccurrence } from "../mcp/navigation.js";
 import { anchoredRange, describeRangeFailure } from "../positions.js";
 import type { ToolSchema } from "./ollama-client.js";
 
 export interface DispatchCtx {
   ydoc: Y.Doc;
-  /** True when editing must be blocked (trial expired). Defaults to the live
-   *  license gate; injectable so tests don't touch the filesystem. */
-  isLicenseRestricted?: () => boolean;
   /** #1123 M3: the authoring agent's identity, stamped onto every annotation /
    *  reply this dispatch writes so the client byline names the specific model.
    *  Undefined ⇒ no stamp (byte-identical to pre-M3 + the MCP path). */
@@ -62,7 +56,6 @@ export interface ToolOutcome {
    *  host-side source of truth (the loop keys all metrics off this, not `result`). */
   effect:
     | { kind: "read" }
-    | { kind: "blocked"; tool: string }
     | {
         kind: "comment" | "replacement";
         ok: boolean;
@@ -151,7 +144,11 @@ export const TOOLS: ToolSchema[] = [
   },
 ];
 
-/** Tools that write to the Y.Doc — gated by the license check. Reads + chat aren't. */
+/**
+ * Tools that write to the Y.Doc. No longer a licence list (#1521 — the local
+ * model is refused per run, before dispatch); kept as the enumeration the
+ * authorship tripwire in `tests/server/local-model/tools.test.ts` iterates.
+ */
 export const MUTATING_TOOLS: ReadonlySet<string> = new Set([
   "comment_on_quote",
   "propose_replacement",
@@ -314,21 +311,6 @@ export function dispatch(
       result: { error: "MALFORMED_ARGS", message: "Tool arguments were not valid JSON." },
       effect: { kind: "read" },
     };
-  }
-
-  // License gate: block the mutating tools when restricted; reads + chat pass.
-  if (MUTATING_TOOLS.has(name)) {
-    const restricted = ctx.isLicenseRestricted ? ctx.isLicenseRestricted() : licenseGate() !== null;
-    if (restricted) {
-      return {
-        result: {
-          error: "LICENSE_REQUIRED",
-          message:
-            "Editing is unavailable — the Tandem trial has ended; activate a license to keep editing.",
-        },
-        effect: { kind: "blocked", tool: name },
-      };
-    }
   }
 
   switch (name) {

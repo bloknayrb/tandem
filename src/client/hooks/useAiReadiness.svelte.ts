@@ -323,6 +323,9 @@ function isRunning(s: LauncherStatus): s is RunningLauncherStatus {
  * `status-check-failed` is the status ROUTE failing, not the supervisor, so it
  * is not a stop.
  *
+ * `unlicensed` (#1521) is false: the licence refusal trips no breaker, and the
+ * supervisor resumes on its own when a licence is activated in the app.
+ *
  * A `Record` rather than a `Set` so a new server code fails to compile here
  * until someone decides whether it means "stopped for good".
  */
@@ -335,6 +338,7 @@ const TRIPPED_FAILURE: Record<LauncherErrorCode, boolean> = {
   "spawn-failed": true,
   "stop-failed": true,
   "status-check-failed": false,
+  unlicensed: false,
 };
 
 /**

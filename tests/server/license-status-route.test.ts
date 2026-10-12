@@ -8,8 +8,8 @@ import type { LicenseState } from "../../src/server/license/license-types.js";
 import * as verifier from "../../src/server/license/verifier.js";
 import { canonicalize } from "../../src/server/license/verifier.js";
 import {
-  handleActivateLicense,
   handleGetLicenseStatus,
+  makeActivateLicenseHandler,
   scrubForNonLoopback,
   toLicenseStatusWire,
 } from "../../src/server/mcp/routes/license.js";
@@ -97,6 +97,9 @@ function activateReq(opts: { origin?: string; body?: unknown }): Request {
     body: opts.body,
   } as unknown as Request;
 }
+
+/** No launcher wired — the shape every pre-#1521 case here was written against. */
+const handleActivateLicense = makeActivateLicenseHandler();
 
 describe("handleActivateLicense", () => {
   it("rejects a non-allowlisted origin with 403 before touching the body", async () => {
@@ -234,6 +237,98 @@ describe("handleActivateLicense", () => {
       openSpy.mockRestore();
       verifySpy.mockRestore();
     }
+  });
+});
+
+describe("activation resumes a launcher the licence refused (#1521 §2e)", () => {
+  let dir: string;
+  let saved: string | undefined;
+  let verifySpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    saved = process.env.TANDEM_APP_DATA_DIR;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-activate-resume-"));
+    process.env.TANDEM_APP_DATA_DIR = dir;
+    // Any blob verifies: these cases are about what happens AFTER a good key.
+    verifySpy = vi.spyOn(verifier, "verifyLicenseSignature").mockImplementation(
+      () =>
+        ({
+          id: "lic-1",
+          name: "Jane Doe",
+          email: "jane@example.com",
+          type: "personal",
+          createdAt: new Date(0).toISOString(),
+          expiresAt: null,
+          version: "1.0",
+        }) as ReturnType<typeof verifier.verifyLicenseSignature>,
+    );
+  });
+
+  afterEach(() => {
+    verifySpy.mockRestore();
+    if (saved === undefined) delete process.env.TANDEM_APP_DATA_DIR;
+    else process.env.TANDEM_APP_DATA_DIR = saved;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const goodReq = () =>
+    activateReq({ origin: "http://127.0.0.1:5173", body: { license: "a-good-key" } });
+
+  it("awaits resumeAfterLicence on success, then answers 200", async () => {
+    const order: string[] = [];
+    const handler = makeActivateLicenseHandler({
+      getSupervisor: () => ({
+        resumeAfterLicence: async () => {
+          order.push("resume");
+        },
+      }),
+    });
+    const res = fakeRes();
+    await handler(goodReq(), res);
+    order.push("answered");
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBeDefined(); // statusCode defaults to 200 in the fake
+    expect(order).toEqual(["resume", "answered"]);
+  });
+
+  it("still answers 200 when resume throws — the key is already saved", async () => {
+    const handler = makeActivateLicenseHandler({
+      getSupervisor: () => ({
+        resumeAfterLicence: async () => {
+          throw new Error("integrations.json is corrupt");
+        },
+      }),
+    });
+    const res = fakeRes();
+    await handler(goodReq(), res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBeDefined(); // statusCode defaults to 200 in the fake
+  });
+
+  it("answers 200 with no supervisor wired, or a null one", async () => {
+    for (const handler of [
+      makeActivateLicenseHandler(),
+      makeActivateLicenseHandler({ getSupervisor: () => null }),
+    ]) {
+      const res = fakeRes();
+      await handler(goodReq(), res);
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toBeDefined(); // statusCode defaults to 200 in the fake
+    }
+  });
+
+  it("never resumes on a refused key", async () => {
+    verifySpy.mockImplementation(() => {
+      throw new Error("bad");
+    });
+    const resume = vi.fn(async () => {});
+    const handler = makeActivateLicenseHandler({
+      getSupervisor: () => ({ resumeAfterLicence: resume }),
+    });
+    const res = fakeRes();
+    await handler(goodReq(), res);
+    expect(res.statusCode).toBe(400);
+    expect(resume).not.toHaveBeenCalled();
   });
 });
 

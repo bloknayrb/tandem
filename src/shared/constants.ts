@@ -54,8 +54,10 @@ export const TANDEM_SITE_URL = "https://tandem.ink";
 
 /**
  * Where to buy a license. Referenced by every surface that can tell a user their
- * trial has ended — the wall, the trial banner, the MCP `RESTRICTED_MESSAGE`,
- * `tandem license`, and the HTTP 403 body. Telling someone to "activate a
+ * trial has ended — the wall, the trial banner, Settings' License tab
+ * (`SettingsLicenseTab.svelte`), the AI refusal copy in `license-copy.ts` (the
+ * MCP error and every `/api` 403 body), and `tandem license`. Never shown for an
+ * installed licence that fails to verify. Telling someone to "activate a
  * license" without saying where to get one is the most avoidable dead end in the
  * whole flow.
  *

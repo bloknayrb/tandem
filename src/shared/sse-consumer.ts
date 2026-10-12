@@ -65,7 +65,42 @@ import {
 import type { TandemEvent } from "./events/types.js";
 import { parseTandemEvent } from "./events/types.js";
 import { describeFetchError, fetchWithTimeout } from "./fetch-with-timeout.js";
+import { LICENSE_REQUIRED } from "./license-copy.js";
 import { type ChannelErrorCode, type TandemMode, TandemModeSchema } from "./types.js";
+
+/**
+ * How long to wait before re-trying a stream the server refused because Tandem
+ * is unlicensed (#1521). Long and flat: the refusal is not an outage, so it
+ * does not climb the retry ladder, report exhaustion or POST `channel-error`.
+ */
+export const LICENSE_REFUSED_RETRY_MS = 5 * 60_000;
+
+/**
+ * The server refused `/api/events` because Tandem is unlicensed. Keyed ONLY on
+ * the wire body's `error === "LICENSE_REQUIRED"` — this module ships in bundles
+ * that carry no licence `define` and must never import the server's licence code.
+ */
+export class LicenseRefusedStreamError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LicenseRefusedStreamError";
+  }
+}
+
+/**
+ * Read a refused response's licence envelope, or `null` when it is not one.
+ * Total: a body that cannot be read or parsed is simply not a licence refusal.
+ */
+async function readLicenseRefusal(res: Response): Promise<string | null> {
+  if (res.status !== 403) return null;
+  try {
+    const body = (await res.json()) as { error?: unknown; message?: unknown } | null;
+    if (body?.error !== LICENSE_REQUIRED) return null;
+    return typeof body.message === "string" ? body.message : LICENSE_REQUIRED;
+  } catch {
+    return null;
+  }
+}
 
 const AWARENESS_DEBOUNCE_MS = 500;
 const AWARENESS_CLEAR_MS = 3000;
@@ -147,6 +182,13 @@ export interface EventConsumerOptions {
    * stream died before it could survive `STABLE_CONNECTION_MS`.
    */
   onExhaustion?: (info: { everConnected: boolean }) => void;
+  /**
+   * Called once per refused stretch when the server refuses the stream because
+   * Tandem is unlicensed (#1521), with the server's refusal message. Cleared by
+   * the next successful handshake. The plugin monitor prints it on stdout so
+   * the model learns why its wakes stopped. Default is a noop.
+   */
+  onLicenseRefused?: (message: string) => void;
 }
 
 // --- Module-level state ---
@@ -219,12 +261,20 @@ export async function runEventConsumer(opts: EventConsumerOptions): Promise<void
 
   let retries = 0;
   let lastEventId: string | undefined;
+  /** Latched for one refused stretch: one log line and one `onLicenseRefused` call. */
+  let licenceRefused = false;
 
   while (true) {
     try {
       await connectAndStreamOnce(opts, lastEventId, {
         onEventId: (id) => {
           lastEventId = id;
+        },
+        onHandshake: () => {
+          if (licenceRefused) {
+            licenceRefused = false;
+            console.error(`${opts.logPrefix} SSE stream admitted again (license active)`);
+          }
         },
         onFirstConnect: () => {
           // Runs exactly once per process — the `everConnected` false→true
@@ -252,6 +302,18 @@ export async function runEventConsumer(opts: EventConsumerOptions): Promise<void
         },
       });
     } catch (err) {
+      // Licence refusal (#1521): not an outage. Skips the retry counter, the
+      // exhaustion report, the `channel-error` POST and `onExhaustion`; logs
+      // once; waits long and flat; tries again, so activation is picked up.
+      if (err instanceof LicenseRefusedStreamError) {
+        if (!licenceRefused) {
+          licenceRefused = true;
+          console.error(`${opts.logPrefix} SSE stream refused: ${err.message}`);
+          opts.onLicenseRefused?.(err.message);
+        }
+        await new Promise((r) => setTimeout(r, LICENSE_REFUSED_RETRY_MS));
+        continue;
+      }
       retries++;
       if (!reportedExhaustion) {
         console.error(
@@ -305,6 +367,8 @@ export interface StreamCallbacks {
   onStable?: () => void;
   /** Fired on the run's first successful handshake only — never on a reconnect. */
   onFirstConnect?: () => void;
+  /** Fired on EVERY successful handshake, first or not. */
+  onHandshake?: () => void;
 }
 
 /**
@@ -344,8 +408,13 @@ export async function connectAndStreamOnce(
   } finally {
     clearTimeout(connectTimer);
   }
-  if (!res.ok) throw new Error(`SSE endpoint returned ${res.status}`);
+  if (!res.ok) {
+    const refusal = await readLicenseRefusal(res);
+    if (refusal !== null) throw new LicenseRefusedStreamError(refusal);
+    throw new Error(`SSE endpoint returned ${res.status}`);
+  }
   if (!res.body) throw new Error("SSE endpoint returned no body");
+  cb.onHandshake?.();
 
   // Latched at the first successful handshake — see `onExhaustion`. Set here,
   // not on first event: a stream that connects and stays quiet IS connected,

@@ -11,7 +11,51 @@
  * Contains no secrets and no I/O — pure string mapping, safe in the browser
  * bundle.
  */
-import { TANDEM_SUPPORT_EMAIL } from "./constants.js";
+import { TANDEM_PURCHASE_URL, TANDEM_SUPPORT_EMAIL } from "./constants.js";
+
+/**
+ * The wire discriminant every AI refusal carries (#1521): the `/api` 403 body's
+ * `error`, the MCP JSON-RPC error's `data.error`, and the wake socket's close
+ * reason. Consumers bundled WITHOUT the licence `define` (the stdio bridge, the
+ * channel shim, the plugin monitor, the shared SSE consumer) key on this string
+ * alone and never import the server's licence modules.
+ */
+export const LICENSE_REQUIRED = "LICENSE_REQUIRED";
+
+/**
+ * JSON-RPC error code for a licence refusal on `/mcp`. Implementation-defined
+ * server-error range (JSON-RPC 2.0 §5.1); unused by the MCP SDK 1.30/1.31.
+ */
+export const LICENSE_REQUIRED_RPC_CODE = -32003;
+
+/** Why the AI is refused: no licence at all, or a licence on disk that fails to verify. */
+export type AiRefusalKind = "unlicensed" | "unverifiable";
+
+/**
+ * Refusal copy for a keyless install (trial over, no licence). Carries the
+ * purchase URL, because Claude is its first reader and invents a link without one.
+ */
+export const AI_REFUSAL_UNLICENSED_MESSAGE =
+  "Tandem is unlicensed, so its AI features are turned off. Your document is unaffected and " +
+  `stays fully editable. Activate a license to turn them back on: ${TANDEM_PURCHASE_URL}`;
+
+/** The local-model loop's stderr line for the same refusal (no document to reassure about). */
+export const AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE =
+  "Tandem is unlicensed, so its AI features are turned off. " +
+  `Activate a license to turn them back on: ${TANDEM_PURCHASE_URL}`;
+
+/**
+ * Refusal copy for an installed licence that does not verify. **Never carries
+ * the purchase URL** (ADR-040 decision 8): this reader most likely already paid,
+ * and the remedy is a fix or a reissue, not a purchase. The prefix is what says
+ * the AI is off — `unverifiableLicenseMessage` alone does not.
+ */
+export function aiRefusalUnverifiableMessage(code: LicenseUnverifiableCode): string {
+  return (
+    "Tandem's AI features are off because your license could not be verified. " +
+    unverifiableLicenseMessage(code)
+  );
+}
 
 /**
  * Why a signature check failed. Produced by `verifyLicenseSignature`.

@@ -16,6 +16,7 @@ import { isStoreReadOnly } from "../annotations/store.js";
 import { clearStreamStaleness, noteStreamSidecar } from "../chat-stream-staleness.js";
 import { recordInboxPoll, resolveDeliveryRound } from "../events/delivery-state.js";
 import { getAnnotationEditedChannelKey, wasEmittedViaChannel } from "../events/queue.js";
+import { type AiRefusal, aiRefusal } from "../license/ai-refusal.js";
 import {
   hideFromAI,
   type ModeState,
@@ -29,6 +30,7 @@ import { getCurrentDoc, getOpenDocs } from "./document.js";
 import { getDocumentStore } from "./document-store.js";
 import { checkInboxOutputShape } from "./output-schemas.js";
 import {
+  mcpError,
   mcpStructured,
   mcpSuccess,
   noDocumentError,
@@ -194,14 +196,22 @@ export function resetInbox(): void {
   replySurfacedIds.clear();
 }
 
+/** What `appendClaudeChatMessage` returns: the new message id, or the licence refusal. */
+export type ClaudeChatAppend = { ok: true; id: string } | { ok: false; refusal: AiRefusal };
+
 /**
  * Append a Claude-authored chat message to CTRL_ROOM's chat map — the single
  * write path for `tandem_reply` AND the local-model collaborator's streamed
  * reply (#1123 M1.2). Tagged `withMcp` + `author:"claude"`, so the ctrl-chat
  * observer skips it on BOTH the origin gate (`mcp` ∈ CHANNEL_SKIP) and the
  * `author !== "user"` gate — a Claude/local write can never self-wake the
- * channel. Returns the new message id. Conditional spreads keep the on-wire
- * `ChatMessage` shape identical to the historical `tandem_reply` write.
+ * channel. Conditional spreads keep the on-wire `ChatMessage` shape identical
+ * to the historical `tandem_reply` write.
+ *
+ * **Licence admission point (#1521).** An AI chat write is refused, before any
+ * Y.Doc access, when Tandem is unlicensed; the result says so rather than
+ * returning a bare id, so every caller has to handle the refusal explicitly.
+ * The user's own chat (browser writes over Hocuspocus) never comes through here.
  */
 export function appendClaudeChatMessage(
   text: string,
@@ -211,7 +221,9 @@ export function appendClaudeChatMessage(
     agentIdentity?: AgentIdentity;
     inProgress?: boolean;
   } = {},
-): string {
+): ClaudeChatAppend {
+  const refusal = aiRefusal();
+  if (refusal) return { ok: false, refusal };
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
   const id = generateMessageId();
@@ -232,7 +244,7 @@ export function appendClaudeChatMessage(
     read: true,
   };
   withMcp(ctrlDoc, () => chatMap.set(id, msg));
-  return id;
+  return { ok: true, id };
 }
 
 /**
@@ -763,15 +775,21 @@ export function registerAwarenessTools(server: McpServer): void {
       return withTypingPresence({ tool: "tandem_reply", documentId }, async () => {
         const current = getCurrentDoc(documentId);
         const docId = documentId ?? current?.id ?? undefined;
-        const id = appendClaudeChatMessage(text, {
+        const appended = appendClaudeChatMessage(text, {
           documentId: docId,
           replyTo,
           inProgress,
         });
+        // Unreachable while the `/mcp` handshake refuses first; kept as defence.
+        if (!appended.ok) {
+          return mcpError(appended.refusal.error, appended.refusal.message, {
+            kind: appended.refusal.kind,
+          });
+        }
         const unmatched = replyTo !== undefined && !markUserChatRead(replyTo);
         return mcpSuccess({
           sent: true,
-          messageId: id,
+          messageId: appended.id,
           ...(unmatched ? { warning: REPLY_TO_UNMATCHED_WARNING } : {}),
         });
       });

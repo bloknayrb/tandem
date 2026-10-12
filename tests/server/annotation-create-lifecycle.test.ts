@@ -494,7 +494,6 @@ describe("local-model create path", () => {
     const docB = makeDoc("The quick brown fox jumps over the lazy dog.");
     const ctx = (ydoc: Y.Doc) => ({
       ydoc,
-      isLicenseRestricted: () => false,
       agentIdentity: undefined,
     });
 
@@ -520,7 +519,6 @@ describe("local-model create path", () => {
       { quoted_text: "quick brown fox", comment: "vivid" },
       {
         ydoc: modelDoc,
-        isLicenseRestricted: () => false,
         agentIdentity: { provider: "local-ollama", displayName: "Test Model" },
       },
     );
@@ -552,7 +550,7 @@ describe("local-model create path", () => {
     const outcome = dispatch(
       "propose_replacement",
       { quoted_text: "lazy dog", suggested_text: "sleeping hound", rationale: "clearer" },
-      { ydoc: modelDoc, isLicenseRestricted: () => false },
+      { ydoc: modelDoc },
     );
 
     expect(outcome.effect).toMatchObject({ kind: "replacement", ok: true });
@@ -561,22 +559,5 @@ describe("local-model create path", () => {
     expect(rec.suggestedText).toBe("sleeping hound");
     expect(rec.content).toBe("clearer");
     expect(rec.type).toBe("comment");
-  });
-
-  it("the license gate still refuses a create before the lifecycle is reached", () => {
-    // The gate is name-keyed and sits above the dispatch switch. The lifecycle
-    // carries no gate of its own, so that ordering is what keeps Critical Rule
-    // 9 true for the local-model half: moving the check below the switch, or
-    // building the creator in a way that skipped it, would be invisible without
-    // this.
-    const modelDoc = makeDoc("The quick brown fox jumps over the lazy dog.");
-    const outcome = dispatch(
-      "comment_on_quote",
-      { quoted_text: "quick brown fox", comment: "vivid" },
-      { ydoc: modelDoc, isLicenseRestricted: () => true },
-    );
-
-    expect(outcome.effect).toStrictEqual({ kind: "blocked", tool: "comment_on_quote" });
-    expect(getAnnotationsMap(modelDoc).size).toBe(0);
   });
 });

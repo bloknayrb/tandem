@@ -612,8 +612,6 @@ async function handleReplayTutorial(): Promise<void> {
   replayLoading = true;
   replayError = null;
   // force:true clears the doc so the server re-injects fresh seed annotations.
-  // (The server license-gates the force sub-path — dark today; a post-v1.0
-  // restricted user would see the gate's error here rather than a silent no-op.)
   const result = await openServerPath(filePath, {
     force: true,
     notFoundMessage: "Welcome document not found.",

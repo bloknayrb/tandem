@@ -121,7 +121,6 @@ function readOnlyToolMessage(format: string, remedy: string): string {
     : `Document is read-only (${format}) — this format cannot be written back to disk. ${remedy}`;
 }
 
-import { gatedTool, licenseGate } from "./license-gate.js";
 import {
   attachItems,
   findListTarget,
@@ -526,17 +525,6 @@ export function registerDocumentTools(server: McpServer): void {
       if (!isFullyQualifiedPath(filePath)) {
         return mcpError("INVALID_PATH", "filePath must be an absolute path.");
       }
-      // License gate (#1116) — ONLY the destructive force-reload sub-path. Plain
-      // open stays ungated (the read/export escape hatch), but force=true runs
-      // clearAndReload, which discards the in-memory annotation, awareness and
-      // content maps and rebuilds the document from disk — an editing-class
-      // operation a restricted user must not reach. (It no longer unlinks the
-      // durable envelope; that was #1813.) Gate sits OUTSIDE the inner try so a
-      // (post-flip) open throw keeps its own error categorization.
-      if (force === true) {
-        const blocked = licenseGate();
-        if (blocked) return blocked;
-      }
       try {
         const result = await openFromDisk(filePath, { force });
 
@@ -600,7 +588,7 @@ export function registerDocumentTools(server: McpServer): void {
           "Initial markdown. Block structure (headings, lists, blank-line-separated paragraphs) is parsed into real blocks.",
         ),
     },
-    gatedTool("tandem_scratchpad", async ({ content }) => {
+    withErrorBoundary("tandem_scratchpad", async ({ content }) => {
       const result = await openScratchpad(content);
       // A scratchpad seeded with content is a COMPLETE task in one call — no
       // outline, no read, no status. That is the population the wake trigger
@@ -722,7 +710,7 @@ export function registerDocumentTools(server: McpServer): void {
           "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
         ),
     },
-    gatedTool(
+    withErrorBoundary(
       "tandem_edit",
       async ({ from: rawFrom, to: rawTo, newText, documentId, textSnapshot }) => {
         // #651 presence: tandem_edit targets text (not an annotation), so the
@@ -1126,7 +1114,7 @@ export function registerDocumentTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    gatedTool("tandem_editList", async ({ at, op, markdown, checked, documentId }) => {
+    withErrorBoundary("tandem_editList", async ({ at, op, markdown, checked, documentId }) => {
       return withTypingPresence({ tool: "tandem_editList", documentId }, async () => {
         const r = requireDocument(documentId);
         if (!r) return noDocumentError();
@@ -1265,7 +1253,7 @@ export function registerDocumentTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    gatedTool("tandem_appendContent", async ({ content, documentId }) => {
+    withErrorBoundary("tandem_appendContent", async ({ content, documentId }) => {
       return withTypingPresence({ tool: "tandem_appendContent", documentId }, async () => {
         const r = requireDocument(documentId);
         if (!r) return noDocumentError();

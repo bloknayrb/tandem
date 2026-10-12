@@ -341,46 +341,6 @@ describe("dispatch — replies", () => {
   });
 });
 
-describe("dispatch — license gate", () => {
-  it("blocks the mutating tools when restricted, without writing", () => {
-    doc = makeMarkdownDoc(FIXTURE);
-    const restricted = () => true;
-    for (const name of ["comment_on_quote", "propose_replacement", "reply_to_annotation"]) {
-      const out = dispatch(
-        name,
-        {
-          quoted_text: "the first phase",
-          comment: "x",
-          suggested_text: "y",
-          annotation_id: "z",
-          text: "t",
-        },
-        { ydoc: doc, isLicenseRestricted: restricted },
-      );
-      expect(out.effect.kind).toBe("blocked");
-      expect((out.result as { error?: string }).error).toBe("LICENSE_REQUIRED");
-    }
-    expect(getAnnotationsMap(doc).size).toBe(0);
-  });
-
-  it("leaves reads open when restricted (escape hatch)", () => {
-    doc = makeMarkdownDoc(FIXTURE);
-    const out = dispatch("get_outline", {}, { ydoc: doc, isLicenseRestricted: () => true });
-    expect(out.effect.kind).toBe("read");
-    expect((out.result as { outline?: unknown }).outline).toBeDefined();
-  });
-
-  it("allows mutating tools when not restricted", () => {
-    doc = makeMarkdownDoc(FIXTURE);
-    const out = dispatch(
-      "comment_on_quote",
-      { quoted_text: "the first phase", comment: "x" },
-      { ydoc: doc, isLicenseRestricted: () => false },
-    );
-    expect((out.result as { ok?: boolean }).ok).toBe(true);
-  });
-});
-
 describe("dispatch — agent identity stamping (#1123 M3)", () => {
   const identity = { provider: "local-ollama" as const, displayName: "Qwen 2.5" };
 

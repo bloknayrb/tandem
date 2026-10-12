@@ -9,6 +9,7 @@ import {
   assertLoopbackForMutation,
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
+import type { Supervisor } from "../../launcher/supervisor.js";
 import { LicenseActivationError } from "../../license/activation.js";
 import {
   activateLicense,
@@ -147,6 +148,15 @@ export function handleGetLicenseStatus(req: Request, res: Response): void {
   res.json(scrubForNonLoopback(state));
 }
 
+export interface ActivateLicenseDeps {
+  /**
+   * The launcher supervisor, late-bound like every launcher route's. Optional:
+   * a server without the launcher (tests, stdio) skips the resume and answers
+   * exactly as before.
+   */
+  getSupervisor?: () => Pick<Supervisor, "resumeAfterLicence"> | null;
+}
+
 /**
  * POST /api/license/activate — persist a signed license blob and return the
  * freshly-resolved (full) state. Body: `{ license: string }` (the signed blob).
@@ -157,8 +167,21 @@ export function handleGetLicenseStatus(req: Request, res: Response): void {
  * license before the v1.0 flag-flip. `activateLicense` verifies the signature
  * and rejects unknown schema versions; a bad blob yields 400 with a generic
  * message (no signature/parse detail reaches the wire).
+ *
+ * A factory so the success path can resume a launcher the licence refused
+ * (#1521) — the one caller of `Supervisor.resumeAfterLicence`.
  */
-export async function handleActivateLicense(req: Request, res: Response): Promise<void> {
+export function makeActivateLicenseHandler(
+  deps: ActivateLicenseDeps = {},
+): (req: Request, res: Response) => Promise<void> {
+  return (req, res) => activateLicenseRoute(req, res, deps);
+}
+
+async function activateLicenseRoute(
+  req: Request,
+  res: Response,
+  deps: ActivateLicenseDeps,
+): Promise<void> {
   // Same gates as before (origin allowlist THEN loopback), but with copy a
   // buyer can act on. The default messages talk about "integration routes" and
   // TANDEM_ALLOW_UNAUTHENTICATED_LAN — internal vocabulary that reaches the
@@ -190,17 +213,6 @@ export async function handleActivateLicense(req: Request, res: Response): Promis
     // No normalization here — `activateLicense` does it, so the persisted bytes
     // are clean and no caller can forget.
     await activateLicense(resolveAppDataDir(), rawLicense);
-
-    // Re-resolve through the LIVE gate flag rather than returning
-    // `activateLicense`'s result directly. That function forces
-    // `gateEnabled: true` on purpose (so `tandem license` can confirm an
-    // installed license while enforcement still ships dark) — but handing that
-    // shape to the client poisons its store on a dark build: it would then
-    // believe `gateActive` is true and render gate-only chrome, such as the
-    // "your update window has ended" warning, on a build that gates nothing.
-    // Same shaping as GET /api/license/status, so the two can't disagree.
-    const live = resolveLiveLicenseState();
-    res.json(loopbackLicenseWire(live));
   } catch (err) {
     const code = err instanceof LicenseActivationError ? err.code : "UNKNOWN";
     // A write failure is OUR fault, not the caller's — 500, not 400. The
@@ -211,5 +223,30 @@ export async function handleActivateLicense(req: Request, res: Response): Promis
       // Static per-code copy; the underlying error message never reaches the wire.
       message: activationErrorMessage(code),
     });
+    return;
   }
+
+  // Resume a launcher the licence refused (#1521) — success path only, and
+  // AWAITED before answering, so the spawn has cleared `lastError` before the
+  // client hears "activated" (otherwise a stale "restart" chip could appear
+  // whose click would relaunch over the fresh child). Deliberately OUTSIDE the
+  // try above: that one maps any throw to 400 `INVALID_LICENSE`, and
+  // `license.json` is already written here — `startInternal` can still throw
+  // from `buildPlan` on a bad `integrations.json`, which is not the key's fault.
+  try {
+    await deps.getSupervisor?.()?.resumeAfterLicence();
+  } catch (err) {
+    console.error("[License] Activated, but resuming the launcher failed:", err);
+  }
+
+  // Re-resolve through the LIVE gate flag rather than returning
+  // `activateLicense`'s result directly. That function forces
+  // `gateEnabled: true` on purpose (so `tandem license` can confirm an
+  // installed license while enforcement still ships dark) — but handing that
+  // shape to the client poisons its store on a dark build: it would then
+  // believe `gateActive` is true and render gate-only chrome, such as the
+  // "your update window has ended" warning, on a build that gates nothing.
+  // Same shaping as GET /api/license/status, so the two can't disagree.
+  const live = resolveLiveLicenseState();
+  res.json(loopbackLicenseWire(live));
 }

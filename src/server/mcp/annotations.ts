@@ -33,7 +33,6 @@ import { getCurrentDoc } from "./document.js";
 import type { FlatBreak } from "./document-model.js";
 import { extractTextWithBreaks } from "./document-model.js";
 import { getDocumentStore } from "./document-store.js";
-import { gatedTool } from "./license-gate.js";
 import { getAnnotationsOutputShape } from "./output-schemas.js";
 import {
   mcpError,
@@ -272,7 +271,7 @@ export function registerAnnotationTools(server: McpServer): void {
       documentId: z.string().optional(),
       textSnapshot: z.string().optional(),
     },
-    gatedTool("tandem_highlight", async () => {
+    withErrorBoundary("tandem_highlight", async () => {
       notifyDeprecatedTool("tandem_highlight");
       return mcpError(
         "DEPRECATED",
@@ -307,7 +306,7 @@ export function registerAnnotationTools(server: McpServer): void {
           "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
         ),
     },
-    gatedTool(
+    withErrorBoundary(
       "tandem_comment",
       async ({
         from: rawFrom,
@@ -387,7 +386,7 @@ export function registerAnnotationTools(server: McpServer): void {
       documentId: z.string().optional(),
       textSnapshot: z.string().optional(),
     },
-    gatedTool("tandem_suggest", async () => {
+    withErrorBoundary("tandem_suggest", async () => {
       notifyDeprecatedTool("tandem_suggest");
       return mcpError(
         "DEPRECATED",
@@ -412,7 +411,7 @@ export function registerAnnotationTools(server: McpServer): void {
       documentId: z.string().optional(),
       textSnapshot: z.string().optional(),
     },
-    gatedTool("tandem_flag", async () => {
+    withErrorBoundary("tandem_flag", async () => {
       notifyDeprecatedTool("tandem_flag");
       return mcpError("DEPRECATED", "tandem_flag is deprecated. Use tandem_comment instead.");
     }),
@@ -525,12 +524,7 @@ export function registerAnnotationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    // gatedTool, not withErrorBoundary (decision F, #1788): restricted mode is
-    // SYMMETRIC read-only. Accept/dismiss writes the document room's annotation
-    // map, which Surface A already refuses from the browser when restricted —
-    // leaving the MCP twin ungated let Claude triage a document its own user
-    // cannot. The gate runs before this handler; no body change.
-    gatedTool("tandem_resolveAnnotation", async ({ id, action, documentId }) => {
+    withErrorBoundary("tandem_resolveAnnotation", async ({ id, action, documentId }) => {
       const store = getDocumentStore(documentId);
       if (!store) return noDocumentError();
 
@@ -599,7 +593,7 @@ export function registerAnnotationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    gatedTool("tandem_removeAnnotation", async ({ id, documentId }) => {
+    withErrorBoundary("tandem_removeAnnotation", async ({ id, documentId }) => {
       const store = getDocumentStore(documentId);
       if (!store) return noDocumentError();
       // ADR-035 Unit 8e: the store delegates to `AnnotationLifecycle.remove`,
@@ -621,7 +615,7 @@ export function registerAnnotationTools(server: McpServer): void {
           );
         default: {
           // A new `RemoveResult` arm errors HERE, naming it. Without this the
-          // switch falls off the end and the only complaint is `gatedTool`
+          // switch falls off the end and the only complaint is `withErrorBoundary`
           // rejecting the inferred `Promise<… | undefined>` — a message that
           // never mentions the arm or this switch, and whose obvious fix is a
           // generic `default` that swallows it.
@@ -648,66 +642,69 @@ export function registerAnnotationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    gatedTool("tandem_editAnnotation", async ({ id, content, newText, reason, documentId }) => {
-      const store = getDocumentStore(documentId);
-      if (!store) return noDocumentError();
+    withErrorBoundary(
+      "tandem_editAnnotation",
+      async ({ id, content, newText, reason, documentId }) => {
+        const store = getDocumentStore(documentId);
+        if (!store) return noDocumentError();
 
-      // `reason` is a legacy alias for `content`; an explicit `content` wins.
-      // When all three are undefined the resolved patch is empty, which the
-      // store reports as `empty-patch` (matching the pre-seam field check).
-      const resolvedContent = content !== undefined ? content : reason;
-      const result = store.editAnnotation(id, {
-        ...(resolvedContent !== undefined ? { content: resolvedContent } : {}),
-        ...(newText !== undefined ? { suggestedText: newText } : {}),
-      });
+        // `reason` is a legacy alias for `content`; an explicit `content` wins.
+        // When all three are undefined the resolved patch is empty, which the
+        // store reports as `empty-patch` (matching the pre-seam field check).
+        const resolvedContent = content !== undefined ? content : reason;
+        const result = store.editAnnotation(id, {
+          ...(resolvedContent !== undefined ? { content: resolvedContent } : {}),
+          ...(newText !== undefined ? { suggestedText: newText } : {}),
+        });
 
-      switch (result.kind) {
-        case "not-found":
-          return mcpError("NOT_FOUND", `Annotation ${id} not found`);
-        case "invalid-note":
-          // ADR-027: notes and private comments are user-private. Claude must
-          // not read or modify them via MCP. The note→comment promotion path
-          // runs from the browser, not through this tool.
-          return mcpError(
-            "INVALID_ARGUMENT",
-            "Cannot edit a private note or private comment via MCP — they are user-private (ADR-027).",
-          );
-        case "not-owned":
-          // #1770 decision 4: Claude may only edit an annotation it authored.
-          return mcpError(
-            "NOT_OWNED",
-            `Annotation ${id} was authored by the ${result.author}; Claude can only edit its own annotations.`,
-          );
-        case "not-pending":
-          return mcpError(
-            "ANNOTATION_RESOLVED",
-            `Cannot edit a ${result.currentStatus} annotation`,
-          );
-        case "empty-patch":
-          return mcpError(
-            "INVALID_ARGUMENT",
-            "No editable fields provided. Use content, newText, or reason.",
-          );
-        case "invalid-suggestion-target":
-          return mcpError(
-            "INVALID_ARGUMENT",
-            `Cannot set replacement text on a ${result.annotationType} annotation. Only comments support suggestedText.`,
-          );
-        case "invalid-suggestion-range":
-          // Critical Rule 6's interior term reaches this tool too (#1626
-          // review): a `newText` on a comment whose live span steps over a
-          // heading prefix is a deferred rewrite that would delete the heading.
-          // The body-only edit (`content` / `reason`) is unaffected.
-          return mcpError("INVALID_ARGUMENT", describeSuggestionRangeRefusal(result.cause));
-        case "ok":
-          return mcpSuccess({
-            id,
-            content: result.annotation.content,
-            suggestedText: result.annotation.suggestedText,
-            editedAt: result.annotation.editedAt,
-          });
-      }
-    }),
+        switch (result.kind) {
+          case "not-found":
+            return mcpError("NOT_FOUND", `Annotation ${id} not found`);
+          case "invalid-note":
+            // ADR-027: notes and private comments are user-private. Claude must
+            // not read or modify them via MCP. The note→comment promotion path
+            // runs from the browser, not through this tool.
+            return mcpError(
+              "INVALID_ARGUMENT",
+              "Cannot edit a private note or private comment via MCP — they are user-private (ADR-027).",
+            );
+          case "not-owned":
+            // #1770 decision 4: Claude may only edit an annotation it authored.
+            return mcpError(
+              "NOT_OWNED",
+              `Annotation ${id} was authored by the ${result.author}; Claude can only edit its own annotations.`,
+            );
+          case "not-pending":
+            return mcpError(
+              "ANNOTATION_RESOLVED",
+              `Cannot edit a ${result.currentStatus} annotation`,
+            );
+          case "empty-patch":
+            return mcpError(
+              "INVALID_ARGUMENT",
+              "No editable fields provided. Use content, newText, or reason.",
+            );
+          case "invalid-suggestion-target":
+            return mcpError(
+              "INVALID_ARGUMENT",
+              `Cannot set replacement text on a ${result.annotationType} annotation. Only comments support suggestedText.`,
+            );
+          case "invalid-suggestion-range":
+            // Critical Rule 6's interior term reaches this tool too (#1626
+            // review): a `newText` on a comment whose live span steps over a
+            // heading prefix is a deferred rewrite that would delete the heading.
+            // The body-only edit (`content` / `reason`) is unaffected.
+            return mcpError("INVALID_ARGUMENT", describeSuggestionRangeRefusal(result.cause));
+          case "ok":
+            return mcpSuccess({
+              id,
+              content: result.annotation.content,
+              suggestedText: result.annotation.suggestedText,
+              editedAt: result.annotation.editedAt,
+            });
+        }
+      },
+    ),
   );
 
   server.tool(
@@ -1020,7 +1017,7 @@ export function registerAnnotationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    gatedTool(
+    withErrorBoundary(
       "tandem_annotationReply",
       async ({ annotationId, text, suggestedText, documentId }) => {
         const store = getDocumentStore(documentId);

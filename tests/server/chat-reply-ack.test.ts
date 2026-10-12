@@ -21,6 +21,7 @@ import { API_CHANNEL_REPLY } from "../../src/shared/api-paths.js";
 import { CTRL_ROOM, Y_MAP_CHAT } from "../../src/shared/constants.js";
 import { withBrowser } from "../../src/shared/origins.js";
 import type { ChatMessage } from "../../src/shared/types.js";
+import { appendedId } from "../helpers/chat-append.js";
 import { callRoute, makeRecorderApp } from "../helpers/route-recorder.js";
 
 function chatMap() {
@@ -43,9 +44,9 @@ beforeEach(() => {
 
 describe("appendClaudeChatMessage", () => {
   it("stores inProgress only when it is true", () => {
-    const ack = appendClaudeChatMessage("on it", { inProgress: true });
-    const plain = appendClaudeChatMessage("done", { inProgress: false });
-    const none = appendClaudeChatMessage("hi");
+    const ack = appendedId(appendClaudeChatMessage("on it", { inProgress: true }));
+    const plain = appendedId(appendClaudeChatMessage("done", { inProgress: false }));
+    const none = appendedId(appendClaudeChatMessage("hi"));
     expect(row(ack)?.inProgress).toBe(true);
     expect(row(plain)).not.toHaveProperty("inProgress");
     expect(row(none)).not.toHaveProperty("inProgress");
@@ -74,7 +75,7 @@ describe("markUserChatRead", () => {
 
   it("writes nothing for an unknown, Claude-authored or already-read message", () => {
     seedUser("read", true);
-    const claudeId = appendClaudeChatMessage("earlier");
+    const claudeId = appendedId(appendClaudeChatMessage("earlier"));
     const before = { read: row("read"), claude: row(claudeId) };
 
     expect(markUserChatRead("nope")).toBe(false);

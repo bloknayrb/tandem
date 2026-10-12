@@ -1,0 +1,59 @@
+/**
+ * The single licence decision for Tandem's AI surfaces (#1521, ADR-040 as
+ * amended 2026-10-11): "after the 14 day trial, tandem remains a usable editor,
+ * but with no AI features".
+ *
+ * Every admission point — the `/mcp` transport, Claude's chat writes, push and
+ * wake, the launcher's spawn, the local-model loop — asks this one function and
+ * does nothing else with licence state. The editor itself is never refused.
+ *
+ * **No memo.** `resolveLicenseState` records that a cache caused the
+ * mid-session-expiry bugs, so this re-reads disk on every call: two small
+ * `readFileSync` and at most one Ed25519 verify — sub-millisecond, paid per MCP
+ * POST and per pushed event.
+ */
+import {
+  AI_REFUSAL_UNLICENSED_MESSAGE,
+  type AiRefusalKind,
+  aiRefusalUnverifiableMessage,
+  LICENSE_REQUIRED,
+} from "../../shared/license-copy.js";
+import { GATE_ENABLED } from "./gate-flag.js";
+import { resolveLiveLicenseState } from "./license-state.js";
+import type { LicenseState } from "./license-types.js";
+
+/** The refusal envelope. It is also the `/api` 403 body, verbatim. */
+export interface AiRefusal {
+  error: typeof LICENSE_REQUIRED;
+  kind: AiRefusalKind;
+  message: string;
+}
+
+/**
+ * Pure decision over a resolved state. `null` admits.
+ *
+ * `restricted` is the only refusing status (the literal is not renamed —
+ * ADR-040 decision 5). `kind: "unverifiable"` when a licence file is present
+ * but fails to verify; its message never carries the purchase URL.
+ */
+export function aiRefusalFor(state: LicenseState): AiRefusal | null {
+  if (!state.gateActive) return null;
+  if (state.status !== "restricted") return null;
+  if (state.licenseUnverifiable !== undefined) {
+    return {
+      error: LICENSE_REQUIRED,
+      kind: "unverifiable",
+      message: aiRefusalUnverifiableMessage(state.licenseUnverifiable),
+    };
+  }
+  return { error: LICENSE_REQUIRED, kind: "unlicensed", message: AI_REFUSAL_UNLICENSED_MESSAGE };
+}
+
+/**
+ * Live decision. Returns `null` on its first line while the gate ships dark, so
+ * a dark build admits everywhere without touching disk.
+ */
+export function aiRefusal(): AiRefusal | null {
+  if (!GATE_ENABLED) return null;
+  return aiRefusalFor(resolveLiveLicenseState());
+}

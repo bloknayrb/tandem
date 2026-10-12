@@ -61,6 +61,7 @@ import {
   LAUNCHER_ERROR_NOT_AVAILABLE,
   LAUNCHER_ERROR_PATH_REJECTED,
   LAUNCHER_ERROR_REAPER_NOT_FOUND,
+  LAUNCHER_ERROR_UNLICENSED,
   type LauncherCwdPreview,
   type LauncherStatus,
   type LauncherUnavailableReason,
@@ -73,7 +74,7 @@ import type { IntegrationConfig } from "../integrations/schema.js";
 import type { IntegrationsStore } from "../integrations/storage.js";
 import type { Handler } from "../mcp/routes/_shared.js";
 import { previewCwdDrift } from "./cwd-preview.js";
-import { resolveRouteCwd, type Supervisor } from "./supervisor.js";
+import { LicenseRefusedError, resolveRouteCwd, type Supervisor } from "./supervisor.js";
 
 /**
  * Single-use nonce gate for mutating launcher routes.
@@ -633,7 +634,18 @@ function makeStartHandler(deps: LauncherRoutesDeps): Handler {
     inflight.start = true;
     try {
       await deps.startSupervisor();
-      res.json({ ok: true, started: deps.getSupervisor() !== null });
+      // Licence (#1521): NOT refused at the top. Refusing there would leave the
+      // supervisor null and the reason `deferred-autostart` forever, which the
+      // client reads as "booting" — and Rust posts this route exactly once,
+      // dropping a non-2xx. Instead the supervisor is created, `startInternal`
+      // refuses by returning, and `resumeAfterLicence` can bring it back after
+      // activation. What this route must not do is claim `started: true`.
+      const sup = deps.getSupervisor();
+      if (sup?.status().lastError === "unlicensed") {
+        sendUnlicensed(res, sup.licenceRefusal());
+        return;
+      }
+      res.json({ ok: true, started: sup !== null });
     } catch (err) {
       sendUnexpected(res, err, "launcher start failed");
     } finally {
@@ -834,7 +846,36 @@ function runningCwd(sup: Supervisor | null): string | null {
  * (including a checked filesystem path) is safe to return, but bound it anyway. */
 const MAX_ERROR_DETAIL = 300;
 
+/** Fallback copy when a refusal reaches the route without its own envelope. */
+const UNLICENSED_FALLBACK_MESSAGE =
+  "Tandem is unlicensed, so its AI features are turned off and Claude Code was not started.";
+
+/**
+ * 403 for a launcher action the licence refused (#1521). The body is the
+ * refusal envelope (`error: "LICENSE_REQUIRED"`, `kind`, `message`) plus the
+ * route's own `code`. Read from the supervisor's stored refusal, so this module
+ * never imports the licence decision itself.
+ */
+function sendUnlicensed(
+  res: Response,
+  refusal: { error: string; kind: string; message: string } | null,
+): void {
+  res.status(403).json({
+    error: refusal?.error ?? "LICENSE_REQUIRED",
+    ...(refusal ? { kind: refusal.kind } : {}),
+    code: LAUNCHER_ERROR_UNLICENSED,
+    message: refusal?.message ?? UNLICENSED_FALLBACK_MESSAGE,
+  });
+}
+
 function sendUnexpected(res: Response, err: unknown, label: string): void {
+  if (err instanceof LicenseRefusedError) {
+    // Not unexpected, and not a 500: the relaunch was refused before anything
+    // was stopped. One line, no stack.
+    console.error(`[Launcher routes] ${label}: AI features are unlicensed`);
+    if (!res.headersSent) sendUnlicensed(res, err.refusal);
+    return;
+  }
   // Full error (stack, etc.) stays server-side; the wire gets a bounded message.
   console.error(`[Launcher routes] ${label}:`, err);
   if (res.headersSent) return;

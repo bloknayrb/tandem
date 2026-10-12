@@ -68,9 +68,9 @@ export interface LicenseFile {
  * is told their trial ended. Only ever set on the non-licensed arms; the
  * licensed arm is by construction verified.
  *
- * Deliberately NOT a fourth `status` value: `connection-gate.ts` and
- * `license-gate.ts` both decide on `status === "restricted"`, so a new status
- * would fail OPEN at both enforcement surfaces until every gate was updated.
+ * Deliberately NOT a fourth `status` value: `ai-refusal.ts` decides on
+ * `status === "restricted"`, so a new status would fail OPEN at every AI
+ * admission point until the decision was updated.
  * Diagnosis and entitlement are orthogonal axes.
  */
 export type LicenseState =

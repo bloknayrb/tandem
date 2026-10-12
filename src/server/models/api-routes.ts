@@ -148,9 +148,9 @@ function makeGetModelsHandler(): Handler {
  * client last saw from `GET`; a stale token → 409 so the client reconciles
  * instead of clobbering (the server never returns the file body on 409 — the
  * client re-GETs through the LAN-scrubbed read path). A concurrent in-flight
- * write → 429. Deliberately NOT license-gated — a registry-config write is not a
- * document/annotation content write (the local model's content mutations gate
- * separately at the `tools.ts` dispatch boundary).
+ * write → 429. Deliberately NOT license-gated — a registry-config write is not
+ * an AI action (the local model itself is refused per run in
+ * `collaborator.ts`, #1521).
  */
 function makePostModelsHandler(): Handler {
   return async (req: Request, res: Response) => {

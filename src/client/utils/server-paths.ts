@@ -36,7 +36,7 @@ export async function openServerPath(
     readOnly?: boolean;
     /** Force-reload from disk, clearing existing doc state (annotations,
      *  awareness, content). Used by "Replay tutorial" so the welcome doc
-     *  re-seeds fresh. NOTE: the server license-gates the force sub-path. */
+     *  re-seeds fresh. */
     force?: boolean;
     notFoundMessage?: string;
     failureMessage?: string;

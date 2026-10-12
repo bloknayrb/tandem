@@ -139,6 +139,11 @@ export function isTransientlyUnavailable(reason: LauncherUnavailableReason | und
  * a turn with its "Not logged in" refusal, so the supervisor stopped retrying.
  * The remedy is to sign in (`claude` in a terminal) and re-check, which the
  * client offers as its own `sign-in` chip rather than a bare restart.
+ *
+ * `unlicensed` (#1521): the supervisor declined to spawn Claude Code because
+ * Tandem is unlicensed (its AI features are off). It trips nothing — no
+ * breaker, no restart loop — and the supervisor resumes on its own when a
+ * licence is activated in the app (`resumeAfterLicence`).
  */
 export type LauncherErrorCode =
   | "spawn-failed"
@@ -148,7 +153,8 @@ export type LauncherErrorCode =
   | "circuit-open"
   | "status-check-failed"
   | "wake-delivery-failed"
-  | "needs-login";
+  | "needs-login"
+  | "unlicensed";
 
 /** Loopback-only side-channel for bundled-skill refresh failures. The user
  * has no other signal that the skill is stale, so `/status` surfaces this
@@ -247,6 +253,9 @@ export const LAUNCHER_ERROR_NO_INTEGRATION = "NO_CLAUDE_INTEGRATION";
  * Claude. Stable code so the UI can show a "reinstall Tandem" hint instead of a
  * raw filesystem path. */
 export const LAUNCHER_ERROR_REAPER_NOT_FOUND = "REAPER_NOT_FOUND";
+/** A relaunch / start-fresh / deferred start was refused because Tandem is
+ * unlicensed (#1521). Answered 403 with the licence refusal envelope. */
+export const LAUNCHER_ERROR_UNLICENSED = "LAUNCHER_UNLICENSED";
 
 /** Marker substring the supervisor embeds in the "binary not found" throw and
  * the launcher route matches on to map it to `LAUNCHER_ERROR_REAPER_NOT_FOUND`.

@@ -64,8 +64,24 @@ export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean)
       `  Status:        trial (${state.trial.daysRemaining} of ${TRIAL_DAYS} days remaining)`,
     );
   } else if (state.gateActive && state.status === "restricted") {
-    lines.push("  Status:        restricted — trial ended; activate a license to keep editing");
-    lines.push(`  Buy a license: ${TANDEM_PURCHASE_URL}`);
+    // #1521: keyless means AI off, never read-only. The "AI features off"
+    // claim is made ONLY when enforcement is on: `tandem license` forces
+    // `gateEnabled: true`, so a dark build with a stale `trial.json` reaches
+    // this branch while nothing is actually switched off.
+    const unverifiable = state.licenseUnverifiable !== undefined;
+    if (!enforcementOn) {
+      lines.push("  Status:        trial ended — nothing is enforced in this build");
+    } else if (unverifiable) {
+      lines.push(
+        "  Status:        license not verified — AI features off; the editor is unaffected",
+      );
+    } else {
+      lines.push("  Status:        unlicensed — AI features off; the editor is unaffected");
+    }
+    // Never a purchase link for an installed licence that fails to verify:
+    // that reader most likely already paid (ADR-040 decision 8). Their remedy
+    // is the fix-or-reissue paragraph below.
+    if (!unverifiable) lines.push(`  Activate:      ${TANDEM_PURCHASE_URL}`);
   } else {
     // licensed (gate-active) — or the dark arm, which `tandem license` never
     // produces (it forces gateEnabled:true), but the union requires the branch.
