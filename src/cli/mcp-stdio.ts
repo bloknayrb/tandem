@@ -543,44 +543,27 @@ export async function runMcpStdio(): Promise<void> {
   let licenseLatch: JsonRpcErrorObject | null = null;
 
   /**
-   * Answer `id` with an upstream error object verbatim, rewriting only the id.
-   * The total sibling of `sendErrorResponse` (which hardcodes `-32000`): same
-   * swallowing of stdio and stderr failures, for the same reason.
+   * A bridge-synthesized error object. -32000 is the implementation-defined
+   * server error range per JSON-RPC 2.0 §5.1 — upstream unavailability is an
+   * application-level condition, not a generic Internal Error.
+   */
+  function bridgeError(message: string, detail?: string): JsonRpcErrorObject {
+    return { code: -32000, message, ...(detail !== undefined ? { data: { detail } } : {}) };
+  }
+
+  /** Answer `id` with the bridge's own `-32000` error. See `sendUpstreamError`. */
+  function sendErrorResponse(id: string | number, message: string, detail?: string): Promise<void> {
+    return sendUpstreamError(id, bridgeError(message, detail));
+  }
+
+  /**
+   * Answer `id` with a JSON-RPC error object — the bridge's own (via
+   * `sendErrorResponse`) or an upstream one relayed verbatim (the licence
+   * latch, #1521). The ONE writer of synthesized errors, and total.
    */
   async function sendUpstreamError(id: string | number, error: JsonRpcErrorObject): Promise<void> {
     try {
       await stdio.send({ jsonrpc: "2.0", id, error } as JSONRPCMessage);
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      try {
-        process.stderr.write(
-          `[tandem mcp-stdio] failed to send licence refusal for id ${id}: ${detail}\n`,
-        );
-      } catch {
-        // Nowhere left to report to.
-      }
-    }
-  }
-
-  async function sendErrorResponse(
-    id: string | number,
-    message: string,
-    detail?: string,
-  ): Promise<void> {
-    const errorResponse: JSONRPCMessage = {
-      jsonrpc: "2.0",
-      id,
-      error: {
-        // -32000 is the implementation-defined server error range per
-        // JSON-RPC 2.0 §5.1 — upstream unavailability is an application-
-        // level condition, not a generic Internal Error.
-        code: -32000,
-        message,
-        ...(detail !== undefined ? { data: { detail } } : {}),
-      },
-    };
-    try {
-      await stdio.send(errorResponse);
     } catch (err) {
       // stdio already torn down; log so synth failures during shutdown
       // (e.g., http.onclose racing stdio.onclose) aren't silently dropped —
@@ -590,7 +573,7 @@ export async function runMcpStdio(): Promise<void> {
       // Reporting a failure must not itself be able to fail. stderr can EPIPE
       // — most likely exactly here, while the host is tearing the child down,
       // which is when stdio.send() fails in the first place. An escaping throw
-      // would propagate out of every `await sendErrorResponse(...)` in
+      // would propagate out of every `await sendUpstreamError(...)` in
       // `synthesizePending`, and from there into the module's
       // `unhandledRejection` handler, which exits 1. This function's callers
       // treat it as infallible; it has to be.
@@ -801,14 +784,21 @@ export async function runMcpStdio(): Promise<void> {
     }
   }
 
-  async function synthesizePending(message: string, detail?: string): Promise<void> {
-    if (pendingRequests.size === 0) return;
-    const ids = [...pendingRequests.keys()];
+  /**
+   * Answer every pending request — plus `extraIds`, for requests held only in
+   * the reconnect queue — with `error`, once each.
+   */
+  async function synthesizePending(
+    error: JsonRpcErrorObject,
+    extraIds: ReadonlyArray<string | number> = [],
+  ): Promise<void> {
+    const ids = [...new Set([...pendingRequests.keys(), ...extraIds])];
+    if (ids.length === 0) return;
     // Synchronous before any await: clear all timers + drain map atomically.
     // Timer callbacks that are already queued observe empty map and return early.
     for (const handle of pendingRequests.values()) clearTimeout(handle);
     pendingRequests.clear();
-    await Promise.all(ids.map((id) => sendErrorResponse(id, message, detail)));
+    await Promise.all(ids.map((id) => sendUpstreamError(id, error)));
   }
 
   const shutdown = async (
@@ -841,7 +831,7 @@ export async function runMcpStdio(): Promise<void> {
       reconnectQueue.splice(0);
       if (synth) {
         await synthesizeBuffered(synth.message, synth.detail);
-        await synthesizePending(synth.message, synth.detail);
+        await synthesizePending(bridgeError(synth.message, synth.detail));
       }
       await http.close().catch((err: unknown) => {
         const detail = err instanceof Error ? err.message : String(err);
@@ -1472,7 +1462,6 @@ export async function runMcpStdio(): Promise<void> {
         // "session lost"), retry at a fixed `LICENSE_RETRY_MS`, and say so
         // once. Recovery is armed first, as below, so a throwing report
         // cannot strand it.
-        const latched = licenseLatch;
         lastSessionOpenedAt = 0;
         reconnectPending = true;
         armReconnectRetry(LICENSE_RETRY_MS, "retry while unlicensed");
@@ -1480,10 +1469,7 @@ export async function runMcpStdio(): Promise<void> {
           .splice(0)
           .map((m) => getRequestId(m))
           .filter((id): id is string | number => id !== undefined);
-        const ids = [...new Set([...pendingRequests.keys(), ...queuedIds])];
-        for (const handle of pendingRequests.values()) clearTimeout(handle);
-        pendingRequests.clear();
-        await Promise.all(ids.map((id) => sendUpstreamError(id, latched)));
+        await synthesizePending(licenseLatch, queuedIds);
         return;
       }
       // Any other failure clears the latch: a restarted or unreachable server
@@ -1532,7 +1518,7 @@ export async function runMcpStdio(): Promise<void> {
       // never throws; recovery is armed first so the contract holds even if the
       // reporting fails.
       armReconnectRetry(delayMs, "retry after failed re-initialize");
-      await synthesizePending("Tandem HTTP upstream session lost", detail).catch(
+      await synthesizePending(bridgeError("Tandem HTTP upstream session lost", detail)).catch(
         (synthErr: unknown) => {
           process.stderr.write(
             `[tandem mcp-stdio] failed to report the lost session to the client: ${
