@@ -214,15 +214,7 @@ async function activateLicenseRoute(
     // are clean and no caller can forget.
     await activateLicense(resolveAppDataDir(), rawLicense);
   } catch (err) {
-    const code = err instanceof LicenseActivationError ? err.code : "UNKNOWN";
-    // A write failure is OUR fault, not the caller's — 500, not 400. The
-    // status code is the difference between "fix your input" and "retry".
-    const status = code === "WRITE_FAILED" ? 500 : 400;
-    res.status(status).json({
-      error: code === "WRITE_FAILED" ? "LICENSE_WRITE_FAILED" : "INVALID_LICENSE",
-      // Static per-code copy; the underlying error message never reaches the wire.
-      message: activationErrorMessage(code),
-    });
+    sendActivationError(res, err);
     return;
   }
 
@@ -247,6 +239,27 @@ async function activateLicenseRoute(
   // believe `gateActive` is true and render gate-only chrome, such as the
   // "your update window has ended" warning, on a build that gates nothing.
   // Same shaping as GET /api/license/status, so the two can't disagree.
-  const live = resolveLiveLicenseState();
-  res.json(loopbackLicenseWire(live));
+  //
+  // Inside a try of its own, mapped exactly as the activation's: a throw here
+  // must still reach the buyer as a coded answer, never as an unhandled
+  // rejection (which Express would turn into an HTML 500).
+  try {
+    const live = resolveLiveLicenseState();
+    res.json(loopbackLicenseWire(live));
+  } catch (err) {
+    sendActivationError(res, err);
+  }
+}
+
+/** The activate route's coded failure answer. Static per-code copy; the
+ * underlying error message never reaches the wire. */
+function sendActivationError(res: Response, err: unknown): void {
+  const code = err instanceof LicenseActivationError ? err.code : "UNKNOWN";
+  // A write failure is OUR fault, not the caller's — 500, not 400. The
+  // status code is the difference between "fix your input" and "retry".
+  const status = code === "WRITE_FAILED" ? 500 : 400;
+  res.status(status).json({
+    error: code === "WRITE_FAILED" ? "LICENSE_WRITE_FAILED" : "INVALID_LICENSE",
+    message: activationErrorMessage(code),
+  });
 }
