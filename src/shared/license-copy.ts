@@ -39,11 +39,6 @@ export const AI_REFUSAL_UNLICENSED_MESSAGE =
   "Tandem is unlicensed, so its AI features are turned off. Your document is unaffected and " +
   `stays fully editable. Activate a license to turn them back on: ${TANDEM_PURCHASE_URL}`;
 
-/** The local-model loop's stderr line for the same refusal (no document to reassure about). */
-export const AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE =
-  "Tandem is unlicensed, so its AI features are turned off. " +
-  `Activate a license to turn them back on: ${TANDEM_PURCHASE_URL}`;
-
 /**
  * Refusal copy for an installed licence that does not verify. **Never carries
  * the purchase URL** (ADR-040 decision 8): this reader most likely already paid,

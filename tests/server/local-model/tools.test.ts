@@ -1,11 +1,19 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type * as Y from "yjs";
-import { dispatch, MUTATING_TOOLS, TOOLS } from "../../../src/server/local-model/tools.js";
+import { dispatch, TOOLS } from "../../../src/server/local-model/tools.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_AUTHORSHIP } from "../../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../../src/shared/origins.js";
 import { SNAPSHOT_CAP } from "../../../src/shared/snapshot.js";
 import type { Annotation } from "../../../src/shared/types.js";
 import { getAnnotationsMap, makeMarkdownDoc } from "../../helpers/ydoc-factory.js";
+
+/**
+ * The tools that may write, derived: every registered tool except the named
+ * reads. A NEW tool therefore counts as mutating until someone lists it as a
+ * read, so the authorship tripwire below covers it by default.
+ */
+const READ_TOOLS = new Set(["get_outline", "read_section"]);
+const MUTATING_TOOLS = TOOLS.map((t) => t.name).filter((n) => !READ_TOOLS.has(n));
 
 const FIXTURE = `# Cost Summary
 
