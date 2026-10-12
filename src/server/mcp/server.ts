@@ -32,7 +32,7 @@ import { registerIntegrationsRoutes } from "../integrations/api-routes.js";
 import { readExistingTandemEntries } from "../integrations/existing-config.js";
 import { createKeychain, KEYCHAIN_SERVICE_MODELS } from "../integrations/keychain.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
-import { type AiRefusal, aiRefusal } from "../license/ai-refusal.js";
+import { type AiRefusal, aiRefusal, sendAiRefusal } from "../license/ai-refusal.js";
 import { registerModelsRoutes } from "../models/api-routes.js";
 import { resolveAppDataDir, SESSION_DIR } from "../platform.js";
 import { runWithMcpContext } from "../sessions/context.js";
@@ -381,6 +381,9 @@ export function licenseRefusalRpcError(refusal: AiRefusal): {
  */
 export function licenseRefusalRpcBody(body: unknown, refusal: AiRefusal): unknown {
   const error = licenseRefusalRpcError(refusal);
+  // Hand-rolled, not the SDK's `isJSONRPCRequest`: that is a strict schema
+  // parse, so a request with malformed params would read as "not a request"
+  // and be dropped — and a malformed request must still hear the refusal.
   const isRequest = (m: unknown): m is { id: unknown } =>
     m !== null &&
     typeof m === "object" &&
@@ -913,7 +916,7 @@ export async function startMcpServerHttp(
     // non-SDK consumers. The stream pin is never taken.
     const refusal = aiRefusal();
     if (refusal) {
-      res.status(403).json(refusal);
+      sendAiRefusal(res, refusal);
       await closeRefusedSession(req);
       return;
     }

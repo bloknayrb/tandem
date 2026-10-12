@@ -214,7 +214,7 @@ describe("supervisor licence refusal (#1521)", () => {
   it("a refused start-fresh throws too, and records `unlicensed` with no child alive", async () => {
     refused = true;
     const sup = makeSupervisor();
-    await expect(sup.startFresh(cwdDir)).rejects.toMatchObject({ kind: "unlicensed" });
+    await expect(sup.startFresh(cwdDir)).rejects.toMatchObject({ refusal: { kind: "unlicensed" } });
     expect(children).toHaveLength(0);
     expect(sup.status()).toEqual({ running: false, lastError: "unlicensed" });
   });

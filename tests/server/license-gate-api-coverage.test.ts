@@ -19,7 +19,8 @@ import {
  * with the `LICENSE_REQUIRED` envelope while Tandem is unlicensed.
  *
  * Three kinds of row:
- *  - `refused` — the registration's own handler calls `refuseIfUnlicensed`
+ *  - `refused` — the registration's own handler answers the refusal itself
+ *    (`refuseIfUnlicensed` or `sendAiRefusal`)
  *    (`mcp/channel-routes.ts`). Asserted from the registration text.
  *  - `refused-by-supervisor` — a launcher route whose refusal lives in the
  *    supervisor (`startInternal` / `respawn`), not the route. Covered
@@ -125,7 +126,7 @@ const ROUTE_GATES: RouteGate[] = [
   {
     constant: "API_CHANNEL_REPLY",
     gate: "refused",
-    why: "Claude's chat write via the channel shim, an AI surface; refused before `markUserChatRead`",
+    why: "Claude's chat write via the channel shim, an AI surface; `appendClaudeChatMessage` refuses and the handler answers before `markUserChatRead`",
   },
   {
     constant: "API_CHANNEL_PERMISSION",
@@ -193,6 +194,9 @@ const ROUTE_GATES: RouteGate[] = [
   { constant: "API_MODELS_SECRET", gate: "open", why: "provider API key, not document content" },
 ];
 
+/** A handler that answers the licence refusal in its own body. */
+const REFUSES = /refuseIfUnlicensed\(res\)|sendAiRefusal\(/;
+
 const REGISTRATIONS = mutatingRegistrations();
 const BY_CONSTANT = new Map<string, Registration[]>();
 for (const r of REGISTRATIONS) {
@@ -219,8 +223,8 @@ describe("/api licence coverage (#1521)", () => {
     );
     for (const reg of regs) {
       expect(
-        reg.call.includes("refuseIfUnlicensed(res)"),
-        `${constant} in ${reg.file} must call refuseIfUnlicensed (AI surface fail-open)`,
+        REFUSES.test(reg.call),
+        `${constant} in ${reg.file} must answer the licence refusal (AI surface fail-open)`,
       ).toBe(true);
     }
   });
@@ -228,7 +232,7 @@ describe("/api licence coverage (#1521)", () => {
   it.each([...OPEN, ...BY_SUPERVISOR])("%s is not refused at registration", (constant) => {
     for (const reg of BY_CONSTANT.get(constant) ?? []) {
       expect(
-        reg.call.includes("refuseIfUnlicensed"),
+        REFUSES.test(reg.call),
         `${constant} in ${reg.file} must NOT be licence-refused — see its row's rationale`,
       ).toBe(false);
     }

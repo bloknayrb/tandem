@@ -12,6 +12,7 @@
  * `readFileSync` and at most one Ed25519 verify — sub-millisecond, paid per MCP
  * POST and per pushed event.
  */
+import type { Response } from "express";
 import {
   AI_REFUSAL_UNLICENSED_MESSAGE,
   type AiRefusalKind,
@@ -56,4 +57,18 @@ export function aiRefusalFor(state: LicenseState): AiRefusal | null {
 export function aiRefusal(): AiRefusal | null {
   if (!GATE_ENABLED) return null;
   return aiRefusalFor(resolveLiveLicenseState());
+}
+
+/**
+ * Answer an HTTP request with the refusal: 403 and the envelope as the body,
+ * plus any route-specific fields (the launcher adds its own `code`). The one
+ * shape every `/api` refusal and the `GET /mcp` refusal share. (The wake
+ * socket refuses before Express exists, so it writes its own raw 403.)
+ */
+export function sendAiRefusal(
+  res: Response,
+  refusal: AiRefusal,
+  extra: Record<string, unknown> = {},
+): void {
+  res.status(403).json({ ...refusal, ...extra });
 }

@@ -12,7 +12,7 @@ import { CTRL_ROOM } from "../../shared/constants.js";
 import { ChannelErrorCodeSchema } from "../../shared/types.js";
 import { recordPushConsumerEvent } from "../events/push-liveness.js";
 import { sseHandler } from "../events/sse.js";
-import { aiRefusal } from "../license/ai-refusal.js";
+import { aiRefusal, sendAiRefusal } from "../license/ai-refusal.js";
 import { sanitizeForLog } from "../log-sanitize.js";
 import { clearCtrlChatDurably } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
@@ -63,7 +63,7 @@ function sweepStalePermissions(): void {
 function refuseIfUnlicensed(res: Response): boolean {
   const refusal = aiRefusal();
   if (!refusal) return false;
-  res.status(403).json(refusal);
+  sendAiRefusal(res, refusal);
   return true;
 }
 
@@ -146,8 +146,6 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
   // Channel reply: shim forwards Claude's chat replies
   app.options(API_CHANNEL_REPLY, apiMiddleware);
   app.post(API_CHANNEL_REPLY, apiMiddleware, (req: Request, res: Response) => {
-    // Before `markUserChatRead`, so a refused reply stamps nothing read.
-    if (refuseIfUnlicensed(res)) return;
     const { text, documentId, replyTo, inProgress } = (req.body ?? {}) as Record<string, unknown>;
     if (typeof text !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "text is required" });
@@ -166,10 +164,11 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
       ...(typeof replyTo === "string" ? { replyTo } : {}),
       ...(inProgress === true ? { inProgress: true } : {}),
     });
-    // The licence can flip between the check above and the write; the write
-    // path re-decides, and its refusal is answered the same way.
+    // Licence (#1521): `appendClaudeChatMessage` refuses before touching the
+    // Y.Doc, and this answers before `markUserChatRead`, so a refused reply
+    // writes nothing and stamps nothing read.
     if (!appended.ok) {
-      res.status(403).json(appended.refusal);
+      sendAiRefusal(res, appended.refusal);
       return;
     }
     const unmatched = typeof replyTo === "string" && !markUserChatRead(replyTo);

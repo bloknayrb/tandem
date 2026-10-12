@@ -7,7 +7,7 @@
 import type { Request, Response } from "express";
 import { CHANNEL_SSE_KEEPALIVE_MS } from "../../shared/constants.js";
 import { isWakeWorthy, toWakeFrame } from "../../shared/events/wake-scope.js";
-import { aiRefusal } from "../license/ai-refusal.js";
+import { aiRefusal, sendAiRefusal } from "../license/ai-refusal.js";
 import { replaySince, subscribe, unsubscribe } from "./queue.js";
 import type { TandemEvent } from "./types.js";
 
@@ -58,7 +58,7 @@ export function sseHandler(req: Request, res: Response): void {
   // it as an outage.
   const refusal = aiRefusal();
   if (refusal) {
-    res.status(403).json(refusal);
+    sendAiRefusal(res, refusal);
     return;
   }
   const wakeMode = verdict === "wake";
