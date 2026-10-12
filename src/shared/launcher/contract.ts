@@ -80,7 +80,8 @@ export type LauncherStatus =
  * `not-configured` (#2180): unlike the others, a supervisor DOES exist — it
  * found no launchable `claude-code` entry (none at all, a Claude Desktop-only
  * setup, or a legacy `apply: "skip"` one), so there is nothing to restart. It
- * resolves when the user completes setup: the wizard's Apply starts Claude.
+ * clears when the user completes setup: the wizard's Apply re-reads the
+ * integration (`Supervisor.refreshConfigured`). That does not start Claude.
  */
 export type LauncherUnavailableReason =
   | "stdio-mode"

@@ -462,9 +462,10 @@ export interface CwdDriftPill {
  * `launcherFailure` only for a tripped launcher beside another session — both
  * mean the supervised launcher is not running, and the server reports drift only
  * when it IS. A restart in progress (`launcherRestarting`, #2180) hides it for
- * the same reason: no CTA is shown then, so nothing else would. They can overlap only through staleness: `useCwdDrift` does not
- * poll, so a drift answer from before an unattended trip stays live. So either
- * one wins outright. This is a staleness gate, not a second copy of the server's
+ * the same reason: no CTA is shown then, so nothing else would. They can
+ * overlap only through staleness: `useCwdDrift` does not poll, so a drift
+ * answer from before an unattended trip stays live. So either one wins
+ * outright. This is a staleness gate, not a second copy of the server's
  * predicate: it never turns a `false` into a `true`.
  *
  * `drift` being non-null already means "the server says nudge"; suppression the
