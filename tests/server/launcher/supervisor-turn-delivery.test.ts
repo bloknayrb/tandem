@@ -509,6 +509,48 @@ describe("#2181 — an event while no spawn is subscribed", () => {
     expect(texts(child2)).toEqual([]);
   });
 
+  it("a relaunch after a user stop owes an event that lands before its spawn subscribes", async () => {
+    const { sup, emit } = makeSupervisor();
+    await idleFreshChild(sup);
+    await sup.stop();
+    onSpawn = (_child, index) => {
+      if (index === 1) emit(annotationEvent());
+    };
+    await sup.relaunch(cwdDir);
+
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  it("an event a live child answered is not carried to a crash successor", async () => {
+    // Pins the disarm at subscribe: a watch left armed beside a live child
+    // would record every event it already handled.
+    const { sup, emit } = makeSupervisor();
+    const child1 = await idleFreshChild(sup);
+    emit(annotationEvent());
+    pushJson(child1, RESULT_OK);
+    await settle();
+    exitChild(child1, 1);
+
+    const child2 = await nthChild(2);
+    await settle();
+    expect(texts(child2)).toEqual([]);
+  });
+
+  it("a crash does not carry the unanswered turn it died on", async () => {
+    // The turn may be what crashed it; re-sending it to every resumed successor
+    // would keep a slow crash loop alive past the restart breaker.
+    const { sup, emit } = makeSupervisor();
+    const child1 = await idleFreshChild(sup);
+    emit(annotationEvent());
+    expect(texts(child1).at(-1)).toBe(SUPERVISOR_WAKE_PROMPT);
+    exitChild(child1, 1);
+
+    const child2 = await nthChild(2);
+    await settle();
+    expect(texts(child2)).toEqual([]);
+  });
+
   it("a user stop of a child with an unanswered turn carries nothing", async () => {
     const { sup, emit } = makeSupervisor();
     const child1 = await idleFreshChild(sup);

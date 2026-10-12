@@ -161,16 +161,18 @@ export function defaultSubscribeToEvents(cb: (event: TandemEvent) => void): () =
 }
 
 /**
- * The gap watch's subscription (#2181). `"internal"`, NOT `"external"`: while
- * it is held no child exists, so nothing outside this process is attached, and
+ * The gap watch's subscription (#2181). `"internal"`, NOT `"external"`: the
+ * watch only sets a flag in this process and delivers nothing to anyone, and
  * `getSubscriberCount() === 0` is the sound negative the wake advisory and
- * `/health` rely on. Counting the watch would make that negative lie.
+ * `/health` rely on. Counting the watch as a consumer would make that negative
+ * lie whenever it is the only subscriber.
  *
  * An internal subscriber bypasses the queue's Solo gate, so the callback is
  * wrapped in that same gate: the watch owes a wake for exactly the events the
  * child's external subscription would have received. User content held in
  * Solo (`isUserPrivacyHeld`) is dropped before any fan-out, so it never
- * arrives here at all. Exported for test only.
+ * arrives here at all. The production default; exported so a test can run it
+ * against the real queue.
  */
 export function defaultSubscribeDuringGap(cb: (event: TandemEvent) => void): () => void {
   const gated = (event: TandemEvent): void => {
@@ -852,6 +854,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * before the process proved stable, so `buildPlan` returns `resuming: true`
    * and the resumed path sends NO bootstrap turn. The comment would then sit
    * unannounced until some unrelated later event happened to wake the session.
+   *
+   * Three things raise it (#2181): a wake still pending on a spawn at its
+   * teardown, a turn left unanswered by a spawn the supervisor itself killed,
+   * and the gap watch (`gapUnsubscribe`) catching an event while no spawn is
+   * subscribed.
    */
   let wakeOwedAcrossSpawns = false;
   /** Bumped by every user `stop()`. A spawn records it at teardown, so a
@@ -1401,7 +1408,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
      * If the CLI instead folds such a write into the running turn and answers
      * both with one `result`, the count stays above zero and receipt checks stop
      * for the rest of this spawn. The latch still recovers that spawn, so the
-     * error is toward the pre-#1867 behaviour, never toward killing a live turn. */
+     * error is toward the pre-#1867 behaviour, never toward killing a live turn.
+     * A stuck count has one more reader: a relaunch of this spawn carries a
+     * wake to its successor (`teardownTurnDelivery`, #2181). */
     let unresolvedTurns = 0;
 
     function clearLatch(): void {
@@ -1555,15 +1564,24 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         // this runs on crash-restart and on relaunch, not just on a deliberate
         // stop. A user `stop()` carries nothing (#1866).
         //
-        // A turn written but never answered counts as undelivered too (#2181).
-        // A write into the pipe of a child that is being killed succeeds, so
-        // its callback never re-arms `pendingWake`, and the wake died with the
-        // child: SIGTERM on POSIX gives Claude a grace period during which its
-        // subscription still takes events. The cost when the child DID read
-        // it is one extra payload-free wake, which `sendTurn`'s docblock
-        // already accepts. Inside the first-teardown latch so a second call
-        // cannot re-raise what a user stop between the two cleared.
-        if ((pendingWake || unresolvedTurns > 0) && carryOwedWake) wakeOwedAcrossSpawns = true;
+        // When the supervisor itself is ending this spawn (a relaunch or
+        // start-fresh), a turn written but never answered counts as
+        // undelivered too (#2181). A write into the pipe of a child that is
+        // being killed succeeds, so its callback never re-arms `pendingWake`,
+        // and the wake died with the child: SIGTERM on POSIX gives Claude a
+        // grace period during which its subscription still takes events. The
+        // cost when the child DID read it is one extra payload-free wake.
+        //
+        // NOT on a crash. There the unanswered turn may be the one that
+        // crashed it, and carrying it would re-send it to every resumed
+        // successor: a Claude that dies 30 s or more into each attempt never
+        // fills the restart breaker's window, so one event would keep that
+        // loop going indefinitely, spending a turn each time.
+        //
+        // Inside the first-teardown latch so a second call cannot re-raise
+        // what a user stop between the two cleared.
+        const unansweredOnOurKill = stopRequested && unresolvedTurns > 0;
+        if ((pendingWake || unansweredOnOurKill) && carryOwedWake) wakeOwedAcrossSpawns = true;
       }
       unsubscribeFromEvents();
       pendingWake = false;
