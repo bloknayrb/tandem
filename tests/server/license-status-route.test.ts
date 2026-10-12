@@ -391,8 +391,9 @@ describe("POST /api/license/activate is wired to the launcher (#1521)", () => {
     const sup = {
       start: async () => {},
       stop: async () => {},
-      relaunch: async () => {},
-      startFresh: async () => {},
+      relaunch: async () => ({ spawned: true as const }),
+      startFresh: async () => ({ spawned: true as const }),
+      refreshConfigured: async () => {},
       resumeAfterLicence: resume,
       licenceRefusal: () => null,
       status: () => ({ running: false as const }),

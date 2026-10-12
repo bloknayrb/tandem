@@ -198,6 +198,23 @@ describe("supervisor licence refusal (#1521)", () => {
     await sleep(50);
     expect(children).toHaveLength(1);
     expect(sup.status()).toEqual({ running: false, lastError: "unlicensed" });
+    // #2180's restartPending must not claim Claude is coming back: the timer
+    // fired, `startInternal` refused, and nothing is scheduled any more.
+    expect(sup.status()).not.toHaveProperty("restartPending");
+  });
+
+  it("while refused, an unconfigured launcher still answers the licence, not no-integration", async () => {
+    // Decision: the licence check runs at the very top of `respawn`, before any
+    // stop or plan, so it lands first even where #2180 would answer 404
+    // NO_CLAUDE_INTEGRATION — the refusal is the reason nothing can start.
+    fs.writeFileSync(
+      path.join(baseDir, "integrations.json"),
+      JSON.stringify({ schemaVersion: 3, integrations: [] }),
+    );
+    refused = true;
+    const sup = makeSupervisor();
+    await expect(sup.relaunch(cwdDir)).rejects.toBeInstanceOf(LicenseRefusedError);
+    expect(sup.status()).not.toHaveProperty("restartPending");
   });
 
   it("a refused relaunch throws BEFORE stopping a running child, and leaves its status clean", async () => {
@@ -301,8 +318,9 @@ describe("launcher routes answer a licence refusal with 403 (#1521)", () => {
     return {
       start: async () => {},
       stop: async () => {},
-      relaunch: async () => {},
-      startFresh: async () => {},
+      relaunch: async () => ({ spawned: true }),
+      startFresh: async () => ({ spawned: true }),
+      refreshConfigured: async () => {},
       resumeAfterLicence: async () => {},
       licenceRefusal: () => null,
       status: () => ({ running: false }),
