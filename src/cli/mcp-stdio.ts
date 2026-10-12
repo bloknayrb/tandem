@@ -77,7 +77,11 @@ export const PREFLIGHT_GRACE_MS = 1500;
 // which would make every request immediately synthesize -32000.
 const MAX_TIMEOUT_MS = 2_147_483_647; // 2^31 - 1
 
-export function parseTimeoutMs(raw: string | undefined): number {
+export function parseTimeoutMs(
+  raw: string | undefined,
+  name = "TANDEM_REQUEST_TIMEOUT_MS",
+  fallback = 30_000,
+): number {
   if (raw !== undefined) {
     const parsed = parseInt(raw, 10);
     if (Number.isFinite(parsed) && parsed > 0 && parsed <= MAX_TIMEOUT_MS) {
@@ -86,10 +90,10 @@ export function parseTimeoutMs(raw: string | undefined): number {
     // Note: parseInt("3e4", 10) returns 3 (stops at 'e'), which passes validation.
     // Scientific notation lands here only when the leading integer is invalid.
     process.stderr.write(
-      `[tandem mcp-stdio] TANDEM_REQUEST_TIMEOUT_MS must be a positive integer ≤ ${MAX_TIMEOUT_MS}; ignoring "${raw}", using 30000ms default\n`,
+      `[tandem mcp-stdio] ${name} must be a positive integer ≤ ${MAX_TIMEOUT_MS}; ignoring "${raw}", using ${fallback}ms default\n`,
     );
   }
-  return 30_000;
+  return fallback;
 }
 
 const STDIO_REQUEST_TIMEOUT_MS = parseTimeoutMs(process.env.TANDEM_REQUEST_TIMEOUT_MS);
@@ -122,12 +126,14 @@ const BACKOFF_MAX_MS = 30_000;
  * answered locally in between, so nothing pulls the retry forward.
  *
  * `TANDEM_LICENSE_RETRY_MS` is a test seam only — the bridge runs as a child
- * process in its tests, where a 30 s wait per case is not affordable.
+ * process in its tests, where a 30 s wait per case is not affordable. Floored
+ * at 1 s, so a mistyped value cannot turn the retry into a hot loop of POSTs.
  */
-const LICENSE_RETRY_MS =
-  process.env.TANDEM_LICENSE_RETRY_MS !== undefined
-    ? parseTimeoutMs(process.env.TANDEM_LICENSE_RETRY_MS)
-    : BACKOFF_MAX_MS;
+const LICENSE_RETRY_FLOOR_MS = 1_000;
+const LICENSE_RETRY_MS = Math.max(
+  LICENSE_RETRY_FLOOR_MS,
+  parseTimeoutMs(process.env.TANDEM_LICENSE_RETRY_MS, "TANDEM_LICENSE_RETRY_MS", BACKOFF_MAX_MS),
+);
 
 /**
  * The JSON-RPC `error` object of a licence refusal, or `undefined`. Keyed ONLY
@@ -936,7 +942,24 @@ export async function runMcpStdio(): Promise<void> {
   function captureNegotiated(msg: JSONRPCMessage): void {
     if (negotiatedProtocolVersion !== undefined) return;
     const identity = readHandshakeIdentity(msg);
-    if (identity?.protocolVersion === undefined) return;
+    // The client's own `initialize` was refused because Tandem is unlicensed
+    // (#1521). It was relayed verbatim, so no baseline exists — the #1805
+    // shape: the first replay admitted after activation IS the first
+    // handshake, so it seeds the baseline instead of failing closed forever
+    // with "no handshake baseline".
+    if (identity === undefined) {
+      const responseId = getResponseId(msg);
+      if (
+        handshakeInit !== undefined &&
+        responseId !== undefined &&
+        responseId === getRequestId(handshakeInit) &&
+        licenseRefusalError(msg) !== undefined
+      ) {
+        deferredHandshake = true;
+      }
+      return;
+    }
+    if (identity.protocolVersion === undefined) return;
     setBaseline({ ...identity, protocolVersion: identity.protocolVersion });
     lastSessionOpenedAt = Date.now();
   }
@@ -1220,7 +1243,10 @@ export async function runMcpStdio(): Promise<void> {
     reconnectPending = false;
     reconnecting = true;
     const replayId = makeReplayId();
-    reconnectAttempts += 1;
+    // While licence-latched (#1521) a retry is a scheduled poll for activation,
+    // not an outage attempt: it neither counts nor announces itself every 30 s.
+    // The reason was logged once, when the latch was set.
+    if (!licenseLatch) reconnectAttempts += 1;
 
     try {
       const old = http;
@@ -1230,11 +1256,13 @@ export async function runMcpStdio(): Promise<void> {
       // is the only field that joins this log to the server's own
       // `Reaping idle MCP session <id>`. Diagnosing #1588 took correlating
       // those two files by hand; this is what makes that a grep.
-      process.stderr.write(
-        `[tandem mcp-stdio] re-initializing upstream session ` +
-          `(attempt ${reconnectAttempts}, reason: ${reason}, ` +
-          `stale session ${old.sessionId ?? "<none>"})\n`,
-      );
+      if (!licenseLatch) {
+        process.stderr.write(
+          `[tandem mcp-stdio] re-initializing upstream session ` +
+            `(attempt ${reconnectAttempts}, reason: ${reason}, ` +
+            `stale session ${old.sessionId ?? "<none>"})\n`,
+        );
+      }
       generation += 1;
       // The SDK's close() calls onclose unconditionally and our onclose is
       // shutdown(1), so closing the old transport must not reach it or the

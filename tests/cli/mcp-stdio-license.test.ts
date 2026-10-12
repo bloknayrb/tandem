@@ -28,7 +28,11 @@ const LICENSE_ERROR = {
 interface FakeUpstream {
   port: number;
   setRefused(refused: boolean): void;
+  /** Hold every refused `initialize` this long before answering it. */
+  setRefusedInitDelay(ms: number): void;
   initCount(): number;
+  /** Methods of every POST the fake received, in order. */
+  methods(): string[];
   close(): Promise<void>;
 }
 
@@ -47,6 +51,8 @@ async function makeUpstream(initiallyRefused: boolean): Promise<FakeUpstream> {
   let live: string | undefined;
   let minted = 0;
   let inits = 0;
+  let refusedInitDelayMs = 0;
+  const methods: string[] = [];
   const streams = new Set<ServerResponse>();
 
   const server: Server = createServer((req, res) => {
@@ -81,6 +87,7 @@ async function makeUpstream(initiallyRefused: boolean): Promise<FakeUpstream> {
           method?: string;
         };
         if (body.method === "initialize") inits += 1;
+        methods.push(String(body.method));
         if (refused) {
           // The real server's shape: closes any session, ends its stream.
           live = undefined;
@@ -90,8 +97,15 @@ async function makeUpstream(initiallyRefused: boolean): Promise<FakeUpstream> {
             res.end();
             return;
           }
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, error: LICENSE_ERROR }));
+          const answer = () => {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, error: LICENSE_ERROR }));
+          };
+          if (body.method === "initialize" && refusedInitDelayMs > 0) {
+            setTimeout(answer, refusedInitDelayMs);
+          } else {
+            answer();
+          }
           return;
         }
         if (body.method === "initialize") {
@@ -111,7 +125,9 @@ async function makeUpstream(initiallyRefused: boolean): Promise<FakeUpstream> {
           );
           return;
         }
-        if (req.headers["mcp-session-id"] !== live) {
+        // No session at all is "not found" too, exactly as the real server
+        // answers a request that carries no (or a closed) session id.
+        if (live === undefined || req.headers["mcp-session-id"] !== live) {
           res.writeHead(404, { "Content-Type": "application/json" });
           res.end(
             JSON.stringify({
@@ -143,7 +159,11 @@ async function makeUpstream(initiallyRefused: boolean): Promise<FakeUpstream> {
     setRefused: (r) => {
       refused = r;
     },
+    setRefusedInitDelay: (ms) => {
+      refusedInitDelayMs = ms;
+    },
     initCount: () => inits,
+    methods: () => [...methods],
     close: async () => {
       for (const s of streams) s.destroy();
       server.closeAllConnections?.();
@@ -157,7 +177,8 @@ function spawnBridge(port: number): ChildProcessWithoutNullStreams {
     env: {
       ...process.env,
       TANDEM_URL: `http://127.0.0.1:${port}`,
-      TANDEM_LICENSE_RETRY_MS: "400",
+      // The floor (1 s): anything lower is clamped, so the seam cannot spin.
+      TANDEM_LICENSE_RETRY_MS: "1000",
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -297,5 +318,67 @@ describe("mcp-stdio under a licence refusal (#1521)", () => {
     await waitFor(() => io.responseFor(5) !== undefined, "an answer", 40_000);
     expect(errorOf(io.responseFor(5))?.data?.error).not.toBe("LICENSE_REQUIRED");
     expect(child.exitCode).toBeNull();
+  }, 60_000);
+
+  it("a refused FIRST initialize is not a dead end: once admitted, the next request heals", async () => {
+    upstream = await makeUpstream(true);
+    child = spawnBridge(upstream.port);
+    const io = collect(child);
+    await new Promise((r) => setTimeout(r, 700));
+    send(child, INITIALIZE);
+    await waitFor(() => io.responseFor(1) !== undefined, "the refused initialize");
+    expect(errorOf(io.responseFor(1))).toEqual(LICENSE_ERROR);
+
+    upstream.setRefused(false);
+    send(child, { jsonrpc: "2.0", id: 2, method: "tools/list" });
+    await waitFor(() => io.responseFor(2) !== undefined, "the healed request");
+    expect(errorOf(io.responseFor(2))).toBeUndefined();
+    expect((io.responseFor(2)?.result as { echo?: string })?.echo).toBe("tools/list");
+    // The #1805 shape: the admitted replay SEEDED the baseline rather than
+    // refusing to adopt a server it never had a baseline for.
+    expect(io.stderr()).toMatch(/deferred handshake completed/);
+    expect(io.stderr()).not.toMatch(/no handshake baseline/);
+  }, 60_000);
+
+  it("a request queued while the refused replay is in flight gets the licence error, not 'session lost'", async () => {
+    upstream = await makeUpstream(false);
+    child = spawnBridge(upstream.port);
+    const io = collect(child);
+    await handshake(child, io);
+    const fake = upstream;
+
+    fake.setRefusedInitDelay(1_500);
+    fake.setRefused(true);
+    send(child, { jsonrpc: "2.0", id: 2, method: "tools/list" });
+    await waitFor(() => io.responseFor(2) !== undefined, "the refused call");
+    // The replay `initialize` is now held by the fake; the bridge is mid-reconnect.
+    const initsBefore = fake.initCount();
+    await waitFor(() => fake.initCount() > initsBefore, "the held replay");
+    send(child, { jsonrpc: "2.0", id: 3, method: "tools/list" });
+
+    await waitFor(() => io.responseFor(3) !== undefined, "the queued request's answer");
+    expect(errorOf(io.responseFor(3))).toEqual(LICENSE_ERROR);
+    expect(io.stderr()).not.toMatch(/re-initialize failed/);
+  }, 60_000);
+
+  it("while latched: a notification is dropped, and retries neither count nor announce", async () => {
+    upstream = await makeUpstream(false);
+    child = spawnBridge(upstream.port);
+    const io = collect(child);
+    await handshake(child, io);
+
+    upstream.setRefused(true);
+    send(child, { jsonrpc: "2.0", id: 2, method: "tools/list" });
+    await waitFor(() => /upstream refused the session/.test(io.stderr()), "the latch");
+    const announcedAtLatch = (io.stderr().match(/re-initializing upstream session/g) ?? []).length;
+
+    send(child, { jsonrpc: "2.0", method: "notifications/latched-probe" });
+    // Several 1 s retries pass while latched.
+    await new Promise((r) => setTimeout(r, 3_500));
+    expect(upstream.methods()).not.toContain("notifications/latched-probe");
+    expect((io.stderr().match(/re-initializing upstream session/g) ?? []).length).toBe(
+      announcedAtLatch,
+    );
+    expect((io.stderr().match(/upstream refused the session/g) ?? []).length).toBe(1);
   }, 60_000);
 });
