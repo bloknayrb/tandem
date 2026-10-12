@@ -20,10 +20,10 @@ import { describe, expect, it } from "vitest";
  * names the doc already claims only confirms the doc against itself; this one
  * has to be able to fail when a *new* AI surface appears.
  *
- * Note the direction of the enforcement assertions: they pin the *absence* of a
- * license gate on the chat and push paths. That is the finding, not an
- * endorsement — when the surface gate lands, these flip and the doc paragraph
- * they guard is rewritten in the same change. Failing then is the point.
+ * The enforcement assertions flipped with #1521, as this header predicted: they
+ * now pin that every AI choke point CONSULTS the licence decision
+ * (`license/ai-refusal.ts`), derived from source, and that the local-model
+ * loop's private copy is gone.
  */
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
@@ -98,14 +98,20 @@ describe("AI surface inventory (#1346 discovery)", () => {
 
   /**
    * Choke point for row 5. `"external"` is the kind that means "leaves this
-   * process toward a model" — the Solo gate is keyed on it, and so is any
-   * future license refusal.
+   * process toward a model" — the Solo gate is keyed on it, and so is the
+   * licence refusal (#1521).
+   *
+   * The regex accepts an optional third argument (`{ onRevoke }`, #1521) after
+   * `"external"`. It was WIDENED for that rather than the expected list being
+   * shrunk: with the old `"external"\s*\)` anchor, SSE and the wake socket —
+   * which now pass `onRevoke` — would have silently dropped out of the match,
+   * and a guard that only sees the supervisor sees nothing.
    */
   it("push/wake has exactly one subscription choke point, with three consumers", () => {
     const consumers = sourcesUnder("src")
       .filter(({ path, src }) => {
         if (path.endsWith("src/server/events/queue.ts")) return false; // the definition
-        return /\bsubscribe\s*\(\s*[\w.]+\s*,\s*"external"\s*\)/.test(stripComments(src));
+        return /\bsubscribe\s*\(\s*[\w.]+\s*,\s*"external"\s*[,)]/.test(stripComments(src));
       })
       .map(({ path }) => path)
       .sort();
@@ -125,62 +131,50 @@ describe("AI surface inventory (#1346 discovery)", () => {
   });
 
   /**
-   * The load-bearing negative. The doc states rows 4-5 have no enforcement site
-   * at all; this derives that from source rather than trusting the sentence.
+   * The load-bearing positive (#1521). Every AI choke point calls the licence
+   * decision. Derived from source: each module named here must CALL it (not
+   * merely mention it), so a refactor that drops the call turns this red.
    */
-  it("the chat and push paths carry no license enforcement today", () => {
-    const gateRefs = sourcesUnder(
-      "src/server/events",
-      "src/channel",
-      "src/monitor",
-      "src/server/launcher",
-    )
-      .filter(({ src }) =>
-        /licenseGate|LicenseState|resolveLiveLicenseState/.test(stripComments(src)),
-      )
-      .map(({ path }) => path);
-
-    expect(
-      gateRefs,
-      [
-        "Enforcement appeared on a push path. That is the #1346 surface gate landing —",
-        "good — but the 'AI surfaces' section of docs/licensing-explained.md still says",
-        "these rows have none. Update the doc in the same change.",
-      ].join(" "),
-    ).toEqual([]);
+  it("every AI choke point consults the licence decision", () => {
+    const CHOKE_POINTS: Record<string, RegExp> = {
+      // row 1: POST + GET /mcp and stdio server mode
+      "src/server/mcp/server.ts": /\baiRefusal\(\)/,
+      // row 4: the chat write, and the shim's reply / approval relay
+      "src/server/mcp/awareness.ts": /\baiRefusal\(\)/,
+      "src/server/mcp/channel-routes.ts": /\baiRefusal\(\)/,
+      // row 5: fan-out, SSE, wake socket, launcher spawn
+      "src/server/events/queue.ts": /\baiRefusal\(\)/,
+      "src/server/events/sse.ts": /\baiRefusal\(\)/,
+      "src/server/events/wake-socket.ts": /\baiRefusal\(\)/,
+      "src/server/launcher/supervisor.ts": /\bdecideRefusal\(\)/,
+      // row 6: the local-model loop, per run
+      "src/server/local-model/collaborator.ts": /\bdecideRefusal\(\)/,
+    };
+    const missing = Object.entries(CHOKE_POINTS)
+      .filter(([file, call]) => !call.test(stripComments(read(file))))
+      .map(([file]) => file);
+    expect(missing, "These AI choke points no longer consult the licence decision").toEqual([]);
   });
 
   /**
-   * Row 6's own comment is the evidence for the "each surface grows a private
-   * copy" claim, so the claim dies if the comment is reworded away.
+   * Row 6's private copy is gone (#1521): the loop is refused per run in the
+   * collaborator, so the dispatcher carries no licence check of its own.
    */
-  it("the local-model loop still documents that it bypasses both surfaces", () => {
-    const tools = read("src", "server", "local-model", "tools.ts");
-    // Collapsed: the claim spans a wrapped comment, so a literal match would be
-    // asserting on where the ` * ` continuations fall rather than on what it says.
-    const collapsed = tools.replace(/\n\s*\*/g, " ").replace(/\s+/g, " ");
-    expect(collapsed).toMatch(/bypasses both license enforcement surfaces/);
-    expect(tools).toMatch(/\blicenseGate\(\)/);
+  it("the local-model dispatcher carries no licence check of its own", () => {
+    const tools = stripComments(read("src", "server", "local-model", "tools.ts"));
+    expect(tools).not.toMatch(/licenseGate|LICENSE_REQUIRED|isLicenseRestricted|aiRefusal/);
   });
 
   /**
-   * Terminology debt from decision 5 ("always unlicensed, never expired"),
-   * pinned to the paragraph that records it so the two cannot drift apart.
+   * Decision 5 ("always unlicensed, never expired") reached the refusal copy
+   * with #1521, and the doc's "contradicts decision 5" debt paragraph went with it.
    */
-  it("pins the decision-5 copy debt to the doc paragraph that records it", () => {
-    const stale =
-      /trial has ended/.test(read("src", "server", "mcp", "license-gate.ts")) ||
-      /trial has ended/.test(read("src", "server", "local-model", "tools.ts"));
-    const documented = /contradicts decision 5/.test(readFileSync(DOC, "utf-8"));
-
-    expect(
-      stale,
-      [
-        "The refusal copy was fixed for decision 5 — now delete the 'refusal copy",
-        "contradicts decision 5' paragraph from docs/licensing-explained.md, which",
-        "still reports it as outstanding.",
-      ].join(" "),
-    ).toBe(documented);
+  it("the refusal copy says unlicensed, never that a trial ended", () => {
+    const copy = read("src", "shared", "license-copy.ts");
+    const aiCopy = copy.slice(copy.indexOf("AI_REFUSAL_UNLICENSED_MESSAGE"));
+    expect(aiCopy).toMatch(/Tandem is unlicensed/);
+    expect(aiCopy.slice(0, 600)).not.toMatch(/trial has ended|expired/i);
+    expect(readFileSync(DOC, "utf-8")).not.toMatch(/contradicts decision 5/);
   });
 
   /**
@@ -199,7 +193,7 @@ describe("AI surface inventory (#1346 discovery)", () => {
    * the route modules name the constant for `assertOriginAllowlisted` without
    * ever fetching it, and this separates the two without a path allowlist.
    */
-  it("the gated /api routes are called only from the browser client", () => {
+  it("the formerly gated /api routes are called only from the browser client", () => {
     const ROUTE_CONSTS = [
       "API_ANNOTATION_REPLY",
       "API_REMOVE_ANNOTATION",
@@ -208,8 +202,7 @@ describe("AI surface inventory (#1346 discovery)", () => {
       "API_DOCUMENT_RELOAD",
       "API_BACKUPS_RESTORE",
       "API_EXTERNAL_CONFLICT_RESOLVE",
-      // Row 3's "+1 in-handler": gated via a direct licenseGate() call on the
-      // force:true sub-path, not by middleware, so a middleware grep misses it.
+      // Row 3's former "+1 in-handler": the force:true sub-path of open.
       "API_OPEN",
     ];
 
@@ -228,10 +221,10 @@ describe("AI surface inventory (#1346 discovery)", () => {
     expect(
       nonClientCallers,
       [
-        "A non-client caller of a gated /api route appeared. The reshape ungates these",
+        "A non-client caller of a formerly gated /api route appeared. #1521 ungated these",
         "routes on the grounds that only the browser calls them — if that is no longer",
         "true, the route is an AI surface and needs an admission point. Fix the code or",
-        "the 'Row 3 is misnamed' paragraph in docs/licensing-explained.md, not this list.",
+        "the 'Row 3 is the browser' paragraph in docs/licensing-explained.md, not this list.",
       ].join(" "),
     ).toEqual([]);
   });
@@ -254,6 +247,6 @@ describe("AI surface inventory (#1346 discovery)", () => {
     // Surface A is explicitly excluded rather than forgotten.
     expect(section).toMatch(/not\* an AI surface/i);
 
-    expect(section).toMatch(/Row 3 is misnamed/);
+    expect(section).toMatch(/Row 3 is the browser/);
   });
 });

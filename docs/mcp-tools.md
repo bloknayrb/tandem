@@ -65,7 +65,7 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `FILE_MODIFIED` | **`tandem_applyChanges` only.** The source file's mtime/size moved between the read and the write-back, so it refused to overwrite (`src/server/mcp/docx-apply.ts:305`). On `tandem_save` the same word is a *success* skip `reason`, never an error code -- see that tool's notes. |
 | `SOURCE_MISSING` | **`tandem_applyChanges` only.** The source file disappeared before the write-back (`src/server/mcp/docx-apply.ts:296`). Same `tandem_save` caveat as `FILE_MODIFIED`. |
 | `RELOAD_IN_PROGRESS` | A reload from disk is mid-flight; retry once it settles. |
-| `LICENSE_REQUIRED` | The license gate is active and restricted. Reads, plain `tandem_open`, saves and exports still work; content mutations **and annotation status changes** do not. `tandem_open` with `force: true` **is** gated -- it runs `clearAndReload`, which discards the in-memory annotation, awareness and content maps and rebuilds the document from disk. Never returned while the gate ships dark. |
+| `LICENSE_REQUIRED` | Tandem is unlicensed, so its AI features are off (#1521). No individual tool returns it: the `/mcp` transport refuses the session itself, as a JSON-RPC error with code `-32003` whose `data` is `{ error: "LICENSE_REQUIRED", kind, purchaseUrl? }` -- `kind` is `unlicensed` or `unverifiable`, and `purchaseUrl` appears only on `unlicensed`. A session already open is closed by its next request. `tandem_reply` can carry it too, as defence in depth. The editor itself is never refused. Never returned while the gate ships dark. |
 | `NO_SUGGESTIONS` | `tandem_applyChanges` found no accepted suggestions to write. |
 | `BACKUP_FAILED` | `tandem_applyChanges` could not write its backup, so it refused to touch the original. |
 | `INVALID_NAME` | `tandem_rename` was given a name that is empty, path-separated, or otherwise unusable. |
@@ -910,7 +910,7 @@ The sidecar and the response carry `heldFromExport` and `privateExcluded` as **t
 }
 ```
 
-**Errors:** `NO_DOCUMENT` (document not found), `NO_SUGGESTIONS`, `FORMAT_ERROR` (not a `.docx` file), `INVALID_PATH` (an upload or scratchpad source, a UNC `backupPath`, or a symlinked `backupPath`), `FILE_NOT_FOUND` (the `backupPath` directory does not exist), `BACKUP_FAILED`, `READ_ONLY`, `EXTERNAL_CONFLICT`, `FILE_MODIFIED`, `SOURCE_MISSING`, `RELOAD_IN_PROGRESS` (a concurrent Y.Doc reload/swap mid-apply -- retry), `FILE_LOCKED` (`EBUSY`, or `EPERM` from a syscall other than `open`), `PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`), `INTERNAL_ERROR` (the flat-text mismatch above -- the experimental caveat). `LICENSE_REQUIRED` is ambient to every gated tool and is never returned while the gate ships dark.
+**Errors:** `NO_DOCUMENT` (document not found), `NO_SUGGESTIONS`, `FORMAT_ERROR` (not a `.docx` file), `INVALID_PATH` (an upload or scratchpad source, a UNC `backupPath`, or a symlinked `backupPath`), `FILE_NOT_FOUND` (the `backupPath` directory does not exist), `BACKUP_FAILED`, `READ_ONLY`, `EXTERNAL_CONFLICT`, `FILE_MODIFIED`, `SOURCE_MISSING`, `RELOAD_IN_PROGRESS` (a concurrent Y.Doc reload/swap mid-apply -- retry), `FILE_LOCKED` (`EBUSY`, or `EPERM` from a syscall other than `open`), `PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`), `INTERNAL_ERROR` (the flat-text mismatch above -- the experimental caveat). A licence refusal never reaches this tool: it is refused at the `/mcp` handshake (see `LICENSE_REQUIRED` above).
 
 **Example:**
 ```
@@ -1186,7 +1186,7 @@ tandem_reply({ text: "I've finished reviewing the cost section. Two figures need
 
 Read connection and boot health as a structured report: Node version, `.mcp.json` / `~/.claude.json` registration, port probes (3478 WebSocket + 3479 MCP HTTP), the `/health` endpoint, and the SSE event stream. Wraps the same `runDoctor()` collector that backs `GET /api/diagnostics`, but rides the MCP transport — so an MCP-connected agent (including a Cowork VM that **cannot** reach `localhost:3479`, see [ADR-023](decisions.md)) can self-diagnose a broken connection without a loopback HTTP round-trip it may not be able to make.
 
-Read-only, takes **no parameters**, and is **not** license-gated — diagnostics stay available even when the license gate is restricted.
+Read-only and takes **no parameters**. Like every MCP tool it is unreachable while Tandem is unlicensed, because the `/mcp` handshake is refused (#1521); `tandem doctor` and `GET /api/diagnostics` stay available regardless, and doctor reports the licence state as its own row.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -1250,22 +1250,22 @@ Registered in `src/server/mcp/api-routes.ts` (`registerApiRoutes`), plus `/healt
 | `POST /api/save` | Save / Save As. | origin (no loopback assert — the path-wide one covers it) |
 | `POST /api/rename` | Rename an on-disk file. | origin + loopback |
 | `POST /api/upload` | Open uploaded content (no disk path). | **one layer** |
-| `POST /api/scratchpad` | New Scratchpad tab. | origin + loopback + license gate |
+| `POST /api/scratchpad` | New Scratchpad tab. | origin + loopback |
 | `POST /api/convert` | Convert `.docx` to Markdown. | origin (no loopback assert — the path-wide one covers it) |
-| `POST /api/apply-changes` | Write accepted suggestions into a `.docx`. | origin + license gate |
+| `POST /api/apply-changes` | Write accepted suggestions into a `.docx`. | origin |
 | `GET /api/document/raw` | Raw document bytes. | loopback-only by hand |
-| `POST /api/document/reload` | Reload the document from disk. | origin + loopback + license gate |
-| `GET /api/backups` · `POST /api/backups/restore` | List / restore pre-overwrite snapshots. | origin + loopback (restore also license-gated); list scrubs paths |
-| `POST /api/external-conflict/resolve` | Answer the keep-vs-reload banner. | origin + loopback + license gate |
-| `POST /api/annotation-reply` | Post a reply to an annotation. | **one layer** + license gate |
-| `POST /api/remove-annotation` | Delete an annotation. | **one layer** + license gate |
+| `POST /api/document/reload` | Reload the document from disk. | origin + loopback |
+| `GET /api/backups` · `POST /api/backups/restore` | List / restore pre-overwrite snapshots. | origin + loopback; list scrubs paths |
+| `POST /api/external-conflict/resolve` | Answer the keep-vs-reload banner. | origin + loopback |
+| `POST /api/annotation-reply` | Post a reply to an annotation. | **one layer** |
+| `POST /api/remove-annotation` | Delete an annotation. | **one layer** |
 | `POST /api/store/reclaim-lock` | Reclaim the annotation-store lock. | origin + loopback |
 | `GET /api/sessions` · `POST /api/sessions/delete` · `POST /api/sessions/clear` | Session management. | origin + loopback; list scrubs paths |
 | `POST /api/rotate-token` | Rotate the auth token. | **one layer** — but not bare: a missing/unparsed JSON body is refused 400 `BAD_REQUEST` (`src/server/mcp/routes/rotate-token.ts:45`), which is positive proof a preflight passed |
 | `POST /api/shutdown` | Graceful shutdown. | hand-rolled `isLoopback` (must accept an absent `Origin`) |
-| `GET/POST /api/launcher/*` | Claude launcher status, nonce, relaunch, working directory. | origin + loopback + nonce |
-| `/api/channel-*`, `DELETE /api/chat` | Channel shim + monitor transport. | carved out of the loopback invariant by name |
-| `/api/wake` | WebSocket upgrade for the self-armed idle watch (ADR-049). | own Origin guard; never reaches Express |
+| `GET/POST /api/launcher/*` | Claude launcher status, nonce, relaunch, working directory. | origin + loopback + nonce; relaunch, start-fresh and the deferred start answer 403 `LAUNCHER_UNLICENSED` (with the licence envelope) while Tandem is unlicensed |
+| `/api/channel-*`, `DELETE /api/chat` | Channel shim + monitor transport. | carved out of the loopback invariant by name; `POST /api/channel-reply` and the two `channel-permission` POSTs answer 403 `LICENSE_REQUIRED` while Tandem is unlicensed |
+| `/api/wake` | WebSocket upgrade for the self-armed idle watch (ADR-049). | own Origin guard; never reaches Express; refused 403 (JSON body) while unlicensed, and a live socket is closed `4403 LICENSE_REQUIRED` |
 
 The channel routes and `GET /api/events` are documented in [Channel API](#channel-api-real-time-push) below.
 
@@ -1362,7 +1362,7 @@ Open a file by its absolute path on disk. Equivalent to `tandem_open` but callab
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `filePath` | string | yes | Absolute path to the file |
-| `force` | boolean | no | Reload from disk even if already open (clears the in-memory annotations + session; the durable envelope survives and re-merges, #1813). Gated by the license gate; plain open is not. |
+| `force` | boolean | no | Reload from disk even if already open (clears the in-memory annotations + session; the durable envelope survives and re-merges, #1813). |
 | `readOnly` | boolean | no | Force read-only mode. Used by the View Changelog button. |
 
 **Response (200):**
@@ -1370,11 +1370,11 @@ Open a file by its absolute path on disk. Equivalent to `tandem_open` but callab
 { "data": { "documentId": "report-a1b2c3", "fileName": "report.md", "format": "md", "readOnly": false, "source": "file", ... } }
 ```
 
-**Errors:** `400 BAD_REQUEST` (missing/non-string `filePath`, and unsupported format -- `UNSUPPORTED_FORMAT` is mapped to `BAD_REQUEST` by `errorCodeToLabel`), `404 NOT_FOUND` (the wire label; `FILE_NOT_FOUND`/`ENOENT` map to it), `400 INVALID_PATH`, `413 FILE_TOO_LARGE`, `423 FILE_LOCKED` (`EBUSY`, or `EPERM` from a syscall other than `open`), `403 PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`), `403 LICENSE_REQUIRED` (on `force: true`)
+**Errors:** `400 BAD_REQUEST` (missing/non-string `filePath`, and unsupported format -- `UNSUPPORTED_FORMAT` is mapped to `BAD_REQUEST` by `errorCodeToLabel`), `404 NOT_FOUND` (the wire label; `FILE_NOT_FOUND`/`ENOENT` map to it), `400 INVALID_PATH`, `413 FILE_TOO_LARGE`, `423 FILE_LOCKED` (`EBUSY`, or `EPERM` from a syscall other than `open`), `403 PERMISSION_DENIED` (`EACCES`, or `EPERM` from `open`)
 
 ### POST /api/scratchpad
 
-Create and open a Scratchpad tab. Equivalent to `tandem_scratchpad` but callable from the editor UI (used by the `Ctrl+N` shortcut and the `+` button's "New Scratchpad" option). Gated by `licenseGateMiddleware` (#1318).
+Create and open a Scratchpad tab. Equivalent to `tandem_scratchpad` but callable from the editor UI (used by the `Ctrl+N` shortcut and the `+` button's "New Scratchpad" option).
 
 **Request:** Body optional. When present it must be exactly `{ "content"?: string }` -- any other key is rejected.
 
@@ -1387,7 +1387,7 @@ Create and open a Scratchpad tab. Equivalent to `tandem_scratchpad` but callable
 { "data": { "documentId": "abc123", "fileName": "Scratchpad.md", "format": "md", "readOnly": false, "source": "upload", ... } }
 ```
 
-**Errors:** `400 BAD_REQUEST` (unknown key, or non-string `content`), `413 PAYLOAD_TOO_LARGE` (content over 1 MiB), `403 LICENSE_REQUIRED`
+**Errors:** `400 BAD_REQUEST` (unknown key, or non-string `content`), `413 PAYLOAD_TOO_LARGE` (content over 1 MiB)
 
 ### POST /api/close
 
@@ -1462,6 +1462,8 @@ data: {"id":"evt_1710936000000_a1b2c3","type":"chat:message","timestamp":1710936
 
 : keepalive
 ```
+
+**While Tandem is unlicensed** (#1521) this answers `403` with `{ error: "LICENSE_REQUIRED", kind, message }` before any frame — a `Last-Event-ID` replays nothing — and a live stream is ended by the next event pushed while refused. The shared consumer (shim and monitor) treats that 403 as a licence refusal, not an outage: it retries every 5 minutes, reports no `channel-error`, and the plugin monitor prints the refusal once on stdout. Events pushed while refused are still buffered, and replay to the first consumer admitted after activation.
 
 Events are only emitted for editor-originated Y.Map changes (MCP-originated writes are filtered via origin tagging). Keepalives are sent every 15 seconds. The event buffer holds up to 200 events or 60 seconds of history for reconnection replay.
 
