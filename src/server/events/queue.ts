@@ -92,19 +92,21 @@ const emittedPayloadIds = new Map<string, number>();
 let trackedEvents = new WeakSet<TandemEvent>();
 
 /**
- * Events `pushEvent` refused for the AI (#1521) — the ONE licence binding,
- * readable by an in-process subscriber that relays to an AI later. The
- * supervisor's gap watch is one: it is `"internal"` (so the external skip in
- * the fan-out loop never applies to it), and without this it would owe the
- * next spawn a wake for an event the licence refused. Reading this set rather
- * than re-asking `aiRefusal()` keeps the decision single: an event is refused
- * or not once, at push, for every consumer.
+ * Events whose bound `forwardExternally` verdict was true at push — the Solo
+ * gate AND the licence refusal (#1521) together, exactly as the fan-out applied
+ * them to external subscribers. For an in-process subscriber that relays to an
+ * external consumer LATER: the supervisor's gap watch is `"internal"` (so the
+ * fan-out's external skip never applies to it), and it reads this rather than
+ * re-deciding, so it owes the next spawn a wake for exactly what the child's
+ * own external subscription would have received. (The local-model
+ * collaborator is different on purpose: it needs `document:*` regardless, and
+ * re-decides the licence per run.)
  */
-let aiRefusedEvents = new WeakSet<TandemEvent>();
+let forwardedEvents = new WeakSet<TandemEvent>();
 
-/** Was this event refused for the AI when it was pushed? See `aiRefusedEvents`. */
-export function wasRefusedForAi(event: TandemEvent): boolean {
-  return aiRefusedEvents.has(event);
+/** Did this event forward externally when it was pushed? See `forwardedEvents`. */
+export function wasForwardedExternally(event: TandemEvent): boolean {
+  return forwardedEvents.has(event);
 }
 
 const buffer: TandemEvent[] = [];
@@ -295,13 +297,13 @@ function pushEvent(event: TandemEvent): void {
   // that reconnects after activation replays it (an accepted residual — it is
   // the user's own chat reaching their now-licensed Claude).
   const licenceRefused = aiRefusal() !== null;
-  if (licenceRefused) aiRefusedEvents.add(event);
 
   // Bound ONCE and reused, rather than re-read per site: `pushEvent` is
   // synchronous so two reads cannot currently disagree, but binding it is the
   // difference between correct and correct-by-accident. It sits HERE, above the
   // tracking, because tracking is one of its consumers (#1823 item 7).
   const forwardExternally = !licenceRefused && shouldForwardExternally(event);
+  if (forwardExternally) forwardedEvents.add(event);
 
   // Track only when the fan-out below is non-empty AND this event actually
   // forwards externally. The forward term is #1823 item 7: tracking used to run
@@ -386,13 +388,11 @@ function pushEvent(event: TandemEvent): void {
   // iterates. `unsubscribe` (not a raw delete) so `noteExternalConsumersGone`
   // still fires. A consumer's own cleanup calling `unsubscribe` again from
   // inside `onRevoke` is a harmless no-op.
-  if (licenceRefused && externalSubscribers.size > 0) {
-    const revoked = [...externalSubscribers].filter((cb) => revokeHooks.has(cb));
-    for (const cb of revoked) {
-      const onRevoke = revokeHooks.get(cb);
+  if (licenceRefused && revokeHooks.size > 0) {
+    for (const [cb, onRevoke] of [...revokeHooks]) {
       unsubscribe(cb);
       try {
-        onRevoke?.();
+        onRevoke();
       } catch (err) {
         console.error("[EventQueue] Subscriber revoke hook threw:", err);
       }
@@ -663,7 +663,7 @@ export function resetForTesting(): void {
   emittedPayloadIds.clear();
   // Reset as a pair with emittedPayloadIds — see the WeakSet's docblock.
   trackedEvents = new WeakSet<TandemEvent>();
-  aiRefusedEvents = new WeakSet<TandemEvent>();
+  forwardedEvents = new WeakSet<TandemEvent>();
   selectionBuffer.clear();
 
   for (const cleanups of docObservers.values()) {

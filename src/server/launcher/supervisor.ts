@@ -48,12 +48,7 @@ import {
   serializeUserTurn,
 } from "../../shared/launcher/contract.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
-import {
-  shouldForwardExternally,
-  subscribe,
-  unsubscribe,
-  wasRefusedForAi,
-} from "../events/queue.js";
+import { subscribe, unsubscribe, wasForwardedExternally } from "../events/queue.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
 import { type AiRefusal, aiRefusal } from "../license/ai-refusal.js";
 import { sanitizeForLog } from "../log-sanitize.js";
@@ -66,12 +61,10 @@ import { isTauriSidecar } from "../platform.js";
  * envelope without importing the licence module.
  */
 export class LicenseRefusedError extends Error {
-  readonly kind: AiRefusal["kind"];
   readonly refusal: AiRefusal;
   constructor(refusal: AiRefusal) {
     super(refusal.message);
     this.name = "LicenseRefusedError";
-    this.kind = refusal.kind;
     this.refusal = refusal;
   }
 }
@@ -195,21 +188,18 @@ export function defaultSubscribeToEvents(cb: (event: TandemEvent) => void): () =
  * `/health` rely on. Counting the watch as a consumer would make that negative
  * lie whenever it is the only subscriber.
  *
- * An internal subscriber bypasses the queue's Solo gate, so the callback is
- * wrapped in that same gate: the watch owes a wake for exactly the events the
- * child's external subscription would have received. User content held in
- * Solo (`isUserPrivacyHeld`) is dropped before any fan-out, so it never
+ * An internal subscriber bypasses the fan-out's external skip, so the callback
+ * reads the push's own bound verdict (`wasForwardedExternally`) — the Solo gate
+ * and the licence refusal (#1521) together, decided once in `pushEvent`. The
+ * watch therefore owes a wake for exactly the events the child's external
+ * subscription would have received, and never re-decides either. User content
+ * held in Solo (`isUserPrivacyHeld`) is dropped before any fan-out, so it never
  * arrives here at all. The production default; exported so a test can run it
  * against the real queue.
- *
- * The licence gate rides along for the same reason (#1521): the fan-out skips
- * external subscribers for an event refused for the AI, but never an internal
- * one, so the watch reads the push's own refusal (`wasRefusedForAi`) — the
- * single binding — rather than owing the next spawn a wake for it.
  */
 export function defaultSubscribeDuringGap(cb: (event: TandemEvent) => void): () => void {
   const gated = (event: TandemEvent): void => {
-    if (shouldForwardExternally(event) && !wasRefusedForAi(event)) cb(event);
+    if (wasForwardedExternally(event)) cb(event);
   };
   subscribe(gated, "internal");
   return () => unsubscribe(gated);
