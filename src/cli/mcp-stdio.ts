@@ -579,7 +579,9 @@ export async function runMcpStdio(): Promise<void> {
       // treat it as infallible; it has to be.
       try {
         process.stderr.write(
-          `[tandem mcp-stdio] failed to send synthesized error for id ${id}: ${detail}\n`,
+          // Names the code, so a lost licence refusal (-32003) is told apart
+          // from the bridge's own outage errors (-32000) in the log.
+          `[tandem mcp-stdio] failed to send error ${error.code} for id ${id}: ${detail}\n`,
         );
       } catch {
         // Nowhere left to report to.

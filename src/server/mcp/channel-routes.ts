@@ -146,6 +146,10 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
   // Channel reply: shim forwards Claude's chat replies
   app.options(API_CHANNEL_REPLY, apiMiddleware);
   app.post(API_CHANNEL_REPLY, apiMiddleware, (req: Request, res: Response) => {
+    // Refusal first, before body validation, like every other AI channel
+    // route: an unlicensed caller hears why it is refused, not a 400 about its
+    // body. `appendClaudeChatMessage` refuses again below, as defence.
+    if (refuseIfUnlicensed(res)) return;
     const { text, documentId, replyTo, inProgress } = (req.body ?? {}) as Record<string, unknown>;
     if (typeof text !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "text is required" });

@@ -27,6 +27,7 @@
  */
 import { BYO_MODELS_ENABLED } from "../../shared/constants.js";
 import type { ChatMessagePayload, TandemEvent } from "../../shared/events/types.js";
+import { AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE } from "../../shared/license-copy.js";
 import type { AgentIdentity } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { getActiveDocId, requireDocument } from "../documents/registry.js";
@@ -511,7 +512,11 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
   function logRefusal(refusal: AiRefusal): void {
     if (loggedRefusal === refusal.kind) return;
     loggedRefusal = refusal.kind;
-    console.error(`[local-model] ${refusal.message}`);
+    console.error(
+      `[local-model] ${
+        refusal.kind === "unlicensed" ? AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE : refusal.message
+      }`,
+    );
   }
 
   /** Synchronous queue callback: ZERO Y.Doc writes, cheap, non-throwing. */

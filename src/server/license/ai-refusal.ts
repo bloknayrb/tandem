@@ -70,5 +70,6 @@ export function sendAiRefusal(
   refusal: AiRefusal,
   extra: Record<string, unknown> = {},
 ): void {
-  res.status(403).json({ ...refusal, ...extra });
+  // `extra` first: a route may add fields, never overwrite the envelope's.
+  res.status(403).json({ ...extra, ...refusal });
 }

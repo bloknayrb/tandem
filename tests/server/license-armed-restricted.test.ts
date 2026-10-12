@@ -438,6 +438,26 @@ describe("armed and keyless (#1521)", () => {
       expect(chatRow("u-armed")?.read).toBe(false);
     });
 
+    it("POST /api/channel-reply refuses BEFORE validating the body (403, not 400)", async () => {
+      const res = await fetch(`${baseUrl}/api/channel-reply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: 42 }),
+      });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ error: LICENSE_REQUIRED });
+    });
+
+    it("the same malformed body is a 400 on a fresh trial (positive twin)", async () => {
+      useFreshTrial();
+      const res = await fetch(`${baseUrl}/api/channel-reply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: 42 }),
+      });
+      expect(res.status).toBe(400);
+    });
+
     it("POST /api/channel-permission answers 403", async () => {
       const res = await fetch(`${baseUrl}/api/channel-permission`, {
         method: "POST",

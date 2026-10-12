@@ -66,9 +66,9 @@ describe("local-model tool registry (ADR-027 lock)", () => {
 // body-editing tool that stamps authorship is dispatched here and breaks the
 // assertion, pointing straight back at the exclusion decision.
 describe("dispatch — no mutating tool writes an authorship range (M4 (d) tripwire)", () => {
-  // Best-effort valid args per current mutating tool so each dispatch actually
-  // reaches its write path; an unknown future tool falls back to {} (still
-  // dispatched, so it's at least exercised — tighten its args when it lands).
+  // Valid args per mutating tool, so each dispatch actually reaches its write
+  // path. A NEW tool throws here until it gets real args: `MUTATING_TOOLS` is
+  // derived, and a `{}` fallback would let it pass without ever writing.
   function argsFor(name: string, annotationId: string): Record<string, unknown> {
     switch (name) {
       case "comment_on_quote":
@@ -78,7 +78,7 @@ describe("dispatch — no mutating tool writes an authorship range (M4 (d) tripw
       case "reply_to_annotation":
         return { annotation_id: annotationId, text: "reply body" };
       default:
-        return {};
+        throw new Error(`argsFor: no args for mutating tool "${name}" — add a case`);
     }
   }
 
@@ -91,8 +91,11 @@ describe("dispatch — no mutating tool writes an authorship range (M4 (d) tripw
       { ydoc: doc },
     );
     const annotationId = (seed.result as { annotation_id?: string }).annotation_id ?? "";
+    expect(MUTATING_TOOLS.length).toBeGreaterThan(0);
     for (const name of MUTATING_TOOLS) {
-      dispatch(name, argsFor(name, annotationId), { ydoc: doc });
+      const out = dispatch(name, argsFor(name, annotationId), { ydoc: doc });
+      // Each really reached its write path: an ok effect, not an error result.
+      expect(out.effect, name).toMatchObject({ ok: true });
     }
     expect(doc.getMap(Y_MAP_AUTHORSHIP).size).toBe(0);
   });
