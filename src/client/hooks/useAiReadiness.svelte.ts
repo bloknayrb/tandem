@@ -314,8 +314,8 @@ function isRunning(s: LauncherStatus): s is RunningLauncherStatus {
  * retrying.
  *
  * `stop-failed` is set only when a reaper survived SIGKILL and was abandoned.
- * A relaunch's own spawn clears it, so it survives only when that relaunch
- * spawned nothing: its plan found no integration (which reads as
+ * A relaunch's own spawn clears it, so it survives a relaunch only when that
+ * relaunch spawned nothing: its plan found no integration (which reads as
  * `not-configured`, masking it), or reading or persisting the plan threw. The
  * abandoned process may still be alive, so "isn't running" can be imprecise
  * there; Restart is still the right remedy.
