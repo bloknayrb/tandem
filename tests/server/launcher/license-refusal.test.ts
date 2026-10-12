@@ -159,7 +159,10 @@ function makeSupervisor(): Supervisor {
     integrationsBase: baseDir,
     probeCliUsable: () => true,
     restartBackoffsMs: [0],
+    // Both fan-out seams faked: the defaults subscribe to the REAL queue, and
+    // a supervisor left armed would leak a subscription into the next test.
     subscribeToEvents: () => () => {},
+    subscribeDuringGap: () => () => {},
     aiRefusal: () => (refused ? REFUSAL : null),
   });
   sups.push(sup);
@@ -219,14 +222,17 @@ describe("supervisor licence refusal (#1521)", () => {
   it("a refused relaunch never overwrites a breaker diagnosis", async () => {
     const sup = makeSupervisor();
     await sup.start();
-    // Crash-loop until the breaker trips (11 spawns at a 0 ms backoff).
-    for (let i = 0; i < 40 && sup.status().lastError !== "circuit-open"; i++) {
+    // Crash-loop until the breaker trips: crash each child, then wait for
+    // either its successor or the trip — never a fixed sleep.
+    while (sup.status().lastError !== "circuit-open") {
       const child = children[children.length - 1];
-      if (child.exitCode === null) {
-        child.exitCode = 1;
-        child.emit("exit", 1, null);
-      }
-      await sleep(10);
+      const spawned = children.length;
+      child.exitCode = 1;
+      child.emit("exit", 1, null);
+      await waitFor(
+        () => children.length > spawned || sup.status().lastError === "circuit-open",
+        "the next spawn or the trip",
+      );
     }
     expect(sup.status()).toEqual({ running: false, lastError: "circuit-open" });
     refused = true;
@@ -237,6 +243,25 @@ describe("supervisor licence refusal (#1521)", () => {
     const before = children.length;
     await sup.resumeAfterLicence();
     expect(children).toHaveLength(before);
+  });
+
+  it("a refused relaunch never overwrites spawn-failed either", async () => {
+    const sup = makeSupervisor();
+    await sup.start();
+    // A crash whose restart cannot read integrations.json (not a transient
+    // errno) stays down with `spawn-failed` — a real diagnosis.
+    fs.writeFileSync(
+      path.join(baseDir, "integrations.json"),
+      JSON.stringify({ schemaVersion: 999, integrations: [] }),
+    );
+    const first = children[0];
+    first.exitCode = 1;
+    first.emit("exit", 1, null);
+    await waitFor(() => sup.status().lastError === "spawn-failed", "the failed restart");
+    refused = true;
+    await expect(sup.relaunch(cwdDir)).rejects.toBeInstanceOf(LicenseRefusedError);
+    expect(sup.status()).toEqual({ running: false, lastError: "spawn-failed" });
+    expect(sup.licenceRefusal()).toBeNull();
   });
 
   it("resumeAfterLicence spawns exactly once after the licence is activated", async () => {

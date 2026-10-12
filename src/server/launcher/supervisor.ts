@@ -48,7 +48,12 @@ import {
   serializeUserTurn,
 } from "../../shared/launcher/contract.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
-import { shouldForwardExternally, subscribe, unsubscribe } from "../events/queue.js";
+import {
+  shouldForwardExternally,
+  subscribe,
+  unsubscribe,
+  wasRefusedForAi,
+} from "../events/queue.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
 import { type AiRefusal, aiRefusal } from "../license/ai-refusal.js";
 import { sanitizeForLog } from "../log-sanitize.js";
@@ -196,10 +201,15 @@ export function defaultSubscribeToEvents(cb: (event: TandemEvent) => void): () =
  * Solo (`isUserPrivacyHeld`) is dropped before any fan-out, so it never
  * arrives here at all. The production default; exported so a test can run it
  * against the real queue.
+ *
+ * The licence gate rides along for the same reason (#1521): the fan-out skips
+ * external subscribers for an event refused for the AI, but never an internal
+ * one, so the watch reads the push's own refusal (`wasRefusedForAi`) — the
+ * single binding — rather than owing the next spawn a wake for it.
  */
 export function defaultSubscribeDuringGap(cb: (event: TandemEvent) => void): () => void {
   const gated = (event: TandemEvent): void => {
-    if (shouldForwardExternally(event)) cb(event);
+    if (shouldForwardExternally(event) && !wasRefusedForAi(event)) cb(event);
   };
   subscribe(gated, "internal");
   return () => unsubscribe(gated);
@@ -2216,10 +2226,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     const refusal = decideRefusal();
     if (refusal) {
       if (child === null) {
-        lastError = "unlicensed";
-        lastRefusal = refusal;
+        recordLicenceRefusal(refusal);
+        console.error("[Launcher] Not starting Claude Code: AI features are unlicensed");
       }
-      console.error("[Launcher] Not starting Claude Code: AI features are unlicensed");
       return;
     }
     try {
@@ -2271,15 +2280,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // `clearSavedSession` and `persistRequestedCwd`, so a refused relaunch
     // never kills a running child, drops a session or moves the cwd. It
     // refuses by THROWING (the routes map it to 403). `lastError` is recorded
-    // only with no child alive and no breaker tripped: a running child would
-    // carry a stale code into its healthy run (see `SupervisorStatus`), and
-    // overwriting `circuit-open` / `cli-unusable` would hide a real diagnosis.
+    // only with no child alive (a running child would carry a stale code into
+    // its healthy run, see `SupervisorStatus`) and never over another code
+    // (`recordLicenceRefusal`).
     const refusal = decideRefusal();
     if (refusal) {
-      if (child === null && !breakerTripped) {
-        lastError = "unlicensed";
-        lastRefusal = refusal;
-      }
+      if (child === null) recordLicenceRefusal(refusal);
       throw new LicenseRefusedError(refusal);
     }
     // Counted from BEFORE the stop (#2180): `kill()` marks the child killed at
@@ -2464,8 +2470,24 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     });
   }
 
+  /**
+   * Record a licence refusal as `lastError`, but never over another code:
+   * `spawn-failed`, `stop-failed` and the breaker's codes are real diagnoses
+   * the refusal must not hide, and a breaker trip (which always sets one of
+   * them) must not read as "resumable on activation".
+   */
+  function recordLicenceRefusal(refusal: AiRefusal): void {
+    if (lastError !== undefined && lastError !== "unlicensed") return;
+    lastError = "unlicensed";
+    lastRefusal = refusal;
+  }
+
   /** See `Supervisor.resumeAfterLicence`. Under the op lock, and idempotent. */
   async function resumeAfterLicence(): Promise<void> {
+    // Unlocked pre-check: activation must never queue behind an in-flight
+    // launcher op (a relaunch can hold the lock for seconds) when there is
+    // nothing to resume. Re-checked under the lock below.
+    if (lastError !== "unlicensed") return;
     return withLock(async () => {
       if (child !== null || lastError !== "unlicensed" || userStopped || breakerTripped) return;
       console.error("[Launcher] Licence activated — starting Claude Code");

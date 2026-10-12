@@ -91,6 +91,22 @@ const emittedPayloadIds = new Map<string, number>();
  */
 let trackedEvents = new WeakSet<TandemEvent>();
 
+/**
+ * Events `pushEvent` refused for the AI (#1521) — the ONE licence binding,
+ * readable by an in-process subscriber that relays to an AI later. The
+ * supervisor's gap watch is one: it is `"internal"` (so the external skip in
+ * the fan-out loop never applies to it), and without this it would owe the
+ * next spawn a wake for an event the licence refused. Reading this set rather
+ * than re-asking `aiRefusal()` keeps the decision single: an event is refused
+ * or not once, at push, for every consumer.
+ */
+let aiRefusedEvents = new WeakSet<TandemEvent>();
+
+/** Was this event refused for the AI when it was pushed? See `aiRefusedEvents`. */
+export function wasRefusedForAi(event: TandemEvent): boolean {
+  return aiRefusedEvents.has(event);
+}
+
 const buffer: TandemEvent[] = [];
 const subscribers = new Set<EventCallback>();
 
@@ -279,6 +295,7 @@ function pushEvent(event: TandemEvent): void {
   // that reconnects after activation replays it (an accepted residual — it is
   // the user's own chat reaching their now-licensed Claude).
   const licenceRefused = aiRefusal() !== null;
+  if (licenceRefused) aiRefusedEvents.add(event);
 
   // Bound ONCE and reused, rather than re-read per site: `pushEvent` is
   // synchronous so two reads cannot currently disagree, but binding it is the
@@ -646,6 +663,7 @@ export function resetForTesting(): void {
   emittedPayloadIds.clear();
   // Reset as a pair with emittedPayloadIds — see the WeakSet's docblock.
   trackedEvents = new WeakSet<TandemEvent>();
+  aiRefusedEvents = new WeakSet<TandemEvent>();
   selectionBuffer.clear();
 
   for (const cleanups of docObservers.values()) {
