@@ -47,6 +47,7 @@ import {
   setRailVisible,
   switchToAnnotationsTab,
 } from "../../tests/e2e/helpers";
+import { E2E_MCP_PORT } from "../test-ports";
 import {
   type AccountRedactionPlan,
   findAccountPathLeaks,
@@ -130,6 +131,11 @@ test.afterEach(async () => {
  * carry-over sweep races nothing. Any OTHER failure — a gated tool, a closed
  * document — means the slate is not clean and the next shot would photograph
  * the residue, so it throws.
+ *
+ * A user-private record (the tutorial's note, a user highlight) is refused to
+ * Claude by design (ADR-027), so it goes through the route the user's
+ * own Archive button uses instead. Until this fallback, that refusal failed
+ * every step in this file.
  */
 async function removeAnnotation(documentId: string, id: string): Promise<void> {
   // The parameter is `id`, not `annotationId` (src/server/mcp/annotations.ts).
@@ -137,6 +143,17 @@ async function removeAnnotation(documentId: string, id: string): Promise<void> {
   // name failed all twelve at once — which is how we learned this pipeline had
   // never actually run.
   const res = (await mcp.callTool("tandem_removeAnnotation", { id, documentId })) as Envelope;
+  if (res.error && res.code === "INVALID_ARGUMENT" && res.message?.includes("user-private")) {
+    const archive = await fetch(`http://127.0.0.1:${E2E_MCP_PORT}/api/remove-annotation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ annotationId: id, documentId }),
+    });
+    if (!archive.ok) {
+      throw new Error(`Archive of ${id} failed: ${archive.status} ${await archive.text()}`);
+    }
+    return;
+  }
   if (res.error && res.code !== "NOT_FOUND") {
     throw new Error(
       `tandem_removeAnnotation(${id}) failed: ${res.code ?? ""} ${res.message ?? ""}`,

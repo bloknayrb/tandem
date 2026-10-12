@@ -537,7 +537,7 @@ function cycleWordMode() {
              Never appended while a `pulse` override is set: beside Tandem's
              Claude, `claudeStatus` may be another session's, and the chat UI
              shows status only for the chat's attached session. -->
-        {view.label}{#if view.sessionCount !== null}<span data-testid="status-ai-session-count">{` · ${sessionCountLabel(view.sessionCount)}`}</span>{/if}{#if claudeStatus && view.canAnimate && view.pulse === null} · {claudeStatus}{#if view.tone === "solo"} (not your comments){/if}{/if}
+        {view.label}{#if view.sessionCount !== null}<span data-testid="status-ai-session-count">{` · ${sessionCountLabel(view.sessionCount)}`}</span>{/if}{#if claudeStatus && view.canAnimate && view.pulse === null}{` · ${claudeStatus}`}{#if view.tone === "solo"}{" (not your comments)"}{/if}{/if}
       </span>
   {/snippet}
   {#if aiView}

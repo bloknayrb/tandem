@@ -114,7 +114,7 @@ describe("StatusBar AI action indicator", () => {
     const indicator = getByTestId("status-ai-indicator");
     expect(indicator.textContent).toContain("Solo · comments held");
     expect(indicator.textContent).toContain("reviewing scratchpad…");
-    expect(indicator.textContent).toContain("(not your comments)");
+    expect(indicator.textContent).toContain("reviewing scratchpad… (not your comments)");
     // The label already says "held"; the qualifier must add the missing fact,
     // not restate it on a status strip whose scarcest resource is width.
     expect(indicator.textContent).not.toContain("comments still held");
@@ -136,6 +136,9 @@ describe("StatusBar AI action indicator", () => {
     // assertion below is about the gate and not about an empty pill.
     expect(indicator.textContent).toContain("reviewing scratchpad…");
     expect(indicator.textContent).not.toContain("not your comments");
+    // The separator keeps its leading space: Svelte trims a text node's leading
+    // whitespace after an `{#if}`, which rendered "AI connected· reviewing…".
+    expect(indicator.textContent).toContain(" · reviewing scratchpad…");
   });
 });
 
