@@ -1508,6 +1508,7 @@ describe("collaborator — licence (#1521)", () => {
     expect(runTurn).not.toHaveBeenCalled();
     expect(chatMessages()).toHaveLength(0);
     const lines = errSpy.mock.calls.map((c) => String(c[0])).filter((l) => /unlicensed/.test(l));
+    errSpy.mockRestore();
     expect(lines).toHaveLength(1);
   });
 
@@ -1519,7 +1520,7 @@ describe("collaborator — licence (#1521)", () => {
       opts.onTurnEnd?.({ hadToolCalls: false });
       return cleanResult("ok");
     });
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const collab = createLocalModelCollaborator(
       makeDeps({ runTurn, aiRefusal: () => (refused ? REFUSAL : null) }),
     );
@@ -1532,6 +1533,7 @@ describe("collaborator — licence (#1521)", () => {
     refused = false;
     collab.onEvent(chatEvent("after activation", { documentId: "doc-lic2", messageId: "d" }));
     await drain(collab);
+    errSpy.mockRestore();
     expect(runTurn).toHaveBeenCalledTimes(1);
     expect(chatMessages()).toHaveLength(1);
   });

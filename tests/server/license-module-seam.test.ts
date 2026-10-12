@@ -68,17 +68,21 @@ for (const file of FILES) {
   IMPORTS.set(file, targets);
 }
 
-/** module (basename under src/server/license) → sorted importer files outside it. */
+/** A licence module's key: its path under src/server/license, without `.ts`
+ * (`ai-refusal`, or `sub/dir/thing` for a module in a subdirectory). */
+const modKey = (abs: string) =>
+  relative(LICENSE_DIR, abs).split(sep).join("/").replace(/\.ts$/, "");
+
+/** module (path under src/server/license, subdirectories included) → sorted
+ * importer files outside it. */
 function importerMap(): Record<string, string[]> {
   const map: Record<string, string[]> = {};
-  for (const mod of readdirSync(LICENSE_DIR).filter((f) => f.endsWith(".ts"))) {
-    map[mod.replace(/\.ts$/, "")] = [];
-  }
+  for (const mod of walk(LICENSE_DIR)) map[modKey(mod)] = [];
   for (const [file, targets] of IMPORTS) {
     if (file.startsWith(LICENSE_DIR + sep)) continue;
     for (const t of targets) {
-      if (dirname(t) !== LICENSE_DIR) continue;
-      const mod = t.slice(LICENSE_DIR.length + 1).replace(/\.ts$/, "");
+      if (!t.startsWith(LICENSE_DIR + sep)) continue;
+      const mod = modKey(t);
       if (!map[mod].includes(toRel(file))) map[mod].push(toRel(file));
     }
   }
@@ -128,12 +132,49 @@ describe("licence module seam (#1521)", () => {
     });
   });
 
+  /** Every `sidecarBundle("<name>")` in tsup.config.ts — the bundles that carry
+   * no licence `define`. Derived, so a new sidecar joins the check by itself. */
+  const SIDECAR_ENTRIES = [
+    ...readFileSync(join(ROOT, "tsup.config.ts"), "utf-8").matchAll(
+      /sidecarBundle\(\s*"([\w-]+)"\s*\)/g,
+    ),
+  ].map((m) => `src/${m[1]}/index.ts`);
+
   const DEFINE_LESS_ROOTS = [
+    ...SIDECAR_ENTRIES,
     "src/cli/mcp-stdio.ts",
-    "src/channel/index.ts",
-    "src/monitor/index.ts",
     "src/shared/sse-consumer.ts",
   ];
+
+  it("the define-less roots are derived from tsup's sidecar entries", () => {
+    expect(SIDECAR_ENTRIES.length).toBeGreaterThan(0);
+    expect(SIDECAR_ENTRIES).toEqual(
+      expect.arrayContaining([
+        "src/channel/index.ts",
+        "src/monitor/index.ts",
+        "src/stdio-bridge/index.ts",
+      ]),
+    );
+    for (const entry of SIDECAR_ENTRIES) {
+      expect(existsSync(join(ROOT, entry)), `${entry} exists`).toBe(true);
+      expect(DEFINE_LESS_ROOTS).toContain(entry);
+    }
+  });
+
+  /**
+   * The relative-import walk above is blind to a path alias, so a `@server/…`
+   * import in a define-less bundle would reach the licence modules unseen.
+   * The aliases exist in tsconfig for the client only; fail closed on any
+   * other use rather than teach the walker to resolve them.
+   */
+  it("no file outside src/client imports through a @server/ @shared/ @client/ alias", () => {
+    const hits = FILES.filter((f) => !f.startsWith(join(SRC, "client") + sep))
+      .filter((f) =>
+        specifiers(readFileSync(f, "utf-8")).some((s) => /^@(server|shared|client)\//.test(s)),
+      )
+      .map(toRel);
+    expect(hits).toEqual([]);
+  });
 
   it("no define-less bundle reaches src/server/license by any import chain", () => {
     for (const root of DEFINE_LESS_ROOTS) {
@@ -172,5 +213,35 @@ describe("licence module seam (#1521)", () => {
     expect(hits).toEqual([]);
     // Positive twin: the one legitimate reader really does read it.
     expect(readFileSync(join(LICENSE_DIR, "gate-flag.ts"), "utf-8")).toMatch(/TANDEM_LICENSE_GATE/);
+  });
+});
+
+describe("licence bindings that a refactor could quietly change (#1521)", () => {
+  const supervisor = readFileSync(join(SRC, "server", "launcher", "supervisor.ts"), "utf-8");
+  const collaborator = readFileSync(join(SRC, "server", "local-model", "collaborator.ts"), "utf-8");
+
+  /**
+   * The launched Claude's push subscription is `"external"` (the Solo gate) and
+   * carries NO `onRevoke`: a refused event must skip it, never unsubscribe it,
+   * so a child still running at expiry is woken again after activation. An
+   * `onRevoke` added here would silently strand that child.
+   */
+  it("the supervisor's push subscription is external with no onRevoke", () => {
+    const body = /export function defaultSubscribeToEvents\([^)]*\)[^{]*\{([\s\S]*?)\n\}/.exec(
+      supervisor,
+    )?.[1];
+    expect(body, "defaultSubscribeToEvents is gone").toBeDefined();
+    expect(body).toMatch(/\bsubscribe\(cb, "external"\);/);
+    expect(body).not.toMatch(/onRevoke/);
+  });
+
+  /**
+   * Both default to the LIVE decision; an injectable seam whose default became
+   * `() => null` would admit everything with every test still green.
+   */
+  it("the supervisor and the collaborator default to the live aiRefusal", () => {
+    expect(supervisor).toMatch(/opts\.aiRefusal \?\? aiRefusal;/);
+    expect(collaborator).toMatch(/deps\.aiRefusal \?\? aiRefusal;/);
+    expect(collaborator).toMatch(/const DEFAULT_DEPS: CollaboratorDeps = \{[\s\S]*?\baiRefusal,/);
   });
 });

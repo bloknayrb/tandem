@@ -43,6 +43,7 @@ import {
 } from "../../src/server/events/queue.js";
 import type { TandemEvent } from "../../src/server/events/types.js";
 import { WAKE_CLOSE_LICENSE_REQUIRED } from "../../src/server/events/wake-socket.js";
+import { defaultSubscribeDuringGap } from "../../src/server/launcher/supervisor.js";
 import { aiRefusal } from "../../src/server/license/ai-refusal.js";
 import { GATE_ENABLED } from "../../src/server/license/gate-flag.js";
 import { resolveLiveLicenseState } from "../../src/server/license/license-state.js";
@@ -54,10 +55,16 @@ import {
   startMcpServerHttp,
   startMcpServerStdio,
 } from "../../src/server/mcp/server.js";
-import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
-import { CTRL_ROOM, TANDEM_PURCHASE_URL, Y_MAP_CHAT } from "../../src/shared/constants.js";
+import { getDocument, getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import {
+  CTRL_ROOM,
+  TANDEM_PURCHASE_URL,
+  Y_MAP_AWARENESS,
+  Y_MAP_CHAT,
+  Y_MAP_CLAUDE,
+} from "../../src/shared/constants.js";
 import { LICENSE_REQUIRED, LICENSE_REQUIRED_RPC_CODE } from "../../src/shared/license-copy.js";
-import { withBrowser } from "../../src/shared/origins.js";
+import { withBrowser, withInternal } from "../../src/shared/origins.js";
 import { allocPort } from "../helpers/alloc-port.js";
 
 const DAY = 86_400_000;
@@ -280,6 +287,87 @@ describe("armed and keyless (#1521)", () => {
       expect(res.status).toBe(403);
       expect(await res.json()).toMatchObject({ error: LICENSE_REQUIRED, kind: "unlicensed" });
     });
+
+    it("closes the live session it names while refused", async () => {
+      useFreshTrial();
+      const sid = await openSession();
+      useExpired();
+      const res = await fetch(`${baseUrl}/mcp`, {
+        headers: { Accept: "text/event-stream", "mcp-session-id": sid },
+      });
+      expect(res.status).toBe(403);
+      await res.text();
+      expect(hasAnyMcpSession()).toBe(false);
+    });
+
+    it("opens the stream for a live session on a fresh trial (positive twin)", async () => {
+      useFreshTrial();
+      const sid = await openSession();
+      const ctrl = new AbortController();
+      const res = await fetch(`${baseUrl}/mcp`, {
+        headers: { Accept: "text/event-stream", "mcp-session-id": sid },
+        signal: ctrl.signal,
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toMatch(/text\/event-stream/);
+      ctrl.abort();
+      expect(hasAnyMcpSession()).toBe(true);
+      await closeMcpSession();
+    });
+  });
+
+  describe("DELETE /mcp", () => {
+    it("is admitted while refused, so teardown works", async () => {
+      useFreshTrial();
+      const sid = await openSession();
+      useExpired();
+      const res = await fetch(`${baseUrl}/mcp`, {
+        method: "DELETE",
+        headers: { "mcp-session-id": sid },
+      });
+      expect(res.status).toBe(200);
+      expect(await res.text()).not.toContain(LICENSE_REQUIRED);
+      expect(hasAnyMcpSession()).toBe(false);
+    });
+  });
+
+  describe("Claude's presence when a refusal closes the last session", () => {
+    async function openDocWithClaudePresent(): Promise<string> {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-license-presence-"));
+      createdDirs.push(dir);
+      const file = path.join(dir, "presence.md");
+      fs.writeFileSync(file, "# Presence\n\nBody.\n");
+      const opened = await fetch(`${baseUrl}/api/open`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filePath: file }),
+      });
+      const docId = ((await opened.json()) as { data: { documentId: string } }).data.documentId;
+      const doc = getOrCreateDocument(docId);
+      withInternal(doc, () =>
+        doc.getMap(Y_MAP_AWARENESS).set(Y_MAP_CLAUDE, { active: true, status: "working" }),
+      );
+      return docId;
+    }
+    const claudeActive = (docId: string) =>
+      (getDocument(docId)?.getMap(Y_MAP_AWARENESS).get(Y_MAP_CLAUDE) as { active?: boolean })
+        ?.active;
+
+    it("is cleared only when the refusal closes the LAST session", async () => {
+      useFreshTrial();
+      const a = await openSession();
+      const b = await openSession();
+      const docId = await openDocWithClaudePresent();
+      useExpired();
+
+      await postMcp({ jsonrpc: "2.0", id: 20, method: "tools/list" }, a);
+      expect(hasAnyMcpSession()).toBe(true); // b remains
+      expect(claudeActive(docId)).toBe(true);
+
+      await postMcp({ jsonrpc: "2.0", id: 21, method: "tools/list" }, b);
+      expect(hasAnyMcpSession()).toBe(false);
+      expect(claudeActive(docId)).toBe(false);
+    });
   });
 
   describe("stdio server mode (TANDEM_TRANSPORT=stdio)", () => {
@@ -357,6 +445,32 @@ describe("armed and keyless (#1521)", () => {
         body: JSON.stringify({ requestId: "r1", toolName: "Bash" }),
       });
       expect(res.status).toBe(403);
+    });
+
+    it("POST /api/channel-permission-verdict answers 403", async () => {
+      const res = await fetch(`${baseUrl}/api/channel-permission-verdict`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId: "r1", approved: true }),
+      });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ error: LICENSE_REQUIRED });
+    });
+
+    it("both channel-permission POSTs are admitted on a fresh trial (positive twin)", async () => {
+      useFreshTrial();
+      const permission = await fetch(`${baseUrl}/api/channel-permission`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId: "r2", toolName: "Bash" }),
+      });
+      expect(permission.status).toBe(200);
+      const verdict = await fetch(`${baseUrl}/api/channel-permission-verdict`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId: "r2", approved: false }),
+      });
+      expect(verdict.status).toBe(200);
     });
 
     it("POST /api/channel-reply is admitted on a fresh trial (positive twin)", async () => {
@@ -444,6 +558,8 @@ describe("armed and keyless (#1521)", () => {
       _pushEventForTests(chatEvent("m-admitted"));
       expect(cb).toHaveBeenCalledTimes(1);
       expect(wasEmittedViaChannel("m-admitted")).toBe(true);
+      // The twin of the refused case's "starts no wake clock".
+      expect(getDeliveryState(Date.now(), getSubscriberCount()).state).toBe("awaiting-poll");
       unsubscribe(cb);
     });
 
@@ -468,6 +584,26 @@ describe("armed and keyless (#1521)", () => {
       expect(supervisorLike).toHaveBeenCalledTimes(1);
       expect(sse).not.toHaveBeenCalled();
       unsubscribe(supervisorLike);
+    });
+
+    it("the supervisor's gap watch owes no wake for an event refused for the AI", () => {
+      // The gap watch is an INTERNAL subscriber, which the fan-out never skips;
+      // it must read the push's own refusal. A chat sent while unlicensed must
+      // not reach Claude later as an owed wake.
+      const owed = vi.fn();
+      const stop = defaultSubscribeDuringGap(owed);
+      _pushEventForTests(chatEvent("m-gap-refused"));
+      expect(owed).not.toHaveBeenCalled();
+      stop();
+    });
+
+    it("the gap watch owes a wake for an admitted event (positive twin)", () => {
+      useFreshTrial();
+      const owed = vi.fn();
+      const stop = defaultSubscribeDuringGap(owed);
+      _pushEventForTests(chatEvent("m-gap-admitted"));
+      expect(owed).toHaveBeenCalledTimes(1);
+      stop();
     });
 
     it("ends a live SSE stream when an event arrives while refused", async () => {
