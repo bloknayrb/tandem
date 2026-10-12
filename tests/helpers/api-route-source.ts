@@ -60,8 +60,8 @@ export type Registration = {
  * Paren-balanced rather than "up to the next `);`" because two registrations
  * carry an inline object literal (`makeRotateTokenHandler({ ... })`) and one a
  * nested call, so a first-match scan truncates them — and a truncated call is
- * one that no longer contains its own `licenseGateMiddleware`, which would read
- * as "ungated" rather than as a parse failure.
+ * one that no longer contains its own licence refusal, which would read as
+ * "not refused" rather than as a parse failure.
  */
 function balancedCall(src: string, openParenIdx: number): string {
   let depth = 0;

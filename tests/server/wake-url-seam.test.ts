@@ -12,8 +12,8 @@
  * to its enclosing `server.tool(` / `registerTool(` name — is silently wrong on today's source:
  * `tandem_status` is registered as `withErrorBoundary(` newline `"tandem_status"`
  * (`document.ts:1448`), so a "nearest preceding registration" inference attributes the call at
- * `:1505` to `tandem_save`. A confidently wrong answer is worse than no answer, and
- * `license-gate-coverage.test.ts` already sets the better precedent.
+ * `:1505` to `tandem_save`. A confidently wrong answer is worse than no answer, so
+ * this keys on symbols and reach instead.
  *
  * Four escapes this guards, three of which a naive importer-set-plus-count sweep misses:
  *

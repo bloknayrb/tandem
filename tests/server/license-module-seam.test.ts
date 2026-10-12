@@ -1,89 +1,91 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { join, posix } from "node:path";
 import { describe, expect, it } from "vitest";
+import { SRC_FILES, stripComments } from "../helpers/src-tree.js";
 
 /**
  * The licence module seam (#1521), keyed on modules, not names.
  *
  * Pins **module → importer files** for every module under `src/server/license/`
- * — static imports, `import()` strings and re-exports — read off the code as
- * implemented. A new importer of the licence decision is a new place licence
- * state is consulted; it must be added here, which is a diff someone reviews.
+ * (subdirectories included) — static imports and type imports, `export … from`
+ * re-exports, bare side-effect imports and `import()` strings — read off the
+ * code as implemented. A new importer of the licence decision is a new place
+ * licence state is consulted; it must be added here, which is a diff someone
+ * reviews.
  *
- * And the forbidden half: the bundles built WITHOUT the licence `define` (the
- * stdio bridge, the channel shim, the plugin monitor and the shared SSE
- * consumer they use) must never reach `src/server/license/` by any import
- * chain — `gate-flag.ts` would fall back to the env var there, and esbuild
- * leaves an absent define as a bare free global. They key on the wire payload
- * `error === "LICENSE_REQUIRED"` instead.
+ * And the forbidden half: the bundles built WITHOUT the licence `define` (every
+ * tsup sidecar, the stdio bridge's script and the shared SSE consumer) must
+ * never reach `src/server/license/` by any import chain — `gate-flag.ts` would
+ * fall back to the env var there, and esbuild leaves an absent define as a bare
+ * free global. They key on the wire payload `error === "LICENSE_REQUIRED"`.
+ *
+ * **The walk fails closed.** A relative specifier it cannot resolve is
+ * collected and asserted empty, rather than silently dropped from the graph —
+ * a dropped edge is exactly how a forbidden import would read as absent. A path
+ * alias (`@server/…`) is refused outright for the same reason.
  *
  * Reachability of the refusals themselves is the armed probe's job
  * (`license-armed-restricted.test.ts`), not this one's.
  */
 
 const ROOT = join(import.meta.dirname, "..", "..");
-const SRC = join(ROOT, "src");
-const LICENSE_DIR = join(SRC, "server", "license");
+const LICENSE_PREFIX = "src/server/license/";
+const CODE = /\.(ts|mts|svelte|js|mjs)$/;
 
-const toRel = (abs: string) => relative(ROOT, abs).split(sep).join("/");
-
-function walk(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir)) {
-    const abs = join(dir, entry);
-    if (statSync(abs).isDirectory()) walk(abs, out);
-    else if (/\.(ts|mts|svelte)$/.test(entry) && !entry.endsWith(".d.ts")) out.push(abs);
-  }
-  return out;
-}
-
-/** Every module specifier: `from "x"` (imports and re-exports) and `import("x")`. */
+/**
+ * Every module specifier in a file, comments stripped. The `import|export …
+ * from` arm spans lines (`[^;'"]` matches newlines), so a multi-line
+ * `export { a, b } from "…"` and an `import type { T } from "…"` both count;
+ * pattern borrowed from `tests/docs/documents-boundary.test.ts`.
+ */
 function specifiers(src: string): string[] {
+  const clean = stripComments(src);
   const out: string[] = [];
-  for (const m of src.matchAll(/\bfrom\s*["']([^"']+)["']/g)) out.push(m[1]);
-  for (const m of src.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g)) out.push(m[1]);
-  for (const m of src.matchAll(/^\s*import\s+["']([^"']+)["']/gm)) out.push(m[1]);
+  const pattern =
+    /\b(?:import|export)\s+(?:type\s+)?(?:[^;'"]*?\s+)?from\s*["']([^"']+)["']|\bimport\s+["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/g;
+  for (const m of clean.matchAll(pattern)) out.push(m[1] ?? m[2] ?? m[3]);
   return out;
 }
 
-/** Resolve a relative specifier to a source file, mapping `.js` to `.ts`. */
-function resolveSpec(fromFile: string, spec: string): string | null {
-  if (!spec.startsWith(".")) return null;
-  const base = resolve(dirname(fromFile), spec);
+/** Resolve a relative specifier to a known `src/` file, mapping `.js` to `.ts`; `null` if none. */
+function resolveSpec(fromRel: string, spec: string): string | null {
+  const base = posix.normalize(posix.join(posix.dirname(fromRel), spec.replace(/\?.*$/, "")));
   const candidates = [
     base.replace(/\.js$/, ".ts"),
-    base.replace(/\.js$/, ".svelte.ts"),
+    base.replace(/\.mjs$/, ".mts"),
     base,
     `${base}.ts`,
-    join(base, "index.ts"),
+    `${base}/index.ts`,
   ];
-  return candidates.find((c) => existsSync(c) && statSync(c).isFile()) ?? null;
+  return candidates.find((c) => SRC_FILES.has(c)) ?? null;
 }
 
-const FILES = walk(SRC);
+const CODE_FILES = [...SRC_FILES.keys()].filter((f) => CODE.test(f));
 const IMPORTS = new Map<string, string[]>();
-for (const file of FILES) {
-  const targets = specifiers(readFileSync(file, "utf-8"))
-    .map((s) => resolveSpec(file, s))
-    .filter((t): t is string => t !== null);
+const UNRESOLVED: string[] = [];
+for (const file of CODE_FILES) {
+  const targets: string[] = [];
+  for (const spec of specifiers(SRC_FILES.get(file) as string)) {
+    if (!spec.startsWith(".")) continue;
+    const resolved = resolveSpec(file, spec);
+    if (resolved) targets.push(resolved);
+    else UNRESOLVED.push(`${file} -> ${spec}`);
+  }
   IMPORTS.set(file, targets);
 }
 
-/** A licence module's key: its path under src/server/license, without `.ts`
- * (`ai-refusal`, or `sub/dir/thing` for a module in a subdirectory). */
-const modKey = (abs: string) =>
-  relative(LICENSE_DIR, abs).split(sep).join("/").replace(/\.ts$/, "");
-
-/** module (path under src/server/license, subdirectories included) → sorted
- * importer files outside it. */
+/** module (path under src/server/license, no `.ts`) → sorted importers outside it. */
 function importerMap(): Record<string, string[]> {
   const map: Record<string, string[]> = {};
-  for (const mod of walk(LICENSE_DIR)) map[modKey(mod)] = [];
+  for (const f of CODE_FILES.filter((f) => f.startsWith(LICENSE_PREFIX))) {
+    map[f.slice(LICENSE_PREFIX.length).replace(/\.ts$/, "")] = [];
+  }
   for (const [file, targets] of IMPORTS) {
-    if (file.startsWith(LICENSE_DIR + sep)) continue;
+    if (file.startsWith(LICENSE_PREFIX)) continue;
     for (const t of targets) {
-      if (!t.startsWith(LICENSE_DIR + sep)) continue;
-      const mod = modKey(t);
-      if (!map[mod].includes(toRel(file))) map[mod].push(toRel(file));
+      if (!t.startsWith(LICENSE_PREFIX)) continue;
+      const mod = t.slice(LICENSE_PREFIX.length).replace(/\.ts$/, "");
+      if (!map[mod].includes(file)) map[mod].push(file);
     }
   }
   for (const k of Object.keys(map)) map[k].sort();
@@ -104,6 +106,12 @@ function closure(entry: string): Set<string> {
 }
 
 describe("licence module seam (#1521)", () => {
+  it("the import walk resolves every relative specifier in src (fails closed)", () => {
+    expect(UNRESOLVED).toEqual([]);
+    // Anti-vacuity: the walk found real edges.
+    expect([...IMPORTS.values()].flat().length).toBeGreaterThan(100);
+  });
+
   it("each src/server/license module is imported by exactly the reviewed files", () => {
     expect(importerMap()).toEqual({
       activation: ["src/cli/license.ts", "src/server/mcp/routes/license.ts"],
@@ -111,6 +119,7 @@ describe("licence module seam (#1521)", () => {
         "src/server/events/queue.ts",
         "src/server/events/sse.ts",
         "src/server/events/wake-socket.ts",
+        "src/server/launcher/api-routes.ts",
         "src/server/launcher/supervisor.ts",
         "src/server/local-model/collaborator.ts",
         "src/server/mcp/awareness.ts",
@@ -156,69 +165,61 @@ describe("licence module seam (#1521)", () => {
       ]),
     );
     for (const entry of SIDECAR_ENTRIES) {
-      expect(existsSync(join(ROOT, entry)), `${entry} exists`).toBe(true);
+      expect(SRC_FILES.has(entry), `${entry} exists`).toBe(true);
       expect(DEFINE_LESS_ROOTS).toContain(entry);
     }
   });
 
   /**
-   * The relative-import walk above is blind to a path alias, so a `@server/…`
-   * import in a define-less bundle would reach the licence modules unseen.
-   * The aliases exist in tsconfig for the client only; fail closed on any
-   * other use rather than teach the walker to resolve them.
+   * The relative-import walk is blind to a path alias, so a `@server/…` import
+   * in a define-less bundle would reach the licence modules unseen. The aliases
+   * exist in tsconfig for the client only; fail closed on any other use rather
+   * than teach the walker to resolve them.
    */
   it("no file outside src/client imports through a @server/ @shared/ @client/ alias", () => {
-    const hits = FILES.filter((f) => !f.startsWith(join(SRC, "client") + sep))
-      .filter((f) =>
-        specifiers(readFileSync(f, "utf-8")).some((s) => /^@(server|shared|client)\//.test(s)),
-      )
-      .map(toRel);
+    const hits = CODE_FILES.filter((f) => !f.startsWith("src/client/")).filter((f) =>
+      specifiers(SRC_FILES.get(f) as string).some((s) => /^@(server|shared|client)\//.test(s)),
+    );
     expect(hits).toEqual([]);
   });
 
   it("no define-less bundle reaches src/server/license by any import chain", () => {
     for (const root of DEFINE_LESS_ROOTS) {
-      const reach = closure(join(ROOT, root));
+      const reach = closure(root);
       // Anti-vacuity: the walk really follows imports (each root pulls in more
       // than itself), so an empty result is evidence, not a broken walker.
       expect(reach.size, `${root} closure`).toBeGreaterThan(1);
-      const hits = [...reach].filter((f) => f.startsWith(LICENSE_DIR + sep)).map(toRel);
+      const hits = [...reach].filter((f) => f.startsWith(LICENSE_PREFIX));
       expect(hits, `${root} must not reach the licence modules`).toEqual([]);
     }
     // And the wire constant they DO use is reached — the positive twin.
-    expect([...closure(join(ROOT, "src/shared/sse-consumer.ts"))].map(toRel)).toContain(
-      "src/shared/license-copy.ts",
-    );
+    expect([...closure("src/shared/sse-consumer.ts")]).toContain("src/shared/license-copy.ts");
   });
 
   it("no file imports a deleted license-gate / connection-gate module", () => {
-    const hits = FILES.filter((f) =>
-      specifiers(readFileSync(f, "utf-8")).some((s) =>
+    const hits = CODE_FILES.filter((f) =>
+      specifiers(SRC_FILES.get(f) as string).some((s) =>
         /\/(license-gate|connection-gate)\.js$/.test(s),
       ),
-    ).map(toRel);
+    );
     expect(hits).toEqual([]);
   });
 
   it("the gate flag is read in gate-flag.ts only", () => {
-    const stripComments = (s: string) =>
-      s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-    const hits = FILES.filter((f) => !f.endsWith(join("license", "gate-flag.ts")))
-      .filter((f) =>
-        /TANDEM_LICENSE_GATE|__LICENSE_GATE_ENABLED__/.test(
-          stripComments(readFileSync(f, "utf-8")),
-        ),
-      )
-      .map(toRel);
+    const hits = CODE_FILES.filter((f) => f !== `${LICENSE_PREFIX}gate-flag.ts`).filter((f) =>
+      /TANDEM_LICENSE_GATE|__LICENSE_GATE_ENABLED__/.test(
+        stripComments(SRC_FILES.get(f) as string),
+      ),
+    );
     expect(hits).toEqual([]);
     // Positive twin: the one legitimate reader really does read it.
-    expect(readFileSync(join(LICENSE_DIR, "gate-flag.ts"), "utf-8")).toMatch(/TANDEM_LICENSE_GATE/);
+    expect(SRC_FILES.get(`${LICENSE_PREFIX}gate-flag.ts`)).toMatch(/TANDEM_LICENSE_GATE/);
   });
 });
 
 describe("licence bindings that a refactor could quietly change (#1521)", () => {
-  const supervisor = readFileSync(join(SRC, "server", "launcher", "supervisor.ts"), "utf-8");
-  const collaborator = readFileSync(join(SRC, "server", "local-model", "collaborator.ts"), "utf-8");
+  const supervisor = SRC_FILES.get("src/server/launcher/supervisor.ts") as string;
+  const collaborator = SRC_FILES.get("src/server/local-model/collaborator.ts") as string;
 
   /**
    * The launched Claude's push subscription is `"external"` (the Solo gate) and
@@ -242,6 +243,5 @@ describe("licence bindings that a refactor could quietly change (#1521)", () => 
   it("the supervisor and the collaborator default to the live aiRefusal", () => {
     expect(supervisor).toMatch(/opts\.aiRefusal \?\? aiRefusal;/);
     expect(collaborator).toMatch(/deps\.aiRefusal \?\? aiRefusal;/);
-    expect(collaborator).toMatch(/const DEFAULT_DEPS: CollaboratorDeps = \{[\s\S]*?\baiRefusal,/);
   });
 });

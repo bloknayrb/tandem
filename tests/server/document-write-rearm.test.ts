@@ -43,8 +43,9 @@
  *       `MethodDeclaration.name`, or an `ArrowFunction`/`FunctionExpression`
  *       whose DIRECT parent is a `VariableDeclaration` (key = the declared
  *       identifier); or
- *   (b) a `CallExpression` whose callee text is `server.tool`, ends in `.tool`,
- *       or is the identifier `gatedTool`, and whose first argument is a string
+ *   (b) a `CallExpression` whose callee text is `server.tool` or ends in
+ *       `.tool`, or is the identifier `withErrorBoundary` (the per-tool wrapper
+ *       since #1521 deleted `gatedTool`), and whose first argument is a string
  *       literal (key = that string).
  * Anonymous callbacks are passed THROUGH.
  *
@@ -303,7 +304,7 @@ function isToolRegistration(node: ts.Node): node is ts.CallExpression {
   if (!ts.isCallExpression(node)) return false;
   const callee = node.expression.getText(node.getSourceFile());
   const looksLikeTool =
-    callee === "server.tool" || callee.endsWith(".tool") || callee === "gatedTool";
+    callee === "server.tool" || callee.endsWith(".tool") || callee === "withErrorBoundary";
   return looksLikeTool && node.arguments.length > 0 && ts.isStringLiteralLike(node.arguments[0]);
 }
 
@@ -626,7 +627,7 @@ describe("the enclosing-scope rule, pinned by fixture", () => {
   it("(2) the INNERMOST tool registration wins over an outer one", () => {
     expect(
       keysOf(`
-        gatedTool("tandem_y", async () => {
+        withErrorBoundary("tandem_y", async () => {
           server.tool(
             "tandem_x",
             async () => {
