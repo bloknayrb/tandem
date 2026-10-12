@@ -2236,7 +2236,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // stop and silently declines to restart — the supervisor stays dead.
     stopRequested = false;
     userStopped = false;
-    // `stopInternal` above has nulled `child`; see `startInternal` (#2181).
+    // `stopInternal` above has nulled `child`; see `planAndSpawn` (#2181).
     armGapWatch();
     const plan = await buildPlan(cwdOverride);
     if (!plan) return { spawned: false, why: "no-integration" };

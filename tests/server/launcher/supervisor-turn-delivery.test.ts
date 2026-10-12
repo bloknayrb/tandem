@@ -561,6 +561,9 @@ describe("#2181 — an event while no spawn is subscribed", () => {
     await sup.start();
     const child2 = await nthChild(2);
     expect(texts(child2)).toEqual([]);
+  });
+});
+
 // --- #2180 --------------------------------------------------------------------
 
 describe("#2180 — status().restartPending: Tandem is already bringing Claude back", () => {
