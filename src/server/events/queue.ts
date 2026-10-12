@@ -180,8 +180,11 @@ function trackPayloadId(event: TandemEvent): boolean {
  * reads "tandem" (409 otherwise) and does so in the same synchronous frame as
  * `emitModeReleaseWake` — no `await` between them — so mode reads `"tandem"`,
  * not indeterminate, at the moment the wake is delivered.
+ *
+ * Exported for the launcher's gap watch (#2181): an `"internal"` subscriber
+ * that must owe a wake for exactly the events an external one would receive.
  */
-function shouldForwardExternally(event: TandemEvent): boolean {
+export function shouldForwardExternally(event: TandemEvent): boolean {
   // Chat is the always-delivered channel in both directions, and it is also the
   // in-process collaborator's wake trigger. Never gate it.
   if (event.type === "chat:message") return true;

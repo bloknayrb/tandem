@@ -249,7 +249,7 @@ afterEach(async () => {
 
 type ExtraOpts = Omit<
   Parameters<typeof createSupervisor>[0],
-  "integrationsBase" | "subscribeToEvents"
+  "integrationsBase" | "subscribeToEvents" | "subscribeDuringGap"
 >;
 
 function makeSupervisor(extra: ExtraOpts = {}): {
@@ -263,6 +263,12 @@ function makeSupervisor(extra: ExtraOpts = {}): {
     ...extra,
     integrationsBase: baseDir,
     subscribeToEvents: (cb) => {
+      callbacks.add(cb);
+      return () => callbacks.delete(cb);
+    },
+    // The same fake fan-out, so an event emitted in a gap reaches the watch
+    // exactly as the queue would deliver it.
+    subscribeDuringGap: (cb) => {
       callbacks.add(cb);
       return () => callbacks.delete(cb);
     },
@@ -415,6 +421,104 @@ describe("#1866 — a failed-write callback that lands after teardown", () => {
 
     const child2 = await nthChild(2);
     expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+});
+
+// --- #2181 --------------------------------------------------------------------
+
+describe("#2181 — an event while no spawn is subscribed", () => {
+  /** Child 1 fresh, bootstrap answered, so it is idle with nothing owed. */
+  async function idleFreshChild(sup: Supervisor): Promise<FakeChild> {
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, RESULT_OK);
+    await settle();
+    return child1;
+  }
+
+  it("a chat during a crash restart's backoff wakes the resumed successor", async () => {
+    const { sup, emit } = makeSupervisor();
+    const child1 = await idleFreshChild(sup);
+    exitChild(child1, 1);
+    emit(annotationEvent());
+
+    const child2 = await nthChild(2);
+    await settle();
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  it("control: with no event in the gap, the resumed successor gets no turn", async () => {
+    const { sup } = makeSupervisor();
+    const child1 = await idleFreshChild(sup);
+    exitChild(child1, 1);
+
+    const child2 = await nthChild(2);
+    await settle();
+    expect(texts(child2)).toEqual([]);
+  });
+
+  it("a wake written into a child being relaunched is carried to the successor", async () => {
+    // The dying child is still subscribed until its exit, so the event reaches
+    // it and the write lands in a pipe nobody will read. Nothing fails, so
+    // only the unanswered turn records that the wake was not delivered.
+    const { sup, emit } = makeSupervisor();
+    const child1 = await idleFreshChild(sup);
+    const relaunched = sup.relaunch(cwdDir);
+    emit(annotationEvent());
+    await relaunched;
+
+    expect(texts(child1).at(-1)).toBe(SUPERVISOR_WAKE_PROMPT);
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  it("an event between start() and the spawn's own subscribe is owed", async () => {
+    const { sup, emit } = makeSupervisor();
+    await idleFreshChild(sup);
+    await sup.stop();
+    // `onSpawn` runs inside `spawn()`, before `spawnOnce` subscribes.
+    onSpawn = (_child, index) => {
+      if (index === 1) emit(annotationEvent());
+    };
+    await sup.start();
+
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  it("a fresh successor gets its bootstrap only, not a second wake", async () => {
+    const { sup, emit } = makeSupervisor({ restartBackoffsMs: [5_000] });
+    const child1 = await idleFreshChild(sup);
+    exitChild(child1, 1);
+    emit(annotationEvent());
+
+    await sup.startFresh(cwdDir);
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_INITIAL_PROMPT]);
+  });
+
+  it("user stop disarms a watch a crash armed (#1866 still holds)", async () => {
+    const { sup, emit } = makeSupervisor({ restartBackoffsMs: [5_000] });
+    const child1 = await idleFreshChild(sup);
+    exitChild(child1, 1);
+    await sup.stop();
+    emit(annotationEvent());
+
+    await sup.start();
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([]);
+  });
+
+  it("a user stop of a child with an unanswered turn carries nothing", async () => {
+    const { sup, emit } = makeSupervisor();
+    const child1 = await idleFreshChild(sup);
+    emit(annotationEvent());
+    expect(texts(child1).at(-1)).toBe(SUPERVISOR_WAKE_PROMPT);
+    await sup.stop();
+
+    await sup.start();
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([]);
   });
 });
 

@@ -48,7 +48,7 @@ import {
   serializeUserTurn,
 } from "../../shared/launcher/contract.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
-import { subscribe, unsubscribe } from "../events/queue.js";
+import { shouldForwardExternally, subscribe, unsubscribe } from "../events/queue.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
 import { sanitizeForLog } from "../log-sanitize.js";
 import { isTauriSidecar } from "../platform.js";
@@ -74,6 +74,13 @@ interface SupervisorOpts {
    * something being attached rather than a constant.
    */
   subscribeToEvents?: (cb: (event: TandemEvent) => void) => () => void;
+  /**
+   * Seam onto the event fan-out for the gap watch (#2181): the subscription
+   * held while NO spawn is subscribed, so an event in that window still owes
+   * the next spawn a wake. Same shape as `subscribeToEvents`; see
+   * `defaultSubscribeDuringGap` for why the default is not that one.
+   */
+  subscribeDuringGap?: (cb: (event: TandemEvent) => void) => () => void;
   /**
    * Override for `WAKE_LATCH_MAX_MS`, so the latch-breaker can be tested in
    * milliseconds rather than by waiting ten minutes.
@@ -151,6 +158,26 @@ function defaultProbeCliUsable(): boolean {
 export function defaultSubscribeToEvents(cb: (event: TandemEvent) => void): () => void {
   subscribe(cb, "external");
   return () => unsubscribe(cb);
+}
+
+/**
+ * The gap watch's subscription (#2181). `"internal"`, NOT `"external"`: while
+ * it is held no child exists, so nothing outside this process is attached, and
+ * `getSubscriberCount() === 0` is the sound negative the wake advisory and
+ * `/health` rely on. Counting the watch would make that negative lie.
+ *
+ * An internal subscriber bypasses the queue's Solo gate, so the callback is
+ * wrapped in that same gate: the watch owes a wake for exactly the events the
+ * child's external subscription would have received. User content held in
+ * Solo (`isUserPrivacyHeld`) is dropped before any fan-out, so it never
+ * arrives here at all. Exported for test only.
+ */
+export function defaultSubscribeDuringGap(cb: (event: TandemEvent) => void): () => void {
+  const gated = (event: TandemEvent): void => {
+    if (shouldForwardExternally(event)) cb(event);
+  };
+  subscribe(gated, "internal");
+  return () => unsubscribe(gated);
 }
 
 /**
@@ -742,6 +769,7 @@ export function createLineFramer(onLine: (line: string) => void): {
 
 export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const subscribeToEvents = opts.subscribeToEvents ?? defaultSubscribeToEvents;
+  const subscribeDuringGap = opts.subscribeDuringGap ?? defaultSubscribeDuringGap;
   const wakeLatchMs = opts.wakeLatchMs ?? WAKE_LATCH_MAX_MS;
   const probeCliUsable = opts.probeCliUsable ?? defaultProbeCliUsable;
   const reportDeliveryTrip = opts.reportDeliveryTrip ?? (() => {});
@@ -830,6 +858,37 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * failed-write callback that lands after a LATER stop cannot re-raise the
    * `wakeOwedAcrossSpawns` that stop cleared (#1866). */
   let userStopCount = 0;
+
+  /**
+   * The gap watch (#2181): unsubscribe fn while armed, else null.
+   *
+   * Each spawn's own subscription lives from `spawnOnce` to its teardown, so
+   * between one spawn's teardown and the next spawn's subscribe — a restart
+   * backoff, a relaunch, a tripped breaker waiting for the user's Restart, the
+   * boot `buildPlan` — an event reached no supervisor callback at all. A
+   * resumed spawn writes no bootstrap turn, so a chat sent then sat unread
+   * while the pill already said Claude was back. The watch covers that window
+   * by recording the owed wake in `wakeOwedAcrossSpawns`, which the next spawn
+   * already discharges (bootstrap when fresh, a wake turn when resumed).
+   *
+   * Armed at a carrying teardown and by `startInternal`/`respawn`; disarmed by
+   * the next spawn's subscribe and by a user `stop()`, which carries nothing
+   * (#1866). Events while the user has stopped Claude are therefore still not
+   * owed — the watch is not a replacement for that decision.
+   */
+  let gapUnsubscribe: (() => void) | null = null;
+
+  function armGapWatch(): void {
+    if (gapUnsubscribe) return;
+    gapUnsubscribe = subscribeDuringGap((event) => {
+      if (isWakeWorthy(event)) wakeOwedAcrossSpawns = true;
+    });
+  }
+
+  function disarmGapWatch(): void {
+    gapUnsubscribe?.();
+    gapUnsubscribe = null;
+  }
 
   /**
    * The last session answered "Not logged in" (#1780), so the next spawn owes
@@ -1471,6 +1530,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     }
 
     const unsubscribeFromEvents = subscribeToEvents(onTandemEvent);
+    // Synchronously after the subscribe above, so no event falls between the
+    // gap watch and this spawn's own subscription (#2181).
+    disarmGapWatch();
 
     /**
      * Detach this spawn's event subscription and kill its latch timer.
@@ -1489,18 +1551,34 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         tornDown = true;
         carryOwedWake = !userStopped;
         stopCountAtTeardown = userStopCount;
+        // Hand an undelivered wake to the next spawn rather than dropping it —
+        // this runs on crash-restart and on relaunch, not just on a deliberate
+        // stop. A user `stop()` carries nothing (#1866).
+        //
+        // A turn written but never answered counts as undelivered too (#2181).
+        // A write into the pipe of a child that is being killed succeeds, so
+        // its callback never re-arms `pendingWake`, and the wake died with the
+        // child: SIGTERM on POSIX gives Claude a grace period during which its
+        // subscription still takes events. The cost when the child DID read
+        // it is one extra payload-free wake, which `sendTurn`'s docblock
+        // already accepts. Inside the first-teardown latch so a second call
+        // cannot re-raise what a user stop between the two cleared.
+        if ((pendingWake || unresolvedTurns > 0) && carryOwedWake) wakeOwedAcrossSpawns = true;
       }
       unsubscribeFromEvents();
-      // Hand an undelivered wake to the next spawn rather than dropping it —
-      // this runs on crash-restart and on relaunch, not just on a deliberate
-      // stop. A user `stop()` carries nothing (#1866).
-      if (pendingWake && carryOwedWake) wakeOwedAcrossSpawns = true;
       pendingWake = false;
       clearLatch();
       // Identity-guarded: only drop the shared handle if it still points at
       // THIS spawn. A late exit from a superseded process must not clear the
       // successor's registration and leave it unreleasable by stopInternal.
-      if (activeTurnDelivery?.spawned === spawned) activeTurnDelivery = null;
+      // The same guard decides the gap watch (#2181): a superseded spawn's
+      // late teardown must not arm it while the successor is subscribed. It
+      // sits outside the first-teardown latch on purpose — the identity, not
+      // the latch, is what makes that safe.
+      if (activeTurnDelivery?.spawned === spawned) {
+        activeTurnDelivery = null;
+        if (carryOwedWake) armGapWatch();
+      }
     }
 
     activeTurnDelivery = {
@@ -1968,6 +2046,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     if (breakerTripped) return;
     stopRequested = false;
     userStopped = false;
+    // Covers the boot window, and a start after a user stop, from here to the
+    // spawn's own subscribe (#2181). After the `child` check, never before it:
+    // arming beside a live spawn would owe its successor a duplicate wake.
+    armGapWatch();
     const plan = await buildPlan();
     if (!plan) {
       console.error("[Launcher] No claude-code integration with apply != skip — skipping");
@@ -2054,6 +2136,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // stop and silently declines to restart — the supervisor stays dead.
     stopRequested = false;
     userStopped = false;
+    // `stopInternal` above has nulled `child`; see `startInternal` (#2181).
+    armGapWatch();
     const plan = await buildPlan(cwdOverride);
     if (!plan) return;
     await persistRequestedCwd(plan, cwdOverride, opts?.persistCwd);
@@ -2141,6 +2225,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       userStopped = true;
       userStopCount += 1;
       wakeOwedAcrossSpawns = false;
+      // A crash may have armed the watch; a user stop carries nothing (#2181).
+      disarmGapWatch();
       await stopInternal();
     });
   }
