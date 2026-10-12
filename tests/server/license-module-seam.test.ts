@@ -33,17 +33,23 @@ const LICENSE_PREFIX = "src/server/license/";
 const CODE = /\.(ts|mts|svelte|js|mjs)$/;
 
 /**
- * Every module specifier in a file, comments stripped. The `import|export …
- * from` arm spans lines (`[^;'"]` matches newlines), so a multi-line
- * `export { a, b } from "…"` and an `import type { T } from "…"` both count;
- * pattern borrowed from `tests/docs/documents-boundary.test.ts`.
+ * Every module specifier in a file. The `import|export … from` arm spans lines
+ * (`[^;'"]` matches newlines), so a multi-line `export { a, b } from "…"` and
+ * an `import type { T } from "…"` both count; pattern borrowed from
+ * `tests/docs/documents-boundary.test.ts`.
+ *
+ * **Comments are deliberately NOT stripped.** A regex comment stripper that
+ * removes block comments first reads a line comment holding `src/*` as the
+ * opening of a block, and silently deletes every import up to the next `*\/` —
+ * neither resolved nor reported (live in `annotations/lifecycle.ts`). Over-
+ * reading a commented-out import errs safe: it can only ADD an edge, or fail
+ * the UNRESOLVED check loudly, never hide one.
  */
 function specifiers(src: string): string[] {
-  const clean = stripComments(src);
   const out: string[] = [];
   const pattern =
     /\b(?:import|export)\s+(?:type\s+)?(?:[^;'"]*?\s+)?from\s*["']([^"']+)["']|\bimport\s+["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/g;
-  for (const m of clean.matchAll(pattern)) out.push(m[1] ?? m[2] ?? m[3]);
+  for (const m of src.matchAll(pattern)) out.push(m[1] ?? m[2] ?? m[3]);
   return out;
 }
 
@@ -106,8 +112,35 @@ function closure(entry: string): Set<string> {
 }
 
 describe("licence module seam (#1521)", () => {
+  /**
+   * The miss a regex comment-stripper made: a line comment holding `src/*`
+   * opens a phantom block comment, and the real import on the next line
+   * vanished until the next `*\/`. Shaped exactly like that, inline, so the
+   * extractor is pinned rather than the tree it happens to scan today.
+   */
+  it("the extractor sees an import that follows a line comment holding src/*", () => {
+    const fixture = [
+      "// see the files under src/* for the full list",
+      'import { aiRefusal } from "../server/license/ai-refusal.js";',
+      "",
+      "/**",
+      " * A later JSDoc whose terminator closed the phantom block.",
+      " */",
+      "export const x = aiRefusal;",
+    ].join("\n");
+    expect(specifiers(fixture)).toContain("../server/license/ai-refusal.js");
+    // And the stripper this replaced really does lose it — the reason not to use it.
+    expect(specifiers(stripComments(fixture))).not.toContain("../server/license/ai-refusal.js");
+  });
+
   it("the import walk resolves every relative specifier in src (fails closed)", () => {
-    expect(UNRESOLVED).toEqual([]);
+    // Exactly the known PROSE specifiers — comments are read on purpose (see
+    // `specifiers`), so a usage example in a docblock lands here. Set equality:
+    // any new unresolved specifier fails, and so does a stale entry.
+    expect(UNRESOLVED).toEqual([
+      // registry.ts:5 docblock: "Each entry is a lazy import: `() => import(...)`".
+      "src/client/svelte-harness/registry.ts -> ../path/to/Component.svelte",
+    ]);
     // Anti-vacuity: the walk found real edges.
     expect([...IMPORTS.values()].flat().length).toBeGreaterThan(100);
   });
