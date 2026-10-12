@@ -3409,11 +3409,11 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
     const healthy =
       (await r.check("health", () => checkHealth(r, mcpPort, startHint, licenceOff))) ?? false;
     if (healthy) {
-      if (licenceOff) {
-        recordEvaluation(r, licenceDeferred("SSE event stream", licenceOff));
-      } else {
-        await r.check("sse", () => checkSseEndpoint(r, mcpPort));
-      }
+      await r.check("sse", () =>
+        licenceOff
+          ? recordEvaluation(r, licenceDeferred("SSE event stream", licenceOff))
+          : checkSseEndpoint(r, mcpPort),
+      );
     }
   }
 

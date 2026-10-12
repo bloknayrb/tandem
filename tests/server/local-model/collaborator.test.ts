@@ -1486,3 +1486,53 @@ describe("collaborator — streamed write volume at the caller level (#1340)", (
     expect(text).not.toContain("Reply truncated");
   });
 });
+
+describe("collaborator — licence (#1521)", () => {
+  const REFUSAL = {
+    error: "LICENSE_REQUIRED" as const,
+    kind: "unlicensed" as const,
+    message: "Tandem is unlicensed, so its AI features are turned off.",
+  };
+
+  it("runs no turn and writes no chat while unlicensed, logging once per refused state", async () => {
+    setupDoc("doc-lic", "# Title\n\nBody.");
+    const runTurn = vi.fn(async () => cleanResult("should not run"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const collab = createLocalModelCollaborator(makeDeps({ runTurn, aiRefusal: () => REFUSAL }));
+    collab.__setConfigForTests(CONFIG);
+
+    collab.onEvent(chatEvent("first", { documentId: "doc-lic", messageId: "a" }));
+    collab.onEvent(chatEvent("second", { documentId: "doc-lic", messageId: "b" }));
+    await drain(collab);
+
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(chatMessages()).toHaveLength(0);
+    const lines = errSpy.mock.calls.map((c) => String(c[0])).filter((l) => /unlicensed/.test(l));
+    expect(lines).toHaveLength(1);
+  });
+
+  it("is checked per run, so activation needs no restart (positive twin)", async () => {
+    setupDoc("doc-lic2", "# Title\n\nBody.");
+    let refused = true;
+    const runTurn = vi.fn(async (opts: Parameters<CollaboratorDeps["runTurn"]>[0]) => {
+      opts.onContentDelta?.("ok");
+      opts.onTurnEnd?.({ hadToolCalls: false });
+      return cleanResult("ok");
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const collab = createLocalModelCollaborator(
+      makeDeps({ runTurn, aiRefusal: () => (refused ? REFUSAL : null) }),
+    );
+    collab.__setConfigForTests(CONFIG);
+
+    collab.onEvent(chatEvent("while refused", { documentId: "doc-lic2", messageId: "c" }));
+    await drain(collab);
+    expect(runTurn).not.toHaveBeenCalled();
+
+    refused = false;
+    collab.onEvent(chatEvent("after activation", { documentId: "doc-lic2", messageId: "d" }));
+    await drain(collab);
+    expect(runTurn).toHaveBeenCalledTimes(1);
+    expect(chatMessages()).toHaveLength(1);
+  });
+});
