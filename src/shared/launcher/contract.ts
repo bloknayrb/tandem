@@ -374,10 +374,11 @@ export const SUPERVISOR_ACK_CLAUSE =
  * because the bootstrap discharges an owed wake (`supervisor.ts`), and a
  * user's reply on one of Claude's threads can be what it was owed for. */
 export const SUPERVISOR_NO_UNASKED_WORK_CLAUSE =
-  "Respond to chat messages, comments and replies from the user, and do only what they ask. " +
-  "An accept or dismiss is not a request and needs no response, and if no document is open, " +
-  "just wait. Do not open, read through, review, annotate or edit any document unless the " +
-  "user asked you to.";
+  "Respond to chat messages, comments and replies from the user, and do only what they ask; " +
+  "reading the text around a comment or selection to answer it is fine. " +
+  "An accept or dismiss is not a request and needs no response. If tandem_checkInbox reports " +
+  "that no document is open, do not open one; just wait. Otherwise do not open, read through, " +
+  "review, annotate or edit any document unless the user asked you to.";
 
 /** The bootstrap turn the supervisor writes immediately on a fresh spawn.
  *
