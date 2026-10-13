@@ -1843,6 +1843,54 @@ describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
       expect(holder.r?.aiNotice).toBe("unlicensed");
     });
 
+    // The respawned child is usually still starting at the first read; the
+    // 2s/5s follow-ups are what show it running before the next 8s poll.
+    it("follows the clearing read with two more at 2s and 5s, and none after unmount", async () => {
+      vi.useFakeTimers();
+      try {
+        const seen: string[] = [];
+        const inner = routedFetch({
+          launcher: stoppedWith("unlicensed"),
+          health: mkResponse({ status: "ok", hasSession: false }),
+        });
+        globalThis.fetch = (async (input: string) => {
+          seen.push(String(input));
+          return inner(input as never);
+        }) as unknown as typeof fetch;
+        const flush = async () => {
+          await vi.advanceTimersByTimeAsync(0);
+          await tick();
+        };
+        const onReady = () => {};
+        const { rerender, unmount } = render(AiReadinessHarness, {
+          props: { aiNotice: "unlicensed", onReady },
+        });
+        await flush();
+        const launcherReads = () => seen.filter((u) => u.includes(API_LAUNCHER_STATUS)).length;
+        const before = launcherReads();
+
+        await rerender({ aiNotice: null, onReady });
+        await flush();
+        expect(launcherReads()).toBe(before + 1);
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(launcherReads()).toBe(before + 2);
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(launcherReads()).toBe(before + 3);
+
+        // A second clearing, then unmount before its follow-ups fire.
+        await rerender({ aiNotice: "unlicensed", onReady });
+        await flush();
+        await rerender({ aiNotice: null, onReady });
+        await flush();
+        const atUnmount = launcherReads();
+        unmount();
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(launcherReads()).toBe(atUnmount);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("deliveryStalledMs is null while refused; the twin reports the stall", async () => {
       const STALLED = { state: "awaiting-poll", waitingMs: 200_000 };
       globalThis.fetch = routedFetch({

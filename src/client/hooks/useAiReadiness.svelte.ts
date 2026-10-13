@@ -932,18 +932,28 @@ export function createAiReadiness(deps: {
   // fresh child. Keyed on the transition itself, so it covers every way the
   // refusal clears: the Settings activate form and a CLI `tandem activate`
   // picked up by the licence poll alike. `prev` is a plain `let`, not `$state`:
-  // as `$state` this effect would re-trigger on its own write.
+  // as `$state` this effect would re-trigger on its own write. The follow-up
+  // reads at 2s and 5s mirror `refreshAiReadinessAfterLauncherAction`: the
+  // respawned child is usually still starting at the first read, and without
+  // them the pill waits for the next 8s poll to show it running.
   let prevAiOff: boolean | null = null;
+  const followUps: ReturnType<typeof setTimeout>[] = [];
+  const readLauncher = () => {
+    if (!destroyed) void pollLauncherStatus(++gen);
+  };
   $effect(() => {
     const aiOff = deps.aiNotice() !== null;
     const cleared = prevAiOff === true && !aiOff;
     prevAiOff = aiOff;
-    if (cleared) untrack(() => void pollLauncherStatus(++gen));
+    if (!cleared) return;
+    untrack(readLauncher);
+    followUps.push(setTimeout(readLauncher, 2_000), setTimeout(readLauncher, 5_000));
   });
   onDestroy(() => {
     gen++;
     destroyed = true;
     clearInterval(interval);
+    for (const t of followUps) clearTimeout(t);
   });
 
   const state = $derived.by((): AiReadinessState => {
