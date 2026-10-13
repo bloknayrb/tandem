@@ -529,7 +529,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "34", bodyHash: "c78bdb5e16df" });
+    ).toEqual({ version: "34", bodyHash: "b3b19e218f8a" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake
@@ -584,6 +584,12 @@ describe("shipped Tandem skill instruction contract", () => {
       );
       expect(trigger).toContain(code);
       expect(bullet).toMatch(/bare message, with no code/);
+      // The label the trigger points to must still exist, and the absent-tools lead-in must
+      // key on the openings too (the branch bullets alone would satisfy a containment check).
+      expect(absent).toContain("**Licence refusal (");
+      expect(absent).toMatch(
+        /First, read the failure[\s\S]*?or its message begins with one of the two/,
+      );
     });
 
     it("says 'unlicensed' only where the message itself says it", () => {

@@ -1472,7 +1472,7 @@ Surface A, `gatedTool()`, the seven `licenseGateMiddleware` mounts and the two i
 - After the licence is restored, the same session heals: over HTTP on the next call, through the bridge within about 40 s.
 
 **Interactive** (2026-10-13, Claude Code 2.1.296, Sonnet, over HTTP, against a dev build with the gate armed; one run per case):
-- A refused `initialize` reaches the model as a system notice, `tandem (-32003): "<message> Once that is done, reconnect …"`. Claude Code cut the text at about 200 characters (one sample), so the longer unverifiable messages lose their fix at the handshake; the skill points to Settings → License for the whole message.
+- A refused `initialize` reaches the model as a system notice, `tandem (-32003): "<message> Once that is done, reconnect …"`. Claude Code cut the text at 200 characters (one sample, of the unlicensed kind). Applying that cut to the unverifiable messages (inferred, not observed): `BAD_SIGNATURE` loses its whole fix, the read-failure default loses part of it, and `UNSUPPORTED_VERSION` keeps it; the skill points to Settings → License for the whole message.
 - When the trial ends mid-session, the tool error is the bare message: no `-32003`, no `LICENSE_REQUIRED`, no `data`. The `-p` runs above show the same, over HTTP and through the bridge.
 - With skill v33, Claude relayed the message, pointed to Settings → License and did not edit the file, in both cases (measured). That it matched on the message's opening rather than the code is inferred: mid-session there was no code to match. Skill v34 keys the mid-session rule on the openings for that reason.
 
