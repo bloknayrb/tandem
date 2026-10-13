@@ -638,9 +638,13 @@ export function registerAwarenessTools(server: McpServer): void {
         // from the stamp above, kept apart because it is a claim about the
         // USER's message. Below the document pass on purpose: a throw from
         // `refreshAnnotations`, `listReplies` or `getUserAwareness` reaches the
-        // error boundary with nothing read, and must leave the round open. It
-        // can still close a round whose forward was an annotation on a document
-        // closed before this poll; `polled` was never proof of delivery.
+        // error boundary with nothing read, and must leave the round open. The
+        // round is process-wide, not per document, so this still closes one
+        // whose forward was an annotation on any document other than the one
+        // polled (closed, or open but not named). That predates the
+        // no-document pass: a poll naming a different open document always
+        // closed it the same way. `polled` was never proof that that
+        // annotation was delivered.
         resolveDeliveryRound();
 
         // Bucket 3: unread chat messages from CTRL_ROOM

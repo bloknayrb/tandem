@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 31
+version: 32
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -206,7 +206,7 @@ The wording above matches what the stdio bridge (`src/cli/mcp-stdio.ts`) already
 - **`FORMAT_ERROR`** — Usually the operation doesn't apply to this document's format: `tandem_appendContent` on a non-Markdown document, or a `tandem_editList` op the format cannot carry. It is also the fallback for a failed `tandem_save` or `tandem_open` that no more specific code covers, so read `details.errorCode` when it is present: `VERIFY_BLOCKED` means the save was refused before touching the file, and its message says why.
 - **`INVALID_PATH`** — The path was refused: a relative path (pass an absolute one), a UNC path, or `tandem_restoreBackup` on an upload or scratchpad, which has no on-disk location.
 - **`EXTERNAL_CONFLICT`** — `tandem_save` refused because the file changed on disk since it was opened, usually from an out-of-band `Edit`/`Write` (see Hard Rule 6). The user resolves it via the editor's Keep/Reload banner; `tandem_open({ force: true })` also clears it, but destructively, and only on the user's say-so — never call it yourself to route around a conflict.
-- **`NO_DOCUMENT`** — No document is open, or the `documentId` you passed doesn't match one. Check `tandem_listDocuments` for what's actually open, and open a file with `tandem_open` when the user's request needs one. The error is not a reason to open something the user didn't ask for. `tandem_checkInbox`, `tandem_reply` and `tandem_open` work with no document open, and the inbox still delivers chat then (its `summary` starts "No document is open."), so a user can ask you to open a file before any tab exists.
+- **`NO_DOCUMENT`** — No document is open, or the `documentId` you passed doesn't match one. Check `tandem_listDocuments` for what's actually open, and open a file with `tandem_open` when the user's request needs one. The error is not a reason to open something the user didn't ask for. `tandem_checkInbox`, `tandem_reply` and `tandem_open` work with no document open, and the inbox still delivers chat then: when no document resolves (none open, none active, or a `documentId` naming one that isn't open), its `summary` opens with a sentence saying so and the comment, reply and activity fields are empty. So a user can ask you to open a file before any tab exists.
 
 ## Session Handoff
 

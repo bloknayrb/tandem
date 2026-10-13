@@ -10,7 +10,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as Y from "yjs";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
@@ -31,7 +31,8 @@ import {
   registerDocumentTools,
 } from "../../src/server/mcp/document.js";
 import { extractMarkdown, extractText } from "../../src/server/mcp/document-model.js";
-import { getOpenDocs } from "../../src/server/mcp/document-service.js";
+import { closeDocumentById, getOpenDocs } from "../../src/server/mcp/document-service.js";
+import { YDocStore } from "../../src/server/mcp/document-store.js";
 import { registerNavigationTools } from "../../src/server/mcp/navigation.js";
 import { shutdownSearchWorker } from "../../src/server/mcp/search-worker.js";
 import {
@@ -1627,7 +1628,13 @@ describe("MCP tool integration — awareness tools", () => {
     expect(getOpenDocs().size).toBe(0);
     const filePath = join(tmpdir(), `chat-no-doc-open-${Date.now()}.md`);
     await fs.writeFile(filePath, "# Notes\n\nSome text.\n");
-    onTestFinished(() => fs.rm(filePath, { force: true }));
+    // One cleanup, so the order is fixed: close the real open (its watcher and
+    // session) BEFORE deleting the file it watches.
+    const cleanup: { openedId?: string } = {};
+    onTestFinished(async () => {
+      if (cleanup.openedId) await closeDocumentById(cleanup.openedId);
+      await fs.rm(filePath, { force: true });
+    });
     seedUserChat("msg_open_request", `please open ${filePath}`);
 
     const inbox = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
@@ -1638,6 +1645,7 @@ describe("MCP tool integration — awareness tools", () => {
     );
     expect(opened.error).toBe(false);
     expect(opened.data.documentId).toBeTruthy();
+    cleanup.openedId = opened.data.documentId;
 
     const reply = parseResult(
       await client.callTool({
@@ -2387,6 +2395,26 @@ describe("checkInbox stamps the pull path", () => {
     await client.callTool({ name: "tandem_checkInbox", arguments: {} });
 
     expect(getDeliveryState(Date.now(), 1).state).toBe("polled");
+  });
+
+  it("leaves the round open when the document pass throws before the chat read", async () => {
+    // Why resolveDeliveryRound sits BELOW collectDocumentInbox: a throw in the
+    // document pass reaches the error boundary with no chat read, so closing
+    // the round first would report `polled` for a message never delivered.
+    setupDoc("inbox-throw-doc", "Hello world");
+    const chat = seedUserChat("msg_throw", "still waiting");
+    recordWakeForward(1_000);
+    const spy = vi.spyOn(YDocStore.prototype, "getUserAwareness").mockImplementation(() => {
+      throw new Error("awareness read failed");
+    });
+    onTestFinished(() => spy.mockRestore());
+
+    const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+
+    expect(spy).toHaveBeenCalled();
+    expect(parsed.error).toBe(true);
+    expect((chat.get("msg_throw") as ChatMessage).read).toBe(false);
+    expect(getDeliveryState(Date.now(), 1).state).toBe("awaiting-poll");
   });
 
   it("closes the join on a poll with no document open, because it reads chat", async () => {
