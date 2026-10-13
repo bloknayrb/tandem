@@ -19,19 +19,13 @@ _Last reconciled against the tracker, flags and CHANGELOG: 2026-09-28 (v0.28.0).
 
 ### Where v1.0 stands
 
-The code is essentially complete. What remains is one engineering reshape, the commercial
-setup, hardware verification, and two flag flips.
+The code is essentially complete. What remains is the licence gate's last checks, the
+commercial setup, hardware verification, and two flag flips.
 
-1. **The license surface gate (#1521) has to land dark before the flip.** Its policy:
-   after the 14-day trial with no key, Tandem stays a usable editor with no AI features:
-   no MCP reads or writes, no chat, no push paths, no local models. Bryan decided this on
-   2026-10-11, superseding **Decision F** (2026-09-06, recorded on #1827 and #1788), whose
-   *symmetric read-only* restricted mode would withhold the editing `LICENSE` grants
-   (decision A4) and the README promises. It is #1521's original design and ADR-040's
-   2026-08-18 amendment; the issue's 2026-09-08 comment, which says Decision F supersedes
-   it, is now itself superseded.
-   Flipping `LICENSE_GATE_ENABLED` on today's per-tool gate would ship a shape ADR-040 no
-   longer describes.
+1. **The license surface gate (#1521) is built, dark; two things remain before the flip.**
+   #2204: run the gate-ON smoke on a real build (trial expiring while Tandem's Claude runs,
+   and real-key activation), which needs a signed key. #2205: `tandem activate` from the CLI
+   should resume Tandem's Claude the way activating in Settings does.
 2. **Commercial readiness** — see [the exit criteria](#v100-exit-criteria). The live
    checklist is [licensing-operations.md §8](licensing-operations.md#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay),
    and all of it is unchecked. #1117, the old commercial-infra tracker, was closed on

@@ -362,7 +362,8 @@ Two more, of the same kind:
   SSE consumer refused in that window backs off 5 minutes before retrying, and a launcher refused at
   boot stays down until the restart chip (or an activation) brings it back. The same holds for any
   licence that becomes valid without `POST /api/license/activate`: `tandem activate` from the CLI or a
-  `license.json` copied in by hand never reaches the launcher, so Restart is the way back.
+  `license.json` copied in by hand never reaches the launcher, so Restart is the way back. #2205
+  tracks making the CLI path resume it.
 - **A local-model run that started while licensed keeps streaming after expiry.** The collaborator is
   checked per run, not per token, so one in-flight reply finishes. Behind `BYO_MODELS_ENABLED`, so
   unreachable today; revisit if that flag flips.

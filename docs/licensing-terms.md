@@ -109,10 +109,10 @@ doesn't grant is the worst version of this problem.
 - After the 14 days, `LICENSE` grants keyless use that leaves out the AI
   features (decision A4). That matches ADR-040's 2026-08-18 amendment
   (unlicensed = an editor with no AI), which Bryan confirmed on 2026-10-11 as
-  #1521's policy, superseding Decision F's read-only mode. The gate merged today
-  differs: it makes documents read-only and keeps chat and Claude's MCP read
-  tools open. Until #1521 lands, the dark build's restricted mode and its copy
-  disagree with the licence in both directions.
+  #1521's policy, superseding Decision F's read-only mode. The gate now built
+  (#1521: #2194, #2202), still dark, matches it: past the trial with no key the
+  editor stays fully editable and every AI surface refuses (ADR-040's third
+  amendment).
 - One asymmetry is deliberate: every pre-1.0 (beta) version stays free
   for personal use and individual self-hosting with no time limit, including
   the releases that shipped under an earlier wording, so someone can keep

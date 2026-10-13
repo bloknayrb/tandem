@@ -121,12 +121,34 @@ before it meets a paying user.
       (Added 2026-06-11; once the updater authenticates against the
       license-checked endpoint — #1116 L3 — run this against the staging
       endpoint so the entitlement check is in the loop.)
-- [ ] **License gate ON** (#1116; Windows + macOS minimum): on a gate-enabled
-      build — trial banner appears → simulate trial expiry (clock or test hook)
-      → hard gate engages → activate with a **real signed license** (issued by
-      the L1 script) → app runs → updater entitlement check succeeds. This is
+- [ ] **License gate ON** (#1116, #1521; Windows + macOS minimum). This is
       the most user-hostile path the product ships; it must not run for the
-      first time on launch day.
+      first time on launch day. On a gate-enabled build, run each step below.
+      The full checklist, with setup notes, is
+      [#2204](https://github.com/bloknayrb/tandem/issues/2204).
+      - [ ] **Expiry.** The trial banner appears → expire the trial (rewrite
+            `trial.json`'s `firstRunAt` more than 14 days back) → the **editor
+            stays editable** and only the AI is off: the AI pill reads "AI off",
+            the rail notice says "AI features are off", the chat composer is
+            disabled, and accept/dismiss on existing annotations still work. A
+            Claude Code session gets the licence message, not "server not
+            running".
+      - [ ] **Expiry while Tandem's Claude runs.** The running child is left
+            alone, and its next tool call returns the licence message. After a
+            stop, a restart is refused and the pill never offers Restart, even
+            inside the client's licence-poll lag.
+      - [ ] **Activation, Settings path.** Paste a **real signed license**
+            (`scripts/sign-license.ts`) into Settings → License: the AI-off
+            notice clears, chat re-enables, and Tandem restarts its Claude by
+            itself within about 5 s.
+      - [ ] **Activation, CLI path.** `tandem activate <key>`: the pill offers
+            Restart once the licence poll picks the key up, and Restart starts
+            Claude. Once #2205 lands, Claude resumes by itself instead.
+      - [ ] **Unverifiable holder.** A damaged `license.json` shows "could not
+            be verified" copy, never "unlicensed" and never a buy link. The
+            Settings form heading "Activate a license" is expected.
+      - [ ] **Updates.** With the key active, the app runs and the updater's
+            entitlement check succeeds.
 
 ## Recording the result
 
