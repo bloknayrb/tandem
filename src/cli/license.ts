@@ -61,11 +61,12 @@ export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean)
   lines.push(`  Enforcement:   ${enforcementOn ? "on" : "off (activates at v1.0)"}`);
   if (!enforcementOn && state.gateActive && state.status !== "licensed") {
     // `tandem license` forces `gateEnabled: true`, so a dark build reaches here
-    // from a stale `trial.json`. A dark build is a pre-1.0 beta, whose grant has
+    // from any `trial.json`, stale or live. A dark build is a pre-1.0 beta, whose grant has
     // no time limit: the user is neither on a trial nor unlicensed, and is
     // offered nothing to buy. The trial clock is still shown, labelled, for
     // diagnosis.
-    const which = state.licenseUnverifiable ? "license not verified" : "no license key";
+    const which =
+      state.licenseUnverifiable !== undefined ? "license not verified" : "no license key";
     const clock =
       state.status === "trial"
         ? ` (trial clock: ${state.trial.daysRemaining} of ${TRIAL_DAYS} days)`
@@ -112,9 +113,10 @@ export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean)
       }
     }
   }
-  // A license file exists but doesn't verify. Without this, every surface tells
-  // the holder of a license that their *trial* ended. The message is chosen by
-  // the code, so it names the actual remedy rather than hedging across three.
+  // A license file exists but doesn't verify. Its holder most likely paid, so
+  // they must never read as unlicensed or be offered a purchase; this paragraph
+  // is their remedy. The message is chosen by the code, so it names the actual
+  // remedy rather than hedging across three.
   if (state.gateActive && state.status !== "licensed" && state.licenseUnverifiable) {
     lines.push("");
     for (const line of wrapForTerminal(unverifiableLicenseMessage(state.licenseUnverifiable))) {

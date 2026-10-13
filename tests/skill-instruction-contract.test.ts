@@ -525,7 +525,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "33", bodyHash: "127e5ceaa964" });
+    ).toEqual({ version: "33", bodyHash: "066e10ef5b53" });
   });
 
   // #1521: what the model sees of a licence refusal is the JSON-RPC code and message
@@ -575,6 +575,20 @@ describe("shipped Tandem skill instruction contract", () => {
       const unverifiable = paragraphs.filter((p) => p.includes(AI_REFUSAL_UNVERIFIABLE_OPENING));
       expect(unverifiable).toHaveLength(1);
       expect(unverifiable[0]).toMatch(/never[^.]*\b(buy|purchase)/i);
+      // And nothing else in it points toward buying: with every "never …" sentence
+      // removed, no purchase word or activation-of-a-new-key remains.
+      const affirmative = unverifiable[0].replace(/[^.]*\bnever\b[^.]*\./gi, "");
+      expect(affirmative).not.toMatch(/\bbuy\b|purchase|activate a license/i);
+    });
+
+    it("suspends the inbox poll while Tandem refuses, at both polling rules", () => {
+      expect(recovery).toMatch(/suspend the every-2-3-calls inbox poll/);
+      expect(recovery).toMatch(/at most one read-mode `tandem_status` per user turn/);
+      // The two standing "poll every 2-3 calls" rules each carry the carve-out.
+      expect(skill).toMatch(/When in doubt, poll — unless Tandem is refusing its AI features/);
+      expect(skill).toMatch(
+        /Keep polling every 2-3 tool calls regardless[^\n]*except while Tandem is refusing/,
+      );
     });
 
     // A link written into the skill would reach every reader, paying or not; the
@@ -588,6 +602,11 @@ describe("shipped Tandem skill instruction contract", () => {
       expect(close).toHaveLength(1);
       expect(close[0]).not.toMatch(/unlicensed|\bbuy\b|purchase/i);
       expect(close[0]).toMatch(/not a reason to arm again/);
+      // It belongs to the wake rules, after the socket-close sentence it qualifies.
+      const wake = gettingWokenSection(skill);
+      expect(wake.indexOf("`LICENSE_REQUIRED` is Tandem turning")).toBeGreaterThan(
+        wake.indexOf("After a socket close, say once"),
+      );
     });
   });
 

@@ -200,7 +200,7 @@ can be loaded in a session whose `~/.claude.json` has no `mcpServers.tandem` ent
 message" is the text after the `MCP error -32003:` prefix. Relay it rather than paraphrasing, and
 act on how it begins:
 
-- **"Tandem is unlicensed, so its AI features are turned off"** → tell the user Tandem's AI features are off because it is unlicensed, and to activate a license key in Tandem's **Settings → License**, then reconnect as the message says (in Claude Code, run `/mcp`). Give a purchase link only as the message gives it; never invent one.
+- **"Tandem is unlicensed, so its AI features are turned off"** → relay the message, which already says why and gives the purchase link. Add what it may leave out: the key is activated in Tandem's **Settings → License**, then reconnect as the message says (in Claude Code, run `/mcp`). Never invent a purchase link.
 - **"Tandem's AI features are off because your license could not be verified"** → the user's license is installed but did not verify, and they most likely paid for it. Relay the message's own fix: a reissue, an update, or entering the key again in **Settings → License**. Never tell them to buy a license, and never say they lack a license.
 - **Anything else after `-32003`** → say only that Tandem's AI features are off and that Tandem's **Settings → License** says why. Do not guess which case it is.
 
