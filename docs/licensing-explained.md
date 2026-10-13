@@ -335,9 +335,10 @@ reads `license-refused` while a forward is outstanding and Tandem refuses the AI
 `consumer-detached` or a climbing `awaiting-poll`. Doctor's session reading defers to its licence row
 while AI is refused, because a refused client has no session and a surviving one is closed at its
 next request. `tandem doctor` reads
-`GET /api/license/status` once, adds a licence row (silent when dark, recording only `gateActive`,
-`status` and `licenseUnverifiable`, never the holder's name or email), and the push and SSE rows defer
-to it.
+`GET /api/license/status` once, adds a licence row (silent when dark, on a 404 from an older server
+or when nothing answers; a "License status unreadable" warning on any other non-OK, unparsable or
+unrecognised answer; recording only `gateActive`, `status` and `licenseUnverifiable`, never the
+holder's name or email), and the push and SSE rows defer to it.
 
 **Accepted residuals** (Bryan, D5): an unlicensed Claude Code with shell access can still reach
 Tandem's local endpoints directly, which is equivalent to editing the file on disk; an open session is

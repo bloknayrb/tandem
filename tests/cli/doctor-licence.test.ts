@@ -9,8 +9,9 @@ import {
 
 /**
  * Doctor's licence row (#1521). It reads `GET /api/license/status` once,
- * is SILENT on a dark build and on any non-answer (so a dark build's report is
- * unchanged), and while AI is refused it is the one licence-caused warning —
+ * is SILENT on a dark build, a 404 and a non-answer (so a dark build's report is
+ * unchanged), WARNS when the server answers but not readably (any other non-OK,
+ * an unparsable body, an unknown status), and while AI is refused it is the one licence-caused warning —
  * the session reading, the push row and the SSE probe each defer to it (a
  * `skip` row with `reason: "license"`) rather than going yellow. Other checks
  * (config files, ports) can still warn for their own reasons.
@@ -33,12 +34,56 @@ describe("parseDoctorLicence", () => {
     ["no answer", null],
     ["a connection error", { error: "ECONNREFUSED" }],
     ["a 404 (older server)", { status: 404, data: null }],
-    ["an unparsable body", { status: 200, data: null }],
     ["a dark build", { status: 200, data: { gateActive: false, status: "licensed" } }],
+    ["a dark build's real wire (no status)", { status: 200, data: { gateActive: false } }],
   ])("is silent on %s", (_label, result) => {
     expect(parseDoctorLicence(result as never)).toBeNull();
     expect(evaluateLicence(parseDoctorLicence(result as never))).toBeNull();
   });
+
+  // The server answered, just not readably. Silence here would read exactly
+  // like a dark build, and the session rows would then claim what the licence
+  // may contradict.
+  it.each([
+    ["a 401", { status: 401, data: null }, /License status unreadable \(HTTP 401\)/],
+    ["a 500", { status: 500, data: { error: "boom" } }, /License status unreadable \(HTTP 500\)/],
+    ["an unparsable body", { status: 200, data: null }, /unreadable \(unrecognised answer\)/],
+    [
+      "an unknown status string",
+      { status: 200, data: { gateActive: true, status: "suspended" } },
+      /unreadable \(unrecognised answer\)/,
+    ],
+    [
+      "a gated body with no status",
+      { status: 200, data: { gateActive: true } },
+      /unreadable \(unrecognised answer\)/,
+    ],
+    [
+      "a body with no gateActive",
+      { status: 200, data: { status: "licensed" } },
+      /unreadable \(unrecognised answer\)/,
+    ],
+  ])("warns that the status is unreadable on %s", (_label, result, message) => {
+    const row = evaluateLicence(parseDoctorLicence(result as never));
+    expect(row?.status).toBe("warn");
+    expect(row?.message).toMatch(message);
+    expect(row?.message).not.toMatch(/AI features on/);
+    // Nothing from the body reaches the shareable report.
+    expect(Object.keys(row?.data ?? {})).toEqual(["httpStatus"]);
+    expect(licenceOffLabel(parseDoctorLicence(result as never))).toBeNull();
+  });
+
+  it.each(["trial", "licensed", "restricted"])(
+    "reads the known status %s (positive twin)",
+    (status) => {
+      const parsed = parseDoctorLicence({
+        status: 200,
+        data: { gateActive: true, status },
+      } as never);
+      expect(parsed).toEqual({ gateActive: true, status, licenseUnverifiable: null });
+      expect(evaluateLicence(parsed)?.message).not.toMatch(/unreadable/);
+    },
+  );
 
   it("keeps only gateActive, status and licenseUnverifiable", () => {
     const parsed = parseDoctorLicence({ status: 200, data: LICENSED_WITH_PII } as never);
@@ -206,6 +251,49 @@ describe("runDoctor with a licence answer", () => {
       const r2 = await runDoctor({ mcpPort: live, wsPort: 1, vitePort: 1 });
       expect(healthText(r2)).toMatch(/session active/);
     });
+  });
+
+  it("an erroring status route: one 'unreadable' warning, and the push and SSE rows still run", async () => {
+    server = createServer((req, res) => {
+      if (req.url === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            version: "0.0.0-test",
+            transport: "http",
+            hasSession: false,
+            sessionCount: 0,
+            push: { subscribers: 1, eventCount: 0, lastEventAt: null },
+          }),
+        );
+        return;
+      }
+      if (req.url === "/api/license/status") {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "INTERNAL" }));
+        return;
+      }
+      if (req.url === "/api/events") {
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.write(": connected\n\n");
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    const mcpPort = await new Promise<number>((resolve) => {
+      server?.listen(0, "127.0.0.1", () => {
+        const addr = server?.address();
+        resolve(typeof addr === "object" && addr ? addr.port : 0);
+      });
+    });
+    const report = await runDoctor({ mcpPort, wsPort: 1, vitePort: 1 });
+    const licence = report.results.filter((r) => r.check === "license");
+    expect(licence).toHaveLength(1);
+    expect(licence[0].status).toBe("warn");
+    expect(licence[0].message).toBe("License status unreadable (HTTP 500)");
+    const sse = report.results.filter((r) => r.check === "sse");
+    expect(sse[0]?.message).toMatch(/reachable/);
   });
 
   it("dark: no licence row at all", async () => {
