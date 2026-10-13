@@ -6321,6 +6321,7 @@ dependencies = [
  "fs2",
  "keyring",
  "log",
+ "objc2-foundation",
  "rand 0.10.3",
  "reqwest 0.12.28",
  "sentry",

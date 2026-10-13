@@ -1678,6 +1678,11 @@ pub fn run() {
             if matches!(event, tauri::WindowEvent::Resized(_)) {
                 apply_window_chrome(window);
             }
+            if matches!(event, tauri::WindowEvent::Focused(true))
+                && window.label() == MAIN_WINDOW_LABEL
+            {
+                notifications::on_main_window_focused(window.app_handle());
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if tray_flag_for_close.load(Ordering::Acquire) {
                     // Tray available: hide to tray, server keeps running

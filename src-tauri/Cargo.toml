@@ -81,12 +81,25 @@ tauri-plugin-autostart = "2"
 # Chat-reply notifications (#2168). Driven from app-defined commands
 # (src/notifications.rs), not the plugin's JS API, so the click handler can
 # call `show_main_window_for_user`. 2.6 is the floor: it is the first release
-# that reports a desktop notification click to `on_action`. MSRV: it declares
-# rust-version 1.90, above tandem-desktop's 1.77.2 — CI builds on stable.
+# that reports a desktop notification click to `on_action`. On macOS a click is
+# reported only for a notification with an action button (notify-rust 4.18
+# waits for nothing else), so a chat reply there carries an "Open chat" action;
+# see CHAT_REPLY_ACTION_TYPE. MSRV: it declares rust-version 1.90, above
+# tandem-desktop's 1.77.2 — CI builds on stable.
 tauri-plugin-notification = "2.6"
 tauri-plugin-updater = "2"
 tauri-plugin-prevent-default = "6"
 tauri-plugin-decorum = "1"
+
+# macOS-only: removes Tandem's delivered notifications through
+# NSUserNotificationCenter when the window is focused, to release a parked
+# notification thread (see MAC_ACTION_OUTSTANDING in src/notifications.rs).
+# Same version already resolved through tao/wry; only the one class feature.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSUserNotification",
+] }
 
 # Windows-only DWM bindings: force rounded window corners (DWMWCP_ROUND) so
 # snapping/maximizing keeps the floating-chrome rounded surface, and suppress

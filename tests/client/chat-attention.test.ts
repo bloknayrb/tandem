@@ -26,6 +26,8 @@ function setup(
 ) {
   let active = opts.active ?? false;
   const seen = new Set(opts.seen ?? []);
+  // Mutable, so a test can flip a setting mid-run.
+  const settings: ChatAttentionSettings = { ...DEFAULTS, ...opts.settings };
   const backend = {
     notify: vi.fn<NotifierBackend["notify"]>(),
     attention: vi.fn<NotifierBackend["attention"]>(),
@@ -35,7 +37,7 @@ function setup(
   const openChat = vi.fn();
   // Real default timers and clock (`Date.now`), both faked by vitest.
   const attention = createChatAttention({
-    getSettings: () => ({ ...DEFAULTS, ...opts.settings }),
+    getSettings: () => settings,
     isActive: () => active,
     isSeen: (id) => seen.has(id),
     documentName: (id) => (id === "doc-1" ? "report.md" : null),
@@ -49,6 +51,7 @@ function setup(
     playChime,
     openChat,
     seen,
+    settings,
     /** Run out the 750 ms coalescing window. */
     flush: () => vi.advanceTimersByTime(COALESCE_MS),
     advance: (ms: number) => vi.advanceTimersByTime(ms),
@@ -60,6 +63,7 @@ function setup(
 
 const COALESCE_MS = 750;
 const INTERVAL_MS = 30_000;
+const ACTIVE_CHIME_GAP_MS = 2_000;
 
 describe("createChatAttention (#2168)", () => {
   beforeEach(() => {
@@ -79,15 +83,54 @@ describe("createChatAttention (#2168)", () => {
     expect(t.backend.attention).not.toHaveBeenCalled();
   });
 
-  it("focused window chimes once per coalesced batch, with no rate limit", () => {
+  it("focused window chimes once per coalesced batch, and again 2 s later", () => {
     const t = setup({ active: true });
     t.attention.push([reply("a")]);
     t.attention.push([reply("b")]);
     t.flush();
     expect(t.playChime).toHaveBeenCalledTimes(1);
+    // The next batch flushes exactly ACTIVE_CHIME_GAP_MS after the first chime.
+    t.advance(ACTIVE_CHIME_GAP_MS - COALESCE_MS);
     t.attention.push([reply("c")]);
     t.flush();
     expect(t.playChime).toHaveBeenCalledTimes(2);
+  });
+
+  it("focused window chimes at most once every 2 s", () => {
+    const t = setup({ active: true });
+    for (let i = 0; i < 60; i++) {
+      t.attention.push([reply(`r${i}`)]);
+      t.advance(1_000);
+    }
+    // Flushes land 1 s apart; every other one is inside the gap.
+    expect(t.playChime).toHaveBeenCalledTimes(30);
+  });
+
+  it("an away announcement chimes even inside the active-window gap", () => {
+    const t = setup({ active: true, settings: { chatNotifications: false } });
+    t.attention.push([reply("a")]);
+    t.flush();
+    expect(t.playChime).toHaveBeenCalledTimes(1);
+    // Pushed while still focused; the user leaves before it flushes, 1.5 s
+    // after the first chime.
+    t.attention.push([reply("b")]);
+    t.advance(250);
+    t.setActive(false);
+    t.advance(COALESCE_MS - 250);
+    expect(t.playChime).toHaveBeenCalledTimes(2);
+    expect(t.backend.notify).not.toHaveBeenCalled();
+  });
+
+  it("an away announcement counts as the last chime for the active-window gap", () => {
+    const t = setup();
+    t.attention.push([reply("a")]);
+    t.flush();
+    expect(t.playChime).toHaveBeenCalledTimes(1);
+    t.attention.windowActivated();
+    t.setActive(true);
+    t.attention.push([reply("b")]);
+    t.flush();
+    expect(t.playChime).toHaveBeenCalledTimes(1);
   });
 
   it("focused window keeps its chime even though it acknowledged the reply itself", () => {
@@ -266,6 +309,31 @@ describe("createChatAttention (#2168)", () => {
     expect(t.playChime).toHaveBeenCalledTimes(1);
   });
 
+  it("destroy withdraws the flash / title count", () => {
+    const t = setup();
+    t.attention.push([reply("a")]);
+    t.flush();
+    t.attention.destroy();
+    expect(t.backend.clearAttention).toHaveBeenCalledTimes(1);
+    t.attention.destroy();
+    expect(t.backend.clearAttention).toHaveBeenCalledTimes(1);
+  });
+
+  it("destroy with nothing pending does not clear attention", () => {
+    const t = setup();
+    t.attention.destroy();
+    expect(t.backend.clearAttention).not.toHaveBeenCalled();
+  });
+
+  it("destroy drops the click target", () => {
+    const t = setup();
+    t.attention.push([reply("a", { documentId: "doc-1" })]);
+    t.flush();
+    t.attention.destroy();
+    t.attention.notificationActivated();
+    expect(t.openChat).toHaveBeenCalledWith(undefined);
+  });
+
   it("with notifications off the away chime is still rate-limited, and plays on the trailing announcement", () => {
     const t = setup({ settings: { chatNotifications: false } });
     t.attention.push([reply("a")]);
@@ -338,12 +406,75 @@ describe("createChatAttention (#2168)", () => {
     expect(t.openChat).toHaveBeenCalledWith("doc-1");
   });
 
+  it("a browser click before the window reports focus keeps the document", () => {
+    const t = setup();
+    t.attention.push([reply("a", { documentId: "doc-1" })]);
+    t.flush();
+    t.attention.notificationActivated();
+    t.attention.windowActivated();
+    expect(t.openChat).toHaveBeenCalledWith("doc-1");
+  });
+
   it("a stale click, long after the window was focused with nothing pending, just opens chat", () => {
     const t = setup();
     t.attention.push([reply("a", { documentId: "doc-1" })]);
     t.flush();
     t.attention.windowActivated();
     t.advance(6_000);
+    t.attention.notificationActivated();
+    expect(t.openChat).toHaveBeenCalledWith(undefined);
+  });
+
+  it("an old notification clicked an hour later, its own focus first, just opens chat", () => {
+    const t = setup();
+    t.attention.push([reply("a", { documentId: "doc-1" })]);
+    t.flush();
+    // The user came back without clicking.
+    t.attention.windowActivated();
+    t.advance(3_600_000);
+    // Rust focuses the window before emitting the click: this return must not
+    // restart the grace.
+    t.attention.windowActivated();
+    t.attention.notificationActivated();
+    expect(t.openChat).toHaveBeenCalledWith(undefined);
+  });
+
+  it("a new absence's notification re-arms the target", () => {
+    const t = setup();
+    t.attention.push([reply("a", { documentId: "doc-1" })]);
+    t.flush();
+    t.attention.windowActivated();
+    t.advance(3_600_000);
+    t.setActive(false);
+    t.attention.push([reply("b", { documentId: "doc-2" })]);
+    t.flush();
+    t.advance(60_000);
+    t.attention.windowActivated();
+    t.attention.notificationActivated();
+    expect(t.openChat).toHaveBeenCalledWith("doc-2");
+  });
+
+  it("a second click after the target was consumed just opens chat", () => {
+    const t = setup();
+    t.attention.push([reply("a", { documentId: "doc-1" })]);
+    t.flush();
+    t.attention.notificationActivated();
+    expect(t.openChat).toHaveBeenLastCalledWith("doc-1");
+    t.attention.notificationActivated();
+    expect(t.openChat).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it("a reply held with notifications off does not revive an old target", () => {
+    const t = setup();
+    t.attention.push([reply("a", { documentId: "doc-1" })]);
+    t.flush();
+    t.attention.windowActivated();
+    t.advance(6_000);
+    t.settings.chatNotifications = false;
+    t.attention.push([reply("b", { documentId: "doc-2" })]);
+    t.flush();
+    expect(t.backend.attention).toHaveBeenLastCalledWith(1);
+    // The doc-1 notification, still in the notification centre.
     t.attention.notificationActivated();
     expect(t.openChat).toHaveBeenCalledWith(undefined);
   });

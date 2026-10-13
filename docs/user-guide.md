@@ -338,11 +338,13 @@ A reply counts as read only once you've seen it in the Tandem window you're usin
 
 ### Reply Notifications
 
-When your AI replies in chat and Tandem isn't the window you're using, Tandem shows a notification, plays a sound and draws attention to itself. In the desktop app the taskbar icon flashes (Windows) or the dock icon bounces (macOS) until you switch back. In the browser, the tab title shows the number of unread replies. While you're using Tandem, each reply plays the sound and nothing else. Several replies in quick succession count as one.
+When your AI replies in chat and Tandem isn't the window you're using, Tandem shows a notification, plays a sound and draws attention to itself. In the desktop app the taskbar icon flashes (Windows) or the dock icon bounces (macOS) until you switch back. In the browser, the tab title shows the number of unread replies. While you're using Tandem, each reply plays the sound and nothing else, at most once every 2 seconds. Several replies in quick succession count as one.
 
 While you're away, you get at most one notification and one sound every 30 seconds. Replies that arrive during those 30 seconds are held back and announced together when the 30 seconds end, unless you've come back to Tandem or read them in another Tandem window by then.
 
 Clicking a notification brings Tandem forward and opens chat on the document of the newest reply a notification announced. That holds when you click it in the first few seconds after switching back to Tandem, too. An old notification clicked from your notification centre long after you came back just opens chat.
+
+On macOS, clicking opens chat for the first notification each time you step away; later notifications from the same time away may only bring Tandem forward. When you come back to Tandem, it clears its notifications from Notification Centre.
 
 The "working on it" message your AI sends before starting longer work doesn't notify. The answer that follows does.
 
