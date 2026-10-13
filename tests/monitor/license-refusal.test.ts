@@ -88,10 +88,20 @@ describe("SSE consumer: licence refusal", () => {
 
   it("a 403 whose body never ends is read under a deadline, then treated as an outage", async () => {
     let attempts = 0;
-    stub.on("/api/events", () => {
+    let aborted = 0;
+    stub.on("/api/events", (_url, init) => {
       attempts++;
-      // Something other than Tandem on the port: headers, then a body that stalls.
-      return new Response(new ReadableStream({ start() {} }), { status: 403 });
+      // Something other than Tandem on the port: headers, then a body that
+      // stalls. Like real fetch, aborting the request's signal errors the body.
+      const body = new ReadableStream({
+        start(ctrl) {
+          init?.signal?.addEventListener("abort", () => {
+            aborted++;
+            ctrl.error(init.signal?.reason);
+          });
+        },
+      });
+      return new Response(body, { status: 403 });
     });
 
     void main().catch(() => {});
@@ -99,6 +109,8 @@ describe("SSE consumer: licence refusal", () => {
 
     // Without the deadline the first `res.json()` never settles: one attempt, forever.
     expect(attempts).toBeGreaterThanOrEqual(8);
+    // Each stalled read is released by aborting its request, not left open.
+    expect(aborted).toBeGreaterThanOrEqual(attempts - 1);
     expect(errorReports()).toBe(1);
   });
 

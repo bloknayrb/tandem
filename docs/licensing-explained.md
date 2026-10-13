@@ -324,7 +324,8 @@ retries every 30 seconds, so activation is picked up without a restart; a non-li
 the latch. (A host whose *first* `initialize` was refused has already been told by its SDK that the
 server failed, and needs a reconnect (`/mcp` in Claude Code) or a restart after activation; a
 refused `initialize`, and only that, appends `AI_REFUSAL_RECONNECT_HINT` saying so, and the bridge
-logs one stderr line.) The shared SSE consumer treats a
+logs one stderr line. The bridge's own replayed `initialize` draws the hint too, so it strips it
+before latching: that host's session never failed.) The shared SSE consumer treats a
 `LICENSE_REQUIRED` 403 as a refusal, not an outage — no retry ladder, no `channel-error` report — and
 retries every 5 minutes; the plugin monitor prints the refusal once on stdout. `tandem doctor` reads
 `GET /api/license/status` once, adds a licence row (silent when dark, recording only `gateActive`,

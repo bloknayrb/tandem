@@ -2,7 +2,8 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { licenseRefusalError } from "../../src/cli/mcp-stdio.js";
+import { licenseRefusalError, withoutReconnectHint } from "../../src/cli/mcp-stdio.js";
+import { AI_REFUSAL_RECONNECT_HINT } from "../../src/shared/license-copy.js";
 
 /**
  * The stdio bridge under a licence refusal (#1521) — relay, never
@@ -23,6 +24,10 @@ const LICENSE_ERROR = {
   code: -32003,
   message: "Tandem is unlicensed, so its AI features are turned off.",
   data: { error: "LICENSE_REQUIRED", kind: "unlicensed" },
+};
+const LICENSE_ERROR_ON_INIT = {
+  ...LICENSE_ERROR,
+  message: `${LICENSE_ERROR.message} ${AI_REFUSAL_RECONNECT_HINT}`,
 };
 
 interface FakeUpstream {
@@ -99,7 +104,9 @@ async function makeUpstream(initiallyRefused: boolean): Promise<FakeUpstream> {
           }
           const answer = () => {
             res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, error: LICENSE_ERROR }));
+            // As the real server: a refused `initialize` carries the reconnect hint.
+            const error = body.method === "initialize" ? LICENSE_ERROR_ON_INIT : LICENSE_ERROR;
+            res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, error }));
           };
           if (body.method === "initialize" && refusedInitDelayMs > 0) {
             setTimeout(answer, refusedInitDelayMs);
@@ -256,6 +263,13 @@ describe("licenseRefusalError", () => {
   });
 });
 
+describe("withoutReconnectHint", () => {
+  it("strips only a trailing hint", () => {
+    expect(withoutReconnectHint(LICENSE_ERROR_ON_INIT)).toEqual(LICENSE_ERROR);
+    expect(withoutReconnectHint(LICENSE_ERROR)).toBe(LICENSE_ERROR);
+  });
+});
+
 describe("mcp-stdio under a licence refusal (#1521)", () => {
   it("relays a refused first initialize verbatim", async () => {
     upstream = await makeUpstream(true);
@@ -264,7 +278,9 @@ describe("mcp-stdio under a licence refusal (#1521)", () => {
     await new Promise((r) => setTimeout(r, 700));
     send(child, INITIALIZE);
     await waitFor(() => io.responseFor(1) !== undefined, "initialize response");
-    expect(errorOf(io.responseFor(1))).toEqual(LICENSE_ERROR);
+    // The host's own `initialize`: the reconnect hint is right advice here.
+    expect(errorOf(io.responseFor(1))).toEqual(LICENSE_ERROR_ON_INIT);
+    expect(io.stderr()).toMatch(/initialize refused by Tandem's license check/);
   }, 30_000);
 
   it("mid-session: latches the server's refusal, answers with it, and heals on activation", async () => {
@@ -282,7 +298,9 @@ describe("mcp-stdio under a licence refusal (#1521)", () => {
     expect(errorOf(io.responseFor(2))?.data?.error).toBe("LICENSE_REQUIRED");
     await waitFor(() => /upstream refused the session/.test(io.stderr()), "the latch");
 
-    // Latched: a new request is answered locally with the server's own error.
+    // Latched: a new request is answered locally with the server's own error,
+    // minus the reconnect hint the replayed `initialize` drew: the host's
+    // session never failed, and the latch heals by itself.
     send(child, { jsonrpc: "2.0", id: 3, method: "tools/list" });
     await waitFor(() => io.responseFor(3) !== undefined, "the latched answer");
     expect(errorOf(io.responseFor(3))).toEqual(LICENSE_ERROR);

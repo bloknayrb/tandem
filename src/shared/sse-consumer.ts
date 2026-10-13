@@ -94,22 +94,24 @@ const REFUSAL_BODY_TIMEOUT_MS = 5_000;
  * Total: a body that cannot be read or parsed is simply not a licence refusal.
  * Bounded: the handshake timer no longer governs the body, so a 403 whose body
  * stalls (something other than Tandem on the port) must not hang the loop.
+ * `fetchCtrl` is the controller the request was made with: aborting it errors
+ * the body mid-read and releases the connection, which cancelling a stream
+ * that `json()` has locked cannot do.
  */
-async function readLicenseRefusal(res: Response): Promise<string | null> {
+async function readLicenseRefusal(
+  res: Response,
+  fetchCtrl: AbortController,
+): Promise<string | null> {
   if (res.status !== 403) return null;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("refusal body timeout")), REFUSAL_BODY_TIMEOUT_MS);
-  });
+  const timer = setTimeout(
+    () => fetchCtrl.abort(new Error("refusal body timeout")),
+    REFUSAL_BODY_TIMEOUT_MS,
+  );
   try {
-    const body = (await Promise.race([res.json(), deadline])) as {
-      error?: unknown;
-      message?: unknown;
-    } | null;
+    const body = (await res.json()) as { error?: unknown; message?: unknown } | null;
     if (body?.error !== LICENSE_REQUIRED) return null;
     return typeof body.message === "string" ? body.message : LICENSE_REQUIRED;
   } catch {
-    res.body?.cancel().catch(() => {});
     return null;
   } finally {
     clearTimeout(timer);
@@ -423,7 +425,7 @@ export async function connectAndStreamOnce(
     clearTimeout(connectTimer);
   }
   if (!res.ok) {
-    const refusal = await readLicenseRefusal(res);
+    const refusal = await readLicenseRefusal(res, connectCtrl);
     if (refusal !== null) throw new LicenseRefusedStreamError(refusal);
     throw new Error(`SSE endpoint returned ${res.status}`);
   }

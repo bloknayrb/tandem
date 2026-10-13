@@ -60,7 +60,7 @@ import {
   resolveClaudeSessionId,
   resolveTandemUrl,
 } from "../shared/cli-runtime.js";
-import { LICENSE_REQUIRED } from "../shared/license-copy.js";
+import { AI_REFUSAL_RECONNECT_HINT, LICENSE_REQUIRED } from "../shared/license-copy.js";
 import { probeTandemServer } from "./preflight.js";
 
 redirectConsoleToStderr();
@@ -148,6 +148,14 @@ export function licenseRefusalError(msg: JSONRPCMessage): JsonRpcErrorObject | u
   return (data as { error?: unknown }).error === LICENSE_REQUIRED
     ? (error as JsonRpcErrorObject)
     : undefined;
+}
+
+/** `error` with the server's `initialize`-only reconnect hint removed. */
+export function withoutReconnectHint(error: JsonRpcErrorObject): JsonRpcErrorObject {
+  const suffix = ` ${AI_REFUSAL_RECONNECT_HINT}`;
+  return error.message.endsWith(suffix)
+    ? { ...error, message: error.message.slice(0, -suffix.length) }
+    : error;
 }
 
 /** A JSON-RPC error object as the upstream sent it. */
@@ -1318,8 +1326,12 @@ export async function runMcpStdio(): Promise<void> {
       if (identity === undefined) {
         // #1521: refused because Tandem is unlicensed. Latch the server's own
         // error so the client hears it verbatim, not "session lost".
-        const refusal = licenseRefusalError(response);
-        if (refusal) {
+        const replayed = licenseRefusalError(response);
+        if (replayed) {
+          // The server appends its reconnect hint to any refused `initialize`,
+          // and this replay is one. But the host's own session never failed
+          // and the latch heals by itself, so the hint would be wrong advice.
+          const refusal = withoutReconnectHint(replayed);
           if (!licenseLatch) {
             process.stderr.write(
               `[tandem mcp-stdio] upstream refused the session: ${refusal.message} ` +

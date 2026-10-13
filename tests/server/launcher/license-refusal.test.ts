@@ -336,6 +336,18 @@ describe("supervisor licence refusal (#1521)", () => {
     expect(children[0].kills).toEqual([]);
   });
 
+  it("an admitted spawn by any other route clears the recorded refusal", async () => {
+    refused = true;
+    const sup = makeSupervisor();
+    await sup.start();
+    expect(sup.licenceRefusal()).toEqual(REFUSAL);
+    // Licensed some other way (`tandem activate`), then the user's Restart.
+    refused = false;
+    await sup.relaunch(cwdDir);
+    expect(children).toHaveLength(1);
+    expect(sup.licenceRefusal()).toBeNull();
+  });
+
   it("resumeAfterLicence is a no-op when nothing was refused", async () => {
     const sup = makeSupervisor();
     await sup.resumeAfterLicence();
