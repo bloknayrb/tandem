@@ -9,6 +9,7 @@ import {
   assertLoopbackForMutation,
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
+import type { Supervisor } from "../../launcher/supervisor.js";
 import { LicenseActivationError } from "../../license/activation.js";
 import {
   activateLicense,
@@ -75,7 +76,7 @@ export function darkInstallInfo(): { installed: boolean; licenseeName?: string }
 /**
  * PII-scrubbed status for non-loopback (LAN / deprecated-browser) callers — drops
  * the licensee name/email/licenseId so they never reach the wire, while keeping
- * enough for the client's wall/banner + read-only derivation.
+ * enough for the client's licence surfaces and `tandem doctor`'s licence row.
  */
 export function scrubForNonLoopback(s: LicenseState): {
   gateActive: boolean;
@@ -147,6 +148,15 @@ export function handleGetLicenseStatus(req: Request, res: Response): void {
   res.json(scrubForNonLoopback(state));
 }
 
+export interface ActivateLicenseDeps {
+  /**
+   * The launcher supervisor, late-bound like every launcher route's. Optional:
+   * a server without the launcher (tests, stdio) skips the resume and answers
+   * exactly as before.
+   */
+  getSupervisor?: () => Pick<Supervisor, "resumeAfterLicence"> | null;
+}
+
 /**
  * POST /api/license/activate — persist a signed license blob and return the
  * freshly-resolved (full) state. Body: `{ license: string }` (the signed blob).
@@ -157,39 +167,62 @@ export function handleGetLicenseStatus(req: Request, res: Response): void {
  * license before the v1.0 flag-flip. `activateLicense` verifies the signature
  * and rejects unknown schema versions; a bad blob yields 400 with a generic
  * message (no signature/parse detail reaches the wire).
+ *
+ * A factory so the success path can resume a launcher the licence refused
+ * (#1521) — the one caller of `Supervisor.resumeAfterLicence`.
  */
-export async function handleActivateLicense(req: Request, res: Response): Promise<void> {
-  // Same gates as before (origin allowlist THEN loopback), but with copy a
-  // buyer can act on. The default messages talk about "integration routes" and
-  // TANDEM_ALLOW_UNAUTHENTICATED_LAN — internal vocabulary that reaches the
-  // activation form verbatim, since the client passes `json.message` straight
-  // through.
-  //
-  // The `tandem activate` clause is conditional on the SAME discriminant the
-  // Settings hint uses (review round 2). On a desktop install the sidecar reads
-  // the Tauri app-data dir while an npm-installed CLI writes `license.json`
-  // under its own env-paths root, so the command prints "✓ License activated"
-  // and changes nothing the app can see — the exact wrong-root no-op #1789
-  // removed from the hint two functions away. `npmCliSharesAppDataRoot()` is the
-  // server saying the two roots coincide; anything else, and we only say "paste
-  // the key there".
-  const LOCAL_ONLY =
-    "A license can only be activated on the computer running Tandem. Open Tandem on that " +
-    "computer and paste the key there" +
-    (npmCliSharesAppDataRoot() ? ", or run `tandem activate` on it." : ".");
-  if (assertOriginAllowlisted(req, res, API_LICENSE_ACTIVATE, LOCAL_ONLY)) return;
-  if (assertLoopbackForMutation(req, res, LOCAL_ONLY)) return;
+export function makeActivateLicenseHandler(
+  deps: ActivateLicenseDeps = {},
+): (req: Request, res: Response) => Promise<void> {
+  return async (req, res) => {
+    // Same gates as before (origin allowlist THEN loopback), but with copy a
+    // buyer can act on. The default messages talk about "integration routes" and
+    // TANDEM_ALLOW_UNAUTHENTICATED_LAN — internal vocabulary that reaches the
+    // activation form verbatim, since the client passes `json.message` straight
+    // through.
+    //
+    // The `tandem activate` clause is conditional on the SAME discriminant the
+    // Settings hint uses (review round 2). On a desktop install the sidecar reads
+    // the Tauri app-data dir while an npm-installed CLI writes `license.json`
+    // under its own env-paths root, so the command prints "✓ License activated"
+    // and changes nothing the app can see — the exact wrong-root no-op #1789
+    // removed from the hint two functions away. `npmCliSharesAppDataRoot()` is the
+    // server saying the two roots coincide; anything else, and we only say "paste
+    // the key there".
+    const LOCAL_ONLY =
+      "A license can only be activated on the computer running Tandem. Open Tandem on that " +
+      "computer and paste the key there" +
+      (npmCliSharesAppDataRoot() ? ", or run `tandem activate` on it." : ".");
+    if (assertOriginAllowlisted(req, res, API_LICENSE_ACTIVATE, LOCAL_ONLY)) return;
+    if (assertLoopbackForMutation(req, res, LOCAL_ONLY)) return;
 
-  const { license: rawLicense } = (req.body ?? {}) as Record<string, unknown>;
-  if (!rawLicense || typeof rawLicense !== "string") {
-    res.status(400).json({ error: "BAD_REQUEST", message: "license is required" });
-    return;
-  }
+    const { license: rawLicense } = (req.body ?? {}) as Record<string, unknown>;
+    if (!rawLicense || typeof rawLicense !== "string") {
+      res.status(400).json({ error: "BAD_REQUEST", message: "license is required" });
+      return;
+    }
 
-  try {
-    // No normalization here — `activateLicense` does it, so the persisted bytes
-    // are clean and no caller can forget.
-    await activateLicense(resolveAppDataDir(), rawLicense);
+    try {
+      // No normalization here — `activateLicense` does it, so the persisted bytes
+      // are clean and no caller can forget.
+      await activateLicense(resolveAppDataDir(), rawLicense);
+    } catch (err) {
+      sendActivationError(res, err);
+      return;
+    }
+
+    // Resume a launcher the licence refused (#1521) — success path only, and
+    // AWAITED before answering, so the spawn has cleared `lastError` before the
+    // client hears "activated" (otherwise a stale "restart" chip could appear
+    // whose click would relaunch over the fresh child). Deliberately OUTSIDE the
+    // try above: that one maps any throw to 400 `INVALID_LICENSE`, and
+    // `license.json` is already written here — `startInternal` can still throw
+    // from `buildPlan` on a bad `integrations.json`, which is not the key's fault.
+    try {
+      await deps.getSupervisor?.()?.resumeAfterLicence();
+    } catch (err) {
+      console.error("[License] Activated, but resuming the launcher failed:", err);
+    }
 
     // Re-resolve through the LIVE gate flag rather than returning
     // `activateLicense`'s result directly. That function forces
@@ -199,17 +232,28 @@ export async function handleActivateLicense(req: Request, res: Response): Promis
     // believe `gateActive` is true and render gate-only chrome, such as the
     // "your update window has ended" warning, on a build that gates nothing.
     // Same shaping as GET /api/license/status, so the two can't disagree.
-    const live = resolveLiveLicenseState();
-    res.json(loopbackLicenseWire(live));
-  } catch (err) {
-    const code = err instanceof LicenseActivationError ? err.code : "UNKNOWN";
-    // A write failure is OUR fault, not the caller's — 500, not 400. The
-    // status code is the difference between "fix your input" and "retry".
-    const status = code === "WRITE_FAILED" ? 500 : 400;
-    res.status(status).json({
-      error: code === "WRITE_FAILED" ? "LICENSE_WRITE_FAILED" : "INVALID_LICENSE",
-      // Static per-code copy; the underlying error message never reaches the wire.
-      message: activationErrorMessage(code),
-    });
-  }
+    //
+    // Inside a try of its own, mapped exactly as the activation's: a throw here
+    // must still reach the buyer as a coded answer, never as an unhandled
+    // rejection (which Express would turn into an HTML 500).
+    try {
+      const live = resolveLiveLicenseState();
+      res.json(loopbackLicenseWire(live));
+    } catch (err) {
+      sendActivationError(res, err);
+    }
+  };
+}
+
+/** The activate route's coded failure answer. Static per-code copy; the
+ * underlying error message never reaches the wire. */
+function sendActivationError(res: Response, err: unknown): void {
+  const code = err instanceof LicenseActivationError ? err.code : "UNKNOWN";
+  // A write failure is OUR fault, not the caller's — 500, not 400. The
+  // status code is the difference between "fix your input" and "retry".
+  const status = code === "WRITE_FAILED" ? 500 : 400;
+  res.status(status).json({
+    error: code === "WRITE_FAILED" ? "LICENSE_WRITE_FAILED" : "INVALID_LICENSE",
+    message: activationErrorMessage(code),
+  });
 }

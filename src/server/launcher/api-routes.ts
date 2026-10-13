@@ -5,6 +5,11 @@
  *   - `GET /status` — read-only; loopback returns full struct (with
  *     `sessionId` redacted to "<set>"), non-loopback returns the minimal
  *     `{ available, running }` shape (mirrors `/health`'s redaction pattern).
+ *     `cwd`, `resuming`, `reaperPid`, `busy` and `attached` are loopback-only
+ *     for the same reason as `/health`'s session-presence fields: `busy` in
+ *     particular is an activity trace of the person at this machine, and the
+ *     CORS allowlist admits any 127.0.0.1 port, so any local page can read
+ *     it (docs/security.md#cors-allowlist).
  *   - `GET /nonce` — issues a one-shot single-use nonce that mutating
  *     routes require. Rotates on consumption (success or failure).
  *   - `POST /relaunch` — body `{ cwd, nonce }`. Origin + loopback gates,
@@ -22,7 +27,11 @@
  *
  * The supervisor singleton is bridged via `() => Supervisor | null`. The
  * MUTATING routes return 503 + `NOT_AVAILABLE` when the getter returns null
- * (stdio mode, disabled-by-env, or no claude-code integration). The two
+ * (stdio mode, disabled-by-env, a deferred autostart, or a supervisor that
+ * failed to start). A supervisor that exists but found no launchable
+ * claude-code integration is NOT null: `GET /status` reports it as
+ * `available: false, reason: "not-configured"`, and relaunch / start-fresh
+ * answer 404 `NO_CLAUDE_INTEGRATION` (#2180). The two
  * read-only ones do not: `GET /status` answers `{ available: false }`, and
  * `POST /cwd-preview` answers `{ drifted: false }` — for both, "there is no
  * launcher" is a fact worth reporting rather than an error.
@@ -52,6 +61,7 @@ import {
   LAUNCHER_ERROR_NOT_AVAILABLE,
   LAUNCHER_ERROR_PATH_REJECTED,
   LAUNCHER_ERROR_REAPER_NOT_FOUND,
+  LAUNCHER_ERROR_UNLICENSED,
   type LauncherCwdPreview,
   type LauncherStatus,
   type LauncherUnavailableReason,
@@ -62,9 +72,10 @@ import { isLoopback } from "../auth/middleware.js";
 import { assertLoopbackForMutation, assertOriginAllowlisted } from "../integrations/api-routes.js";
 import type { IntegrationConfig } from "../integrations/schema.js";
 import type { IntegrationsStore } from "../integrations/storage.js";
+import { type AiRefusal, sendAiRefusal } from "../license/ai-refusal.js";
 import type { Handler } from "../mcp/routes/_shared.js";
 import { previewCwdDrift } from "./cwd-preview.js";
-import { resolveRouteCwd, type Supervisor } from "./supervisor.js";
+import { LicenseRefusedError, resolveRouteCwd, type Supervisor } from "./supervisor.js";
 
 /**
  * Single-use nonce gate for mutating launcher routes.
@@ -153,8 +164,14 @@ export interface LauncherRoutesDeps {
    * when `claude-code` integration is absent.
    */
   getSupervisor: () => Supervisor | null;
-  /** Reason the supervisor is unavailable (stdio mode, disabled, no integration).
-   * Surfaced via GET /status. */
+  /** Whether a live MCP connection from this Claude session id, opened at or
+   * after `sinceMs`, is in the transport registry (`isClaudeSessionAttached` in
+   * `mcp/server.ts`). Called with the supervisor's real UUID, which never leaves
+   * the server: only the boolean is sent. */
+  isClaudeSessionAttached: (claudeSessionId: string, sinceMs: number) => boolean;
+  /** Reason the supervisor is null (stdio mode, disabled, deferred, failed to
+   * start). Surfaced via GET /status. `not-configured` is NOT produced here: it
+   * comes from a live supervisor's own status (#2180). */
   unavailableReason: () => LauncherUnavailableReason;
   /** Create + start the supervisor from null. Idempotent and single-flighted in
    * `src/server/index.ts`. Only reachable via `POST /start` and only in the
@@ -246,6 +263,17 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
         res.json({ available: true, running: true });
         return;
       }
+      // Green beside "Tandem's Claude" hangs on this, so a throw reads as "not
+      // attached" (an honest neutral) rather than escaping with the UUID in hand.
+      let attached = false;
+      try {
+        attached = deps.isClaudeSessionAttached(raw.sessionId, raw.spawnedAt);
+      } catch {
+        // stays false
+      }
+      // An explicit field list, never `{ ...raw }`: that copy is the only thing
+      // keeping a future internal `SupervisorStatus` field off the wire, and
+      // `raw.sessionId` is the real UUID (`raw.spawnedAt` stays internal too).
       const body: LauncherStatus = {
         available: true,
         running: true,
@@ -253,8 +281,39 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
         cwd: raw.cwd,
         sessionId: "<set>",
         resuming: raw.resuming,
+        busy: raw.busy,
+        attached,
         skillRefresh,
       };
+      res.json(body);
+      return;
+    }
+    // A restart in progress outranks "not configured": a start or relaunch
+    // in flight is re-planning, so don't flash "Connect AI" meanwhile.
+    if (raw.restartPending) {
+      const body: LauncherStatus = loopback
+        ? {
+            available: true,
+            running: false,
+            lastError: raw.lastError,
+            restartPending: true,
+            skillRefresh,
+          }
+        : { available: true, running: false };
+      res.json(body);
+      return;
+    }
+    if (raw.configured === false) {
+      // No launchable claude-code entry: there is nothing to restart, so this
+      // reads as unavailable and the client offers setup (#2180). Same
+      // loopback-only `reason` as the null-supervisor branch above.
+      const body: LauncherStatus = loopback
+        ? {
+            available: false,
+            reason: "not-configured",
+            ...(skillRefresh ? { skillRefresh } : {}),
+          }
+        : { available: false };
       res.json(body);
       return;
     }
@@ -263,6 +322,17 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
       : { available: true, running: false };
     res.json(body);
   };
+}
+
+/** 404 for a relaunch / start-fresh whose plan found no launchable claude-code
+ * entry (#2180). The message is shown to the user verbatim by the client's
+ * launcher toast, so it says what to do. */
+function sendNoIntegration(res: Response): void {
+  res.status(404).json({
+    error: "NOT_FOUND",
+    code: LAUNCHER_ERROR_NO_INTEGRATION,
+    message: "Claude Code isn't set up in Tandem yet. Use Connect AI to set it up.",
+  });
 }
 
 function makeNonceHandler(): Handler {
@@ -446,7 +516,11 @@ function makeRelaunchHandler(deps: LauncherRoutesDeps): Handler {
     inflight.relaunch = true;
     try {
       if (deps.relaunchHook) await deps.relaunchHook();
-      await sup.relaunch(cwd, { persistCwd: parsePersistCwd(body) });
+      const result = await sup.relaunch(cwd, { persistCwd: parsePersistCwd(body) });
+      if (!result.spawned) {
+        sendNoIntegration(res);
+        return;
+      }
       res.json({ ok: true, cwd: landedCwd(sup, cwd) });
     } catch (err) {
       sendUnexpected(res, err, "relaunch failed");
@@ -494,7 +568,11 @@ function makeStartFreshHandler(deps: LauncherRoutesDeps): Handler {
     inflight.startFresh = true;
     try {
       if (deps.startFreshHook) await deps.startFreshHook();
-      await sup.startFresh(cwd, { persistCwd: parsePersistCwd(body) });
+      const result = await sup.startFresh(cwd, { persistCwd: parsePersistCwd(body) });
+      if (!result.spawned) {
+        sendNoIntegration(res);
+        return;
+      }
       res.json({ ok: true, cwd: landedCwd(sup, cwd) });
     } catch (err) {
       sendUnexpected(res, err, "start-fresh failed");
@@ -557,7 +635,19 @@ function makeStartHandler(deps: LauncherRoutesDeps): Handler {
     inflight.start = true;
     try {
       await deps.startSupervisor();
-      res.json({ ok: true, started: deps.getSupervisor() !== null });
+      // Licence (#1521): NOT refused at the top. Refusing there would leave the
+      // supervisor null and the reason `deferred-autostart` forever, which the
+      // client reads as "booting" — and Rust posts this route exactly once,
+      // dropping a non-2xx. Instead the supervisor is created, `startInternal`
+      // refuses by returning, and `resumeAfterLicence` can bring it back after
+      // activation. What this route must not do is claim `started: true`.
+      const sup = deps.getSupervisor();
+      const refusal = sup?.licenceRefusal();
+      if (refusal) {
+        sendUnlicensed(res, refusal);
+        return;
+      }
+      res.json({ ok: true, started: sup !== null });
     } catch (err) {
       sendUnexpected(res, err, "launcher start failed");
     } finally {
@@ -758,7 +848,23 @@ function runningCwd(sup: Supervisor | null): string | null {
  * (including a checked filesystem path) is safe to return, but bound it anyway. */
 const MAX_ERROR_DETAIL = 300;
 
+/**
+ * 403 for a launcher action the licence refused (#1521): the refusal envelope
+ * the supervisor recorded, plus the route's own `code`. The supervisor holds
+ * the refusal, so this module never makes the licence decision itself.
+ */
+function sendUnlicensed(res: Response, refusal: AiRefusal): void {
+  sendAiRefusal(res, refusal, { code: LAUNCHER_ERROR_UNLICENSED });
+}
+
 function sendUnexpected(res: Response, err: unknown, label: string): void {
+  if (err instanceof LicenseRefusedError) {
+    // Not unexpected, and not a 500: the relaunch was refused before anything
+    // was stopped. One line, no stack.
+    console.error(`[Launcher routes] ${label}: AI features are unlicensed`);
+    if (!res.headersSent) sendUnlicensed(res, err.refusal);
+    return;
+  }
   // Full error (stack, etc.) stays server-side; the wire gets a bounded message.
   console.error(`[Launcher routes] ${label}:`, err);
   if (res.headersSent) return;

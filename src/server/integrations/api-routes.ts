@@ -41,6 +41,8 @@
  * - Calls `installSkill()` exactly once after the per-integration loop, and
  *   records a declined install (#1790, newer skill on disk) on the
  *   skill-refresh error channel — the response shape does not carry it.
+ * - Then, if a `claude-code` entry applied, calls `onClaudeCodeApplied` so the
+ *   launcher re-reads whether it is configured (#2180).
  * - Response never echoes entries / headers / tokens.
  */
 
@@ -179,6 +181,16 @@ export interface IntegrationsRoutesDeps {
    * real installer.
    */
   installClaudeCli?: typeof installClaudeCli;
+  /**
+   * Called once at the end of a successful apply in which at least one
+   * `claude-code` entry was written (#2180). Production wires it to the
+   * launcher supervisor's `refreshConfigured()`, so the status stops reporting
+   * "not configured" (and the pill stops offering setup) as soon as setup is
+   * done; the boot-time plan had already run against an empty file. It does
+   * NOT start Claude: whether it should is an open product question. Must not
+   * throw; fire-and-forget.
+   */
+  onClaudeCodeApplied?: () => void;
 }
 
 /**
@@ -840,6 +852,7 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
       const removals = body.data.removals ?? {};
       const results: ApplyItemResult[] = [];
       let anyApplied = false;
+      let claudeCodeApplied = false;
 
       const errorResult = (
         id: string,
@@ -955,6 +968,9 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
           await applyConfig(target.configPath, ops);
           results.push({ id: entry.id, status: "applied" });
           anyApplied = true;
+          // Results carry no kind, so track it here. A skipped entry does
+          // not count: the launcher does not launch `apply: "skip"`.
+          if (entry.kind === "claude-code") claudeCodeApplied = true;
         } catch (err) {
           if (err instanceof PathRejectedError) {
             // err.message embeds the resolved realpath — keep it for the
@@ -1026,6 +1042,8 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
           console.error("[Tandem] apply: skill install failed:", err);
         }
       }
+
+      if (claudeCodeApplied) deps.onClaudeCodeApplied?.();
 
       // Rotate nonce on every successful apply (rejected calls don't burn the nonce).
       gate.nonce = randomBytes(32).toString("base64url");

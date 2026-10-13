@@ -23,8 +23,9 @@ endpoint to a server that binds to loopback.
    verifies `webhook-signature` (HMAC-SHA256 over `${id}.${timestamp}.${body}`,
    key = base64-decoded `whsec_` secret) and rejects stale timestamps — **before**
    any parse or side effect.
-2. On **`order.paid`** it mints a license: `personal` (1-year update window) or,
-   for a grandfather-listed email, `grandfathered` (`expiresAt: null`). It signs
+2. On **`order.paid`** it mints a license: `personal`, or, for a
+   grandfather-listed email, `grandfathered`. Both carry `expiresAt: null`:
+   every key includes all future updates (ADR-040, decision A5, 2026-10-09). It signs
    the canonical metadata (byte-compatible with `verifier.ts`), writes the
    issuance **ledger** record, writes the update **entitlement** (`LICENSE_KV`,
    the same namespace the update Worker reads), and emails the blob via Resend.
@@ -92,6 +93,17 @@ after its recheck. Cloudflare KV's eventual consistency (propagation lag
 across edge locations) means this isn't only a contrived race — an ordinary
 Polar retry landing on a different PoP can trigger it.
 
+A second route has no recheck at all: `reDrive()` re-asserts the live
+entitlement from a ledger record read at the start of the request, so a
+redelivered `order.paid` that overlaps a refund can write the live entitlement
+back over the refund's tombstone, and when the order's `emailSent` is still
+false it also rewrites the ledger with `refunded: false`.
+
+**Since every key includes all future updates (2026-10-09, ADR-040 decision
+A5), a live entitlement that survives a refund this way never runs out.**
+Before, it carried a one-year window and expired with it. The check below is now
+the only backstop, so it matters more than it did.
+
 **Operational mitigation until this is closed:** after refunding a
 higher-value order, verify with `npx wrangler kv key get "order:live:<orderId>"
 --remote --namespace-id <LEDGER_KV id>` that `refunded: true`, then read the
@@ -103,8 +115,9 @@ deleting the key (a deletion is indistinguishable from an eviction or a failed
 write, and the update Worker pages on that), so a successful revocation and the
 failure this check exists to catch both return a value:
 
-- pass — the tombstone, exactly `{"updateWindowEnd":null,"status":"revoked"}`;
-- fail — a live entitlement, `{"updateWindowEnd":"<date>","status":"personal",…}`,
+- pass — the tombstone, exactly `{"updateWindowEnd":null,"status":"revoked"}`.
+  Both shapes carry a null window, so read `status`, never the window;
+- fail — a live entitlement, `{"updateWindowEnd":null,"status":"personal",…}`,
   i.e. a mint that landed after the refund's recheck. Re-run the §7 revocation
   procedure by hand.
 

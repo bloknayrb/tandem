@@ -130,7 +130,12 @@ export function lockOrPermissionCode(err: {
 
 /** Standard NO_DOCUMENT error — returned when a tool requires an open document */
 export function noDocumentError(): McpToolResult {
-  return mcpError("NO_DOCUMENT", "No document is open. Call tandem_open first.");
+  // Not "Call tandem_open first": Tandem's own Claude reads this with nothing
+  // open, and opening a document is something it does only when asked.
+  return mcpError(
+    "NO_DOCUMENT",
+    "No document is open. tandem_listDocuments lists open documents; open one with tandem_open only if the user asked for it.",
+  );
 }
 
 /** Extract a human-readable message from an unknown error */

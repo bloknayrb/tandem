@@ -49,10 +49,18 @@ import { type WebSocket, WebSocketServer } from "ws";
 import { API_WAKE } from "../../shared/api-paths.js";
 import { CHANNEL_SSE_KEEPALIVE_MS } from "../../shared/constants.js";
 import { isWakeWorthy, toWakeFrame } from "../../shared/events/wake-scope.js";
+import { LICENSE_REQUIRED } from "../../shared/license-copy.js";
 import { isLoopback } from "../auth/middleware.js";
+import { aiRefusal } from "../license/ai-refusal.js";
 import { isHostAllowed, isLocalhostOrigin } from "../mcp/api-routes.js";
 import { subscribe, unsubscribe } from "./queue.js";
 import type { TandemEvent } from "./types.js";
+
+/**
+ * WebSocket close code for a consumer cut off because Tandem is unlicensed
+ * (#1521). Private-use range (4000-4999), mirroring HTTP 403.
+ */
+export const WAKE_CLOSE_LICENSE_REQUIRED = 4403;
 
 /**
  * Ceiling on simultaneously-attached wake consumers.
@@ -200,6 +208,26 @@ export function attachWakeSocket(httpServer: Server, extraHosts: string[] = []):
       socket.destroy();
       return;
     }
+    // Licence admission (#1521). Here, after the verdict and never inside the
+    // pure `verifyWakeUpgrade`, so a peer that verdict refuses learns nothing
+    // about licence state. Unlike the bare refusals above, this one carries a
+    // body: the refusal envelope is the reason a consumer should stop re-arming.
+    const refusal = aiRefusal();
+    if (refusal) {
+      socket.on("error", () => {});
+      const body = JSON.stringify(refusal);
+      if (socket.writable) {
+        socket.write(
+          "HTTP/1.1 403 Forbidden\r\n" +
+            "Content-Type: application/json; charset=utf-8\r\n" +
+            `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+            "Connection: close\r\n\r\n" +
+            body,
+        );
+      }
+      socket.destroy();
+      return;
+    }
     if (wss.clients.size >= MAX_WAKE_CONSUMERS) {
       socket.on("error", () => {});
       if (socket.writable) {
@@ -247,7 +275,19 @@ export function attachWakeSocket(httpServer: Server, extraHosts: string[] = []):
     // queue's Solo gate exactly as the SSE consumers do. Subscribing as
     // "internal" would push the user's Solo-held annotations at a model — the
     // precise leak WS-A2 exists to prevent.
-    subscribe(onEvent, "external");
+    //
+    // `onRevoke` (#1521): an event pushed while Tandem is unlicensed closes the
+    // socket with 4403. The reason stays SHORT — `ws` throws on a close reason
+    // over 123 bytes, so the refusal message itself cannot ride here.
+    subscribe(onEvent, "external", {
+      onRevoke: () => {
+        try {
+          ws.close(WAKE_CLOSE_LICENSE_REQUIRED, LICENSE_REQUIRED);
+        } catch {
+          ws.terminate();
+        }
+      },
+    });
 
     ws.on("close", () => unsubscribe(onEvent));
     ws.on("error", () => {

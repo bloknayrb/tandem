@@ -9,7 +9,7 @@
 //
 // THIS KEY IS NOT ROTATABLE TODAY. There is one const and no `keyId`, so
 // replacing it drops every existing customer to `restricted` — mid-session,
-// clamping their open documents read-only via `connection-gate.ts`. If a
+// turning their AI features off via `ai-refusal.ts` (#1521). If a
 // rotation story is ever needed, the cheap version is to accept an ARRAY of
 // public keys here (a few lines, and it makes rotation routine). Adding a
 // `keyId` to the signed metadata instead would change the signed bytes, so it

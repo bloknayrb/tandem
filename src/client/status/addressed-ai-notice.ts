@@ -70,7 +70,8 @@ export function addressedAiNotice(input: {
    * from a fresh one at this boundary. Only rule 5 consults it — see there.
    */
   probeAnswered: boolean;
-  /** Fresh `/health` confirmation that an MCP transport is open. */
+  /** Fresh `/health` confirmation that a LIVE MCP session is attached (a
+   *  leftover from a client that went away does not count). */
   sessionLive: boolean;
   /** Re-read after the probe — readiness may have settled while it was in flight. */
   chip: AiChip;

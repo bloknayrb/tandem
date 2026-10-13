@@ -48,10 +48,26 @@ import {
   serializeUserTurn,
 } from "../../shared/launcher/contract.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
-import { subscribe, unsubscribe } from "../events/queue.js";
+import { subscribe, unsubscribe, wasForwardedExternally } from "../events/queue.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
+import { type AiRefusal, aiRefusal } from "../license/ai-refusal.js";
 import { sanitizeForLog } from "../log-sanitize.js";
 import { isTauriSidecar } from "../platform.js";
+
+/**
+ * Thrown by `relaunch` / `startFresh` when Tandem is unlicensed (#1521), BEFORE
+ * anything is stopped — a refused relaunch never kills a running child. Carries
+ * the refusal's own fields so the launcher route can answer 403 with the
+ * envelope without importing the licence module.
+ */
+export class LicenseRefusedError extends Error {
+  readonly refusal: AiRefusal;
+  constructor(refusal: AiRefusal) {
+    super(refusal.message);
+    this.name = "LicenseRefusedError";
+    this.refusal = refusal;
+  }
+}
 
 interface SupervisorOpts {
   /** Directory containing `integrations.json` (typically `resolveAppDataDir()`). */
@@ -75,6 +91,13 @@ interface SupervisorOpts {
    */
   subscribeToEvents?: (cb: (event: TandemEvent) => void) => () => void;
   /**
+   * Seam onto the event fan-out for the gap watch (#2181): the subscription
+   * held while NO spawn is subscribed, so an event in that window still owes
+   * the next spawn a wake. Same shape as `subscribeToEvents`; see
+   * `defaultSubscribeDuringGap` for why the default is not that one.
+   */
+  subscribeDuringGap?: (cb: (event: TandemEvent) => void) => () => void;
+  /**
    * Override for `WAKE_LATCH_MAX_MS`, so the latch-breaker can be tested in
    * milliseconds rather than by waiting ten minutes.
    *
@@ -94,6 +117,11 @@ interface SupervisorOpts {
    * window silently, with nothing in the type to warn the next editor.
    */
   probeCliUsable?: () => boolean;
+  /**
+   * Seam onto the licence decision (#1521). Defaults to the live `aiRefusal`,
+   * which admits on its first line while the gate ships dark.
+   */
+  aiRefusal?: () => AiRefusal | null;
   /**
    * Override for `RESTART_BACKOFFS_MS`, so a test can drive the eleven crashes
    * the circuit breaker needs without waiting out the real 1s/5s/30s ladder.
@@ -151,6 +179,30 @@ function defaultProbeCliUsable(): boolean {
 export function defaultSubscribeToEvents(cb: (event: TandemEvent) => void): () => void {
   subscribe(cb, "external");
   return () => unsubscribe(cb);
+}
+
+/**
+ * The gap watch's subscription (#2181). `"internal"`, NOT `"external"`: the
+ * watch only sets a flag in this process and delivers nothing to anyone, and
+ * `getSubscriberCount() === 0` is the sound negative the wake advisory and
+ * `/health` rely on. Counting the watch as a consumer would make that negative
+ * lie whenever it is the only subscriber.
+ *
+ * An internal subscriber bypasses the fan-out's external skip, so the callback
+ * reads the push's own bound verdict (`wasForwardedExternally`) — the Solo gate
+ * and the licence refusal (#1521) together, decided once in `pushEvent`. The
+ * watch therefore owes a wake for exactly the events the child's external
+ * subscription would have received, and never re-decides either. User content
+ * held in Solo (`isUserPrivacyHeld`) is dropped before any fan-out, so it never
+ * arrives here at all. The production default; exported so a test can run it
+ * against the real queue.
+ */
+export function defaultSubscribeDuringGap(cb: (event: TandemEvent) => void): () => void {
+  const gated = (event: TandemEvent): void => {
+    if (wasForwardedExternally(event)) cb(event);
+  };
+  subscribe(gated, "internal");
+  return () => unsubscribe(gated);
 }
 
 /**
@@ -266,6 +318,13 @@ const SESSION_FILE_NAME = "launcher-session.json";
  * the stale session to never be cleared (issue #1169). */
 export const RESUME_CONFIRM_MS = 30_000;
 const RESTART_BACKOFFS_MS = [1_000, 5_000, 30_000];
+
+/** How long after a delivery kill (#1867/#1868) the status keeps reading
+ * "restarting" while it waits for the exit that schedules the restart. Matches
+ * `stopInternal`'s SIGTERM grace. Bounded so a reaper that never exits (the
+ * unverified macOS case `spawnOnce` notes) cannot hold the pill on
+ * "Restarting Claude…" forever with no button (#2180). */
+const DELIVERY_KILL_EXIT_GRACE_MS = 6_000;
 /** Circuit breaker: if Claude crashes this many times within
  * CIRCUIT_BREAKER_WINDOW_MS, the supervisor gives up and surfaces via status.
  * Avoids unbounded restart-loop spam from a permanently-broken Claude binary. */
@@ -351,19 +410,44 @@ export interface Supervisor {
    * see `persistRequestedCwd` for why a cwd on the wire is not evidence that
    * the user chose that folder.
    */
-  relaunch(newCwd?: string, opts?: RelocateOpts): Promise<void>;
+  relaunch(newCwd?: string, opts?: RelocateOpts): Promise<RespawnResult>;
   /** Idempotent — safe to call when not running. */
   stop(): Promise<void>;
   /** Drop any persisted session and respawn fresh. Omit `cwdOverride` to use the
    * integration's configured directory; `opts.persistCwd` behaves as in
    * `relaunch`. Single atomic stop+clear+spawn under the supervisor lock. */
-  startFresh(cwdOverride?: string, opts?: RelocateOpts): Promise<void>;
+  startFresh(cwdOverride?: string, opts?: RelocateOpts): Promise<RespawnResult>;
   /** Current state for /api/launcher/status. */
   status(): SupervisorStatus;
+  /** Re-read whether a launchable claude-code entry exists, WITHOUT starting
+   * anything (#2180). Called after the setup wizard writes one, so the status
+   * stops reporting `not-configured` without waiting for the next start.
+   * Whether finishing the wizard should also start Tandem's Claude is an open
+   * product question, deliberately not answered here. */
+  refreshConfigured(): Promise<void>;
+  /**
+   * Resume a launcher the licence refused (#1521). Spawns only when no child
+   * is alive, a refusal is recorded, no breaker is tripped and the user has
+   * not stopped it — so it can never stop or double-spawn anything. A plan
+   * read that throws is handled as a crash restart's is. Its one caller is
+   * `POST /api/license/activate`'s success path.
+   */
+  resumeAfterLicence(): Promise<void>;
+  /** The licence refusal that left the launcher down, or null when there is none. */
+  licenceRefusal(): AiRefusal | null;
 }
 
-/** Discriminated union: when `running === false` the only extra field is the
- * (optional) `lastError`; when `running === true` all process-level fields are
+/** What `relaunch` / `startFresh` did. `no-integration`: the plan found no
+ * launchable claude-code entry, so nothing was spawned (#2180). Both stop the
+ * running Claude before they plan, and `startFresh` also drops the saved
+ * session, so either one ACTS and then reports this: a relaunch after the
+ * entry was removed ends Claude, and a start-fresh discards the conversation
+ * pointer. Acceptable, because the alternative is reading the store under the
+ * lock before stopping, and a removed entry is a deliberate act. */
+export type RespawnResult = { spawned: true } | { spawned: false; why: "no-integration" };
+
+/** Discriminated union: when `running === false` the extra fields are the
+ * optional `lastError`, `restartPending` and `configured`; when `running === true` all process-level fields are
  * guaranteed present.
  *
  * `lastError` is deliberately absent from the `running: true` branch, and that
@@ -374,7 +458,21 @@ export interface Supervisor {
  * perfectly healthy supervisor. The explicit `lastError?: undefined` below
  * encodes that invariant instead of leaving it to the reader. */
 export type SupervisorStatus =
-  | { running: false; lastError?: LauncherErrorCode }
+  | {
+      running: false;
+      lastError?: LauncherErrorCode;
+      /** Tandem is already bringing Claude back: a restart timer is set, a
+       * start or relaunch is in progress, or a delivery kill's exit is still
+       * on its way (#2180). The client shows "Restarting Claude…" instead of
+       * a Restart button, which would race the retry. */
+      restartPending?: true;
+      /** The last spawn plan found no launchable claude-code integration
+       * (#2180). Refreshed only by a plan (start, relaunch, crash restart, a
+       * wizard Apply that wrote a claude-code entry), never per status poll.
+       * Any other change to `integrations.json` (a hand edit, or a wizard run
+       * that removes the entry) shows up at the next plan. */
+      configured?: false;
+    }
   | {
       running: true;
       /** PID of the reaper process. Claude's own PID is intentionally not
@@ -383,6 +481,26 @@ export type SupervisorStatus =
       cwd: string;
       sessionId: string;
       resuming: boolean;
+      /**
+       * A turn written to the child has not yet been closed — the spawn's
+       * `turnInFlight`. Cleared by ANY `result` envelope (they carry no
+       * correlation id), by the `WAKE_LATCH_MAX_MS` expiry, by a failed write,
+       * by `onNoReceipt`, and by teardown; `flushPendingWake` can set it straight
+       * back on a `result` or a latch expiry when a wake was owed. True during
+       * the bootstrap turn and a resumed spawn's login-recheck turn too.
+       *
+       * It inherits both limitations documented on `WAKE_LATCH_MAX_MS`: a slow
+       * turn whose latch broke reads idle while still working, and a reaper that
+       * stopped forwarding reads busy until the receipt check or the latch. It
+       * says nothing about WHICH message the turn serves — the chat pickup row
+       * (#2165) owns that.
+       */
+      busy: boolean;
+      /** Wall-clock ms when this child was spawned. An MCP connection carrying
+       * `sessionId` but initialized before this belongs to an earlier child
+       * resumed under the same UUID. Internal: the status route sends only the
+       * derived `attached` boolean. */
+      spawnedAt: number;
       /** Never set: a running supervisor has, by construction, no pending
        * fatal error. Present as an explicit `undefined` so `status.lastError`
        * type-checks on the un-narrowed union. */
@@ -722,6 +840,7 @@ export function createLineFramer(onLine: (line: string) => void): {
 
 export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const subscribeToEvents = opts.subscribeToEvents ?? defaultSubscribeToEvents;
+  const subscribeDuringGap = opts.subscribeDuringGap ?? defaultSubscribeDuringGap;
   const wakeLatchMs = opts.wakeLatchMs ?? WAKE_LATCH_MAX_MS;
   const probeCliUsable = opts.probeCliUsable ?? defaultProbeCliUsable;
   const reportDeliveryTrip = opts.reportDeliveryTrip ?? (() => {});
@@ -730,9 +849,19 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const restartBackoffs = opts.restartBackoffsMs?.length
     ? opts.restartBackoffsMs
     : RESTART_BACKOFFS_MS;
+  const decideRefusal = opts.aiRefusal ?? aiRefusal;
+  /**
+   * The licence refusal that left the launcher down, or null. Authoritative
+   * on its own, even when `lastError` holds another code (see
+   * `recordLicenceRefusal`). Cleared by a spawn and by `resumeAfterLicence`.
+   */
+  let lastRefusal: AiRefusal | null = null;
   let child: ChildProcess | null = null;
   let currentCwd: string | undefined;
   let currentSessionId: string | undefined;
+  /** Wall-clock start of the current spawn. Lets the status route tell this
+   * child's MCP connection from a previous one resumed under the same UUID. */
+  let currentSpawnedAt: number | undefined;
   let currentResuming = false;
   let stopRequested = false;
   /**
@@ -757,6 +886,16 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    */
   let stopEpoch = 0;
   let restartIndex = 0;
+  /** Starts and relaunches in progress, for `restartPending` (#2180). A count,
+   * because an unlocked crash restart can overlap a locked `start()`. */
+  let launching = 0;
+  /** The last plan's answer to "is there a launchable claude-code entry?"
+   * (#2180). `undefined` until a plan has been built. Written only by
+   * `buildPlan`, so a status poll never reads the integrations store. */
+  let configured: boolean | undefined;
+  /** When the current spawn was ended for refusing turns, if it was. Cleared
+   * at each spawn. See `DELIVERY_KILL_EXIT_GRACE_MS`. */
+  let deliveryKillAt: number | undefined;
   let restartTimer: NodeJS.Timeout | null = null;
   /** Confirmation timer for the active spawn. Set in spawnOnce, cancelled in
    * stopInternal and the exit handler. Module-scoped so stopInternal can
@@ -778,7 +917,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * Paired with `spawned` rather than stored bare so a late release from a
    * superseded spawn cannot detach the subscription of the one that replaced it.
    */
-  let activeTurnDelivery: { spawned: ChildProcess; teardown: () => void } | null = null;
+  let activeTurnDelivery: {
+    spawned: ChildProcess;
+    teardown: () => void;
+    /** This spawn's `turnInFlight` — read by `status()` as `busy`. */
+    isBusy: () => boolean;
+  } | null = null;
 
   /** Release the active spawn's subscription, whatever state its process is in.
    * Idempotent — the `exit` handler normally gets here first. */
@@ -796,12 +940,48 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * before the process proved stable, so `buildPlan` returns `resuming: true`
    * and the resumed path sends NO bootstrap turn. The comment would then sit
    * unannounced until some unrelated later event happened to wake the session.
+   *
+   * Three things raise it (#2181): a wake still pending on a spawn at its
+   * teardown, a turn left unanswered by a spawn the supervisor itself killed,
+   * and the gap watch (`gapUnsubscribe`) catching an event while no spawn is
+   * subscribed.
    */
   let wakeOwedAcrossSpawns = false;
   /** Bumped by every user `stop()`. A spawn records it at teardown, so a
    * failed-write callback that lands after a LATER stop cannot re-raise the
    * `wakeOwedAcrossSpawns` that stop cleared (#1866). */
   let userStopCount = 0;
+
+  /**
+   * The gap watch (#2181): unsubscribe fn while armed, else null.
+   *
+   * Each spawn's own subscription lives from `spawnOnce` to its teardown, so
+   * between one spawn's teardown and the next spawn's subscribe — a restart
+   * backoff, a relaunch, a tripped breaker waiting for the user's Restart, the
+   * boot `buildPlan` — an event reached no supervisor callback at all. A
+   * resumed spawn writes no bootstrap turn, so a chat sent then sat unread
+   * while the pill already said Claude was back. The watch covers that window
+   * by recording the owed wake in `wakeOwedAcrossSpawns`, which the next spawn
+   * already discharges (bootstrap when fresh, a wake turn when resumed).
+   *
+   * Armed at a carrying teardown and by `startInternal`/`respawn`; disarmed by
+   * the next spawn's subscribe and by a user `stop()`, which carries nothing
+   * (#1866). Events while the user has stopped Claude are therefore still not
+   * owed — the watch is not a replacement for that decision.
+   */
+  let gapUnsubscribe: (() => void) | null = null;
+
+  function armGapWatch(): void {
+    if (gapUnsubscribe) return;
+    gapUnsubscribe = subscribeDuringGap((event) => {
+      if (isWakeWorthy(event)) wakeOwedAcrossSpawns = true;
+    });
+  }
+
+  function disarmGapWatch(): void {
+    gapUnsubscribe?.();
+    gapUnsubscribe = null;
+  }
 
   /**
    * The last session answered "Not logged in" (#1780), so the next spawn owes
@@ -1138,6 +1318,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
   async function buildPlan(cwdOverride?: string): Promise<SpawnPlan | null> {
     const integration = await readIntegration();
+    configured = integration !== null;
     if (!integration) return null;
 
     const { cwd, fromOverride } = resolveCwd(integration, cwdOverride);
@@ -1225,6 +1406,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     let killedForDelivery = false;
     function markDeliveryKill(): void {
       killedForDelivery = true;
+      // First kill only: the handler may run more than once for one child.
+      if (child === spawned && deliveryKillAt === undefined) deliveryKillAt = Date.now();
     }
     const onStdinGone = makeStdinGoneHandler(spawned, () => child === spawned, markDeliveryKill);
     attachChildStreamErrorHandlers(spawned, onStdinGone);
@@ -1233,9 +1416,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // leaving the old code set would make it resurface on the next clean stop
     // (see the note on SupervisorStatus).
     lastError = undefined;
+    lastRefusal = null;
+    deliveryKillAt = undefined;
 
+    // One timestamp for the spawn: the exit handler's `ranFor` and the status
+    // route's attachment match must agree on when this child started.
+    const spawnedAt = Date.now();
     currentCwd = plan.cwd;
     currentSessionId = plan.sessionId;
+    currentSpawnedAt = spawnedAt;
     currentResuming = plan.resuming;
 
     // Persist the session id on first successful spawn. We mark it as
@@ -1244,8 +1433,6 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     if (!plan.resuming) {
       writeSavedSession(plan.sessionId, plan.cwd);
     }
-
-    const spawnedAt = Date.now();
 
     // Track whether this spawn has run long enough to be considered a
     // successful resume. Fresh spawns are inherently "confirmed" — only a
@@ -1312,7 +1499,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
      * If the CLI instead folds such a write into the running turn and answers
      * both with one `result`, the count stays above zero and receipt checks stop
      * for the rest of this spawn. The latch still recovers that spawn, so the
-     * error is toward the pre-#1867 behaviour, never toward killing a live turn. */
+     * error is toward the pre-#1867 behaviour, never toward killing a live turn.
+     * A stuck count has one more reader: a relaunch of this spawn carries a
+     * wake to its successor (`teardownTurnDelivery`, #2181). */
     let unresolvedTurns = 0;
 
     function clearLatch(): void {
@@ -1441,6 +1630,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     }
 
     const unsubscribeFromEvents = subscribeToEvents(onTandemEvent);
+    // Synchronously after the subscribe above, so no event falls between the
+    // gap watch and this spawn's own subscription (#2181).
+    disarmGapWatch();
 
     /**
      * Detach this spawn's event subscription and kill its latch timer.
@@ -1459,21 +1651,50 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         tornDown = true;
         carryOwedWake = !userStopped;
         stopCountAtTeardown = userStopCount;
+        // Hand an undelivered wake to the next spawn rather than dropping it —
+        // this runs on crash-restart and on relaunch, not just on a deliberate
+        // stop. A user `stop()` carries nothing (#1866).
+        //
+        // When the supervisor itself is ending this spawn (a relaunch or
+        // start-fresh), a turn written but never answered counts as
+        // undelivered too (#2181). A write into the pipe of a child that is
+        // being killed succeeds, so its callback never re-arms `pendingWake`,
+        // and the wake died with the child: SIGTERM on POSIX gives Claude a
+        // grace period during which its subscription still takes events. The
+        // cost when the child DID read it is one extra payload-free wake.
+        //
+        // NOT on a crash. There the unanswered turn may be the one that
+        // crashed it, and carrying it would re-send it to every resumed
+        // successor: a Claude that dies 30 s or more into each attempt never
+        // fills the restart breaker's window, so one event would keep that
+        // loop going indefinitely, spending a turn each time.
+        //
+        // Inside the first-teardown latch so a second call cannot re-raise
+        // what a user stop between the two cleared.
+        const unansweredOnOurKill = stopRequested && unresolvedTurns > 0;
+        if ((pendingWake || unansweredOnOurKill) && carryOwedWake) wakeOwedAcrossSpawns = true;
       }
       unsubscribeFromEvents();
-      // Hand an undelivered wake to the next spawn rather than dropping it —
-      // this runs on crash-restart and on relaunch, not just on a deliberate
-      // stop. A user `stop()` carries nothing (#1866).
-      if (pendingWake && carryOwedWake) wakeOwedAcrossSpawns = true;
       pendingWake = false;
       clearLatch();
       // Identity-guarded: only drop the shared handle if it still points at
       // THIS spawn. A late exit from a superseded process must not clear the
       // successor's registration and leave it unreleasable by stopInternal.
-      if (activeTurnDelivery?.spawned === spawned) activeTurnDelivery = null;
+      // The same guard decides the gap watch (#2181): a superseded spawn's
+      // late teardown must not arm it while the successor is subscribed. It
+      // sits outside the first-teardown latch on purpose — the identity, not
+      // the latch, is what makes that safe.
+      if (activeTurnDelivery?.spawned === spawned) {
+        activeTurnDelivery = null;
+        if (carryOwedWake) armGapWatch();
+      }
     }
 
-    activeTurnDelivery = { spawned, teardown: teardownTurnDelivery };
+    activeTurnDelivery = {
+      spawned,
+      teardown: teardownTurnDelivery,
+      isBusy: () => turnInFlight,
+    };
 
     // Written on spawn, NOT gated on the CLI's `init` line. Measured against a
     // real `claude` binary on 2026-08-04 (docs/spikes/channel-push-stream-json.md):
@@ -1497,7 +1718,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     if (!plan.resuming) {
       // The bootstrap prompt already tells Claude to call `tandem_checkInbox`,
       // which surfaces anything that accumulated while nothing was listening —
-      // so it discharges any owed wake by itself.
+      // so it discharges any owed wake by itself. That holds only while the
+      // prompt asks Claude to answer replies as well as chat and comments: a
+      // reply on one of Claude's threads can be what the wake was owed for.
       sendTurn(SUPERVISOR_INITIAL_PROMPT);
       wakeOwedAcrossSpawns = false;
     } else {
@@ -1655,6 +1878,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         child = null;
         currentCwd = undefined;
         currentSessionId = undefined;
+        currentSpawnedAt = undefined;
         currentResuming = false;
         // Cancel the confirmation timer — spawn errors don't flow through the
         // exit handler, so confirmTimer must be cleared here too. Inside the
@@ -1825,7 +2049,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // its `wasCurrent` identity guard; the "error" handler guards its state
     // clearing but not this call.
     if (breakerTripped) return;
-    if (restartTimer) clearTimeout(restartTimer);
+    if (restartTimer) {
+      clearTimeout(restartTimer);
+      // Null it too, so the handle never outlives the timer it named. The
+      // breaker branch below returns without setting a new one;
+      // `restartPending` already ignores the timer once the breaker trips, so
+      // this is hygiene, not a fix (#2180).
+      restartTimer = null;
+    }
 
     // Circuit breaker: drop attempts older than the window, then check count.
     const now = Date.now();
@@ -1929,10 +2160,25 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * the public `start()` wrapper. `epoch` is the `stopEpoch` this start
    * belongs to; the restart timer passes the one its failure handler checks. */
   async function startInternal(epoch = stopEpoch): Promise<void> {
+    // Counted for `restartPending` (#2180). The restart timer nulls itself and
+    // calls this synchronously, so no status poll lands between the two.
+    launching++;
+    try {
+      await planAndSpawn(epoch);
+    } finally {
+      launching--;
+    }
+  }
+
+  async function planAndSpawn(epoch: number): Promise<void> {
     if (child) return;
     if (breakerTripped) return;
     stopRequested = false;
     userStopped = false;
+    // Covers the boot window, and a start after a user stop, from here to the
+    // spawn's own subscribe (#2181). After the `child` check, never before it:
+    // arming beside a live spawn would owe its successor a duplicate wake.
+    armGapWatch();
     const plan = await buildPlan();
     if (!plan) {
       console.error("[Launcher] No claude-code integration with apply != skip — skipping");
@@ -1963,6 +2209,24 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       console.error("[Launcher] Breaker tripped while building the spawn plan — not spawning");
       return;
     }
+    // Licence admission (#1521). Covers boot, the deferred start route and the
+    // crash-respawn timer, which all come through here. It REFUSES BY
+    // RETURNING, never by throwing: a throw would reach the crash timer's
+    // `onRestartFailed` (→ `lastError = "spawn-failed"`) and boot's
+    // `startLauncherSupervisor` (→ `launcherUnavailableReason = "spawn-failed"`),
+    // both of which misname the cause. It touches no breaker state and
+    // schedules no restart; `resumeAfterLicence` is what brings it back.
+    //
+    // After `buildPlan`'s await, where another spawn can land — so the code is
+    // recorded only when no child is alive, and it returns either way.
+    const refusal = decideRefusal();
+    if (refusal) {
+      if (child === null) {
+        recordLicenceRefusal(refusal);
+        console.error("[Launcher] Not starting Claude Code: AI features are unlicensed");
+      }
+      return;
+    }
     try {
       await spawnOnce(plan);
       // Reset backoff once a spawn runs long enough to be considered stable.
@@ -1986,7 +2250,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   // the chip CTAs fire from surfaces that legitimately have no document open.
   // Requiring one here is what made the empty state's safe recovery unreachable
   // while its session-destroying secondary kept working.
-  async function relaunch(newCwd?: string, opts?: RelocateOpts): Promise<void> {
+  async function relaunch(newCwd?: string, opts?: RelocateOpts): Promise<RespawnResult> {
     return withLock(() => respawn(newCwd, opts, { clearSession: false }));
   }
 
@@ -2007,7 +2271,35 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     cwdOverride: string | undefined,
     opts: RelocateOpts | undefined,
     { clearSession }: { clearSession: boolean },
-  ): Promise<void> {
+  ): Promise<RespawnResult> {
+    // Licence admission (#1521), at the very top — BEFORE `stopInternal`,
+    // `clearSavedSession` and `persistRequestedCwd`, so a refused relaunch
+    // never kills a running child, drops a session or moves the cwd. It
+    // refuses by THROWING (the routes map it to 403). `lastError` is recorded
+    // only with no child alive (a running child would carry a stale code into
+    // its healthy run, see `SupervisorStatus`) and never over another code
+    // (`recordLicenceRefusal`).
+    const refusal = decideRefusal();
+    if (refusal) {
+      if (child === null) recordLicenceRefusal(refusal);
+      throw new LicenseRefusedError(refusal);
+    }
+    // Counted from BEFORE the stop (#2180): `kill()` marks the child killed at
+    // once, so `status()` reads not-running for the whole SIGTERM wait, and
+    // that is exactly the window that used to offer a Restart button.
+    launching++;
+    try {
+      return await stopAndSpawn(cwdOverride, opts, clearSession);
+    } finally {
+      launching--;
+    }
+  }
+
+  async function stopAndSpawn(
+    cwdOverride: string | undefined,
+    opts: RelocateOpts | undefined,
+    clearSession: boolean,
+  ): Promise<RespawnResult> {
     await stopInternal();
     if (clearSession) clearSavedSession();
     // relaunch/startFresh always mean "user is actively asking" → clear breaker.
@@ -2019,10 +2311,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // stop and silently declines to restart — the supervisor stays dead.
     stopRequested = false;
     userStopped = false;
+    // `stopInternal` above has nulled `child`; see `planAndSpawn` (#2181).
+    armGapWatch();
     const plan = await buildPlan(cwdOverride);
-    if (!plan) return;
+    if (!plan) return { spawned: false, why: "no-integration" };
     await persistRequestedCwd(plan, cwdOverride, opts?.persistCwd);
     await spawnOnce(plan);
+    return { spawned: true };
   }
 
   async function stopInternal(): Promise<void> {
@@ -2047,6 +2342,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       child = null;
       currentCwd = undefined;
       currentSessionId = undefined;
+      currentSpawnedAt = undefined;
       currentResuming = false;
       return;
     }
@@ -2092,6 +2388,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     child = null;
     currentCwd = undefined;
     currentSessionId = undefined;
+    currentSpawnedAt = undefined;
     currentResuming = false;
   }
 
@@ -2104,11 +2401,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       userStopped = true;
       userStopCount += 1;
       wakeOwedAcrossSpawns = false;
+      // A crash may have armed the watch; a user stop carries nothing (#2181).
+      disarmGapWatch();
       await stopInternal();
     });
   }
 
-  async function startFresh(cwdOverride?: string, opts?: RelocateOpts): Promise<void> {
+  async function startFresh(cwdOverride?: string, opts?: RelocateOpts): Promise<RespawnResult> {
     return withLock(() => respawn(cwdOverride, opts, { clearSession: true }));
   }
 
@@ -2118,7 +2417,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       !child.killed &&
       child.pid !== undefined &&
       currentCwd !== undefined &&
-      currentSessionId !== undefined
+      currentSessionId !== undefined &&
+      currentSpawnedAt !== undefined
     ) {
       return {
         running: true,
@@ -2126,12 +2426,100 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         cwd: currentCwd,
         sessionId: currentSessionId,
         resuming: currentResuming,
+        // No `spawned === child` identity check: `child` and
+        // `activeTurnDelivery` are assigned in one synchronous stretch of
+        // `spawnOnce`, and every exit path tears delivery down before nulling
+        // `child`, so there is no observable window where they disagree.
+        busy: activeTurnDelivery !== null && activeTurnDelivery.isBusy(),
+        spawnedAt: currentSpawnedAt,
       };
     }
-    return lastError ? { running: false, lastError } : { running: false };
+    const stopped: Extract<SupervisorStatus, { running: false }> = { running: false };
+    if (lastError) stopped.lastError = lastError;
+    if (restartPending()) stopped.restartPending = true;
+    if (configured === false) stopped.configured = false;
+    return stopped;
   }
 
-  return { start, relaunch, stop, startFresh, status };
+  /** Tandem is already bringing Claude back, so a Restart button would race it
+   * (#2180). Never true beside a tripped breaker: that is "stopped for good",
+   * and the failure state must show. */
+  function restartPending(): boolean {
+    if (breakerTripped) return false;
+    if (restartTimer !== null || launching > 0) return true;
+    // A delivery kill (#1867/#1868) marks the child killed before its exit
+    // schedules the restart; bounded, see `DELIVERY_KILL_EXIT_GRACE_MS`.
+    return (
+      child !== null &&
+      child.killed &&
+      !stopRequested &&
+      deliveryKillAt !== undefined &&
+      Date.now() - deliveryKillAt < DELIVERY_KILL_EXIT_GRACE_MS
+    );
+  }
+
+  async function refreshConfigured(): Promise<void> {
+    // Under the lock so it cannot interleave with a respawn's own plan.
+    // `buildPlan` writes `configured`; the plan itself is discarded.
+    return withLock(async () => {
+      await buildPlan();
+    });
+  }
+
+  /**
+   * Record a licence refusal. `lastRefusal` always takes it: it is what the
+   * routes answer with and what `resumeAfterLicence` keys on. `lastError`
+   * takes `"unlicensed"` only when it holds no other code: `spawn-failed`,
+   * `stop-failed` and the breaker's codes are real diagnoses the refusal must
+   * not hide from the status chip.
+   */
+  function recordLicenceRefusal(refusal: AiRefusal): void {
+    lastRefusal = refusal;
+    if (lastError !== undefined && lastError !== "unlicensed") return;
+    lastError = "unlicensed";
+  }
+
+  /** See `Supervisor.resumeAfterLicence`. Under the op lock, and idempotent. */
+  async function resumeAfterLicence(): Promise<void> {
+    // Unlocked pre-check: activation must never queue behind an in-flight
+    // launcher op (a relaunch can hold the lock for seconds) when there is
+    // nothing to resume. Re-checked under the lock below.
+    if (lastRefusal === null) return;
+    return withLock(async () => {
+      // A breaker trip is never "resumable on activation", whatever refused
+      // after it.
+      if (child !== null || lastRefusal === null || userStopped || breakerTripped) return;
+      console.error("[Launcher] Licence activated — starting Claude Code");
+      // Cleared first: a start the gate refuses again re-records it, and a
+      // spawn would clear it anyway.
+      lastRefusal = null;
+      if (lastError === "unlicensed") lastError = undefined;
+      const epoch = stopEpoch;
+      try {
+        await startInternal(epoch);
+      } catch (err) {
+        // `buildPlan` threw (`integrations.json` unreadable or invalid). Same
+        // handling as a crash restart's, so the real cause reaches the chip
+        // instead of a stale "unlicensed".
+        onRestartFailed(err, epoch);
+      }
+    });
+  }
+
+  function licenceRefusal(): AiRefusal | null {
+    return lastRefusal;
+  }
+
+  return {
+    start,
+    relaunch,
+    stop,
+    startFresh,
+    status,
+    refreshConfigured,
+    resumeAfterLicence,
+    licenceRefusal,
+  };
 }
 
 /** Exported for unit testing. Resolves a cwd candidate to a canonical path,

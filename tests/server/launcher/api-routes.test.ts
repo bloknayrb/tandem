@@ -20,7 +20,7 @@ import {
   type LauncherRoutesDeps,
   registerLauncherRoutes,
 } from "../../../src/server/launcher/api-routes.js";
-import type { Supervisor } from "../../../src/server/launcher/supervisor.js";
+import type { RespawnResult, Supervisor } from "../../../src/server/launcher/supervisor.js";
 import { TAURI_HOSTNAME } from "../../../src/shared/constants.js";
 import {
   LAUNCHER_ERROR_REAPER_NOT_FOUND,
@@ -36,9 +36,15 @@ type WrittenIntegrationsFile = { integrations: Array<{ workingDirectory?: string
 interface FakeSupervisorOpts {
   running?: boolean;
   cwd?: string;
+  busy?: boolean;
   relaunchHook?: (cwd?: string) => Promise<void>;
   startFreshHook?: (cwd?: string) => Promise<void>;
+  /** What relaunch / start-fresh report; defaults to a spawn (#2180). */
+  respawnResult?: RespawnResult;
 }
+
+const FAKE_SESSION_ID = "11111111-1111-4111-8111-111111111111";
+const FAKE_SPAWNED_AT = 1_700_000_000_000;
 
 function makeFakeSupervisor(opts: FakeSupervisorOpts = {}): Supervisor {
   return {
@@ -46,18 +52,25 @@ function makeFakeSupervisor(opts: FakeSupervisorOpts = {}): Supervisor {
     stop: async () => {},
     relaunch: async (cwd?: string) => {
       await opts.relaunchHook?.(cwd);
+      return opts.respawnResult ?? { spawned: true };
     },
     startFresh: async (cwd?: string) => {
       await opts.startFreshHook?.(cwd);
+      return opts.respawnResult ?? { spawned: true };
     },
+    refreshConfigured: async () => {},
+    resumeAfterLicence: async () => {},
+    licenceRefusal: () => null,
     status: () =>
       opts.running
         ? {
             running: true,
             reaperPid: 12345,
             cwd: opts.cwd ?? os.homedir(),
-            sessionId: "11111111-1111-4111-8111-111111111111",
+            sessionId: FAKE_SESSION_ID,
             resuming: false,
+            busy: opts.busy ?? false,
+            spawnedAt: FAKE_SPAWNED_AT,
           }
         : { running: false },
   };
@@ -138,6 +151,7 @@ const baseDeps = (
   unavailableReason: () => reason,
   startSupervisor: async () => {},
   store: store ?? makeStubStore(),
+  isClaudeSessionAttached: () => false,
 });
 
 beforeEach(() => {
@@ -190,11 +204,72 @@ describe("GET /api/launcher/status", () => {
     expect(body.cwd).toBe("/home/test");
     // sessionId is redacted — the real UUID never crosses the wire.
     expect(body.sessionId).toBe("<set>");
+    expect(body.busy).toBe(false);
+    expect(body.attached).toBe(false);
+    // The exact key set: an explicit field list is what keeps `spawnedAt` and
+    // any future internal field off the wire, and naming fields one by one
+    // cannot catch an extra one.
+    expect(Object.keys(body).sort()).toEqual(
+      [
+        "attached",
+        "available",
+        "busy",
+        "cwd",
+        "reaperPid",
+        "resuming",
+        "running",
+        "sessionId",
+        "skillRefresh",
+      ].sort(),
+    );
+    expect(JSON.stringify(body)).not.toContain(FAKE_SESSION_ID);
+  });
+
+  it("asks the registry about the REAL session id and spawn time", async () => {
+    const calls: Array<[string, number]> = [];
+    const sup = makeFakeSupervisor({ running: true });
+    const { app } = makeApp({
+      ...baseDeps(sup),
+      isClaudeSessionAttached: (id, since) => {
+        calls.push([id, since]);
+        return true;
+      },
+    });
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect((res.body as Extract<LauncherStatus, { running: true }>).attached).toBe(true);
+    // Not the "<set>" placeholder the wire body carries.
+    expect(calls).toEqual([[FAKE_SESSION_ID, FAKE_SPAWNED_AT]]);
+  });
+
+  it("reads a throwing attachment check as not attached, without leaking the id", async () => {
+    const sup = makeFakeSupervisor({ running: true });
+    const { app } = makeApp({
+      ...baseDeps(sup),
+      isClaudeSessionAttached: (id) => {
+        throw new Error(`boom ${id}`);
+      },
+    });
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.status).toBe(200);
+    expect((res.body as Extract<LauncherStatus, { running: true }>).attached).toBe(false);
+    expect(JSON.stringify(res.body)).not.toContain(FAKE_SESSION_ID);
+  });
+
+  it("passes the supervisor's busy flag through to loopback callers", async () => {
+    const sup = makeFakeSupervisor({ running: true, busy: true });
+    const { app } = makeApp(baseDeps(sup));
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect((res.body as Extract<LauncherStatus, { running: true }>).busy).toBe(true);
   });
 
   it("returns the minimal { available, running } shape to non-loopback callers", async () => {
-    const sup = makeFakeSupervisor({ running: true });
-    const { app } = makeApp(baseDeps(sup), { remoteAddress: "192.168.1.50" });
+    // busy and attached true so the exact-shape assertion below would catch
+    // either leaking.
+    const sup = makeFakeSupervisor({ running: true, busy: true });
+    const { app } = makeApp(
+      { ...baseDeps(sup), isClaudeSessionAttached: () => true },
+      { remoteAddress: "192.168.1.50" },
+    );
     const res = await request(app, "GET", "/api/launcher/status");
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ available: true, running: true });
@@ -694,13 +769,84 @@ describe("per-route 429 inflight gates (T2)", () => {
   });
 });
 
+describe("#2180 — a supervisor with nothing to launch, and one already restarting", () => {
+  function supWith(status: ReturnType<Supervisor["status"]>, result?: RespawnResult): Supervisor {
+    return {
+      ...makeFakeSupervisor({ respawnResult: result }),
+      status: () => status,
+    };
+  }
+  const SKILL = { code: "write-failed" as const, message: "EACCES" };
+
+  it("not configured → unavailable/not-configured on loopback, keeping skillRefresh", async () => {
+    const { app } = makeApp({
+      ...baseDeps(supWith({ running: false, configured: false })),
+      getSkillRefreshError: () => SKILL,
+    });
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.body).toEqual({ available: false, reason: "not-configured", skillRefresh: SKILL });
+  });
+
+  it("not configured → bare unavailable off loopback", async () => {
+    const { app } = makeApp(baseDeps(supWith({ running: false, configured: false })), {
+      remoteAddress: "192.168.1.50",
+    });
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.body).toEqual({ available: false });
+  });
+
+  it("restartPending is passed through on loopback", async () => {
+    const { app } = makeApp(
+      baseDeps(supWith({ running: false, lastError: "spawn-failed", restartPending: true })),
+    );
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.body).toMatchObject({
+      available: true,
+      running: false,
+      lastError: "spawn-failed",
+      restartPending: true,
+    });
+  });
+
+  it("restartPending outranks not-configured (a start re-plans meanwhile)", async () => {
+    const { app } = makeApp(
+      baseDeps(supWith({ running: false, restartPending: true, configured: false })),
+    );
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.body).toMatchObject({ available: true, running: false, restartPending: true });
+  });
+
+  it("guard: restartPending is loopback-only", async () => {
+    const { app } = makeApp(baseDeps(supWith({ running: false, restartPending: true })), {
+      remoteAddress: "192.168.1.50",
+    });
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.body).toEqual({ available: true, running: false });
+  });
+
+  for (const route of ["relaunch", "start-fresh"] as const) {
+    it(`${route} with no integration answers 404 NO_CLAUDE_INTEGRATION`, async () => {
+      const sup = supWith({ running: false }, { spawned: false, why: "no-integration" });
+      const { app } = makeApp(baseDeps(sup));
+      const nonce = (await request(app, "GET", "/api/launcher/nonce")).body as { nonce: string };
+      const res = await request(app, "POST", `/api/launcher/${route}`, { nonce: nonce.nonce });
+      expect(res.status).toBe(404);
+      expect(res.body).toMatchObject({ code: "NO_CLAUDE_INTEGRATION" });
+      expect((res.body as { message: string }).message).toContain("Connect AI");
+    });
+  }
+});
+
 describe("loopback vs LAN redaction for running:false (T6)", () => {
   it("loopback sees lastError; non-loopback does not", async () => {
     const sup: Supervisor = {
       start: async () => {},
       stop: async () => {},
-      relaunch: async () => {},
-      startFresh: async () => {},
+      relaunch: async () => ({ spawned: true }),
+      startFresh: async () => ({ spawned: true }),
+      refreshConfigured: async () => {},
+      resumeAfterLicence: async () => {},
+      licenceRefusal: () => null,
       status: () => ({ running: false, lastError: "spawn-failed" as const }),
     };
     const { app: appLoop } = makeApp(baseDeps(sup));
@@ -738,8 +884,11 @@ describe("/status try/catch on supervisor throw (B4)", () => {
     const sup: Supervisor = {
       start: async () => {},
       stop: async () => {},
-      relaunch: async () => {},
-      startFresh: async () => {},
+      relaunch: async () => ({ spawned: true }),
+      startFresh: async () => ({ spawned: true }),
+      refreshConfigured: async () => {},
+      resumeAfterLicence: async () => {},
+      licenceRefusal: () => null,
       status: () => {
         throw new Error("simulated supervisor crash");
       },
@@ -758,8 +907,11 @@ describe("/status try/catch on supervisor throw (B4)", () => {
     const sup: Supervisor = {
       start: async () => {},
       stop: async () => {},
-      relaunch: async () => {},
-      startFresh: async () => {},
+      relaunch: async () => ({ spawned: true }),
+      startFresh: async () => ({ spawned: true }),
+      refreshConfigured: async () => {},
+      resumeAfterLicence: async () => {},
+      licenceRefusal: () => null,
       status: () => {
         throw new Error("simulated");
       },
@@ -787,6 +939,7 @@ describe("POST /api/launcher/start — autostart deferral (#1236)", () => {
         sup = makeFakeSupervisor();
       },
       store: makeStubStore(),
+      isClaudeSessionAttached: () => false,
       calls: () => calls,
       ...overrides,
     };

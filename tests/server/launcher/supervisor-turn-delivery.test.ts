@@ -249,7 +249,7 @@ afterEach(async () => {
 
 type ExtraOpts = Omit<
   Parameters<typeof createSupervisor>[0],
-  "integrationsBase" | "subscribeToEvents"
+  "integrationsBase" | "subscribeToEvents" | "subscribeDuringGap"
 >;
 
 function makeSupervisor(extra: ExtraOpts = {}): {
@@ -263,6 +263,12 @@ function makeSupervisor(extra: ExtraOpts = {}): {
     ...extra,
     integrationsBase: baseDir,
     subscribeToEvents: (cb) => {
+      callbacks.add(cb);
+      return () => callbacks.delete(cb);
+    },
+    // The same fake fan-out, so an event emitted in a gap reaches the watch
+    // exactly as the queue would deliver it.
+    subscribeDuringGap: (cb) => {
       callbacks.add(cb);
       return () => callbacks.delete(cb);
     },
@@ -415,6 +421,241 @@ describe("#1866 — a failed-write callback that lands after teardown", () => {
 
     const child2 = await nthChild(2);
     expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+});
+
+// --- #2181 --------------------------------------------------------------------
+
+describe("#2181 — an event while no spawn is subscribed", () => {
+  /** Child 1 fresh, bootstrap answered, so it is idle with nothing owed. */
+  async function idleFreshChild(sup: Supervisor): Promise<FakeChild> {
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, RESULT_OK);
+    await settle();
+    return child1;
+  }
+
+  it("a chat during a crash restart's backoff wakes the resumed successor", async () => {
+    const { sup, emit } = makeSupervisor();
+    const child1 = await idleFreshChild(sup);
+    exitChild(child1, 1);
+    emit(annotationEvent());
+
+    const child2 = await nthChild(2);
+    await settle();
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  it("control: with no event in the gap, the resumed successor gets no turn", async () => {
+    const { sup } = makeSupervisor();
+    const child1 = await idleFreshChild(sup);
+    exitChild(child1, 1);
+
+    const child2 = await nthChild(2);
+    await settle();
+    expect(texts(child2)).toEqual([]);
+  });
+
+  it("a wake written into a child being relaunched is carried to the successor", async () => {
+    // The dying child is still subscribed until its exit, so the event reaches
+    // it and the write lands in a pipe nobody will read. Nothing fails, so
+    // only the unanswered turn records that the wake was not delivered.
+    const { sup, emit } = makeSupervisor();
+    const child1 = await idleFreshChild(sup);
+    const relaunched = sup.relaunch(cwdDir);
+    emit(annotationEvent());
+    await relaunched;
+
+    expect(texts(child1).at(-1)).toBe(SUPERVISOR_WAKE_PROMPT);
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  it("an event between start() and the spawn's own subscribe is owed", async () => {
+    const { sup, emit } = makeSupervisor();
+    await idleFreshChild(sup);
+    await sup.stop();
+    // `onSpawn` runs inside `spawn()`, before `spawnOnce` subscribes.
+    onSpawn = (_child, index) => {
+      if (index === 1) emit(annotationEvent());
+    };
+    await sup.start();
+
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  it("a fresh successor gets its bootstrap only, not a second wake", async () => {
+    const { sup, emit } = makeSupervisor({ restartBackoffsMs: [5_000] });
+    const child1 = await idleFreshChild(sup);
+    exitChild(child1, 1);
+    emit(annotationEvent());
+
+    await sup.startFresh(cwdDir);
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_INITIAL_PROMPT]);
+  });
+
+  it("user stop disarms a watch a crash armed (#1866 still holds)", async () => {
+    const { sup, emit } = makeSupervisor({ restartBackoffsMs: [5_000] });
+    const child1 = await idleFreshChild(sup);
+    exitChild(child1, 1);
+    await sup.stop();
+    emit(annotationEvent());
+
+    await sup.start();
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([]);
+  });
+
+  it("a relaunch after a user stop owes an event that lands before its spawn subscribes", async () => {
+    const { sup, emit } = makeSupervisor();
+    await idleFreshChild(sup);
+    await sup.stop();
+    onSpawn = (_child, index) => {
+      if (index === 1) emit(annotationEvent());
+    };
+    await sup.relaunch(cwdDir);
+
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  it("an event a live child answered is not carried to a crash successor", async () => {
+    // Pins the disarm at subscribe: a watch left armed beside a live child
+    // would record every event it already handled.
+    const { sup, emit } = makeSupervisor();
+    const child1 = await idleFreshChild(sup);
+    emit(annotationEvent());
+    pushJson(child1, RESULT_OK);
+    await settle();
+    exitChild(child1, 1);
+
+    const child2 = await nthChild(2);
+    await settle();
+    expect(texts(child2)).toEqual([]);
+  });
+
+  it("a crash does not carry the unanswered turn it died on", async () => {
+    // The turn may be what crashed it; re-sending it to every resumed successor
+    // would keep a slow crash loop alive past the restart breaker.
+    const { sup, emit } = makeSupervisor();
+    const child1 = await idleFreshChild(sup);
+    emit(annotationEvent());
+    expect(texts(child1).at(-1)).toBe(SUPERVISOR_WAKE_PROMPT);
+    exitChild(child1, 1);
+
+    const child2 = await nthChild(2);
+    await settle();
+    expect(texts(child2)).toEqual([]);
+  });
+
+  it("a user stop of a child with an unanswered turn carries nothing", async () => {
+    const { sup, emit } = makeSupervisor();
+    const child1 = await idleFreshChild(sup);
+    emit(annotationEvent());
+    expect(texts(child1).at(-1)).toBe(SUPERVISOR_WAKE_PROMPT);
+    await sup.stop();
+
+    await sup.start();
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([]);
+  });
+});
+
+// --- #2180 --------------------------------------------------------------------
+
+describe("#2180 — status().restartPending: Tandem is already bringing Claude back", () => {
+  function pending(sup: Supervisor): boolean {
+    const st = sup.status();
+    return !st.running && st.restartPending === true;
+  }
+
+  /** Stop this child's `kill()` from exiting on its own; the test fires it. */
+  function holdExit(child: FakeChild): void {
+    child.kill = (sig: NodeJS.Signals = "SIGTERM") => {
+      child.kills.push(sig);
+      child.killed = true;
+      return true;
+    };
+  }
+
+  it("is true during a crash restart's backoff", async () => {
+    const { sup } = makeSupervisor({ restartBackoffsMs: [5_000] });
+    await sup.startFresh(cwdDir);
+    exitChild(children[0], 1);
+    expect(sup.status().running).toBe(false);
+    expect(pending(sup)).toBe(true);
+  });
+
+  it("is true while a relaunch waits for the old child to exit", async () => {
+    // `kill()` marks the child killed at once, so status already reads
+    // not-running for the whole SIGTERM wait: the window that used to offer a
+    // Restart button.
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    holdExit(child1);
+    const relaunched = sup.relaunch(cwdDir);
+    await waitFor(() => child1.kills.length > 0, "the relaunch's SIGTERM");
+    expect(sup.status().running).toBe(false);
+    expect(pending(sup)).toBe(true);
+
+    exitChild(child1, null, "SIGTERM");
+    await relaunched;
+    expect(sup.status().running).toBe(true);
+  });
+
+  it("is true while the relaunch builds its next spawn", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    let seen: boolean | null = null;
+    onSpawn = (_child, index) => {
+      if (index === 1) seen = pending(sup);
+    };
+    await sup.relaunch(cwdDir);
+    expect(seen).toBe(true);
+  });
+
+  it("is true between a delivery kill and its exit", async () => {
+    const { sup, emit } = makeSupervisor({ turnReceiptMs: 100 });
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    succeedWrites(held(child1));
+    pushJson(child1, RESULT_OK);
+    await settle();
+    holdExit(child1);
+    emit(annotationEvent());
+    succeedWrites(held(child1));
+    await waitFor(() => child1.kills.length > 0, "the receipt kill", 2_000);
+    expect(pending(sup)).toBe(true);
+    exitChild(child1, null, "SIGTERM");
+  });
+
+  it("guard: false once the new child is running", async () => {
+    const { sup } = makeSupervisor({ restartBackoffsMs: [0] });
+    await sup.startFresh(cwdDir);
+    exitChild(children[0], 1);
+    await nthChild(2);
+    await waitFor(() => sup.status().running, "the restart");
+    expect(pending(sup)).toBe(false);
+  });
+
+  it("guard: false once the breaker trips, so the failure can show", async () => {
+    const { sup } = makeSupervisor({ restartBackoffsMs: [0] });
+    await sup.startFresh(cwdDir);
+    for (let n = 1; ; n++) {
+      exitChild(children[n - 1], 1);
+      const st = sup.status();
+      if (!st.running && st.lastError !== undefined) break;
+      await nthChild(n + 1);
+      await waitFor(() => sup.status().running, `restart ${n}`);
+    }
+    const st = sup.status();
+    expect(st.running).toBe(false);
+    expect(st.running === false && st.lastError).toBe("circuit-open");
+    expect(pending(sup)).toBe(false);
   });
 });
 
@@ -1264,5 +1505,83 @@ describe("#2125 — a crash restart whose integrations read fails", () => {
     expect(occurrences("Breaker tripped while building the spawn plan")).toBe(1);
     expect(children).toHaveLength(1);
     expect(sup.status()).toEqual({ running: false, lastError: "circuit-open" });
+  });
+});
+
+// The status route matches MCP connections opened at or after this, so a stale
+// or zero value would let the previous child's leftover entry turn the pill green.
+describe("status().spawnedAt — when the current child started", () => {
+  function spawnedAt(sup: Supervisor): number | undefined {
+    const status = sup.status();
+    return status.running ? status.spawnedAt : undefined;
+  }
+
+  it("is stamped at each spawn, not once per supervisor", async () => {
+    const { sup } = makeSupervisor();
+    const before = Date.now();
+    await sup.startFresh(cwdDir);
+    const first = spawnedAt(sup);
+    expect(first).toBeGreaterThanOrEqual(before);
+    expect(first).toBeLessThanOrEqual(Date.now());
+
+    await new Promise((r) => setTimeout(r, 5));
+    const beforeSecond = Date.now();
+    await sup.startFresh(cwdDir);
+    expect(spawnedAt(sup)).toBeGreaterThanOrEqual(beforeSecond);
+  });
+});
+
+describe("status().busy — the launched child's turn-in-flight flag", () => {
+  function busy(sup: Supervisor): boolean | undefined {
+    const status = sup.status();
+    return status.running ? status.busy : undefined;
+  }
+
+  it("is true while the bootstrap turn runs and false once its result arrives", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    expect(busy(sup)).toBe(true);
+    pushJson(child1, RESULT_OK);
+    await settle();
+    expect(busy(sup)).toBe(false);
+  });
+
+  it("goes true again on a wake written to an idle child", async () => {
+    const { sup, emit } = makeSupervisor();
+    await freshChildWithHeldWake(sup, emit);
+    expect(busy(sup)).toBe(true);
+  });
+
+  it("stays true across a result when a wake was coalesced behind the turn", async () => {
+    const { sup, emit } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    // Mid-bootstrap: this event can only set `pendingWake`.
+    emit(annotationEvent());
+    pushJson(child1, RESULT_OK);
+    await settle();
+    // `flushPendingWake` wrote the owed wake on that result, re-raising the flag.
+    expect(texts(child1)).toEqual([SUPERVISOR_INITIAL_PROMPT, SUPERVISOR_WAKE_PROMPT]);
+    expect(busy(sup)).toBe(true);
+  });
+
+  it("clears when the latch expires with nothing owed", async () => {
+    const { sup } = makeSupervisor({ wakeLatchMs: 100 });
+    await sup.startFresh(cwdDir);
+    pushJson(children[0], INIT);
+    expect(busy(sup)).toBe(true);
+    await waitFor(() => busy(sup) === false, "the latch expiry", 2_000);
+  });
+
+  it("clears on a failed write while the child is still up", async () => {
+    // Without this, a dead pipe would leave the pill pulsing until the latch.
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    expect(busy(sup)).toBe(true);
+    failCallbacksOnly(held(child1));
+    expect(sup.status().running).toBe(true);
+    expect(busy(sup)).toBe(false);
   });
 });

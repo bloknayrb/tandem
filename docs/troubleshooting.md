@@ -187,7 +187,14 @@ If you close that dialog, Settings → Network → **Restart server** does the s
 
 ## I sent a chat message (or left a comment) and nothing happened
 
-The status bar says **AI connected** and Claude never reacts. This is the most common new-user snag, and the status bar is genuinely not lying — it's answering a different question than the one you're asking.
+First, read the status bar's AI label — it says who is attached:
+
+- **Tandem's Claude** — the Claude session Tandem started for you is running, and Tandem wakes it when you send a message. It works in the background, so a reply can take a while; "Tandem's Claude is working…" means it is mid-turn; if you sent something during that turn, Tandem wakes it again when the turn ends. If the hover text says Tandem **hasn't seen it connect**, nothing has connected to Tandem's tools yet. A working session can briefly look like this, but if it stays that way, check that your Claude Code config still has Tandem's MCP entry. The dot is **green** only when Tandem has matched a live connection to its own Claude; otherwise it is a **hollow ring**, and the hover text says Tandem can't confirm which connection is its Claude. With the Tandem plugin installed, Tandem can make that match when the connection reports which Claude session it belongs to (not yet confirmed on every setup). With the plain config entry that `tandem setup` writes it can't, because that connection doesn't say which Claude session it belongs to, so the ring is the normal look there and doesn't mean anything is broken.
+- **· 2 sessions** after the label is how many MCP connections Tandem can see are still there: ones holding their connection open, or that used Tandem in the last minute. A session that just closed can still count for about a minute, a frozen client stays counted until its connection drops, and one Claude connected both through the plugin and through the `tandem setup` entry counts twice. Clients on the newest MCP protocol revision aren't counted at all. The hover text repeats the number. With Tandem's Claude running and a hollow ring, the count tells you whether anything live has connected: if no count is shown, nothing has.
+- **AI attached** — *something else* is connected: a Claude Code session you started, Claude Desktop, or another MCP client. Tandem can't wake it. The rest of this section is about that case. With a **hollow ring** instead of a green dot, Tandem can't see that it's still there: usually a session that closed without disconnecting, which Tandem forgets about 30–35 minutes after it was last used. When the pill is also offering to set up or restart Claude, it says **AI not connected** instead. An MCP client that never holds its connection open can also look like this between calls.
+- A separate **Tandem's Claude isn't running** button means Tandem's own session stopped (crashed, signed out, or the Claude CLI won't start) while something else is still attached. Its label says which: **isn't running** (click to restart it), **sign in** (run `claude` in a terminal to sign in, then click to check again) or **can't start** (click to open setup). It only ever acts on Tandem's own session; any Claude you started yourself is unaffected.
+
+**AI attached** with no reaction is the most common new-user snag, and the label is not lying — it's answering a different question than the one you're asking.
 
 Tandem has **two independent connections** to Claude:
 
@@ -196,7 +203,7 @@ Tandem has **two independent connections** to Claude:
 | **Pull** | The MCP server | Lets Claude read and edit your document when it decides to look |
 | **Push** | A real-time event stream | Tells Claude the moment you comment or send a message |
 
-"AI connected" reports the **pull** path only. Chat and comments need the **push** path, and the two can be in completely different states. A session with a working pull path and a dead push path looks perfectly healthy and does nothing when you type.
+"AI attached" reports the **pull** path only. Chat and comments need the **push** path, and the two can be in completely different states. A session with a working pull path and a dead push path looks perfectly healthy and does nothing when you type.
 
 **Diagnose it.** In the desktop app: **Settings → About → Copy Diagnostics** (the desktop app does not install the `tandem` command). From a terminal, if you installed via npm:
 

@@ -4,6 +4,7 @@ import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatLicenseStatus, resolveLicenseInput, runActivate } from "../../src/cli/license.js";
 import type { LicenseState } from "../../src/server/license/license-types.js";
+import { TANDEM_PURCHASE_URL } from "../../src/shared/constants.js";
 
 describe("resolveLicenseInput", () => {
   it("reads + trims a file when the arg is an existing path", () => {
@@ -64,14 +65,45 @@ describe("formatLicenseStatus", () => {
     expect(out).toContain("Enforcement:   on");
   });
 
-  it("shows the restricted escape-hatch hint", () => {
-    expect(formatLicenseStatus(restricted, true).join("\n")).toContain("restricted");
+  it("says AI is off and the editor unaffected when enforcement is on (#1521)", () => {
+    const out = formatLicenseStatus(restricted, true).join("\n");
+    expect(out).toContain("unlicensed — AI features off; the editor is unaffected");
+    expect(out).toContain(`Buy a license: ${TANDEM_PURCHASE_URL}`);
+    expect(out).not.toMatch(/keep editing|read-only/);
   });
 
-  it("shows licensee + update window for a licensed device", () => {
+  it("claims nothing is switched off when enforcement is off (dark build, stale trial.json)", () => {
+    const out = formatLicenseStatus(restricted, false).join("\n");
+    expect(out).toContain("nothing is enforced in this build");
+    expect(out).not.toContain("AI features off");
+  });
+
+  it("never offers a purchase link for an installed licence that fails to verify", () => {
+    const out = formatLicenseStatus(
+      { ...restricted, licenseUnverifiable: "BAD_SIGNATURE" } as LicenseState,
+      true,
+    ).join("\n");
+    expect(out).toContain("license not verified — AI features off");
+    expect(out).not.toContain(TANDEM_PURCHASE_URL);
+    expect(out).toMatch(/reissued/);
+  });
+
+  it("shows licensee + a dated update window for a hand-signed windowed key", () => {
     const out = formatLicenseStatus(licensed, true).join("\n");
     expect(out).toContain("Jane Doe (grandfathered)");
     expect(out).toContain("Update window: current (through 2027-01-01)");
+  });
+
+  it("says all future updates are included for a key with no window", () => {
+    // Every issued key since ADR-040's 2026-10-09 amendment (A5) has a null
+    // `expiresAt`. It used to print "Update window: current" with no date.
+    const open: LicenseState = {
+      ...licensed,
+      license: { ...licensed.license, type: "personal", expiresAt: null },
+    };
+    const out = formatLicenseStatus(open, true).join("\n");
+    expect(out).toContain("Updates:       all future updates included");
+    expect(out).not.toContain("Update window:");
   });
 
   it("reports enforcement off when the gate ships dark", () => {

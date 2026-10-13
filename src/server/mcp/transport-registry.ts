@@ -128,10 +128,95 @@ export interface McpSessionRegistry<S extends ClosableServer = ClosableServer, T
   reapIdle(idleTtlMsOverride?: number): Promise<number>;
   /** Close and drop everything (graceful shutdown). */
   closeAll(): Promise<void>;
-  /** Live session count — backs `/health`'s `hasSession`. */
+  /** Number of registry entries. `/health` reports `countDistinctClients` instead. */
   readonly size: number;
   /** Snapshot for diagnostics and the connected-sessions surface. */
   list(): ReadonlyArray<McpSessionEntry<S, T>>;
+}
+
+/** The one identity rule `countDistinctClients` and `hasLiveEntryFor` share, so
+ *  the count and the attachment match can never disagree on what "the same
+ *  Claude session" means. Case-folded because `normalizeSessionId` preserves
+ *  case and a UUID may round-trip through the session file in either. */
+function claudeIdKey(id: string): string {
+  return id.toLowerCase();
+}
+
+/** How recently a request must have STARTED for an entry with no open stream
+ *  to still count as live. See `isLiveEntry`. */
+export const LIVE_RECENT_MS = 60_000;
+
+/**
+ * Whether an entry is evidence of a client that is still there, as opposed to
+ * one that went away without `DELETE /mcp` and is waiting for the reaper (up to
+ * ~35 min). An open standalone GET stream is the main signal: Claude Code holds
+ * it for the life of the session, quiet stretches included (measured
+ * 2026-10-11), and it closes when the process exits. The recency arm keeps a
+ * client that never opens a stream counted while it is actually calling tools.
+ *
+ * `lastSeenAt` moves only at the START of a request (`dispatchToSession`), never
+ * on SSE traffic, so a stream-less client reads as gone 60 s after its last
+ * request began. That is the one population this misreads, and it is unmeasured.
+ */
+export function isLiveEntry(
+  entry: Pick<McpSessionEntry, "openStreams" | "lastSeenAt">,
+  now: number,
+): boolean {
+  return entry.openStreams > 0 || now - entry.lastSeenAt < LIVE_RECENT_MS;
+}
+
+/**
+ * How many clients a set of entries represents — `/health`'s `sessionCount`
+ * passes only the live ones (`isLiveEntry`). Entries sharing a
+ * `claudeSessionId` are one Claude session (a stdio bridge that re-initializes
+ * leaves its old entry behind under the same id); entries without one count
+ * individually.
+ *
+ * Over the live entries it can still overcount: a client that just exited
+ * counts until `LIVE_RECENT_MS` after its last request, a hung client holding
+ * its stream open stays counted, and one Claude session wired through both the
+ * plugin bridge and a direct-HTTP entry counts twice. It undercounts when two
+ * live processes share a Claude id, and stateless `2026-07-28` clients are
+ * never in the registry at all (#1249).
+ */
+export function countDistinctClients(
+  entries: ReadonlyArray<Pick<McpSessionEntry, "claudeSessionId">>,
+): number {
+  const ids = new Set<string>();
+  let anonymous = 0;
+  for (const e of entries) {
+    if (e.claudeSessionId === undefined) anonymous += 1;
+    else ids.add(claudeIdKey(e.claudeSessionId));
+  }
+  return ids.size + anonymous;
+}
+
+/**
+ * Whether a LIVE connection from a specific Claude session, opened at or after
+ * `sinceMs`, is in the registry — how the launcher status route decides that
+ * Tandem's own child is attached.
+ *
+ * All three conjuncts are load-bearing. The stdio bridge never sends
+ * `DELETE /mcp`, so a dead child's entry lingers until reaped, and a Restart
+ * resumes the next child under the SAME Claude session id: `createdAt` rules
+ * out the previous child's entry, and `openStreams > 0` rules out one whose
+ * bridge has died (the SDK client opens its standalone GET stream right after
+ * initialize, and the bridge re-opens it on reconnect). Ids compare by
+ * `claudeIdKey`.
+ */
+export function hasLiveEntryFor(
+  entries: ReadonlyArray<Pick<McpSessionEntry, "claudeSessionId" | "createdAt" | "openStreams">>,
+  claudeSessionId: string,
+  sinceMs: number,
+): boolean {
+  const want = claudeIdKey(claudeSessionId);
+  return entries.some(
+    (e) =>
+      e.claudeSessionId !== undefined &&
+      claudeIdKey(e.claudeSessionId) === want &&
+      e.createdAt >= sinceMs &&
+      e.openStreams > 0,
+  );
 }
 
 const DEFAULT_MAX_SESSIONS = 16;

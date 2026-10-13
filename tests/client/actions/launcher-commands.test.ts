@@ -66,6 +66,8 @@ function installFetchStub(
     available?: boolean;
     rejectCwd?: boolean;
     skillRefresh?: { code: "read-failed" | "write-failed"; message: string };
+    /** The `reason` an unavailable launcher reports. */
+    reason?: string;
   } = {},
 ): ReturnType<typeof vi.fn> {
   const available = opts.available ?? true;
@@ -82,7 +84,7 @@ function installFetchStub(
           })
         : jsonResponse(200, {
             available: false,
-            reason: "stdio-mode",
+            reason: opts.reason ?? "stdio-mode",
             ...(opts.skillRefresh ? { skillRefresh: opts.skillRefresh } : {}),
           });
     }
@@ -248,6 +250,17 @@ describe("launcher-relaunch-here", () => {
     getAction("launcher-relaunch-here").run();
     await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(STATUS_URL));
     await new Promise((r) => setTimeout(r, 0));
+    expect(fetchSpy.mock.calls.some(([url]) => String(url) === RELAUNCH_URL)).toBe(false);
+  });
+
+  it("points a user with no Claude Code setup at Connect AI (#2180)", async () => {
+    const fetchSpy = installFetchStub({ available: false, reason: "not-configured" });
+    getAction("launcher-relaunch-here").run();
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(STATUS_URL));
+    await vi.waitFor(() =>
+      expect(notify).toHaveBeenCalledWith("info", expect.stringContaining("Use Connect AI")),
+    );
+    expect(notify).not.toHaveBeenCalledWith("warning", expect.stringContaining("Tandem build"));
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === RELAUNCH_URL)).toBe(false);
   });
 

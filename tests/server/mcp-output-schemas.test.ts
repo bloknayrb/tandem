@@ -578,14 +578,17 @@ describe("error envelopes from outputSchema'd tools", () => {
     expect(envelope.code).toBe("NO_DOCUMENT");
   });
 
-  it("checkInbox with no document degrades to a parseable NO_DOCUMENT envelope", async () => {
+  it("checkInbox with no document open returns schema-valid structured content", async () => {
+    // It used to answer NO_DOCUMENT here, which hid chat sent with nothing
+    // open. The no-document pass fills every field (activity nulls, empty
+    // document buckets): the SDK validates `structuredContent` against the
+    // outputSchema, so one `undefined` would fail the whole response.
     const result = (await client.callTool({
       name: "tandem_checkInbox",
       arguments: {},
     })) as ToolResult;
-    expect(result.isError).toBe(true);
-    const envelope = textEnvelope(result) as { error: boolean; code?: string };
-    expect(envelope.code).toBe("NO_DOCUMENT");
+    const sc = expectStructuredMatch(result, checkInboxOutputShape);
+    expect(sc.summary).toMatch(/^No document is open\./);
   });
 });
 

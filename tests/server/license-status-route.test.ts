@@ -8,11 +8,13 @@ import type { LicenseState } from "../../src/server/license/license-types.js";
 import * as verifier from "../../src/server/license/verifier.js";
 import { canonicalize } from "../../src/server/license/verifier.js";
 import {
-  handleActivateLicense,
   handleGetLicenseStatus,
+  makeActivateLicenseHandler,
   scrubForNonLoopback,
   toLicenseStatusWire,
 } from "../../src/server/mcp/routes/license.js";
+import { closeMcpSession, startMcpServerHttp } from "../../src/server/mcp/server.js";
+import { allocPort } from "../helpers/alloc-port.js";
 
 const FULL: LicenseState = {
   gateActive: true,
@@ -97,6 +99,9 @@ function activateReq(opts: { origin?: string; body?: unknown }): Request {
     body: opts.body,
   } as unknown as Request;
 }
+
+/** No launcher wired — the shape every pre-#1521 case here was written against. */
+const handleActivateLicense = makeActivateLicenseHandler();
 
 describe("handleActivateLicense", () => {
   it("rejects a non-allowlisted origin with 403 before touching the body", async () => {
@@ -233,6 +238,187 @@ describe("handleActivateLicense", () => {
     } finally {
       openSpy.mockRestore();
       verifySpy.mockRestore();
+    }
+  });
+});
+
+describe("activation resumes a launcher the licence refused (#1521)", () => {
+  let dir: string;
+  let saved: string | undefined;
+  let verifySpy: ReturnType<typeof vi.spyOn>;
+
+  /**
+   * A response that records WHEN it was answered. `statusCode` starts at a
+   * sentinel rather than the 200 Express defaults to, so "no error status was
+   * set" is something a case can assert and fail.
+   */
+  function recordingRes(log: string[]) {
+    const r = {
+      body: undefined as unknown,
+      statusCode: -1,
+      status(code: number) {
+        r.statusCode = code;
+        return r;
+      },
+      json(b: unknown) {
+        log.push("answered");
+        r.body = b;
+        return r;
+      },
+    };
+    return r as unknown as Response & { body: unknown; statusCode: number };
+  }
+
+  beforeEach(() => {
+    saved = process.env.TANDEM_APP_DATA_DIR;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-activate-resume-"));
+    process.env.TANDEM_APP_DATA_DIR = dir;
+    // Any blob verifies: these cases are about what happens AFTER a good key.
+    verifySpy = vi.spyOn(verifier, "verifyLicenseSignature").mockImplementation(
+      () =>
+        ({
+          id: "lic-1",
+          name: "Jane Doe",
+          email: "jane@example.com",
+          type: "personal",
+          createdAt: new Date(0).toISOString(),
+          expiresAt: null,
+          version: "1.0",
+        }) as ReturnType<typeof verifier.verifyLicenseSignature>,
+    );
+  });
+
+  afterEach(() => {
+    verifySpy.mockRestore();
+    if (saved === undefined) delete process.env.TANDEM_APP_DATA_DIR;
+    else process.env.TANDEM_APP_DATA_DIR = saved;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const goodReq = () =>
+    activateReq({ origin: "http://127.0.0.1:5173", body: { license: "a-good-key" } });
+
+  it("sends nothing until resumeAfterLicence has resolved, then answers the licence wire", async () => {
+    const log: string[] = [];
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const handler = makeActivateLicenseHandler({
+      getSupervisor: () => ({
+        resumeAfterLicence: async () => {
+          log.push("resume-started");
+          await held;
+          log.push("resume-done");
+        },
+      }),
+    });
+    const res = recordingRes(log);
+    const pending = handler(goodReq(), res);
+    await vi.waitFor(() => expect(log).toContain("resume-started"));
+    // Still held: the client must not hear "activated" yet.
+    expect(log).not.toContain("answered");
+    expect(res.body).toBeUndefined();
+    release();
+    await pending;
+    expect(log).toEqual(["resume-started", "resume-done", "answered"]);
+    expect(res.statusCode).toBe(-1); // no error status was set
+    expect(res.body).toMatchObject({ gateActive: expect.any(Boolean) });
+  });
+
+  it("still answers success when resume throws — the key is already saved", async () => {
+    const log: string[] = [];
+    const handler = makeActivateLicenseHandler({
+      getSupervisor: () => ({
+        resumeAfterLicence: async () => {
+          throw new Error("integrations.json is corrupt");
+        },
+      }),
+    });
+    const res = recordingRes(log);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await handler(goodReq(), res);
+    expect(log).toEqual(["answered"]);
+    expect(res.statusCode).toBe(-1);
+    expect(res.body).toMatchObject({ gateActive: expect.any(Boolean) });
+  });
+
+  it("answers success with no supervisor wired, or a null one", async () => {
+    for (const handler of [
+      makeActivateLicenseHandler(),
+      makeActivateLicenseHandler({ getSupervisor: () => null }),
+    ]) {
+      const res = recordingRes([]);
+      await handler(goodReq(), res);
+      expect(res.statusCode).toBe(-1);
+      expect(res.body).toMatchObject({ gateActive: expect.any(Boolean) });
+    }
+  });
+
+  it("never resumes on a refused key", async () => {
+    verifySpy.mockImplementation(() => {
+      throw new Error("bad");
+    });
+    const resume = vi.fn(async () => {});
+    const handler = makeActivateLicenseHandler({
+      getSupervisor: () => ({ resumeAfterLicence: resume }),
+    });
+    const res = recordingRes([]);
+    await handler(goodReq(), res);
+    expect(res.statusCode).toBe(400);
+    expect(resume).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/license/activate is wired to the launcher (#1521)", () => {
+  it("startMcpServerHttp hands its launcher getter to the activate route", async () => {
+    const saved = process.env.TANDEM_APP_DATA_DIR;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-activate-wired-"));
+    process.env.TANDEM_APP_DATA_DIR = dir;
+    const verifySpy = vi.spyOn(verifier, "verifyLicenseSignature").mockImplementation(
+      () =>
+        ({
+          id: "lic-1",
+          name: "Jane Doe",
+          email: "jane@example.com",
+          type: "personal",
+          createdAt: new Date(0).toISOString(),
+          expiresAt: null,
+          version: "1.0",
+        }) as ReturnType<typeof verifier.verifyLicenseSignature>,
+    );
+    const resume = vi.fn(async () => {});
+    const sup = {
+      start: async () => {},
+      stop: async () => {},
+      relaunch: async () => ({ spawned: true as const }),
+      startFresh: async () => ({ spawned: true as const }),
+      refreshConfigured: async () => {},
+      resumeAfterLicence: resume,
+      licenceRefusal: () => null,
+      status: () => ({ running: false as const }),
+    };
+    const port = await allocPort();
+    const server = await startMcpServerHttp(port, "127.0.0.1", undefined, undefined, {
+      getSupervisor: () => sup,
+      unavailableReason: () => "stdio-mode",
+      startSupervisor: async () => {},
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/license/activate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:5173" },
+        body: JSON.stringify({ license: "a-good-key" }),
+      });
+      expect(res.status).toBe(200);
+      expect(resume).toHaveBeenCalledTimes(1);
+    } finally {
+      await closeMcpSession();
+      await new Promise<void>((r) => server.close(() => r()));
+      verifySpy.mockRestore();
+      if (saved === undefined) delete process.env.TANDEM_APP_DATA_DIR;
+      else process.env.TANDEM_APP_DATA_DIR = saved;
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

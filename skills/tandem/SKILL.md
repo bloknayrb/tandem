@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 29
+version: 32
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -86,7 +86,7 @@ Selections are **not** sent as standalone events. Instead, when the user sends a
 ## Collaboration Etiquette
 
 - Check `tandem_getActivity()` before annotating near the user's cursor. If `isTyping` is true, wait for typing to stop before annotating that area. `cursor` is a flat text offset (UTF-16 code units), the same system as annotation ranges — only a document change triggers a write, and the last one publishes wherever the caret is by then, so treat it as a proximity hint, never as a range endpoint for `tandem_edit` or `tandem_comment`.
-- Use `tandem_status({ text: "..." })` to show what you're working on — the user sees it in the editor status bar.
+- Use `tandem_status({ text: "..." })` to show what you're working on — the user may see it in the editor status bar (it is hidden while Tandem's own launched Claude is running, because Tandem can't tell which session set it).
 - **Call `tandem_checkInbox` every 2-3 tool calls** (orchestrator only in a multi-agent workflow), not just at the end of a task. You cannot tell from your side whether real-time push is reaching you — the channel is often not connected, and Tandem can only tell you when *nothing at all* is subscribed, not whether the thing that is subscribed reaches you — so steady polling is the reliable path, always. It's cheap: repeat polls de-duplicate against what you've already been shown, so frequent calls don't double-report. An item that also went out as a real-time push carries `alreadyPushed: true` and still appears — the server can't confirm a push reached you, so it shows you everything rather than risk dropping it. See "User comments" above before acting on a flagged item twice. When in doubt, poll.
 - Reply to chat messages with `tandem_reply`, not annotations.
 - **Acknowledge a chat request before doing the work.** The user sees nothing in chat until you reply, and the work can take minutes. So when a chat message asks for work, first send a one-line `tandem_reply` saying what you are about to do, with `replyTo` set to that message's `id` (a channel event's `message_id`) and `inProgress: true` — the editor then shows the user it is in progress. When you finish, reply again with the result, same `replyTo`, no `inProgress`. If several messages arrived together, use the latest one's `id`. If a single reply fully answers the message, just answer it (no `inProgress`).
@@ -206,7 +206,7 @@ The wording above matches what the stdio bridge (`src/cli/mcp-stdio.ts`) already
 - **`FORMAT_ERROR`** — Usually the operation doesn't apply to this document's format: `tandem_appendContent` on a non-Markdown document, or a `tandem_editList` op the format cannot carry. It is also the fallback for a failed `tandem_save` or `tandem_open` that no more specific code covers, so read `details.errorCode` when it is present: `VERIFY_BLOCKED` means the save was refused before touching the file, and its message says why.
 - **`INVALID_PATH`** — The path was refused: a relative path (pass an absolute one), a UNC path, or `tandem_restoreBackup` on an upload or scratchpad, which has no on-disk location.
 - **`EXTERNAL_CONFLICT`** — `tandem_save` refused because the file changed on disk since it was opened, usually from an out-of-band `Edit`/`Write` (see Hard Rule 6). The user resolves it via the editor's Keep/Reload banner; `tandem_open({ force: true })` also clears it, but destructively, and only on the user's say-so — never call it yourself to route around a conflict.
-- **`NO_DOCUMENT`** — No document is open, or the `documentId` you passed doesn't match one. Call `tandem_open` first, or check `tandem_listDocuments` for what's actually open.
+- **`NO_DOCUMENT`** — No document is open, or the `documentId` you passed doesn't match one. Check `tandem_listDocuments` for what's actually open, and open a file with `tandem_open` when the user's request needs one. The error is not a reason to open something the user didn't ask for. `tandem_checkInbox`, `tandem_reply` and `tandem_open` work with no document open, and the inbox still delivers chat then: when no document resolves (none open, none active, or a `documentId` naming one that isn't open), its `summary` opens with a sentence saying so and the comment, reply and activity fields are empty. So a user can ask you to open a file before any tab exists.
 
 ## Session Handoff
 

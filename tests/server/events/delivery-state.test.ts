@@ -183,10 +183,11 @@ describe("delivery-state", () => {
 
   describe("a poll that bails out", () => {
     it("stamps pull-path liveness but does NOT close the join", () => {
-      // `tandem_checkInbox` against a closed document returns `noDocumentError`
-      // before collecting anything: no annotations, no replies, and it never
-      // reaches the CTRL_ROOM chat loop, so not one message is marked read. The
-      // user's message is still unseen.
+      // A poll that bails out before the CTRL_ROOM chat loop marks not one
+      // message read, so the user's message is still unseen. `tandem_checkInbox`
+      // used to do that on a closed document; it now reads chat with nothing
+      // open and closes the round (pinned in mcp-tool-integration.test.ts), so
+      // this is the recorder's contract for any bail-out, not a tool path.
       //
       // With the join closed at dispatch, /health reported
       // `{state: "polled", latencyMs: 240}` — "push delivered in a quarter

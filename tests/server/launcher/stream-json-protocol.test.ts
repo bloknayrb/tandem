@@ -31,6 +31,7 @@ import {
   CLAUDE_STREAM_JSON_FLAGS,
   SUPERVISOR_INITIAL_PROMPT,
   SUPERVISOR_NO_ARM_CLAUSE,
+  SUPERVISOR_NO_UNASKED_WORK_CLAUSE,
   SUPERVISOR_WAKE_PROMPT,
 } from "../../../src/shared/launcher/contract.js";
 
@@ -1045,8 +1046,8 @@ describe("supervisor restart lifecycle after relaunch/startFresh (#1267)", () =>
     const sup = createSupervisor({ integrationsBase: tmpDir });
     try {
       await sup.startFresh(spawnDir);
-      await expect(sup.startFresh(spawnDir)).resolves.toBeUndefined();
-      await expect(sup.relaunch(spawnDir)).resolves.toBeUndefined();
+      await expect(sup.startFresh(spawnDir)).resolves.toEqual({ spawned: true });
+      await expect(sup.relaunch(spawnDir)).resolves.toEqual({ spawned: true });
       expect(sup.status().running).toBe(true);
     } finally {
       await sup.stop();
@@ -1394,6 +1395,33 @@ describe("the supervisor's turns tell a launched session not to self-arm", () =>
     // Guards against the clause displacing the instruction it accompanies.
     expect(SUPERVISOR_INITIAL_PROMPT).toContain("tandem_checkInbox");
     expect(SUPERVISOR_WAKE_PROMPT).toContain("tandem_checkInbox");
+  });
+
+  it("tells both turns to do no work the user didn't ask for", () => {
+    // Bryan, 2026-10-12: no review without the user asking. The wake turn is
+    // the one a resumed or compacted session actually sees.
+    expect(SUPERVISOR_INITIAL_PROMPT).toContain(SUPERVISOR_NO_UNASKED_WORK_CLAUSE);
+    expect(SUPERVISOR_WAKE_PROMPT).toContain(SUPERVISOR_NO_UNASKED_WORK_CLAUSE);
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).toContain("unless the user asked you to");
+    // An accept/dismiss wakes the session into a non-empty inbox that asks
+    // for nothing; the tutorial invites exactly those clicks.
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).toContain("accept or dismiss is not a request");
+    // The bootstrap answers replies too, since it discharges an owed wake.
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).toContain("replies");
+  });
+
+  it("lets the session answer chat and open a document on request with none open", () => {
+    // Bryan: "the desired behavior is that tandem's claude can open documents
+    // for the user, even if none are already open". #2193's first wording told
+    // a no-document session to "just wait", which forbade that.
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).not.toContain("do not open one");
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).not.toContain("just wait");
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).toContain(
+      "Chat reaches you even when no document is open",
+    );
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).toContain(
+      "if the user asks you to open a file, open it with tandem_open",
+    );
   });
 
   it("names Monitor explicitly, so the instruction is actionable", () => {

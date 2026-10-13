@@ -19,16 +19,21 @@
  *  - Nested-txn safety: the queue callback does ZERO synchronous Y.Doc writes;
  *    the controller is handed off via `queueMicrotask`, and the streaming sink
  *    flushes only from a deferred timer — never synchronously on a delta stack.
- *  - License: the loop bypasses Surfaces A/B; the engine's dispatch-time gate
- *    (M1.1) is the only one. The chat write-back is intentionally ungated (the
- *    read-only/chat escape hatch).
+ *  - License (#1521): the local model is an AI surface, so an unlicensed
+ *    install runs no turn at all. Checked PER RUN in `onEvent` (a start-time
+ *    check would need a restart after activation); the chat write-back is
+ *    refused by `appendClaudeChatMessage` too, so a licence that lapses before
+ *    the run's first chat write ends the run; a reply already streaming
+ *    finishes. The editor itself is never refused.
  */
 import { BYO_MODELS_ENABLED } from "../../shared/constants.js";
 import type { ChatMessagePayload, TandemEvent } from "../../shared/events/types.js";
+import { AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE } from "../../shared/license-copy.js";
 import type { AgentIdentity } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { getActiveDocId, requireDocument } from "../documents/registry.js";
 import { type SubscriberKind, subscribe, unsubscribe } from "../events/queue.js";
+import { type AiRefusal, aiRefusal } from "../license/ai-refusal.js";
 import {
   appendClaudeChatMessage,
   finalizeClaudeChatMessage,
@@ -113,6 +118,8 @@ export interface CollaboratorDeps {
   // default would stop modelling the thing this loop depends on (see `wire`).
   subscribe: (cb: (e: TandemEvent) => void, kind: SubscriberKind) => void;
   unsubscribe: (cb: (e: TandemEvent) => void) => void;
+  /** The licence decision (#1521). Optional: absent means the live `aiRefusal`. */
+  aiRefusal?: () => AiRefusal | null;
 }
 
 const DEFAULT_DEPS: CollaboratorDeps = {
@@ -170,6 +177,9 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
   let cachedConfig: LocalModelConfig | null = null;
   let subscriberCb: ((e: TandemEvent) => void) | null = null;
   let current: RunSlot | null = null;
+  /** Which refusal was last logged, so a refused state logs once, not once per chat. */
+  let loggedRefusal: AiRefusal["kind"] | null = null;
+  const decideRefusal = deps.aiRefusal ?? aiRefusal;
 
   /**
    * Per-run streaming sink. Owns ONE live chat message + a coalescing buffer +
@@ -214,11 +224,20 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
       charsSinceFlush = 0;
       if (!isOwner() || buffer.length === 0) return;
       if (liveId === null) {
-        liveId = appendClaudeChatMessage(buffer, {
+        const appended = appendClaudeChatMessage(buffer, {
           documentId: ctx.docName,
           ...(ctx.replyTo ? { replyTo: ctx.replyTo } : {}),
           ...(ctx.agentIdentity ? { agentIdentity: ctx.agentIdentity } : {}),
         });
+        if (!appended.ok) {
+          // The licence lapsed between the run's start and its first write
+          // (#1521): drop the run, write nothing. Once a row is minted the run
+          // finishes, since the check is per run, not per write.
+          logRefusal(appended.refusal);
+          ctx.abort.abort();
+          return;
+        }
+        liveId = appended.id;
       } else {
         updateClaudeChatMessage(liveId, buffer);
       }
@@ -493,6 +512,16 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
     })();
   }
 
+  function logRefusal(refusal: AiRefusal): void {
+    if (loggedRefusal === refusal.kind) return;
+    loggedRefusal = refusal.kind;
+    console.error(
+      `[local-model] ${
+        refusal.kind === "unlicensed" ? AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE : refusal.message
+      }`,
+    );
+  }
+
   /** Synchronous queue callback: ZERO Y.Doc writes, cheap, non-throwing. */
   function onEvent(event: TandemEvent): void {
     if (event.type === "document:closed") {
@@ -517,6 +546,15 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
     // Re-resolve and/or log (rate-limited) so a post-boot misconfig isn't silent
     // across many chat messages.
     if (!cachedConfig) return; // inert when unconfigured (M1a)
+    // Licence admission (#1521), per run: no turn, no chat write, one stderr
+    // line per refused state. The user-facing explanation is meant to be the
+    // editor's AI-off notice (PR 2 of #1521), not a chat message.
+    const refusal = decideRefusal();
+    if (refusal) {
+      logRefusal(refusal);
+      return;
+    }
+    loggedRefusal = null;
     const docName = event.documentId ?? getActiveDocId();
     if (!docName) return;
     if (!requireDocument(docName)) return; // never fabricate a phantom room

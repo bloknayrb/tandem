@@ -60,6 +60,7 @@ import {
   resolveClaudeSessionId,
   resolveTandemUrl,
 } from "../shared/cli-runtime.js";
+import { AI_REFUSAL_RECONNECT_HINT, LICENSE_REQUIRED } from "../shared/license-copy.js";
 import { probeTandemServer } from "./preflight.js";
 
 redirectConsoleToStderr();
@@ -76,7 +77,11 @@ export const PREFLIGHT_GRACE_MS = 1500;
 // which would make every request immediately synthesize -32000.
 const MAX_TIMEOUT_MS = 2_147_483_647; // 2^31 - 1
 
-export function parseTimeoutMs(raw: string | undefined): number {
+export function parseTimeoutMs(
+  raw: string | undefined,
+  name = "TANDEM_REQUEST_TIMEOUT_MS",
+  fallback = 30_000,
+): number {
   if (raw !== undefined) {
     const parsed = parseInt(raw, 10);
     if (Number.isFinite(parsed) && parsed > 0 && parsed <= MAX_TIMEOUT_MS) {
@@ -85,10 +90,10 @@ export function parseTimeoutMs(raw: string | undefined): number {
     // Note: parseInt("3e4", 10) returns 3 (stops at 'e'), which passes validation.
     // Scientific notation lands here only when the leading integer is invalid.
     process.stderr.write(
-      `[tandem mcp-stdio] TANDEM_REQUEST_TIMEOUT_MS must be a positive integer ≤ ${MAX_TIMEOUT_MS}; ignoring "${raw}", using 30000ms default\n`,
+      `[tandem mcp-stdio] ${name} must be a positive integer ≤ ${MAX_TIMEOUT_MS}; ignoring "${raw}", using ${fallback}ms default\n`,
     );
   }
-  return 30_000;
+  return fallback;
 }
 
 const STDIO_REQUEST_TIMEOUT_MS = parseTimeoutMs(process.env.TANDEM_REQUEST_TIMEOUT_MS);
@@ -113,6 +118,60 @@ const REPLAY_DEADLINE_MS = Math.min(STDIO_REQUEST_TIMEOUT_MS, 15_000);
 /** Reconnect backoff ladder: 1s, doubling, capped. */
 const BACKOFF_INITIAL_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
+
+/**
+ * Retry cadence while the server refuses Tandem's AI because it is unlicensed
+ * (#1521): fixed at the ladder's cap, so a licence activated in the app is
+ * picked up within 30 s. One small POST per retry; latched requests are
+ * answered locally in between, so nothing pulls the retry forward.
+ *
+ * `TANDEM_LICENSE_RETRY_MS` is a test seam only — the bridge runs as a child
+ * process in its tests, where a 30 s wait per case is not affordable. Floored
+ * at 1 s, so a mistyped value cannot turn the retry into a hot loop of POSTs.
+ */
+const LICENSE_RETRY_FLOOR_MS = 1_000;
+const LICENSE_RETRY_MS = Math.max(
+  LICENSE_RETRY_FLOOR_MS,
+  parseTimeoutMs(process.env.TANDEM_LICENSE_RETRY_MS, "TANDEM_LICENSE_RETRY_MS", BACKOFF_MAX_MS),
+);
+
+/**
+ * The JSON-RPC `error` object of a licence refusal, or `undefined`. Keyed ONLY
+ * on the wire payload's `data.error === "LICENSE_REQUIRED"`: this bundle has no
+ * licence `define` and must never import the server's licence modules.
+ */
+export function licenseRefusalError(msg: JSONRPCMessage): JsonRpcErrorObject | undefined {
+  const error = (msg as { error?: unknown }).error;
+  if (error === null || typeof error !== "object") return undefined;
+  const data = (error as { data?: unknown }).data;
+  if (data === null || typeof data !== "object") return undefined;
+  return (data as { error?: unknown }).error === LICENSE_REQUIRED
+    ? (error as JsonRpcErrorObject)
+    : undefined;
+}
+
+/** `error` with the server's `initialize`-only reconnect hint removed. */
+export function withoutReconnectHint(error: JsonRpcErrorObject): JsonRpcErrorObject {
+  const suffix = ` ${AI_REFUSAL_RECONNECT_HINT}`;
+  return error.message.endsWith(suffix)
+    ? { ...error, message: error.message.slice(0, -suffix.length) }
+    : error;
+}
+
+/** A JSON-RPC error object as the upstream sent it. */
+export interface JsonRpcErrorObject {
+  code: number;
+  message: string;
+  data?: unknown;
+}
+
+/** Thrown inside `runReconnect` when the replayed handshake was licence-refused. */
+class LicenseRefusedReplay extends Error {
+  constructor() {
+    super("upstream refused re-initialize: Tandem is unlicensed");
+    this.name = "LicenseRefusedReplay";
+  }
+}
 
 /**
  * A session that stayed up longer than this is treated as healthy-then-reaped
@@ -481,26 +540,38 @@ export async function runMcpStdio(): Promise<void> {
   let warnedUnrecognized404 = false;
   /** Latched: "no captured initialize" never clears, so it would repeat forever. */
   let warnedNoHandshake = false;
+  /**
+   * The upstream's licence refusal (#1521), latched when a replayed handshake
+   * was refused because Tandem is unlicensed. While set, every request from
+   * the client is answered locally with exactly this error and notifications
+   * are dropped; the reconnect retries every `LICENSE_RETRY_MS`. Cleared by a
+   * successful replay, and by a replay that fails for any OTHER reason (a
+   * restarted server must not be met with stale licence copy).
+   */
+  let licenseLatch: JsonRpcErrorObject | null = null;
 
-  async function sendErrorResponse(
-    id: string | number,
-    message: string,
-    detail?: string,
-  ): Promise<void> {
-    const errorResponse: JSONRPCMessage = {
-      jsonrpc: "2.0",
-      id,
-      error: {
-        // -32000 is the implementation-defined server error range per
-        // JSON-RPC 2.0 §5.1 — upstream unavailability is an application-
-        // level condition, not a generic Internal Error.
-        code: -32000,
-        message,
-        ...(detail !== undefined ? { data: { detail } } : {}),
-      },
-    };
+  /**
+   * A bridge-synthesized error object. -32000 is the implementation-defined
+   * server error range per JSON-RPC 2.0 §5.1 — upstream unavailability is an
+   * application-level condition, not a generic Internal Error.
+   */
+  function bridgeError(message: string, detail?: string): JsonRpcErrorObject {
+    return { code: -32000, message, ...(detail !== undefined ? { data: { detail } } : {}) };
+  }
+
+  /** Answer `id` with the bridge's own `-32000` error. See `sendUpstreamError`. */
+  function sendErrorResponse(id: string | number, message: string, detail?: string): Promise<void> {
+    return sendUpstreamError(id, bridgeError(message, detail));
+  }
+
+  /**
+   * Answer `id` with a JSON-RPC error object — the bridge's own (via
+   * `sendErrorResponse`) or an upstream one relayed verbatim (the licence
+   * latch, #1521). The ONE writer of synthesized errors, and total.
+   */
+  async function sendUpstreamError(id: string | number, error: JsonRpcErrorObject): Promise<void> {
     try {
-      await stdio.send(errorResponse);
+      await stdio.send({ jsonrpc: "2.0", id, error } as JSONRPCMessage);
     } catch (err) {
       // stdio already torn down; log so synth failures during shutdown
       // (e.g., http.onclose racing stdio.onclose) aren't silently dropped —
@@ -510,13 +581,15 @@ export async function runMcpStdio(): Promise<void> {
       // Reporting a failure must not itself be able to fail. stderr can EPIPE
       // — most likely exactly here, while the host is tearing the child down,
       // which is when stdio.send() fails in the first place. An escaping throw
-      // would propagate out of every `await sendErrorResponse(...)` in
+      // would propagate out of every `await sendUpstreamError(...)` in
       // `synthesizePending`, and from there into the module's
       // `unhandledRejection` handler, which exits 1. This function's callers
       // treat it as infallible; it has to be.
       try {
         process.stderr.write(
-          `[tandem mcp-stdio] failed to send synthesized error for id ${id}: ${detail}\n`,
+          // Names the code, so a lost licence refusal (-32003) is told apart
+          // from the bridge's own outage errors (-32000) in the log.
+          `[tandem mcp-stdio] failed to send error ${error.code} for id ${id}: ${detail}\n`,
         );
       } catch {
         // Nowhere left to report to.
@@ -721,14 +794,21 @@ export async function runMcpStdio(): Promise<void> {
     }
   }
 
-  async function synthesizePending(message: string, detail?: string): Promise<void> {
-    if (pendingRequests.size === 0) return;
-    const ids = [...pendingRequests.keys()];
+  /**
+   * Answer every pending request — plus `extraIds`, for requests held only in
+   * the reconnect queue — with `error`, once each.
+   */
+  async function synthesizePending(
+    error: JsonRpcErrorObject,
+    extraIds: ReadonlyArray<string | number> = [],
+  ): Promise<void> {
+    const ids = [...new Set([...pendingRequests.keys(), ...extraIds])];
+    if (ids.length === 0) return;
     // Synchronous before any await: clear all timers + drain map atomically.
     // Timer callbacks that are already queued observe empty map and return early.
     for (const handle of pendingRequests.values()) clearTimeout(handle);
     pendingRequests.clear();
-    await Promise.all(ids.map((id) => sendErrorResponse(id, message, detail)));
+    await Promise.all(ids.map((id) => sendUpstreamError(id, error)));
   }
 
   const shutdown = async (
@@ -761,7 +841,7 @@ export async function runMcpStdio(): Promise<void> {
       reconnectQueue.splice(0);
       if (synth) {
         await synthesizeBuffered(synth.message, synth.detail);
-        await synthesizePending(synth.message, synth.detail);
+        await synthesizePending(bridgeError(synth.message, synth.detail));
       }
       await http.close().catch((err: unknown) => {
         const detail = err instanceof Error ? err.message : String(err);
@@ -862,7 +942,30 @@ export async function runMcpStdio(): Promise<void> {
   function captureNegotiated(msg: JSONRPCMessage): void {
     if (negotiatedProtocolVersion !== undefined) return;
     const identity = readHandshakeIdentity(msg);
-    if (identity?.protocolVersion === undefined) return;
+    // The client's own `initialize` was refused because Tandem is unlicensed
+    // (#1521). It was relayed verbatim, so no baseline exists — the #1805
+    // shape: the first replay admitted after activation IS the first
+    // handshake, so it seeds the baseline instead of failing closed forever
+    // with "no handshake baseline".
+    if (identity === undefined) {
+      const responseId = getResponseId(msg);
+      if (
+        handshakeInit !== undefined &&
+        responseId !== undefined &&
+        responseId === getRequestId(handshakeInit) &&
+        licenseRefusalError(msg) !== undefined
+      ) {
+        if (!deferredHandshake) {
+          process.stderr.write(
+            "[tandem mcp-stdio] initialize refused by Tandem's license check; " +
+              "reconnect from the host after activating\n",
+          );
+        }
+        deferredHandshake = true;
+      }
+      return;
+    }
+    if (identity.protocolVersion === undefined) return;
     setBaseline({ ...identity, protocolVersion: identity.protocolVersion });
     lastSessionOpenedAt = Date.now();
   }
@@ -889,6 +992,14 @@ export async function runMcpStdio(): Promise<void> {
     // true across a reconnect and must never be reset to false — that would
     // route stdin into the one-shot preReadyBuffer, which is only ever drained
     // once, at startup.
+    //
+    // Licence latch (#1521) BEFORE the reconnecting check, so latched traffic
+    // is answered now rather than queued behind a retry up to 30 s away.
+    if (licenseLatch) {
+      const id = getRequestId(msg);
+      if (id !== undefined) void sendUpstreamError(id, licenseLatch);
+      return;
+    }
     if (reconnecting) {
       enqueueForReconnect(msg);
       return;
@@ -1138,7 +1249,10 @@ export async function runMcpStdio(): Promise<void> {
     reconnectPending = false;
     reconnecting = true;
     const replayId = makeReplayId();
-    reconnectAttempts += 1;
+    // While licence-latched (#1521) a retry is a scheduled poll for activation,
+    // not an outage attempt: it neither counts nor announces itself every 30 s.
+    // The reason was logged once, when the latch was set.
+    if (!licenseLatch) reconnectAttempts += 1;
 
     try {
       const old = http;
@@ -1148,11 +1262,13 @@ export async function runMcpStdio(): Promise<void> {
       // is the only field that joins this log to the server's own
       // `Reaping idle MCP session <id>`. Diagnosing #1588 took correlating
       // those two files by hand; this is what makes that a grep.
-      process.stderr.write(
-        `[tandem mcp-stdio] re-initializing upstream session ` +
-          `(attempt ${reconnectAttempts}, reason: ${reason}, ` +
-          `stale session ${old.sessionId ?? "<none>"})\n`,
-      );
+      if (!licenseLatch) {
+        process.stderr.write(
+          `[tandem mcp-stdio] re-initializing upstream session ` +
+            `(attempt ${reconnectAttempts}, reason: ${reason}, ` +
+            `stale session ${old.sessionId ?? "<none>"})\n`,
+        );
+      }
       generation += 1;
       // The SDK's close() calls onclose unconditionally and our onclose is
       // shutdown(1), so closing the old transport must not reach it or the
@@ -1208,6 +1324,23 @@ export async function runMcpStdio(): Promise<void> {
 
       const identity = readHandshakeIdentity(response);
       if (identity === undefined) {
+        // #1521: refused because Tandem is unlicensed. Latch the server's own
+        // error so the client hears it verbatim, not "session lost".
+        const replayed = licenseRefusalError(response);
+        if (replayed) {
+          // The server appends its reconnect hint to any refused `initialize`,
+          // and this replay is one. But the host's own session never failed
+          // and the latch heals by itself, so the hint would be wrong advice.
+          const refusal = withoutReconnectHint(replayed);
+          if (!licenseLatch) {
+            process.stderr.write(
+              `[tandem mcp-stdio] upstream refused the session: ${refusal.message} ` +
+                `(retrying every ${LICENSE_RETRY_MS}ms)\n`,
+            );
+          }
+          licenseLatch = refusal;
+          throw new LicenseRefusedReplay();
+        }
         throw new Error(
           `upstream rejected re-initialize: ${JSON.stringify((response as { error?: unknown }).error)}`,
         );
@@ -1324,6 +1457,13 @@ export async function runMcpStdio(): Promise<void> {
       // The generation key already makes these unreachable; clearing bounds
       // the set's growth over a day-long session.
       noRetryKeys.clear();
+      // Admitted again (#1521): stop answering locally. Before the drain, and
+      // before the finally clears `reconnecting`.
+      if (licenseLatch) {
+        licenseLatch = null;
+        backoffMs = BACKOFF_INITIAL_MS;
+        process.stderr.write("[tandem mcp-stdio] upstream admitted the session again\n");
+      }
       // Synchronous, and before the finally clears `reconnecting`, so no
       // message is ever neither queued nor sent.
       drainReconnectQueue();
@@ -1336,6 +1476,28 @@ export async function runMcpStdio(): Promise<void> {
       // took N tries", and the next outage starts from 1.
       reconnectAttempts = 0;
     } catch (err) {
+      if (err instanceof LicenseRefusedReplay && licenseLatch) {
+        // #1521: not an outage — the server is up and refusing the AI. Answer
+        // pending and queued requests with the server's own refusal (never
+        // "session lost"), retry at a fixed `LICENSE_RETRY_MS`, and say so
+        // once. Recovery is armed first, as below, so a throwing report
+        // cannot strand it.
+        lastSessionOpenedAt = 0;
+        reconnectPending = true;
+        armReconnectRetry(LICENSE_RETRY_MS, "retry while unlicensed");
+        const queuedIds = reconnectQueue
+          .splice(0)
+          .map((m) => getRequestId(m))
+          .filter((id): id is string | number => id !== undefined);
+        await synthesizePending(licenseLatch, queuedIds);
+        return;
+      }
+      // Any other failure clears the latch: a restarted or unreachable server
+      // must not be answered with stale licence copy.
+      if (licenseLatch) {
+        licenseLatch = null;
+        process.stderr.write("[tandem mcp-stdio] licence refusal cleared (upstream changed)\n");
+      }
       const detail = err instanceof Error ? err.message : String(err);
       process.stderr.write(`[tandem mcp-stdio] re-initialize failed: ${detail}\n`);
       // Soft give-up: answer what is outstanding and stay alive.
@@ -1376,7 +1538,7 @@ export async function runMcpStdio(): Promise<void> {
       // never throws; recovery is armed first so the contract holds even if the
       // reporting fails.
       armReconnectRetry(delayMs, "retry after failed re-initialize");
-      await synthesizePending("Tandem HTTP upstream session lost", detail).catch(
+      await synthesizePending(bridgeError("Tandem HTTP upstream session lost", detail)).catch(
         (synthErr: unknown) => {
           process.stderr.write(
             `[tandem mcp-stdio] failed to report the lost session to the client: ${

@@ -1034,8 +1034,7 @@ function transitionPending(
   // client-only, so an MCP accept has never applied `suggestedText` — it flipped
   // status and left the document untouched, which is the opposite of what the
   // tool description promised. Applying it here would make this tool write
-  // document content, falsifying `license-gate-coverage.test.ts`'s claim that it
-  // does not.
+  // document content, which nothing in its contract or description admits to.
   //
   // Dismiss stays open to every non-private record, including a user's comment —
   // the existing flow, with `resolvedBy: "claude"` as its only trace.

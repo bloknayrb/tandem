@@ -1182,6 +1182,75 @@ describe("integrations API routes", () => {
       // refresher ever set it. The response shape is deliberately unchanged
       // (a declined skill is not a failed integration); the decline rides the
       // refresher's channel, which `/api/launcher/status` already surfaces.
+      // #2180: a first wizard Apply used to leave the launcher believing the
+      // boot-time plan (nothing configured) until Tandem restarted.
+      describe("onClaudeCodeApplied (#2180)", () => {
+        async function applyWith(
+          onClaudeCodeApplied: () => void,
+          detect: IntegrationsRoutesDeps["detectTargets"],
+        ): Promise<{ status: number; results: Array<{ status: string }> }> {
+          const configPath = path.join(tmpDir, "claude-config.json");
+          fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {} }));
+          await deps.store.write({
+            schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+            integrations: [
+              {
+                kind: "claude-code",
+                id: "cc-1",
+                label: "Claude Code",
+                configPath,
+                transport: "http",
+                url: "http://127.0.0.1:3479",
+              },
+            ],
+          });
+          const app = makeApp({
+            ...deps,
+            detectTargets: detect,
+            shouldRegisterChannelShim: () => false,
+            onClaudeCodeApplied,
+          });
+          const nonce = await freshNonce(app);
+          const res = await request(
+            app,
+            "POST",
+            API_INTEGRATIONS_APPLY,
+            { ids: ["cc-1"], confirmationNonce: nonce },
+            TAURI_ORIGIN,
+          );
+          return {
+            status: res.status,
+            results: (res.body as { results: Array<{ status: string }> }).results,
+          };
+        }
+
+        it("is called once after a claude-code entry applies, after the skill install", async () => {
+          const hook = vi.fn();
+          const configPath = path.join(tmpDir, "claude-config.json");
+          const { status, results } = await applyWith(hook, () => [
+            { label: "Claude Code", configPath, kind: "claude-code" },
+          ]);
+          expect(status).toBe(200);
+          expect(results[0]?.status).toBe("applied");
+          expect(hook).toHaveBeenCalledTimes(1);
+          expect(installSkillSpy.mock.invocationCallOrder[0]).toBeLessThan(
+            hook.mock.invocationCallOrder[0] ?? 0,
+          );
+        });
+
+        it("guard: is not called when nothing applied", async () => {
+          const hook = vi.fn();
+          const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+          try {
+            const { results } = await applyWith(hook, () => []);
+            expect(results[0]?.status).not.toBe("applied");
+            expect(hook).not.toHaveBeenCalled();
+          } finally {
+            errorSpy.mockRestore();
+          }
+        });
+      });
+
       describe("a declined skill install reaches the skill-refresh error channel", () => {
         async function applyOnce(): Promise<{
           status: number;

@@ -12,6 +12,7 @@ import { CTRL_ROOM } from "../../shared/constants.js";
 import { ChannelErrorCodeSchema } from "../../shared/types.js";
 import { recordPushConsumerEvent } from "../events/push-liveness.js";
 import { sseHandler } from "../events/sse.js";
+import { aiRefusal, sendAiRefusal } from "../license/ai-refusal.js";
 import { sanitizeForLog } from "../log-sanitize.js";
 import { clearCtrlChatDurably } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
@@ -51,6 +52,19 @@ function sweepStalePermissions(): void {
   for (const [id, perm] of pendingPermissions) {
     if (now - perm.createdAt > PERMISSION_TTL_MS) pendingPermissions.delete(id);
   }
+}
+
+/**
+ * Licence admission for the AI-facing channel routes (#1521): answer 403 with
+ * the refusal envelope and report that the caller must stop. Checked before the
+ * route touches any state. The shim's diagnostics (`channel-awareness`,
+ * `channel-error`) stay open — they carry no AI content.
+ */
+function refuseIfUnlicensed(res: Response): boolean {
+  const refusal = aiRefusal();
+  if (!refusal) return false;
+  sendAiRefusal(res, refusal);
+  return true;
 }
 
 /** Register channel-related routes (/api/events, /api/channel-*, /api/chat) on the Express app. */
@@ -132,6 +146,10 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
   // Channel reply: shim forwards Claude's chat replies
   app.options(API_CHANNEL_REPLY, apiMiddleware);
   app.post(API_CHANNEL_REPLY, apiMiddleware, (req: Request, res: Response) => {
+    // Refusal first, before body validation, like every other AI channel
+    // route: an unlicensed caller hears why it is refused, not a 400 about its
+    // body. `appendClaudeChatMessage` refuses again below, as defence.
+    if (refuseIfUnlicensed(res)) return;
     const { text, documentId, replyTo, inProgress } = (req.body ?? {}) as Record<string, unknown>;
     if (typeof text !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "text is required" });
@@ -145,15 +163,22 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     }
     // Narrow the untrusted body fields, then route through the shared Claude-chat
     // write path that `tandem_reply` and the local-model collaborator also use.
-    const id = appendClaudeChatMessage(text, {
+    const appended = appendClaudeChatMessage(text, {
       ...(typeof documentId === "string" ? { documentId } : {}),
       ...(typeof replyTo === "string" ? { replyTo } : {}),
       ...(inProgress === true ? { inProgress: true } : {}),
     });
+    // Licence (#1521): `appendClaudeChatMessage` refuses before touching the
+    // Y.Doc, and this answers before `markUserChatRead`, so a refused reply
+    // writes nothing and stamps nothing read.
+    if (!appended.ok) {
+      sendAiRefusal(res, appended.refusal);
+      return;
+    }
     const unmatched = typeof replyTo === "string" && !markUserChatRead(replyTo);
     res.json({
       sent: true,
-      messageId: id,
+      messageId: appended.id,
       ...(unmatched ? { warning: REPLY_TO_UNMATCHED_WARNING } : {}),
     });
   });
@@ -168,6 +193,7 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
   // sweeps on a timer (see `sweepStalePermissions`).
   app.options(API_CHANNEL_PERMISSION, apiMiddleware);
   app.post(API_CHANNEL_PERMISSION, apiMiddleware, (req: Request, res: Response) => {
+    if (refuseIfUnlicensed(res)) return;
     const { requestId, toolName, description } = (req.body ?? {}) as Record<string, unknown>;
     if (typeof requestId !== "string" || typeof toolName !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "requestId and toolName required" });
@@ -200,6 +226,7 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
   // Browser submits verdict
   app.options(API_CHANNEL_PERMISSION_VERDICT, apiMiddleware);
   app.post(API_CHANNEL_PERMISSION_VERDICT, apiMiddleware, (req: Request, res: Response) => {
+    if (refuseIfUnlicensed(res)) return;
     const { requestId, approved } = (req.body ?? {}) as Record<string, unknown>;
     if (typeof requestId !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "requestId is required" });

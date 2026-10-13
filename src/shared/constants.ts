@@ -2,9 +2,11 @@ export const DEFAULT_WS_PORT = 3478;
 export const DEFAULT_MCP_PORT = 3479;
 
 /**
- * Trial length in days (ADR-040 §5: equal to the evaluation period in the
- * `LICENSE` Additional Use Grant, which `tests/docs/trial-length-claims.test.ts`
- * pins to this number).
+ * Trial length in days (ADR-040 §5: equal to clause (a) of the `LICENSE`
+ * Additional Use Grant: 14 days of use, including the AI features, from the first
+ * launch of v1.0 or later on a device, counted once across versions; after that
+ * the AI features need a key). `tests/docs/trial-length-claims.test.ts` pins this
+ * number to that clause.
  *
  * Lives in `shared` so the *client* copy ("N of 14 days left") is generated from
  * the same number the server clock uses, rather than hand-written in each
@@ -52,8 +54,10 @@ export const TANDEM_SITE_URL = "https://tandem.ink";
 
 /**
  * Where to buy a license. Referenced by every surface that can tell a user their
- * trial has ended — the wall, the trial banner, the MCP `RESTRICTED_MESSAGE`,
- * `tandem license`, and the HTTP 403 body. Telling someone to "activate a
+ * trial has ended — the wall, the trial banner, Settings' License tab
+ * (`SettingsLicenseTab.svelte`), the AI refusal copy in `license-copy.ts` (the
+ * MCP error and every `/api` 403 body), and `tandem license`. Never shown for an
+ * installed licence that fails to verify. Telling someone to "activate a
  * license" without saying where to get one is the most avoidable dead end in the
  * whole flow.
  *

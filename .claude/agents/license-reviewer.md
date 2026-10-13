@@ -80,8 +80,8 @@ When unsure between two tags, take the one that changes less.
 
 ## Constraints
 
-- `tests/docs/trial-length-claims.test.ts` pins license prose: every day count in a trial or
-  evaluation paragraph must be 14, and `LICENSE` must contain "one-time purchase" and
+- `tests/docs/trial-length-claims.test.ts` pins license prose: every day count in a paragraph that
+  mentions a trial, an evaluation or a first launch must be 14, and `LICENSE` must contain "one-time purchase" and
   "before version 1.0.0". Read it before editing any trial wording.
 - Edit files only. Never commit, and never run a git command that changes state.
 - The repository is public. Counsel questions go where the caller says, not into a tracked file,

@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type ClosableServer,
+  countDistinctClients,
   createMcpSessionRegistry,
+  hasLiveEntryFor,
+  isLiveEntry,
+  LIVE_RECENT_MS,
 } from "../../src/server/mcp/transport-registry.js";
 
 /** Minimal stand-in for an McpServer — the registry only ever calls close(). */
@@ -298,5 +302,91 @@ describe("open SSE streams pin a session against the reaper", () => {
 
     expect(evicted).toEqual(["pinned-but-old"]);
     expect(reg.get("recent")).toBeDefined();
+  });
+});
+
+describe("countDistinctClients", () => {
+  it("counts entries sharing a Claude session id once, case-insensitively", () => {
+    expect(
+      countDistinctClients([{ claudeSessionId: "abc-DEF" }, { claudeSessionId: "ABC-def" }]),
+    ).toBe(1);
+  });
+
+  it("counts every entry without a Claude session id", () => {
+    expect(countDistinctClients([{}, {}])).toBe(2);
+  });
+
+  it("adds distinct ids and anonymous entries together", () => {
+    expect(
+      countDistinctClients([
+        { claudeSessionId: "a" },
+        { claudeSessionId: "a" },
+        { claudeSessionId: "b" },
+        {},
+      ]),
+    ).toBe(3);
+  });
+
+  it("is zero for an empty registry", () => {
+    expect(countDistinctClients([])).toBe(0);
+  });
+});
+
+describe("hasLiveEntryFor", () => {
+  const ID = "11111111-1111-4111-8111-111111111111";
+  const SPAWN = 5_000;
+  const live = { claudeSessionId: ID, createdAt: SPAWN + 10, openStreams: 1 };
+
+  it("matches a live entry opened after the spawn", () => {
+    expect(hasLiveEntryFor([live], ID, SPAWN)).toBe(true);
+  });
+
+  it("matches an entry opened exactly at the spawn", () => {
+    expect(hasLiveEntryFor([{ ...live, createdAt: SPAWN }], ID, SPAWN)).toBe(true);
+  });
+
+  // The previous child, resumed under the same UUID, whose bridge never sent
+  // DELETE: its entry lingers until reaped and must not turn the new child green.
+  it("ignores the same id from before the spawn, even with a stream open", () => {
+    expect(hasLiveEntryFor([{ ...live, createdAt: SPAWN - 1 }], ID, SPAWN)).toBe(false);
+  });
+
+  it("ignores an entry whose stream has closed", () => {
+    expect(hasLiveEntryFor([{ ...live, openStreams: 0 }], ID, SPAWN)).toBe(false);
+  });
+
+  it("ignores other ids and anonymous entries", () => {
+    expect(
+      hasLiveEntryFor(
+        [
+          { ...live, claudeSessionId: "22222222-2222-4222-8222-222222222222" },
+          { createdAt: SPAWN + 10, openStreams: 1 },
+        ],
+        ID,
+        SPAWN,
+      ),
+    ).toBe(false);
+  });
+
+  it("compares ids case-insensitively", () => {
+    expect(hasLiveEntryFor([{ ...live, claudeSessionId: ID.toUpperCase() }], ID, SPAWN)).toBe(true);
+  });
+});
+
+describe("isLiveEntry", () => {
+  const NOW = 1_000_000;
+
+  it("is live while a stream is open, however long since the last request", () => {
+    expect(isLiveEntry({ openStreams: 1, lastSeenAt: NOW - 10 * LIVE_RECENT_MS }, NOW)).toBe(true);
+  });
+
+  it("is live with no stream while a request started recently", () => {
+    expect(isLiveEntry({ openStreams: 0, lastSeenAt: NOW - LIVE_RECENT_MS + 1 }, NOW)).toBe(true);
+  });
+
+  // The ghost: a client that exited without DELETE closes its stream and stops
+  // making requests, but the reaper keeps the entry for up to ~35 min.
+  it("is not live with no stream once the recent window has passed", () => {
+    expect(isLiveEntry({ openStreams: 0, lastSeenAt: NOW - LIVE_RECENT_MS }, NOW)).toBe(false);
   });
 });

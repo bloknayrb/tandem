@@ -185,6 +185,21 @@ describe("createReachabilityCheck", () => {
     expect(calls()).toBe(afterVerify); // poll never started
   });
 
+  // The wizard asks the user to restart Claude; the old process's leftover
+  // entry must not latch "connected" before the new one arrives.
+  it("a leftover-only session does not latch connected; a live one does", async () => {
+    const { fetchFn } = healthStub([
+      mkResponse({ status: "ok", hasSession: true, sessionCount: 0 }),
+      mkResponse({ status: "ok", hasSession: true, sessionCount: 1 }),
+    ]);
+    const h = mount({ targets: [{ id: "claude-code", transport: "http" }], fetchFn });
+    await flush();
+    expect(h.get().claudeConnected).toBe(false);
+    await vi.advanceTimersByTimeAsync(100);
+    await flush();
+    expect(h.get().claudeConnected).toBe(true);
+  });
+
   it("latch is monotonic: once connected, a /health blip never demotes it", async () => {
     // Verify false, tick #2 true (latch), tick #3 throws — must stay connected.
     const { fetchFn } = healthStub([

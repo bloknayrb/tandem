@@ -803,6 +803,12 @@ async function checkLauncherAvailable(d: ActionDeps): Promise<boolean> {
       d.notify("info", "Claude is starting up — try again in a moment.");
       return false;
     }
+    // #2180: the launcher IS present; there is just no Claude Code setup for
+    // it to start, so point at the fix rather than at the build.
+    if (status.reason === "not-configured") {
+      d.notify("info", "Claude Code isn't set up in Tandem yet. Use Connect AI to set it up.");
+      return false;
+    }
     d.notify("warning", "Claude launcher not active in this Tandem build.");
     return false;
   }

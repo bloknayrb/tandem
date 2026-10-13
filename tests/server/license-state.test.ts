@@ -624,3 +624,62 @@ describe("activateLicense", () => {
     await expect(activateLicense(dir, blob, makeVerify(publicKey))).rejects.toThrow();
   });
 });
+
+describe("an existing but unusable license.json (#1521)", () => {
+  // Expired trial underneath, so the state is `restricted` and the only
+  // question is which refusal the licence file earns.
+  function expiredDir(): string {
+    const dir = tmp();
+    fs.writeFileSync(
+      trialFilePath(dir),
+      JSON.stringify({ version: 1, firstRunAt: new Date(Date.now() - 30 * DAY).toISOString() }),
+    );
+    return dir;
+  }
+  const resolve = (dir: string) =>
+    resolveLicenseState({ appDataDir: dir, now: () => Date.now(), gateEnabled: true });
+
+  beforeEach(() => _resetLicenseWarningsForTests());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("a transient read error (EBUSY) is unverifiable, never unlicensed, and never unlocks", () => {
+    const dir = expiredDir();
+    fs.writeFileSync(licenseFilePath(dir), JSON.stringify({ version: 1, blob: "x" }));
+    const real = fs.readFileSync;
+    const spy = vi.spyOn(fs, "readFileSync").mockImplementation(((
+      p: fs.PathOrFileDescriptor,
+      o?: unknown,
+    ) => {
+      if (p === licenseFilePath(dir)) {
+        throw Object.assign(new Error("EBUSY: resource busy"), { code: "EBUSY" });
+      }
+      return real(p, o as never);
+    }) as typeof fs.readFileSync);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(resolve(dir)).toMatchObject({
+        gateActive: true,
+        status: "restricted",
+        licenseUnverifiable: "UNKNOWN",
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each([
+    ["unparseable JSON", "{not json"],
+    ["a body with no blob", JSON.stringify({ version: 1 })],
+  ])("%s is unverifiable (MALFORMED)", (_label, body) => {
+    const dir = expiredDir();
+    fs.writeFileSync(licenseFilePath(dir), body);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(resolve(dir)).toMatchObject({ status: "restricted", licenseUnverifiable: "MALFORMED" });
+  });
+
+  it("an ABSENT license.json is plain unlicensed (positive twin)", () => {
+    const state = resolve(expiredDir());
+    expect(state).toMatchObject({ status: "restricted" });
+    expect((state as { licenseUnverifiable?: string }).licenseUnverifiable).toBeUndefined();
+  });
+});
