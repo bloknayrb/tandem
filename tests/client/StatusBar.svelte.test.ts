@@ -41,7 +41,7 @@ describe("StatusBar AI action indicator", () => {
 
   // #1521: the new action must reach its own handler, never the connect or
   // restart branch a binary ternary would route it to.
-  it("the unlicensed chip opens license settings and nothing else", async () => {
+  it("the ai-off chip opens license settings and nothing else", async () => {
     const onConnectAi = vi.fn();
     const onRestartClaude = vi.fn();
     const onOpenLicenseSettings = vi.fn();
@@ -49,7 +49,7 @@ describe("StatusBar AI action indicator", () => {
       props: {
         ...baseProps,
         aiState: "stopped",
-        aiChip: "unlicensed",
+        aiChip: "ai-off",
         aiNotice: "unlicensed",
         onConnectAi,
         onRestartClaude,
@@ -57,7 +57,7 @@ describe("StatusBar AI action indicator", () => {
       },
     });
     const indicator = getByTestId("status-ai-indicator");
-    expect(indicator.getAttribute("data-ai-action")).toBe("unlicensed");
+    expect(indicator.getAttribute("data-ai-action")).toBe("ai-off");
     expect(indicator.textContent).toContain("AI off");
     await fireEvent.click(indicator);
     expect(onOpenLicenseSettings).toHaveBeenCalledOnce();
@@ -71,7 +71,7 @@ describe("StatusBar AI action indicator", () => {
 
   it("an unverifiable holder is never told 'unlicensed' or shown the purchase URL", () => {
     const { getByTestId } = render(StatusBar, {
-      props: { ...baseProps, aiState: "stopped", aiChip: "unlicensed", aiNotice: "unverifiable" },
+      props: { ...baseProps, aiState: "stopped", aiChip: "ai-off", aiNotice: "unverifiable" },
     });
     const indicator = getByTestId("status-ai-indicator");
     for (const text of [
@@ -86,7 +86,7 @@ describe("StatusBar AI action indicator", () => {
 
   it("the unlicensed twin's copy does name the state", () => {
     const { getByTestId } = render(StatusBar, {
-      props: { ...baseProps, aiState: "stopped", aiChip: "unlicensed", aiNotice: "unlicensed" },
+      props: { ...baseProps, aiState: "stopped", aiChip: "ai-off", aiNotice: "unlicensed" },
     });
     expect(getByTestId("status-ai-indicator").getAttribute("title")).toContain("unlicensed");
   });

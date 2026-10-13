@@ -112,7 +112,7 @@ describe("evaluateLicence", () => {
   it("names an unverifiable licence as such", () => {
     const licence = {
       gateActive: true as const,
-      status: "restricted",
+      status: "restricted" as const,
       licenseUnverifiable: "BAD_SIGNATURE",
     };
     expect(licenceOffLabel(licence)).toBe("(license not verified)");

@@ -233,13 +233,13 @@ describe("addressedAiNotice", () => {
  * license is activated.
  */
 describe("addressedAiNotice — licence refusal", () => {
-  it("the unlicensed chip gives ai-off", () => {
-    expect(addressedAiNotice({ ...base, chip: "unlicensed" })).toEqual({ kind: "ai-off" });
+  it("the ai-off chip gives ai-off", () => {
+    expect(addressedAiNotice({ ...base, chip: "ai-off" })).toEqual({ kind: "ai-off" });
   });
 
   it("Solo still outranks it, and an unreachable server still reads offline", () => {
-    expect(addressedAiNotice({ ...base, chip: "unlicensed", soloMode: true })).toBeNull();
-    expect(addressedAiNotice({ ...base, chip: "unlicensed", serverUnreachable: true })).toEqual({
+    expect(addressedAiNotice({ ...base, chip: "ai-off", soloMode: true })).toBeNull();
+    expect(addressedAiNotice({ ...base, chip: "ai-off", serverUnreachable: true })).toEqual({
       kind: "offline",
     });
   });
@@ -266,11 +266,11 @@ describe("noticeAction", () => {
     expect(t.cta).toBeNull();
   });
 
-  it("ai-off: the unlicensed CTA, and copy naming neither kind", () => {
+  it("ai-off: the ai-off CTA, and copy naming neither kind", () => {
     const t = act({ kind: "ai-off" });
     expect(t.idPrefix).toBe("ai-off");
     expect(t.severity).toBe("warning");
-    expect(t.cta).toBe("unlicensed");
+    expect(t.cta).toBe("ai-off");
     expect(t.message).not.toMatch(/unlicensed/i);
     expect(t.message).not.toMatch(/activate/i);
     expect(t.message).toContain("Settings → License");

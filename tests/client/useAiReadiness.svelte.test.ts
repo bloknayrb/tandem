@@ -958,7 +958,7 @@ describe("createAiReadiness", () => {
  * to stop, so the wrong branch is actively harmful, not merely mislabelled.
  */
 describe("AI_CTA", () => {
-  const CHIPS: Exclude<AiChip, null>[] = ["connect", "setup", "sign-in", "restart", "unlicensed"];
+  const CHIPS: Exclude<AiChip, null>[] = ["connect", "setup", "sign-in", "restart", "ai-off"];
 
   it("covers every non-null chip with non-empty copy", () => {
     // Guards against a future union member landing with no entry: the type
@@ -991,12 +991,12 @@ describe("AI_CTA", () => {
 
   // #1521. One entry serves both refusal kinds, so its copy names neither and
   // never says the trial ended (ADR-040 decision 5).
-  it("routes 'unlicensed' to license settings, with kind-neutral copy", () => {
-    expect(AI_CTA.unlicensed.action).toBe("open-license-settings");
+  it("routes 'ai-off' to license settings, with kind-neutral copy", () => {
+    expect(AI_CTA["ai-off"].action).toBe("open-license-settings");
     for (const text of [
-      AI_CTA.unlicensed.label,
-      AI_CTA.unlicensed.title,
-      AI_CTA.unlicensed.ariaLabel,
+      AI_CTA["ai-off"].label,
+      AI_CTA["ai-off"].title,
+      AI_CTA["ai-off"].ariaLabel,
     ]) {
       expect(text).not.toMatch(/trial|expired|unlicensed|activate/i);
     }
@@ -1755,24 +1755,24 @@ describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
     const stoppedWith = (lastError?: string) => () =>
       mkResponse({ available: true, running: false, ...(lastError ? { lastError } : {}) });
 
-    it("chip is 'unlicensed' in Tandem mode with a stopped launcher", async () => {
+    it("chip is 'ai-off' in Tandem mode with a stopped launcher", async () => {
       globalThis.fetch = routedFetch({
         launcher: stoppedWith(),
         health: mkResponse({ status: "ok", hasSession: false }),
       });
       const h = mount({ aiNotice: "unlicensed" });
       await settle();
-      expect(h.get().chip).toBe("unlicensed");
+      expect(h.get().chip).toBe("ai-off");
     });
 
-    it("chip is 'unlicensed' in Solo too — the refusal outranks Solo", async () => {
+    it("chip is 'ai-off' in Solo too — the refusal outranks Solo", async () => {
       globalThis.fetch = routedFetch({
         launcher: stoppedWith(),
         health: mkResponse({ status: "ok", hasSession: false }),
       });
       const h = mount({ aiNotice: "unverifiable", soloMode: true });
       await settle();
-      expect(h.get().chip).toBe("unlicensed");
+      expect(h.get().chip).toBe("ai-off");
     });
 
     // Once the refusal clears, a launcher still reporting `unlicensed` is the
@@ -1781,14 +1781,14 @@ describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
     // that never clears the code (a CLI `tandem activate`, a licence file that
     // starts verifying, an activation after a user Stop) must not hide the
     // Restart that now succeeds.
-    it("chip is 'unlicensed' with lastError 'unlicensed'; cleared, it waits for one licence re-read, then offers restart", async () => {
+    it("chip is 'ai-off' with lastError 'unlicensed'; cleared, it waits for one licence re-read, then offers restart", async () => {
       globalThis.fetch = routedFetch({
         launcher: stoppedWith("unlicensed"),
         health: mkResponse({ status: "ok", hasSession: false }),
       });
       const off = mount({ aiNotice: "unlicensed" });
       await settle();
-      expect(off.get().chip).toBe("unlicensed");
+      expect(off.get().chip).toBe("ai-off");
       cleanup();
 
       let finishReread: () => void = () => {};

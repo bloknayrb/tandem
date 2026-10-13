@@ -12,8 +12,8 @@ function makeProps(overrides: Record<string, unknown> = {}) {
   return {
     connected: true,
     aiChip: null,
-    // What readiness guarantees: a refusal exactly when the chip is `unlicensed`.
-    aiNotice: (overrides.aiChip === "unlicensed" ? "unlicensed" : null) as AiNotice | null,
+    // What readiness guarantees: a refusal exactly when the chip is `ai-off`.
+    aiNotice: (overrides.aiChip === "ai-off" ? "unlicensed" : null) as AiNotice | null,
     onOpenFile: vi.fn(),
     onRetry: vi.fn(),
     onOpenSettings: vi.fn(),
@@ -73,8 +73,8 @@ describe("EmptyState", () => {
         expectedTestId: "empty-state-restart-claude",
       },
       {
-        why: "aiChip 'unlicensed' (#1521) → Open license settings CTA, no positioning line",
-        aiChip: "unlicensed",
+        why: "aiChip 'ai-off' (#1521) → Open license settings CTA, no positioning line",
+        aiChip: "ai-off",
         expectSecondary: false,
         expectedTestId: "empty-state-open-license-settings",
       },
@@ -111,10 +111,10 @@ describe("EmptyState", () => {
       expect(container.textContent).not.toContain("Tandem works alongside Claude");
     });
 
-    it("the unlicensed CTA opens license settings and nothing else", async () => {
+    it("the ai-off CTA opens license settings and nothing else", async () => {
       const props = makeProps({
         connected: true,
-        aiChip: "unlicensed",
+        aiChip: "ai-off",
         aiNotice: "unlicensed",
         onOpenLicenseSettings: vi.fn(),
       });
@@ -129,7 +129,7 @@ describe("EmptyState", () => {
 
     it("the unverifiable line never says unlicensed, Activate a license, or the purchase URL", () => {
       const { container } = render(EmptyState, {
-        props: makeProps({ connected: true, aiChip: "unlicensed", aiNotice: "unverifiable" }),
+        props: makeProps({ connected: true, aiChip: "ai-off", aiNotice: "unverifiable" }),
       });
       const text = container.textContent ?? "";
       expect(text).not.toMatch(/unlicensed/i);

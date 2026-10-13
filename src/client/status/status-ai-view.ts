@@ -26,7 +26,7 @@ import { type AiNotice, aiOffCopy } from "../utils/license-ui";
  *
  * Ordering rules (order is load-bearing):
  *   0. AI off by licence (#1521), keyed on `aiNotice` — readiness's own value,
- *      non-null exactly when its `chip` is `"unlicensed"` and so selects the
+ *      non-null exactly when its `chip` is `"ai-off"` and so selects the
  *      pill's CTA wrapper, so the label and its action agree by construction
  *      (see `AiReadiness.aiNotice`). A launcher child still running at expiry would
  *      otherwise read "Tandem's Claude" beside an "AI off" CTA. It outranks

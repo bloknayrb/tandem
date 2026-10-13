@@ -221,13 +221,13 @@ export type AiReadinessState = "booting" | "unconfigured" | "stopped" | "ready";
  *   - `restart` — configured but stopped for any other reason, including
  *     `circuit-open` with a healthy CLI, `wake-delivery-failed`, and the rare
  *     `binary-not-found`. Plain restart.
- *   - `unlicensed` — the AI is refused by the licence (#1521): `aiNotice` is
- *     set, whichever kind. Opens Settings → License. It ranks FIRST, above Solo:
+ *   - `ai-off`  — the AI is refused by the licence (#1521): `aiNotice` is set,
+ *     whichever kind. Opens Settings → License. It ranks FIRST, above Solo:
  *     Solo is a privacy choice, the licence refusal is a capability fact, and
  *     every other CTA (connect, restart) would be refused by the server anyway.
- *     Its copy is kind-neutral — see `AI_CTA.unlicensed`.
+ *     Its copy is kind-neutral — see `AI_CTA["ai-off"]`.
  */
-export type AiChip = "connect" | "setup" | "sign-in" | "restart" | "unlicensed" | null;
+export type AiChip = "connect" | "setup" | "sign-in" | "restart" | "ai-off" | null;
 
 /**
  * Everything a surface needs to render an `AiChip`'s call to action: its copy
@@ -291,13 +291,11 @@ export const AI_CTA: Record<
     ariaLabel: "Claude Code has stopped. Restart Claude Code.",
     action: "restart",
   },
-  // THE statement of the kind-neutral rule (other comments point here): this
-  // one entry serves both `unlicensed` and `unverifiable`, and an unverifiable
-  // licence holder most likely already paid (ADR-040 decision 8). So it never
-  // says "unlicensed", "activate" or "trial ended", and carries no URL. Views
-  // take kind-specific copy from `aiOffCopy(readiness.aiNotice)`; this entry is
-  // the label, the action, and the fallback where a type cannot prove the kind.
-  unlicensed: {
+  // Kind-neutral (other comments point here): it also serves the unverifiable
+  // licence holder, who most likely already paid (ADR-040 decision 8), so it
+  // never says "unlicensed", "activate" or "trial ended" and carries no URL.
+  // Kind-specific copy comes from `aiOffCopy(readiness.aiNotice)`.
+  "ai-off": {
     label: "AI off — see license",
     title: "Tandem's AI features are off. Open Settings → License.",
     ariaLabel: "AI features are off. Open license settings.",
@@ -330,7 +328,7 @@ export function ctaHandler(
 
 /** A stopped launcher's CTA — also a tripped Tandem Claude surfaced beside a
  *  session that is still attached (`launcherFailure`). */
-export type LauncherFailure = Exclude<AiChip, null | "connect" | "unlicensed">;
+export type LauncherFailure = Exclude<AiChip, null | "connect" | "ai-off">;
 
 /**
  * The `lastError` → CTA decision for a stopped launcher. ONE function, used by
@@ -544,8 +542,9 @@ export interface AiReadiness {
    */
   readonly deliveryStalledMs: number | null;
   /**
-   * The licence refusal, or null (#1521): the same `deps.aiNotice()` that ranks
-   * `chip` first, so it is non-null exactly when `chip === "unlicensed"`. Views
+   * The licence refusal, or null (#1521): the one derived read of
+   * `deps.aiNotice()` that also ranks `chip` first, so it is non-null exactly
+   * when `chip === "ai-off"`. Views
    * key their AI-off rendering and copy on this value and their CTA on `chip`;
    * because both come from here, the two cannot disagree. Pass this, never
    * `licenseStore.ui.aiNotice` beside it.
@@ -645,6 +644,11 @@ export function createAiReadiness(deps: {
   // Counts each observed start of Tandem's Claude (not-running → running), so
   // a dismissal of its failure button lasts only until it next runs.
   let launcherRunEpoch = $state(0);
+  // The licence refusal, read ONCE. `chip`, `launcherFailure`, the `aiNotice`
+  // getter and every other licence-keyed reader below key on this one value
+  // with one test (`!== null`), so "`aiNotice` non-null exactly when `chip` is
+  // `ai-off`" holds by construction rather than by each reader agreeing.
+  const notice = $derived(deps.aiNotice());
 
   // Drop stale async resolves for LAUNCHER reads (a poll that resolves after
   // the component is gone, or after a newer poll superseded it). Mirrors
@@ -955,7 +959,7 @@ export function createAiReadiness(deps: {
     if (!destroyed) void pollLauncherStatus(++gen);
   };
   $effect(() => {
-    const aiOff = deps.aiNotice() !== null;
+    const aiOff = notice !== null;
     const changed = prevAiOff !== null && aiOff !== prevAiOff;
     const cleared = prevAiOff === true && !aiOff;
     prevAiOff = aiOff;
@@ -996,7 +1000,7 @@ export function createAiReadiness(deps: {
       status.available &&
       !status.running &&
       status.lastError === "unlicensed" &&
-      deps.aiNotice() === null,
+      notice === null,
   );
   let licenceRereadPending = $state(false);
   let sighting = 0;
@@ -1077,8 +1081,8 @@ export function createAiReadiness(deps: {
   // why `circuit-open` on its own does not). Views must render off this value
   // alone, not re-derive their own copy of this ternary.
   const chip = $derived<AiChip>(
-    deps.aiNotice()
-      ? "unlicensed"
+    notice !== null
+      ? "ai-off"
       : deps.soloMode()
         ? null
         : state === "unconfigured"
@@ -1107,7 +1111,7 @@ export function createAiReadiness(deps: {
   // Suppressed while the AI is refused: the chip already says why, and the
   // launcher cannot be restarted until the licence returns.
   const launcherFailure = $derived<LauncherFailure | null>(
-    deps.aiNotice() === null &&
+    notice === null &&
       !deps.soloMode() &&
       sessionLive &&
       !restartPending &&
@@ -1196,12 +1200,12 @@ export function createAiReadiness(deps: {
         state: deliveryState,
         waitingMs: deliveryWaitingMs,
         soloMode: deps.soloMode(),
-        aiOff: deps.aiNotice() !== null,
+        aiOff: notice !== null,
         serverUnreachable,
       });
     },
     get aiNotice() {
-      return deps.aiNotice();
+      return notice;
     },
     refresh: () => poll(),
     refreshLauncherStatus: () => void pollLauncherStatus(++gen),

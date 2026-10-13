@@ -2529,22 +2529,31 @@ export function describeHealthSession(d: { hasSession?: boolean; sessionCount?: 
  */
 export interface DoctorLicenceState {
   gateActive: true;
-  status: string;
+  status: DoctorLicenceStatus;
   licenseUnverifiable: string | null;
 }
 
 /**
  * The server answered `/api/license/status`, but not with a state doctor can
- * read. `httpStatus` is the only thing kept: nothing from the body reaches the
- * report.
+ * read: a non-OK status (`http-status`), or a 200 whose body is not a licence
+ * state doctor knows (`unrecognised`). Nothing from the body reaches the report.
  */
 export interface DoctorLicenceUnreadable {
   unreadable: true;
-  httpStatus: number | null;
+  reason: "http-status" | "unrecognised";
+  httpStatus: number;
 }
 
+/** `parseDoctorLicence`'s answer: a state, an unreadable answer, or silence. */
+export type DoctorLicenceResult = DoctorLicenceState | DoctorLicenceUnreadable | null;
+
 /** The licence states the server emits. Anything else is unreadable, never "on". */
-const KNOWN_LICENCE_STATUSES = new Set(["trial", "licensed", "restricted"]);
+const KNOWN_LICENCE_STATUSES = ["trial", "licensed", "restricted"] as const;
+type DoctorLicenceStatus = (typeof KNOWN_LICENCE_STATUSES)[number];
+
+function isKnownLicenceStatus(s: unknown): s is DoctorLicenceStatus {
+  return (KNOWN_LICENCE_STATUSES as readonly unknown[]).includes(s);
+}
 
 /**
  * Narrow a `GET /api/license/status` result to the picklist.
@@ -2562,27 +2571,25 @@ const KNOWN_LICENCE_STATUSES = new Set(["trial", "licensed", "restricted"]);
  * build with the gate off, and the session rows then make claims the licence
  * may contradict.
  */
-export function parseDoctorLicence(
-  result: HttpGetResult | null,
-): DoctorLicenceState | DoctorLicenceUnreadable | null {
+export function parseDoctorLicence(result: HttpGetResult | null): DoctorLicenceResult {
   if (!result || result.error || result.status === undefined) return null;
   if (result.status === 404) return null;
-  const unreadable: DoctorLicenceUnreadable = { unreadable: true, httpStatus: result.status };
-  if (result.status !== 200) return unreadable;
+  if (result.status !== 200) {
+    return { unreadable: true, reason: "http-status", httpStatus: result.status };
+  }
+  const unrecognised: DoctorLicenceUnreadable = {
+    unreadable: true,
+    reason: "unrecognised",
+    httpStatus: result.status,
+  };
   const d = result.data as {
     gateActive?: unknown;
     status?: unknown;
     licenseUnverifiable?: unknown;
   } | null;
-  if (!d || typeof d !== "object") return unreadable;
+  if (!d || typeof d !== "object") return unrecognised;
   if (d.gateActive === false) return null;
-  if (
-    d.gateActive !== true ||
-    typeof d.status !== "string" ||
-    !KNOWN_LICENCE_STATUSES.has(d.status)
-  ) {
-    return unreadable;
-  }
+  if (d.gateActive !== true || !isKnownLicenceStatus(d.status)) return unrecognised;
   return {
     gateActive: true,
     status: d.status,
@@ -2590,30 +2597,24 @@ export function parseDoctorLicence(
   };
 }
 
-function isReadableLicence(
-  licence: DoctorLicenceState | DoctorLicenceUnreadable | null,
-): licence is DoctorLicenceState {
+function isReadableLicence(licence: DoctorLicenceResult): licence is DoctorLicenceState {
   return licence !== null && !("unreadable" in licence);
 }
 
 /** "(unlicensed)" / "(license not verified)" when AI is refused, else `null`. */
-export function licenceOffLabel(
-  licence: DoctorLicenceState | DoctorLicenceUnreadable | null,
-): string | null {
+export function licenceOffLabel(licence: DoctorLicenceResult): string | null {
   if (!isReadableLicence(licence) || licence.status !== "restricted") return null;
   return licence.licenseUnverifiable ? "(license not verified)" : "(unlicensed)";
 }
 
 /** The licence row. `null` (no row) whenever `parseDoctorLicence` was silent. */
-export function evaluateLicence(
-  licence: DoctorLicenceState | DoctorLicenceUnreadable | null,
-): EvalOutcome | null {
+export function evaluateLicence(licence: DoctorLicenceResult): EvalOutcome | null {
   if (!licence) return null;
   if (!isReadableLicence(licence)) {
     return {
       status: "warn",
       message:
-        licence.httpStatus === 200
+        licence.reason === "unrecognised"
           ? "License status unreadable (unrecognised answer)"
           : `License status unreadable (HTTP ${licence.httpStatus})`,
       fix: "Check Tandem's Settings → License. If this persists, restart Tandem.",
@@ -2648,10 +2649,7 @@ function licenceDeferred(what: string, off: string): EvalOutcome {
   };
 }
 
-async function checkLicence(
-  r: Recorder,
-  mcpPort: number,
-): Promise<DoctorLicenceState | DoctorLicenceUnreadable | null> {
+async function checkLicence(r: Recorder, mcpPort: number): Promise<DoctorLicenceResult> {
   const licence = parseDoctorLicence(
     await httpGet(`http://127.0.0.1:${mcpPort}/api/license/status`),
   );

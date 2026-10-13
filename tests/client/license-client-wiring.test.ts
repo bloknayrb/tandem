@@ -68,7 +68,7 @@ describe("aiNotice reaches the readiness hook", () => {
 
 /**
  * The pill and EmptyState read the refusal from READINESS, the same value that
- * makes `chip` `"unlicensed"` — never from `licenseStore` beside it, which is a
+ * makes `chip` `"ai-off"` — never from `licenseStore` beside it, which is a
  * second source the two could disagree on.
  */
 describe("the AI-off views read readiness's aiNotice", () => {

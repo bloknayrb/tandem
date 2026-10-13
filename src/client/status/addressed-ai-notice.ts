@@ -56,7 +56,7 @@ import type { AiChip, PushDelivery } from "../hooks/useAiReadiness.svelte";
 export type AddressedAiNotice =
   | { kind: "offline" }
   | { kind: "ai-off" }
-  | { kind: "no-agent"; chip: Exclude<AiChip, null | "unlicensed"> }
+  | { kind: "no-agent"; chip: Exclude<AiChip, null | "ai-off"> }
   | { kind: "no-push" };
 
 export function addressedAiNotice(input: {
@@ -96,7 +96,7 @@ export function addressedAiNotice(input: {
   if (input.serverUnreachable) return { kind: "offline" };
 
   // Rule 2b — the licence refuses the AI (#1521).
-  if (input.chip === "unlicensed") return { kind: "ai-off" };
+  if (input.chip === "ai-off") return { kind: "ai-off" };
 
   // Rule 3 — no agent attached.
   if (!input.sessionLive) {
@@ -178,7 +178,7 @@ export function noticeAction(notice: AddressedAiNotice, noun: string): Addressed
         idPrefix: "ai-off",
         severity: "warning",
         message: `${noun} saved. Claude won't see it while AI features are off. See Settings → License.`,
-        cta: "unlicensed",
+        cta: "ai-off",
       };
     case "no-agent":
       return {

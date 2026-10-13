@@ -74,7 +74,7 @@ interface Props {
   onConnectAi?: () => void;
   onRestartClaude?: () => void;
   /**
-   * Open Settings → License — the `unlicensed` chip's action (#1521). Required,
+   * Open Settings → License — the `ai-off` chip's action (#1521). Required,
    * like `aiLauncherAttached`: a default would let a mount that forgets it
    * render a CTA that does nothing.
    */
@@ -82,7 +82,7 @@ interface Props {
   /**
    * The licence refusal (#1521): pass `aiReadiness.aiNotice`, never
    * `licenseStore.ui.aiNotice` — readiness guarantees it is non-null exactly
-   * when `aiChip` is `"unlicensed"`. Drives the pill's ai-off state and copy.
+   * when `aiChip` is `"ai-off"`. Drives the pill's ai-off state and copy.
    */
   aiNotice: AiNotice | null;
   /** Solo mode — suppresses the "AI not connected" nag when no AI is connected. */
@@ -346,18 +346,18 @@ const launcherDown = $derived(
  * props, so they're bound inside `aiCta` here: a plain top-level object would
  * freeze stale closures over the props' initial values.
  */
-// The `unlicensed` chip takes its title/aria from the ai-off view, which holds
-// the kind-specific copy (#1521). `AI_CTA.unlicensed` is the type-level fallback
+// The `ai-off` chip takes its title/aria from the ai-off view, which holds
+// the kind-specific copy (#1521). `AI_CTA["ai-off"]` is the type-level fallback
 // only, which is why it must stay kind-neutral (see its comment).
 const aiCta = $derived(
   aiChip
     ? {
         title:
-          aiChip === "unlicensed" && aiView?.dataState === "ai-off"
+          aiChip === "ai-off" && aiView?.dataState === "ai-off"
             ? aiView.title
             : AI_CTA[aiChip].title,
         ariaLabel:
-          aiChip === "unlicensed" && aiView?.dataState === "ai-off"
+          aiChip === "ai-off" && aiView?.dataState === "ai-off"
             ? aiView.ariaLabel
             : AI_CTA[aiChip].ariaLabel,
         onclick: ctaHandler(AI_CTA[aiChip].action, ctaHandlers()),

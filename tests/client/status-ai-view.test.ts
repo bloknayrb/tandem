@@ -229,7 +229,7 @@ describe("aiIndicatorView — Tandem's Claude", () => {
 
 /**
  * Rule 0 (#1521): the licence refusal, keyed on `aiNotice` — readiness's own
- * value, non-null exactly when its chip is `"unlicensed"`, so label and action
+ * value, non-null exactly when its chip is `"ai-off"`, so label and action
  * agree. The kind also picks the copy.
  */
 describe("aiIndicatorView — AI off by licence", () => {

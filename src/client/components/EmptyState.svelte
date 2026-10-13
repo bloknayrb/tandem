@@ -15,8 +15,8 @@ interface Props {
    *   `"setup"`   → configured but stopped with the CLI apparently missing.
    *   `"sign-in"` → configured but stopped because the CLI is not signed in.
    *   `"restart"` → configured but stopped for any other reason.
-   *   `"unlicensed"` → the licence refuses the AI (#1521); opens Settings →
-   *                 License. Its branch keys on `aiNotice`, which carries the copy.
+   *   `"ai-off"`  → the licence refuses the AI (#1521); opens Settings →
+   *               License. Its branch keys on `aiNotice`, which carries the copy.
    *   `null`      → ready / booting / Solo (no CTA, falls back to the
    *                 product-positioning line).
    * Replaces the old `claudeActive`-gated line, which keyed on a flapping
@@ -45,11 +45,11 @@ interface Props {
   onStartFreshClaude?: () => void;
   /**
    * The licence refusal (#1521): pass `aiReadiness.aiNotice`, which is
-   * non-null exactly when `aiChip` is `"unlicensed"`. Required, so a mount
+   * non-null exactly when `aiChip` is `"ai-off"`. Required, so a mount
    * that forgets it cannot silently drop the AI-off line.
    */
   aiNotice: AiNotice | null;
-  /** Opens Settings → License — the `"unlicensed"` CTA. */
+  /** Opens Settings → License — the `"ai-off"` CTA. */
   onOpenLicenseSettings?: () => void;
 }
 
@@ -236,7 +236,7 @@ $effect(() => {
         <button
           class="empty-cta"
           data-testid="empty-state-open-license-settings"
-          data-ai-chip="unlicensed"
+          data-ai-chip="ai-off"
           onclick={onOpenLicenseSettings}
         >
           Open license settings

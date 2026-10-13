@@ -60,16 +60,7 @@ export interface LicenseStatusResponse {
   cliActivateEffective?: boolean;
 }
 
-export interface LicenseUi {
-  /**
-   * Non-null exactly when the gate is active and the AI is refused (restricted):
-   * `"unverifiable"` when a licence file is installed but fails to verify,
-   * otherwise `"unlicensed"`. Null on every dark build, in a trial and when
-   * licensed. The editor stays editable in every state.
-   */
-  aiNotice: AiNotice | null;
-  /** `aiNotice !== null`: the one predicate for "disable the AI controls". */
-  aiOff: boolean;
+interface LicenseUiFields {
   /** Show the trial countdown banner (trial). */
   showTrialBanner: boolean;
   /** Days left in trial, or null when not in a trial. */
@@ -78,21 +69,30 @@ export interface LicenseUi {
   statusLabel: string;
 }
 
+/**
+ * `aiNotice` is non-null exactly when the gate is active and the AI is refused
+ * (restricted): `"unverifiable"` when a licence file is installed but fails to
+ * verify, otherwise `"unlicensed"`. Null on every dark build, in a trial and
+ * when licensed. The editor stays editable in every state.
+ *
+ * `aiOff` is `aiNotice !== null`, the one predicate for "disable the AI
+ * controls". The two are a union rather than independent fields, so a
+ * `LicenseUi` whose `aiOff` disagrees with its `aiNotice` does not type-check.
+ */
+export type LicenseUi = LicenseUiFields &
+  ({ aiNotice: null; aiOff: false } | { aiNotice: AiNotice; aiOff: true });
+
 function trialDays(state: LicenseStatusResponse): number | null {
   return state.trial?.daysRemaining ?? state.daysRemaining ?? null;
 }
 
 export function deriveLicenseUi(state: LicenseStatusResponse | null): LicenseUi {
-  const ui = deriveWithoutAiOff(state);
-  return { ...ui, aiOff: ui.aiNotice !== null };
-}
-
-function deriveWithoutAiOff(state: LicenseStatusResponse | null): Omit<LicenseUi, "aiOff"> {
   // Not yet loaded, or the gate is inactive (dark build / pre-v1.0): the app
   // behaves exactly as today — no banner, no AI-off notice, no pill.
   if (!state || !state.gateActive) {
     return {
       aiNotice: null,
+      aiOff: false,
       showTrialBanner: false,
       trialDaysRemaining: null,
       statusLabel: "",
@@ -102,6 +102,7 @@ function deriveWithoutAiOff(state: LicenseStatusResponse | null): Omit<LicenseUi
   if (state.status === "restricted") {
     return {
       aiNotice: state.licenseUnverifiable ? "unverifiable" : "unlicensed",
+      aiOff: true,
       showTrialBanner: false,
       trialDaysRemaining: null,
       // Never "Trial ended" (ADR-040 decision 5).
@@ -113,6 +114,7 @@ function deriveWithoutAiOff(state: LicenseStatusResponse | null): Omit<LicenseUi
     const days = trialDays(state);
     return {
       aiNotice: null,
+      aiOff: false,
       showTrialBanner: true,
       trialDaysRemaining: days,
       statusLabel: days != null ? `Trial — ${days} day${days === 1 ? "" : "s"} left` : "Trial",
@@ -122,6 +124,7 @@ function deriveWithoutAiOff(state: LicenseStatusResponse | null): Omit<LicenseUi
   // licensed
   return {
     aiNotice: null,
+    aiOff: false,
     showTrialBanner: false,
     trialDaysRemaining: null,
     statusLabel: state.license?.name ? `Licensed to ${state.license.name}` : "Licensed",
