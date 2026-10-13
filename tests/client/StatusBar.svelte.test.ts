@@ -63,6 +63,9 @@ describe("StatusBar AI action indicator", () => {
     expect(onOpenLicenseSettings).toHaveBeenCalledOnce();
     expect(onConnectAi).not.toHaveBeenCalled();
     expect(onRestartClaude).not.toHaveBeenCalled();
+    // Sanity only: `aiLauncherFailure` is at its default here. The suppression
+    // itself lives in the hook and is pinned by useAiReadiness's "launcherFailure
+    // is suppressed while refused".
     expect(queryByTestId("status-tandem-claude-down")).toBeNull();
   });
 
