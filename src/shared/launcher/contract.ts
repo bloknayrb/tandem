@@ -362,24 +362,32 @@ export const SUPERVISOR_ACK_CLAUSE =
 
 /** No work the user didn't ask for, on both supervisor turns for the same
  * reason as {@link SUPERVISOR_NO_ARM_CLAUSE}. Bryan decided on 2026-10-12 that
- * Tandem's Claude must not start a review without the user asking. The wake
- * turn needs it most: wakes fire on every `annotation:*` event, including a
- * user's own note or a Solo-held comment that `tandem_checkInbox` then does not
- * show, and "needs your attention" followed by an empty inbox is where a model
- * falls back on the skill's "annotate freely" line. */
+ * Tandem's Claude must not start a review without the user asking.
+ *
+ * It is unconditional rather than an "if the inbox is empty" branch, because
+ * the wakes that end in nothing asked are rarely empty: an accept or dismiss
+ * wakes the session (`isWakeWorthy` takes every `annotation:*`) and shows up as
+ * `userResponses`, and the first-run tutorial invites exactly those clicks.
+ * The other case is a coalesced wake whose events Claude already pulled
+ * mid-turn. Either way "needs your attention" with nothing asked is where a
+ * model falls back on the skill's "annotate freely" line. "Replies" is named
+ * because the bootstrap discharges an owed wake (`supervisor.ts`), and a
+ * user's reply on one of Claude's threads can be what it was owed for. */
 export const SUPERVISOR_NO_UNASKED_WORK_CLAUSE =
-  "If it holds nothing from the user, or reports that no document is open, stop there: " +
-  "do not open, read through, review, annotate or edit any document until the user asks, " +
-  "and then do only what they asked.";
+  "Respond to chat messages, comments and replies from the user, and do only what they ask. " +
+  "An accept or dismiss is not a request and needs no response, and if no document is open, " +
+  "just wait. Do not open, read through, review, annotate or edit any document unless the " +
+  "user asked you to.";
 
 /** The bootstrap turn the supervisor writes immediately on a fresh spawn.
  *
- * It fires when the server starts, on a first run (with the tutorial open), on
- * "Start fresh conversation" and on a relaunch — never because a document was
- * opened — so it must not assume one is open, and it must not ask for a review
- * (see {@link SUPERVISOR_NO_UNASKED_WORK_CLAUSE}). "Replies" is in scope on
- * purpose: `supervisor.ts` lets this turn discharge an owed wake, and a user's
- * reply on one of Claude's threads can be what that wake was owed for.
+ * A fresh spawn happens whenever there is no saved session for the planned
+ * folder: a first run (with the tutorial open), "Start fresh conversation", a
+ * start or relaunch in a different folder, or a start after a failed resume.
+ * An ordinary server start or relaunch resumes instead and gets no bootstrap.
+ * None of these means a document was just opened, so the turn must not assume
+ * one is, and it must not ask for a review (see
+ * {@link SUPERVISOR_NO_UNASKED_WORK_CLAUSE}).
  *
  * Written on spawn, NOT after the CLI's `init` line: under these flags the CLI
  * emits nothing until it has received a turn, so waiting for `init` deadlocks.
@@ -389,7 +397,6 @@ export const SUPERVISOR_NO_UNASKED_WORK_CLAUSE =
  * re-sending would inject a duplicate turn into the conversation. */
 export const SUPERVISOR_INITIAL_PROMPT =
   "Tandem started you as its built-in collaborator. Call tandem_checkInbox now. " +
-  "If it shows chat messages, comments or replies from the user, respond to them. " +
   `${SUPERVISOR_NO_UNASKED_WORK_CLAUSE} Tandem will wake you when the user does something. ` +
   `${SUPERVISOR_ACK_CLAUSE} ${SUPERVISOR_NO_ARM_CLAUSE}`;
 

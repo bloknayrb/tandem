@@ -1402,9 +1402,12 @@ describe("the supervisor's turns tell a launched session not to self-arm", () =>
     // the one a resumed or compacted session actually sees.
     expect(SUPERVISOR_INITIAL_PROMPT).toContain(SUPERVISOR_NO_UNASKED_WORK_CLAUSE);
     expect(SUPERVISOR_WAKE_PROMPT).toContain(SUPERVISOR_NO_UNASKED_WORK_CLAUSE);
-    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).toContain("until the user asks");
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).toContain("unless the user asked you to");
+    // An accept/dismiss wakes the session into a non-empty inbox that asks
+    // for nothing; the tutorial invites exactly those clicks.
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).toContain("accept or dismiss is not a request");
     // The bootstrap answers replies too, since it discharges an owed wake.
-    expect(SUPERVISOR_INITIAL_PROMPT).toContain("replies");
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).toContain("replies");
   });
 
   it("names Monitor explicitly, so the instruction is actionable", () => {
