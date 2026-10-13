@@ -50,6 +50,7 @@ describe("ReplyThread — A13 disclosure", () => {
 
     const { container } = render(ReplyThread, {
       props: {
+        aiDisabled: false,
         annotation: makeAnnotation(),
         replies,
         isPending: false,
@@ -80,6 +81,7 @@ describe("ReplyThread — A13 disclosure", () => {
     ];
     const { container } = render(ReplyThread, {
       props: {
+        aiDisabled: false,
         annotation: makeAnnotation(),
         replies,
         isPending: false,
@@ -107,6 +109,7 @@ describe("ReplyThread — A13 disclosure", () => {
     const replies = [makeReply({ text: "vanilla claude reply" })];
     const { container } = render(ReplyThread, {
       props: {
+        aiDisabled: false,
         annotation: makeAnnotation(),
         replies,
         isPending: false,
@@ -128,6 +131,7 @@ describe("ReplyThread — A13 disclosure", () => {
     const replies = [makeReply({ id: "r1" }), makeReply({ id: "r2" })];
     const { container } = render(ReplyThread, {
       props: {
+        aiDisabled: false,
         annotation: makeAnnotation(),
         replies,
         isPending: false,
@@ -150,6 +154,7 @@ describe("ReplyThread — A13 disclosure", () => {
 
     const { container } = render(ReplyThread, {
       props: {
+        aiDisabled: false,
         annotation: makeAnnotation({ type: "note" }),
         replies,
         isPending: false,
@@ -170,6 +175,7 @@ describe("ReplyThread — A13 disclosure", () => {
     const replies = [makeReply({ id: "r1", text: "nope" })];
     const { container } = render(ReplyThread, {
       props: {
+        aiDisabled: false,
         annotation: makeAnnotation({ type: "highlight" }),
         replies,
         isPending: false,
@@ -186,6 +192,7 @@ describe("ReplyThread — A13 disclosure", () => {
 
     const { container } = render(ReplyThread, {
       props: {
+        aiDisabled: false,
         annotation: makeAnnotation({ type: "note" }),
         replies,
         isPending: true,
@@ -227,6 +234,7 @@ describe("#1626: a suggestion-bearing reply opens the thread", () => {
   it("opens at mount when a suggestion is already present", () => {
     const { container } = render(ReplyThread, {
       props: {
+        aiDisabled: false,
         annotation: makeAnnotation(),
         replies: [SUGGESTION],
         isPending: true,
@@ -246,6 +254,7 @@ describe("#1626: a suggestion-bearing reply opens the thread", () => {
 
   it("opens when the suggestion arrives at an ALREADY-MOUNTED card", async () => {
     const props = {
+      aiDisabled: false,
       annotation: makeAnnotation(),
       replies: [makeReply()],
       isPending: true,
@@ -274,6 +283,7 @@ describe("#1626: a suggestion-bearing reply opens the thread", () => {
     // which is precisely why the original was written as a mount-time seed —
     // the fix has to keep that property, not trade it away.
     const props = {
+      aiDisabled: false,
       annotation: makeAnnotation(),
       replies: [SUGGESTION],
       isPending: true,
@@ -306,7 +316,15 @@ describe("ReplyThread — licence refusal (#1521)", () => {
   function mount(annotation: Annotation, extra: { aiDisabled?: boolean; openNonce?: number } = {}) {
     const onReply = vi.fn(async () => true);
     const r = render(ReplyThread, {
-      props: { annotation, replies: [], isPending: true, isEditing: false, onReply, ...extra },
+      props: {
+        annotation,
+        replies: [],
+        isPending: true,
+        isEditing: false,
+        onReply,
+        aiDisabled: false,
+        ...extra,
+      },
     });
     return { ...r, onReply };
   }

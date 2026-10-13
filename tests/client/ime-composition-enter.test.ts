@@ -85,6 +85,7 @@ function renderChat(onSend: () => boolean) {
       onClear: async () => {},
       onExport: async () => {},
       onInsert: () => false,
+      aiDisabled: false,
     },
   });
 }

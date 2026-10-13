@@ -19,6 +19,7 @@ function renderChat(messages: ChatMessage[]) {
       onClear: async () => {},
       onExport: async () => {},
       onInsert: () => false,
+      aiDisabled: false,
     },
   });
 }

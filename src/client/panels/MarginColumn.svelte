@@ -557,6 +557,9 @@ $effect(() => subscribeAnnotationActions());
           </svg>
         </button>
       {/if}
+      <!-- `canX(ann, false)`: does this card type ever offer the action? The
+           licence applies through `aiDisabled`, which disables rather than
+           hides the button (Critical Rule 7). -->
       <AnnotationCard
         annotation={ann}
         replies={visibleReplies}

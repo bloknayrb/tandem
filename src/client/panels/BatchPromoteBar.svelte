@@ -16,9 +16,11 @@ interface Props {
   reduceMotion?: boolean;
   /**
    * The licence refuses the AI (#1521). Promoting sends notes to Claude, so both
-   * send buttons render disabled and their handlers do nothing.
+   * send buttons render disabled and their handlers do nothing. Required, with
+   * no default, so a mount that forgets it fails to compile rather than fail
+   * open.
    */
-  aiDisabled?: boolean;
+  aiDisabled: boolean;
 }
 
 let {
@@ -30,7 +32,7 @@ let {
   onClear,
   confirmRef = $bindable(null),
   reduceMotion = false,
-  aiDisabled = false,
+  aiDisabled,
 }: Props = $props();
 
 const agentLabel = createAgentLabel();

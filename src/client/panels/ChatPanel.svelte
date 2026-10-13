@@ -45,10 +45,10 @@ interface Props {
   reduceMotion?: boolean;
   /**
    * The licence refuses the AI (#1521). Disables the composer and send; the
-   * history stays fully readable. Default `false`, so every dark build is
-   * unchanged.
+   * history stays fully readable. Required, with no default, so a mount that
+   * forgets it fails to compile rather than fail open.
    */
-  aiDisabled?: boolean;
+  aiDisabled: boolean;
 }
 
 let {
@@ -67,7 +67,7 @@ let {
   canInsert = false,
   inputEl = $bindable(null),
   reduceMotion,
-  aiDisabled = false,
+  aiDisabled,
 }: Props = $props();
 
 const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");

@@ -28,8 +28,10 @@ interface Props {
   /**
    * The licence refuses the AI (#1521). A reply to a COMMENT is an AI write, so
    * it is blocked; a reply inside the user's own note thread (#1000) is not.
+   * Required, with no default, so a mount that forgets it fails to compile
+   * rather than fail open.
    */
-  aiDisabled?: boolean;
+  aiDisabled: boolean;
 }
 
 let {
@@ -41,7 +43,7 @@ let {
   reduceMotion = false,
   openNonce = 0,
   onAcceptReplySuggestion,
-  aiDisabled = false,
+  aiDisabled,
 }: Props = $props();
 
 // Single client-display fan-out point. Notes show their (private) reply

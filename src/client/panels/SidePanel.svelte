@@ -857,6 +857,9 @@ function handleRailBackgroundClick(e: MouseEvent) {
   >
       {#each filteredData.pending as ann (ann.id)}
         {@const isTarget = activeAnnotationId === ann.id}
+        <!-- `canX(ann, false)`: does this card type ever offer the action? The
+             licence applies through `aiDisabled`, which disables rather than
+             hides the button (Critical Rule 7). -->
         <AnnotationCard
           annotation={ann}
           replies={repliesMap.get(ann.id) ?? []}
@@ -888,6 +891,8 @@ function handleRailBackgroundClick(e: MouseEvent) {
           </summary>
           <div role="list" aria-label="Resolved annotations">
             {#each filteredData.resolved as ann (ann.id)}
+              <!-- `aiDisabled={false}`: a resolved card offers no AI action, so
+                   the licence has nothing to disable here. -->
               <AnnotationCard
                 annotation={ann}
                 replies={repliesMap.get(ann.id) ?? []}

@@ -16,8 +16,10 @@ interface Props {
   /**
    * The licence refuses the AI (#1521). "Send to Claude" still renders (the
    * testid set is a contract, Rule 7) but disabled, and its click is a no-op.
+   * Required, with no default, so a mount that forgets it fails to compile
+   * rather than fail open.
    */
-  aiDisabled?: boolean;
+  aiDisabled: boolean;
 }
 
 let {
@@ -31,7 +33,7 @@ let {
   onUndo,
   onRemove,
   onSendToClaude,
-  aiDisabled = false,
+  aiDisabled,
 }: Props = $props();
 
 const agentLabel = createAgentLabel();
