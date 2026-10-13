@@ -150,7 +150,11 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // a paragraph after "After a socket close…" saying a `LICENSE_REQUIRED` close is not a
   // reason to re-arm. Appended, never inserted into the pinned four-bullet list; every wake
   // assertion below was re-read against the bumped file.
-  expect(skill).toMatch(/^version:\s*33$/m);
+  // 34 keys the licence refusal on what the model actually receives (measured 2026-10-13,
+  // interactive): `<server> (-32003): "…"` at the handshake, the bare message mid-session.
+  // The Error Recovery bullet now matches on the opening sentences. Outside the wake section;
+  // the `LICENSE_REQUIRED` close paragraph is untouched.
+  expect(skill).toMatch(/^version:\s*34$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
   // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
@@ -525,11 +529,13 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "33", bodyHash: "066e10ef5b53" });
+    ).toEqual({ version: "34", bodyHash: "c78bdb5e16df" });
   });
 
-  // #1521: what the model sees of a licence refusal is the JSON-RPC code and message
-  // (measured, PR #2194), so the skill keys on `-32003` and on how the message BEGINS. The
+  // #1521: what the model sees of a licence refusal is the code and message at the handshake
+  // (`tandem (-32003): "…"`) and the bare message, with no code, on a mid-session tool error
+  // (measured: PR #2194 under `-p`, 2026-10-13 interactive). So the skill keys on `-32003`
+  // and, everywhere, on how the message BEGINS. The
   // openings are imported, so a copy change reds here instead of silently de-keying the
   // skill. The scoping asserts are the point: a presence check cannot see that a paying
   // user (unverifiable) or a kind-neutral wake close is told "unlicensed" or "buy".
@@ -552,7 +558,9 @@ describe("shipped Tandem skill instruction contract", () => {
     it("names the third absent-tools cause, keyed on -32003, before the not-running step", () => {
       expect(absent).toContain(AI_REFUSAL_UNLICENSED_OPENING);
       expect(absent).toContain(AI_REFUSAL_UNVERIFIABLE_OPENING);
-      expect(absent).toContain(`MCP error ${code}`);
+      // The rendering Claude Code was measured to use, not the SDK's `MCP error …` string.
+      expect(absent).toContain(`(${code}): "…"`);
+      expect(absent).not.toContain("MCP error");
       expect(absent).toMatch(/Three causes/);
       expect(absent).not.toMatch(/Two causes|Those two are/);
       // Positive evidence is read before the default remedy, or "not running" is said first.
@@ -562,7 +570,20 @@ describe("shipped Tandem skill instruction contract", () => {
       expect(recovery).toContain(code);
       expect(recovery).toContain("LICENSE_REQUIRED");
       // The no-opening fallback, which names no case: the shape a bare code takes.
-      expect(absent).toMatch(/Anything else after `-32003`[^\n]*do not guess which case/i);
+      expect(absent).toMatch(/\*\*Any other message\*\*[^\n]*do not guess which case/i);
+    });
+
+    // Mid-session the tool error is the bare message: no code, no `LICENSE_REQUIRED`
+    // (measured). A trigger keyed on those alone never fires for the case it is for.
+    it("keys the mid-session bullet on the openings, in its own trigger", () => {
+      const bullet = recovery.split(/\n(?=- )/).find((p) => p.includes("names `LICENSE_REQUIRED`"));
+      expect(bullet).toBeDefined();
+      const trigger = /^- \*\*([^\n]*?)\*\*/.exec(bullet ?? "")?.[1] ?? "";
+      expect(trigger).toMatch(
+        /begins with one of the two sentences quoted under "Licence refusal"/,
+      );
+      expect(trigger).toContain(code);
+      expect(bullet).toMatch(/bare message, with no code/);
     });
 
     it("says 'unlicensed' only where the message itself says it", () => {

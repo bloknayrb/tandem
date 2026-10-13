@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 33
+version: 34
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -87,7 +87,7 @@ Selections are **not** sent as standalone events. Instead, when the user sends a
 
 - Check `tandem_getActivity()` before annotating near the user's cursor. If `isTyping` is true, wait for typing to stop before annotating that area. `cursor` is a flat text offset (UTF-16 code units), the same system as annotation ranges — only a document change triggers a write, and the last one publishes wherever the caret is by then, so treat it as a proximity hint, never as a range endpoint for `tandem_edit` or `tandem_comment`.
 - Use `tandem_status({ text: "..." })` to show what you're working on — the user may see it in the editor status bar (it is hidden while Tandem's own launched Claude is running, because Tandem can't tell which session set it).
-- **Call `tandem_checkInbox` every 2-3 tool calls** (orchestrator only in a multi-agent workflow), not just at the end of a task. You cannot tell from your side whether real-time push is reaching you — the channel is often not connected, and Tandem can only tell you when *nothing at all* is subscribed, not whether the thing that is subscribed reaches you — so steady polling is the reliable path, always. It's cheap: repeat polls de-duplicate against what you've already been shown, so frequent calls don't double-report. An item that also went out as a real-time push carries `alreadyPushed: true` and still appears — the server can't confirm a push reached you, so it shows you everything rather than risk dropping it. See "User comments" above before acting on a flagged item twice. When in doubt, poll — unless Tandem is refusing its AI features (`-32003`; see Error Recovery).
+- **Call `tandem_checkInbox` every 2-3 tool calls** (orchestrator only in a multi-agent workflow), not just at the end of a task. You cannot tell from your side whether real-time push is reaching you — the channel is often not connected, and Tandem can only tell you when *nothing at all* is subscribed, not whether the thing that is subscribed reaches you — so steady polling is the reliable path, always. It's cheap: repeat polls de-duplicate against what you've already been shown, so frequent calls don't double-report. An item that also went out as a real-time push carries `alreadyPushed: true` and still appears — the server can't confirm a push reached you, so it shows you everything rather than risk dropping it. See "User comments" above before acting on a flagged item twice. When in doubt, poll — unless Tandem is refusing its AI features (a licence refusal; see Error Recovery).
 - Reply to chat messages with `tandem_reply`, not annotations.
 - **Acknowledge a chat request before doing the work.** The user sees nothing in chat until you reply, and the work can take minutes. So when a chat message asks for work, first send a one-line `tandem_reply` saying what you are about to do, with `replyTo` set to that message's `id` (a channel event's `message_id`) and `inProgress: true` — the editor then shows the user it is in progress. When you finish, reply again with the result, same `replyTo`, no `inProgress`. If several messages arrived together, use the latest one's `id`. If a single reply fully answers the message, just answer it (no `inProgress`).
 
@@ -174,7 +174,8 @@ the change directly," and do not offer to. The user asked for their document in 
 made outside it is invisible in the editor, unreviewable, and looks like success. **Absence of the
 toolset means stop.** This holds even when the file is right there and the change is trivial.
 
-**First, read the failure Claude Code reports for the Tandem server.** If it is `MCP error -32003`,
+**First, read the failure Claude Code reports for the Tandem server.** If it carries the code
+`-32003` (Claude Code lists it as `<server name> (-32003): "…"`, for example `tandem (-32003): "…"`),
 or its message begins with one of the two sentences quoted under "Licence refusal" below, Tandem *is*
 running and has turned its AI features off. Skip steps 2 and 3 and follow "Licence refusal".
 Anything else, or no message at all: step 2.
@@ -196,13 +197,14 @@ can be loaded in a session whose `~/.claude.json` has no `mcpServers.tandem` ent
 > Tandem isn't set up for Claude Code on this machine. Run `tandem setup --apply`, or open Tandem
 > and use **Settings → AI Assistant**, then restart Claude Code.
 
-**Licence refusal (`MCP error -32003`).** Tandem is running but has turned its AI features off. "The
-message" is the text after the `MCP error -32003:` prefix. Relay it rather than paraphrasing, and
-act on how it begins:
+**Licence refusal (`-32003`).** Tandem is running but has turned its AI features off. "The message"
+is the quoted error text, without the code. At connection time Claude Code may cut it short with
+`…`; Tandem's **Settings → License** shows it in full. Relay it rather than paraphrasing, and act on
+how it begins:
 
 - **"Tandem is unlicensed, so its AI features are turned off"** → relay the message, which already says why and gives the purchase link. Add what it may leave out: the key is activated in Tandem's **Settings → License**, then reconnect as the message says (in Claude Code, run `/mcp`). Never invent a purchase link.
-- **"Tandem's AI features are off because your license could not be verified"** → the user's license is installed but did not verify, and they most likely paid for it. Relay the message's own fix: a reissue, an update, or entering the key again in **Settings → License**. Never tell them to buy a license, and never say they lack a license.
-- **Anything else after `-32003`** → say only that Tandem's AI features are off and that Tandem's **Settings → License** says why. Do not guess which case it is.
+- **"Tandem's AI features are off because your license could not be verified"** → the user's license is installed but did not verify, and they most likely paid for it. Relay the message's own fix: a reissue, an update, or entering the key again in **Settings → License**. If the quote is cut off before its fix, say that **Settings → License** shows the whole message. Never tell them to buy a license, and never say they lack a license.
+- **Any other message** → say only that Tandem's AI features are off and that Tandem's **Settings → License** says why. Do not guess which case it is.
 
 The hard rule above applies here too: do not edit the file another way, or offer to.
 
@@ -228,7 +230,7 @@ message, never "server not running".
 - **`FORMAT_ERROR`** — Usually the operation doesn't apply to this document's format: `tandem_appendContent` on a non-Markdown document, or a `tandem_editList` op the format cannot carry. It is also the fallback for a failed `tandem_save` or `tandem_open` that no more specific code covers, so read `details.errorCode` when it is present: `VERIFY_BLOCKED` means the save was refused before touching the file, and its message says why.
 - **`INVALID_PATH`** — The path was refused: a relative path (pass an absolute one), a UNC path, or `tandem_restoreBackup` on an upload or scratchpad, which has no on-disk location.
 - **`EXTERNAL_CONFLICT`** — `tandem_save` refused because the file changed on disk since it was opened, usually from an out-of-band `Edit`/`Write` (see Hard Rule 6). The user resolves it via the editor's Keep/Reload banner; `tandem_open({ force: true })` also clears it, but destructively, and only on the user's say-so — never call it yourself to route around a conflict.
-- **`-32003`, or an error naming `LICENSE_REQUIRED`** — Tandem stopped admitting its AI features mid-session, for a licence reason. Tell the user once, with the same three branches as "Licence refusal" above; when the error is JSON (a `tandem_reply` failing with `Reply failed (403): {…}`), branch on which of the two quoted sentences it contains. Do not edit the file another way, or offer to. While it lasts, suspend the every-2-3-calls inbox poll: make at most one read-mode `tandem_status` per user turn to see whether it has healed, and resume normal polling on the first success. Repeat the explanation only if the message changes. Once the user activates, the next call works again by itself within about a minute; no `/mcp` is needed unless the message asks you to reconnect. A line from Tandem's monitor (`Tandem: …`) or a `license_refused` channel event saying the same thing is this refusal too: tell the user once if you have not already. It is not a wake, and not a reason to poll or arm. If it carries neither quoted sentence (for example `Tandem: LICENSE_REQUIRED`), use the "anything else" branch.
+- **A tool error that begins with one of the two sentences quoted under "Licence refusal", or that carries `-32003` or names `LICENSE_REQUIRED`** — Tandem stopped admitting its AI features mid-session, for a licence reason. Mid-session the error usually arrives as the bare message, with no code, so match on how it begins. Tell the user once, with the same three branches as "Licence refusal" above; when the error is JSON (a `tandem_reply` failing with `Reply failed (403): {…}`), branch on which of the two quoted sentences it contains. Do not edit the file another way, or offer to. While it lasts, suspend the every-2-3-calls inbox poll: make at most one read-mode `tandem_status` per user turn to see whether it has healed, and resume normal polling on the first success. Repeat the explanation only if the message changes. Once the user activates, the next call works again by itself within about a minute; no `/mcp` is needed unless the message asks you to reconnect. A line from Tandem's monitor (`Tandem: …`) or a `license_refused` channel event saying the same thing is this refusal too: tell the user once if you have not already. It is not a wake, and not a reason to poll or arm. If it carries neither quoted sentence (for example `Tandem: LICENSE_REQUIRED`), use the "any other message" branch.
 - **`NO_DOCUMENT`** — No document is open, or the `documentId` you passed doesn't match one. Check `tandem_listDocuments` for what's actually open, and open a file with `tandem_open` when the user's request needs one. The error is not a reason to open something the user didn't ask for. `tandem_checkInbox`, `tandem_reply` and `tandem_open` work with no document open, and the inbox still delivers chat then: when no document resolves (none open, none active, or a `documentId` naming one that isn't open), its `summary` opens with a sentence saying so and the comment, reply and activity fields are empty. So a user can ask you to open a file before any tab exists.
 
 ## Session Handoff
