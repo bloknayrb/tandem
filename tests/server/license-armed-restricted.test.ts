@@ -31,7 +31,16 @@ vi.hoisted(() => {
   process.env.TANDEM_LICENSE_GATE = "1";
 });
 
+// The backup-restore probe writes a pre-overwrite snapshot, whose first write
+// per root sets a Windows ACL by spawning icacls — not for a unit test. Same
+// stub as restore-backup.test.ts and mcp-wire-codes.test.ts.
+vi.mock(import("../../src/server/integrations/acl-win.js"), () => ({
+  setRestrictiveAcl: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createAnnotationLifecycle } from "../../src/server/annotations/lifecycle.js";
+import { addDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   getDeliveryState,
   resetDeliveryStateForTests,
@@ -46,25 +55,36 @@ import {
 } from "../../src/server/events/queue.js";
 import type { TandemEvent } from "../../src/server/events/types.js";
 import { WAKE_CLOSE_LICENSE_REQUIRED } from "../../src/server/events/wake-socket.js";
+import {
+  _resetDocBackupGateForTests,
+  listDocBackups,
+  snapshotBeforeFirstWrite,
+} from "../../src/server/file-io/doc-backup.js";
 import { defaultSubscribeDuringGap } from "../../src/server/launcher/supervisor.js";
 import { aiRefusal } from "../../src/server/license/ai-refusal.js";
 import { GATE_ENABLED } from "../../src/server/license/gate-flag.js";
 import { resolveLiveLicenseState } from "../../src/server/license/license-state.js";
 import { licenseFilePath, trialFilePath } from "../../src/server/license/paths.js";
 import { appendClaudeChatMessage } from "../../src/server/mcp/awareness.js";
+import { extractText } from "../../src/server/mcp/document-model.js";
 import {
   closeMcpSession,
   hasAnyMcpSession,
   startMcpServerHttp,
   startMcpServerStdio,
 } from "../../src/server/mcp/server.js";
+import { resolveAppDataDir } from "../../src/server/platform.js";
 import { getDocument, getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
   TANDEM_PURCHASE_URL,
+  Y_MAP_ANNOTATION_REPLIES,
+  Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
   Y_MAP_CHAT,
   Y_MAP_CLAUDE,
+  Y_MAP_DOCUMENT_META,
+  Y_MAP_EXTERNAL_CONFLICT,
 } from "../../src/shared/constants.js";
 import {
   AI_REFUSAL_RECONNECT_HINT,
@@ -72,7 +92,11 @@ import {
   LICENSE_REQUIRED_RPC_CODE,
 } from "../../src/shared/license-copy.js";
 import { withBrowser, withInternal } from "../../src/shared/origins.js";
+import type { ExternalConflictState } from "../../src/shared/types.js";
 import { allocPort } from "../helpers/alloc-port.js";
+import { timeoutMs } from "../helpers/timing.js";
+import { createMinimalDocx, seedAcceptedSuggestion } from "../helpers/wire-code-fixtures.js";
+import { rangeOf } from "../helpers/ydoc-factory.js";
 
 const DAY = 86_400_000;
 const MCP_ACCEPT = "application/json, text/event-stream";
@@ -751,5 +775,180 @@ describe("armed and keyless (#1521)", () => {
       expect(forced.status).toBe(200);
       expect(await forced.text()).not.toContain(LICENSE_REQUIRED);
     });
+
+    /**
+     * The six document-mutating `/api` routes the browser drives (#1521
+     * acceptance). Each probe asserts the route's REAL success body and the
+     * state change it made, so it fails if the route is refused for any reason
+     * — a `licenseGateMiddleware` remounted on it answers 403 LICENSE_REQUIRED
+     * before the handler runs. "Not LICENSE_REQUIRED" alone would also pass on
+     * a 400 from a malformed body, which proves nothing about the gate.
+     *
+     * The twin: every probe first proves, against this same server at this same
+     * moment, that the AI IS being refused (`POST /mcp initialize` → -32003). A
+     * fixture that silently resolved licensed would fail there rather than let
+     * the success below read as "the editor survives restriction".
+     */
+    const ORIGIN = "http://127.0.0.1:5173";
+
+    async function expectAiRefusedNow(): Promise<void> {
+      const res = await postMcp(initBody("armed-twin"));
+      expect(res.sessionId).toBeNull();
+      expect(JSON.parse(res.text).error.code).toBe(LICENSE_REQUIRED_RPC_CODE);
+    }
+
+    async function postApi(route: string, body: unknown): Promise<{ status: number; json: any }> {
+      const res = await fetch(`${baseUrl}${route}`, {
+        method: "POST",
+        // Four of the six carry `assertOriginAllowlisted` (#1121 F6); sending an
+        // allowlisted Origin to the other two is what the browser does anyway.
+        headers: { "Content-Type": "application/json", Origin: ORIGIN },
+        body: JSON.stringify(body),
+      });
+      return { status: res.status, json: await res.json() };
+    }
+
+    function tmpFile(name: string, content: string | Buffer): string {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tandem-license-routes-"));
+      createdDirs.push(dir);
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, content);
+      return file;
+    }
+
+    async function openViaApi(file: string): Promise<string> {
+      const res = await postApi("/api/open", { filePath: file });
+      expect(res.status).toBe(200);
+      return (res.json as { data: { documentId: string } }).data.documentId;
+    }
+
+    /** A pending Claude comment over "Hello" in an open "Hello world" doc. */
+    async function openWithClaudeComment(): Promise<{ docId: string; annId: string }> {
+      const docId = await openViaApi(tmpFile("annotated.md", "Hello world\n"));
+      const doc = getOrCreateDocument(docId);
+      const created = createAnnotationLifecycle(doc).create({
+        anchored: rangeOf(0, 5, doc),
+        content: "Swap the greeting",
+      });
+      return { docId, annId: created.annotation.id };
+    }
+
+    it("POST /api/document/reload succeeds armed and replaces the body", async () => {
+      await expectAiRefusedNow();
+      const docId = await openViaApi(tmpFile("reload.md", "Before reload.\n"));
+      const res = await postApi("/api/document/reload", {
+        documentId: docId,
+        markdown: "After reload.\n",
+      });
+      expect(res).toEqual({ status: 200, json: { success: true } });
+      expect(extractText(getOrCreateDocument(docId))).toBe("After reload.");
+    });
+
+    it("POST /api/external-conflict/resolve succeeds armed and clears the conflict", async () => {
+      await expectAiRefusedNow();
+      const docId = await openViaApi(tmpFile("conflict.md", "Mine.\n"));
+      const doc = getOrCreateDocument(docId);
+      const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+      // Seeded, because with nothing pending the handler answers success
+      // without doing anything — a vacuous pass.
+      withInternal(doc, () =>
+        meta.set(Y_MAP_EXTERNAL_CONFLICT, {
+          kind: "external-edit",
+          diskChanged: true,
+          detectedAt: Date.now(),
+        } satisfies ExternalConflictState),
+      );
+      const res = await postApi("/api/external-conflict/resolve", {
+        documentId: docId,
+        choice: "keep",
+      });
+      expect(res).toEqual({ status: 200, json: { success: true } });
+      expect(meta.has(Y_MAP_EXTERNAL_CONFLICT)).toBe(false);
+    });
+
+    it("POST /api/backups/restore succeeds armed and restores the snapshot", async () => {
+      await expectAiRefusedNow();
+      // Snapshot and restore must see ONE app-data dir: no useTrial() between.
+      _resetDocBackupGateForTests();
+      const file = tmpFile("restore.md", "Version one.\n");
+      expect(await snapshotBeforeFirstWrite(file, { appDataDir: resolveAppDataDir() })).toBe(
+        "written",
+      );
+      const [snapshot] = await listDocBackups(file, resolveAppDataDir());
+      expect(snapshot).toBeDefined();
+      fs.writeFileSync(file, "Version two.\n");
+      const docId = await openViaApi(file);
+      expect(extractText(getOrCreateDocument(docId))).toBe("Version two.");
+
+      const res = await postApi("/api/backups/restore", {
+        backup: snapshot.name,
+        documentId: docId,
+      });
+      expect(res.status).toBe(200);
+      expect(res.json.data.restoredFrom).toContain(snapshot.name);
+      expect(extractText(getOrCreateDocument(docId))).toBe("Version one.");
+      expect(fs.readFileSync(file, "utf8")).toBe("Version one.\n");
+    });
+
+    it("POST /api/annotation-reply succeeds armed and writes the reply", async () => {
+      await expectAiRefusedNow();
+      const { docId, annId } = await openWithClaudeComment();
+      const res = await postApi("/api/annotation-reply", {
+        documentId: docId,
+        annotationId: annId,
+        text: "Agreed, thanks.",
+      });
+      expect(res.status).toBe(200);
+      expect(res.json).toEqual({
+        data: { replyId: expect.stringMatching(/^rpl_/), annotationId: annId },
+      });
+      const replies = getOrCreateDocument(docId).getMap(Y_MAP_ANNOTATION_REPLIES);
+      expect(replies.get(res.json.data.replyId)).toMatchObject({
+        annotationId: annId,
+        author: "user",
+        text: "Agreed, thanks.",
+      });
+    });
+
+    it("POST /api/remove-annotation succeeds armed and removes the record", async () => {
+      await expectAiRefusedNow();
+      const { docId, annId } = await openWithClaudeComment();
+      const annotations = getOrCreateDocument(docId).getMap(Y_MAP_ANNOTATIONS);
+      expect(annotations.has(annId)).toBe(true);
+      const res = await postApi("/api/remove-annotation", {
+        documentId: docId,
+        annotationId: annId,
+      });
+      expect(res).toEqual({ status: 200, json: { data: { removed: true, annotationId: annId } } });
+      expect(annotations.has(annId)).toBe(false);
+    });
+
+    it(
+      "POST /api/apply-changes succeeds armed and writes the accepted change",
+      async () => {
+        await expectAiRefusedNow();
+        // The wire-codes fixture (#1823): a minimal .docx on disk and an
+        // ACCEPTED suggestion over "Hello", registered directly — `.docx` opens
+        // are dark in a release, and vitest's TANDEM_DOCX=1 keeps this path live.
+        const file = tmpFile("apply.docx", await createMinimalDocx("Hello world"));
+        const docId = "license-armed-apply";
+        seedAcceptedSuggestion(getOrCreateDocument(docId));
+        addDoc(docId, {
+          id: docId,
+          filePath: file,
+          format: "docx",
+          readOnly: false,
+          source: "file",
+        });
+        setActiveDocId(docId);
+        const before = fs.readFileSync(file);
+
+        const res = await postApi("/api/apply-changes", { documentId: docId });
+        expect(res.status).toBe(200);
+        expect(res.json.data).toMatchObject({ applied: 1, rejected: 0 });
+        expect(fs.readFileSync(file).equals(before)).toBe(false);
+      },
+      timeoutMs(60_000, 300_000),
+    );
   });
 });
