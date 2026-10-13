@@ -10,7 +10,7 @@ interface Props {
   firstRunSettled?: boolean;
   soloMode?: boolean;
   aiNotice?: AiNotice | null;
-  refreshLicence?: () => void;
+  refreshLicence?: () => Promise<unknown> | void;
 }
 
 let {

@@ -598,8 +598,9 @@ export function createAiReadiness(deps: {
    * server stopped Tandem's Claude as `unlicensed` while `aiNotice` is still
    * null: at trial expiry the server knows before the client's licence poll
    * does (up to 60 s later). Required, so no caller can leave that window open.
+   * The pill waits only until the returned promise settles.
    */
-  refreshLicence: () => void;
+  refreshLicence: () => Promise<unknown> | void;
 }): AiReadiness {
   let status = $state<LauncherStatus | null>(null);
   // Whether an MCP client transport is currently open (from `/health`). An
@@ -981,6 +982,15 @@ export function createAiReadiness(deps: {
   // pill from saying "unlicensed" with no kind to explain it, which an
   // unverifiable licence holder must never see. `launcherFailure` already
   // ignores `unlicensed` (`TRIPPED_FAILURE`).
+  //
+  // The wait is bounded by that one re-read, never by the sighting. The server
+  // can keep reporting `unlicensed` after the licence is valid — a CLI
+  // `tandem activate` never reaches the route that resumes the launcher, nor
+  // does a licence file that starts verifying, nor an activation after a user
+  // Stop — and a "booting" held for the whole sighting would then hide the
+  // pill, and the Restart that now succeeds, until the server restarts. So once
+  // the re-read settles with `aiNotice` still null, the client's licence view
+  // is the answer and `state` falls through to the ordinary stopped mapping.
   const staleLicenceStop = $derived(
     status !== null &&
       status.available &&
@@ -988,12 +998,28 @@ export function createAiReadiness(deps: {
       status.lastError === "unlicensed" &&
       deps.aiNotice() === null,
   );
+  let licenceRereadPending = $state(false);
+  let sighting = 0;
   // ...and ask the licence store to catch up, once per sighting: a `$derived`
   // boolean re-runs this only when it CHANGES, so an 8 s poll repeating the
   // same answer calls nothing; a different `lastError`, or `aiNotice` turning
-  // non-null, ends the sighting and the next one calls again.
+  // non-null, ends the sighting and the next one calls again. This effect
+  // writes `licenceRereadPending` but never reads it.
   $effect(() => {
-    if (staleLicenceStop) untrack(() => deps.refreshLicence());
+    const mine = ++sighting;
+    if (!staleLicenceStop) {
+      licenceRereadPending = false;
+      return;
+    }
+    licenceRereadPending = true;
+    untrack(() => {
+      void Promise.resolve()
+        .then(() => deps.refreshLicence())
+        .catch(() => {})
+        .finally(() => {
+          if (mine === sighting && !destroyed) licenceRereadPending = false;
+        });
+    });
   });
 
   const state = $derived.by((): AiReadinessState => {
@@ -1011,7 +1037,7 @@ export function createAiReadiness(deps: {
     // An active MCP session means an agent is connected and AI works, whether
     // or not the launcher spawned it. Promote to ready and skip the CTA.
     if (sessionLive) return "ready";
-    if (staleLicenceStop) return "booting";
+    if (staleLicenceStop && licenceRereadPending) return "booting";
     if (status.available === false) {
       // Autostart deferral (#1236): the app was launched by the OS at login and
       // deliberately held the Claude launcher back. Nothing is misconfigured —

@@ -127,7 +127,7 @@ function mount(
     firstRunSettled?: boolean;
     soloMode?: boolean;
     aiNotice?: "unlicensed" | "unverifiable" | null;
-    refreshLicence?: () => void;
+    refreshLicence?: () => Promise<unknown> | void;
   } = {},
 ): { get(): AiReadiness } {
   const holder: { readiness: AiReadiness | null } = { readiness: null };
@@ -1776,12 +1776,14 @@ describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
     });
 
     // Once the refusal clears, a launcher still reporting `unlicensed` is the
-    // server and the client's licence view disagreeing — not a stop Restart can
-    // fix. It reads as "we don't know yet" until the next read says otherwise.
-    it("chip is 'unlicensed' with lastError 'unlicensed'; cleared, it waits rather than offering restart", async () => {
-      let launcher = stoppedWith("unlicensed");
+    // server and the client's licence view disagreeing. It reads as "we don't
+    // know yet" while the licence is re-read — and only that long: a server
+    // that never clears the code (a CLI `tandem activate`, a licence file that
+    // starts verifying, an activation after a user Stop) must not hide the
+    // Restart that now succeeds.
+    it("chip is 'unlicensed' with lastError 'unlicensed'; cleared, it waits for one licence re-read, then offers restart", async () => {
       globalThis.fetch = routedFetch({
-        launcher: () => launcher(),
+        launcher: stoppedWith("unlicensed"),
         health: mkResponse({ status: "ok", hasSession: false }),
       });
       const off = mount({ aiNotice: "unlicensed" });
@@ -1789,19 +1791,34 @@ describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
       expect(off.get().chip).toBe("unlicensed");
       cleanup();
 
-      const refreshLicence = vi.fn();
+      let finishReread: () => void = () => {};
+      const refreshLicence = vi.fn(() => new Promise<void>((resolve) => (finishReread = resolve)));
       const on = mount({ aiNotice: null, refreshLicence });
       await settle();
       expect(on.get().chip).toBeNull();
       expect(on.get().state).toBe("booting");
       expect(refreshLicence).toHaveBeenCalledTimes(1);
 
-      // The next read carries a real stop: Restart is offered again.
-      launcher = stoppedWith("circuit-open");
-      on.get().refreshLauncherStatus();
+      // The re-read lands and the licence still admits AI; the launcher still
+      // says `unlicensed`. The client's licence view is the answer: Restart.
+      finishReread();
       await settle();
       expect(on.get().state).toBe("stopped");
       expect(on.get().chip).toBe("restart");
+      expect(refreshLicence).toHaveBeenCalledTimes(1);
+    });
+
+    it("a re-read that fails also ends the wait", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: stoppedWith("unlicensed"),
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      const h = mount({
+        aiNotice: null,
+        refreshLicence: vi.fn(() => Promise.reject(new Error("offline"))),
+      });
+      await settle();
+      expect(h.get().chip).toBe("restart");
     });
 
     /**
@@ -1814,7 +1831,8 @@ describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
       it("offers no restart, surfaces no launcherFailure, and re-reads the licence once", async () => {
         vi.useFakeTimers();
         try {
-          const refreshLicence = vi.fn();
+          // The re-read is still in flight across the whole window.
+          const refreshLicence = vi.fn(() => new Promise<void>(() => {}));
           globalThis.fetch = routedFetch({
             launcher: stoppedWith("unlicensed"),
             health: mkResponse({ status: "ok", hasSession: false }),

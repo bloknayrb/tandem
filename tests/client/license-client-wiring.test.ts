@@ -57,7 +57,7 @@ describe("aiNotice reaches the readiness hook", () => {
   it("App wires refreshLicence to the licence store's refresh", () => {
     const call = APP.slice(APP.indexOf("createAiReadiness({"));
     expect(call.slice(0, call.indexOf("});"))).toContain(
-      "refreshLicence: () => void licenseStore.refresh()",
+      "refreshLicence: () => licenseStore.refresh()",
     );
   });
 
