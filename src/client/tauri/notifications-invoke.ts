@@ -26,3 +26,16 @@ export function notifyChatReply(invoke: InvokeFn, title: string, body: string): 
 export function requestAttention(invoke: InvokeFn): Promise<void> {
   return invoke<void>("request_attention");
 }
+
+/** Withdraw a `requestAttention` flash once the reply has been seen. */
+export function clearAttention(invoke: InvokeFn): Promise<void> {
+  return invoke<void>("clear_attention");
+}
+
+/**
+ * Post the fixed-text Settings test notification. Its click focuses the window
+ * but emits no `notification-activated` event: there is no reply to open.
+ */
+export function notifyTest(invoke: InvokeFn): Promise<void> {
+  return invoke<void>("notify_test");
+}

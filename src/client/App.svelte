@@ -109,10 +109,9 @@ import { createYjsSync } from "./hooks/yjsSync.svelte";
 import { createEditorStageModel } from "./layout/editor-stage.svelte";
 import { createLayoutModel } from "./layout/model.svelte";
 import { createRailContentModel } from "./layout/rail-content.svelte";
+import { createNotifierBackend } from "./notifications/backend";
 import { createChatAttention } from "./notifications/chat-attention";
 import { armChimes, playChime } from "./notifications/chimes";
-import { createTauriNotifier } from "./notifications/tauri-notifier";
-import { createWebNotifier } from "./notifications/web-notifier";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
 import {
   editAnnotation as marginEditAnnotation,
@@ -143,7 +142,7 @@ import {
   visibleLauncherFailure,
 } from "./status/status-ai-view";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
-import { loadInvoke, NOTIFICATION_ACTIVATED_EVENT } from "./tauri/notifications-invoke";
+import { NOTIFICATION_ACTIVATED_EVENT } from "./tauri/notifications-invoke";
 import { isRenamable } from "./types.js";
 import { MCP_BASE_URL } from "./utils/backend-ports";
 import { openFileForRuntime } from "./utils/browse-file";
@@ -2077,16 +2076,18 @@ const chatCanInsert = $derived(
 );
 // #2168: is the user looking at THIS window? Chat counts as seen only then —
 // a background window with chat open used to acknowledge every reply, so the
-// user came back to no unread count.
-const windowAttention = createWindowAttention();
+// user came back to no unread count. The Notifications toggle
+// `chatSeenWhenVisible` widens that to "visible" for side-by-side setups.
+const windowAttention = createWindowAttention({
+  visibleCountsAsActive: () => settingsState.settings.chatSeenWhenVisible,
+});
 const chatAttention = createChatAttention({
   getSettings: () => settingsState.settings,
   isActive: () => windowAttention.active,
   isSeen: (id) => chatState.isSeen(id),
   documentName: (id) =>
     chatState.documentFileNames.get(id) ?? openDocs.find((d) => d.id === id)?.fileName ?? null,
-  // Tauri first: the notification plugin replaces `window.Notification` there.
-  backend: isTauriRuntime() ? createTauriNotifier(loadInvoke) : createWebNotifier(),
+  backend: createNotifierBackend(),
   playChime,
   openChat: (documentId) => {
     if (documentId && yjsSync.tabs.some((tab) => tab.id === documentId)) {

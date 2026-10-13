@@ -53,9 +53,6 @@ export const EDITOR_MEASURE_LABEL: Readonly<Record<EditorMeasure, string>> = {
   full: "Full",
 };
 
-function isEditorMeasure(value: unknown): value is EditorMeasure {
-  return typeof value === "string" && (EDITOR_MEASURES as readonly string[]).includes(value);
-}
 export type ThemePreference = "light" | "dark" | "warm" | "system";
 /**
  * When `theme === "system"` and the OS reports a LIGHT appearance, this picks
@@ -288,6 +285,13 @@ export interface TandemSettings {
   /** Chime volume, 0–100. */
   chatSoundVolume: number;
   /**
+   * A visible window counts as the one you're using, for marking replies read
+   * and for notification decisions. Default `false`: only the focused window
+   * does. For people who keep Tandem open beside other apps — a visible but
+   * unfocused window then chimes without posting a notification.
+   */
+  chatSeenWhenVisible: boolean;
+  /**
    * **DO NOT** set this from product code. Internal marker stamped by
    * `loadSettings` when the on-disk `schemaVersion` is newer than this
    * client knows how to migrate. `createTandemSettings` short-circuits
@@ -358,6 +362,7 @@ const DEFAULTS: TandemSettings = {
   chatAttentionFlash: true,
   chatSound: "chime",
   chatSoundVolume: 60,
+  chatSeenWhenVisible: false,
 };
 
 /** Max length of an opaque keychain ref (matches server-side `REF_MAX_LENGTH`). */
@@ -578,12 +583,18 @@ function parseFontByExtension(raw: unknown): Partial<Record<string, EditorFont>>
  *   listed in REMOVED_FIELDS so it cannot resurrect via forward-compat.
  * v20→v21: introduce the chat-reply notification fields (#2168) —
  *   `chatNotifications: true`, `chatNotificationContent: "document"`,
- *   `chatAttentionFlash: true`, `chatSound: "chime"`, `chatSoundVolume: 60` —
- *   in one combined bump. Pure version bump — do NOT set the fields here;
+ *   `chatAttentionFlash: true`, `chatSound: "chime"`, `chatSoundVolume: 60`,
+ *   `chatSeenWhenVisible: false` — in one combined bump. Pure version bump — do NOT set the fields here;
  *   `normalizeKnownFields` fills each missing one with its default and
  *   preserves explicit values.
  */
 export const CURRENT_SCHEMA_VERSION = 21;
+
+/**
+ * Closed string-enum fields whose unknown value from a newer client is coerced
+ * to the default on a forward-compat load — `loadSettings` warns for each.
+ */
+const CLOSED_ENUM_FIELDS = ["editorMeasure", "chatNotificationContent", "chatSound"] as const;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -632,7 +643,7 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
       parsed.panelOrder === "annotations-editor-chat"
         ? "annotations-editor-chat"
         : "chat-editor-annotations",
-    editorMeasure: isEditorMeasure(parsed.editorMeasure)
+    editorMeasure: isOneOf(EDITOR_MEASURES, parsed.editorMeasure)
       ? parsed.editorMeasure
       : DEFAULTS.editorMeasure,
     selectionDwellMs: Math.max(
@@ -724,6 +735,7 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
     chatAttentionFlash: parsed.chatAttentionFlash === false ? false : DEFAULTS.chatAttentionFlash,
     chatSound: isOneOf(CHAT_SOUNDS, parsed.chatSound) ? parsed.chatSound : DEFAULTS.chatSound,
     chatSoundVolume: clampVolume(parsed.chatSoundVolume, DEFAULTS.chatSoundVolume),
+    chatSeenWhenVisible: parsed.chatSeenWhenVisible === true,
   };
 }
 
@@ -955,9 +967,10 @@ export function loadSettings(): TandemSettings {
         parsed = next;
       }
       if (parsed.schemaVersion === 20) {
-        // v20→v21: introduce the chat-reply notification fields (#2168).
-        // Pure version bump — do NOT set them here (that would clobber an
-        // explicit override); normalizeKnownFields fills the defaults.
+        // v20→v21: introduce the chat-reply notification fields (#2168),
+        // `chatSeenWhenVisible` included. Pure version bump — do NOT set them
+        // here (that would clobber an explicit override); normalizeKnownFields
+        // fills the defaults.
         parsed = { ...parsed, schemaVersion: 21 };
       }
       // Forward-compat: an on-disk version newer than what we can migrate
@@ -981,15 +994,14 @@ export function loadSettings(): TandemSettings {
         // bouncing back to the older client would see "comfortable" with no
         // signal — indistinguishable from "user changed their mind." `_readOnly`
         // still blocks the write-back so the future-client state isn't damaged.
-        const originalEditorMeasure = parsed.editorMeasure;
         const normalized = normalizeKnownFields(parsed);
-        if (
-          typeof originalEditorMeasure === "string" &&
-          originalEditorMeasure !== normalized.editorMeasure
-        ) {
-          console.warn(
-            `[tandem] editorMeasure=${JSON.stringify(originalEditorMeasure)} from newer client is unknown to v${CURRENT_SCHEMA_VERSION}; displaying as ${JSON.stringify(normalized.editorMeasure)} (your setting is preserved on-disk).`,
-          );
+        for (const field of CLOSED_ENUM_FIELDS) {
+          const original = parsed[field];
+          if (typeof original === "string" && original !== normalized[field]) {
+            console.warn(
+              `[tandem] ${field}=${JSON.stringify(original)} from newer client is unknown to v${CURRENT_SCHEMA_VERSION}; displaying as ${JSON.stringify(normalized[field])} (your setting is preserved on-disk).`,
+            );
+          }
         }
         // Preserve unknown future fields verbatim so a user bouncing back
         // to the newer client doesn't perceive a regression. `knownKeys`
@@ -1073,7 +1085,7 @@ export function mergeAndClampSettings(
     // preset payload can land a bogus string here. Reuse the on-load validator
     // so the clamp-on-write contract holds for `editorMeasure` the same way it
     // already holds for `accentHue` / `selectionDwellMs` / `defaultModelId`.
-    editorMeasure: isEditorMeasure(merged.editorMeasure)
+    editorMeasure: isOneOf(EDITOR_MEASURES, merged.editorMeasure)
       ? merged.editorMeasure
       : DEFAULTS.editorMeasure,
     degradedBannerDelayMs: Math.max(5000, Math.min(120000, merged.degradedBannerDelayMs)),

@@ -342,6 +342,7 @@ notifications-permission-status
 notifications-sound-preview
 notifications-sound-select
 notifications-test-button
+notifications-visible-toggle
 notifications-volume-slider
 onboarding-tutorial
 open-file-btn

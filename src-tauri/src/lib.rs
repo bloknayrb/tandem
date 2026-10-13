@@ -1725,7 +1725,9 @@ pub fn run() {
             autostart::autostart_get_status,
             autostart::autostart_set_enabled,
             notifications::notify_chat_reply,
+            notifications::notify_test,
             notifications::request_attention,
+            notifications::clear_attention,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| panic!("Failed to build Tauri application: {e}"))

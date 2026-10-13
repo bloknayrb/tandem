@@ -172,6 +172,12 @@ const CASES: ControlCase[] = [
     innerInput: true,
   },
   {
+    name: "SettingsNotificationsTab visible-counts-as-active checkbox",
+    component: SettingsNotificationsTab,
+    testid: "notifications-visible-toggle",
+    innerInput: true,
+  },
+  {
     name: "SettingsNotificationsTab content select",
     component: SettingsNotificationsTab,
     testid: "notifications-content-select",

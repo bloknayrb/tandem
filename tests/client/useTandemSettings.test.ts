@@ -348,6 +348,7 @@ describe("useTandemSettings — updateSettings write path", () => {
     chatAttentionFlash: true,
     chatSound: "chime",
     chatSoundVolume: 60,
+    chatSeenWhenVisible: false,
   } as TandemSettings;
 
   it("clamps chat-notification values on write (#2168)", () => {

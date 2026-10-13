@@ -239,6 +239,8 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   the OS; browser: granted / denied / unsupported / ask), and
   `notifications-allow-button`, rendered only while the browser permission is
   `"default"`
+- `notifications-visible-toggle` — "I keep Tandem visible beside other apps"
+  (`chatSeenWhenVisible`): a visible window counts as the one in use
 
 ### Settings — Appearance tab
 - `theme-{*}-btn`, `default-tab-{chat,annotations}-btn`,

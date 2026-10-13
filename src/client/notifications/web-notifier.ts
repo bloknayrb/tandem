@@ -47,33 +47,68 @@ export function withTitleCount(title: string, count: number): string {
   return `(${count > 9 ? "9+" : count}) ${base}`;
 }
 
+/**
+ * `lib.dom` does not declare `renotify` yet. Chromium re-alerts (sound,
+ * banner) for a notification that replaces one with the same non-empty tag
+ * only when it is set; other browsers ignore the field.
+ */
+type WebNotificationOptions = NotificationOptions & { renotify?: boolean };
+
+/**
+ * Post one browser notification. Returns it, or null when permission is not
+ * granted or the platform refuses. A click focuses the window, closes the
+ * notification, then runs `onClick`.
+ */
+export function postWebNotification(
+  text: NotificationText,
+  options: { tag: string; onClick: () => void },
+): Notification | null {
+  if (webNotificationPermission() !== "granted") return null;
+  try {
+    const init: WebNotificationOptions = {
+      body: text.body,
+      tag: options.tag,
+      renotify: true,
+      // The page plays its own chime.
+      silent: true,
+    };
+    const notification = new Notification(text.title, init);
+    notification.onclick = () => {
+      window.focus();
+      notification.close();
+      options.onClick();
+    };
+    return notification;
+  } catch (err) {
+    // Some platforms (Android Chrome) only allow notifications from a
+    // service worker and throw on the constructor.
+    console.warn("[notifications] browser notification failed:", err);
+    return null;
+  }
+}
+
 export function createWebNotifier(): NotifierBackend {
+  // The last notification this backend posted, closed once the user is back
+  // so a stale "Claude replied" does not linger in the notification centre.
+  let last: Notification | null = null;
   return {
     notify(text: NotificationText, onClick: () => void) {
-      if (webNotificationPermission() !== "granted") return;
-      try {
-        const notification = new Notification(text.title, {
-          body: text.body,
-          tag: TAG,
-          // The page plays its own chime.
-          silent: true,
-        });
-        notification.onclick = () => {
-          window.focus();
-          notification.close();
-          onClick();
-        };
-      } catch (err) {
-        // Some platforms (Android Chrome) only allow notifications from a
-        // service worker and throw on the constructor.
-        console.warn("[notifications] browser notification failed:", err);
-      }
+      const posted = postWebNotification(text, { tag: TAG, onClick });
+      if (posted) last = posted;
     },
     attention(count: number) {
       document.title = withTitleCount(document.title, count);
     },
     clearAttention() {
       document.title = withTitleCount(document.title, 0);
+      if (last) {
+        try {
+          last.close();
+        } catch {
+          // Already gone, or the platform refuses — nothing to undo.
+        }
+        last = null;
+      }
     },
   };
 }

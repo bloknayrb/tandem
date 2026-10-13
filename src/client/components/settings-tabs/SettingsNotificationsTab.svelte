@@ -1,15 +1,13 @@
 <script lang="ts">
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
 import type { ChatNotificationContent, ChatSound } from "../../hooks/useTandemSettings";
+import { sendTestNotification } from "../../notifications/backend";
 import { playChime } from "../../notifications/chimes";
-import { createTauriNotifier } from "../../notifications/tauri-notifier";
 import {
-  createWebNotifier,
   requestWebNotificationPermission,
   type WebNotificationPermission,
   webNotificationPermission,
 } from "../../notifications/web-notifier";
-import { loadInvoke } from "../../tauri/notifications-invoke";
 import { disabledControlStyle } from "../../utils/colors";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
@@ -55,11 +53,7 @@ async function setEnabled(enabled: boolean): Promise<void> {
 }
 
 function sendTest(): void {
-  const backend = desktop ? createTauriNotifier(loadInvoke) : createWebNotifier();
-  backend.notify(
-    { title: "Claude replied", body: "This is a test notification from Tandem." },
-    () => {},
-  );
+  sendTestNotification();
   playChime(ctx.settings.chatSound, ctx.settings.chatSoundVolume);
 }
 </script>
@@ -137,6 +131,23 @@ function sendTest(): void {
   />
   <span>{desktop ? "Flash the taskbar icon until you switch to Tandem" : "Show the unread count in the tab title"}</span>
 </label>
+
+<div>
+  <label data-testid="notifications-visible-toggle" style={toggleStyle}>
+    <input
+      type="checkbox"
+      checked={ctx.settings.chatSeenWhenVisible}
+      disabled={ctx.readOnly}
+      onchange={(e) => ctx.onUpdate({ chatSeenWhenVisible: (e.target as HTMLInputElement).checked })}
+      style="accent-color: var(--tandem-accent); {disabledControlStyle(ctx.readOnly)}"
+    />
+    <span>I keep Tandem visible beside other apps</span>
+  </label>
+  <div class="settings-hint" style="margin-top: var(--tandem-space-1);">
+    Replies count as read whenever Tandem is open on screen, even behind other windows. You'll hear
+    the sound but get no notification while it's open.
+  </div>
+</div>
 
 <div>
   <label for="notifications-sound-select" class="settings-section-label">Sound</label>

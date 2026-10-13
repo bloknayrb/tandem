@@ -1,4 +1,9 @@
-import { type InvokeFn, notifyChatReply, requestAttention } from "../tauri/notifications-invoke";
+import {
+  clearAttention,
+  type InvokeFn,
+  notifyChatReply,
+  requestAttention,
+} from "../tauri/notifications-invoke";
 import type { NotificationText, NotifierBackend } from "./chat-attention";
 
 /**
@@ -8,8 +13,12 @@ import type { NotificationText, NotifierBackend } from "./chat-attention";
  * A click is not reported through `notify`'s callback: the Rust click handler
  * focuses the window (as a user-presence signal) and emits the payload-free
  * `notification-activated` event, which `App.svelte` routes to
- * `ChatAttention.notificationActivated()`. The flash clears itself when the
- * window is focused, so `clearAttention` has nothing to do.
+ * `ChatAttention.notificationActivated()`.
+ *
+ * `clearAttention` withdraws the request explicitly (`clear_attention`) once
+ * the user is back. Focusing stops the Windows flash and the macOS bounce on
+ * its own; the Linux urgency hint is the case that needs it, since tao clears
+ * that only when asked.
  */
 export function createTauriNotifier(getInvoke: () => Promise<InvokeFn>): NotifierBackend {
   const warn = (what: string) => (err: unknown) => {
@@ -26,6 +35,10 @@ export function createTauriNotifier(getInvoke: () => Promise<InvokeFn>): Notifie
         .then((invoke) => requestAttention(invoke))
         .catch(warn("request_attention"));
     },
-    clearAttention() {},
+    clearAttention() {
+      void getInvoke()
+        .then((invoke) => clearAttention(invoke))
+        .catch(warn("clear_attention"));
+    },
   };
 }

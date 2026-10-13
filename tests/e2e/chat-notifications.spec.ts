@@ -123,3 +123,38 @@ test("the Notifications settings tab persists its controls", async ({ page }) =>
   expect(stored.chatNotificationContent).toBe("preview");
   expect(stored.chatSound).toBe("none");
 });
+
+test("trusted input after a blur counts as the user being back", async ({ page }) => {
+  // The synthetic blur stands in for a window that lost (or never had) focus;
+  // a real keypress is trusted input, which corrects it without any `focus`
+  // event — the case a false `document.hasFocus()` seed at load depends on.
+  await boot(page);
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await page.keyboard.press("Shift");
+
+  await mcp.callTool("tandem_reply", { text: "Answer after you pressed a key." });
+  await page.waitForTimeout(2_000);
+  expect(await posted(page)).toHaveLength(0);
+  await expect(page).not.toHaveTitle(/^\(\d+\+?\) /);
+});
+
+test("with 'visible beside other apps' on, a blurred visible window does not notify", async ({
+  page,
+}) => {
+  // Each test gets a fresh browser context, so this setting does not leak.
+  await boot(page);
+  await openSettingsViaBrandMenu(page);
+  await page.locator("[data-testid='settings-modal-tab-notifications']").click();
+  const toggle = page.locator("[data-testid='notifications-visible-toggle'] input");
+  await toggle.check();
+  await expect(toggle).toBeChecked();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("[data-testid='settings-modal']")).toBeHidden();
+
+  // Blur AFTER the last input, so the trusted-input correction cannot be what
+  // keeps the window active — only the setting can.
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await mcp.callTool("tandem_reply", { text: "Answer beside your terminal." });
+  await page.waitForTimeout(2_000);
+  expect(await posted(page)).toHaveLength(0);
+});
