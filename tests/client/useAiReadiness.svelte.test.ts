@@ -27,9 +27,9 @@
 
 import { cleanup, render, screen } from "@testing-library/svelte";
 import { tick } from "svelte";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { AiChip, AiReadiness } from "../../src/client/hooks/useAiReadiness.svelte";
-import { AI_CTA } from "../../src/client/hooks/useAiReadiness.svelte";
+import { AI_CTA, ctaHandler } from "../../src/client/hooks/useAiReadiness.svelte";
 import AiReadinessHarness from "../../src/client/svelte-harness/AiReadinessHarness.svelte";
 import { API_LAUNCHER_STATUS } from "../../src/shared/api-paths.js";
 
@@ -122,7 +122,13 @@ function expectDemoted(h: { get(): AiReadiness }): void {
 /** Mount the harness; `onReady` fires in an $effect after mount, so the handle
  *  is captured in a holder and read (via `.get()`) after `settle()`. */
 function mount(
-  props: { connected?: boolean; firstRunSettled?: boolean; soloMode?: boolean } = {},
+  props: {
+    connected?: boolean;
+    firstRunSettled?: boolean;
+    soloMode?: boolean;
+    aiNotice?: "unlicensed" | "unverifiable" | null;
+    refreshLicence?: () => Promise<unknown> | void;
+  } = {},
 ): { get(): AiReadiness } {
   const holder: { readiness: AiReadiness | null } = { readiness: null };
   render(AiReadinessHarness, {
@@ -952,7 +958,7 @@ describe("createAiReadiness", () => {
  * to stop, so the wrong branch is actively harmful, not merely mislabelled.
  */
 describe("AI_CTA", () => {
-  const CHIPS: Exclude<AiChip, null>[] = ["connect", "setup", "sign-in", "restart"];
+  const CHIPS: Exclude<AiChip, null>[] = ["connect", "setup", "sign-in", "restart", "ai-off"];
 
   it("covers every non-null chip with non-empty copy", () => {
     // Guards against a future union member landing with no entry: the type
@@ -981,6 +987,54 @@ describe("AI_CTA", () => {
   // #1780: Check again is a restart — the supervisor re-sends a turn on it.
   it("routes 'sign-in' to the restart flow", () => {
     expect(AI_CTA["sign-in"].action).toBe("restart");
+  });
+
+  // #1521. One entry serves both refusal kinds, so its copy names neither and
+  // never says the trial ended (ADR-040 decision 5).
+  it("routes 'ai-off' to license settings, with kind-neutral copy", () => {
+    expect(AI_CTA["ai-off"].action).toBe("open-license-settings");
+    for (const text of [
+      AI_CTA["ai-off"].label,
+      AI_CTA["ai-off"].title,
+      AI_CTA["ai-off"].ariaLabel,
+    ]) {
+      expect(text).not.toMatch(/trial|expired|unlicensed|activate/i);
+    }
+  });
+});
+
+/**
+ * `ctaHandler` is the ONE dispatcher from a CTA action to its handler (#1521).
+ * Each action must call exactly its own handler — a binary ternary would route
+ * the new `open-license-settings` action to connect or restart.
+ */
+describe("ctaHandler", () => {
+  it("calls exactly the matching handler for each action", () => {
+    for (const action of ["connect", "restart", "open-license-settings"] as const) {
+      const h = { connect: vi.fn(), restart: vi.fn(), openLicenseSettings: vi.fn() };
+      ctaHandler(action, h)();
+      expect(h.connect).toHaveBeenCalledTimes(action === "connect" ? 1 : 0);
+      expect(h.restart).toHaveBeenCalledTimes(action === "restart" ? 1 : 0);
+      expect(h.openLicenseSettings).toHaveBeenCalledTimes(
+        action === "open-license-settings" ? 1 : 0,
+      );
+    }
+  });
+
+  it("is typed over AiCtaAction only", () => {
+    const h = { connect: () => {}, restart: () => {}, openLicenseSettings: () => {} };
+    expectTypeOf(ctaHandler)
+      .parameter(0)
+      .toEqualTypeOf<"connect" | "restart" | "open-license-settings">();
+    // @ts-expect-error — an unknown action is a compile error.
+    ctaHandler("relaunch", h);
+  });
+
+  it("every AI_CTA entry resolves to a handler", () => {
+    const h = { connect: vi.fn(), restart: vi.fn(), openLicenseSettings: vi.fn() };
+    for (const chip of Object.keys(AI_CTA) as Exclude<AiChip, null>[]) {
+      expect(typeof ctaHandler(AI_CTA[chip].action, h)).toBe("function");
+    }
   });
 });
 
@@ -1689,6 +1743,338 @@ describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
       await settle();
       expect(h.get().state).toBe("unconfigured");
       expect(h.get().chip).toBe("connect");
+    });
+  });
+
+  /**
+   * #1521: the licence refusal ranks FIRST. Solo is a privacy choice, the
+   * refusal is a capability fact, and every other CTA would be refused by the
+   * server. Once it clears, an `unlicensed` lastError maps back to Restart.
+   */
+  describe("licence refusal (aiNotice)", () => {
+    const stoppedWith = (lastError?: string) => () =>
+      mkResponse({ available: true, running: false, ...(lastError ? { lastError } : {}) });
+
+    it("chip is 'ai-off' in Tandem mode with a stopped launcher", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: stoppedWith(),
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      const h = mount({ aiNotice: "unlicensed" });
+      await settle();
+      expect(h.get().chip).toBe("ai-off");
+    });
+
+    it("chip is 'ai-off' in Solo too — the refusal outranks Solo", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: stoppedWith(),
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      const h = mount({ aiNotice: "unverifiable", soloMode: true });
+      await settle();
+      expect(h.get().chip).toBe("ai-off");
+    });
+
+    // Once the refusal clears, a launcher still reporting `unlicensed` is the
+    // server and the client's licence view disagreeing. It reads as "we don't
+    // know yet" while the licence is re-read — and only that long: a server
+    // that never clears the code (a CLI `tandem activate`, a licence file that
+    // starts verifying, an activation after a user Stop) must not hide the
+    // Restart that now succeeds.
+    it("chip is 'ai-off' with lastError 'unlicensed'; cleared, it waits for one licence re-read, then offers restart", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: stoppedWith("unlicensed"),
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      const off = mount({ aiNotice: "unlicensed" });
+      await settle();
+      expect(off.get().chip).toBe("ai-off");
+      cleanup();
+
+      let finishReread: () => void = () => {};
+      const refreshLicence = vi.fn(() => new Promise<void>((resolve) => (finishReread = resolve)));
+      const on = mount({ aiNotice: null, refreshLicence });
+      await settle();
+      expect(on.get().chip).toBeNull();
+      expect(on.get().state).toBe("booting");
+      expect(refreshLicence).toHaveBeenCalledTimes(1);
+
+      // The re-read lands and the licence still admits AI; the launcher still
+      // says `unlicensed`. The client's licence view is the answer: Restart.
+      finishReread();
+      await settle();
+      expect(on.get().state).toBe("stopped");
+      expect(on.get().chip).toBe("restart");
+      expect(refreshLicence).toHaveBeenCalledTimes(1);
+    });
+
+    it("an earlier sighting's re-read settling late does not end a newer sighting's wait", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: stoppedWith("unlicensed"),
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      const finishers: Array<() => void> = [];
+      const refreshLicence = vi.fn(() => new Promise<void>((resolve) => finishers.push(resolve)));
+      const holder: { r: AiReadiness | null } = { r: null };
+      const onReady = (r: AiReadiness) => (holder.r = r);
+      const { rerender } = render(AiReadinessHarness, {
+        props: { aiNotice: null, refreshLicence, onReady },
+      });
+      await settle();
+      await rerender({ aiNotice: "unlicensed", refreshLicence, onReady });
+      await settle();
+      await rerender({ aiNotice: null, refreshLicence, onReady });
+      await settle();
+      expect(refreshLicence).toHaveBeenCalledTimes(2);
+
+      finishers[0]();
+      await settle();
+      expect(holder.r?.state).toBe("booting");
+
+      finishers[1]();
+      await settle();
+      expect(holder.r?.chip).toBe("restart");
+    });
+
+    it("a re-read that fails also ends the wait", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: stoppedWith("unlicensed"),
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      const h = mount({
+        aiNotice: null,
+        refreshLicence: vi.fn(() => Promise.reject(new Error("offline"))),
+      });
+      await settle();
+      expect(h.get().chip).toBe("restart");
+    });
+
+    /**
+     * At trial expiry the server stops Tandem's Claude (`lastError:
+     * "unlicensed"`) up to 60 s before the client's licence poll notices. In
+     * that window nothing may offer Restart (the server would refuse it), and
+     * nothing may say "unlicensed" without a kind; the licence is re-read once.
+     */
+    describe("the server refuses before the client's licence knows", () => {
+      it("offers no restart, surfaces no launcherFailure, and re-reads the licence once", async () => {
+        vi.useFakeTimers();
+        try {
+          // The re-read is still in flight across the whole window.
+          const refreshLicence = vi.fn(() => new Promise<void>(() => {}));
+          globalThis.fetch = routedFetch({
+            launcher: stoppedWith("unlicensed"),
+            health: mkResponse({ status: "ok", hasSession: false }),
+          });
+          const h = mount({ aiNotice: null, refreshLicence });
+          await vi.advanceTimersByTimeAsync(0);
+          await tick();
+          expect(h.get().chip).toBeNull();
+          expect(h.get().state).toBe("booting");
+          expect(h.get().launcherFailure).toBeNull();
+          expect(refreshLicence).toHaveBeenCalledTimes(1);
+
+          // Two more 8 s polls with the same answer call nothing more.
+          await vi.advanceTimersByTimeAsync(16_000);
+          await tick();
+          expect(refreshLicence).toHaveBeenCalledTimes(1);
+          expect(h.get().chip).toBeNull();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("a live session beside it still surfaces no launcherFailure", async () => {
+        globalThis.fetch = routedFetch({
+          launcher: stoppedWith("unlicensed"),
+          health: mkResponse({ status: "ok", hasSession: true, sessionCount: 1 }),
+        });
+        const h = mount({ aiNotice: null, refreshLicence: vi.fn() });
+        await settle();
+        expect(h.get().launcherFailure).toBeNull();
+        expect(h.get().chip).toBeNull();
+      });
+
+      it("the sighting ends when aiNotice arrives; a later one re-reads again", async () => {
+        const refreshLicence = vi.fn();
+        globalThis.fetch = routedFetch({
+          launcher: stoppedWith("unlicensed"),
+          health: mkResponse({ status: "ok", hasSession: false }),
+        });
+        const onReady = () => {};
+        const { rerender } = render(AiReadinessHarness, {
+          props: { aiNotice: null, refreshLicence, onReady },
+        });
+        await settle();
+        expect(refreshLicence).toHaveBeenCalledTimes(1);
+
+        await rerender({ aiNotice: "unlicensed", refreshLicence, onReady });
+        await settle();
+        expect(refreshLicence).toHaveBeenCalledTimes(1);
+
+        await rerender({ aiNotice: null, refreshLicence, onReady });
+        await settle();
+        expect(refreshLicence).toHaveBeenCalledTimes(2);
+      });
+
+      it("the twin: circuit-open with aiNotice null still offers restart, and reads no licence", async () => {
+        const refreshLicence = vi.fn();
+        globalThis.fetch = routedFetch({
+          launcher: stoppedWith("circuit-open"),
+          health: mkResponse({ status: "ok", hasSession: false }),
+        });
+        const h = mount({ aiNotice: null, refreshLicence });
+        await settle();
+        expect(h.get().state).toBe("stopped");
+        expect(h.get().chip).toBe("restart");
+        expect(refreshLicence).not.toHaveBeenCalled();
+      });
+    });
+
+    it("launcherFailure is suppressed while refused; the twin shows it when cleared", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: stoppedWith("circuit-open"),
+        health: mkResponse({ status: "ok", hasSession: true }),
+      });
+      const off = mount({ aiNotice: "unlicensed" });
+      await settle();
+      expect(off.get().launcherFailure).toBeNull();
+      cleanup();
+
+      const on = mount({ aiNotice: null });
+      await settle();
+      expect(on.get().launcherFailure).toBe("restart");
+    });
+
+    // The refusal clearing is what retires the stale `lastError: "unlicensed"`
+    // Restart chip, however it clears — the Settings form or a CLI
+    // `tandem activate` picked up by the licence poll.
+    it("re-reads the launcher at once when the refusal clears, and only then", async () => {
+      const seen: string[] = [];
+      const inner = routedFetch({
+        launcher: stoppedWith("unlicensed"),
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      globalThis.fetch = (async (input: string) => {
+        seen.push(String(input));
+        return inner(input as never);
+      }) as unknown as typeof fetch;
+      const holder: { r: AiReadiness | null } = { r: null };
+      const onReady = (r: AiReadiness) => (holder.r = r);
+      const { rerender } = render(AiReadinessHarness, {
+        props: { aiNotice: "unlicensed", onReady },
+      });
+      await settle();
+      const launcherReads = () => seen.filter((u) => u.includes(API_LAUNCHER_STATUS)).length;
+      const before = launcherReads();
+
+      // A kind change is not a clearing.
+      await rerender({ aiNotice: "unverifiable", onReady });
+      await settle();
+      expect(launcherReads()).toBe(before);
+
+      await rerender({ aiNotice: null, onReady });
+      await settle();
+      expect(launcherReads()).toBe(before + 1);
+      expect(holder.r?.aiNotice).toBeNull();
+
+      // Becoming refused again reads nothing extra.
+      await rerender({ aiNotice: "unlicensed", onReady });
+      await settle();
+      expect(launcherReads()).toBe(before + 1);
+      expect(holder.r?.aiNotice).toBe("unlicensed");
+    });
+
+    // The respawned child is usually still starting at the first read; the
+    // 2s/5s follow-ups are what show it running before the next 8s poll.
+    it("follows the clearing read with two more at 2s and 5s, and none after unmount", async () => {
+      vi.useFakeTimers();
+      try {
+        const seen: string[] = [];
+        const inner = routedFetch({
+          launcher: stoppedWith("unlicensed"),
+          health: mkResponse({ status: "ok", hasSession: false }),
+        });
+        globalThis.fetch = (async (input: string) => {
+          seen.push(String(input));
+          return inner(input as never);
+        }) as unknown as typeof fetch;
+        const flush = async () => {
+          await vi.advanceTimersByTimeAsync(0);
+          await tick();
+        };
+        const onReady = () => {};
+        const { rerender, unmount } = render(AiReadinessHarness, {
+          props: { aiNotice: "unlicensed", onReady },
+        });
+        await flush();
+        const launcherReads = () => seen.filter((u) => u.includes(API_LAUNCHER_STATUS)).length;
+        const before = launcherReads();
+
+        await rerender({ aiNotice: null, onReady });
+        await flush();
+        expect(launcherReads()).toBe(before + 1);
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(launcherReads()).toBe(before + 2);
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(launcherReads()).toBe(before + 3);
+
+        // A refusal returning within 5s cancels the pending follow-ups: clear,
+        // wait 1s, re-refuse, and nothing more is read. The 8s poll interval
+        // also reads the launcher, so each window below is placed between two
+        // of its ticks (t=8s, 16s, 24s from mount): step just past one first.
+        await vi.advanceTimersByTimeAsync(3_100); // t≈8.1s, past the first tick
+        const beforeRecur = launcherReads();
+        await rerender({ aiNotice: "unlicensed", onReady });
+        await flush();
+        await rerender({ aiNotice: null, onReady });
+        await flush();
+        expect(launcherReads()).toBe(beforeRecur + 1);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await rerender({ aiNotice: "unlicensed", onReady });
+        await flush();
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(launcherReads()).toBe(beforeRecur + 1);
+
+        // Clearing again schedules a fresh pair, and only one: no reads stacked
+        // from the cancelled clearing.
+        await vi.advanceTimersByTimeAsync(2_000); // t≈16.1s, past the second tick
+        const beforeAgain = launcherReads();
+        await rerender({ aiNotice: null, onReady });
+        await flush();
+        expect(launcherReads()).toBe(beforeAgain + 1);
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(launcherReads()).toBe(beforeAgain + 2);
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(launcherReads()).toBe(beforeAgain + 3);
+
+        // A second clearing, then unmount before its follow-ups fire.
+        await rerender({ aiNotice: "unlicensed", onReady });
+        await flush();
+        await rerender({ aiNotice: null, onReady });
+        await flush();
+        const atUnmount = launcherReads();
+        unmount();
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(launcherReads()).toBe(atUnmount);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("deliveryStalledMs is null while refused; the twin reports the stall", async () => {
+      const STALLED = { state: "awaiting-poll", waitingMs: 200_000 };
+      globalThis.fetch = routedFetch({
+        launcher: RUNNING_LAUNCHER,
+        health: mkResponse({ status: "ok", hasSession: true, delivery: STALLED }),
+      });
+      const off = mount({ aiNotice: "unlicensed" });
+      await settle();
+      expect(off.get().deliveryStalledMs).toBeNull();
+      cleanup();
+
+      const on = mount({ aiNotice: null });
+      await settle();
+      expect(on.get().deliveryStalledMs).toBe(200_000);
     });
   });
 

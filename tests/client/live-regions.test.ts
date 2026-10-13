@@ -175,6 +175,27 @@ describe("LicenseBanner live region", () => {
     expect(before.textContent).toContain("left in your Tandem trial");
     notALiveRegion(q(container, "license-trial-banner"));
   });
+
+  // #1521: the trial gates the AI, not editing, so the banner says so.
+  it("offers a license to keep Claude, not to keep editing", async () => {
+    licenseStore.set(trial(5));
+    const { container } = render(LicenseBanner);
+    await tick();
+    const text = q(container, "license-trial-banner")?.textContent ?? "";
+    expect(text).toContain("to keep Claude when it ends");
+    expect(text).not.toContain("keep editing");
+    expect(q(container, "license-trial-buy")).toBeTruthy();
+  });
+
+  // A trial user can hold a licence file that fails to verify; they most likely
+  // paid, so no purchase link (ADR-040 decision 8).
+  it("a trial with an unverifiable licence shows no buy link", async () => {
+    licenseStore.set({ ...trial(5), licenseUnverifiable: "BAD_SIGNATURE" });
+    const { container } = render(LicenseBanner);
+    await tick();
+    expect(q(container, "license-trial-buy")).toBeNull();
+    expect(q(container, "license-trial-banner")?.textContent).toContain("couldn't be verified");
+  });
 });
 
 describe("WakeStallBanner live region", () => {

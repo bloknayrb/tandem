@@ -32,7 +32,10 @@ vi.hoisted(() => {
 });
 
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { getDeliveryState } from "../../src/server/events/delivery-state.js";
+import {
+  getDeliveryState,
+  resetDeliveryStateForTests,
+} from "../../src/server/events/delivery-state.js";
 import {
   _pushEventForTests,
   getSubscriberCount,
@@ -663,6 +666,58 @@ describe("armed and keyless (#1521)", () => {
       expect(code).toBe(WAKE_CLOSE_LICENSE_REQUIRED);
       expect(reason).toBe(LICENSE_REQUIRED);
       expect(Buffer.byteLength(reason)).toBeLessThanOrEqual(123);
+    });
+  });
+
+  /**
+   * `/health`'s delivery state under a refusal (#1521, PR 2). Both misreadings
+   * need a forward outstanding at expiry: an ask recorded while licensed.
+   * Refused events are never recorded, so the forward is pushed on a fresh
+   * trial first. Each case flips back to a trial for the twin, which must read
+   * the raw state again — the fix is read-time and must not stick.
+   */
+  describe("GET /health delivery while refused", () => {
+    async function deliveryState(): Promise<string> {
+      const res = await fetch(`${baseUrl}/health`);
+      const body = (await res.json()) as { delivery?: { state: string } };
+      if (!body.delivery) throw new Error("loopback /health carried no delivery");
+      return body.delivery.state;
+    }
+
+    it("a revoked last consumer reads license-refused, not consumer-detached", async () => {
+      resetDeliveryStateForTests();
+      useFreshTrial();
+      const sse = vi.fn();
+      subscribe(sse, "external", { onRevoke: vi.fn() });
+      _pushEventForTests(chatEvent("m-health-1"));
+      expect(await deliveryState()).toBe("awaiting-poll");
+
+      useExpired();
+      _pushEventForTests(chatEvent("m-health-2")); // revokes the SSE consumer
+      expect(getSubscriberCount()).toBe(0);
+      expect(await deliveryState()).toBe("license-refused");
+
+      useFreshTrial();
+      expect(await deliveryState()).toBe("consumer-detached");
+      resetDeliveryStateForTests();
+    });
+
+    it("a surviving no-onRevoke subscriber reads license-refused, not awaiting-poll", async () => {
+      resetDeliveryStateForTests();
+      useFreshTrial();
+      const supervisorLike = vi.fn();
+      subscribe(supervisorLike, "external");
+      _pushEventForTests(chatEvent("m-health-3"));
+
+      useExpired();
+      _pushEventForTests(chatEvent("m-health-4"));
+      expect(getSubscriberCount()).toBe(1);
+      expect(await deliveryState()).toBe("license-refused");
+
+      useFreshTrial();
+      expect(await deliveryState()).toBe("awaiting-poll");
+      unsubscribe(supervisorLike);
+      resetDeliveryStateForTests();
     });
   });
 

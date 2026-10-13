@@ -9,10 +9,11 @@ import type {
   LauncherFailure,
   PushDelivery,
 } from "../hooks/useAiReadiness.svelte";
-import { AI_CTA, TANDEM_CLAUDE_DOWN } from "../hooks/useAiReadiness.svelte";
+import { AI_CTA, ctaHandler, TANDEM_CLAUDE_DOWN } from "../hooks/useAiReadiness.svelte";
 import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
 import { createCoalescingTick } from "../utils/coalescing-tick";
 import { debounce } from "../utils/debounce";
+import type { AiNotice } from "../utils/license-ui";
 import CwdDriftPill from "./CwdDriftPill.svelte";
 import {
   type AiIndicatorTone,
@@ -72,6 +73,18 @@ interface Props {
   aiChip?: AiChip;
   onConnectAi?: () => void;
   onRestartClaude?: () => void;
+  /**
+   * Open Settings → License — the `ai-off` chip's action (#1521). Required,
+   * like `aiLauncherAttached`: a default would let a mount that forgets it
+   * render a CTA that does nothing.
+   */
+  onOpenLicenseSettings: () => void;
+  /**
+   * The licence refusal (#1521): pass `aiReadiness.aiNotice`, never
+   * `licenseStore.ui.aiNotice` — readiness guarantees it is non-null exactly
+   * when `aiChip` is `"ai-off"`. Drives the pill's ai-off state and copy.
+   */
+  aiNotice: AiNotice | null;
   /** Solo mode — suppresses the "AI not connected" nag when no AI is connected. */
   soloMode: boolean;
   /** Whether anything is delivering real-time events. Only `"none"` changes the
@@ -144,6 +157,8 @@ let {
   aiChip = null,
   onConnectAi,
   onRestartClaude,
+  onOpenLicenseSettings,
+  aiNotice,
   soloMode,
   pushDelivery = "unknown",
   claudeWorkingTool = null,
@@ -286,8 +301,19 @@ const aiView = $derived(
     launcherRestarting: aiLauncherRestarting,
     docSyncConnected: connected,
     sessionCount: aiSessionCount,
+    aiNotice,
   }),
 );
+
+// The three handlers every CTA may name, for `ctaHandler`. Built inside each
+// `$derived` below (never a top-level object) so the closures read live props.
+function ctaHandlers() {
+  return {
+    connect: () => onConnectAi?.(),
+    restart: () => onRestartClaude?.(),
+    openLicenseSettings: () => onOpenLicenseSettings(),
+  };
+}
 
 // The "Tandem's Claude isn't running" sibling: copy from `TANDEM_CLAUDE_DOWN`,
 // handler choice from `AI_CTA[failure].action` — one lookup each, never a
@@ -296,7 +322,7 @@ const launcherDown = $derived(
   aiLauncherFailure && !aiLauncherFailureDismissed
     ? {
         ...TANDEM_CLAUDE_DOWN[aiLauncherFailure],
-        onclick: AI_CTA[aiLauncherFailure].action === "restart" ? onRestartClaude : onConnectAi,
+        onclick: ctaHandler(AI_CTA[aiLauncherFailure].action, ctaHandlers()),
       }
     : null,
 );
@@ -320,12 +346,21 @@ const launcherDown = $derived(
  * props, so they're bound inside `aiCta` here: a plain top-level object would
  * freeze stale closures over the props' initial values.
  */
+// The `ai-off` chip takes its title/aria from the ai-off view, which holds
+// the kind-specific copy (#1521). `AI_CTA["ai-off"]` is the type-level fallback
+// only, which is why it must stay kind-neutral (see its comment).
 const aiCta = $derived(
   aiChip
     ? {
-        title: AI_CTA[aiChip].title,
-        ariaLabel: AI_CTA[aiChip].ariaLabel,
-        onclick: AI_CTA[aiChip].action === "restart" ? onRestartClaude : onConnectAi,
+        title:
+          aiChip === "ai-off" && aiView?.dataState === "ai-off"
+            ? aiView.title
+            : AI_CTA[aiChip].title,
+        ariaLabel:
+          aiChip === "ai-off" && aiView?.dataState === "ai-off"
+            ? aiView.ariaLabel
+            : AI_CTA[aiChip].ariaLabel,
+        onclick: ctaHandler(AI_CTA[aiChip].action, ctaHandlers()),
       }
     : null,
 );

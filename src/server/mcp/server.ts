@@ -1023,6 +1023,8 @@ export async function startMcpServerHttp(
       getPushLiveness: getPushConsumerLiveness,
       getDeliveryState: (externalConsumerCount) =>
         getDeliveryState(Date.now(), externalConsumerCount),
+      // #1521: the one licence decision, read in a file that already imports it.
+      aiRefused: () => aiRefusal() !== null,
       isShuttingDown,
     }),
   );

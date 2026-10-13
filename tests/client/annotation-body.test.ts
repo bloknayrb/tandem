@@ -100,6 +100,7 @@ describe("AnnotationBody — clicking a link must not also activate the card", (
     const onClick = vi.fn();
     const { container } = render(AnnotationCard, {
       props: {
+        aiDisabled: false,
         annotation: makeBaseAnnotation({
           id: "a1",
           type: "comment",

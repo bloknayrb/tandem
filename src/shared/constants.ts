@@ -10,7 +10,7 @@ export const DEFAULT_MCP_PORT = 3479;
  *
  * Lives in `shared` so the *client* copy ("N of 14 days left") is generated from
  * the same number the server clock uses, rather than hand-written in each
- * surface — the trial length appears in banner, wall and CLI text, and a silent
+ * surface — the trial length appears in banner and CLI text, and a silent
  * drift between the copy and the enforcement would be an accusation of bad
  * faith, not a typo. `src/server/license/paths.ts` re-exports it.
  */
@@ -54,9 +54,10 @@ export const TANDEM_SITE_URL = "https://tandem.ink";
 
 /**
  * Where to buy a license. Referenced by every surface that can tell a user their
- * trial has ended — the wall, the trial banner, Settings' License tab
+ * trial has ended — the trial banner, Settings' License tab
  * (`SettingsLicenseTab.svelte`), the AI refusal copy in `license-copy.ts` (the
- * MCP error and every `/api` 403 body), and `tandem license`. Never shown for an
+ * MCP error and every `/api` 403 body), and `tandem license`. The in-app AI-off
+ * notice is not one of them; it links to Settings → License. Never shown for an
  * installed licence that fails to verify. Telling someone to "activate a
  * license" without saying where to get one is the most avoidable dead end in the
  * whole flow.

@@ -32,6 +32,7 @@ import {
   isAbortOrTimeoutError,
 } from "../shared/fetch-with-timeout.js";
 import { CHAT_ACK_RULE } from "../shared/launcher/contract.js";
+import { licenseRefusalMessage } from "../shared/sse-consumer.js";
 import { startEventBridge } from "./event-bridge.js";
 
 export interface RunChannelOptions {
@@ -176,6 +177,11 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
     }),
   });
 
+  // Latched for one refused stretch (#1521): the relay logs the licence refusal
+  // once, and a later successful relay re-arms it. Inside `runChannel`, never at
+  // module level, so two shims in one process (or two tests) never share it.
+  let permissionRelayRefused = false;
+
   mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
     try {
       const res = await fetchWithTimeout(
@@ -191,10 +197,25 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
         },
         CHANNEL_PERMISSION_FETCH_TIMEOUT_MS,
       );
-      if (!res.ok) {
-        console.error(
-          `[Channel] Permission relay POST failed (HTTP ${res.status}); the request is dropped — there is no browser-side permission UI`,
-        );
+      if (res.ok) {
+        permissionRelayRefused = false;
+      } else {
+        // The body read is bounded by the request's own AbortSignal.timeout.
+        const refusal = await licenseRefusalMessage(res);
+        if (refusal !== null) {
+          if (!permissionRelayRefused) {
+            permissionRelayRefused = true;
+            console.error(
+              // Kind-neutral: the refusal may be an unverifiable licence, and its
+              // own message (appended) already names which.
+              `[Channel] Permission relay refused — Tandem's AI features are off; approve or deny in Claude Code instead. (${refusal})`,
+            );
+          }
+        } else {
+          console.error(
+            `[Channel] Permission relay POST failed (HTTP ${res.status}); the request is dropped — there is no browser-side permission UI`,
+          );
+        }
       }
     } catch (err) {
       console.error(

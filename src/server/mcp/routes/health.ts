@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { isLoopback } from "../../auth/middleware.js";
-import type { DeliveryState } from "../../events/delivery-state.js";
+import { applyAiRefusal, type DeliveryState } from "../../events/delivery-state.js";
 import type { Handler } from "./_shared.js";
 
 export interface HealthHandlerDeps {
@@ -37,6 +37,18 @@ export interface HealthHandlerDeps {
    * detached consumer turns into a `waitingMs` that climbs for days.
    */
   getDeliveryState: (externalConsumerCount: number) => DeliveryState;
+  /**
+   * Does Tandem refuse the AI right now (#1521)? `aiRefusal() !== null`, wired
+   * in the server. Maps an outstanding forward to `delivery.state:
+   * "license-refused"` instead of a misleading `consumer-detached` or climbing
+   * `awaiting-poll`.
+   *
+   * REQUIRED, with no default: a forgotten wiring would silently restore the
+   * misdiagnosis. It costs a licence file read and a signature check, so it is
+   * read only inside the loopback branch (a LAN poll is never sent the result)
+   * and only for an outstanding forward (`applyAiRefusal` asks lazily).
+   */
+  aiRefused: () => boolean;
   /**
    * True once `shutdown()` has begun. Flips `status` from `"ok"` to
    * `"shutting-down"` — see the note on that field below, and
@@ -131,7 +143,7 @@ export function makeHealthHandler(deps: HealthHandlerDeps): Handler {
       // Read once and shared, so `push.subscribers` and the join's re-evaluation
       // can never disagree within a single response — which is the exact
       // contradiction ("subscribers: 0" beside "awaiting-poll") this fixes.
-      body.delivery = deps.getDeliveryState(subscribers);
+      body.delivery = applyAiRefusal(deps.getDeliveryState(subscribers), deps.aiRefused);
     }
 
     res.json(body);

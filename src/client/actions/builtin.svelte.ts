@@ -34,9 +34,22 @@ import { clearDriftNudgeOptOut, driftNudgeOptedOut } from "../status/cwdDriftDis
 import { logClientWarning } from "../utils/client-log.js";
 import { resolveDefaultDirectory } from "../utils/default-directory.js";
 import { API_BASE } from "../utils/fileUpload.js";
+import { AI_OFF_TITLE, aiOffCopy } from "../utils/license-ui.js";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "../utils/recentFiles.js";
 import { type ActionDeps, notifyUser, runBoundAction } from "./executor.js";
 import { type Action, registerActions } from "./registry.svelte.js";
+
+/**
+ * Refuse a launcher action while the licence refuses the AI (#1521). Runs
+ * BEFORE `claimLauncher`, so a refusal neither claims the launcher nor asks the
+ * user to confirm a restart that the server would refuse anyway.
+ */
+function refusedByLicence(d: ActionDeps): boolean {
+  const kind = d.aiNotice();
+  if (kind === null) return false;
+  d.notify("warning", `${AI_OFF_TITLE}, so Claude can't be restarted. ${aiOffCopy(kind).remedy}`);
+  return true;
+}
 
 // ---------------------------------------------------------------------------
 // Save — mirrors useSaveShortcut.svelte.ts logic
@@ -830,6 +843,7 @@ async function relaunchHere(
   d: ActionDeps,
   { cwdRequired }: { cwdRequired: boolean },
 ): Promise<void> {
+  if (refusedByLicence(d)) return;
   if (!claimLauncher(d)) return;
   let attempted = false;
   try {
@@ -975,6 +989,7 @@ export function startFreshClaudeCode(): void {
 }
 
 async function startFreshConversation(d: ActionDeps): Promise<void> {
+  if (refusedByLicence(d)) return;
   // Claimed synchronously, ahead of every `await` — same window as
   // `relaunchHere`'s, and the same two SIGTERMs if it is claimed any later.
   if (!claimLauncher(d)) return;

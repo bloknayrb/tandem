@@ -76,6 +76,12 @@ interface Props {
    * straight to ReplyThread; absent ⇒ no accept affordance on any reply.
    */
   onAcceptReplySuggestion?: (annotationId: string, replyId: string) => void;
+  /**
+   * The licence refuses the AI (#1521). REQUIRED, no default: a mount that
+   * forgets it must fail to compile rather than fail open. Forwarded to the
+   * actions row and the reply thread, which disable their AI writes.
+   */
+  aiDisabled: boolean;
 }
 
 let {
@@ -100,6 +106,7 @@ let {
   exitModes,
   openRequest = null,
   onAcceptReplySuggestion,
+  aiDisabled,
 }: Props = $props();
 
 const agentLabel = createAgentLabel();
@@ -364,6 +371,7 @@ function onCardClick(event: MouseEvent) {
     {onUndo}
     {onRemove}
     {onSendToClaude}
+    {aiDisabled}
   />
   <!-- A13 (#798): the inline disclosure in ReplyThread is now the reply reader;
        it replaced the former "Expand thread" → portaled ReplyThreadOverlay
@@ -377,6 +385,7 @@ function onCardClick(event: MouseEvent) {
     {reduceMotion}
     openNonce={replyOpenNonce}
     {onAcceptReplySuggestion}
+    {aiDisabled}
   />
 </div>
 

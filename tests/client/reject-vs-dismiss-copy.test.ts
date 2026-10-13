@@ -69,6 +69,7 @@ describe("AnnotationCardActions dismiss copy (#1824 item D)", () => {
         isEditing: false,
         onAccept: vi.fn(),
         onDismiss: vi.fn(),
+        aiDisabled: false,
       },
     });
     const scoped = within(container);

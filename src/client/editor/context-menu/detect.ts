@@ -18,6 +18,8 @@ export interface DetectInput {
   hasSelection: boolean;
   /** Editor editability. */
   isEditable: boolean;
+  /** The licence refuses the AI (#1521), read at gesture time. */
+  aiDisabled: boolean;
 }
 
 /**
@@ -33,7 +35,7 @@ export interface DetectInput {
  * WebView menu is the issue's original pain point).
  */
 export function detectContext(input: DetectInput): ContextMenuRequest | null {
-  const { targetEl, platform, hasSelection, isEditable } = input;
+  const { targetEl, platform, hasSelection, isEditable, aiDisabled } = input;
 
   const overLink = targetEl.closest("a[href]") != null;
   const inTableCell = targetEl.closest("td, th") != null;
@@ -41,7 +43,14 @@ export function detectContext(input: DetectInput): ContextMenuRequest | null {
   // Table-capability flags are computed by the caller (needs `editor.can()`);
   // detection only fills the booleans it can know. The caller overwrites
   // canMergeCells/canSplitCell for the tableCell kind before invoking.
-  const base = { hasSelection, isEditable, overLink, canMergeCells: false, canSplitCell: false };
+  const base = {
+    hasSelection,
+    isEditable,
+    overLink,
+    canMergeCells: false,
+    canSplitCell: false,
+    aiDisabled,
+  };
 
   if (overLink) {
     return { kind: "link", ...base };

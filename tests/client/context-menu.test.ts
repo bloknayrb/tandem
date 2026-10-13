@@ -16,7 +16,7 @@ function targetMatching(...matches: string[]) {
 }
 
 describe("detectContext", () => {
-  const base = { hasSelection: false, isEditable: true };
+  const base = { hasSelection: false, isEditable: true, aiDisabled: false };
 
   it("returns link kind when over an anchor (precedence over table)", () => {
     const req = detectContext({
@@ -61,8 +61,22 @@ describe("detectContext", () => {
       platform: "linux",
       hasSelection: true,
       isEditable: false,
+      aiDisabled: false,
     });
     expect(req).toMatchObject({ hasSelection: true, isEditable: false });
+  });
+
+  it("carries aiDisabled into the request (#1521)", () => {
+    for (const aiDisabled of [true, false]) {
+      const req = detectContext({
+        targetEl: targetMatching(),
+        platform: "windows",
+        hasSelection: true,
+        isEditable: true,
+        aiDisabled,
+      });
+      expect(req?.aiDisabled).toBe(aiDisabled);
+    }
   });
 });
 
@@ -164,6 +178,7 @@ function baseDeps(editor: never) {
     focusChat: vi.fn(),
     composeAnnotation: vi.fn(),
     editLink: vi.fn(),
+    isAiDisabled: vi.fn(() => false),
   };
 }
 
@@ -243,6 +258,16 @@ describe("dispatchContextAction", () => {
     const comment = await run("ctx:selection:comment");
     expect(comment.deps.composeAnnotation).toHaveBeenCalledWith("comment");
     const note = await run("ctx:selection:privateNote");
+    expect(note.deps.composeAnnotation).toHaveBeenCalledWith("note");
+  });
+
+  it("refuses the two AI intents while the AI is off, and keeps the private note (#1521)", async () => {
+    const off = { isAiDisabled: vi.fn(() => true) };
+    const ask = await run("ctx:selection:askAi", off);
+    expect(ask.deps.focusChat).not.toHaveBeenCalled();
+    const comment = await run("ctx:selection:comment", off);
+    expect(comment.deps.composeAnnotation).not.toHaveBeenCalled();
+    const note = await run("ctx:selection:privateNote", off);
     expect(note.deps.composeAnnotation).toHaveBeenCalledWith("note");
   });
 

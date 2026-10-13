@@ -56,9 +56,13 @@ export const canDismiss = (a: AnnotationGate): boolean => a.author !== "user" &&
  * Reply — comment + note (post-#1000 notes carry PRIVATE user-authored reply threads
  * shown only to the owning user; the Claude privacy boundary is server-side and
  * untouched). Highlights have no body to thread. Bryan-approved 2026-06-03.
+ *
+ * `aiDisabled` (the licence refuses the AI, #1521): a reply to a comment is an
+ * AI write, so it is refused; a reply inside the user's own note thread (#1000)
+ * stays live. Required, so every consumer has to decide.
  */
-export const canReply = (a: AnnotationGate): boolean =>
-  (a.type === "note" || a.type === "comment") && isPending(a);
+export const canReply = (a: AnnotationGate, aiDisabled: boolean): boolean =>
+  (a.type === "note" || (a.type === "comment" && !aiDisabled)) && isPending(a);
 
 /**
  * Edit — CORRECTED to user-authored only (#999). A user must not rewrite Claude's or an
@@ -72,9 +76,10 @@ export const canEdit = (a: AnnotationGate): boolean => a.author === "user" && is
  * Send to Claude — promotes a USER note → comment. Author-gated to `user` because the
  * Send button only reaches the `else-if type==="note"` branch when the Accept/Reject
  * branch doesn't fire (i.e. author === "user"); import notes render Accept instead.
+ * Refused while the licence refuses the AI (`aiDisabled`, #1521).
  */
-export const canSendToClaude = (a: AnnotationGate): boolean =>
-  a.author === "user" && a.type === "note" && isPending(a);
+export const canSendToClaude = (a: AnnotationGate, aiDisabled: boolean): boolean =>
+  !aiDisabled && a.author === "user" && a.type === "note" && isPending(a);
 
 /** Archive (note) / Remove (highlight/comment) — user-authored only, pending. */
 export const canRemove = (a: AnnotationGate): boolean => a.author === "user" && isPending(a);
@@ -96,13 +101,16 @@ export interface AnnotationContextMenuRequest {
 }
 
 /** Compute the booleans-only menu request for a right-clicked annotation. */
-export function buildAnnotationMenuContext(a: AnnotationGate): AnnotationContextMenuRequest {
+export function buildAnnotationMenuContext(
+  a: AnnotationGate,
+  aiDisabled: boolean,
+): AnnotationContextMenuRequest {
   return {
     canAccept: canAccept(a),
     canDismiss: canDismiss(a),
-    canReply: canReply(a),
+    canReply: canReply(a, aiDisabled),
     canEdit: canEdit(a),
-    canSendToClaude: canSendToClaude(a),
+    canSendToClaude: canSendToClaude(a, aiDisabled),
     canCopy: canCopy(a),
     canRemove: canRemove(a),
     isNote: a.type === "note",

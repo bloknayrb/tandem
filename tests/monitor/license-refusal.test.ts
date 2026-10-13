@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main } from "../../src/monitor/index.js";
-import { LICENSE_REFUSED_RETRY_MS } from "../../src/shared/sse-consumer.js";
+import { LICENSE_REFUSED_RETRY_MS, licenseRefusalMessage } from "../../src/shared/sse-consumer.js";
 import {
   ControllableStream,
   createFetchStub,
@@ -131,5 +131,34 @@ describe("SSE consumer: licence refusal", () => {
     refused = false;
     await vi.advanceTimersByTimeAsync(LICENSE_REFUSED_RETRY_MS + 1_000);
     expect(streams).toBe(1);
+  });
+});
+
+/**
+ * The body-only refusal reader the channel shim's permission relay shares with
+ * the SSE consumer (#1521). Total: anything but a 403 carrying
+ * `LICENSE_REQUIRED` is `null`, never a throw.
+ */
+describe("licenseRefusalMessage", () => {
+  const json = (body: unknown, status: number) => new Response(JSON.stringify(body), { status });
+
+  it("returns the server's message for a licence refusal", async () => {
+    expect(
+      await licenseRefusalMessage(json({ error: "LICENSE_REQUIRED", message: "AI off" }, 403)),
+    ).toBe("AI off");
+  });
+
+  it("is null for a 403 with another error", async () => {
+    expect(await licenseRefusalMessage(json({ error: "FORBIDDEN", message: "x" }, 403))).toBeNull();
+  });
+
+  it("is null for a 500, even one carrying the licence body", async () => {
+    expect(
+      await licenseRefusalMessage(json({ error: "LICENSE_REQUIRED", message: "x" }, 500)),
+    ).toBeNull();
+  });
+
+  it("is null for an unparsable body", async () => {
+    expect(await licenseRefusalMessage(new Response("<html>", { status: 403 }))).toBeNull();
   });
 });

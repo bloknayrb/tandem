@@ -24,16 +24,24 @@ const ui = $derived(licenseStore.ui);
         {:else}
           You're on a {TRIAL_DAYS}-day Tandem trial.
         {/if}
-        <!-- A purchase link, not just "activate a license": telling someone their
-             trial is ending without saying where to buy one is a dead end. -->
-        <a
-          class="license-trial-banner__buy"
-          data-testid="license-trial-buy"
-          href={TANDEM_PURCHASE_URL}
-          target="_blank"
-          rel="noopener noreferrer">Buy a license</a
-        >
-        to keep editing when it ends, or activate one in Settings → License.
+        {#if licenseStore.status?.licenseUnverifiable}
+          <!-- A trial user can hold a licence file that fails to verify (#1521).
+               `aiNotice` is null in a trial, so this keys on the reason code: a
+               paying user must never be shown the purchase link (ADR-040
+               decision 8). -->
+          Your installed license couldn't be verified — see Settings → License.
+        {:else}
+          <!-- A purchase link, not just "activate a license": telling someone their
+               trial is ending without saying where to buy one is a dead end. -->
+          <a
+            class="license-trial-banner__buy"
+            data-testid="license-trial-buy"
+            href={TANDEM_PURCHASE_URL}
+            target="_blank"
+            rel="noopener noreferrer">Buy a license</a
+          >
+          to keep Claude when it ends, or activate one in Settings → License.
+        {/if}
       </span>
     </div>
   {/if}

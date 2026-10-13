@@ -8,6 +8,7 @@ import LiveRegion from "../components/LiveRegion.svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { flatOffsetToPmPos } from "../positions";
 import { agentColor } from "../utils/agent-color";
+import { AI_OFF_TITLE } from "../utils/license-ui";
 import { localChatDateLabel } from "./chat-export";
 import { renderMarkdown } from "./chat-markdown";
 import { chatPickup, chatPickupAnnouncement, chatPickupLabel } from "./chat-pickup";
@@ -43,6 +44,12 @@ interface Props {
   /** Bind to get a reference to the textarea element. */
   inputEl?: HTMLTextAreaElement | null;
   reduceMotion?: boolean;
+  /**
+   * The licence refuses the AI (#1521). Disables the composer and send; the
+   * history stays fully readable. Required, with no default, so a mount that
+   * forgets it fails to compile rather than fail open.
+   */
+  aiDisabled: boolean;
 }
 
 let {
@@ -61,6 +68,7 @@ let {
   canInsert = false,
   inputEl = $bindable(null),
   reduceMotion,
+  aiDisabled,
 }: Props = $props();
 
 const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
@@ -194,6 +202,7 @@ $effect(() => {
 });
 
 function sendMessage() {
+  if (aiDisabled) return;
   if (!inputText.trim()) return;
   if (onSend(inputText.trim()) === false) return;
   inputText = "";
@@ -464,7 +473,8 @@ async function exportChat() {
       value={inputText}
       oninput={(e) => (inputText = (e.target as HTMLTextAreaElement).value)}
       onkeydown={handleKeyDown}
-      placeholder="Message your AI…"
+      disabled={aiDisabled}
+      placeholder={aiDisabled ? AI_OFF_TITLE : "Message your AI…"}
       rows={1}
       class="chat-textarea"
       data-multiline={composerMultiline}
@@ -472,7 +482,7 @@ async function exportChat() {
     ></textarea>
     <button
       onclick={sendMessage}
-      disabled={!inputText.trim()}
+      disabled={!inputText.trim() || aiDisabled}
       class="chat-send-btn"
       aria-label="Send message"
       title="Send · Enter"

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AiChip, PushDelivery } from "../../src/client/hooks/useAiReadiness.svelte";
-import { addressedAiNotice } from "../../src/client/status/addressed-ai-notice.js";
+import {
+  type AddressedAiNotice,
+  addressedAiNotice,
+  noticeAction,
+} from "../../src/client/status/addressed-ai-notice.js";
 
 /**
  * The decision behind the three `tandem:addressed-ai` notices.
@@ -220,5 +224,80 @@ describe("addressedAiNotice", () => {
     ])("stays silent in Solo (%s)", (_label, rest) => {
       expect(addressedAiNotice({ ...base, ...rest, soloMode: true })).toBeNull();
     });
+  });
+});
+
+/**
+ * #1521: the licence refusal. Without its own arm, `no-agent` would promise the
+ * message "will be seen when one connects" — but nothing can connect until a
+ * license is activated.
+ */
+describe("addressedAiNotice — licence refusal", () => {
+  it("the ai-off chip gives ai-off", () => {
+    expect(addressedAiNotice({ ...base, chip: "ai-off" })).toEqual({ kind: "ai-off" });
+  });
+
+  it("Solo still outranks it, and an unreachable server still reads offline", () => {
+    expect(addressedAiNotice({ ...base, chip: "ai-off", soloMode: true })).toBeNull();
+    expect(addressedAiNotice({ ...base, chip: "ai-off", serverUnreachable: true })).toEqual({
+      kind: "offline",
+    });
+  });
+
+  it("the twin: a restart chip is still no-agent", () => {
+    expect(addressedAiNotice({ ...base, chip: "restart" })).toEqual({
+      kind: "no-agent",
+      chip: "restart",
+    });
+  });
+});
+
+/**
+ * `noticeAction` is the pure, exhaustive toast table App pushes from (#1521).
+ * Each kind yields its own descriptor; `ai-off` must not fall into `no-push`.
+ */
+describe("noticeAction", () => {
+  const act = (n: AddressedAiNotice) => noticeAction(n, "Message");
+
+  it("offline: a warning with no CTA", () => {
+    const t = act({ kind: "offline" });
+    expect(t.idPrefix).toBe("ai-offline");
+    expect(t.severity).toBe("warning");
+    expect(t.cta).toBeNull();
+  });
+
+  it("ai-off: the ai-off CTA, and copy naming neither kind", () => {
+    const t = act({ kind: "ai-off" });
+    expect(t.idPrefix).toBe("ai-off");
+    expect(t.severity).toBe("warning");
+    expect(t.cta).toBe("ai-off");
+    expect(t.message).not.toMatch(/unlicensed/i);
+    expect(t.message).not.toMatch(/activate/i);
+    expect(t.message).toContain("Settings → License");
+  });
+
+  it("no-agent: carries its chip", () => {
+    const t = act({ kind: "no-agent", chip: "setup" });
+    expect(t.idPrefix).toBe("ai-not-ready");
+    expect(t.cta).toBe("setup");
+  });
+
+  it("no-push: info, no CTA", () => {
+    const t = act({ kind: "no-push" });
+    expect(t.idPrefix).toBe("ai-no-push");
+    expect(t.severity).toBe("info");
+    expect(t.cta).toBeNull();
+  });
+
+  it("every kind has a distinct id prefix", () => {
+    const prefixes = (
+      [
+        { kind: "offline" },
+        { kind: "ai-off" },
+        { kind: "no-agent", chip: "restart" },
+        { kind: "no-push" },
+      ] as AddressedAiNotice[]
+    ).map((n) => act(n).idPrefix);
+    expect(new Set(prefixes).size).toBe(4);
   });
 });

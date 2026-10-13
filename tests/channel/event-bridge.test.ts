@@ -571,3 +571,65 @@ describe("event-bridge: retry exhaustion -> CHANNEL_CONNECT_FAILED", () => {
     expect(h.exitSpy).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * #1521: stderr is invisible to the model, so a licence-refused stream sends one
+ * channel notification per refused stretch — not one per retry — and no
+ * `channel-error` POST, because a refusal is not an outage.
+ */
+describe("event-bridge: licence refusal notice", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = setupHarness({ mode: "tandem" });
+  });
+
+  afterEach(() => {
+    teardownHarness(h);
+  });
+
+  const licenceNotices = () =>
+    h.mcp.notification.mock.calls
+      .map((c) => c[0])
+      .filter((n) => n?.params?.meta?.event_type === "license_refused");
+
+  it("notifies the model once across two refused attempts, with the server's copy", async () => {
+    let attempts = 0;
+    h.stub.on("/api/events", () => {
+      attempts++;
+      return new Response(
+        JSON.stringify({ error: "LICENSE_REQUIRED", kind: "unlicensed", message: "AI off (copy)" }),
+        { status: 403 },
+      );
+    });
+    const { LICENSE_REFUSED_RETRY_MS } = await import("../../src/shared/sse-consumer.js");
+    const start = await loadStartEventBridge();
+    void start(h.mcp as unknown as Server, URL).catch(() => {});
+
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(LICENSE_REFUSED_RETRY_MS + 100);
+    expect(attempts).toBeGreaterThanOrEqual(2);
+
+    const notices = licenceNotices();
+    expect(notices).toHaveLength(1);
+    expect(notices[0].method).toBe("notifications/claude/channel");
+    expect(notices[0].params.content).toBe("AI off (copy)");
+    expect(h.errorReports).toHaveLength(0);
+  });
+
+  it("the twin: a plain 500 sends no licence notice and climbs the ladder", async () => {
+    let attempts = 0;
+    h.stub.on("/api/events", () => {
+      attempts++;
+      return new Response("boom", { status: 500 });
+    });
+    const start = await loadStartEventBridge();
+    void start(h.mcp as unknown as Server, URL).catch(() => {});
+
+    await vi.advanceTimersByTimeAsync(300_000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(licenceNotices()).toHaveLength(0);
+    expect(attempts).toBeGreaterThan(CHANNEL_MAX_RETRIES);
+    expect(h.errorReports.length).toBeGreaterThanOrEqual(1);
+  });
+});

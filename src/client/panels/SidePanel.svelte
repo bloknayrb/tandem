@@ -11,6 +11,7 @@ import ApplyChangesButton from "../components/ApplyChangesButton.svelte";
 import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { type AnnotationSortMode, sortAnnotations } from "../hooks/useAnnotationOrder.js";
+import { licenseStore } from "../hooks/useLicense.svelte";
 import { warningStateColors } from "../utils/colors";
 import { API_BASE } from "../utils/fileUpload";
 import AnnotationCard from "./AnnotationCard.svelte";
@@ -512,6 +513,12 @@ function liveAnnotation(id: string): Annotation | undefined {
   return annotations.find((a) => a.id === id);
 }
 
+// The licence refuses the AI (#1521). Declared above the dispatch closure,
+// which reads it when it RUNS, so a menu held open across the flip is
+// re-checked. Card mounts pass `canX(ann, false)` (does this card type ever offer
+// the action?) plus `aiDisabled`, so the button stays and renders disabled.
+const aiDisabled = $derived(licenseStore.ui.aiOff);
+
 // Route an emitted action through the shared re-validating dispatcher. Captures the id
 // (string only) + this panel's handlers; reply/edit open the in-card composer/editor via
 // the reactive `cardOpenRequest` nonce.
@@ -521,14 +528,19 @@ function dispatchAnnotationAction(
   return (action) => {
     const ann = liveAnnotation(id);
     if (!ann) return; // deleted while the menu was open → no-op
-    runAnnotationAction(action, ann, {
-      accept: handleAcceptAnimated,
-      dismiss: handleDismissAnimated,
-      sendToClaude: handleSendToClaude,
-      remove: handleRemove,
-      openEdit: (i) => (cardOpenRequest = { id: i, kind: "edit", nonce: ++nonceSeq }),
-      openReply: (i) => (cardOpenRequest = { id: i, kind: "reply", nonce: ++nonceSeq }),
-    });
+    runAnnotationAction(
+      action,
+      ann,
+      {
+        accept: handleAcceptAnimated,
+        dismiss: handleDismissAnimated,
+        sendToClaude: handleSendToClaude,
+        remove: handleRemove,
+        openEdit: (i) => (cardOpenRequest = { id: i, kind: "edit", nonce: ++nonceSeq }),
+        openReply: (i) => (cardOpenRequest = { id: i, kind: "reply", nonce: ++nonceSeq }),
+      },
+      aiDisabled,
+    );
   };
 }
 
@@ -542,7 +554,7 @@ async function handleAnnotationContextMenu(e: MouseEvent) {
 
   e.preventDefault();
   e.stopPropagation();
-  await openAnnotationContextMenu(ann, dispatchAnnotationAction(id));
+  await openAnnotationContextMenu(ann, dispatchAnnotationAction(id), aiDisabled);
 }
 
 // Delegated contextmenu listener on the list container (attached imperatively so
@@ -625,6 +637,8 @@ function toggleImportSelection(id: string) {
 }
 
 function handleBatchPromote() {
+  // Promoting turns private notes into comments Claude reads (#1521).
+  if (aiDisabled) return;
   const ids = Array.from(selectedImportIds);
   promoteNotesToComments(ydoc, ids, tandemMode);
   selectedImportIds = new Set();
@@ -798,6 +812,7 @@ function handleRailBackgroundClick(e: MouseEvent) {
     onCancelPromote={() => (promoteConfirmRequested = false)}
     onClear={handleClearSelection}
     {reduceMotion}
+    {aiDisabled}
   />
 
   <!-- Bulk actions -->
@@ -842,6 +857,9 @@ function handleRailBackgroundClick(e: MouseEvent) {
   >
       {#each filteredData.pending as ann (ann.id)}
         {@const isTarget = activeAnnotationId === ann.id}
+        <!-- `canX(ann, false)`: does this card type ever offer the action? The
+             licence applies through `aiDisabled`, which disables rather than
+             hides the button (Critical Rule 7). -->
         <AnnotationCard
           annotation={ann}
           replies={repliesMap.get(ann.id) ?? []}
@@ -853,9 +871,9 @@ function handleRailBackgroundClick(e: MouseEvent) {
           onAccept={canAccept(ann) ? handleAcceptAnimated : undefined}
           onDismiss={canDismiss(ann) ? handleDismissAnimated : undefined}
           onRemove={canRemove(ann) ? handleRemove : undefined}
-          onSendToClaude={canSendToClaude(ann) ? handleSendToClaude : undefined}
+          onSendToClaude={canSendToClaude(ann, false) ? handleSendToClaude : undefined}
           onEdit={canEdit(ann) ? handleEdit : undefined}
-          onReply={canReply(ann) ? handleReply : undefined}
+          onReply={canReply(ann, false) ? handleReply : undefined}
           onAcceptReplySuggestion={canAccept(ann) ? review.acceptReplySuggestion : undefined}
           openRequest={cardOpenRequest?.id === ann.id ? cardOpenRequest : null}
           onClick={() => review.scrollToAnnotation(ann)}
@@ -863,6 +881,7 @@ function handleRailBackgroundClick(e: MouseEvent) {
           onToggleSelect={ann.author === "import" && ann.type === "note"
             ? toggleImportSelection
             : undefined}
+          {aiDisabled}
         />
       {/each}
       {#if filteredData.resolved.length > 0}
@@ -872,6 +891,8 @@ function handleRailBackgroundClick(e: MouseEvent) {
           </summary>
           <div role="list" aria-label="Resolved annotations">
             {#each filteredData.resolved as ann (ann.id)}
+              <!-- `aiDisabled={false}`: a resolved card offers no AI action, so
+                   the licence has nothing to disable here. -->
               <AnnotationCard
                 annotation={ann}
                 replies={repliesMap.get(ann.id) ?? []}
@@ -879,6 +900,7 @@ function handleRailBackgroundClick(e: MouseEvent) {
                 onUndo={review.undoResolveAnnotation}
                 undoable={review.getRecentlyResolved().has(ann.id)}
                 onClick={() => review.scrollToAnnotation(ann)}
+                aiDisabled={false}
               />
             {/each}
           </div>

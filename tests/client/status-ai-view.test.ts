@@ -6,6 +6,7 @@ import {
   sessionCountLabel,
   visibleLauncherFailure,
 } from "../../src/client/status/status-ai-view.js";
+import { TANDEM_PURCHASE_URL } from "../../src/shared/constants.js";
 
 type ViewInput = Parameters<typeof aiIndicatorView>[0];
 
@@ -23,6 +24,7 @@ function view(over: Partial<ViewInput> = {}) {
     launcherRestarting: false,
     docSyncConnected: true,
     sessionCount: null,
+    aiNotice: null,
     ...over,
   });
 }
@@ -222,6 +224,47 @@ describe("aiIndicatorView — Tandem's Claude", () => {
   it("drops the folder clause when the cwd is unknown", () => {
     const v = view({ launcherRunning: true, liveIndicator: "connected", launcherAttached: true });
     expect(v?.title).toBe("Tandem's Claude is running. Tandem wakes it when you send a message.");
+  });
+});
+
+/**
+ * Rule 0 (#1521): the licence refusal, keyed on `aiNotice` — readiness's own
+ * value, non-null exactly when its chip is `"ai-off"`, so label and action
+ * agree. The kind also picks the copy.
+ */
+describe("aiIndicatorView — AI off by licence", () => {
+  it("beats Solo, a running Tandem's Claude and a connected session", () => {
+    for (const over of [
+      { liveIndicator: "solo-paused" as const, soloMode: true },
+      { launcherRunning: true, launcherAttached: true, liveIndicator: "connected" as const },
+      { liveIndicator: "connected" as const, sessionCount: 1 },
+    ]) {
+      const v = view({ ...over, aiNotice: "unlicensed" });
+      expect(v?.dataState).toBe("ai-off");
+      expect(v?.label).toBe("AI off");
+      expect(v?.canAnimate).toBe(false);
+    }
+  });
+
+  it("suppresses the session count — a refused handshake leaves at most a leftover", () => {
+    const v = view({ liveIndicator: "connected", sessionCount: 3, aiNotice: "unverifiable" });
+    expect(v?.sessionCount).toBeNull();
+    expect(v?.title).not.toMatch(/sessions? (is|are) connected/);
+  });
+
+  it("the twin: no refusal keeps the existing view", () => {
+    expect(view({ liveIndicator: "connected", sessionCount: 1 })?.dataState).toBe("connected");
+    expect(view({ liveIndicator: "solo-paused", soloMode: true })?.dataState).toBe("solo-paused");
+  });
+
+  it("unverifiable copy never says unlicensed, Activate a license, or the purchase URL", () => {
+    const v = view({ aiNotice: "unverifiable" });
+    for (const text of [v?.title ?? "", v?.ariaLabel ?? ""]) {
+      expect(text).not.toMatch(/unlicensed/i);
+      expect(text).not.toContain("Activate a license");
+      expect(text).not.toContain(TANDEM_PURCHASE_URL);
+    }
+    expect(view({ aiNotice: "unlicensed" })?.title).toContain("unlicensed");
   });
 });
 

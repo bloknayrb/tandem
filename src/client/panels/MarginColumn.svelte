@@ -3,6 +3,7 @@ import { untrack } from "svelte";
 import type { Annotation, AnnotationReply } from "../../shared/types";
 import { getVisibleReplies } from "../annotations/replies";
 import { isTauriRuntime } from "../cowork/cowork-helpers";
+import { licenseStore } from "../hooks/useLicense.svelte";
 import type { MarginMode } from "../layout/editor-stage.svelte";
 import AnnotationCard from "./AnnotationCard.svelte";
 import { getDisplayAuthor } from "./annotation-card-helpers";
@@ -350,6 +351,12 @@ function liveAnnotation(id: string): Annotation | undefined {
   return annotations.find((a) => a.id === id);
 }
 
+// The licence refuses the AI (#1521). Declared above the dispatch closure,
+// which reads it when it RUNS, so a menu held open across the flip is
+// re-checked. Card mounts pass `canX(ann, false)` (does this card type ever offer
+// the action?) plus `aiDisabled`, so the button stays and renders disabled.
+const aiDisabled = $derived(licenseStore.ui.aiOff);
+
 // Route an emitted action through the shared re-validating dispatcher, bound to THIS
 // column's handler props (so a margin right-click acts on margin handlers even though the
 // listener is shared with the rail). reply/edit open the in-card composer/editor.
@@ -359,14 +366,19 @@ function dispatchAnnotationAction(
   return (action) => {
     const ann = liveAnnotation(id);
     if (!ann) return; // deleted while the menu was open → no-op
-    runAnnotationAction(action, ann, {
-      accept: onAccept,
-      dismiss: onDismiss,
-      sendToClaude: onSendToClaude,
-      remove: onRemove,
-      openEdit: (i) => (cardOpenRequest = { id: i, kind: "edit", nonce: ++nonceSeq }),
-      openReply: (i) => (cardOpenRequest = { id: i, kind: "reply", nonce: ++nonceSeq }),
-    });
+    runAnnotationAction(
+      action,
+      ann,
+      {
+        accept: onAccept,
+        dismiss: onDismiss,
+        sendToClaude: onSendToClaude,
+        remove: onRemove,
+        openEdit: (i) => (cardOpenRequest = { id: i, kind: "edit", nonce: ++nonceSeq }),
+        openReply: (i) => (cardOpenRequest = { id: i, kind: "reply", nonce: ++nonceSeq }),
+      },
+      aiDisabled,
+    );
   };
 }
 
@@ -380,7 +392,7 @@ async function handleAnnotationContextMenu(e: MouseEvent) {
 
   e.preventDefault();
   e.stopPropagation();
-  await openAnnotationContextMenu(ann, dispatchAnnotationAction(id));
+  await openAnnotationContextMenu(ann, dispatchAnnotationAction(id), aiDisabled);
 }
 
 $effect(() => {
@@ -545,6 +557,9 @@ $effect(() => subscribeAnnotationActions());
           </svg>
         </button>
       {/if}
+      <!-- `canX(ann, false)`: does this card type ever offer the action? The
+           licence applies through `aiDisabled`, which disables rather than
+           hides the button (Critical Rule 7). -->
       <AnnotationCard
         annotation={ann}
         replies={visibleReplies}
@@ -555,10 +570,11 @@ $effect(() => subscribeAnnotationActions());
         onAccept={canAccept(ann) ? onAccept : undefined}
         onDismiss={canDismiss(ann) ? onDismiss : undefined}
         onRemove={canRemove(ann) ? onRemove : undefined}
-        onSendToClaude={canSendToClaude(ann) ? onSendToClaude : undefined}
+        onSendToClaude={canSendToClaude(ann, false) ? onSendToClaude : undefined}
         onEdit={canEdit(ann) ? onEdit : undefined}
-        onReply={canReply(ann) ? onReply : undefined}
+        onReply={canReply(ann, false) ? onReply : undefined}
         openRequest={cardOpenRequest?.id === ann.id ? cardOpenRequest : null}
+        {aiDisabled}
       />
     </div>
   {/each}

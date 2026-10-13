@@ -4,18 +4,23 @@ import { render } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import EmptyState from "../../src/client/components/EmptyState.svelte";
-import { DISCONNECT_DEBOUNCE_MS } from "../../src/shared/constants.js";
+import { AI_CTA, type AiChip } from "../../src/client/hooks/useAiReadiness.svelte";
+import type { AiNotice } from "../../src/client/utils/license-ui.js";
+import { DISCONNECT_DEBOUNCE_MS, TANDEM_PURCHASE_URL } from "../../src/shared/constants.js";
 
 function makeProps(overrides: Record<string, unknown> = {}) {
   return {
     connected: true,
     aiChip: null,
+    // What readiness guarantees: a refusal exactly when the chip is `ai-off`.
+    aiNotice: (overrides.aiChip === "ai-off" ? "unlicensed" : null) as AiNotice | null,
     onOpenFile: vi.fn(),
     onRetry: vi.fn(),
     onOpenSettings: vi.fn(),
     onConnectAi: vi.fn(),
     onRestartClaude: vi.fn(),
     onStartFreshClaude: vi.fn(),
+    onOpenLicenseSettings: vi.fn(),
     ...overrides,
   };
 }
@@ -35,15 +40,11 @@ describe("EmptyState", () => {
     vi.useRealTimers();
   });
 
-  // Every non-null aiChip branch renders exactly one of these — checking all
-  // three per case (not just the one expected to be present) is the positive
-  // control: it proves an "absent" testid is absent because that branch
-  // genuinely didn't render, not because the whole card failed to mount.
-  const AI_CTA_TESTIDS = [
-    "empty-state-connect-ai",
-    "empty-state-setup-claude",
-    "empty-state-restart-claude",
-  ] as const;
+  // Every non-null chip, derived from the exhaustive `AI_CTA` map rather than a
+  // hand-written list (#1521). The hand list this replaces had already missed
+  // `sign-in`; keying on the map means a new chip with no branch here is a red
+  // test — the `{:else}` guard a Svelte `{#if}` chain cannot express.
+  const CHIPS = Object.keys(AI_CTA) as Exclude<AiChip, null>[];
 
   describe("state A — no document open", () => {
     it.each([
@@ -71,6 +72,12 @@ describe("EmptyState", () => {
         expectSecondary: false,
         expectedTestId: "empty-state-restart-claude",
       },
+      {
+        why: "aiChip 'ai-off' (#1521) → Open license settings CTA, no positioning line",
+        aiChip: "ai-off",
+        expectSecondary: false,
+        expectedTestId: "empty-state-open-license-settings",
+      },
     ])("$why", ({ aiChip, expectSecondary, expectedTestId }) => {
       const { container } = render(EmptyState, {
         props: makeProps({ connected: true, aiChip }),
@@ -86,13 +93,48 @@ describe("EmptyState", () => {
         container.textContent?.includes("Tandem works alongside Claude") ?? false;
       expect(hasSecondary).toBe(expectSecondary);
 
-      // Exactly the expected branch's testid is present — every other AI-CTA
-      // testid must be absent, distinguishing the three reachable branches
-      // from each other (not just "some CTA rendered").
-      for (const testid of AI_CTA_TESTIDS) {
-        const present = byTestId(container, testid) !== null;
-        expect(present).toBe(testid === expectedTestId);
+      if (expectedTestId) expect(byTestId(container, expectedTestId)).toBeTruthy();
+      // Exactly the expected chip's buttons are present — every other chip's
+      // must be absent, distinguishing the branches from each other (not just
+      // "some CTA rendered").
+      for (const chip of CHIPS) {
+        const present = container.querySelector(`[data-ai-chip='${chip}']`) !== null;
+        expect(present).toBe(chip === aiChip);
       }
+    });
+
+    it.each(CHIPS)("every chip has its own branch: %s renders a CTA", (chip) => {
+      const { container } = render(EmptyState, {
+        props: makeProps({ connected: true, aiChip: chip }),
+      });
+      expect(container.querySelector(`button[data-ai-chip='${chip}']`)).toBeTruthy();
+      expect(container.textContent).not.toContain("Tandem works alongside Claude");
+    });
+
+    it("the ai-off CTA opens license settings and nothing else", async () => {
+      const props = makeProps({
+        connected: true,
+        aiChip: "ai-off",
+        aiNotice: "unlicensed",
+        onOpenLicenseSettings: vi.fn(),
+      });
+      const { container } = render(EmptyState, { props });
+      byTestId(container, "empty-state-open-license-settings")?.click();
+      await tick();
+      expect(props.onOpenLicenseSettings).toHaveBeenCalledOnce();
+      expect(props.onConnectAi).not.toHaveBeenCalled();
+      expect(props.onRestartClaude).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("unlicensed");
+    });
+
+    it("the unverifiable line never says unlicensed, Activate a license, or the purchase URL", () => {
+      const { container } = render(EmptyState, {
+        props: makeProps({ connected: true, aiChip: "ai-off", aiNotice: "unverifiable" }),
+      });
+      const text = container.textContent ?? "";
+      expect(text).not.toMatch(/unlicensed/i);
+      expect(text).not.toContain("Activate a license");
+      expect(text).not.toContain(TANDEM_PURCHASE_URL);
     });
 
     it("Open file… fires onOpenFile", async () => {

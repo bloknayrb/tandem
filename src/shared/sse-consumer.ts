@@ -108,13 +108,30 @@ async function readLicenseRefusal(
     REFUSAL_BODY_TIMEOUT_MS,
   );
   try {
+    return await licenseRefusalMessage(res);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The licence refusal's message, read from a response body, or `null` when the
+ * response is anything else (#1521). Keyed on the wire string `LICENSE_REQUIRED`
+ * alone, so a caller bundled without the licence `define` needs no server code.
+ *
+ * Total: a non-403, another `error`, or any read or parse failure gives `null`.
+ * It does not bound the body read itself — the caller's request must carry its
+ * own timeout (`readLicenseRefusal` arms one; the channel shim's relay POST has
+ * its `AbortSignal.timeout`).
+ */
+export async function licenseRefusalMessage(res: Response): Promise<string | null> {
+  if (res.status !== 403) return null;
+  try {
     const body = (await res.json()) as { error?: unknown; message?: unknown } | null;
     if (body?.error !== LICENSE_REQUIRED) return null;
     return typeof body.message === "string" ? body.message : LICENSE_REQUIRED;
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 

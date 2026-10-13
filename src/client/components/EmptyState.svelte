@@ -1,6 +1,7 @@
 <script lang="ts">
 import { DISCONNECT_DEBOUNCE_MS } from "../../shared/constants";
 import type { AiChip } from "../hooks/useAiReadiness.svelte";
+import { type AiNotice, aiOffCopy } from "../utils/license-ui";
 
 interface Props {
   connected: boolean;
@@ -14,6 +15,8 @@ interface Props {
    *   `"setup"`   → configured but stopped with the CLI apparently missing.
    *   `"sign-in"` → configured but stopped because the CLI is not signed in.
    *   `"restart"` → configured but stopped for any other reason.
+   *   `"ai-off"`  → the licence refuses the AI (#1521); opens Settings →
+   *               License. Its branch keys on `aiNotice`, which carries the copy.
    *   `null`      → ready / booting / Solo (no CTA, falls back to the
    *                 product-positioning line).
    * Replaces the old `claudeActive`-gated line, which keyed on a flapping
@@ -40,6 +43,14 @@ interface Props {
    * expecting a safe retry must never destroy their session; see #1268).
    */
   onStartFreshClaude?: () => void;
+  /**
+   * The licence refusal (#1521): pass `aiReadiness.aiNotice`, which is
+   * non-null exactly when `aiChip` is `"ai-off"`. Required, so a mount
+   * that forgets it cannot silently drop the AI-off line.
+   */
+  aiNotice: AiNotice | null;
+  /** Opens Settings → License — the `"ai-off"` CTA. */
+  onOpenLicenseSettings?: () => void;
 }
 
 let {
@@ -51,6 +62,8 @@ let {
   onConnectAi,
   onRestartClaude,
   onStartFreshClaude,
+  aiNotice,
+  onOpenLicenseSettings,
 }: Props = $props();
 
 let showDisconnected = $state(false);
@@ -214,6 +227,19 @@ $effect(() => {
           onclick={onStartFreshClaude}
         >
           Start a fresh conversation
+        </button>
+      </div>
+    {:else if connected && aiNotice !== null}
+      <!-- #1521: the licence refuses the AI; the document stays editable. -->
+      <p class="empty-sub empty-sub-secondary">{aiOffCopy(aiNotice).sentence}</p>
+      <div class="empty-actions">
+        <button
+          class="empty-cta"
+          data-testid="empty-state-open-license-settings"
+          data-ai-chip="ai-off"
+          onclick={onOpenLicenseSettings}
+        >
+          Open license settings
         </button>
       </div>
     {:else if connected}

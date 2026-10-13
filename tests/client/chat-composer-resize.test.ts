@@ -30,6 +30,7 @@ function renderChat() {
       onClear: async () => {},
       onExport: async () => {},
       onInsert: () => false,
+      aiDisabled: false,
     },
   });
 }

@@ -77,6 +77,7 @@
 
 import { reportError } from "../sentry.js";
 import { logClientError, logClientWarning } from "../utils/client-log.js";
+import type { AiNotice } from "../utils/license-ui.js";
 import { type Action, getActionsMap } from "./registry.svelte.js";
 
 /** Optional routing for a toast pushed by the executor rather than by App. */
@@ -126,6 +127,13 @@ export interface ActionDeps {
    * world before the relaunch. Keep it at the mutation.
    */
   afterLauncherAction: () => void;
+  /**
+   * The licence refusal, or null (#1521). Read by the launcher actions, which
+   * refuse up front while it is set: the single funnel for the palette, the
+   * status pill, the empty state, the drift nudge and the toast. The server's
+   * 403 `LAUNCHER_UNLICENSED` stays the real guard.
+   */
+  aiNotice: () => AiNotice | null;
   /** Open the Settings modal (the single consolidated settings surface). */
   openSettings: () => void;
   toggleSoloMode: () => void;

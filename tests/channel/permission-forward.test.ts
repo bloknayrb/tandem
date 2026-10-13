@@ -96,3 +96,80 @@ describe("channel shim permission relay body (#1884)", () => {
     expect(body).not.toContain("inputPreview");
   });
 });
+
+/**
+ * A licence-refused relay is logged as a licence refusal, once per refused
+ * stretch, not as a plain 403 (#1521). The latch lives inside `runChannel`:
+ * the two licence cases below run back to back against the same cached module
+ * and each expects exactly one licence line, which a module-level latch would
+ * fail on the second.
+ */
+describe("channel shim permission relay under a licence refusal (#1521)", () => {
+  let stub: ReturnType<typeof createFetchStub>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let status = 403;
+  let body: unknown = {};
+
+  beforeEach(() => {
+    registered.length = 0;
+    stub = createFetchStub();
+    stub.install();
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+    status = 403;
+    body = { error: "LICENSE_REQUIRED", kind: "unlicensed", message: "AI is off (test copy)" };
+    stub.on("/api/channel-permission", () => new Response(JSON.stringify(body), { status }));
+  });
+  afterEach(() => {
+    stub.restore();
+    vi.restoreAllMocks();
+  });
+
+  async function relay(): Promise<void> {
+    const { schema, handler } = registered[registered.length - 1]!;
+    await handler(
+      schema.parse({
+        method: "notifications/claude/channel/permission_request",
+        params: { request_id: "r", tool_name: "Bash", description: "d" },
+      }),
+    );
+  }
+  const lines = (): string[] => errorSpy.mock.calls.map((c: unknown[]) => c.map(String).join(" "));
+  const licenceLines = () => lines().filter((l) => l.includes("Permission relay refused"));
+
+  for (const round of [1, 2]) {
+    it(`logs the licence line once across two refused relays (run ${round})`, async () => {
+      const { runChannel } = await import("../../src/channel/run.js");
+      await runChannel({ skipReachabilityLog: true });
+      await relay();
+      await relay();
+      expect(licenceLines()).toHaveLength(1);
+      expect(licenceLines()[0]).toContain("AI is off (test copy)");
+      expect(lines().some((l) => l.includes("the request is dropped"))).toBe(false);
+    });
+  }
+
+  it("the twin: a plain 403 (not a licence body) still logs the dropped line", async () => {
+    body = { error: "FORBIDDEN", message: "nope" };
+    const { runChannel } = await import("../../src/channel/run.js");
+    await runChannel({ skipReachabilityLog: true });
+    await relay();
+    expect(licenceLines()).toHaveLength(0);
+    expect(lines().some((l) => l.includes("HTTP 403") && l.includes("dropped"))).toBe(true);
+  });
+
+  it("a successful relay re-arms the latch", async () => {
+    const { runChannel } = await import("../../src/channel/run.js");
+    await runChannel({ skipReachabilityLog: true });
+    await relay();
+    status = 200;
+    body = { ok: true };
+    await relay();
+    status = 403;
+    body = { error: "LICENSE_REQUIRED", message: "AI is off (test copy)" };
+    await relay();
+    expect(licenceLines()).toHaveLength(2);
+  });
+});

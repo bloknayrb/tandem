@@ -18,8 +18,11 @@ import {
   LAUNCHER_ERROR_PATH_REJECTED,
 } from "../../../shared/launcher/contract";
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
+import { licenseStore } from "../../hooks/useLicense.svelte";
 import { disabledControlStyle } from "../../utils/colors";
 import { API_BASE } from "../../utils/fileUpload";
+import { aiOffCopy } from "../../utils/license-ui";
+import "../warning-box.css";
 import { responseErrorMessage } from "../../utils/response-error";
 import PushRoutesInfo from "../PushRoutesInfo.svelte";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
@@ -251,6 +254,19 @@ function handleReset() {
   void persistWorkingDirectory(null);
 }
 </script>
+
+<!-- #1521: the licence refuses the AI. The tab stays reachable; one line says
+     why nothing here will bring Claude back until a license is in place. -->
+{#if licenseStore.ui.aiNotice !== null}
+  <div
+    data-testid="claude-code-ai-off-hint"
+    class="tandem-warning-box"
+    role="status"
+    style="margin-bottom: var(--tandem-space-3);"
+  >
+    {aiOffCopy(licenseStore.ui.aiNotice).sentence}
+  </div>
+{/if}
 
 {#if showConnectCallout}
   <div

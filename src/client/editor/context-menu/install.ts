@@ -27,6 +27,13 @@ export interface ContextMenuHostDeps {
   composeAnnotation?: (kind: "comment" | "note") => void;
   /** Open the shared link editor at the current link caret/range. */
   editLink?: () => void;
+  /**
+   * The licence refuses the AI (#1521). A LIVE getter, read at gesture time and
+   * again when the action fires — never a value captured at install. Required,
+   * with no fallback, so a missed wiring is a compile error rather than a menu
+   * that fails open.
+   */
+  isAiDisabled: () => boolean;
   /** Optional platform override (tests); defaults to runtime detection. */
   platform?: Platform;
 }
@@ -82,6 +89,7 @@ export function installContextMenu(editor: Editor, deps: ContextMenuHostDeps): (
       platform,
       hasSelection: false,
       isEditable: editor.isEditable,
+      aiDisabled: deps.isAiDisabled(),
     });
     if (!req) return; // native WebView menu — selection untouched
 
@@ -143,6 +151,7 @@ export function installContextMenu(editor: Editor, deps: ContextMenuHostDeps): (
         focusChat: deps.focusChat,
         composeAnnotation: deps.composeAnnotation,
         editLink: deps.editLink,
+        isAiDisabled: deps.isAiDisabled,
       });
     }),
   );

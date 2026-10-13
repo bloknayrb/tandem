@@ -6,6 +6,7 @@ import type {
   PushDelivery,
 } from "../hooks/useAiReadiness.svelte";
 import type { CwdDrift } from "../hooks/useCwdDrift.svelte";
+import { type AiNotice, aiOffCopy } from "../utils/license-ui";
 
 /**
  * Consolidated AI-status indicator for the status pill (replaces the old
@@ -24,6 +25,13 @@ import type { CwdDrift } from "../hooks/useCwdDrift.svelte";
  * and only the last is something the server knows it will wake.
  *
  * Ordering rules (order is load-bearing):
+ *   0. AI off by licence (#1521), keyed on `aiNotice` — readiness's own value,
+ *      non-null exactly when its `chip` is `"ai-off"` and so selects the
+ *      pill's CTA wrapper, so the label and its action agree by construction
+ *      (see `AiReadiness.aiNotice`). A launcher child still running at expiry would
+ *      otherwise read "Tandem's Claude" beside an "AI off" CTA. It outranks
+ *      Solo for the reason the chip does: Solo is a privacy choice, the
+ *      refusal is a capability fact.
  *   1. Solo first: the user opted out of AI surfacing, so the Solo pill (or
  *      nothing) wins over every connection claim.
  *   2. Tandem's own Claude (`launcherRunning`). The supervisor wakes it over
@@ -62,7 +70,8 @@ export interface AiIndicatorView {
     | "solo-paused"
     | "not-connected"
     | "tandem-claude"
-    | "restarting";
+    | "restarting"
+    | "ai-off";
   /**
    * Whether this state may animate its dot off presence activity. Only ever
    * true when a session is live (connected/solo) — a disconnected indicator
@@ -308,6 +317,20 @@ function tandemClaudeView(input: {
   };
 }
 
+/** The AI is refused by the licence (#1521); `kind` picks the copy. */
+function aiOffView(kind: AiNotice): BaseView {
+  const title = aiOffCopy(kind).sentence;
+  return {
+    label: "AI off",
+    tone: "not-connected",
+    dataState: "ai-off",
+    canAnimate: false,
+    ...QUIET,
+    title,
+    ariaLabel: `AI off. ${title}`,
+  };
+}
+
 /** The visible suffix: "1 session", "3 sessions". */
 export function sessionCountLabel(count: number): string {
   return count === 1 ? "1 session" : `${count} sessions`;
@@ -320,7 +343,13 @@ export function sessionCountLabel(count: number): string {
  * zero or unknown, and never on "AI not connected", whose label already says it.
  */
 function withSessionCount(view: BaseView, count: number | null): AiIndicatorView {
-  if (count == null || count < 1 || view.dataState === "not-connected") {
+  // Nor on "AI off": a refused handshake leaves at most a leftover connection.
+  if (
+    count == null ||
+    count < 1 ||
+    view.dataState === "not-connected" ||
+    view.dataState === "ai-off"
+  ) {
     return { ...view, sessionCount: null };
   }
   const sentence = `${sessionCountLabel(count)} ${count === 1 ? "is" : "are"} connected to Tandem. One that just closed can still count for about a minute, a frozen one until it closes, and one Claude connected two ways counts twice.`;
@@ -357,9 +386,15 @@ export interface AiIndicatorInput {
   docSyncConnected: boolean;
   /** `/health`'s session count, or `null` when unknown. */
   sessionCount: number | null;
+  /** The licence refusal (`AiReadiness.aiNotice`) — the ONE source of the
+   *  pill's ai-off state and its copy. */
+  aiNotice: AiNotice | null;
 }
 
 function baseIndicatorView(input: AiIndicatorInput): BaseView | null {
+  // Rule 0: the licence refuses the AI.
+  if (input.aiNotice !== null) return aiOffView(input.aiNotice);
+
   // Rule 1: Solo. Solo already tells the user their comments are withheld,
   // which is a stronger and more relevant statement than any delivery state.
   if (input.liveIndicator === "solo-paused") {

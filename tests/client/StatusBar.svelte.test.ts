@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import StatusBar from "../../src/client/status/StatusBar.svelte";
+import { TANDEM_PURCHASE_URL } from "../../src/shared/constants.js";
 
 const baseProps = {
   connected: true,
@@ -15,6 +16,8 @@ const baseProps = {
   aiLauncherAttached: false,
   aiLauncherRestarting: false,
   aiSessionCount: null as number | null,
+  aiNotice: null,
+  onOpenLicenseSettings: () => {},
   aiState: "unconfigured" as const,
   soloMode: false,
 };
@@ -34,6 +37,58 @@ describe("StatusBar AI action indicator", () => {
     expect(indicator.getAttribute("data-ai-action")).toBe("connect");
     await fireEvent.click(indicator);
     expect(onConnectAi).toHaveBeenCalledOnce();
+  });
+
+  // #1521: the new action must reach its own handler, never the connect or
+  // restart branch a binary ternary would route it to.
+  it("the ai-off chip opens license settings and nothing else", async () => {
+    const onConnectAi = vi.fn();
+    const onRestartClaude = vi.fn();
+    const onOpenLicenseSettings = vi.fn();
+    const { getByTestId, queryByTestId } = render(StatusBar, {
+      props: {
+        ...baseProps,
+        aiState: "stopped",
+        aiChip: "ai-off",
+        aiNotice: "unlicensed",
+        onConnectAi,
+        onRestartClaude,
+        onOpenLicenseSettings,
+      },
+    });
+    const indicator = getByTestId("status-ai-indicator");
+    expect(indicator.getAttribute("data-ai-action")).toBe("ai-off");
+    expect(indicator.textContent).toContain("AI off");
+    await fireEvent.click(indicator);
+    expect(onOpenLicenseSettings).toHaveBeenCalledOnce();
+    expect(onConnectAi).not.toHaveBeenCalled();
+    expect(onRestartClaude).not.toHaveBeenCalled();
+    // Sanity only: `aiLauncherFailure` is at its default here. The suppression
+    // itself lives in the hook and is pinned by useAiReadiness's "launcherFailure
+    // is suppressed while refused".
+    expect(queryByTestId("status-tandem-claude-down")).toBeNull();
+  });
+
+  it("an unverifiable holder is never told 'unlicensed' or shown the purchase URL", () => {
+    const { getByTestId } = render(StatusBar, {
+      props: { ...baseProps, aiState: "stopped", aiChip: "ai-off", aiNotice: "unverifiable" },
+    });
+    const indicator = getByTestId("status-ai-indicator");
+    for (const text of [
+      indicator.getAttribute("title") ?? "",
+      indicator.getAttribute("aria-label") ?? "",
+    ]) {
+      expect(text).not.toMatch(/unlicensed/i);
+      expect(text).not.toContain("Activate a license");
+      expect(text).not.toContain(TANDEM_PURCHASE_URL);
+    }
+  });
+
+  it("the unlicensed twin's copy does name the state", () => {
+    const { getByTestId } = render(StatusBar, {
+      props: { ...baseProps, aiState: "stopped", aiChip: "ai-off", aiNotice: "unlicensed" },
+    });
+    expect(getByTestId("status-ai-indicator").getAttribute("title")).toContain("unlicensed");
   });
 
   it("renders Restart with a state-specific accessible name", async () => {

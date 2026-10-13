@@ -152,14 +152,21 @@ function onActivated(): void {
       <code>tandem activate &lt;file&gt;</code> from the command line{/if}. A valid license runs
     forever and includes all future updates.
   </div>
+  <!-- The buy link hides from anyone holding an unverifiable licence file, a
+       trial included (#1521, ADR-040 decision 8). `ui.aiNotice` is null during
+       a trial by design, so this keys on the reason code directly: that reader
+       most likely already paid. -->
   <div class="settings-hint" style="margin-top: var(--tandem-space-2);">
-    Don't have one yet?
-    <a
-      data-testid="license-buy-link"
-      href={TANDEM_PURCHASE_URL}
-      target="_blank"
-      rel="noopener noreferrer">Buy a license</a
-    >. Trouble activating? Email
+    {#if !status?.licenseUnverifiable}
+      Don't have one yet?
+      <a
+        data-testid="license-buy-link"
+        href={TANDEM_PURCHASE_URL}
+        target="_blank"
+        rel="noopener noreferrer">Buy a license</a
+      >.
+    {/if}
+    Trouble activating? Email
     <a href="mailto:{TANDEM_SUPPORT_EMAIL}">{TANDEM_SUPPORT_EMAIL}</a> — please don't post your
     license key publicly, it contains your name and email address.
   </div>

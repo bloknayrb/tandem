@@ -3,7 +3,7 @@
  *
  * In `shared/` because all three surfaces need it and none of them should reach
  * into another's tree: the HTTP route and `tandem activate` render activation
- * failures, while the client wall, Settings, and `tandem license` render the
+ * failures, while the client's AI-off notice, Settings, and `tandem license` render the
  * "installed but unverifiable" case. The alternative was the same paragraph
  * hand-written in three components plus the CLI, which is exactly how the three
  * copies drifted before.

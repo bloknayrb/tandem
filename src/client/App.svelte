@@ -24,6 +24,7 @@ import { effectiveBindingLabels } from "./actions/keybindings.js";
 import { scrollFade } from "./actions/scrollFade.svelte.js";
 import { buildOverrides } from "./actions/shortcut-conflicts.js";
 import ActivityTray from "./components/ActivityTray.svelte";
+import AiOffNotice from "./components/AiOffNotice.svelte";
 import { resolveActivityAction } from "./components/activityActions.js";
 import CommandPalette from "./components/CommandPalette.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
@@ -36,7 +37,6 @@ import FirstRunModelPickerModal from "./components/FirstRunModelPickerModal.svel
 import HelpModal from "./components/HelpModal.svelte";
 import IntegrationWizardModal from "./components/IntegrationWizardModal.svelte";
 import LicenseBanner from "./components/LicenseBanner.svelte";
-import LicenseWall from "./components/LicenseWall.svelte";
 import OnboardingTutorial from "./components/OnboardingTutorial.svelte";
 import PanelSlot from "./components/PanelSlot.svelte";
 import PendingUpdateBanner from "./components/PendingUpdateBanner.svelte";
@@ -55,7 +55,7 @@ import ScrollPill from "./editor/ScrollPill.svelte";
 import SourceView from "./editor/SourceView.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
-import { AI_CTA, createAiReadiness } from "./hooks/useAiReadiness.svelte";
+import { AI_CTA, createAiReadiness, ctaHandler } from "./hooks/useAiReadiness.svelte";
 import {
   nextAnnotationId,
   prevAnnotationId,
@@ -128,7 +128,7 @@ import PeekStrip from "./panels/PeekStrip.svelte";
 import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
 import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
-import { addressedAiNotice } from "./status/addressed-ai-notice.js";
+import { addressedAiNotice, noticeAction } from "./status/addressed-ai-notice.js";
 import {
   dismissDrift,
   driftDismissed,
@@ -169,14 +169,10 @@ const scratchpadPersistence = createScratchpadPersistence(
 );
 onDestroy(() => scratchpadPersistence.destroy());
 
-// #1116: license gate (ADR-040). Polls /api/license/status; on any
-// restricted↔unrestricted transition, rebuild the doc-room providers so the
-// server re-applies Surface A's read-only mode via onAuthenticate (a bare
-// reconnect() can't — connect() no-ops on a live socket in hocuspocus-provider
-// 3.x). This clamps to read-only on trial→restricted and releases it on
-// restricted→licensed. Dark builds (the default until v1.0) poll once and go
-// quiet — the store self-stops when gateActive is false, so this never fires.
-licenseStore.start({ onTransition: () => yjsSync.rebuildForLicenseChange() });
+// #1116/#1521: license gate (ADR-040). Polls /api/license/status. A keyless
+// install refuses the AI, never the editor, so a transition needs no provider
+// rebuild. Dark builds (the default until v1.0) poll once and go quiet.
+licenseStore.start();
 onDestroy(() => licenseStore.stop());
 
 // In-memory closed-tab history for Ctrl+Alt+T (reopen closed tab). Lifetime is
@@ -414,6 +410,8 @@ const aiReadiness = createAiReadiness({
   connected: () => yjsSync.connected,
   firstRunSettled: () => firstRun.settled,
   soloMode: () => modeState.tandemMode === "solo",
+  aiNotice: () => licenseStore.ui.aiNotice,
+  refreshLicence: () => licenseStore.refresh(),
 });
 
 // #1282 working-folder drift. Fed the SAME derivation the relaunch action uses,
@@ -687,68 +685,32 @@ $effect(() => {
     });
     if (notice === null) return;
 
-    if (notice.kind === "offline") {
-      // The server is gone, so this is not an AI problem and must not be
-      // dressed as one. It is also the only branch here where the message may
-      // not survive: `chatState.send` writes to a LOCAL Y.Doc with nowhere to
-      // sync, and if the server returns on a new generation the stale-tab gate
-      // tears down every doc and rebuilds from empty ones — the write is
-      // dropped. So no "it'll be seen when one connects" promise, and no CTA:
-      // neither the wizard nor a Claude restart addresses a dead Tandem server,
-      // and offering one would repeat the #1268 mistake of pointing a user at a
-      // remedy for a different problem.
-      notifications.push({
-        id: `ai-offline-${viaKey}-${Date.now()}`,
+    // The branching lives in the pure, exhaustive `noticeAction`; App only pushes
+    // what it returns. The CTA is dispatched through `ctaHandler`, never a binary
+    // ternary: `chip` has five non-null members, and a `=== "connect"` test once
+    // sent `setup` (Claude CLI not installed) down the restart branch.
+    const toast = noticeAction(notice, noun);
+    const cta = toast.cta;
+    notifications.push(
+      {
+        id: `${toast.idPrefix}-${viaKey}-${Date.now()}`,
         type: "launcher",
-        severity: "warning",
-        message: `${noun} saved locally, but Tandem couldn't reach its server, so it wasn't delivered. If the server restarted, send it again.`,
-        dedupKey: `ai-offline-${viaKey}`,
+        severity: toast.severity,
+        message: toast.message,
+        dedupKey: `${toast.idPrefix}-${viaKey}`,
         timestamp: Date.now(),
-      });
-      return;
-    }
-
-    if (notice.kind === "no-agent") {
-      notifications.push(
-        {
-          id: `ai-not-ready-${viaKey}-${Date.now()}`,
-          type: "launcher",
-          severity: "warning",
-          // Past tense on the observation because `warning` never expires —
-          // see the tense rule on `TandemNotification.severity`.
-          message: `${noun} saved while no AI was connected. It'll be seen when one connects.`,
-          dedupKey: `ai-not-ready-${viaKey}`,
-          timestamp: Date.now(),
-        },
-        {
-          // Driven by the shared exhaustive map, not a binary ternary: `chip`
-          // has three non-null members, and a `=== "connect"` test sent `setup`
-          // (Claude CLI not installed) down the restart branch — offering to
-          // restart a binary that isn't there.
-          label: AI_CTA[notice.chip].label,
-          onClick: AI_CTA[notice.chip].action === "restart" ? restartClaude : connectAi,
-        },
-      );
-      return;
-    }
-
-    // An agent is attached, so nothing is wrong — this is a latency
-    // expectation, not a failure, hence `info` rather than `warning` and no CTA.
-    //
-    // The copy names the contradiction on purpose. The status pill says "AI
-    // attached" (truthfully — something IS connected), so a bare "it'll be seen
-    // later" reads as a non-sequitur. Saying "connected, but not being notified"
-    // is the whole point of the notice. Same voice as the pill's
-    // `CONNECTED_NO_PUSH`: "something", and a conditional check-in, because the
-    // attached client may be a script or a dead session's leftover connection.
-    notifications.push({
-      id: `ai-no-push-${viaKey}-${Date.now()}`,
-      type: "launcher",
-      severity: "info",
-      message: `${noun} saved. Something is connected to Tandem but isn't being notified. If it's a session you're using, it'll see this the next time it checks in.`,
-      dedupKey: `ai-no-push-${viaKey}`,
-      timestamp: Date.now(),
-    });
+      },
+      cta === null
+        ? undefined
+        : {
+            label: AI_CTA[cta].label,
+            onClick: ctaHandler(AI_CTA[cta].action, {
+              connect: connectAi,
+              restart: restartClaude,
+              openLicenseSettings,
+            }),
+          },
+    );
   };
   // The DOM discards an async listener's promise, so a rejection would become
   // an unhandled rejection AND silently skip the notice — the user's comment
@@ -937,6 +899,12 @@ function openModelsSettings() {
   openSettingsModalWithAck();
 }
 
+/** Settings → License (#1521): the AI-off notice, the pill CTA and EmptyState. */
+function openLicenseSettings() {
+  if (!settingsModalOpen) nextSettingsTabId = SETTINGS_TAB_IDS.license;
+  openSettingsModalWithAck();
+}
+
 function focusChat(): void {
   // Command/native focus is intentionally context-free. Only the explicit
   // Chat-tab selection capture path may attach an anchor to a message.
@@ -997,6 +965,7 @@ const actionExecutor = mountActionExecutor({
     });
   },
   afterLauncherAction: refreshAiReadinessAfterLauncherAction,
+  aiNotice: () => licenseStore.ui.aiNotice,
   openSettings: openSettingsModalWithAck,
   toggleSoloMode: () =>
     modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo"),
@@ -1983,14 +1952,6 @@ $effect(() => {
 // Raw-markdown source view (#1021). Only editable .md documents qualify
 // (read-only .md like CHANGELOG and non-.md formats are excluded).
 const isReadOnly = $derived(activeTab?.readOnly === true);
-// When the license wall is up (trial expired, no license) the editor is forced
-// read-only as a client-side belt to the server gates — Surface A already makes
-// the Hocuspocus connection read-only, so this only stops local keystrokes that
-// the full-screen wall already covers. `showWall` is false when the gate is dark
-// or the license is valid, so this collapses to `isReadOnly` in the normal case.
-// Kept separate from `isReadOnly` so document-level affordances (source view,
-// status indicator) keep their own meaning. (#1116)
-const editorReadOnly = $derived(isReadOnly || licenseStore.ui.showWall);
 // ADR-035 Unit 10a. Source view, the close/reopen funnel and the save entry
 // points live in `hooks/useDocumentWorkspace.svelte.ts` now. Constructed here
 // (not earlier) because `getActiveTab` / `getIsReadOnly` must close over
@@ -2033,8 +1994,8 @@ const documentWorkspace = createDocumentWorkspace({
  * document has neither — `editable: false` is not tabbable — and Chrome and
  * Firefox paper over that by making overflow scrollers implicitly focusable,
  * while **WebKit does not**. WebKit is the desktop app's WebView, so on macOS a
- * read-only document (the changelog after an update, a `.docx` in review-only,
- * anything behind the license wall) had no keyboard scroll path at all. Now
+ * read-only document (the changelog after an update, or a `.docx` in
+ * review-only) had no keyboard scroll path at all. Now
  * that the scroll pill hides the native scrollbar, it also has no visible one
  * until the mouse comes near — so this is the whole keyboard story for that
  * case, not a nicety.
@@ -2046,7 +2007,7 @@ const documentWorkspace = createDocumentWorkspace({
  * scrolls itself.
  */
 const editorScrollTabIndex = $derived(
-  editorReadOnly && !documentWorkspace.inSourceView ? 0 : undefined,
+  isReadOnly && !documentWorkspace.inSourceView ? 0 : undefined,
 );
 /**
  * Pre-narrowed to a plain boolean so `ScrollPill`'s effect subscribes to THIS
@@ -2072,7 +2033,7 @@ const chatVisible = $derived(
     (effectiveRightVisible || railFloat.right || railFloatClosing.right || railContent.revealOpen),
 );
 const chatCanInsert = $derived(
-  !!editor && !!activeTab && !editorReadOnly && !documentWorkspace.inSourceView,
+  !!editor && !!activeTab && !isReadOnly && !documentWorkspace.inSourceView,
 );
 // #2168: is the user looking at THIS window? Chat counts as seen only then —
 // a background window with chat open used to acknowledge every reply, so the
@@ -2120,6 +2081,8 @@ const chatState = createChatState({
 });
 
 function sendChatMessage(text: string): boolean {
+  // Defence in depth: the composer is disabled while the AI is off (#1521).
+  if (licenseStore.ui.aiOff) return false;
   const sent = chatState.send(text, yjsSync.activeTabId ?? undefined, railContent.capturedAnchor);
   if (!sent) return false;
   railContent.setCapturedAnchor(null);
@@ -2683,6 +2646,8 @@ const shouldShowModelPicker = $derived(
               </button>
             </div>
           </div>
+          <!-- #1521: explains the disabled AI controls below; nothing on a dark build. -->
+          <AiOffNotice onOpenLicenseSettings={openLicenseSettings} />
           <PanelSlot
             kind="chat"
             messages={chatState.messages}
@@ -2699,6 +2664,7 @@ const shouldShowModelPicker = $derived(
             canInsert={chatCanInsert}
             reduceMotion={settingsState.settings.reduceMotion}
             visible={chatVisible}
+            aiDisabled={licenseStore.ui.aiOff}
           />
           <PanelSlot
             kind="side"
@@ -2757,6 +2723,8 @@ const shouldShowModelPicker = $derived(
       aiChip={aiReadiness.chip}
       onConnectAi={connectAi}
       onRestartClaude={restartClaude}
+      onOpenLicenseSettings={openLicenseSettings}
+      aiNotice={aiReadiness.aiNotice}
       soloMode={modeState.tandemMode === "solo"}
       pushDelivery={aiReadiness.pushDelivery}
       claudeWorkingTool={yjsSync.claudeWorking?.tool ?? null}
@@ -2796,12 +2764,6 @@ const shouldShowModelPicker = $derived(
         })}
       onReplayTutorial={tutorial.restartTutorial}
     />
-
-    <!-- #1116: restricted-mode activation wall. Self-gates on `ui.showWall`
-         (trial expired, no license). Full-screen scrim over the editor; the
-         read/export escape hatch holds since the document underneath stays
-         loaded. Server gates (Surface A/B) are the real enforcement. -->
-    <LicenseWall />
 
     <HelpModal
       open={showHelp}
@@ -3073,7 +3035,7 @@ const shouldShowModelPicker = $derived(
       <Editor
         ydoc={activeTab!.ydoc}
         provider={activeTab!.provider}
-        readOnly={editorReadOnly}
+        readOnly={isReadOnly}
         currentFilePath={activeTab!.filePath}
         format={activeTab!.format}
         activeAnnotationId={railContent.activeAnnotationId}
@@ -3226,6 +3188,8 @@ const shouldShowModelPicker = $derived(
               onConnectAi={connectAi}
               onRestartClaude={restartClaude}
               onStartFreshClaude={startFreshClaude}
+              aiNotice={aiReadiness.aiNotice}
+              onOpenLicenseSettings={openLicenseSettings}
             />
           {/if}
         </div>

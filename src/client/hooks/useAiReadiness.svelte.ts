@@ -42,7 +42,9 @@
  *
  * States:
  *   - `booting`      — not yet known (still connecting / first status read
- *                      pending). Render nothing; never flash a CTA on boot.
+ *                      pending, or a launcher stopped as `unlicensed` while
+ *                      the client's licence view still says AI is on — see
+ *                      `staleLicenceStop`). Render nothing; never flash a CTA.
  *   - `unconfigured` — launcher unavailable (`available: false`: stdio mode,
  *                      disabled, or `not-configured` — no launchable claude-code
  *                      integration, #2180) AND no live MCP session. Prompt setup.
@@ -83,7 +85,7 @@
  * messages, and before it existed they were indistinguishable — see the field's
  * doc on `AiReadiness`.
  */
-import { onDestroy } from "svelte";
+import { onDestroy, untrack } from "svelte";
 import { API_HEALTH, API_LAUNCHER_STATUS } from "../../shared/api-paths.js";
 import {
   isTransientlyUnavailable,
@@ -92,6 +94,7 @@ import {
 } from "../../shared/launcher/contract.js";
 import { deliveryStall } from "../status/delivery-stall.js";
 import { API_BASE } from "../utils/fileUpload.js";
+import type { AiNotice } from "../utils/license-ui.js";
 
 /** Loopback `/health` response. `hasSession` and `push` are omitted for
  * non-loopback callers; the client only ever talks to 127.0.0.1 so they are
@@ -218,8 +221,13 @@ export type AiReadinessState = "booting" | "unconfigured" | "stopped" | "ready";
  *   - `restart` — configured but stopped for any other reason, including
  *     `circuit-open` with a healthy CLI, `wake-delivery-failed`, and the rare
  *     `binary-not-found`. Plain restart.
+ *   - `ai-off`  — the AI is refused by the licence (#1521): `aiNotice` is set,
+ *     whichever kind. Opens Settings → License. It ranks FIRST, above Solo:
+ *     Solo is a privacy choice, the licence refusal is a capability fact, and
+ *     every other CTA (connect, restart) would be refused by the server anyway.
+ *     Its copy is kind-neutral — see `AI_CTA["ai-off"]`.
  */
-export type AiChip = "connect" | "setup" | "sign-in" | "restart" | null;
+export type AiChip = "connect" | "setup" | "sign-in" | "restart" | "ai-off" | null;
 
 /**
  * Everything a surface needs to render an `AiChip`'s call to action: its copy
@@ -237,6 +245,9 @@ export type AiChip = "connect" | "setup" | "sign-in" | "restart" | null;
  *
  * With this map a fourth member is a type error at every consumer instead.
  */
+/** Every handler an `AI_CTA` entry can name. Dispatched by `ctaHandler` alone. */
+export type AiCtaAction = "connect" | "restart" | "open-license-settings";
+
 export const AI_CTA: Record<
   Exclude<AiChip, null>,
   {
@@ -247,7 +258,7 @@ export const AI_CTA: Record<
     ariaLabel: string;
     /** Which handler this CTA must invoke. `setup` resolves to `connect`: the
      * install flow IS the integration wizard, only with different copy. */
-    action: "connect" | "restart";
+    action: AiCtaAction;
   }
 > = {
   connect: {
@@ -280,11 +291,44 @@ export const AI_CTA: Record<
     ariaLabel: "Claude Code has stopped. Restart Claude Code.",
     action: "restart",
   },
+  // Kind-neutral (other comments point here): it also serves the unverifiable
+  // licence holder, who most likely already paid (ADR-040 decision 8), so it
+  // never says "unlicensed", "activate" or "trial ended" and carries no URL.
+  // Kind-specific copy comes from `aiOffCopy(readiness.aiNotice)`.
+  "ai-off": {
+    label: "AI off — see license",
+    title: "Tandem's AI features are off. Open Settings → License.",
+    ariaLabel: "AI features are off. Open license settings.",
+    action: "open-license-settings",
+  },
 };
+
+/**
+ * The ONE dispatcher from a CTA's `action` to its handler. A `switch` with a
+ * `never` default, so a new action is a compile error here rather than a binary
+ * ternary at a call site routing it to the wrong handler (#1521).
+ */
+export function ctaHandler(
+  action: AiCtaAction,
+  h: { connect: () => void; restart: () => void; openLicenseSettings: () => void },
+): () => void {
+  switch (action) {
+    case "connect":
+      return h.connect;
+    case "restart":
+      return h.restart;
+    case "open-license-settings":
+      return h.openLicenseSettings;
+    default: {
+      const _exhaustive: never = action;
+      return _exhaustive;
+    }
+  }
+}
 
 /** A stopped launcher's CTA — also a tripped Tandem Claude surfaced beside a
  *  session that is still attached (`launcherFailure`). */
-export type LauncherFailure = Exclude<AiChip, null | "connect">;
+export type LauncherFailure = Exclude<AiChip, null | "connect" | "ai-off">;
 
 /**
  * The `lastError` → CTA decision for a stopped launcher. ONE function, used by
@@ -497,6 +541,15 @@ export interface AiReadiness {
    * gap it deliberately cannot cover.
    */
   readonly deliveryStalledMs: number | null;
+  /**
+   * The licence refusal, or null (#1521): the one derived read of
+   * `deps.aiNotice()` that also ranks `chip` first, so it is non-null exactly
+   * when `chip === "ai-off"`. Views
+   * key their AI-off rendering and copy on this value and their CTA on `chip`;
+   * because both come from here, the two cannot disagree. Pass this, never
+   * `licenseStore.ui.aiNotice` beside it.
+   */
+  readonly aiNotice: AiNotice | null;
   /** Re-poll launcher status + session now (e.g. just after a restart). */
   refresh: () => void;
   /** Re-poll launcher status alone. For the post-send `busy` read: it leaves
@@ -537,6 +590,16 @@ export function createAiReadiness(deps: {
   connected: () => boolean;
   firstRunSettled: () => boolean;
   soloMode: () => boolean;
+  /** The licence refusal, or null (#1521). Null on every dark build. */
+  aiNotice: () => AiNotice | null;
+  /**
+   * Re-read the licence now (#1521). Called when the launcher reports the
+   * server stopped Tandem's Claude as `unlicensed` while `aiNotice` is still
+   * null: at trial expiry the server knows before the client's licence poll
+   * does (up to 60 s later). Required, so no caller can leave that window open.
+   * The pill waits only until the returned promise settles.
+   */
+  refreshLicence: () => Promise<unknown> | void;
 }): AiReadiness {
   let status = $state<LauncherStatus | null>(null);
   // Whether an MCP client transport is currently open (from `/health`). An
@@ -581,6 +644,11 @@ export function createAiReadiness(deps: {
   // Counts each observed start of Tandem's Claude (not-running → running), so
   // a dismissal of its failure button lasts only until it next runs.
   let launcherRunEpoch = $state(0);
+  // The licence refusal, read ONCE. `chip`, `launcherFailure`, the `aiNotice`
+  // getter and every other licence-keyed reader below key on this one value
+  // with one test (`!== null`), so "`aiNotice` non-null exactly when `chip` is
+  // `ai-off`" holds by construction rather than by each reader agreeing.
+  const notice = $derived(deps.aiNotice());
 
   // Drop stale async resolves for LAUNCHER reads (a poll that resolves after
   // the component is gone, or after a newer poll superseded it). Mirrors
@@ -870,10 +938,92 @@ export function createAiReadiness(deps: {
 
   poll();
   const interval = setInterval(() => poll(), POLL_MS);
+
+  // When the licence refusal clears, read the launcher at once. The server has
+  // already respawned Tandem's Claude by then, but the retained `status` still
+  // carries `lastError: "unlicensed"`, which `chip` maps to Restart the moment
+  // the refusal stops outranking it — and a click on that relaunches over the
+  // fresh child. Keyed on the transition itself, so it covers every way the
+  // refusal clears: the Settings activate form and a CLI `tandem activate`
+  // picked up by the licence poll alike. `prev` is a plain `let`, not `$state`:
+  // as `$state` this effect would re-trigger on its own write. The follow-up
+  // reads at 2s and 5s mirror `refreshAiReadinessAfterLauncherAction`: the
+  // respawned child is usually still starting at the first read, and without
+  // them the pill waits for the next 8s poll to show it running. Every
+  // transition, either way, cancels follow-ups still pending from an earlier
+  // clearing: a refusal that returns within 5s must not leave them firing, and
+  // a second clearing must not stack a second pair on the first.
+  let prevAiOff: boolean | null = null;
+  const followUps: ReturnType<typeof setTimeout>[] = [];
+  const readLauncher = () => {
+    if (!destroyed) void pollLauncherStatus(++gen);
+  };
+  $effect(() => {
+    const aiOff = notice !== null;
+    const changed = prevAiOff !== null && aiOff !== prevAiOff;
+    const cleared = prevAiOff === true && !aiOff;
+    prevAiOff = aiOff;
+    if (!changed) return;
+    for (const t of followUps) clearTimeout(t);
+    followUps.length = 0;
+    if (!cleared) return;
+    untrack(readLauncher);
+    followUps.push(setTimeout(readLauncher, 2_000), setTimeout(readLauncher, 5_000));
+  });
   onDestroy(() => {
     gen++;
     destroyed = true;
     clearInterval(interval);
+    for (const t of followUps) clearTimeout(t);
+  });
+
+  // The server has stopped Tandem's Claude for want of a licence, but the
+  // client's licence view does not say so yet (`aiNotice` null): at trial
+  // expiry the licence poll can lag the server by up to 60 s. The launcher read
+  // is then ahead of the licence, so neither half is the truth on its own.
+  // `state` reads it as "we do not know yet" (booting), which keeps the
+  // Restart chip off — a click on it would only be refused — and keeps the
+  // pill from saying "unlicensed" with no kind to explain it, which an
+  // unverifiable licence holder must never see. `launcherFailure` already
+  // ignores `unlicensed` (`TRIPPED_FAILURE`).
+  //
+  // The wait is bounded by that one re-read, never by the sighting. The server
+  // can keep reporting `unlicensed` after the licence is valid — a CLI
+  // `tandem activate` never reaches the route that resumes the launcher, nor
+  // does a licence file that starts verifying, nor an activation after a user
+  // Stop — and a "booting" held for the whole sighting would then hide the
+  // pill, and the Restart that now succeeds, until the server restarts. So once
+  // the re-read settles with `aiNotice` still null, the client's licence view
+  // is the answer and `state` falls through to the ordinary stopped mapping.
+  const staleLicenceStop = $derived(
+    status !== null &&
+      status.available &&
+      !status.running &&
+      status.lastError === "unlicensed" &&
+      notice === null,
+  );
+  let licenceRereadPending = $state(false);
+  let sighting = 0;
+  // ...and ask the licence store to catch up, once per sighting: a `$derived`
+  // boolean re-runs this only when it CHANGES, so an 8 s poll repeating the
+  // same answer calls nothing; a different `lastError`, or `aiNotice` turning
+  // non-null, ends the sighting and the next one calls again. This effect
+  // writes `licenceRereadPending` but never reads it.
+  $effect(() => {
+    const mine = ++sighting;
+    if (!staleLicenceStop) {
+      licenceRereadPending = false;
+      return;
+    }
+    licenceRereadPending = true;
+    untrack(() => {
+      void Promise.resolve()
+        .then(() => deps.refreshLicence())
+        .catch(() => {})
+        .finally(() => {
+          if (mine === sighting && !destroyed) licenceRereadPending = false;
+        });
+    });
   });
 
   const state = $derived.by((): AiReadinessState => {
@@ -891,6 +1041,7 @@ export function createAiReadiness(deps: {
     // An active MCP session means an agent is connected and AI works, whether
     // or not the launcher spawned it. Promote to ready and skip the CTA.
     if (sessionLive) return "ready";
+    if (staleLicenceStop && licenceRereadPending) return "booting";
     if (status.available === false) {
       // Autostart deferral (#1236): the app was launched by the OS at login and
       // deliberately held the Claude launcher back. Nothing is misconfigured —
@@ -930,13 +1081,15 @@ export function createAiReadiness(deps: {
   // why `circuit-open` on its own does not). Views must render off this value
   // alone, not re-derive their own copy of this ternary.
   const chip = $derived<AiChip>(
-    deps.soloMode()
-      ? null
-      : state === "unconfigured"
-        ? "connect"
-        : state === "stopped" && !restartPending
-          ? chipForStoppedLauncher(lastError)
-          : null,
+    notice !== null
+      ? "ai-off"
+      : deps.soloMode()
+        ? null
+        : state === "unconfigured"
+          ? "connect"
+          : state === "stopped" && !restartPending
+            ? chipForStoppedLauncher(lastError)
+            : null,
   );
 
   // The running arm of `status`, or null. One gate, narrowed once, so the three
@@ -955,8 +1108,11 @@ export function createAiReadiness(deps: {
   // green.
   const launcherAttached = $derived(runningStatus?.attached === true);
   const launcherRestarting = $derived(restartPending && launcherFresh && !serverUnreachable);
+  // Suppressed while the AI is refused: the chip already says why, and the
+  // launcher cannot be restarted until the licence returns.
   const launcherFailure = $derived<LauncherFailure | null>(
-    !deps.soloMode() &&
+    notice === null &&
+      !deps.soloMode() &&
       sessionLive &&
       !restartPending &&
       lastError !== undefined &&
@@ -1044,8 +1200,12 @@ export function createAiReadiness(deps: {
         state: deliveryState,
         waitingMs: deliveryWaitingMs,
         soloMode: deps.soloMode(),
+        aiOff: notice !== null,
         serverUnreachable,
       });
+    },
+    get aiNotice() {
+      return notice;
     },
     refresh: () => poll(),
     refreshLauncherStatus: () => void pollLauncherStatus(++gen),

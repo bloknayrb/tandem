@@ -38,6 +38,7 @@ function renderChat(messages: ChatMessage[], visible: boolean | "omit" = true) {
       onClear: async () => {},
       onExport: async () => {},
       onInsert: () => false,
+      aiDisabled: false,
     },
   });
 }
