@@ -1492,7 +1492,7 @@ The shipped skill's remedy branches key on the measured carriers: the code, and 
 **10. D7: "byte-identical" restated as behaviour-identical when dark.** Deleting code changes bundle bytes, and byte equality was never tested. What holds:
 - Admission is tested with the gate dark for `POST`/`GET /mcp`, SSE, the wake upgrade, chat, fan-out and stdio mode (`tests/server/license-ai-refusal.test.ts`). The launcher, the local model and the channel-permission routes rely on the same `aiRefusal()` first line.
 - The deleted code was already inert when dark.
-- Two things do reach dark users, and both are made harmless. The shipped skill's licence instructions fire only on a licence refusal (`-32003`, or a carrier naming `LICENSE_REQUIRED`), which a dark build never sends, because `aiRefusal()` admits on its first line. `tandem license` on a dark build says "nothing is enforced in this build" and never "unlicensed", "trial … remaining" or a purchase link.
+- Two things do reach dark users, and both are made harmless. The shipped skill's licence instructions fire only on a licence refusal (`-32003`, or a carrier naming `LICENSE_REQUIRED`), which a dark build never sends, because `aiRefusal()` admits on its first line. `tandem license` on a dark build with no valid key says "nothing is enforced in this build" and never "unlicensed", "trial … remaining" or a purchase link.
 
 #1521's other restated acceptance criteria are reconciled on the issue.
 

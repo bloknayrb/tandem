@@ -561,6 +561,8 @@ describe("shipped Tandem skill instruction contract", () => {
       expect(leadIn).toBeLessThan(absent.indexOf("**2. Tandem is not running"));
       expect(recovery).toContain(code);
       expect(recovery).toContain("LICENSE_REQUIRED");
+      // The no-opening fallback, which names no case: the shape a bare code takes.
+      expect(absent).toMatch(/Anything else after `-32003`[^\n]*do not guess which case/i);
     });
 
     it("says 'unlicensed' only where the message itself says it", () => {

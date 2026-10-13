@@ -113,10 +113,12 @@ doesn't grant is the worst version of this problem.
   (#1521: #2194, #2202), still dark, follows it: past the trial with no key the
   editor stays fully editable and Tandem refuses its AI surfaces at their
   admission points (ADR-040's third amendment; its accepted residuals are in
-  `licensing-explained.md`). One difference runs the other way: a holder whose
-  key fails to verify is refused the AI although `LICENSE` grants it to anyone
-  holding a key the Licensor issued, because the product cannot tell that key
-  from a forged one. They get fix-or-reissue copy, never "buy".
+  `licensing-explained.md`). One difference runs the other way: past the trial,
+  a holder whose key fails to verify is refused the AI although `LICENSE` grants
+  it to anyone holding a key the Licensor issued. The product cannot tell a
+  damaged or wrongly signed key from a forged one, and a key that needs a newer
+  Tandem cannot be read until they update. They get fix-or-reissue copy, never
+  "buy".
 - One asymmetry is deliberate: every pre-1.0 (beta) version stays free
   for personal use and individual self-hosting with no time limit, including
   the releases that shipped under an earlier wording, so someone can keep
