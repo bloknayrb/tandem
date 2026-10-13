@@ -575,9 +575,10 @@ describe("shipped Tandem skill instruction contract", () => {
       const unverifiable = paragraphs.filter((p) => p.includes(AI_REFUSAL_UNVERIFIABLE_OPENING));
       expect(unverifiable).toHaveLength(1);
       expect(unverifiable[0]).toMatch(/never[^.]*\b(buy|purchase)/i);
-      // And nothing else in it points toward buying: with every "never …" sentence
-      // removed, no purchase word or activation-of-a-new-key remains.
-      const affirmative = unverifiable[0].replace(/[^.]*\bnever\b[^.]*\./gi, "");
+      // And nothing else in it points toward buying: with every "never …" clause
+      // removed (up to the next comma or full stop, so "never X, but buy" keeps
+      // its "but buy"), no purchase word or activation-of-a-new-key remains.
+      const affirmative = unverifiable[0].replace(/\bnever\b[^.,;]*/gi, "");
       expect(affirmative).not.toMatch(/\bbuy\b|purchase|activate a license/i);
     });
 
@@ -604,9 +605,9 @@ describe("shipped Tandem skill instruction contract", () => {
       expect(close[0]).toMatch(/not a reason to arm again/);
       // It belongs to the wake rules, after the socket-close sentence it qualifies.
       const wake = gettingWokenSection(skill);
-      expect(wake.indexOf("`LICENSE_REQUIRED` is Tandem turning")).toBeGreaterThan(
-        wake.indexOf("After a socket close, say once"),
-      );
+      const anchor = wake.indexOf("After a socket close, say once");
+      expect(anchor).toBeGreaterThan(-1);
+      expect(wake.indexOf("`LICENSE_REQUIRED` is Tandem turning")).toBeGreaterThan(anchor);
     });
   });
 
