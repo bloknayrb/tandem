@@ -2,6 +2,15 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { WAKE_URL_PRODUCERS } from "../src/server/mcp/wake-url.js";
+import { TANDEM_PURCHASE_URL } from "../src/shared/constants.js";
+import {
+  AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE,
+  AI_REFUSAL_UNLICENSED_MESSAGE,
+  AI_REFUSAL_UNLICENSED_OPENING,
+  AI_REFUSAL_UNVERIFIABLE_OPENING,
+  aiRefusalUnverifiableMessage,
+  LICENSE_REQUIRED_RPC_CODE,
+} from "../src/shared/license-copy.js";
 
 function readShippedSkill(): string {
   return readFileSync(new URL("../skills/tandem/SKILL.md", import.meta.url), "utf8");
@@ -136,7 +145,12 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // assertion below was re-read against the bumped file.
   // 32 corrects that bullet's summary claim: the no-document summary has three variants
   // (none open, none active, an unknown id), not one fixed sentence. Outside the wake section.
-  expect(skill).toMatch(/^version:\s*32$/m);
+  // 33 adds the licence refusal (#1521 PR 3): a third absent-tools cause keyed on `-32003`,
+  // an Error Recovery bullet, polling suspended while refused, and — INSIDE the wake section —
+  // a paragraph after "After a socket close…" saying a `LICENSE_REQUIRED` close is not a
+  // reason to re-arm. Appended, never inserted into the pinned four-bullet list; every wake
+  // assertion below was re-read against the bumped file.
+  expect(skill).toMatch(/^version:\s*33$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
   // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
@@ -511,7 +525,68 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "32", bodyHash: "087f03b2ad6a" });
+    ).toEqual({ version: "33", bodyHash: "a48a57e67bdd" });
+  });
+
+  // #1521: what the model sees of a licence refusal is the JSON-RPC code and message
+  // (measured, PR #2194), so the skill keys on `-32003` and on how the message BEGINS. The
+  // openings are imported, so a copy change reds here instead of silently de-keying the
+  // skill. The scoping asserts are the point: a presence check cannot see that a paying
+  // user (unverifiable) or a kind-neutral wake close is told "unlicensed" or "buy".
+  describe("licence refusal (#1521)", () => {
+    const skill = readShippedSkill().replace(/\r\n/g, "\n");
+    // A paragraph is a blank-line-separated block or a single list item.
+    const paragraphs = skill.split(/\n\n|\n(?=- )/);
+    const absent = /## When the tandem_\* Tools Are Absent\n([\s\S]*?)\n## /.exec(skill)?.[1] ?? "";
+    const recovery = namedSection(skill, "Error Recovery");
+    const code = String(LICENSE_REQUIRED_RPC_CODE);
+
+    it("every refusal message is composed from the opening the skill keys on", () => {
+      expect(AI_REFUSAL_UNLICENSED_MESSAGE.startsWith(`${AI_REFUSAL_UNLICENSED_OPENING}. `)).toBe(
+        true,
+      );
+      expect(
+        AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE.startsWith(`${AI_REFUSAL_UNLICENSED_OPENING}. `),
+      ).toBe(true);
+      expect(
+        aiRefusalUnverifiableMessage("UNKNOWN").startsWith(`${AI_REFUSAL_UNVERIFIABLE_OPENING}. `),
+      ).toBe(true);
+    });
+
+    it("names the third absent-tools cause, keyed on -32003, before the not-running step", () => {
+      expect(code).toBe("-32003");
+      expect(absent).toContain(AI_REFUSAL_UNLICENSED_OPENING);
+      expect(absent).toContain(AI_REFUSAL_UNVERIFIABLE_OPENING);
+      expect(absent).toContain(`MCP error ${code}`);
+      expect(absent).toMatch(/Three causes/);
+      expect(absent).not.toMatch(/Two causes|Those two are/);
+      // Positive evidence is read before the default remedy, or "not running" is said first.
+      const leadIn = absent.indexOf("First, read the failure");
+      expect(leadIn).toBeGreaterThan(-1);
+      expect(leadIn).toBeLessThan(absent.indexOf("**2. Tandem is not running"));
+      expect(recovery).toContain(code);
+      expect(recovery).toContain("LICENSE_REQUIRED");
+    });
+
+    it("says 'unlicensed' only where the message itself says it", () => {
+      const hits = paragraphs.filter((p) => /unlicensed/i.test(p));
+      expect(hits.length).toBeGreaterThan(0);
+      for (const p of hits) expect(p).toContain(AI_REFUSAL_UNLICENSED_OPENING);
+    });
+
+    it("never tells an unverifiable holder to buy, and never sends a purchase link", () => {
+      const unverifiable = paragraphs.filter((p) => p.includes(AI_REFUSAL_UNVERIFIABLE_OPENING));
+      expect(unverifiable).toHaveLength(1);
+      expect(unverifiable[0]).toMatch(/never[^.]*\b(buy|purchase)/i);
+      expect(skill).not.toContain(TANDEM_PURCHASE_URL);
+    });
+
+    it("keeps the kind-neutral wake close kind-neutral", () => {
+      const close = paragraphs.filter((p) => p.includes("`LICENSE_REQUIRED` is Tandem turning"));
+      expect(close).toHaveLength(1);
+      expect(close[0]).not.toMatch(/unlicensed|\bbuy\b|purchase/i);
+      expect(close[0]).toMatch(/not a reason to arm again/);
+    });
   });
 
   // The editor's pickup row shows "working on it" only from an `inProgress` ack, and the

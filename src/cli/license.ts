@@ -59,18 +59,22 @@ export function wrapForTerminal(text: string, width = 76): string[] {
 export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean): string[] {
   const lines: string[] = ["", "Tandem license", ""];
   lines.push(`  Enforcement:   ${enforcementOn ? "on" : "off (activates at v1.0)"}`);
+  // `tandem license` forces `gateEnabled: true`, so a dark build reaches the
+  // trial and restricted branches from a stale `trial.json`. A dark build is a
+  // pre-1.0 beta, whose grant has no time limit: there the trial clock is
+  // mechanism only, and the user is neither on a trial nor unlicensed.
+  const notEnforced = "nothing is enforced in this build";
   if (state.gateActive && state.status === "trial") {
-    lines.push(
-      `  Status:        trial (${state.trial.daysRemaining} of ${TRIAL_DAYS} days remaining)`,
-    );
+    const days = `trial (${state.trial.daysRemaining} of ${TRIAL_DAYS} days remaining)`;
+    lines.push(`  Status:        ${enforcementOn ? days : `${days} — ${notEnforced}`}`);
   } else if (state.gateActive && state.status === "restricted") {
-    // #1521: keyless means AI off, never read-only. The "AI features off"
-    // claim is made ONLY when enforcement is on: `tandem license` forces
-    // `gateEnabled: true`, so a dark build with a stale `trial.json` reaches
-    // this branch while nothing is actually switched off.
+    // #1521: keyless means AI off, never read-only. "AI features off" and
+    // "unlicensed" are said ONLY when enforcement is on.
     const unverifiable = state.licenseUnverifiable !== undefined;
     if (!enforcementOn) {
-      lines.push("  Status:        trial ended — nothing is enforced in this build");
+      lines.push(
+        `  Status:        ${unverifiable ? "license not verified" : "no license key"} — ${notEnforced}`,
+      );
     } else if (unverifiable) {
       lines.push(
         "  Status:        license not verified — AI features off; the editor is unaffected",
@@ -80,8 +84,9 @@ export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean)
     }
     // Never a purchase link for an installed licence that fails to verify:
     // that reader most likely already paid (ADR-040 decision 8). Their remedy
-    // is the fix-or-reissue paragraph below.
-    if (!unverifiable) lines.push(`  Buy a license: ${TANDEM_PURCHASE_URL}`);
+    // is the fix-or-reissue paragraph below. Nor on a dark build, where nothing
+    // is enforced and the beta is free.
+    if (enforcementOn && !unverifiable) lines.push(`  Buy a license: ${TANDEM_PURCHASE_URL}`);
   } else {
     // licensed (gate-active) — or the dark arm, which `tandem license` never
     // produces (it forces gateEnabled:true), but the union requires the branch.

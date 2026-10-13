@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 32
+version: 33
 description: >
   Use before the first tandem_* call in a session — including a lone status
   check — or when the user asks about Tandem document editing or iterating on
@@ -87,7 +87,7 @@ Selections are **not** sent as standalone events. Instead, when the user sends a
 
 - Check `tandem_getActivity()` before annotating near the user's cursor. If `isTyping` is true, wait for typing to stop before annotating that area. `cursor` is a flat text offset (UTF-16 code units), the same system as annotation ranges — only a document change triggers a write, and the last one publishes wherever the caret is by then, so treat it as a proximity hint, never as a range endpoint for `tandem_edit` or `tandem_comment`.
 - Use `tandem_status({ text: "..." })` to show what you're working on — the user may see it in the editor status bar (it is hidden while Tandem's own launched Claude is running, because Tandem can't tell which session set it).
-- **Call `tandem_checkInbox` every 2-3 tool calls** (orchestrator only in a multi-agent workflow), not just at the end of a task. You cannot tell from your side whether real-time push is reaching you — the channel is often not connected, and Tandem can only tell you when *nothing at all* is subscribed, not whether the thing that is subscribed reaches you — so steady polling is the reliable path, always. It's cheap: repeat polls de-duplicate against what you've already been shown, so frequent calls don't double-report. An item that also went out as a real-time push carries `alreadyPushed: true` and still appears — the server can't confirm a push reached you, so it shows you everything rather than risk dropping it. See "User comments" above before acting on a flagged item twice. When in doubt, poll.
+- **Call `tandem_checkInbox` every 2-3 tool calls** (orchestrator only in a multi-agent workflow), not just at the end of a task. You cannot tell from your side whether real-time push is reaching you — the channel is often not connected, and Tandem can only tell you when *nothing at all* is subscribed, not whether the thing that is subscribed reaches you — so steady polling is the reliable path, always. It's cheap: repeat polls de-duplicate against what you've already been shown, so frequent calls don't double-report. An item that also went out as a real-time push carries `alreadyPushed: true` and still appears — the server can't confirm a push reached you, so it shows you everything rather than risk dropping it. See "User comments" above before acting on a flagged item twice. When in doubt, poll — unless Tandem is refusing its AI features (`-32003`; see Error Recovery).
 - Reply to chat messages with `tandem_reply`, not annotations.
 - **Acknowledge a chat request before doing the work.** The user sees nothing in chat until you reply, and the work can take minutes. So when a chat message asks for work, first send a one-line `tandem_reply` saying what you are about to do, with `replyTo` set to that message's `id` (a channel event's `message_id`) and `inProgress: true` — the editor then shows the user it is in progress. When you finish, reply again with the result, same `replyTo`, no `inProgress`. If several messages arrived together, use the latest one's `id`. If a single reply fully answers the message, just answer it (no `inProgress`).
 
@@ -126,6 +126,8 @@ Nothing else is a reason to arm again:
 
 After a socket close, say once that the watch ended and keep polling.
 
+**A close whose text carries `LICENSE_REQUIRED` is Tandem turning its AI features off,** not a restart. Say once that the watch ended for that reason and that Tandem's **Settings → License** says why; the close does not say which case it is, so do not guess. It is not a reason to arm again. If the user then asks you to watch, make one read-mode `tandem_status` first: if it is refused, relay that instead of arming; if it succeeds, arm as usual.
+
 Two more limits:
 - **A turn saying Tandem launched you or wakes you directly wins.** If one is in view, do not re-arm. Stand down as below.
 - **If the re-arm itself fails, say so once and stop trying.** Keep polling.
@@ -134,7 +136,7 @@ Before you arm, know these:
 
 - **Do not arm one if Tandem launched you.** A launcher-spawned session is already woken directly on its input, and the wake turn says so explicitly. A second watch double-wakes every message. This is the same test as "How to tell which you are" above, restated where you are about to act on it.
 - **A wake tells you *that* something happened, never *what*.** Frames carry an id, a type and a timestamp — no message text, by design. Always call `tandem_checkInbox` to find out what actually arrived. Answering from the notification is how the same item gets replied to twice: the inbox never marks it seen, so it comes back.
-- **Wakes are best-effort and can be dropped.** A burst of activity is rate-limited by the host, so some notifications never arrive even though every event reached the server. This is exactly why the point above matters — the inbox has all of them; the wake stream may not. Keep polling every 2-3 tool calls regardless (orchestrator only in a multi-agent workflow).
+- **Wakes are best-effort and can be dropped.** A burst of activity is rate-limited by the host, so some notifications never arrive even though every event reached the server. This is exactly why the point above matters — the inbox has all of them; the wake stream may not. Keep polling every 2-3 tool calls regardless (orchestrator only in a multi-agent workflow), except while Tandem is refusing its AI features (see Error Recovery).
 - **If every wake arrives twice, you are the second consumer — stand down.** A subscriber count of zero at the moment you check is not a promise it stays zero. If the user has the Tandem plugin installed, dispatching this skill is what starts its monitor, and that takes some seconds to connect — so a count you read in your first tool call can be stale by the time your watch is open. Nothing on Tandem's side can tell the two apart; doubled wakes are the signal. Stop your watch with `TaskStop` and keep polling, rather than leaving both running. If both are your own `Tandem wake` watches, stop one of them: the older if you can identify it, otherwise either one. Never re-arm, on your own initiative, a watch you stood down; only the user asking you to watch brings one back. No item is lost either way: the inbox de-duplicates, so the cost is a wasted turn, not a duplicate reply.
 
 - **A later turn telling you Tandem wakes you directly retracts your watch.** If you armed one and a turn then arrives saying Tandem is already waking you directly and not to arm, that turn is right and your watch is the duplicate — stop it with `TaskStop` and say so. The one-live-watch bound is about never running two at once; it never bars you from standing one down. A watch retracted this way is never re-armed, not even when asked: a launched session is already woken on its input.
@@ -160,15 +162,22 @@ Tandem snapshots the file's bytes before its first write each run, so a save is 
 resolves `mcpServers.tandem` once at session start over direct HTTP, so the whole toolset is
 missing whenever that resolution did not produce a live connection. There is no failing tool call
 to read, because there is no tool — which is why this needs saying rather than being obvious
-(#1463).
+(#1463). There may still be a failure reported for the Tandem server itself, and that is worth one
+look.
 
-**Two causes, and they take different fixes** — step 2 is almost always the right one, and step 3
-tells you when it was not, without guessing.
+**Three causes, and they take different fixes.** Read the server's failure first (below the hard
+rule). Without a licence refusal, step 2 is almost always the right one, and step 3 tells you when it
+was not, without guessing.
 
 **1. Do not edit the target file by any other means.** Not `Edit`, not `Write`, not "I'll just make
 the change directly," and do not offer to. The user asked for their document in Tandem: an edit
 made outside it is invisible in the editor, unreviewable, and looks like success. **Absence of the
 toolset means stop.** This holds even when the file is right there and the change is trivial.
+
+**First, read the failure Claude Code reports for the Tandem server.** If it is `MCP error -32003`,
+or its message begins with one of the two sentences quoted under "Licence refusal" below, Tandem *is*
+running and has turned its AI features off. Skip steps 2 and 3 and follow "Licence refusal".
+Anything else, or no message at all: step 2.
 
 **2. Tandem is not running (the common cause). Tell the user, in these terms:**
 
@@ -187,15 +196,28 @@ can be loaded in a session whose `~/.claude.json` has no `mcpServers.tandem` ent
 > Tandem isn't set up for Claude Code on this machine. Run `tandem setup --apply`, or open Tandem
 > and use **Settings → AI Assistant**, then restart Claude Code.
 
-Those two are the whole set. Do not invent a third — there is no per-chat connector toggle to
+**Licence refusal (`MCP error -32003`).** Tandem is running but has turned its AI features off. "The
+message" is the text after the `MCP error -32003:` prefix. Relay it rather than paraphrasing, and
+act on how it begins:
+
+- **"Tandem is unlicensed, so its AI features are turned off"** → tell the user Tandem's AI features are off because it is unlicensed, and to activate a license key in Tandem's **Settings → License**, then reconnect as the message says (in Claude Code, run `/mcp`). Give a purchase link only as the message gives it; never invent one.
+- **"Tandem's AI features are off because your license could not be verified"** → the user's license is installed but did not verify, and they most likely paid for it. Relay the message's own fix: a reissue, an update, or entering the key again in **Settings → License**. Never tell them to buy a license, and never say they lack a license.
+- **Anything else after `-32003`** → say only that Tandem's AI features are off and that Tandem's **Settings → License** says why. Do not guess which case it is.
+
+The hard rule above applies here too: do not edit the file another way, or offer to.
+
+Those three are the whole set. Do not invent a fourth — there is no per-chat connector toggle to
 enable and no MCP setting to hand-edit.
 
 **Do not go looking for the tools first.** No amount of `ToolSearch`, connector listing, or plugin
 listing will surface a server that never connected; it only adds latency before the user hears
 anything. One check is enough, and the answer is conclusive.
 
-The wording above matches what the stdio bridge (`src/cli/mcp-stdio.ts`) already returns as JSON-RPC
-`-32000` for Claude Desktop and Cowork, so every integration says the same thing.
+The step-2 wording above matches what the stdio bridge (`src/cli/mcp-stdio.ts`) already returns as
+JSON-RPC `-32000` for Claude Desktop and Cowork, so every integration says the same thing. `-32000`
+is the bridge's own error for losing Tandem (not running, unhealthy, or the connection dropping). A
+licence refusal is Tandem's own `-32003`, which the bridge passes through, so its text is the licence
+message, never "server not running".
 
 ## Error Recovery
 
@@ -206,6 +228,7 @@ The wording above matches what the stdio bridge (`src/cli/mcp-stdio.ts`) already
 - **`FORMAT_ERROR`** — Usually the operation doesn't apply to this document's format: `tandem_appendContent` on a non-Markdown document, or a `tandem_editList` op the format cannot carry. It is also the fallback for a failed `tandem_save` or `tandem_open` that no more specific code covers, so read `details.errorCode` when it is present: `VERIFY_BLOCKED` means the save was refused before touching the file, and its message says why.
 - **`INVALID_PATH`** — The path was refused: a relative path (pass an absolute one), a UNC path, or `tandem_restoreBackup` on an upload or scratchpad, which has no on-disk location.
 - **`EXTERNAL_CONFLICT`** — `tandem_save` refused because the file changed on disk since it was opened, usually from an out-of-band `Edit`/`Write` (see Hard Rule 6). The user resolves it via the editor's Keep/Reload banner; `tandem_open({ force: true })` also clears it, but destructively, and only on the user's say-so — never call it yourself to route around a conflict.
+- **`-32003`, or an error naming `LICENSE_REQUIRED`** — Tandem stopped admitting its AI features mid-session: the trial ran out, or the installed license stopped verifying. Tell the user once, with the same three branches as "Licence refusal" above; when the error is JSON (a `tandem_reply` failing with `Reply failed (403): {…}`), branch on which of the two quoted sentences it contains. Do not edit the file another way, or offer to. While it lasts, suspend the every-2-3-calls inbox poll: make at most one read-mode `tandem_status` per user turn to see whether it has healed, and resume normal polling on the first success. Repeat the explanation only if the message changes. Once the user activates, the next call works again by itself within about a minute; no `/mcp` is needed unless the message asks you to reconnect. A line from Tandem's monitor (`Tandem: …`) or a `license_refused` channel event saying the same thing is this refusal too: tell the user once if you have not already. It is not a wake, and not a reason to poll or arm. If it carries neither quoted sentence (for example `Tandem: LICENSE_REQUIRED`), use the "anything else" branch.
 - **`NO_DOCUMENT`** — No document is open, or the `documentId` you passed doesn't match one. Check `tandem_listDocuments` for what's actually open, and open a file with `tandem_open` when the user's request needs one. The error is not a reason to open something the user didn't ask for. `tandem_checkInbox`, `tandem_reply` and `tandem_open` work with no document open, and the inbox still delivers chat then: when no document resolves (none open, none active, or a `documentId` naming one that isn't open), its `summary` opens with a sentence saying so and the comment, reply and activity fields are empty. So a user can ask you to open a file before any tab exists.
 
 ## Session Handoff
