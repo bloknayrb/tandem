@@ -196,6 +196,63 @@ describe("licenseStore (singleton lifecycle)", () => {
  * null and Settings → License asserted "Not enforced in this version" from a
  * fetch that never answered.
  */
+/**
+ * A hidden tab skips its ticks, so a backgrounded window does not poll the
+ * licence every 8 s forever, and polls once on becoming visible. `hidden` is
+ * redefined on the instance, which works whatever happy-dom's own definition
+ * is; the afterEach removes the override.
+ */
+describe("licenseStore — hidden tabs", () => {
+  let hidden = false;
+  const fire = () => document.dispatchEvent(new Event("visibilitychange"));
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fetchLicenseStatus.mockReset();
+    licenseStore.stop();
+    licenseStore.set(DARK);
+    hidden = false;
+    Object.defineProperty(document, "hidden", { get: () => hidden, configurable: true });
+  });
+
+  afterEach(() => {
+    licenseStore.stop();
+    vi.useRealTimers();
+    delete (document as unknown as { hidden?: boolean }).hidden;
+  });
+
+  it("skips restricted ticks while hidden and polls once on becoming visible", async () => {
+    fetchLicenseStatus.mockResolvedValue(RESTRICTED);
+    licenseStore.start();
+    await flush();
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(1);
+
+    hidden = true;
+    fire();
+    await vi.advanceTimersByTimeAsync(80_000);
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(1);
+
+    hidden = false;
+    fire();
+    await flush();
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(2);
+
+    // Visible again: the 8 s cadence resumes.
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(3);
+  });
+
+  it("a visibilitychange after stop() polls nothing", async () => {
+    fetchLicenseStatus.mockResolvedValue(RESTRICTED);
+    licenseStore.start();
+    await flush();
+    licenseStore.stop();
+    fire();
+    await flush();
+    expect(fetchLicenseStatus).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("licenseStore — statusUnavailable (#1789)", () => {
   let warn: ReturnType<typeof vi.fn<(...args: unknown[]) => void>>;
 

@@ -15,6 +15,7 @@
 
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { DeliveryState } from "../../src/server/events/delivery-state.js";
 import { makeHealthHandler } from "../../src/server/mcp/routes/health.js";
 
 function makeMockRes() {
@@ -253,9 +254,13 @@ describe("GET /health — delivery under a licence refusal (#1521)", () => {
     sincePollMs: 120_000,
   };
 
-  function call(remoteAddress: string, aiRefused: () => boolean): Record<string, unknown> {
+  function call(
+    remoteAddress: string,
+    aiRefused: () => boolean,
+    state = OUTSTANDING as DeliveryState,
+  ): Record<string, unknown> {
     const res = makeMockRes();
-    makeHealthHandler({ ...DEPS, getDeliveryState: () => OUTSTANDING, aiRefused })(
+    makeHealthHandler({ ...DEPS, getDeliveryState: () => state, aiRefused })(
       // biome-ignore lint/suspicious/noExplicitAny: minimal Express req/res doubles
       makeMockReq(remoteAddress) as any,
       // biome-ignore lint/suspicious/noExplicitAny: minimal Express req/res doubles
@@ -278,6 +283,14 @@ describe("GET /health — delivery under a licence refusal (#1521)", () => {
     const delivery = call("127.0.0.1", () => false).delivery as Record<string, unknown>;
     expect(delivery.state).toBe("awaiting-poll");
     expect(delivery.waitingMs).toBe(90_000);
+  });
+
+  it("a loopback poll with nothing outstanding never pays for the refusal read", () => {
+    const aiRefused = vi.fn(() => true);
+    const idle = { ...OUTSTANDING, state: "idle" as const, waitingMs: null };
+    const delivery = call("127.0.0.1", aiRefused, idle).delivery as Record<string, unknown>;
+    expect(delivery.state).toBe("idle");
+    expect(aiRefused).not.toHaveBeenCalled();
   });
 
   it("a LAN caller gets no delivery and never pays for the refusal read", () => {

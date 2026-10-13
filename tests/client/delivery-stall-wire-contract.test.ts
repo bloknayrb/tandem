@@ -68,7 +68,7 @@ describe("delivery join — server state names reach the client predicate", () =
     // here rather than silently reading as a stall.
     const refused = applyAiRefusal(
       getDeliveryState(1_000_000 + DELIVERY_STALL_MS + 1_000, 1),
-      true,
+      () => true,
     );
     expect(refused.state).toBe("license-refused");
     expect(silentFor(refused)).toBeNull();

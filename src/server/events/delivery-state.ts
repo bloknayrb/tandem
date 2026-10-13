@@ -378,12 +378,14 @@ export function resetDeliveryStateForTests(): void {
  * the user's way. `idle` and `polled` make no claim and pass through.
  *
  * Read-time, not a latch, so there is no window between expiry and the next
- * refused event, and nothing goes stale after activation. The refusal is a
- * plain argument, the way `externalConsumerCount` is: this module imports no
- * licence code, and the caller decides it with `aiRefusal()`.
+ * refused event, and nothing goes stale after activation. The refusal is
+ * passed in, the way `externalConsumerCount` is: this module imports no
+ * licence code, and the caller decides it with `aiRefusal()`. It is a thunk,
+ * asked only for a state it could remap, because answering it costs a licence
+ * file read and a signature check on every `/health` poll otherwise.
  */
-export function applyAiRefusal(state: DeliveryState, aiRefused: boolean): DeliveryState {
-  if (!aiRefused) return state;
+export function applyAiRefusal(state: DeliveryState, aiRefused: () => boolean): DeliveryState {
   if (state.state !== "awaiting-poll" && state.state !== "consumer-detached") return state;
+  if (!aiRefused()) return state;
   return { ...state, state: "license-refused", waitingMs: null, latencyMs: null };
 }

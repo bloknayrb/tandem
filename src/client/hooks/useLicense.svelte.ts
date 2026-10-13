@@ -15,7 +15,9 @@ import { fetchLicenseStatus } from "./useLicense";
  * transition needs no provider rebuild: nothing about the document connection
  * depends on it. The cadence does change with the state — every 8 s while the
  * AI is refused, so a `tandem activate` from the CLI brings the AI back within
- * seconds rather than a minute, and every 60 s otherwise.
+ * seconds rather than a minute, and every 60 s otherwise. Ticks are skipped
+ * while the tab is hidden, and one poll runs when it becomes visible again, so a
+ * background tab does not poll the licence forever.
  */
 
 const POLL_INTERVAL_MS = 60_000;
@@ -49,8 +51,22 @@ function createLicenseStore() {
 
   function arm(periodMs: number): void {
     if (timer) clearInterval(timer);
-    timer = setInterval(() => void poll(), periodMs);
+    timer = setInterval(() => {
+      if (!isHidden()) void poll();
+    }, periodMs);
     armedPeriodMs = periodMs;
+  }
+
+  // `document` is guarded: this module is imported by code that can run with no
+  // DOM, and a non-DOM context is never "hidden".
+  function isHidden(): boolean {
+    return typeof document !== "undefined" && document.hidden;
+  }
+
+  // Catch up at once when the tab comes back, rather than waiting out a period
+  // whose ticks were all skipped.
+  function onVisibilityChange(): void {
+    if (started && !isHidden()) void poll();
   }
 
   /**
@@ -77,6 +93,9 @@ function createLicenseStore() {
     started = false;
     armedPeriodMs = null;
     statusUnavailable = false;
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    }
   }
 
   async function poll(): Promise<void> {
@@ -136,6 +155,9 @@ function createLicenseStore() {
     start(): void {
       if (started) return;
       started = true;
+      if (typeof document !== "undefined") {
+        document.addEventListener("visibilitychange", onVisibilityChange);
+      }
       void poll();
       arm(desiredPeriodMs());
     },

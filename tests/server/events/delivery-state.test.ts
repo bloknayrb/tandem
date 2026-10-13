@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyAiRefusal,
   type DeliveryState,
@@ -407,7 +407,7 @@ describe("applyAiRefusal", () => {
   };
 
   it("maps awaiting-poll to license-refused, with both clocks null", () => {
-    expect(applyAiRefusal(base, true)).toEqual({
+    expect(applyAiRefusal(base, () => true)).toEqual({
       ...base,
       state: "license-refused",
       waitingMs: null,
@@ -417,19 +417,22 @@ describe("applyAiRefusal", () => {
 
   it("maps consumer-detached to license-refused", () => {
     const detached: DeliveryState = { ...base, state: "consumer-detached", waitingMs: null };
-    expect(applyAiRefusal(detached, true).state).toBe("license-refused");
+    expect(applyAiRefusal(detached, () => true).state).toBe("license-refused");
   });
 
-  it("leaves idle and polled alone — they make no claim", () => {
+  it("leaves idle and polled alone — they make no claim — and never asks", () => {
     const idle: DeliveryState = { ...base, state: "idle", waitingMs: null };
     const polled: DeliveryState = { ...base, state: "polled", waitingMs: null, latencyMs: 900 };
-    expect(applyAiRefusal(idle, true)).toBe(idle);
-    expect(applyAiRefusal(polled, true)).toBe(polled);
+    const aiRefused = vi.fn(() => true);
+    expect(applyAiRefusal(idle, aiRefused)).toBe(idle);
+    expect(applyAiRefusal(polled, aiRefused)).toBe(polled);
+    // The refusal read is a licence file read plus a signature check.
+    expect(aiRefused).not.toHaveBeenCalled();
   });
 
   it("the twin: not refused returns the input unchanged", () => {
-    expect(applyAiRefusal(base, false)).toBe(base);
+    expect(applyAiRefusal(base, () => false)).toBe(base);
     const detached: DeliveryState = { ...base, state: "consumer-detached", waitingMs: null };
-    expect(applyAiRefusal(detached, false)).toBe(detached);
+    expect(applyAiRefusal(detached, () => false)).toBe(detached);
   });
 });
