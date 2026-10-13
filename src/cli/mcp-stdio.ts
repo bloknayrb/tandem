@@ -947,6 +947,12 @@ export async function runMcpStdio(): Promise<void> {
         responseId === getRequestId(handshakeInit) &&
         licenseRefusalError(msg) !== undefined
       ) {
+        if (!deferredHandshake) {
+          process.stderr.write(
+            "[tandem mcp-stdio] initialize refused by Tandem's license check; " +
+              "reconnect from the host after activating\n",
+          );
+        }
         deferredHandshake = true;
       }
       return;

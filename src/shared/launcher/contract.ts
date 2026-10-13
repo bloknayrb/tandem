@@ -142,8 +142,11 @@ export function isTransientlyUnavailable(reason: LauncherUnavailableReason | und
  *
  * `unlicensed` (#1521): the supervisor declined to spawn Claude Code because
  * Tandem is unlicensed (its AI features are off). It trips nothing — no
- * breaker, no restart loop — and the supervisor resumes on its own when a
- * licence is activated in the app (`resumeAfterLicence`).
+ * breaker, no restart loop. The supervisor resumes when a licence is
+ * activated through `POST /api/license/activate` (`resumeAfterLicence`).
+ * Any other way the licence becomes valid (`tandem activate`, a copied-in
+ * `license.json`, a lock on the file clearing) does not resume it; the
+ * stopped chip's Restart does.
  */
 export type LauncherErrorCode =
   | "spawn-failed"

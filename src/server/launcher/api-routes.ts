@@ -848,7 +848,6 @@ function runningCwd(sup: Supervisor | null): string | null {
  * (including a checked filesystem path) is safe to return, but bound it anyway. */
 const MAX_ERROR_DETAIL = 300;
 
-/** Fallback copy when a refusal reaches the route without its own envelope. */
 /**
  * 403 for a launcher action the licence refused (#1521): the refusal envelope
  * the supervisor recorded, plus the route's own `code`. The supervisor holds

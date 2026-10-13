@@ -20,7 +20,7 @@ import {
   TANDEM_PURCHASE_URL,
   TAURI_HOSTNAME,
 } from "../../shared/constants.js";
-import { LICENSE_REQUIRED_RPC_CODE } from "../../shared/license-copy.js";
+import { AI_REFUSAL_RECONNECT_HINT, LICENSE_REQUIRED_RPC_CODE } from "../../shared/license-copy.js";
 import { createAuthMiddleware } from "../auth/middleware.js";
 import { getTokenFilePath, tokenFileIsAuthoritative } from "../auth/token-store.js";
 import { isNonLoopback } from "../bind-check.js";
@@ -384,17 +384,27 @@ export function licenseRefusalRpcBody(body: unknown, refusal: AiRefusal): unknow
   // Hand-rolled, not the SDK's `isJSONRPCRequest`: that is a strict schema
   // parse, so a request with malformed params would read as "not a request"
   // and be dropped — and a malformed request must still hear the refusal.
-  const isRequest = (m: unknown): m is { id: unknown } =>
+  const isRequest = (m: unknown): m is { id: unknown; method: unknown } =>
     m !== null &&
     typeof m === "object" &&
     "method" in m &&
     "id" in m &&
     (m as { id: unknown }).id !== undefined;
+  // Only a refused `initialize` carries the reconnect hint: the host marks the
+  // server failed and will not handshake again by itself.
+  const answer = (m: { id: unknown; method: unknown }) => ({
+    jsonrpc: "2.0",
+    error:
+      m.method === "initialize"
+        ? { ...error, message: `${error.message} ${AI_REFUSAL_RECONNECT_HINT}` }
+        : error,
+    id: m.id,
+  });
   if (Array.isArray(body)) {
-    const answers = body.filter(isRequest).map((m) => ({ jsonrpc: "2.0", error, id: m.id }));
+    const answers = body.filter(isRequest).map(answer);
     return answers.length > 0 ? answers : null;
   }
-  return isRequest(body) ? { jsonrpc: "2.0", error, id: body.id } : null;
+  return isRequest(body) ? answer(body) : null;
 }
 
 /**

@@ -87,18 +87,32 @@ export class LicenseRefusedStreamError extends Error {
   }
 }
 
+const REFUSAL_BODY_TIMEOUT_MS = 5_000;
+
 /**
  * Read a refused response's licence envelope, or `null` when it is not one.
  * Total: a body that cannot be read or parsed is simply not a licence refusal.
+ * Bounded: the handshake timer no longer governs the body, so a 403 whose body
+ * stalls (something other than Tandem on the port) must not hang the loop.
  */
 async function readLicenseRefusal(res: Response): Promise<string | null> {
   if (res.status !== 403) return null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("refusal body timeout")), REFUSAL_BODY_TIMEOUT_MS);
+  });
   try {
-    const body = (await res.json()) as { error?: unknown; message?: unknown } | null;
+    const body = (await Promise.race([res.json(), deadline])) as {
+      error?: unknown;
+      message?: unknown;
+    } | null;
     if (body?.error !== LICENSE_REQUIRED) return null;
     return typeof body.message === "string" ? body.message : LICENSE_REQUIRED;
   } catch {
+    res.body?.cancel().catch(() => {});
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

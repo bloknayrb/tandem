@@ -293,7 +293,7 @@ points**, each of which asks `aiRefusal()`:
 | Push / wake fan-out | `pushEvent` in `src/server/events/queue.ts` | A refused event is not forwarded and **not recorded** as pushed or as an unanswered ask. External subscribers that supplied `onRevoke` are cut off. |
 | SSE `/api/events` | `sseHandler` | 403 before `writeHead`, so `Last-Event-ID` replays nothing; a live stream is ended by its revoke hook. |
 | WS `/api/wake` | `onUpgrade`, after the pure `verifyWakeUpgrade` | 403 with a JSON body; a live socket is closed `4403 LICENSE_REQUIRED`. |
-| The launcher's Claude Code | `startInternal` and `respawn` in `src/server/launcher/supervisor.ts` | Boot, the deferred start and crash-respawn refuse by **returning** (`lastError: "unlicensed"`); relaunch and start-fresh refuse by **throwing** before anything is stopped, and the routes answer 403 `LAUNCHER_UNLICENSED`. `POST /api/license/activate` resumes a refused launcher (`resumeAfterLicence`). |
+| The launcher's Claude Code | `startInternal` and `respawn` in `src/server/launcher/supervisor.ts` | Boot, the deferred start and crash-respawn refuse by **returning** (`lastError: "unlicensed"`); relaunch and start-fresh refuse by **throwing** before anything is stopped, and the routes answer 403 `LAUNCHER_UNLICENSED`. `POST /api/license/activate` resumes a refused launcher (`resumeAfterLicence`), including one whose chip shows an earlier diagnosis; no other way of becoming licensed does. |
 | Local-model collaborator | `onEvent` in `src/server/local-model/collaborator.ts` | Per run: no turn, no chat write, one stderr line per refused state. |
 
 **Open, deliberately:** every browser and editor write — the seven routes Surface B gated
@@ -313,14 +313,18 @@ admitted) and that the check sits above the `isInit` branch. `tests/server/licen
 pins which files import each `src/server/license/` module, and that the bundles built without the
 licence `define` — the stdio bridge, the channel shim, the plugin monitor, the shared SSE consumer —
 reach none of them; those key only on the wire payload `error === "LICENSE_REQUIRED"`.
-`tests/server/license-armed-restricted.test.ts` is the armed probe of every admission point above,
-each paired with a fresh-trial twin.
+`tests/server/license-armed-restricted.test.ts` is the armed probe of the MCP, push, chat and stdio
+admission points, each paired with a fresh-trial twin. The launcher's refusal is probed in
+`tests/server/launcher/license-refusal.test.ts` and the local model's in
+`tests/server/local-model/collaborator.test.ts`.
 
 **What the clients do with a refusal.** The stdio bridge relays the server's error verbatim. If a
 replayed handshake is refused mid-session it latches that error, answers every request with it, and
 retries every 30 seconds, so activation is picked up without a restart; a non-licence failure clears
 the latch. (A host whose *first* `initialize` was refused has already been told by its SDK that the
-server failed, and needs a restart after activation.) The shared SSE consumer treats a
+server failed, and needs a reconnect (`/mcp` in Claude Code) or a restart after activation; a
+refused `initialize`, and only that, appends `AI_REFUSAL_RECONNECT_HINT` saying so, and the bridge
+logs one stderr line.) The shared SSE consumer treats a
 `LICENSE_REQUIRED` 403 as a refusal, not an outage — no retry ladder, no `channel-error` report — and
 retries every 5 minutes; the plugin monitor prints the refusal once on stdout. `tandem doctor` reads
 `GET /api/license/status` once, adds a licence row (silent when dark, recording only `gateActive`,
@@ -346,7 +350,13 @@ Two more, of the same kind:
   resolve `unverifiable` — the fix-or-reissue copy, never the purchase link, and never an unlock. A
   transient lock therefore refuses the AI only for as long as it lasts, with one side effect each: an
   SSE consumer refused in that window backs off 5 minutes before retrying, and a launcher refused at
-  boot stays down until the restart chip (or an activation) brings it back.
+  boot stays down until the restart chip (or an activation) brings it back. The same holds for any
+  licence that becomes valid without `POST /api/license/activate`: `tandem activate` from the CLI or a
+  `license.json` copied in by hand never reaches the launcher, so Restart is the way back.
+- **Diagnostics can name the wrong cause for a revoked consumer.** Revoking the last SSE or wake
+  consumer with a forward outstanding reads in `/health` as a detached consumer, not a licence
+  refusal (`tandem doctor`'s push row defers to its licence row), and the channel shim logs a refused
+  permission relay as a plain HTTP 403.
 - **A local-model run that started while licensed keeps streaming after expiry.** The collaborator is
   checked per run, not per token, so one in-flight reply finishes. Behind `BYO_MODELS_ENABLED`, so
   unreachable today; revisit if that flag flips.

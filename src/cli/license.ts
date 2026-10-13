@@ -81,7 +81,7 @@ export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean)
     // Never a purchase link for an installed licence that fails to verify:
     // that reader most likely already paid (ADR-040 decision 8). Their remedy
     // is the fix-or-reissue paragraph below.
-    if (!unverifiable) lines.push(`  Activate:      ${TANDEM_PURCHASE_URL}`);
+    if (!unverifiable) lines.push(`  Buy a license: ${TANDEM_PURCHASE_URL}`);
   } else {
     // licensed (gate-active) — or the dark arm, which `tandem license` never
     // produces (it forces gateEnabled:true), but the union requires the branch.

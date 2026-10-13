@@ -40,6 +40,16 @@ export const AI_REFUSAL_UNLICENSED_MESSAGE =
   `stays fully editable. Activate a license to turn them back on: ${TANDEM_PURCHASE_URL}`;
 
 /**
+ * Appended only to a refused `initialize`. Claude Code marks the server failed
+ * after one (measured over HTTP and the stdio bridge, 2026-10-12), and whether
+ * any host handshakes again by itself is unmeasured, so activating alone may
+ * not bring the AI back.
+ * A refusal mid-session needs no hint: the next call heals on its own.
+ */
+export const AI_REFUSAL_RECONNECT_HINT =
+  "Once that is done, reconnect Tandem in your AI client (in Claude Code, run /mcp).";
+
+/**
  * The local-model loop's stderr line for the unlicensed refusal. Its own copy
  * because the shared one reassures about "your document", which reads wrong in
  * a server log with no document in view.

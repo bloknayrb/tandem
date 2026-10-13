@@ -86,6 +86,22 @@ describe("SSE consumer: licence refusal", () => {
     expect(errorReports()).toBe(1);
   });
 
+  it("a 403 whose body never ends is read under a deadline, then treated as an outage", async () => {
+    let attempts = 0;
+    stub.on("/api/events", () => {
+      attempts++;
+      // Something other than Tandem on the port: headers, then a body that stalls.
+      return new Response(new ReadableStream({ start() {} }), { status: 403 });
+    });
+
+    void main().catch(() => {});
+    await vi.advanceTimersByTimeAsync(200_000);
+
+    // Without the deadline the first `res.json()` never settles: one attempt, forever.
+    expect(attempts).toBeGreaterThanOrEqual(8);
+    expect(errorReports()).toBe(1);
+  });
+
   it("picks the stream back up after activation", async () => {
     let refused = true;
     let streams = 0;

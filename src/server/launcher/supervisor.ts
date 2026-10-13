@@ -427,12 +427,13 @@ export interface Supervisor {
   refreshConfigured(): Promise<void>;
   /**
    * Resume a launcher the licence refused (#1521). Spawns only when no child
-   * is alive, `lastError === "unlicensed"`, no breaker is tripped and the
-   * user has not stopped it — so it can never stop or double-spawn anything.
-   * Its one caller is `POST /api/license/activate`'s success path.
+   * is alive, a refusal is recorded, no breaker is tripped and the user has
+   * not stopped it — so it can never stop or double-spawn anything. A plan
+   * read that throws is handled as a crash restart's is. Its one caller is
+   * `POST /api/license/activate`'s success path.
    */
   resumeAfterLicence(): Promise<void>;
-  /** The refusal behind `lastError === "unlicensed"`, or null when there is none. */
+  /** The licence refusal that left the launcher down, or null when there is none. */
   licenceRefusal(): AiRefusal | null;
 }
 
@@ -849,7 +850,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     ? opts.restartBackoffsMs
     : RESTART_BACKOFFS_MS;
   const decideRefusal = opts.aiRefusal ?? aiRefusal;
-  /** The refusal stored beside `lastError = "unlicensed"`; cleared with it. */
+  /**
+   * The licence refusal that left the launcher down, or null. Authoritative
+   * on its own, even when `lastError` holds another code (see
+   * `recordLicenceRefusal`). Cleared by a spawn and by `resumeAfterLicence`.
+   */
   let lastRefusal: AiRefusal | null = null;
   let child: ChildProcess | null = null;
   let currentCwd: string | undefined;
@@ -1411,6 +1416,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // leaving the old code set would make it resurface on the next clean stop
     // (see the note on SupervisorStatus).
     lastError = undefined;
+    lastRefusal = null;
     deliveryKillAt = undefined;
 
     // One timestamp for the spawn: the exit handler's `ranFor` and the status
@@ -2461,15 +2467,16 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   }
 
   /**
-   * Record a licence refusal as `lastError`, but never over another code:
-   * `spawn-failed`, `stop-failed` and the breaker's codes are real diagnoses
-   * the refusal must not hide, and a breaker trip (which always sets one of
-   * them) must not read as "resumable on activation".
+   * Record a licence refusal. `lastRefusal` always takes it: it is what the
+   * routes answer with and what `resumeAfterLicence` keys on. `lastError`
+   * takes `"unlicensed"` only when it holds no other code: `spawn-failed`,
+   * `stop-failed` and the breaker's codes are real diagnoses the refusal must
+   * not hide from the status chip.
    */
   function recordLicenceRefusal(refusal: AiRefusal): void {
+    lastRefusal = refusal;
     if (lastError !== undefined && lastError !== "unlicensed") return;
     lastError = "unlicensed";
-    lastRefusal = refusal;
   }
 
   /** See `Supervisor.resumeAfterLicence`. Under the op lock, and idempotent. */
@@ -2477,16 +2484,30 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // Unlocked pre-check: activation must never queue behind an in-flight
     // launcher op (a relaunch can hold the lock for seconds) when there is
     // nothing to resume. Re-checked under the lock below.
-    if (lastError !== "unlicensed") return;
+    if (lastRefusal === null) return;
     return withLock(async () => {
-      if (child !== null || lastError !== "unlicensed" || userStopped || breakerTripped) return;
+      // A breaker trip is never "resumable on activation", whatever refused
+      // after it.
+      if (child !== null || lastRefusal === null || userStopped || breakerTripped) return;
       console.error("[Launcher] Licence activated — starting Claude Code");
-      await startInternal();
+      // Cleared first: a start the gate refuses again re-records it, and a
+      // spawn would clear it anyway.
+      lastRefusal = null;
+      if (lastError === "unlicensed") lastError = undefined;
+      const epoch = stopEpoch;
+      try {
+        await startInternal(epoch);
+      } catch (err) {
+        // `buildPlan` threw (`integrations.json` unreadable or invalid). Same
+        // handling as a crash restart's, so the real cause reaches the chip
+        // instead of a stale "unlicensed".
+        onRestartFailed(err, epoch);
+      }
     });
   }
 
   function licenceRefusal(): AiRefusal | null {
-    return lastError === "unlicensed" ? lastRefusal : null;
+    return lastRefusal;
   }
 
   return {

@@ -301,7 +301,7 @@ export function resolveLicenseState(deps: {
     };
   }
 
-  // 3. Trial expired, no license ⇒ restricted (read-only escape hatch).
+  // 3. Trial expired, no license ⇒ restricted (AI refused; the editor stays writable, #1521).
   return {
     gateActive: true,
     status: "restricted",

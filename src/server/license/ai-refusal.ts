@@ -50,13 +50,32 @@ export function aiRefusalFor(state: LicenseState): AiRefusal | null {
   return { error: LICENSE_REQUIRED, kind: "unlicensed", message: AI_REFUSAL_UNLICENSED_MESSAGE };
 }
 
+let loggedResolveFailure = false;
+
 /**
  * Live decision. Returns `null` on its first line while the gate ships dark, so
  * a dark build admits everywhere without touching disk.
+ *
+ * Total: it runs unguarded inside `pushEvent` and above every `/mcp` dispatch,
+ * so a throw from resolving (a hand-edited `trial.json` near the maximum Date
+ * makes `toISOString()` throw) would break event delivery outright. It fails
+ * CLOSED, as unverifiable, which never carries the purchase URL.
  */
 export function aiRefusal(): AiRefusal | null {
   if (!GATE_ENABLED) return null;
-  return aiRefusalFor(resolveLiveLicenseState());
+  try {
+    return aiRefusalFor(resolveLiveLicenseState());
+  } catch (err) {
+    if (!loggedResolveFailure) {
+      loggedResolveFailure = true;
+      console.error("[License] Could not resolve licence state; refusing AI:", err);
+    }
+    return {
+      error: LICENSE_REQUIRED,
+      kind: "unverifiable",
+      message: aiRefusalUnverifiableMessage("UNKNOWN"),
+    };
+  }
 }
 
 /**

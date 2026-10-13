@@ -68,7 +68,7 @@ describe("formatLicenseStatus", () => {
   it("says AI is off and the editor unaffected when enforcement is on (#1521)", () => {
     const out = formatLicenseStatus(restricted, true).join("\n");
     expect(out).toContain("unlicensed — AI features off; the editor is unaffected");
-    expect(out).toContain(`Activate:      ${TANDEM_PURCHASE_URL}`);
+    expect(out).toContain(`Buy a license: ${TANDEM_PURCHASE_URL}`);
     expect(out).not.toMatch(/keep editing|read-only/);
   });
 

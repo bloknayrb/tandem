@@ -22,8 +22,9 @@
  *  - License (#1521): the local model is an AI surface, so an unlicensed
  *    install runs no turn at all. Checked PER RUN in `onEvent` (a start-time
  *    check would need a restart after activation); the chat write-back is
- *    refused by `appendClaudeChatMessage` too, which ends a run whose licence
- *    lapsed mid-stream. The editor itself is never refused.
+ *    refused by `appendClaudeChatMessage` too, so a licence that lapses before
+ *    the run's first chat write ends the run; a reply already streaming
+ *    finishes. The editor itself is never refused.
  */
 import { BYO_MODELS_ENABLED } from "../../shared/constants.js";
 import type { ChatMessagePayload, TandemEvent } from "../../shared/events/types.js";
@@ -229,7 +230,9 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
           ...(ctx.agentIdentity ? { agentIdentity: ctx.agentIdentity } : {}),
         });
         if (!appended.ok) {
-          // The licence lapsed mid-run (#1521): drop the run, write nothing.
+          // The licence lapsed between the run's start and its first write
+          // (#1521): drop the run, write nothing. Once a row is minted the run
+          // finishes, since the check is per run, not per write.
           logRefusal(appended.refusal);
           ctx.abort.abort();
           return;
@@ -544,8 +547,8 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
     // across many chat messages.
     if (!cachedConfig) return; // inert when unconfigured (M1a)
     // Licence admission (#1521), per run: no turn, no chat write, one stderr
-    // line per refused state. The user-facing explanation is the editor's own
-    // notice, not a chat message.
+    // line per refused state. The user-facing explanation is meant to be the
+    // editor's AI-off notice (PR 2 of #1521), not a chat message.
     const refusal = decideRefusal();
     if (refusal) {
       logRefusal(refusal);

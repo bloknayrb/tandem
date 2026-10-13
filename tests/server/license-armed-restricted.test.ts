@@ -63,7 +63,11 @@ import {
   Y_MAP_CHAT,
   Y_MAP_CLAUDE,
 } from "../../src/shared/constants.js";
-import { LICENSE_REQUIRED, LICENSE_REQUIRED_RPC_CODE } from "../../src/shared/license-copy.js";
+import {
+  AI_REFUSAL_RECONNECT_HINT,
+  LICENSE_REQUIRED,
+  LICENSE_REQUIRED_RPC_CODE,
+} from "../../src/shared/license-copy.js";
 import { withBrowser, withInternal } from "../../src/shared/origins.js";
 import { allocPort } from "../helpers/alloc-port.js";
 
@@ -222,6 +226,8 @@ describe("armed and keyless (#1521)", () => {
       expect(body.id).toBe(7);
       expect(body.error.code).toBe(LICENSE_REQUIRED_RPC_CODE);
       expect(body.error.message).toContain(TANDEM_PURCHASE_URL);
+      // The host marks the server failed after this, so the copy says to reconnect.
+      expect(body.error.message).toContain(AI_REFUSAL_RECONNECT_HINT);
       expect(body.error.data).toEqual({
         error: LICENSE_REQUIRED,
         kind: "unlicensed",
@@ -272,6 +278,8 @@ describe("armed and keyless (#1521)", () => {
       const refused = await postMcp({ jsonrpc: "2.0", id: 9, method: "tools/list" }, sid);
       expect(refused.status).toBe(200);
       expect(JSON.parse(refused.text).error.data.error).toBe(LICENSE_REQUIRED);
+      // Mid-session the next call heals by itself, so no reconnect hint.
+      expect(JSON.parse(refused.text).error.message).not.toContain(AI_REFUSAL_RECONNECT_HINT);
       expect(hasAnyMcpSession()).toBe(false);
 
       // Back to admitted: the closed session is gone (404), not silently revived.

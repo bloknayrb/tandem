@@ -278,6 +278,46 @@ describe("supervisor licence refusal (#1521)", () => {
     refused = true;
     await expect(sup.relaunch(cwdDir)).rejects.toBeInstanceOf(LicenseRefusedError);
     expect(sup.status()).toEqual({ running: false, lastError: "spawn-failed" });
+    // The refusal is still recorded, so the routes answer 403 and activation
+    // can resume, while the chip keeps the real diagnosis.
+    expect(sup.licenceRefusal()).toEqual(REFUSAL);
+  });
+
+  it("a refusal that landed after spawn-failed still resumes on activation", async () => {
+    const sup = makeSupervisor();
+    await sup.start();
+    const good = fs.readFileSync(path.join(baseDir, "integrations.json"), "utf8");
+    fs.writeFileSync(
+      path.join(baseDir, "integrations.json"),
+      JSON.stringify({ schemaVersion: 999, integrations: [] }),
+    );
+    const first = children[0];
+    first.exitCode = 1;
+    first.emit("exit", 1, null);
+    await waitFor(() => sup.status().lastError === "spawn-failed", "the failed restart");
+    refused = true;
+    await expect(sup.relaunch(cwdDir)).rejects.toBeInstanceOf(LicenseRefusedError);
+    fs.writeFileSync(path.join(baseDir, "integrations.json"), good);
+    refused = false;
+    await sup.resumeAfterLicence();
+    expect(children).toHaveLength(2);
+    expect(sup.status().running).toBe(true);
+    expect(sup.licenceRefusal()).toBeNull();
+  });
+
+  it("a resume whose plan read fails reports spawn-failed, not a stale unlicensed", async () => {
+    refused = true;
+    const sup = makeSupervisor();
+    await sup.start();
+    expect(sup.status().lastError).toBe("unlicensed");
+    fs.writeFileSync(
+      path.join(baseDir, "integrations.json"),
+      JSON.stringify({ schemaVersion: 999, integrations: [] }),
+    );
+    refused = false;
+    await sup.resumeAfterLicence();
+    expect(children).toHaveLength(0);
+    expect(sup.status()).toEqual({ running: false, lastError: "spawn-failed" });
     expect(sup.licenceRefusal()).toBeNull();
   });
 

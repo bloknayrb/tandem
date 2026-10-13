@@ -76,7 +76,7 @@ export function darkInstallInfo(): { installed: boolean; licenseeName?: string }
 /**
  * PII-scrubbed status for non-loopback (LAN / deprecated-browser) callers — drops
  * the licensee name/email/licenseId so they never reach the wire, while keeping
- * enough for the client's wall/banner + read-only derivation.
+ * enough for the client's licence surfaces and `tandem doctor`'s licence row.
  */
 export function scrubForNonLoopback(s: LicenseState): {
   gateActive: boolean;
