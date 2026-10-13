@@ -355,7 +355,7 @@ function liveAnnotation(id: string): Annotation | undefined {
 // which reads it when it RUNS, so a menu held open across the flip is
 // re-checked. Card mounts pass `canX(ann, false)` (does this card type ever offer
 // the action?) plus `aiDisabled`, so the button stays and renders disabled.
-const aiDisabled = $derived(licenseStore.ui.aiNotice !== null);
+const aiDisabled = $derived(licenseStore.ui.aiOff);
 
 // Route an emitted action through the shared re-validating dispatcher, bound to THIS
 // column's handler props (so a margin right-click acts on margin handlers even though the

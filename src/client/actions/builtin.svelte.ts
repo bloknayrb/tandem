@@ -34,8 +34,10 @@ import { clearDriftNudgeOptOut, driftNudgeOptedOut } from "../status/cwdDriftDis
 import { logClientWarning } from "../utils/client-log.js";
 import { resolveDefaultDirectory } from "../utils/default-directory.js";
 import { API_BASE } from "../utils/fileUpload.js";
+import { AI_OFF_TITLE, aiOffCopy } from "../utils/license-ui.js";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "../utils/recentFiles.js";
 import { type ActionDeps, notifyUser, runBoundAction } from "./executor.js";
+import { type Action, registerActions } from "./registry.svelte.js";
 
 /**
  * Refuse a launcher action while the licence refuses the AI (#1521). Runs
@@ -45,16 +47,9 @@ import { type ActionDeps, notifyUser, runBoundAction } from "./executor.js";
 function refusedByLicence(d: ActionDeps): boolean {
   const kind = d.aiNotice();
   if (kind === null) return false;
-  d.notify(
-    "warning",
-    kind === "unlicensed"
-      ? "AI features are off, so Claude can't be restarted. Activate a license in Settings → License."
-      : "AI features are off, so Claude can't be restarted. See Settings → License.",
-  );
+  d.notify("warning", `${AI_OFF_TITLE}, so Claude can't be restarted. ${aiOffCopy(kind).remedy}`);
   return true;
 }
-
-import { type Action, registerActions } from "./registry.svelte.js";
 
 // ---------------------------------------------------------------------------
 // Save — mirrors useSaveShortcut.svelte.ts logic

@@ -30,6 +30,7 @@ import DecorationsMenu from "../../shell/DecorationsMenu.svelte";
 import DisplayMenu from "../../shell/DisplayMenu.svelte";
 import { onOutsideEvent } from "../../utils/dismiss-outside";
 import { escapeIsClaimed } from "../../utils/escape-owner";
+import { AI_OFF_TITLE } from "../../utils/license-ui";
 import {
   type AnnotationComposerIntent,
   defaultAnnotationIntent,
@@ -350,7 +351,7 @@ const annotationTextTrimmed = $derived(annotationText.trim());
 // The licence refuses the AI (#1521): the composer defaults to a private note
 // and the outbound segment is disabled. Derived, never an `$effect` rewriting
 // `annotationIntent` — that would fight `openAnnotateMode`.
-const aiDisabled = $derived(licenseStore.ui.aiNotice !== null);
+const aiDisabled = $derived(licenseStore.ui.aiOff);
 const primaryAnnotationIntent = $derived(defaultAnnotationIntent(annotationIntent, aiDisabled));
 
 // Plain `let` — see SelectionToolbarPositionArgs.previousPlacement docstring.
@@ -1357,7 +1358,7 @@ function handleComposerKeyDown(e: KeyboardEvent) {
               aria-pressed={primaryAnnotationIntent === "comment"}
               disabled={aiDisabled}
               title={aiDisabled
-                ? "AI features are off"
+                ? AI_OFF_TITLE
                 : `Send to ${agentLabel.family} as an outbound comment`}
               onmousedown={(e) => e.preventDefault()}
               onkeydown={handleComposerKeyDown}

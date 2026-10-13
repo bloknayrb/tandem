@@ -22,10 +22,12 @@ describe("App.svelte — the licence wall and Surface-A rebuild are gone (#1521)
   });
 
   it("no licence input reaches editability", () => {
-    const line = APP.split("\n").find((l) => l.includes("const editorReadOnly ="));
-    expect(line).toBeDefined();
-    expect(line).not.toContain("licenseStore");
-    expect(line).toContain("$derived(isReadOnly)");
+    // A keyless install refuses the AI, never the editor (D3): every `readOnly`
+    // binding is the document's own flag and nothing else.
+    expect(APP).toContain("const isReadOnly = $derived(activeTab?.readOnly === true);");
+    const bindings = APP.split("\n").filter((l) => /^\s+readOnly=\{/.test(l));
+    expect(bindings.length).toBeGreaterThan(0);
+    for (const l of bindings) expect(l.trim()).toBe("readOnly={isReadOnly}");
   });
 });
 
@@ -61,7 +63,7 @@ describe("the AI-off views read readiness's aiNotice", () => {
  */
 describe("Toolbar — the comment segment", () => {
   it("is disabled from the licence store", () => {
-    expect(TOOLBAR).toContain("const aiDisabled = $derived(licenseStore.ui.aiNotice !== null);");
+    expect(TOOLBAR).toContain("const aiDisabled = $derived(licenseStore.ui.aiOff);");
     const seg = TOOLBAR.indexOf('data-testid="popup-comment-submit"');
     expect(seg).toBeGreaterThan(-1);
     const tag = TOOLBAR.slice(seg, TOOLBAR.indexOf(">", TOOLBAR.indexOf("onclick=", seg)));

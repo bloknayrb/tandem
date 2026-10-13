@@ -1946,10 +1946,6 @@ $effect(() => {
 // Raw-markdown source view (#1021). Only editable .md documents qualify
 // (read-only .md like CHANGELOG and non-.md formats are excluded).
 const isReadOnly = $derived(activeTab?.readOnly === true);
-// No licence state reaches editability (#1521, D3): a keyless install refuses
-// the AI, never the editor. Kept separate from `isReadOnly` so document-level
-// affordances (source view, status indicator) keep their own meaning.
-const editorReadOnly = $derived(isReadOnly);
 // ADR-035 Unit 10a. Source view, the close/reopen funnel and the save entry
 // points live in `hooks/useDocumentWorkspace.svelte.ts` now. Constructed here
 // (not earlier) because `getActiveTab` / `getIsReadOnly` must close over
@@ -2005,7 +2001,7 @@ const documentWorkspace = createDocumentWorkspace({
  * scrolls itself.
  */
 const editorScrollTabIndex = $derived(
-  editorReadOnly && !documentWorkspace.inSourceView ? 0 : undefined,
+  isReadOnly && !documentWorkspace.inSourceView ? 0 : undefined,
 );
 /**
  * Pre-narrowed to a plain boolean so `ScrollPill`'s effect subscribes to THIS
@@ -2031,7 +2027,7 @@ const chatVisible = $derived(
     (effectiveRightVisible || railFloat.right || railFloatClosing.right || railContent.revealOpen),
 );
 const chatCanInsert = $derived(
-  !!editor && !!activeTab && !editorReadOnly && !documentWorkspace.inSourceView,
+  !!editor && !!activeTab && !isReadOnly && !documentWorkspace.inSourceView,
 );
 const chatState = createChatState({
   getCtrlYdoc: () => yjsSync.bootstrapYdoc,
@@ -2043,7 +2039,7 @@ const chatState = createChatState({
 
 function sendChatMessage(text: string): boolean {
   // Defence in depth: the composer is disabled while the AI is off (#1521).
-  if (licenseStore.ui.aiNotice !== null) return false;
+  if (licenseStore.ui.aiOff) return false;
   const sent = chatState.send(text, yjsSync.activeTabId ?? undefined, railContent.capturedAnchor);
   if (!sent) return false;
   railContent.setCapturedAnchor(null);
@@ -2625,7 +2621,7 @@ const shouldShowModelPicker = $derived(
             canInsert={chatCanInsert}
             reduceMotion={settingsState.settings.reduceMotion}
             visible={chatVisible}
-            aiDisabled={licenseStore.ui.aiNotice !== null}
+            aiDisabled={licenseStore.ui.aiOff}
           />
           <PanelSlot
             kind="side"
@@ -2996,7 +2992,7 @@ const shouldShowModelPicker = $derived(
       <Editor
         ydoc={activeTab!.ydoc}
         provider={activeTab!.provider}
-        readOnly={editorReadOnly}
+        readOnly={isReadOnly}
         currentFilePath={activeTab!.filePath}
         format={activeTab!.format}
         activeAnnotationId={railContent.activeAnnotationId}

@@ -214,7 +214,7 @@ $effect(() => {
     focusChat: () => onFocusChat?.(),
     composeAnnotation: (kind) => onComposeAnnotation?.(kind),
     // #1521: a live read of the module singleton at gesture/action time.
-    isAiDisabled: () => licenseStore.ui.aiNotice !== null,
+    isAiDisabled: () => licenseStore.ui.aiOff,
     editLink: () => {
       // Re-read from the current PM selection; the href captured by the
       // right-click host remains private and is never round-tripped through Rust.

@@ -8,6 +8,7 @@ import LiveRegion from "../components/LiveRegion.svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { flatOffsetToPmPos } from "../positions";
 import { agentColor } from "../utils/agent-color";
+import { AI_OFF_TITLE } from "../utils/license-ui";
 import { localChatDateLabel } from "./chat-export";
 import { renderMarkdown } from "./chat-markdown";
 import { chatPickup, chatPickupAnnouncement, chatPickupLabel } from "./chat-pickup";
@@ -473,7 +474,7 @@ async function exportChat() {
       oninput={(e) => (inputText = (e.target as HTMLTextAreaElement).value)}
       onkeydown={handleKeyDown}
       disabled={aiDisabled}
-      placeholder={aiDisabled ? "AI features are off" : "Message your AI…"}
+      placeholder={aiDisabled ? AI_OFF_TITLE : "Message your AI…"}
       rows={1}
       class="chat-textarea"
       data-multiline={composerMultiline}

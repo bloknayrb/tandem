@@ -109,7 +109,40 @@ describe("deriveLicenseUi", () => {
   });
 });
 
+describe("deriveLicenseUi — aiOff", () => {
+  it("is exactly aiNotice !== null in every state", () => {
+    const states = [
+      null,
+      { gateActive: false, status: "restricted", updateWindowCurrent: true },
+      { gateActive: true, status: "trial", updateWindowCurrent: true, daysRemaining: 3 },
+      { gateActive: true, status: "licensed", updateWindowCurrent: true },
+      { gateActive: true, status: "restricted", updateWindowCurrent: false },
+      {
+        gateActive: true,
+        status: "restricted",
+        updateWindowCurrent: false,
+        licenseUnverifiable: "MALFORMED",
+      },
+    ] as const;
+    const seen = new Set<boolean>();
+    for (const state of states) {
+      const ui = deriveLicenseUi(state);
+      expect(ui.aiOff).toBe(ui.aiNotice !== null);
+      seen.add(ui.aiOff);
+    }
+    // Both buckets, so the loop cannot pass on all-false.
+    expect(seen).toEqual(new Set([true, false]));
+  });
+});
+
 describe("aiOffCopy", () => {
+  it("each sentence ends with its remedy", () => {
+    for (const kind of ["unlicensed", "unverifiable"] as const) {
+      const c = aiOffCopy(kind);
+      expect(c.sentence.endsWith(` ${c.remedy}`)).toBe(true);
+    }
+  });
+
   it("unlicensed names the state and the remedy", () => {
     const c = aiOffCopy("unlicensed");
     expect(c.sentence).toContain("unlicensed");
@@ -118,7 +151,7 @@ describe("aiOffCopy", () => {
 
   it("unverifiable never says 'unlicensed' or 'Activate a license', and carries no URL", () => {
     const c = aiOffCopy("unverifiable");
-    for (const text of [c.short, c.sentence]) {
+    for (const text of [c.short, c.sentence, c.remedy]) {
       expect(text).not.toMatch(/unlicensed/i);
       expect(text).not.toContain("Activate a license");
       expect(text).not.toContain(TANDEM_PURCHASE_URL);

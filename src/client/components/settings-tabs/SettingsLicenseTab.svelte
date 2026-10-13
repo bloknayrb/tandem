@@ -156,8 +156,8 @@ function onActivated(): void {
        trial included (#1521, ADR-040 decision 8). `ui.aiNotice` is null during
        a trial by design, so this keys on the reason code directly: that reader
        most likely already paid. -->
-  {#if !status?.licenseUnverifiable}
-    <div class="settings-hint" style="margin-top: var(--tandem-space-2);">
+  <div class="settings-hint" style="margin-top: var(--tandem-space-2);">
+    {#if !status?.licenseUnverifiable}
       Don't have one yet?
       <a
         data-testid="license-buy-link"
@@ -165,12 +165,7 @@ function onActivated(): void {
         target="_blank"
         rel="noopener noreferrer">Buy a license</a
       >.
-    </div>
-  {/if}
-  <div
-    class="settings-hint"
-    style:margin-top={status?.licenseUnverifiable ? "var(--tandem-space-2)" : undefined}
-  >
+    {/if}
     Trouble activating? Email
     <a href="mailto:{TANDEM_SUPPORT_EMAIL}">{TANDEM_SUPPORT_EMAIL}</a> — please don't post your
     license key publicly, it contains your name and email address.

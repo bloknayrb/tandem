@@ -2,6 +2,7 @@
 import { untrack } from "svelte";
 import type { Annotation, AnnotationReply } from "../../shared/types";
 import { getVisibleReplies } from "../annotations/replies";
+import { AI_OFF_TITLE } from "../utils/license-ui";
 import CommentThread from "./CommentThread.svelte";
 import { discloseUnfold } from "./cardMotion";
 import { TEXTAREA_STYLE } from "./panel-styles";
@@ -222,7 +223,7 @@ async function handleSendReply() {
         <button
           data-testid="reply-btn-{annotationId}"
           disabled={replyBlocked}
-          title={replyBlocked ? "AI features are off" : undefined}
+          title={replyBlocked ? AI_OFF_TITLE : undefined}
           onclick={() => {
             if (!replyBlocked) isReplying = true;
           }}

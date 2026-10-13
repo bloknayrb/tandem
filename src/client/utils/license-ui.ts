@@ -6,7 +6,8 @@
  *
  * A keyless install refuses the AI, never the editor (#1521, D3): no licence
  * state reaches editability, so `LicenseUi` carries no `editable` field at all.
- * Every AI-surface show/hide decision keys on `aiNotice`; the reason code
+ * Every AI-surface show/hide decision keys on `aiNotice` (or its boolean,
+ * `aiOff`); the reason code
  * (`status.licenseUnverifiable`) is read only to pick copy — with one
  * exception, the purchase link, which must hide from an unverifiable licence
  * holder even during a trial, where `aiNotice` is null by design.
@@ -19,6 +20,9 @@ import type { AiRefusalKind, LicenseUnverifiableCode } from "../../shared/licens
 
 /** Why the AI features are off on this client. One union, shared with the server's refusal. */
 export type AiNotice = AiRefusalKind;
+
+/** The kind-neutral label for a disabled AI control: tooltips, placeholders, headings. */
+export const AI_OFF_TITLE = "AI features are off";
 
 export interface LicenseStatusResponse {
   gateActive: boolean;
@@ -64,6 +68,8 @@ export interface LicenseUi {
    * licensed. The editor stays editable in every state.
    */
   aiNotice: AiNotice | null;
+  /** `aiNotice !== null`: the one predicate for "disable the AI controls". */
+  aiOff: boolean;
   /** Show the trial countdown banner (trial). */
   showTrialBanner: boolean;
   /** Days left in trial, or null when not in a trial. */
@@ -77,6 +83,11 @@ function trialDays(state: LicenseStatusResponse): number | null {
 }
 
 export function deriveLicenseUi(state: LicenseStatusResponse | null): LicenseUi {
+  const ui = deriveWithoutAiOff(state);
+  return { ...ui, aiOff: ui.aiNotice !== null };
+}
+
+function deriveWithoutAiOff(state: LicenseStatusResponse | null): Omit<LicenseUi, "aiOff"> {
   // Not yet loaded, or the gate is inactive (dark build / pre-v1.0): the app
   // behaves exactly as today — no banner, no AI-off notice, no pill.
   if (!state || !state.gateActive) {
@@ -119,24 +130,29 @@ export function deriveLicenseUi(state: LicenseStatusResponse | null): LicenseUi 
 
 /**
  * Kind-specific "AI is off" copy. `short` is a one-line label; `sentence` is the
- * full explanation. The `unverifiable` copy never says "unlicensed" or
- * "activate" and never carries a purchase URL (ADR-040 decision 8): that reader
- * most likely already paid.
+ * full explanation; `remedy` is its last sentence alone, for messages that
+ * state their own cause first. The `unverifiable` copy never says "unlicensed"
+ * or "activate" and never carries a purchase URL (ADR-040 decision 8): that
+ * reader most likely already paid.
  */
-export function aiOffCopy(kind: AiNotice): { short: string; sentence: string } {
+export function aiOffCopy(kind: AiNotice): { short: string; sentence: string; remedy: string } {
   switch (kind) {
-    case "unlicensed":
+    case "unlicensed": {
+      const remedy = "Activate a license in Settings → License.";
       return {
         short: "AI features off — unlicensed",
-        sentence:
-          "Tandem is unlicensed, so its AI features are off. Activate a license in Settings → License.",
+        sentence: `Tandem is unlicensed, so its AI features are off. ${remedy}`,
+        remedy,
       };
-    case "unverifiable":
+    }
+    case "unverifiable": {
+      const remedy = "See Settings → License.";
       return {
         short: "AI features off — license not verified",
-        sentence:
-          "Tandem's AI features are off because your license could not be verified. See Settings → License.",
+        sentence: `Tandem's AI features are off because your license could not be verified. ${remedy}`,
+        remedy,
       };
+    }
     default: {
       const _exhaustive: never = kind;
       return _exhaustive;

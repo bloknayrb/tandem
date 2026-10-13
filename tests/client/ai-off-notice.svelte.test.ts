@@ -19,8 +19,9 @@ import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AiOffNotice from "../../src/client/components/AiOffNotice.svelte";
 import { licenseStore } from "../../src/client/hooks/useLicense.svelte";
-import type { LicenseStatusResponse } from "../../src/client/utils/license-ui";
+import { aiOffCopy, type LicenseStatusResponse } from "../../src/client/utils/license-ui";
 import { TANDEM_PURCHASE_URL } from "../../src/shared/constants";
+import type { LicenseUnverifiableCode } from "../../src/shared/license-copy";
 
 const KEY = "tandem:ai-off-notice-collapsed";
 const DARK: LicenseStatusResponse = {
@@ -70,9 +71,34 @@ describe("AiOffNotice", () => {
     });
     const root = q(container, "ai-off-notice");
     expect(root?.getAttribute("role")).toBe("status");
-    expect(text(container)).toContain("Activate a license to bring Claude back");
+    expect(text(container)).toContain(aiOffCopy("unlicensed").sentence);
     q(container, "ai-off-notice-settings-link")?.click();
     expect(onOpen).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  // Every reason code, not one: the body is `aiRefusalUnverifiableMessage(code)`,
+  // whose per-code half `aiOffCopy` does not carry. A `Record` so a new code
+  // fails to compile here until it is listed.
+  const CODES = Object.keys({
+    TOO_LONG: true,
+    MALFORMED: true,
+    BAD_SIGNATURE: true,
+    UNSUPPORTED_VERSION: true,
+    WRITE_FAILED: true,
+    UNKNOWN: true,
+  } satisfies Record<LicenseUnverifiableCode, true>) as LicenseUnverifiableCode[];
+
+  it.each(CODES)("unverifiable %s: never 'unlicensed', 'Activate a license' or a URL", (code) => {
+    licenseStore.set({ ...UNLICENSED, licenseUnverifiable: code });
+    const { container, unmount } = render(AiOffNotice, { props: PROPS });
+    const t = text(container);
+    expect(t).toContain("could not be verified");
+    expect(t).not.toMatch(/unlicensed/i);
+    // "Activate it again from the key you were sent" (a damaged file) is a
+    // repair, not a purchase prompt; the line drawn is "Activate a license".
+    expect(t).not.toContain("Activate a license");
+    expect(t).not.toMatch(/https?:/);
     unmount();
   });
 

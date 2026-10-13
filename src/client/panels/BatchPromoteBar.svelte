@@ -1,5 +1,6 @@
 <script lang="ts">
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
+import { AI_OFF_TITLE } from "../utils/license-ui";
 import { barIn, barOut } from "./cardMotion";
 
 interface Props {
@@ -99,7 +100,7 @@ const destDisc =
         bind:this={confirmRef}
         data-testid="batch-promote-commit"
         disabled={aiDisabled}
-        title={aiDisabled ? "AI features are off" : undefined}
+        title={aiDisabled ? AI_OFF_TITLE : undefined}
         onclick={() => {
           if (!aiDisabled) onConfirmPromote();
         }}
@@ -137,7 +138,7 @@ const destDisc =
       <button
         data-testid="batch-promote-confirm"
         disabled={aiDisabled}
-        title={aiDisabled ? "AI features are off" : undefined}
+        title={aiDisabled ? AI_OFF_TITLE : undefined}
         onclick={() => {
           if (!aiDisabled) onPromote();
         }}

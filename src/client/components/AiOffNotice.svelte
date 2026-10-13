@@ -1,7 +1,8 @@
 <script lang="ts">
 import { aiRefusalUnverifiableMessage } from "../../shared/license-copy";
 import { licenseStore } from "../hooks/useLicense.svelte";
-import { aiOffCopy } from "../utils/license-ui";
+import { AI_OFF_TITLE, aiOffCopy } from "../utils/license-ui";
+import "./warning-box.css";
 
 // The rail's "AI features are off" notice (#1521, D3). A keyless install keeps a
 // fully editable document and loses only the AI, so this explains the disabled
@@ -11,7 +12,9 @@ import { aiOffCopy } from "../utils/license-ui";
 //
 // Renders nothing while `aiNotice` is null, which covers every dark build.
 // No purchase link here, ever: it links to Settings → License, which decides
-// whether this reader may be shown one (ADR-040 decision 8).
+// whether this reader may be shown one (ADR-040 decision 8). The unverifiable
+// body keeps `aiRefusalUnverifiableMessage` rather than `aiOffCopy` because it
+// carries the reason code's own explanation, which `aiOffCopy` does not.
 
 interface Props {
   /** Opens Settings → License. Required: a default would render a dead link. */
@@ -46,10 +49,10 @@ function toggleCollapsed(): void {
 </script>
 
 {#if notice !== null}
-  <div class="ai-off-notice" data-testid="ai-off-notice" role="status">
+  <div class="ai-off-notice tandem-warning-box" data-testid="ai-off-notice" role="status">
     <div class="ai-off-notice__head">
       <span class="ai-off-notice__title">
-        {collapsed ? aiOffCopy(notice).short : "AI features are off"}
+        {collapsed ? aiOffCopy(notice).short : AI_OFF_TITLE}
       </span>
       <button
         type="button"
@@ -64,11 +67,9 @@ function toggleCollapsed(): void {
     </div>
     {#if !collapsed}
       <p class="ai-off-notice__body">
-        {#if notice === "unverifiable"}
-          {aiRefusalUnverifiableMessage(unverifiableCode)}
-        {:else}
-          AI features are off. Activate a license to bring Claude back.
-        {/if}
+        {notice === "unverifiable"
+          ? aiRefusalUnverifiableMessage(unverifiableCode)
+          : aiOffCopy(notice).sentence}
       </p>
       <button
         type="button"
@@ -83,15 +84,10 @@ function toggleCollapsed(): void {
 {/if}
 
 <style>
+/* Box, colours and type come from `.tandem-warning-box`. */
 .ai-off-notice {
   margin: var(--tandem-space-2);
-  padding: var(--tandem-space-2) var(--tandem-space-3);
-  font-size: var(--tandem-text-sm);
   line-height: 1.5;
-  color: var(--tandem-warning-fg-strong);
-  background: var(--tandem-warning-bg);
-  border: 1px solid var(--tandem-warning-border);
-  border-radius: var(--tandem-r-2);
 }
 .ai-off-notice__head {
   display: flex;

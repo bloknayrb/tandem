@@ -1,6 +1,7 @@
 <script lang="ts">
 import { onDestroy } from "svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
+import { AI_OFF_TITLE } from "../utils/license-ui";
 
 interface Props {
   annotationId: string;
@@ -116,7 +117,7 @@ onDestroy(clearUndoTimer);
         data-testid="send-to-claude-btn-{annotationId}"
         class="aca-btn aca-btn--send"
         disabled={aiDisabled}
-        title={aiDisabled ? "AI features are off" : undefined}
+        title={aiDisabled ? AI_OFF_TITLE : undefined}
         onclick={(e) => {
           e.stopPropagation();
           // The disabled attribute alone is not a guard: a programmatic click,
