@@ -5,6 +5,7 @@ import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import EmptyState from "../../src/client/components/EmptyState.svelte";
 import { AI_CTA, type AiChip } from "../../src/client/hooks/useAiReadiness.svelte";
+import type { AiNotice } from "../../src/client/utils/license-ui.js";
 import { DISCONNECT_DEBOUNCE_MS, TANDEM_PURCHASE_URL } from "../../src/shared/constants.js";
 
 function makeProps(overrides: Record<string, unknown> = {}) {
@@ -12,7 +13,7 @@ function makeProps(overrides: Record<string, unknown> = {}) {
     connected: true,
     aiChip: null,
     // What readiness guarantees: a refusal exactly when the chip is `unlicensed`.
-    aiNotice: overrides.aiChip === "unlicensed" ? "unlicensed" : null,
+    aiNotice: (overrides.aiChip === "unlicensed" ? "unlicensed" : null) as AiNotice | null,
     onOpenFile: vi.fn(),
     onRetry: vi.fn(),
     onOpenSettings: vi.fn(),
