@@ -1677,7 +1677,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     if (!plan.resuming) {
       // The bootstrap prompt already tells Claude to call `tandem_checkInbox`,
       // which surfaces anything that accumulated while nothing was listening —
-      // so it discharges any owed wake by itself.
+      // so it discharges any owed wake by itself. That holds only while the
+      // prompt asks Claude to answer replies as well as chat and comments: a
+      // reply on one of Claude's threads can be what the wake was owed for.
       sendTurn(SUPERVISOR_INITIAL_PROMPT);
       wakeOwedAcrossSpawns = false;
     } else {

@@ -360,7 +360,26 @@ export const SUPERVISOR_ACK_CLAUSE =
   "If the user chatted, acknowledge each request with tandem_reply (replyTo + " +
   "inProgress: true) before starting the work, then reply with the result.";
 
+/** No work the user didn't ask for, on both supervisor turns for the same
+ * reason as {@link SUPERVISOR_NO_ARM_CLAUSE}. Bryan decided on 2026-10-12 that
+ * Tandem's Claude must not start a review without the user asking. The wake
+ * turn needs it most: wakes fire on every `annotation:*` event, including a
+ * user's own note or a Solo-held comment that `tandem_checkInbox` then does not
+ * show, and "needs your attention" followed by an empty inbox is where a model
+ * falls back on the skill's "annotate freely" line. */
+export const SUPERVISOR_NO_UNASKED_WORK_CLAUSE =
+  "If it holds nothing from the user, or reports that no document is open, stop there: " +
+  "do not open, read through, review, annotate or edit any document until the user asks, " +
+  "and then do only what they asked.";
+
 /** The bootstrap turn the supervisor writes immediately on a fresh spawn.
+ *
+ * It fires when the server starts, on a first run (with the tutorial open), on
+ * "Start fresh conversation" and on a relaunch — never because a document was
+ * opened — so it must not assume one is open, and it must not ask for a review
+ * (see {@link SUPERVISOR_NO_UNASKED_WORK_CLAUSE}). "Replies" is in scope on
+ * purpose: `supervisor.ts` lets this turn discharge an owed wake, and a user's
+ * reply on one of Claude's threads can be what that wake was owed for.
  *
  * Written on spawn, NOT after the CLI's `init` line: under these flags the CLI
  * emits nothing until it has received a turn, so waiting for `init` deadlocks.
@@ -369,8 +388,9 @@ export const SUPERVISOR_ACK_CLAUSE =
  * Fresh spawns only — a resumed session already carries its own history, so
  * re-sending would inject a duplicate turn into the conversation. */
 export const SUPERVISOR_INITIAL_PROMPT =
-  "A document has been opened in Tandem for review. " +
-  "Call tandem_checkInbox to see what needs attention, then begin reviewing. " +
+  "Tandem started you as its built-in collaborator. Call tandem_checkInbox now. " +
+  "If it shows chat messages, comments or replies from the user, respond to them. " +
+  `${SUPERVISOR_NO_UNASKED_WORK_CLAUSE} Tandem will wake you when the user does something. ` +
   `${SUPERVISOR_ACK_CLAUSE} ${SUPERVISOR_NO_ARM_CLAUSE}`;
 
 /** The turn the supervisor writes when Tandem activity should wake an idle
@@ -384,7 +404,9 @@ export const SUPERVISOR_INITIAL_PROMPT =
  * the last word even if the queue's Solo gate were ever wrong. A content-free
  * nudge is also what makes coalescing trivial: N events collapse to one turn
  * instead of a concatenation that grows without bound. */
-export const SUPERVISOR_WAKE_PROMPT = `Activity in Tandem needs your attention. Call tandem_checkInbox. ${SUPERVISOR_ACK_CLAUSE} ${SUPERVISOR_NO_ARM_CLAUSE}`;
+export const SUPERVISOR_WAKE_PROMPT =
+  "Activity in Tandem may need your attention. Call tandem_checkInbox. " +
+  `${SUPERVISOR_NO_UNASKED_WORK_CLAUSE} ${SUPERVISOR_ACK_CLAUSE} ${SUPERVISOR_NO_ARM_CLAUSE}`;
 
 /** One `stream-json` user turn as the Claude CLI accepts it on stdin. */
 export interface StreamJsonUserTurn {
