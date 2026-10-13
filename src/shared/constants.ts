@@ -10,7 +10,7 @@ export const DEFAULT_MCP_PORT = 3479;
  *
  * Lives in `shared` so the *client* copy ("N of 14 days left") is generated from
  * the same number the server clock uses, rather than hand-written in each
- * surface — the trial length appears in banner, wall and CLI text, and a silent
+ * surface — the trial length appears in banner and CLI text, and a silent
  * drift between the copy and the enforcement would be an accusation of bad
  * faith, not a typo. `src/server/license/paths.ts` re-exports it.
  */

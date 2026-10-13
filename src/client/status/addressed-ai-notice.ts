@@ -14,8 +14,8 @@ import type { AiChip, PushDelivery } from "../hooks/useAiReadiness.svelte";
  * to prevent:
  *
  *   - `offline`  — the SERVER is gone, so the question "is an AI attached" has
- *     no meaningful answer. This is the newest branch and it exists because the
- *     other two both imply a working server. Without it the case fell into the
+ *     no meaningful answer. It exists because `no-agent` and `no-push` both
+ *     imply a working server. Without it the case fell into the
  *     `chip === null` hole below and produced NO notice at all: `state` is
  *     `booting` whenever `connected()` is false, so a send into a dead server
  *     was silent. That silence replaced a wrong message with no message, which
@@ -32,7 +32,7 @@ import type { AiChip, PushDelivery } from "../hooks/useAiReadiness.svelte";
  *
  * Ordering rules (order is load-bearing):
  *   1. Solo outranks everything. The user deliberately opted out of AI
- *      surfacing, so all three notices contradict that intent — the same
+ *      surfacing, so every notice contradicts that intent — the same
  *      reasoning that makes `chip` null in Solo.
  *   2. Server-reachability outranks the AI questions, because both of those
  *      presuppose a server to be attached to. `sessionLive` is false when the

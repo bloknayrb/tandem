@@ -52,9 +52,10 @@ export interface DeliveryStallInput {
   /** Solo outranks everything — the user opted out of AI surfacing. */
   soloMode: boolean;
   /**
-   * The licence refuses the AI (#1521). An outstanding forward is then neither
-   * stalled nor ignored — nothing can answer it until activation. The server
-   * reads it as `license-refused`; this is the client belt for a stale server.
+   * While the licence refuses the AI (#1521), an outstanding forward makes no
+   * stall claim: nothing can answer it until activation, so a climbing wait
+   * would blame the wrong thing. The server reports `license-refused`; this is
+   * the client-side guard for an older server.
    */
   aiOff: boolean;
   /** A dead server is its own, louder story; never stack the two. */

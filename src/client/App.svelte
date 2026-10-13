@@ -1989,8 +1989,8 @@ const documentWorkspace = createDocumentWorkspace({
  * document has neither — `editable: false` is not tabbable — and Chrome and
  * Firefox paper over that by making overflow scrollers implicitly focusable,
  * while **WebKit does not**. WebKit is the desktop app's WebView, so on macOS a
- * read-only document (the changelog after an update, a `.docx` in review-only,
- * anything behind the license wall) had no keyboard scroll path at all. Now
+ * read-only document (the changelog after an update, or a `.docx` in
+ * review-only) had no keyboard scroll path at all. Now
  * that the scroll pill hides the native scrollbar, it also has no visible one
  * until the mouse comes near — so this is the whole keyboard story for that
  * case, not a nicety.
