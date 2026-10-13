@@ -345,7 +345,7 @@ describe("mcp-stdio under a licence refusal (#1521)", () => {
     await new Promise((r) => setTimeout(r, 700));
     send(child, INITIALIZE);
     await waitFor(() => io.responseFor(1) !== undefined, "the refused initialize");
-    expect(errorOf(io.responseFor(1))).toEqual(LICENSE_ERROR);
+    expect(errorOf(io.responseFor(1))).toEqual(LICENSE_ERROR_ON_INIT);
 
     upstream.setRefused(false);
     send(child, { jsonrpc: "2.0", id: 2, method: "tools/list" });
