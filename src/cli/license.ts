@@ -62,11 +62,16 @@ export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean)
   // `tandem license` forces `gateEnabled: true`, so a dark build reaches the
   // trial and restricted branches from a stale `trial.json`. A dark build is a
   // pre-1.0 beta, whose grant has no time limit: there the trial clock is
-  // mechanism only, and the user is neither on a trial nor unlicensed.
+  // mechanism only, and the user is neither on a trial nor unlicensed. The
+  // clock is still shown, labelled as such, for diagnosis.
   const notEnforced = "nothing is enforced in this build";
   if (state.gateActive && state.status === "trial") {
-    const days = `trial (${state.trial.daysRemaining} of ${TRIAL_DAYS} days remaining)`;
-    lines.push(`  Status:        ${enforcementOn ? days : `${days} — ${notEnforced}`}`);
+    const days = `${state.trial.daysRemaining} of ${TRIAL_DAYS} days`;
+    lines.push(
+      enforcementOn
+        ? `  Status:        trial (${days} remaining)`
+        : `  Status:        no license key — ${notEnforced} (trial clock: ${days})`,
+    );
   } else if (state.gateActive && state.status === "restricted") {
     // #1521: keyless means AI off, never read-only. "AI features off" and
     // "unlicensed" are said ONLY when enforcement is on.

@@ -126,14 +126,15 @@ before it meets a paying user.
       first time on launch day. On a gate-enabled build, run each step below.
       The full checklist, with setup notes, is
       [#2204](https://github.com/bloknayrb/tandem/issues/2204).
-      - [ ] **Expiry.** The trial banner appears → expire the trial (rewrite
+      - [ ] **Trial end.** The trial banner appears → end the trial (rewrite
             `trial.json`'s `firstRunAt` more than 14 days back) → the **editor
             stays editable** and only the AI is off: the AI pill reads "AI off",
-            the rail notice says "AI features are off", the chat composer is
+            the rail notice (open the right rail) says "AI features are off",
+            the chat composer is
             disabled, and accept/dismiss on existing annotations still work. A
             Claude Code session gets the licence message, not "server not
             running".
-      - [ ] **Expiry while Tandem's Claude runs.** The running child is left
+      - [ ] **Trial end while Tandem's Claude runs.** The running child is left
             alone, and its next tool call returns the licence message. After a
             stop, a restart is refused and the pill never offers Restart, even
             inside the client's licence-poll lag.

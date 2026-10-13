@@ -110,9 +110,13 @@ doesn't grant is the worst version of this problem.
   features (decision A4). That matches ADR-040's 2026-08-18 amendment
   (unlicensed = an editor with no AI), which Bryan confirmed on 2026-10-11 as
   #1521's policy, superseding Decision F's read-only mode. The gate now built
-  (#1521: #2194, #2202), still dark, matches it: past the trial with no key the
-  editor stays fully editable and every AI surface refuses (ADR-040's third
-  amendment).
+  (#1521: #2194, #2202), still dark, follows it: past the trial with no key the
+  editor stays fully editable and Tandem refuses its AI surfaces at their
+  admission points (ADR-040's third amendment; its accepted residuals are in
+  `licensing-explained.md`). One difference runs the other way: a holder whose
+  key fails to verify is refused the AI although `LICENSE` grants it to anyone
+  holding a key the Licensor issued, because the product cannot tell that key
+  from a forged one. They get fix-or-reissue copy, never "buy".
 - One asymmetry is deliberate: every pre-1.0 (beta) version stays free
   for personal use and individual self-hosting with no time limit, including
   the releases that shipped under an earlier wording, so someone can keep

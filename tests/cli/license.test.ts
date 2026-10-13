@@ -88,9 +88,12 @@ describe("formatLicenseStatus", () => {
     expect(out).not.toContain(TANDEM_PURCHASE_URL);
   });
 
-  it("says the trial clock is not enforced on a dark build", () => {
+  it("never tells a beta user they are on a trial (dark build, fresh trial.json)", () => {
     const out = formatLicenseStatus(trial, false).join("\n");
-    expect(out).toContain("trial (9 of 14 days remaining) — nothing is enforced in this build");
+    expect(out).toContain(
+      "Status:        no license key — nothing is enforced in this build (trial clock: 9 of 14 days)",
+    );
+    expect(out).not.toMatch(/Status:\s+trial|days remaining/);
   });
 
   it("never offers a purchase link for an installed licence that fails to verify", () => {

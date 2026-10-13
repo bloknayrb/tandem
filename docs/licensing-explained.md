@@ -315,7 +315,10 @@ pins which files import each `src/server/license/` module, and that the bundles 
 licence `define` — the stdio bridge, the channel shim, the plugin monitor, the shared SSE consumer —
 reach none of them; those key only on the wire payload `error === "LICENSE_REQUIRED"`.
 `tests/server/license-armed-restricted.test.ts` is the armed probe of the MCP, push, chat and stdio
-admission points, each paired with a fresh-trial twin. The launcher's refusal is probed in
+admission points, each paired with a fresh-trial twin, and proves the seven browser write routes
+still succeed armed. `tests/server/license-armed-editing.test.ts` proves the browser's own Hocuspocus
+writes still land armed: document edits, accept and dismiss, and the Solo/Tandem mode in `CTRL_ROOM`,
+plus the `openDocuments` broadcast reaching it. The launcher's refusal is probed in
 `tests/server/launcher/license-refusal.test.ts` and the local model's in
 `tests/server/local-model/collaborator.test.ts`.
 
