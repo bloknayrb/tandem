@@ -398,7 +398,7 @@ export function finalizeClaudeChatMessage(id: string): void {
  * Deliberately carries no "call tandem_open" advice: opening a document is
  * something Claude does only when the user asks.
  */
-export function noDocumentInboxNote(requestedId: string | undefined): string {
+function noDocumentInboxNote(requestedId: string | undefined): string {
   if (requestedId !== undefined) {
     return `Document ${requestedId} is not open (tandem_listDocuments lists the open ones), so only chat is shown.`;
   }
@@ -608,7 +608,7 @@ export function registerAwarenessTools(server: McpServer): void {
         // below the guard would make the pull path look dead during exactly the
         // window a user is most likely to be told it is.
         recordInboxPoll();
-        // `""` means "no id", as for message text elsewhere; left as-is it would
+        // `""` is treated as omitted: `getCurrentDoc("")` would otherwise
         // resolve to no document even with one active.
         const requestedId = documentId || undefined;
         const store = getDocumentStore(requestedId);
@@ -617,16 +617,8 @@ export function registerAwarenessTools(server: McpServer): void {
         // closed went unanswered: the supervisor's Claude polled, got the
         // error, and never reached the chat loop. That held for an explicit id
         // naming a closed tab too (the skill says to pass one when several are
-        // open), and NO_DOCUMENT's text told Claude to call tandem_open, which
-        // is an unasked open. So the poll always runs; with no store the
-        // document buckets are empty and the summary says why.
-        //
-        // The join closes HERE — a separate fact from the stamp above, kept
-        // apart because it is a claim about the USER's message: every pass from
-        // this line reads the chat bucket and stamps it read. It can also close
-        // a round whose forward was an annotation on a document closed before
-        // this poll; `polled` was never proof of delivery (see delivery-state).
-        resolveDeliveryRound();
+        // open). So the poll always runs; with no store the document buckets
+        // are empty and the summary says why.
 
         // WS-A2: single live read of the three-state mode, used both to gate
         // the Solo privacy hold (`hideFromAI` in the surfacer) and to report
@@ -641,6 +633,15 @@ export function registerAwarenessTools(server: McpServer): void {
         const { userActions, userResponses, userReplies, activity } = store
           ? collectDocumentInbox(store, modeState)
           : emptyDocumentInbox();
+
+        // The join closes HERE, directly above the chat loop — a separate fact
+        // from the stamp above, kept apart because it is a claim about the
+        // USER's message. Below the document pass on purpose: a throw from
+        // `refreshAnnotations`, `listReplies` or `getUserAwareness` reaches the
+        // error boundary with nothing read, and must leave the round open. It
+        // can still close a round whose forward was an annotation on a document
+        // closed before this poll; `polled` was never proof of delivery.
+        resolveDeliveryRound();
 
         // Bucket 3: unread chat messages from CTRL_ROOM
         const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
@@ -778,7 +779,7 @@ export function registerAwarenessTools(server: McpServer): void {
  * Safely slice text and truncate to 100 chars.
  *
  * **Not test-only.** Three production callers, all on the inbox poll path: the
- * `tandem_checkInbox` handler's `selectedText`, and both collectors below.
+ * `selectedText` in `collectDocumentInbox` above, and both collectors below.
  */
 export function safeSlice(text: string, from: number, to: number): string {
   const start = Math.max(0, Math.min(from, text.length));

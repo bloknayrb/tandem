@@ -143,10 +143,11 @@ export function isUnansweredAsk(event: TandemEvent): boolean {
  * different moments and one of them is a claim about the USER's message. A poll
  * that bails out before the CTRL_ROOM chat loop marks nothing read, so the
  * user's message is still unseen and the round must stay open. Since chat is
- * delivered with no document open, `tandem_checkInbox` itself has no such
- * bail-out (it used to return `noDocumentError()` there); only an unexpected
- * throw before the chat loop does, which the error boundary turns into an
- * error result. Keep the split for that, and for any guard added later. Closing the join there would report
+ * delivered with no document open, `tandem_checkInbox` no longer returns
+ * `noDocumentError()` there; what still bails out is a throw in the document
+ * pass (refresh, replies, awareness), which the error boundary turns into an
+ * error result. That is why the handler resolves the round only after that
+ * pass, directly above the chat loop. Closing the join there would report
  * `{state: "polled", latencyMs: 240}` — "push delivered in a quarter second" —
  * for a message the model never received, which is the comforting-and-wrong
  * shape this module exists to eliminate.

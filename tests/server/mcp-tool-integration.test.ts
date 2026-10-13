@@ -124,6 +124,10 @@ afterEach(async () => {
 // production server is) stays alive on the leaked MessagePort.
 afterAll(() => shutdownSearchWorker());
 
+/** `noDocumentError()`'s text. It must not tell Claude to open a document unasked. */
+const NO_DOCUMENT_MESSAGE =
+  "No document is open. tandem_listDocuments lists open documents; open one with tandem_open only if the user asked for it.";
+
 /**
  * Replace CTRL_ROOM's chat with one unread user message. Chat is not cleared
  * between tests, so a spec asserting the exact chat set clears it first.
@@ -284,7 +288,7 @@ describe("MCP tool integration — tandem_convertToMarkdown error mapping (#1796
     const parsed = parseResult(result);
     expect(parsed.error).toBe(true);
     expect(parsed.code).toBe("NO_DOCUMENT");
-    expect(parsed.message).toBe("No document is open. Call tandem_open first.");
+    expect(parsed.message).toBe(NO_DOCUMENT_MESSAGE);
   });
 
   it("documentId naming a closed document: code NO_DOCUMENT, message names the id itself", async () => {
@@ -321,7 +325,7 @@ describe("MCP tool integration — tandem_convertToMarkdown error mapping (#1796
     // space, naming an id `getCurrentDoc` never looked up (it returns null
     // from `if (!id)` before touching the open-document map). "" belongs on
     // the shared no-document text.
-    expect(parsed.message).toBe("No document is open. Call tandem_open first.");
+    expect(parsed.message).toBe(NO_DOCUMENT_MESSAGE);
     expect(parsed.message, "a hole where the id should be").not.toMatch(/ {2}/);
   });
 
@@ -1550,7 +1554,20 @@ describe("MCP tool integration — awareness tools", () => {
     // it to). If the user then closes that tab and chats, a NO_DOCUMENT here
     // would hide the chat on every poll, and its "Call tandem_open first" text
     // invited an unasked open.
-    setupDoc("mcp-aw-other-open", "Still open");
+    const open = setupDoc("mcp-aw-other-open", "Still open");
+    withInternal(open, () =>
+      open.getMap(Y_MAP_ANNOTATIONS).set("u_other_open", {
+        id: "u_other_open",
+        author: "user",
+        type: "comment",
+        audience: "outbound",
+        range: { from: 0, to: 5 },
+        content: "a comment on the document that IS open",
+        status: "pending",
+        timestamp: 1,
+        rev: 1,
+      }),
+    );
     const chat = seedUserChat("msg_closed_id", "never mind that file");
 
     const parsed = parseResult(
@@ -1564,21 +1581,44 @@ describe("MCP tool integration — awareness tools", () => {
     expect(parsed.data.chatMessages.map((m: { id: string }) => m.id)).toEqual(["msg_closed_id"]);
     expect(parsed.data.summary).toContain("Document mcp-aw-closed-tab is not open");
     expect(parsed.data.summary).not.toContain("tandem_open");
-    // Nothing from the document that IS open leaks into a poll naming another.
+    // Nothing from the document that IS open leaks into a poll naming another,
+    // and it is not consumed by that poll either: the next poll against the
+    // active document still surfaces it.
     expect(parsed.data.userActions).toEqual([]);
     expect((chat.get("msg_closed_id") as ChatMessage).read).toBe(true);
+    const active = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+    expect(active.data.userActions.map((a: { id: string }) => a.id)).toEqual(["u_other_open"]);
   });
 
-  it("tandem_checkInbox treats an empty documentId as none", async () => {
+  it("tandem_checkInbox treats an empty documentId as omitted", async () => {
     // `""` reached getCurrentDoc as an id and resolved to nothing, even with a
-    // document active.
-    setupDoc("mcp-aw-empty-id", "Hello world");
+    // document active. Positive anchor: the active document's activity comes
+    // back, which only a resolved store can produce.
+    const ydoc = setupDoc("mcp-aw-empty-id", "Hello world");
+    withInternal(ydoc, () =>
+      ydoc
+        .getMap(Y_MAP_USER_AWARENESS)
+        .set(Y_MAP_ACTIVITY, { isTyping: true, cursor: 3, lastEdit: Date.now() }),
+    );
     const parsed = parseResult(
       await client.callTool({ name: "tandem_checkInbox", arguments: { documentId: "" } }),
     );
     expect(parsed.error).toBe(false);
-    expect(parsed.data.summary).not.toContain("not open");
-    expect(parsed.data.summary).not.toContain("not active");
+    expect(parsed.data.summary.startsWith("No document")).toBe(false);
+    expect(parsed.data.activity.cursor).toBe(3);
+  });
+
+  it("tandem_checkInbox says no document is ACTIVE when tabs are open but none is active", async () => {
+    // "No document is open" would be false here, and invites an open.
+    setupDoc("mcp-aw-inactive", "Hello world");
+    setActiveDocId(null);
+    seedUserChat("msg_inactive", "hi");
+
+    const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.summary).toMatch(/^No document is active \(tandem_listDocuments/);
+    expect(parsed.data.chatMessages.map((m: { id: string }) => m.id)).toEqual(["msg_inactive"]);
   });
 
   it("with nothing open, a chat asking for a file can be read, opened and answered", async () => {
