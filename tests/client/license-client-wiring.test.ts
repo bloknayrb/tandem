@@ -1,0 +1,92 @@
+/**
+ * Source pins for the client half of #1521 that no mounted test can reach.
+ *
+ * `App.svelte` is never mounted in tests, and the selection composer's popup
+ * needs a measured editor selection that happy-dom cannot produce, so these
+ * read the source. Each pin names the regression it exists to catch.
+ */
+
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+
+// Relative to the repo root, which is vitest's cwd (as `license-store.svelte.test.ts` reads it).
+const read = (rel: string) => readFileSync(rel, "utf-8");
+
+const APP = read("src/client/App.svelte");
+const HARNESS = read("src/client/svelte-harness/AiReadinessHarness.svelte");
+const TOOLBAR = read("src/client/editor/toolbar/Toolbar.svelte");
+
+/** The body of the arrow assigned to `const <name> = () => {`, up to its `};`. */
+function arrowBody(src: string, name: string): string {
+  const start = src.indexOf(`const ${name} = () => {`);
+  if (start < 0) throw new Error(`no arrow named ${name}`);
+  const end = src.indexOf("\n  };", start);
+  if (end < 0) throw new Error(`no end for ${name}`);
+  return src.slice(start, end);
+}
+
+describe("App.svelte — the licence wall and Surface-A rebuild are gone (#1521)", () => {
+  it("does not import or mount LicenseWall", () => {
+    expect(APP).not.toContain("LicenseWall");
+  });
+
+  it("no licence input reaches editability", () => {
+    const line = APP.split("\n").find((l) => l.includes("const editorReadOnly ="));
+    expect(line).toBeDefined();
+    expect(line).not.toContain("licenseStore");
+    expect(line).toContain("$derived(isReadOnly)");
+  });
+});
+
+describe("aiNotice reaches the readiness hook", () => {
+  it("App passes it to createAiReadiness", () => {
+    const call = APP.slice(APP.indexOf("createAiReadiness({"));
+    expect(call.slice(0, call.indexOf("});"))).toContain(
+      "aiNotice: () => licenseStore.ui.aiNotice",
+    );
+  });
+
+  it("the test harness passes it too", () => {
+    expect(HARNESS).toContain("aiNotice: () => aiNotice");
+  });
+});
+
+/**
+ * Activation respawns the launcher before its 200, while readiness still holds
+ * `lastError: "unlicensed"` — which maps to a Restart chip once the notice
+ * clears. The launcher read must be IMMEDIATE, or that chip shows for up to two
+ * seconds and a click relaunches over the fresh child.
+ */
+describe("the tandem:license-activated listener", () => {
+  it("re-reads the launcher status synchronously, before the staggered refresh", () => {
+    const body = arrowBody(APP, "onActivated");
+    const immediate = body.indexOf("aiReadiness.refreshLauncherStatus()");
+    const staggered = body.indexOf("refreshAiReadinessAfterLauncherAction()");
+    expect(immediate).toBeGreaterThan(-1);
+    expect(staggered).toBeGreaterThan(immediate);
+    expect(body).not.toMatch(/setTimeout/);
+    expect(APP).toContain("window.addEventListener(LICENSE_ACTIVATED_EVENT, onActivated)");
+  });
+});
+
+/**
+ * The comment segment of the selection composer must be disabled while the AI
+ * is off. A mount cannot open the popup (it needs a measured selection), so
+ * this pins the binding and its source.
+ */
+describe("Toolbar — the comment segment", () => {
+  it("is disabled from the licence store", () => {
+    expect(TOOLBAR).toContain("const aiDisabled = $derived(licenseStore.ui.aiNotice !== null);");
+    const seg = TOOLBAR.indexOf('data-testid="popup-comment-submit"');
+    expect(seg).toBeGreaterThan(-1);
+    const tag = TOOLBAR.slice(seg, TOOLBAR.indexOf(">", TOOLBAR.indexOf("onclick=", seg)));
+    expect(tag).toContain("disabled={aiDisabled}");
+  });
+
+  it("submitAsComment refuses while the AI is off", () => {
+    const fn = TOOLBAR.slice(TOOLBAR.indexOf("function submitAsComment() {"));
+    expect(fn.slice(0, fn.indexOf("\n}"))).toMatch(
+      /^function submitAsComment\(\) \{\n\s+if \(aiDisabled\) return;/,
+    );
+  });
+});

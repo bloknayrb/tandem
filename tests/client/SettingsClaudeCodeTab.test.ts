@@ -4,7 +4,9 @@ import { render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import SettingsClaudeCodeTab from "../../src/client/components/settings-tabs/SettingsClaudeCodeTab.svelte";
+import { licenseStore } from "../../src/client/hooks/useLicense.svelte";
 import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
+import { aiOffCopy } from "../../src/client/utils/license-ui";
 
 /**
  * #1022 — AI-setup discoverability in Settings → AI Assistant.
@@ -124,5 +126,43 @@ describe("SettingsClaudeCodeTab — Connect AI discoverability (#1022)", () => {
     expect(byTestId(container, "settings-modal-open-integration-wizard")?.textContent).toContain(
       "Reopen integration wizard…",
     );
+  });
+});
+
+/**
+ * #1521: while the licence refuses the AI, the tab stays reachable and says
+ * why in one line, with the kind's own copy; absent when the AI is not refused.
+ */
+describe("SettingsClaudeCodeTab — AI-off hint (#1521)", () => {
+  afterEach(() => {
+    licenseStore.set({ gateActive: false, status: "licensed", updateWindowCurrent: true });
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ["unlicensed", {}],
+    ["unverifiable", { licenseUnverifiable: "BAD_SIGNATURE" as const }],
+  ] as const)("renders the %s copy", (kind, extra) => {
+    mockIntegrations([{ kind: "claude-code" }]);
+    licenseStore.set({
+      gateActive: true,
+      status: "restricted",
+      updateWindowCurrent: false,
+      ...extra,
+    });
+    const { container, unmount } = render(SettingsClaudeCodeTab, { props: makeProps() });
+    const hint = byTestId(container, "claude-code-ai-off-hint");
+    expect(hint).toBeTruthy();
+    expect(hint?.textContent?.trim()).toBe(aiOffCopy(kind).sentence);
+    unmount();
+  });
+
+  it("is absent when the AI is not refused", () => {
+    mockIntegrations([{ kind: "claude-code" }]);
+    licenseStore.set({ gateActive: true, status: "trial", updateWindowCurrent: false });
+    const { container, unmount } = render(SettingsClaudeCodeTab, { props: makeProps() });
+    expect(byTestId(container, "claude-code-ai-off-hint")).toBeNull();
+    unmount();
   });
 });

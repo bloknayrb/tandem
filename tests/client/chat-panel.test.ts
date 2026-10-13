@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 
-import { render } from "@testing-library/svelte";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render } from "@testing-library/svelte";
+import { tick } from "svelte";
+import { describe, expect, it, vi } from "vitest";
 import ChatPanel from "../../src/client/panels/ChatPanel.svelte";
 import type { ChatMessage } from "../../src/shared/types";
 
@@ -126,5 +127,63 @@ describe("ChatPanel — the {@html} sink is routed through renderMarkdown", () =
 
     expect(view.container.querySelector("strong")).toBeNull();
     expect(view.container.textContent).toContain("**not bold**");
+  });
+});
+
+/**
+ * #1521: while the licence refuses the AI the composer and send are disabled
+ * and Enter sends nothing; the history stays readable. The twin is the normal
+ * send path with `aiDisabled: false`.
+ */
+describe("ChatPanel — AI off by licence", () => {
+  function mount(aiDisabled: boolean) {
+    const onSend = vi.fn(() => true);
+    const r = render(ChatPanel, {
+      props: {
+        messages: [claudeMsg()],
+        editor: null,
+        activeDocId: null,
+        openDocs: [],
+        capturedAnchor: null,
+        onCapturedAnchorChange: () => {},
+        onSend,
+        onClear: async () => {},
+        onExport: async () => {},
+        onInsert: () => false,
+        aiDisabled,
+      },
+    });
+    const input = r.container.querySelector<HTMLTextAreaElement>(
+      "[data-testid='chat-composer-input']",
+    ) as HTMLTextAreaElement;
+    const send = r.container.querySelector<HTMLButtonElement>(
+      "[data-testid='chat-send-btn']",
+    ) as HTMLButtonElement;
+    return { ...r, onSend, input, send };
+  }
+
+  it("disables the composer and send, and Enter does not send", async () => {
+    const { input, send, onSend, container, unmount } = mount(true);
+    expect(input.disabled).toBe(true);
+    expect(input.placeholder).toBe("AI features are off");
+    await fireEvent.input(input, { target: { value: "hello" } });
+    await tick();
+    expect(send.disabled).toBe(true);
+    await fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+    // The user's own history is still there.
+    expect(container.textContent).toContain("hello");
+    unmount();
+  });
+
+  it("the twin: enabled, Enter sends", async () => {
+    const { input, send, onSend, unmount } = mount(false);
+    expect(input.disabled).toBe(false);
+    await fireEvent.input(input, { target: { value: "hi there" } });
+    await tick();
+    expect(send.disabled).toBe(false);
+    await fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSend).toHaveBeenCalledWith("hi there");
+    unmount();
   });
 });

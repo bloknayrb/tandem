@@ -2,7 +2,7 @@
 
 import { fireEvent, render } from "@testing-library/svelte";
 import { tick } from "svelte";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import ReplyThread from "../../src/client/panels/ReplyThread.svelte";
 import type { Annotation, AnnotationReply } from "../../src/shared/types";
 
@@ -290,5 +290,87 @@ describe("#1626: a suggestion-bearing reply opens the thread", () => {
     await tick();
 
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+});
+
+/**
+ * #1521: a reply to a COMMENT is an AI write, refused while the licence refuses
+ * the AI. The button stays (Rule 7) but is disabled; the user's own note thread
+ * (#1000) stays live; a draft open at the flip is kept and cannot be sent; a
+ * context-menu nonce bumped while refused is consumed, not deferred.
+ */
+describe("ReplyThread — licence refusal (#1521)", () => {
+  const q = (c: HTMLElement, id: string) =>
+    c.querySelector<HTMLButtonElement | HTMLTextAreaElement>(`[data-testid='${id}']`);
+
+  function mount(annotation: Annotation, extra: { aiDisabled?: boolean; openNonce?: number } = {}) {
+    const onReply = vi.fn(async () => true);
+    const r = render(ReplyThread, {
+      props: { annotation, replies: [], isPending: true, isEditing: false, onReply, ...extra },
+    });
+    return { ...r, onReply };
+  }
+
+  it("on a comment the reply button is present and disabled", () => {
+    const { container } = mount(makeAnnotation(), { aiDisabled: true });
+    const btn = q(container, "reply-btn-annotation-1") as HTMLButtonElement;
+    expect(btn).not.toBeNull();
+    expect(btn.disabled).toBe(true);
+  });
+
+  it("on a note the reply button stays enabled (#1000)", () => {
+    const { container } = mount(makeAnnotation({ type: "note", author: "user" }), {
+      aiDisabled: true,
+    });
+    const btn = q(container, "reply-btn-annotation-1") as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+  });
+
+  it("a composer open at the flip keeps its draft and cannot send; the twin sends once", async () => {
+    const { container, rerender, onReply } = mount(makeAnnotation(), { aiDisabled: false });
+    await fireEvent.click(q(container, "reply-btn-annotation-1") as HTMLButtonElement);
+    await tick();
+    const input = q(container, "reply-input-annotation-1") as HTMLTextAreaElement;
+    await fireEvent.input(input, { target: { value: "my draft" } });
+    await tick();
+
+    await rerender({ aiDisabled: true });
+    await tick();
+    const send = q(container, "reply-send-btn-annotation-1") as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    // `disabled` alone is not the guard: strip it (as a stale render or a
+    // devtools edit would) and the handler itself must still refuse.
+    send.disabled = false;
+    send.click();
+    await tick();
+    expect(onReply).not.toHaveBeenCalled();
+    expect((q(container, "reply-input-annotation-1") as HTMLTextAreaElement).value).toBe(
+      "my draft",
+    );
+
+    await rerender({ aiDisabled: false });
+    await tick();
+    (q(container, "reply-send-btn-annotation-1") as HTMLButtonElement).click();
+    await tick();
+    expect(onReply).toHaveBeenCalledTimes(1);
+    expect(onReply).toHaveBeenCalledWith("annotation-1", "my draft");
+  });
+
+  it("a nonce bumped while refused is consumed: the composer stays closed after the licence returns", async () => {
+    const { container, rerender } = mount(makeAnnotation(), { aiDisabled: true, openNonce: 0 });
+    await rerender({ openNonce: 1 });
+    await tick();
+    expect(q(container, "reply-input-annotation-1")).toBeNull();
+
+    await rerender({ aiDisabled: false });
+    await tick();
+    expect(q(container, "reply-input-annotation-1")).toBeNull();
+  });
+
+  it("the twin: a nonce bumped while enabled opens the composer", async () => {
+    const { container, rerender } = mount(makeAnnotation(), { aiDisabled: false, openNonce: 0 });
+    await rerender({ openNonce: 1 });
+    await tick();
+    expect(q(container, "reply-input-annotation-1")).not.toBeNull();
   });
 });

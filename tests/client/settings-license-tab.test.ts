@@ -284,3 +284,32 @@ describe("Settings → License — the ended update window offers a way out (#18
     expect(byTestId(container, "license-window-support-link")).toBeNull();
   });
 });
+
+/**
+ * The purchase link hides from anyone holding an unverifiable licence file, a
+ * trial included (#1521, ADR-040 decision 8). `aiNotice` is null during a
+ * trial, so the link keys on the reason code directly. The support line stays
+ * in every case.
+ */
+describe("Settings → License — no purchase link for an unverifiable licence (#1521)", () => {
+  const RESTRICTED: LicenseStatusResponse = {
+    gateActive: true,
+    status: "restricted",
+    updateWindowCurrent: false,
+  };
+
+  it.each([
+    ["restricted + unverifiable", { ...RESTRICTED, licenseUnverifiable: "BAD_SIGNATURE" }, false],
+    ["trial + unverifiable", { ...TRIAL, licenseUnverifiable: "MALFORMED" }, false],
+    ["restricted + unlicensed", RESTRICTED, true],
+    ["a plain trial", TRIAL, true],
+  ] as const)("%s ⇒ buy link shown: %s", (_label, state, buy) => {
+    licenseStore.set(state as LicenseStatusResponse);
+    const { container, unmount } = render(SettingsLicenseTab, { props: makeProps() });
+    expect(byTestId(container, "license-buy-link") !== null).toBe(buy);
+    // The support mailto renders in all four.
+    expect(container.querySelector(`a[href='mailto:${TANDEM_SUPPORT_EMAIL}']`)).toBeTruthy();
+    expect(flat(container)).toContain("Trouble activating?");
+    unmount();
+  });
+});
