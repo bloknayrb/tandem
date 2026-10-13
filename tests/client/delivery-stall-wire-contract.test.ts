@@ -39,6 +39,7 @@ describe("delivery join — server state names reach the client predicate", () =
         state: server.state,
         waitingMs: server.waitingMs,
         soloMode: false,
+        aiOff: false,
         serverUnreachable: false,
       }),
     ).toBe(DELIVERY_STALL_MS + 1_000);
@@ -70,6 +71,7 @@ function silentFor(server: { state: string; waitingMs: number | null }): number 
     state: server.state,
     waitingMs: server.waitingMs,
     soloMode: false,
+    aiOff: false,
     serverUnreachable: false,
   });
 }

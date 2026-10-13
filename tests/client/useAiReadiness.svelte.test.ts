@@ -27,9 +27,9 @@
 
 import { cleanup, render, screen } from "@testing-library/svelte";
 import { tick } from "svelte";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { AiChip, AiReadiness } from "../../src/client/hooks/useAiReadiness.svelte";
-import { AI_CTA } from "../../src/client/hooks/useAiReadiness.svelte";
+import { AI_CTA, ctaHandler } from "../../src/client/hooks/useAiReadiness.svelte";
 import AiReadinessHarness from "../../src/client/svelte-harness/AiReadinessHarness.svelte";
 import { API_LAUNCHER_STATUS } from "../../src/shared/api-paths.js";
 
@@ -122,7 +122,12 @@ function expectDemoted(h: { get(): AiReadiness }): void {
 /** Mount the harness; `onReady` fires in an $effect after mount, so the handle
  *  is captured in a holder and read (via `.get()`) after `settle()`. */
 function mount(
-  props: { connected?: boolean; firstRunSettled?: boolean; soloMode?: boolean } = {},
+  props: {
+    connected?: boolean;
+    firstRunSettled?: boolean;
+    soloMode?: boolean;
+    aiNotice?: "unlicensed" | "unverifiable" | null;
+  } = {},
 ): { get(): AiReadiness } {
   const holder: { readiness: AiReadiness | null } = { readiness: null };
   render(AiReadinessHarness, {
@@ -952,7 +957,7 @@ describe("createAiReadiness", () => {
  * to stop, so the wrong branch is actively harmful, not merely mislabelled.
  */
 describe("AI_CTA", () => {
-  const CHIPS: Exclude<AiChip, null>[] = ["connect", "setup", "sign-in", "restart"];
+  const CHIPS: Exclude<AiChip, null>[] = ["connect", "setup", "sign-in", "restart", "unlicensed"];
 
   it("covers every non-null chip with non-empty copy", () => {
     // Guards against a future union member landing with no entry: the type
@@ -981,6 +986,54 @@ describe("AI_CTA", () => {
   // #1780: Check again is a restart — the supervisor re-sends a turn on it.
   it("routes 'sign-in' to the restart flow", () => {
     expect(AI_CTA["sign-in"].action).toBe("restart");
+  });
+
+  // #1521. One entry serves both refusal kinds, so its copy names neither and
+  // never says the trial ended (ADR-040 decision 5).
+  it("routes 'unlicensed' to license settings, with kind-neutral copy", () => {
+    expect(AI_CTA.unlicensed.action).toBe("open-license-settings");
+    for (const text of [
+      AI_CTA.unlicensed.label,
+      AI_CTA.unlicensed.title,
+      AI_CTA.unlicensed.ariaLabel,
+    ]) {
+      expect(text).not.toMatch(/trial|expired|unlicensed|activate/i);
+    }
+  });
+});
+
+/**
+ * `ctaHandler` is the ONE dispatcher from a CTA action to its handler (#1521).
+ * Each action must call exactly its own handler — a binary ternary would route
+ * the new `open-license-settings` action to connect or restart.
+ */
+describe("ctaHandler", () => {
+  it("calls exactly the matching handler for each action", () => {
+    for (const action of ["connect", "restart", "open-license-settings"] as const) {
+      const h = { connect: vi.fn(), restart: vi.fn(), openLicenseSettings: vi.fn() };
+      ctaHandler(action, h)();
+      expect(h.connect).toHaveBeenCalledTimes(action === "connect" ? 1 : 0);
+      expect(h.restart).toHaveBeenCalledTimes(action === "restart" ? 1 : 0);
+      expect(h.openLicenseSettings).toHaveBeenCalledTimes(
+        action === "open-license-settings" ? 1 : 0,
+      );
+    }
+  });
+
+  it("is typed over AiCtaAction only", () => {
+    const h = { connect: () => {}, restart: () => {}, openLicenseSettings: () => {} };
+    expectTypeOf(ctaHandler)
+      .parameter(0)
+      .toEqualTypeOf<"connect" | "restart" | "open-license-settings">();
+    // @ts-expect-error — an unknown action is a compile error.
+    ctaHandler("relaunch", h);
+  });
+
+  it("every AI_CTA entry resolves to a handler", () => {
+    const h = { connect: vi.fn(), restart: vi.fn(), openLicenseSettings: vi.fn() };
+    for (const chip of Object.keys(AI_CTA) as Exclude<AiChip, null>[]) {
+      expect(typeof ctaHandler(AI_CTA[chip].action, h)).toBe("function");
+    }
   });
 });
 
@@ -1689,6 +1742,82 @@ describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
       await settle();
       expect(h.get().state).toBe("unconfigured");
       expect(h.get().chip).toBe("connect");
+    });
+  });
+
+  /**
+   * #1521: the licence refusal ranks FIRST. Solo is a privacy choice, the
+   * refusal is a capability fact, and every other CTA would be refused by the
+   * server. Once it clears, an `unlicensed` lastError maps back to Restart.
+   */
+  describe("licence refusal (aiNotice)", () => {
+    const stoppedWith = (lastError?: string) => () =>
+      mkResponse({ available: true, running: false, ...(lastError ? { lastError } : {}) });
+
+    it("chip is 'unlicensed' in Tandem mode with a stopped launcher", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: stoppedWith(),
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      const h = mount({ aiNotice: "unlicensed" });
+      await settle();
+      expect(h.get().chip).toBe("unlicensed");
+    });
+
+    it("chip is 'unlicensed' in Solo too — the refusal outranks Solo", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: stoppedWith(),
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      const h = mount({ aiNotice: "unverifiable", soloMode: true });
+      await settle();
+      expect(h.get().chip).toBe("unlicensed");
+    });
+
+    it("chip is 'unlicensed' with lastError 'unlicensed'; cleared, it returns to restart", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: stoppedWith("unlicensed"),
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      const off = mount({ aiNotice: "unlicensed" });
+      await settle();
+      expect(off.get().chip).toBe("unlicensed");
+      cleanup();
+
+      const on = mount({ aiNotice: null });
+      await settle();
+      expect(on.get().chip).toBe("restart");
+    });
+
+    it("launcherFailure is suppressed while refused; the twin shows it when cleared", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: stoppedWith("circuit-open"),
+        health: mkResponse({ status: "ok", hasSession: true }),
+      });
+      const off = mount({ aiNotice: "unlicensed" });
+      await settle();
+      expect(off.get().launcherFailure).toBeNull();
+      cleanup();
+
+      const on = mount({ aiNotice: null });
+      await settle();
+      expect(on.get().launcherFailure).toBe("restart");
+    });
+
+    it("deliveryStalledMs is null while refused; the twin reports the stall", async () => {
+      const STALLED = { state: "awaiting-poll", waitingMs: 200_000 };
+      globalThis.fetch = routedFetch({
+        launcher: RUNNING_LAUNCHER,
+        health: mkResponse({ status: "ok", hasSession: true, delivery: STALLED }),
+      });
+      const off = mount({ aiNotice: "unlicensed" });
+      await settle();
+      expect(off.get().deliveryStalledMs).toBeNull();
+      cleanup();
+
+      const on = mount({ aiNotice: null });
+      await settle();
+      expect(on.get().deliveryStalledMs).toBe(200_000);
     });
   });
 

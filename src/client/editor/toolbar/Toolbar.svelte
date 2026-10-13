@@ -21,6 +21,7 @@ import type {
 import { generateAnnotationId } from "../../../shared/utils";
 import { isMacPlatform } from "../../actions/keybindings";
 import { createAgentLabel } from "../../hooks/useAgentLabel.svelte";
+import { licenseStore } from "../../hooks/useLicense.svelte";
 import type { DisplayPrefsUpdate, EditorMeasure, TextSize } from "../../hooks/useTandemSettings";
 import { heldInSoloOnCreate } from "../../panels/annotation-actions";
 import { ENTER_POPUP_MS, motionOff, popupEnter, registerFlySource } from "../../panels/cardMotion";
@@ -346,7 +347,11 @@ const showPopup = $derived(
     dwellSatisfied,
 );
 const annotationTextTrimmed = $derived(annotationText.trim());
-const primaryAnnotationIntent = $derived(defaultAnnotationIntent(annotationIntent));
+// The licence refuses the AI (#1521): the composer defaults to a private note
+// and the outbound segment is disabled. Derived, never an `$effect` rewriting
+// `annotationIntent` — that would fight `openAnnotateMode`.
+const aiDisabled = $derived(licenseStore.ui.aiNotice !== null);
+const primaryAnnotationIntent = $derived(defaultAnnotationIntent(annotationIntent, aiDisabled));
 
 // Plain `let` — see SelectionToolbarPositionArgs.previousPlacement docstring.
 // This is read+written from a Tiptap event listener, NOT from inside a
@@ -984,6 +989,7 @@ function annotationRangeGoneNotification(): TandemNotification {
 }
 
 function submitAsComment() {
+  if (aiDisabled) return;
   if (!annotationTextTrimmed) return;
   // A27: capture the popover footprint BEFORE create (it's still mounted), then
   // register the fly-source AFTER a successful create — dismissPopup() unmounts
@@ -1054,7 +1060,7 @@ function handleComposerKeyDown(e: KeyboardEvent) {
   // Ctrl/Cmd+Enter path follows the native-menu intent and otherwise defaults
   // to an outbound comment.
   if (e.key === "Enter") {
-    const submission = resolveAnnotationSubmission(annotationIntent, e);
+    const submission = resolveAnnotationSubmission(annotationIntent, e, aiDisabled);
     if (!submission) return;
     e.preventDefault();
     if (submission === "note") submitAsNote();
@@ -1349,7 +1355,10 @@ function handleComposerKeyDown(e: KeyboardEvent) {
               class:on={primaryAnnotationIntent === "comment"}
               data-testid="popup-comment-submit"
               aria-pressed={primaryAnnotationIntent === "comment"}
-              title={`Send to ${agentLabel.family} as an outbound comment`}
+              disabled={aiDisabled}
+              title={aiDisabled
+                ? "AI features are off"
+                : `Send to ${agentLabel.family} as an outbound comment`}
               onmousedown={(e) => e.preventDefault()}
               onkeydown={handleComposerKeyDown}
               onclick={() => (annotationIntent = "comment")}

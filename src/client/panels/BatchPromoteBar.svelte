@@ -14,6 +14,11 @@ interface Props {
   confirmRef?: HTMLButtonElement | null;
   /** App reduce-motion setting; threaded from SidePanel (A24, #798). */
   reduceMotion?: boolean;
+  /**
+   * The licence refuses the AI (#1521). Promoting sends notes to Claude, so both
+   * send buttons render disabled and their handlers do nothing.
+   */
+  aiDisabled?: boolean;
 }
 
 let {
@@ -25,6 +30,7 @@ let {
   onClear,
   confirmRef = $bindable(null),
   reduceMotion = false,
+  aiDisabled = false,
 }: Props = $props();
 
 const agentLabel = createAgentLabel();
@@ -90,7 +96,11 @@ const destDisc =
       <button
         bind:this={confirmRef}
         data-testid="batch-promote-commit"
-        onclick={onConfirmPromote}
+        disabled={aiDisabled}
+        title={aiDisabled ? "AI features are off" : undefined}
+        onclick={() => {
+          if (!aiDisabled) onConfirmPromote();
+        }}
         aria-describedby="{uid}-warn"
         style={neutralBtn}
       >
@@ -124,7 +134,11 @@ const destDisc =
            selectors but never lose one (CLAUDE.md Critical Rule 7). -->
       <button
         data-testid="batch-promote-confirm"
-        onclick={onPromote}
+        disabled={aiDisabled}
+        title={aiDisabled ? "AI features are off" : undefined}
+        onclick={() => {
+          if (!aiDisabled) onPromote();
+        }}
         style="{neutralBtn} display: inline-flex; align-items: center; gap: var(--tandem-space-2);"
       >
         <span aria-hidden="true" style={destDisc}></span>

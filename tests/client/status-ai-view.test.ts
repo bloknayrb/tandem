@@ -23,6 +23,8 @@ function view(over: Partial<ViewInput> = {}) {
     launcherRestarting: false,
     docSyncConnected: true,
     sessionCount: null,
+    aiOff: false,
+    aiOffKind: null,
     ...over,
   });
 }

@@ -53,11 +53,11 @@ describe("annotation context-menu gating predicates", () => {
   });
 
   it("Reply: note + comment, pending; never highlight", () => {
-    expect(canReply(ann("note", "user"))).toBe(true);
-    expect(canReply(ann("note", "import"))).toBe(true);
-    expect(canReply(ann("comment", "claude"))).toBe(true);
-    expect(canReply(ann("highlight", "user"))).toBe(false);
-    expect(canReply(ann("comment", "claude", "dismissed"))).toBe(false);
+    expect(canReply(ann("note", "user"), false)).toBe(true);
+    expect(canReply(ann("note", "import"), false)).toBe(true);
+    expect(canReply(ann("comment", "claude"), false)).toBe(true);
+    expect(canReply(ann("highlight", "user"), false)).toBe(false);
+    expect(canReply(ann("comment", "claude", "dismissed"), false)).toBe(false);
   });
 
   it("Edit: user-authored only (corrected), pending — never claude/import", () => {
@@ -70,11 +70,11 @@ describe("annotation context-menu gating predicates", () => {
   });
 
   it("Send to Claude: user notes only, pending (import notes show Accept instead)", () => {
-    expect(canSendToClaude(ann("note", "user"))).toBe(true);
-    expect(canSendToClaude(ann("note", "import"))).toBe(false); // → Accept branch
-    expect(canSendToClaude(ann("comment", "user"))).toBe(false);
-    expect(canSendToClaude(ann("highlight", "user"))).toBe(false);
-    expect(canSendToClaude(ann("note", "user", "dismissed"))).toBe(false);
+    expect(canSendToClaude(ann("note", "user"), false)).toBe(true);
+    expect(canSendToClaude(ann("note", "import"), false)).toBe(false); // → Accept branch
+    expect(canSendToClaude(ann("comment", "user"), false)).toBe(false);
+    expect(canSendToClaude(ann("highlight", "user"), false)).toBe(false);
+    expect(canSendToClaude(ann("note", "user", "dismissed"), false)).toBe(false);
   });
 
   it("Remove/Archive: user-authored only, pending", () => {
@@ -97,14 +97,14 @@ describe("annotation context-menu gating predicates", () => {
       ann("comment", "claude"),
       ann("highlight", "user"),
     ]) {
-      expect(canAccept(a) && canSendToClaude(a)).toBe(false);
+      expect(canAccept(a) && canSendToClaude(a, false)).toBe(false);
     }
   });
 });
 
 describe("buildAnnotationMenuContext", () => {
   it("user note → compose + copy + archive (isNote true)", () => {
-    const req = buildAnnotationMenuContext(ann("note", "user"));
+    const req = buildAnnotationMenuContext(ann("note", "user"), false);
     expect(req).toEqual({
       canAccept: false,
       canDismiss: false,
@@ -118,7 +118,7 @@ describe("buildAnnotationMenuContext", () => {
   });
 
   it("claude comment → review + reply + copy, no edit/remove/send", () => {
-    const req = buildAnnotationMenuContext(ann("comment", "claude"));
+    const req = buildAnnotationMenuContext(ann("comment", "claude"), false);
     expect(req).toMatchObject({
       canAccept: true,
       canDismiss: true,
@@ -131,7 +131,7 @@ describe("buildAnnotationMenuContext", () => {
   });
 
   it("user highlight → edit + copy + remove (isNote false), no reply", () => {
-    const req = buildAnnotationMenuContext(ann("highlight", "user"));
+    const req = buildAnnotationMenuContext(ann("highlight", "user"), false);
     expect(req).toMatchObject({
       canReply: false,
       canEdit: true,
@@ -142,7 +142,7 @@ describe("buildAnnotationMenuContext", () => {
   });
 
   it("resolved annotation → copy only", () => {
-    const req = buildAnnotationMenuContext(ann("comment", "claude", "accepted"));
+    const req = buildAnnotationMenuContext(ann("comment", "claude", "accepted"), false);
     expect(req).toEqual({
       canAccept: false,
       canDismiss: false,
@@ -153,6 +153,27 @@ describe("buildAnnotationMenuContext", () => {
       canRemove: false,
       isNote: false,
     });
+  });
+});
+
+describe("licence refusal (#1521): aiDisabled gates the AI writes only", () => {
+  it("Send to Claude is refused while the AI is off; the twin allows it", () => {
+    expect(canSendToClaude(ann("note", "user"), true)).toBe(false);
+    expect(canSendToClaude(ann("note", "user"), false)).toBe(true);
+  });
+
+  it("a reply to a comment is refused; a reply in the user's own note thread is not (#1000)", () => {
+    expect(canReply(ann("comment", "claude"), true)).toBe(false);
+    expect(canReply(ann("note", "user"), true)).toBe(true);
+    expect(canReply(ann("comment", "claude"), false)).toBe(true);
+  });
+
+  it("the menu builder forwards it", () => {
+    const off = buildAnnotationMenuContext(ann("note", "user"), true);
+    expect(off.canSendToClaude).toBe(false);
+    expect(off.canReply).toBe(true);
+    expect(buildAnnotationMenuContext(ann("comment", "claude"), true).canReply).toBe(false);
+    expect(buildAnnotationMenuContext(ann("note", "user"), false).canSendToClaude).toBe(true);
   });
 });
 

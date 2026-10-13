@@ -40,7 +40,7 @@ function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation {
 const PROVENANCE = { author: "Dana Reviewer", file: "/draft.docx" };
 
 function renderCard(annotation: Annotation) {
-  return render(AnnotationCard, { props: { annotation } });
+  return render(AnnotationCard, { props: { aiDisabled: false, annotation } });
 }
 
 function cardBackground(container: HTMLElement, id: string): string {
@@ -110,6 +110,7 @@ describe("AnnotationCard — the card VARIANT stays on the stored author (#1714)
     // ImportedCard".
     const { container } = render(AnnotationCard, {
       props: {
+        aiDisabled: false,
         annotation: makeAnnotation({ author: "import", type: "note", importSource: PROVENANCE }),
         selected: false,
         onToggleSelect: () => {},

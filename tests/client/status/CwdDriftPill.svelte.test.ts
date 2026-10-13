@@ -34,6 +34,8 @@ const baseProps = {
   aiLauncherAttached: false,
   aiLauncherRestarting: false,
   aiSessionCount: null as number | null,
+  aiOffKind: null,
+  onOpenLicenseSettings: () => {},
   aiState: "ready" as const,
   soloMode: false,
 };

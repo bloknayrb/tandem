@@ -51,6 +51,12 @@ export interface DeliveryStallInput {
   waitingMs: number | null;
   /** Solo outranks everything — the user opted out of AI surfacing. */
   soloMode: boolean;
+  /**
+   * The licence refuses the AI (#1521). An outstanding forward is then neither
+   * stalled nor ignored — nothing can answer it until activation. The server
+   * reads it as `license-refused`; this is the client belt for a stale server.
+   */
+  aiOff: boolean;
   /** A dead server is its own, louder story; never stack the two. */
   serverUnreachable: boolean;
 }
@@ -63,6 +69,7 @@ export interface DeliveryStallInput {
  */
 export function deliveryStall(input: DeliveryStallInput): number | null {
   if (input.soloMode) return null;
+  if (input.aiOff) return null;
   // The offline notice already tells this story, and better: with the server
   // gone, "Claude hasn't picked this up" is true but blames the wrong party.
   if (input.serverUnreachable) return null;

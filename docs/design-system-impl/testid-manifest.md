@@ -229,6 +229,8 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `settings-modal-view-license-btn`, `settings-modal-license-error` (the
   sidebar "View license" link; rendered only when `/api/info`'s `licensePath` has
   an openable extension, i.e. the desktop bundle's `LICENSE.txt`)
+- `claude-code-ai-off-hint` — Settings → AI Assistant's one-line "AI features are
+  off" notice (#1521); rendered only while the licence refuses the AI
 
 ### Settings — Appearance tab
 - `theme-{*}-btn`, `default-tab-{chat,annotations}-btn`,
@@ -387,11 +389,12 @@ site.
 
 ### Empty states (3.11 D5)
 - `empty-state-open-file` (state A primary), `empty-state-retry` + `empty-state-open-settings` (state C)
-- State A AI-readiness CTA (#1268, keyed 1:1 off the `useAiReadiness` `chip` value — never re-derive from `lastError` in the view): `empty-state-connect-ai` (`aiChip: "connect"`), `empty-state-setup-claude` (`aiChip: "setup"` — keyed off `lastError === "cli-unusable"`, a filesystem probe the supervisor takes when the circuit breaker trips), `empty-state-setup-restart-anyway` (`aiChip: "setup"` secondary — the escape for a false-negative probe, so the branch is not a dead end), `empty-state-restart-claude` (`aiChip: "restart"` primary), `empty-state-start-fresh` (`aiChip: "restart"` secondary — irreversible, never the default handler)
+- State A AI-readiness CTA (#1268, keyed 1:1 off the `useAiReadiness` `chip` value — never re-derive from `lastError` in the view): `empty-state-connect-ai` (`aiChip: "connect"`), `empty-state-setup-claude` (`aiChip: "setup"` — keyed off `lastError === "cli-unusable"`, a filesystem probe the supervisor takes when the circuit breaker trips), `empty-state-setup-restart-anyway` (`aiChip: "setup"` secondary — the escape for a false-negative probe, so the branch is not a dead end), `empty-state-restart-claude` (`aiChip: "restart"` primary), `empty-state-start-fresh` (`aiChip: "restart"` secondary — irreversible, never the default handler), `empty-state-open-license-settings` (`aiChip: "unlicensed"` — the licence refuses the AI, #1521; opens Settings → License)
 
 ### Licensing gate (#1116, ships dark)
 - `license-trial-banner`, `license-trial-days` (trial countdown banner)
-- `license-wall` (restricted-mode activation overlay)
+- `license-wall`, `license-wall-buy`, `license-wall-dismiss`, `license-wall-unverifiable` removed (#1521, D6): a keyless install refuses the AI, never the editor, so the restricted-mode overlay was retired. A deliberate Rule 7 contract change.
+- `ai-off-notice` (the rail's "AI features are off" notice, #1521), `ai-off-notice-collapse` (its collapse toggle, persisted per browser), `ai-off-notice-settings-link` (opens Settings → License; the notice carries no purchase link)
 - `license-activate-input`, `license-activate-error`, `license-activate-submit` (shared activation form)
 - `license-settings-section`, `license-status-pill` (Settings → License tab)
 - `license-update-window-ended` (Settings → License warning for a lapsed update window) and `license-window-support-link` (its support mailto link)

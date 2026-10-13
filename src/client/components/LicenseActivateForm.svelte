@@ -2,10 +2,10 @@
 import { activateLicenseClient } from "../hooks/useLicense";
 import { licenseStore } from "../hooks/useLicense.svelte";
 
-// Shared license-activation form (#1116). Used by both the restricted-mode wall
-// and the Settings → License tab, so the activate testids are defined once.
+// License-activation form (#1116). Used by Settings → License only since the
+// restricted-mode wall was retired (#1521, D3).
 interface Props {
-  /** Called after a successful activation (e.g. to show a toast / close a wall). */
+  /** Called after a successful activation (e.g. to show a toast). */
   onActivated?: () => void;
 }
 const { onActivated }: Props = $props();

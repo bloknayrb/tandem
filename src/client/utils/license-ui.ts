@@ -1,14 +1,29 @@
 /**
- * Pure license → UI derivation (#1116, ADR-040, client side). Given the
- * `GET /api/license/status` payload, decide what the editor + chrome should do.
- * Kept pure (no runes, no fetch) so it's unit-testable without mounting; the
- * `.svelte.ts` hook fetches/polls and feeds its result through here.
+ * Pure license → UI derivation (#1116, ADR-040, #1521, client side). Given the
+ * `GET /api/license/status` payload, decide what the chrome should do. Kept pure
+ * (no runes, no fetch) so it's unit-testable without mounting; the `.svelte.ts`
+ * hook fetches/polls and feeds its result through here.
+ *
+ * A keyless install refuses the AI, never the editor (#1521, D3): no licence
+ * state reaches editability, so `LicenseUi` carries no `editable` field at all.
+ * Every AI-surface show/hide decision keys on `aiNotice`; the reason code
+ * (`status.licenseUnverifiable`) is read only to pick copy — with one
+ * exception, the purchase link, which must hide from an unverifiable licence
+ * holder even during a trial, where `aiNotice` is null by design.
  *
  * The status payload is loopback-full or LAN-scrubbed (see routes/license.ts);
  * this reads only fields present in BOTH shapes, plus the optional licensee name
  * (loopback only) used for the "Licensed to {name}" label.
  */
-import type { LicenseUnverifiableCode } from "../../shared/license-copy";
+import type { AiRefusalKind, LicenseUnverifiableCode } from "../../shared/license-copy";
+
+/** Why the AI features are off on this client. One union, shared with the server's refusal. */
+export type AiNotice = AiRefusalKind;
+
+/** Window event: a license was just activated in Settings → License (#1521). */
+export const LICENSE_ACTIVATED_EVENT = "tandem:license-activated";
+/** Window event: open Settings → License (the AI-off notice, CTAs, EmptyState). */
+export const OPEN_LICENSE_SETTINGS_EVENT = "tandem:open-license-settings";
 
 export interface LicenseStatusResponse {
   gateActive: boolean;
@@ -47,10 +62,13 @@ export interface LicenseStatusResponse {
 }
 
 export interface LicenseUi {
-  /** The editor is read-only ONLY when restricted. */
-  editable: boolean;
-  /** Show the full-screen activation wall (restricted). */
-  showWall: boolean;
+  /**
+   * Non-null exactly when the gate is active and the AI is refused (restricted):
+   * `"unverifiable"` when a licence file is installed but fails to verify,
+   * otherwise `"unlicensed"`. Null on every dark build, in a trial and when
+   * licensed. The editor stays editable in every state.
+   */
+  aiNotice: AiNotice | null;
   /** Show the trial countdown banner (trial). */
   showTrialBanner: boolean;
   /** Days left in trial, or null when not in a trial. */
@@ -65,11 +83,10 @@ function trialDays(state: LicenseStatusResponse): number | null {
 
 export function deriveLicenseUi(state: LicenseStatusResponse | null): LicenseUi {
   // Not yet loaded, or the gate is inactive (dark build / pre-v1.0): the app
-  // behaves exactly as today — fully editable, no banner, no wall, no pill.
+  // behaves exactly as today — no banner, no AI-off notice, no pill.
   if (!state || !state.gateActive) {
     return {
-      editable: true,
-      showWall: false,
+      aiNotice: null,
       showTrialBanner: false,
       trialDaysRemaining: null,
       statusLabel: "",
@@ -78,19 +95,18 @@ export function deriveLicenseUi(state: LicenseStatusResponse | null): LicenseUi 
 
   if (state.status === "restricted") {
     return {
-      editable: false,
-      showWall: true,
+      aiNotice: state.licenseUnverifiable ? "unverifiable" : "unlicensed",
       showTrialBanner: false,
       trialDaysRemaining: null,
-      statusLabel: state.licenseUnverifiable ? "License not verified" : "Trial ended",
+      // Never "Trial ended" (ADR-040 decision 5).
+      statusLabel: state.licenseUnverifiable ? "License not verified" : "Unlicensed",
     };
   }
 
   if (state.status === "trial") {
     const days = trialDays(state);
     return {
-      editable: true,
-      showWall: false,
+      aiNotice: null,
       showTrialBanner: true,
       trialDaysRemaining: days,
       statusLabel: days != null ? `Trial — ${days} day${days === 1 ? "" : "s"} left` : "Trial",
@@ -99,10 +115,36 @@ export function deriveLicenseUi(state: LicenseStatusResponse | null): LicenseUi 
 
   // licensed
   return {
-    editable: true,
-    showWall: false,
+    aiNotice: null,
     showTrialBanner: false,
     trialDaysRemaining: null,
     statusLabel: state.license?.name ? `Licensed to ${state.license.name}` : "Licensed",
   };
+}
+
+/**
+ * Kind-specific "AI is off" copy. `short` is a one-line label; `sentence` is the
+ * full explanation. The `unverifiable` copy never says "unlicensed" or
+ * "activate" and never carries a purchase URL (ADR-040 decision 8): that reader
+ * most likely already paid.
+ */
+export function aiOffCopy(kind: AiNotice): { short: string; sentence: string } {
+  switch (kind) {
+    case "unlicensed":
+      return {
+        short: "AI features off — unlicensed",
+        sentence:
+          "Tandem is unlicensed, so its AI features are off. Activate a license in Settings → License.",
+      };
+    case "unverifiable":
+      return {
+        short: "AI features off — license not verified",
+        sentence:
+          "Tandem's AI features are off because your license could not be verified. See Settings → License.",
+      };
+    default: {
+      const _exhaustive: never = kind;
+      return _exhaustive;
+    }
+  }
 }

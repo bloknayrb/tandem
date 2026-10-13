@@ -92,6 +92,7 @@ import {
 } from "../../shared/launcher/contract.js";
 import { deliveryStall } from "../status/delivery-stall.js";
 import { API_BASE } from "../utils/fileUpload.js";
+import type { AiNotice } from "../utils/license-ui.js";
 
 /** Loopback `/health` response. `hasSession` and `push` are omitted for
  * non-loopback callers; the client only ever talks to 127.0.0.1 so they are
@@ -218,8 +219,13 @@ export type AiReadinessState = "booting" | "unconfigured" | "stopped" | "ready";
  *   - `restart` — configured but stopped for any other reason, including
  *     `circuit-open` with a healthy CLI, `wake-delivery-failed`, and the rare
  *     `binary-not-found`. Plain restart.
+ *   - `unlicensed` — the AI is refused by the licence (#1521): `aiNotice` is
+ *     set, whichever kind. Opens Settings → License. It ranks FIRST, above Solo:
+ *     Solo is a privacy choice, the licence refusal is a capability fact, and
+ *     every other CTA (connect, restart) would be refused by the server anyway.
+ *     Its copy is kind-neutral; kind-specific copy comes from `aiOffCopy`.
  */
-export type AiChip = "connect" | "setup" | "sign-in" | "restart" | null;
+export type AiChip = "connect" | "setup" | "sign-in" | "restart" | "unlicensed" | null;
 
 /**
  * Everything a surface needs to render an `AiChip`'s call to action: its copy
@@ -237,6 +243,9 @@ export type AiChip = "connect" | "setup" | "sign-in" | "restart" | null;
  *
  * With this map a fourth member is a type error at every consumer instead.
  */
+/** Every handler an `AI_CTA` entry can name. Dispatched by `ctaHandler` alone. */
+export type AiCtaAction = "connect" | "restart" | "open-license-settings";
+
 export const AI_CTA: Record<
   Exclude<AiChip, null>,
   {
@@ -247,7 +256,7 @@ export const AI_CTA: Record<
     ariaLabel: string;
     /** Which handler this CTA must invoke. `setup` resolves to `connect`: the
      * install flow IS the integration wizard, only with different copy. */
-    action: "connect" | "restart";
+    action: AiCtaAction;
   }
 > = {
   connect: {
@@ -280,11 +289,44 @@ export const AI_CTA: Record<
     ariaLabel: "Claude Code has stopped. Restart Claude Code.",
     action: "restart",
   },
+  // Deliberately kind-neutral: this one entry serves both `unlicensed` and
+  // `unverifiable`, so it never says "unlicensed", "activate" or "trial ended",
+  // and carries no URL. Surfaces with room pick kind-specific copy via
+  // `aiOffCopy`.
+  unlicensed: {
+    label: "AI off — see license",
+    title: "Tandem's AI features are off. Open Settings → License.",
+    ariaLabel: "AI features are off. Open license settings.",
+    action: "open-license-settings",
+  },
 };
+
+/**
+ * The ONE dispatcher from a CTA's `action` to its handler. A `switch` with a
+ * `never` default, so a new action is a compile error here rather than a binary
+ * ternary at a call site routing it to the wrong handler (#1521).
+ */
+export function ctaHandler(
+  action: AiCtaAction,
+  h: { connect: () => void; restart: () => void; openLicenseSettings: () => void },
+): () => void {
+  switch (action) {
+    case "connect":
+      return h.connect;
+    case "restart":
+      return h.restart;
+    case "open-license-settings":
+      return h.openLicenseSettings;
+    default: {
+      const _exhaustive: never = action;
+      return _exhaustive;
+    }
+  }
+}
 
 /** A stopped launcher's CTA — also a tripped Tandem Claude surfaced beside a
  *  session that is still attached (`launcherFailure`). */
-export type LauncherFailure = Exclude<AiChip, null | "connect">;
+export type LauncherFailure = Exclude<AiChip, null | "connect" | "unlicensed">;
 
 /**
  * The `lastError` → CTA decision for a stopped launcher. ONE function, used by
@@ -537,6 +579,8 @@ export function createAiReadiness(deps: {
   connected: () => boolean;
   firstRunSettled: () => boolean;
   soloMode: () => boolean;
+  /** The licence refusal, or null (#1521). Null on every dark build. */
+  aiNotice: () => AiNotice | null;
 }): AiReadiness {
   let status = $state<LauncherStatus | null>(null);
   // Whether an MCP client transport is currently open (from `/health`). An
@@ -930,13 +974,15 @@ export function createAiReadiness(deps: {
   // why `circuit-open` on its own does not). Views must render off this value
   // alone, not re-derive their own copy of this ternary.
   const chip = $derived<AiChip>(
-    deps.soloMode()
-      ? null
-      : state === "unconfigured"
-        ? "connect"
-        : state === "stopped" && !restartPending
-          ? chipForStoppedLauncher(lastError)
-          : null,
+    deps.aiNotice()
+      ? "unlicensed"
+      : deps.soloMode()
+        ? null
+        : state === "unconfigured"
+          ? "connect"
+          : state === "stopped" && !restartPending
+            ? chipForStoppedLauncher(lastError)
+            : null,
   );
 
   // The running arm of `status`, or null. One gate, narrowed once, so the three
@@ -955,8 +1001,11 @@ export function createAiReadiness(deps: {
   // green.
   const launcherAttached = $derived(runningStatus?.attached === true);
   const launcherRestarting = $derived(restartPending && launcherFresh && !serverUnreachable);
+  // Suppressed while the AI is refused: the chip already says why, and the
+  // launcher cannot be restarted until the licence returns.
   const launcherFailure = $derived<LauncherFailure | null>(
-    !deps.soloMode() &&
+    deps.aiNotice() === null &&
+      !deps.soloMode() &&
       sessionLive &&
       !restartPending &&
       lastError !== undefined &&
@@ -1044,6 +1093,7 @@ export function createAiReadiness(deps: {
         state: deliveryState,
         waitingMs: deliveryWaitingMs,
         soloMode: deps.soloMode(),
+        aiOff: deps.aiNotice() !== null,
         serverUnreachable,
       });
     },

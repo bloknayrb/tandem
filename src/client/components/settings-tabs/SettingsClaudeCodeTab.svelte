@@ -18,8 +18,10 @@ import {
   LAUNCHER_ERROR_PATH_REJECTED,
 } from "../../../shared/launcher/contract";
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
+import { licenseStore } from "../../hooks/useLicense.svelte";
 import { disabledControlStyle } from "../../utils/colors";
 import { API_BASE } from "../../utils/fileUpload";
+import { aiOffCopy } from "../../utils/license-ui";
 import { responseErrorMessage } from "../../utils/response-error";
 import PushRoutesInfo from "../PushRoutesInfo.svelte";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
@@ -250,7 +252,21 @@ function handleManualSave(e: SubmitEvent) {
 function handleReset() {
   void persistWorkingDirectory(null);
 }
+
+// #1521: the licence refuses the AI. The tab stays reachable; one line says why
+// nothing here will bring Claude back until a license is in place.
+const aiNotice = $derived(licenseStore.ui.aiNotice);
 </script>
+
+{#if aiNotice !== null}
+  <div
+    data-testid="claude-code-ai-off-hint"
+    role="status"
+    style="padding: var(--tandem-space-2) var(--tandem-space-3); margin-bottom: var(--tandem-space-3); font-size: var(--tandem-text-sm); color: var(--tandem-warning-fg-strong); background: var(--tandem-warning-bg); border: 1px solid var(--tandem-warning-border); border-radius: var(--tandem-r-2);"
+  >
+    {aiOffCopy(aiNotice).sentence}
+  </div>
+{/if}
 
 {#if showConnectCallout}
   <div

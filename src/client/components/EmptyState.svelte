@@ -1,6 +1,7 @@
 <script lang="ts">
 import { DISCONNECT_DEBOUNCE_MS } from "../../shared/constants";
-import type { AiChip } from "../hooks/useAiReadiness.svelte";
+import { AI_CTA, type AiChip } from "../hooks/useAiReadiness.svelte";
+import { type AiNotice, aiOffCopy } from "../utils/license-ui";
 
 interface Props {
   connected: boolean;
@@ -14,6 +15,8 @@ interface Props {
    *   `"setup"`   → configured but stopped with the CLI apparently missing.
    *   `"sign-in"` → configured but stopped because the CLI is not signed in.
    *   `"restart"` → configured but stopped for any other reason.
+   *   `"unlicensed"` → the licence refuses the AI (#1521); opens Settings →
+   *                 License. Copy comes from `aiOffKind`.
    *   `null`      → ready / booting / Solo (no CTA, falls back to the
    *                 product-positioning line).
    * Replaces the old `claudeActive`-gated line, which keyed on a flapping
@@ -40,6 +43,10 @@ interface Props {
    * expecting a safe retry must never destroy their session; see #1268).
    */
   onStartFreshClaude?: () => void;
+  /** Which licence refusal, for the `"unlicensed"` line's copy only (#1521). */
+  aiOffKind?: AiNotice | null;
+  /** Opens Settings → License — the `"unlicensed"` CTA. */
+  onOpenLicenseSettings?: () => void;
 }
 
 let {
@@ -51,6 +58,8 @@ let {
   onConnectAi,
   onRestartClaude,
   onStartFreshClaude,
+  aiOffKind = null,
+  onOpenLicenseSettings,
 }: Props = $props();
 
 let showDisconnected = $state(false);
@@ -214,6 +223,23 @@ $effect(() => {
           onclick={onStartFreshClaude}
         >
           Start a fresh conversation
+        </button>
+      </div>
+    {:else if connected && aiChip === "unlicensed"}
+      <!-- #1521: the licence refuses the AI; the document stays editable. A
+           null kind falls back to the kind-neutral CTA title, never to copy
+           that would tell an unverifiable holder they are unlicensed. -->
+      <p class="empty-sub empty-sub-secondary">
+        {aiOffKind ? aiOffCopy(aiOffKind).sentence : AI_CTA.unlicensed.title}
+      </p>
+      <div class="empty-actions">
+        <button
+          class="empty-cta"
+          data-testid="empty-state-open-license-settings"
+          data-ai-chip="unlicensed"
+          onclick={onOpenLicenseSettings}
+        >
+          Open license settings
         </button>
       </div>
     {:else if connected}

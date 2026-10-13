@@ -15,6 +15,8 @@ const baseProps = {
   aiLauncherAttached: false,
   aiLauncherRestarting: false,
   aiSessionCount: null as number | null,
+  aiOffKind: null,
+  onOpenLicenseSettings: () => {},
   aiState: "unconfigured" as const,
   soloMode: false,
 };

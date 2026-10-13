@@ -3,6 +3,7 @@ import { TANDEM_PURCHASE_URL, TANDEM_SUPPORT_EMAIL } from "../../../shared/const
 import { unverifiableLicenseMessage } from "../../../shared/license-copy";
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
 import { licenseStore } from "../../hooks/useLicense.svelte";
+import { LICENSE_ACTIVATED_EVENT } from "../../utils/license-ui";
 import LicenseActivateForm from "../LicenseActivateForm.svelte";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
@@ -56,6 +57,11 @@ const pillLabel = $derived(
 
 function onActivated(): void {
   ctx.notify("info", "License activated.");
+  // App refreshes the AI readiness at once (#1521): activation has already
+  // respawned the launcher, and a stale "unlicensed" launcher error would
+  // otherwise offer a Restart over the child that was just spawned. A window
+  // event because this form sits three levels under SettingsModal.
+  window.dispatchEvent(new CustomEvent(LICENSE_ACTIVATED_EVENT));
 }
 </script>
 
@@ -152,14 +158,26 @@ function onActivated(): void {
       <code>tandem activate &lt;file&gt;</code> from the command line{/if}. A valid license runs
     forever and includes all future updates.
   </div>
-  <div class="settings-hint" style="margin-top: var(--tandem-space-2);">
-    Don't have one yet?
-    <a
-      data-testid="license-buy-link"
-      href={TANDEM_PURCHASE_URL}
-      target="_blank"
-      rel="noopener noreferrer">Buy a license</a
-    >. Trouble activating? Email
+  <!-- The buy link hides from anyone holding an unverifiable licence file, a
+       trial included (#1521, ADR-040 decision 8). `ui.aiNotice` is null during
+       a trial by design, so this keys on the reason code directly: that reader
+       most likely already paid. -->
+  {#if !status?.licenseUnverifiable}
+    <div class="settings-hint" style="margin-top: var(--tandem-space-2);">
+      Don't have one yet?
+      <a
+        data-testid="license-buy-link"
+        href={TANDEM_PURCHASE_URL}
+        target="_blank"
+        rel="noopener noreferrer">Buy a license</a
+      >.
+    </div>
+  {/if}
+  <div
+    class="settings-hint"
+    style:margin-top={status?.licenseUnverifiable ? "var(--tandem-space-2)" : undefined}
+  >
+    Trouble activating? Email
     <a href="mailto:{TANDEM_SUPPORT_EMAIL}">{TANDEM_SUPPORT_EMAIL}</a> — please don't post your
     license key publicly, it contains your name and email address.
   </div>

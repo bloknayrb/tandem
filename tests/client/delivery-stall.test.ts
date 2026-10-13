@@ -15,6 +15,7 @@ const base = {
   state: "awaiting-poll",
   waitingMs: DELIVERY_STALL_MS,
   soloMode: false,
+  aiOff: false,
   serverUnreachable: false,
 };
 
@@ -60,6 +61,13 @@ describe("deliveryStall", () => {
   describe("precedence", () => {
     it("Solo outranks it — the user opted out of AI surfacing", () => {
       expect(deliveryStall({ ...base, soloMode: true, waitingMs: 60 * 60_000 })).toBeNull();
+    });
+
+    it("the licence refusal outranks it (#1521); the twin with AI on still fires", () => {
+      // Nothing can answer the forward until activation, so "Claude hasn't
+      // picked this up" would blame a model that is not allowed to look.
+      expect(deliveryStall({ ...base, aiOff: true, waitingMs: 60 * 60_000 })).toBeNull();
+      expect(deliveryStall({ ...base, aiOff: false, waitingMs: 60 * 60_000 })).toBe(60 * 60_000);
     });
 
     it("a dead server outranks it, and must not stack with it", () => {

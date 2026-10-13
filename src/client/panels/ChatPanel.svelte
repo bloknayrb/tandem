@@ -43,6 +43,12 @@ interface Props {
   /** Bind to get a reference to the textarea element. */
   inputEl?: HTMLTextAreaElement | null;
   reduceMotion?: boolean;
+  /**
+   * The licence refuses the AI (#1521). Disables the composer and send; the
+   * history stays fully readable. Default `false`, so every dark build is
+   * unchanged.
+   */
+  aiDisabled?: boolean;
 }
 
 let {
@@ -61,6 +67,7 @@ let {
   canInsert = false,
   inputEl = $bindable(null),
   reduceMotion,
+  aiDisabled = false,
 }: Props = $props();
 
 const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
@@ -194,6 +201,7 @@ $effect(() => {
 });
 
 function sendMessage() {
+  if (aiDisabled) return;
   if (!inputText.trim()) return;
   if (onSend(inputText.trim()) === false) return;
   inputText = "";
@@ -464,7 +472,8 @@ async function exportChat() {
       value={inputText}
       oninput={(e) => (inputText = (e.target as HTMLTextAreaElement).value)}
       onkeydown={handleKeyDown}
-      placeholder="Message your AI…"
+      disabled={aiDisabled}
+      placeholder={aiDisabled ? "AI features are off" : "Message your AI…"}
       rows={1}
       class="chat-textarea"
       data-multiline={composerMultiline}
@@ -472,7 +481,7 @@ async function exportChat() {
     ></textarea>
     <button
       onclick={sendMessage}
-      disabled={!inputText.trim()}
+      disabled={!inputText.trim() || aiDisabled}
       class="chat-send-btn"
       aria-label="Send message"
       title="Send · Enter"

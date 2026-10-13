@@ -3,7 +3,7 @@
  *
  * Extracted because this was the fifth hand-copied instance in the client
  * (`SettingsModal`, `IntegrationWizardModal`, `CoworkAdminDeclinedModal`,
- * `HelpModal`, and now `LicenseWall`), and the copies had already drifted:
+ * `HelpModal`, and a fifth since retired), and the copies had already drifted:
  * SettingsModal filters `:not([inert])`, others filter `offsetParent !== null`,
  * one filters nothing and omits `summary` from its selector. An accessibility
  * fix currently has to be made five times to actually land.
