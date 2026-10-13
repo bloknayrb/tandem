@@ -7,6 +7,7 @@ import Typography from "@tiptap/extension-typography";
 import { untrack } from "svelte";
 import * as Y from "yjs";
 import type { TandemNotification } from "../../shared/types.js";
+import { licenseStore } from "../hooks/useLicense.svelte";
 import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { readStoredName, subscribeToUserName } from "../hooks/useUserName";
 import { openServerPath } from "../utils/server-paths";
@@ -212,6 +213,8 @@ $effect(() => {
     },
     focusChat: () => onFocusChat?.(),
     composeAnnotation: (kind) => onComposeAnnotation?.(kind),
+    // #1521: a live read of the module singleton at gesture/action time.
+    isAiDisabled: () => licenseStore.ui.aiNotice !== null,
     editLink: () => {
       // Re-read from the current PM selection; the href captured by the
       // right-click host remains private and is never round-tripped through Rust.

@@ -28,6 +28,8 @@ export interface ContextMenuRequest {
   canMergeCells: boolean;
   /** `editor.can().splitCell()` — gates the table Split item. */
   canSplitCell: boolean;
+  /** The licence refuses the AI (#1521): disables Ask AI and Comment to AI. */
+  aiDisabled: boolean;
 }
 
 /**

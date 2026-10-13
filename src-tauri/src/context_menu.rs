@@ -66,6 +66,12 @@ pub(crate) struct ContextMenuRequest {
     over_link: bool,
     can_merge_cells: bool,
     can_split_cell: bool,
+    /// The licence refuses the AI (#1521): disables the two AI intents and
+    /// leaves the private note. `default`, because without it an older client
+    /// that omits the field is a deserialize error and the menu silently never
+    /// opens.
+    #[serde(default)]
+    ai_disabled: bool,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -95,9 +101,10 @@ enum CtxItem {
 
 fn selection_intents(req: &ContextMenuRequest) -> Vec<CtxItem> {
     let enabled = req.is_editable && req.has_selection;
+    let ai_enabled = enabled && !req.ai_disabled;
     vec![
-        CtxItem::Custom("ctx:selection:askAi", "Ask AI about selection…", enabled),
-        CtxItem::Custom("ctx:selection:comment", "Comment to AI…", enabled),
+        CtxItem::Custom("ctx:selection:askAi", "Ask AI about selection…", ai_enabled),
+        CtxItem::Custom("ctx:selection:comment", "Comment to AI…", ai_enabled),
         CtxItem::Custom("ctx:selection:privateNote", "Private Note…", enabled),
     ]
 }
@@ -493,6 +500,7 @@ mod context_menu_tests {
             over_link: false,
             can_merge_cells: false,
             can_split_cell: false,
+            ai_disabled: false,
         }
     }
 
@@ -627,10 +635,49 @@ mod context_menu_tests {
             "overLink": false,
             "canMergeCells": true,
             "canSplitCell": false,
+            "aiDisabled": true,
         }))
         .expect("camelCase request should deserialize");
         assert!(matches!(r.kind, ContextMenuKind::TableCell));
         assert!(r.can_merge_cells);
+        assert!(r.ai_disabled);
+    }
+
+    /// `#[serde(default)]` pin (#1521): a request without `aiDisabled` must
+    /// still deserialize, as `false`. Dropping `default` would make it a
+    /// deserialize error and the menu would silently never open.
+    #[test]
+    fn missing_ai_disabled_defaults_to_false() {
+        let r: ContextMenuRequest = serde_json::from_value(serde_json::json!({
+            "kind": "editorText",
+            "hasSelection": true,
+            "isEditable": true,
+            "overLink": false,
+            "canMergeCells": false,
+            "canSplitCell": false,
+        }))
+        .expect("a request without aiDisabled should deserialize");
+        assert!(!r.ai_disabled);
+    }
+
+    /// #1521: the licence refusal disables the two AI intents and leaves the
+    /// private note; the twin with the AI allowed enables all three.
+    #[test]
+    fn ai_disabled_disables_ai_intents_only() {
+        let mut off = req(ContextMenuKind::EditorText, true);
+        off.has_selection = true;
+        off.ai_disabled = true;
+        let spec = build_context_menu_spec(&off);
+        assert_eq!(enabled_of(&spec, "ctx:selection:askAi"), Some(false));
+        assert_eq!(enabled_of(&spec, "ctx:selection:comment"), Some(false));
+        assert_eq!(enabled_of(&spec, "ctx:selection:privateNote"), Some(true));
+
+        let mut on = req(ContextMenuKind::EditorText, true);
+        on.has_selection = true;
+        let spec = build_context_menu_spec(&on);
+        assert_eq!(enabled_of(&spec, "ctx:selection:askAi"), Some(true));
+        assert_eq!(enabled_of(&spec, "ctx:selection:comment"), Some(true));
+        assert_eq!(enabled_of(&spec, "ctx:selection:privateNote"), Some(true));
     }
 }
 
@@ -979,7 +1026,7 @@ mod context_menu_id_space_tests {
         // rather than sample. `ContextMenuKind` is not `Copy`, hence the
         // rebuild per iteration.
         for k in 0..3u8 {
-            for flags in 0u8..32 {
+            for flags in 0u8..64 {
                 let kind = match k {
                     0 => ContextMenuKind::EditorText,
                     1 => ContextMenuKind::Link,
@@ -993,6 +1040,7 @@ mod context_menu_id_space_tests {
                         over_link: flags & 4 != 0,
                         can_merge_cells: flags & 8 != 0,
                         can_split_cell: flags & 16 != 0,
+                        ai_disabled: flags & 32 != 0,
                     }),
                     &mut ids,
                 );
