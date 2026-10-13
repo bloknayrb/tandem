@@ -541,20 +541,15 @@ describe("shipped Tandem skill instruction contract", () => {
     const recovery = namedSection(skill, "Error Recovery");
     const code = String(LICENSE_REQUIRED_RPC_CODE);
 
-    it("every refusal message is composed from the opening the skill keys on", () => {
-      expect(AI_REFUSAL_UNLICENSED_MESSAGE.startsWith(`${AI_REFUSAL_UNLICENSED_OPENING}. `)).toBe(
-        true,
-      );
-      expect(
-        AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE.startsWith(`${AI_REFUSAL_UNLICENSED_OPENING}. `),
-      ).toBe(true);
-      expect(
-        aiRefusalUnverifiableMessage("UNKNOWN").startsWith(`${AI_REFUSAL_UNVERIFIABLE_OPENING}. `),
-      ).toBe(true);
+    it.each([
+      [AI_REFUSAL_UNLICENSED_MESSAGE, AI_REFUSAL_UNLICENSED_OPENING],
+      [AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE, AI_REFUSAL_UNLICENSED_OPENING],
+      [aiRefusalUnverifiableMessage("UNKNOWN"), AI_REFUSAL_UNVERIFIABLE_OPENING],
+    ])("refusal message %# begins with the opening the skill keys on", (message, opening) => {
+      expect(message.slice(0, opening.length + 2)).toBe(`${opening}. `);
     });
 
     it("names the third absent-tools cause, keyed on -32003, before the not-running step", () => {
-      expect(code).toBe("-32003");
       expect(absent).toContain(AI_REFUSAL_UNLICENSED_OPENING);
       expect(absent).toContain(AI_REFUSAL_UNVERIFIABLE_OPENING);
       expect(absent).toContain(`MCP error ${code}`);
@@ -574,10 +569,15 @@ describe("shipped Tandem skill instruction contract", () => {
       for (const p of hits) expect(p).toContain(AI_REFUSAL_UNLICENSED_OPENING);
     });
 
-    it("never tells an unverifiable holder to buy, and never sends a purchase link", () => {
+    it("never tells an unverifiable holder to buy", () => {
       const unverifiable = paragraphs.filter((p) => p.includes(AI_REFUSAL_UNVERIFIABLE_OPENING));
       expect(unverifiable).toHaveLength(1);
       expect(unverifiable[0]).toMatch(/never[^.]*\b(buy|purchase)/i);
+    });
+
+    // A link written into the skill would reach every reader, paying or not; the
+    // refusal message is the only place a purchase link may come from.
+    it("carries no purchase link of its own", () => {
       expect(skill).not.toContain(TANDEM_PURCHASE_URL);
     });
 

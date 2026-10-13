@@ -88,13 +88,24 @@ describe("formatLicenseStatus", () => {
     expect(out).not.toContain(TANDEM_PURCHASE_URL);
   });
 
-  it("never tells a beta user they are on a trial (dark build, fresh trial.json)", () => {
-    const out = formatLicenseStatus(trial, false).join("\n");
-    expect(out).toContain(
-      "Status:        no license key — nothing is enforced in this build (trial clock: 9 of 14 days)",
-    );
-    expect(out).not.toMatch(/Status:\s+trial|days remaining/);
-  });
+  it.each([
+    ["keyless", trial, "no license key"],
+    [
+      "unverifiable",
+      { ...trial, licenseUnverifiable: "MALFORMED" } as LicenseState,
+      "license not verified",
+    ],
+  ])(
+    "never tells a beta user they are on a trial (dark build, %s, fresh trial.json)",
+    (_k, state, which) => {
+      const out = formatLicenseStatus(state, false).join("\n");
+      expect(out).toContain(
+        `Status:        ${which} — nothing is enforced in this build (trial clock: 9 of 14 days)`,
+      );
+      expect(out).not.toMatch(/Status:\s+trial|days remaining|unlicensed/);
+      expect(out).not.toContain(TANDEM_PURCHASE_URL);
+    },
+  );
 
   it("never offers a purchase link for an installed licence that fails to verify", () => {
     const out = formatLicenseStatus(
