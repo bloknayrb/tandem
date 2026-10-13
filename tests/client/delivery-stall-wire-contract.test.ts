@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { deliveryStall } from "../../src/client/status/delivery-stall.js";
 import {
+  applyAiRefusal,
   getDeliveryState,
   recordWakeForward,
   resetDeliveryStateForTests,
@@ -61,6 +62,16 @@ describe("delivery join — server state names reach the client predicate", () =
     const detached = getDeliveryState(1_000_000 + DELIVERY_STALL_MS + 1_000, 0);
     expect(detached.state).toBe("consumer-detached");
     expect(silentFor(detached)).toBeNull();
+
+    // #1521: an outstanding forward while the AI is refused. Taken from the
+    // real mapping, not a literal, so a renamed state on the server goes red
+    // here rather than silently reading as a stall.
+    const refused = applyAiRefusal(
+      getDeliveryState(1_000_000 + DELIVERY_STALL_MS + 1_000, 1),
+      true,
+    );
+    expect(refused.state).toBe("license-refused");
+    expect(silentFor(refused)).toBeNull();
 
     resetDeliveryStateForTests();
   });

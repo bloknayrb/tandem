@@ -260,7 +260,13 @@ export type DeliveryJoinState =
   /** A forward is outstanding and something is still attached to receive it. */
   | "awaiting-poll"
   /** A forward was outstanding when the last external consumer detached. */
-  | "consumer-detached";
+  | "consumer-detached"
+  /**
+   * A forward is outstanding while Tandem refuses the AI (#1521). Neither
+   * stalled nor detached: nothing can answer it until a license is activated.
+   * Applied at read time by `applyAiRefusal`, never stored.
+   */
+  | "license-refused";
 
 export interface DeliveryState {
   pollCount: number;
@@ -356,4 +362,28 @@ export function resetDeliveryStateForTests(): void {
   pendingSince = null;
   pendingAbandoned = false;
   lastLatencyMs = null;
+}
+
+/**
+ * Re-read a delivery state through the licence refusal (#1521). While Tandem
+ * refuses the AI, an outstanding forward is neither stalled (`awaiting-poll`
+ * with a climbing clock — the launched child left running at expiry is closed
+ * at its next request, so no poll can land) nor detached (refusal revokes the
+ * SSE and wake consumers, which reads as the last consumer leaving). Both map
+ * to `license-refused`, with no clock: there is no wait to time.
+ *
+ * `consumer-detached` maps even when the detach predated expiry. While refused
+ * nothing can attach (`/api/events` and `/api/wake` refuse at entry), so the
+ * detach cannot be acted on until activation, and the refusal is the fact in
+ * the user's way. `idle` and `polled` make no claim and pass through.
+ *
+ * Read-time, not a latch, so there is no window between expiry and the next
+ * refused event, and nothing goes stale after activation. The refusal is a
+ * plain argument, the way `externalConsumerCount` is: this module imports no
+ * licence code, and the caller decides it with `aiRefusal()`.
+ */
+export function applyAiRefusal(state: DeliveryState, aiRefused: boolean): DeliveryState {
+  if (!aiRefused) return state;
+  if (state.state !== "awaiting-poll" && state.state !== "consumer-detached") return state;
+  return { ...state, state: "license-refused", waitingMs: null, latencyMs: null };
 }

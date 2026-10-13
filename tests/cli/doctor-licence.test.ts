@@ -10,8 +10,10 @@ import {
 /**
  * Doctor's licence row (#1521). It reads `GET /api/license/status` once,
  * is SILENT on a dark build and on any non-answer (so a dark build's report is
- * unchanged), and while AI is refused it is the one warning — the push row and
- * the SSE probe defer to it rather than each going yellow.
+ * unchanged), and while AI is refused it is the one licence-caused warning —
+ * the session reading, the push row and the SSE probe each defer to it (a
+ * `skip` row with `reason: "license"`) rather than going yellow. Other checks
+ * (config files, ports) can still warn for their own reasons.
  *
  * `runDoctor` backs the shareable `/api/diagnostics` report, so the row's
  * `data` must never carry the licence holder's name or email, which the
@@ -89,7 +91,10 @@ describe("runDoctor with a licence answer", () => {
     server = undefined;
   });
 
-  async function fakeTandem(licence: unknown): Promise<number> {
+  async function fakeTandem(
+    licence: unknown,
+    session: { hasSession: boolean; sessionCount: number } = { hasSession: false, sessionCount: 0 },
+  ): Promise<number> {
     server = createServer((req, res) => {
       if (req.url === "/health") {
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -97,8 +102,7 @@ describe("runDoctor with a licence answer", () => {
           JSON.stringify({
             version: "0.0.0-test",
             transport: "http",
-            hasSession: false,
-            sessionCount: 0,
+            ...session,
             push: { subscribers: 1, eventCount: 0, lastEventAt: null },
           }),
         );
@@ -147,6 +151,61 @@ describe("runDoctor with a licence answer", () => {
     const sse = report.results.filter((r) => r.check === "sse");
     expect(sse[0]?.message).toMatch(/reachable/);
     expect(JSON.stringify(report)).not.toMatch(/Jane|jane@example\.com|lic-secret-id/);
+  });
+
+  /**
+   * #1521: while refused, doctor makes no session claim either way: the
+   * session reading becomes a deferred `skip` (recorded as a `skipped` pass). A fresh
+   * client's handshake is refused (so "hasn't connected yet" may be false) and
+   * a client pinned by an open stream survives until its next request (so
+   * "session active" may be false). These assert what doctor prints.
+   */
+  describe("the session reading while refused", () => {
+    const sessionSkip = (report: Awaited<ReturnType<typeof runDoctor>>) =>
+      report.results.filter(
+        (r) => r.check === "health" && /MCP session not checked — AI features off/.test(r.message),
+      );
+    const healthText = (report: Awaited<ReturnType<typeof runDoctor>>) =>
+      report.results
+        .filter((r) => r.check === "health")
+        .map((r) => r.message)
+        .join("\n");
+
+    it("no session: a deferred skip row, and no 'hasn't connected yet' warning", async () => {
+      const mcpPort = await fakeTandem({ gateActive: true, status: "restricted" });
+      const report = await runDoctor({ mcpPort, wsPort: 1, vitePort: 1 });
+      const skip = sessionSkip(report);
+      expect(skip).toHaveLength(1);
+      // A `skip` outcome is recorded as a pass row marked `skipped`.
+      expect(skip[0].data).toEqual({ reason: "license", skipped: true });
+      expect(healthText(report)).not.toMatch(/hasn't connected yet/);
+    });
+
+    it("a live session: the same skip, and the pass line claims no 'session active'", async () => {
+      const mcpPort = await fakeTandem(
+        { gateActive: true, status: "restricted" },
+        { hasSession: true, sessionCount: 1 },
+      );
+      const report = await runDoctor({ mcpPort, wsPort: 1, vitePort: 1 });
+      expect(sessionSkip(report)).toHaveLength(1);
+      expect(healthText(report)).not.toMatch(/session active/);
+      expect(healthText(report)).toMatch(/Server healthy \(v0\.0\.0-test, http\)/);
+    });
+
+    it("the twin, not refused: no session still warns, and a live one is 'session active'", async () => {
+      const none = await fakeTandem({ gateActive: true, status: "trial" });
+      const r1 = await runDoctor({ mcpPort: none, wsPort: 1, vitePort: 1 });
+      expect(sessionSkip(r1)).toHaveLength(0);
+      expect(healthText(r1)).toMatch(/hasn't connected yet/);
+      await new Promise<void>((resolve) => server?.close(() => resolve()));
+
+      const live = await fakeTandem(
+        { gateActive: true, status: "trial" },
+        { hasSession: true, sessionCount: 1 },
+      );
+      const r2 = await runDoctor({ mcpPort: live, wsPort: 1, vitePort: 1 });
+      expect(healthText(r2)).toMatch(/session active/);
+    });
   });
 
   it("dark: no licence row at all", async () => {

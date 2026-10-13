@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  applyAiRefusal,
+  type DeliveryState,
   getDeliveryState,
   isUnansweredAsk,
   noteExternalConsumerAttached,
@@ -386,5 +388,48 @@ describe("delivery-state", () => {
       waitingMs: null,
       sincePollMs: null,
     });
+  });
+});
+
+/**
+ * #1521: a forward outstanding while Tandem refuses the AI is neither stalled
+ * nor detached. A pure read-time mapping, so the twin (not refused) must hand
+ * the input back untouched.
+ */
+describe("applyAiRefusal", () => {
+  const base: DeliveryState = {
+    pollCount: 3,
+    forwardCount: 4,
+    state: "awaiting-poll",
+    latencyMs: null,
+    waitingMs: 45_000,
+    sincePollMs: 50_000,
+  };
+
+  it("maps awaiting-poll to license-refused, with both clocks null", () => {
+    expect(applyAiRefusal(base, true)).toEqual({
+      ...base,
+      state: "license-refused",
+      waitingMs: null,
+      latencyMs: null,
+    });
+  });
+
+  it("maps consumer-detached to license-refused", () => {
+    const detached: DeliveryState = { ...base, state: "consumer-detached", waitingMs: null };
+    expect(applyAiRefusal(detached, true).state).toBe("license-refused");
+  });
+
+  it("leaves idle and polled alone — they make no claim", () => {
+    const idle: DeliveryState = { ...base, state: "idle", waitingMs: null };
+    const polled: DeliveryState = { ...base, state: "polled", waitingMs: null, latencyMs: 900 };
+    expect(applyAiRefusal(idle, true)).toBe(idle);
+    expect(applyAiRefusal(polled, true)).toBe(polled);
+  });
+
+  it("the twin: not refused returns the input unchanged", () => {
+    expect(applyAiRefusal(base, false)).toBe(base);
+    const detached: DeliveryState = { ...base, state: "consumer-detached", waitingMs: null };
+    expect(applyAiRefusal(detached, false)).toBe(detached);
   });
 });

@@ -2585,7 +2585,7 @@ export function evaluateLicence(licence: DoctorLicenceState | null): EvalOutcome
   return { status: "pass", message: `AI features on (license: ${licence.status})`, data };
 }
 
-/** What the push / SSE rows say instead of pass or fault while AI is refused. */
+/** What the session / push / SSE rows say instead of pass or fault while AI is refused. */
 function licenceDeferred(what: string, off: string): EvalOutcome {
   return {
     status: "skip",
@@ -2627,13 +2627,29 @@ async function checkHealth(
 
   const d = result.data;
   if (d) {
-    const session = describeHealthSession(d);
-    r.pass(`Server healthy (v${d.version}, ${d.transport}, ${session.label})`, undefined, {
+    const healthData = {
       version: d.version,
       transport: d.transport,
       hasSession: !!d.hasSession,
-    });
-    if (session.warning) r.warn(session.warning);
+    };
+    if (licenceOff) {
+      // #1521: while AI is refused, the session reading misreports both ways.
+      // A new handshake is refused, so "hasn't connected yet" may be false (it
+      // connected and was refused); and a session pinned by an open stream
+      // survives until its next request, which will be refused, so "session
+      // active" may be false too. Make no session claim, and defer to the
+      // licence row. `hasSession` stays in `data` as the raw fact.
+      r.pass(`Server healthy (v${d.version}, ${d.transport})`, undefined, healthData);
+      recordEvaluation(r, licenceDeferred("MCP session", licenceOff));
+    } else {
+      const session = describeHealthSession(d);
+      r.pass(
+        `Server healthy (v${d.version}, ${d.transport}, ${session.label})`,
+        undefined,
+        healthData,
+      );
+      if (session.warning) r.warn(session.warning);
+    }
     // #1521: an unlicensed server refuses push, so the push row defers to the
     // licence row rather than reporting an attached-but-refused consumer.
     recordEvaluation(

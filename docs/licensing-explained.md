@@ -116,13 +116,14 @@ That third one matters and is easy to get wrong, so to be blunt: **we do not
 lock you out of your own files.** They're plain files on your disk, and nothing
 stops you opening them anywhere else.
 
-**The server already works this way; the editor's own screens follow.** Since
-#1521's server half, an unlicensed Tandem refuses Claude, chat, push and the
-local model, and never refuses an edit; the MCP refusal and `tandem license` say
-so. The in-app copy is the next step: until it lands, the license wall
-(`src/client/components/LicenseWall.svelte`) and the Settings and banner text
-still describe the earlier design, where documents went read-only. None of it is
-reachable while the gate ships dark.
+**The server and the editor's screens both work this way (#1521).** An unlicensed
+Tandem refuses Claude, chat, push and the local model, and never refuses an edit;
+the MCP refusal and `tandem license` say so. The editor matches: there is no
+activation wall and the document stays editable. An "AI features are off" notice
+sits in the right rail and links to Settings → License, the status pill reads "AI
+off", and the AI controls (the chat composer, the comment segment, Send to Claude,
+replies to a comment, the AI context-menu items) are disabled in place. None of it
+is reachable while the gate ships dark.
 
 ## If something goes wrong
 
@@ -327,7 +328,13 @@ refused `initialize`, and only that, appends `AI_REFUSAL_RECONNECT_HINT` saying 
 logs one stderr line. The bridge's own replayed `initialize` draws the hint too, so it strips it
 before latching: that host's session never failed.) The shared SSE consumer treats a
 `LICENSE_REQUIRED` 403 as a refusal, not an outage — no retry ladder, no `channel-error` report — and
-retries every 5 minutes; the plugin monitor prints the refusal once on stdout. `tandem doctor` reads
+retries every 5 minutes; the plugin monitor prints the refusal once on stdout. The channel shim sends
+the model one channel notification (`event_type: license_refused`) per refused stretch, and logs a
+refused permission relay as a licence refusal rather than a plain 403. `/health`'s `delivery.state`
+reads `license-refused` while a forward is outstanding and Tandem refuses the AI, instead of
+`consumer-detached` or a climbing `awaiting-poll`. Doctor's session reading defers to its licence row
+while AI is refused, because a refused client has no session and a surviving one is closed at its
+next request. `tandem doctor` reads
 `GET /api/license/status` once, adds a licence row (silent when dark, recording only `gateActive`,
 `status` and `licenseUnverifiable`, never the holder's name or email), and the push and SSE rows defer
 to it.
@@ -354,10 +361,6 @@ Two more, of the same kind:
   boot stays down until the restart chip (or an activation) brings it back. The same holds for any
   licence that becomes valid without `POST /api/license/activate`: `tandem activate` from the CLI or a
   `license.json` copied in by hand never reaches the launcher, so Restart is the way back.
-- **Diagnostics can name the wrong cause for a revoked consumer.** Revoking the last SSE or wake
-  consumer with a forward outstanding reads in `/health` as a detached consumer, not a licence
-  refusal (`tandem doctor`'s push row defers to its licence row), and the channel shim logs a refused
-  permission relay as a plain HTTP 403.
 - **A local-model run that started while licensed keeps streaming after expiry.** The collaborator is
   checked per run, not per token, so one in-flight reply finishes. Behind `BYO_MODELS_ENABLED`, so
   unreachable today; revisit if that flag flips.
