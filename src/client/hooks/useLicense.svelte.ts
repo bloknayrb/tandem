@@ -18,6 +18,11 @@ import { fetchLicenseStatus } from "./useLicense";
  * seconds rather than a minute, and every 60 s otherwise. Ticks are skipped
  * while the tab is hidden, and one poll runs when it becomes visible again, so a
  * background tab does not poll the licence forever.
+ *
+ * The client's AI-off state is advisory and fails OPEN: while `status` is null
+ * (the first poll still in flight, or every poll failing) `ui.aiNotice` is null
+ * and the AI controls stay enabled. The server's `aiRefusal()` gates MCP and
+ * `/api` and is the authority; these surfaces only explain its refusal early.
  */
 
 const POLL_INTERVAL_MS = 60_000;
@@ -42,6 +47,11 @@ function createLicenseStore() {
   // The period of the interval currently armed. Plain `let`, not `$state`:
   // nothing renders it.
   let armedPeriodMs: number | null = null;
+  // Sequences polls against each other and against `set()`: only the most
+  // recently issued observation may write. Without it a poll started before an
+  // activation could resolve after `set(licensed)` and put the stale
+  // `restricted` answer back. Plain `let`: nothing renders it.
+  let pollSeq = 0;
 
   function desiredPeriodMs(): number {
     return status?.gateActive && status.status === "restricted"
@@ -99,6 +109,7 @@ function createLicenseStore() {
   }
 
   async function poll(): Promise<void> {
+    const mine = ++pollSeq;
     let next: LicenseStatusResponse;
     // The try wraps the FETCH ONLY. `statusUnavailable` drives copy that names
     // the local server as unreachable, so it must be bound to a fetch/parse
@@ -106,6 +117,9 @@ function createLicenseStore() {
     try {
       next = await fetchLicenseStatus();
     } catch (err) {
+      // Superseded: a newer poll or `set()` owns the state, and a stale failure
+      // must not paint "couldn't reach the server" beside it.
+      if (mine !== pollSeq) return;
       // Server unavailable / transient — keep last-known `status`, retry next
       // tick. What must NOT happen is the silent version: before #1789 this
       // catch was a bare comment, so a first-poll failure left `status === null`
@@ -128,6 +142,7 @@ function createLicenseStore() {
       statusUnavailable = true;
       return;
     }
+    if (mine !== pollSeq) return;
     status = next;
     statusUnavailable = false;
     // The build flag never flips at runtime — a dark build polls once, then rests.
@@ -168,6 +183,8 @@ function createLicenseStore() {
     },
     /** Apply a freshly-activated state immediately (from the activate response). */
     set(next: LicenseStatusResponse): void {
+      // Supersede any poll in flight, so it cannot overwrite this answer.
+      pollSeq++;
       status = next;
       // A successful observation by definition — this is the activate response.
       // Without the clear, a just-activated license renders beside a stale

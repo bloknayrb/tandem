@@ -78,6 +78,14 @@ describe("deriveLicenseUi", () => {
     expect(ui.statusLabel).toBe("License not verified");
   });
 
+  // Client AI-off is advisory and fails open: with no status yet (first poll in
+  // flight, or every poll failing) the AI controls stay enabled. The server's
+  // `aiRefusal()` is the authority.
+  it("fails open: no status means the AI controls are not disabled", () => {
+    expect(deriveLicenseUi(null).aiOff).toBe(false);
+    expect(deriveLicenseUi(null).aiNotice).toBeNull();
+  });
+
   it("carries no editable or showWall key in any state", () => {
     for (const ui of [
       deriveLicenseUi(null),

@@ -127,6 +127,7 @@ function mount(
     firstRunSettled?: boolean;
     soloMode?: boolean;
     aiNotice?: "unlicensed" | "unverifiable" | null;
+    refreshLicence?: () => void;
   } = {},
 ): { get(): AiReadiness } {
   const holder: { readiness: AiReadiness | null } = { readiness: null };
@@ -1774,9 +1775,13 @@ describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
       expect(h.get().chip).toBe("unlicensed");
     });
 
-    it("chip is 'unlicensed' with lastError 'unlicensed'; cleared, it returns to restart", async () => {
+    // Once the refusal clears, a launcher still reporting `unlicensed` is the
+    // server and the client's licence view disagreeing — not a stop Restart can
+    // fix. It reads as "we don't know yet" until the next read says otherwise.
+    it("chip is 'unlicensed' with lastError 'unlicensed'; cleared, it waits rather than offering restart", async () => {
+      let launcher = stoppedWith("unlicensed");
       globalThis.fetch = routedFetch({
-        launcher: stoppedWith("unlicensed"),
+        launcher: () => launcher(),
         health: mkResponse({ status: "ok", hasSession: false }),
       });
       const off = mount({ aiNotice: "unlicensed" });
@@ -1784,9 +1789,99 @@ describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
       expect(off.get().chip).toBe("unlicensed");
       cleanup();
 
-      const on = mount({ aiNotice: null });
+      const refreshLicence = vi.fn();
+      const on = mount({ aiNotice: null, refreshLicence });
       await settle();
+      expect(on.get().chip).toBeNull();
+      expect(on.get().state).toBe("booting");
+      expect(refreshLicence).toHaveBeenCalledTimes(1);
+
+      // The next read carries a real stop: Restart is offered again.
+      launcher = stoppedWith("circuit-open");
+      on.get().refreshLauncherStatus();
+      await settle();
+      expect(on.get().state).toBe("stopped");
       expect(on.get().chip).toBe("restart");
+    });
+
+    /**
+     * At trial expiry the server stops Tandem's Claude (`lastError:
+     * "unlicensed"`) up to 60 s before the client's licence poll notices. In
+     * that window nothing may offer Restart (the server would refuse it), and
+     * nothing may say "unlicensed" without a kind; the licence is re-read once.
+     */
+    describe("the server refuses before the client's licence knows", () => {
+      it("offers no restart, surfaces no launcherFailure, and re-reads the licence once", async () => {
+        vi.useFakeTimers();
+        try {
+          const refreshLicence = vi.fn();
+          globalThis.fetch = routedFetch({
+            launcher: stoppedWith("unlicensed"),
+            health: mkResponse({ status: "ok", hasSession: false }),
+          });
+          const h = mount({ aiNotice: null, refreshLicence });
+          await vi.advanceTimersByTimeAsync(0);
+          await tick();
+          expect(h.get().chip).toBeNull();
+          expect(h.get().state).toBe("booting");
+          expect(h.get().launcherFailure).toBeNull();
+          expect(refreshLicence).toHaveBeenCalledTimes(1);
+
+          // Two more 8 s polls with the same answer call nothing more.
+          await vi.advanceTimersByTimeAsync(16_000);
+          await tick();
+          expect(refreshLicence).toHaveBeenCalledTimes(1);
+          expect(h.get().chip).toBeNull();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("a live session beside it still surfaces no launcherFailure", async () => {
+        globalThis.fetch = routedFetch({
+          launcher: stoppedWith("unlicensed"),
+          health: mkResponse({ status: "ok", hasSession: true, sessionCount: 1 }),
+        });
+        const h = mount({ aiNotice: null, refreshLicence: vi.fn() });
+        await settle();
+        expect(h.get().launcherFailure).toBeNull();
+        expect(h.get().chip).toBeNull();
+      });
+
+      it("the sighting ends when aiNotice arrives; a later one re-reads again", async () => {
+        const refreshLicence = vi.fn();
+        globalThis.fetch = routedFetch({
+          launcher: stoppedWith("unlicensed"),
+          health: mkResponse({ status: "ok", hasSession: false }),
+        });
+        const onReady = () => {};
+        const { rerender } = render(AiReadinessHarness, {
+          props: { aiNotice: null, refreshLicence, onReady },
+        });
+        await settle();
+        expect(refreshLicence).toHaveBeenCalledTimes(1);
+
+        await rerender({ aiNotice: "unlicensed", refreshLicence, onReady });
+        await settle();
+        expect(refreshLicence).toHaveBeenCalledTimes(1);
+
+        await rerender({ aiNotice: null, refreshLicence, onReady });
+        await settle();
+        expect(refreshLicence).toHaveBeenCalledTimes(2);
+      });
+
+      it("the twin: circuit-open with aiNotice null still offers restart, and reads no licence", async () => {
+        const refreshLicence = vi.fn();
+        globalThis.fetch = routedFetch({
+          launcher: stoppedWith("circuit-open"),
+          health: mkResponse({ status: "ok", hasSession: false }),
+        });
+        const h = mount({ aiNotice: null, refreshLicence });
+        await settle();
+        expect(h.get().state).toBe("stopped");
+        expect(h.get().chip).toBe("restart");
+        expect(refreshLicence).not.toHaveBeenCalled();
+      });
     });
 
     it("launcherFailure is suppressed while refused; the twin shows it when cleared", async () => {
@@ -1876,6 +1971,35 @@ describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
         expect(launcherReads()).toBe(before + 2);
         await vi.advanceTimersByTimeAsync(3_000);
         expect(launcherReads()).toBe(before + 3);
+
+        // A refusal returning within 5s cancels the pending follow-ups: clear,
+        // wait 1s, re-refuse, and nothing more is read. The 8s poll interval
+        // also reads the launcher, so each window below is placed between two
+        // of its ticks (t=8s, 16s, 24s from mount): step just past one first.
+        await vi.advanceTimersByTimeAsync(3_100); // t≈8.1s, past the first tick
+        const beforeRecur = launcherReads();
+        await rerender({ aiNotice: "unlicensed", onReady });
+        await flush();
+        await rerender({ aiNotice: null, onReady });
+        await flush();
+        expect(launcherReads()).toBe(beforeRecur + 1);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await rerender({ aiNotice: "unlicensed", onReady });
+        await flush();
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(launcherReads()).toBe(beforeRecur + 1);
+
+        // Clearing again schedules a fresh pair, and only one: no reads stacked
+        // from the cancelled clearing.
+        await vi.advanceTimersByTimeAsync(2_000); // t≈16.1s, past the second tick
+        const beforeAgain = launcherReads();
+        await rerender({ aiNotice: null, onReady });
+        await flush();
+        expect(launcherReads()).toBe(beforeAgain + 1);
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(launcherReads()).toBe(beforeAgain + 2);
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(launcherReads()).toBe(beforeAgain + 3);
 
         // A second clearing, then unmount before its follow-ups fire.
         await rerender({ aiNotice: "unlicensed", onReady });

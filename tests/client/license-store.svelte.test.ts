@@ -351,6 +351,87 @@ describe("licenseStore — statusUnavailable (#1789)", () => {
     expect(licenseStore.statusUnavailable).toBe(false);
   });
 });
+/**
+ * A poll issued before `set()` must not land after it. With the 8 s restricted
+ * cadence a poll is often in flight when the activate form answers, and without
+ * sequencing its stale `restricted` would overwrite the licensed status.
+ */
+describe("licenseStore — a poll superseded by set()", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fetchLicenseStatus.mockReset();
+    licenseStore.stop();
+    licenseStore.set(DARK);
+  });
+
+  afterEach(() => {
+    licenseStore.stop();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  it("an in-flight restricted poll resolving after set(licensed) leaves licensed", async () => {
+    fetchLicenseStatus.mockResolvedValueOnce(RESTRICTED);
+    licenseStore.start();
+    await flush();
+    expect(licenseStore.ui.aiOff).toBe(true);
+
+    const slow = deferred<LicenseStatusResponse>();
+    fetchLicenseStatus.mockReturnValueOnce(slow.promise);
+    const inFlight = licenseStore.refresh();
+    licenseStore.set(LICENSED);
+    slow.resolve(RESTRICTED);
+    await inFlight;
+    await flush();
+
+    expect(licenseStore.status).toEqual(LICENSED);
+    expect(licenseStore.ui.aiOff).toBe(false);
+  });
+
+  it("an in-flight poll failing after set(licensed) raises no 'unavailable' flag", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchLicenseStatus.mockResolvedValueOnce(RESTRICTED);
+    licenseStore.start();
+    await flush();
+
+    const slow = deferred<LicenseStatusResponse>();
+    fetchLicenseStatus.mockReturnValueOnce(slow.promise);
+    const inFlight = licenseStore.refresh();
+    licenseStore.set(LICENSED);
+    slow.reject(new Error("ECONNREFUSED"));
+    await inFlight;
+    await flush();
+
+    expect(licenseStore.statusUnavailable).toBe(false);
+    expect(licenseStore.status).toEqual(LICENSED);
+  });
+
+  it("the twin: a poll with nothing newer still writes its answer", async () => {
+    fetchLicenseStatus.mockResolvedValueOnce(LICENSED);
+    licenseStore.start();
+    await flush();
+
+    const slow = deferred<LicenseStatusResponse>();
+    fetchLicenseStatus.mockReturnValueOnce(slow.promise);
+    const inFlight = licenseStore.refresh();
+    slow.resolve(RESTRICTED);
+    await inFlight;
+    await flush();
+
+    expect(licenseStore.status).toEqual(RESTRICTED);
+  });
+});
+
 // The `status === null` row is deliberately NOT here: `stop()` never clears
 // `status` and `set()` always assigns a non-null one, so within this file the
 // singleton has held a status since the first describe's `beforeEach`. That row

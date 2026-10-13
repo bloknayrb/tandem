@@ -42,7 +42,9 @@
  *
  * States:
  *   - `booting`      — not yet known (still connecting / first status read
- *                      pending). Render nothing; never flash a CTA on boot.
+ *                      pending, or a launcher stopped as `unlicensed` while
+ *                      the client's licence view still says AI is on — see
+ *                      `staleLicenceStop`). Render nothing; never flash a CTA.
  *   - `unconfigured` — launcher unavailable (`available: false`: stdio mode,
  *                      disabled, or `not-configured` — no launchable claude-code
  *                      integration, #2180) AND no live MCP session. Prompt setup.
@@ -591,6 +593,13 @@ export function createAiReadiness(deps: {
   soloMode: () => boolean;
   /** The licence refusal, or null (#1521). Null on every dark build. */
   aiNotice: () => AiNotice | null;
+  /**
+   * Re-read the licence now (#1521). Called when the launcher reports the
+   * server stopped Tandem's Claude as `unlicensed` while `aiNotice` is still
+   * null: at trial expiry the server knows before the client's licence poll
+   * does (up to 60 s later). Required, so no caller can leave that window open.
+   */
+  refreshLicence: () => void;
 }): AiReadiness {
   let status = $state<LauncherStatus | null>(null);
   // Whether an MCP client transport is currently open (from `/health`). An
@@ -935,7 +944,10 @@ export function createAiReadiness(deps: {
   // as `$state` this effect would re-trigger on its own write. The follow-up
   // reads at 2s and 5s mirror `refreshAiReadinessAfterLauncherAction`: the
   // respawned child is usually still starting at the first read, and without
-  // them the pill waits for the next 8s poll to show it running.
+  // them the pill waits for the next 8s poll to show it running. Every
+  // transition, either way, cancels follow-ups still pending from an earlier
+  // clearing: a refusal that returns within 5s must not leave them firing, and
+  // a second clearing must not stack a second pair on the first.
   let prevAiOff: boolean | null = null;
   const followUps: ReturnType<typeof setTimeout>[] = [];
   const readLauncher = () => {
@@ -943,8 +955,12 @@ export function createAiReadiness(deps: {
   };
   $effect(() => {
     const aiOff = deps.aiNotice() !== null;
+    const changed = prevAiOff !== null && aiOff !== prevAiOff;
     const cleared = prevAiOff === true && !aiOff;
     prevAiOff = aiOff;
+    if (!changed) return;
+    for (const t of followUps) clearTimeout(t);
+    followUps.length = 0;
     if (!cleared) return;
     untrack(readLauncher);
     followUps.push(setTimeout(readLauncher, 2_000), setTimeout(readLauncher, 5_000));
@@ -954,6 +970,30 @@ export function createAiReadiness(deps: {
     destroyed = true;
     clearInterval(interval);
     for (const t of followUps) clearTimeout(t);
+  });
+
+  // The server has stopped Tandem's Claude for want of a licence, but the
+  // client's licence view does not say so yet (`aiNotice` null): at trial
+  // expiry the licence poll can lag the server by up to 60 s. The launcher read
+  // is then ahead of the licence, so neither half is the truth on its own.
+  // `state` reads it as "we do not know yet" (booting), which keeps the
+  // Restart chip off — a click on it would only be refused — and keeps the
+  // pill from saying "unlicensed" with no kind to explain it, which an
+  // unverifiable licence holder must never see. `launcherFailure` already
+  // ignores `unlicensed` (`TRIPPED_FAILURE`).
+  const staleLicenceStop = $derived(
+    status !== null &&
+      status.available &&
+      !status.running &&
+      status.lastError === "unlicensed" &&
+      deps.aiNotice() === null,
+  );
+  // ...and ask the licence store to catch up, once per sighting: a `$derived`
+  // boolean re-runs this only when it CHANGES, so an 8 s poll repeating the
+  // same answer calls nothing; a different `lastError`, or `aiNotice` turning
+  // non-null, ends the sighting and the next one calls again.
+  $effect(() => {
+    if (staleLicenceStop) untrack(() => deps.refreshLicence());
   });
 
   const state = $derived.by((): AiReadinessState => {
@@ -971,6 +1011,7 @@ export function createAiReadiness(deps: {
     // An active MCP session means an agent is connected and AI works, whether
     // or not the launcher spawned it. Promote to ready and skip the CTA.
     if (sessionLive) return "ready";
+    if (staleLicenceStop) return "booting";
     if (status.available === false) {
       // Autostart deferral (#1236): the app was launched by the OS at login and
       // deliberately held the Claude launcher back. Nothing is misconfigured —

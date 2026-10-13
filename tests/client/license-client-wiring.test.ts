@@ -42,6 +42,19 @@ describe("aiNotice reaches the readiness hook", () => {
   it("the test harness passes it too", () => {
     expect(HARNESS).toContain("aiNotice: () => aiNotice");
   });
+
+  // At trial expiry the launcher can report `unlicensed` before the licence
+  // poll does; readiness asks the store to catch up through this dep.
+  it("App wires refreshLicence to the licence store's refresh", () => {
+    const call = APP.slice(APP.indexOf("createAiReadiness({"));
+    expect(call.slice(0, call.indexOf("});"))).toContain(
+      "refreshLicence: () => void licenseStore.refresh()",
+    );
+  });
+
+  it("the test harness forwards refreshLicence", () => {
+    expect(HARNESS).toContain("refreshLicence: () => refreshLicence()");
+  });
 });
 
 /**

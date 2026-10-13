@@ -10,6 +10,7 @@ interface Props {
   firstRunSettled?: boolean;
   soloMode?: boolean;
   aiNotice?: AiNotice | null;
+  refreshLicence?: () => void;
 }
 
 let {
@@ -18,6 +19,7 @@ let {
   firstRunSettled = true,
   soloMode = false,
   aiNotice = null,
+  refreshLicence = () => {},
 }: Props = $props();
 
 // Created once at mount (inside a real component context so the hook's
@@ -29,6 +31,7 @@ const readiness = untrack(() =>
     firstRunSettled: () => firstRunSettled,
     soloMode: () => soloMode,
     aiNotice: () => aiNotice,
+    refreshLicence: () => refreshLicence(),
   }),
 );
 $effect(() => {

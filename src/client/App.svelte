@@ -406,6 +406,7 @@ const aiReadiness = createAiReadiness({
   firstRunSettled: () => firstRun.settled,
   soloMode: () => modeState.tandemMode === "solo",
   aiNotice: () => licenseStore.ui.aiNotice,
+  refreshLicence: () => void licenseStore.refresh(),
 });
 
 // #1282 working-folder drift. Fed the SAME derivation the relaunch action uses,
