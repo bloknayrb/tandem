@@ -19,9 +19,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LicenseStatusResponse } from "../../src/client/utils/license-ui";
 
-const fetchLicenseStatus = vi.fn<() => Promise<LicenseStatusResponse>>();
+const fetchLicenseStatus = vi.fn<(signal?: AbortSignal) => Promise<LicenseStatusResponse>>();
 vi.mock(import("../../src/client/hooks/useLicense"), () => ({
-  fetchLicenseStatus: () => fetchLicenseStatus(),
+  fetchLicenseStatus: (signal?: AbortSignal) => fetchLicenseStatus(signal),
   activateLicenseClient: vi.fn(),
 }));
 
@@ -84,6 +84,36 @@ describe("licenseStore (singleton lifecycle)", () => {
     // Well past the interval — no further polls (the dark path stopped the timer).
     await vi.advanceTimersByTimeAsync(180_000);
     expect(fetchLicenseStatus).toHaveBeenCalledTimes(1);
+  });
+
+  // Readiness holds the pill on "booting" while a licence re-read is in
+  // flight; an unanswered read must therefore end, as a failure.
+  it("bounds every read: a status request that never answers aborts and is a failure", async () => {
+    // `AbortSignal.timeout` runs on the platform's own clock, not vitest's
+    // fake timers, so the test owns the signal and fires it itself.
+    const ctrl = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(ctrl.signal);
+    try {
+      fetchLicenseStatus.mockImplementation(
+        (signal) =>
+          new Promise((_resolve, reject) =>
+            signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+          ),
+      );
+      const settled = vi.fn();
+      void licenseStore.refresh().then(settled);
+      await flush();
+      expect(timeout).toHaveBeenCalledWith(5_000);
+      expect(fetchLicenseStatus).toHaveBeenCalledWith(ctrl.signal);
+      expect(settled).not.toHaveBeenCalled();
+
+      ctrl.abort();
+      await flush();
+      expect(settled).toHaveBeenCalledTimes(1);
+      expect(licenseStore.statusUnavailable).toBe(true);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 
   it("trial state surfaces the banner with the day count", async () => {

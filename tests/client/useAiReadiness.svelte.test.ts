@@ -1808,6 +1808,34 @@ describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
       expect(refreshLicence).toHaveBeenCalledTimes(1);
     });
 
+    it("an earlier sighting's re-read settling late does not end a newer sighting's wait", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: stoppedWith("unlicensed"),
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      const finishers: Array<() => void> = [];
+      const refreshLicence = vi.fn(() => new Promise<void>((resolve) => finishers.push(resolve)));
+      const holder: { r: AiReadiness | null } = { r: null };
+      const onReady = (r: AiReadiness) => (holder.r = r);
+      const { rerender } = render(AiReadinessHarness, {
+        props: { aiNotice: null, refreshLicence, onReady },
+      });
+      await settle();
+      await rerender({ aiNotice: "unlicensed", refreshLicence, onReady });
+      await settle();
+      await rerender({ aiNotice: null, refreshLicence, onReady });
+      await settle();
+      expect(refreshLicence).toHaveBeenCalledTimes(2);
+
+      finishers[0]();
+      await settle();
+      expect(holder.r?.state).toBe("booting");
+
+      finishers[1]();
+      await settle();
+      expect(holder.r?.chip).toBe("restart");
+    });
+
     it("a re-read that fails also ends the wait", async () => {
       globalThis.fetch = routedFetch({
         launcher: stoppedWith("unlicensed"),

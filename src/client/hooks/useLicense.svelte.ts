@@ -28,6 +28,8 @@ import { fetchLicenseStatus } from "./useLicense";
 const POLL_INTERVAL_MS = 60_000;
 /** While restricted: how quickly a CLI activation is noticed. */
 const RESTRICTED_POLL_INTERVAL_MS = 8_000;
+/** Under the restricted cadence, so a hung read never overlaps two ticks. */
+const LICENSE_READ_TIMEOUT_MS = 5_000;
 
 function createLicenseStore() {
   let status = $state<LicenseStatusResponse | null>(null);
@@ -115,7 +117,9 @@ function createLicenseStore() {
     // the local server as unreachable, so it must be bound to a fetch/parse
     // failure and nothing else.
     try {
-      next = await fetchLicenseStatus();
+      // Bounded: readiness holds the pill on "booting" while a licence re-read
+      // is in flight, so a request that never answers must not hold it forever.
+      next = await fetchLicenseStatus(AbortSignal.timeout(LICENSE_READ_TIMEOUT_MS));
     } catch (err) {
       // Superseded: a newer poll or `set()` owns the state, and a stale failure
       // must not paint "couldn't reach the server" beside it.
