@@ -83,7 +83,7 @@
  * messages, and before it existed they were indistinguishable — see the field's
  * doc on `AiReadiness`.
  */
-import { onDestroy } from "svelte";
+import { onDestroy, untrack } from "svelte";
 import { API_HEALTH, API_LAUNCHER_STATUS } from "../../shared/api-paths.js";
 import {
   isTransientlyUnavailable,
@@ -223,7 +223,7 @@ export type AiReadinessState = "booting" | "unconfigured" | "stopped" | "ready";
  *     set, whichever kind. Opens Settings → License. It ranks FIRST, above Solo:
  *     Solo is a privacy choice, the licence refusal is a capability fact, and
  *     every other CTA (connect, restart) would be refused by the server anyway.
- *     Its copy is kind-neutral; kind-specific copy comes from `aiOffCopy`.
+ *     Its copy is kind-neutral — see `AI_CTA.unlicensed`.
  */
 export type AiChip = "connect" | "setup" | "sign-in" | "restart" | "unlicensed" | null;
 
@@ -289,10 +289,12 @@ export const AI_CTA: Record<
     ariaLabel: "Claude Code has stopped. Restart Claude Code.",
     action: "restart",
   },
-  // Deliberately kind-neutral: this one entry serves both `unlicensed` and
-  // `unverifiable`, so it never says "unlicensed", "activate" or "trial ended",
-  // and carries no URL. Surfaces with room pick kind-specific copy via
-  // `aiOffCopy`.
+  // THE statement of the kind-neutral rule (other comments point here): this
+  // one entry serves both `unlicensed` and `unverifiable`, and an unverifiable
+  // licence holder most likely already paid (ADR-040 decision 8). So it never
+  // says "unlicensed", "activate" or "trial ended", and carries no URL. Views
+  // take kind-specific copy from `aiOffCopy(readiness.aiNotice)`; this entry is
+  // the label, the action, and the fallback where a type cannot prove the kind.
   unlicensed: {
     label: "AI off — see license",
     title: "Tandem's AI features are off. Open Settings → License.",
@@ -539,6 +541,14 @@ export interface AiReadiness {
    * gap it deliberately cannot cover.
    */
   readonly deliveryStalledMs: number | null;
+  /**
+   * The licence refusal, or null (#1521): the same `deps.aiNotice()` that ranks
+   * `chip` first, so it is non-null exactly when `chip === "unlicensed"`. Views
+   * key their AI-off rendering and copy on this value and their CTA on `chip`;
+   * because both come from here, the two cannot disagree. Pass this, never
+   * `licenseStore.ui.aiNotice` beside it.
+   */
+  readonly aiNotice: AiNotice | null;
   /** Re-poll launcher status + session now (e.g. just after a restart). */
   refresh: () => void;
   /** Re-poll launcher status alone. For the post-send `busy` read: it leaves
@@ -914,6 +924,22 @@ export function createAiReadiness(deps: {
 
   poll();
   const interval = setInterval(() => poll(), POLL_MS);
+
+  // When the licence refusal clears, read the launcher at once. The server has
+  // already respawned Tandem's Claude by then, but the retained `status` still
+  // carries `lastError: "unlicensed"`, which `chip` maps to Restart the moment
+  // the refusal stops outranking it — and a click on that relaunches over the
+  // fresh child. Keyed on the transition itself, so it covers every way the
+  // refusal clears: the Settings activate form and a CLI `tandem activate`
+  // picked up by the licence poll alike. `prev` is a plain `let`, not `$state`:
+  // as `$state` this effect would re-trigger on its own write.
+  let prevAiOff: boolean | null = null;
+  $effect(() => {
+    const aiOff = deps.aiNotice() !== null;
+    const cleared = prevAiOff === true && !aiOff;
+    prevAiOff = aiOff;
+    if (cleared) untrack(() => void pollLauncherStatus(++gen));
+  });
   onDestroy(() => {
     gen++;
     destroyed = true;
@@ -1096,6 +1122,9 @@ export function createAiReadiness(deps: {
         aiOff: deps.aiNotice() !== null,
         serverUnreachable,
       });
+    },
+    get aiNotice() {
+      return deps.aiNotice();
     },
     refresh: () => poll(),
     refreshLauncherStatus: () => void pollLauncherStatus(++gen),

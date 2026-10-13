@@ -11,6 +11,8 @@ function makeProps(overrides: Record<string, unknown> = {}) {
   return {
     connected: true,
     aiChip: null,
+    // What readiness guarantees: a refusal exactly when the chip is `unlicensed`.
+    aiNotice: overrides.aiChip === "unlicensed" ? "unlicensed" : null,
     onOpenFile: vi.fn(),
     onRetry: vi.fn(),
     onOpenSettings: vi.fn(),
@@ -112,7 +114,7 @@ describe("EmptyState", () => {
       const props = makeProps({
         connected: true,
         aiChip: "unlicensed",
-        aiOffKind: "unlicensed",
+        aiNotice: "unlicensed",
         onOpenLicenseSettings: vi.fn(),
       });
       const { container } = render(EmptyState, { props });
@@ -126,7 +128,7 @@ describe("EmptyState", () => {
 
     it("the unverifiable line never says unlicensed, Activate a license, or the purchase URL", () => {
       const { container } = render(EmptyState, {
-        props: makeProps({ connected: true, aiChip: "unlicensed", aiOffKind: "unverifiable" }),
+        props: makeProps({ connected: true, aiChip: "unlicensed", aiNotice: "unverifiable" }),
       });
       const text = container.textContent ?? "";
       expect(text).not.toMatch(/unlicensed/i);

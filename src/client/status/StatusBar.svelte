@@ -13,7 +13,7 @@ import { AI_CTA, ctaHandler, TANDEM_CLAUDE_DOWN } from "../hooks/useAiReadiness.
 import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
 import { createCoalescingTick } from "../utils/coalescing-tick";
 import { debounce } from "../utils/debounce";
-import { type AiNotice, aiOffCopy } from "../utils/license-ui";
+import type { AiNotice } from "../utils/license-ui";
 import CwdDriftPill from "./CwdDriftPill.svelte";
 import {
   type AiIndicatorTone,
@@ -80,11 +80,11 @@ interface Props {
    */
   onOpenLicenseSettings: () => void;
   /**
-   * Which licence refusal, for COPY ONLY (#1521). The pill's ai-off state keys
-   * on `aiChip === "unlicensed"` alone, so a kind can never turn the pill to
-   * ai-off by itself, and the unverifiable reader is never told "unlicensed".
+   * The licence refusal (#1521): pass `aiReadiness.aiNotice`, never
+   * `licenseStore.ui.aiNotice` — readiness guarantees it is non-null exactly
+   * when `aiChip` is `"unlicensed"`. Drives the pill's ai-off state and copy.
    */
-  aiOffKind: AiNotice | null;
+  aiNotice: AiNotice | null;
   /** Solo mode — suppresses the "AI not connected" nag when no AI is connected. */
   soloMode: boolean;
   /** Whether anything is delivering real-time events. Only `"none"` changes the
@@ -158,7 +158,7 @@ let {
   onConnectAi,
   onRestartClaude,
   onOpenLicenseSettings,
-  aiOffKind,
+  aiNotice,
   soloMode,
   pushDelivery = "unknown",
   claudeWorkingTool = null,
@@ -301,8 +301,7 @@ const aiView = $derived(
     launcherRestarting: aiLauncherRestarting,
     docSyncConnected: connected,
     sessionCount: aiSessionCount,
-    aiOff: aiChip === "unlicensed",
-    aiOffKind,
+    aiNotice,
   }),
 );
 
@@ -347,19 +346,19 @@ const launcherDown = $derived(
  * props, so they're bound inside `aiCta` here: a plain top-level object would
  * freeze stale closures over the props' initial values.
  */
-// The `unlicensed` chip's own title/aria override the view's, so they take the
-// kind-specific copy (#1521): `AI_CTA.unlicensed` is kind-neutral, and the
-// unverifiable holder must never be told "unlicensed".
+// The `unlicensed` chip takes its title/aria from the ai-off view, which holds
+// the kind-specific copy (#1521). `AI_CTA.unlicensed` is the type-level fallback
+// only, which is why it must stay kind-neutral (see its comment).
 const aiCta = $derived(
   aiChip
     ? {
         title:
-          aiChip === "unlicensed" && aiOffKind
-            ? aiOffCopy(aiOffKind).sentence
+          aiChip === "unlicensed" && aiView?.dataState === "ai-off"
+            ? aiView.title
             : AI_CTA[aiChip].title,
         ariaLabel:
-          aiChip === "unlicensed" && aiOffKind
-            ? `AI off. ${aiOffCopy(aiOffKind).sentence}`
+          aiChip === "unlicensed" && aiView?.dataState === "ai-off"
+            ? aiView.ariaLabel
             : AI_CTA[aiChip].ariaLabel,
         onclick: ctaHandler(AI_CTA[aiChip].action, ctaHandlers()),
       }

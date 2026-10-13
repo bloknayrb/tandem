@@ -20,11 +20,6 @@ import type { AiRefusalKind, LicenseUnverifiableCode } from "../../shared/licens
 /** Why the AI features are off on this client. One union, shared with the server's refusal. */
 export type AiNotice = AiRefusalKind;
 
-/** Window event: a license was just activated in Settings → License (#1521). */
-export const LICENSE_ACTIVATED_EVENT = "tandem:license-activated";
-/** Window event: open Settings → License (the AI-off notice, CTAs, EmptyState). */
-export const OPEN_LICENSE_SETTINGS_EVENT = "tandem:open-license-settings";
-
 export interface LicenseStatusResponse {
   gateActive: boolean;
   status: "trial" | "licensed" | "restricted";

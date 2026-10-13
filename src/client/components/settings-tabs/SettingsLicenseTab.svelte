@@ -3,7 +3,6 @@ import { TANDEM_PURCHASE_URL, TANDEM_SUPPORT_EMAIL } from "../../../shared/const
 import { unverifiableLicenseMessage } from "../../../shared/license-copy";
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
 import { licenseStore } from "../../hooks/useLicense.svelte";
-import { LICENSE_ACTIVATED_EVENT } from "../../utils/license-ui";
 import LicenseActivateForm from "../LicenseActivateForm.svelte";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
@@ -57,11 +56,6 @@ const pillLabel = $derived(
 
 function onActivated(): void {
   ctx.notify("info", "License activated.");
-  // App refreshes the AI readiness at once (#1521): activation has already
-  // respawned the launcher, and a stale "unlicensed" launcher error would
-  // otherwise offer a Restart over the child that was just spawned. A window
-  // event because this form sits three levels under SettingsModal.
-  window.dispatchEvent(new CustomEvent(LICENSE_ACTIVATED_EVENT));
 }
 </script>
 

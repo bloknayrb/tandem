@@ -24,8 +24,7 @@ function view(over: Partial<ViewInput> = {}) {
     launcherRestarting: false,
     docSyncConnected: true,
     sessionCount: null,
-    aiOff: false,
-    aiOffKind: null,
+    aiNotice: null,
     ...over,
   });
 }
@@ -229,9 +228,9 @@ describe("aiIndicatorView — Tandem's Claude", () => {
 });
 
 /**
- * Rule 0 (#1521): the licence refusal. Keyed on `aiOff` (`aiChip ===
- * "unlicensed"`), the same value that selects the pill's CTA, so label and
- * action agree. `aiOffKind` picks copy only.
+ * Rule 0 (#1521): the licence refusal, keyed on `aiNotice` — readiness's own
+ * value, non-null exactly when its chip is `"unlicensed"`, so label and action
+ * agree. The kind also picks the copy.
  */
 describe("aiIndicatorView — AI off by licence", () => {
   it("beats Solo, a running Tandem's Claude and a connected session", () => {
@@ -240,7 +239,7 @@ describe("aiIndicatorView — AI off by licence", () => {
       { launcherRunning: true, launcherAttached: true, liveIndicator: "connected" as const },
       { liveIndicator: "connected" as const, sessionCount: 1 },
     ]) {
-      const v = view({ ...over, aiOff: true, aiOffKind: "unlicensed" });
+      const v = view({ ...over, aiNotice: "unlicensed" });
       expect(v?.dataState).toBe("ai-off");
       expect(v?.label).toBe("AI off");
       expect(v?.canAnimate).toBe(false);
@@ -248,29 +247,24 @@ describe("aiIndicatorView — AI off by licence", () => {
   });
 
   it("suppresses the session count — a refused handshake leaves at most a leftover", () => {
-    const v = view({ liveIndicator: "connected", sessionCount: 3, aiOff: true, aiOffKind: null });
+    const v = view({ liveIndicator: "connected", sessionCount: 3, aiNotice: "unverifiable" });
     expect(v?.sessionCount).toBeNull();
     expect(v?.title).not.toMatch(/sessions? (is|are) connected/);
   });
 
-  it("the twin: aiOff false keeps the existing view", () => {
+  it("the twin: no refusal keeps the existing view", () => {
     expect(view({ liveIndicator: "connected", sessionCount: 1 })?.dataState).toBe("connected");
     expect(view({ liveIndicator: "solo-paused", soloMode: true })?.dataState).toBe("solo-paused");
   });
 
-  it("a kind alone never turns the pill to ai-off — the chip is the source", () => {
-    const v = view({ liveIndicator: "connected", sessionCount: 1, aiOffKind: "unlicensed" });
-    expect(v?.dataState).toBe("connected");
-  });
-
   it("unverifiable copy never says unlicensed, Activate a license, or the purchase URL", () => {
-    const v = view({ aiOff: true, aiOffKind: "unverifiable" });
+    const v = view({ aiNotice: "unverifiable" });
     for (const text of [v?.title ?? "", v?.ariaLabel ?? ""]) {
       expect(text).not.toMatch(/unlicensed/i);
       expect(text).not.toContain("Activate a license");
       expect(text).not.toContain(TANDEM_PURCHASE_URL);
     }
-    expect(view({ aiOff: true, aiOffKind: "unlicensed" })?.title).toContain("unlicensed");
+    expect(view({ aiNotice: "unlicensed" })?.title).toContain("unlicensed");
   });
 });
 

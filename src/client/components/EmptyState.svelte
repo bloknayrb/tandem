@@ -1,6 +1,6 @@
 <script lang="ts">
 import { DISCONNECT_DEBOUNCE_MS } from "../../shared/constants";
-import { AI_CTA, type AiChip } from "../hooks/useAiReadiness.svelte";
+import type { AiChip } from "../hooks/useAiReadiness.svelte";
 import { type AiNotice, aiOffCopy } from "../utils/license-ui";
 
 interface Props {
@@ -16,7 +16,7 @@ interface Props {
    *   `"sign-in"` → configured but stopped because the CLI is not signed in.
    *   `"restart"` → configured but stopped for any other reason.
    *   `"unlicensed"` → the licence refuses the AI (#1521); opens Settings →
-   *                 License. Copy comes from `aiOffKind`.
+   *                 License. Its branch keys on `aiNotice`, which carries the copy.
    *   `null`      → ready / booting / Solo (no CTA, falls back to the
    *                 product-positioning line).
    * Replaces the old `claudeActive`-gated line, which keyed on a flapping
@@ -43,8 +43,12 @@ interface Props {
    * expecting a safe retry must never destroy their session; see #1268).
    */
   onStartFreshClaude?: () => void;
-  /** Which licence refusal, for the `"unlicensed"` line's copy only (#1521). */
-  aiOffKind?: AiNotice | null;
+  /**
+   * The licence refusal (#1521): pass `aiReadiness.aiNotice`, which is
+   * non-null exactly when `aiChip` is `"unlicensed"`. Required, so a mount
+   * that forgets it cannot silently drop the AI-off line.
+   */
+  aiNotice: AiNotice | null;
   /** Opens Settings → License — the `"unlicensed"` CTA. */
   onOpenLicenseSettings?: () => void;
 }
@@ -58,7 +62,7 @@ let {
   onConnectAi,
   onRestartClaude,
   onStartFreshClaude,
-  aiOffKind = null,
+  aiNotice,
   onOpenLicenseSettings,
 }: Props = $props();
 
@@ -225,13 +229,9 @@ $effect(() => {
           Start a fresh conversation
         </button>
       </div>
-    {:else if connected && aiChip === "unlicensed"}
-      <!-- #1521: the licence refuses the AI; the document stays editable. A
-           null kind falls back to the kind-neutral CTA title, never to copy
-           that would tell an unverifiable holder they are unlicensed. -->
-      <p class="empty-sub empty-sub-secondary">
-        {aiOffKind ? aiOffCopy(aiOffKind).sentence : AI_CTA.unlicensed.title}
-      </p>
+    {:else if connected && aiNotice !== null}
+      <!-- #1521: the licence refuses the AI; the document stays editable. -->
+      <p class="empty-sub empty-sub-secondary">{aiOffCopy(aiNotice).sentence}</p>
       <div class="empty-actions">
         <button
           class="empty-cta"

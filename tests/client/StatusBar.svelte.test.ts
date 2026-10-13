@@ -16,7 +16,7 @@ const baseProps = {
   aiLauncherAttached: false,
   aiLauncherRestarting: false,
   aiSessionCount: null as number | null,
-  aiOffKind: null,
+  aiNotice: null,
   onOpenLicenseSettings: () => {},
   aiState: "unconfigured" as const,
   soloMode: false,
@@ -50,7 +50,7 @@ describe("StatusBar AI action indicator", () => {
         ...baseProps,
         aiState: "stopped",
         aiChip: "unlicensed",
-        aiOffKind: "unlicensed",
+        aiNotice: "unlicensed",
         onConnectAi,
         onRestartClaude,
         onOpenLicenseSettings,
@@ -71,7 +71,7 @@ describe("StatusBar AI action indicator", () => {
 
   it("an unverifiable holder is never told 'unlicensed' or shown the purchase URL", () => {
     const { getByTestId } = render(StatusBar, {
-      props: { ...baseProps, aiState: "stopped", aiChip: "unlicensed", aiOffKind: "unverifiable" },
+      props: { ...baseProps, aiState: "stopped", aiChip: "unlicensed", aiNotice: "unverifiable" },
     });
     const indicator = getByTestId("status-ai-indicator");
     for (const text of [
@@ -86,7 +86,7 @@ describe("StatusBar AI action indicator", () => {
 
   it("the unlicensed twin's copy does name the state", () => {
     const { getByTestId } = render(StatusBar, {
-      props: { ...baseProps, aiState: "stopped", aiChip: "unlicensed", aiOffKind: "unlicensed" },
+      props: { ...baseProps, aiState: "stopped", aiChip: "unlicensed", aiNotice: "unlicensed" },
     });
     expect(getByTestId("status-ai-indicator").getAttribute("title")).toContain("unlicensed");
   });

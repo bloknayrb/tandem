@@ -19,10 +19,7 @@ import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AiOffNotice from "../../src/client/components/AiOffNotice.svelte";
 import { licenseStore } from "../../src/client/hooks/useLicense.svelte";
-import {
-  type LicenseStatusResponse,
-  OPEN_LICENSE_SETTINGS_EVENT,
-} from "../../src/client/utils/license-ui";
+import type { LicenseStatusResponse } from "../../src/client/utils/license-ui";
 import { TANDEM_PURCHASE_URL } from "../../src/shared/constants";
 
 const KEY = "tandem:ai-off-notice-collapsed";
@@ -37,6 +34,8 @@ const UNLICENSED: LicenseStatusResponse = {
   updateWindowCurrent: false,
 };
 const UNVERIFIABLE: LicenseStatusResponse = { ...UNLICENSED, licenseUnverifiable: "BAD_SIGNATURE" };
+
+const PROPS = { onOpenLicenseSettings: () => {} };
 
 const q = (c: HTMLElement, id: string) => c.querySelector<HTMLElement>(`[data-testid='${id}']`);
 const text = (c: HTMLElement) => (c.textContent ?? "").replace(/\s+/g, " ").trim();
@@ -58,7 +57,7 @@ afterEach(() => {
 describe("AiOffNotice", () => {
   it("renders nothing on a dark build", () => {
     licenseStore.set(DARK);
-    const { container, unmount } = render(AiOffNotice);
+    const { container, unmount } = render(AiOffNotice, { props: PROPS });
     expect(q(container, "ai-off-notice")).toBeNull();
     unmount();
   });
@@ -66,20 +65,20 @@ describe("AiOffNotice", () => {
   it("unlicensed: says the AI is off, and its link opens Settings → License", async () => {
     licenseStore.set(UNLICENSED);
     const onOpen = vi.fn();
-    window.addEventListener(OPEN_LICENSE_SETTINGS_EVENT, onOpen);
-    const { container, unmount } = render(AiOffNotice);
+    const { container, unmount } = render(AiOffNotice, {
+      props: { onOpenLicenseSettings: onOpen },
+    });
     const root = q(container, "ai-off-notice");
     expect(root?.getAttribute("role")).toBe("status");
     expect(text(container)).toContain("Activate a license to bring Claude back");
     q(container, "ai-off-notice-settings-link")?.click();
     expect(onOpen).toHaveBeenCalledTimes(1);
-    window.removeEventListener(OPEN_LICENSE_SETTINGS_EVENT, onOpen);
     unmount();
   });
 
   it("unverifiable: the code-specific copy, no purchase URL, no 'unlicensed'", () => {
     licenseStore.set(UNVERIFIABLE);
-    const { container, unmount } = render(AiOffNotice);
+    const { container, unmount } = render(AiOffNotice, { props: PROPS });
     const t = text(container);
     expect(t).toContain("could not be verified");
     expect(t).not.toContain(TANDEM_PURCHASE_URL);
@@ -95,7 +94,7 @@ describe("AiOffNotice", () => {
     ] as const) {
       licenseStore.set(state);
       localStorage.setItem(KEY, "1");
-      const { container, unmount } = render(AiOffNotice);
+      const { container, unmount } = render(AiOffNotice, { props: PROPS });
       expect(q(container, "ai-off-notice-settings-link")).toBeNull();
       const t = text(container);
       expect(/unlicensed/i.test(t)).toBe(expectUnlicensed);
@@ -106,7 +105,7 @@ describe("AiOffNotice", () => {
 
   it("collapse persists across mounts", async () => {
     licenseStore.set(UNLICENSED);
-    const first = render(AiOffNotice);
+    const first = render(AiOffNotice, { props: PROPS });
     const toggle = q(first.container, "ai-off-notice-collapse");
     expect(toggle?.getAttribute("aria-expanded")).toBe("true");
     toggle?.click();
@@ -115,7 +114,7 @@ describe("AiOffNotice", () => {
     expect(localStorage.getItem(KEY)).toBe("1");
     first.unmount();
 
-    const second = render(AiOffNotice);
+    const second = render(AiOffNotice, { props: PROPS });
     expect(q(second.container, "ai-off-notice-collapse")?.getAttribute("aria-expanded")).toBe(
       "false",
     );
@@ -134,7 +133,7 @@ describe("AiOffNotice", () => {
       },
       removeItem: () => {},
     });
-    const { container, unmount } = render(AiOffNotice);
+    const { container, unmount } = render(AiOffNotice, { props: PROPS });
     const toggle = q(container, "ai-off-notice-collapse");
     expect(q(container, "ai-off-notice")).not.toBeNull();
     expect(toggle?.getAttribute("aria-expanded")).toBe("true");

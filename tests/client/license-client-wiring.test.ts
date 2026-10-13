@@ -16,15 +16,6 @@ const APP = read("src/client/App.svelte");
 const HARNESS = read("src/client/svelte-harness/AiReadinessHarness.svelte");
 const TOOLBAR = read("src/client/editor/toolbar/Toolbar.svelte");
 
-/** The body of the arrow assigned to `const <name> = () => {`, up to its `};`. */
-function arrowBody(src: string, name: string): string {
-  const start = src.indexOf(`const ${name} = () => {`);
-  if (start < 0) throw new Error(`no arrow named ${name}`);
-  const end = src.indexOf("\n  };", start);
-  if (end < 0) throw new Error(`no end for ${name}`);
-  return src.slice(start, end);
-}
-
 describe("App.svelte — the licence wall and Surface-A rebuild are gone (#1521)", () => {
   it("does not import or mount LicenseWall", () => {
     expect(APP).not.toContain("LicenseWall");
@@ -52,20 +43,14 @@ describe("aiNotice reaches the readiness hook", () => {
 });
 
 /**
- * Activation respawns the launcher before its 200, while readiness still holds
- * `lastError: "unlicensed"` — which maps to a Restart chip once the notice
- * clears. The launcher read must be IMMEDIATE, or that chip shows for up to two
- * seconds and a click relaunches over the fresh child.
+ * The pill and EmptyState read the refusal from READINESS, the same value that
+ * makes `chip` `"unlicensed"` — never from `licenseStore` beside it, which is a
+ * second source the two could disagree on.
  */
-describe("the tandem:license-activated listener", () => {
-  it("re-reads the launcher status synchronously, before the staggered refresh", () => {
-    const body = arrowBody(APP, "onActivated");
-    const immediate = body.indexOf("aiReadiness.refreshLauncherStatus()");
-    const staggered = body.indexOf("refreshAiReadinessAfterLauncherAction()");
-    expect(immediate).toBeGreaterThan(-1);
-    expect(staggered).toBeGreaterThan(immediate);
-    expect(body).not.toMatch(/setTimeout/);
-    expect(APP).toContain("window.addEventListener(LICENSE_ACTIVATED_EVENT, onActivated)");
+describe("the AI-off views read readiness's aiNotice", () => {
+  it("StatusBar and EmptyState are both passed aiReadiness.aiNotice", () => {
+    expect(APP.match(/aiNotice=\{aiReadiness\.aiNotice\}/g)?.length).toBe(2);
+    expect(APP).not.toMatch(/aiNotice=\{licenseStore/);
   });
 });
 

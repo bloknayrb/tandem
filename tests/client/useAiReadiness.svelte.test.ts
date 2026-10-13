@@ -1804,6 +1804,45 @@ describe("createAiReadiness — Tandem's Claude (launcher facts)", () => {
       expect(on.get().launcherFailure).toBe("restart");
     });
 
+    // The refusal clearing is what retires the stale `lastError: "unlicensed"`
+    // Restart chip, however it clears — the Settings form or a CLI
+    // `tandem activate` picked up by the licence poll.
+    it("re-reads the launcher at once when the refusal clears, and only then", async () => {
+      const seen: string[] = [];
+      const inner = routedFetch({
+        launcher: stoppedWith("unlicensed"),
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      globalThis.fetch = (async (input: string) => {
+        seen.push(String(input));
+        return inner(input as never);
+      }) as unknown as typeof fetch;
+      const holder: { r: AiReadiness | null } = { r: null };
+      const onReady = (r: AiReadiness) => (holder.r = r);
+      const { rerender } = render(AiReadinessHarness, {
+        props: { aiNotice: "unlicensed", onReady },
+      });
+      await settle();
+      const launcherReads = () => seen.filter((u) => u.includes(API_LAUNCHER_STATUS)).length;
+      const before = launcherReads();
+
+      // A kind change is not a clearing.
+      await rerender({ aiNotice: "unverifiable", onReady });
+      await settle();
+      expect(launcherReads()).toBe(before);
+
+      await rerender({ aiNotice: null, onReady });
+      await settle();
+      expect(launcherReads()).toBe(before + 1);
+      expect(holder.r?.aiNotice).toBeNull();
+
+      // Becoming refused again reads nothing extra.
+      await rerender({ aiNotice: "unlicensed", onReady });
+      await settle();
+      expect(launcherReads()).toBe(before + 1);
+      expect(holder.r?.aiNotice).toBe("unlicensed");
+    });
+
     it("deliveryStalledMs is null while refused; the twin reports the stall", async () => {
       const STALLED = { state: "awaiting-poll", waitingMs: 200_000 };
       globalThis.fetch = routedFetch({

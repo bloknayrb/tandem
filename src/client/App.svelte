@@ -141,7 +141,6 @@ import DocumentTabs from "./tabs/DocumentTabs.svelte";
 import { isRenamable } from "./types.js";
 import { MCP_BASE_URL } from "./utils/backend-ports";
 import { openFileForRuntime } from "./utils/browse-file";
-import { LICENSE_ACTIVATED_EVENT, OPEN_LICENSE_SETTINGS_EVENT } from "./utils/license-ui";
 import { resolveDefaultModelChip } from "./utils/model-chip";
 import { resolveModelFirstRunNeeded } from "./utils/model-first-run";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
@@ -805,29 +804,6 @@ $effect(() => {
   };
   window.addEventListener("tandem:open-integration-wizard", onOpen);
   return () => window.removeEventListener("tandem:open-integration-wizard", onOpen);
-});
-
-// #1521: the AI-off notice dispatches this; it sits in the rail with no
-// callback path to App.
-$effect(() => {
-  const onOpen = () => openLicenseSettings();
-  window.addEventListener(OPEN_LICENSE_SETTINGS_EVENT, onOpen);
-  return () => window.removeEventListener(OPEN_LICENSE_SETTINGS_EVENT, onOpen);
-});
-
-// #1521: Settings → License dispatches this after a successful activation.
-// Activation's 200 is sent after the server has respawned the launcher, while
-// `aiReadiness` still holds `lastError: "unlicensed"` — which maps to a Restart
-// chip once the notice clears. Read the launcher status NOW, so that chip never
-// shows (and a click on it never relaunches over the fresh child), then run the
-// usual post-action refresh.
-$effect(() => {
-  const onActivated = () => {
-    aiReadiness.refreshLauncherStatus();
-    refreshAiReadinessAfterLauncherAction();
-  };
-  window.addEventListener(LICENSE_ACTIVATED_EVENT, onActivated);
-  return () => window.removeEventListener(LICENSE_ACTIVATED_EVENT, onActivated);
 });
 let settingsBtnEl = $state<HTMLButtonElement | null>(null);
 
@@ -2632,7 +2608,7 @@ const shouldShowModelPicker = $derived(
             </div>
           </div>
           <!-- #1521: explains the disabled AI controls below; nothing on a dark build. -->
-          <AiOffNotice />
+          <AiOffNotice onOpenLicenseSettings={openLicenseSettings} />
           <PanelSlot
             kind="chat"
             messages={chatState.messages}
@@ -2709,7 +2685,7 @@ const shouldShowModelPicker = $derived(
       onConnectAi={connectAi}
       onRestartClaude={restartClaude}
       onOpenLicenseSettings={openLicenseSettings}
-      aiOffKind={licenseStore.ui.aiNotice}
+      aiNotice={aiReadiness.aiNotice}
       soloMode={modeState.tandemMode === "solo"}
       pushDelivery={aiReadiness.pushDelivery}
       claudeWorkingTool={yjsSync.claudeWorking?.tool ?? null}
@@ -3173,7 +3149,7 @@ const shouldShowModelPicker = $derived(
               onConnectAi={connectAi}
               onRestartClaude={restartClaude}
               onStartFreshClaude={startFreshClaude}
-              aiOffKind={licenseStore.ui.aiNotice}
+              aiNotice={aiReadiness.aiNotice}
               onOpenLicenseSettings={openLicenseSettings}
             />
           {/if}

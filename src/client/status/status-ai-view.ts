@@ -1,10 +1,9 @@
-import {
-  AI_CTA,
-  type AiChip,
-  type AiLiveIndicator,
-  type AiReadinessState,
-  type LauncherFailure,
-  type PushDelivery,
+import type {
+  AiChip,
+  AiLiveIndicator,
+  AiReadinessState,
+  LauncherFailure,
+  PushDelivery,
 } from "../hooks/useAiReadiness.svelte";
 import type { CwdDrift } from "../hooks/useCwdDrift.svelte";
 import { type AiNotice, aiOffCopy } from "../utils/license-ui";
@@ -26,9 +25,10 @@ import { type AiNotice, aiOffCopy } from "../utils/license-ui";
  * and only the last is something the server knows it will wake.
  *
  * Ordering rules (order is load-bearing):
- *   0. AI off by licence (#1521), keyed on `aiChip === "unlicensed"` — the same
- *      value that selects the pill's CTA wrapper, so the label and its action
- *      agree by construction. A launcher child still running at expiry would
+ *   0. AI off by licence (#1521), keyed on `aiNotice` — readiness's own value,
+ *      non-null exactly when its `chip` is `"unlicensed"` and so selects the
+ *      pill's CTA wrapper, so the label and its action agree by construction
+ *      (see `AiReadiness.aiNotice`). A launcher child still running at expiry would
  *      otherwise read "Tandem's Claude" beside an "AI off" CTA. It outranks
  *      Solo for the reason the chip does: Solo is a privacy choice, the
  *      refusal is a capability fact.
@@ -317,14 +317,9 @@ function tandemClaudeView(input: {
   };
 }
 
-/**
- * The AI is refused by the licence (#1521). `kind` picks the copy only; a null
- * kind (the chip says `unlicensed` but no kind was passed) falls back to the
- * kind-neutral `AI_CTA.unlicensed` title, so the pill can never show the
- * `unverifiable` reader "unlicensed".
- */
-function aiOffView(kind: AiNotice | null): BaseView {
-  const title = kind === null ? AI_CTA.unlicensed.title : aiOffCopy(kind).sentence;
+/** The AI is refused by the licence (#1521); `kind` picks the copy. */
+function aiOffView(kind: AiNotice): BaseView {
+  const title = aiOffCopy(kind).sentence;
   return {
     label: "AI off",
     tone: "not-connected",
@@ -391,15 +386,14 @@ export interface AiIndicatorInput {
   docSyncConnected: boolean;
   /** `/health`'s session count, or `null` when unknown. */
   sessionCount: number | null;
-  /** `aiChip === "unlicensed"` — the ONE source of the pill's ai-off state. */
-  aiOff: boolean;
-  /** Copy only: which refusal. Never turns the pill to ai-off on its own. */
-  aiOffKind: AiNotice | null;
+  /** The licence refusal (`AiReadiness.aiNotice`) — the ONE source of the
+   *  pill's ai-off state and its copy. */
+  aiNotice: AiNotice | null;
 }
 
 function baseIndicatorView(input: AiIndicatorInput): BaseView | null {
   // Rule 0: the licence refuses the AI.
-  if (input.aiOff) return aiOffView(input.aiOffKind);
+  if (input.aiNotice !== null) return aiOffView(input.aiNotice);
 
   // Rule 1: Solo. Solo already tells the user their comments are withheld,
   // which is a stronger and more relevant statement than any delivery state.
