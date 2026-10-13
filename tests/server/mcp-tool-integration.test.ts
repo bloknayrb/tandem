@@ -10,7 +10,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
 import * as Y from "yjs";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
@@ -123,6 +123,21 @@ afterEach(async () => {
 // pool would kill it anyway, but a bare `node` process (which is what the
 // production server is) stays alive on the leaked MessagePort.
 afterAll(() => shutdownSearchWorker());
+
+/**
+ * Replace CTRL_ROOM's chat with one unread user message. Chat is not cleared
+ * between tests, so a spec asserting the exact chat set clears it first.
+ */
+function seedUserChat(id: string, text: string) {
+  const ctrl = getOrCreateDocument(CTRL_ROOM);
+  const chat = ctrl.getMap(Y_MAP_CHAT);
+  const msg: ChatMessage = { id, author: "user", text, timestamp: Date.now(), read: false };
+  withInternal(ctrl, () => {
+    chat.clear();
+    chat.set(id, msg);
+  });
+  return chat;
+}
 
 function setMode(mode: "solo" | "tandem") {
   const ctrl = getOrCreateDocument(CTRL_ROOM);
@@ -1493,6 +1508,133 @@ describe("MCP tool integration — awareness tools", () => {
     expect(parsed.data.hasNew).toBe(false);
   });
 
+  it("tandem_checkInbox delivers chat sent with no document open", async () => {
+    // The bug: the handler returned NO_DOCUMENT before reading chat, which
+    // lives in CTRL_ROOM, so a chat typed with every tab closed never reached
+    // Tandem's Claude. beforeEach leaves no document open and none active.
+    expect(getOpenDocs().size).toBe(0);
+    const chat = seedUserChat("msg_no_doc", "open my notes file please");
+
+    const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.hasNew).toBe(true);
+    expect(parsed.data.chatMessages).toEqual([
+      expect.objectContaining({ id: "msg_no_doc", text: "open my notes file please" }),
+    ]);
+    expect(parsed.data.summary.startsWith("No document is open. ")).toBe(true);
+    expect(parsed.data.summary).toContain(CHAT_ACK_DIRECTIVE);
+    // The summary must not nudge an unasked open.
+    expect(parsed.data.summary).not.toContain("tandem_open");
+    expect(parsed.data.mode).toBe("tandem");
+    expect(parsed.data.userActions).toEqual([]);
+    expect(parsed.data.userResponses).toEqual([]);
+    expect(parsed.data.userReplies).toEqual([]);
+    expect(parsed.data.activity).toEqual({
+      isTyping: false,
+      cursor: null,
+      lastEdit: null,
+      selectedText: null,
+      selectionAt: null,
+    });
+    // Stamped read, so the next poll does not deliver it twice.
+    expect((chat.get("msg_no_doc") as ChatMessage).read).toBe(true);
+    const again = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+    expect(again.data.chatMessages).toEqual([]);
+    expect(again.data.hasNew).toBe(false);
+    expect(again.data.summary).toBe("No document is open. No new actions.");
+  });
+
+  it("tandem_checkInbox still delivers chat when the documentId it names is closed", async () => {
+    // A multi-document session passes documentId explicitly (the skill tells
+    // it to). If the user then closes that tab and chats, a NO_DOCUMENT here
+    // would hide the chat on every poll, and its "Call tandem_open first" text
+    // invited an unasked open.
+    setupDoc("mcp-aw-other-open", "Still open");
+    const chat = seedUserChat("msg_closed_id", "never mind that file");
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_checkInbox",
+        arguments: { documentId: "mcp-aw-closed-tab" },
+      }),
+    );
+
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.chatMessages.map((m: { id: string }) => m.id)).toEqual(["msg_closed_id"]);
+    expect(parsed.data.summary).toContain("Document mcp-aw-closed-tab is not open");
+    expect(parsed.data.summary).not.toContain("tandem_open");
+    // Nothing from the document that IS open leaks into a poll naming another.
+    expect(parsed.data.userActions).toEqual([]);
+    expect((chat.get("msg_closed_id") as ChatMessage).read).toBe(true);
+  });
+
+  it("tandem_checkInbox treats an empty documentId as none", async () => {
+    // `""` reached getCurrentDoc as an id and resolved to nothing, even with a
+    // document active.
+    setupDoc("mcp-aw-empty-id", "Hello world");
+    const parsed = parseResult(
+      await client.callTool({ name: "tandem_checkInbox", arguments: { documentId: "" } }),
+    );
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.summary).not.toContain("not open");
+    expect(parsed.data.summary).not.toContain("not active");
+  });
+
+  it("with nothing open, a chat asking for a file can be read, opened and answered", async () => {
+    // Bryan: "tandem's claude can open documents for the user, even if none
+    // are already open". The whole round trip, from a cold start.
+    expect(getOpenDocs().size).toBe(0);
+    const filePath = join(tmpdir(), `chat-no-doc-open-${Date.now()}.md`);
+    await fs.writeFile(filePath, "# Notes\n\nSome text.\n");
+    onTestFinished(() => fs.rm(filePath, { force: true }));
+    seedUserChat("msg_open_request", `please open ${filePath}`);
+
+    const inbox = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+    expect(inbox.data.chatMessages.map((m: { id: string }) => m.id)).toEqual(["msg_open_request"]);
+
+    const opened = parseResult(
+      await client.callTool({ name: "tandem_open", arguments: { filePath } }),
+    );
+    expect(opened.error).toBe(false);
+    expect(opened.data.documentId).toBeTruthy();
+
+    const reply = parseResult(
+      await client.callTool({
+        name: "tandem_reply",
+        arguments: { text: "Opened it.", replyTo: "msg_open_request" },
+      }),
+    );
+    expect(reply.error).toBe(false);
+    expect(reply.data.warning).toBeUndefined();
+
+    // And the inbox now polls against the opened document.
+    const after = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+    expect(after.error).toBe(false);
+    expect(after.data.summary.startsWith("No document")).toBe(false);
+  });
+
+  it("tandem_reply works with no document open, and the reply lands in chat", async () => {
+    expect(getOpenDocs().size).toBe(0);
+    const chat = seedUserChat("msg_reply_no_doc", "hello?");
+
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_reply",
+        arguments: { text: "Hi. Nothing is open yet.", replyTo: "msg_reply_no_doc" },
+      }),
+    );
+
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.sent).toBe(true);
+    expect(parsed.data.warning).toBeUndefined();
+    const reply = chat.get(parsed.data.messageId) as ChatMessage;
+    expect(reply.author).toBe("claude");
+    expect(reply.text).toBe("Hi. Nothing is open yet.");
+    expect(reply.documentId).toBeUndefined();
+    expect((chat.get("msg_reply_no_doc") as ChatMessage).read).toBe(true);
+  });
+
   it("tandem_getActivity reports seeded typing activity, and nothing when there is none", async () => {
     // **This handler had no behavioural spec at all before Unit 8j-2.** Only
     // `license-gate-coverage.test.ts` named `tandem_getActivity`, and that
@@ -2187,12 +2329,9 @@ describe("checkInbox stamps the pull path", () => {
   });
 
   it("records a poll even when no document is open", async () => {
-    // The ordering decision, pinned. `recordInboxPoll` sits ABOVE the
-    // `noDocumentError` guard because the fact being recorded is "a model
-    // reached for the inbox" — the only signal here written by a model rather
-    // than by a transport — and that is equally true when the poll lands on a
-    // closed document. Below the guard, the pull path would read as dead during
-    // exactly the window a user is most likely to be told that it is.
+    // "A model reached for the inbox" is the only signal here written by a
+    // model rather than by a transport, and it is equally true with nothing
+    // open — the window a user is most likely to be told the pull path is dead.
     setActiveDocId(null);
 
     await client.callTool({ name: "tandem_checkInbox", arguments: {} });
@@ -2210,21 +2349,24 @@ describe("checkInbox stamps the pull path", () => {
     expect(getDeliveryState(Date.now(), 1).state).toBe("polled");
   });
 
-  it("does NOT close the join when the tool bails out on a closed document", async () => {
-    // The other half of the split, through the real tool rather than the
-    // recorder: a poll that returns `noDocumentError` marked nothing read, so
-    // the user's message is still unseen and the round must stay open. Driven
-    // here rather than as a unit test because the fact under test is WHERE the
-    // two calls sit relative to the document guard.
+  it("closes the join on a poll with no document open, because it reads chat", async () => {
+    // This used to pin the OPPOSITE: the poll bailed out with NO_DOCUMENT
+    // before the chat loop, so the round stayed open — and the user's chat,
+    // sent with every tab closed, was never delivered at all. The poll now
+    // reads chat with nothing open, so it is a real delivery and closes the
+    // round. Asserted together with the chat read so `polled` is backed by a
+    // message actually returned, not just by the call returning.
     setActiveDocId(null);
+    seedUserChat("chat-join-no-doc", "are you there?");
     recordWakeForward(1_000);
 
-    await client.callTool({ name: "tandem_checkInbox", arguments: {} });
+    const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
 
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.chatMessages.map((m: { id: string }) => m.id)).toEqual(["chat-join-no-doc"]);
     const state = getDeliveryState(Date.now(), 1);
-    expect(state.state).toBe("awaiting-poll");
-    expect(state.latencyMs).toBeNull();
-    expect(state.pollCount).toBe(1); // liveness still stamped
+    expect(state.state).toBe("polled");
+    expect(state.pollCount).toBe(1);
   });
 });
 

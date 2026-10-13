@@ -136,14 +136,17 @@ export function isUnansweredAsk(event: TandemEvent): boolean {
  * the join.
  *
  * Call at the point `tandem_checkInbox` DISPATCHES, not where it succeeds: a
- * poll against a closed document still tells us a model is reaching for the
+ * poll naming a closed document still tells us a model is reaching for the
  * inbox, which is the fact this stamp reports.
  *
  * Split from {@link resolveDeliveryRound} because the two facts are true at
  * different moments and one of them is a claim about the USER's message. A poll
- * that returns `noDocumentError()` collected no annotations, no replies, and
- * never reached the CTRL_ROOM chat loop — so it marked nothing read and the
- * user's message is still unseen. Closing the join there would report
+ * that bails out before the CTRL_ROOM chat loop marks nothing read, so the
+ * user's message is still unseen and the round must stay open. Since chat is
+ * delivered with no document open, `tandem_checkInbox` itself has no such
+ * bail-out (it used to return `noDocumentError()` there); only an unexpected
+ * throw before the chat loop does, which the error boundary turns into an
+ * error result. Keep the split for that, and for any guard added later. Closing the join there would report
  * `{state: "polled", latencyMs: 240}` — "push delivered in a quarter second" —
  * for a message the model never received, which is the comforting-and-wrong
  * shape this module exists to eliminate.
@@ -156,9 +159,9 @@ export function recordInboxPoll(now: number = Date.now()): void {
 /**
  * The inbox poll actually collected. Closes any outstanding forward.
  *
- * Call only once the poll is committed to running its full pass — past the
- * document guard, so the chat loop's `read: true` writes and the `surfacedIds`
- * ledger updates are going to happen. See {@link recordInboxPoll} for why the
+ * Call only once the poll is committed to reading the chat bucket, so the chat
+ * loop's `read: true` writes are going to happen (and, when a document is open,
+ * the `surfacedIds` ledger updates). See {@link recordInboxPoll} for why the
  * split exists.
  */
 export function resolveDeliveryRound(now: number = Date.now()): void {

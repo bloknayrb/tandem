@@ -1410,6 +1410,20 @@ describe("the supervisor's turns tell a launched session not to self-arm", () =>
     expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).toContain("replies");
   });
 
+  it("lets the session answer chat and open a document on request with none open", () => {
+    // Bryan: "the desired behavior is that tandem's claude can open documents
+    // for the user, even if none are already open". #2193's first wording told
+    // a no-document session to "just wait", which forbade that.
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).not.toContain("do not open one");
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).not.toContain("just wait");
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).toContain(
+      "Chat reaches you even when no document is open",
+    );
+    expect(SUPERVISOR_NO_UNASKED_WORK_CLAUSE).toContain(
+      "if the user asks you to open a file, open it with tandem_open",
+    );
+  });
+
   it("names Monitor explicitly, so the instruction is actionable", () => {
     expect(SUPERVISOR_NO_ARM_CLAUSE).toContain("Monitor");
   });

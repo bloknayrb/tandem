@@ -1132,6 +1132,8 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
 }
 ```
 
+**No document open:** the tool never returns `NO_DOCUMENT`. Chat lives in `CTRL_ROOM`, not on a document, so with no active document (or a `documentId` that names no open document) it still returns `chatMessages`, `mode`, `modeProvenance` and `storeReadOnly`, with `userActions` / `userResponses` / `userReplies` empty and every `activity` field `false`/`null`. The `summary` then leads with `No document is open.` (or names the unknown id, or says no document is active while tabs remain open), and carries no advice to call `tandem_open`: Tandem's Claude opens a document only when the user asks. An empty-string `documentId` is treated as omitted. Before this, the tool refused with `NO_DOCUMENT` ahead of the chat read, so a chat sent with every tab closed never reached the supervisor's Claude.
+
 **Notes:**
 - Each annotation is surfaced only once -- subsequent calls return only new items (edited annotations re-surface with `edited: true`).
 - `userActions`: new or edited user comments. User notes and highlights never surface here (ADR-027) — and since #1619 neither does any record whose stored `audience` is not `outbound`, on either bucket, matching the channel.

@@ -372,13 +372,20 @@ export const SUPERVISOR_ACK_CLAUSE =
  * mid-turn. Either way "needs your attention" with nothing asked is where a
  * model falls back on the skill's "annotate freely" line. "Replies" is named
  * because the bootstrap discharges an owed wake (`supervisor.ts`), and a
- * user's reply on one of Claude's threads can be what it was owed for. */
+ * user's reply on one of Claude's threads can be what it was owed for.
+ *
+ * The no-document sentence exists because chat is not per-document: it reaches
+ * Claude through `tandem_checkInbox` with nothing open, and Bryan wants "tandem's
+ * claude can open documents for the user, even if none are already open". An
+ * earlier draft said "do not open one; just wait", which forbade exactly that.
+ * Opening stays gated on the user asking, like every other action here. */
 export const SUPERVISOR_NO_UNASKED_WORK_CLAUSE =
   "Respond to chat messages, comments and replies from the user, and do only what they ask; " +
   "reading the text around a comment or selection to answer it is fine. " +
-  "An accept or dismiss is not a request and needs no response. If tandem_checkInbox reports " +
-  "that no document is open, do not open one; just wait. Otherwise do not open, read through, " +
-  "review, annotate or edit any document unless the user asked you to.";
+  "An accept or dismiss is not a request and needs no response. Chat reaches you even when no " +
+  "document is open: answer it, and if the user asks you to open a file, open it with " +
+  "tandem_open. Do not open, read through, review, annotate or edit any document unless the " +
+  "user asked you to.";
 
 /** The bootstrap turn the supervisor writes immediately on a fresh spawn.
  *

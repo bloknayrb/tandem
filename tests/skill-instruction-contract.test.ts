@@ -130,7 +130,11 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // sees it" to "may see it": the status bar now hides presence text beside Tandem's own
   // launched Claude, because it can't be attributed to the chat's session (#2167). Outside the
   // wake section; every wake assertion below was re-read against the bumped file.
-  expect(skill).toMatch(/^version:\s*30$/m);
+  // 31 rewrites the `NO_DOCUMENT` bullet in Error Recovery: `tandem_checkInbox` now delivers
+  // chat with no document open, the error is no longer an instruction to open one unasked,
+  // and Claude opens a file when the user asks. Outside the wake section; every wake
+  // assertion below was re-read against the bumped file.
+  expect(skill).toMatch(/^version:\s*31$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
   // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
@@ -505,7 +509,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "30", bodyHash: "4c4fb3785e04" });
+    ).toEqual({ version: "31", bodyHash: "bae4d34331dd" });
   });
 
   // The editor's pickup row shows "working on it" only from an `inProgress` ack, and the

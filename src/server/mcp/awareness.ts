@@ -25,7 +25,7 @@ import {
 } from "../mode.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
-import { getCurrentDoc } from "./document.js";
+import { getCurrentDoc, getOpenDocs } from "./document.js";
 import { getDocumentStore } from "./document-store.js";
 import { checkInboxOutputShape } from "./output-schemas.js";
 import {
@@ -393,6 +393,137 @@ export function finalizeClaudeChatMessage(id: string): void {
   });
 }
 
+/**
+ * Leads `tandem_checkInbox`'s summary when the poll resolved to no document.
+ * Deliberately carries no "call tandem_open" advice: opening a document is
+ * something Claude does only when the user asks.
+ */
+export function noDocumentInboxNote(requestedId: string | undefined): string {
+  if (requestedId !== undefined) {
+    return `Document ${requestedId} is not open (tandem_listDocuments lists the open ones), so only chat is shown.`;
+  }
+  // No id and no store means no ACTIVE document, which is not quite "none
+  // open": the active id can be unset while tabs remain.
+  return getOpenDocs().size === 0
+    ? "No document is open."
+    : "No document is active (tandem_listDocuments lists the open ones), so only chat is shown.";
+}
+
+type DocumentStore = NonNullable<ReturnType<typeof getDocumentStore>>;
+
+/** The `activity` object `tandem_checkInbox` returns. */
+interface InboxActivity {
+  isTyping: boolean;
+  cursor: number | null;
+  lastEdit: number | null;
+  selectedText: string | null;
+  selectionAt: number | null;
+}
+
+interface DocumentInbox {
+  userActions: ReturnType<typeof processInboxAnnotations>["userActions"];
+  userResponses: ReturnType<typeof processInboxAnnotations>["userResponses"];
+  userReplies: ReturnType<typeof collectInboxUserReplies>;
+  activity: InboxActivity;
+}
+
+/** The document-scoped half of a `tandem_checkInbox` pass with nothing open. */
+function emptyDocumentInbox(): DocumentInbox {
+  return {
+    userActions: [],
+    userResponses: [],
+    userReplies: [],
+    activity: {
+      isTyping: false,
+      cursor: null,
+      lastEdit: null,
+      selectedText: null,
+      selectionAt: null,
+    },
+  };
+}
+
+/**
+ * The document-scoped half of a `tandem_checkInbox` pass: the three annotation
+ * buckets and `activity`, all read from `store`. Chat is NOT here — it lives in
+ * CTRL_ROOM and is read by the handler whether or not a document is open.
+ */
+function collectDocumentInbox(store: DocumentStore, modeState: ModeState): DocumentInbox {
+  const allAnnotations = store.listAnnotations();
+  const fullText = store.getText();
+
+  // Refresh only unsurfaced annotations, in the one batch
+  // `YDocStore.refreshAnnotations` owns the transaction for (its docblock
+  // carries why the callee owns it). The inbox surfacer doesn't currently
+  // distinguish refresh outcomes; a future enhancement could route
+  // `degraded` / `failed` annotations into a separate notification.
+  //
+  // **This calls the exported function rather than the private one, and
+  // that is the point of Unit 8j-2's A2.** The selection loop used to be
+  // duplicated here, inline inside a `store.transactMcp`, while every
+  // ledger/Solo/dedup spec drove the exported copy. One loop now.
+  //
+  // ONE context object for both collectors (#1702). `modeState` is the
+  // mode resolved for THIS poll, so the Solo hold reflects the user's
+  // current setting and not a fallback; handing the same object to both
+  // buckets is what keeps them from drifting apart. See `InboxPollContext`.
+  const pollCtx: InboxPollContext = {
+    modeState,
+    documentId: store.documentId,
+    wasChannelEmitted: wasEmittedViaChannel,
+  };
+  const { userActions, userResponses } = processInboxAnnotations(
+    allAnnotations,
+    fullText,
+    surfacedIds,
+    (anns) => store.refreshAnnotations(anns),
+    pollCtx,
+  );
+
+  // WS-A2 userReplies bucket — new user replies on comment threads, held in
+  // Solo and released on the flip. Uses the full annotation set (not just
+  // `unsurfaced`) since a reply can arrive on a long-surfaced comment.
+  const userReplies = collectInboxUserReplies(
+    allAnnotations,
+    fullText,
+    (id) => store.listReplies(id),
+    replySurfacedIds,
+    pollCtx,
+  );
+
+  // Current user activity. `getUserAwareness()` is typed rather than a
+  // `getMap` returning the raw Y.Map — a map accessor would be the `ydoc`
+  // hatch under a new name.
+  const { selection, activity } = store.getUserAwareness();
+
+  const hasSelection = selection && selection.from !== selection.to;
+  const selectedText = hasSelection ? safeSlice(fullText, selection!.from, selection!.to) : null;
+  // #1624: the selection record's own timestamp. `cursor`/`lastEdit` come
+  // from a DIFFERENT record (`Y_MAP_ACTIVITY`), so without this the two
+  // halves of `activity` read as one snapshot while having independent
+  // ages. Null whenever `selectedText` is null, but NOT only then: a record
+  // with no numeric `timestamp` yields a real `selectedText` beside a null
+  // `selectionAt`, so a null here must never be read as "no selection".
+  // The `typeof` guard is not defensive: an `undefined` here fails the
+  // SDK's structured-output validation for the WHOLE response, not just
+  // this field.
+  const selectionAt =
+    hasSelection && typeof selection!.timestamp === "number" ? selection!.timestamp : null;
+
+  return {
+    userActions,
+    userResponses,
+    userReplies,
+    activity: {
+      isTyping: activity?.isTyping ?? false,
+      cursor: activity?.cursor ?? null,
+      lastEdit: activity?.lastEdit ?? null,
+      selectedText,
+      selectionAt,
+    },
+  };
+}
+
 export function registerAwarenessTools(server: McpServer): void {
   server.tool(
     "tandem_getActivity",
@@ -459,7 +590,7 @@ export function registerAwarenessTools(server: McpServer): void {
     "tandem_checkInbox",
     {
       description:
-        'Return user actions not yet returned by a previous poll — new comments, chat messages, and replies to your annotations — plus the current collaboration `mode` and `activity`. This is the authoritative delivery path: real-time push cannot be confirmed to have reached a client, so nothing here is suppressed on the strength of a push, and steady polling is the only reliable way to see user activity. Repeat calls de-duplicate against what was already returned, so frequent polling never double-reports. An item carries `alreadyPushed: true` when it was also emitted as a real-time event; that describes the server\'s side only. Does not return user notes (`type: "note"`), nor any record whose stored `audience` is not outbound (#1619/#1710) — user highlights are always private, so they never appear here at all. `activity.selectedText` is the most recent non-empty selection, not necessarily the current one — it is not cleared when focus leaves the editor — and `activity.selectionAt` is when the user last made it. For a document not shown in an editor nothing updates the record, so after an edit `selectedText` can be sliced from stale offsets (#1997).',
+        'Return user actions not yet returned by a previous poll — new comments, chat messages, and replies to your annotations — plus the current collaboration `mode` and `activity`. Works with no document open: chat and `mode` are still returned, and the document fields are empty. This is the authoritative delivery path: real-time push cannot be confirmed to have reached a client, so nothing here is suppressed on the strength of a push, and steady polling is the only reliable way to see user activity. Repeat calls de-duplicate against what was already returned, so frequent polling never double-reports. An item carries `alreadyPushed: true` when it was also emitted as a real-time event; that describes the server\'s side only. Does not return user notes (`type: "note"`), nor any record whose stored `audience` is not outbound (#1619/#1710) — user highlights are always private, so they never appear here at all. `activity.selectedText` is the most recent non-empty selection, not necessarily the current one — it is not cleared when focus leaves the editor — and `activity.selectionAt` is when the user last made it. For a document not shown in an editor nothing updates the record, so after an edit `selectedText` can be sliced from stale offsets (#1997).',
       inputSchema: {
         documentId: z
           .string()
@@ -477,16 +608,25 @@ export function registerAwarenessTools(server: McpServer): void {
         // below the guard would make the pull path look dead during exactly the
         // window a user is most likely to be told it is.
         recordInboxPoll();
-        const store = getDocumentStore(documentId);
-        if (!store) return noDocumentError();
-        // The join closes HERE, below the guard — a separate fact from the
-        // stamp above. The poll that bailed out collected nothing, marked no
-        // chat message read, and touched no ledger, so the user's message is
-        // still unseen; closing the round there would report a delivery that
-        // did not happen. Past this line the full pass runs.
+        // `""` means "no id", as for message text elsewhere; left as-is it would
+        // resolve to no document even with one active.
+        const requestedId = documentId || undefined;
+        const store = getDocumentStore(requestedId);
+        // No document is NOT an error here. Chat lives in CTRL_ROOM, not on a
+        // document, and returning NO_DOCUMENT is how a chat sent with every tab
+        // closed went unanswered: the supervisor's Claude polled, got the
+        // error, and never reached the chat loop. That held for an explicit id
+        // naming a closed tab too (the skill says to pass one when several are
+        // open), and NO_DOCUMENT's text told Claude to call tandem_open, which
+        // is an unasked open. So the poll always runs; with no store the
+        // document buckets are empty and the summary says why.
+        //
+        // The join closes HERE — a separate fact from the stamp above, kept
+        // apart because it is a claim about the USER's message: every pass from
+        // this line reads the chat bucket and stamps it read. It can also close
+        // a round whose forward was an annotation on a document closed before
+        // this poll; `polled` was never proof of delivery (see delivery-state).
         resolveDeliveryRound();
-        const allAnnotations = store.listAnnotations();
-        const fullText = store.getText();
 
         // WS-A2: single live read of the three-state mode, used both to gate
         // the Solo privacy hold (`hideFromAI` in the surfacer) and to report
@@ -494,44 +634,13 @@ export function registerAwarenessTools(server: McpServer): void {
         // value can never disagree within a single poll.
         const modeState = readModeState();
 
-        // Refresh only unsurfaced annotations, in the one batch
-        // `YDocStore.refreshAnnotations` owns the transaction for (its docblock
-        // carries why the callee owns it). The inbox surfacer doesn't currently
-        // distinguish refresh outcomes; a future enhancement could route
-        // `degraded` / `failed` annotations into a separate notification.
-        //
-        // **This calls the exported function rather than the private one, and
-        // that is the point of Unit 8j-2's A2.** The selection loop used to be
-        // duplicated here, inline inside a `store.transactMcp`, while every
-        // ledger/Solo/dedup spec drove the exported copy. One loop now.
-        //
-        // ONE context object for both collectors (#1702). `modeState` is the
-        // mode resolved for THIS poll, so the Solo hold reflects the user's
-        // current setting and not a fallback; handing the same object to both
-        // buckets is what keeps them from drifting apart. See `InboxPollContext`.
-        const pollCtx: InboxPollContext = {
-          modeState,
-          documentId: store.documentId,
-          wasChannelEmitted: wasEmittedViaChannel,
-        };
-        const { userActions, userResponses } = processInboxAnnotations(
-          allAnnotations,
-          fullText,
-          surfacedIds,
-          (anns) => store.refreshAnnotations(anns),
-          pollCtx,
-        );
-
-        // WS-A2 userReplies bucket — new user replies on comment threads, held in
-        // Solo and released on the flip. Uses the full annotation set (not just
-        // `unsurfaced`) since a reply can arrive on a long-surfaced comment.
-        const userReplies = collectInboxUserReplies(
-          allAnnotations,
-          fullText,
-          (id) => store.listReplies(id),
-          replySurfacedIds,
-          pollCtx,
-        );
+        // Every document-scoped field — the three annotation buckets and
+        // `activity` — comes from the store. With no document open they are
+        // empty, so nothing annotation-derived (notes, private records,
+        // Solo-held content) can reach Claude on that pass.
+        const { userActions, userResponses, userReplies, activity } = store
+          ? collectDocumentInbox(store, modeState)
+          : emptyDocumentInbox();
 
         // Bucket 3: unread chat messages from CTRL_ROOM
         const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
@@ -554,31 +663,10 @@ export function registerAwarenessTools(server: McpServer): void {
           }
         });
 
-        // Current user activity. `getUserAwareness()` is typed rather than a
-        // `getMap` returning the raw Y.Map — a map accessor would be the `ydoc`
-        // hatch under a new name.
-        const { selection, activity } = store.getUserAwareness();
-
         // Reported mode is the two-state view of the same live read used for
         // the hold gate: indeterminate (mode key absent, e.g. restart) collapses
         // to the default, matching the pre-WS-A2 `.catch(TANDEM_MODE_DEFAULT)`.
         const mode = reportedMode(modeState);
-
-        const hasSelection = selection && selection.from !== selection.to;
-        const selectedText = hasSelection
-          ? safeSlice(fullText, selection!.from, selection!.to)
-          : null;
-        // #1624: the selection record's own timestamp. `cursor`/`lastEdit` come
-        // from a DIFFERENT record (`Y_MAP_ACTIVITY`), so without this the two
-        // halves of `activity` read as one snapshot while having independent
-        // ages. Null whenever `selectedText` is null, but NOT only then: a record
-        // with no numeric `timestamp` yields a real `selectedText` beside a null
-        // `selectionAt`, so a null here must never be read as "no selection".
-        // The `typeof` guard is not defensive: an `undefined` here fails the
-        // SDK's structured-output validation for the WHOLE response, not just
-        // this field.
-        const selectionAt =
-          hasSelection && typeof selection!.timestamp === "number" ? selection!.timestamp : null;
 
         // Build summary
         const parts: string[] = [];
@@ -611,7 +699,10 @@ export function registerAwarenessTools(server: McpServer): void {
           );
           parts.push(CHAT_ACK_DIRECTIVE);
         }
-        const summary = parts.length > 0 ? parts.join(". ") + "." : "No new actions.";
+        const actions = parts.length > 0 ? parts.join(". ") + "." : "No new actions.";
+        // Leads, so a model reading only the summary knows why the document
+        // buckets are empty. Not counted in `hasNew`: it is a state, not an ask.
+        const summary = store ? actions : `${noDocumentInboxNote(requestedId)} ${actions}`;
 
         const hasNew =
           userActions.length > 0 ||
@@ -632,13 +723,7 @@ export function registerAwarenessTools(server: McpServer): void {
           userResponses,
           userReplies,
           chatMessages,
-          activity: {
-            isTyping: activity?.isTyping ?? false,
-            cursor: activity?.cursor ?? null,
-            lastEdit: activity?.lastEdit ?? null,
-            selectedText,
-            selectionAt,
-          },
+          activity,
         });
       }),
     ),
