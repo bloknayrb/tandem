@@ -716,7 +716,7 @@ Claude's own work is the user's decision and is refused here** (#1770).
 |-----------|------|----------|-------------|
 | `id` | string | yes | Annotation ID |
 | `action` | enum | yes | `accept` or `dismiss` — `accept` is refused on Claude's own record and on any record carrying `suggestedText` |
-| `documentId` | string | no | Target document ID (defaults to active document) |
+| `documentId` | string | no | Target document ID. Omit it to use the open document that holds this annotation id (the active document when none does); if the id is Claude-facing in more than one open document the call is refused with `INVALID_ARGUMENT` and `details: { reason: "ambiguous-document", documentIds }` (#2187, PR #2225 review). The success payload names the `documentId` it acted on. The lookup applies no Solo hold, deliberately, matching the explicit-`documentId` form. |
 
 **Returns:**
 ```json
@@ -753,7 +753,7 @@ Delete an annotation permanently.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `id` | string | yes | Annotation ID |
-| `documentId` | string | no | Target document ID (defaults to active document) |
+| `documentId` | string | no | Target document ID. Omit it to use the open document that holds this annotation id (the active document when none does); if the id is Claude-facing in more than one open document the call is refused with `INVALID_ARGUMENT` and `details: { reason: "ambiguous-document", documentIds }` (#2187, PR #2225 review). The success payload names the `documentId` it acted on. The lookup applies no Solo hold, deliberately, matching the explicit-`documentId` form. |
 
 **Returns:**
 ```json
@@ -772,7 +772,7 @@ Edit the content of an annotation Claude authored. Only pending annotations can 
 | `content` | string | no | New comment/note text |
 | `reason` | string | no | Alias for content (legacy compat) |
 | `newText` | string | no | Sets the `suggestedText` field on a comment (replacement proposal) |
-| `documentId` | string | no | Target document ID (defaults to active document) |
+| `documentId` | string | no | Target document ID. Omit it to use the open document that holds this annotation id (the active document when none does); if the id is Claude-facing in more than one open document the call is refused with `INVALID_ARGUMENT` and `details: { reason: "ambiguous-document", documentIds }` (#2187, PR #2225 review). The success payload names the `documentId` it acted on. The lookup applies no Solo hold, deliberately, matching the explicit-`documentId` form. |
 
 **Returns:**
 ```json
@@ -815,7 +815,7 @@ Reply to a thread on an annotation Claude authored. Only works on pending annota
 | `annotationId` | string | yes | The annotation ID to reply to |
 | `text` | string | yes | Reply text |
 | `suggestedText` | string | no | A refined replacement proposal, over the **parent annotation's** range (#1626). A reply has no range of its own. |
-| `documentId` | string | no | Target document ID (defaults to active document) |
+| `documentId` | string | no | Target document ID. Omit it to use the open document that holds this annotation id (the active document when none does); if the id is Claude-facing in more than one open document the call is refused with `INVALID_ARGUMENT` and `details: { reason: "ambiguous-document", documentIds }` (#2187, PR #2225 review). The success payload names the `documentId` it acted on. The lookup applies no Solo hold, deliberately, matching the explicit-`documentId` form. |
 
 **Returns:**
 ```json
@@ -1108,7 +1108,7 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `documentId` | string | no | Target document ID (defaults to active document) |
+| `documentId` | string | no | Limit the poll to one document. Omit it to poll every open document — the usual call (#2187) |
 
 **Returns:**
 ```json
@@ -1118,11 +1118,12 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
   "mode": "tandem",
   "modeProvenance": { "source": "client", "connection": "a1b2c3d4", "at": 1710936000000, "value": "tandem" },
   "storeReadOnly": false,
-  "userActions": [ { ...annotation, "textSnippet": "...", "edited": true, "alreadyPushed": true } ],
-  "userReplies": [ { "id": "r_...", "annotationId": "ann_...", "author": "user", "text": "...", "timestamp": 1710936000000, "textSnippet": "...", "alreadyPushed": true } ],
-  "userResponses": [ { ...annotation, "textSnippet": "..." } ],
+  "userActions": [ { ...annotation, "textSnippet": "...", "documentId": "notes-a1b2c3", "edited": true, "alreadyPushed": true } ],
+  "userReplies": [ { "id": "r_...", "annotationId": "ann_...", "author": "user", "text": "...", "timestamp": 1710936000000, "textSnippet": "...", "documentId": "notes-a1b2c3", "alreadyPushed": true } ],
+  "userResponses": [ { ...annotation, "textSnippet": "...", "documentId": "notes-a1b2c3" } ],
   "chatMessages": [ { "id": "msg_...", "text": "...", "timestamp": 1710936000000 } ],
   "activity": {
+    "documentId": "notes-a1b2c3",
     "isTyping": false,
     "cursor": 142,
     "lastEdit": 1710936000000,
@@ -1132,7 +1133,14 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
 }
 ```
 
-**No document open:** the tool never returns `NO_DOCUMENT`. Chat lives in `CTRL_ROOM`, not on a document, so with no active document (or a `documentId` that names no open document) it still returns `chatMessages`, `mode`, `modeProvenance` and `storeReadOnly`, with `userActions` / `userResponses` / `userReplies` empty and every `activity` field `false`/`null`. The `summary` then leads with `No document is open.` (or names the unknown id, or says no document is active while tabs remain open), and carries no advice to call `tandem_open`: Tandem's Claude opens a document only when the user asks. An empty-string `documentId` is treated as omitted. Before this, the tool refused with `NO_DOCUMENT` ahead of the chat read, so a chat sent with every tab closed never reached the supervisor's Claude.
+**Every open document, by default (#2187):** with no `documentId` the poll reads every open document, the active one first. Every `userActions`, `userResponses` and `userReplies` item carries the `documentId` it belongs to, so the same imported Word comment open in two files arrives twice, told apart by it. Act on an item by passing that `documentId`: a follow-up without one targets the active document, and a range from one document applied to another lands on the wrong text. When any item comes from a document other than the active one, the `summary` names those files and says so. `activity` describes only the active document, which `activity.documentId` names (`null` when none is active). A document whose pass throws is skipped, named by id in the `summary` and logged to stderr (never its error text in the response, which can carry note content), and the other documents and the chat are still returned. Passing a `documentId` narrows the poll to that one document, with the pre-#2187 behaviour: a throw reaches the error boundary with nothing read. Since the PR #2225 review, three more things hold on both paths:
+- **Items are checked before they are marked delivered.** Each comment, response, reply and chat message is validated against its wire schema just before the ledger would stamp it (after the privacy and Solo gates, so a withheld record is never counted). One that fails — a legacy or stale-tab record with, say, a non-string `content` — is left out of the response and NOT marked delivered, logged to stderr once with its document id, a clamped id and the failing field paths only (never its content), and counted in the `summary` ("N item(s) in <file> could not be returned"). It never sets `hasNew`.
+- **Nothing is committed until the whole response validates.** The surfaced-item ledgers, the chat `read` stamps and the delivery-round close all happen only after the full response parses against the output schema; if it does not, the call returns an error and the next poll retries everything.
+- **The delivery round waits on the documents it was told about.** An annotation forward stays pending while the document it belongs to could not be read at all, and a round held that way is re-timed to its oldest item still undelivered, so later forwards that were delivered neither extend the wait nor hide behind it. A record left out as malformed does not hold it: the summary has just reported it to Claude, and holding would pin the round at `awaiting-poll` for as long as the record stays malformed. A chat forward, or one for a document that was read, closes as before.
+
+On a default poll a background document that produced nothing on its last pass, has not changed since (any transaction on it, deletions included), and was polled under the same Solo/Tandem mode is not re-read. `activity.documentId` names the active document even when its pass failed (its other fields are then empty); it is `null` only when no document is active. When two listed files share a name the summary adds the `documentId`, e.g. `README.md (readme-ab12cd)`. Before #2187 a default poll read only the active document, so a comment on a background tab came back as `No new actions.`, which nothing distinguished from a quiet poll.
+
+**No document open:** the tool never returns `NO_DOCUMENT`. Chat lives in `CTRL_ROOM`, not on a document, so with no document open (or a `documentId` that names no open document) it still returns `chatMessages`, `mode`, `modeProvenance` and `storeReadOnly`, with `userActions` / `userResponses` / `userReplies` empty and every `activity` field `false`/`null`. The `summary` then leads with `No document is open.` (or names the unknown id), and carries no advice to call `tandem_open`: Tandem's Claude opens a document only when the user asks. An empty-string `documentId` is treated as omitted. Before this, the tool refused with `NO_DOCUMENT` ahead of the chat read, so a chat sent with every tab closed never reached the supervisor's Claude.
 
 **Notes:**
 - Each annotation is surfaced only once -- subsequent calls return only new items (edited annotations re-surface with `edited: true`).
