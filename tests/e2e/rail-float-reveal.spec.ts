@@ -47,24 +47,25 @@ let tmpDir: string;
  * `hover()` targets the at-rest 14px shell.
  *
  * `setRailVisible` returns when the handle unmounts, which is the START of the
- * shell's 360 ms width transition. Playwright's stability check can accept the
- * shell's rect in the transition's first frames, so `hover()` aims at the
- * centre of a ~200px-wide shell. `mouseenter` fires, the shell then shrinks out
- * from under the pointer, Chromium's post-layout hover update fires
- * `mouseleave`, and `onRailShellLeave` clears the 120 ms enter timer before
- * `railFloat.right` is ever set. Measured: `hover({ force: true })` at that
- * point never floats; with this wait in front it always does.
+ * shell's 360 ms width transition. A hover that lands mid-transition aims at
+ * the centre of a still-wide shell: `mouseenter` fires, the shell shrinks out
+ * from under the pointer, `mouseleave` follows, and `onRailShellLeave` clears
+ * the 120 ms enter timer before `railFloat.right` is ever set. Measured:
+ * `hover({ force: true })` straight after `setRailVisible` failed 5 of 5 runs
+ * that way, and passed 20 of 20 with this wait in front. Inferred, not
+ * measured: the unforced `hover()` reaches the same point because its
+ * stability check can accept two identical rects at the transition's start.
  *
- * `collapsed` is asserted first so the negative check cannot pass on a shell
- * that never collapsed. `animating` is set in the same Svelte flush that
- * unmounts the handle, so by the time `setRailVisible` returns it is already
- * present, and its absence means the transition finished.
+ * The computed width is what the hover depends on, so that is what is waited
+ * for; it reads the in-flight value during the transition. `animating` alone
+ * is not enough: the 400 ms fallback timer in `handleRailVisChange` can clear
+ * it before `transitionend` if the transition started late.
  */
 async function collapseRightRail(page: Page): Promise<Locator> {
   await setRailVisible(page, "right", false);
   const shell = page.locator(SHELL);
-  await expect(shell).toHaveClass(/\bcollapsed\b/);
   await expect(shell).not.toHaveClass(/\banimating\b/);
+  await expect(shell).toHaveCSS("width", "14px");
   return shell;
 }
 
@@ -90,19 +91,21 @@ test("an open chat reveal never co-exists with the float-closing phase (#2014)",
   // `railHoverReveal` is deliberately NOT seeded off — the hover float is what
   // is under test here.
   const shell = await collapseRightRail(page);
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent("tandem:focus-chat")));
 
-  await expect(shell).toHaveClass(/\bfloating\b/);
-  await expect(page.locator(COMPOSER)).toBeVisible();
-
-  // Arm the hover float. The wait is a deterministic hold, NOT a poll on
-  // `[data-testid='rail-float-right']`: that testid is present from
-  // `revealOpen` alone, so a poll resolves immediately, the pointer can leave
-  // inside the 120 ms enter delay, `onRailShellLeave` clears the pending enter
-  // timer, `railFloat.right` is never set, and `maybeHideFloat`'s
-  // `if (!railFloat[side]) return;` fires first — green on unfixed master.
+  // Arm the hover float BEFORE opening the reveal. Once the reveal is open,
+  // `.floating`, `[data-testid='rail-float-right']` and the float chrome all
+  // come from `revealOpen` alone, so nothing in the DOM can show the hover
+  // armed. A hover that never armed leaves `railFloat.right` unset and
+  // `maybeHideFloat`'s `if (!railFloat[side]) return;` fires first — green on
+  // unfixed master. With no reveal open yet, `.floating` is that witness. The
+  // wait is a deterministic hold that keeps the pointer inside through the
+  // 120 ms enter delay.
   await shell.hover();
   await page.waitForTimeout(HOVER_ENTER_MS + 150);
+  await expect(shell).toHaveClass(/\bfloating\b/);
+
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("tandem:focus-chat")));
+  await expect(page.locator(COMPOSER)).toBeVisible();
 
   // Move the pointer away, then take the keyboard/programmatic focus exit the
   // issue identifies (an outside pointerdown cannot be used: the capture-phase
