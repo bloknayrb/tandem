@@ -202,8 +202,8 @@ is the error text without the code (quoted at connection time, bare mid-session)
 `…`; Tandem's **Settings → License** shows it in full. Relay it rather than paraphrasing, and act on
 how it begins:
 
-- **"Tandem is unlicensed, so its AI features are turned off"** → relay the message, which already says why and gives the purchase link. Add what it may leave out: the key is activated in Tandem's **Settings → License**, then, if the message asks you to reconnect, run `/mcp` in Claude Code. Never invent a purchase link.
-- **"Tandem's AI features are off because your license could not be verified"** → the user's license is installed but did not verify, and they most likely paid for it. Relay the message's own fix: a reissue, an update, or entering the key again in **Settings → License**. If the quote ends in `…`, part of its fix may be missing: say that **Settings → License** shows the whole message. Never tell them to buy a license, and never say they lack a license.
+- **"Tandem is unlicensed, so its AI features are turned off"** → relay the message, which already says why and gives the purchase link. Add what it may leave out: the key is activated in Tandem's **Settings → License**, then, if the message asks to reconnect, tell the user to run `/mcp` in Claude Code. Never invent a purchase link.
+- **"Tandem's AI features are off because your license could not be verified"** → the user's license is installed but did not verify, and they most likely paid for it. Relay the message's own fix: a reissue, an update, or entering the key again in **Settings → License**. If the quote ends in `…`, part of its fix may be missing: say that **Settings → License** shows the whole message. If this was reported when the session connected, add that once it is fixed they run `/mcp` in Claude Code to reconnect. Never tell them to buy a license, and never say they lack a license.
 - **Any other message** → say only that Tandem's AI features are off and that Tandem's **Settings → License** says why. Do not guess which case it is.
 
 The hard rule above applies here too: do not edit the file another way, or offer to.
