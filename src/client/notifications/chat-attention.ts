@@ -1,5 +1,11 @@
 import type { ChatMessage } from "../../shared/types";
 import type { ChatNotificationContent, ChatSound } from "../hooks/useTandemSettings";
+import {
+  cleanNotificationText,
+  NOTIFICATION_BODY_MAX_CHARS,
+  NOTIFICATION_TITLE_MAX_CHARS,
+  sliceCodeUnitsSafe,
+} from "./notification-text";
 
 /**
  * Turns live Claude replies into attention (#2168): a chime, and — only while
@@ -97,6 +103,10 @@ export interface ChatAttention {
 }
 
 const PREVIEW_MAX_CHARS = 140;
+/**
+ * How much of a reply `previewText` reads, in UTF-16 code units. See there.
+ */
+const PREVIEW_INPUT_MAX_UNITS = 2_000;
 /**
  * How long after the user's first return following a notification a click
  * still opens the document it named. See `activate()`.
@@ -272,6 +282,11 @@ export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
  * What the notification says. `generic` never names the document, because the
  * notification can show on a lock screen; `document` names it; `preview` adds
  * the start of the reply. A batch naming more than one document names none.
+ *
+ * Both halves go through `cleanNotificationText`, for both backends: the
+ * browser posts this text as-is, so this is where a file name's U+202E or a
+ * reply's zero-width characters are dropped and the caps applied. The desktop
+ * path cleans again in Rust, which changes nothing.
  */
 export function buildNotificationText(
   replies: readonly ChatMessage[],
@@ -288,7 +303,10 @@ export function buildNotificationText(
   const lead = count > 1 ? `Claude sent ${count} replies` : "Claude replied";
   const title = name ? `${lead} in ${name}` : lead;
   const body = content === "preview" ? previewText(last.text) : "";
-  return { title, body };
+  return {
+    title: cleanNotificationText(title, NOTIFICATION_TITLE_MAX_CHARS),
+    body: cleanNotificationText(body, NOTIFICATION_BODY_MAX_CHARS),
+  };
 }
 
 /**
@@ -297,9 +315,19 @@ export function buildNotificationText(
  * like it: `my_config_file.md`, `x > 3` and `a * b * c` come through
  * unchanged. Written without regex lookbehind, which WebKit before Safari 16.4
  * (the macOS WebView on older systems) rejects at parse time.
+ *
+ * **The input is bounded first, and the bound is load-bearing.** Several of
+ * the regexes below are quadratic on adversarial text, because a match that
+ * starts at every position can scan to the end of the input before failing:
+ * the link regex on `[[[[…` or `[](` repeated, the paired-emphasis regexes on
+ * ` _a` or ` **a` repeated. A reply is text an MCP client chooses, so 40k such
+ * characters would cost seconds on the UI thread for a 140-character preview.
+ * Reading only the first `PREVIEW_INPUT_MAX_UNITS` keeps that to milliseconds.
+ * A reply that opens with a code block longer than the bound previews as an
+ * empty body; the title still shows.
  */
 export function previewText(text: string): string {
-  const lines = text
+  const lines = sliceCodeUnitsSafe(text, PREVIEW_INPUT_MAX_UNITS)
     // Fenced code, including one a streamed reply has not closed yet.
     .replace(/```[\s\S]*?(?:```|$)/g, " ")
     // Images and links keep only their text.

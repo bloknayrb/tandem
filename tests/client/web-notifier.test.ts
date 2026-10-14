@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createWebNotifier,
   postWebNotification,
+  watchWebNotificationPermission,
   withTitleCount,
 } from "../../src/client/notifications/web-notifier";
 
@@ -134,5 +135,119 @@ describe("withTitleCount", () => {
   it("caps at 9+ and rewrites only its own prefix", () => {
     expect(withTitleCount("(3) Tandem", 12)).toBe("(9+) Tandem");
     expect(withTitleCount("(9+) Tandem", 0)).toBe("Tandem");
+  });
+});
+
+describe("watchWebNotificationPermission", () => {
+  class FakeStatus extends EventTarget {
+    state: PermissionState = "prompt";
+  }
+
+  function stubPermissions(query: unknown): void {
+    Object.defineProperty(navigator, "permissions", {
+      configurable: true,
+      value: query === undefined ? undefined : { query },
+    });
+  }
+
+  function setPermission(permission: NotificationPermission): void {
+    (Notification as unknown as { permission: NotificationPermission }).permission = permission;
+  }
+
+  const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  afterEach(() => {
+    // Drop the own property so happy-dom's prototype getter shows through again.
+    delete (navigator as unknown as { permissions?: unknown }).permissions;
+  });
+
+  it("reports once after the query resolves, then on every change, re-reading Notification.permission", async () => {
+    stubNotification("default");
+    const status = new FakeStatus();
+    const query = vi.fn(async () => status);
+    stubPermissions(query);
+    const onChange = vi.fn();
+
+    const stop = watchWebNotificationPermission(onChange);
+    expect(query).toHaveBeenCalledWith({ name: "notifications" });
+    expect(onChange).not.toHaveBeenCalled();
+    await flush();
+    expect(onChange.mock.calls).toEqual([["default"]]);
+
+    setPermission("granted");
+    // The status's own `state` stays "prompt": the value reported must be
+    // Notification.permission's, never PermissionStatus vocabulary.
+    status.dispatchEvent(new Event("change"));
+    expect(onChange.mock.calls).toEqual([["default"], ["granted"]]);
+
+    setPermission("denied");
+    status.dispatchEvent(new Event("change"));
+    expect(onChange).toHaveBeenLastCalledWith("denied");
+    stop();
+  });
+
+  it("a rejected query reports nothing and does not throw", async () => {
+    stubPermissions(vi.fn(() => Promise.reject(new TypeError("bad name"))));
+    const onChange = vi.fn();
+    const stop = watchWebNotificationPermission(onChange);
+    await flush();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(() => stop()).not.toThrow();
+  });
+
+  it("a query that throws synchronously reports nothing and does not throw", async () => {
+    stubPermissions(
+      vi.fn(() => {
+        throw new TypeError("Illegal invocation");
+      }),
+    );
+    const onChange = vi.fn();
+    let stop: () => void = () => {};
+    expect(() => {
+      stop = watchWebNotificationPermission(onChange);
+    }).not.toThrow();
+    await flush();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(() => stop()).not.toThrow();
+  });
+
+  it("is a no-op without navigator.permissions", async () => {
+    stubPermissions(undefined);
+    const onChange = vi.fn();
+    const stop = watchWebNotificationPermission(onChange);
+    await flush();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(() => stop()).not.toThrow();
+  });
+
+  it("a cleanup before the query resolves never subscribes or reports", async () => {
+    const status = new FakeStatus();
+    const add = vi.spyOn(status, "addEventListener");
+    let resolve: (s: FakeStatus) => void = () => {};
+    stubPermissions(vi.fn(() => new Promise<FakeStatus>((r) => (resolve = r))));
+    const onChange = vi.fn();
+
+    const stop = watchWebNotificationPermission(onChange);
+    stop();
+    resolve(status);
+    await flush();
+    expect(add).not.toHaveBeenCalled();
+    status.dispatchEvent(new Event("change"));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("the cleanup removes the change listener", async () => {
+    const status = new FakeStatus();
+    const remove = vi.spyOn(status, "removeEventListener");
+    stubPermissions(vi.fn(async () => status));
+    const onChange = vi.fn();
+
+    const stop = watchWebNotificationPermission(onChange);
+    await flush();
+    expect(onChange).toHaveBeenCalledOnce();
+    stop();
+    expect(remove).toHaveBeenCalledWith("change", expect.any(Function));
+    status.dispatchEvent(new Event("change"));
+    expect(onChange).toHaveBeenCalledOnce();
   });
 });

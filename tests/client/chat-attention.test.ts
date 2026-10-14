@@ -500,6 +500,34 @@ describe("buildNotificationText", () => {
     ).toEqual({ title: "Claude replied in report.md", body: "Done. See the doc." });
   });
 
+  it("the title drops a bidi override in the document name", () => {
+    const bidi = (id: string) => (id === "doc-1" ? "report\u202Etxt.exe" : null);
+    expect(
+      buildNotificationText([reply("a", { documentId: "doc-1" })], "document", bidi).title,
+    ).toBe("Claude replied in reporttxt.exe");
+  });
+
+  it("a 300-character document name is capped at 120 characters", () => {
+    const long = (id: string) => (id === "doc-1" ? `${"n".repeat(296)}.md` : null);
+    const { title } = buildNotificationText(
+      [reply("a", { documentId: "doc-1" })],
+      "document",
+      long,
+    );
+    expect(Array.from(title)).toHaveLength(120);
+    expect(title.startsWith("Claude replied in nnn")).toBe(true);
+    expect(title.endsWith("…")).toBe(true);
+  });
+
+  it("the preview body loses bidi and zero-width characters", () => {
+    const { body } = buildNotificationText(
+      [reply("a", { documentId: "doc-1", text: "Fixed\u202E in\u2066 the\u200B draft.\uFEFF" })],
+      "preview",
+      name,
+    );
+    expect(body).toBe("Fixed in the draft.");
+  });
+
   it("a batch spanning documents names none", () => {
     expect(
       buildNotificationText(
@@ -547,6 +575,21 @@ describe("previewText", () => {
 
   it("keeps inline code contents verbatim", () => {
     expect(previewText("Run `npm *test*` now")).toBe("Run npm *test* now");
+  });
+
+  // Each is quadratic in the unbounded regexes (seconds at this size); the
+  // 2,000-unit input bound keeps each to a few ms. See `previewText`.
+  it.each([
+    ["an unclosed link opener run (link regex)", "[".repeat(40_000)],
+    ["repeated empty link heads (link regex)", "[](".repeat(13_000)],
+    ["unclosed intraword underscores (emphasis regex)", " _a".repeat(13_000)],
+    ["unclosed strong markers (emphasis regex)", " **a".repeat(10_000)],
+  ])("bounds its work on %s", (_label, text) => {
+    const started = performance.now();
+    const out = previewText(text);
+    const elapsed = performance.now() - started;
+    expect(elapsed).toBeLessThan(250);
+    expect(Array.from(out).length).toBeLessThanOrEqual(140);
   });
 
   it("strips paired emphasis", () => {

@@ -91,6 +91,33 @@ describe("createReplyDetector (#2168)", () => {
     ).toEqual(["answer"]);
   });
 
+  it("announces a late reply on an already-seeded doc, however old its timestamp", () => {
+    // A same-doc reconnect delivers only the delta: a reply that reaches
+    // Tandem minutes late after a lost connection is still live news.
+    const detector = make();
+    const doc = {};
+    expect(observeIds(detector, { doc, baselineIds: ["a"], messages: [msg("a")] })).toEqual([]);
+    expect(
+      observeIds(detector, {
+        doc,
+        baselineIds: ["a"],
+        messages: [msg("a"), msg("late", { timestamp: NOW - 5 * 60_000 })],
+      }),
+    ).toEqual(["late"]);
+  });
+
+  it("drops an old reply outside the baseline when seeding a new doc, and never revives it", () => {
+    const detector = make();
+    const first = {};
+    observeIds(detector, { doc: first, baselineIds: ["a"], messages: [msg("a")] });
+    const second = {};
+    const old = msg("old", { timestamp: NOW - 5 * 60_000 });
+    expect(
+      observeIds(detector, { doc: second, baselineIds: ["a"], messages: [msg("a"), old] }),
+    ).toEqual([]);
+    expect(observeIds(detector, { doc: second, messages: [msg("a"), old] })).toEqual([]);
+  });
+
   it("holds a streaming reply without marking it known, then announces it on finish", () => {
     const detector = make();
     const doc = {};

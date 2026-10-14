@@ -72,8 +72,8 @@ function handleKey(e: KeyboardEvent) {
 }
 
 // A measure pick writes ONLY `editorMeasure` — never rail visibility or
-// width — and `mergeAndClampSettings`' `isEditorMeasure` clamp is its write
-// guard.
+// width — and `mergeAndClampSettings`' `isOneOf(EDITOR_MEASURES, …)` clamp
+// is its write guard.
 function pick(partial: DisplayPrefsUpdate) {
   onUpdate(partial);
   closeMenu();

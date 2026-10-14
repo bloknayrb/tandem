@@ -38,6 +38,53 @@ export async function requestWebNotificationPermission(): Promise<WebNotificatio
 }
 
 /**
+ * Follow the site's notification permission while Settings is open, so a
+ * change made in the browser's site settings (or in another tab) shows up
+ * without reopening the tab. Calls `onChange` with a fresh
+ * `webNotificationPermission()` read — never `PermissionStatus.state`, whose
+ * `"prompt"` is not one of `Notification.permission`'s values.
+ *
+ * Calls `onChange` once as soon as the subscription is in place, which covers a
+ * change landing between the caller's first read and the query resolving.
+ * A no-op where `navigator.permissions.query` is missing or refuses the
+ * `notifications` name (older Safari). Returns the cleanup; after it runs,
+ * `onChange` is never called again, even if the query resolves later.
+ */
+export function watchWebNotificationPermission(
+  onChange: (permission: WebNotificationPermission) => void,
+): () => void {
+  let stopped = false;
+  let status: PermissionStatus | null = null;
+  const handler = () => {
+    if (!stopped) onChange(webNotificationPermission());
+  };
+  let query: Promise<PermissionStatus>;
+  try {
+    const permissions = typeof navigator === "undefined" ? undefined : navigator.permissions;
+    if (typeof permissions?.query !== "function") return () => {};
+    query = Promise.resolve(permissions.query({ name: "notifications" }));
+  } catch {
+    return () => {};
+  }
+  query
+    .then((s) => {
+      if (stopped) return;
+      s.addEventListener("change", handler);
+      status = s;
+      handler();
+    })
+    .catch(() => {
+      // Unsupported permission name, or the platform refuses — keep the
+      // value read at mount.
+    });
+  return () => {
+    stopped = true;
+    status?.removeEventListener("change", handler);
+    status = null;
+  };
+}
+
+/**
  * Rewrite only our own `(N) ` prefix, so this composes with any other prefix
  * something else puts on the title instead of saving and restoring a snapshot.
  */

@@ -14,7 +14,8 @@
 //! replay — are the client's (`src/client/notifications/`). This module only
 //! posts what it is handed.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, Manager, UserAttentionType};
 use tauri_plugin_notification::{Action, ActionType, NotificationExt};
@@ -59,7 +60,8 @@ pub const OPEN_CHAT_ACTION_ID: &str = "open-chat";
 /// macOS tells actions apart by their title, so it must be unique in the type.
 const OPEN_CHAT_ACTION_TITLE: &str = "Open chat";
 
-/// Whether a chat-reply notification with the action button is outstanding.
+/// When the chat-reply notification with the action button was claimed, while
+/// one is outstanding; `None` otherwise.
 ///
 /// That notification is not free on macOS: mac-notification-sys parks a thread
 /// on it, plus a 0.5 s poll on the main run loop, until it is clicked or leaves
@@ -68,28 +70,69 @@ const OPEN_CHAT_ACTION_TITLE: &str = "Open chat";
 /// of an absence carries the button — later ones in the same absence post
 /// action-less and cost at most a 2 s delivery wait — and the main window
 /// gaining focus removes Tandem's delivered notifications, which releases the
-/// waiter (`on_main_window_focused`). At most one waits at a time.
+/// waiter (`on_main_window_focused`). Outside the race below, at most one
+/// waits at a time; inside it, two can until the next focus.
 ///
-/// Never claimed off macOS (`should_attach_action`), so there it stays false.
-static MAC_ACTION_OUTSTANDING: AtomicBool = AtomicBool::new(false);
+/// The claim is made before the post, and mac-notification-sys waits up to 2 s
+/// for delivery, so a focus that lands inside that wait sweeps before the
+/// notification arrives and would leave it parked until the next focus. The
+/// claim time is recorded so that focus can tell, and sweep once more after
+/// `LATE_DELIVERY_SWEEP_DELAY` (`sweeps_for_focus`).
+///
+/// Never claimed off macOS (`should_attach_action`), so there it stays `None`.
+static MAC_ACTION_OUTSTANDING: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Longer than mac-notification-sys's 2 s delivery wait, so a notification
+/// claimed this recently has been delivered by the time a sweep this long
+/// after focus runs.
+const LATE_DELIVERY_SWEEP_DELAY: Duration = Duration::from_millis(2500);
+
+/// The claim survives a panic elsewhere: a poisoned lock still holds a valid
+/// `Option<Instant>`.
+fn lock(outstanding: &Mutex<Option<Instant>>) -> MutexGuard<'_, Option<Instant>> {
+    outstanding.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 /// Whether this chat-reply notification carries the action button. On macOS it
-/// claims `outstanding` when it does, so of any number of concurrent posts in
-/// one absence exactly one wins. Off macOS it never touches the flag.
+/// claims `outstanding` (recording `now`) when it does, so of any number of
+/// concurrent posts in one absence exactly one wins. Off macOS it never touches
+/// the claim.
 ///
 /// `is_macos` is a parameter (`cfg!`, never `#[cfg]`) so the decision compiles
 /// and is tested on every platform.
-fn should_attach_action(is_macos: bool, outstanding: &AtomicBool) -> bool {
-    is_macos
-        && outstanding
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
+fn should_attach_action(
+    is_macos: bool,
+    outstanding: &Mutex<Option<Instant>>,
+    now: Instant,
+) -> bool {
+    if !is_macos {
+        return false;
+    }
+    let mut claim = lock(outstanding);
+    if claim.is_some() {
+        return false;
+    }
+    *claim = Some(now);
+    true
 }
 
 /// Let the next chat notification carry the action button again. Returns
-/// whether one was outstanding.
-fn release_action(outstanding: &AtomicBool) -> bool {
-    outstanding.swap(false, Ordering::SeqCst)
+/// when the outstanding one was claimed, if one was.
+fn release_action(outstanding: &Mutex<Option<Instant>>) -> Option<Instant> {
+    lock(outstanding).take()
+}
+
+/// What a focus does with a released claim: `(sweep now, sweep again after
+/// LATE_DELIVERY_SWEEP_DELAY)`. `claimed_ago` is the released claim's age, or
+/// `None` when nothing was outstanding — then there is no waiter, and no sweep,
+/// so a dev build does not clear Terminal's notifications on every focus. A
+/// claim younger than the delay may not be delivered yet, so it gets the
+/// second sweep as well.
+fn sweeps_for_focus(claimed_ago: Option<Duration>) -> (bool, bool) {
+    match claimed_ago {
+        None => (false, false),
+        Some(age) => (true, age < LATE_DELIVERY_SWEEP_DELAY),
+    }
 }
 
 /// The fixed text of the test notification. Written to read like a real one,
@@ -241,7 +284,11 @@ pub async fn notify_chat_reply(
     title: String,
     body: String,
 ) -> Result<(), &'static str> {
-    let with_action = should_attach_action(cfg!(target_os = "macos"), &MAC_ACTION_OUTSTANDING);
+    let with_action = should_attach_action(
+        cfg!(target_os = "macos"),
+        &MAC_ACTION_OUTSTANDING,
+        Instant::now(),
+    );
     let action_type = with_action.then_some(CHAT_REPLY_ACTION_TYPE);
     let result = post(
         &app,
@@ -252,8 +299,8 @@ pub async fn notify_chat_reply(
         "chat-reply",
     );
     // Nothing was shown, so nothing waits: let the next post carry the button.
-    // A failure later, on the plugin's own thread, is not seen here; the flag
-    // then stays claimed until the window is focused, which only costs this
+    // A failure later, on the plugin's own thread, is not seen here; the claim
+    // then stays held until the window is focused, which only costs this
     // absence its click reporting.
     if with_action && result.is_err() {
         let _ = release_action(&MAC_ACTION_OUTSTANDING);
@@ -313,9 +360,26 @@ pub async fn clear_attention(app: AppHandle) -> Result<(), &'static str> {
 /// claim and, if a notification carrying it was outstanding, end the wait
 /// parked on it (see `MAC_ACTION_OUTSTANDING`). Called from the native window
 /// event, so it holds however the client's own attention state stands.
+///
+/// A claim younger than `LATE_DELIVERY_SWEEP_DELAY` may belong to a
+/// notification still inside its delivery wait, which this sweep cannot see.
+/// One more sweep after the delay removes it once it has landed. That sweep is
+/// skipped if a new claim exists by then: its notification is the new
+/// absence's, and the next focus sweeps both.
 pub fn on_main_window_focused(app: &AppHandle) {
-    if release_action(&MAC_ACTION_OUTSTANDING) {
+    let claimed_ago = release_action(&MAC_ACTION_OUTSTANDING).map(|at| at.elapsed());
+    let (now, delayed) = sweeps_for_focus(claimed_ago);
+    if now {
         remove_delivered_notifications(app);
+    }
+    if delayed {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(LATE_DELIVERY_SWEEP_DELAY).await;
+            if lock(&MAC_ACTION_OUTSTANDING).is_none() {
+                remove_delivered_notifications(&app);
+            }
+        });
     }
 }
 
@@ -329,9 +393,14 @@ pub fn on_main_window_focused(app: &AppHandle) {
 /// it is the one mac-notification-sys (and so notify-rust 4.18) posts through,
 /// so it is the centre holding these notifications.
 ///
+/// Only what is delivered when this runs is removed. A notification still in
+/// mac-notification-sys's delivery wait (up to 2 s after its post) is missed,
+/// which is why a focus soon after a claim calls this twice (see
+/// `on_main_window_focused`).
+///
 /// Dispatched to the main thread: the poll that reads `deliveredNotifications`
 /// runs on the main run loop, and this keeps the removal serialised with it.
-/// Fire-and-forget, so a reply posted between the flag release and this
+/// Fire-and-forget, so a reply posted between the claim release and this
 /// running can be removed as it lands; that costs its click reporting, never
 /// an unbounded wait. A click racing the removal still wins: mac-notification-sys
 /// drains queued delegate callbacks before reading a disappearance as a
@@ -494,21 +563,62 @@ mod tests {
 
     #[test]
     fn only_macos_attaches_the_action_and_only_once_per_claim() {
-        let flag = AtomicBool::new(false);
-        // Off macOS: never attached, and the flag is never claimed.
-        assert!(!should_attach_action(false, &flag));
-        assert!(!flag.load(Ordering::SeqCst));
-        // macOS: the first post wins, the rest of the absence post action-less.
-        assert!(should_attach_action(true, &flag));
-        assert!(flag.load(Ordering::SeqCst));
-        assert!(!should_attach_action(true, &flag));
-        assert!(!should_attach_action(false, &flag));
+        let claim = Mutex::new(None);
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_secs(1);
+        // Off macOS: never attached, and the claim is never made.
+        assert!(!should_attach_action(false, &claim, t0));
+        assert_eq!(*lock(&claim), None);
+        // macOS: the first post wins and records its time; the rest of the
+        // absence post action-less and leave that time alone.
+        assert!(should_attach_action(true, &claim, t0));
+        assert_eq!(*lock(&claim), Some(t0));
+        assert!(!should_attach_action(true, &claim, t1));
+        assert!(!should_attach_action(false, &claim, t1));
+        assert_eq!(*lock(&claim), Some(t0));
         // Released (focus, accepted click or failed post): the next one wins
-        // again, and the release reports whether one was outstanding.
-        assert!(release_action(&flag));
-        assert!(!release_action(&flag));
-        assert!(should_attach_action(true, &flag));
-        assert!(!should_attach_action(true, &flag));
+        // again, and the release reports when the outstanding one was claimed.
+        assert_eq!(release_action(&claim), Some(t0));
+        assert_eq!(release_action(&claim), None);
+        assert!(should_attach_action(true, &claim, t1));
+        assert!(!should_attach_action(true, &claim, t1));
+        assert_eq!(release_action(&claim), Some(t1));
+    }
+
+    #[test]
+    fn focus_with_nothing_outstanding_never_sweeps() {
+        assert_eq!(sweeps_for_focus(None), (false, false));
+    }
+
+    #[test]
+    fn focus_soon_after_a_claim_sweeps_now_and_again_after_the_delay() {
+        assert_eq!(sweeps_for_focus(Some(Duration::ZERO)), (true, true));
+        assert_eq!(
+            sweeps_for_focus(Some(Duration::from_millis(1999))),
+            (true, true)
+        );
+        assert_eq!(
+            sweeps_for_focus(Some(Duration::from_millis(2499))),
+            (true, true)
+        );
+    }
+
+    #[test]
+    fn focus_from_2_5_s_after_a_claim_sweeps_once() {
+        assert_eq!(LATE_DELIVERY_SWEEP_DELAY, Duration::from_millis(2500));
+        assert_eq!(
+            sweeps_for_focus(Some(Duration::from_millis(2500))),
+            (true, false)
+        );
+        assert_eq!(
+            sweeps_for_focus(Some(Duration::from_secs(600))),
+            (true, false)
+        );
+    }
+
+    #[test]
+    fn the_delayed_sweep_outlasts_the_2_s_delivery_wait() {
+        assert!(LATE_DELIVERY_SWEEP_DELAY > Duration::from_secs(2));
     }
 
     #[test]

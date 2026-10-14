@@ -6,6 +6,7 @@ import { playChime } from "../../notifications/chimes";
 import {
   requestWebNotificationPermission,
   type WebNotificationPermission,
+  watchWebNotificationPermission,
   webNotificationPermission,
 } from "../../notifications/web-notifier";
 import { disabledControlStyle } from "../../utils/colors";
@@ -21,6 +22,16 @@ const desktop = isTauriRuntime();
 let permission = $state<WebNotificationPermission>(
   desktop ? "granted" : webNotificationPermission(),
 );
+
+// A permission changed in the browser's site settings, or answered in another
+// tab, reaches the status line without reopening Settings. Browser only: the
+// desktop build never queries `navigator.permissions`.
+$effect(() => {
+  if (desktop) return;
+  return watchWebNotificationPermission((p) => {
+    permission = p;
+  });
+});
 
 const CONTENT_OPTIONS: { value: ChatNotificationContent; label: string }[] = [
   { value: "generic", label: "Generic — “Claude replied”" },
@@ -144,8 +155,8 @@ function sendTest(): void {
     <span>I keep Tandem visible beside other apps</span>
   </label>
   <div class="settings-hint" style="margin-top: var(--tandem-space-1);">
-    Replies count as read whenever Tandem is open on screen, even behind other windows. You'll hear
-    the sound but get no notification while it's open.
+    Replies count as read whenever Tandem is on screen with chat showing, even behind other windows.
+    While it's on screen you'll hear the sound but get no notification.
   </div>
 </div>
 

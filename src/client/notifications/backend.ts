@@ -1,6 +1,7 @@
 import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { loadInvoke, notifyTest } from "../tauri/notifications-invoke";
 import type { NotifierBackend } from "./chat-attention";
+import { TEST_NOTIFICATION_TEXT } from "./notification-text";
 import { createTauriNotifier } from "./tauri-notifier";
 import { createWebNotifier, postWebNotification } from "./web-notifier";
 
@@ -22,9 +23,12 @@ const TEST_TAG = "tandem-chat-test";
 
 /**
  * Settings → Notifications "Send a test notification". A click on it only
- * focuses Tandem — it must not open chat or clear a real reply's attention.
- * On desktop the Rust side posts fixed text under its own id and routes the
- * click by that id.
+ * focuses Tandem: it never opens chat. That focus still counts as the user
+ * coming back, so it clears a real reply's taskbar flash or title count like
+ * any other return. On desktop the Rust side posts its own copy of the same
+ * text (`TEST_TITLE` / `TEST_BODY`, pinned to `TEST_NOTIFICATION_TEXT` by
+ * `tests/docs/chat-notification-parity-claims.test.ts`) under its own id, and
+ * routes the click by that id.
  */
 export function sendTestNotification(): void {
   if (isTauriRuntime()) {
@@ -35,8 +39,5 @@ export function sendTestNotification(): void {
       });
     return;
   }
-  postWebNotification(
-    { title: "Claude replied", body: "This is a test notification from Tandem." },
-    { tag: TEST_TAG, onClick: () => {} },
-  );
+  postWebNotification(TEST_NOTIFICATION_TEXT, { tag: TEST_TAG, onClick: () => {} });
 }

@@ -16,9 +16,13 @@ import {
  *
  * `Notification` is replaced before any page script runs with a recorder whose
  * permission is already "granted", so no prompt is involved. Focus is driven
- * with window `blur`/`focus` events: Playwright's focus emulation pins
- * `document.hasFocus()` to true, which is why `useWindowAttention` tracks the
- * events rather than polling it.
+ * two ways. Window `blur`/`focus` events move it after boot: Playwright's focus
+ * emulation pins `document.hasFocus()` to true, which is why
+ * `useWindowAttention` tracks the events rather than polling it. And
+ * `startUnfocused` overrides `hasFocus()` before any page script runs, so the
+ * window is away from its very first frame (`readInitialFocus`) with no
+ * synthetic event involved — boot sends no input, so the trusted-input
+ * correction never fires.
  */
 
 test.describe.configure({ timeout: 90_000 });
@@ -74,6 +78,20 @@ async function boot(page: Page): Promise<void> {
   await page.locator(".tandem-editor").waitFor({ state: "visible", timeout: 10_000 });
 }
 
+/**
+ * Every LATER load of this page reports `document.hasFocus() === false`, so
+ * `useWindowAttention` seeds `focused` false and the window starts away.
+ * Registered per call, so a test can boot focused first and away afterwards.
+ */
+async function startUnfocused(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    Document.prototype.hasFocus = () => false;
+  });
+}
+
+/** Long enough for the 750 ms coalescing window to have fired if it were going to. */
+const QUIET_MS = 2_000;
+
 test("a reply while the window is unfocused notifies once and marks the title", async ({
   page,
 }) => {
@@ -93,17 +111,68 @@ test("a reply while the window is unfocused notifies once and marks the title", 
   await expect(page).not.toHaveTitle(/^\(\d+\+?\) /);
 });
 
-test("a reply while focused, an inProgress ack, and history never notify", async ({ page }) => {
-  // History: a reply that exists before the page loads.
-  await mcp.callTool("tandem_reply", { text: "Old reply from before the page loaded." });
+test("a reply while focused never notifies", async ({ page }) => {
   await boot(page);
-  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
-  await mcp.callTool("tandem_reply", { text: "On it.", inProgress: true });
-  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await mcp.callTool("tandem_reply", { text: "Answer while you watch." });
-  // Give the 750 ms coalescing window ample time to have fired if it were going to.
-  await page.waitForTimeout(2_000);
+  await page.waitForTimeout(QUIET_MS);
   expect(await posted(page)).toHaveLength(0);
+});
+
+test("a window that loads without focus notifies for a reply", async ({ page }) => {
+  // Positive control for the test below: the same `hasFocus` override, with
+  // nothing else in the way, does produce a notification. Without it, a
+  // regression that silenced every notification in an unfocused-at-load
+  // window would pass the negative checks there too.
+  await startUnfocused(page);
+  await boot(page);
+
+  await mcp.callTool("tandem_reply", { text: "Here is the answer." });
+  await expect.poll(() => posted(page), { timeout: 10_000 }).toHaveLength(1);
+  expect((await posted(page))[0].title).toBe("Claude replied in sample.md");
+  await expect(page).toHaveTitle(/^\(1\) /);
+});
+
+test("an inProgress ack and history never notify; a real reply does", async ({ page }) => {
+  // Precondition: `Y_MAP_CHAT_SEEN_INITIALIZED` is already set when the page
+  // that sees the history boots. Its FIRST synced load marks every reply then
+  // present as seen, so without this boot the history reply below would be
+  // filtered out by the dispatcher's `isSeen` check and never reach the reply
+  // detector's baseline at all — and the test would pass with the baseline
+  // broken. The marker lives in CTRL_ROOM on the server and outlives the
+  // page, so one plain boot sets it, whatever earlier specs did. The unread
+  // assertion after the second boot is what proves it held.
+  await boot(page);
+  // `boot` waits for the editor, which needs the ctrl room synced; give the
+  // seen-initialise effect a moment to have written before the page goes.
+  await page.waitForTimeout(500);
+  await page.goto("about:blank");
+
+  // History: a reply that exists before the page that will watch it loads.
+  // Seconds old, so the detector's `staleMs` backstop cannot be what drops it.
+  await mcp.callTool("tandem_reply", { text: "Old reply from before the page loaded." });
+
+  await startUnfocused(page);
+  await boot(page);
+  // The history reply is UNREAD: the away window does not acknowledge it, and
+  // the first-sync baseline did not mark it seen — which it would have, had
+  // the marker been unset. So only the reply detector stands between it and a
+  // notification.
+  await expect(page.locator("[aria-label='1 unread message']")).toBeAttached({
+    timeout: 10_000,
+  });
+  await page.waitForTimeout(QUIET_MS);
+  expect(await posted(page), "history must not notify").toHaveLength(0);
+
+  // The ack-before-work reply (#2165): "working on it" is not the answer.
+  await mcp.callTool("tandem_reply", { text: "On it.", inProgress: true });
+  await page.waitForTimeout(QUIET_MS);
+  expect(await posted(page), "an inProgress ack must not notify").toHaveLength(0);
+
+  // The negative checks ran first, so the dispatcher's 30 s notify limit has
+  // not been spent and cannot be what kept them quiet.
+  await mcp.callTool("tandem_reply", { text: "Here is the answer." });
+  await expect.poll(() => posted(page), { timeout: 10_000 }).toHaveLength(1);
+  expect((await posted(page))[0].title).toBe("Claude replied in sample.md");
 });
 
 test("the Notifications settings tab persists its controls", async ({ page }) => {

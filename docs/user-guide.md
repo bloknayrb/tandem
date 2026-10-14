@@ -357,7 +357,7 @@ Change any of this under **Settings → Notifications**:
 - **Sound** — Chime, Bell, Pop, Ping or None, with a **Preview** button and a volume slider.
 - **Send a test notification** — check that notifications reach you. Clicking the test notification only brings Tandem forward.
 
-In the desktop app, whether notifications appear at all is up to your operating system's notification settings, such as Focus Assist or Do Not Disturb. A desktop app hidden to the tray has no taskbar icon to flash, so you get the notification and sound only. If several Tandem windows are open, the one you're using plays the sound; with **I keep Tandem visible beside other apps** on, every window that counts as in use plays it, so two visible windows both chime. A window you're not using stays quiet once the reply has been read in another window.
+In the browser, a reply that arrives before your first click or keypress in the Tandem tab plays no sound, because browsers block audio until you interact with the page; the notification and the title count still appear. In the desktop app, whether notifications appear at all is up to your operating system's notification settings, such as Focus Assist or Do Not Disturb. A desktop app hidden to the tray has no taskbar icon to flash, so you get the notification and sound only. If several Tandem windows are open, the one you're using plays the sound; with **I keep Tandem visible beside other apps** on, every window that counts as in use plays it, so two visible windows both chime. A window you're not using stays quiet once the reply has been read in another window.
 
 ## Settings
 
