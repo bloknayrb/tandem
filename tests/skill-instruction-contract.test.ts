@@ -2,6 +2,15 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { WAKE_URL_PRODUCERS } from "../src/server/mcp/wake-url.js";
+import { TANDEM_PURCHASE_URL } from "../src/shared/constants.js";
+import {
+  AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE,
+  AI_REFUSAL_UNLICENSED_MESSAGE,
+  AI_REFUSAL_UNLICENSED_OPENING,
+  AI_REFUSAL_UNVERIFIABLE_OPENING,
+  aiRefusalUnverifiableMessage,
+  LICENSE_REQUIRED_RPC_CODE,
+} from "../src/shared/license-copy.js";
 
 function readShippedSkill(): string {
   return readFileSync(new URL("../skills/tandem/SKILL.md", import.meta.url), "utf8");
@@ -136,7 +145,16 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // assertion below was re-read against the bumped file.
   // 32 corrects that bullet's summary claim: the no-document summary has three variants
   // (none open, none active, an unknown id), not one fixed sentence. Outside the wake section.
-  expect(skill).toMatch(/^version:\s*32$/m);
+  // 33 adds the licence refusal (#1521 PR 3): a third absent-tools cause keyed on `-32003`,
+  // an Error Recovery bullet, polling suspended while refused, and — INSIDE the wake section —
+  // a paragraph after "After a socket close…" saying a `LICENSE_REQUIRED` close is not a
+  // reason to re-arm. Appended, never inserted into the pinned four-bullet list; every wake
+  // assertion below was re-read against the bumped file.
+  // 34 keys the licence refusal on what the model actually receives (measured 2026-10-13,
+  // interactive): `<server> (-32003): "…"` at the handshake, the bare message mid-session.
+  // The Error Recovery bullet now matches on the opening sentences. Outside the wake section;
+  // the `LICENSE_REQUIRED` close paragraph is untouched.
+  expect(skill).toMatch(/^version:\s*34$/m);
   expect(wake).toMatch(/hand-started session/i);
   // The anchor is source-agnostic but still a SINGLE moment. `first` is the whole bound —
   // without it, four tools returning `wakeUrl` read as four standing invitations to arm.
@@ -511,7 +529,113 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "32", bodyHash: "087f03b2ad6a" });
+    ).toEqual({ version: "34", bodyHash: "23dff1467ec1" });
+  });
+
+  // #1521: what the model sees of a licence refusal is the code and message at the handshake
+  // (`tandem (-32003): "…"`) and the bare message, with no code, on a mid-session tool error
+  // (measured: PR #2194 under `-p`, 2026-10-13 interactive). So the skill keys on `-32003`
+  // and, everywhere, on how the message BEGINS. The
+  // openings are imported, so a copy change reds here instead of silently de-keying the
+  // skill. The scoping asserts are the point: a presence check cannot see that a paying
+  // user (unverifiable) or a kind-neutral wake close is told "unlicensed" or "buy".
+  describe("licence refusal (#1521)", () => {
+    const skill = readShippedSkill().replace(/\r\n/g, "\n");
+    // A paragraph is a blank-line-separated block or a single list item.
+    const paragraphs = skill.split(/\n\n|\n(?=- )/);
+    const absent = /## When the tandem_\* Tools Are Absent\n([\s\S]*?)\n## /.exec(skill)?.[1] ?? "";
+    const recovery = namedSection(skill, "Error Recovery");
+    const code = String(LICENSE_REQUIRED_RPC_CODE);
+
+    it.each([
+      [AI_REFUSAL_UNLICENSED_MESSAGE, AI_REFUSAL_UNLICENSED_OPENING],
+      [AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE, AI_REFUSAL_UNLICENSED_OPENING],
+      [aiRefusalUnverifiableMessage("UNKNOWN"), AI_REFUSAL_UNVERIFIABLE_OPENING],
+    ])("refusal message %# begins with the opening the skill keys on", (message, opening) => {
+      expect(message.slice(0, opening.length + 2)).toBe(`${opening}. `);
+    });
+
+    it("names the third absent-tools cause, keyed on -32003, before the not-running step", () => {
+      expect(absent).toContain(AI_REFUSAL_UNLICENSED_OPENING);
+      expect(absent).toContain(AI_REFUSAL_UNVERIFIABLE_OPENING);
+      // The rendering Claude Code was measured to use, not the SDK's `MCP error …` string.
+      expect(absent).toContain(`(${code}): "…"`);
+      expect(absent).not.toContain("MCP error");
+      expect(absent).toMatch(/Three causes/);
+      expect(absent).not.toMatch(/Two causes|Those two are/);
+      // Positive evidence is read before the default remedy, or "not running" is said first.
+      const leadIn = absent.indexOf("First, read the failure");
+      expect(leadIn).toBeGreaterThan(-1);
+      expect(leadIn).toBeLessThan(absent.indexOf("**2. Tandem is not running"));
+      expect(recovery).toContain(code);
+      expect(recovery).toContain("LICENSE_REQUIRED");
+      // The no-opening fallback, which names no case: the shape a bare code takes.
+      expect(absent).toMatch(/\*\*Any other message\*\*[^\n]*do not guess which case/i);
+    });
+
+    // Mid-session the tool error is the bare message: no code, no `LICENSE_REQUIRED`
+    // (measured). A trigger keyed on those alone never fires for the case it is for.
+    it("keys the mid-session bullet on the openings, in its own trigger", () => {
+      const bullet = recovery.split(/\n(?=- )/).find((p) => p.includes("names `LICENSE_REQUIRED`"));
+      expect(bullet).toBeDefined();
+      const trigger = /^- \*\*([^\n]*?)\*\*/.exec(bullet ?? "")?.[1] ?? "";
+      expect(trigger).toMatch(
+        /begins with one of the two sentences quoted under "Licence refusal"/,
+      );
+      expect(trigger).toContain(code);
+      expect(bullet).toMatch(/bare message, with no code/);
+      // The label the trigger points to must still exist, and the absent-tools lead-in must
+      // key on the openings too (the branch bullets alone would satisfy a containment check).
+      expect(absent).toContain("**Licence refusal (");
+      expect(absent).toMatch(
+        /First, read the failure[\s\S]*?or its message begins with one of the two/,
+      );
+    });
+
+    it("says 'unlicensed' only where the message itself says it", () => {
+      const hits = paragraphs.filter((p) => /unlicensed/i.test(p));
+      expect(hits.length).toBeGreaterThan(0);
+      for (const p of hits) expect(p).toContain(AI_REFUSAL_UNLICENSED_OPENING);
+    });
+
+    it("never tells an unverifiable holder to buy", () => {
+      const unverifiable = paragraphs.filter((p) => p.includes(AI_REFUSAL_UNVERIFIABLE_OPENING));
+      expect(unverifiable).toHaveLength(1);
+      expect(unverifiable[0]).toMatch(/never[^.]*\b(buy|purchase)/i);
+      // And nothing else in it points toward buying: with every "never …" clause
+      // removed (up to the next comma or full stop, so "never X, but buy" keeps
+      // its "but buy"), no purchase word or activation-of-a-new-key remains.
+      const affirmative = unverifiable[0].replace(/\bnever\b[^.,;]*/gi, "");
+      expect(affirmative).not.toMatch(/\bbuy\b|purchase|activate a license/i);
+    });
+
+    it("suspends the inbox poll while Tandem refuses, at both polling rules", () => {
+      expect(recovery).toMatch(/suspend the every-2-3-calls inbox poll/);
+      expect(recovery).toMatch(/at most one read-mode `tandem_status` per user turn/);
+      // The two standing "poll every 2-3 calls" rules each carry the carve-out.
+      expect(skill).toMatch(/When in doubt, poll — unless Tandem is refusing its AI features/);
+      expect(skill).toMatch(
+        /Keep polling every 2-3 tool calls regardless[^\n]*except while Tandem is refusing/,
+      );
+    });
+
+    // A link written into the skill would reach every reader, paying or not; the
+    // refusal message is the only place a purchase link may come from.
+    it("carries no purchase link of its own", () => {
+      expect(skill).not.toContain(TANDEM_PURCHASE_URL);
+    });
+
+    it("keeps the kind-neutral wake close kind-neutral", () => {
+      const close = paragraphs.filter((p) => p.includes("`LICENSE_REQUIRED` is Tandem turning"));
+      expect(close).toHaveLength(1);
+      expect(close[0]).not.toMatch(/unlicensed|\bbuy\b|purchase/i);
+      expect(close[0]).toMatch(/not a reason to arm again/);
+      // It belongs to the wake rules, after the socket-close sentence it qualifies.
+      const wake = gettingWokenSection(skill);
+      const anchor = wake.indexOf("After a socket close, say once");
+      expect(anchor).toBeGreaterThan(-1);
+      expect(wake.indexOf("`LICENSE_REQUIRED` is Tandem turning")).toBeGreaterThan(anchor);
+    });
   });
 
   // The editor's pickup row shows "working on it" only from an `inProgress` ack, and the

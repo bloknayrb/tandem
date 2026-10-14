@@ -109,10 +109,16 @@ doesn't grant is the worst version of this problem.
 - After the 14 days, `LICENSE` grants keyless use that leaves out the AI
   features (decision A4). That matches ADR-040's 2026-08-18 amendment
   (unlicensed = an editor with no AI), which Bryan confirmed on 2026-10-11 as
-  #1521's policy, superseding Decision F's read-only mode. The gate merged today
-  differs: it makes documents read-only and keeps chat and Claude's MCP read
-  tools open. Until #1521 lands, the dark build's restricted mode and its copy
-  disagree with the licence in both directions.
+  #1521's policy, superseding Decision F's read-only mode. The gate now built
+  (#1521: #2194, #2202), still dark, follows it: past the trial with no key the
+  editor stays fully editable and Tandem refuses its AI surfaces at their
+  admission points (ADR-040's third amendment; its accepted residuals are in
+  `licensing-explained.md`). One difference runs the other way: past the trial,
+  a holder whose key fails to verify is refused the AI although `LICENSE` grants
+  it to anyone holding a key the Licensor issued. The product cannot tell a
+  damaged or wrongly signed key from a forged one, and a key that needs a newer
+  Tandem cannot be read until they update. They get fix-or-reissue copy, never
+  "buy".
 - One asymmetry is deliberate: every pre-1.0 (beta) version stays free
   for personal use and individual self-hosting with no time limit, including
   the releases that shipped under an earlier wording, so someone can keep

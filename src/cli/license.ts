@@ -59,19 +59,27 @@ export function wrapForTerminal(text: string, width = 76): string[] {
 export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean): string[] {
   const lines: string[] = ["", "Tandem license", ""];
   lines.push(`  Enforcement:   ${enforcementOn ? "on" : "off (activates at v1.0)"}`);
-  if (state.gateActive && state.status === "trial") {
+  if (!enforcementOn && state.gateActive && state.status !== "licensed") {
+    // `tandem license` forces `gateEnabled: true`, so a dark build reaches here
+    // from any `trial.json`, stale or live. A dark build is a pre-1.0 beta, whose grant has
+    // no time limit: the user is neither on a trial nor unlicensed, and is
+    // offered nothing to buy. The trial clock is still shown, labelled, for
+    // diagnosis.
+    const which =
+      state.licenseUnverifiable !== undefined ? "license not verified" : "no license key";
+    const clock =
+      state.status === "trial"
+        ? ` (trial clock: ${state.trial.daysRemaining} of ${TRIAL_DAYS} days)`
+        : "";
+    lines.push(`  Status:        ${which} — nothing is enforced in this build${clock}`);
+  } else if (state.gateActive && state.status === "trial") {
     lines.push(
       `  Status:        trial (${state.trial.daysRemaining} of ${TRIAL_DAYS} days remaining)`,
     );
   } else if (state.gateActive && state.status === "restricted") {
-    // #1521: keyless means AI off, never read-only. The "AI features off"
-    // claim is made ONLY when enforcement is on: `tandem license` forces
-    // `gateEnabled: true`, so a dark build with a stale `trial.json` reaches
-    // this branch while nothing is actually switched off.
+    // #1521: keyless means AI off, never read-only.
     const unverifiable = state.licenseUnverifiable !== undefined;
-    if (!enforcementOn) {
-      lines.push("  Status:        trial ended — nothing is enforced in this build");
-    } else if (unverifiable) {
+    if (unverifiable) {
       lines.push(
         "  Status:        license not verified — AI features off; the editor is unaffected",
       );
@@ -105,9 +113,10 @@ export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean)
       }
     }
   }
-  // A license file exists but doesn't verify. Without this, every surface tells
-  // the holder of a license that their *trial* ended. The message is chosen by
-  // the code, so it names the actual remedy rather than hedging across three.
+  // A license file exists but doesn't verify. Its holder most likely paid, so
+  // they must never read as unlicensed or be offered a purchase; this paragraph
+  // is their remedy. The message is chosen by the code, so it names the actual
+  // remedy rather than hedging across three.
   if (state.gateActive && state.status !== "licensed" && state.licenseUnverifiable) {
     lines.push("");
     for (const line of wrapForTerminal(unverifiableLicenseMessage(state.licenseUnverifiable))) {

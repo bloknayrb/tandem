@@ -72,11 +72,46 @@ describe("formatLicenseStatus", () => {
     expect(out).not.toMatch(/keep editing|read-only/);
   });
 
-  it("claims nothing is switched off when enforcement is off (dark build, stale trial.json)", () => {
-    const out = formatLicenseStatus(restricted, false).join("\n");
-    expect(out).toContain("nothing is enforced in this build");
-    expect(out).not.toContain("AI features off");
-  });
+  // A dark build is a pre-1.0 beta: free, no time limit. A stale `trial.json`
+  // must not tell that reader they are unlicensed, out of trial, or should buy.
+  it.each([
+    ["keyless", restricted, "Status:        no license key — nothing is enforced in this build"],
+    [
+      "unverifiable",
+      { ...restricted, licenseUnverifiable: "BAD_SIGNATURE" } as LicenseState,
+      "Status:        license not verified — nothing is enforced in this build",
+    ],
+  ])(
+    "claims nothing is switched off on a dark build (%s, stale trial.json)",
+    (kind, state, line) => {
+      const out = formatLicenseStatus(state, false).join("\n");
+      expect(out).toContain(line);
+      expect(out).not.toMatch(/AI features off|unlicensed|trial ended|expired/i);
+      expect(out).not.toContain(TANDEM_PURCHASE_URL);
+      // The fix-or-reissue paragraph is the holder's remedy, dark or not.
+      expect(/A license is installed on this device/.test(out)).toBe(kind === "unverifiable");
+    },
+  );
+
+  it.each([
+    ["keyless", trial, "no license key"],
+    [
+      "unverifiable",
+      { ...trial, licenseUnverifiable: "MALFORMED" } as LicenseState,
+      "license not verified",
+    ],
+  ])(
+    "never tells a beta user they are on a trial (dark build, %s, fresh trial.json)",
+    (kind, state, which) => {
+      const out = formatLicenseStatus(state, false).join("\n");
+      expect(out).toContain(
+        `Status:        ${which} — nothing is enforced in this build (trial clock: 9 of 14 days)`,
+      );
+      expect(out).not.toMatch(/Status:\s+trial|days remaining|unlicensed|AI features off|expired/i);
+      expect(out).not.toContain(TANDEM_PURCHASE_URL);
+      expect(/A license is installed on this device/.test(out)).toBe(kind === "unverifiable");
+    },
+  );
 
   it("never offers a purchase link for an installed licence that fails to verify", () => {
     const out = formatLicenseStatus(

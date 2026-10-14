@@ -1,6 +1,10 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE,
+  AI_REFUSAL_UNLICENSED_MESSAGE,
+} from "../../src/shared/license-copy.js";
 
 /**
  * Guards the AI-surface inventory in `docs/licensing-explained.md` — the
@@ -170,10 +174,15 @@ describe("AI surface inventory (#1346 discovery)", () => {
    * with #1521, and the doc's "contradicts decision 5" debt paragraph went with it.
    */
   it("the refusal copy says unlicensed, never that a trial ended", () => {
-    const copy = read("src", "shared", "license-copy.ts");
-    const aiCopy = copy.slice(copy.indexOf("AI_REFUSAL_UNLICENSED_MESSAGE"));
-    expect(aiCopy).toMatch(/Tandem is unlicensed/);
-    expect(aiCopy.slice(0, 600)).not.toMatch(/trial has ended|expired/i);
+    // The runtime values, not a source slice: the messages are composed from
+    // shared openings, so the literal no longer sits after each constant's name.
+    for (const message of [
+      AI_REFUSAL_UNLICENSED_MESSAGE,
+      AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE,
+    ]) {
+      expect(message).toMatch(/^Tandem is unlicensed/);
+      expect(message).not.toMatch(/trial has ended|expired/i);
+    }
     expect(readFileSync(DOC, "utf-8")).not.toMatch(/contradicts decision 5/);
   });
 

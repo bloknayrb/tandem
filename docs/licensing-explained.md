@@ -315,7 +315,12 @@ pins which files import each `src/server/license/` module, and that the bundles 
 licence `define` — the stdio bridge, the channel shim, the plugin monitor, the shared SSE consumer —
 reach none of them; those key only on the wire payload `error === "LICENSE_REQUIRED"`.
 `tests/server/license-armed-restricted.test.ts` is the armed probe of the MCP, push, chat and stdio
-admission points, each paired with a fresh-trial twin. The launcher's refusal is probed in
+admission points, each paired with a fresh-trial twin, and proves the seven browser write routes
+Surface B used to gate (scratchpad, apply-changes, document/reload, backups/restore,
+external-conflict/resolve, annotation-reply, remove-annotation) and `/api/open` with `force` still
+succeed armed. `tests/server/license-armed-editing.test.ts` proves the browser's own Hocuspocus
+writes still land armed: document edits, accept and dismiss, and the Solo/Tandem mode in `CTRL_ROOM`,
+plus the `openDocuments` broadcast reaching it. The launcher's refusal is probed in
 `tests/server/launcher/license-refusal.test.ts` and the local model's in
 `tests/server/local-model/collaborator.test.ts`.
 
@@ -362,7 +367,8 @@ Two more, of the same kind:
   SSE consumer refused in that window backs off 5 minutes before retrying, and a launcher refused at
   boot stays down until the restart chip (or an activation) brings it back. The same holds for any
   licence that becomes valid without `POST /api/license/activate`: `tandem activate` from the CLI or a
-  `license.json` copied in by hand never reaches the launcher, so Restart is the way back.
+  `license.json` copied in by hand never reaches the launcher, so Restart is the way back. #2205
+  tracks making the CLI path resume it.
 - **A local-model run that started while licensed keeps streaming after expiry.** The collaborator is
   checked per run, not per token, so one in-flight reply finishes. Behind `BYO_MODELS_ENABLED`, so
   unreachable today; revisit if that flag flips.

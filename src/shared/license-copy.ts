@@ -32,11 +32,22 @@ export const LICENSE_REQUIRED_RPC_CODE = -32003;
 export type AiRefusalKind = "unlicensed" | "unverifiable";
 
 /**
+ * The first sentence of each refusal message, without its full stop. The shipped
+ * skill tells Claude which remedy to give by which of these a message starts
+ * with, so every message below is composed from them and a copy change here
+ * reaches the skill's contract test instead of silently de-keying it.
+ */
+export const AI_REFUSAL_UNLICENSED_OPENING =
+  "Tandem is unlicensed, so its AI features are turned off";
+export const AI_REFUSAL_UNVERIFIABLE_OPENING =
+  "Tandem's AI features are off because your license could not be verified";
+
+/**
  * Refusal copy for a keyless install (trial over, no licence). Carries the
  * purchase URL, because Claude is its first reader and invents a link without one.
  */
 export const AI_REFUSAL_UNLICENSED_MESSAGE =
-  "Tandem is unlicensed, so its AI features are turned off. Your document is unaffected and " +
+  `${AI_REFUSAL_UNLICENSED_OPENING}. Your document is unaffected and ` +
   `stays fully editable. Activate a license to turn them back on: ${TANDEM_PURCHASE_URL}`;
 
 /**
@@ -55,7 +66,7 @@ export const AI_REFUSAL_RECONNECT_HINT =
  * a server log with no document in view.
  */
 export const AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE =
-  "Tandem is unlicensed, so its AI features are turned off. " +
+  `${AI_REFUSAL_UNLICENSED_OPENING}. ` +
   `Activate a license to turn them back on: ${TANDEM_PURCHASE_URL}`;
 
 /**
@@ -65,10 +76,7 @@ export const AI_REFUSAL_LOCAL_MODEL_UNLICENSED_MESSAGE =
  * the AI is off — `unverifiableLicenseMessage` alone does not.
  */
 export function aiRefusalUnverifiableMessage(code: LicenseUnverifiableCode): string {
-  return (
-    "Tandem's AI features are off because your license could not be verified. " +
-    unverifiableLicenseMessage(code)
-  );
+  return `${AI_REFUSAL_UNVERIFIABLE_OPENING}. ` + unverifiableLicenseMessage(code);
 }
 
 /**
