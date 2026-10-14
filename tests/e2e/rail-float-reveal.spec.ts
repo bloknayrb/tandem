@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import path from "path";
 import {
   cleanupAllOpenDocuments,
@@ -42,6 +42,32 @@ const COMPOSER = "[data-testid='chat-composer-input']";
 let mcp: McpTestClient;
 let tmpDir: string;
 
+/**
+ * Collapse the right rail and wait for the collapse to SETTLE, so a later
+ * `hover()` targets the at-rest 14px shell.
+ *
+ * `setRailVisible` returns when the handle unmounts, which is the START of the
+ * shell's 360 ms width transition. Playwright's stability check can accept the
+ * shell's rect in the transition's first frames, so `hover()` aims at the
+ * centre of a ~200px-wide shell. `mouseenter` fires, the shell then shrinks out
+ * from under the pointer, Chromium's post-layout hover update fires
+ * `mouseleave`, and `onRailShellLeave` clears the 120 ms enter timer before
+ * `railFloat.right` is ever set. Measured: `hover({ force: true })` at that
+ * point never floats; with this wait in front it always does.
+ *
+ * `collapsed` is asserted first so the negative check cannot pass on a shell
+ * that never collapsed. `animating` is set in the same Svelte flush that
+ * unmounts the handle, so by the time `setRailVisible` returns it is already
+ * present, and its absence means the transition finished.
+ */
+async function collapseRightRail(page: Page): Promise<Locator> {
+  await setRailVisible(page, "right", false);
+  const shell = page.locator(SHELL);
+  await expect(shell).toHaveClass(/\bcollapsed\b/);
+  await expect(shell).not.toHaveClass(/\banimating\b/);
+  return shell;
+}
+
 test.beforeEach(async () => {
   mcp = new McpTestClient();
   await mcp.connect();
@@ -63,10 +89,9 @@ test("an open chat reveal never co-exists with the float-closing phase (#2014)",
 
   // `railHoverReveal` is deliberately NOT seeded off — the hover float is what
   // is under test here.
-  await setRailVisible(page, "right", false);
+  const shell = await collapseRightRail(page);
   await page.evaluate(() => window.dispatchEvent(new CustomEvent("tandem:focus-chat")));
 
-  const shell = page.locator(SHELL);
   await expect(shell).toHaveClass(/\bfloating\b/);
   await expect(page.locator(COMPOSER)).toBeVisible();
 
@@ -125,9 +150,7 @@ test("a chat reveal opened DURING the retreat cancels it (#2014)", async ({ page
   await page.goto("/");
   await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
 
-  await setRailVisible(page, "right", false);
-
-  const shell = page.locator(SHELL);
+  const shell = await collapseRightRail(page);
 
   // Arm the hover float with no reveal open (the deterministic hold, for the
   // reason the first test states), then leave so the retreat starts.
