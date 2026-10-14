@@ -1,5 +1,6 @@
 <script lang="ts">
 import type * as Y from "yjs";
+import type { ChatMessage } from "../../../src/shared/types";
 import { createChatState } from "../../../src/client/hooks/useChatState.svelte";
 
 let {
@@ -8,12 +9,14 @@ let {
   visible,
   initialClaudeIds = [],
   openDocuments = [],
+  onClaudeReplies,
 }: {
   doc: Y.Doc;
   synced: boolean;
   visible: boolean;
   initialClaudeIds?: readonly string[];
   openDocuments?: readonly { id: string; fileName: string }[];
+  onClaudeReplies?: (replies: ChatMessage[]) => void;
 } = $props();
 const state = createChatState({
   getCtrlYdoc: () => doc,
@@ -21,6 +24,9 @@ const state = createChatState({
   getInitialClaudeMessageIds: () => initialClaudeIds,
   getOpenDocuments: () => openDocuments,
   getVisible: () => visible,
+  get onClaudeReplies() {
+    return onClaudeReplies;
+  },
 });
 </script>
 

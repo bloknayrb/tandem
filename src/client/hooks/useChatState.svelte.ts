@@ -1,3 +1,4 @@
+import { untrack } from "svelte";
 import * as Y from "yjs";
 import { API_CHAT } from "../../shared/api-paths";
 import {
@@ -10,6 +11,7 @@ import {
 import { withBrowser } from "../../shared/origins";
 import type { CapturedAnchor, ChatMessage } from "../../shared/types";
 import { generateMessageId } from "../../shared/utils";
+import { createReplyDetector } from "../notifications/reply-detector";
 import { MCP_BASE_URL } from "../utils/backend-ports";
 
 const MAX_SEEN_MESSAGE_IDS = 400;
@@ -27,6 +29,8 @@ export interface ChatState {
   readonly documentFileNames: ReadonlyMap<string, string>;
   readonly initialSyncComplete: boolean;
   readonly unreadCount: number;
+  /** Has any window acknowledged this message? Reads the shared seen map directly. */
+  isSeen(messageId: string): boolean;
   send(text: string, documentId?: string, anchor?: CapturedAnchor | null): boolean;
   clear(): Promise<number>;
 }
@@ -37,8 +41,14 @@ export function createChatState(options: {
   getInitialClaudeMessageIds: () => readonly string[];
   getOpenDocuments: () => readonly { id: string; fileName: string }[];
   getVisible: () => boolean;
+  /**
+   * Called with the Claude replies that arrived live (#2168) — never history,
+   * never an `inProgress` ack. See `notifications/reply-detector.ts`.
+   */
+  onClaudeReplies?: (replies: ChatMessage[]) => void;
 }): ChatState {
   let messages = $state<ChatMessage[]>([]);
+  let streamingIds = $state<ReadonlySet<string>>(new Set());
   let seenIds = $state(new Set<string>());
   let documentFileNames = $state(new Map<string, string>());
   const unreadCount = $derived(
@@ -55,13 +65,16 @@ export function createChatState(options: {
     // insert, unread accounting) sees the live text without knowing about
     // the sidecar. instanceof guards against malformed foreign values.
     const streamMap = doc.getMap(Y_MAP_CHAT_STREAM);
+    const streaming = new Set<string>();
     doc.getMap(Y_MAP_CHAT).forEach((value) => {
       const msg = value as ChatMessage;
       const live = streamMap.get(msg.id);
+      if (live instanceof Y.Text) streaming.add(msg.id);
       next.push(live instanceof Y.Text ? { ...msg, text: live.toString() } : msg);
     });
     next.sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
     messages = next;
+    streamingIds = streaming;
     const seen = doc.getMap(Y_MAP_CHAT_SEEN);
     seenIds = new Set(
       Array.from(seen.entries())
@@ -120,6 +133,7 @@ export function createChatState(options: {
     const doc = options.getCtrlYdoc();
     if (!doc) {
       messages = [];
+      streamingIds = new Set();
       seenIds = new Set();
       documentFileNames = new Map();
       return;
@@ -163,6 +177,29 @@ export function createChatState(options: {
     if (options.getVisible()) acknowledgeVisibleMessages(doc);
   });
 
+  // #2168: announce live Claude replies. Runs off `messages` rather than from
+  // inside `refresh()` so it never executes inside the observer-attach effect,
+  // and the callback runs untracked so whatever it reads (settings, window
+  // focus) does not become a dependency of this effect.
+  const replyDetector = createReplyDetector();
+  $effect(() => {
+    const onClaudeReplies = options.onClaudeReplies;
+    const doc = options.getCtrlYdoc();
+    const synced = options.getInitialSyncComplete();
+    const baselineIds = options.getInitialClaudeMessageIds();
+    const current = messages;
+    const streaming = streamingIds;
+    if (!onClaudeReplies || !doc) return;
+    const fresh = replyDetector.observe({
+      doc,
+      synced,
+      baselineIds,
+      messages: current,
+      streamingIds: streaming,
+    });
+    if (fresh.length > 0) untrack(() => onClaudeReplies(fresh));
+  });
+
   // Keep path-free names only for documents referenced by current chat. An
   // open document alone is not permission to copy its filename into CTRL.
   // Existing names survive tab closure while their messages remain.
@@ -204,6 +241,9 @@ export function createChatState(options: {
     },
     get unreadCount() {
       return unreadCount;
+    },
+    isSeen(messageId) {
+      return options.getCtrlYdoc()?.getMap(Y_MAP_CHAT_SEEN).get(messageId) === true;
     },
     send(text, documentId, anchor) {
       const doc = options.getCtrlYdoc();

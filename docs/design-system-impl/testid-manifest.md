@@ -232,6 +232,18 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `claude-code-ai-off-hint` — Settings → AI Assistant's one-line "AI features are
   off" notice (#1521); rendered only while the licence refuses the AI
 
+### Settings — Notifications tab (#2168)
+- `notifications-enable-toggle`, `notifications-content-select`,
+  `notifications-flash-toggle`, `notifications-sound-select`,
+  `notifications-sound-preview`, `notifications-volume-slider`,
+  `notifications-test-button`
+- `notifications-permission-status` — the platform line (desktop: managed by
+  the OS; browser: granted / denied / unsupported / ask), and
+  `notifications-allow-button`, rendered only while the browser permission is
+  `"default"`
+- `notifications-visible-toggle` — "I keep Tandem visible beside other apps"
+  (`chatSeenWhenVisible`): a visible window counts as the one in use
+
 ### Settings — Appearance tab
 - `theme-{*}-btn`, `default-tab-{chat,annotations}-btn`,
   `text-size-{*}-btn`, `accent-hue-slider`,

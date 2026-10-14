@@ -215,3 +215,113 @@ describe("streamed message composition (#1340)", () => {
     });
   });
 });
+
+// #2168: the live-reply hook the notification dispatcher hangs off.
+describe("chat state live Claude replies", () => {
+  afterEach(() => cleanup());
+
+  const live = (id: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({
+    ...claude(id, Date.now()),
+    ...extra,
+  });
+
+  it("announces a reply arriving after sync, never the synced history", async () => {
+    const doc = new Y.Doc();
+    doc.getMap(Y_MAP_CHAT).set("history", live("history"));
+    const announced: string[] = [];
+    const onClaudeReplies = (replies: ChatMessage[]) => announced.push(...replies.map((r) => r.id));
+    const view = render(ChatStateHarness, {
+      props: { doc, synced: false, visible: false, onClaudeReplies },
+    });
+    await view.rerender({
+      doc,
+      synced: true,
+      visible: false,
+      initialClaudeIds: ["history"],
+      onClaudeReplies,
+    });
+    doc.getMap(Y_MAP_CHAT).set("fresh", live("fresh"));
+    await waitFor(() => expect(announced).toEqual(["fresh"]));
+  });
+
+  it("skips inProgress acks and user messages", async () => {
+    const doc = new Y.Doc();
+    const announced: string[] = [];
+    render(ChatStateHarness, {
+      props: {
+        doc,
+        synced: true,
+        visible: false,
+        onClaudeReplies: (replies: ChatMessage[]) => announced.push(...replies.map((r) => r.id)),
+      },
+    });
+    const chat = doc.getMap(Y_MAP_CHAT);
+    chat.set("ack", live("ack", { inProgress: true }));
+    chat.set("mine", { ...live("mine"), author: "user", read: false });
+    chat.set("answer", live("answer"));
+    await waitFor(() => expect(announced).toEqual(["answer"]));
+  });
+
+  // Production order (src/server/local-model/collaborator.ts `makeSink.write`):
+  // the FIRST flush mints the chat row via `appendClaudeChatMessage` with no
+  // sidecar; only a later flush (`updateClaudeChatMessage`) creates the
+  // chatStream Y.Text, and `finalizeClaudeChatMessage` folds it back.
+  it("announces a streamed reply once, at its first flush, with the partial text", async () => {
+    const doc = new Y.Doc();
+    const announced: ChatMessage[] = [];
+    render(ChatStateHarness, {
+      props: {
+        doc,
+        synced: true,
+        visible: false,
+        onClaudeReplies: (replies: ChatMessage[]) => announced.push(...replies),
+      },
+    });
+    const chat = doc.getMap(Y_MAP_CHAT);
+    const stream = doc.getMap(Y_MAP_CHAT_STREAM);
+    chat.set("streamed", live("streamed", { text: "first flush" }));
+    await waitFor(() => expect(announced.map((r) => r.id)).toEqual(["streamed"]));
+    expect(announced[0]?.text).toBe("first flush");
+
+    // Later flushes: the sidecar appears and grows ...
+    const yText = new Y.Text();
+    doc.transact(() => {
+      stream.set("streamed", yText); // attach before populate
+      yText.insert(0, "first flush plus the tail");
+    });
+    // ... then the finalize fold re-sets the row and drops the sidecar.
+    doc.transact(() => {
+      chat.set("streamed", live("streamed", { text: "first flush plus the tail" }));
+      stream.delete("streamed");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(announced.map((r) => r.id)).toEqual(["streamed"]);
+  });
+
+  it("holds a row that arrives together with its sidecar (mid-stream reconnect) until it finishes", async () => {
+    const doc = new Y.Doc();
+    const announced: string[] = [];
+    render(ChatStateHarness, {
+      props: {
+        doc,
+        synced: true,
+        visible: false,
+        onClaudeReplies: (replies: ChatMessage[]) => announced.push(...replies.map((r) => r.id)),
+      },
+    });
+    // The server already holds row + sidecar; a reconnecting client receives
+    // both in a single update.
+    const server = new Y.Doc();
+    const serverText = new Y.Text();
+    server.transact(() => {
+      server.getMap(Y_MAP_CHAT).set("streamed", live("streamed", { text: "first flush" }));
+      server.getMap(Y_MAP_CHAT_STREAM).set("streamed", serverText);
+      serverText.insert(0, "first flush plus more");
+    });
+    Y.applyUpdate(doc, Y.encodeStateAsUpdate(server));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(announced).toEqual([]);
+    doc.getMap(Y_MAP_CHAT_STREAM).delete("streamed");
+    await waitFor(() => expect(announced).toEqual(["streamed"]));
+  });
+});

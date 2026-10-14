@@ -49,6 +49,7 @@ export const SETTINGS_TAB_IDS = {
   network: "network",
   accessibility: "accessibility",
   collaboration: "collaboration",
+  notifications: "notifications",
   claudeCode: "claude-code",
   models: "models",
   shortcuts: "shortcuts",
@@ -97,6 +98,7 @@ import EditorSettings from "./EditorSettings.svelte";
 import NetworkSettings from "./NetworkSettings.svelte";
 import SettingsClaudeCodeTab from "./settings-tabs/SettingsClaudeCodeTab.svelte";
 import SettingsCollaborationTab from "./settings-tabs/SettingsCollaborationTab.svelte";
+import SettingsNotificationsTab from "./settings-tabs/SettingsNotificationsTab.svelte";
 import SettingsModelsTab from "./settings-tabs/SettingsModelsTab.svelte";
 import SettingsShortcutsTab from "./settings-tabs/SettingsShortcutsTab.svelte";
 import SettingsLicenseTab from "./settings-tabs/SettingsLicenseTab.svelte";
@@ -145,6 +147,12 @@ export const DEFAULT_SETTINGS_TABS: SettingsTab[] = [
     label: "Collaboration",
     icon: "M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM21 21v-2a4 4 0 0 0-3-3.87M16 3.13A4 4 0 0 1 16 11",
     component: SettingsCollaborationTab,
+  },
+  {
+    id: "notifications",
+    label: "Notifications",
+    icon: "M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0",
+    component: SettingsNotificationsTab,
   },
   {
     id: "claude-code",
