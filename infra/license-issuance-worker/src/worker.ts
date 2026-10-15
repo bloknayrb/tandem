@@ -42,6 +42,7 @@
 
 import {
   importPkcs8Ed25519,
+  keyIdOfPkcs8Ed25519,
   type SignBytes,
   signLicense,
   verifyStandardWebhook,
@@ -51,6 +52,24 @@ import {
 /** License schema version baked into signed metadata. Drift changes the signed
  * bytes, so keep it in lockstep with the server (`webhook.ts` used "1.0"). */
 export const LICENSE_VERSION = "1.0";
+
+/** Ids of the signing keys shipped builds trust: a copy of the ids of
+ * `TRUSTED_PUBLIC_KEYS` in src/server/license/public-key.ts (this Worker cannot
+ * import from `src/`). A parity test keeps the two equal, so a new key is added
+ * to both in one commit. The Worker refuses to sign with a key not listed here.
+ * Rotation order: docs/licensing-operations.md §0. */
+export const TRUSTED_KEY_IDS: readonly string[] = ["79c10e75fb8cfa46"];
+
+// What the fetch handler checks against. Tests sign with throwaway keys (the
+// production private key is never in CI), so they swap the list through
+// `_setTrustedKeyIdsForTests`; production never touches it.
+let trustedKeyIds: readonly string[] = TRUSTED_KEY_IDS;
+
+/** Test-only: replace the trusted list; call with no argument to restore it. */
+export function _setTrustedKeyIdsForTests(ids: readonly string[] = TRUSTED_KEY_IDS): void {
+  trustedKeyIds = ids;
+  signerCache = null;
+}
 
 /** Standard-Webhooks freshness tolerance (svix guidance; each attempt is
  * freshly timestamped, so this does not reject legitimate retries). */
@@ -146,6 +165,10 @@ type EventOutcome = Exclude<ResultKind, "rejected" | "error"> | Failure;
 export interface IssuanceDeps {
   webhookSecret: string;
   signBytes: SignBytes;
+  /** The id of the key behind `signBytes`, stamped into every license. Derived
+   * from the key (`keyIdOfPkcs8Ed25519`), never configured, so the two cannot
+   * disagree. */
+  keyId: string;
   /** licenseId → LicenseEntitlement; read by the update Worker. NO PII. */
   entitlementKv: KvNamespace;
   /** issuance-owned store: `order:<mode>:<id>` records + `evt:<mode>:<id>`. */
@@ -165,7 +188,9 @@ export interface IssuanceDeps {
 
 /** Durable ledger record. Carries the fields needed to re-sign an identical
  * blob on a retry/resend (Ed25519 is deterministic per RFC 8032 — a randomized
- * scheme would break the resend story) plus dedup/refund bookkeeping — no
+ * scheme would break the resend story; across a signing-key rotation a resend
+ * is re-signed under the CURRENT key, so it differs from the original but is
+ * equally valid — after a leak, deliberately so) plus dedup/refund bookkeeping — no
  * separate copy of the signature. A refund that arrives before the paid event
  * writes a TOMBSTONE: `refunded: true` with empty licenseId/email. */
 interface LedgerRecord {
@@ -269,7 +294,7 @@ function entitlementValue(rec: LedgerRecord): string {
   });
 }
 
-function metadataFrom(rec: LedgerRecord) {
+function metadataFrom(rec: LedgerRecord, keyId: string) {
   return {
     id: rec.licenseId,
     name: rec.name,
@@ -278,6 +303,7 @@ function metadataFrom(rec: LedgerRecord) {
     createdAt: rec.createdAt,
     expiresAt: rec.updateWindowEnd,
     version: LICENSE_VERSION,
+    keyId,
   };
 }
 
@@ -296,7 +322,7 @@ async function reDrive(existing: LedgerRecord, deps: IssuanceDeps): Promise<Even
     await deps.entitlementKv.put(existing.licenseId, entitlementValue(existing)); // idempotent re-assert
   }
   if (!existing.emailSent) {
-    const blob = await signLicense(metadataFrom(existing), deps.signBytes);
+    const blob = await signLicense(metadataFrom(existing, deps.keyId), deps.signBytes);
     const sent = await deps.sendEmail(existing.email, existing.name, blob);
     if (!sent.ok) return { stage: "email", status: sent.status };
     existing.emailSent = true;
@@ -389,7 +415,7 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Even
     refunded: false,
   };
 
-  const blob = await signLicense(metadataFrom(rec), deps.signBytes);
+  const blob = await signLicense(metadataFrom(rec, deps.keyId), deps.signBytes);
   // Belt-and-suspenders on the verifier's 4096-byte ceiling: never email a blob
   // the buyer's client would reject. Decoded size derived arithmetically from
   // the (always correctly padded) base64 we just produced. With name≤128 and
@@ -689,7 +715,7 @@ interface WorkerEnv {
 // across requests on the same isolate, so the Ed25519 import and grandfather
 // Set are built once per isolate (and rebuilt if a secret rotates). A failed
 // key import is never cached — it re-attempts (and 503s) per request.
-let signerCache: { pem: string; signBytes: SignBytes } | null = null;
+let signerCache: { pem: string; signBytes: SignBytes; keyId: string } | null = null;
 let grandfatherCache: { raw: string; set: Set<string> } | null = null;
 
 function grandfatherSetOf(raw: string): Set<string> {
@@ -1097,17 +1123,21 @@ export default {
     };
 
     // Import the signing key up front — a bad/missing key fails closed (503)
-    // before any webhook processing.
+    // before any webhook processing. So does a key no shipped build trusts: its
+    // licenses would fail verification on every device, and the buyer would be
+    // told their key is bad, after the sale had already gone through.
     if (signerCache?.pem !== env.TANDEM_PRIVATE_KEY) {
       try {
         const key = await importPkcs8Ed25519(env.TANDEM_PRIVATE_KEY);
-        signerCache = { pem: env.TANDEM_PRIVATE_KEY, signBytes: webCryptoSigner(key) };
+        const keyId = await keyIdOfPkcs8Ed25519(env.TANDEM_PRIVATE_KEY);
+        if (!trustedKeyIds.includes(keyId)) throw new Error("untrusted signing key");
+        signerCache = { pem: env.TANDEM_PRIVATE_KEY, signBytes: webCryptoSigner(key), keyId };
       } catch {
         log({ result: "error", ts: Math.floor(Date.now() / 1000), stage: "config" });
         return jsonResponse(503);
       }
     }
-    const { signBytes } = signerCache;
+    const { signBytes, keyId } = signerCache;
 
     // Same fail-closed treatment as the signing key, and for the same reason: a
     // bad SUPPORT_EMAIL is not detectable from a successful-looking response.
@@ -1164,6 +1194,7 @@ export default {
     return handleIssuance(request, {
       webhookSecret: env.POLAR_WEBHOOK_SECRET,
       signBytes,
+      keyId,
       entitlementKv: env.LICENSE_KV,
       ledgerKv: env.LEDGER_KV,
       sendEmail: (to, name, blob) => sendViaResend(env, to, name, blob),

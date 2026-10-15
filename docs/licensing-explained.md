@@ -601,11 +601,12 @@ Worth stating plainly, because they look like bugs:
 
 ## What is not built yet
 
-- **Key rotation.** There is one pinned public key and no `keyId`, so rotating
-  drops every existing customer to restricted, mid-session. Making the verifier
-  accept an *array* of keys is a few lines and would make rotation routine —
-  but adding a `keyId` to the signed metadata changes the signed bytes, so that
-  variant is now-or-never, before the first sale.
+- **A rotation that has actually run.** Since 2026-10-15 every license carries
+  a `keyId` and the app trusts a list of keys, so the signing key can be
+  replaced without dropping existing customers
+  ([licensing-operations.md §0](licensing-operations.md#rotating-the-signing-key)).
+  No rotation has been done, and the Workers runtime's id derivation is checked
+  only by the sandbox order that procedure calls for.
 - **A resend-my-license endpoint.** Deferred past ~25 sales; manual re-signing
   is adequate and safer at that volume, and it doesn't help the case that
   actually prompts it (mail quarantine).

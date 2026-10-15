@@ -92,7 +92,10 @@ export type LicenseVerifyCode =
   | "TOO_LONG"
   /** Not base64, not JSON, or missing metadata/signature. */
   | "MALFORMED"
-  /** Well-formed, but not signed by the key this build trusts. */
+  /**
+   * Well-formed, but not signed by any key this build trusts: a bad signature,
+   * or a key id this build does not carry (a retired or newer signing key).
+   */
   | "BAD_SIGNATURE";
 
 /**
