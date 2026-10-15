@@ -24,11 +24,15 @@ import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/co
 import { toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation, AnnotationReply, AnnotationType } from "../../src/shared/types.js";
 
-function seedParentAnnotation(doc: Y.Doc, type: AnnotationType): string {
+function seedParentAnnotation(
+  doc: Y.Doc,
+  type: AnnotationType,
+  author: Annotation["author"] = "user",
+): string {
   const annId = `ann_${type}_${Math.random().toString(36).slice(2, 8)}`;
   const annotation: Annotation = {
     id: annId,
-    author: "user",
+    author,
     type,
     range: { from: toFlatOffset(0), to: toFlatOffset(5) },
     content: type === "highlight" ? "" : "parent annotation body",
@@ -55,7 +59,10 @@ function addUserReply(doc: Y.Doc, annotationId: string, text: string): string {
   return id;
 }
 
-function setup(parentType: AnnotationType): {
+function setup(
+  parentType: AnnotationType,
+  parentAuthor: Annotation["author"] = "user",
+): {
   doc: Y.Doc;
   events: TandemEvent[];
   dispose: () => void;
@@ -63,7 +70,7 @@ function setup(parentType: AnnotationType): {
 } {
   const doc = new Y.Doc();
   const events: TandemEvent[] = [];
-  const parentId = seedParentAnnotation(doc, parentType);
+  const parentId = seedParentAnnotation(doc, parentType, parentAuthor);
   const dispose = makeRepliesObserver({
     docName: `doc_${parentType}`,
     doc,
@@ -84,6 +91,33 @@ describe("replies observer — ADR-027 privacy guard", () => {
       replyAuthor: "user",
       textSnippet: "PRIVATE PARENT TEXT — must not leak",
     });
+    dispose();
+  });
+
+  it.each(["claude", "user"] as const)(
+    "carries the parent's author (%s), which decides whether a reply starts Claude (#2196)",
+    (author) => {
+      const { doc, events, dispose, parentId } = setup("comment", author);
+      addUserReply(doc, parentId, "reply body");
+      expect(events[0].payload).toMatchObject({ parentAuthor: author });
+      dispose();
+    },
+  );
+
+  // The reply that starts a stopped Tandem's Claude (#2196) is one on a
+  // Claude-authored parent, so the parents that must stay silent are pinned
+  // with author "claude" too: the author must never decide the outcome.
+  it.each([
+    ["a private Claude comment (legacy envelope / stale-tab merge)", "comment", "private"],
+    ["a Claude-authored note", "note", undefined],
+  ] as const)("does NOT fire for a user reply on %s", (_label, type, audience) => {
+    const { doc, events, dispose, parentId } = setup(type, "claude");
+    if (audience) {
+      const map = doc.getMap(Y_MAP_ANNOTATIONS);
+      map.set(parentId, { ...(map.get(parentId) as Annotation), audience });
+    }
+    addUserReply(doc, parentId, "should never reach Claude");
+    expect(events).toHaveLength(0);
     dispose();
   });
 

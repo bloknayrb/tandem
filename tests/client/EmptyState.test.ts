@@ -20,6 +20,7 @@ function makeProps(overrides: Record<string, unknown> = {}) {
     onConnectAi: vi.fn(),
     onRestartClaude: vi.fn(),
     onStartFreshClaude: vi.fn(),
+    onStartClaude: vi.fn(),
     onOpenLicenseSettings: vi.fn(),
     ...overrides,
   };
@@ -390,5 +391,23 @@ describe("EmptyState", () => {
     const { container } = render(EmptyState, { props: makeProps() });
     const illus = container.querySelector(".empty-illus");
     expect(illus?.getAttribute("aria-hidden")).toBe("true");
+  });
+});
+
+describe("EmptyState — the start chip (#2195)", () => {
+  it("offers Start, wired to onStartClaude and to nothing else", () => {
+    const props = makeProps({ aiChip: "start" });
+    const { container } = render(EmptyState, { props });
+    const btn = container.querySelector<HTMLElement>("[data-testid='empty-state-start-claude']");
+    expect(btn).not.toBeNull();
+    expect(btn?.getAttribute("data-ai-chip")).toBe("start");
+    btn?.click();
+    expect(props.onStartClaude).toHaveBeenCalledOnce();
+    expect(props.onRestartClaude).not.toHaveBeenCalled();
+    expect(props.onConnectAi).not.toHaveBeenCalled();
+    // Not a failure: no restart wording, no fresh-conversation secondary.
+    expect(container.querySelector("[data-testid='empty-state-restart-claude']")).toBeNull();
+    expect(container.querySelector("[data-testid='empty-state-start-fresh']")).toBeNull();
+    expect(container.textContent).toContain("Tandem's Claude isn't running.");
   });
 });

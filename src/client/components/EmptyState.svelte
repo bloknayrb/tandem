@@ -43,6 +43,9 @@ interface Props {
    * expecting a safe retry must never destroy their session; see #1268).
    */
   onStartFreshClaude?: () => void;
+  /** The Start control (#2195), for the `start` chip. Required, so a mount
+   * that forgets it is a type error rather than a dead button. */
+  onStartClaude: () => void;
   /**
    * The licence refusal (#1521): pass `aiReadiness.aiNotice`, which is
    * non-null exactly when `aiChip` is `"ai-off"`. Required, so a mount
@@ -62,6 +65,7 @@ let {
   onConnectAi,
   onRestartClaude,
   onStartFreshClaude,
+  onStartClaude,
   aiNotice,
   onOpenLicenseSettings,
 }: Props = $props();
@@ -167,13 +171,12 @@ $effect(() => {
         >
           Set up Claude Code
         </button>
-        <!-- The probe can be wrong — it looks for a `claude` on PATH, so an
-             install under another name reads as absent — and a branch offering
-             one CTA that might not apply is a dead end. Deliberately modest
-             copy: this retries a spawn, it does NOT help someone who installed
-             the CLI after Tandem started, because the supervisor spawns from
-             the PATH this process was launched with. That case needs a Tandem
-             restart, which is what the wizard's own banner says. -->
+        <!-- The probe can be wrong — it looks for a `claude` on PATH and in
+             `~/.local/bin`, so an install under another name or elsewhere reads
+             as absent — and a branch offering one CTA that might not apply is
+             a dead end. This retries a start, which resolves the command
+             afresh (#2199), so it also picks up a native install made since
+             Tandem started. -->
         <button
           class="empty-link"
           data-testid="empty-state-setup-restart-anyway"
@@ -240,6 +243,21 @@ $effect(() => {
           onclick={onOpenLicenseSettings}
         >
           Open license settings
+        </button>
+      </div>
+    {:else if connected && aiChip === "start"}
+      <!-- #2195: Tandem's Claude is not running by choice — off, waiting for
+           Start, or stopped while idle. Not a failure, so no restart wording
+           and no Start-fresh secondary: Start resumes the conversation. -->
+      <p class="empty-sub empty-sub-secondary">Tandem's Claude isn't running.</p>
+      <div class="empty-actions">
+        <button
+          class="empty-cta"
+          data-testid="empty-state-start-claude"
+          data-ai-chip="start"
+          onclick={onStartClaude}
+        >
+          Start Tandem's Claude
         </button>
       </div>
     {:else if connected}
