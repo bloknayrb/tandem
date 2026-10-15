@@ -36,7 +36,9 @@ explicitly, now:
    Choosing "no recovery" is allowed, but choose it on purpose.
 2. **What PII goes in the signed bytes.** `LicenseMetadata` embeds `name` and
    `email`, so both land on disk and in any support thread where the key is
-   pasted. `email` buys the honour-system "bound to its buyer" deterrent;
+   pasted. `email` identifies whose key it is if one turns up in a support
+   thread or is posted publicly; there is no per-buyer rule (decided
+   2026-10-15);
    **`name` buys display text only, and is the field most likely to be a real
    legal name.** Decide whether `name` belongs there at all.
 3. **Missing fields.** `version` is not stored in the ledger (so a future

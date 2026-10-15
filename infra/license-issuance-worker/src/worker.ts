@@ -892,7 +892,7 @@ export function licenseEmailText(name: string, blob: string, supportEmail: strin
     wrapBlob(blob),
     "",
     "Keep this email - it's your proof of purchase, and it lets you",
-    "re-activate on any device you personally use. Your license never",
+    "re-activate Tandem whenever you need to. Your license never",
     "expires, and it includes all future updates. There is no guarantee",
     "that future updates will be released.",
     "",
