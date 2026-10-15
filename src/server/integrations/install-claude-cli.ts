@@ -390,12 +390,13 @@ export async function installClaudeCli(
   // on PATH always reads as INSTALLED_ON_PATH), so this is about the route's own
   // honesty rather than a live button.
   //
-  // `installedThisProcess` is what keeps the widened guard convergent. The shim
-  // case can't clear itself within a session — the native installer leaves the
-  // shim in place and drops `claude.exe` in `~/.local/bin`, off the server's
-  // start-time PATH — so `launchable()` stays false and a retrying caller would
-  // re-download and re-exec the installer without bound. One successful install
-  // per process is all that can possibly help; the rest waits on a restart.
+  // `installedThisProcess` keeps the widened guard convergent whatever
+  // `launchable()` says. Since #2199 the launcher finds a native
+  // `~/.local/bin/claude.exe` directly, so after a successful install the shim
+  // case normally reads launchable at once; the latch remains for an install
+  // that exited 0 yet left nothing the launcher can start (a different
+  // location, a blocked file), where a retrying caller would otherwise
+  // re-download and re-exec the installer without bound.
   // Latched on SUCCESS only: a failed attempt must stay retryable, or one
   // transient network blip disables the remedy for the life of the process.
   const before = detect();

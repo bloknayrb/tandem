@@ -30,22 +30,25 @@ import os from "node:os";
 import path from "node:path";
 
 import type { TandemEvent } from "../../shared/events/types.js";
-import { isWakeWorthy } from "../../shared/events/wake-scope.js";
+import { isStartWorthy, isWakeWorthy } from "../../shared/events/wake-scope.js";
 import type {
   ClaudeCodeIntegration,
   IntegrationConfig,
 } from "../../shared/integrations/contract.js";
-import {
-  detectClaudeCli,
-  isBareNameLaunchable,
-} from "../../shared/integrations/detect-claude-cli.js";
+import { resolveClaudeLaunch } from "../../shared/integrations/detect-claude-cli.js";
 import {
   CLAUDE_STREAM_JSON_FLAGS,
+  GREETING_REPLY_WINDOW_MS,
   type LauncherErrorCode,
+  type LauncherSettings,
+  type LauncherSettingsPatch,
+  type LauncherStandby,
   REAPER_NOT_FOUND_MARKER,
+  SUPERVISOR_GREETING_PROMPT,
   SUPERVISOR_INITIAL_PROMPT,
   SUPERVISOR_WAKE_PROMPT,
   serializeUserTurn,
+  type TandemClaudeAfterSetup,
 } from "../../shared/launcher/contract.js";
 import { rejectUnsafeWindowsPrefix } from "../../shared/windows-path-safety.js";
 import { subscribe, unsubscribe, wasForwardedExternally } from "../events/queue.js";
@@ -53,6 +56,11 @@ import { createIntegrationsStore } from "../integrations/storage.js";
 import { type AiRefusal, aiRefusal } from "../license/ai-refusal.js";
 import { sanitizeForLog } from "../log-sanitize.js";
 import { isTauriSidecar } from "../platform.js";
+import {
+  type LauncherSettingsRead,
+  readLauncherSettings,
+  updateLauncherSettings,
+} from "./settings.js";
 
 /**
  * Thrown by `relaunch` / `startFresh` when Tandem is unlicensed (#1521), BEFORE
@@ -118,6 +126,14 @@ interface SupervisorOpts {
    */
   probeCliUsable?: () => boolean;
   /**
+   * Seam onto the program the launcher spawns (#2199): an ABSOLUTE path, or
+   * `null` when nothing startable resolves — then nothing is spawned and the
+   * status reads `cli-unusable`. Defaults to `resolveClaudeLaunch().command`,
+   * read per start. Synchronous for the same reason as `probeCliUsable`, which
+   * defaults to "this resolves".
+   */
+  resolveClaudeCommand?: () => string | null;
+  /**
    * Seam onto the licence decision (#1521). Defaults to the live `aiRefusal`,
    * which admits on its first line while the gate ships dark.
    */
@@ -159,18 +175,78 @@ interface SupervisorOpts {
    * to share the constant.
    */
   resumeConfirmMs?: number;
-}
-
-/**
- * Default `probeCliUsable`: the CLI is usable if it exists *and* the launcher's
- * bare-name spawn can actually start it. The second half is the Windows npm
- * shim case — `claude.cmd` on PATH answers "installed" to every check a user
- * would run by hand, and `CreateProcessW` still cannot launch it (#1273).
- *
- * Both halves are `statSync`-based, hence synchronous; see `probeCliUsable`.
- */
-function defaultProbeCliUsable(): boolean {
-  return detectClaudeCli() !== "NOT_INSTALLED" && isBareNameLaunchable();
+  /**
+   * Seam onto the `launcher-settings.json` read (#2195), so a test can make it
+   * fail the way a held file does on Windows without racing an antivirus.
+   * Defaults to `readLauncherSettings(integrationsBase)`.
+   */
+  readSettings?: () => Promise<LauncherSettingsRead>;
+  /**
+   * Milliseconds per configured idle minute (#2195). Default 60_000. A test
+   * seam with the same justification as `wakeLatchMs`: the idle stop is a timer
+   * nothing could otherwise reach in a test, and it scales the minutes from
+   * both the spawn plan and `updateSettings`.
+   */
+  idleMinuteMs?: number;
+  /**
+   * Seam onto the event fan-out for the standby watch (#2196): the
+   * subscription held while Tandem's Claude is not running by choice, so a
+   * chat message can start it. Defaults to `defaultSubscribeDuringGap` — the
+   * same `"internal"` + `wasForwardedExternally` subscription the gap watch
+   * uses, for the same reasons: it delivers nothing, so it must not count as a
+   * consumer, and the Solo gate and the licence refusal are decided once by the
+   * push, never again here.
+   */
+  subscribeDuringStandby?: (cb: (event: TandemEvent) => void) => () => void;
+  // Production must keep the default: `isStartWorthy` decides only "addressed
+  // to Claude", never "may Claude see it", and relies on this subscription for
+  // the Solo and licence half (the real-queue test pins the default).
+  /**
+   * Whether an AI session OTHER than Tandem's own Claude is live (#2196;
+   * Bryan: "Not if another AI is on"). Given the Claude session ids of every
+   * child this supervisor has spawned, so their leftover MCP entries — live
+   * for up to a minute after a stop or a start-fresh — are not mistaken for
+   * someone else's. A seam because the registry lives in `mcp/server.ts`,
+   * which this module must not import; `index.ts` wires it. The default is
+   * `() => false`, which is today's single-AI behaviour.
+   */
+  otherAiAttached?: (ownClaudeSessionIds: ReadonlySet<string>) => boolean;
+  /**
+   * The one-time greeting's marker (#2197; `greeting.ts`). `isOwed` is read at
+   * every spawn and MUST stay synchronous (no await in the restart path);
+   * `markDone` runs once the greeting reaches the chat. The default is "never
+   * owed", so no test greets by accident; `index.ts` wires the real file.
+   */
+  greeting?: { isOwed: () => boolean; markDone: () => Promise<void> };
+  /**
+   * Seam onto `tandem_reply` (#2197): `cb` runs whenever a `tandem_reply`
+   * lands a chat message, with the caller's Claude session id, undefined when
+   * its transport sends none (`onTandemReply` in `mcp/awareness.ts`, wired in
+   * `index.ts`; this module must not import the MCP layer). That is how the
+   * supervisor learns the greeting arrived; a reply from a session it did not
+   * spawn is not the greeting. Default: never.
+   */
+  subscribeTandemReply?: (cb: (sessionId: string | undefined) => void) => () => void;
+  /**
+   * True while the user's mode is Solo, or cannot be read (#2197; Bryan,
+   * 2026-10-14): the hello is unasked, and Solo means Claude speaks only when
+   * spoken to, so a spawn in Solo sends its ordinary first turn and the
+   * greeting stays owed for the first spawn in Tandem mode. `index.ts` wires
+   * `readModeState`. The default is "never Solo"; a throw reads as Solo.
+   */
+  greetingHeldBySolo?: () => boolean;
+  /**
+   * The v1.0 setup walkthrough is owed (#2198; `integrations/walkthrough.ts`).
+   * Read once, at `start()`: while it is, the boot does not start Tandem's
+   * Claude even in the automatic mode (Bryan, 2026-10-14 — the walkthrough is
+   * how the user meets the start choice, so it must not be inferred first).
+   * The boot holds in `awaiting-start` instead, and the walkthrough's Keep or
+   * Apply (`startAfterSetup`) releases it under the mode the user then has.
+   * Synchronous; a throw reads as not owed. Default: never owed.
+   */
+  walkthroughPending?: () => boolean;
+  /** Override for `GREETING_REPLY_WINDOW_MS`, for tests. */
+  greetingWindowMs?: number;
 }
 
 /** Exported for test only — the `"external"` argument below is the single line
@@ -420,11 +496,18 @@ export interface Supervisor {
   /** Current state for /api/launcher/status. */
   status(): SupervisorStatus;
   /** Re-read whether a launchable claude-code entry exists, WITHOUT starting
-   * anything (#2180). Called after the setup wizard writes one, so the status
-   * stops reporting `not-configured` without waiting for the next start.
-   * Whether finishing the wizard should also start Tandem's Claude is an open
-   * product question, deliberately not answered here. */
+   * anything (#2180). `startAfterSetup` is what the setup wizard's Apply
+   * calls; this remains for a caller that must not start Claude. */
   refreshConfigured(): Promise<void>;
+  /**
+   * After a setup-wizard Apply that wrote a claude-code entry (#2197): refresh
+   * `configured` and, when nothing is running, the start mode is automatic,
+   * nothing is stopped by choice, the licence admits it and no other AI is
+   * attached, start Tandem's Claude. Resolves with the decision as soon as it
+   * is made — before the spawn finishes — and never rejects; a failure after
+   * that is recorded as `lastError`, where the status shows it.
+   */
+  startAfterSetup(): Promise<TandemClaudeAfterSetup>;
   /**
    * Resume a launcher the licence refused (#1521). Spawns only when no child
    * is alive, a refusal is recorded, no breaker is tripped and the user has
@@ -435,6 +518,25 @@ export interface Supervisor {
   resumeAfterLicence(): Promise<void>;
   /** The licence refusal that left the launcher down, or null when there is none. */
   licenceRefusal(): AiRefusal | null;
+  /**
+   * The Start control (#2195): start Tandem's Claude from standby, resuming
+   * its conversation. A no-op answering `{spawned: true}` when a child is
+   * already alive — it never relaunches a running Claude. Goes through the
+   * same `respawn` as relaunch, so the licence refusal comes before anything
+   * changes and a start from `off` moves the saved mode to `on-click`.
+   */
+  startByUser(): Promise<RespawnResult>;
+  /**
+   * Merge a settings patch into `launcher-settings.json` and apply it (#2195).
+   * Switching to `off` stops Claude whatever state the supervisor is in —
+   * including a crash restart that is only scheduled or mid-plan, which a
+   * child-alive check would miss. Throws `SettingsNewerError` for a file a
+   * newer Tandem wrote.
+   */
+  updateSettings(patch: LauncherSettingsPatch): Promise<LauncherSettings>;
+  /** The settings this supervisor last read or saved successfully, or null
+   * before any. What it is acting on while the file cannot be read. */
+  appliedSettings(): LauncherSettings | null;
 }
 
 /** What `relaunch` / `startFresh` did. `no-integration`: the plan found no
@@ -444,7 +546,9 @@ export interface Supervisor {
  * entry was removed ends Claude, and a start-fresh discards the conversation
  * pointer. Acceptable, because the alternative is reading the store under the
  * lock before stopping, and a removed entry is a deliberate act. */
-export type RespawnResult = { spawned: true } | { spawned: false; why: "no-integration" };
+export type RespawnResult =
+  | { spawned: true }
+  | { spawned: false; why: "no-integration" | "cli-unusable" };
 
 /** Discriminated union: when `running === false` the extra fields are the
  * optional `lastError`, `restartPending` and `configured`; when `running === true` all process-level fields are
@@ -472,6 +576,16 @@ export type SupervisorStatus =
        * Any other change to `integrations.json` (a hand edit, or a wizard run
        * that removes the entry) shows up at the next plan. */
       configured?: false;
+      /** Not running by choice (#2195): see `LauncherStandby`. Never set
+       * beside a `lastError` — a failed stop is a diagnosis to show, not a
+       * choice. Beside `restartPending` it means a Start from standby is in
+       * progress. */
+      standby?: LauncherStandby;
+      /** Only beside `standby` (#2196): a chat message sent now would start
+       * Tandem's Claude — no other AI is attached and the licence admits it. */
+      startsOnMessage?: true;
+      /** The greeting is late (#2197) — see `LauncherStatus`. */
+      greetingLate?: true;
     }
   | {
       running: true;
@@ -501,6 +615,8 @@ export type SupervisorStatus =
        * resumed under the same UUID. Internal: the status route sends only the
        * derived `attached` boolean. */
       spawnedAt: number;
+      /** The greeting is late (#2197) — see `LauncherStatus`. */
+      greetingLate?: true;
       /** Never set: a running supervisor has, by construction, no pending
        * fatal error. Present as an explicit `undefined` so `status.lastError`
        * type-checks on the un-narrowed union. */
@@ -842,7 +958,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const subscribeToEvents = opts.subscribeToEvents ?? defaultSubscribeToEvents;
   const subscribeDuringGap = opts.subscribeDuringGap ?? defaultSubscribeDuringGap;
   const wakeLatchMs = opts.wakeLatchMs ?? WAKE_LATCH_MAX_MS;
-  const probeCliUsable = opts.probeCliUsable ?? defaultProbeCliUsable;
+  // The command and the usable probe are one reading (#2199): a probe that
+  // could say "usable" while the spawn has nothing to run (or the reverse) is
+  // the #1273 crash loop with a Restart that cannot help.
+  const resolveCommand = opts.resolveClaudeCommand ?? (() => resolveClaudeLaunch().command);
+  const probeCliUsable = opts.probeCliUsable ?? (() => resolveCommand() !== null);
   const reportDeliveryTrip = opts.reportDeliveryTrip ?? (() => {});
   const turnReceiptMs = opts.turnReceiptMs ?? TURN_RECEIPT_MS;
   const resumeConfirmMs = opts.resumeConfirmMs ?? RESUME_CONFIRM_MS;
@@ -850,6 +970,27 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     ? opts.restartBackoffsMs
     : RESTART_BACKOFFS_MS;
   const decideRefusal = opts.aiRefusal ?? aiRefusal;
+  const readSettings = opts.readSettings ?? (() => readLauncherSettings(opts.integrationsBase));
+  const idleMinuteMs = opts.idleMinuteMs ?? 60_000;
+  const subscribeDuringStandby = opts.subscribeDuringStandby ?? defaultSubscribeDuringGap;
+  const otherAiAttached = opts.otherAiAttached ?? (() => false);
+  const greetingMarker = opts.greeting ?? { isOwed: () => false, markDone: async () => {} };
+  const greetingWindowMs = opts.greetingWindowMs ?? GREETING_REPLY_WINDOW_MS;
+  /**
+   * Why Tandem's Claude is not running when nothing went wrong (#2195), or
+   * undefined. Set by `stopByChoice` and by a start the settings held back;
+   * cleared by every spawn, beside `lastError`.
+   */
+  let standby: LauncherStandby | undefined;
+  /**
+   * The last settings read (or write) that was not a fallback, or null before
+   * the first. A later read that fails reuses it rather than the fallback: the
+   * file being unreadable for a moment says nothing about what the user chose,
+   * and the fallback's `on-click` would otherwise leave a crashed `auto` Claude
+   * down, or its `always` would cancel an idle lifetime. Only a read with
+   * nothing to fall back on — the first one, at boot — takes the fallback.
+   */
+  let lastGoodSettings: LauncherSettings | null = null;
   /**
    * The licence refusal that left the launcher down, or null. Authoritative
    * on its own, even when `lastError` holds another code (see
@@ -922,6 +1063,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     teardown: () => void;
     /** This spawn's `turnInFlight` — read by `status()` as `busy`. */
     isBusy: () => boolean;
+    /** Replace this spawn's idle limit and restart its clock (#2195). */
+    setIdlePolicy: (ms: number | null) => void;
   } | null = null;
 
   /** Release the active spawn's subscription, whatever state its process is in.
@@ -981,6 +1124,194 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   function disarmGapWatch(): void {
     gapUnsubscribe?.();
     gapUnsubscribe = null;
+  }
+
+  /** The Claude session ids of every child this supervisor has spawned, kept
+   * across their stops, so `otherAiAttached` can tell their leftover MCP
+   * entries from another AI's (#2196). A start-fresh changes the id, and the
+   * replaced child's entry still looks live for a minute. */
+  const ownChildSessionIds = new Set<string>();
+  /** Raised synchronously by the public `stop()` — shutdown — and lowered by
+   * `start()`. While up, no message starts Claude, whatever lands on the lock
+   * after it — including an Off that re-arms the standby watch (#2196). */
+  let shuttingDown = false;
+  /** The boot found the v1.0 walkthrough owed (#2198), whatever the start
+   * mode: an `awaiting-start` standby is then the walkthrough's to release, if
+   * the mode is automatic by the time the user confirms. Cleared by the first
+   * `startAfterSetup`, which is the confirm (Keep or Apply). */
+  let walkthroughHold = false;
+
+  /**
+   * The one-time greeting in this process (#2197), or null before one is
+   * written. `pending` from the moment the turn is written; `answered` once a
+   * `tandem_reply` from this supervisor's own child lands (and the marker is
+   * then marked done);
+   * `unanswered` if the turn ends, or its child exits, with no message. A
+   * later reply from the child in this process still counts as `answered`:
+   * the user has heard from Tandem's Claude, and the note should go. A
+   * process greets at most once successfully (`greetedThisProcess`), so a
+   * marker write that failed cannot greet again on the next spawn. Never in
+   * Solo (`greetingHeldBySolo`): that spawn's first turn is the ordinary one,
+   * and the greeting stays owed.
+   */
+  let greeting: { phase: "pending" | "answered" | "unanswered"; sentAt: number } | null = null;
+  let greetedThisProcess = false;
+  /** A greeting turn's child crashed before the turn ended: no further greeting
+   * in this process, so a crash loop cannot re-send it on every restart. The
+   * next Tandem launch tries again (the marker is still owed). */
+  let greetingCrashedThisProcess = false;
+  /** Spend the greeting: never again in this process, and `done` on disk.
+   * Idempotent — a turn's end and its reply can both get here. */
+  function spendGreeting(): void {
+    if (greetedThisProcess) return;
+    greetedThisProcess = true;
+    greetingMarker.markDone().catch((err: unknown) => {
+      console.error("[Launcher] Could not record that the greeting was sent:", err);
+    });
+  }
+  // A reply carrying another session's id is that session's, not the
+  // greeting. One with no id is counted: the header is optional, and a child
+  // that never sends it must not owe its greeting on every spawn.
+  const unsubscribeTandemReply = (opts.subscribeTandemReply ?? (() => () => {}))((sessionId) => {
+    if (greeting === null || greeting.phase === "answered") return;
+    if (sessionId !== undefined && !isOwnChildSession(sessionId)) return;
+    greeting.phase = "answered";
+    unsubscribeTandemReply();
+    spendGreeting();
+  });
+
+  /** `opts.walkthroughPending`, read at boot; a throw reads as not owed. */
+  function walkthroughOwedAtBoot(): boolean {
+    try {
+      return opts.walkthroughPending?.() === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Case-folded, as the MCP registry compares Claude session ids: a UUID
+   * may round-trip through the session file in either case. */
+  function isOwnChildSession(sessionId: string): boolean {
+    const key = sessionId.toLowerCase();
+    for (const id of ownChildSessionIds) if (id.toLowerCase() === key) return true;
+    return false;
+  }
+
+  /** Read the marker; any failure reads as not owed (see `greeting.ts`). In
+   * Solo, or a mode that cannot be read, the greeting waits (and stays owed). */
+  function greetingOwedNow(): boolean {
+    if (greetedThisProcess || greetingCrashedThisProcess) return false;
+    try {
+      if (opts.greetingHeldBySolo?.() === true) return false;
+    } catch {
+      return false;
+    }
+    try {
+      return greetingMarker.isOwed();
+    } catch {
+      return false;
+    }
+  }
+
+  /** The hello was asked for and has not reached the chat: its turn ended
+   * without a message, or the window passed. */
+  function greetingLate(): boolean {
+    // A standby is the user's choice (or idle): nothing for the note to fix.
+    if (greeting === null || standby !== undefined) return false;
+    if (greeting.phase === "unanswered") return true;
+    return greeting.phase === "pending" && Date.now() - greeting.sentAt >= greetingWindowMs;
+  }
+
+  /**
+   * The standby watch (#2196): unsubscribe fn while armed, else null. Armed
+   * exactly while `standby` is set — `setStandby` is the only writer of both —
+   * so a chat message (or a user reply on Claude's thread, `isStartWorthy`)
+   * reaching a Claude that is off, idle-stopped or waiting for its first Start
+   * starts it.
+   *
+   * The owed wake is recorded SYNCHRONOUSLY here, before `startForMessage`
+   * queues on the op lock: if another start (the user's Start, a relaunch)
+   * holds the lock and wins, its spawn still owes this message a wake turn.
+   * Recording it inside the locked body would lose the message to that race.
+   * In `off` this is the one thing that may set `wakeOwedAcrossSpawns`
+   * (#1866): the gap watch is disarmed there, and this message is owed only
+   * because it is starting Claude to answer it.
+   *
+   * Not with another AI attached: the user's own AI answers, and starting a
+   * second one would be work nobody asked for.
+   */
+  let standbyUnsubscribe: (() => void) | null = null;
+  /** A message's start is queued on the op lock or running (#2196). One at a
+   * time: a burst records its owed wake and leaves the queued start to answer
+   * it. Counts toward `restartPending`, so the status reads "Starting" from
+   * the moment the message lands rather than once the lock frees up. */
+  let messageStartQueued = false;
+
+  /** Is an AI other than Tandem's own last child live? */
+  function anotherAiOn(): boolean {
+    return otherAiAttached(ownChildSessionIds);
+  }
+
+  function setStandby(next: LauncherStandby | undefined): void {
+    standby = next;
+    if (next === undefined) {
+      standbyUnsubscribe?.();
+      standbyUnsubscribe = null;
+      return;
+    }
+    if (standbyUnsubscribe) return;
+    standbyUnsubscribe = subscribeDuringStandby((event) => {
+      // `standby` is re-read although the watch is armed only while it is set:
+      // a fan-out already in progress can still reach a callback that an
+      // earlier subscriber's handler unsubscribed.
+      // Never beside a tripped breaker: a chat is not a decision to retry a
+      // Claude that kept crashing, and a message start must not leave the
+      // breaker tripped under a running child either (a later crash would then
+      // get no restart and no diagnosis). Start, which resets it, is the way.
+      if (standby === undefined || breakerTripped || !isStartWorthy(event) || anotherAiOn()) {
+        return;
+      }
+      wakeOwedAcrossSpawns = true;
+      if (messageStartQueued) return;
+      messageStartQueued = true;
+      // `startForMessage` catches what it can; this catches the rest, because
+      // an unhandled rejection exits the server (#2125).
+      startForMessage().catch((err: unknown) => {
+        console.error("[Launcher] Starting Claude for a message failed:", err);
+      });
+    });
+  }
+
+  /** Start Tandem's Claude for a message that reached it in standby (#2196).
+   * Never throws: it runs off the event fan-out, which has no caller to report
+   * to, so a failure is left where the user can see it — `lastError`, or the
+   * licence and not-configured states `respawn` already records. */
+  async function startForMessage(): Promise<void> {
+    await withLock(async () => {
+      // Re-checked under the lock: the user's own Start, a shutdown or another
+      // AI attaching may all have landed while this waited.
+      if (shuttingDown || standby === undefined || breakerTripped || isAlive() || anotherAiOn()) {
+        return;
+      }
+      console.error("[Launcher] A message arrived while Claude was stopped — starting it");
+      // Owed again here, not only in the watch: a Turn off that took the lock
+      // between the message and this start cleared it (#1866), and this start
+      // still exists only to answer that message.
+      wakeOwedAcrossSpawns = true;
+      try {
+        const result = await respawn(undefined, undefined, {
+          clearSession: false,
+          byMessage: true,
+        });
+        if (!result.spawned) {
+          console.error(`[Launcher] Could not start Claude for the message: ${result.why}`);
+        }
+      } catch (err) {
+        recordStartThrow(err, "Could not start Claude for the message");
+      }
+    }).finally(() => {
+      messageStartQueued = false;
+    });
   }
 
   /**
@@ -1310,10 +1641,51 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     throw new Error(`${REAPER_NOT_FOUND_MARKER} (checked ${adjacent})`);
   }
 
-  // TANDEM_CLAUDE_CMD honors PATH search via spawn. Security boundary is
-  // "user controls their own PATH" — same as running `claude` in any terminal.
-  function claudeCommand(): string {
-    return process.env.TANDEM_CLAUDE_CMD || "claude";
+  /**
+   * Nothing startable resolved (#2199): record it where the status shows it,
+   * and spawn nothing. Never a bare name in its place — on Windows the
+   * reaper's `CreateProcessW` would search the user's working directory for
+   * it first. Trips no breaker: there is no child and no loop, and a tripped
+   * breaker would make the next setup Apply hold instead of start. Recorded
+   * only with no child alive, so a Restart refused here leaves a running
+   * Claude's clean status alone.
+   */
+  function recordCliUnusable(where: string): void {
+    if (child === null) lastError = "cli-unusable";
+    console.error(
+      `[Launcher] ${where}: Claude Code was not found (PATH, ~/.local/bin, TANDEM_CLAUDE_CMD) — not spawning`,
+    );
+  }
+
+  /** Read the settings for a start (#2195); see `lastGoodSettings`. */
+  async function readSettingsNow(): Promise<LauncherSettings> {
+    const read = await readSettings();
+    if (read.source === "fallback") return lastGoodSettings ?? read.settings;
+    lastGoodSettings = read.settings;
+    return read.settings;
+  }
+
+  /** The newest settings known at spawn time. A Settings change that lands
+   * while a start is between its read and its spawn (an unlocked crash restart
+   * awaiting its plan) updates `lastGoodSettings` and finds no child to apply
+   * to, so the spawn must take it from there rather than from its own read. */
+  function latestSettings(read: LauncherSettings): LauncherSettings {
+    return lastGoodSettings ?? read;
+  }
+
+  function idleMsFor(settings: LauncherSettings): number | null {
+    return settings.lifetime === "idle" ? settings.idleMinutes * idleMinuteMs : null;
+  }
+
+  /** Enter a standby with no child to stop. `off` owes nothing (#1866), so it
+   * drops the gap watch; `awaiting-start` keeps it, so a message sent before the
+   * first Start is waiting for the spawn that Start makes. */
+  function holdInStandby(kind: LauncherStandby): void {
+    setStandby(kind);
+    if (kind === "off") {
+      wakeOwedAcrossSpawns = false;
+      disarmGapWatch();
+    }
   }
 
   async function buildPlan(cwdOverride?: string): Promise<SpawnPlan | null> {
@@ -1354,11 +1726,19 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     };
   }
 
-  async function spawnOnce(plan: SpawnPlan): Promise<void> {
+  /** `idleLimitMs`: stop the child after this long without a turn, or `null`
+   * to keep it running (#2195). */
+  /** `claudeBin` is the caller's `resolveCommand()` answer — absolute, never a
+   * bare name (#2199). The caller resolves it, so a missing CLI is answered on
+   * its own terms (`cli-unusable`) rather than as a spawn failure. */
+  async function spawnOnce(
+    plan: SpawnPlan,
+    idleLimitMs: number | null,
+    claudeBin: string,
+  ): Promise<void> {
     if (child) throw new Error("Supervisor already running — call stop() first");
 
     const reaper = reaperPath();
-    const claudeBin = claudeCommand();
     const claudeArgs = buildClaudeArgs(plan);
 
     const reaperArgs = [String(process.pid), claudeBin, ...claudeArgs];
@@ -1418,6 +1798,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     lastError = undefined;
     lastRefusal = null;
     deliveryKillAt = undefined;
+    setStandby(undefined);
+    ownChildSessionIds.add(plan.sessionId);
 
     // One timestamp for the spawn: the exit handler's `ranFor` and the status
     // route's attachment match must agree on when this child started.
@@ -1480,6 +1862,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
      * flag any more — so it must hand the wake to `wakeOwedAcrossSpawns`
      * directly (#1866). */
     let tornDown = false;
+    /** This spawn wrote the greeting and has not seen its turn end (#2197). */
+    let awaitingGreetingResult = false;
     /** Latched at the FIRST teardown: may a wake owed by this spawn cross to the
      * next one? False when the teardown came from a user `stop()`. Latched rather
      * than read live, because a callback can land after `start()` has already
@@ -1503,6 +1887,58 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
      * A stuck count has one more reader: a relaunch of this spawn carries a
      * wake to its successor (`teardownTurnDelivery`, #2181). */
     let unresolvedTurns = 0;
+
+    // --- Idle stop (#2195) -------------------------------------------------
+    //
+    // The clock runs from the END of the last turn — its `result` — or from the
+    // spawn when no turn was written (Bryan, 2026-10-13). It never runs while a
+    // turn is in flight, and never once a latch expiry has left a turn
+    // unresolved: that errs toward staying up, which is the old behaviour.
+    // Tool calls need no clock of their own: under `-p` stream-json the child
+    // acts only inside a turn.
+    /** This spawn's idle limit; `setIdlePolicy` replaces it. */
+    let idleMs = idleLimitMs;
+    let idleTimer: NodeJS.Timeout | null = null;
+    /** Bumped whenever the clock is reset, so a timer that fired just before a
+     * turn — whose stop then waited on the op lock while that turn ran and
+     * ended — cannot stop Claude moments after the turn it should have been
+     * reset by. */
+    let idleGen = 0;
+
+    function clearIdle(): void {
+      idleGen += 1;
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    }
+
+    function armIdle(): void {
+      clearIdle();
+      if (idleMs === null || turnInFlight || unresolvedTurns > 0) return;
+      const gen = idleGen;
+      idleTimer = setTimeout(() => onIdle(gen), idleMs);
+    }
+
+    function onIdle(gen: number): void {
+      idleTimer = null;
+      // Nothing awaits this, and `index.ts` exits the server on an unhandled
+      // rejection, so the chain ends in a catch.
+      withLock(async () => {
+        // Re-checked under the lock: a wake can land between the timer and the
+        // lock, a Settings change can switch the lifetime to `always`, and a
+        // delivery kill can already be ending this child (its restart must not
+        // be swallowed by a stop flag).
+        if (child !== spawned || spawned.killed) return;
+        if (gen !== idleGen || idleMs === null || turnInFlight || unresolvedTurns > 0) return;
+        console.error(
+          `[Launcher] Tandem's Claude was idle for ${Math.round(idleMs / 1000)}s — stopping it until it is needed`,
+        );
+        await stopByChoice("idle");
+      }).catch((err: unknown) => {
+        console.error("[Launcher] Idle stop failed:", err);
+      });
+    }
 
     function clearLatch(): void {
       turnInFlight = false;
@@ -1568,6 +2004,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       const receiptCheckable = unresolvedTurns === 0;
       unresolvedTurns += 1;
       turnInFlight = true;
+      clearIdle();
       if (latchTimer) clearTimeout(latchTimer);
       latchTimer = setTimeout(() => {
         latchTimer = null;
@@ -1677,6 +2114,17 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       unsubscribeFromEvents();
       pendingWake = false;
       clearLatch();
+      clearIdle();
+      // A child that ends before its greeting turn does (a crash, a stop) has
+      // not greeted anyone. A crash also ends greeting in this process: the
+      // greeting turn may be what crashed it, and the restart must not send it
+      // again (the same reasoning as the crash carry above). A stop we asked
+      // for — the note's own Restart — may try again.
+      if (awaitingGreetingResult) {
+        awaitingGreetingResult = false;
+        if (greeting?.phase === "pending") greeting.phase = "unanswered";
+        if (!stopRequested) greetingCrashedThisProcess = true;
+      }
       // Identity-guarded: only drop the shared handle if it still points at
       // THIS spawn. A late exit from a superseded process must not clear the
       // successor's registration and leave it unreleasable by stopInternal.
@@ -1694,6 +2142,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       spawned,
       teardown: teardownTurnDelivery,
       isBusy: () => turnInFlight,
+      setIdlePolicy: (ms) => {
+        idleMs = ms;
+        armIdle();
+      },
     };
 
     // Written on spawn, NOT gated on the CLI's `init` line. Measured against a
@@ -1715,13 +2167,31 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // wakes on the next piece of Tandem activity. That is the whole reason the
     // resume path is not inert: before this subscription existed it depended on
     // channel push, which finding 2 of the spike shows does not arrive.
+    // The one-time greeting (#2197) takes the place of this spawn's first turn:
+    // the bootstrap when fresh, the wake / sign-in re-check when resumed. It
+    // asks for `tandem_checkInbox` first, so it discharges an owed wake too.
+    const greetNow = greetingOwedNow();
+    // A spawn that does not greet retires the last greeting's note: the user
+    // restarted (the note's own advice) or Claude came back by itself, and an
+    // old turn's "hasn't said hello" no longer describes this child.
+    if (!greetNow) greeting = null;
+    const writeGreeting = (): void => {
+      if (!sendTurn(SUPERVISOR_GREETING_PROMPT)) return;
+      greeting = { phase: "pending", sentAt: Date.now() };
+      awaitingGreetingResult = true;
+      wakeOwedAcrossSpawns = false;
+    };
     if (!plan.resuming) {
       // The bootstrap prompt already tells Claude to call `tandem_checkInbox`,
       // which surfaces anything that accumulated while nothing was listening —
       // so it discharges any owed wake by itself. That holds only while the
       // prompt asks Claude to answer replies as well as chat and comments: a
       // reply on one of Claude's threads can be what the wake was owed for.
-      sendTurn(SUPERVISOR_INITIAL_PROMPT);
+      if (greetNow) {
+        writeGreeting();
+      } else {
+        sendTurn(SUPERVISOR_INITIAL_PROMPT);
+      }
       wakeOwedAcrossSpawns = false;
     } else {
       // A re-check owed by a previous Tandem run (see
@@ -1729,12 +2199,17 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // clears the persisted copy too.
       if (plan.loginRecheckOwed) loginRecheckOwed = true;
     }
-    if (plan.resuming && (wakeOwedAcrossSpawns || loginRecheckOwed)) {
+    if (plan.resuming && greetNow) {
+      writeGreeting();
+    } else if (plan.resuming && (wakeOwedAcrossSpawns || loginRecheckOwed)) {
       // `loginRecheckOwed` (#1780): a resumed CLI is silent until it is sent a
       // turn, so Check again after a sign-in refusal must send one. A fresh
       // spawn's bootstrap turn above already is that re-check.
       if (sendTurn(SUPERVISOR_WAKE_PROMPT)) wakeOwedAcrossSpawns = false;
     }
+    // A spawn that wrote no turn starts its idle clock now; one that did starts
+    // it at that turn's `result`.
+    armIdle();
 
     function handleStdoutLine(line: string): void {
       const trimmed = line.trim();
@@ -1788,6 +2263,28 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         // proves the turn was read, not that the session can finish one.
         deliveryKillStreak = 0;
         unresolvedTurns = Math.max(0, unresolvedTurns - 1);
+        // The greeting is this spawn's first turn, so the first `result` is its
+        // end (#2197). A message it wrote has already flipped it to answered.
+        // A turn that ran spends the greeting whether or not a chat reply was
+        // seen: "once" must not hang on spotting the reply (a hello posted in
+        // a comment thread, a client sending no session id that we could
+        // match), because a miss would re-send it on every later spawn. Only
+        // an errored turn — Claude never got to speak, the sign-in refusal
+        // among them — leaves it owed, so the start after the fix greets.
+        // "Errored" is either signal: `is_error` (the least-verified field —
+        // #1267 saw none during the spike) or an `error_*` subtype.
+        if (awaitingGreetingResult) {
+          awaitingGreetingResult = false;
+          if (greeting?.phase === "pending") greeting.phase = "unanswered";
+          // `error*` only: a subtype this build does not know must not leave
+          // the greeting owed, or every later spawn would greet again.
+          // `typeof` first: the envelope is the child's untyped JSON, and a
+          // throw here would reach the process's fatal-error handler.
+          const errored =
+            parsed.is_error === true ||
+            (typeof parsed.subtype === "string" && parsed.subtype.startsWith("error"));
+          if (!errored) spendGreeting();
+        }
 
         // A Claude Code that is not signed in answers every turn with this
         // refusal and never exits (#1780; see `NOT_SIGNED_IN_RESULT`). Stop:
@@ -1833,6 +2330,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         }
 
         flushPendingWake();
+        // After the flush: a wake it wrote is a new turn, and the clock starts
+        // at THAT turn's end instead.
+        armIdle();
       }
     }
 
@@ -2071,8 +2571,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // the wizard tells them to install software they already have.
       //
       // Probed once, here, rather than per status poll: it is a filesystem walk,
-      // and the answer cannot change usefully mid-run anyway (the supervisor
-      // spawns from the PATH this process started with). Synchronous, so this
+      // and a CLI installed later is found by the next Start anyway, which
+      // resolves its command afresh (#2199). Synchronous, so this
       // and `breakerTripped` above land in the same tick — see `probeCliUsable`.
       // Guarded because this runs inside the child's "error"/"exit" handlers,
       // which Node calls synchronously from `emit()` with no try/catch in this
@@ -2156,21 +2656,24 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     console.error("[Launcher] Restart failed — staying down until Restart:", err);
   }
 
-  /** Internal start without lock acquisition — called by scheduleRestart and
-   * the public `start()` wrapper. `epoch` is the `stopEpoch` this start
-   * belongs to; the restart timer passes the one its failure handler checks. */
-  async function startInternal(epoch = stopEpoch): Promise<void> {
+  /** Internal start without lock acquisition — called by scheduleRestart,
+   * `resumeAfterLicence` and the public `start()` wrapper. `epoch` is the
+   * `stopEpoch` this start belongs to; the restart timer passes the one its
+   * failure handler checks. */
+  async function startInternal(epoch = stopEpoch, known?: LauncherSettings): Promise<void> {
     // Counted for `restartPending` (#2180). The restart timer nulls itself and
     // calls this synchronously, so no status poll lands between the two.
     launching++;
     try {
-      await planAndSpawn(epoch);
+      await planAndSpawn(epoch, known);
     } finally {
       launching--;
     }
   }
 
-  async function planAndSpawn(epoch: number): Promise<void> {
+  /** `known`: settings the caller already read (boot), so they are not read
+   * twice. */
+  async function planAndSpawn(epoch: number, known?: LauncherSettings): Promise<void> {
     if (child) return;
     if (breakerTripped) return;
     stopRequested = false;
@@ -2179,11 +2682,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // spawn's own subscribe (#2181). After the `child` check, never before it:
     // arming beside a live spawn would owe its successor a duplicate wake.
     armGapWatch();
+    const settings = known ?? (await readSettingsNow());
     const plan = await buildPlan();
-    if (!plan) {
-      console.error("[Launcher] No claude-code integration with apply != skip — skipping");
-      return;
-    }
     // `buildPlan` yields, and `scheduleRestart` calls this function WITHOUT the
     // op lock — so a user `stop()` can complete during that await. It takes the
     // lock, finds `child` already null, and resolves successfully. Without this
@@ -2209,6 +2709,19 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       console.error("[Launcher] Breaker tripped while building the spawn plan — not spawning");
       return;
     }
+    // Off holds every non-user start (#2195) — boot, a crash restart, a
+    // licence resume — so a Claude the user turned off never comes back on its
+    // own. After the re-checks above, so a stop that passed through during the
+    // reads still wins. (`on-click` holds only boot; `start()` decides that.)
+    if (settings.startMode === "off") {
+      holdInStandby("off");
+      console.error("[Launcher] Tandem's Claude is turned off — not starting it");
+      return;
+    }
+    if (!plan) {
+      console.error("[Launcher] No claude-code integration with apply != skip — skipping");
+      return;
+    }
     // Licence admission (#1521). Covers boot, the deferred start route and the
     // crash-respawn timer, which all come through here. It REFUSES BY
     // RETURNING, never by throwing: a throw would reach the crash timer's
@@ -2227,8 +2740,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       }
       return;
     }
+    const claudeBin = resolveCommand();
+    if (claudeBin === null) {
+      recordCliUnusable("Starting Claude");
+      return;
+    }
     try {
-      await spawnOnce(plan);
+      await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin);
       // Reset backoff once a spawn runs long enough to be considered stable.
       // Must match RESUME_CONFIRM_MS — a doomed --resume exits at ~6s, so
       // the old 5s timer fired while the process was still alive, resetting
@@ -2242,7 +2760,47 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   }
 
   async function start(): Promise<void> {
-    return withLock(() => startInternal());
+    shuttingDown = false;
+    return withLock(async () => {
+      if (child || breakerTripped) return;
+      // The settings read counts as launching, so a status poll during it
+      // reads "starting" rather than a plain stopped launcher with a Restart
+      // button (#2180). It is one small file, so that window is milliseconds.
+      let settings: LauncherSettings;
+      launching++;
+      try {
+        settings = await readSettingsNow();
+      } finally {
+        launching--;
+      }
+      walkthroughHold = walkthroughOwedAtBoot();
+      // The walkthrough hold (#2198) is the on-click hold: the same standby, so
+      // a message sent meanwhile still starts Claude (#2196) and Start is one
+      // click away; the walkthrough's confirm is what releases it.
+      if (settings.startMode !== "auto" || walkthroughHold) {
+        // The boot hold (#2195). The standby is set BEFORE the plan read, so
+        // no poll lands on a plain stopped launcher in between; the plan still
+        // runs, for `configured` alone — a user with no integration yet reads
+        // as not-configured, and this standby decides their chip once the
+        // wizard writes one (`startAfterSetup`, which holds rather than
+        // starts while this standby is set).
+        holdInStandby(settings.startMode === "off" ? "off" : "awaiting-start");
+        if (settings.startMode !== "off") armGapWatch();
+        console.error(
+          settings.startMode === "off"
+            ? "[Launcher] Tandem's Claude is turned off — not starting it"
+            : settings.startMode === "on-click"
+              ? "[Launcher] Tandem's Claude is set to start on click — waiting for Start"
+              : "[Launcher] The v1.0 setup walkthrough is pending — Tandem's Claude waits for it",
+        );
+        await buildPlan();
+        return;
+      }
+      // Synchronous from the decrement above to the increment inside, so no
+      // poll lands between them; the settings travel along rather than being
+      // read a second time.
+      await startInternal(stopEpoch, settings);
+    });
   }
 
   // `newCwd` is optional for the same reason `startFresh`'s is: `buildPlan`
@@ -2270,7 +2828,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   async function respawn(
     cwdOverride: string | undefined,
     opts: RelocateOpts | undefined,
-    { clearSession }: { clearSession: boolean },
+    { clearSession, byMessage = false }: { clearSession: boolean; byMessage?: boolean },
   ): Promise<RespawnResult> {
     // Licence admission (#1521), at the very top — BEFORE `stopInternal`,
     // `clearSavedSession` and `persistRequestedCwd`, so a refused relaunch
@@ -2284,12 +2842,21 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       if (child === null) recordLicenceRefusal(refusal);
       throw new LicenseRefusedError(refusal);
     }
+    // Nothing to spawn (#2199): with a Claude alive, checked here, BEFORE the
+    // stop, for the same reason as the licence — a Restart must not kill a
+    // healthy Claude only to find it cannot start another. With none, after
+    // the plan (`stopAndSpawn`), so a user with no integration still hears
+    // "not set up" rather than "not found".
+    if (child !== null && resolveCommand() === null) {
+      recordCliUnusable("Restarting Claude");
+      return { spawned: false, why: "cli-unusable" };
+    }
     // Counted from BEFORE the stop (#2180): `kill()` marks the child killed at
     // once, so `status()` reads not-running for the whole SIGTERM wait, and
     // that is exactly the window that used to offer a Restart button.
     launching++;
     try {
-      return await stopAndSpawn(cwdOverride, opts, clearSession);
+      return await stopAndSpawn(cwdOverride, opts, clearSession, byMessage);
     } finally {
       launching--;
     }
@@ -2299,13 +2866,26 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     cwdOverride: string | undefined,
     opts: RelocateOpts | undefined,
     clearSession: boolean,
+    byMessage: boolean,
   ): Promise<RespawnResult> {
     await stopInternal();
-    if (clearSession) clearSavedSession();
+    // Resolved before the session is dropped (#2199 review): a Start fresh
+    // that finds no Claude Code must not have deleted the conversation on its
+    // way to saying so. (Still answered after the plan, so a user with no
+    // integration hears "not set up" — and that start fresh still drops it,
+    // as before.)
+    const claudeBin = resolveCommand();
+    if (clearSession && claudeBin !== null) clearSavedSession();
     // relaunch/startFresh always mean "user is actively asking" → clear breaker.
-    breakerTripped = false;
-    recentAttempts = [];
-    deliveryKillStreak = 0;
+    // A start for a message never runs beside a tripped breaker (the standby
+    // watch and `startForMessage` both refuse it), so it has none to clear; it
+    // leaves the attempt history alone too, so a message start cannot reset
+    // the count of a Claude that is crashing now (#2196).
+    if (!byMessage) {
+      breakerTripped = false;
+      recentAttempts = [];
+      deliveryKillStreak = 0;
+    }
     // stopInternal() raised the stop flag on the way in. Lower it before the
     // new spawn, or the exit handler treats the *next* crash as a deliberate
     // stop and silently declines to restart — the supervisor stays dead.
@@ -2313,10 +2893,40 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     userStopped = false;
     // `stopInternal` above has nulled `child`; see `planAndSpawn` (#2181).
     armGapWatch();
-    const plan = await buildPlan(cwdOverride);
-    if (!plan) return { spawned: false, why: "no-integration" };
+    let settings: LauncherSettings | undefined;
+    let plan: SpawnPlan | null = null;
+    try {
+      settings = await readSettingsNow();
+      plan = await buildPlan(cwdOverride);
+    } finally {
+      // No spawn is coming (no integration, nothing to run, or a read threw).
+      // From `off` the watch armed above owes it nothing (#1866); the standby
+      // watch still stands, so a later message can try again.
+      if ((plan === null || claudeBin === null) && standby === "off") disarmGapWatch();
+    }
+    if (!plan || !settings) {
+      if (clearSession && claudeBin === null) clearSavedSession();
+      return { spawned: false, why: "no-integration" };
+    }
+    if (claudeBin === null) {
+      recordCliUnusable("Starting Claude");
+      return { spawned: false, why: "cli-unusable" };
+    }
+    // A user start while the mode is `off` turns it back on as `on-click`
+    // (#2195; Bryan's #2196 answer, applied to every user start). After the
+    // plan, so a start that finds no integration changes nothing, and after
+    // `respawn`'s licence check, so a refused one does not either. This covers
+    // relaunch and start-fresh as well as Start: otherwise Claude would run
+    // while Settings still said Off, and its first crash would stay down.
+    if (settings.startMode === "off") {
+      await persistStartMode("on-click");
+      // Kept in step with the saved mode: if the spawn below fails, its error
+      // outranks this anyway, and if it is retried the pill must not still say
+      // "off" while Settings says "on click".
+      if (standby === "off") setStandby("awaiting-start");
+    }
     await persistRequestedCwd(plan, cwdOverride, opts?.persistCwd);
-    await spawnOnce(plan);
+    await spawnOnce(plan, idleMsFor(latestSettings(settings)), claudeBin);
     return { spawned: true };
   }
 
@@ -2392,17 +3002,129 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     currentResuming = false;
   }
 
+  /** Best-effort write of the start mode from inside a lock-held operation.
+   * Logged, never thrown: the start the user asked for still happens, and the
+   * cost of a failed write is that the next launch reads the old mode. */
+  async function persistStartMode(mode: LauncherSettings["startMode"]): Promise<void> {
+    try {
+      // Over an unreadable file, the fields this does not touch come from the
+      // last good read, as in `updateSettings`: a Start from Off must not also
+      // save the default lifetime over the user's "stop when idle".
+      lastGoodSettings = await updateLauncherSettings(
+        opts.integrationsBase,
+        { startMode: mode },
+        lastGoodSettings,
+      );
+    } catch (err) {
+      console.error(`[Launcher] Could not save start mode "${mode}":`, err);
+    }
+  }
+
+  /**
+   * Stop Tandem's Claude because the user or the lifetime setting chose to
+   * (#2195), leaving the supervisor in standby. Caller holds the op lock.
+   *
+   * Runs even with no child alive: `stopInternal` on a null child still bumps
+   * `stopEpoch`, raises `stopRequested` and clears `restartTimer`, which is what
+   * cancels a crash restart that is only scheduled, or one suspended in its
+   * plan read. A child-alive check here would let either bring Claude back
+   * after the user turned it off.
+   *
+   * `lastError` is cleared first, so one present afterwards (`stop-failed`, a
+   * reaper that survived SIGKILL) is a fresh diagnosis and outranks `standby`.
+   *
+   * The child's subscription is released BEFORE the kill, so an event in the
+   * SIGTERM grace is never written into a dying pipe:
+   *   - `off` carries nothing (#1866), exactly like `stop()`. `userStopped` is
+   *     raised BEFORE the release — that order is load-bearing: teardown
+   *     latches `carryOwedWake = false` from it, so nothing pending is carried
+   *     and teardown arms no gap watch.
+   *   - `idle` happens only with no turn pending, so teardown has nothing to
+   *     carry; it leaves the gap watch armed and keeps `wakeOwedAcrossSpawns`,
+   *     so what the user sends while Claude is idle-stopped is owed to the
+   *     spawn that brings it back.
+   */
+  async function stopByChoice(kind: "off" | "idle"): Promise<void> {
+    lastError = undefined;
+    if (kind === "off") {
+      userStopped = true;
+      userStopCount += 1;
+      wakeOwedAcrossSpawns = false;
+      releaseTurnDelivery();
+      disarmGapWatch();
+    } else {
+      releaseTurnDelivery();
+      armGapWatch();
+    }
+    setStandby(kind);
+    await stopInternal();
+  }
+
+  function isAlive(): boolean {
+    return child !== null && !child.killed && child.exitCode === null && child.signalCode === null;
+  }
+
+  async function startByUser(): Promise<RespawnResult> {
+    return withLock(async () => {
+      // Alive means a child that has not been killed or exited. A handle the
+      // sign-in trip or a delivery kill already ended is not, and Start must
+      // replace it rather than answer "running" and do nothing.
+      if (isAlive()) return { spawned: true };
+      return respawn(undefined, undefined, { clearSession: false });
+    });
+  }
+
+  async function updateSettings(patch: LauncherSettingsPatch): Promise<LauncherSettings> {
+    return withLock(async () => {
+      let next: LauncherSettings;
+      try {
+        // An unreadable file merges onto what this supervisor last knew, not
+        // onto the fallback: a lifetime change made while antivirus holds the
+        // file must not also save `on-click` over the user's real start mode.
+        next = await updateLauncherSettings(opts.integrationsBase, patch, lastGoodSettings);
+      } catch (err) {
+        // Turning Claude off is never refused. If the mode cannot be saved —
+        // a file from a newer Tandem, a failed write — Claude still stops now;
+        // the caller still gets the error, because the next launch will not
+        // know it was turned off.
+        if (patch.startMode === "off" && standby !== "off") await stopByChoice("off");
+        throw err;
+      }
+      lastGoodSettings = next;
+      if (next.startMode === "off") {
+        if (standby !== "off") await stopByChoice("off");
+      } else if (standby === "off") {
+        // Switching the mode back on does not start Claude by itself: the mode
+        // is about launch, and a radio click that spawned a process would be
+        // work nobody asked for. Start is one click away.
+        setStandby("awaiting-start");
+        armGapWatch();
+      }
+      // Only a lifetime change restarts the clock; a start-mode change leaves it.
+      if ((patch.lifetime !== undefined || patch.idleMinutes !== undefined) && isAlive()) {
+        activeTurnDelivery?.setIdlePolicy(idleMsFor(next));
+      }
+      return next;
+    });
+  }
+
   /** The user turning Claude off. Carries no owed wake to a later spawn
    * (#1866): the clear lives HERE, not in `stopInternal`, because `respawn`
    * runs `stopInternal` too, and a Restart after a crash must keep the wake the
    * crash owed. */
   async function stop(): Promise<void> {
+    // Synchronously, before the lock: a message start already queued AHEAD of
+    // this stop must not spawn a Claude that shutdown then SIGTERMs (#2196).
+    shuttingDown = true;
     return withLock(async () => {
       userStopped = true;
       userStopCount += 1;
       wakeOwedAcrossSpawns = false;
       // A crash may have armed the watch; a user stop carries nothing (#2181).
       disarmGapWatch();
+      // Shutdown: no message may start Claude after this (#2196); see
+      // `shuttingDown`.
+      setStandby(undefined);
       await stopInternal();
     });
   }
@@ -2432,12 +3154,43 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         // `child`, so there is no observable window where they disagree.
         busy: activeTurnDelivery !== null && activeTurnDelivery.isBusy(),
         spawnedAt: currentSpawnedAt,
+        ...(greetingLate() ? { greetingLate: true as const } : {}),
       };
+    }
+    // A `cli-unusable` with no crash behind it (#2199) is a reading of the
+    // filesystem, so it lapses once Claude Code is there: otherwise it would
+    // mask the standby's Start, and the only remedy it names (Set up) would
+    // keep offering an install the user has already done. One resolve per
+    // poll, only while this is the error; a tripped breaker's copy waits for
+    // the user's Restart as before.
+    if (
+      lastError === "cli-unusable" &&
+      !breakerTripped &&
+      child === null &&
+      resolveCommand() !== null
+    ) {
+      lastError = undefined;
     }
     const stopped: Extract<SupervisorStatus, { running: false }> = { running: false };
     if (lastError) stopped.lastError = lastError;
     if (restartPending()) stopped.restartPending = true;
     if (configured === false) stopped.configured = false;
+    // Beside `restartPending` too: a pending restart with a standby is a START
+    // from standby (`respawn` runs while `standby` is still set, until the
+    // spawn clears it), which the client shows as "Starting Claude…".
+    if (greetingLate()) stopped.greetingLate = true;
+    if (standby !== undefined && lastError === undefined) {
+      stopped.standby = standby;
+      // The conditions the standby watch applies, so the chat panel can promise
+      // "resuming" only when a message really will start Claude (#2196). The
+      // licence half is the push's own refusal there (a refused event is never
+      // forwarded, so it never reaches the watch) and `decideRefusal` here. The
+      // in-memory check goes first: once the licence gate ships, `decideRefusal`
+      // reads the licence file, and this runs on every status poll.
+      if (!shuttingDown && !breakerTripped && !anotherAiOn() && decideRefusal() === null) {
+        stopped.startsOnMessage = true;
+      }
+    }
     return stopped;
   }
 
@@ -2446,7 +3199,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * and the failure state must show. */
   function restartPending(): boolean {
     if (breakerTripped) return false;
-    if (restartTimer !== null || launching > 0) return true;
+    if (restartTimer !== null || launching > 0 || messageStartQueued) return true;
     // A delivery kill (#1867/#1868) marks the child killed before its exit
     // schedules the restart; bounded, see `DELIVERY_KILL_EXIT_GRACE_MS`.
     return (
@@ -2456,6 +3209,100 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       deliveryKillAt !== undefined &&
       Date.now() - deliveryKillAt < DELIVERY_KILL_EXIT_GRACE_MS
     );
+  }
+
+  function startAfterSetup(): Promise<TandemClaudeAfterSetup> {
+    let decide!: (d: TandemClaudeAfterSetup) => void;
+    const decision = new Promise<TandemClaudeAfterSetup>((resolve) => {
+      decide = resolve;
+    });
+    withLock(async () => {
+      // This is the walkthrough's confirm, if one was owed: the hold is
+      // released (or kept, below) exactly once — but only once there is a
+      // Claude Code setup to start. Without one (a Desktop-only "Continue
+      // without connecting", a throw before the decision) the hold stays, so
+      // an Apply that adds Claude Code later this launch still starts it.
+      const heldForWalkthrough = walkthroughHold;
+      const plan = await buildPlan();
+      if (!plan) return decide("not-configured");
+      walkthroughHold = false;
+      if (shuttingDown) return decide("held");
+      if (isAlive() || restartPending()) return decide("running");
+      const settings = await readSettingsNow();
+      // The walkthrough's own hold (#2198) is released when the user confirms
+      // with the mode automatic — including a mode they just chose in the
+      // walkthrough, which is the point of showing it there, and an Off they
+      // then reversed. Any other standby, or another mode, holds.
+      const releasesWalkthrough =
+        heldForWalkthrough && standby === "awaiting-start" && settings.startMode === "auto";
+      // Otherwise the user's own Off (an Apply is not a Start), a mode that is
+      // not automatic (on-click holds boot, #2195, and a first Apply is boot
+      // for a Claude that has never run), or any standby (idle is a choice too).
+      if (
+        !releasesWalkthrough &&
+        (userStopped || settings.startMode !== "auto" || standby !== undefined)
+      ) {
+        return decide("held");
+      }
+      // A tripped breaker (a crash loop, a sign-in stop) or a stop that could
+      // not be confirmed (its child may still be alive) is a diagnosis for the
+      // user to act on: an Apply does not clear it the way their Start does.
+      if (breakerTripped || lastError === "stop-failed") return decide("held");
+      // Bryan's #2196 rule, applied here as well: never a second AI beside
+      // the user's own. Before the licence check, which RECORDS its refusal:
+      // a recorded refusal is what activating the licence resumes, and that
+      // resume would then start Tandem's Claude beside the user's own AI.
+      if (anotherAiOn()) return decide("other-ai");
+      const refusal = decideRefusal();
+      if (refusal !== null) {
+        recordLicenceRefusal(refusal);
+        return decide("refused");
+      }
+      // Checked before "starting" is promised (#2199): a done screen that says
+      // starting and then shows nothing is the false claim this answer exists
+      // to avoid.
+      if (resolveCommand() === null) {
+        recordCliUnusable("Setup wrote a Claude Code entry");
+        // Nothing started, so nothing was released: the next Apply — after
+        // the user installs Claude Code — releases the walkthrough's hold as
+        // this one would have.
+        walkthroughHold = heldForWalkthrough;
+        return decide("cli-unusable");
+      }
+      decide("starting");
+      console.error("[Launcher] Setup wrote a Claude Code entry — starting Tandem's Claude");
+      // `respawn` reads the plan and settings again under this same lock: a
+      // second read, kept so this start takes respawn's one path rather than
+      // a variant fed from the checks above.
+      try {
+        await respawn(undefined, undefined, { clearSession: false });
+      } catch (err) {
+        recordStartThrow(err, "Starting Claude after setup failed");
+      }
+    }).catch((err: unknown) => {
+      // A throw before the decision (the plan or settings read): answer
+      // rather than leave the route waiting, and never reject — the caller is
+      // an HTTP handler whose apply already succeeded.
+      decide("unknown");
+      console.error("[Launcher] Starting Claude after setup failed:", err);
+    });
+    return decision;
+  }
+
+  /**
+   * A start that `respawn` threw out of, for the two starts nobody clicked (a
+   * message, a setup Apply). A licence refusal is already recorded. Any other
+   * throw — the settings or plan read — records nothing on its own, so record
+   * `spawn-failed`: otherwise the pill still offers Start as if nothing had
+   * been tried.
+   */
+  function recordStartThrow(err: unknown, label: string): void {
+    if (err instanceof LicenseRefusedError) {
+      console.error(`[Launcher] ${label}: unlicensed`);
+      return;
+    }
+    if (child === null && lastError === undefined) lastError = "spawn-failed";
+    console.error(`[Launcher] ${label}:`, err);
   }
 
   async function refreshConfigured(): Promise<void> {
@@ -2488,6 +3335,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return withLock(async () => {
       // A breaker trip is never "resumable on activation", whatever refused
       // after it.
+      // An Off after the refusal is covered twice over (#2195): turning Claude
+      // off raises `userStopped` here, and `planAndSpawn`'s settings hold
+      // refuses any non-user start while the saved mode is off.
       if (child !== null || lastRefusal === null || userStopped || breakerTripped) return;
       console.error("[Launcher] Licence activated — starting Claude Code");
       // Cleared first: a start the gate refuses again re-records it, and a
@@ -2517,8 +3367,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     startFresh,
     status,
     refreshConfigured,
+    startAfterSetup,
     resumeAfterLicence,
     licenceRefusal,
+    startByUser,
+    updateSettings,
+    appliedSettings: () => (lastGoodSettings ? { ...lastGoodSettings } : null),
   };
 }
 

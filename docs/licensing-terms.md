@@ -28,9 +28,9 @@ Stated as the code behaves, not as marketing:
 | **Right to run** | Perpetual. The run gate checks the Ed25519 signature only (`verifyLicenseSignature`, never `verifyLicense`), so a paid licence runs **forever** — including after any update window ends (only a hand-signed key has one), and including after a refund. |
 | **Updates** | All future updates included, with no guarantee that any will be released (decided 2026-10-09, A5). Paid and grandfathered keys alike are issued with `expiresAt` / `updateWindowEnd` null. There is no renewal product (B6). |
 | **Activation** | Fully offline. No server contact, no activation call, no device count, no seat check. |
-| **Devices** | Technically unlimited — nothing enforces a device count. The email says "any device you personally use", which is an **honour-system** limit, not a technical one. Terms should say the same thing, or say something different and be honest that it isn't enforced. |
+| **Devices and people per key** | Not limited by `LICENSE` and not enforced in the code. `LICENSE` sets no device count and does not tie a key to one person, and customer copy states no per-key rule (decided 2026-10-15). See §2. |
 | **Transfer** | Not restricted (left out of the terms by decision, 2026-10-09). |
-| **Organisational use** | One natural person's use only, as `LICENSE` defines personal use and individual self-hosting. An employee using Tandem for their own work is inside; a deployment one installation serves to several people is not. See §2. |
+| **Organisational use** | Each production use must be personal use or individual self-hosting, which `LICENSE` defines as one natural person's. An employee using Tandem for their own work is inside; a deployment one installation serves to several people is not. See §2. |
 
 Nothing above is live yet: the gate ships **dark** — `LICENSE_GATE_ENABLED` is a
 `const false` in `tsup.config.ts`, so today's builds neither trial nor gate. It
@@ -58,6 +58,14 @@ decision. What stays outside is use that is not one natural person's: one instal
 or Tandem run as a service for others. That needs a **commercial** licence, and
 this pipeline cannot issue one.
 
+**No per-key limit** (decided 2026-10-15). `LICENSE` sets no limit on how many
+people or devices one key serves: clause (b) asks only that the user hold "a
+license key the Licensor issued". A per-key clause was drafted and declined so
+that the licence stays plain. Customer copy therefore states no rule about who
+may use a key, and neither promises nor forbids any particular use of one. Each
+use must still be one natural person's (personal use or individual
+self-hosting).
+
 The failure mode for that case is worse than a loud error. `issue()` hardcodes
 `type = grandfathered ? "grandfathered" : "personal"` and `LedgerRecord["type"]`
 admits nothing else, so a commercial purchase would be **silently issued a
@@ -70,10 +78,10 @@ write such a record in the first place.)
 So the buyer would receive a licence whose own metadata contradicts what they
 paid for.
 
-Until a commercial SKU exists, checkout copy must say that a key covers **one
-natural person**, employees included, and that a shared or hosted deployment is
-outside it. Selling a company a shared deployment the software's own licence
-doesn't grant is the worst version of this problem.
+Until a commercial SKU exists, checkout copy must say that a key is not for a
+**shared or hosted deployment**: one installation serving several people, or
+Tandem run as a service for others. Selling a company a shared deployment the
+software's own licence doesn't grant is the worst version of this problem.
 
 ## 3. Refunds
 
@@ -192,9 +200,8 @@ Roughly in priority order:
    statutory duty is still open. The
    update Worker proxies a *single* manifest, so it can serve every key the same
    build and nothing narrower.
-6. **EU exhaustion / resale** (*UsedSoft*) versus the email's "any device you
-   personally use". If a lawful resale requires the buyer to be able to make
-   their own copy unusable, that makes copy-key and a remove-licence path
+6. **EU exhaustion / resale** (*UsedSoft*). If a lawful resale requires the
+   buyer to be able to make their own copy unusable, that makes copy-key and a remove-licence path
    *required mechanisms*, not conveniences. Transfer itself is no longer a
    question: the terms leave it unrestricted (A2), so this item is only about
    whether the remove-licence path (#1943) is required.
@@ -212,4 +219,4 @@ Roughly in priority order:
 - [ ] End-user licence agreement / terms of sale
 - [ ] Refund policy (customer-facing wording of §3)
 - [ ] Privacy notice (customer-facing wording of §5)
-- [ ] Checkout copy stating that a key covers one natural person, employees included, and not a shared or hosted deployment (§2)
+- [ ] Checkout copy stating that a key is not for a shared or hosted deployment, and no other rule about who may use it (§2)

@@ -90,6 +90,7 @@ import { API_HEALTH, API_LAUNCHER_STATUS } from "../../shared/api-paths.js";
 import {
   isTransientlyUnavailable,
   type LauncherErrorCode,
+  type LauncherStandby,
   type LauncherStatus,
 } from "../../shared/launcher/contract.js";
 import { deliveryStall } from "../status/delivery-stall.js";
@@ -221,13 +222,20 @@ export type AiReadinessState = "booting" | "unconfigured" | "stopped" | "ready";
  *   - `restart` — configured but stopped for any other reason, including
  *     `circuit-open` with a healthy CLI, `wake-delivery-failed`, and the rare
  *     `binary-not-found`. Plain restart.
+ *   - `start`   — configured and stopped BY CHOICE (`standby`, #2195): the
+ *     start mode is off, it is waiting for Start, or it stopped while idle.
+ *     Nothing failed, so it is never a restart nag; its action is the Start
+ *     control (`POST /api/launcher/start` with `userInitiated`).
  *   - `ai-off`  — the AI is refused by the licence (#1521): `aiNotice` is set,
  *     whichever kind. Opens Settings → License. It ranks FIRST, above Solo:
  *     Solo is a privacy choice, the licence refusal is a capability fact, and
- *     every other CTA (connect, restart) would be refused by the server anyway.
- *     Its copy is kind-neutral — see `AI_CTA["ai-off"]`.
+ *     every other CTA (connect, restart, start) would be refused by the server
+ *     anyway. Its copy is kind-neutral — see `AI_CTA["ai-off"]`.
  */
-export type AiChip = "connect" | "setup" | "sign-in" | "restart" | "ai-off" | null;
+export type AiChip = "connect" | "setup" | "sign-in" | "restart" | "start" | "ai-off" | null;
+
+/** A chip that is present — what `AI_CTA` is keyed on, and what a remedy is. */
+export type AiRemedy = Exclude<AiChip, null>;
 
 /**
  * Everything a surface needs to render an `AiChip`'s call to action: its copy
@@ -246,7 +254,7 @@ export type AiChip = "connect" | "setup" | "sign-in" | "restart" | "ai-off" | nu
  * With this map a fourth member is a type error at every consumer instead.
  */
 /** Every handler an `AI_CTA` entry can name. Dispatched by `ctaHandler` alone. */
-export type AiCtaAction = "connect" | "restart" | "open-license-settings";
+export type AiCtaAction = "connect" | "restart" | "start" | "open-license-settings";
 
 export const AI_CTA: Record<
   Exclude<AiChip, null>,
@@ -291,6 +299,12 @@ export const AI_CTA: Record<
     ariaLabel: "Claude Code has stopped. Restart Claude Code.",
     action: "restart",
   },
+  start: {
+    label: "Start Tandem's Claude",
+    title: "Tandem's Claude isn't running. Click to start it.",
+    ariaLabel: "Start Tandem's Claude.",
+    action: "start",
+  },
   // Kind-neutral (other comments point here): it also serves the unverifiable
   // licence holder, who most likely already paid (ADR-040 decision 8), so it
   // never says "unlicensed", "activate" or "trial ended" and carries no URL.
@@ -310,13 +324,20 @@ export const AI_CTA: Record<
  */
 export function ctaHandler(
   action: AiCtaAction,
-  h: { connect: () => void; restart: () => void; openLicenseSettings: () => void },
+  h: {
+    connect: () => void;
+    restart: () => void;
+    start: () => void;
+    openLicenseSettings: () => void;
+  },
 ): () => void {
   switch (action) {
     case "connect":
       return h.connect;
     case "restart":
       return h.restart;
+    case "start":
+      return h.start;
     case "open-license-settings":
       return h.openLicenseSettings;
     default: {
@@ -327,8 +348,9 @@ export function ctaHandler(
 }
 
 /** A stopped launcher's CTA — also a tripped Tandem Claude surfaced beside a
- *  session that is still attached (`launcherFailure`). */
-export type LauncherFailure = Exclude<AiChip, null | "connect" | "ai-off">;
+ *  session that is still attached (`launcherFailure`). Never `start`: a
+ *  standby is a choice, not a failure (#2195). */
+export type LauncherFailure = Exclude<AiChip, null | "connect" | "start" | "ai-off">;
 
 /**
  * The `lastError` → CTA decision for a stopped launcher. ONE function, used by
@@ -476,6 +498,15 @@ export interface AiReadiness {
    */
   readonly pushDelivery: PushDelivery;
   /**
+   * The launcher found no Claude Code setup to run (#2199): the status's own
+   * `available: false, reason: "not-configured"`, read off the RAW status
+   * rather than `state` — a connected Claude Desktop makes `state` read
+   * "ready" first, and that user is exactly who the chat panel's offer is
+   * for. False off-loopback (the `reason` is redacted there) and while the
+   * server is unreachable.
+   */
+  readonly launcherNotConfigured: boolean;
+  /**
    * Has `/health` gone quiet for a full strike run?
    *
    * The question is about the SERVER, not the AI, and the two were previously
@@ -519,6 +550,53 @@ export interface AiReadiness {
    *  read the raw retained status, so a failed read mid-restart cannot bring a
    *  Restart button back. */
   readonly launcherRestarting: boolean;
+  /**
+   * The restart in progress is a Start from standby (#2195): the user clicked
+   * Start on a Claude that was off, waiting, or idle-stopped, and the server
+   * reports the standby beside `restartPending`. The pill says "Starting
+   * Claude…" then, because "Restarting" claims a Claude that never ran in this
+   * session.
+   */
+  readonly launcherStarting: boolean;
+  /**
+   * Why Tandem's Claude is not running by choice (`LauncherStatus.standby`,
+   * #2195), or `null`. Read off the RAW retained status like `chip`, so one
+   * failed read does not flip a Start control back to a Restart one. A
+   * `lastError` outranks it on the server, so this is never set beside a
+   * failure.
+   */
+  readonly launcherStandby: LauncherStandby | null;
+  /**
+   * The standby began within the last minute — the window in which the
+   * stopped child's own MCP entry can still read as a live session
+   * (`LIVE_RECENT_MS` server-side). The pill lets the standby outrank a live
+   * session only then; after it, a live session is someone else's and shows
+   * as connected.
+   */
+  readonly launcherStandbyRecent: boolean;
+  /**
+   * A chat message sent now would start Tandem's Claude
+   * (`LauncherStatus.startsOnMessage`, #2196): it is in standby, no other AI is
+   * attached and the licence admits it. Raw status, like `launcherStandby`, and
+   * false while the server is unreachable — a send then goes nowhere.
+   */
+  readonly launcherStartsOnMessage: boolean;
+  /**
+   * The remedy for a Tandem's Claude that is not running, UN-gated (#2196):
+   * `chip`'s decision without its Solo and live-session gates, which hide it
+   * whenever any session is live. The chat panel's "couldn't start" row needs
+   * the remedy even then, because it is about Tandem's Claude specifically.
+   * `"ai-off"` whenever the licence refuses the AI, running or not; otherwise
+   * `null` while it runs, while a start or restart is under way, while the
+   * status is unknown or transient, and while a server `unlicensed` waits on
+   * the client's licence re-read (`staleLicenceStop`).
+   */
+  readonly launcherRemedy: AiRemedy | null;
+  /** Tandem's Claude was asked for its one-time greeting and none reached the
+   *  chat (`LauncherStatus.greetingLate`, #2197). Raw status, either arm (a
+   *  dead server clears `status` through the launcher's own floor). Not gated
+   *  on Solo: chat works there. */
+  readonly greetingLate: boolean;
   /** How many LIVE MCP clients `/health` counts (`isLiveEntry` +
    *  `countDistinctClients`), or `null` when unknown or unreachable. */
   readonly sessionCount: number | null;
@@ -585,6 +663,9 @@ export interface AiReadiness {
 }
 
 const POLL_MS = 8_000;
+/** Mirrors the server's `LIVE_RECENT_MS` (transport-registry.ts): how long a
+ * stopped client's MCP entry can still count as live. */
+const STANDBY_LEFTOVER_MS = 60_000;
 
 export function createAiReadiness(deps: {
   connected: () => boolean;
@@ -644,6 +725,9 @@ export function createAiReadiness(deps: {
   // Counts each observed start of Tandem's Claude (not-running → running), so
   // a dismissal of its failure button lasts only until it next runs.
   let launcherRunEpoch = $state(0);
+  // When the current standby was first seen, for `launcherStandbyRecent`.
+  // Kept by the poll, because it depends on the read history.
+  let standbySince = $state<number | null>(null);
   // The licence refusal, read ONCE. `chip`, `launcherFailure`, the `aiNotice`
   // getter and every other licence-keyed reader below key on this one value
   // with one test (`!== null`), so "`aiNotice` non-null exactly when `chip` is
@@ -737,6 +821,9 @@ export function createAiReadiness(deps: {
     }
     const next = body as LauncherStatus;
     if (isRunning(next) && !(status !== null && isRunning(status))) launcherRunEpoch++;
+    const nextStandby = next.available && !next.running ? next.standby : undefined;
+    if (nextStandby === undefined) standbySince = null;
+    else if (standbySince === null) standbySince = Date.now();
     status = next;
     launcherFresh = true;
     settledOnce = true;
@@ -1074,22 +1161,62 @@ export function createAiReadiness(deps: {
   const restartPending = $derived(
     status !== null && status.available && !status.running && status.restartPending === true,
   );
+  // Raw retained status, same reason as `restartPending`.
+  const launcherStandby = $derived<LauncherStandby | null>(
+    status !== null && status.available && !status.running ? (status.standby ?? null) : null,
+  );
+  // Re-read on every poll (the poll reassigns `status`), so it lapses within
+  // one poll of the window closing.
+  const launcherStandbyRecent = $derived(
+    status !== null && standbySince !== null && Date.now() - standbySince < STANDBY_LEFTOVER_MS,
+  );
+  const greetingLate = $derived(
+    status !== null && status.available && status.greetingLate === true,
+  );
+  const launcherNotConfigured = $derived(
+    status !== null &&
+      status.available === false &&
+      status.reason === "not-configured" &&
+      !serverUnreachable,
+  );
+  const launcherStartsOnMessage = $derived(
+    status !== null &&
+      status.available &&
+      !status.running &&
+      status.startsOnMessage === true &&
+      !serverUnreachable,
+  );
 
-  // `chip` is the ONE place the `lastError` → CTA decision is made (see the
-  // `AiChip` doc comment for why `cli-unusable` — a server-side probe taken at
-  // breaker-trip time — is the branch that means "go install Claude Code", and
-  // why `circuit-open` on its own does not). Views must render off this value
-  // alone, not re-derive their own copy of this ternary.
+  // `launcherRemedy` is the ONE place the `lastError` → CTA decision is made
+  // (see the `AiChip` doc comment for why `cli-unusable` — a server-side probe
+  // taken at breaker-trip time — is the branch that means "go install Claude
+  // Code", and why `circuit-open` on its own does not). `chip` is that remedy
+  // behind the Solo and state gates. Views must render off these values alone,
+  // not re-derive their own copy of this ternary. The licence refusal (#1521)
+  // outranks both, and Solo with them.
+  const launcherRemedy = $derived<AiRemedy | null>(
+    notice !== null
+      ? "ai-off"
+      : status === null || (staleLicenceStop && licenceRereadPending)
+        ? null
+        : !status.available
+          ? isTransientlyUnavailable(status.reason)
+            ? null
+            : "connect"
+          : status.running || restartPending
+            ? null
+            : launcherStandby !== null
+              ? "start"
+              : chipForStoppedLauncher(lastError),
+  );
+  // `state` is `unconfigured` or `stopped` only off a settled, non-transient
+  // status with no live session, so the remedy is exactly the chip there.
   const chip = $derived<AiChip>(
     notice !== null
       ? "ai-off"
-      : deps.soloMode()
+      : deps.soloMode() || (state !== "unconfigured" && state !== "stopped")
         ? null
-        : state === "unconfigured"
-          ? "connect"
-          : state === "stopped" && !restartPending
-            ? chipForStoppedLauncher(lastError)
-            : null,
+        : launcherRemedy,
   );
 
   // The running arm of `status`, or null. One gate, narrowed once, so the three
@@ -1162,6 +1289,9 @@ export function createAiReadiness(deps: {
     get pushDelivery() {
       return pushDelivery;
     },
+    get launcherNotConfigured() {
+      return launcherNotConfigured;
+    },
     get serverUnreachable() {
       return serverUnreachable;
     },
@@ -1182,6 +1312,26 @@ export function createAiReadiness(deps: {
     },
     get launcherRestarting() {
       return launcherRestarting;
+    },
+    get launcherStarting() {
+      // The server keeps `standby` beside `restartPending` while a Start from
+      // standby runs, so this is a reading of the status, not of its history.
+      return launcherRestarting && launcherStandby !== null;
+    },
+    get launcherStandby() {
+      return launcherStandby;
+    },
+    get launcherStandbyRecent() {
+      return launcherStandbyRecent;
+    },
+    get launcherStartsOnMessage() {
+      return launcherStartsOnMessage;
+    },
+    get launcherRemedy() {
+      return launcherRemedy;
+    },
+    get greetingLate() {
+      return greetingLate;
     },
     get sessionCount() {
       return sessionCount;

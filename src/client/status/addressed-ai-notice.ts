@@ -41,6 +41,11 @@ import type { AiChip, PushDelivery } from "../hooks/useAiReadiness.svelte";
  *      promise in place of the one this whole change removed.
  *   2b. The licence refusal outranks the AI questions below: while it holds,
  *      no agent can be connected and no restart would be allowed.
+ *   2c. A chat that is starting Tandem's Claude (#2196) gets no notice: the
+ *      chat panel's resume row is already saying what happens to it, and the
+ *      `start` chip's "nothing will answer until you start it" would
+ *      contradict that row. After rules 2 and 2b, because a server that has gone away
+ *      since the send makes the resume row's promise moot.
  *   3. A live session decides which of the remaining branches applies. Without
  *      one, only the agent-absence notice can be correct; with one, only the
  *      delivery notice can be.
@@ -83,6 +88,8 @@ export function addressedAiNotice(input: {
   chip: AiChip;
   /** Only `"none"` is actionable; `"attached"` and `"unknown"` stay silent. */
   pushDelivery: PushDelivery;
+  /** This send is a chat that is starting Tandem's Claude (rule 2c). */
+  startingForMessage: boolean;
 }): AddressedAiNotice | null {
   // Rule 1. Belt-and-braces: the production caller short-circuits on Solo
   // before reaching here (to skip the probe), so this branch is defensive —
@@ -97,6 +104,9 @@ export function addressedAiNotice(input: {
 
   // Rule 2b — the licence refuses the AI (#1521).
   if (input.chip === "ai-off") return { kind: "ai-off" };
+
+  // Rule 2c — the chat panel's resume row speaks for this message.
+  if (input.startingForMessage) return null;
 
   // Rule 3 — no agent attached.
   if (!input.sessionLive) {
@@ -186,7 +196,13 @@ export function noticeAction(notice: AddressedAiNotice, noun: string): Addressed
         severity: "warning",
         // Past tense on the observation because `warning` never expires —
         // see the tense rule on `TandemNotification.severity`.
-        message: `${noun} saved while no AI was connected. It'll be seen when one connects.`,
+        // The `start` chip (#2195) is Tandem's Claude stopped by choice:
+        // "when one connects" would be wrong — nothing is going to connect
+        // until the user starts it.
+        message:
+          notice.chip === "start"
+            ? `${noun} saved. Tandem's Claude isn't running, so nothing will answer until you start it.`
+            : `${noun} saved while no AI was connected. It'll be seen when one connects.`,
         cta: notice.chip,
       };
     case "no-push":

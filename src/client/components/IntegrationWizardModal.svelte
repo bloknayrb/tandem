@@ -25,7 +25,7 @@
  * --tandem-z-above-titlebar, r-5 + shadow-3) and a Tab focus trap re-queried
  * per keypress (the Advanced <details> changes the focusable set while open).
  */
-import { untrack } from "svelte";
+import { tick, untrack } from "svelte";
 import { BYO_MODELS_ENABLED, COWORK_ENABLED } from "../../shared/constants.js";
 import type { ApplyItemResult, ExistingMcpInstall } from "../../shared/integrations/contract.js";
 import {
@@ -37,6 +37,8 @@ import {
   undetectedDetail,
 } from "../cowork/cowork-helpers.js";
 import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke.js";
+import { picksSomethingNew } from "../hooks/integration-wizard-merge.js";
+import type { AiRemedy } from "../hooks/useAiReadiness.svelte.js";
 import {
   autostartWizardDefault,
   createAutostart,
@@ -48,7 +50,7 @@ import { createSubnetPreflight } from "../hooks/useCoworkPreflight.svelte.js";
 import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte.js";
 import {
   createIntegrationWizard,
-  detectedToPicked,
+  isSelectable,
   type PickedIntegration,
 } from "../hooks/useIntegrationWizard.svelte.js";
 import {
@@ -63,9 +65,14 @@ import {
   computeDoneHeaderState,
   type PushSupportNote,
   pushSupportNote,
+  type TandemClaudeLive,
+  tandemClaudeDoneCopy,
+  tandemClaudeIsStartingOrRunning,
+  tandemClaudeNeedsSignIn,
 } from "./integration-wizard-helpers.js";
 import LiveRegion from "./LiveRegion.svelte";
 import PushRoutesInfo from "./PushRoutesInfo.svelte";
+import SettingsTandemClaudeSection from "./settings-tabs/SettingsTandemClaudeSection.svelte";
 
 interface Props {
   open: boolean;
@@ -77,9 +84,41 @@ interface Props {
    * (and undefined-safe via `?.`) while dark.
    */
   onSetupModels?: () => void;
+  /**
+   * Tandem's own Claude as the launcher status shows it now (#2197): refines
+   * the apply's `tandemClaude` answer on the done screen, so a start that has
+   * since failed or come up is reported as it is. App passes readiness; a mount
+   * without it shows the apply's answer alone.
+   */
+  tandemClaudeLive?: TandemClaudeLive | null;
+  /**
+   * The server version the v1.0 walkthrough is owed on (#2198), or null when
+   * none is. While set, the wizard offers **Keep this setup** (or "Continue
+   * without connecting" when nothing is set up), shows the start choice, and
+   * tells the user it comes back until they keep or connect.
+   */
+  walkthroughVersion?: string | null;
+  /** Keep succeeded: the walkthrough is done (App also stops the first-run
+   * rule from reopening the wizard). Called before the wizard closes. */
+  onWalkthroughKept?: () => void;
+  /** Opened from the chat panel's offer (#2199): bring the Claude Code offer
+   * into view and focus its button, when it is shown. */
+  focusClaudeCodeOffer?: boolean;
+  /** Runs a launcher remedy through App's one dispatcher (`AI_CTA[...]
+   * .action`) — the done screen's Check sign-in (#2199). */
+  onLauncherRemedy?: (remedy: AiRemedy) => void;
 }
 
-let { open, onClose, onSetupModels }: Props = $props();
+let {
+  open,
+  onClose,
+  onSetupModels,
+  tandemClaudeLive = null,
+  walkthroughVersion = null,
+  onWalkthroughKept,
+  focusClaudeCodeOffer = false,
+  onLauncherRemedy,
+}: Props = $props();
 
 // Absolute base URL because the Vite dev server does not proxy /api/* —
 // other client modules (yjsSync, useNotifications, fileUpload) follow the
@@ -187,6 +226,10 @@ const emptyStateFoundInstall = $derived(
 // land in the NON-empty branch, where the empty state's CLI messaging never
 // renders, so gating this on it would reach nearly nobody.
 const showShimWarning = $derived(cliStatus.bareNameLaunchable === false);
+/** The Claude Code offer (#2199, below): `idle` → the offer itself;
+ * `installed` → installed here and its card ticked; `not-detected` →
+ * installed, but no Claude Code card appeared yet. Per mount, like the rest. */
+let offerPhase = $state<"idle" | "installed" | "not-detected">("idle");
 
 // Post-apply reachability (#1174 gap #1). Once the Done screen shows, verify the
 // Tandem MCP server actually answers at the URL we just wrote (HTTP targets =
@@ -214,17 +257,53 @@ function reachabilityStatusFor(id: string): ReachabilityStatus | null {
   return reachability.results.find((r) => r.id === id)?.status ?? null;
 }
 
+// `/health.hasSession` counts every MCP session, Tandem's own background
+// Claude included (#2197). While the Apply started it (or it was running, or
+// its answer timed out — `unknown` — with it running now), a session proves
+// nothing about the user's own Claude, so the screen does not claim
+// "connected" and keeps the restart-and-/mcp guidance.
+// Nor when this wizard just installed the Claude Code it applied (#2199): the
+// session it sees is the user's Claude Desktop, never a Claude Code that has
+// not signed in.
+const installedHereAndApplied = $derived(
+  offerPhase === "installed" && wizard.picked.some((p) => p.config.kind === "claude-code"),
+);
+const userClaudeConnected = $derived(
+  reachability.claudeConnected &&
+    wizard.tandemClaude !== "starting" &&
+    wizard.tandemClaude !== "running" &&
+    tandemClaudeLive?.running !== true &&
+    !installedHereAndApplied,
+);
+
 // Adapt the "what's next" guidance to the reachability outcome.
-const whatsNext = $derived.by((): "connected" | "unreachable" | "stdio-only" | "default" => {
-  const rows = reachability.results;
-  const hasHttp = rows.some(
-    (r) => r.status === "reachable" || r.status === "unreachable" || r.status === "verifying",
-  );
-  if (!hasHttp && rows.length > 0) return "stdio-only";
-  if (rows.some((r) => r.status === "unreachable")) return "unreachable";
-  if (reachability.claudeConnected) return "connected";
-  return "default";
-});
+const whatsNext = $derived.by(
+  ():
+    | "connected"
+    | "unreachable"
+    | "stdio-only"
+    | "tandem-claude"
+    | "installed-here"
+    | "default" => {
+    const rows = reachability.results;
+    const hasHttp = rows.some(
+      (r) => r.status === "reachable" || r.status === "unreachable" || r.status === "verifying",
+    );
+    if (!hasHttp && rows.length > 0) return "stdio-only";
+    if (rows.some((r) => r.status === "unreachable")) return "unreachable";
+    if (userClaudeConnected) return "connected";
+    // Installed here for Tandem's own Claude, which the Apply is starting
+    // (#2199): "restart Claude Code and run /mcp" is advice for a terminal
+    // session this user never had. Any other answer — a start held, failed
+    // or waiting on sign-in, whose own line follows — gets the neutral arm.
+    if (installedHereAndApplied) {
+      return tandemClaudeIsStartingOrRunning(wizard.tandemClaude, tandemClaudeLive)
+        ? "tandem-claude"
+        : "installed-here";
+    }
+    return "default";
+  },
+);
 
 /**
  * #1432: does a persistent home for the push routes exist for this user?
@@ -262,7 +341,8 @@ let view = $state<"main" | "cowork">("main");
 const progressAnnouncement = $derived.by(() => {
   if (view === "cowork") return "";
   if (wizard.step === "connect") {
-    return wizard.detecting ? "Looking for Claude on your computer…" : "";
+    if (wizard.detecting) return "Looking for Claude on your computer…";
+    return cliStatus.installing ? "Installing Claude Code…" : "";
   }
   if (wizard.step === "applying") return "Connecting Claude…";
   if (wizard.step === "done" && reachability.phase === "verifying") {
@@ -418,6 +498,9 @@ function close(): void {
  *  $effect is keyed on `getActive()`, which doesn't change post-install, so
  *  it won't auto-re-probe. */
 function retryDetection(): void {
+  // A token entered this session and never saved must not outlive the reset
+  // (a saved one is never touched — see the hook).
+  void wizard.cleanupUnsavedSecrets().catch(() => {});
   wizard.reset();
   secretInputs = {};
   // Same as `openCoworkView` (#1432): `wizard.reset()` sets `step = "connect"`,
@@ -482,7 +565,9 @@ function togglePicked(install: ExistingMcpInstall): void {
     wizard.setPicked(wizard.picked.filter((_, i) => i !== existingIdx));
     return;
   }
-  const next = detectedToPicked(install);
+  // From its saved record when it has one (#2198): re-checking a card must not
+  // mint a fresh id and drop the record's token, cwd and the rest.
+  const next = wizard.pickedForInstall(install);
   if (next) wizard.setPicked([...wizard.picked, next]);
 }
 
@@ -504,6 +589,125 @@ const NETWORK_ERROR_RE = /fetch|network|Failed to/i;
 const connectLabel = $derived(
   wizard.picked.length === 1 ? `Connect ${wizard.picked[0].config.label}` : "Connect selected",
 );
+
+// --- The v1.0 walkthrough (#2198) -------------------------------------------
+const walkthrough = $derived(walkthroughVersion !== null);
+const hasClaudeCodeInstall = $derived(wizard.existing.some((i) => i.target.kind === "claude-code"));
+/** The start choice is about Tandem's Claude, which only Claude Code runs — and
+ * only once a Claude Code card is ticked (#2199: a card that arrives unticked
+ * says nothing about the user wanting Tandem's Claude). */
+const picksClaudeCode = $derived(wizard.picked.some((p) => p.config.kind === "claude-code"));
+/** "Keep" keeps something; with nothing set up it is "Continue without
+ * connecting" (Bryan, 2026-10-14) — and then Connect stays the primary action
+ * whenever something connectable was found. */
+const keepLabel = $derived(
+  wizard.step !== "connect"
+    ? // After an Apply or a failed read, what was read at open no longer says
+      // what is set up: a neutral label for "end the walkthrough as things are".
+      "Keep things as they are"
+    : wizard.hasSetupToKeep
+      ? "Keep this setup"
+      : "Continue without connecting",
+);
+// Connect leads once the user ticks something new (#2199).
+const keepIsPrimary = $derived(
+  (wizard.hasSetupToKeep && !picksSomethingNew(wizard.picked, wizard.existing)) ||
+    !wizard.existing.some(isSelectable),
+);
+
+// --- The Claude Code offer for a Claude Desktop setup (#2199) ---------------
+let offerEl: HTMLElement | null = $state(null);
+/** An install from the offer is running, or re-reading detection after it:
+ * `presence` has already moved on, and the block must not unmount under the
+ * focused button meanwhile. */
+let offerBusy = $state(false);
+const hasClaudeDesktopInstall = $derived(
+  wizard.existing.some((i) => i.target.kind === "claude-desktop"),
+);
+/**
+ * What the offer block shows, or null for no block:
+ *   - `offer` — Claude Desktop, no Claude Code anywhere: the opt-in.
+ *   - `missing` — a Claude Code card, but no Claude Code program: Tandem's own
+ *     Claude cannot start (the launcher's `cli-unusable`), so the same Install.
+ *   - `installed` / `not-detected` — after an install from here.
+ *   - `not-detected` also when Claude Code is installed but has never been run
+ *     (no card): arriving from the chat panel's offer must not be a dead end.
+ */
+const offerView = $derived.by((): "offer" | "missing" | "installed" | "not-detected" | null => {
+  if (view !== "main" || wizard.step !== "connect" || wizard.detecting) return null;
+  if (offerPhase !== "idle") return offerPhase;
+  const missing = cliStatus.presence === "NOT_INSTALLED" || offerBusy;
+  if (missing) return hasClaudeCodeInstall ? "missing" : hasClaudeDesktopInstall ? "offer" : null;
+  // Only when asked for, from the chat panel's offer (#2199 review): unasked,
+  // it would be an install prompt for something the user did not raise.
+  if (
+    focusClaudeCodeOffer &&
+    cliStatus.presence !== null &&
+    hasClaudeDesktopInstall &&
+    !hasClaudeCodeInstall
+  ) {
+    return "not-detected";
+  }
+  return null;
+});
+const showClaudeCodeOffer = $derived(offerView !== null);
+
+/** Re-read detection, ticking a newly found Claude Code card; `fallback` is
+ * the phase when none appeared. The button that was clicked unmounts on a
+ * phase change, so focus moves to the new note rather than falling to <body>
+ * inside the focus-trapped dialog. */
+async function refreshAfterInstall(fallback: "not-detected" | null): Promise<void> {
+  await wizard.refreshDetected({ pickNewOfKind: "claude-code" });
+  const card = wizard.existing.some((i) => i.target.kind === "claude-code");
+  const next = card ? "installed" : fallback;
+  if (next === null) return;
+  offerPhase = next;
+  await tick();
+  offerEl?.querySelector<HTMLElement>('[data-offer-focus="true"]')?.focus();
+}
+
+/** The offer's Install: the click is the opt-in, so the new card arrives
+ * ticked (Bryan, 2026-10-14). A failed install shows `cliStatus`'s error and
+ * leaves the offer as it was. */
+async function installFromOffer(): Promise<void> {
+  offerBusy = true;
+  try {
+    const next = await cliStatus.install();
+    if (next === null || next === "NOT_INSTALLED") return;
+    await refreshAfterInstall("not-detected");
+  } finally {
+    offerBusy = false;
+  }
+}
+
+/** Check again, without starting over: the picks the user made stay. */
+async function recheckFromOffer(): Promise<void> {
+  void cliStatus.refetch();
+  await refreshAfterInstall(null);
+}
+
+// Opened from the chat panel's offer: once, when the offer is there to show.
+let offerFocusDone = false;
+$effect(() => {
+  if (offerFocusDone || !focusClaudeCodeOffer || !showClaudeCodeOffer || !offerEl) return;
+  offerFocusDone = true;
+  offerEl.scrollIntoView({ block: "nearest" });
+  offerEl.querySelector<HTMLElement>("button")?.focus();
+});
+/** A start-mode save in flight: Connect and Keep both ask the launcher to
+ * start under the saved mode, so they wait for it. */
+let startModeBusy = $state(false);
+let keeping = $state(false);
+
+async function keepSetup(): Promise<void> {
+  if (walkthroughVersion === null || keeping) return;
+  keeping = true;
+  const ok = await wizard.keepSetup(walkthroughVersion);
+  keeping = false;
+  if (!ok) return;
+  onWalkthroughKept?.();
+  close();
+}
 
 /** Friendly name for an apply-result row — results carry integration ids,
  *  so resolve back through `picked` for the human label. */
@@ -563,9 +767,9 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
 
 // See computeDoneHeaderState — the honesty contract lives in the pure helper
 // (unit-tested); this derived just feeds it the two live inputs.
-const doneHeaderState = $derived(
-  computeDoneHeaderState(anyApplyErrors, reachability.claudeConnected),
-);
+const doneHeaderState = $derived(computeDoneHeaderState(anyApplyErrors, userClaudeConnected));
+// The line about Tandem's own background Claude (#2197).
+const tandemClaudeLine = $derived(tandemClaudeDoneCopy(wizard.tandemClaude, tandemClaudeLive));
 
 /** Per-row delivery truth, joined the same way `resultLabel` joins the label.
  *  Static (a fact of the target kind), so unlike `reachabilityLine` it needs no
@@ -574,6 +778,20 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
   return pushSupportNote(wizard.picked.find((p) => p.id === id)?.config.kind);
 }
 </script>
+
+{#snippet keepButton(primary: boolean)}
+  {#if walkthrough}
+  <button
+    type="button"
+    class="iw-btn {primary ? 'iw-btn-primary' : 'iw-btn-secondary'}"
+    onclick={keepSetup}
+    disabled={keeping || startModeBusy}
+    data-testid="integration-wizard-keep-setup"
+  >
+    {keeping ? "Saving…" : keepLabel}
+  </button>
+  {/if}
+{/snippet}
 
 {#snippet warningIcon(cls?: string)}
   <svg
@@ -647,7 +865,7 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
       {#if status === "verifying"}
         Checking Tandem is reachable…
       {:else if status === "reachable"}
-        {reachability.claudeConnected
+        {userClaudeConnected
           ? "Claude connected just now"
           : "Server's up — restart Claude and run /mcp to connect it"}
       {:else if status === "unreachable"}
@@ -713,7 +931,11 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
           <h2 class="iw-title">
             {view === "cowork" ? "Set up Cowork" : "Connect Claude to Tandem"}
           </h2>
-          {#if view === "main" && wizard.step === "connect"}
+          {#if view === "main" && wizard.step === "connect" && walkthrough}
+            <p class="iw-subtitle" data-testid="integration-wizard-walkthrough-intro">
+              Tandem 1.0: check how Tandem connects to your AI, then keep it or change it.
+            </p>
+          {:else if view === "main" && wizard.step === "connect"}
             <p class="iw-subtitle">Connect your AI assistant.</p>
           {:else if view === "cowork"}
             <p class="iw-subtitle">Let a teammate's Claude join from the Cowork VM.</p>
@@ -878,9 +1100,8 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                   can't start Claude for you. Reinstall Claude Code from
                   <a href="https://claude.com/claude-code" target="_blank" rel="noreferrer"
                     >claude.com/claude-code</a
-                  > to fix it, then restart Tandem — its launcher reads the PATH it started
-                  with, so a fresh install stays invisible until then. Connecting here still
-                  works if you launch Claude yourself.
+                  > to fix it — Tandem finds the new install without a restart. Connecting
+                  here still works if you launch Claude yourself.
                 </span>
               </div>
             {/if}
@@ -1006,14 +1227,107 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                 </details>
               {/if}
             {/if}
+            {#if showClaudeCodeOffer}
+              <!-- #2199: opt-in, never pre-selected. A Claude Desktop setup
+                   cannot answer the chat as messages arrive; Tandem's own
+                   Claude can, and it runs on Claude Code. -->
+              <div
+                class="iw-offer"
+                bind:this={offerEl}
+                data-testid="integration-wizard-claude-code-offer"
+                data-offer-phase={offerView}
+              >
+                {#if offerView === "installed"}
+                  <div
+                    class="iw-whats-next"
+                    tabindex="-1"
+                    data-offer-focus="true"
+                    data-testid="integration-wizard-claude-code-offer-installed"
+                  >
+                    {@render checkIcon()}
+                    <span>
+                      {picksClaudeCode
+                        ? "Claude Code is installed and ticked above. Choose Connect, then sign in to it once if it asks."
+                        : "Claude Code is installed. Tick Claude Code above, choose Connect, then sign in to it once if it asks."}
+                    </span>
+                  </div>
+                {:else if offerView === "not-detected"}
+                  <p class="iw-hint-text" tabindex="-1" data-offer-focus="true">
+                    Claude Code is installed. Open a new terminal, run <code>claude</code> once,
+                    then choose Check again.
+                  </p>
+                  <div>
+                    <button
+                      type="button"
+                      class="iw-btn iw-btn-secondary"
+                      onclick={recheckFromOffer}
+                      data-testid="integration-wizard-claude-code-offer-recheck"
+                    >
+                      Check again
+                    </button>
+                  </div>
+                {:else}
+                  {#if offerView === "missing"}
+                    <p class="iw-offer-title">Tandem can't find the Claude Code program</p>
+                    <p class="iw-hint-text">
+                      So it can't start its own Claude. A copy installed with Homebrew or npm may
+                      work in your terminal and still be out of Tandem's sight; installing it here
+                      (a small, signed download from Anthropic) puts it where Tandem looks.
+                    </p>
+                  {:else}
+                    <p class="iw-offer-title">Want answers right here in Tandem?</p>
+                    <p class="iw-hint-text">
+                      Claude Desktop answers only when you ask it something in Claude Desktop.
+                      To get answers here as you send them, Tandem can run its own Claude in the
+                      background. That needs Claude Code, a separate app from Anthropic.
+                      Installing it doesn't change your Claude Desktop setup.
+                    </p>
+                  {/if}
+                  <div>
+                    <button
+                      type="button"
+                      class="iw-btn iw-btn-secondary"
+                      onclick={installFromOffer}
+                      disabled={cliStatus.installing}
+                      data-testid="integration-wizard-claude-code-offer-install"
+                    >
+                      {cliStatus.installing ? "Installing…" : "Install Claude Code"}
+                    </button>
+                  </div>
+                  {#if cliStatus.installError}
+                    <div
+                      class="iw-banner-warning"
+                      role="alert"
+                      data-testid="integration-wizard-claude-code-offer-error"
+                    >
+                      {@render warningIcon()}
+                      <span>{cliStatus.installError}</span>
+                    </div>
+                  {/if}
+                {/if}
+              </div>
+            {/if}
             <!-- First-run dismissal is persisted per server version, so the
                  wizard never auto-reopens. Tell the user where the way back is
                  before they close it (#1022). -->
+            {#if walkthrough && picksClaudeCode && !wizard.detecting}
+              <div class="iw-start-mode" data-testid="integration-wizard-start-mode">
+                <SettingsTandemClaudeSection
+                  startModeOnly
+                  onBusyChange={(busy) => (startModeBusy = busy)}
+                />
+              </div>
+            {/if}
             <p
               class="iw-hint-text iw-reopen-hint"
               data-testid="integration-wizard-reopen-hint"
             >
-              Not now? You can reopen this wizard anytime from Settings → AI Assistant.
+              {#if walkthrough}
+                This opens again the next time you start Tandem, until you keep your setup or
+                connect.
+              {:else}
+                Not now? You can reopen this wizard anytime from Settings → AI Assistant.
+              {/if}
             </p>
           </section>
         {:else if wizard.step === "applying"}
@@ -1125,12 +1439,40 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                   <code class="iw-code-inline">/mcp</code>.
                 {:else if whatsNext === "stdio-only"}
                   Open Claude Desktop to start using Tandem.
+                {:else if whatsNext === "tandem-claude"}
+                  Open the chat panel to talk to Tandem's own Claude. Claude Desktop works with
+                  Tandem as before.
+                {:else if whatsNext === "installed-here"}
+                  <!-- Points below only when there is a line there: an Apply
+                       whose answer timed out has none. -->
+                  Claude Desktop works with Tandem as before.{#if tandemClaudeLine}{" "}The line
+                    below says what happened to Tandem's own Claude.{/if}
                 {:else}
                   Restart Claude Code, then type <code class="iw-code-inline">/mcp</code> to verify —
                   or just ask Claude to open a document.
                 {/if}
               </span>
             </div>
+            {#if tandemClaudeLine}
+              <p class="iw-hint-text" data-testid="integration-wizard-tandem-claude">
+                {tandemClaudeLine}
+              </p>
+            {/if}
+            {#if tandemClaudeNeedsSignIn(wizard.tandemClaude, tandemClaudeLive) && onLauncherRemedy}
+              <!-- #2199: only while the status says sign-in, so it never fires a
+                   relaunch over the start an Apply just began. Through App's
+                   one remedy dispatcher (AI_CTA["sign-in"] → restart). -->
+              <div>
+                <button
+                  type="button"
+                  class="iw-btn iw-btn-secondary"
+                  onclick={() => onLauncherRemedy("sign-in")}
+                  data-testid="integration-wizard-check-sign-in"
+                >
+                  Check sign-in
+                </button>
+              </div>
+            {/if}
             {#if isTauriRuntime() && wizardAutostartStatus !== null && !wizardAutostartBlocked}
               <label class="iw-autostart" data-testid="integration-wizard-autostart">
                 <input
@@ -1304,6 +1646,14 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
         {/if}
       </div>
 
+      <!-- Above the footer, on every step: Keep is offered on the done and
+           error screens too, and a refusal there must not be silent. -->
+      {#if walkthrough && view === "main" && wizard.keepError}
+        <p role="alert" class="iw-keep-error" data-testid="integration-wizard-keep-error">
+          {wizard.keepError}
+        </p>
+      {/if}
+
       <footer class="iw-footer">
         {#if view === "cowork"}
           <button
@@ -1345,6 +1695,7 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
             <button type="button" class="iw-btn iw-btn-secondary" onclick={close}>Cancel</button>
           {:else if wizard.existing.length === 0}
             <button type="button" class="iw-btn iw-btn-secondary" onclick={close}>Close</button>
+            {@render keepButton(false)}
             <button
               type="button"
               class="iw-btn iw-btn-primary"
@@ -1357,11 +1708,12 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
             <button type="button" class="iw-btn iw-btn-secondary" onclick={close}>
               Not now
             </button>
+            {@render keepButton(keepIsPrimary)}
             <button
               type="button"
-              class="iw-btn iw-btn-primary"
+              class="iw-btn {walkthrough && keepIsPrimary ? 'iw-btn-secondary' : 'iw-btn-primary'}"
               onclick={() => wizard.save()}
-              disabled={wizard.picked.length === 0}
+              disabled={wizard.picked.length === 0 || startModeBusy || keeping}
               data-testid="integration-wizard-connect-btn"
             >
               {connectLabel}
@@ -1371,6 +1723,10 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
           <button type="button" class="iw-btn iw-btn-secondary" disabled>Connecting…</button>
         {:else if wizard.step === "done"}
           {#if anyApplyErrors}
+            <!-- A target that keeps failing must not trap the user in the
+                 walkthrough every launch: Keep writes nothing, so it is safe
+                 whatever the apply did (#2198). -->
+            {@render keepButton(false)}
             <button
               type="button"
               class="iw-btn iw-btn-secondary"
@@ -1390,6 +1746,7 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
           </button>
         {:else if wizard.step === "error"}
           <button type="button" class="iw-btn iw-btn-secondary" onclick={close}>Close</button>
+          {@render keepButton(false)}
           <button
             type="button"
             class="iw-btn iw-btn-primary"
@@ -1661,8 +2018,33 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
     margin: 0;
   }
 
+  /* #2199's offer: a quiet block under the cards, not a banner. */
+  .iw-offer {
+    display: flex;
+    flex-direction: column;
+    gap: var(--tandem-space-2);
+    padding: var(--tandem-space-3);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-3);
+  }
+  .iw-offer-title {
+    font-size: var(--tandem-text-sm);
+    font-weight: 600;
+    margin: 0;
+  }
+
   /* The parent .iw-step flex gap provides the spacing; only the tone differs
      from a regular hint (it's an aside, not step guidance). */
+  .iw-start-mode {
+    margin-top: var(--tandem-space-3);
+  }
+
+  .iw-keep-error {
+    margin: 0;
+    color: var(--tandem-error-fg);
+    font-size: var(--tandem-text-sm);
+  }
+
   .iw-reopen-hint {
     color: var(--tandem-fg-subtle);
   }

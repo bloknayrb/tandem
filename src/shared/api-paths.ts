@@ -95,9 +95,15 @@ export const API_LAUNCHER_STATUS = "/api/launcher/status";
 export const API_LAUNCHER_NONCE = "/api/launcher/nonce";
 export const API_LAUNCHER_RELAUNCH = "/api/launcher/relaunch";
 export const API_LAUNCHER_START_FRESH = "/api/launcher/start-fresh";
-/** Promote a `deferred-autostart` launcher to a live supervisor (#1236).
- * Distinct from `start-fresh`, which restarts an *existing* supervisor. */
+/** Promote a `deferred-autostart` launcher to a live supervisor (#1236), or,
+ * with `userInitiated: true` in the body, start an existing supervisor's
+ * Claude from standby — the Start control (#2195). Distinct from
+ * `start-fresh`, which drops the conversation. */
 export const API_LAUNCHER_START = "/api/launcher/start";
+/** How Tandem's Claude starts and how long it runs (#2195). GET reads, POST
+ * merges a partial patch. Lives in `launcher-settings.json`, not
+ * `integrations.json`. */
+export const API_LAUNCHER_SETTINGS = "/api/launcher/settings";
 export const API_LAUNCHER_WORKING_DIRECTORY = "/api/launcher/working-directory";
 /** Read-only "would relaunching here move Claude?" preview (#1282). POST
  * because it carries a path in the body, not because it mutates — it does not,

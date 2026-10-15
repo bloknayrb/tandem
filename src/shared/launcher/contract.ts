@@ -2,7 +2,9 @@
  * Wire contract for the auto-launcher routes (#477 PR 4b).
  *
  * Server: `src/server/launcher/api-routes.ts`.
- * Client: `src/client/launcher/*` (palette actions + settings picker).
+ * Client: `src/client/hooks/useAiReadiness.svelte.ts` (status), the launcher
+ * actions in `src/client/actions/builtin.svelte.ts`, and the AI Assistant
+ * settings tab.
  *
  * The launcher routes are HTTP-mode-only and only useful when a
  * `claude-code` integration with `apply !== "skip"` exists in
@@ -40,6 +42,23 @@ export type LauncherStatus =
        * a Restart button that would race it (#2180). Absent from an older
        * server, which reads as today's behaviour. */
       restartPending?: true;
+      /** Loopback-only. Tandem's Claude is not running BY CHOICE (#2195): the
+       * start mode is off, it is waiting for the user's Start, or it was
+       * stopped while idle. Never sent beside a `lastError` (a stop that
+       * failed is a diagnosis, not a choice). Beside `restartPending` it means
+       * a Start from standby is under way — "Starting", not "Restarting".
+       * Absent from an older server. */
+      standby?: LauncherStandby;
+      /** Loopback-only, and only beside `standby` (#2196): a chat message sent
+       * now would start Tandem's Claude — no other AI session is attached and
+       * the licence admits it. What the chat panel's "Claude is resuming…"
+       * promise keys on, so it is never shown for a message nothing will
+       * answer. Absent from an older server. */
+      startsOnMessage?: true;
+      /** Loopback-only (#2197): see the running arm's `greetingLate`. Here too,
+       * because the commonest reason the hello never comes — Claude Code not
+       * signed in — stops the child. */
+      greetingLate?: true;
       /** Loopback-only. `null` when last refresh succeeded. */
       skillRefresh?: SkillRefreshError | null;
     }
@@ -61,6 +80,12 @@ export type LauncherStatus =
        * its Claude session id (the plugin's stdio bridge); absent or false
        * means "can't confirm", not "not connected". */
       attached?: boolean;
+      /** Loopback-only (#2197). Tandem's Claude was asked for its one-time
+       * greeting and has not written to the chat: its turn ended without a
+       * message, or a minute passed (`GREETING_REPLY_WINDOW_MS`). The chat
+       * panel shows how to fix it. Decided server-side, so neither a cleared
+       * chat nor the client's clock can fake it. */
+      greetingLate?: true;
       /** Loopback-only. `null` when last refresh succeeded. */
       skillRefresh?: SkillRefreshError | null;
     };
@@ -81,7 +106,8 @@ export type LauncherStatus =
  * found no launchable `claude-code` entry (none at all, a Claude Desktop-only
  * setup, or a legacy `apply: "skip"` one), so there is nothing to restart. It
  * clears when the user completes setup: the wizard's Apply re-reads the
- * integration (`Supervisor.refreshConfigured`). That does not start Claude.
+ * integration and, when the start mode allows, starts Claude
+ * (`Supervisor.startAfterSetup`, #2197).
  */
 export type LauncherUnavailableReason =
   | "stdio-mode"
@@ -116,18 +142,21 @@ export function isTransientlyUnavailable(reason: LauncherUnavailableReason | und
  * Scrubbed `lastError` enum. Verbose error strings stay server-side.
  *
  * `binary-not-found` is about the **reaper**, not the Claude CLI — a broken
- * Tandem install. `cli-unusable` is the Claude CLI one, and it is a strictly
- * more specific `circuit-open`: the breaker tripped *and* a filesystem probe
- * says the CLI is absent, or present as an unstartable Windows shim. Both of
- * those have the same remedy (install/repair it), which is why one member
- * covers them; `circuit-open` keeps its literal meaning of "it crash-looped
- * and the CLI itself is fine", which is what routes the user to a restart
- * rather than to the integration wizard.
+ * Tandem install. `cli-unusable` is the Claude CLI one: no Claude Code
+ * program the launcher can start was found — absent, or present only as an
+ * unstartable Windows shim. Since #2199 the launcher resolves its command
+ * before every start (`resolveClaudeLaunch`) and spawns nothing when it finds
+ * none, so this is usually recorded with no crash and no breaker; it is also
+ * still the more specific reading of a tripped breaker whose probe finds the
+ * CLI gone. Both have the same remedy (install/repair it), which is why one
+ * member covers them; `circuit-open` keeps its literal meaning of "it
+ * crash-looped and the CLI itself is fine", which is what routes the user to a
+ * restart rather than to the integration wizard.
  *
- * The probe runs once when the breaker trips, so this is a snapshot: a CLI
- * installed afterwards will not update it. That is acceptable because the
- * supervisor spawns from the PATH the *process* started with, so such a user
- * needs a Tandem restart regardless of what the enum says.
+ * A CLI installed afterwards does not clear it on its own, but needs no Tandem
+ * restart either: the next Start resolves the command afresh, the native
+ * install location (`~/.local/bin`) included, which the PATH this process
+ * started with never contains right after an install.
  *
  * `wake-delivery-failed` (#1868): the supervisor ended three successive
  * children in a row because each stopped accepting turns on stdin, with no
@@ -158,6 +187,117 @@ export type LauncherErrorCode =
   | "wake-delivery-failed"
   | "needs-login"
   | "unlicensed";
+
+// --- Start / lifetime setting (#2195) -------------------------------------
+
+/**
+ * Why Tandem's Claude is not running when nothing went wrong (#2195).
+ *   - `off` — the start mode is off (the user turned it off).
+ *   - `awaiting-start` — the start mode is `on-click` and nobody has clicked
+ *     Start yet, or the mode was switched back on from off.
+ *   - `idle` — the lifetime is `idle` and it went the configured time without
+ *     a turn, so the supervisor stopped it.
+ */
+export type LauncherStandby = "off" | "awaiting-start" | "idle";
+
+/** `auto` starts Tandem's Claude when Tandem starts; `on-click` waits for the
+ * user's Start; `off` never starts it on its own. */
+export type LauncherStartMode = "auto" | "on-click" | "off";
+/** `always` keeps it running; `idle` stops it after `idleMinutes` without a
+ * turn (measured from the end of the last turn — Bryan, 2026-10-13). */
+export type LauncherLifetime = "always" | "idle";
+
+export interface LauncherSettings {
+  startMode: LauncherStartMode;
+  lifetime: LauncherLifetime;
+  idleMinutes: number;
+}
+
+export const LAUNCHER_START_MODES: readonly LauncherStartMode[] = ["auto", "on-click", "off"];
+export const LAUNCHER_LIFETIMES: readonly LauncherLifetime[] = ["always", "idle"];
+export const LAUNCHER_IDLE_MINUTES_MIN = 1;
+/** Kept far below `setTimeout`'s 2^31-1 ms ceiling (~35,791 minutes): past it
+ * Node fires the timer at once, which would turn "stop after a long idle" into
+ * "stop immediately". */
+export const LAUNCHER_IDLE_MINUTES_MAX = 1440;
+
+/** Bryan, 2026-10-12: start automatically, always running, 30-minute idle
+ * default. Identical to the behaviour before the setting existed, so an install
+ * with no settings file is unchanged. */
+export const DEFAULT_LAUNCHER_SETTINGS: Readonly<LauncherSettings> = Object.freeze({
+  startMode: "auto",
+  lifetime: "always",
+  idleMinutes: 30,
+});
+
+/** A partial update — the only shape the POST accepts. Whole-object writes let
+ * a stale snapshot (a second window, a Settings tab opened before Turn off)
+ * silently put back a choice the user had just changed. */
+export type LauncherSettingsPatch = Partial<LauncherSettings>;
+
+export function isLauncherStartMode(v: unknown): v is LauncherStartMode {
+  return typeof v === "string" && (LAUNCHER_START_MODES as readonly string[]).includes(v);
+}
+
+export function isLauncherLifetime(v: unknown): v is LauncherLifetime {
+  return typeof v === "string" && (LAUNCHER_LIFETIMES as readonly string[]).includes(v);
+}
+
+export function isLauncherIdleMinutes(v: unknown): v is number {
+  return (
+    typeof v === "number" &&
+    Number.isInteger(v) &&
+    v >= LAUNCHER_IDLE_MINUTES_MIN &&
+    v <= LAUNCHER_IDLE_MINUTES_MAX
+  );
+}
+
+/** Validate a POST patch: an object with at least one known field, every field
+ * present valid, and nothing else. Returns the patch or the offending field. */
+export function parseLauncherSettingsPatch(
+  raw: unknown,
+): { ok: true; patch: LauncherSettingsPatch } | { ok: false; field: string } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, field: "patch" };
+  const r = raw as Record<string, unknown>;
+  const keys = Object.keys(r);
+  if (keys.length === 0) return { ok: false, field: "patch" };
+  const patch: LauncherSettingsPatch = {};
+  for (const key of keys) {
+    const v = r[key];
+    if (key === "startMode" && isLauncherStartMode(v)) patch.startMode = v;
+    else if (key === "lifetime" && isLauncherLifetime(v)) patch.lifetime = v;
+    else if (key === "idleMinutes" && isLauncherIdleMinutes(v)) patch.idleMinutes = v;
+    else return { ok: false, field: key };
+  }
+  return { ok: true, patch };
+}
+
+/** A full settings body (the GET answer), or null if it is not one. The client
+ * keeps its controls disabled until a read passes this. */
+export function parseLauncherSettings(raw: unknown): LauncherSettings | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (!isLauncherStartMode(r.startMode)) return null;
+  if (!isLauncherLifetime(r.lifetime)) return null;
+  if (!isLauncherIdleMinutes(r.idleMinutes)) return null;
+  return { startMode: r.startMode, lifetime: r.lifetime, idleMinutes: r.idleMinutes };
+}
+
+/** `GET /api/launcher/settings` answer. `readOnly` is set when the file was
+ * written by a newer Tandem: its known fields are shown, but a save is refused
+ * rather than overwriting fields this build does not know. */
+export interface LauncherSettingsResponse {
+  settings: LauncherSettings;
+  readOnly?: true;
+  /** The file exists but could not be read. `settings` is then what Tandem's
+   * Claude is running by: the supervisor's last good read when it has one
+   * (`keptLastGood`), else the fallback (waiting for Start). Not a saved
+   * choice either way; a save rewrites the file. */
+  unreadable?: true;
+  /** With `unreadable`: `settings` are the ones Tandem last read, still in
+   * effect, rather than the fallback. */
+  keptLastGood?: true;
+}
 
 /** Loopback-only side-channel for bundled-skill refresh failures. The user
  * has no other signal that the skill is stale, so `/status` surfaces this
@@ -252,6 +392,9 @@ export const LAUNCHER_ERROR_PATH_REJECTED = "PATH_REJECTED";
 export const LAUNCHER_ERROR_IN_PROGRESS = "LAUNCHER_IN_PROGRESS";
 export const LAUNCHER_ERROR_NOT_AVAILABLE = "LAUNCHER_NOT_AVAILABLE";
 export const LAUNCHER_ERROR_NO_INTEGRATION = "NO_CLAUDE_INTEGRATION";
+/** A relaunch / start-fresh / Start found no Claude Code program it can start
+ * (#2199) and spawned nothing, leaving a running Claude alone. */
+export const LAUNCHER_ERROR_CLI_UNUSABLE = "CLAUDE_CLI_UNUSABLE";
 /** The reaper binary is missing from the install — the supervisor cannot spawn
  * Claude. Stable code so the UI can show a "reinstall Tandem" hint instead of a
  * raw filesystem path. */
@@ -259,6 +402,14 @@ export const LAUNCHER_ERROR_REAPER_NOT_FOUND = "REAPER_NOT_FOUND";
 /** A relaunch / start-fresh / deferred start was refused because Tandem is
  * unlicensed (#1521). Answered 403 with the licence refusal envelope. */
 export const LAUNCHER_ERROR_UNLICENSED = "LAUNCHER_UNLICENSED";
+/** `POST /api/launcher/settings` refused because `launcher-settings.json` was
+ * written by a newer Tandem (#2195). Answered 409 rather than overwriting
+ * fields this build cannot see. */
+export const LAUNCHER_ERROR_SETTINGS_NEWER = "LAUNCHER_SETTINGS_NEWER";
+/** A switch to `off` that stopped Tandem's Claude but could not save the mode
+ * (a newer Tandem's file, a failed write) (#2195). Answered 409 so the caller
+ * says "off now, not saved" rather than "couldn't turn off". */
+export const LAUNCHER_ERROR_OFF_NOT_SAVED = "LAUNCHER_OFF_NOT_SAVED";
 
 /** Marker substring the supervisor embeds in the "binary not found" throw and
  * the launcher route matches on to map it to `LAUNCHER_ERROR_REAPER_NOT_FOUND`.
@@ -419,6 +570,68 @@ export const SUPERVISOR_INITIAL_PROMPT =
   "Tandem started you as its built-in collaborator. Call tandem_checkInbox now. " +
   `${SUPERVISOR_NO_UNASKED_WORK_CLAUSE} Tandem will wake you when the user does something. ` +
   `${SUPERVISOR_ACK_CLAUSE} ${SUPERVISOR_NO_ARM_CLAUSE}`;
+
+/**
+ * The one-time greeting turn (#2197) — the ONLY supervisor turn that asks
+ * Tandem's Claude to do something the user did not ask for (Bryan, 2026-10-12:
+ * "for that first run only, have it send a chat message in tandem greeting the
+ * user"). Sent instead of the bootstrap on a fresh spawn, and instead of the
+ * wake / sign-in re-check on a resumed one, at most once per install (see
+ * `server/launcher/greeting.ts`), and once more on the first run of v1.0.
+ *
+ * It still carries {@link SUPERVISOR_NO_UNASKED_WORK_CLAUSE}: the hello is the
+ * asked-for work, and the clause governs everything after it. The inbox comes
+ * first, so a user who has already written gets an answer, with the hello
+ * folded into it, rather than a greeting that ignores their question. It makes
+ * no "first session" claim, because the v1.0 re-arm reaches existing users.
+ */
+export const SUPERVISOR_GREETING_PROMPT =
+  "Tandem started you as its built-in collaborator, and asked you to say hello to the user once. " +
+  "First call tandem_checkInbox and answer anything waiting as you normally would. Then say " +
+  "hello in the chat with tandem_reply, even if what was waiting was a comment rather than a " +
+  "chat message (if you already answered a chat message, the hello can be part of that reply): " +
+  "two or three short sentences on what you can do here (answer chat, read and comment on " +
+  "documents they open, make the edits they ask for) and that you wait to be asked. " +
+  `${SUPERVISOR_NO_UNASKED_WORK_CLAUSE} Tandem will wake you when the user does something. ` +
+  `${SUPERVISOR_ACK_CLAUSE} ${SUPERVISOR_NO_ARM_CLAUSE}`;
+
+/** How long after the greeting turn is written Tandem waits for a Claude chat
+ * message before the chat panel says the hello didn't come (#2197; Bryan:
+ * "about a minute"). */
+export const GREETING_REPLY_WINDOW_MS = 60_000;
+
+/**
+ * What a wizard Apply that wrote a claude-code entry did about Tandem's Claude
+ * (#2197), for the done screen. The initial value only; the screen then reads
+ * the launcher status like everything else.
+ *   - `starting` — it was not running and the start mode is automatic, so it
+ *     is starting now.
+ *   - `running` — already running (or a start or restart was under way); left
+ *     alone.
+ *   - `held` — the start mode is not automatic, or it is stopped by choice.
+ *   - `other-ai` — another AI session is attached ("Not if another AI is on").
+ *   - `refused` — the licence refuses the AI.
+ *   - `not-configured` — the launcher found no usable claude-code entry.
+ *   - `cli-unusable` — the entry is there, but no Claude Code program the
+ *     launcher can start was found (#2199); the status reads `cli-unusable`.
+ *   - `unknown` — no answer in time, or no launcher in this process yet.
+ */
+export const TANDEM_CLAUDE_AFTER_SETUP = [
+  "starting",
+  "running",
+  "held",
+  "other-ai",
+  "refused",
+  "not-configured",
+  "cli-unusable",
+  "unknown",
+] as const;
+export type TandemClaudeAfterSetup = (typeof TANDEM_CLAUDE_AFTER_SETUP)[number];
+
+/** Validate a wire value: the wizard trusts nothing it did not check. */
+export function isTandemClaudeAfterSetup(v: unknown): v is TandemClaudeAfterSetup {
+  return typeof v === "string" && (TANDEM_CLAUDE_AFTER_SETUP as readonly string[]).includes(v);
+}
 
 /** The turn the supervisor writes when Tandem activity should wake an idle
  * session.

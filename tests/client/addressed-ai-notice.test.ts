@@ -32,9 +32,25 @@ const base = {
   // never`) keeps a future widening of that union a type error here.
   chip: null as AiChip,
   pushDelivery: "unknown" as PushDelivery,
+  startingForMessage: false,
 };
 
 describe("addressedAiNotice", () => {
+  describe("a chat that is starting Tandem's Claude (#2196)", () => {
+    it("raises no notice — the chat panel's resume row speaks for it", () => {
+      const inputs = { ...base, chip: "start" as AiChip };
+      // Control: the same send without the start gets the no-agent notice.
+      expect(addressedAiNotice(inputs)).toEqual({ kind: "no-agent", chip: "start" });
+      expect(addressedAiNotice({ ...inputs, startingForMessage: true })).toBeNull();
+    });
+
+    it("still reports a server that has gone away", () => {
+      expect(
+        addressedAiNotice({ ...base, serverUnreachable: true, startingForMessage: true }),
+      ).toEqual({ kind: "offline" });
+    });
+  });
+
   describe("server unreachable", () => {
     it("reports the server, not the AI, and does so through the null-chip hole", () => {
       // The exact production shape: server gone → `connected()` false → state
@@ -280,6 +296,15 @@ describe("noticeAction", () => {
     const t = act({ kind: "no-agent", chip: "setup" });
     expect(t.idPrefix).toBe("ai-not-ready");
     expect(t.cta).toBe("setup");
+  });
+
+  it("no-agent with the start chip (#2195): says nothing will answer until Start, not 'when one connects'", () => {
+    const t = act({ kind: "no-agent", chip: "start" });
+    expect(t.cta).toBe("start");
+    expect(t.message).toContain("nothing will answer until you start it");
+    expect(t.message).not.toContain("when one connects");
+    // Control: any other chip keeps the connect copy.
+    expect(act({ kind: "no-agent", chip: "restart" }).message).toContain("when one connects");
   });
 
   it("no-push: info, no CTA", () => {

@@ -393,6 +393,7 @@ export function replyPayload(
     replyText: reply.text,
     replyAuthor: reply.author,
     textSnippet: parent.textSnapshot ?? "",
+    parentAuthor: parent.author,
   };
 }
 

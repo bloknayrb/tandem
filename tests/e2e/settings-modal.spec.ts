@@ -448,3 +448,66 @@ test("A5: spellcheck toggle flips the editor's spellcheck attribute without dest
   await page.keyboard.type(" still editable");
   await expect(firstParagraph).toContainText("document. still editable");
 });
+
+// #2195 — the "Tandem's Claude" section saves ONE field per change, so a stale
+// view can never put back a start mode another window changed.
+test("Tandem's Claude: choosing Off saves startMode alone", async ({ page }) => {
+  await page.route("**/api/integrations", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ integrations: [{ kind: "claude-code" }] }),
+      });
+    } else {
+      await route.continue();
+    }
+  });
+  await page.route("**/api/launcher/nonce", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ nonce: "e2e-nonce" }),
+    }),
+  );
+  const patches: unknown[] = [];
+  await page.route("**/api/launcher/settings", async (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postDataJSON() as { patch: unknown };
+      patches.push(body.patch);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          settings: { startMode: "off", lifetime: "always", idleMinutes: 30 },
+        }),
+      });
+    } else {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          settings: { startMode: "auto", lifetime: "always", idleMinutes: 30 },
+        }),
+      });
+    }
+  });
+
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+  await openSettingsModal(page);
+  await page.locator("[data-testid='settings-modal-tab-claude-code']").click();
+
+  const section = page.locator("[data-testid='settings-modal-tandem-claude']");
+  await expect(section).toBeVisible({ timeout: 5_000 });
+  await expect(section).toContainText("keeps running in the background");
+  const auto = page.locator("[data-testid='settings-modal-tandem-claude-start-auto']");
+  await expect(auto).toBeChecked();
+  await page.locator("[data-testid='settings-modal-tandem-claude-start-off']").check();
+  await expect.poll(() => patches).toEqual([{ startMode: "off" }]);
+  await expect(
+    page.locator("[data-testid='settings-modal-tandem-claude-start-off']"),
+  ).toBeChecked();
+});
