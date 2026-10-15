@@ -389,13 +389,18 @@ get past that anyway, and only the first was obvious:
    `tandem_checkInbox` call rather than filtering one row. Now gated.
 
 **What this does NOT close, and the CHANGELOG's first draft got this wrong by
-framing the identifier as the barrier.** `tandem_open({force: true})` clears the
-whole annotations map and the durable store in one transaction — every note and
-every private reply, with **no identifier needed at all**. `tandem_restoreBackup`
-and `tandem_applyChanges` reach the same wipe through the reload family. #1680
-closed the *targeted* case; the sledgehammer is untouched and is arguably
-intended (the tool's own conflict message advertises "(and annotations)"), but
-nobody should read this section as "the AI cannot destroy notes". Separately,
+framing the identifier as the barrier.** When #1680 shipped, `tandem_open({force: true})`
+cleared the whole annotations map and the durable store in one transaction — every
+note and every private reply, with **no identifier needed at all** — and
+`tandem_restoreBackup` and `tandem_applyChanges` reached the same wipe through the
+reload family. #1680 closed only the *targeted* case. Since #1813 a forced open
+flushes the durable envelope and re-merges it, and the other two never clear the
+map, so notes survive all three. A forced open can still lose them in two
+cases: its envelope flush fails (logged, and the reload continues), or the
+document's annotation store never wired this session (the user was warned when
+it opened). Outside the AI's tools, a scratchpad's source-view commit drops its
+notes (#2219). Even so, nobody should read this section as "the AI cannot
+destroy notes". Separately,
 `refreshRange` writes to note records on every Claude *read* — the sanctioned
 coordinate-repair exception, but it means "the AI never writes to a note" was
 never literally true either.

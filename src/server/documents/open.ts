@@ -337,7 +337,8 @@ function pathsEqual(a: string, b: string): boolean {
 /**
  * Open a file by its absolute path on disk.
  * Throws on errors (ENOENT, EACCES, EBUSY, etc.) — caller maps to MCP or HTTP responses.
- * Pass `force: true` to reload from disk even if already open (clears all document state).
+ * Pass `force: true` to reload from disk even if already open (discards unsaved edits;
+ * annotations are re-merged from the durable store and re-anchored).
  * Pass `readOnly: true` to force the document open in read-only mode (e.g. CHANGELOG.md).
  */
 export async function openFromDisk(
@@ -425,8 +426,8 @@ export async function openFromDisk(
           source: "file",
         }),
         // Decided HERE, after clearAndReload and the store wiring, not before.
-        // The force path wipes the open document's content and annotations
-        // first; claiming the arm earlier would decouple which outcome we
+        // The force path replaces the open document's content and re-merges
+        // its annotations first; claiming the arm earlier would decouple which outcome we
         // report from whether the mutation that outcome names completed.
         kind: "force-reloaded",
       };

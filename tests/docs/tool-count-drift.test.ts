@@ -127,7 +127,13 @@ describe("de-numbered docs do not reacquire a tool count", () => {
  * exist. A removed tool left in prose is invisible to every count check above, and an
  * agent that follows it gets an unknown-tool error with nothing to explain it.
  */
-const NAMES_ONLY_REAL_TOOLS = ["AGENTS.md", "docs/mcp-tools.md"];
+const NAMES_ONLY_REAL_TOOLS = [
+  "AGENTS.md",
+  "README.md",
+  "docs/mcp-tools.md",
+  "docs/workflows.md",
+  "skills/tandem/SKILL.md",
+];
 
 describe("tool reference docs name only registered tools", () => {
   it.each(NAMES_ONLY_REAL_TOOLS)("%s names no unregistered tandem_* tool", (relative) => {
