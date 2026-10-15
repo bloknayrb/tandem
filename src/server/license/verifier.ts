@@ -3,7 +3,7 @@ import crypto from "crypto";
 import type { LicenseVerifyCode } from "../../shared/license-copy.js";
 import type { LicenseMetadata, SignatureVerified, SignedLicense } from "./license-types.js";
 import { MAX_NORMALIZE_INPUT, normalizePastedLicense } from "./paste.js";
-import { TANDEM_PUBLIC_KEY } from "./public-key.js";
+import { KEY_ID_PATTERN, KEYS_BY_ID, LEGACY_KEY_ID } from "./public-key.js";
 
 export type { LicenseVerifyCode };
 
@@ -62,6 +62,31 @@ export class LicenseVerifyError extends Error {
  * Throws if the format is malformed or the signature is invalid.
  */
 export function verifyLicenseSignature(rawLicenseString: string): SignatureVerified {
+  // Brand: this metadata is now signature-verified against the pinned keys
+  // (run-gate may trust it). Only this function casts, so the test seam below
+  // cannot mint the brand with keys a caller supplies.
+  return verifyAgainst(rawLicenseString, KEYS_BY_ID, LEGACY_KEY_ID) as SignatureVerified;
+}
+
+/**
+ * The verification itself, against an explicit key map. Test-only outside this
+ * module: tests reach the real selection and verify path with a temporary key
+ * map, which the pinned production key (whose private half is not in CI) does
+ * not allow. Returns plain metadata, never the `SignatureVerified` brand.
+ */
+export function _verifyAgainstForTests(
+  rawLicenseString: string,
+  keysById: Readonly<Record<string, string>>,
+  legacyKeyId: string,
+): LicenseMetadata {
+  return verifyAgainst(rawLicenseString, keysById, legacyKeyId);
+}
+
+function verifyAgainst(
+  rawLicenseString: string,
+  keysById: Readonly<Record<string, string>>,
+  legacyKeyId: string,
+): LicenseMetadata {
   // Bound the RAW input first — the normalize below allocates a new string, and
   // "bound before any allocation" is the whole point of this check. The raw
   // ceiling is deliberately looser than the post-normalize one: quoted-printable
@@ -118,18 +143,37 @@ export function verifyLicenseSignature(rawLicenseString: string): SignatureVerif
       );
     }
 
-    // 2. Verify signature
+    // 2. Pick the key. `keyId` is inside the signed metadata, so it only chooses
+    // which key to try: a license still verifies only if that key signed it.
+    // Absent means a license from before key ids, checked against the legacy
+    // key, which is looked up like any other id so removing it retires these too.
+    const metadata = signedLicense.metadata as unknown as Record<string, unknown>;
+    let keyId = legacyKeyId;
+    if (Object.hasOwn(metadata, "keyId")) {
+      const stamped = metadata.keyId;
+      if (typeof stamped !== "string" || !KEY_ID_PATTERN.test(stamped)) {
+        throw new LicenseVerifyError("MALFORMED", "License verification failed: malformed key id");
+      }
+      keyId = stamped;
+    }
+    // An id no key in this build carries answers like a bad signature: after a
+    // leak the remedy is a reissue, and a planned rotation ships the new key in
+    // releases before anything is signed with it (licensing-operations.md §0).
+    if (!Object.hasOwn(keysById, keyId)) {
+      throw new LicenseVerifyError("BAD_SIGNATURE", "License verification failed: unknown key");
+    }
+
+    // 3. Verify signature
     const data = Buffer.from(canonicalize(signedLicense.metadata));
     const signature = Buffer.from(signedLicense.signature, "hex");
 
-    const verified = crypto.verify(null, data, TANDEM_PUBLIC_KEY, signature);
+    const verified = crypto.verify(null, data, keysById[keyId], signature);
 
     if (!verified) {
       throw new LicenseVerifyError("BAD_SIGNATURE", "License verification failed: bad signature");
     }
 
-    // Brand: this metadata is now signature-verified (run-gate may trust it).
-    return signedLicense.metadata as SignatureVerified;
+    return signedLicense.metadata;
   } catch (error: any) {
     // Preserve an already-classified error rather than re-wrapping it.
     if (error instanceof LicenseVerifyError) throw error;

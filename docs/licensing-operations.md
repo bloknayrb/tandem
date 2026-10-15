@@ -28,12 +28,13 @@ because changing any of them afterwards means re-issuing every customer or
 supporting two schemas in `verifyLicenseSignature` forever. Decide them
 explicitly, now:
 
-1. **Key-leak recovery.** There is none today. One const, no `keyId`, so
-   rotating drops every existing customer to `restricted` — mid-session,
-   clamping their open documents read-only. The cheap fix is to accept an
-   **array** of public keys (a few lines; makes rotation routine). Adding a
-   `keyId` field instead changes the signed bytes, so it is now-or-never.
-   Choosing "no recovery" is allowed, but choose it on purpose.
+1. **Key-leak recovery.** *Decided 2026-10-15: built.* Every license now
+   carries a `keyId`, and the app trusts a list of public keys
+   (`TRUSTED_PUBLIC_KEYS`), so the signing key can be replaced without dropping
+   anyone whose key is still trusted. The id is the key's own fingerprint,
+   derived by the signer, so it cannot disagree with the key that signed. A
+   license with no `keyId` is checked against `LEGACY_KEY_ID`, today's original
+   key. See "Rotating the signing key" below.
 2. **What PII goes in the signed bytes.** `LicenseMetadata` embeds `name` and
    `email`, so both land on disk and in any support thread where the key is
    pasted. `email` identifies whose key it is if one turns up in a support
@@ -48,14 +49,20 @@ explicitly, now:
 Then:
 
 ```bash
-npx tsx scripts/generate-keys.ts        # writes keys/tandem-private-key.pem (+ prints the public key)
+npx tsx scripts/generate-keys.ts        # writes keys/tandem-<keyId>.pem + .pub.pem (+ prints the public key and its id)
 ```
 
-- Paste the printed public key into `src/server/license/public-key.ts`, and
-  update `EXPECTED_PUBLIC_KEY_SHA256` in `tests/server/license.test.ts` in the
-  **same commit** — CI pins the shipped key's fingerprint, so a swap by bad
-  merge or stray paste fails the build instead of surfacing when customers'
-  licenses stop verifying.
+It never overwrites: each run is a new key beside the old one.
+
+- Add the printed public key to `TRUSTED_PUBLIC_KEYS` in
+  `src/server/license/public-key.ts`, its id to `TRUSTED_KEY_IDS` in
+  `infra/license-issuance-worker/src/worker.ts`, and its id and fingerprint to
+  `EXPECTED_KEYS` in `tests/server/license.test.ts`, all in the **same commit**.
+  CI pins the shipped keys, so a swap by bad merge or stray paste fails the build
+  instead of surfacing when customers' licenses stop verifying, and a parity test
+  fails if the Worker's list and the app's list differ. If the ceremony replaces
+  the original key outright (nothing was ever issued with it), remove that key
+  and point `LEGACY_KEY_ID` at the new one in the same commit.
 - Give the issuance Worker the private key with
   `npx wrangler secret put TANDEM_PRIVATE_KEY`.
 - **`wrangler secret put` is write-only. It is NOT a backup** — you cannot read
@@ -63,8 +70,35 @@ npx tsx scripts/generate-keys.ts        # writes keys/tandem-private-key.pem (+ 
   locations**. A single password-manager entry is doing 100% of the work, and
   losing it means you can never sign another license against the key every
   shipped binary trusts.
-- For out-of-band signing, `scripts/sign-license.ts` reads
-  `keys/tandem-private-key.pem` (gitignored).
+- For out-of-band signing, `scripts/sign-license.ts --key <path>` reads the
+  private key (default `keys/tandem-private-key.pem`, the original key's path;
+  `keys/` is gitignored). It stamps the key's id and refuses a key that is not
+  in `TRUSTED_PUBLIC_KEYS`.
+- **The issuance Worker refuses to sign with a key not in `TRUSTED_KEY_IDS`**:
+  every webhook answers 503 at stage `config` until the secret matches a listed
+  key. After setting or changing the secret, issue one sandbox order
+  (`TANDEM_ISSUANCE_ENV=sandbox`, `wrangler dev` or a sandbox deploy) and check
+  that the emailed key's `keyId` is the one you expect and that it activates.
+  That run is also the only check that the Workers runtime derives the same id
+  as the app; CI checks Node only.
+
+### Rotating the signing key
+
+The order matters, because a license from a key a build does not trust fails
+verification on that build.
+
+1. Generate the new key (above) and, in **one commit**, add it to
+   `TRUSTED_PUBLIC_KEYS`, `TRUSTED_KEY_IDS` and `EXPECTED_KEYS`. Listing it
+   early is harmless: the Worker signs only with whatever its secret holds.
+2. Release that build and deploy the Worker. Wait until most installs have
+   updated: a buyer on an older build who receives a new-key license is told it
+   "may need to be reissued", and the real fix for them is to update.
+3. Switch the Worker secret to the new key, then run the sandbox check above.
+4. **After a leak, also retire the old key**: remove it from all three lists in
+   one release. Every license it signed (and any keyless license, if it is the
+   `LEGACY_KEY_ID` key) stops verifying, which is the point: those can no longer
+   be told apart from forgeries. Reissue them under the new key; a resend from
+   the Worker re-signs under the current key automatically.
 - **Before the ceremony, confirm nothing was ever issued with the current dev
   key.** `/api/license/activate` works regardless of the gate flag by design, so
   a tester may already hold one. Note the list may be genuinely *unknowable*:
