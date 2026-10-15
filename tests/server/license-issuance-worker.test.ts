@@ -5,12 +5,14 @@ import {
   canonicalize as canonicalizeWorker,
   constantTimeEqual,
   importPkcs8Ed25519,
+  keyIdOfPkcs8Ed25519,
   signLicense,
   verifyStandardWebhook,
   webCryptoSigner,
 } from "../../infra/license-issuance-worker/src/crypto.js";
 import issuanceWorker, {
   _resetAlertThrottleForTests,
+  _setTrustedKeyIdsForTests,
   EVENT_TTL_S,
   type FailStage,
   handleIssuance,
@@ -21,27 +23,36 @@ import issuanceWorker, {
   licenseEmailText,
   resendFromProblem,
   supportEmailProblem,
+  TRUSTED_KEY_IDS,
 } from "../../infra/license-issuance-worker/src/worker.js";
 import {
   handleUpdateRequest,
   LICENSE_HEADER,
 } from "../../infra/license-update-worker/src/worker.js";
 import type {
+  IssuedLicenseMetadata,
   LicenseEntitlement,
-  LicenseMetadata,
 } from "../../src/server/license/license-types.js";
-import { canonicalize as canonicalizeServer } from "../../src/server/license/verifier.js";
+import { buildKeyMap, keyIdForPublicKey } from "../../src/server/license/public-key.js";
+import {
+  _verifyAgainstForTests,
+  canonicalize as canonicalizeServer,
+} from "../../src/server/license/verifier.js";
 
 // --- test crypto ------------------------------------------------------------
 // A real Ed25519 keypair. The Worker signs with the PRIVATE half (via injected
-// signBytes) and the test verifies with the PUBLIC half using Node's crypto —
-// independent of the Worker's WebCrypto path. Combined with the canonicalize
-// parity test below, this proves a Worker-produced blob verifies under the real
-// on-device `verifyLicenseSignature`.
+// signBytes) and the test verifies with the PUBLIC half through the server's
+// real key-selection and verify path (`_verifyAgainstForTests` over a map built
+// by the production `buildKeyMap`) — independent of the Worker's WebCrypto path.
+// Combined with the canonicalize parity test below, this proves a Worker-produced
+// blob verifies under the real on-device `verifyLicenseSignature`.
 const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
 
 const signBytes = async (data: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> =>
   new Uint8Array(crypto.sign(null, Buffer.from(data), privateKey));
+/** The id the server derives for the test key; the Worker stamps it as given. */
+const TEST_KEY_ID = keyIdForPublicKey(publicKey);
+const TEST_KEYS_BY_ID = buildKeyMap([publicKey.export({ type: "spki", format: "pem" }).toString()]);
 
 interface DecodedBlob {
   metadata: Record<string, unknown>;
@@ -54,13 +65,12 @@ function decodeBlob(blob: string): DecodedBlob {
 
 /** Verify a Worker-produced blob the way the real server verifier does. */
 function blobVerifies(blob: string): boolean {
-  const { metadata, signature } = decodeBlob(blob);
-  return crypto.verify(
-    null,
-    Buffer.from(canonicalizeServer(metadata)),
-    publicKey,
-    Buffer.from(signature, "hex"),
-  );
+  try {
+    _verifyAgainstForTests(blob, TEST_KEYS_BY_ID, TEST_KEY_ID);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // --- webhook signing (test fixture; scheme independently pinned by the golden
@@ -133,6 +143,7 @@ function baseDeps(overrides: Partial<IssuanceDeps> = {}): TestDeps {
   const defaults = {
     webhookSecret: SECRET,
     signBytes,
+    keyId: TEST_KEY_ID,
     entitlementKv: makeKv(),
     ledgerKv: makeKv(),
     sendEmail: vi.fn(async () => ({ ok: true })),
@@ -240,7 +251,7 @@ describe("crypto: signLicense round-trips through the real verifier path", () =>
     // Typed as the on-device LicenseMetadata so a field drift in the Worker's
     // metadata shape is a compile error here, not a production activation
     // failure.
-    const metadata: LicenseMetadata = {
+    const metadata: IssuedLicenseMetadata = {
       id: "lic-x",
       name: "Jane Buyer",
       email: "buyer@example.com",
@@ -248,6 +259,7 @@ describe("crypto: signLicense round-trips through the real verifier path", () =>
       createdAt: new Date(NOW).toISOString(),
       expiresAt: new Date(NOW).toISOString(),
       version: LICENSE_VERSION,
+      keyId: TEST_KEY_ID,
     };
     const blob = await signLicense(metadata, signBytes);
     expect(blobVerifies(blob)).toBe(true);
@@ -267,7 +279,7 @@ describe("crypto: production WebCrypto signing path", () => {
   it("importPkcs8Ed25519 + webCryptoSigner produce a blob the real verifier accepts", async () => {
     const pem = privateKey.export({ type: "pkcs8", format: "pem" }) as string;
     const key = await importPkcs8Ed25519(pem);
-    const metadata: LicenseMetadata = {
+    const metadata: IssuedLicenseMetadata = {
       id: "lic-wc",
       name: "Web Crypto",
       email: "wc@example.com",
@@ -275,6 +287,7 @@ describe("crypto: production WebCrypto signing path", () => {
       createdAt: new Date(NOW).toISOString(),
       expiresAt: null,
       version: LICENSE_VERSION,
+      keyId: await keyIdOfPkcs8Ed25519(pem),
     };
     const blob = await signLicense(metadata, webCryptoSigner(key));
     expect(blobVerifies(blob)).toBe(true);
@@ -395,6 +408,8 @@ describe("handleIssuance: order.paid happy path", () => {
     const blob = deps.sendEmail.mock.calls[0][2] as string;
     expect(blobVerifies(blob)).toBe(true);
     expect(decodeBlob(blob).metadata.email).toBe("buyer@example.com");
+    // and names the key that signed it
+    expect(decodeBlob(blob).metadata.keyId).toBe(TEST_KEY_ID);
   });
 
   it("order.paid resolves its ledger key through the SAME helper as order.refunded", async () => {
@@ -1092,10 +1107,36 @@ describe("default fetch wiring (env → deps)", () => {
     // second test to provoke a given (result, stage) is silently suppressed,
     // and every "does not alert" assertion would pass vacuously.
     _resetAlertThrottleForTests();
+    // The test key is a throwaway, so trust it here; the guard itself is
+    // pinned by the "untrusted signing key" test below.
+    _setTrustedKeyIdsForTests([TEST_KEY_ID]);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    _setTrustedKeyIdsForTests();
+  });
+
+  it("a signing key no build trusts → 503 at stage config, before any ledger write", async () => {
+    _setTrustedKeyIdsForTests(TRUSTED_KEY_IDS);
+    const env = makeEnv();
+    const logs: { stage?: string }[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((line: string) => {
+      logs.push(JSON.parse(line));
+    });
+    let res: Response;
+    try {
+      res = await issuanceWorker.fetch(
+        makeRequest(paidBody("ord_u"), { id: "evt_u", ts: nowTs() }),
+        env as never,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    expect(res.status).toBe(503);
+    expect(logs.map((l) => l.stage)).toContain("config");
+    expect(env.LEDGER_KV.map.size).toBe(0);
+    expect(env.LICENSE_KV.map.size).toBe(0);
   });
 
   it("production default: mints, entitles, and emails via the Resend REST API", async () => {

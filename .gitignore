@@ -16,10 +16,10 @@ graphify-out/
 # what infra/license-issuance-worker/wrangler.toml documents as `wrangler secret
 # put` targets -- TANDEM_PRIVATE_KEY, POLAR_WEBHOOK_SECRET, RESEND_API_KEY --
 # and docs/licensing-operations.md walks an operator toward creating one. This
-# repo is public, and a leaked TANDEM_PRIVATE_KEY is not recoverable by rotation:
-# src/server/license/public-key.ts is a single const with no keyId, so replacing
-# it drops every existing customer to `restricted` mid-session. None has ever
-# been committed (verified by path sweep over all refs); this keeps it that way.
+# repo is public, and a leaked TANDEM_PRIVATE_KEY drops every license it signed
+# to `restricted` once rotation retires it (src/server/license/public-key.ts;
+# docs/licensing-operations.md §0). None has ever been committed (verified by
+# path sweep over all refs); this keeps it that way.
 .dev.vars
 .dev.vars.*
 

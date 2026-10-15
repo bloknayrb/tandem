@@ -8,7 +8,15 @@ export interface LicenseMetadata {
   createdAt: string; // ISO string
   expiresAt: string | null; // ISO string or null for never (end of update window)
   version: string; // "1.0"
+  /**
+   * The signing key's id (`keyIdForPublicKey`). Optional on read: licenses
+   * signed before key ids existed have none and verify against the legacy key.
+   */
+  keyId?: string;
 }
+
+/** What a signer produces: every newly issued license names its key. */
+export type IssuedLicenseMetadata = LicenseMetadata & { keyId: string };
 
 export interface SignedLicense {
   metadata: LicenseMetadata;
