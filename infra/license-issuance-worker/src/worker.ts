@@ -899,14 +899,15 @@ export function licenseEmailText(name: string, blob: string, supportEmail: strin
     "Please don't post the key publicly - it contains your name and email",
     "address.",
     "",
-    "If activation gives you any trouble, just reply here, or write to:",
+    // No "reply here": a reply would quote the key printed above back to us.
+    "If activation gives you any trouble, write to:",
     // Its own line: the address is operator-configured and interpolating it
     // mid-sentence made this line's length unbounded (85 chars with a short
     // address, and the whole point of the 72 ceiling is that no line invites an
     // MTA to re-encode).
     `  ${supportEmail}`,
     "",
-    "-- The Tandem team",
+    "-- Bryan Kolb",
   ].join("\n");
 }
 
