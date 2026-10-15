@@ -20,7 +20,9 @@ vi.hoisted(() => {
   process.env.TANDEM_LICENSE_GATE = "1";
 });
 
+import { resetForTesting as resetAnnotationStoreForTesting } from "../../src/server/annotations/store.js";
 import { openFromDisk } from "../../src/server/documents/open.js";
+import { unwatchAll } from "../../src/server/file-watcher.js";
 import { aiRefusal } from "../../src/server/license/ai-refusal.js";
 import { GATE_ENABLED } from "../../src/server/license/gate-flag.js";
 import { resolveLiveLicenseState } from "../../src/server/license/license-state.js";
@@ -93,6 +95,9 @@ beforeAll(async () => {
 afterAll(async () => {
   await hp.destroy();
   resetHocuspocusLifecycleForTesting();
+  // Quiesce before deleting the dir: see license-armed-restricted.test.ts (#1937).
+  unwatchAll();
+  resetAnnotationStoreForTesting();
   if (savedDir === undefined) delete process.env.TANDEM_APP_DATA_DIR;
   else process.env.TANDEM_APP_DATA_DIR = savedDir;
   if (savedGate === undefined) delete process.env.TANDEM_LICENSE_GATE;
