@@ -80,7 +80,7 @@ made mid-review does not count. Full study:
 [docs/spikes/ai-debugging-blind-spots-audit.md](docs/spikes/ai-debugging-blind-spots-audit.md).
 
 **`/diverge`** is an optional step *before* `/plan`, for genuinely open-ended design problems where the
-right shape isn't obvious (~16 `Agent` calls, 60–180s). Invoke only when the next artifact
+right shape isn't obvious (10 `Agent` calls, 60–180s). Invoke only when the next artifact
 would be `/plan`, there is no confident one-sentence answer, and the problem is design-shaped
 rather than bug-shaped. **When it informs a piece of work, write `via /diverge` in that work's
 commit or PR body** — its output lands in gitignored `.claude/plans/`, so a tracked trace is the

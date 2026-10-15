@@ -136,7 +136,7 @@ the feature that needs it.
 
 Two local cautions carry over regardless:
 
-- **The pre-push hook runs biome + the full vitest suite + `cargo test`** on every push, and
+- **The pre-push hook runs biome, `npm run typecheck:tests`, the full vitest suite and `cargo test`** on every push, and
   `gh stack push` pushes several branches. Expect it to be slow, and expect the working tree
   state at that moment to be what gets tested.
 - **Checks on a rebased branch are checks on a new SHA.** After any cascading rebase, a green

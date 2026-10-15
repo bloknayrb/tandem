@@ -30,15 +30,13 @@ git log $(git describe --tags --abbrev=0)..HEAD --oneline --no-merges
    state: `git log --oneline v<prev>..HEAD -- <path>` shows whether what you just read was
    later amended, and `git show v<prev>:<file>` settles "is this actually new?"
 
-4. Group into Keep a Changelog categories based on conventional commit prefixes:
+4. Group into the categories `CHANGELOG.md` actually uses, guided by the conventional commit prefix:
    - `feat(...)` → **Added** (new features) or **Changed** (enhancements to existing)
    - `fix(...)` → **Fixed**
-   - `refactor(...)` → **Changed**
-   - `docs(...)` → **Documentation**
-   - `test(...)` → **Tests**
-   - `chore(...)` → **Maintenance**
-   - `perf(...)` → **Performance**
+   - A removed feature, tool or option → **Removed**
    - Security-related commits → **Security**
+   - `refactor`, `test`, `docs`, `chore`, `ci`, `build`, `perf` with no user-visible effect → **Internal**
+   - Any of those a user will notice (a faster open, a behaviour change) → **Changed** or **Fixed**
 
 5. **Write the entries** (see *Writing the prose* below), ordered within each section by user
    impact, most impactful first. Not by issue number, not by merge order, not by subsystem. A
@@ -48,7 +46,7 @@ git log $(git describe --tags --abbrev=0)..HEAD --oneline --no-merges
 6. **Then write a `### What's New` section and place it first**, above every other subsection.
    It is written last and read first — you cannot summarise entries you have not drafted.
 
-   - 3–6 bullets, most impactful first, one line each (≤20 words).
+   - A few bullets, most impactful first, one line each.
    - No PR numbers, no subsystem names, no file paths, no bounds — those live in the entries.
    - Each bullet is derived from an entry's bold clause. **Re-derive the bullet whenever you
      edit that entry**; nothing checks that the two agree, so this is the only thing keeping
@@ -77,11 +75,10 @@ accumulated a lot of narration. Tighten the narration; keep the qualifications.
 2. One sentence of consequence: what the user saw, or would have seen, when it was wrong.
 3. Zero or more **bounds**, one sentence each — see below.
 
-Nothing else. If a sentence is doing a fourth job, it belongs in the PR. **120 words is a
-runaway backstop, not a target**, and bounds do not count toward it — an entry that needs
-three honest bounds gets three sentences and is still correct. Draft the entry, then cut it to
-shape; do not aim short and stop early, because the first draft is where you find out what
-actually mattered.
+Nothing else. If a sentence is doing a fourth job, it belongs in the PR. Bounds are never cut
+for length — an entry that needs three honest bounds gets three sentences and is still
+correct. Draft the entry, then cut it to shape; do not aim short and stop early, because the
+first draft is where you find out what actually mattered.
 
 ### Bounds
 

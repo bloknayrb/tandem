@@ -6,11 +6,7 @@ disable-model-invocation: true
 
 # Cut a Tandem Release
 
-Codifies the release sequence used from v0.14.3 onward, and refined by every cut
-through v0.22.0 — including the global-install upgrade step, the two changelog
-gaps, the rebuild-before-retest step, and the duplicate-draft race described
-below. The version
-bump has **SEVEN surfaces**, none of which bump automatically. Surfaces 1–4 are
+The version bump has **SEVEN surfaces**, none of which bump automatically. Surfaces 1–4 are
 CI-guarded by `tests/plugin/plugin-version-pin.test.ts` (any divergence from
 `package.json` fails CI); surfaces 5–6 are **not guarded** — this skill is what
 prevents them drifting. Surface 7 is guarded more loosely and is bumped **last,
@@ -145,10 +141,7 @@ other six.
 3. **Rebuild before you retest.** `APP_VERSION` is a build-time tsup define, so
    `dist/` still carries the OUTGOING version until `npm run build` runs, and
    `tests/build/version-baked.test.ts` fails asserting the new string against a
-   stale bundle. It reads as a real regression and is not one. This has now
-   fired at three cuts (v0.19.0→v0.20.0, and again at v0.22.0 despite being
-   recorded in project memory both times), which is why it is a step here rather
-   than a note someone is expected to remember:
+   stale bundle. It reads as a real regression and is not one:
    ```bash
    npm run build
    ```
