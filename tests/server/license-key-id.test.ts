@@ -94,11 +94,10 @@ describe("verifier key selection", () => {
 
   it("answers BAD_SIGNATURE for a well-formed id no trusted key carries", () => {
     const onlyA = buildKeyMap([A.publicPem]);
-    expect(
-      code(() =>
-        _verifyAgainstForTests(blob({ ...FIELDS, keyId: B.id }, B.privateKey), onlyA, A.id),
-      ),
-    ).toBe("BAD_SIGNATURE");
+    const b = blob({ ...FIELDS, keyId: B.id }, B.privateKey);
+    expect(code(() => _verifyAgainstForTests(b, onlyA, A.id))).toBe("BAD_SIGNATURE");
+    // Refused at the lookup, not by falling back to the legacy key and failing there.
+    expect(() => _verifyAgainstForTests(b, onlyA, A.id)).toThrow(/unknown key/);
   });
 
   it("retires keyless licenses when the legacy key leaves the list", () => {
@@ -148,6 +147,23 @@ describe("key id derivation agrees across the server and the Worker", () => {
     expect(keyIdForPublicKey(TRUSTED_PUBLIC_KEYS[0])).toBe(id);
   });
 
+  it("derives the same id on both sides for a key whose public value has `_` and `-`", async () => {
+    // Fixed, not random, so a Worker that decoded `jwk.x` with plain `atob`
+    // fails every run rather than about one in four. A throwaway test key that
+    // no build trusts.
+    const fixed = crypto.createPrivateKey({
+      key: {
+        kty: "OKP",
+        crv: "Ed25519",
+        d: "FnHR7ZxzRnRMUUDLCiVn-oSYUv39rviEiqlYZFhjH8U",
+        x: "zpZ_f5ZZYL7h-0Dh4HRQMSvSXN1NJJdHHkQ7N1fAj8g",
+      },
+      format: "jwk",
+    });
+    const pem = fixed.export({ type: "pkcs8", format: "pem" }).toString();
+    expect(await keyIdOfPkcs8Ed25519(pem)).toBe(keyIdForPublicKey(crypto.createPublicKey(fixed)));
+  });
+
   it("gives the same id for a random key pair on both sides", async () => {
     for (const k of [A, B, keypair(), keypair()]) {
       expect(await keyIdOfPkcs8Ed25519(k.privatePem)).toBe(k.id);
@@ -181,22 +197,23 @@ describe("test seam", () => {
   it("is called from no production source file", () => {
     // `_verifyAgainstForTests` accepts caller-supplied keys; production must
     // only ever verify against the pinned list.
-    const offenders: string[] = [];
+    const definition = path.join(process.cwd(), "src", "server", "license", "verifier.ts");
+    const holders: string[] = [];
     const walk = (dir: string) => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) walk(full);
         else if (/\.(ts|svelte|js|mjs)$/.test(entry.name)) {
-          const text = fs.readFileSync(full, "utf8");
-          if (text.includes("_verifyAgainstForTests") && !full.endsWith("verifier.ts")) {
-            offenders.push(full);
-          }
+          if (fs.readFileSync(full, "utf8").includes("_verifyAgainstForTests")) holders.push(full);
         }
       }
     };
     walk(path.join(process.cwd(), "src"));
     walk(path.join(process.cwd(), "infra"));
     walk(path.join(process.cwd(), "scripts"));
-    expect(offenders).toEqual([]);
+    // Positive anchor: the sweep must see the definition, or it is looking in
+    // the wrong place and an empty offender list would mean nothing.
+    expect(holders).toContain(definition);
+    expect(holders.filter((f) => f !== definition)).toEqual([]);
   });
 });

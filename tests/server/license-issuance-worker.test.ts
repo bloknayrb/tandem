@@ -1120,11 +1120,21 @@ describe("default fetch wiring (env → deps)", () => {
   it("a signing key no build trusts → 503 at stage config, before any ledger write", async () => {
     _setTrustedKeyIdsForTests(TRUSTED_KEY_IDS);
     const env = makeEnv();
-    const res = await issuanceWorker.fetch(
-      makeRequest(paidBody("ord_u"), { id: "evt_u", ts: nowTs() }),
-      env as never,
-    );
+    const logs: { stage?: string }[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((line: string) => {
+      logs.push(JSON.parse(line));
+    });
+    let res: Response;
+    try {
+      res = await issuanceWorker.fetch(
+        makeRequest(paidBody("ord_u"), { id: "evt_u", ts: nowTs() }),
+        env as never,
+      );
+    } finally {
+      spy.mockRestore();
+    }
     expect(res.status).toBe(503);
+    expect(logs.map((l) => l.stage)).toContain("config");
     expect(env.LEDGER_KV.map.size).toBe(0);
     expect(env.LICENSE_KV.map.size).toBe(0);
   });

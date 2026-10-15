@@ -82,6 +82,13 @@ It never overwrites: each run is a new key beside the old one.
   That run is also the only check that the Workers runtime derives the same id
   as the app; CI checks Node only.
 
+- **Before the ceremony, confirm nothing was ever issued with the current dev
+  key.** `/api/license/activate` works regardless of the gate flag by design, so
+  a tester may already hold one. Note the list may be genuinely *unknowable*:
+  Tandem has no telemetry, analytics, or signup — which is also why §1c exists.
+  Anyone holding a pre-rotation license now sees an explicit "installed but
+  could not be verified" message rather than "your trial ended".
+
 ### Rotating the signing key
 
 The order matters, because a license from a key a build does not trust fails
@@ -99,12 +106,6 @@ verification on that build.
    `LEGACY_KEY_ID` key) stops verifying, which is the point: those can no longer
    be told apart from forgeries. Reissue them under the new key; a resend from
    the Worker re-signs under the current key automatically.
-- **Before the ceremony, confirm nothing was ever issued with the current dev
-  key.** `/api/license/activate` works regardless of the gate flag by design, so
-  a tester may already hold one. Note the list may be genuinely *unknowable*:
-  Tandem has no telemetry, analytics, or signup — which is also why §1c exists.
-  Anyone holding a pre-rotation license now sees an explicit "installed but
-  could not be verified" message rather than "your trial ended".
 
 ## 1. Grandfathering beta testers (the main flow)
 
@@ -444,7 +445,8 @@ so this is unblocked before any payout setup.
 ### 3.5c. Recovery & monitoring
 
 - The ledger record persists everything needed to **re-sign an identical blob**
-  (no separate blob copy), so a failed email is recoverable: the Worker returns
+  (no separate blob copy; after a signing-key rotation the re-signed blob uses
+  the current key, so it differs but is equally valid), so a failed email is recoverable: the Worker returns
   a retryable `500` and Polar's retry re-drives (re-asserts the entitlement,
   resends the email). Records with `emailSent: false` are the "who didn't get
   their license" worklist.
