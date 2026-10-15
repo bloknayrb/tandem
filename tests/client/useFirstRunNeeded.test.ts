@@ -68,6 +68,42 @@ describe("createFirstRunNeeded", () => {
     expect(state.settled).toBe(true);
   });
 
+  it("reads the v1.0 walkthrough flag (#2198), and a failed refetch clears it", async () => {
+    let call = 0;
+    globalThis.fetch = (async () => {
+      call += 1;
+      if (call === 1) {
+        return mkResponse({
+          needed: true,
+          walkthrough: true,
+          serverVersion: "1.0.0",
+          launchId: "launch-1",
+          confirmationNonce: "n",
+        }) as unknown as Response;
+      }
+      throw new Error("network down");
+    }) as unknown as typeof fetch;
+    const state = createFirstRunNeeded();
+    await new Promise((r) => setTimeout(r, 0));
+    flushSync();
+    expect(state.walkthrough).toBe(true);
+    expect(state.launchId).toBe("launch-1");
+    await state.refetch();
+    flushSync();
+    expect(state.walkthrough).toBe(false);
+    expect(state.launchId).toBeNull();
+  });
+
+  it("an older server (no walkthrough field) reads as no walkthrough", async () => {
+    globalThis.fetch = fetchStubReturning(
+      mkResponse({ needed: true, serverVersion: "0.28.0", confirmationNonce: "n" }),
+    );
+    const state = createFirstRunNeeded();
+    await new Promise((r) => setTimeout(r, 0));
+    flushSync();
+    expect(state.walkthrough).toBe(false);
+  });
+
   it("fetches the sidecar via the absolute API base, not a relative URL", async () => {
     // Regression guard for the Tauri-desktop bug: a relative `/api/...` URL
     // resolves against the `tauri.localhost` WebView origin and never reaches

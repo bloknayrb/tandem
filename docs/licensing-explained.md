@@ -41,10 +41,10 @@ You buy Tandem once. You get a **license key** by email — a long block of
 letters and numbers, plus a `tandem.license` file attached. You paste the key in
 (**double-clicking the file does nothing** — Tandem registers no `.license` file
 association; its only associations are `.md`/`.markdown`, `.txt` and `.html`,
-`src-tauri/tauri.conf.json:74-96`), and Tandem is yours: it keeps working forever, on
-any computer you personally use, with no internet connection required to prove
-it. Every future update is included too, with no time limit, though no one can
-promise that future updates will come.
+`src-tauri/tauri.conf.json:74-96`), and Tandem is yours: it keeps working
+forever, with no internet connection required to prove it. Every future update
+is included too, with no time limit, though no one can promise that future
+updates will come.
 
 **Where you paste it depends on which Tandem you're running.** On the desktop app
 the only route is Settings → License; the desktop bundle ships no `tandem`
@@ -63,7 +63,7 @@ is still the only route, and it stops offering the command accordingly.
 |---|---|
 | **The version you have** | Yours forever. No subscription, no expiry, and no licence check over the network. |
 | **New versions** | All future updates are included, for as long as they are released. There is no update year, no renewal and no paid upgrade. No future update is guaranteed. |
-| **Devices** | Any computer you personally use. |
+| **Devices** | Not counted, and not limited by the license. |
 | **Offline** | Activation and running work with the network unplugged — no server is ever asked whether your licence is valid. (Checking for *updates* does contact us, and sends an opaque id. See Part 2.) |
 
 ## Why the key is so long
@@ -445,7 +445,7 @@ and those are where `aiRefusal()` is consulted:
 
 - The MCP session handshake — rows 1 and 2 together.
 - `appendClaudeChatMessage()` — every AI chat write: `tandem_reply`, `POST /api/channel-reply`, the collaborator.
-- `pushEvent` plus `subscribe(cb, "external")` — every push consumer: SSE `/api/events`, WS `/api/wake`, the supervisor's stdin.
+- `pushEvent` plus `subscribe(cb, "external")` — every push consumer: SSE `/api/events`, WS `/api/wake`, the supervisor's stdin. The supervisor's gap and standby watches subscribe `"internal"` and read the push's own verdict (`wasForwardedExternally`), so a refused event neither owes a wake nor starts Claude for a message (#2196).
 - The supervisor's spawn — the launcher's own Claude Code.
 - The collaborator's per-run check — row 6.
 
@@ -590,8 +590,9 @@ Worth stating plainly, because they look like bugs:
 - **A refund does not stop the software running.** It can't — activation is
   air-gapped by design. Consumer law obliges returning money, not technical
   revocability.
-- **Nothing enforces the device count.** "Any device you personally use" is an
-  honour-system limit, and the terms say so rather than implying otherwise.
+- **Nothing counts devices or people.** `LICENSE` sets no per-key limit either,
+  and customer copy deliberately states none: how a key is used is left to
+  good faith (decided 2026-10-15).
 - **In restricted mode a Claude Code with shell access can still reach Tandem
   out of band** — edit the file on disk (the watcher reloads it) or call
   Tandem's local endpoints directly. Tandem refuses the AI at its own admission

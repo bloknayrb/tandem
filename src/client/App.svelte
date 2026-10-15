@@ -16,8 +16,10 @@ import {
   saveStore,
   shouldAutoOpenScratchpad,
   startFreshClaudeCode,
+  startTandemClaude,
   triggerSave,
   triggerSaveAs,
+  turnOffTandemClaude,
 } from "./actions/builtin.svelte.js";
 import { mountActionExecutor } from "./actions/executor.js";
 import { effectiveBindingLabels } from "./actions/keybindings.js";
@@ -55,7 +57,13 @@ import ScrollPill from "./editor/ScrollPill.svelte";
 import SourceView from "./editor/SourceView.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
-import { AI_CTA, createAiReadiness, ctaHandler } from "./hooks/useAiReadiness.svelte";
+import {
+  AI_CTA,
+  type AiCtaAction,
+  type AiRemedy,
+  createAiReadiness,
+  ctaHandler,
+} from "./hooks/useAiReadiness.svelte";
 import {
   nextAnnotationId,
   prevAnnotationId,
@@ -120,12 +128,15 @@ import {
   sendNoteToClaude as marginSendNoteToClaude,
 } from "./panels/annotation-actions";
 import { motionOff } from "./panels/cardMotion";
+import { claudeCodeOfferEligible } from "./panels/chat-claude-code-offer";
 import { exportChatMarkdown } from "./panels/chat-export";
+import { type GreetingAction, greetingNoteAction } from "./panels/chat-greeting";
 import { insertChatMarkdown } from "./panels/chat-insert";
 import MarginColumn from "./panels/MarginColumn.svelte";
 import { isLeftMarginAnnotation, isRightMarginAnnotation } from "./panels/marginSides";
 import PeekStrip from "./panels/PeekStrip.svelte";
 import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
+import { createChatResume } from "./panels/useChatResume.svelte";
 import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
 import { addressedAiNotice, noticeAction } from "./status/addressed-ai-notice.js";
@@ -146,6 +157,7 @@ import { NOTIFICATION_ACTIVATED_EVENT } from "./tauri/notifications-invoke";
 import { isRenamable } from "./types.js";
 import { MCP_BASE_URL } from "./utils/backend-ports";
 import { openFileForRuntime } from "./utils/browse-file";
+import { createLaunchLatch } from "./utils/launch-latch.svelte";
 import { resolveDefaultModelChip } from "./utils/model-chip";
 import { resolveModelFirstRunNeeded } from "./utils/model-first-run";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
@@ -153,6 +165,7 @@ import { openServerPath } from "./utils/server-paths";
 import { wireSidecarRestarted } from "./utils/sidecar-restart-toast";
 import { wireStartupRejection } from "./utils/startup-rejection";
 import { listenTauriEvent } from "./utils/tauri-event";
+import { resolveWizardAutoOpen } from "./utils/wizard-auto-open";
 
 // `getRetryStrategy` is read lazily inside yjsSync (only after bootstrap), so it
 // safely closes over `settingsState`, which is initialized further down.
@@ -464,6 +477,7 @@ const cwdDriftView = $derived(
     aiReadiness.chip,
     aiReadiness.launcherFailure,
     aiReadiness.launcherRestarting,
+    aiReadiness.launcherStandby,
   ),
 );
 
@@ -618,6 +632,78 @@ function startFreshClaude(): void {
   startFreshClaudeCode();
 }
 
+/** The Start control (#2195): start Tandem's Claude from standby. The re-probe
+ *  is the action's own, as with `restartClaude`. */
+function startClaude(): void {
+  startTandemClaude();
+}
+
+/** The off switch (#2195), from the chat panel. */
+function turnOffClaude(): void {
+  turnOffTandemClaude();
+}
+
+/** The chat panel's resume row (#2196): a chat sent while Tandem's Claude was
+ *  stopped by choice, which the server is starting it to answer. */
+const chatResumeState = createChatResume(aiReadiness, refreshAiReadinessAfterLauncherAction, () => {
+  let latest: number | null = null;
+  for (const m of chatState.messages) {
+    if (m.author === "claude" && (latest === null || m.timestamp > latest)) latest = m.timestamp;
+  }
+  return latest;
+});
+
+/** The chat panel's Start / Turn off control (#2195): Turn off while Tandem's
+ *  Claude runs, Start while it is in standby, hidden otherwise (no launcher,
+ *  a failure — whose own CTA is elsewhere — or a restart in progress). */
+const tandemClaudeControl = $derived<"start" | "turn-off" | null>(
+  aiReadiness.launcherRunning
+    ? "turn-off"
+    : // Not while the licence refuses the AI (#1521): Start would be refused;
+      // and hidden beside the resume row (#2196), which carries its own remedy.
+      aiReadiness.aiNotice === null &&
+        aiReadiness.launcherStandby !== null &&
+        !aiReadiness.launcherRestarting &&
+        chatResumeState.view === null
+      ? "start"
+      : null,
+);
+
+/** The "hasn't said hello" note's action (#2197): restart a Claude that is
+ *  still running, otherwise the stopped launcher's own remedy. */
+const greetingAction = $derived<GreetingAction | null>(
+  greetingNoteAction({
+    greetingLate: aiReadiness.greetingLate,
+    serverUnreachable: aiReadiness.serverUnreachable,
+    aiOff: aiReadiness.aiNotice !== null,
+    stoppedByChoice: aiReadiness.launcherStandby !== null,
+    busy: aiReadiness.launcherBusy,
+    running: aiReadiness.launcherRunning,
+    remedy: aiReadiness.launcherRemedy,
+  }),
+);
+
+function onGreetingAction(action: GreetingAction): void {
+  if (action === "relaunch") restartClaude();
+  else aiCtaHandler(AI_CTA[action].action)();
+}
+
+function onResumeRemedy(remedy: AiRemedy): void {
+  aiCtaHandler(AI_CTA[remedy].action)();
+}
+
+/** Every `AiCtaAction` → its handler, through the one dispatcher
+ *  (`ctaHandler`, #1268, #1521, #2195). A binary `action === "restart" ? … : …`
+ *  would send the `start` CTA to the integration wizard. */
+function aiCtaHandler(action: AiCtaAction): () => void {
+  return ctaHandler(action, {
+    connect: connectAi,
+    restart: restartClaude,
+    start: startClaude,
+    openLicenseSettings,
+  });
+}
+
 // #1018 loud failures: ChatPanel (chat send) and Toolbar ("Send to Claude"
 // comment) dispatch `tandem:addressed-ai` AFTER persisting. Two DIFFERENT
 // silences get a notice here, and they are not the same problem:
@@ -682,12 +768,13 @@ $effect(() => {
       sessionLive: probe.sessionLive,
       chip: aiReadiness.chip,
       pushDelivery: aiReadiness.pushDelivery,
+      startingForMessage: viaKey === "chat" && chatResumeState.pending,
     });
     if (notice === null) return;
 
     // The branching lives in the pure, exhaustive `noticeAction`; App only pushes
     // what it returns. The CTA is dispatched through `ctaHandler`, never a binary
-    // ternary: `chip` has five non-null members, and a `=== "connect"` test once
+    // ternary: `chip` has six non-null members, and a `=== "connect"` test once
     // sent `setup` (Claude CLI not installed) down the restart branch.
     const toast = noticeAction(notice, noun);
     const cta = toast.cta;
@@ -704,11 +791,7 @@ $effect(() => {
         ? undefined
         : {
             label: AI_CTA[cta].label,
-            onClick: ctaHandler(AI_CTA[cta].action, {
-              connect: connectAi,
-              restart: restartClaude,
-              openLicenseSettings,
-            }),
+            onClick: aiCtaHandler(AI_CTA[cta].action),
           },
     );
   };
@@ -733,7 +816,11 @@ $effect(() => {
 });
 
 const WIZARD_DISMISSED_KEY = "tandem:wizard-dismissed";
+/** The auto-opened wizard was closed during this server launch (#2198): not
+ * again until the next one (`createLaunchLatch`). */
+const WIZARD_CLOSED_LAUNCH_KEY = "tandem:wizard-closed-for-launch";
 let dismissedForVersion = $state<string | null>(readDismissed());
+const wizardClosedLatch = createLaunchLatch(WIZARD_CLOSED_LAUNCH_KEY, () => firstRun.launchId);
 let manuallyReopened = $state(false);
 
 function readDismissed(): string | null {
@@ -741,6 +828,18 @@ function readDismissed(): string | null {
     return localStorage.getItem(WIZARD_DISMISSED_KEY);
   } catch {
     return null;
+  }
+}
+
+/** Dismiss the first-run rule for this server version — in memory even when
+ * localStorage throws, so a storage-disabled browser is not re-prompted at
+ * once (#2198 review). */
+function dismissForVersion(version: string): void {
+  dismissedForVersion = version;
+  try {
+    localStorage.setItem(WIZARD_DISMISSED_KEY, version);
+  } catch {
+    // localStorage unavailable — the server-side check re-prompts on next launch.
   }
 }
 
@@ -752,11 +851,20 @@ function readDismissed(): string | null {
 // in client localStorage, or Cowork state, which lives behind Tauri). The
 // unified wizard surfaces models + Cowork client-side under "More
 // integrations" — do NOT try to make `needed` "smart" about them.
+//
+// The v1.0 walkthrough (#2198) ignores the per-version dismissal — closing it
+// brings it back next launch — see `resolveWizardAutoOpen`.
 const isAutoOpenFirstRun = $derived(
-  firstRun.needed === true &&
-    firstRun.serverVersion !== null &&
-    dismissedForVersion !== firstRun.serverVersion,
+  resolveWizardAutoOpen({
+    needed: firstRun.needed,
+    walkthrough: firstRun.walkthrough,
+    serverVersion: firstRun.serverVersion,
+    dismissedForVersion,
+    closedThisSession: wizardClosedLatch.active,
+  }),
 );
+/** The version the walkthrough is owed on, for the wizard's Keep. */
+const walkthroughVersion = $derived(firstRun.walkthrough ? firstRun.serverVersion : null);
 const shouldShowWizard = $derived(manuallyReopened || isAutoOpenFirstRun);
 
 // #1713: `manuallyReopened`'s own trigger already clears settingsModalOpen in
@@ -773,15 +881,52 @@ function closeIntegrationWizard(): void {
   // Only persist dismissal when this close ends an auto-open session.
   // A manual reopen → close where the server says `needed === false`
   // would otherwise burn the dismissal slot for `serverVersion`.
+  //
+  // The walkthrough (#2198) is NOT dismissed for the version: only Keep or a
+  // successful Apply ends it, on the server. Closing it ends it for this
+  // session alone.
   if (isAutoOpenFirstRun && firstRun.serverVersion !== null) {
-    try {
-      localStorage.setItem(WIZARD_DISMISSED_KEY, firstRun.serverVersion);
-      dismissedForVersion = firstRun.serverVersion;
-    } catch {
-      // localStorage unavailable — the server-side check re-prompts on next launch.
-    }
+    if (!firstRun.walkthrough) dismissForVersion(firstRun.serverVersion);
+    wizardClosedLatch.mark();
   }
   manuallyReopened = false;
+  wizardFocusClaudeCodeOffer = false;
+  // Re-read: a successful Apply or Keep may have just ended the walkthrough on
+  // the server, and a later Settings → Reopen must not show its copy again.
+  // Only a walkthrough can change the answer this way.
+  if (firstRun.walkthrough) void firstRun.refetch();
+}
+
+// --- The chat panel's offer to set up Tandem's own Claude (#2199) -------------
+/** "Not now" holds until the next server launch, like the wizard's
+ * closed-for-launch. */
+const claudeCodeOfferDismissed = createLaunchLatch(
+  "tandem:claude-code-offer-dismissed",
+  () => firstRun.launchId,
+);
+/** The wizard was opened from the offer: it brings its own offer into view. */
+let wizardFocusClaudeCodeOffer = $state(false);
+
+function openWizardAtClaudeCodeOffer(): void {
+  window.dispatchEvent(
+    new CustomEvent("tandem:open-integration-wizard", { detail: { focus: "claude-code-offer" } }),
+  );
+}
+
+const claudeCodeOfferOk = $derived(
+  claudeCodeOfferEligible({
+    launcherNotConfigured: aiReadiness.launcherNotConfigured,
+    pushAttached: aiReadiness.pushDelivery === "attached",
+    aiOff: licenseStore.ui.aiOff,
+    solo: modeState.tandemMode === "solo",
+    dismissed: claudeCodeOfferDismissed.active,
+  }),
+);
+
+/** Keep this setup succeeded (#2198). Also dismiss the first-run rule, or a
+ * user with nothing set up would match it on the next launch. */
+function onWalkthroughKept(): void {
+  if (firstRun.serverVersion !== null) dismissForVersion(firstRun.serverVersion);
 }
 
 // Sync dismissal state across tabs: if one tab dismisses (writes to
@@ -790,9 +935,20 @@ function closeIntegrationWizard(): void {
 // tab updates `dismissedForVersion` synchronously above.
 $effect(() => {
   const onStorage = (ev: StorageEvent) => {
+    // Another tab's close stops FUTURE auto-opens here; it must not unmount a
+    // wizard this tab is showing mid-flow (its own close cleans up after
+    // itself — an unmount from here would skip that). Latch it open first.
+    if (
+      (ev.key === WIZARD_DISMISSED_KEY || ev.key === WIZARD_CLOSED_LAUNCH_KEY) &&
+      isAutoOpenFirstRun
+    ) {
+      manuallyReopened = true;
+    }
     if (ev.key === WIZARD_DISMISSED_KEY) {
       dismissedForVersion = ev.newValue;
     }
+    wizardClosedLatch.onStorage(ev);
+    claudeCodeOfferDismissed.onStorage(ev);
   };
   window.addEventListener("storage", onStorage);
   return () => window.removeEventListener("storage", onStorage);
@@ -801,8 +957,12 @@ $effect(() => {
 // SettingsClaudeCodeTab dispatches this when the user clicks "Reopen wizard".
 // Listening here avoids threading another callback through every Settings tab.
 $effect(() => {
-  const onOpen = () => {
+  const onOpen = (ev: Event) => {
     manuallyReopened = true;
+    // Only the chat panel's offer asks for this (#2199); any other reopen
+    // clears it.
+    wizardFocusClaudeCodeOffer =
+      (ev as CustomEvent<{ focus?: string } | null>).detail?.focus === "claude-code-offer";
     settingsModalOpen = false;
     // Re-fetch first-run state so a reopen reflects any concurrent
     // persist from another tab / CLI.
@@ -810,6 +970,16 @@ $effect(() => {
   };
   window.addEventListener("tandem:open-integration-wizard", onOpen);
   return () => window.removeEventListener("tandem:open-integration-wizard", onOpen);
+});
+
+// #2195: the Settings section changed the start mode of Tandem's Claude.
+// Choosing Off has already stopped it by the time the save answers, so one
+// status read brings the pill and chat panel up to date without waiting out a
+// whole poll.
+$effect(() => {
+  const onChanged = () => aiReadiness.refreshLauncherStatus();
+  window.addEventListener("tandem:launcher-changed", onChanged);
+  return () => window.removeEventListener("tandem:launcher-changed", onChanged);
 });
 let settingsBtnEl = $state<HTMLButtonElement | null>(null);
 
@@ -2086,6 +2256,8 @@ function sendChatMessage(text: string): boolean {
   const sent = chatState.send(text, yjsSync.activeTabId ?? undefined, railContent.capturedAnchor);
   if (!sent) return false;
   railContent.setCapturedAnchor(null);
+  // Before the dispatch below, whose no-agent toast reads it (#2196).
+  chatResumeState.noteSent();
   window.dispatchEvent(new CustomEvent("tandem:addressed-ai", { detail: { via: "chat" } }));
   railContent.closeReveal();
   return true;
@@ -2663,6 +2835,16 @@ const shouldShowModelPicker = $derived(
             onInsert={insertChatMessage}
             canInsert={chatCanInsert}
             reduceMotion={settingsState.settings.reduceMotion}
+            tandemClaudeControl={tandemClaudeControl}
+            onStartClaude={startClaude}
+            onTurnOffClaude={turnOffClaude}
+            tandemClaudeResume={chatResumeState.view}
+            {onResumeRemedy}
+            tandemClaudeGreetingLate={greetingAction}
+            {onGreetingAction}
+            claudeCodeOfferEligible={claudeCodeOfferOk}
+            onClaudeCodeOfferSetup={openWizardAtClaudeCodeOffer}
+            onClaudeCodeOfferDismiss={claudeCodeOfferDismissed.mark}
             visible={chatVisible}
             aiDisabled={licenseStore.ui.aiOff}
           />
@@ -2716,6 +2898,9 @@ const shouldShowModelPicker = $derived(
       aiLauncherBusy={aiReadiness.launcherBusy}
       aiLauncherAttached={aiReadiness.launcherAttached}
       aiLauncherRestarting={aiReadiness.launcherRestarting}
+      aiLauncherStarting={aiReadiness.launcherStarting}
+      aiLauncherStandby={aiReadiness.launcherStandby}
+      aiLauncherStandbyRecent={aiReadiness.launcherStandbyRecent}
       aiSessionCount={aiReadiness.sessionCount}
       aiLauncherFailure={aiReadiness.launcherFailure}
       aiLauncherFailureDismissed={launcherFailureShown === null}
@@ -2723,6 +2908,7 @@ const shouldShowModelPicker = $derived(
       aiChip={aiReadiness.chip}
       onConnectAi={connectAi}
       onRestartClaude={restartClaude}
+      onStartClaude={startClaude}
       onOpenLicenseSettings={openLicenseSettings}
       aiNotice={aiReadiness.aiNotice}
       soloMode={modeState.tandemMode === "solo"}
@@ -2776,6 +2962,15 @@ const shouldShowModelPicker = $derived(
         open={true}
         onClose={closeIntegrationWizard}
         onSetupModels={openModelsSettings}
+        tandemClaudeLive={{
+          running: aiReadiness.launcherRunning,
+          remedy: aiReadiness.launcherRemedy,
+          standby: aiReadiness.launcherStandby,
+        }}
+        {walkthroughVersion}
+        {onWalkthroughKept}
+        focusClaudeCodeOffer={wizardFocusClaudeCodeOffer}
+        onLauncherRemedy={onResumeRemedy}
       />
     {/if}
 
@@ -3188,6 +3383,7 @@ const shouldShowModelPicker = $derived(
               onConnectAi={connectAi}
               onRestartClaude={restartClaude}
               onStartFreshClaude={startFreshClaude}
+              onStartClaude={startClaude}
               aiNotice={aiReadiness.aiNotice}
               onOpenLicenseSettings={openLicenseSettings}
             />

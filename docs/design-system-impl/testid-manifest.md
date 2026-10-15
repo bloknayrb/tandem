@@ -157,6 +157,16 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 
 ### Side panels & rails
 - `left-outline-rail`, `annotations-tab`, `chat-tab`
+- `chat-tandem-claude-toggle` — Start / Turn off for Tandem's Claude in the chat panel header (#2195; `data-action` is `start` or `turn-off`)
+- `chat-tandem-claude-resuming` — "Claude is resuming…" / "Starting Tandem's Claude…" row for a chat that is starting a stopped Tandem's Claude (#2196; `data-verb` is `resuming` or `starting`); replaces the pickup row
+- `chat-tandem-claude-resume-failed` — the same row once the start failed or never began (#2196; `data-remedy` is the `AiChip` it offers)
+- `chat-tandem-claude-resume-remedy` — that row's remedy button
+- `chat-greeting-late` — "Tandem's Claude hasn't said hello" note, when the one-time greeting did not reach the chat (#2197; `data-action` is `relaunch` or the stopped launcher's `AiChip`); below the resume row, replaces the pickup row
+- `chat-greeting-late-action` — that note's button
+- `chat-claude-code-offer` — offer to set up Tandem's own Claude (#2199), with `-setup` (opens the
+  wizard at its offer) and `-dismiss` ("Not now", until the next server launch); only when the
+  launcher has no Claude Code setup and nothing is pushed to, on an empty chat or a message waiting
+  past the stall threshold
 - `clear-chat-btn`, `held-banner`, `store-readonly-banner`,
   `store-readonly-dismiss`, `peek-strip-{*}`,
   `panel-edge-collapse-{*}` (resize-handle selectors synthesized — see Known
@@ -214,6 +224,8 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `settings-modal-sidebar-{version,footer}`,
   `settings-modal-mcp-status`, `settings-modal-tab-{*}`,
   `settings-modal-display-name`, `settings-modal-shortcuts-list`,
+  `settings-modal-tandem-claude{,-disclosure,-load-error,-readonly,-unreadable,-absent,-save-error,-idle-minutes,-idle-error}`,
+  `settings-modal-tandem-claude-start-{*}`, `settings-modal-tandem-claude-lifetime-{*}` (#2195),
   `settings-modal-app-info-footer`
 - `settings-modal-solo-rail-hidden-toggle`,
   `settings-modal-dwell-time-slider`,
@@ -288,6 +300,20 @@ shipped and were removed:
   `integration-wizard-apply-result-{*}`
 - Post-apply reachability (#1174): `integration-wizard-reachability-{*}`,
   `integration-wizard-whats-next`
+- Tandem's own Claude after the apply (#2197): `integration-wizard-tandem-claude` — only when a
+  claude-code entry was written and the server answered what it did about it
+- The v1.0 walkthrough (#2198): `integration-wizard-walkthrough-intro`,
+  `integration-wizard-keep-setup` ("Keep this setup", or "Continue without connecting" with nothing
+  set up), `integration-wizard-keep-error`, `integration-wizard-start-mode` (wraps the start
+  choice, whose radios keep their `settings-modal-tandem-claude-start-*` ids) — only while the
+  walkthrough is owed
+- The Claude Code offer for a Claude Desktop setup (#2199):
+  `integration-wizard-claude-code-offer` (carries `data-offer-phase` `offer` / `missing` /
+  `installed` / `not-detected`) with `-install`, `-error`, `-installed` and `-recheck` — `offer`
+  beside a detected Claude Desktop with no Claude Code, `missing` beside a Claude Code card whose
+  program is not installed, `not-detected` only when opened from the chat panel's offer (or after
+  an install that left no card); `integration-wizard-check-sign-in` on the done screen, only while
+  the launcher status says sign-in
 - Start at login (#1463): `integration-wizard-autostart{,-toggle,-error}` — desktop only, and
   hidden entirely when the OS reports no tray, so absence is not a regression signal on its own.
 - Per-target delivery honesty (#1299): `integration-wizard-push-support-{*}` —
@@ -401,7 +427,7 @@ site.
 
 ### Empty states (3.11 D5)
 - `empty-state-open-file` (state A primary), `empty-state-retry` + `empty-state-open-settings` (state C)
-- State A AI-readiness CTA (#1268, keyed 1:1 off the `useAiReadiness` `chip` value — never re-derive from `lastError` in the view): `empty-state-connect-ai` (`aiChip: "connect"`), `empty-state-setup-claude` (`aiChip: "setup"` — keyed off `lastError === "cli-unusable"`, a filesystem probe the supervisor takes when the circuit breaker trips), `empty-state-setup-restart-anyway` (`aiChip: "setup"` secondary — the escape for a false-negative probe, so the branch is not a dead end), `empty-state-restart-claude` (`aiChip: "restart"` primary), `empty-state-start-fresh` (`aiChip: "restart"` secondary — irreversible, never the default handler), `empty-state-open-license-settings` (`aiChip: "unlicensed"` — the licence refuses the AI, #1521; opens Settings → License)
+- State A AI-readiness CTA (#1268, keyed 1:1 off the `useAiReadiness` `chip` value — never re-derive from `lastError` in the view): `empty-state-connect-ai` (`aiChip: "connect"`), `empty-state-setup-claude` (`aiChip: "setup"` — keyed off `lastError === "cli-unusable"`, a filesystem probe the supervisor takes when the circuit breaker trips), `empty-state-setup-restart-anyway` (`aiChip: "setup"` secondary — the escape for a false-negative probe, so the branch is not a dead end), `empty-state-restart-claude` (`aiChip: "restart"` primary), `empty-state-start-fresh` (`aiChip: "restart"` secondary — irreversible, never the default handler), `empty-state-open-license-settings` (`aiChip: "ai-off"` — the licence refuses the AI, #1521; opens Settings → License), `empty-state-start-claude` (`aiChip: "start"` — Tandem's Claude in standby, #2195)
 
 ### Licensing gate (#1116, ships dark)
 - `license-trial-banner`, `license-trial-days` (trial countdown banner)

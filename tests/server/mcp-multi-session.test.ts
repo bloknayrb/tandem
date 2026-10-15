@@ -16,6 +16,7 @@ import {
   closeMcpSession,
   getPinnedMcpSessionCount,
   isClaudeSessionAttached,
+  isOtherMcpClientLive,
   reapIdleMcpSessions,
   startMcpServerHttp,
 } from "../../src/server/mcp/server.js";
@@ -307,6 +308,41 @@ describe("an open standalone stream pins its session against the reaper", () => 
 
     await stream.close();
     expect(isClaudeSessionAttached(id, spawnedAt)).toBe(false);
+  });
+
+  it("isOtherMcpClientLive sees a different client against the real registry (#2196)", async () => {
+    const own = "tandem-child-session";
+    const mine = await openSession("bridge", own);
+    const mineStream = await openStream(mine.sessionId);
+    const theirs = await openSession("their-claude", "users-own-claude");
+    try {
+      // Theirs has no stream yet, but its initialize just ran: live.
+      expect(isOtherMcpClientLive(new Set([own]))).toBe(true);
+      expect(isOtherMcpClientLive(new Set(["users-own-claude"]))).toBe(true);
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.now() + 2 * 60_000);
+      // Two minutes on, only the streaming entry is live — and it is ours.
+      expect(isOtherMcpClientLive(new Set([own]))).toBe(false);
+      expect(isOtherMcpClientLive(new Set(["users-own-claude"]))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      await mineStream.close();
+    }
+    expect(theirs.status).toBe(200);
+  });
+
+  it("Claude Desktop, by its initialize's clientInfo name, is not another AI (#2199)", async () => {
+    const desktop = await openSession("claude-ai");
+    const desktopStream = await openStream(desktop.sessionId);
+    try {
+      expect(isOtherMcpClientLive(new Set())).toBe(false);
+      // Any other client name still counts — including one that is close.
+      const other = await openSession("claude-ai-not");
+      expect(other.status).toBe(200);
+      expect(isOtherMcpClientLive(new Set())).toBe(true);
+    } finally {
+      await desktopStream.close();
+    }
   });
 
   // The real wiring for "live": an open stream keeps a quiet client counted,

@@ -441,7 +441,10 @@ describe("AI-chip relaunch vs. palette relaunch", () => {
     notify.mockClear();
     relaunchClaudeCode();
     await vi.waitFor(() => expect(notify).toHaveBeenCalled());
-    expect(notify).toHaveBeenCalledWith("info", expect.stringContaining("Already restarting"));
+    expect(notify).toHaveBeenCalledWith(
+      "info",
+      expect.stringContaining("Another Claude action is still running"),
+    );
 
     // Positive control: exactly one relaunch was actually issued, so the notify
     // above is the guard reporting itself — not a second request going through.

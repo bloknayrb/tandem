@@ -38,14 +38,22 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 import { spawn } from "node:child_process";
+import { _pushEventForTests, resetForTesting } from "../../../src/server/events/queue.js";
 import type { TandemEvent } from "../../../src/server/events/types.js";
 import type { IntegrationsFile } from "../../../src/server/integrations/schema.js";
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
-import { createSupervisor, type Supervisor } from "../../../src/server/launcher/supervisor.js";
 import {
+  createSupervisor,
+  LicenseRefusedError,
+  type Supervisor,
+} from "../../../src/server/launcher/supervisor.js";
+import type { AiRefusal } from "../../../src/server/license/ai-refusal.js";
+import {
+  SUPERVISOR_GREETING_PROMPT,
   SUPERVISOR_INITIAL_PROMPT,
   SUPERVISOR_WAKE_PROMPT,
 } from "../../../src/shared/launcher/contract.js";
+import { setCtrlMode } from "../../helpers/ctrl-mode.js";
 
 // --- Fake child -------------------------------------------------------------
 
@@ -249,7 +257,7 @@ afterEach(async () => {
 
 type ExtraOpts = Omit<
   Parameters<typeof createSupervisor>[0],
-  "integrationsBase" | "subscribeToEvents" | "subscribeDuringGap"
+  "integrationsBase" | "subscribeToEvents" | "subscribeDuringGap" | "subscribeDuringStandby"
 >;
 
 function makeSupervisor(extra: ExtraOpts = {}): {
@@ -259,6 +267,9 @@ function makeSupervisor(extra: ExtraOpts = {}): {
   const callbacks = new Set<(event: TandemEvent) => void>();
   const sup = createSupervisor({
     probeCliUsable: () => true,
+    // Spawn is mocked; the command only has to resolve (#2199), whatever the
+    // host has installed.
+    resolveClaudeCommand: () => process.execPath,
     restartBackoffsMs: [0],
     ...extra,
     integrationsBase: baseDir,
@@ -269,6 +280,12 @@ function makeSupervisor(extra: ExtraOpts = {}): {
     // The same fake fan-out, so an event emitted in a gap reaches the watch
     // exactly as the queue would deliver it.
     subscribeDuringGap: (cb) => {
+      callbacks.add(cb);
+      return () => callbacks.delete(cb);
+    },
+    // And the standby watch (#2196), so a chat emitted in standby starts
+    // Claude exactly as the real queue would.
+    subscribeDuringStandby: (cb) => {
       callbacks.add(cb);
       return () => callbacks.delete(cb);
     },
@@ -1583,5 +1600,1683 @@ describe("status().busy — the launched child's turn-in-flight flag", () => {
     failCallbacksOnly(held(child1));
     expect(sup.status().running).toBe(true);
     expect(busy(sup)).toBe(false);
+  });
+});
+
+// --- #2195 --------------------------------------------------------------------
+
+function chatEvent(): TandemEvent {
+  eventSeq++;
+  return {
+    id: `evt_${eventSeq}`,
+    type: "chat:message",
+    timestamp: Date.now(),
+    documentId: "d1",
+    payload: { messageId: `msg_${eventSeq}`, text: "are you there?", replyTo: null, anchor: null },
+  } as TandemEvent;
+}
+
+function writeLauncherSettingsFile(settings: Record<string, unknown>): void {
+  fs.writeFileSync(
+    path.join(baseDir, "launcher-settings.json"),
+    JSON.stringify({ version: 1, ...settings }),
+  );
+}
+
+function readLauncherSettingsFile(): Record<string, unknown> {
+  return JSON.parse(fs.readFileSync(path.join(baseDir, "launcher-settings.json"), "utf8"));
+}
+
+const LICENCE_REFUSAL: AiRefusal = {
+  error: "LICENSE_REQUIRED",
+  kind: "unlicensed",
+  message: "Tandem is unlicensed, so its AI features are turned off.",
+};
+
+describe("#2195 — the start mode holds boot back", () => {
+  it("with no settings file, boot starts Claude exactly as before", async () => {
+    const { sup } = makeSupervisor();
+    await sup.start();
+    await nthChild(1);
+    expect(sup.status().running).toBe(true);
+  });
+
+  it("on-click: boot spawns nothing and reads as awaiting-start, not restarting or failed", async () => {
+    writeLauncherSettingsFile({ startMode: "on-click", lifetime: "always", idleMinutes: 30 });
+    const { sup } = makeSupervisor();
+    await sup.start();
+    await settle();
+    expect(children).toHaveLength(0);
+    expect(sup.status()).toEqual({
+      running: false,
+      standby: "awaiting-start",
+      startsOnMessage: true,
+    });
+  });
+
+  it("off: boot spawns nothing and reads as off", async () => {
+    writeLauncherSettingsFile({ startMode: "off", lifetime: "always", idleMinutes: 30 });
+    const { sup } = makeSupervisor();
+    await sup.start();
+    await settle();
+    expect(children).toHaveLength(0);
+    expect(sup.status()).toEqual({ running: false, standby: "off", startsOnMessage: true });
+  });
+
+  it("an unreadable settings file holds boot back rather than defaulting to auto", async () => {
+    fs.writeFileSync(path.join(baseDir, "launcher-settings.json"), "{ truncated");
+    const { sup } = makeSupervisor();
+    await sup.start();
+    await settle();
+    expect(children).toHaveLength(0);
+    expect(sup.status()).toEqual({
+      running: false,
+      standby: "awaiting-start",
+      startsOnMessage: true,
+    });
+  });
+
+  it("decides the standby even with no integration yet, so the chip is Start once setup writes one", async () => {
+    writeLauncherSettingsFile({ startMode: "on-click", lifetime: "always", idleMinutes: 30 });
+    fs.writeFileSync(
+      path.join(baseDir, "integrations.json"),
+      JSON.stringify({ schemaVersion: 3, integrations: [] }),
+    );
+    const { sup } = makeSupervisor();
+    await sup.start();
+    expect(sup.status()).toMatchObject({ running: false, configured: false });
+    const file: IntegrationsFile = {
+      schemaVersion: 3,
+      integrations: [
+        {
+          kind: "claude-code",
+          id: "active",
+          label: "Active Claude",
+          configPath:
+            process.platform === "win32"
+              ? "C:\\Users\\test\\.claude.json"
+              : "/home/test/.claude.json",
+          transport: "http",
+          url: "http://127.0.0.1:3479/mcp",
+          apply: "create",
+          workingDirectory: cwdDir,
+        },
+      ],
+    };
+    await createIntegrationsStore(baseDir).write(file);
+    await sup.refreshConfigured();
+    expect(sup.status()).toEqual({
+      running: false,
+      standby: "awaiting-start",
+      startsOnMessage: true,
+    });
+  });
+
+  it("a crash restart whose settings read fails keeps the last good settings, not the fallback", async () => {
+    // A held or half-written file for a moment says nothing about what the user
+    // chose: the restarted Claude keeps its idle lifetime rather than the
+    // fallback's "always".
+    writeLauncherSettingsFile({ startMode: "auto", lifetime: "idle", idleMinutes: 1 });
+    const { sup } = makeSupervisor({ idleMinuteMs: 40 });
+    await sup.start();
+    const child1 = await nthChild(1);
+    fs.writeFileSync(path.join(baseDir, "launcher-settings.json"), "{ truncated");
+    exitChild(child1, 1);
+    const child2 = await nthChild(2);
+    // Resumed with nothing owed, so it writes no turn and its idle clock starts
+    // at spawn — and only an idle lifetime ends it.
+    await waitFor(() => child2.killed, "the restarted child's idle stop");
+    expect(sup.status()).toEqual({ running: false, standby: "idle", startsOnMessage: true });
+  });
+
+  it("on-click holds only boot: a crash restart of a Claude the user started brings it back", async () => {
+    writeLauncherSettingsFile({ startMode: "on-click", lifetime: "always", idleMinutes: 30 });
+    const { sup } = makeSupervisor();
+    await sup.start();
+    await sup.startByUser();
+    exitChild(await nthChild(1), 1);
+    await nthChild(2);
+    expect(sup.status().running).toBe(true);
+  });
+});
+
+describe("#2195 — Start (startByUser)", () => {
+  it("starts from awaiting-start", async () => {
+    writeLauncherSettingsFile({ startMode: "on-click", lifetime: "always", idleMinutes: 30 });
+    const { sup } = makeSupervisor();
+    await sup.start();
+    expect(await sup.startByUser()).toEqual({ spawned: true });
+    await nthChild(1);
+    expect(sup.status().running).toBe(true);
+    // The mode was not off, so Start leaves it alone.
+    expect(readLauncherSettingsFile().startMode).toBe("on-click");
+  });
+
+  it("from off, starts Claude and saves the mode as on-click (Bryan, 2026-10-13)", async () => {
+    writeLauncherSettingsFile({ startMode: "off", lifetime: "always", idleMinutes: 30 });
+    const { sup } = makeSupervisor();
+    await sup.start();
+    await sup.startByUser();
+    await nthChild(1);
+    expect(readLauncherSettingsFile().startMode).toBe("on-click");
+  });
+
+  it("from off over an unreadable file, keeps the lifetime it last read — on disk and in the child", async () => {
+    writeLauncherSettingsFile({ startMode: "off", lifetime: "idle", idleMinutes: 1 });
+    const { sup } = makeSupervisor({ idleMinuteMs: 40 });
+    await sup.start();
+    fs.writeFileSync(path.join(baseDir, "launcher-settings.json"), "{ truncated");
+    await sup.startByUser();
+    const child1 = await nthChild(1);
+    expect(readLauncherSettingsFile()).toMatchObject({
+      startMode: "on-click",
+      lifetime: "idle",
+      idleMinutes: 1,
+    });
+    expect(sup.appliedSettings()).toEqual({
+      startMode: "on-click",
+      lifetime: "idle",
+      idleMinutes: 1,
+    });
+    // The child runs by "stop when idle", not the fallback's "always".
+    pushJson(child1, RESULT_OK);
+    await waitFor(() => child1.killed, "the idle stop");
+  });
+
+  it("a relaunch from off saves on-click too, so Settings never says Off beside a running Claude", async () => {
+    writeLauncherSettingsFile({ startMode: "off", lifetime: "always", idleMinutes: 30 });
+    const { sup } = makeSupervisor();
+    await sup.start();
+    await sup.relaunch();
+    await nthChild(1);
+    expect(readLauncherSettingsFile().startMode).toBe("on-click");
+  });
+
+  it("is a no-op beside a live child — it never relaunches a running Claude", async () => {
+    const { sup } = makeSupervisor();
+    await sup.start();
+    const child1 = await nthChild(1);
+    expect(await sup.startByUser()).toEqual({ spawned: true });
+    await settle();
+    expect(children).toHaveLength(1);
+    expect(child1.killed).toBe(false);
+  });
+
+  it("a licence refusal changes nothing, the saved mode included", async () => {
+    writeLauncherSettingsFile({ startMode: "off", lifetime: "always", idleMinutes: 30 });
+    const { sup } = makeSupervisor({ aiRefusal: () => LICENCE_REFUSAL });
+    await sup.start();
+    await expect(sup.startByUser()).rejects.toBeInstanceOf(LicenseRefusedError);
+    expect(children).toHaveLength(0);
+    expect(readLauncherSettingsFile().startMode).toBe("off");
+  });
+});
+
+describe("#2195 — turning Claude off (updateSettings startMode off)", () => {
+  it("stops a running Claude, schedules no restart, and reads as off with no error", async () => {
+    const { sup } = makeSupervisor();
+    await sup.start();
+    const child1 = await nthChild(1);
+    await sup.updateSettings({ startMode: "off" });
+    expect(child1.killed).toBe(true);
+    await sleep(50);
+    await settle();
+    expect(children).toHaveLength(1);
+    expect(occurrences("Restarting Claude in")).toBe(0);
+    expect(sup.status()).toEqual({ running: false, standby: "off", startsOnMessage: true });
+    expect(readLauncherSettingsFile()).toMatchObject({ startMode: "off", lifetime: "always" });
+  });
+
+  it("cancels a crash restart that is only scheduled", async () => {
+    const { sup } = makeSupervisor({ restartBackoffsMs: [150] });
+    await sup.start();
+    exitChild(await nthChild(1), 1);
+    await settle();
+    expect(sup.status()).toMatchObject({ running: false, restartPending: true });
+    await sup.updateSettings({ startMode: "off" });
+    await sleep(300);
+    await settle();
+    expect(children).toHaveLength(1);
+    expect(sup.status()).toEqual({ running: false, standby: "off", startsOnMessage: true });
+  });
+
+  it("cancels a crash restart suspended in its plan read", async () => {
+    const { sup } = makeSupervisor();
+    await sup.start();
+    const read = deferred<string>();
+    const reads = interceptIntegrationsReads((n, pass) => (n === 1 ? read.promise : pass()));
+    try {
+      exitChild(await nthChild(1), 1);
+      await waitFor(() => reads.count() === 1, "the restart's integrations read");
+      await sup.updateSettings({ startMode: "off" });
+      read.resolve(fs.readFileSync(path.join(baseDir, "integrations.json"), "utf8"));
+      await sleep(50);
+      await settle();
+    } finally {
+      reads.restore();
+    }
+    expect(children).toHaveLength(1);
+    expect(sup.status()).toEqual({ running: false, standby: "off", startsOnMessage: true });
+  });
+
+  it("a crash restart while off never starts Claude, even if the off came first in the file only", async () => {
+    // Off written by another path (a second window, a hand edit) between
+    // spawns: the restart's own plan read is what holds it back.
+    const { sup } = makeSupervisor();
+    await sup.start();
+    writeLauncherSettingsFile({ startMode: "off", lifetime: "always", idleMinutes: 30 });
+    exitChild(await nthChild(1), 1);
+    await sleep(50);
+    await settle();
+    expect(children).toHaveLength(1);
+    expect(sup.status()).toEqual({ running: false, standby: "off", startsOnMessage: true });
+  });
+
+  it("licence activation does not bring back a Claude the user turned off", async () => {
+    let refused = true;
+    const { sup } = makeSupervisor({ aiRefusal: () => (refused ? LICENCE_REFUSAL : null) });
+    await sup.start();
+    expect(sup.licenceRefusal()).not.toBeNull();
+    await sup.updateSettings({ startMode: "off" });
+    refused = false;
+    await sup.resumeAfterLicence();
+    await settle();
+    expect(children).toHaveLength(0);
+  });
+
+  it("owes nothing for what arrives while off (#1866): Start resumes with no turn", async () => {
+    const { sup, emit } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    pushJson(children[0], RESULT_OK);
+    await settle();
+    await sup.updateSettings({ startMode: "off" });
+    // A new comment, not a chat: a chat now starts Claude by itself (#2196).
+    emit(annotationEvent());
+    await settle();
+    expect(children).toHaveLength(1);
+    await sup.startByUser();
+    const child2 = await nthChild(2);
+    await settle();
+    expect(texts(child2)).toEqual([]);
+  });
+
+  it("switching the mode back on does not start Claude by itself", async () => {
+    writeLauncherSettingsFile({ startMode: "off", lifetime: "always", idleMinutes: 30 });
+    const { sup } = makeSupervisor();
+    await sup.start();
+    await sup.updateSettings({ startMode: "auto" });
+    await settle();
+    expect(children).toHaveLength(0);
+    expect(sup.status()).toEqual({
+      running: false,
+      standby: "awaiting-start",
+      startsOnMessage: true,
+    });
+  });
+
+  it("merges a partial patch: a lifetime change keeps the saved start mode", async () => {
+    writeLauncherSettingsFile({ startMode: "off", lifetime: "always", idleMinutes: 30 });
+    const { sup } = makeSupervisor();
+    await sup.start();
+    await sup.updateSettings({ lifetime: "idle" });
+    expect(readLauncherSettingsFile()).toMatchObject({
+      startMode: "off",
+      lifetime: "idle",
+      idleMinutes: 30,
+    });
+  });
+});
+
+describe("#2195 — stopping while idle", () => {
+  const IDLE = { startMode: "auto", lifetime: "idle", idleMinutes: 1 } as const;
+  /** One configured "minute" lasts this many ms in these tests. */
+  const MINUTE = 40;
+
+  it("never stops mid-turn; stops one idle period after the turn's result", async () => {
+    writeLauncherSettingsFile(IDLE);
+    const { sup } = makeSupervisor({ idleMinuteMs: MINUTE });
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    // The bootstrap turn is in flight: well past the limit, still running.
+    await sleep(MINUTE * 3);
+    expect(child1.killed).toBe(false);
+    pushJson(child1, RESULT_OK);
+    await waitFor(() => child1.killed, "the idle stop");
+    await sleep(50);
+    await settle();
+    expect(children).toHaveLength(1);
+    expect(occurrences("Restarting Claude in")).toBe(0);
+    expect(sup.status()).toEqual({ running: false, standby: "idle", startsOnMessage: true });
+  });
+
+  it("starts the clock at spawn when a resumed spawn writes no turn", async () => {
+    writeLauncherSettingsFile(IDLE);
+    const { sup } = makeSupervisor({ idleMinuteMs: MINUTE });
+    await sup.startFresh(cwdDir);
+    pushJson(children[0], RESULT_OK);
+    await waitFor(() => children[0].killed, "the first idle stop");
+    await settle();
+    await sup.startByUser();
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([]);
+    await waitFor(() => child2.killed, "the resumed spawn's idle stop");
+  });
+
+  it("an event resets the clock: the wake turn runs, and the clock restarts at its result", async () => {
+    writeLauncherSettingsFile({ ...IDLE, idleMinutes: 3 });
+    const { sup, emit } = makeSupervisor({ idleMinuteMs: MINUTE });
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, RESULT_OK);
+    await settle();
+    await sleep(MINUTE * 2);
+    emit(chatEvent());
+    await sleep(MINUTE * 2);
+    // 4 "minutes" since the bootstrap result, but a turn is in flight.
+    expect(child1.killed).toBe(false);
+    pushJson(child1, RESULT_OK);
+    await waitFor(() => child1.killed, "the idle stop after the wake");
+  });
+
+  it("what the user sends while idle-stopped is owed: Start resumes with a wake turn", async () => {
+    writeLauncherSettingsFile(IDLE);
+    const { sup, emit } = makeSupervisor({ idleMinuteMs: MINUTE });
+    await sup.startFresh(cwdDir);
+    pushJson(children[0], RESULT_OK);
+    await waitFor(() => children[0].killed, "the idle stop");
+    await settle();
+    emit(chatEvent());
+    await sup.startByUser();
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  it("an event during the stop's SIGTERM grace is never written into the dying child", async () => {
+    writeLauncherSettingsFile(IDLE);
+    let releaseExit: (() => void) | null = null;
+    onSpawn = (child, index) => {
+      if (index !== 0) return;
+      // Hold child 1's exit until the test lets it go.
+      child.kill = (sig: NodeJS.Signals = "SIGTERM") => {
+        child.kills.push(sig);
+        child.killed = true;
+        releaseExit = () => {
+          child.signalCode = sig;
+          child.emit("exit", null, sig);
+        };
+        return true;
+      };
+    };
+    const { sup, emit } = makeSupervisor({ idleMinuteMs: MINUTE });
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, RESULT_OK);
+    await waitFor(() => child1.killed, "the idle stop's kill");
+    const writesBefore = child1.stdin.writes.length;
+    emit(chatEvent());
+    expect(child1.stdin.writes).toHaveLength(writesBefore);
+    (releaseExit as (() => void) | null)?.();
+    await settle();
+    await sup.startByUser();
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  it("does not count toward the crash breaker", async () => {
+    writeLauncherSettingsFile(IDLE);
+    const { sup } = makeSupervisor({ idleMinuteMs: 5 });
+    for (let i = 0; i < 12; i++) {
+      if (i === 0) await sup.startFresh(cwdDir);
+      else await sup.startByUser();
+      const child = await nthChild(i + 1);
+      pushJson(child, RESULT_OK);
+      await waitFor(() => child.killed, `idle stop ${i + 1}`);
+      await settle();
+    }
+    expect(occurrences("Restarting Claude in")).toBe(0);
+    expect(occurrences("Circuit breaker tripped")).toBe(0);
+    expect(sup.status()).toEqual({ running: false, standby: "idle", startsOnMessage: true });
+  });
+
+  it("a Settings change to idle arms the clock on the running child; back to always cancels it", async () => {
+    const { sup } = makeSupervisor({ idleMinuteMs: MINUTE });
+    await sup.startFresh(cwdDir);
+    const child1 = children[0];
+    pushJson(child1, RESULT_OK);
+    await settle();
+    await sup.updateSettings({ lifetime: "idle", idleMinutes: 2 });
+    await sup.updateSettings({ lifetime: "always" });
+    await sleep(MINUTE * 4);
+    expect(child1.killed).toBe(false);
+    await sup.updateSettings({ lifetime: "idle", idleMinutes: 1 });
+    await waitFor(() => child1.killed, "the idle stop after switching to idle");
+  });
+});
+
+describe("#2195 — review fixes", () => {
+  it("Off still stops Claude when the mode cannot be saved (a file from a newer Tandem)", async () => {
+    const { sup } = makeSupervisor();
+    await sup.start();
+    const child1 = await nthChild(1);
+    fs.writeFileSync(
+      path.join(baseDir, "launcher-settings.json"),
+      JSON.stringify({ version: 2, startMode: "auto" }),
+    );
+    await expect(sup.updateSettings({ startMode: "off" })).rejects.toThrow(/newer Tandem/);
+    expect(child1.killed).toBe(true);
+    expect(sup.status()).toEqual({ running: false, standby: "off", startsOnMessage: true });
+  });
+
+  it("a lifetime change while the file is unreadable keeps the real start mode, not the fallback's on-click", async () => {
+    writeLauncherSettingsFile({ startMode: "auto", lifetime: "always", idleMinutes: 30 });
+    const { sup } = makeSupervisor();
+    await sup.start();
+    await nthChild(1);
+    fs.writeFileSync(path.join(baseDir, "launcher-settings.json"), "{ truncated");
+    await sup.updateSettings({ lifetime: "idle" });
+    expect(readLauncherSettingsFile()).toMatchObject({ startMode: "auto", lifetime: "idle" });
+  });
+
+  it("the boot settings read counts as starting, never as a plain stopped launcher", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { sup } = makeSupervisor({
+      readSettings: async () => {
+        await held;
+        return {
+          source: "default",
+          settings: { startMode: "on-click", lifetime: "always", idleMinutes: 30 },
+        };
+      },
+    });
+    const booting = sup.start();
+    await settle();
+    expect(sup.status()).toMatchObject({ running: false, restartPending: true });
+    release();
+    await booting;
+    expect(sup.status()).toEqual({
+      running: false,
+      standby: "awaiting-start",
+      startsOnMessage: true,
+    });
+  });
+
+  it("a lifetime change that lands while a crash restart reads its plan reaches the restarted child", async () => {
+    const { sup } = makeSupervisor({ idleMinuteMs: 40 });
+    await sup.start();
+    const read = deferred<string>();
+    const reads = interceptIntegrationsReads((n, pass) => (n === 1 ? read.promise : pass()));
+    let child2: FakeChild;
+    try {
+      exitChild(await nthChild(1), 1);
+      await waitFor(() => reads.count() === 1, "the restart's integrations read");
+      // No child is alive, so nothing can take the new idle limit but the spawn.
+      await sup.updateSettings({ lifetime: "idle", idleMinutes: 1 });
+      read.resolve(fs.readFileSync(path.join(baseDir, "integrations.json"), "utf8"));
+      child2 = await nthChild(2);
+    } finally {
+      reads.restore();
+    }
+    await waitFor(() => child2.killed, "the restarted child's idle stop");
+  });
+});
+
+// --- #2196 ----------------------------------------------------------------------
+
+function replyEvent(parentAuthor: "user" | "claude" | "import", replyAuthor = "user"): TandemEvent {
+  eventSeq++;
+  return {
+    id: `evt_${eventSeq}`,
+    type: "annotation:reply",
+    timestamp: Date.now(),
+    documentId: "d1",
+    payload: {
+      annotationId: `ann_${eventSeq}`,
+      replyId: `rep_${eventSeq}`,
+      replyText: "yes, do that",
+      replyAuthor,
+      textSnippet: "x",
+      parentAuthor,
+    },
+  } as TandemEvent;
+}
+
+/** Rewrite integrations.json: `[]` for none, `null` for the default entry. */
+function writeIntegrations(list: [] | null): void {
+  const file = {
+    schemaVersion: 3,
+    integrations: list ?? [
+      {
+        kind: "claude-code",
+        id: "active",
+        label: "Active Claude",
+        configPath:
+          process.platform === "win32"
+            ? "C:\\Users\\test\\.claude.json"
+            : "/home/test/.claude.json",
+        transport: "http",
+        url: "http://127.0.0.1:3479/mcp",
+        apply: "create",
+        workingDirectory: cwdDir,
+      },
+    ],
+  };
+  fs.writeFileSync(path.join(baseDir, "integrations.json"), JSON.stringify(file));
+}
+
+/** A supervisor whose Claude ran once (so it has a saved session) and is now
+ * in the given standby, with nothing owed. */
+async function stoppedByChoice(
+  kind: "off" | "idle" | "awaiting-start",
+  extra: ExtraOpts = {},
+): Promise<ReturnType<typeof makeSupervisor>> {
+  if (kind === "awaiting-start") {
+    writeLauncherSettingsFile({ startMode: "on-click", lifetime: "always", idleMinutes: 30 });
+    const made = makeSupervisor(extra);
+    await made.sup.start();
+    return made;
+  }
+  const idle = kind === "idle";
+  writeLauncherSettingsFile({
+    startMode: "auto",
+    lifetime: idle ? "idle" : "always",
+    idleMinutes: 1,
+  });
+  const made = makeSupervisor({ idleMinuteMs: 40, ...extra });
+  await made.sup.startFresh(cwdDir);
+  pushJson(children[0], RESULT_OK);
+  await settle();
+  if (idle) await waitFor(() => children[0].killed, "the idle stop");
+  else await made.sup.updateSettings({ startMode: "off" });
+  await settle();
+  expect(made.sup.status()).toMatchObject({ running: false, standby: kind });
+  return made;
+}
+
+describe("#2196 — a message starts a Claude that is stopped by choice", () => {
+  it.each(["off", "idle"] as const)(
+    "%s: a chat starts Claude, resumes the saved session and writes the wake turn",
+    async (kind) => {
+      const { sup, emit } = await stoppedByChoice(kind);
+      expect(children).toHaveLength(1);
+      emit(chatEvent());
+      const child2 = await nthChild(2);
+      await waitFor(() => texts(child2).length > 0, "the wake turn");
+      expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+      expect(sup.status().running).toBe(true);
+    },
+  );
+
+  it("awaiting-start: a chat before the first Start starts Claude", async () => {
+    const { sup, emit } = await stoppedByChoice("awaiting-start");
+    expect(children).toHaveLength(0);
+    emit(chatEvent());
+    await nthChild(1);
+    await waitFor(() => sup.status().running, "running");
+  });
+
+  it("from off, the saved mode becomes on-click (Bryan, 2026-10-13)", async () => {
+    const { emit } = await stoppedByChoice("off");
+    emit(chatEvent());
+    await nthChild(2);
+    expect(readLauncherSettingsFile().startMode).toBe("on-click");
+  });
+
+  it("a user's reply on Claude's comment starts it", async () => {
+    const { emit } = await stoppedByChoice("off");
+    emit(replyEvent("claude"));
+    await nthChild(2);
+  });
+
+  it.each([
+    ["a reply on a user-authored parent", () => replyEvent("user")],
+    ["a reply on an imported Word comment", () => replyEvent("import")],
+    ["Claude's own reply", () => replyEvent("claude", "claude")],
+    ["a new comment", () => annotationEvent()],
+  ])("%s does not start it", async (_label, make) => {
+    const { sup, emit } = await stoppedByChoice("off");
+    emit(make());
+    await sleep(30);
+    await settle();
+    expect(children).toHaveLength(1);
+    expect(sup.status()).toMatchObject({ running: false, standby: "off" });
+  });
+
+  it("the status reads as starting from the moment the message lands", async () => {
+    const { sup, emit } = await stoppedByChoice("idle");
+    const read = deferred<string>();
+    const reads = interceptIntegrationsReads((n, pass) => (n === 1 ? read.promise : pass()));
+    try {
+      emit(chatEvent());
+      // Synchronously, before the start has even taken the lock.
+      expect(sup.status()).toMatchObject({ restartPending: true, standby: "idle" });
+      read.resolve(fs.readFileSync(path.join(baseDir, "integrations.json"), "utf8"));
+    } finally {
+      reads.restore();
+    }
+    await nthChild(2);
+  });
+
+  it("a declined start clears the pending status", async () => {
+    let other = false;
+    const { sup, emit } = await stoppedByChoice("off", { otherAiAttached: () => other });
+    emit(chatEvent());
+    // Clear when the message landed; attached by the time its start runs
+    // (the lock body runs on a later microtask).
+    other = true;
+    expect(sup.status()).toMatchObject({ restartPending: true });
+    await waitFor(() => !("restartPending" in sup.status()), "the pending flag to clear");
+    expect(children).toHaveLength(1);
+  });
+
+  it("a burst of messages makes exactly one spawn", async () => {
+    const { emit } = await stoppedByChoice("idle");
+    for (let i = 0; i < 5; i++) emit(chatEvent());
+    await nthChild(2);
+    await sleep(30);
+    await settle();
+    expect(children).toHaveLength(2);
+  });
+
+  it("once Claude is running, a chat is a wake to it, not another start", async () => {
+    const { emit } = await stoppedByChoice("off");
+    emit(chatEvent());
+    const child2 = await nthChild(2);
+    await waitFor(() => texts(child2).length === 1, "the wake turn");
+    pushJson(child2, RESULT_OK);
+    await settle();
+    emit(chatEvent());
+    await settle();
+    expect(children).toHaveLength(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT, SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  it("not while another AI is attached (Bryan: 'Not if another AI is on')", async () => {
+    let other = true;
+    const seen: Array<ReadonlySet<string>> = [];
+    const { sup, emit } = await stoppedByChoice("off", {
+      otherAiAttached: (own) => {
+        seen.push(own);
+        return other;
+      },
+    });
+    emit(chatEvent());
+    await sleep(30);
+    await settle();
+    expect(children).toHaveLength(1);
+    // The check is told Tandem's own last session, so that child's leftover
+    // entry is not mistaken for someone else's.
+    expect([...(seen.at(-1) ?? [])]).toEqual([expect.stringMatching(/^[0-9a-f-]{36}$/)]);
+    expect(sup.status()).toEqual({ running: false, standby: "off" });
+    // The declined message is not owed either: a later Start writes no turn.
+    other = false;
+    await sup.startByUser();
+    const child2 = await nthChild(2);
+    await settle();
+    expect(texts(child2)).toEqual([]);
+  });
+
+  it("every child it spawned counts as its own, not only the last — a start-fresh leaves no 'other AI'", async () => {
+    // The first child's entry is still live (a stopped child's lingers up to a
+    // minute); anything live outside the set reads as another AI.
+    const live: string[] = [];
+    const { sup, emit } = makeSupervisor({
+      otherAiAttached: (own) => live.some((id) => !own.has(id)),
+    });
+    await sup.startFresh(cwdDir);
+    const first = sup.status();
+    if (!first.running) throw new Error("not running");
+    live.push(first.sessionId);
+    await sup.startFresh(cwdDir);
+    await nthChild(2);
+    await sup.updateSettings({ startMode: "off" });
+    emit(chatEvent());
+    await nthChild(3);
+  });
+
+  it("another AI attaching before the start gets the lock still stops it", async () => {
+    let calls = 0;
+    const { emit } = await stoppedByChoice("off", {
+      // Clear when the message arrives, attached by the time the start runs.
+      otherAiAttached: () => ++calls > 1,
+    });
+    calls = 0;
+    emit(chatEvent());
+    await sleep(30);
+    await settle();
+    expect(calls).toBeGreaterThanOrEqual(2);
+    expect(children).toHaveLength(1);
+  });
+
+  it("a message that waits behind the user's own Start is still owed to that spawn", async () => {
+    const { sup, emit } = await stoppedByChoice("idle");
+    const read = deferred<string>();
+    const reads = interceptIntegrationsReads((n, pass) => (n === 1 ? read.promise : pass()));
+    try {
+      const started = sup.startByUser();
+      await waitFor(() => reads.count() === 1, "Start's plan read");
+      // Start holds the lock and has not spawned: the chat's own start queues
+      // behind it, and the chat must ride on Start's spawn.
+      emit(chatEvent());
+      read.resolve(fs.readFileSync(path.join(baseDir, "integrations.json"), "utf8"));
+      await started;
+    } finally {
+      reads.restore();
+    }
+    const child2 = await nthChild(2);
+    await waitFor(() => texts(child2).length > 0, "the wake turn");
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+    await sleep(30);
+    expect(children).toHaveLength(2);
+  });
+
+  it("a licence refusal starts nothing and does not loop; a later message tries again", async () => {
+    let refused = false;
+    const { sup, emit } = await stoppedByChoice("off", {
+      aiRefusal: () => (refused ? LICENCE_REFUSAL : null),
+    });
+    refused = true;
+    // Before any attempt, the status already says a message would not start it.
+    expect(sup.status()).toEqual({ running: false, standby: "off" });
+    emit(chatEvent());
+    await sleep(30);
+    await settle();
+    expect(children).toHaveLength(1);
+    expect(occurrences("Could not start Claude for the message: unlicensed")).toBe(1);
+    expect(readLauncherSettingsFile().startMode).toBe("off");
+    refused = false;
+    emit(chatEvent());
+    await nthChild(2);
+  });
+
+  it("with no integration, a chat starts nothing and leaves the mode alone", async () => {
+    const { emit } = await stoppedByChoice("off");
+    writeIntegrations([]);
+    emit(chatEvent());
+    await waitFor(
+      () => occurrences("Could not start Claude for the message: no-integration") === 1,
+      "the no-integration log",
+    );
+    expect(children).toHaveLength(1);
+    expect(readLauncherSettingsFile().startMode).toBe("off");
+  });
+
+  it.each([
+    ["finds no integration", () => writeIntegrations([])],
+    ["throws reading its plan", null],
+  ] as const)(
+    "a Start from off that %s owes nothing to a later spawn (#1866)",
+    async (_label, breakIt) => {
+      const { sup, emit } = await stoppedByChoice("off");
+      if (breakIt) {
+        breakIt();
+        expect(await sup.startByUser()).toEqual({ spawned: false, why: "no-integration" });
+      } else {
+        const reads = interceptIntegrationsReads(() => Promise.reject(new Error("boom")));
+        try {
+          await expect(sup.startByUser()).rejects.toThrow("boom");
+        } finally {
+          reads.restore();
+        }
+      }
+      // Still off: a new comment is owed to nothing.
+      emit(annotationEvent());
+      writeIntegrations(null);
+      await sup.startByUser();
+      const child2 = await nthChild(2);
+      await settle();
+      expect(texts(child2)).toEqual([]);
+    },
+  );
+
+  it("a plan read that throws leaves a visible failure, not a silent Start chip", async () => {
+    const { sup, emit } = await stoppedByChoice("off");
+    const reads = interceptIntegrationsReads(() => Promise.reject(new Error("boom")));
+    try {
+      emit(chatEvent());
+      await waitFor(() => sup.status().lastError, "lastError");
+    } finally {
+      reads.restore();
+    }
+    expect(sup.status()).toMatchObject({ running: false, lastError: "spawn-failed" });
+    expect(sup.status()).not.toHaveProperty("standby");
+  });
+
+  it("after the public stop() (shutdown), a message starts nothing", async () => {
+    const { sup, emit } = await stoppedByChoice("idle");
+    await sup.stop();
+    emit(chatEvent());
+    await sleep(30);
+    await settle();
+    expect(children).toHaveLength(1);
+  });
+
+  it("a message that queued behind shutdown's stop() starts nothing", async () => {
+    const { sup, emit } = await stoppedByChoice("idle");
+    const stopping = sup.stop();
+    emit(chatEvent());
+    await stopping;
+    await sleep(30);
+    await settle();
+    expect(children).toHaveLength(1);
+  });
+
+  it("a Turn off that takes the lock between the message and its start still leaves the message owed", async () => {
+    const { sup, emit } = await stoppedByChoice("idle");
+    // Off queues first; the chat's start queues behind it.
+    const off = sup.updateSettings({ startMode: "off" });
+    emit(chatEvent());
+    await off;
+    // The message still starts Claude from off, and the start still answers it.
+    const child2 = await nthChild(2);
+    await waitFor(() => texts(child2).length > 0, "the wake turn");
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+  });
+
+  it("from off, a message that arrives before the user's own Start rides on that Start's spawn", async () => {
+    const { sup, emit } = await stoppedByChoice("off");
+    // Hold the lock with a plan read, so Start and the message's start both
+    // queue behind it — Start first, before it has armed anything.
+    const read = deferred<string>();
+    const reads = interceptIntegrationsReads((n, pass) => (n === 1 ? read.promise : pass()));
+    try {
+      const holding = sup.refreshConfigured();
+      await waitFor(() => reads.count() === 1, "the held plan read");
+      const started = sup.startByUser();
+      emit(chatEvent());
+      read.resolve(fs.readFileSync(path.join(baseDir, "integrations.json"), "utf8"));
+      await holding;
+      await started;
+    } finally {
+      reads.restore();
+    }
+    const child2 = await nthChild(2);
+    await waitFor(() => texts(child2).length > 0, "the wake turn");
+    expect(texts(child2)).toEqual([SUPERVISOR_WAKE_PROMPT]);
+    await sleep(30);
+    expect(children).toHaveLength(2);
+  });
+
+  it("a message start queued AHEAD of shutdown's stop() spawns nothing", async () => {
+    const { sup, emit } = await stoppedByChoice("idle");
+    const read = deferred<string>();
+    const reads = interceptIntegrationsReads((n, pass) => (n === 1 ? read.promise : pass()));
+    let stopping: Promise<void>;
+    try {
+      const holding = sup.refreshConfigured();
+      await waitFor(() => reads.count() === 1, "the held plan read");
+      emit(chatEvent()); // queued first
+      stopping = sup.stop(); // queued second
+      read.resolve(fs.readFileSync(path.join(baseDir, "integrations.json"), "utf8"));
+      await holding;
+      await stopping;
+    } finally {
+      reads.restore();
+    }
+    await sleep(30);
+    await settle();
+    expect(children).toHaveLength(1);
+    // And an Off after shutdown arms nothing either.
+    await sup.updateSettings({ startMode: "off" });
+    emit(chatEvent());
+    await sleep(30);
+    await settle();
+    expect(children).toHaveLength(1);
+  });
+
+  it("a message never starts a Claude whose crash breaker tripped; Start does, and resets it", async () => {
+    const { sup, emit } = makeSupervisor({ restartBackoffsMs: [0] });
+    await sup.startFresh(cwdDir);
+    for (let n = 1; ; n++) {
+      exitChild(children[n - 1], 1);
+      const st = sup.status();
+      if (!st.running && st.lastError !== undefined) break;
+      await nthChild(n + 1);
+      await waitFor(() => sup.status().running, `restart ${n}`);
+    }
+    expect(sup.status()).toMatchObject({ running: false, lastError: "circuit-open" });
+    // The user turns it off. Nothing promises that a chat starts it…
+    await sup.updateSettings({ startMode: "off" });
+    expect(sup.status()).toEqual({ running: false, standby: "off" });
+    // …and a chat does not.
+    const before = children.length;
+    emit(chatEvent());
+    await sleep(50);
+    await settle();
+    expect(children).toHaveLength(before);
+    // Start does, and clears the breaker: its next crash is restarted.
+    await sup.startByUser();
+    const next = await nthChild(before + 1);
+    exitChild(next, 1);
+    await nthChild(before + 2);
+  });
+
+  it("status never promises a message start once shutdown has begun", async () => {
+    const { sup } = await stoppedByChoice("off", { otherAiAttached: () => false });
+    // While the stop is still running, as well as after it.
+    const stopping = sup.stop();
+    expect(sup.status()).not.toHaveProperty("startsOnMessage");
+    await stopping;
+    expect(sup.status()).not.toHaveProperty("startsOnMessage");
+  });
+
+  it("status says a message would start Claude only in standby with nothing in the way", async () => {
+    const { sup } = await stoppedByChoice("off", { otherAiAttached: () => false });
+    expect(sup.status()).toEqual({ running: false, standby: "off", startsOnMessage: true });
+  });
+});
+
+describe("#2196 — the standby watch's DEFAULT subscription, against the real queue", () => {
+  // No `subscribeDuringStandby` seam here: the default is what production runs,
+  // and the Solo hold is decided by the queue before any fan-out.
+  async function offWithRealQueue(): Promise<Supervisor> {
+    resetForTesting();
+    writeLauncherSettingsFile({ startMode: "off", lifetime: "always", idleMinutes: 30 });
+    const sup = createSupervisor({
+      probeCliUsable: () => true,
+      resolveClaudeCommand: () => process.execPath,
+      restartBackoffsMs: [0],
+      integrationsBase: baseDir,
+      subscribeToEvents: () => () => {},
+      subscribeDuringGap: () => () => {},
+    });
+    sups.push(sup);
+    await sup.start();
+    expect(sup.status()).toMatchObject({ standby: "off" });
+    return sup;
+  }
+
+  afterEach(() => setCtrlMode("tandem"));
+
+  it("in Solo, a user's reply on Claude's comment is held and starts nothing; a chat still does", async () => {
+    await offWithRealQueue();
+    setCtrlMode("solo");
+    _pushEventForTests(replyEvent("claude"));
+    await sleep(30);
+    await settle();
+    expect(children).toHaveLength(0);
+    _pushEventForTests(chatEvent());
+    await nthChild(1);
+  });
+
+  it("in Tandem mode, the same reply starts Claude", async () => {
+    await offWithRealQueue();
+    setCtrlMode("tandem");
+    _pushEventForTests(replyEvent("claude"));
+    await nthChild(1);
+  });
+});
+
+// --- #2197 ----------------------------------------------------------------------
+
+describe("#2197 — startAfterSetup: a wizard Apply starts Tandem's Claude when it should", () => {
+  /** Boot with no integration (the first-run state), then write one. */
+  async function firstRunSupervisor(extra: ExtraOpts = {}, settings?: Record<string, unknown>) {
+    if (settings) writeLauncherSettingsFile(settings);
+    writeIntegrations([]);
+    const made = makeSupervisor(extra);
+    await made.sup.start();
+    expect(made.sup.status()).toMatchObject({ running: false, configured: false });
+    writeIntegrations(null);
+    return made;
+  }
+
+  it("auto, never configured: starts, fresh, and answers 'starting'", async () => {
+    const { sup } = await firstRunSupervisor();
+    expect(await sup.startAfterSetup()).toBe("starting");
+    const child = await nthChild(1);
+    await waitFor(() => sup.status().running, "running");
+    expect(texts(child)).toEqual([SUPERVISOR_INITIAL_PROMPT]);
+  });
+
+  it.each([
+    ["on-click", { startMode: "on-click", lifetime: "always", idleMinutes: 30 }],
+    ["off", { startMode: "off", lifetime: "always", idleMinutes: 30 }],
+  ])("%s: holds — an Apply is not a Start", async (_l, settings) => {
+    const { sup } = await firstRunSupervisor({}, settings);
+    expect(await sup.startAfterSetup()).toBe("held");
+    await sleep(30);
+    expect(children).toHaveLength(0);
+  });
+
+  it("a running Claude is left alone: 'running', no relaunch", async () => {
+    const { sup } = makeSupervisor();
+    await sup.start();
+    const child1 = await nthChild(1);
+    expect(await sup.startAfterSetup()).toBe("running");
+    await sleep(30);
+    expect(children).toHaveLength(1);
+    expect(child1.killed).toBe(false);
+  });
+
+  it("idle-stopped is a choice too: held", async () => {
+    const { sup } = await stoppedByChoice("idle");
+    expect(await sup.startAfterSetup()).toBe("held");
+    await sleep(30);
+    expect(children).toHaveLength(1);
+  });
+
+  it("no usable entry: 'not-configured'", async () => {
+    writeIntegrations([]);
+    const { sup } = makeSupervisor();
+    await sup.start();
+    expect(await sup.startAfterSetup()).toBe("not-configured");
+    expect(children).toHaveLength(0);
+  });
+
+  it("the licence refuses: 'refused', nothing spawned", async () => {
+    const { sup } = await firstRunSupervisor({ aiRefusal: () => LICENCE_REFUSAL });
+    expect(await sup.startAfterSetup()).toBe("refused");
+    await sleep(30);
+    expect(children).toHaveLength(0);
+  });
+
+  it("another AI is attached: 'other-ai', nothing spawned (#2196's rule)", async () => {
+    const { sup } = await firstRunSupervisor({ otherAiAttached: () => true });
+    expect(await sup.startAfterSetup()).toBe("other-ai");
+    await sleep(30);
+    expect(children).toHaveLength(0);
+  });
+
+  it("another AI attached AND the licence refusing: no refusal recorded, so activating starts nothing beside it", async () => {
+    let refused = true;
+    const { sup } = await firstRunSupervisor({
+      aiRefusal: () => (refused ? LICENCE_REFUSAL : null),
+      otherAiAttached: () => true,
+    });
+    expect(await sup.startAfterSetup()).toBe("other-ai");
+    expect(sup.licenceRefusal()).toBeNull();
+    refused = false;
+    await sup.resumeAfterLicence();
+    await sleep(30);
+    expect(children).toHaveLength(0);
+  });
+
+  it("a sign-in stop (a tripped breaker) is a diagnosis: held, nothing spawned", async () => {
+    const { sup } = makeSupervisor();
+    await sup.startFresh(cwdDir);
+    pushJson(children[0], {
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      result: "Not logged in · Please run /login",
+    });
+    await waitFor(() => !sup.status().running, "the sign-in stop");
+    expect(await sup.startAfterSetup()).toBe("held");
+    await sleep(30);
+    expect(children).toHaveLength(1);
+  });
+
+  it("'refused' is recorded, so activating the licence starts it", async () => {
+    let refused = true;
+    const { sup } = await firstRunSupervisor({
+      aiRefusal: () => (refused ? LICENCE_REFUSAL : null),
+    });
+    expect(await sup.startAfterSetup()).toBe("refused");
+    expect(sup.licenceRefusal()).not.toBeNull();
+    refused = false;
+    await sup.resumeAfterLicence();
+    await nthChild(1);
+  });
+
+  it("after shutdown's stop(): held", async () => {
+    const { sup } = await firstRunSupervisor();
+    await sup.stop();
+    expect(await sup.startAfterSetup()).toBe("held");
+    await sleep(30);
+    expect(children).toHaveLength(0);
+  });
+
+  it("answers before the spawn finishes", async () => {
+    const { sup } = await firstRunSupervisor();
+    const read = deferred<string>();
+    // Read 1 is the decision's plan; read 2 is the respawn's own plan.
+    const reads = interceptIntegrationsReads((n, pass) => (n === 2 ? read.promise : pass()));
+    try {
+      expect(await sup.startAfterSetup()).toBe("starting");
+      expect(children).toHaveLength(0);
+      read.resolve(fs.readFileSync(path.join(baseDir, "integrations.json"), "utf8"));
+    } finally {
+      reads.restore();
+    }
+    await nthChild(1);
+  });
+
+  it("a start that throws after the decision is recorded, not rejected", async () => {
+    const { sup } = await firstRunSupervisor();
+    const reads = interceptIntegrationsReads((n, pass) =>
+      n === 2 ? Promise.reject(new Error("boom")) : pass(),
+    );
+    try {
+      expect(await sup.startAfterSetup()).toBe("starting");
+      await waitFor(() => sup.status().lastError, "lastError");
+    } finally {
+      reads.restore();
+    }
+    expect(sup.status()).toMatchObject({ running: false, lastError: "spawn-failed" });
+  });
+});
+
+describe("#2198 — the v1.0 walkthrough holds the boot start", () => {
+  const settings = (startMode: string) => ({ startMode, lifetime: "always", idleMinutes: 30 });
+
+  it("automatic, walkthrough owed: the boot waits in awaiting-start, and the confirm starts it", async () => {
+    writeLauncherSettingsFile(settings("auto"));
+    const { sup } = makeSupervisor({ walkthroughPending: () => true });
+    await sup.start();
+    await sleep(30);
+    expect(children).toHaveLength(0);
+    expect(sup.status()).toMatchObject({ running: false, standby: "awaiting-start" });
+    expect(await sup.startAfterSetup()).toBe("starting");
+    await nthChild(1);
+  });
+
+  it("control: nothing owed, the automatic boot starts as before", async () => {
+    writeLauncherSettingsFile(settings("auto"));
+    const { sup } = makeSupervisor({ walkthroughPending: () => false });
+    await sup.start();
+    await nthChild(1);
+  });
+
+  it("a read that throws does not hold the boot", async () => {
+    writeLauncherSettingsFile(settings("auto"));
+    const { sup } = makeSupervisor({
+      walkthroughPending: () => {
+        throw new Error("EACCES");
+      },
+    });
+    await sup.start();
+    await nthChild(1);
+  });
+
+  it("on-click kept through the walkthrough: the confirm starts nothing", async () => {
+    writeLauncherSettingsFile(settings("on-click"));
+    const { sup } = makeSupervisor({ walkthroughPending: () => true });
+    await sup.start();
+    expect(await sup.startAfterSetup()).toBe("held");
+    await sleep(30);
+    expect(children).toHaveLength(0);
+  });
+
+  it.each(["on-click", "off"])(
+    "%s at boot, automatic chosen in the walkthrough: the confirm starts it",
+    async (mode) => {
+      writeLauncherSettingsFile(settings(mode));
+      const { sup } = makeSupervisor({ walkthroughPending: () => true });
+      await sup.start();
+      await sup.updateSettings({ startMode: "auto" });
+      expect(await sup.startAfterSetup()).toBe("starting");
+      await nthChild(1);
+    },
+  );
+
+  it("control: the same mode change with no walkthrough owed stays a #2195 hold", async () => {
+    writeLauncherSettingsFile(settings("on-click"));
+    const { sup } = makeSupervisor({ walkthroughPending: () => false });
+    await sup.start();
+    await sup.updateSettings({ startMode: "auto" });
+    expect(await sup.startAfterSetup()).toBe("held");
+    await sleep(30);
+    expect(children).toHaveLength(0);
+  });
+
+  it("the hold is released once: a later Apply follows the ordinary rules", async () => {
+    writeLauncherSettingsFile(settings("on-click"));
+    const { sup } = makeSupervisor({ walkthroughPending: () => true });
+    await sup.start();
+    expect(await sup.startAfterSetup()).toBe("held"); // the confirm, on-click kept
+    await sup.updateSettings({ startMode: "auto" });
+    expect(await sup.startAfterSetup()).toBe("held");
+    await sleep(30);
+    expect(children).toHaveLength(0);
+  });
+
+  it("a confirm with no Claude Code setup keeps the hold: adding Claude Code later this launch starts it", async () => {
+    // A Desktop-only user clicks Continue without connecting, then connects
+    // Claude Code from Settings in the same launch.
+    writeLauncherSettingsFile(settings("auto"));
+    writeIntegrations([]);
+    const { sup } = makeSupervisor({ walkthroughPending: () => true });
+    await sup.start();
+    expect(await sup.startAfterSetup()).toBe("not-configured");
+    writeIntegrations(null);
+    expect(await sup.startAfterSetup()).toBe("starting");
+    await nthChild(1);
+  });
+
+  it("a chat during the walkthrough still starts Claude: the user asked (#2196)", async () => {
+    writeLauncherSettingsFile(settings("auto"));
+    const { sup, emit } = makeSupervisor({ walkthroughPending: () => true });
+    await sup.start();
+    expect(sup.status()).toMatchObject({ standby: "awaiting-start", startsOnMessage: true });
+    emit(chatEvent());
+    await nthChild(1);
+  });
+});
+
+describe("#2197 — the one-time greeting", () => {
+  function greetingSeam(owed = true) {
+    const state = { owed, throws: false };
+    const markDone = vi.fn(async () => {
+      state.owed = false;
+    });
+    const replyCbs = new Set<(sessionId: string | undefined) => void>();
+    const extra: ExtraOpts = {
+      greeting: {
+        isOwed: () => {
+          if (state.throws) throw new Error("unreadable");
+          return state.owed;
+        },
+        markDone,
+      },
+      subscribeTandemReply: (cb) => {
+        replyCbs.add(cb);
+        return () => replyCbs.delete(cb);
+      },
+    };
+    /** A `tandem_reply` landed; no session id unless one is given. */
+    const claudeWrote = (sessionId?: string) => {
+      for (const cb of [...replyCbs]) cb(sessionId);
+    };
+    return { state, markDone, extra, claudeWrote };
+  }
+
+  it("a fresh spawn that owes the greeting sends it INSTEAD of the bootstrap", async () => {
+    const g = greetingSeam();
+    const { sup } = makeSupervisor(g.extra);
+    await sup.startFresh(cwdDir);
+    expect(texts(children[0])).toEqual([SUPERVISOR_GREETING_PROMPT]);
+  });
+
+  it("control: not owed, the ordinary bootstrap", async () => {
+    const g = greetingSeam(false);
+    const { sup } = makeSupervisor(g.extra);
+    await sup.startFresh(cwdDir);
+    expect(texts(children[0])).toEqual([SUPERVISOR_INITIAL_PROMPT]);
+  });
+
+  it("an unreadable marker reads as not owed", async () => {
+    const g = greetingSeam();
+    g.state.throws = true;
+    const { sup } = makeSupervisor(g.extra);
+    await sup.startFresh(cwdDir);
+    expect(texts(children[0])).toEqual([SUPERVISOR_INITIAL_PROMPT]);
+  });
+
+  it("a resumed spawn that owes it sends it in place of the wake — one turn, not two", async () => {
+    const g = greetingSeam(false);
+    const { sup, emit } = makeSupervisor({ ...g.extra, idleMinuteMs: 40 });
+    writeLauncherSettingsFile({ startMode: "auto", lifetime: "idle", idleMinutes: 1 });
+    await sup.startFresh(cwdDir);
+    pushJson(children[0], RESULT_OK);
+    await waitFor(() => children[0].killed, "the idle stop");
+    // Owed now — the v1.0 re-arm reaches a user with a saved session — and a
+    // chat is owed too. The chat starts it (#2196).
+    g.state.owed = true;
+    emit(chatEvent());
+    const child2 = await nthChild(2);
+    await waitFor(() => texts(child2).length > 0, "the first turn");
+    await settle();
+    expect(texts(child2)).toEqual([SUPERVISOR_GREETING_PROMPT]);
+  });
+
+  it("a Claude chat message marks it done once; the next spawn gets the ordinary bootstrap", async () => {
+    const g = greetingSeam();
+    const { sup } = makeSupervisor(g.extra);
+    await sup.startFresh(cwdDir);
+    g.claudeWrote();
+    g.claudeWrote();
+    expect(g.markDone).toHaveBeenCalledTimes(1);
+    pushJson(children[0], RESULT_OK);
+    await settle();
+    expect(sup.status()).not.toHaveProperty("greetingLate");
+    await sup.startFresh(cwdDir);
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_INITIAL_PROMPT]);
+  });
+
+  it("a reply from a session this supervisor did not spawn is not the greeting; its own child's is", async () => {
+    const g = greetingSeam();
+    const { sup } = makeSupervisor(g.extra);
+    await sup.startFresh(cwdDir);
+    const own = JSON.parse(
+      fs.readFileSync(path.join(baseDir, "launcher-session.json"), "utf8"),
+    ) as { sessionId: string };
+    g.claudeWrote("someone-else");
+    expect(g.markDone).not.toHaveBeenCalled();
+    g.claudeWrote(own.sessionId);
+    expect(g.markDone).toHaveBeenCalledTimes(1);
+  });
+
+  it("matches its own child's session id case-insensitively", async () => {
+    const g = greetingSeam();
+    const { sup } = makeSupervisor(g.extra);
+    await sup.startFresh(cwdDir);
+    const own = JSON.parse(
+      fs.readFileSync(path.join(baseDir, "launcher-session.json"), "utf8"),
+    ) as { sessionId: string };
+    g.claudeWrote(own.sessionId.toUpperCase());
+    expect(g.markDone).toHaveBeenCalledTimes(1);
+  });
+
+  it("in Solo the hello waits: the ordinary first turn, still owed, then greeted in Tandem mode", async () => {
+    const g = greetingSeam();
+    let solo = true;
+    const { sup } = makeSupervisor({ ...g.extra, greetingHeldBySolo: () => solo });
+    await sup.startFresh(cwdDir);
+    expect(texts(children[0])).toEqual([SUPERVISOR_INITIAL_PROMPT]);
+    pushJson(children[0], RESULT_OK);
+    await settle();
+    expect(sup.status()).not.toHaveProperty("greetingLate");
+    expect(g.state.owed).toBe(true);
+    solo = false;
+    await sup.startFresh(cwdDir);
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_GREETING_PROMPT]);
+  });
+
+  it("a mode read that throws holds the hello too", async () => {
+    const g = greetingSeam();
+    const { sup } = makeSupervisor({
+      ...g.extra,
+      greetingHeldBySolo: () => {
+        throw new Error("ctrl doc gone");
+      },
+    });
+    await sup.startFresh(cwdDir);
+    expect(texts(children[0])).toEqual([SUPERVISOR_INITIAL_PROMPT]);
+  });
+
+  it("a marker write that fails cannot make this process greet twice", async () => {
+    const g = greetingSeam();
+    g.markDone.mockImplementation(async () => {
+      throw new Error("EPERM");
+    });
+    const { sup } = makeSupervisor(g.extra);
+    await sup.startFresh(cwdDir);
+    g.claudeWrote();
+    await settle();
+    // The file still says owed.
+    expect(g.state.owed).toBe(true);
+    await sup.startFresh(cwdDir);
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_INITIAL_PROMPT]);
+    expect(occurrences("Could not record that the greeting was sent")).toBe(1);
+  });
+
+  it("a greeting turn that ends with no chat message is late, but spent: never sent again", async () => {
+    // "Once" must not hang on spotting the reply (a hello posted in a comment
+    // thread, a session id we could not match): a miss would re-send it on
+    // every later spawn.
+    const g = greetingSeam();
+    const { sup } = makeSupervisor(g.extra);
+    await sup.startFresh(cwdDir);
+    expect(sup.status()).not.toHaveProperty("greetingLate");
+    pushJson(children[0], RESULT_OK);
+    await settle();
+    expect(sup.status()).toMatchObject({ running: true, greetingLate: true });
+    expect(g.markDone).toHaveBeenCalledTimes(1);
+    expect(g.state.owed).toBe(false);
+    // A later reply from the child still clears the note.
+    g.claudeWrote();
+    expect(sup.status()).not.toHaveProperty("greetingLate");
+    expect(g.markDone).toHaveBeenCalledTimes(1);
+    await sup.startFresh(cwdDir);
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_INITIAL_PROMPT]);
+  });
+
+  it("the restart the note advises retires the note, though the hello is spent", async () => {
+    const g = greetingSeam();
+    const { sup } = makeSupervisor(g.extra);
+    await sup.startFresh(cwdDir);
+    pushJson(children[0], RESULT_OK);
+    await settle();
+    expect(sup.status()).toMatchObject({ greetingLate: true });
+    await sup.relaunch(cwdDir);
+    await nthChild(2);
+    expect(sup.status()).not.toHaveProperty("greetingLate");
+  });
+
+  it("an errored greeting turn leaves it owed, and the next spawn greets", async () => {
+    const g = greetingSeam();
+    const { sup } = makeSupervisor(g.extra);
+    await sup.startFresh(cwdDir);
+    pushJson(children[0], { type: "result", subtype: "error_during_execution", is_error: true });
+    await settle();
+    expect(g.markDone).not.toHaveBeenCalled();
+    await sup.startFresh(cwdDir);
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_GREETING_PROMPT]);
+    // A new greeting turn is pending again, not late.
+    expect(sup.status()).not.toHaveProperty("greetingLate");
+  });
+
+  it("an error subtype with no is_error flag also leaves it owed", async () => {
+    const g = greetingSeam();
+    const { sup } = makeSupervisor(g.extra);
+    await sup.startFresh(cwdDir);
+    pushJson(children[0], { type: "result", subtype: "error_during_execution" });
+    await settle();
+    expect(g.markDone).not.toHaveBeenCalled();
+  });
+
+  it("a subtype this build doesn't know spends the greeting — never greet on every spawn", async () => {
+    const g = greetingSeam();
+    const { sup } = makeSupervisor(g.extra);
+    await sup.startFresh(cwdDir);
+    pushJson(children[0], { type: "result", subtype: "some_new_kind", is_error: false });
+    await settle();
+    expect(g.markDone).toHaveBeenCalled();
+  });
+
+  it("a malformed subtype on the greeting's result is survived, not thrown", async () => {
+    const g = greetingSeam();
+    const { sup } = makeSupervisor(g.extra);
+    await sup.startFresh(cwdDir);
+    pushJson(children[0], { type: "result", subtype: 42 });
+    await settle();
+    expect(g.markDone).toHaveBeenCalled();
+    expect(sup.status().running).toBe(true);
+  });
+
+  it("a crash before the greeting turn ends: the crash restart does not greet again", async () => {
+    const g = greetingSeam();
+    const { sup } = makeSupervisor(g.extra);
+    await sup.startFresh(cwdDir);
+    exitChild(children[0], 1);
+    const child2 = await nthChild(2);
+    await settle();
+    expect(texts(child2)).not.toContain(SUPERVISOR_GREETING_PROMPT);
+    // Still owed on disk: the next Tandem launch tries again.
+    expect(g.state.owed).toBe(true);
+    await sup.stop();
+  });
+
+  it("a restart we asked for while the greeting is pending greets again", async () => {
+    const g = greetingSeam();
+    const { sup } = makeSupervisor(g.extra);
+    await sup.startFresh(cwdDir);
+    await sup.startFresh(cwdDir);
+    const child2 = await nthChild(2);
+    expect(texts(child2)).toEqual([SUPERVISOR_GREETING_PROMPT]);
+  });
+
+  it("no note while stopped by choice: Off after an unanswered greeting", async () => {
+    const g = greetingSeam();
+    const { sup } = makeSupervisor(g.extra);
+    await sup.startFresh(cwdDir);
+    pushJson(children[0], RESULT_OK);
+    await settle();
+    expect(sup.status()).toMatchObject({ greetingLate: true });
+    await sup.updateSettings({ startMode: "off" });
+    await settle();
+    expect(sup.status()).toMatchObject({ running: false, standby: "off" });
+    expect(sup.status()).not.toHaveProperty("greetingLate");
+  });
+
+  it("a resumed spawn owing both the greeting and a sign-in re-check writes one turn", async () => {
+    const g = greetingSeam(false);
+    const first = makeSupervisor(g.extra).sup;
+    await first.startFresh(cwdDir);
+    pushJson(children[0], {
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      result: "Not logged in · Please run /login",
+    });
+    await waitFor(() => !first.status().running, "the sign-in stop");
+    await first.stop();
+    g.state.owed = true;
+    const { sup } = makeSupervisor(g.extra);
+    await sup.start();
+    const child2 = await nthChild(2);
+    await settle();
+    expect(texts(child2)).toEqual([SUPERVISOR_GREETING_PROMPT]);
+  });
+
+  it("still pending past the window is late; a message then clears it", async () => {
+    const g = greetingSeam();
+    const { sup } = makeSupervisor({ ...g.extra, greetingWindowMs: 40 });
+    await sup.startFresh(cwdDir);
+    expect(sup.status()).not.toHaveProperty("greetingLate");
+    await sleep(60);
+    expect(sup.status()).toMatchObject({ greetingLate: true });
+    g.claudeWrote();
+    expect(sup.status()).not.toHaveProperty("greetingLate");
+  });
+
+  it("a Claude Code that is not signed in: late on the STOPPED status, and still owed", async () => {
+    const g = greetingSeam();
+    const { sup } = makeSupervisor(g.extra);
+    await sup.startFresh(cwdDir);
+    pushJson(children[0], {
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      result: "Not logged in · Please run /login",
+    });
+    await waitFor(() => !sup.status().running, "the sign-in stop");
+    expect(sup.status()).toMatchObject({
+      running: false,
+      lastError: "needs-login",
+      greetingLate: true,
+    });
+    expect(g.markDone).not.toHaveBeenCalled();
+  });
+
+  it("a child that exits before its greeting turn ends is late", async () => {
+    const g = greetingSeam();
+    const { sup } = makeSupervisor({ ...g.extra, restartBackoffsMs: [10_000] });
+    await sup.startFresh(cwdDir);
+    exitChild(children[0], 1);
+    await settle();
+    expect(sup.status()).toMatchObject({ running: false, greetingLate: true });
+  });
+});
+
+// --- #2199 ----------------------------------------------------------------------
+
+describe("#2199 — no Claude Code to start: nothing is spawned, and nothing is broken", () => {
+  /** A command the test can take away and give back. */
+  function withCommand(initial: string | null) {
+    let command = initial;
+    return {
+      opts: { resolveClaudeCommand: () => command },
+      set: (next: string | null) => {
+        command = next;
+      },
+    };
+  }
+
+  it("a boot spawns nothing, reads cli-unusable — and trips no breaker, so the next Apply starts it", async () => {
+    const cmd = withCommand(null);
+    const { sup } = makeSupervisor(cmd.opts);
+    await sup.start();
+    await sleep(30);
+    expect(children).toHaveLength(0);
+    expect(sup.status()).toMatchObject({ running: false, lastError: "cli-unusable" });
+    cmd.set(process.execPath);
+    expect(await sup.startAfterSetup()).toBe("starting");
+    await nthChild(1);
+  });
+
+  it("an Apply with nothing to start answers 'cli-unusable', never a 'starting' that shows nothing", async () => {
+    writeIntegrations([]);
+    const cmd = withCommand(process.execPath);
+    const { sup } = makeSupervisor(cmd.opts);
+    await sup.start();
+    writeIntegrations(null);
+    cmd.set(null);
+    expect(await sup.startAfterSetup()).toBe("cli-unusable");
+    await sleep(30);
+    expect(children).toHaveLength(0);
+    expect(sup.status()).toMatchObject({ lastError: "cli-unusable" });
+  });
+
+  it("a Restart that finds no CLI leaves the running Claude alone, status clean", async () => {
+    const cmd = withCommand(process.execPath);
+    const { sup } = makeSupervisor(cmd.opts);
+    await sup.start();
+    const child1 = await nthChild(1);
+    cmd.set(null);
+    await expect(sup.relaunch()).resolves.toEqual({ spawned: false, why: "cli-unusable" });
+    await expect(sup.startFresh()).resolves.toEqual({ spawned: false, why: "cli-unusable" });
+    expect(child1.killed).toBe(false);
+    expect(children).toHaveLength(1);
+    expect(sup.status()).toMatchObject({ running: true });
+    expect(sup.status()).not.toHaveProperty("lastError", "cli-unusable");
+  });
+
+  it("a Start fresh that finds no CLI keeps the conversation it was about to drop", async () => {
+    const cmd = withCommand(process.execPath);
+    const { sup } = makeSupervisor(cmd.opts);
+    await sup.startFresh(cwdDir);
+    await nthChild(1);
+    const sessionFile = path.join(baseDir, "launcher-session.json");
+    const before = fs.readFileSync(sessionFile, "utf8");
+    cmd.set(null);
+    exitChild(children[0], 1);
+    // The crash restart finds nothing to run.
+    await waitFor(() => sup.status().lastError === "cli-unusable", "the restart's diagnosis");
+    await expect(sup.startFresh()).resolves.toEqual({ spawned: false, why: "cli-unusable" });
+    expect(fs.readFileSync(sessionFile, "utf8")).toBe(before);
+  });
+
+  it("the diagnosis lapses once Claude Code is there, so the standby's Start shows again", async () => {
+    writeLauncherSettingsFile({ startMode: "on-click", lifetime: "always", idleMinutes: 30 });
+    const cmd = withCommand(null);
+    const { sup } = makeSupervisor(cmd.opts);
+    await sup.start();
+    await expect(sup.startByUser()).resolves.toEqual({ spawned: false, why: "cli-unusable" });
+    expect(sup.status()).toMatchObject({ lastError: "cli-unusable" });
+    expect(sup.status()).not.toHaveProperty("standby");
+    cmd.set(process.execPath);
+    expect(sup.status()).not.toHaveProperty("lastError");
+    expect(sup.status()).toMatchObject({ standby: "awaiting-start" });
+  });
+
+  it("an Apply that found no CLI keeps the walkthrough's hold for the Apply after the install", async () => {
+    writeLauncherSettingsFile({ startMode: "auto", lifetime: "always", idleMinutes: 30 });
+    const cmd = withCommand(process.execPath);
+    const { sup } = makeSupervisor({ ...cmd.opts, walkthroughPending: () => true });
+    await sup.start();
+    cmd.set(null);
+    expect(await sup.startAfterSetup()).toBe("cli-unusable");
+    cmd.set(process.execPath);
+    expect(await sup.startAfterSetup()).toBe("starting");
+    await nthChild(1);
+  });
+
+  it("a Start with no CLI and no Claude says so; with no integration it still says not set up", async () => {
+    const cmd = withCommand(null);
+    const { sup } = makeSupervisor(cmd.opts);
+    await expect(sup.startByUser()).resolves.toEqual({ spawned: false, why: "cli-unusable" });
+    expect(sup.status()).toMatchObject({ running: false, lastError: "cli-unusable" });
+    writeIntegrations([]);
+    await expect(sup.relaunch()).resolves.toEqual({ spawned: false, why: "no-integration" });
+    expect(children).toHaveLength(0);
   });
 });

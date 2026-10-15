@@ -24,6 +24,7 @@ import {
   readModeState,
   reportedMode,
 } from "../mode.js";
+import { getCurrentSessionId } from "../sessions/context.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { channelVisibleReplies } from "./annotations.js";
 import { getCurrentDoc, getOpenDocs } from "./document.js";
@@ -198,6 +199,36 @@ export function resetInbox(): void {
 
 /** What `appendClaudeChatMessage` returns: the new message id, or the licence refusal. */
 export type ClaudeChatAppend = { ok: true; id: string } | { ok: false; refusal: AiRefusal };
+
+/**
+ * Listeners told whenever a Claude Code session's `tandem_reply` lands a chat
+ * message (#2197): how the launcher supervisor learns its one-time greeting
+ * reached the chat. Two `tandem_reply` tools reach here — the MCP tool below,
+ * and the channel shim's, through `/api/channel-reply` (the shim ships in the
+ * plugin, so Tandem's own Claude can hold both). The local-model collaborator
+ * also appends Claude chat but never notifies: it is not Tandem's Claude. The
+ * listener gets the caller's `X-Claude-Session-Id` (undefined when the
+ * transport sends none) and no content, so the supervisor can tell its own
+ * child from another session. A seam rather than an import, because the
+ * supervisor must not reach the MCP layer; `index.ts` wires the two. A
+ * throwing listener is logged and never fails the reply.
+ */
+const tandemReplyListeners = new Set<(sessionId: string | undefined) => void>();
+
+export function onTandemReply(cb: (sessionId: string | undefined) => void): () => void {
+  tandemReplyListeners.add(cb);
+  return () => tandemReplyListeners.delete(cb);
+}
+
+export function notifyTandemReply(sessionId: string | undefined): void {
+  for (const cb of tandemReplyListeners) {
+    try {
+      cb(sessionId);
+    } catch (err) {
+      console.error("[Tandem] A chat listener failed:", err);
+    }
+  }
+}
 
 /**
  * Append a Claude-authored chat message to CTRL_ROOM's chat map — the single
@@ -786,6 +817,7 @@ export function registerAwarenessTools(server: McpServer): void {
             kind: appended.refusal.kind,
           });
         }
+        notifyTandemReply(getCurrentSessionId());
         const unmatched = replyTo !== undefined && !markUserChatRead(replyTo);
         return mcpSuccess({
           sent: true,
