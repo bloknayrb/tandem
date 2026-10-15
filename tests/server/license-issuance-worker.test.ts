@@ -1417,6 +1417,18 @@ describe("default fetch wiring (env → deps)", () => {
     expect(text).not.toMatch(/first year|renew|one year|update window/i);
   });
 
+  it("the license email speaks as one person and does not invite a reply under the key", () => {
+    // Sales copy is in the licensor's singular voice, and a reply would quote
+    // the key printed above the support line.
+    const text = licenseEmailText("Ada", "QUJD", "support@tandem.ink").replace(/\s+/g, " ");
+    expect(text).toContain("-- Bryan Kolb");
+    expect(text).not.toMatch(/\b(we|us|our|team)\b/i);
+    expect(text).not.toMatch(/\breply\b/i);
+    // The CLI route is the npm install's alone: the desktop bundle ships no
+    // `tandem` command, and an npm CLI activates its own app-data directory.
+    expect(text).toContain("If you installed Tandem with npm");
+  });
+
   it("an unset RESEND_API_KEY → retryable 500, not a silent drop", async () => {
     // RESEND_API_KEY is a *secret*, deliberately NOT validated up front (the
     // fetch handler only guards `[vars]`), so this is still the point-of-use

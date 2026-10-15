@@ -882,10 +882,13 @@ export function licenseEmailText(name: string, blob: string, supportEmail: strin
     "Thank you for buying Tandem. Your license is attached as",
     "tandem.license, and is also printed below.",
     "",
-    "To activate, either:",
-    "  * open Tandem -> Settings -> License and paste the key below; or",
-    "  * run `tandem activate ./tandem.license` from the command line,",
-    "    pointing at the attached file.",
+    // The CLI route is offered to npm installs only: the desktop bundle ships
+    // no `tandem` command, and an npm CLI writes into its own app-data
+    // directory, so a desktop buyer would see "activated" and stay unlicensed.
+    // SettingsLicenseTab.svelte hides the same clause on desktop.
+    "To activate, open Tandem -> Settings -> License and paste the key",
+    "below. If you installed Tandem with npm, you can instead run",
+    "`tandem activate ./tandem.license`, pointing at the attached file.",
     "",
     // Wrapped so an MTA doesn't re-encode the body as quoted-printable and
     // truncate the key. Base64 ignores the line breaks on paste.
@@ -899,7 +902,10 @@ export function licenseEmailText(name: string, blob: string, supportEmail: strin
     "Please don't post the key publicly - it contains your name and email",
     "address.",
     "",
-    // No "reply here": a reply would quote the key printed above back to us.
+    // No "reply here": a reply would quote the key printed above into the
+    // support inbox. `reply_to` still points there on purpose, as the inbound
+    // channel when RESEND_FROM is a no-reply address, so this only stops
+    // inviting it.
     "If activation gives you any trouble, write to:",
     // Its own line: the address is operator-configured and interpolating it
     // mid-sentence made this line's length unbounded (85 chars with a short
