@@ -38,6 +38,10 @@ const COLLAPSED_WIDTH = "14px";
 
 const SHELL = ".rail-shell-right";
 const COMPOSER = "[data-testid='chat-composer-input']";
+// The `floating` class itself. `\bfloating\b` would also match
+// `rail-floating-chrome` (`-` is a word boundary), which the closing phase
+// carries too, so it is not a witness that the hover armed.
+const FLOATING = /(?:^|\s)floating(?:\s|$)/;
 
 let mcp: McpTestClient;
 let tmpDir: string;
@@ -58,7 +62,9 @@ let tmpDir: string;
  * rects at the transition's start.
  *
  * The wait is on the computed width, the property the hover depends on; it
- * reads the in-flight value during the transition, so it cannot pass early.
+ * reads the in-flight value during the transition, so it passes only once the
+ * shell is at rest (at most a frame before `transitionend`, with the width
+ * already serialising as 14px).
  * The `animating` class is NOT a substitute: the 400 ms fallback timer in
  * `handleRailVisChange` can clear it before `transitionend` if the transition
  * started late.
@@ -102,7 +108,7 @@ test("an open chat reveal never co-exists with the float-closing phase (#2014)",
   // polling for it is safe: nothing moves the pointer until it resolves, so it
   // waits out the enter delay on its own.
   await shell.hover();
-  await expect(shell).toHaveClass(/\bfloating\b/);
+  await expect(shell).toHaveClass(FLOATING);
 
   await page.evaluate(() => window.dispatchEvent(new CustomEvent("tandem:focus-chat")));
   await expect(page.locator(COMPOSER)).toBeVisible();
@@ -162,7 +168,7 @@ test("a chat reveal opened DURING the retreat cancels it (#2014)", async ({ page
   // Arm the hover float with no reveal open (witnessed by `.floating`, as in
   // the first test), then leave so the retreat starts.
   await shell.hover();
-  await expect(shell).toHaveClass(/\bfloating\b/);
+  await expect(shell).toHaveClass(FLOATING);
 
   await page.mouse.move(8, 400);
   await page.waitForTimeout(HOVER_LEAVE_MS + 80);
