@@ -2035,11 +2035,10 @@ export function evaluateClaudeCli(
     return {
       status: "warn",
       message: "Claude Code CLI installed but not on PATH (found in ~/.local/bin)",
-      // Not just "open a new terminal": doctor reads its own fresh process's
-      // PATH, while the launcher spawns from the long-running server's env
-      // captured at start. A new terminal fixes what doctor sees, not what the
-      // launcher uses — Tandem itself has to be restarted.
-      fix: "Add ~/.local/bin to your PATH and open a new terminal; restart Tandem so its launcher picks up the new PATH too",
+      // Tandem's launcher looks in ~/.local/bin itself (#2199), so this is
+      // about the user's own terminal only. A shim earlier on PATH would still
+      // be what that terminal runs, which is worth knowing when the two differ.
+      fix: "Add ~/.local/bin to your PATH and open a new terminal so `claude` works there too (Tandem's own launcher already looks in ~/.local/bin, unless TANDEM_CLAUDE_CMD names another program)",
     };
   }
   return {

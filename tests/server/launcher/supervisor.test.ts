@@ -34,12 +34,22 @@ import {
 import { NETWORK_PATHS } from "../../helpers/unc-fixtures.js";
 
 let tmpDir: string;
+let savedClaudeCmd: string | undefined;
 
 beforeEach(async () => {
   tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "supervisor-test-"));
+  // The launcher resolves an absolute, startable command before every spawn
+  // and spawns nothing without one (#2199). These tests are about everything
+  // after that point, so they must not depend on whether the host running them
+  // has a `claude` installed: node itself stands in (absolute, executable, on
+  // every CI platform). The cases that need a missing CLI inject one.
+  savedClaudeCmd = process.env.TANDEM_CLAUDE_CMD;
+  process.env.TANDEM_CLAUDE_CMD = process.execPath;
 });
 
 afterEach(async () => {
+  if (savedClaudeCmd === undefined) delete process.env.TANDEM_CLAUDE_CMD;
+  else process.env.TANDEM_CLAUDE_CMD = savedClaudeCmd;
   await fs.promises.rm(tmpDir, { recursive: true, force: true });
 });
 

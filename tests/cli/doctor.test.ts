@@ -813,12 +813,14 @@ describe("evaluateClaudeCli", () => {
     expect(result.fix).toContain("claude.com/claude-code");
   });
 
-  it("tells the user to restart Tandem, not just open a new terminal", () => {
-    // Doctor reads its own fresh process's PATH; the launcher spawns from the
-    // long-running server's env captured at start. A new terminal fixes what
-    // doctor sees, not what the launcher uses.
+  it("is about the user's terminal only: Tandem's launcher already finds ~/.local/bin (#2199)", () => {
+    // The launcher looks in the native install location itself, so no Tandem
+    // restart is owed — telling the user to restart would send them on an
+    // errand that changes nothing.
     const result = evaluateClaudeCli("INSTALLED_NOT_ON_PATH");
-    expect(result.fix).toContain("restart Tandem");
+    expect(result.fix).toContain("open a new terminal");
+    expect(result.fix).toContain("already looks in ~/.local/bin");
+    expect(result.fix).not.toContain("restart Tandem");
   });
 
   it("warns instead of passing when on PATH but not launchable", () => {

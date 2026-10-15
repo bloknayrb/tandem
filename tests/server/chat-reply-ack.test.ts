@@ -9,10 +9,11 @@
  * Claude's inbox the moment `BYO_MODELS_ENABLED` flips. The "append alone does not
  * stamp" case below is that caller's exact call shape.
  */
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendClaudeChatMessage,
   markUserChatRead,
+  onTandemReply,
   REPLY_TO_UNMATCHED_WARNING,
 } from "../../src/server/mcp/awareness.js";
 import { registerChannelRoutes } from "../../src/server/mcp/channel-routes.js";
@@ -50,6 +51,17 @@ describe("appendClaudeChatMessage", () => {
     expect(row(ack)?.inProgress).toBe(true);
     expect(row(plain)).not.toHaveProperty("inProgress");
     expect(row(none)).not.toHaveProperty("inProgress");
+  });
+
+  it("tells no tandem_reply listener (#2197): the local-model collaborator is not Tandem's Claude", () => {
+    const seen = vi.fn();
+    const off = onTandemReply(seen);
+    try {
+      appendedId(appendClaudeChatMessage("hello"));
+      expect(seen).not.toHaveBeenCalled();
+    } finally {
+      off();
+    }
   });
 
   it("does not stamp the message it replies to (the collaborator's call shape)", () => {
@@ -100,6 +112,32 @@ describe("POST /api/channel-reply", () => {
   function post(body: unknown): ReplyBody {
     return postRaw(body)._body as ReplyBody;
   }
+
+  it("tells the greeting's listeners with the shim's session id (#2197): the plugin's shim can be Tandem's own Claude", () => {
+    const seen = vi.fn();
+    const off = onTandemReply(seen);
+    try {
+      const { app, routes } = makeRecorderApp();
+      registerChannelRoutes(app as never, (() => {}) as never);
+      callRoute(
+        routes,
+        `POST ${API_CHANNEL_REPLY}`,
+        { text: "hello" },
+        {
+          "x-claude-session-id": "0b9c2a4e-1d2f-4a5b-8c6d-7e8f9a0b1c2d",
+        },
+      );
+      expect(seen).toHaveBeenCalledWith("0b9c2a4e-1d2f-4a5b-8c6d-7e8f9a0b1c2d");
+      post({ text: "no header" });
+      expect(seen).toHaveBeenLastCalledWith(undefined);
+      // A refused body writes nothing and tells no one.
+      seen.mockClear();
+      postRaw({ text: 7 });
+      expect(seen).not.toHaveBeenCalled();
+    } finally {
+      off();
+    }
+  });
 
   it("forwards inProgress and stamps the answered message", () => {
     seedUser("u1");

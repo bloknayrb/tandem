@@ -136,6 +136,13 @@ describe("isBareNameLaunchable", () => {
     // set it would otherwise see every PATH-walk case below answer from their
     // machine instead of the fixture.
     vi.stubEnv("TANDEM_CLAUDE_CMD", "");
+    // Same for the home directory: the walk ends with a `~/.local/bin` probe,
+    // and on a developer's machine that really holds `claude.exe` every
+    // shim-only case answered true (#2230). `homedir()` reads these per call.
+    const home = join(root, "home");
+    mkdirSync(home, { recursive: true });
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
   });
 
   afterEach(() => {
@@ -224,11 +231,15 @@ describe("isBareNameLaunchable", () => {
     };
 
     it("is true for an .exe override even when PATH holds only shims", () => {
+      // The override must exist: the resolver checks the file before trusting
+      // it. A made-up `C:\…` path only passed on POSIX, where it is not a path
+      // at all and fell through to the PATH walk (#2230).
+      const exe = join(seedBins("progfiles", "claude.exe"), "claude.exe");
       expect(
         isBareNameLaunchable({
           platformOverride: "win32",
           pathOverride: shimOnlyPath(),
-          claudeCmdOverride: "C:\\Program Files\\Claude\\claude.exe",
+          claudeCmdOverride: exe,
         }),
       ).toBe(true);
     });

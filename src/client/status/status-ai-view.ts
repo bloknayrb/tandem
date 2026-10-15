@@ -1,3 +1,4 @@
+import type { LauncherStandby } from "../../shared/launcher/contract";
 import type {
   AiChip,
   AiLiveIndicator,
@@ -71,6 +72,8 @@ export interface AiIndicatorView {
     | "not-connected"
     | "tandem-claude"
     | "restarting"
+    /** Tandem's Claude is not running by choice (#2195); see `STANDBY`. */
+    | "standby"
     | "ai-off";
   /**
    * Whether this state may animate its dot off presence activity. Only ever
@@ -190,6 +193,58 @@ const RESTARTING: BaseView = {
   ariaLabel: "Restarting Claude. Tandem is starting its Claude.",
 };
 
+/** A Start from standby (#2195) in progress — "Restarting" would claim a
+ *  Claude that never ran this session. Otherwise identical to RESTARTING. */
+const STARTING: BaseView = {
+  ...RESTARTING,
+  label: "Starting Claude…",
+  title: "Tandem is starting its Claude. There's nothing you need to do.",
+  ariaLabel: "Starting Claude. Tandem is starting its Claude.",
+};
+
+/**
+ * Tandem's Claude is not running BY CHOICE (#2195). Never the failure tone and
+ * never "AI not connected": nothing is broken, and the pill is the Start
+ * button (`AI_CTA.start`) whenever the chip is `start`.
+ *
+ * Shown at tier 2, beside RESTARTING, for the first minute of a standby: the
+ * child's own MCP entry still reads live for up to a minute after it exits
+ * (`LIVE_RECENT_MS`), and below tier 2 that leftover would show a green "AI
+ * attached" right after the user turned Claude off. After that minute a live
+ * session is someone else's, and Rule 3 shows it as connected.
+ *
+ * The titles name the chat panel: when the pill is the Start button its hover
+ * text comes from `AI_CTA.start` instead, so these show only when it is not.
+ */
+const STANDBY_BASE = {
+  tone: "not-connected",
+  dataState: "standby",
+  canAnimate: false,
+  ...QUIET,
+} as const satisfies Partial<BaseView>;
+
+const STANDBY: Record<LauncherStandby, BaseView> = {
+  off: {
+    ...STANDBY_BASE,
+    label: "Tandem's Claude is off",
+    title: "Tandem's Claude is turned off. Start it from the chat panel.",
+    ariaLabel: "Tandem's Claude is turned off.",
+  },
+  "awaiting-start": {
+    ...STANDBY_BASE,
+    label: "Tandem's Claude hasn't started",
+    title: "Tandem's Claude is set to start when you click Start in the chat panel.",
+    ariaLabel: "Tandem's Claude hasn't started. It starts when you click Start.",
+  },
+  idle: {
+    ...STANDBY_BASE,
+    label: "Tandem's Claude stopped (idle)",
+    title:
+      "Tandem's Claude stopped after being idle, as set in Settings. Start it again any time; its conversation resumes.",
+    ariaLabel: "Tandem's Claude stopped while idle.",
+  },
+};
+
 /**
  * #1287: the label used to read "Solo · edits held", which overstates what
  * Solo actually withholds. Solo gates *forwarding* of annotation
@@ -299,7 +354,9 @@ function tandemClaudeView(input: {
     // and the chat pickup row (#2165) may show the message picked up first.
     title = `Tandem's Claude is running${where} and is in the middle of a turn. Tandem wakes it again when that turn finishes, if it hasn't picked up your message already.`;
   } else {
-    title = `Tandem's Claude is running${where}. Tandem wakes it when you send a message.`;
+    // The background disclosure (#2195) lives here because auto-mode users
+    // never open Settings, where the longer version is.
+    title = `Tandem's Claude is running${where} in the background. Tandem wakes it when you send a message.`;
   }
   if (input.sessionSeen && !input.attached) title += UNATTRIBUTED;
   return {
@@ -383,6 +440,13 @@ export interface AiIndicatorInput {
   launcherAttached: boolean;
   /** Tandem is restarting its own Claude (`AiReadiness.launcherRestarting`). */
   launcherRestarting: boolean;
+  /** That restart is a Start from standby (`AiReadiness.launcherStarting`). */
+  launcherStarting: boolean;
+  /** Tandem's Claude is not running by choice (`AiReadiness.launcherStandby`). */
+  launcherStandby: LauncherStandby | null;
+  /** That standby began within the leftover-session window
+   *  (`AiReadiness.launcherStandbyRecent`). */
+  launcherStandbyRecent: boolean;
   docSyncConnected: boolean;
   /** `/health`'s session count, or `null` when unknown. */
   sessionCount: number | null;
@@ -416,7 +480,16 @@ function baseIndicatorView(input: AiIndicatorInput): BaseView | null {
       docSyncConnected: input.docSyncConnected,
     });
   }
-  if (input.launcherRestarting) return RESTARTING;
+  if (input.launcherRestarting) return input.launcherStarting ? STARTING : RESTARTING;
+  // A standby outranks a live session only while that session can still be the
+  // stopped child's own leftover entry; after that it is someone else's, and
+  // Rule 3 shows it as connected.
+  if (
+    input.launcherStandby !== null &&
+    (input.liveIndicator !== "connected" || input.sessionCount === 0 || input.launcherStandbyRecent)
+  ) {
+    return STANDBY[input.launcherStandby];
+  }
 
   // Rule 3: anything else attached.
   if (input.liveIndicator === "connected") {
@@ -513,9 +586,14 @@ export function cwdDriftPill(
   aiChip: AiChip,
   launcherFailure: LauncherFailure | null,
   launcherRestarting: boolean,
+  launcherStandby: LauncherStandby | null,
 ): CwdDriftPill | null {
   if (drift === null) return null;
   if (aiChip !== null || launcherFailure !== null || launcherRestarting) return null;
+  // A stopped Claude has no folder to be wrong about (#2195). `useCwdDrift`
+  // does not poll, so an answer from before an idle stop would otherwise stay
+  // up — and its action would start Claude somewhere.
+  if (launcherStandby !== null) return null;
   // Names the consequence, not the state. "AI · other folder" reads as a
   // connection status and leaves the user with no idea what is actually
   // degraded — the document syncs fine and Claude can still edit it; what it

@@ -34,7 +34,9 @@
       a document can still make the app GET its own origin. Reads there are
       scrubbed and non-GET is refused by `enforceLoopbackMutation`, so it buys an
       attacker nothing today — but it is the residue to look at first if that
-      ever stops being true.
+      ever stops being true. The one GET with a side effect, the launcher nonce
+      (#2195), admits an Origin-less request only for a fetch from script
+      (`Sec-Fetch-Dest: empty`), so an image or link here cannot rotate it.
     -->
     <meta http-equiv="Content-Security-Policy" content="img-src 'self' data: blob:" />
     <link rel="icon" type="image/png" href="/favicon.png" />

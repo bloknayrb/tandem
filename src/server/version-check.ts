@@ -3,6 +3,18 @@ import path from "path";
 
 export type VersionCheckResult = "first-install" | "upgraded" | "current";
 
+/**
+ * `1.0.0` or later, release only — the one definition of "v1.0" that both the
+ * v1.0 greeting re-arm (#2197) and the v1.0 setup walkthrough (#2198) key on.
+ * A prerelease (`1.0.0-rc.1`) is NOT v1.0: a tester on a release candidate
+ * must not spend either before v1.0 ships. Anything unparseable (a dev
+ * fallback version) is not either. Not a semver comparator — see below.
+ */
+export function isV1Release(version: string | undefined): boolean {
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(version ?? "");
+  return m !== null && Number(m[1]) >= 1;
+}
+
 export interface CheckVersionChangeOptions {
   /**
    * Work to do BEFORE the new version is stamped, on the `"upgraded"`
