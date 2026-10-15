@@ -39,9 +39,8 @@ commercial setup, hardware verification, and two flag flips.
    - **Local models.** `BYO_MODELS_ENABLED` (`src/shared/constants.ts`) flips for #1123. The
      whole M1a→M4 track is merged dark and has been in the tree since v0.20.0. What remains
      is the flip and its gates.
-5. **The pre-v1.0 review's remainder.** 10 of 93 `v1-review` issues are open: #1792, #1822,
-   #1823, #1825, #1827, #1920, #1942, #1943, #2001, and #1754 (moot while `.docx` is dark).
-   #1942 (key rotation) is dated 2027-03-01 and does not block.
+5. **The pre-v1.0 review's remainder.** 9 of 93 `v1-review` issues are open: #1792, #1822,
+   #1823, #1825, #1827, #1920, #1943, #2001, and #1754 (moot while `.docx` is dark).
 
 ### Decisions still owed
 
@@ -73,7 +72,6 @@ outcome is keep, replace or retire.
 | 2027-02-24 | #1599 | Accepted: config-mutation lost-update race |
 | 2027-02-26 | #1633 | ui-inspector screenshots on Windows |
 | 2027-02-28 | #1671 | Accepted: caller-named write destinations |
-| 2027-03-01 | #1942 | Rotate the license signing key |
 
 ### Open work that bears on v1.0
 
