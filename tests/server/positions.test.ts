@@ -1420,3 +1420,213 @@ describe("validateFlatRange (pure)", () => {
     expect(validateFlatRange("a\u{1F600}b", 2, 3, { surrogates: "ignore" }).ok).toBe(true);
   });
 });
+
+/**
+ * #2188 — a stored flat range past the end of the document. The client stores a
+ * user comment's range with no anchor and no snapshot, and a selection ending at
+ * the start of a trailing empty paragraph includes its `\n` separator. Once that
+ * paragraph is gone, `to` is one past the last offset. `resolveToElement` maps a
+ * past-the-end offset to the end of the last element, so both mint arms minted a
+ * correct anchor — but returned (and persisted) the stale stored range, which is
+ * the record `tandem_checkInbox` handed Claude on that poll.
+ */
+describe("refreshRange — a stored range past the end of the document (#2188)", () => {
+  /**
+   * "Hello world" followed by a trailing empty paragraph: flat length 12.
+   * `populateYDoc` gives the empty paragraph a `Y.XmlText`, so an end anchor
+   * can land inside it — the shape the repair arm needs. A bare empty element
+   * (no text child) cannot be anchored into at all; that shape reaches the
+   * lazy-attach arm instead, which the first test covers.
+   */
+  function docWithTrailingEmptyParagraph(): Y.Doc {
+    const d = makeDoc("Hello world\n");
+    expect(extractText(d)).toBe("Hello world\n");
+    return d;
+  }
+
+  /** Insert `text` at the start of the first paragraph. */
+  function prependText(d: Y.Doc, text: string): void {
+    getOrCreateXmlText(getFragment(d).get(0) as Y.XmlElement).insert(0, text);
+  }
+
+  function dropTrailingParagraph(d: Y.Doc): void {
+    getFragment(d).delete(1, 1);
+    expect(extractText(d)).toBe("Hello world");
+  }
+
+  it("lazy attach clamps a past-the-end `to` to the flat length, and persists it", () => {
+    doc = docWithTrailingEmptyParagraph();
+    const map = getAnnotationsMap(doc);
+    const ann = makeAnnotation({ id: "ann_eod", author: "user", range: range(6, 12) });
+    map.set(ann.id, ann);
+    dropTrailingParagraph(doc);
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("attached");
+    expect(refreshed.annotation.range).toEqual({ from: 6, to: 11 });
+    expect((map.get(ann.id) as Annotation).range).toEqual({ from: 6, to: 11 });
+    // The minted anchor agrees with the returned range, so the next refresh is
+    // a no-op rather than the `updated` that used to correct it one poll late.
+    expect(refreshRange(refreshed.annotation, doc, map).kind).toBe("ok");
+  });
+
+  it("the dead-relRange repair clamps the same way", () => {
+    doc = docWithTrailingEmptyParagraph();
+    const map = getAnnotationsMap(doc);
+    const ann = makeAnnotation({ id: "ann_eod", author: "user", range: range(6, 12) });
+    map.set(ann.id, ann);
+    // Attach while `to` is still valid: its end anchor lands in the empty
+    // paragraph, which the deletion then kills.
+    const attached = refreshRange(ann, doc, map);
+    expect(attached.kind).toBe("attached");
+    expect(attached.annotation.range).toEqual({ from: 6, to: 12 });
+    dropTrailingParagraph(doc);
+
+    const refreshed = refreshRange(attached.annotation, doc, map);
+    expect(refreshed.kind).toBe("repaired");
+    expect(refreshed.annotation.range).toEqual({ from: 6, to: 11 });
+    expect((map.get(ann.id) as Annotation).range).toEqual({ from: 6, to: 11 });
+    expect(refreshRange(refreshed.annotation, doc, map).kind).toBe("ok");
+  });
+
+  it("a range WHOLLY past the end clamps to a point at the end", () => {
+    // Master minted at the end and the next refresh collapsed the record
+    // there; this is that end state one refresh early. Refusing to anchor it
+    // instead would leave stale offsets that a later lazy attach mints over
+    // unrelated text once the document grows past them (next spec).
+    doc = makeDoc("Hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = makeAnnotation({ id: "ann_eod", author: "user", range: range(13, 15) });
+    map.set(ann.id, ann);
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("attached");
+    expect(refreshed.annotation.range).toEqual({ from: 11, to: 11 });
+  });
+
+  it("a wholly-past-the-end record does not land on new text when the document grows", () => {
+    doc = makeDoc("Hello world\nGone text");
+    const map = getAnnotationsMap(doc);
+    const ann = makeAnnotation({ id: "ann_eod", author: "user", range: range(12, 21) });
+    map.set(ann.id, ann);
+    getFragment(doc).delete(1, 1);
+    expect(extractText(doc)).toBe("Hello world");
+
+    const first = refreshRange(ann, doc, map);
+    expect(first.annotation.range).toEqual({ from: 11, to: 11 });
+
+    prependText(doc, "Prepended intro: ");
+    const after = refreshRange(map.get(ann.id) as Annotation, doc, map);
+    // Follows the end it was parked at, never the stale {12,21}.
+    expect(after.annotation.range).toEqual({ from: 28, to: 28 });
+  });
+
+  it("a range WHOLLY before the start clamps to a point at the start", () => {
+    doc = makeDoc("Hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = makeAnnotation({
+      id: "ann_neg",
+      range: { from: -5 as FlatOffset, to: -2 as FlatOffset },
+    });
+    map.set(ann.id, ann);
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("attached");
+    expect(refreshed.annotation.range).toEqual({ from: 0, to: 0 });
+  });
+
+  it("a range starting exactly at the end clamps to a point there", () => {
+    doc = makeDoc("Hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = makeAnnotation({ id: "ann_eod", author: "user", range: range(11, 12) });
+    map.set(ann.id, ann);
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("attached");
+    expect(refreshed.annotation.range).toEqual({ from: 11, to: 11 });
+  });
+
+  it("a negative `from` is gated on the clamped range, not a wrapped slice", () => {
+    // `slice(-5, 11)` wraps to "world", so the raw gate passed and the anchor
+    // was minted from offset 0 over "Hello world" — durably pinned to text the
+    // snapshot never described. Clamped, the slice is "Hello world" and
+    // contradicts: degraded, and nothing is written.
+    doc = makeDoc("Hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = makeAnnotation({
+      id: "ann_neg",
+      range: { from: -5 as FlatOffset, to: off(11) },
+      textSnapshot: "world",
+    });
+    map.set(ann.id, ann);
+    const stored = map.get(ann.id);
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("degraded");
+    expect(refreshed.annotation.relRange).toBeUndefined();
+    expect(map.get(ann.id)).toBe(stored);
+  });
+
+  it("the COLLAPSE arm gates a negative `from` on the clamped slice too", () => {
+    // The third arm that calls `storedRangeStillMatches`. A raw `slice(-3, 6)`
+    // over "hello " wraps to "lo ", which "matched" the snapshot, so a genuine
+    // deletion was preserved as a spurious collapse holding {-3, 6} forever.
+    doc = makeDoc("hello world");
+    const map = getAnnotationsMap(doc);
+    const anchored = anchoredRange(doc, off(6), off(11));
+    if (!anchored.ok || !anchored.fullyAnchored) throw new Error("expected a full anchor");
+    const ann = makeAnnotation({
+      id: "ann_neg_collapse",
+      range: { from: -3 as FlatOffset, to: off(6) },
+      relRange: anchored.relRange,
+      textSnapshot: "lo ",
+    });
+    map.set(ann.id, ann);
+    getOrCreateXmlText(getFragment(doc).get(0) as Y.XmlElement).delete(6, 5);
+    expect(extractText(doc)).toBe("hello ");
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("updated");
+    expect(refreshed.annotation.range).toEqual({ from: 6, to: 6 });
+  });
+
+  it("a negative `from` without a snapshot clamps to 0 and anchors", () => {
+    doc = makeDoc("Hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = makeAnnotation({ id: "ann_neg", range: { from: -3 as FlatOffset, to: off(5) } });
+    map.set(ann.id, ann);
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("attached");
+    expect(refreshed.annotation.range).toEqual({ from: 0, to: 5 });
+    expect(refreshRange(refreshed.annotation, doc, map).kind).toBe("ok");
+  });
+
+  it("an EMPTY snapshot past the end settles at the end instead of a stale span", () => {
+    // Behaviour change, deliberately: on master {11,13} with textSnapshot ""
+    // attached as {11,13} and then read `degraded` forever, because the
+    // collapse arm preserves a stored span whose (empty) snapshot "matches".
+    // The snapshot itself claims the span is empty, so {11,11} is the record's
+    // own description of where it is.
+    doc = makeDoc("Hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = makeAnnotation({ id: "ann_eod", range: range(11, 13), textSnapshot: "" });
+    map.set(ann.id, ann);
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("attached");
+    expect(refreshed.annotation.range).toEqual({ from: 11, to: 11 });
+    expect(refreshRange(refreshed.annotation, doc, map).kind).toBe("ok");
+  });
+
+  it("an in-bounds stored range is untouched by the clamp", () => {
+    doc = makeDoc("Hello world");
+    const map = getAnnotationsMap(doc);
+    const ann = makeAnnotation({ id: "ann_eod", author: "user", range: range(6, 11) });
+    map.set(ann.id, ann);
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("attached");
+    expect(refreshed.annotation.range).toBe(ann.range);
+  });
+});
