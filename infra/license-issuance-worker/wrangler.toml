@@ -71,7 +71,8 @@ binding = "LEDGER_KV"
 id = "REPLACE_WITH_LEDGER_KV_NAMESPACE_ID"
 
 # Secrets (set with `npx wrangler secret put <NAME>`, never in this file):
-#   TANDEM_PRIVATE_KEY    Ed25519 PEM PKCS#8 (the private half of public-key.ts)
+#   TANDEM_PRIVATE_KEY    Ed25519 PEM PKCS#8: the private half of a key in public-key.ts
+#                         whose id is in TRUSTED_KEY_IDS (worker.ts), or every webhook 503s
 #   POLAR_WEBHOOK_SECRET  whsec_... from the Polar webhook endpoint config
 #   RESEND_API_KEY        re_... from Resend
 #   GRANDFATHER_EMAILS    optional, comma/space-separated beta-tester emails

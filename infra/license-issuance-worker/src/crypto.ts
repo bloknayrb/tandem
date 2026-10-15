@@ -191,6 +191,40 @@ export async function importPkcs8Ed25519(pem: string): Promise<CryptoKey> {
   return globalThis.crypto.subtle.importKey("pkcs8", der, { name: "Ed25519" }, false, ["sign"]);
 }
 
+/** Decode base64url (RFC 4648 §5, unpadded as JWK emits it) to bytes. */
+export function base64UrlToBytes(b64url: string): Uint8Array<ArrayBuffer> {
+  const b64 = b64url.replace(/-/g, "+").replace(/_/g, "/");
+  return base64ToBytes(b64.padEnd(b64.length + ((4 - (b64.length % 4)) % 4), "="));
+}
+
+/**
+ * The key id of a PKCS#8 Ed25519 private key: lowercase hex of the first 8
+ * bytes of SHA-256 over its raw 32-byte public value. Must equal the server's
+ * `keyIdForPublicKey` (src/server/license/public-key.ts) for the same key pair.
+ *
+ * The public value is the JWK `x`, which WebCrypto exposes only for a key
+ * imported as extractable, so this import is separate from the signing import
+ * above, which stays non-extractable. `x` is base64url: plain `atob` throws on
+ * its `-`/`_`, and today's production key contains `_`.
+ */
+export async function keyIdOfPkcs8Ed25519(pem: string): Promise<string> {
+  const b64 = pem
+    .replace(/-----BEGIN [^-]+-----/, "")
+    .replace(/-----END [^-]+-----/, "")
+    .replace(/\s+/g, "");
+  const key = await globalThis.crypto.subtle.importKey(
+    "pkcs8",
+    base64ToBytes(b64),
+    { name: "Ed25519" },
+    true,
+    ["sign"],
+  );
+  const jwk = await globalThis.crypto.subtle.exportKey("jwk", key);
+  if (typeof jwk.x !== "string") throw new Error("Ed25519 JWK export has no public value");
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", base64UrlToBytes(jwk.x));
+  return bytesToHex(new Uint8Array(digest).subarray(0, 8));
+}
+
 /**
  * A function that produces a raw 64-byte Ed25519 signature over `data`.
  *
