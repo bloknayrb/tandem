@@ -882,31 +882,38 @@ export function licenseEmailText(name: string, blob: string, supportEmail: strin
     "Thank you for buying Tandem. Your license is attached as",
     "tandem.license, and is also printed below.",
     "",
-    "To activate, either:",
-    "  * open Tandem -> Settings -> License and paste the key below; or",
-    "  * run `tandem activate ./tandem.license` from the command line,",
-    "    pointing at the attached file.",
+    // The CLI route is offered to npm installs only: the desktop bundle ships
+    // no `tandem` command, and an npm CLI writes into its own app-data
+    // directory, so a desktop buyer would see "activated" and stay unlicensed.
+    // SettingsLicenseTab.svelte hides the same clause on desktop.
+    "To activate, open Tandem -> Settings -> License and paste the key",
+    "below. If you installed Tandem with npm, you can instead run",
+    "`tandem activate ./tandem.license`, pointing at the attached file.",
     "",
     // Wrapped so an MTA doesn't re-encode the body as quoted-printable and
     // truncate the key. Base64 ignores the line breaks on paste.
     wrapBlob(blob),
     "",
     "Keep this email - it's your proof of purchase, and it lets you",
-    "re-activate on any device you personally use. Your license never",
+    "re-activate Tandem whenever you need to. Your license never",
     "expires, and it includes all future updates. There is no guarantee",
     "that future updates will be released.",
     "",
     "Please don't post the key publicly - it contains your name and email",
     "address.",
     "",
-    "If activation gives you any trouble, just reply here, or write to:",
+    // No "reply here": a reply would quote the key printed above into the
+    // support inbox. `reply_to` still points there on purpose, as the inbound
+    // channel when RESEND_FROM is a no-reply address, so this only stops
+    // inviting it.
+    "If activation gives you any trouble, write to:",
     // Its own line: the address is operator-configured and interpolating it
     // mid-sentence made this line's length unbounded (85 chars with a short
     // address, and the whole point of the 72 ceiling is that no line invites an
     // MTA to re-encode).
     `  ${supportEmail}`,
     "",
-    "-- The Tandem team",
+    "-- Bryan Kolb",
   ].join("\n");
 }
 

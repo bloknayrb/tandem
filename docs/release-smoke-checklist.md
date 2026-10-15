@@ -131,6 +131,17 @@ before it meets a paying user.
       (Added 2026-06-11; once the updater authenticates against the
       license-checked endpoint — #1116 L3 — run this against the staging
       endpoint so the entitlement check is in the loop.)
+- [ ] **v1.0 setup walkthrough** (#2198; Windows + macOS): `isV1Release`
+      rejects an rc, so launch the RC with `TANDEM_FORCE_V1_WALKTHROUGH=1`
+      on a profile that has a working 0.x setup. Expect: the wizard opens
+      pre-filled; Tandem's Claude is held (Start shown, no hello yet); closing
+      it and relaunching brings it back; **Keep this setup** closes it and —
+      with "Start automatically" — starts Tandem's Claude; relaunching shows
+      no wizard. (No hello on the rc: the greeting's v1.0 re-arm ignores
+      release candidates, and the force switch is the walkthrough's alone.) Check `integrations.json`
+      still holds the working directory and token ref it had before.
+      Re-check on the 1.0.0 build itself without the variable — there the
+      hello follows the release, once.
 - [ ] **License gate ON** (#1116, #1521; Windows + macOS minimum). This is
       the most user-hostile path the product ships; it must not run for the
       first time on launch day. On a gate-enabled build, run each step below.

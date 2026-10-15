@@ -10,7 +10,7 @@
  * server layer boundary.
  */
 
-import type { AnnotationType, ReplyAuthor } from "../types.js";
+import type { Annotation, AnnotationType, ReplyAuthor } from "../types.js";
 
 // --- Per-event payload interfaces ---
 
@@ -56,6 +56,14 @@ export interface AnnotationReplyPayload {
   replyText: string;
   replyAuthor: ReplyAuthor;
   textSnippet: string;
+  /**
+   * Who created the PARENT annotation (#2196) — whether a user's reply is an
+   * answer to Claude, which is the one kind of reply that starts a stopped
+   * Tandem's Claude (`isStartWorthy`). Nothing new to Claude: the parent is a
+   * record it can already read, author included. Notes never reach here
+   * (`narrowForChannel` refuses them).
+   */
+  parentAuthor: Annotation["author"];
 }
 
 export interface DocumentSwitchedPayload {

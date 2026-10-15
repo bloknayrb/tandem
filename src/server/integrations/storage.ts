@@ -160,6 +160,34 @@ async function writeIntegrationsFile(filePath: string, file: IntegrationsFile): 
 }
 
 /**
+ * Read a small JSON file of Tandem's own, synchronously, for the one-shot
+ * markers (#2197's greeting, #2198's walkthrough): `null` when there is no
+ * file, `"unreadable"` for anything else that is not a regular file within
+ * `maxBytes` holding valid JSON — a symlink, a directory, an oversized or
+ * truncated file. `lstat`, so a planted symlink is refused rather than
+ * followed. Never throws; the caller checks the shape.
+ */
+export function readBoundedJsonFileSync(
+  filePath: string,
+  maxBytes: number,
+): unknown | null | "unreadable" {
+  let raw: string;
+  try {
+    const st = fs.lstatSync(filePath);
+    if (!st.isFile() || st.size > maxBytes) return "unreadable";
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    return "unreadable";
+  }
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return "unreadable";
+  }
+}
+
+/**
  * Atomic write for a small config file under the app-data dir: temp file
  * (`wx`, 0o600) → rename, with an EXDEV fallback and a POSIX chmod backstop.
  * Exported so sibling stores (Models registry) reuse this ONE copy of the

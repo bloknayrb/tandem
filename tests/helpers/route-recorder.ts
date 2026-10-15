@@ -50,10 +50,15 @@ export function makeRes(): RecordedRes {
 }
 
 /** Invoke the last handler registered for `key` (e.g. `"POST /api/x"`) with `body`. */
-export function callRoute(routes: Map<string, Handler[]>, key: string, body: unknown): RecordedRes {
+export function callRoute(
+  routes: Map<string, Handler[]>,
+  key: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+): RecordedRes {
   const handlers = routes.get(key);
   if (!handlers || handlers.length === 0) throw new Error(`no route registered for ${key}`);
   const res = makeRes();
-  handlers[handlers.length - 1]!({ body }, res);
+  handlers[handlers.length - 1]!({ body, headers }, res);
   return res;
 }

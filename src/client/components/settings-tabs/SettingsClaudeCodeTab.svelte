@@ -26,6 +26,7 @@ import "../warning-box.css";
 import { responseErrorMessage } from "../../utils/response-error";
 import PushRoutesInfo from "../PushRoutesInfo.svelte";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
+import SettingsTandemClaudeSection from "./SettingsTandemClaudeSection.svelte";
 
 // Map the server's stable `code` field (POST /api/launcher/working-directory,
 // `src/server/launcher/api-routes.ts`) to fixed client strings. We deliberately
@@ -424,6 +425,14 @@ function handleReset() {
       </div>
     {/if}
   </div>
+{/if}
+
+<!-- #2195: how Tandem's own Claude starts and how long it runs. Gated like the
+     working directory above: both describe the Claude Code integration's
+     launcher, and with no claude-code entry there is nothing for them to
+     govern. -->
+{#if wdLoaded && hasIntegration}
+  <SettingsTandemClaudeSection />
 {/if}
 
 <!-- #1432: the durable home for the push routes. Before this they existed only

@@ -21,6 +21,7 @@ import {
 import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import {
   CHAT_ACK_DIRECTIVE,
+  onTandemReply,
   REPLY_TO_UNMATCHED_WARNING,
   registerAwarenessTools,
   resetInbox,
@@ -1866,6 +1867,33 @@ describe("MCP tool integration — awareness tools", () => {
     expect(parsed.error).toBe(false);
     expect(parsed.data.sent).toBe(true);
     expect(parsed.data.messageId).toMatch(/^msg_/);
+  });
+
+  it("tandem_reply tells the greeting's listeners (#2197), with no session id over an id-less transport", async () => {
+    setupDoc("mcp-aw-greet", "Hello world");
+    const seen = vi.fn();
+    const bad = vi.fn(() => {
+      throw new Error("listener bug");
+    });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const off1 = onTandemReply(bad);
+    const off2 = onTandemReply(seen);
+    try {
+      const parsed = parseResult(
+        await client.callTool({ name: "tandem_reply", arguments: { text: "hello" } }),
+      );
+      // A throwing listener never fails the reply.
+      expect(parsed.data.sent).toBe(true);
+      expect(seen).toHaveBeenCalledTimes(1);
+      expect(seen).toHaveBeenCalledWith(undefined);
+      off2();
+      await client.callTool({ name: "tandem_reply", arguments: { text: "again" } });
+      expect(seen).toHaveBeenCalledTimes(1);
+    } finally {
+      off1();
+      off2();
+      errSpy.mockRestore();
+    }
   });
 
   it("tandem_checkInbox tells Claude to acknowledge chat, and only when chat is present", async () => {

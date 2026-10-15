@@ -167,6 +167,15 @@ const WRITER_SITES: Record<
       "rather than here. Not covered by #1599; if it acquires a Claude-config " +
       "caller, that is a new finding.",
   },
+  "src/server/integrations/walkthrough.ts": {
+    sites: 1,
+    disposition: "out-of-scope",
+    why:
+      "#2198: v1-walkthrough.json (the v1.0 setup walkthrough was confirmed), in " +
+      "Tandem's own app-data root, through atomicWriteConfigFile. One write, no " +
+      "read-modify-write cycle, and never a Claude config file — named in the " +
+      "#1599 entry in docs/security.md so the accepted scope is unchanged.",
+  },
   "src/cli/rotate-token.ts": {
     sites: 4,
     disposition: "out-of-scope",
@@ -258,6 +267,15 @@ const DURABLE_WRITER_FILES: Record<string, number> = {
   "src/server/integrations/apply.ts": 9,
   "src/server/integrations/install-claude-cli.ts": 2,
   "src/server/integrations/storage.ts": 8,
+  // #2198: `v1-walkthrough.json`, same app-data root, never a Claude config.
+  "src/server/integrations/walkthrough.ts": 1,
+  // #2195: `launcher-settings.json` (start mode and lifetime of Tandem's
+  // Claude), through `atomicWriteConfigFile`. Tandem's OWN app-data root, never
+  // a Claude config file, so the accepted #1599 scope is unchanged.
+  "src/server/launcher/settings.ts": 1,
+  // #2197: `first-run-greeting.json` (whether the one-time greeting is owed),
+  // through `atomicWriteConfigFile`, in the same app-data root.
+  "src/server/launcher/greeting.ts": 1,
   "src/server/launcher/supervisor.ts": 1,
   "src/server/license/license-state.ts": 2,
   "src/server/mcp/annotations.ts": 1,
