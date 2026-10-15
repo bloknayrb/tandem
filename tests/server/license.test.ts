@@ -3,7 +3,12 @@ import fs from "fs";
 import path from "path";
 import { describe, expect, it } from "vitest";
 import type { LicenseMetadata, SignedLicense } from "../../src/server/license/license-types.js";
-import { TANDEM_PUBLIC_KEY } from "../../src/server/license/public-key.js";
+import {
+  KEYS_BY_ID,
+  keyIdForPublicKey,
+  LEGACY_KEY_ID,
+  TRUSTED_PUBLIC_KEYS,
+} from "../../src/server/license/public-key.js";
 import { canonicalize, verifyLicense } from "../../src/server/license/verifier.js";
 
 describe("Licensing Core", () => {
@@ -164,39 +169,51 @@ describe("Licensing Core", () => {
   });
 
   describe("Production Key Verification", () => {
-    it("should carry a valid PEM format public key", () => {
-      expect(TANDEM_PUBLIC_KEY).toContain("-----BEGIN PUBLIC KEY-----");
-      expect(TANDEM_PUBLIC_KEY).toContain("-----END PUBLIC KEY-----");
+    it("should carry valid PEM format public keys", () => {
+      expect(TRUSTED_PUBLIC_KEYS.length).toBeGreaterThan(0);
+      for (const pem of TRUSTED_PUBLIC_KEYS) {
+        expect(pem).toContain("-----BEGIN PUBLIC KEY-----");
+        expect(pem).toContain("-----END PUBLIC KEY-----");
+      }
     });
 
     /**
-     * Pin the exact shipped verification key.
+     * Pin the exact shipped verification keys, by id and fingerprint.
      *
      * Everything else in this describe block is structural — the PEM check
      * passes for ANY well-formed key, and the round-trip below `return`s early
      * whenever `keys/` is absent, which in CI is always (it's gitignored and
      * never checked in). So before this test, a silent skip read as a pass and
-     * NOTHING verified which key the product actually ships. Swapping the key
+     * NOTHING verified which key the product actually ships. Swapping a key
      * — by a bad merge, a stray paste from a dev keypair, or a rebase that
      * resurrected an old line — would have been invisible until customers'
      * licenses stopped verifying in the field.
      *
-     * Update `EXPECTED_PUBLIC_KEY_SHA256` deliberately, in the same commit as a
-     * real key rotation, never to make a red test green.
+     * Update `EXPECTED_KEYS` deliberately, in the same commit as a real key
+     * rotation (docs/licensing-operations.md §0), never to make a red test green.
      *
-     * The hash is over the base64 body with all whitespace stripped, so it is
+     * Each hash is over the base64 body with all whitespace stripped, so it is
      * immune to CRLF/LF checkout differences (see the `core.autocrlf` gotcha in
      * CLAUDE.md) and to reflowing the PEM.
      */
-    it("ships the pinned production public key (fingerprint)", () => {
-      const EXPECTED_PUBLIC_KEY_SHA256 =
-        "d896ad7b41bfab69a5c356bbd0e68576201ac2fd5a0f90f9eddfa4f7d78a688b";
-      const body = TANDEM_PUBLIC_KEY.replace(/-----(BEGIN|END) PUBLIC KEY-----/g, "").replace(
-        /\s+/g,
-        "",
-      );
-      const actual = crypto.createHash("sha256").update(body).digest("hex");
-      expect(actual).toBe(EXPECTED_PUBLIC_KEY_SHA256);
+    it("ships the pinned production public keys (ids + fingerprints)", () => {
+      const EXPECTED_KEYS: Record<string, string> = {
+        "79c10e75fb8cfa46": "d896ad7b41bfab69a5c356bbd0e68576201ac2fd5a0f90f9eddfa4f7d78a688b",
+      };
+      const actual: Record<string, string> = {};
+      for (const [id, pem] of Object.entries(KEYS_BY_ID)) {
+        const body = pem.replace(/-----(BEGIN|END) PUBLIC KEY-----/g, "").replace(/\s+/g, "");
+        actual[id] = crypto.createHash("sha256").update(body).digest("hex");
+      }
+      // Anti-vacuity: an empty map would compare equal to an empty expectation.
+      expect(Object.keys(actual).length).toBe(TRUSTED_PUBLIC_KEYS.length);
+      expect(actual).toEqual(EXPECTED_KEYS);
+    });
+
+    it("keeps LEGACY_KEY_ID equal to the original key's computed id", () => {
+      // The literal is written out so a reader can see it; this keeps it honest.
+      expect(LEGACY_KEY_ID).toBe(keyIdForPublicKey(TRUSTED_PUBLIC_KEYS[0]));
+      expect(Object.hasOwn(KEYS_BY_ID, LEGACY_KEY_ID)).toBe(true);
     });
 
     it("should verify a license signed by the local private key using verifyLicense", () => {
@@ -220,6 +237,7 @@ describe("Licensing Core", () => {
         createdAt: new Date().toISOString(),
         expiresAt: null,
         version: "1.0",
+        keyId: keyIdForPublicKey(crypto.createPublicKey(privateKey)),
       };
 
       const dataStr = canonicalize(metadata);
@@ -246,8 +264,8 @@ describe("Licensing Core", () => {
           "The keypair in keys/ does not match the public key shipped in " +
             "src/server/license/public-key.ts.\n" +
             "If you just ran `npx tsx scripts/generate-keys.ts`, that is expected: finish the " +
-            "ceremony by pasting the new PUBLIC key into public-key.ts and updating " +
-            "EXPECTED_PUBLIC_KEY_SHA256 above, in the same commit (docs/licensing-operations.md §0).\n" +
+            "ceremony by adding the new PUBLIC key to public-key.ts (and its id to the Worker) and updating " +
+            "EXPECTED_KEYS above, in the same commit (docs/licensing-operations.md §0).\n" +
             "If you did NOT intend to rotate the signing key, delete keys/ — it is gitignored " +
             "scratch, and every license already issued was signed by the pinned key.\n" +
             `Underlying: ${err instanceof Error ? err.message : String(err)}`,
