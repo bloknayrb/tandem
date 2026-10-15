@@ -751,7 +751,7 @@ Some text here
 - `validateRange(doc, from, to)` — validates a flat offset range against the document, returns `RangeValidation`
 - `anchoredRange(doc, from, to)` — creates both flat range + Yjs RelativePosition range in one call
 - `resolveToElement(doc, offset)` — maps flat offset to Y.XmlElement + local offset (replaces the old `resolveOffset`)
-- `refreshRange(doc, annotation)` — resolves relRange → flat offsets on read; lazily attaches relRange to annotations that lack it
+- `refreshRange(ann, ydoc, map?, getText?)` — resolves relRange → flat offsets on read; lazily attaches a relRange when the stored range still matches its `textSnapshot`; returns a tagged result (`ok` / `updated` / `attached` / `repaired` / `degraded` / `failed`)
 - `flatOffsetToRelPos(doc, offset, assoc)` — flat offset → serialized RelativePosition JSON
 - `relPosToFlatOffset(doc, relPosJson)` — serialized RelativePosition → flat offset (or null if deleted)
 

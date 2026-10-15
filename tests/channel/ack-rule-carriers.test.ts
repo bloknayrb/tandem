@@ -20,6 +20,15 @@ describe("channel shim — ack rule carriers", () => {
     expect(src).toMatch(/description:\s*`Reply to a chat message in Tandem\. \$\{CHAT_ACK_RULE\}`/);
   });
 
+  // The event list was once typed by hand and silently dropped annotation:edited.
+  it("names the event types from the shared list, not a hand-typed copy", async () => {
+    const src = await readFile(RUN_TS, "utf8");
+    const instructions = /instructions:\s*\[([\s\S]*?)\]\.join/.exec(src)?.[1] ?? "";
+    expect(instructions).toContain("TANDEM_EVENT_TYPES.join");
+    expect(instructions).toContain("LICENSE_REFUSED_EVENT_TYPE");
+    expect(instructions).not.toMatch(/annotation:created/);
+  });
+
   it("declares inProgress and forwards every argument to /api/channel-reply", async () => {
     const src = await readFile(RUN_TS, "utf8");
     expect(src).toMatch(/inProgress:\s*\{\s*type:\s*"boolean"/);

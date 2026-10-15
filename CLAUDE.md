@@ -47,7 +47,7 @@ Each of these breaks something when violated, usually without a type error:
 
 | Working on… | Read first |
 |---|---|
-| MCP tools, `/api` routes, channel API | [docs/mcp-tools.md](docs/mcp-tools.md) — All 33 MCP tools (28 active, 2 shipped dark, 3 deprecated stubs) |
+| MCP tools, `/api` routes, channel API | [docs/mcp-tools.md](docs/mcp-tools.md) — All 30 MCP tools (28 active, 2 shipped dark) |
 | Data flows, coordinate systems, file map, Tauri layer | [docs/architecture.md](docs/architecture.md) |
 | Colors, spacing, radii, elevation | [docs/semantic-tokens.md](docs/semantic-tokens.md) |
 | `data-testid` / E2E selectors | [docs/design-system-impl/testid-manifest.md](docs/design-system-impl/testid-manifest.md) |

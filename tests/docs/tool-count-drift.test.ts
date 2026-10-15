@@ -31,14 +31,6 @@ const SRC = allMcpSource();
 const read = (relative: string): string => readFileSync(join(REPO_ROOT, relative), "utf-8");
 
 /**
- * Deprecated stubs return an MCP error instead of doing work, so they count toward the
- * total but not the active figure. Named explicitly (rather than inferred) because
- * un-stubbing one is a deliberate act that should force a look at this list — the
- * companion assertion below fails if a name here stops being a stub.
- */
-const DEPRECATED_STUBS = ["tandem_highlight", "tandem_suggest", "tandem_flag"];
-
-/**
  * `.docx`-only tools that are not registered while `.docx` ships dark (ADR-053). The
  * source scan still sees them, so they count toward the total but not the active figure,
  * and a release exposes TOTAL − DARK. The companion assertion below fails if a name here
@@ -48,21 +40,11 @@ const DARK_TOOLS = ["tandem_applyChanges", "tandem_convertToMarkdown"];
 
 const REGISTERED = registeredToolNames(SRC);
 const TOTAL = REGISTERED.size;
-const ACTIVE = TOTAL - DEPRECATED_STUBS.length - DARK_TOOLS.length;
-const EXPOSED = TOTAL - DARK_TOOLS.length;
+const ACTIVE = TOTAL - DARK_TOOLS.length;
+// A release exposes every active tool; the docs state both figures.
+const EXPOSED = ACTIVE;
 
 describe("MCP tool count stated in docs", () => {
-  it("every named deprecated stub is registered and still returns DEPRECATED", () => {
-    for (const name of DEPRECATED_STUBS) {
-      expect(REGISTERED, `${name} is no longer registered`).toContain(name);
-      // The stub body calls notifyDeprecatedTool with its own name; if it were un-stubbed
-      // that call would go, and the active count below would be wrong by one.
-      expect(SRC, `${name} no longer looks like a deprecated stub`).toContain(
-        `notifyDeprecatedTool("${name}")`,
-      );
-    }
-  });
-
   it("every named dark tool is registered and gated on the .docx flag", () => {
     for (const name of DARK_TOOLS) {
       expect(REGISTERED, `${name} is no longer registered`).toContain(name);
@@ -74,16 +56,15 @@ describe("MCP tool count stated in docs", () => {
 
   it("docs/mcp-tools.md states the counts that source actually registers", () => {
     expect(read("docs/mcp-tools.md")).toContain(
-      `Tandem registers ${TOTAL} tools in source (${ACTIVE} active, ${DARK_TOOLS.length} shipped dark, ` +
-        `${DEPRECATED_STUBS.length} deprecated stubs); a release exposes ${EXPOSED} over MCP HTTP`,
+      `Tandem registers ${TOTAL} tools in source (${ACTIVE} active, ${DARK_TOOLS.length} shipped dark); ` +
+        `a release exposes ${EXPOSED} over MCP HTTP`,
     );
   });
 
   it("CLAUDE.md mirrors the same counts", () => {
     const claudeMd = read("CLAUDE.md");
     expect(claudeMd).toContain(
-      `All ${TOTAL} MCP tools (${ACTIVE} active, ${DARK_TOOLS.length} shipped dark, ` +
-        `${DEPRECATED_STUBS.length} deprecated stubs)`,
+      `All ${TOTAL} MCP tools (${ACTIVE} active, ${DARK_TOOLS.length} shipped dark)`,
     );
     expect(claudeMd).toContain(`${ACTIVE} active MCP tools`);
   });
@@ -138,5 +119,20 @@ describe("de-numbered docs do not reacquire a tool count", () => {
       `${relative} states a tool count (${offenders.join(", ")}). The count belongs in ` +
         `docs/mcp-tools.md only — say "the MCP tools" here. See ADR-038 and audit-v3-docs R7.`,
     ).toEqual([]);
+  });
+});
+
+/**
+ * Docs a model or contributor reads as the tool reference must name only tools that
+ * exist. A removed tool left in prose is invisible to every count check above, and an
+ * agent that follows it gets an unknown-tool error with nothing to explain it.
+ */
+const NAMES_ONLY_REAL_TOOLS = ["AGENTS.md", "docs/mcp-tools.md"];
+
+describe("tool reference docs name only registered tools", () => {
+  it.each(NAMES_ONLY_REAL_TOOLS)("%s names no unregistered tandem_* tool", (relative) => {
+    const named = new Set([...read(relative).matchAll(/\btandem_\w+\b/g)].map((m) => m[0]));
+    const unknown = [...named].filter((name) => !REGISTERED.has(name));
+    expect(unknown, `${relative} names tools that are not registered in src`).toEqual([]);
   });
 });

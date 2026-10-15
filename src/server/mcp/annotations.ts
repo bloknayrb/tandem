@@ -14,7 +14,6 @@ import {
   AnnotationStatusSchema,
   AuthorSchema,
   ExportFormatSchema,
-  HighlightColorSchema,
   toFlatOffset,
 } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
@@ -146,20 +145,6 @@ function notifyRangeFailure(
   });
 }
 
-/** Surface a deprecated-tool call to the user; without this, only the AI client sees the failure. */
-function notifyDeprecatedTool(toolName: string): void {
-  pushNotification({
-    id: generateNotificationId(),
-    type: "annotation-error",
-    severity: "warning",
-    message: `Your AI tried a deprecated tool (${toolName}). Ask it to retry with tandem_comment.`,
-    toolName,
-    errorCode: "DEPRECATED",
-    dedupKey: `deprecated:${toolName}`,
-    timestamp: Date.now(),
-  });
-}
-
 /**
  * Capture a text snapshot from the document at the given range, capped at
  * {@link SNAPSHOT_CAP} chars.
@@ -255,46 +240,22 @@ export { refreshAllRanges, refreshRange } from "../positions.js";
 
 export function registerAnnotationTools(server: McpServer): void {
   server.tool(
-    "tandem_highlight",
-    "DEPRECATED. Highlights are user-only. Use tandem_comment for text annotations.",
-    {
-      // All params optional: a deprecated stub must surface DEPRECATED for any
-      // call shape, including ones missing the legacy required params. That is
-      // why the LIVE tools' `.int()` is deliberately NOT mirrored here (#1752):
-      // a stub never validates a range, so `.int()` would close no drift and
-      // would answer a Zod protocol error where docs/mcp-tools.md promises
-      // "Always returns a DEPRECATED error".
-      from: z.number().optional(),
-      to: z.number().optional(),
-      color: HighlightColorSchema.optional(),
-      note: z.string().optional(),
-      documentId: z.string().optional(),
-      textSnapshot: z.string().optional(),
-    },
-    withErrorBoundary("tandem_highlight", async () => {
-      notifyDeprecatedTool("tandem_highlight");
-      return mcpError(
-        "DEPRECATED",
-        "tandem_highlight is deprecated. Highlights are user-only. Use tandem_comment for text annotations.",
-      );
-    }),
-  );
-
-  server.tool(
     "tandem_comment",
-    "Add a comment to a text range. Optionally include suggestedText for a replacement proposal.",
+    "Attach a comment to the non-empty flat range [from, to) (offsets from tandem_getTextContent, " +
+      "tandem_search or tandem_resolveRange); returns the annotationId. The user sees it as a card in " +
+      "the editor and accepts or dismisses it. Add suggestedText to make it a replacement proposal the " +
+      'user can accept. A range whose start or end falls inside heading markup such as "## " — ' +
+      "including a to at the first character of that markup — returns INVALID_RANGE. A plain comment " +
+      "may span headings, but a range carrying suggestedText may not contain heading markup anywhere, " +
+      "because accepting it would delete the heading.",
     {
-      from: z.number().int().describe("Start position"),
-      to: z.number().int().describe("End position"),
+      from: z.number().int().describe("Start offset (flat text, inclusive)"),
+      to: z.number().int().describe("End offset (flat text, exclusive)"),
       text: z.string().describe("Comment text"),
       suggestedText: z
         .string()
         .optional()
         .describe("Optional replacement text — turns this into a tracked-change suggestion"),
-      directedAt: z
-        .enum(["claude"])
-        .optional()
-        .describe("Deprecated — pass omitted; including this field returns DEPRECATED."),
       documentId: z
         .string()
         .optional()
@@ -303,29 +264,16 @@ export function registerAnnotationTools(server: McpServer): void {
         .string()
         .optional()
         .describe(
-          "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
+          "Expected text at [from, to) — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
         ),
     },
     withErrorBoundary(
       "tandem_comment",
-      async ({
-        from: rawFrom,
-        to: rawTo,
-        text,
-        suggestedText,
-        directedAt,
-        documentId,
-        textSnapshot,
-      }) => {
+      async ({ from: rawFrom, to: rawTo, text, suggestedText, documentId, textSnapshot }) => {
         // #651 presence: tandem_comment creates a new annotation (no pre-existing
         // id to broadcast), so the presence marker is a generic "Claude is
         // working on the document" indicator surfaced in the status bar.
         return withTypingPresence({ tool: "tandem_comment", documentId }, async () => {
-          if (directedAt !== undefined)
-            return mcpError(
-              "DEPRECATED",
-              "directedAt is no longer supported — comments now always reach the connected AI client. Drop the field from your call.",
-            );
           const store = getDocumentStore(documentId);
           if (!store) return noDocumentError();
           const from = toFlatOffset(rawFrom);
@@ -369,65 +317,19 @@ export function registerAnnotationTools(server: McpServer): void {
     ),
   );
 
-  server.tool(
-    "tandem_suggest",
-    "DEPRECATED — use tandem_comment with suggestedText instead. Always returns an error.",
-    {
-      // All params optional: a deprecated stub must surface DEPRECATED for any
-      // call shape, including ones missing the legacy required params. That is
-      // why the LIVE tools' `.int()` is deliberately NOT mirrored here (#1752):
-      // a stub never validates a range, so `.int()` would close no drift and
-      // would answer a Zod protocol error where docs/mcp-tools.md promises
-      // "Always returns a DEPRECATED error".
-      from: z.number().optional(),
-      to: z.number().optional(),
-      newText: z.string().optional(),
-      reason: z.string().optional(),
-      documentId: z.string().optional(),
-      textSnapshot: z.string().optional(),
-    },
-    withErrorBoundary("tandem_suggest", async () => {
-      notifyDeprecatedTool("tandem_suggest");
-      return mcpError(
-        "DEPRECATED",
-        "tandem_suggest is deprecated. Use tandem_comment with suggestedText instead.",
-      );
-    }),
-  );
-
-  server.tool(
-    "tandem_flag",
-    "DEPRECATED. Use tandem_comment instead.",
-    {
-      // All params optional: a deprecated stub must surface DEPRECATED for any
-      // call shape, including ones missing the legacy required params. That is
-      // why the LIVE tools' `.int()` is deliberately NOT mirrored here (#1752):
-      // a stub never validates a range, so `.int()` would close no drift and
-      // would answer a Zod protocol error where docs/mcp-tools.md promises
-      // "Always returns a DEPRECATED error".
-      from: z.number().optional(),
-      to: z.number().optional(),
-      note: z.string().optional(),
-      documentId: z.string().optional(),
-      textSnapshot: z.string().optional(),
-    },
-    withErrorBoundary("tandem_flag", async () => {
-      notifyDeprecatedTool("tandem_flag");
-      return mcpError("DEPRECATED", "tandem_flag is deprecated. Use tandem_comment instead.");
-    }),
-  );
-
   server.registerTool(
     "tandem_getAnnotations",
     {
       description:
-        'Read annotations, optionally filtered by author/type/status. User notes are always excluded — they are private (ADR-027); notesExcluded reports how many were filtered, including imported comments awaiting user promotion (promoted ones surface as user comments). Every record whose stored audience is not outbound is excluded too and counted in privateExcluded (#1619/#1710) — user highlights are always private, so type: "highlight" returns nothing. For new user actions, prefer tandem_checkInbox.',
+        'Read the annotations on a document, optionally filtered by author/type/status, each comment with its visible replies. Only records shared with you are returned. User notes are private and excluded, counted in notesExcluded (including imported comments awaiting user promotion; promoted ones surface as user comments). Every other record the user has not shared is excluded too and counted in privateExcluded — user highlights are always private, so type: "highlight" returns only a highlight Claude authored (such as the tutorial seed). In solo mode the user\'s own annotations and replies are also held back. A record whose anchor no longer matches its text carries anchor: "degraded" or "failed". For only what is new since your last poll, use tandem_checkInbox.',
       inputSchema: {
         author: AuthorSchema.optional().describe("Filter by author"),
         type: z
           .enum(["highlight", "comment"])
           .optional()
-          .describe('Filter by type ("highlight" always returns nothing — highlights are private)'),
+          .describe(
+            'Filter by type ("highlight" never returns a user highlight — those are private)',
+          ),
         status: AnnotationStatusSchema.optional().describe("Filter by status"),
         documentId: z
           .string()
@@ -513,8 +415,8 @@ export function registerAnnotationTools(server: McpServer): void {
       "applies no text. Accept on a user-authored or imported comment with no suggestedText " +
       'does go through; it is stamped resolvedBy: "claude" and is kept out of the ' +
       "tandem_checkInbox userResponses bucket, so it never reads back as the user's decision. " +
-      "Only pending annotations can transition, and private notes and comments cannot be " +
-      "transitioned at all (ADR-027). The record is kept either way — use " +
+      "Only pending annotations can transition, and records private to the user (notes, private " +
+      "comments, user highlights) cannot be transitioned at all. The record is kept either way — use " +
       "tandem_removeAnnotation to delete it.",
     {
       id: z.string().describe("Annotation ID"),
@@ -584,8 +486,9 @@ export function registerAnnotationTools(server: McpServer): void {
     "tandem_removeAnnotation",
     "Delete an annotation and its whole reply thread permanently. Not the same as " +
       "tandem_resolveAnnotation, which keeps the record and moves it to accepted/dismissed — " +
-      "prefer resolve unless the annotation should leave no trace. Refuses to remove user notes " +
-      '(type: "note"), which are private per ADR-027. There is no undo.',
+      "prefer resolve unless the annotation should leave no trace. Records private to the user — " +
+      "notes, private comments and the user's highlights — are refused with INVALID_ARGUMENT. " +
+      "There is no undo.",
     {
       id: z.string().describe("Annotation ID"),
       documentId: z
@@ -631,12 +534,12 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_editAnnotation",
-    "Edit the content of an annotation Claude authored. Use newText to update replacement text, reason/content for the comment body. Only pending annotations can be edited, and a user-authored or imported record is refused with NOT_OWNED (#1770) — private notes and private comments are refused ahead of that (ADR-027).",
+    "Edit a pending annotation Claude authored: content replaces the comment body, newText sets or replaces its suggestedText. A private note or private comment (including an imported comment not yet promoted) returns INVALID_ARGUMENT, checked first; any other record not authored by Claude — a user comment or highlight, or a promoted note or imported comment, which is stored as a user comment — returns NOT_OWNED; an accepted or dismissed one returns ANNOTATION_RESOLVED; a newText whose live range overlaps heading markup or no longer resolves returns INVALID_ARGUMENT.",
     {
       id: z.string().describe("Annotation ID"),
       content: z.string().optional().describe("New comment text"),
       newText: z.string().optional().describe("New replacement text (sets suggestedText)"),
-      reason: z.string().optional().describe("Alias for content (legacy compat)"),
+      reason: z.string().optional().describe("Same as content; content wins if both are passed"),
       documentId: z
         .string()
         .optional()
@@ -709,7 +612,7 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_exportAnnotations",
-    "Export all annotations as a review summary (markdown or json). writeToDisk:true also writes a sharable sidecar file (e.g. `<doc>.annotations.json`) next to the document.",
+    "Export the annotations you can see as a review summary (markdown by default, or json) — the same records tandem_getAnnotations returns. User notes and other private records are left out, as are the user's annotations held back in solo mode; privateExcluded counts the withheld non-note records and heldFromExport the solo-held ones; notes are left out without a count. writeToDisk: true also writes the export to a sidecar file next to the document (`<file>.annotations.md|json` by default), overwriting any existing one; uploaded and scratchpad documents have no location for it and return INVALID_PATH.",
     {
       format: ExportFormatSchema.optional().describe("Output format (default: markdown)"),
       documentId: z
@@ -996,11 +899,11 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_annotationReply",
-    "Reply to a thread on an annotation Claude authored. Only works on pending annotations. " +
-      "A user-authored or imported record — including a promoted note or imported comment, which is " +
-      "stored as a user comment — is refused with NOT_OWNED (#1770); answer in chat with " +
-      "tandem_reply, or leave a fresh tandem_comment. Private notes and private comments are " +
-      "refused ahead of that (ADR-027).",
+    "Reply in the thread of a pending annotation Claude authored (ANNOTATION_RESOLVED once it is " +
+      "accepted or dismissed). A user-authored or imported record — including a promoted note or " +
+      "imported comment, which is stored as a user comment — returns NOT_OWNED; answer it in chat with " +
+      "tandem_reply, or leave a fresh tandem_comment. Private notes and private comments return " +
+      "INVALID_ARGUMENT.",
     {
       annotationId: z.string().describe("The annotation ID to reply to"),
       text: z.string().describe("Reply text"),

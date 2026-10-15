@@ -12,9 +12,8 @@
  * `document-store.anchorRange` — the same `Math.min` shape this change
  * deliberately sanctions at the `.docx` import site — passes every
  * `tandem_edit` and `tandem_getContext` case while `tandem_comment` still spans
- * to end-of-document. `tandem_comment` is the only live MCP annotation creator
- * (`tandem_highlight`/`tandem_suggest`/`tandem_flag` return DEPRECATED before
- * touching a range), so it is the case that discriminates.
+ * to end-of-document. `tandem_comment` is the only MCP annotation creator, so
+ * it is the case that discriminates.
  */
 
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";

@@ -477,7 +477,7 @@ to stamp `resolvedBy: "claude"` on a user's private highlight and
 reported the same record only as a `privateExcluded` count. Those two families
 now use `isWithheldFromClaude` — literally `!isClaudeFacing` — so the write
 guards are no weaker than the read filter on any type. Claude cannot mint a
-highlight (`tandem_highlight` is a deprecated stub), so nothing Claude authored
+highlight (Claude has no highlight-creating tool), so nothing Claude authored
 is refused by the widening.
 
 **One regression shipped with the fix, deliberately.** If a legacy imported

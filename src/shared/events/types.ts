@@ -106,17 +106,31 @@ export { generateEventId } from "../utils.js";
 
 // --- Parse guard for SSE consumers ---
 
-const VALID_EVENT_TYPES = new Set<TandemEventType>([
-  "annotation:created",
-  "annotation:accepted",
-  "annotation:dismissed",
-  "annotation:edited",
-  "annotation:reply",
-  "chat:message",
-  "document:opened",
-  "document:closed",
-  "document:switched",
-]);
+// A Record keyed by the union, so adding a member to `TandemEvent` is a compile
+// error here until it is listed — and the channel shim's instructions, which
+// name every type from `TANDEM_EVENT_TYPES`, pick it up without an edit.
+const EVENT_TYPE_KEYS: Record<TandemEventType, true> = {
+  "annotation:created": true,
+  "annotation:accepted": true,
+  "annotation:dismissed": true,
+  "annotation:edited": true,
+  "annotation:reply": true,
+  "chat:message": true,
+  "document:opened": true,
+  "document:closed": true,
+  "document:switched": true,
+};
+
+/** Every `TandemEventType`, in a stable order. */
+export const TANDEM_EVENT_TYPES = Object.keys(EVENT_TYPE_KEYS) as readonly TandemEventType[];
+
+const VALID_EVENT_TYPES = new Set<TandemEventType>(TANDEM_EVENT_TYPES);
+
+/**
+ * The channel shim's `event_type` for its one-time licence-refusal notice. Not a
+ * `TandemEventType`: the shim emits it itself, never the server's event queue.
+ */
+export const LICENSE_REFUSED_EVENT_TYPE = "license_refused";
 
 /**
  * Validate a JSON-parsed value as a TandemEvent.

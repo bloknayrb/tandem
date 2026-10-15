@@ -377,7 +377,7 @@ Only pending annotations can be edited — accepted or dismissed annotations are
 1. Usually nothing to do — Tandem watches open files and reloads them automatically, preserving annotations
 2. **Unless the document has unsaved edits.** Then the reload is held and the editor shows a keep-vs-reload banner, because reloading would discard the only copy of those edits (the CRDT undo stack does not cover a server-side content replacement). Saves stay blocked until the user answers; `tandem_save` returns `EXTERNAL_CONFLICT` rather than reporting a success that didn't happen. Only the user can resolve it — there is no MCP tool for the choice
 3. Call `tandem_open({ filePath: "...", force: true })` to force a reload regardless
-4. Force-reload clears annotations and session state (they reference old positions) — don't use it mid-review
+4. Force-reload discards unsaved edits and the session; annotations are kept and re-anchored, but one whose text changed may come back `degraded` — don't use it mid-review
 5. `POST /api/open` also accepts `force: true` for editor-initiated reloads
 
 **Tip:** Always `tandem_save()` before ending a session to persist edits to disk.

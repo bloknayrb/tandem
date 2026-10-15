@@ -604,8 +604,9 @@ export function registerApplyTools(server: McpServer): void {
         ? "For .docx the list also includes the {name}.backup.docx sidecar written by " +
           "tandem_applyChanges, listed last; restore it by name like any snapshot. "
         : "") +
-      "Restoring " +
-      "reloads the open document in place — annotations are preserved and re-anchored.",
+      "Restoring overwrites the file on disk with the snapshot and reloads the open document in " +
+      "place, discarding unsaved in-memory edits; annotations are preserved and re-anchored. Refused " +
+      "for read-only, uploaded and scratchpad documents.",
     {
       documentId: z.string().optional().describe("Target document ID (defaults to active doc)"),
       backup: z
