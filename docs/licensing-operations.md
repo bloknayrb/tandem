@@ -429,7 +429,27 @@ it, so a fix is only prompted by Polar's delivery log (§5b).
 Point the Polar webhook endpoint (subscribed to `order.paid` + `order.refunded`)
 at the deployed URL. Deploy a **separate sandbox instance** (the sandbox Polar
 secret, its own namespaces) to test end-to-end — the sandbox needs no Polar KYC,
-so this is unblocked before any payout setup.
+so this is unblocked before any payout setup. `wrangler.toml` names only the
+production Worker, so **every** sandbox command (`deploy`, `secret put`,
+`secret delete`) needs `--name <sandbox-worker-name>`: run bare from
+`infra/license-issuance-worker/`, each one acts on production.
+
+> **The sandbox instance signs with the production key.** Its
+> `TANDEM_PRIVATE_KEY` must be a key in `TRUSTED_KEY_IDS`, so in practice the
+> real one: a throwaway key answers every webhook 503 at stage `config`, and a
+> key no build trusts could not pass the "it activates" check anyway.
+> `TANDEM_ISSUANCE_ENV` does not change the signing, and the key is emailed as
+> usual, so every sandbox order sends the buyer address a key that activates
+> Tandem from a test-card payment. (It gets no updates: no entitlement reaches
+> the live `LICENSE_KV`, because `sandbox` skips the write and `production` on the
+> sandbox writes to its own namespaces.) Keep the sandbox checkout link to
+> yourself, and once the end-to-end check passes, take the key off the sandbox
+> instance. **Name that Worker explicitly**, e.g.
+> `npx wrangler@4.130.0 secret delete TANDEM_PRIVATE_KEY --name <sandbox-worker-name>`,
+> or delete the sandbox Worker. Run bare from `infra/license-issuance-worker/`,
+> the command reads `wrangler.toml`, whose only `name` is the production Worker,
+> and deletes the production key. If you ran the check with `wrangler dev`
+> instead, the key sits in `.dev.vars` (gitignored); delete that file afterwards.
 
 > **Which `TANDEM_ISSUANCE_ENV` the sandbox gets depends on what you're testing.**
 > `sandbox` writes the ledger but suppresses the entitlement `put`, which is
