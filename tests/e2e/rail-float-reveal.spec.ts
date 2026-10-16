@@ -30,14 +30,18 @@ test.use({ contextOptions: { reducedMotion: "no-preference" } });
 // `no-preference`.
 
 // Duplicated literals, deliberately: these are unexported module consts in
-// `src/client/App.svelte` (`HOVER_ENTER_MS`, `HOVER_LEAVE_MS`,
-// `FLOAT_CLOSE_MS`). Keep them in step by hand.
-const HOVER_ENTER_MS = 120;
+// `src/client/App.svelte` (`HOVER_LEAVE_MS`, `FLOAT_CLOSE_MS`) and the
+// `.rail-shell.collapsed` width in its stylesheet. Keep them in step by hand.
 const HOVER_LEAVE_MS = 180;
 const FLOAT_CLOSE_MS = 300;
+const COLLAPSED_WIDTH = "14px";
 
 const SHELL = ".rail-shell-right";
 const COMPOSER = "[data-testid='chat-composer-input']";
+// The `floating` class itself. `\bfloating\b` would also match
+// `rail-floating-chrome` (`-` is a word boundary), which the closing phase
+// carries too, so it is not a witness that the hover armed.
+const FLOATING = /(?:^|\s)floating(?:\s|$)/;
 
 let mcp: McpTestClient;
 let tmpDir: string;
@@ -52,20 +56,23 @@ let tmpDir: string;
  * from under the pointer, `mouseleave` follows, and `onRailShellLeave` clears
  * the 120 ms enter timer before `railFloat.right` is ever set. Measured:
  * `hover({ force: true })` straight after `setRailVisible` failed 5 of 5 runs
- * that way, and passed 20 of 20 with this wait in front. Inferred, not
- * measured: the unforced `hover()` reaches the same point because its
- * stability check can accept two identical rects at the transition's start.
+ * that way, with the enter/leave pair in an event log, and passed 20 of 20
+ * with this wait in front. Inferred, not measured: the unforced `hover()`
+ * reaches the same point because its stability check can accept two identical
+ * rects at the transition's start.
  *
- * The computed width is what the hover depends on, so that is what is waited
- * for; it reads the in-flight value during the transition. `animating` alone
- * is not enough: the 400 ms fallback timer in `handleRailVisChange` can clear
- * it before `transitionend` if the transition started late.
+ * The wait is on the computed width, the property the hover depends on; it
+ * reads the in-flight value during the transition, so it passes only once the
+ * shell is at rest (at most a frame before `transitionend`, with the width
+ * already serialising as 14px).
+ * The `animating` class is NOT a substitute: the 400 ms fallback timer in
+ * `handleRailVisChange` can clear it before `transitionend` if the transition
+ * started late.
  */
 async function collapseRightRail(page: Page): Promise<Locator> {
   await setRailVisible(page, "right", false);
   const shell = page.locator(SHELL);
-  await expect(shell).not.toHaveClass(/\banimating\b/);
-  await expect(shell).toHaveCSS("width", "14px");
+  await expect(shell).toHaveCSS("width", COLLAPSED_WIDTH);
   return shell;
 }
 
@@ -97,15 +104,18 @@ test("an open chat reveal never co-exists with the float-closing phase (#2014)",
   // come from `revealOpen` alone, so nothing in the DOM can show the hover
   // armed. A hover that never armed leaves `railFloat.right` unset and
   // `maybeHideFloat`'s `if (!railFloat[side]) return;` fires first — green on
-  // unfixed master. With no reveal open yet, `.floating` is that witness. The
-  // wait is a deterministic hold that keeps the pointer inside through the
-  // 120 ms enter delay.
+  // unfixed master. With no reveal open yet, `.floating` is that witness, and
+  // polling for it is safe: nothing moves the pointer until it resolves, so it
+  // waits out the enter delay on its own.
   await shell.hover();
-  await page.waitForTimeout(HOVER_ENTER_MS + 150);
-  await expect(shell).toHaveClass(/\bfloating\b/);
+  await expect(shell).toHaveClass(FLOATING);
 
   await page.evaluate(() => window.dispatchEvent(new CustomEvent("tandem:focus-chat")));
   await expect(page.locator(COMPOSER)).toBeVisible();
+  // The blur below is only the focus exit the issue names if the composer
+  // holds focus; without it `maybeHideFloat` would run from the leave timer
+  // instead.
+  await expect(page.locator(COMPOSER)).toBeFocused();
 
   // Move the pointer away, then take the keyboard/programmatic focus exit the
   // issue identifies (an outside pointerdown cannot be used: the capture-phase
@@ -155,11 +165,10 @@ test("a chat reveal opened DURING the retreat cancels it (#2014)", async ({ page
 
   const shell = await collapseRightRail(page);
 
-  // Arm the hover float with no reveal open (the deterministic hold, for the
-  // reason the first test states), then leave so the retreat starts.
+  // Arm the hover float with no reveal open (witnessed by `.floating`, as in
+  // the first test), then leave so the retreat starts.
   await shell.hover();
-  await page.waitForTimeout(HOVER_ENTER_MS + 150);
-  await expect(shell).toHaveClass(/\bfloating\b/);
+  await expect(shell).toHaveClass(FLOATING);
 
   await page.mouse.move(8, 400);
   await page.waitForTimeout(HOVER_LEAVE_MS + 80);
