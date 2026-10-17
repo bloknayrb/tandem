@@ -512,20 +512,23 @@ async function applyRefund(rec: LedgerRecord, deps: IssuanceDeps): Promise<Event
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function revoke(data: any, deps: IssuanceDeps, nowMs: number): Promise<EventOutcome> {
-  // Only an EXPLICIT `false` is treated as a genuinely mis-routed non-refund
+  // Only an EXPLICIT `false` without refund status is treated as a genuinely mis-routed non-refund
   // event — routing here already required `type === "order.refunded"`, so
-  // this is defense-in-depth, not the primary discriminator. Polar's exact
-  // field name/shape for a refunded order is UNCONFIRMED against a real
-  // sandbox payload (same risk class as `isFreeOrder`'s amount-field guess).
-  // A missing/non-boolean field is therefore NEITHER auto-revoked (which
-  // would silently delete a paying customer's entitlement on a wrong guess)
-  // NOR auto-ignored (which would silently leave a real refund unprocessed
-  // forever) — it falls through to "dropped" below: alertable, not committed
-  // either way, recoverable via a manual Polar re-send once confirmed.
-  if (data?.refunded === false) return "ignored";
+  // this is defense-in-depth, not the primary discriminator.
+  // In Polar's Order schema, refund state is indicated by status ("refunded" | "partially_refunded"),
+  // refunded_amount > 0, or legacy boolean `refunded === true`.
+  // A payload that matches none of these falls through to "dropped".
+  if (data?.refunded === false && data?.status !== "refunded" && data?.status !== "partially_refunded") return "ignored";
   const orderId = orderIdOf(data);
   if (!orderId) return "dropped";
-  if (data?.refunded !== true) return "dropped";
+
+  const isRefunded =
+    data?.refunded === true ||
+    data?.status === "refunded" ||
+    data?.status === "partially_refunded" ||
+    (typeof data?.refunded_amount === "number" && data.refunded_amount > 0);
+
+  if (!isRefunded) return "dropped";
 
   const rec = await readOrder(deps, orderId);
   if (rec) return applyRefund(rec, deps);

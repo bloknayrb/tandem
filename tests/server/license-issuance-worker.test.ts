@@ -745,6 +745,34 @@ describe("handleIssuance: order.refunded", () => {
     expectRevoked(deps, licenseId);
   });
 
+  it("revokes when Polar Order schema carries status: 'refunded' (issue #2229)", async () => {
+    const deps = await issued();
+    const licenseId = ledgerRec(deps).licenseId;
+    const body = JSON.stringify({
+      type: "order.refunded",
+      data: { id: "ord_1", status: "refunded" },
+    });
+    const res = await handleIssuance(makeRequest(body, { id: "evt_polar_refund" }), deps);
+    expect(res.status).toBe(200);
+    expectRevoked(deps, licenseId);
+    expect(ledgerRec(deps).refunded).toBe(true);
+    expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
+  });
+
+  it("revokes when Polar Order schema carries status: 'partially_refunded' or refunded_amount > 0", async () => {
+    const deps = await issued();
+    const licenseId = ledgerRec(deps).licenseId;
+    const body = JSON.stringify({
+      type: "order.refunded",
+      data: { id: "ord_1", status: "partially_refunded", refunded_amount: 2500 },
+    });
+    const res = await handleIssuance(makeRequest(body, { id: "evt_polar_partial" }), deps);
+    expect(res.status).toBe(200);
+    expectRevoked(deps, licenseId);
+    expect(ledgerRec(deps).refunded).toBe(true);
+    expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
+  });
+
   it("does not resurrect a refunded entitlement when the paid event retries (H2)", async () => {
     // Paid email FAILS first (so evt never marked done), then a refund revokes,
     // then the paid event retries — it must not re-assert the entitlement.
