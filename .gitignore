@@ -14,7 +14,8 @@ graphify-out/
 
 # Cloudflare Wrangler's local-secrets file for `wrangler dev`. It holds exactly
 # what infra/license-issuance-worker/wrangler.toml documents as `wrangler secret
-# put` targets -- TANDEM_PRIVATE_KEY, POLAR_WEBHOOK_SECRET, RESEND_API_KEY --
+# put` targets -- TANDEM_PRIVATE_KEY, PADDLE_WEBHOOK_SECRET, PADDLE_API_KEY,
+# RESEND_API_KEY --
 # and docs/licensing-operations.md walks an operator toward creating one. This
 # repo is public, and a leaked TANDEM_PRIVATE_KEY drops every license it signed
 # to `restricted` once rotation retires it (src/server/license/public-key.ts;
