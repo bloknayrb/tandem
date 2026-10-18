@@ -85,21 +85,32 @@ software's own licence doesn't grant is the worst version of this problem.
 
 ## 3. Refunds
 
-- Refunds are processed by **Polar**, the merchant of record.
-- A refund deletes nothing. The issuance Worker overwrites the key's
-  `LICENSE_KV` entitlement with a `revoked` tombstone
+- Refunds are processed by **Paddle**, the merchant of record (since
+  2026-10-17, replacing Polar). Paddle also issues the receipts and invoices.
+  The public Refund Policy will live at `https://tandem.ink/refunds` (not live
+  yet); **the refund window is not decided** (14 days is the recommendation).
+- A refund deletes nothing, **and it keeps the right to run; it stops updates
+  only. That is deliberate.** On a full refund (or a full credit, or a
+  chargeback) the issuance Worker overwrites the `LICENSE_KV` entitlement of
+  every key the order minted with a `revoked` tombstone
   (`{updateWindowEnd: null, status: "revoked"}`) and marks the ledger record
   `refunded`, so the update Worker answers `revoked` and offers no new builds.
   **It does not, and cannot, stop the software running** — activation is
   air-gapped by design — and by decision the licence has no revocation clause
   either (A2, 2026-10-09; Bryan: "if they want a refund it is what it is"). The
   `revoked` label names the update entitlement only, never the right to run.
+- **A partial refund keeps the licence, updates included** (decided
+  2026-10-18). The operator is notified and revokes by hand only if partial
+  refunds on one order add up to a full refund.
+- **One purchase is one licence**, whatever quantity the checkout records
+  (approved with the Paddle plan, 2026-10-18). Set the checkout quantity to 1 in
+  Paddle so a buyer cannot pay for more.
 - Arithmetic worth stating plainly: a 14-day trial, plus a 14-day EU withdrawal
   window, plus perpetual run, is **~28 days of legitimate free use ending in a
   permanent licence**. That follows from the design; price accordingly. ⚖️
 - ⚖️ **Withdrawal-right waiver** (Consumer Rights Directive Art. 16(m) / UK CCR
   reg. 37): is it even available given a 14-day trial is *also* offered, and
-  does Polar's checkout actually present both the express consent and the
+  does Paddle's checkout actually present both the express consent and the
   acknowledgement of losing the right? Verify in the live checkout, not the docs.
 
 ## 4. Trial
@@ -142,7 +153,8 @@ What exists, so a privacy notice can be accurate rather than aspirational:
 | Where | What | Notes |
 |---|---|---|
 | `license.json` on the buyer's device | name, email (inside the signed blob) | The only identity PII Tandem writes to disk. |
-| `LEDGER_KV` (Cloudflare, seller-side) | orderId, licenseId, **email, name**, type, dates, delivery/refund flags | The only PII store the seller operates. |
+| Paddle (merchant of record) | the buyer's customer record, payment details, receipts and invoices | Paddle's own records, as the seller of record. The issuance Worker reads the buyer's email and name from it (`customer.read`) and keeps them only in `LEDGER_KV`. |
+| `LEDGER_KV` (Cloudflare, seller-side) | orderId (Paddle transaction id), licenseId, **email, name**, type, dates, delivery/refund flags; plus id-only `evt:`, `notice:` and `txnlic:` keys | The only live PII store the seller operates; its backups (ops §6) hold the same data. |
 | `LICENSE_KV` (Cloudflare) | updateWindowEnd, status, version | Keyed by an opaque UUID. **No PII.** |
 | Update endpoint logs | `{ result, reason, ts }` | No licence id, no IP recorded by us. Retained by our own Cloudflare `[observability]` configuration, so the operator can detect a missing entitlement without waiting for a report. |
 | Resend | delivery of the licence email | Processor. |
@@ -152,8 +164,9 @@ Open questions:
 - **Retention for `LEDGER_KV` — decided 2026-10-09 (B5).** The buyer's name and
   email are kept for as long as keys are reissued, because a reissue needs them,
   and erased on request. Merchant-of-record status removes the usual
-  tax-retention reason: **Polar** carries the statutory invoice obligation, so
-  your own books record payouts, not buyers. ⚖️ The lawful basis for the
+  tax-retention reason: **Paddle** carries the statutory invoice obligation, so
+  your own books record payouts, not buyers. Erasure requests go to the support
+  inbox. ⚖️ The lawful basis for the
   privacy notice is still to be stated.
 - **Erasure (GDPR Art. 17) is already representable, and is the B5 erasure
   path.** A redaction tombstone

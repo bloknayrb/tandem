@@ -2,7 +2,7 @@
  * Mint a signed Tandem license locally (#1116, ADR-040).
  *
  * This is the operator's out-of-band issuance path — the one that does NOT go
- * through Polar. Two uses: a free/complimentary license, and handing a buyer
+ * through Paddle. Two uses: a free/complimentary license, and handing a buyer
  * their bytes directly when their mail provider quarantined the automated one
  * (re-sending through the same pipe cannot fix that case).
  *

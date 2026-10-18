@@ -124,6 +124,29 @@ takes the file fallback with no diagnostic. Treat "these entries exist" as
 expected rather than observed. Nothing here is lost if they do not: the
 consequence is that a secret has to be re-entered, not that it leaks.
 
+## If you buy a license: what the seller keeps
+
+Nothing on this page so far leaves your computer. Buying a license (from v1.0;
+nothing is on sale during the beta) puts your details in three places outside it:
+
+| Where | What | Who holds it |
+| --- | --- | --- |
+| Paddle | Your customer record, payment, receipts and invoices | Paddle, the merchant of record, under its own privacy policy |
+| The seller's issuance ledger (`LEDGER_KV`, on Cloudflare) | Your email and name, copied from Paddle when the license is made, with the Paddle transaction id, the license id, its type, dates, and whether the email was sent or the order refunded | The seller (Bryan Kolb) |
+| Resend, the email service | The license email it delivered to you, with your license inside, for as long as Resend's log retention keeps it | Resend, under its own privacy policy |
+
+The ledger, and the seller's private backups of it, are the only places the
+seller itself keeps your name and email. The update
+service your app talks to sees only the opaque license id, and the seller's
+operator alerts carry no ids at all. Your license itself, with your name and
+email inside, is on your own machine as `license.json` (above).
+
+**To have the seller's copy erased**, email the support address in your license
+email. The seller removes your name and email from the ledger record and keeps
+only its ids, so your license and its updates keep working. After that, a lost
+license can be reissued only if you send your name and email again. Paddle's own
+records are kept under Paddle's terms.
+
 ## Entries Tandem writes into other programs' config
 
 These are what go stale if you delete Tandem without cleaning up:
