@@ -500,7 +500,7 @@ describe("handleIssuance: idempotency & recovery", () => {
   });
 });
 
-describe("handleIssuance: issue() order of operations (§6)", () => {
+describe("handleIssuance: issue() order of operations", () => {
   async function ledgered(deps: TestDeps) {
     await handleIssuance(makeRequest(paidBody({ eventId: "evt_first" })), deps);
     deps.lookupCustomer.mockClear();
@@ -636,7 +636,7 @@ describe("handleIssuance: issue() order of operations (§6)", () => {
   });
 });
 
-describe("handleIssuance: buyer lookup mapping (§7)", () => {
+describe("handleIssuance: buyer lookup mapping", () => {
   const fail = (status?: number) =>
     vi.fn(async () =>
       status === undefined ? { ok: false as const } : { ok: false as const, status },
@@ -673,7 +673,7 @@ describe("handleIssuance: buyer lookup mapping (§7)", () => {
   });
 });
 
-describe("handleIssuance: gate (§2) and dispatcher (§4)", () => {
+describe("handleIssuance: gate and dispatcher", () => {
   it("missing Paddle-Signature → 400; bad signature → 401, no side effects", async () => {
     const deps = baseDeps();
     const req = new Request("https://x/", { method: "POST", body: paidBody() });
@@ -808,7 +808,7 @@ describe("handleIssuance: gate (§2) and dispatcher (§4)", () => {
   });
 });
 
-describe("handleIssuance: adjustments (§10 first-match table)", () => {
+describe("handleIssuance: adjustments (first-match table)", () => {
   async function issued(o: { isTest?: boolean } = {}) {
     const deps = baseDeps(o);
     await handleIssuance(makeRequest(paidBody({ eventId: "evt_paid" })), deps);
@@ -945,7 +945,7 @@ describe("handleIssuance: adjustments (§10 first-match table)", () => {
   });
 });
 
-describe("handleIssuance: double mint (§12)", () => {
+describe("handleIssuance: double mint", () => {
   it("two mints for one txn → two txnlic keys; a full refund tombstones both", async () => {
     const deps = baseDeps();
     // Simulate the race: both requests read "no record" through the recheck.
@@ -1639,7 +1639,7 @@ describe("default fetch wiring (env → deps)", () => {
     expect(calls).toEqual(["https://hooks.example/tandem"]);
   });
 
-  // --- §12a scheduled delivery check -----------------------------------------
+  // --- scheduled delivery check ---------------------------------------------
   function deliveryFetch(o: {
     failed?: unknown[];
     settings?: unknown[];
