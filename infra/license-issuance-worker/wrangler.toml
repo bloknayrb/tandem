@@ -117,8 +117,9 @@ id = "REPLACE_WITH_LEDGER_KV_NAMESPACE_ID"
 #     instance stops minting on its own.
 #   - TANDEM_ISSUANCE_ENV = "sandbox": no update entitlement is written, and
 #     ledger keys use the `test` mode segment.
-# Afterwards, take the key off:
-#   npx wrangler@4.130.0 secret delete TANDEM_PRIVATE_KEY --env sandbox
+# Afterwards, delete the whole sandbox Worker, not just its key (the daily cron
+# would otherwise keep running and alert once its API key expires):
+#   npx wrangler@4.130.0 delete --env sandbox
 # ---------------------------------------------------------------------------
 [env.sandbox.vars]
 TANDEM_ISSUANCE_ENV = "sandbox"

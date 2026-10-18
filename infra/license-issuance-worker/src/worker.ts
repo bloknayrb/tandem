@@ -380,11 +380,14 @@ async function reDrive(existing: LedgerRecord, deps: IssuanceDeps): Promise<Even
   return "duplicate";
 }
 
-const TXN_ID = /^txn_[a-z0-9]+$/;
-const CTM_ID = /^ctm_[a-z0-9]+$/;
-const ADJ_ID = /^adj_[a-z0-9]+$/;
-const EVT_ID = /^evt_[a-z0-9]+$/;
-const APIKEY_ID = /^apikey_[a-z0-9]+$/;
+// Paddle ids are a prefix plus 26 lower-case characters. The 64 bound keeps
+// every KV key built from them far below KV's 512-byte limit, so a drifted id
+// can never loop as a 500 on an over-long key.
+const TXN_ID = /^txn_[a-z0-9]{1,64}$/;
+const CTM_ID = /^ctm_[a-z0-9]{1,64}$/;
+const ADJ_ID = /^adj_[a-z0-9]{1,64}$/;
+const EVT_ID = /^evt_[a-z0-9]{1,64}$/;
+const APIKEY_ID = /^apikey_[a-z0-9]{1,64}$/;
 
 /** The transaction a payload is about — the ledger key both `issue()` and
  * `revoke()` derive everything else from. */
@@ -1192,6 +1195,8 @@ const STAGE_TEXT: Partial<Record<FailStage, string>> = {
   "paddle-api": "The Paddle API could not be reached to look up a buyer; the sale is waiting",
   "paddle-api-auth":
     "The Paddle API key is expired or lacks customer.read; every sale fails until it is replaced",
+  ledger:
+    "A ledger record is corrupt; every retry for that order fails until the record is repaired by hand",
   "notice-write":
     "A notice or dropped-event record could not be written to LEDGER_KV; Paddle will retry the event",
   "delivery-check":
@@ -1499,7 +1504,11 @@ export default {
     let sandboxBuyers: ReadonlySet<string> | undefined;
     if (apiKey.startsWith("pdl_sdbx_")) {
       sandboxBuyers = emailSetOf(env.SANDBOX_BUYER_EMAILS ?? "");
-      if (sandboxBuyers.size === 0) return configFail("config-sandbox-buyers");
+      // Every entry must be address-shaped, so the shipped placeholder 503s
+      // like every other one instead of silently ignoring every test order.
+      if (sandboxBuyers.size === 0 || [...sandboxBuyers].some((e) => !EMAIL_SHAPE.test(e))) {
+        return configFail("config-sandbox-buyers");
+      }
     }
 
     const grandfatherSet = grandfatherSetOf(env.GRANDFATHER_EMAILS ?? "");

@@ -107,7 +107,12 @@ verification on that build.
 2. Release that build and deploy the Worker. Wait until most installs have
    updated: a buyer on an older build who receives a new-key license is told it
    "may need to be reissued", and the real fix for them is to update.
-3. Switch the Worker secret to the new key, then run the sandbox check above.
+3. Switch the **production** Worker's secret to the new key. To check it
+   before a buyer does, put the same key on a sandbox Worker for the length of
+   one sandbox order (`--env sandbox`, with `SANDBOX_SIGNING_UNTIL` and your own
+   address in `SANDBOX_BUYER_EMAILS`), run the check above, then delete that
+   Worker again (§3.5b). Production itself shows a bad key only as 503
+   `config`, alerted, on the next webhook.
 4. **After a leak, also retire the old key**: remove it from all three lists in
    one release. Every license it signed (and any keyless license, if it is the
    `LEGACY_KEY_ID` key) stops verifying, which is the point: those can no longer
@@ -480,17 +485,19 @@ namespaces, and its secrets.
    transaction's `txnlic:` index** with the `revoked` tombstone,
    `{updateWindowEnd: null, status: "revoked"}`. The flag goes first so that a
    redelivered purchase racing the refund sees it and declines to re-drive, and
-   so that a retry after a failed entitlement write revokes again. **A refund does not revoke the key itself**: the
-   offline run-license keeps working by design (ADR-040 §4, and the Terms say
-   so); what stops is the updater offering that key new versions. A full refund
-   that arrives before the purchase writes a tombstone ledger record, so the late
-   purchase cannot mint. A notice writes nothing to the ledger. Whether Paddle
+   so that a retry after a failed entitlement write revokes again. **A refund
+   does not revoke the key itself**: the offline run-license keeps working by
+   design (ADR-040 §4, and the Terms draft says so); what stops is the updater
+   offering that key new versions. A full refund that arrives before the
+   purchase writes a tombstone ledger record, so the late purchase cannot mint.
+   A notice writes only its `notice:` record, never an `order:` record. Whether Paddle
    sends an auto-created chargeback as `approved` is unverified (U3); if it sends
    anything undocumented, step 4 drops it and alerts, which is the safe side.
 
 **Result kinds.** `issued`, `duplicate` (a redelivery, or an event already
 marked done), `revoked`, `settled` and `noticed` reply `200` and mark the event
-done (`evt:<mode>:<event_id>`, 4-day TTL). `ignored` replies `200`; it is marked
+done (`evt:<mode>:<event_id>`, 4-day TTL; an `event_id` outside Paddle's
+documented shape is keyed by the `body_…` digest instead). `ignored` replies `200`; it is marked
 done for an unknown event type but **not** for a transaction `issue()` ignores
 (a free one, or a sandbox buyer not on the list). `dropped`
 replies `200` and is deliberately **not** marked, so a replay after you fix the
@@ -509,7 +516,8 @@ record is the guarantee**: §5b says how to list, act on and clear them.
 
 Idempotent across Paddle retries in three layers: per-attempt timestamp
 freshness, the `evt:<mode>:<event_id>` completion marker (keyed on `event_id`,
-never on the per-attempt `notification_id`), and the durable
+or its body digest when the id is malformed, never on the per-attempt
+`notification_id`), and the durable
 `order:<mode>:<txn_id>` ledger. PII lives only in `LEDGER_KV`; `LICENSE_KV` is
 PII-free; the HTTP response never carries the blob; logs are `{ result, ts }`
 plus a non-PII `stage`/`status` or `notice`/`ref`, never an email or license id.
@@ -665,10 +673,11 @@ than that means editing the date and redeploying. That is the point.
 > and `production` on the sandbox writes to its own namespaces.) Keep the
 > buyer list to your own test addresses. `SANDBOX_SIGNING_UNTIL` makes a
 > forgotten sandbox Worker stop minting within a week, but that is a backstop:
-> once the end-to-end check passes, take the key off the sandbox instance.
-> **Target that Worker explicitly**, e.g.
-> `npx wrangler@4.130.0 secret delete TANDEM_PRIVATE_KEY --env sandbox`,
-> or delete the sandbox Worker. Run bare from `infra/license-issuance-worker/`,
+> once the end-to-end check passes, **delete the sandbox Worker**
+> (`npx wrangler@4.130.0 delete --env sandbox`). Taking only the key off
+> (`npx wrangler@4.130.0 secret delete TANDEM_PRIVATE_KEY --env sandbox`) stops
+> the minting but leaves its daily delivery-check cron running, which alerts
+> every day once its API key expires. **Target that Worker explicitly.** Run bare from `infra/license-issuance-worker/`,
 > without `--env sandbox`, the command targets the production Worker and
 > deletes the production key. If you ran the check with `wrangler dev`
 > instead, the key sits in `.dev.vars` (gitignored); delete that file afterwards.
@@ -676,8 +685,9 @@ than that means editing the date and redeploying. That is the point.
 > **Which `TANDEM_ISSUANCE_ENV` the sandbox gets depends on what you're testing.**
 > `sandbox` writes the ledger but suppresses the entitlement `put`, which is
 > right for exercising issuance/dedup/refund logic — but it makes the
-> "is this license actually served a manifest?" check (§5a step 4) structurally
-> incapable of failing, because there was never going to be an entitlement.
+> "does the entitlement exist?" check (§5a step 3) structurally incapable of
+> failing, because there was never going to be an entitlement. (The manifest
+> check, step 4, never works from the sandbox: see §8.)
 > **For the pre-launch end-to-end gate, set `TANDEM_ISSUANCE_ENV = "production"`
 > in the `[env.sandbox.vars]` block** (it ships as `"sandbox"`) and keep its own
 > KV namespaces, then put it back afterwards. Separate
@@ -1120,13 +1130,20 @@ Then walk §5a steps 2–4 with that order number.
       does, the response is to drop `[observability]` on the update Worker or to
       stop sending the id in a header. Do not assume either way from the docs.
 - [ ] A sandbox purchase completed end-to-end: email → activate →
-      `tandem license` reports `licensed` → §5a step 4 returns a manifest.
+      `tandem license` reports `licensed` → §5a steps 2–3 pass **against the
+      sandbox's own namespaces** (`--env sandbox --binding LEDGER_KV` /
+      `--binding LICENSE_KV` in place of `--namespace-id`).
       Deploy the sandbox (`--env sandbox`) with **`TANDEM_ISSUANCE_ENV =
       "production"` in `[env.sandbox.vars]`, its own KV namespaces, and the
-      test buyer's address in `SANDBOX_BUYER_EMAILS`** — `sandbox` suppresses the entitlement write, so the manifest
-      check would be structurally incapable of distinguishing pass from fail.
-      Use separate namespaces because the mode segment lives only in *ledger*
-      keys; entitlement keys are a bare `licenseId` and would collide.
+      test buyer's address in `SANDBOX_BUYER_EMAILS`** — `sandbox` suppresses
+      the entitlement write, so step 3 would be structurally incapable of
+      failing. Use separate namespaces because the mode segment lives only in
+      *ledger* keys; entitlement keys are a bare `licenseId` and would collide.
+      **§5a step 4 (the manifest) cannot pass here, by design:** the update
+      Worker reads production's `LICENSE_KV`, and the sandbox writes its own.
+      Never point the sandbox at production's `LICENSE_KV` to make it pass:
+      that would give a test-card license, signed with the real key, permanent
+      production updates. Step 4 is first proven on the first real sale (§5a).
 - [ ] **U1 — the hard deploy gate. Do not deploy a live Worker until it
       passes.** Does a Paddle retry, and a dashboard or API replay, carry a
       *fresh* `ts` in `Paddle-Signature`? The Worker refuses a `ts` more than

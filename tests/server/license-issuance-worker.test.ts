@@ -775,6 +775,21 @@ describe("handleIssuance: gate and dispatcher", () => {
     expect(lastLog(deps)).toEqual({ result: "error", ts: NOW / 1000, stage: "notice-write" });
   });
 
+  it("a malformed or over-long event_id is marked by its body digest, and a redelivery dedupes on it", async () => {
+    for (const eventId of ["EVT-not-paddle", `evt_${"a".repeat(600)}`]) {
+      const deps = baseDeps();
+      const body = paidBody({ eventId });
+      await handleIssuance(makeRequest(body), deps);
+      expect(lastLog(deps).result).toBe("issued");
+      const markers = [...deps.ledgerKv.map.keys()].filter((k) => k.startsWith("evt:"));
+      expect(markers).toHaveLength(1);
+      expect(markers[0]).toMatch(/^evt:live:body_[0-9a-f]{16}$/);
+      await handleIssuance(makeRequest(body), deps);
+      expect(lastLog(deps)).toEqual({ result: "duplicate", ts: NOW / 1000 });
+      expect(deps.sendEmail).toHaveBeenCalledOnce();
+    }
+  });
+
   it("a dropped event writes notice:<mode>:dropped:<event_id> before replying, test mode keyed test", async () => {
     const deps = baseDeps({ isTest: true });
     await handleIssuance(makeRequest(paidBody({ eventId: "evt_dr", status: "paid" })), deps);
@@ -1307,7 +1322,7 @@ describe("default fetch wiring (env → deps)", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) =>
-        String(input).includes("paddle.com")
+        String(input).startsWith("https://api.paddle.com/")
           ? new Response(JSON.stringify({ data: { email: "alice@EXAMPLE.com", name: "A" } }))
           : new Response("{}"),
       ),
@@ -1380,22 +1395,25 @@ describe("default fetch wiring (env → deps)", () => {
     expect(ok.LEDGER_KV.map.has("order:live:txn_1")).toBe(true); // listed buyer → minted
   });
 
-  it("a sandbox key with an empty SANDBOX_BUYER_EMAILS → 503 config-sandbox-buyers, nothing minted", async () => {
+  it("a sandbox key with an empty, placeholder or malformed SANDBOX_BUYER_EMAILS → 503 config-sandbox-buyers, nothing minted", async () => {
     vi.stubGlobal("fetch", routedFetch());
-    const env = makeEnv({
-      PADDLE_API_KEY: "pdl_sdbx_apikey_x",
-      SANDBOX_SIGNING_UNTIL: inDays(3),
-      SANDBOX_BUYER_EMAILS: " , ",
-    });
-    const stages = await captureLogs(async () => {
-      const res = await issuanceWorker.fetch(
-        makeRequest(paidBody(), { ts: nowTs() }),
-        env as never,
-      );
-      expect(res.status).toBe(503);
-    });
-    expect(stages).toEqual(["config-sandbox-buyers"]);
-    expect(env.LEDGER_KV.map.size).toBe(0);
+    // The middle value is the literal wrangler.toml ships.
+    for (const buyers of [" , ", "REPLACE_WITH_YOUR_OWN_TEST_EMAIL", "me@x.co, oops"]) {
+      const env = makeEnv({
+        PADDLE_API_KEY: "pdl_sdbx_apikey_x",
+        SANDBOX_SIGNING_UNTIL: inDays(3),
+        SANDBOX_BUYER_EMAILS: buyers,
+      });
+      const stages = await captureLogs(async () => {
+        const res = await issuanceWorker.fetch(
+          makeRequest(paidBody(), { ts: nowTs() }),
+          env as never,
+        );
+        expect(res.status).toBe(503);
+      });
+      expect(stages, buyers).toEqual(["config-sandbox-buyers"]);
+      expect(env.LEDGER_KV.map.size).toBe(0);
+    }
   });
 
   it("a free order with GRANDFATHER_EMAILS unset makes no Paddle API call (wiring)", async () => {

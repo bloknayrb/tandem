@@ -150,9 +150,9 @@ npx wrangler@4.130.0 secret put RESEND_API_KEY --env sandbox
 ```
 
 A `pdl_live_` key in a Worker whose `TANDEM_ISSUANCE_ENV` is not `production` is
-refused. Afterwards, `npx wrangler@4.130.0 secret delete TANDEM_PRIVATE_KEY
---env sandbox`. Take the signing key off the sandbox Worker, or
-delete it, once the end-to-end check is done
+refused. Once the end-to-end check is done, delete the sandbox Worker:
+`npx wrangler@4.130.0 delete --env sandbox`. Deleting only its signing key
+stops the minting but leaves its daily cron alerting once its API key expires
 (`docs/licensing-operations.md` §3.5b).
 
 ## Known limitation: concurrent-delivery races (tracked, not yet closed)
