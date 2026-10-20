@@ -10,9 +10,9 @@
 // Every license carries a `keyId` naming the key that signed it, and the id IS
 // that key's fingerprint (`keyIdForPublicKey`): signers derive it from the key
 // they sign with, so a license can never claim a key other than its signer's.
-// A license with no `keyId` (one signed before ids existed) is checked against
-// `LEGACY_KEY_ID`, looked up in this list like any other id, so removing that
-// key from the list retires keyless licenses too.
+// A license with no `keyId` is refused as an unknown key: the only key that
+// signed without ids (`79c10e75fb8cfa46`) was lost and retired before any
+// license was issued with it (docs/licensing-operations.md §0).
 //
 // Rotation (docs/licensing-operations.md §0 has the full procedure): add the new
 // PEM here AND its id to the issuance Worker's `TRUSTED_KEY_IDS` in one commit,
@@ -26,13 +26,11 @@
 import crypto from "node:crypto";
 
 export const TRUSTED_PUBLIC_KEYS: readonly string[] = Object.freeze([
+  // c24dd9f66f449a56, generated at the 2026-10-20 ceremony.
   `-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEA7gm5YEEylcqDgxr1rQ/gA/K8ZzOPfqmvUBtE6CI8QCk=
+MCowBQYDK2VwAyEAZI8LvFVXCim5r2o/RFfNdbeZPyP0mbw92Jta8DS67fw=
 -----END PUBLIC KEY-----`,
 ]);
-
-/** The id a license without a `keyId` is checked against: the original key. */
-export const LEGACY_KEY_ID = "79c10e75fb8cfa46";
 
 /** A key id is 16 lowercase hex characters. Anything else is malformed. */
 export const KEY_ID_PATTERN = /^[0-9a-f]{16}$/;

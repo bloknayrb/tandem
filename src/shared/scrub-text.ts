@@ -161,8 +161,10 @@ export interface ScrubbableSentryEvent {
  * Frames are read off `exception.values[].stacktrace` only: neither SDK
  * populates `event.stacktrace` or `event.threads` here.
  *
- * `sendDefaultPii: false` covers none of this — it governs IPs, cookies and
- * request bodies, not filenames or hostnames. Surfaces that are NOT shared
+ * The SDKs' PII switches cover none of this — `sendDefaultPii: false` in the
+ * WebView, and its `@sentry/node` 11 replacement `dataCollection` in the
+ * sidecar, govern IPs, cookies, headers and request bodies, not filenames or
+ * hostnames. Surfaces that are NOT shared
  * (the WebView's `request` and breadcrumbs) stay in the caller.
  */
 export function scrubSentryEvent<E extends ScrubbableSentryEvent>(

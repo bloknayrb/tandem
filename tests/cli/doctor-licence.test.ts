@@ -17,8 +17,9 @@ import {
  * (config files, ports) can still warn for their own reasons.
  *
  * `runDoctor` backs the shareable `/api/diagnostics` report, so the row's
- * `data` must never carry the licence holder's name or email, which the
- * loopback status body does.
+ * `data` must never carry the licence holder's email, which the loopback
+ * status body does. The fixture also keeps a `name`, the shape a server from
+ * before 2026-10-20 (when licenses still carried one) would send.
  */
 
 const LICENSED_WITH_PII = {

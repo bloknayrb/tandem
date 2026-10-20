@@ -19,7 +19,7 @@ threads get shorter.
 | **License id** | `metadata.id`, a UUID. The KV join key. | Operator only. Never ask a customer for it — a customer with a broken license often can't read it, and a refunded one has no KV entry to look up. |
 
 Other Paddle ids you will meet, none of which a customer should be asked for:
-`ctm_…` (a customer, which the Worker looks up for the buyer's email and name),
+`ctm_…` (a customer, which the Worker looks up for the buyer's email),
 `adj_…` (an adjustment: a refund, credit or chargeback), `pri_…` (a price; the
 Worker mints only for the ones in `PADDLE_PRICE_IDS`) and `evt_…` (a webhook
 event, the Worker's dedupe key; each delivery attempt also has its own
@@ -30,28 +30,37 @@ event, the Worker's dedupe key; each delivery attempt also has its own
 Licenses are Ed25519-signed offline. The **public** key is embedded in the app
 (`src/server/license/public-key.ts`); the **private** key must never reach git.
 
+**The ceremony was done on 2026-10-20.** The signing key is `c24dd9f66f449a56`,
+generated outside any checkout and kept in two offline copies. The original
+key, `79c10e75fb8cfa46` (added in #1133, 2026-06-13), was **retired as lost**:
+its private half was written to a gitignored `keys/` in a checkout nobody can
+find, and the ceremony had never been done for it. No license was ever issued
+to a customer with it (the gate ships dark, nothing was sold, and no
+grandfather key had been sent), so it was removed outright rather than rotated.
+A license carrying no `keyId` (only that key ever signed without one) is now
+refused as an unknown key.
+
 Three decisions become irreversible the moment the first license is signed,
 because changing any of them afterwards means re-issuing every customer or
-supporting two schemas in `verifyLicenseSignature` forever. Decide them
-explicitly, now:
+supporting two schemas in `verifyLicenseSignature` forever:
 
-1. **Key-leak recovery.** *Decided 2026-10-15: built.* Every license now
+1. **Key-leak recovery.** *Decided 2026-10-15: built.* Every license
    carries a `keyId`, and the app trusts a list of public keys
    (`TRUSTED_PUBLIC_KEYS`), so the signing key can be replaced without dropping
    anyone whose key is still trusted. The id is the key's own fingerprint,
-   derived by the signer, so it cannot disagree with the key that signed. A
-   license with no `keyId` is checked against `LEGACY_KEY_ID`, today's original
-   key. See "Rotating the signing key" below.
-2. **What PII goes in the signed bytes.** `LicenseMetadata` embeds `name` and
-   `email`, so both land on disk and in any support thread where the key is
-   pasted. `email` identifies whose key it is if one turns up in a support
+   derived by the signer, so it cannot disagree with the key that signed.
+   `keyId` is required: a license without one is refused. See "Rotating the
+   signing key" below.
+2. **What PII goes in the signed bytes.** *Decided 2026-10-20: email only.*
+   Bryan: "drop it; email is enough". `LicenseMetadata` carries `email` and no
+   `name`. The email identifies whose key it is if one turns up in a support
    thread or is posted publicly; there is no per-buyer rule (decided
-   2026-10-15);
-   **`name` buys display text only, and is the field most likely to be a real
-   legal name.** Decide whether `name` belongs there at all.
-3. **Missing fields.** `version` is not stored in the ledger (so a future
-   `LICENSE_VERSION` change would make a re-signed blob diverge from the one the
-   buyer holds), and there is no `orderId`.
+   2026-10-15). Paddle, as merchant of record, still collects the buyer's name
+   at checkout; the Worker never reads it. `version` stays `"1.0"`: no license
+   with a `name` was ever issued, so there is no old shape to tell apart.
+3. **Missing fields.** *Still open.* `version` is not stored in the ledger (so a
+   future `LICENSE_VERSION` change would make a re-signed blob diverge from the
+   one the buyer holds), and there is no `orderId`.
 
 Then:
 
@@ -67,9 +76,9 @@ It never overwrites: each run is a new key beside the old one.
   `EXPECTED_KEYS` in `tests/server/license.test.ts`, all in the **same commit**.
   CI pins the shipped keys, so a swap by bad merge or stray paste fails the build
   instead of surfacing when customers' licenses stop verifying, and a parity test
-  fails if the Worker's list and the app's list differ. If the ceremony replaces
-  the original key outright (nothing was ever issued with it), remove that key
-  and point `LEGACY_KEY_ID` at the new one in the same commit.
+  fails if the Worker's list and the app's list differ. If the new key replaces
+  one outright (nothing was ever issued with it), remove the old key from all
+  three lists in the same commit.
 - Give the issuance Worker the private key with
   `npx wrangler@4.130.0 secret put TANDEM_PRIVATE_KEY`.
 - **`wrangler secret put` is write-only. It is NOT a backup** — you cannot read
@@ -78,9 +87,11 @@ It never overwrites: each run is a new key beside the old one.
   losing it means you can never sign another license against the key every
   shipped binary trusts.
 - For out-of-band signing, `scripts/sign-license.ts --key <path>` reads the
-  private key (default `keys/tandem-private-key.pem`, the original key's path;
-  `keys/` is gitignored). It stamps the key's id and refuses a key that is not
-  in `TRUSTED_PUBLIC_KEYS`.
+  private key (default `keys/tandem-<id>.pem` for the one trusted id, the name
+  `generate-keys.ts` writes; with more than one trusted key there is no default
+  and `--key` is required; `keys/` is gitignored). Point `--key` at an offline
+  copy rather than keeping the key in a checkout. It stamps the key's id and
+  refuses a key that is not in `TRUSTED_PUBLIC_KEYS`.
 - **The issuance Worker refuses to sign with a key not in `TRUSTED_KEY_IDS`**:
   every webhook answers 503 at stage `config` until the secret matches a listed
   key. After setting or changing the secret, issue one sandbox order
@@ -114,8 +125,7 @@ verification on that build.
    Worker again (§3.5b). Production itself shows a bad key only as 503
    `config`, alerted, on the next webhook.
 4. **After a leak, also retire the old key**: remove it from all three lists in
-   one release. Every license it signed (and any keyless license, if it is the
-   `LEGACY_KEY_ID` key) stops verifying, which is the point: those can no longer
+   one release. Every license it signed stops verifying, which is the point: those can no longer
    be told apart from forgeries. Reissue them under the new key; a resend from
    the Worker re-signs under the current key automatically.
 
@@ -143,9 +153,9 @@ For each beta tester:
 
 ```bash
 npx tsx scripts/sign-license.ts \
-  --name "Jane Doe" \
   --email "jane@example.com" \
-  --type grandfathered
+  --type grandfathered \
+  --key "<path to your offline copy of keys/tandem-c24dd9f66f449a56.pem>"
 ```
 
 The script prints the metadata and a base64 **license key**. Email that key to
@@ -245,7 +255,7 @@ because every key includes all future updates (ADR-040, decision A5, 2026-10-09)
 it was one year until then:
 
 ```bash
-npx tsx scripts/sign-license.ts --name "Buyer" --email "buyer@example.com"
+npx tsx scripts/sign-license.ts --email "buyer@example.com"
 ```
 
 Every license runs forever. `--expires <days>` sets an **update window**
@@ -364,8 +374,8 @@ Two paths write `KV[licenseId] = { updateWindowEnd, status, version }`:
 > `[observability]` and `ALERT_WEBHOOK_URL` set (§8).
 > **Repair:** re-`PUT KV[licenseId]` from the ledger record — `entitlementValue`
 > is fully derivable, so nothing needs re-issuing. If the customer still has
-> their key, that works too: the blob carries id/name/email/type/createdAt/
-> expiresAt/version, i.e. everything a ledger record holds.
+> their key, that works too: the blob carries id/email/type/createdAt/
+> expiresAt/version/keyId, i.e. everything a ledger record holds.
 
 ### 3c. Behavior
 
@@ -437,9 +447,9 @@ namespaces, and its secrets.
    7. **Buyer lookup.** Paddle's webhook carries no email, so the Worker calls
       `GET /customers/{customer_id}` with `PADDLE_API_KEY` (host from the key
       prefix: `pdl_live_` → `api.paddle.com`, `pdl_sdbx_` →
-      `sandbox-api.paddle.com`) and reads `data.email` / `data.name`. A null name
-      becomes "Valued Customer"; whether checkout fills the name at all is
-      unverified (U4). Outcomes:
+      `sandbox-api.paddle.com`) and reads `data.email` only. Paddle's
+      `data.name` is ignored: a license carries no name (§0, decision 2).
+      Outcomes:
 
       | Paddle API answer | Result |
       |---|---|
@@ -609,9 +619,14 @@ two deploys of identical source can differ across wrangler versions. To advance 
 re-run `npm view wrangler version` and update **all six** deploy sites together —
 §3 and §3.5b here, both §9 quick-reference rows, and the two Worker READMEs.
 
+**Roll forward, never back, past the 2026-10-20 name removal.** A Worker
+deployed from before it treats a ledger record with no `name` as corrupt
+(`stage: "ledger"`, retried forever), so once one sale is recorded, redeploying
+an older version is not a rollback: fix forward.
+
 Also set in `[vars]`: `SUPPORT_EMAIL` (the license email's `reply_to` — without
 it a buyer whose activation fails has no inbound channel but the public issue
-tracker, where they will paste a key carrying their own name and email), and
+tracker, where they will paste a key carrying their own email address), and
 `ALERT_WEBHOOK_URL` / `ALERT_EMAIL` (§5c).
 
 `SUPPORT_EMAIL` is **required and enforced**: the Worker rejects every request
@@ -943,20 +958,20 @@ command**.
   inside the free read tier.
 
 > **No backup job is checked into this repository, deliberately.** The export
-> contains every customer's name and email in plaintext, and the obvious
+> contains every customer's email in plaintext, and the obvious
 > zero-infra destination for a scheduled GitHub Action — a workflow artifact —
 > is readable by anyone who can read a **public** repository. This one is
 > checked in as a decision rather than a script: pick a genuinely private
 > destination (an R2 bucket, a private repo, encrypted object storage) and wire
 > the job there. A convenient backup that publishes your customer list is worse
 > than no backup.
-- The export contains plaintext `email` and `name`. Whatever destination you
+- The export contains plaintext `email`. Whatever destination you
   choose becomes a PII store, so `docs/security.md` and `docs/data-locations.md`
   must stay true about where PII lives.
 
 **Customers are a distributed backup, and this is why the copy-key button
-exists.** `metadataFrom` puts id, name, email, type, createdAt, expiresAt and
-version into the signed blob — so the blob *is* a complete ledger record. A
+exists.** `metadataFrom` puts id, email, type, createdAt, expiresAt, version
+and keyId into the signed blob — so the blob *is* a complete ledger record. A
 customer who emails you their key hands you everything needed to rebuild their
 record and re-`PUT` their entitlement.
 
@@ -1068,7 +1083,7 @@ For a buyer who asks support@ to have their details erased (the promise in
 Their license and its updates keep working, because the entitlement is keyed by
 the license id alone:
 
-1. In `order:live:<txn_id>`, set `"email": ""` and `"name": ""`, and set
+1. In `order:live:<txn_id>`, set `"email": ""`, and set
    `"emailSent": true` so no retry ever tries to send to the blank address. Put
    the whole record back, as in "Revoke by hand" step 1. Keep every other field:
    the ids and the `refunded` flag are what stop a replay from re-minting or
@@ -1079,14 +1094,14 @@ the license id alone:
 4. Tell the buyer what this does not reach: Paddle's customer record (they ask
    Paddle, at `https://paddle.net`, or you forward the request), Resend's
    delivery log of the license email (kept under Resend's retention), and the
-   license file on their own machine, which carries their name and email inside
+   license file on their own machine, which carries their email inside
    its signature and cannot be changed without re-issuing it.
 
 ### Support template
 
 When a customer reports an activation or update problem, ask for **the order
 number** (see Vocabulary; payment questions go to Paddle's buyer support at
-`https://paddle.net`, which the license email links) — never the license key (it contains their name and email, and they'll
+`https://paddle.net`, which the license email links) — never the license key (it contains their email address, and they'll
 paste it into a public issue if you let them) and never the license id (a
 customer with a broken license often can't read it).
 
@@ -1144,6 +1159,15 @@ Then walk §5a steps 2–4 with that order number.
       Never point the sandbox at production's `LICENSE_KV` to make it pass:
       that would give a test-card license, signed with the real key, permanent
       production updates. Step 4 is first proven on the first real sale (§5a).
+- [ ] **The sandbox "it activates" check runs on a build from `master`**
+      (a dev build, `npm run dev:standalone` or a fresh `npm run build`) made
+      after the 2026-10-20 key ceremony merged — never on an installed
+      release. Every release before that trusts only the retired key
+      `79c10e75fb8cfa46` (§0), so a key signed with `c24dd9f66f449a56` is refused
+      there as "may need to be reissued", which proves nothing about the Worker.
+- [ ] **No grandfather or live key is sent until a release carrying
+      `c24dd9f66f449a56` has shipped and installs have updated.** Until then a
+      tester or buyer on the build they have is told their key is unverifiable.
 - [ ] **U1 — the hard deploy gate. Do not deploy a live Worker until it
       passes.** Does a Paddle retry, and a dashboard or API replay, carry a
       *fresh* `ts` in `Paddle-Signature`? The Worker refuses a `ts` more than
@@ -1156,13 +1180,13 @@ Then walk §5a steps 2–4 with that order number.
       (to about 4 days, leaning on the `evt:` marker and the ledger for replay
       defence) before launch.
 - [ ] **The other unverified facts (U2–U12), settled in the sandbox** and
-      captured as fixtures (email and name scrubbed):
+      captured as fixtures (email and name scrubbed). U4, whether checkout
+      fills the customer's name, was retired on 2026-10-20: a license no
+      longer carries one.
       - **U2** — does a $0 (100%-code) checkout fire `transaction.completed` at
         all? Governs §1b; until it is settled, §1a is the grandfather path.
       - **U3** — what `status` does an auto-created chargeback adjustment carry?
         Anything but `approved` is dropped and alerted rather than revoked.
-      - **U4** — does checkout fill the customer's `name`? (If not, every email
-        says "Valued Customer".)
       - **U5** — does Paddle deactivate a destination that keeps failing?
       - **U6** — which id does Paddle's receipt show the buyer (Vocabulary)?
       - **U7** — are simulator deliveries signed?
@@ -1233,8 +1257,8 @@ Then walk §5a steps 2–4 with that order number.
 | Task | Command |
 |---|---|
 | Generate keypair | `npx tsx scripts/generate-keys.ts` |
-| Sign grandfathered license | `npx tsx scripts/sign-license.ts --name N --email E --type grandfathered` |
-| Sign paid license (all future updates) | `npx tsx scripts/sign-license.ts --name N --email E --type personal` |
+| Sign grandfathered license | `npx tsx scripts/sign-license.ts --email E --type grandfathered --key K` |
+| Sign paid license (all future updates) | `npx tsx scripts/sign-license.ts --email E --type personal --key K` |
 | Activate (tester) | `tandem activate <key-or-path>` |
 | Check status (tester) | `tandem license` |
 | Deploy update Worker | `cd infra/license-update-worker && npx wrangler@4.130.0 deploy` |

@@ -152,17 +152,18 @@ What exists, so a privacy notice can be accurate rather than aspirational:
 
 | Where | What | Notes |
 |---|---|---|
-| `license.json` on the buyer's device | name, email (inside the signed blob) | The only identity PII Tandem writes to disk. |
-| Paddle (merchant of record) | the buyer's customer record, payment details, receipts and invoices | Paddle's own records, as the seller of record. The issuance Worker reads the buyer's email and name from it (`customer.read`) and keeps them only in `LEDGER_KV`. |
-| `LEDGER_KV` (Cloudflare, seller-side) | orderId (Paddle transaction id), licenseId, **email, name**, type, dates, delivery/refund flags; plus id-only `evt:`, `notice:` and `txnlic:` keys | The only live PII store the seller operates; its backups (ops §6) hold the same data. |
+| `license.json` on the buyer's device | email (inside the signed blob) | The only identity PII Tandem writes to disk. |
+| Paddle (merchant of record) | the buyer's customer record, payment details, receipts and invoices | Paddle's own records, as the seller of record. The issuance Worker reads only the buyer's email from it (`customer.read`) and keeps it only in `LEDGER_KV`; the name Paddle collects at checkout stays with Paddle. |
+| `LEDGER_KV` (Cloudflare, seller-side) | orderId (Paddle transaction id), licenseId, **email**, type, dates, delivery/refund flags; plus id-only `evt:`, `notice:` and `txnlic:` keys | The only live PII store the seller operates; its backups (ops §6) hold the same data. |
 | `LICENSE_KV` (Cloudflare) | updateWindowEnd, status, version | Keyed by an opaque UUID. **No PII.** |
 | Update endpoint logs | `{ result, reason, ts }` | No licence id, no IP recorded by us. Retained by our own Cloudflare `[observability]` configuration, so the operator can detect a missing entitlement without waiting for a report. |
 | Resend | delivery of the licence email | Processor. |
 
 Open questions:
 
-- **Retention for `LEDGER_KV` — decided 2026-10-09 (B5).** The buyer's name and
-  email are kept for as long as keys are reissued, because a reissue needs them,
+- **Retention for `LEDGER_KV` — decided 2026-10-09 (B5).** The buyer's email
+  (the ledger holds no name since 2026-10-20) is kept for as long as keys are
+  reissued, because a reissue needs it,
   and erased on request. Merchant-of-record status removes the usual
   tax-retention reason: **Paddle** carries the statutory invoice obligation, so
   your own books record payouts, not buyers. Erasure requests go to the support
