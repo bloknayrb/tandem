@@ -791,10 +791,9 @@ export function remapRangeAcrossReplacement(
  * included — and `overlayFallbackAnchors` with one rule.
  */
 export function storedRangeStillMatches(ann: Annotation, text: string): boolean {
-  return (
-    ann.textSnapshot === undefined ||
-    !snapshotContradicts(ann, text.slice(Math.max(ann.range.from, 0), Math.max(ann.range.to, 0)))
-  );
+  if (ann.textSnapshot === undefined) return true;
+  const { from, to } = clampToFlatLength(ann.range, text.length);
+  return !snapshotContradicts(ann, text.slice(from, to));
 }
 
 /**
@@ -953,10 +952,16 @@ export function refreshRange(
   // a stale non-empty span for one of those would export a Word comment over
   // unrelated text — a byte change in the user's file. With a snapshot
   // required, a snapshot-less collapse keeps writing `{n, n}`.
+  //
+  // An EMPTY snapshot is excluded too: it claims the span held no text, so
+  // there is nothing whose survival a collapse could be hiding. Without this a
+  // record attached before #2188 with a stale past-the-end span and `""` (the
+  // clamped slice is `""`, so the gate "matches") read `degraded` forever.
   if (
     newFrom === newTo &&
     ann.range.from !== ann.range.to &&
     ann.textSnapshot !== undefined &&
+    ann.textSnapshot !== "" &&
     storedRangeStillMatches(ann, docText())
   ) {
     return { kind: "degraded", annotation: ann };

@@ -1619,6 +1619,30 @@ describe("refreshRange — a stored range past the end of the document (#2188)",
     expect(refreshRange(refreshed.annotation, doc, map).kind).toBe("ok");
   });
 
+  it("an EMPTY snapshot already anchored over a stale span settles too, not `degraded` forever", () => {
+    // The shape master's lazy arm persisted for the record above: a live
+    // point anchor at the end beside the stale {11,13}. The collapse arm's
+    // gate "matches" the empty clamped slice, so without excluding an empty
+    // snapshot this was preserved as a spurious collapse on every read.
+    doc = makeDoc("Hello world");
+    const map = getAnnotationsMap(doc);
+    const fromRel = flatOffsetToRelPos(doc, off(11), 0);
+    const toRel = flatOffsetToRelPos(doc, off(11), -1);
+    if (!fromRel || !toRel) throw new Error("expected an anchor at the end");
+    const ann = makeAnnotation({
+      id: "ann_eod",
+      range: range(11, 13),
+      relRange: { fromRel, toRel },
+      textSnapshot: "",
+    });
+    map.set(ann.id, ann);
+
+    const refreshed = refreshRange(ann, doc, map);
+    expect(refreshed.kind).toBe("updated");
+    expect(refreshed.annotation.range).toEqual({ from: 11, to: 11 });
+    expect(refreshRange(refreshed.annotation, doc, map).kind).toBe("ok");
+  });
+
   it("an in-bounds stored range is untouched by the clamp", () => {
     doc = makeDoc("Hello world");
     const map = getAnnotationsMap(doc);
