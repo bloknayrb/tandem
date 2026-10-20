@@ -95,7 +95,7 @@ export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean)
     // produces (it forces gateEnabled:true), but the union requires the branch.
     lines.push("  Status:        licensed");
     if (state.gateActive && state.status === "licensed") {
-      lines.push(`  Licensee:      ${state.license.name} (${state.license.type})`);
+      lines.push(`  Licensee:      ${state.license.email} (${state.license.type})`);
       if (state.license.expiresAt === null) {
         // Every issued key since ADR-040's 2026-10-09 amendment (decision A5):
         // no window at all, so "current" with no date would understate it.
@@ -188,7 +188,7 @@ export async function runActivate(args: string[]): Promise<void> {
   try {
     const state = await activateLicense(resolveAppDataDir(), blob);
     const lic = state.gateActive && state.status === "licensed" ? state.license : null;
-    const who = lic ? `${lic.name} (${lic.type})` : "this device";
+    const who = lic ? `${lic.email} (${lic.type})` : "this device";
     console.log(`\n✓ License activated for ${who}.`);
     if (lic?.expiresAt) {
       console.log(`  Updates included through ${lic.expiresAt.slice(0, 10)}.`);

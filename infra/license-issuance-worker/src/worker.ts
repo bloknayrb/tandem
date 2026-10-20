@@ -37,7 +37,7 @@
  *    Closing that residual gap needs a Durable Object per transaction — accepted
  *    as a follow-up (see README). Every license minted is indexed under
  *    `txnlic:` so a refund revokes a double mint too.
- *  - PII (email/name) lives ONLY in the issuance-owned ledger KV, never in the
+ *  - PII (the buyer's email) lives ONLY in the issuance-owned ledger KV, never in the
  *    entitlement KV the update Worker reads. Logs carry `{ result, ts }` plus a
  *    non-PII failure `stage` on errors — never an email or license id. The HTTP
  *    response NEVER contains the blob (that would leak it into Paddle's
@@ -64,7 +64,7 @@ export const LICENSE_VERSION = "1.0";
  * import from `src/`). A parity test keeps the two equal, so a new key is added
  * to both in one commit. The Worker refuses to sign with a key not listed here.
  * Rotation order: docs/licensing-operations.md §0. */
-export const TRUSTED_KEY_IDS: readonly string[] = ["79c10e75fb8cfa46"];
+export const TRUSTED_KEY_IDS: readonly string[] = ["c24dd9f66f449a56"];
 
 // What the fetch handler checks against. Tests sign with throwaway keys (the
 // production private key is never in CI), so they swap the list through
@@ -94,7 +94,6 @@ const TERMS_URL = "https://tandem.ink/terms";
 const REFUND_POLICY_URL = "https://tandem.ink/refunds";
 const PADDLE_BUYER_SUPPORT_URL = "https://paddle.net";
 
-const MAX_NAME_LEN = 128;
 const MAX_EMAIL_LEN = 254; // RFC 5321
 /** Paddle's documented `transaction.completed` example is large (U8: measure a
  * real one); 256 KiB leaves headroom. This is defense-in-depth
@@ -192,9 +191,7 @@ export interface LogEntry {
 /** What issue()/revoke() produce. */
 type EventOutcome = Exclude<ResultKind, "rejected" | "error" | "noticed"> | Failure | Notice;
 
-export type CustomerLookup =
-  | { ok: true; email: unknown; name: unknown }
-  | { ok: false; status?: number };
+export type CustomerLookup = { ok: true; email: unknown } | { ok: false; status?: number };
 
 export interface IssuanceDeps {
   webhookSecret: string;
@@ -207,7 +204,7 @@ export interface IssuanceDeps {
   entitlementKv: KvNamespace;
   /** issuance-owned store: `order:`, `evt:`, `notice:`, `txnlic:` keys. */
   ledgerKv: KvNamespace;
-  sendEmail: (to: string, name: string, blob: string) => Promise<{ ok: boolean; status?: number }>;
+  sendEmail: (to: string, blob: string) => Promise<{ ok: boolean; status?: number }>;
   isGrandfathered: (email: string) => boolean;
   /** Whether `GRANDFATHER_EMAILS` has any entry. When it has none, a free
    * order is ignored before the customer lookup, so a leaked 100% code cannot
@@ -233,12 +230,13 @@ export interface IssuanceDeps {
  * is re-signed under the CURRENT key, so it differs from the original but is
  * equally valid — after a leak, deliberately so) plus dedup/refund bookkeeping — no
  * separate copy of the signature. A refund that arrives before the paid event
- * writes a TOMBSTONE: `refunded: true` with empty licenseId/email. */
+ * writes a TOMBSTONE: `refunded: true` with empty licenseId/email. No `name`
+ * (docs/licensing-operations.md §0, decision 2): a record written before that
+ * change still carries one, and parses, because extra fields are tolerated. */
 interface LedgerRecord {
   orderId: string;
   licenseId: string;
   email: string;
-  name: string;
   type: "personal" | "grandfathered";
   createdAt: string;
   updateWindowEnd: string | null;
@@ -273,7 +271,6 @@ function isLedgerRecord(v: unknown): v is LedgerRecord {
     typeof r?.orderId === "string" &&
     typeof r.licenseId === "string" &&
     typeof r.email === "string" &&
-    typeof r.name === "string" &&
     (r.type === "personal" || r.type === "grandfathered") &&
     typeof r.createdAt === "string" &&
     (r.updateWindowEnd === null || typeof r.updateWindowEnd === "string") &&
@@ -302,21 +299,13 @@ function writeOrder(deps: IssuanceDeps, rec: LedgerRecord): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Input hygiene. Names are cosmetic → clamped. Emails are identity → rejected
-// (not silently truncated) when implausible.
+// Input hygiene. Emails are identity → rejected (not silently truncated) when
+// implausible.
 // ---------------------------------------------------------------------------
 
 /** C0 controls + DEL, as \u escapes so the source carries no control bytes. */
 
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/g;
-
-function cleanName(raw: unknown): string {
-  const s = (typeof raw === "string" ? raw : "")
-    .replace(CONTROL_CHARS, "")
-    .trim()
-    .slice(0, MAX_NAME_LEN);
-  return s || "Valued Customer";
-}
 
 // Minimal structural check (one "@", a non-empty local + domain part, a dot
 // somewhere in the domain not at either end) — not full RFC 5322. Paddle is the
@@ -341,7 +330,6 @@ function entitlementValue(rec: LedgerRecord): string {
 function metadataFrom(rec: LedgerRecord, keyId: string) {
   return {
     id: rec.licenseId,
-    name: rec.name,
     email: rec.email,
     type: rec.type,
     createdAt: rec.createdAt,
@@ -367,7 +355,7 @@ async function reDrive(existing: LedgerRecord, deps: IssuanceDeps): Promise<Even
   }
   if (!existing.emailSent) {
     const blob = await signLicense(metadataFrom(existing, deps.keyId), deps.signBytes);
-    const sent = await deps.sendEmail(existing.email, existing.name, blob);
+    const sent = await deps.sendEmail(existing.email, blob);
     if (!sent.ok) return { stage: "email", status: sent.status };
     existing.emailSent = true;
     // NOTE: if this write itself fails, the exception below collapses to a
@@ -464,7 +452,6 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Even
   // sandbox client token and the 4242 test card would otherwise get a real,
   // permanent run license while SANDBOX_SIGNING_UNTIL is open.
   if (deps.sandboxBuyers && !deps.sandboxBuyers.has(email.toLowerCase())) return "ignored";
-  const name = cleanName(found.name);
   // 9. Free-order gate, now that the email is known.
   const grandfathered = deps.isGrandfathered(email);
   if (free && !grandfathered) return "ignored";
@@ -476,7 +463,6 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Even
     orderId: txnId,
     licenseId,
     email,
-    name,
     type,
     createdAt: new Date(nowMs).toISOString(),
     updateWindowEnd: null,
@@ -498,7 +484,7 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Even
   await writeOrder(deps, rec);
   if (!deps.isTest) await deps.entitlementKv.put(licenseId, entitlementValue(rec));
 
-  const sent = await deps.sendEmail(email, name, blob);
+  const sent = await deps.sendEmail(email, blob);
   if (!sent.ok) return { stage: "email", status: sent.status };
   rec.emailSent = true;
   await writeOrder(deps, rec);
@@ -611,7 +597,6 @@ async function revoke(
     orderId: txnId,
     licenseId: "",
     email: "",
-    name: "",
     type: "personal",
     createdAt: new Date(nowMs).toISOString(),
     updateWindowEnd: null,
@@ -999,14 +984,16 @@ async function lookupViaPaddle(
     if (!resp.ok) return { ok: false, status: resp.status };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const json: any = await resp.json();
-    return { ok: true, email: json?.data?.email, name: json?.data?.name };
+    // Only the email: a license carries no name (docs/licensing-operations.md §0,
+    // decision 2), so the Paddle name is never read even though checkout asks for it.
+    return { ok: true, email: json?.data?.email };
   } catch {
     // A network error or an unparseable 200 body: retryable (`paddle-api`).
     return { ok: false };
   }
 }
 
-async function sendViaResend(env: WorkerEnv, to: string, name: string, blob: string) {
+async function sendViaResend(env: WorkerEnv, to: string, blob: string) {
   // Not configured counts as a delivery failure so the event stays retryable
   // (the handler's 500 path logs it) rather than silently dropping a paid
   // customer's license. RESEND_FROM is belt-and-braces here — the fetch handler
@@ -1026,13 +1013,13 @@ async function sendViaResend(env: WorkerEnv, to: string, name: string, blob: str
         to,
         // A buyer whose activation fails needs somewhere to write that isn't the
         // public issue tracker — the natural instinct is to paste the key, and
-        // the key carries their own name and email. `RESEND_FROM` is a noreply
+        // the key carries their own email address. `RESEND_FROM` is a noreply
         // address, so without this there is no inbound channel at all. It used
         // to be conditional, which made a missing var invisible; the fetch
         // handler now validates it up front, so it is unconditional here.
         reply_to: env.SUPPORT_EMAIL,
         subject: "Your Tandem license",
-        text: licenseEmailText(name, blob, env.SUPPORT_EMAIL),
+        text: licenseEmailText(blob, env.SUPPORT_EMAIL),
         attachments: [licenseAttachment(blob)],
       }),
     });
@@ -1049,15 +1036,15 @@ async function sendViaResend(env: WorkerEnv, to: string, name: string, blob: str
  * The plain-text license email.
  *
  * Deliberately pure 7-bit ASCII — no em dashes, no smart quotes, no accented
- * characters outside the buyer's own name. A single non-ASCII byte anywhere in
- * the body is enough for a mail transfer agent to re-encode the whole thing as
- * quoted-printable, and QP's soft line breaks are the one transformation that
- * silently truncates a base64 license key. `name` is the unavoidable exception
- * (it is the customer's actual name); everything we author is ASCII.
+ * characters. A single non-ASCII byte anywhere in the body is enough for a mail
+ * transfer agent to re-encode the whole thing as quoted-printable, and QP's soft
+ * line breaks are the one transformation that silently truncates a base64
+ * license key. The buyer's name used to be the one exception; it is no longer
+ * greeted by name (a license carries no name), so the whole body is ASCII.
  */
-export function licenseEmailText(name: string, blob: string, supportEmail: string): string {
+export function licenseEmailText(blob: string, supportEmail: string): string {
   return [
-    `Hi ${name},`,
+    "Hello,",
     "",
     "Thank you for buying Tandem. Your license is attached as",
     "tandem.license, and is also printed below.",
@@ -1079,7 +1066,7 @@ export function licenseEmailText(name: string, blob: string, supportEmail: strin
     "expires, and it includes all future updates. There is no guarantee",
     "that future updates will be released.",
     "",
-    "Please don't post the key publicly - it contains your name and email",
+    "Please don't post the key publicly - it contains your email",
     "address.",
     "",
     // No "reply here": a reply would quote the key printed above into the
@@ -1519,7 +1506,7 @@ export default {
       keyId,
       entitlementKv: env.LICENSE_KV,
       ledgerKv: env.LEDGER_KV,
-      sendEmail: (to, name, blob) => sendViaResend(env, to, name, blob),
+      sendEmail: (to, blob) => sendViaResend(env, to, blob),
       isGrandfathered: (email) => grandfatherSet.has(email.toLowerCase().trim()),
       hasGrandfathers: grandfatherSet.size > 0,
       ...(sandboxBuyers ? { sandboxBuyers } : {}),

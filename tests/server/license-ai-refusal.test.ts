@@ -64,12 +64,12 @@ describe("aiRefusalFor (pure)", () => {
         updateWindowCurrent: true,
         license: {
           id: "id",
-          name: "n",
           email: "e",
           type: "personal",
           createdAt: "",
           expiresAt: null,
           version: "1.0",
+          keyId: "0123456789abcdef",
         },
       }),
     ).toBeNull();

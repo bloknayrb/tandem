@@ -2,21 +2,20 @@ import type { LicenseUnverifiableCode } from "../../shared/license-copy.js";
 
 export interface LicenseMetadata {
   id: string; // Unique ID (e.g. UUID)
-  name: string;
+  // No `name`: the buyer is identified by email alone, so a key carries no
+  // more PII than it needs (docs/licensing-operations.md §0, decision 2).
   email: string;
   type: "personal" | "commercial" | "grandfathered";
   createdAt: string; // ISO string
   expiresAt: string | null; // ISO string or null for never (end of update window)
   version: string; // "1.0"
   /**
-   * The signing key's id (`keyIdForPublicKey`). Optional on read: licenses
-   * signed before key ids existed have none and verify against the legacy key.
+   * The signing key's id (`keyIdForPublicKey`). Required: the only key that
+   * ever signed without one was retired (docs/licensing-operations.md §0), so
+   * a keyless license names no key this build trusts and is refused.
    */
-  keyId?: string;
+  keyId: string;
 }
-
-/** What a signer produces: every newly issued license names its key. */
-export type IssuedLicenseMetadata = LicenseMetadata & { keyId: string };
 
 export interface SignedLicense {
   metadata: LicenseMetadata;

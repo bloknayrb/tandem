@@ -71,7 +71,7 @@ export const TANDEM_PURCHASE_URL = TANDEM_SITE_URL;
 /**
  * Where a buyer with a licensing problem should write. Deliberately NOT the
  * public issue tracker: an activation failure funnels people toward pasting
- * their license blob for help, and that blob carries their own name and email.
+ * their license blob for help, and that blob carries their own email address.
  *
  * Keep this in sync with the issuance Worker's `reply_to`
  * (`infra/license-issuance-worker/src/worker.ts`) — they are the same promise

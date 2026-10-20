@@ -2522,7 +2522,7 @@ export function describeHealthSession(d: { hasSession?: boolean; sessionCount?: 
 
 /**
  * The only licence fields doctor ever records (#1521). The loopback
- * `/api/license/status` body also carries the licence holder's name and email,
+ * `/api/license/status` body also carries the licence holder's email address,
  * and `runDoctor` backs the shareable `/api/diagnostics` report — so nothing
  * outside this picklist may reach a row's `data`.
  */
