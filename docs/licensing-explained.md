@@ -166,11 +166,14 @@ of the engineering below exists purely to make that state detectable.
 ## The pieces
 
 ```
-  Buyer                Polar            Cloudflare Workers          Their machine
+  Buyer                Paddle           Cloudflare Workers          Their machine
     |                    |                      |                        |
     |--- pays ---------->|                      |                        |
-    |                    |-- order.paid ------->| issuance Worker        |
-    |                    |   (svix-signed)      |  . verify signature    |
+    |                    |-- transaction. ----->| issuance Worker        |
+    |                    |   completed          |  . verify signature    |
+    |                    |   (Paddle-Signature) |                        |
+    |                    |<-- GET /customers ---|  . look up the buyer   |
+    |                    |--- email, name ----->|                        |
     |                    |                      |  . mint + Ed25519-sign |
     |                    |                      |  . write LEDGER_KV     |
     |                    |                      |  . write LICENSE_KV    |
@@ -186,8 +189,13 @@ of the engineering below exists purely to make that state detectable.
 
 Four moving parts:
 
-1. **`infra/license-issuance-worker/`** — a Cloudflare Worker. Receives Polar's
-   webhook, mints and signs the license, records it, emails it.
+1. **`infra/license-issuance-worker/`** — a Cloudflare Worker. Receives
+   Paddle's `transaction.completed` webhook (Paddle is the merchant of record),
+   looks the buyer's email and name up through the Paddle API, because the
+   webhook carries neither, then mints and signs the license, records it, and
+   emails it. Refunds and chargebacks arrive as `adjustment.*` events. None of
+   this has run against a real Paddle account yet; the open questions are U1–U12
+   in [licensing-operations.md §8](licensing-operations.md#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay).
 2. **`infra/license-update-worker/`** — a second Worker. Decides whether a given
    license id may be served the update manifest.
 3. **`src/server/license/`** — the on-device gate. Verifies, tracks the trial,
@@ -555,24 +563,48 @@ nothing needs re-issuing.
 
 ## The one that loses sales without a trace
 
-Polar disables a webhook endpoint after repeated consecutive failures. So:
+A failing delivery retries until Paddle gives up on it. So:
 
 ```
-unverified RESEND_FROM -> Resend 422 -> Worker returns retryable 500
-  -> Polar retries ~10x -> endpoint disabled
-    -> every subsequent sale arrives nowhere
-      -> and writes NO ledger record at all
+unverified RESEND_FROM (or a webhook secret that no longer matches,
+  or an expired Paddle API key) -> every sale gets a non-2xx
+    -> Paddle retries each one, 60 times over ~3 days
+      -> then marks the notification "failed"
+        -> and the Worker wrote NO ledger record at all
 ```
 
-This is why reconciliation **enumerates from Polar's order list, not the
-ledger**. A ledger-rooted scan for `emailSent: false` is structurally blind to
-it — those orders have no record to find. Polar's own delivery log is the only
-surface that shows the disable.
+This is why reconciliation **enumerates from Paddle's transactions and its
+notification log, not the ledger**. A ledger-rooted scan for `emailSent: false`
+is structurally blind to it — those sales have no record to find. What the
+Worker can do is leave a trace of two kinds:
+
+- **A durable record.** Every event the Worker authenticated but could not
+  fulfil (`dropped`), and every refund or API-key event that needs a human
+  (`noticed`), writes a `notice:` key to `LEDGER_KV` before the Worker answers
+  200. The alert that goes with it is best-effort; the record is what the
+  operator lists, acts on and clears.
+- **A daily check.** A bad signature never alerts, because anyone on the
+  internet can send one and an alert per request would drain the email quota
+  that delivers licenses. So a webhook secret regenerated in Paddle without the
+  matching Worker secret is silent per request; a once-a-day cron in the Worker
+  asks the Paddle API for failed or retrying notifications and inactive
+  destinations, and alerts if it finds any, if there is no destination at all,
+  or if it cannot ask.
+
+Two silences remain, deliberately. A `rejected` request (no signature, a bad
+one, a stale one) leaves nothing, for the reason above. And a free (100%-code)
+transaction is `ignored` with no record and no alert when its buyer is not on
+the grandfather list or its price is not one the Worker sells, because nobody
+paid and a leaked code must not become a way to fill the operator's inbox. (A
+sandbox Worker also ignores every buyer not on its own test list.) Whether Paddle also deactivates a destination that keeps
+failing is unverified (U5); the daily check looks for that too.
 
 ## Why alerts don't go through the thing that's broken
 
-Operator alerts fire on `dropped` results and email-stage failures. The
-email-stage alert deliberately does **not** route through Resend — Resend is
+Operator alerts fire on `dropped` and `noticed` results, on email-stage and
+Paddle-API failures, on a failed notice write, on a corrupt ledger record, on
+the config stages, and from
+the daily delivery check. The email-stage alert deliberately does **not** route through Resend — Resend is
 what just failed — and degrades to a webhook, or is dropped with an
 `alert-undeliverable` log line rather than sent down the broken path.
 
@@ -589,7 +621,9 @@ Worth stating plainly, because they look like bugs:
   The signed license is the only hard gate; the trial is a courtesy.
 - **A refund does not stop the software running.** It can't — activation is
   air-gapped by design. Consumer law obliges returning money, not technical
-  revocability.
+  revocability. What a full refund or a chargeback stops is updates: the Worker tombstones that
+  key's update entitlement. A partial refund changes nothing automatically; the
+  buyer keeps the license and the operator gets a notice (decided 2026-10-18).
 - **Nothing counts devices or people.** `LICENSE` sets no per-key limit either,
   and customer copy deliberately states none: how a key is used is left to
   good faith (decided 2026-10-15).
@@ -618,8 +652,10 @@ Worth stating plainly, because they look like bugs:
   checkout copy must exclude that explicitly until an SKU→type map exists.
 - **Atomicity on concurrent deliveries.** Workers KV has no compare-and-swap.
   `issue()` and `revoke()` each re-read immediately before their first commit,
-  which narrows the race to one KV round trip but does not close it. Closing it
-  needs a Durable Object per order.
+  which narrows the race to one KV round trip but does not close it. Every
+  license a transaction mints is indexed, so a later refund revokes a double
+  mint too (within the minute or so KV listing takes to catch up). Closing the
+  race needs a Durable Object per order.
 - **The legal documents.** See [licensing-terms.md](licensing-terms.md) — a
   working draft exists. No counsel is being consulted, so the licensor writes
   the real ones.
