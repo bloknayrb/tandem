@@ -89,12 +89,22 @@ import {
   type ReplySuggestion,
 } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
+import { narrowForChannel } from "../annotations/projection.js";
 import { exportAnnotations } from "../file-io/docx.js";
 import { anchoredRange, refreshAllRanges } from "../positions.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
-import { captureSnapshot, collectAnnotations, collectRepliesForAnnotation } from "./annotations.js";
+import {
+  captureSnapshot,
+  collectAnnotations,
+  collectRepliesForAnnotation,
+  hasAnnotationShape,
+} from "./annotations.js";
 import { extractText, type FlatBreak } from "./document-model.js";
-import { getCurrentDoc } from "./document-service.js";
+// `getOpenDocs` through `document-service.ts`'s re-export, beside
+// `getCurrentDoc`, rather than from `documents/registry.ts` directly: the
+// `documents/` fan-in is a pinned inventory (`documents-boundary.test.ts`),
+// and this module needs nothing the re-export does not already carry.
+import { getCurrentDoc, getOpenDocs } from "./document-service.js";
 
 /**
  * The operations MCP tool handlers perform against a single document's
@@ -275,6 +285,11 @@ export class YDocStore {
    * this is not new transaction logic.
    */
   refreshAnnotations(anns: Annotation[]): Annotation[] {
+    // An empty subset is the inbox surfacer's common case (nothing surfaced on
+    // this document), and `refreshAllRanges` would still open — and commit — an
+    // empty `withMcp` transaction for it, which Yjs reports to every
+    // `afterTransaction` listener on the doc like any other (PR #2225 review).
+    if (anns.length === 0) return [];
     return refreshAllRanges(anns, this.#ydoc, this.#map).map((r) => r.annotation);
   }
 
@@ -430,4 +445,93 @@ export function getDocumentStore(documentId?: string): YDocStore | null {
   if (!doc) return null;
   const ydoc = getOrCreateDocument(doc.docName);
   return new YDocStore(ydoc, doc.filePath, doc.id);
+}
+
+/**
+ * What {@link resolveAnnotationStore} found. `none` is a null
+ * {@link getDocumentStore} (the handlers answer `noDocumentError()`);
+ * `ambiguous` lists the open documents in which the id is Claude-facing.
+ */
+export type AnnotationStoreResolution =
+  | { kind: "store"; store: YDocStore }
+  | { kind: "none" }
+  | { kind: "ambiguous"; documentIds: string[] };
+
+/**
+ * Resolve the document an id-keyed annotation tool acts on (PR #2225 review).
+ *
+ * Since #2187 a default `tandem_checkInbox` polls EVERY open document and hands
+ * Claude annotation ids from background documents. The four id-keyed tools
+ * (`tandem_resolveAnnotation`, `tandem_removeAnnotation`,
+ * `tandem_editAnnotation`, `tandem_annotationReply`) defaulted to the ACTIVE
+ * document alone, so acting on such an id without echoing its `documentId`
+ * answered NOT_FOUND for a record Claude had just been shown.
+ *
+ * - `documentId` given → {@link getDocumentStore}, unchanged. Explicit wins.
+ * - omitted → each open document (`getOpenDocs()`, the registry — never the
+ *   Hocuspocus document map, which also holds `CTRL_ROOM`) is a candidate when
+ *   its record for `id` passes the READ filter: `collectAnnotations`' shape
+ *   pre-check, then `narrowForChannel` — `sanitizeAnnotation`, the
+ *   `unknown-type` refusal, and the `isClaudeFacing` conjunction. Exactly one
+ *   candidate → its store. More than one → `ambiguous`, and nothing is
+ *   touched. None → the ACTIVE document's store, so a missing id, a note and a
+ *   private comment answer with exactly the envelopes they did before.
+ *
+ * **Why the read filter decides candidacy (ADR-027).** A note or a private
+ * comment is invisible to every Claude-facing read, so it must not steer this
+ * either: if it counted, a note in a background document would turn a unique
+ * comment id into an `ambiguous-document` refusal NAMING the note's document,
+ * which discloses that the note exists. Records the reads never return never
+ * change which document is chosen, and the no-candidate fallback answers from
+ * the active document as before, so this path discloses nothing new.
+ *
+ * **Why `unknown-type` is refused, not only notes.** `sanitizeAnnotation`
+ * coerces an unrecognized type to `{comment, outbound}`, so a note whose `type`
+ * a stale-tab merge corrupted would pass `isClaudeFacing` and steer a write.
+ * `narrowForChannel` already closes that gap; reusing it keeps this from being
+ * a third surface that has to remember it.
+ *
+ * **Deliberately no Solo hold.** `hideFromAI` gates what the reads return in
+ * Solo mode, but none of the write guards (`editPending`, `transitionPending`,
+ * `remove`, `reply`) applies it today — an explicit `documentId` reaches a
+ * Solo-held record — so holding here would only make the omitted-`documentId`
+ * form disagree with the explicit one. A Solo write hold, if it is ever
+ * wanted, belongs in the lifecycle where both forms reach it.
+ *
+ * **Read-only.** It reads each document's raw record and sanitizes a copy;
+ * `sanitizeAnnotation` is pure (no Y.Doc access), so there is no write here to
+ * origin-tag. The legacy-migration relay is keyed on the document's `docHash`,
+ * the key {@link YDocStore}'s own relay and `forgetDoc` use, so a legacy record
+ * logs once per document whether this probe or the store's write sees it first.
+ *
+ * Each document's probe has its own `try`: a record that throws is "not a
+ * candidate", so one corrupt document cannot break a resolve aimed at another.
+ */
+export function resolveAnnotationStore(id: string, documentId?: string): AnnotationStoreResolution {
+  if (documentId !== undefined) {
+    const store = getDocumentStore(documentId);
+    return store ? { kind: "store", store } : { kind: "none" };
+  }
+
+  const candidates: string[] = [];
+  for (const [docId, openDoc] of getOpenDocs()) {
+    try {
+      const raw = getOrCreateDocument(docId).getMap(Y_MAP_ANNOTATIONS).get(id);
+      if (!hasAnnotationShape(raw)) continue;
+      const hash = docHash(openDoc.filePath);
+      const narrowed = narrowForChannel(raw, {
+        onLossy: (event) => relaySanitizationEvent(hash, event),
+      });
+      if (narrowed !== null) candidates.push(docId);
+    } catch {
+      // Not a candidate. Deliberately not logged with the error: a sanitize
+      // failure can carry the record's own content, and the active-document
+      // fallback still answers the call.
+    }
+  }
+
+  if (candidates.length > 1) return { kind: "ambiguous", documentIds: candidates };
+  // `candidates[0]` is undefined when nothing matched → the active document.
+  const store = getDocumentStore(candidates[0]);
+  return store ? { kind: "store", store } : { kind: "none" };
 }

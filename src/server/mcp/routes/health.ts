@@ -111,7 +111,9 @@ export interface HealthHandlerDeps {
  * copy is built on it:
  *
  *  - **The negative is sound for ONE model, not two.** Any session's poll clears
- *    the single process-global outstanding forward, so a second busy session —
+ *    the single process-global outstanding forward (unless that poll could not
+ *    hand over an item the forward is waiting on — PR #2225 review), so a second
+ *    busy session —
  *    two terminals, or an auto-launched child alongside a hand-launched one —
  *    pins `state` at `"polled"` while masking a first session that is wedged.
  *    `"awaiting-poll"` is trustworthy evidence; `"polled"` is not evidence of
