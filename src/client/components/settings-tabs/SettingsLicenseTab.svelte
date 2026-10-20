@@ -48,8 +48,8 @@ const pillLabel = $derived(
     (status == null
       ? "License status unknown"
       : darkInstalled
-        ? status.licenseeName
-          ? `License installed for ${status.licenseeName} — takes effect at v1.0`
+        ? status.licenseeEmail
+          ? `License installed for ${status.licenseeEmail} — takes effect at v1.0`
           : "License installed — takes effect at v1.0"
         : "Not enforced in this version"),
 );
@@ -168,7 +168,7 @@ function onActivated(): void {
     {/if}
     Trouble activating? Email
     <a href="mailto:{TANDEM_SUPPORT_EMAIL}">{TANDEM_SUPPORT_EMAIL}</a> — please don't post your
-    license key publicly, it contains your name and email address.
+    license key publicly, it contains your email address.
   </div>
 </div>
 

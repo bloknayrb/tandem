@@ -19,31 +19,37 @@
  * to mint a blob without one — deliberately, e.g. for an offline test.
  *
  * Usage:
- *   npx tsx scripts/sign-license.ts --name "Jane Doe" --email jane@example.com
- *   npx tsx scripts/sign-license.ts --name "Beta Tester" --email b@x.com --type grandfathered
+ *   npx tsx scripts/sign-license.ts --email jane@example.com
+ *   npx tsx scripts/sign-license.ts --email b@x.com --type grandfathered
  */
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
 import { writeLicenseEntitlement } from "../src/server/license/kv-store.js";
-import type {
-  IssuedLicenseMetadata,
-  LicenseMetadata,
-  SignedLicense,
-} from "../src/server/license/license-types.js";
+import type { LicenseMetadata, SignedLicense } from "../src/server/license/license-types.js";
 import { KEYS_BY_ID, keyIdForPublicKey } from "../src/server/license/public-key.js";
 import { canonicalize } from "../src/server/license/verifier.js";
 
 const LICENSE_TYPES = ["personal", "commercial", "grandfathered"] as const;
 
 const USAGE =
-  'Usage: npx tsx scripts/sign-license.ts --name "User Name" --email "user@example.com" ' +
+  'Usage: npx tsx scripts/sign-license.ts --email "user@example.com" ' +
   "[--type personal|commercial|grandfathered] [--expires days|never] [--key path] " +
   "[--skip-entitlement]";
 
-/** The private key `--key` defaults to: where `generate-keys.ts` used to write. */
-const DEFAULT_PRIVATE_KEY = path.join("keys", "tandem-private-key.pem");
+/**
+ * The private key `--key` defaults to: `keys/tandem-<id>.pem`, the name
+ * `generate-keys.ts` writes, for the one key this build trusts. With more than
+ * one trusted key (mid-rotation) there is no safe guess, so `--key` is required
+ * (docs/licensing-operations.md §0).
+ */
+export function defaultPrivateKeyPath(
+  trustedKeysById: Readonly<Record<string, string>> = KEYS_BY_ID,
+): string | undefined {
+  const ids = Object.keys(trustedKeysById);
+  return ids.length === 1 ? path.join("keys", `tandem-${ids[0]}.pem`) : undefined;
+}
 
 /**
  * Sign license metadata with a private key, stamping the key's id.
@@ -54,10 +60,10 @@ const DEFAULT_PRIVATE_KEY = path.join("keys", "tandem-private-key.pem");
  * the buyer would be told their key is bad.
  */
 export function signWithKey(
-  fields: Omit<IssuedLicenseMetadata, "keyId">,
+  fields: Omit<LicenseMetadata, "keyId">,
   privateKeyPem: string,
   trustedKeysById: Readonly<Record<string, string>> = KEYS_BY_ID,
-): { metadata: IssuedLicenseMetadata; blob: string } {
+): { metadata: LicenseMetadata; blob: string } {
   const privateKey = crypto.createPrivateKey(privateKeyPem);
   const keyId = keyIdForPublicKey(crypto.createPublicKey(privateKey));
   if (!Object.hasOwn(trustedKeysById, keyId)) {
@@ -66,7 +72,7 @@ export function signWithKey(
         "(src/server/license/public-key.ts), so no build would accept its licenses.",
     );
   }
-  const metadata: IssuedLicenseMetadata = { ...fields, keyId };
+  const metadata: LicenseMetadata = { ...fields, keyId };
   const signature = crypto.sign(null, Buffer.from(canonicalize(metadata)), privateKey);
   const signedLicense: SignedLicense = { metadata, signature: signature.toString("hex") };
   return { metadata, blob: Buffer.from(JSON.stringify(signedLicense)).toString("base64") };
@@ -143,12 +149,15 @@ export function resolveExpiresAt(rawExpires: string | undefined, now: Date): str
 
 async function generateLicense(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
-  const name = str(options, "name");
+  if (options.name !== undefined) {
+    // Refused rather than ignored: an operator passing it expects it in the key.
+    fail("--name is no longer accepted: a license no longer carries a name.", true);
+  }
   const email = str(options, "email");
   const type = (str(options, "type") ?? "personal") as LicenseMetadata["type"];
 
-  if (!name || !email) {
-    fail("--name and --email are required.", true);
+  if (!email) {
+    fail("--email is required.", true);
   }
   if (!LICENSE_TYPES.includes(type as (typeof LICENSE_TYPES)[number])) {
     // A typo'd type would otherwise be SIGNED into the blob and rejected
@@ -157,9 +166,16 @@ async function generateLicense(): Promise<void> {
   }
 
   // Load private key
-  const privKeyPath = path.resolve(process.cwd(), str(options, "key") ?? DEFAULT_PRIVATE_KEY);
+  const keyArg = str(options, "key") ?? defaultPrivateKeyPath();
+  if (keyArg === undefined) {
+    fail("More than one key is trusted, so there is no default: pass --key.");
+  }
+  const privKeyPath = path.resolve(process.cwd(), keyArg);
   if (!fs.existsSync(privKeyPath)) {
-    fail(`Private key not found at ${privKeyPath}. Pass --key, or run scripts/generate-keys.ts.`);
+    fail(
+      `Private key not found at ${privKeyPath}. Pass --key with the path to the signing ` +
+        "key's offline copy (docs/licensing-operations.md §0).",
+    );
   }
   const privateKey = fs.readFileSync(privKeyPath, "utf8");
 
@@ -175,10 +191,7 @@ async function generateLicense(): Promise<void> {
 
   let signed: ReturnType<typeof signWithKey>;
   try {
-    signed = signWithKey(
-      { id, name, email, type, createdAt, expiresAt, version: "1.0" },
-      privateKey,
-    );
+    signed = signWithKey({ id, email, type, createdAt, expiresAt, version: "1.0" }, privateKey);
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
   }

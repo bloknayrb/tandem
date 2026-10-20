@@ -258,7 +258,7 @@ describe("Settings → License — the ended update window offers a way out (#18
     gateActive: true,
     status: "licensed",
     updateWindowCurrent: false,
-    license: { name: "Paying Customer", type: "paid" },
+    license: { email: "paying@example.com", type: "paid" },
   };
 
   it("the ended-window warning carries a support link, and no renewal link", () => {

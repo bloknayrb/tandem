@@ -25,11 +25,13 @@ log = "0.4"
 # DSN yields a disabled (no-op) client. The default feature set does NOT install
 # a global `tracing` subscriber (only the optional `sentry-tracing` integration
 # does), so there is no collision with `tauri-plugin-log` or the `devtools`
-# feature — both of which own the global subscriber. The minidump handler is
-# re-exported by the plugin (`tauri_plugin_sentry::minidump`); no separate
-# `sentry-rust-minidump` dependency is needed.
+# feature — both of which own the global subscriber. Minidumps come from
+# `sentry::integrations::minidump::MinidumpIntegration`, which the plugin's
+# default `minidump` feature enables on `sentry` (tauri-plugin-sentry 0.7
+# removed the old `tauri_plugin_sentry::minidump` re-export); no separate
+# `sentry-minidump` dependency is needed.
 sentry = "0.49"
-tauri-plugin-sentry = "0.6"
+tauri-plugin-sentry = "0.7"
 # linux-libxdo: makes native Cut/Copy/Paste/Select All PredefinedMenuItems work
 # on Linux (muda uses libxdo to synthesize them); off by default. Required by
 # the editor context menu (#923).
@@ -77,7 +79,20 @@ tauri-plugin-window-state = "2"
 # Start-at-login (#1236). Wrapped in app-defined commands (src/autostart.rs)
 # rather than exposed via its JS API, so no `autostart:default` capability
 # grant and no @tauri-apps/plugin-autostart npm dependency are needed.
-tauri-plugin-autostart = "2"
+#
+# Held below 2.7: 2.7 moves to `auto-launch` 0.6, whose Windows `enable()`
+# defaults to `WindowsEnableMode::Dynamic` — it writes the machine-wide
+# `HKLM\...\Run` value whenever the process is elevated (Run as administrator,
+# or any launch with UAC off) and falls back to HKCU only on access-denied. The
+# plugin's `Builder` exposes no way to select `CurrentUser`. Because
+# `refresh_registration` calls `enable()` on every launch, one elevated launch
+# would plant an all-users Run entry pointing at this user's per-user install;
+# a later non-elevated `disable()` ignores the HKLM access-denied, `is_enabled()`
+# keeps reading HKLM as on (the toggle sticks with `readback-mismatch`), and the
+# uninstall scrub only deletes HKCU. Lift the hold (here and in
+# .github/dependabot.yml) only once Tandem can pin the Windows mode to
+# CurrentUser — and then make `uninstall_scrub.rs` cover whatever it writes.
+tauri-plugin-autostart = ">=2, <2.7"
 # Chat-reply notifications (#2168). Driven from app-defined commands
 # (src/notifications.rs), not the plugin's JS API, so the click handler can
 # call `show_main_window_for_user`. 2.6 is the floor: it is the first release

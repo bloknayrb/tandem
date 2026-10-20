@@ -318,7 +318,13 @@ describe("ListItemCheckbox Enter continuation (#982 A3)", () => {
     expect(nestedBulletLists).toBe(1);
   });
 
-  it("accepted deviation: Enter at position 0 of a checked item leaves the empty first item checked:true and moves the content into a checked:false second item", () => {
+  // Until @tiptap/core 3.32 this pinned a deviation from GitHub: the emptied
+  // first item kept `checked: true` and the content moved into a new
+  // `checked: false` item. 3.32's `splitListItem` keeps the original attrs on
+  // the trailing item when the split is at the start of the item, so the
+  // content now keeps its checked state and the new empty item above is
+  // unchecked — GitHub's behaviour, with no code of ours involved.
+  it("Enter at position 0 of a checked item inserts an unchecked empty item above and the content stays checked (GitHub behaviour)", () => {
     const ed = makeEditor();
     ed.commands.setContent({
       type: "doc",
@@ -339,7 +345,7 @@ describe("ListItemCheckbox Enter continuation (#982 A3)", () => {
     ed.commands.setTextSelection(findTextPos(ed, "hello"));
     expect(pressEnter(ed)).toBe(true);
 
-    expect(checkedValues(ed)).toEqual([true, false]);
+    expect(checkedValues(ed)).toEqual([false, true]);
     // The first item is now empty; the second carries the original text.
     const paragraphs: string[] = [];
     ed.state.doc.descendants((node) => {

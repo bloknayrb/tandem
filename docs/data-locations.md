@@ -63,7 +63,7 @@ Inside either directory:
 | `owner.json` | Which install claimed this directory (`{"version", "flavor"}`). Delete it only to hand the directory to the other flavor deliberately; doing so does not re-run the one-time npm import. |
 | `npm-migration-complete` | **Desktop location only.** The record that the one-time copy from the npm directory already happened. Deleting it makes the next desktop launch re-import that directory, so leave it alone. |
 | `auth-token` | **npm location only.** Its path is derived from the `env-paths` root directly and deliberately ignores `TANDEM_APP_DATA_DIR`, so it never appears in the desktop directory. The desktop keeps its token in the OS keychain and passes it to the sidecar, but it also uses this npm-location file as its fallback: it reads the file when the keychain has no entry (adopting a token an npm install already minted), and writes it when the keychain is unavailable (for example Linux without Secret Service). So the file can exist on a machine with no npm install at all. The auto-generated Bearer token (mode `0o600` on POSIX; the desktop fallback writer narrows it to that just after writing) that non-loopback callers must present. Deleting it makes Tandem mint a new one on next launch, which invalidates any config still carrying the old value — run `tandem rotate-token` instead of deleting it by hand. |
-| `license.json` | **Your activated license.** Contains the signed blob, which carries your name and email address — the only identity information Tandem writes to disk. Deleting it means re-activating from the key you were emailed. |
+| `license.json` | **Your activated license.** Contains the signed blob, which carries your email address — the only identity information Tandem writes to disk. Deleting it means re-activating from the key you were emailed. |
 | `trial.json` | The trial clock's start timestamp. Deleting it restarts the trial (the clock is deliberately soft — see [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license)). This file and `license.json` both live under `TANDEM_APP_DATA_DIR`, so pointing that variable at a new directory presents a fresh trial and an apparently-unlicensed device. |
 | `.backups/` | Backups of `~/.claude.json` and the Claude Desktop config, taken before Tandem rewrote an entry you had customized. Named `claude-json-<YYYYMMDD-HHMMSS>-<id>.json`; the three most recent are kept |
 | `.broken-backups/` | Quarantined copies of Tandem's own malformed config files (user-only permissions): `integrations.json` (named `integrations-…`) and the bring-your-own-model store (named `models-…`). Claude's config files are never copied here — a malformed Claude config is refused and left untouched |
@@ -147,19 +147,20 @@ nothing is on sale during the beta) puts your details in three places outside it
 | Where | What | Who holds it |
 | --- | --- | --- |
 | Paddle | Your customer record, payment, receipts and invoices | Paddle, the merchant of record, under its own privacy policy |
-| The seller's issuance ledger (`LEDGER_KV`, on Cloudflare) | Your email and name, copied from Paddle when the license is made, with the Paddle transaction id, the license id, its type, dates, and whether the email was sent or the order refunded | The seller (Bryan Kolb) |
+| The seller's issuance ledger (`LEDGER_KV`, on Cloudflare) | Your email address, copied from Paddle when the license is made, with the Paddle transaction id, the license id, its type, dates, and whether the email was sent or the order refunded | The seller (Bryan Kolb) |
 | Resend, the email service | The license email it delivered to you, with your license inside, for as long as Resend's log retention keeps it | Resend, under its own privacy policy |
 
 The ledger, and the seller's private backups of it, are the only places the
-seller itself keeps your name and email. The update
+seller itself keeps your email address. Your name, which Paddle asks for at
+checkout, stays with Paddle; the seller never copies it. The update
 service your app talks to sees only the opaque license id, and the seller's
-operator alerts carry no ids at all. Your license itself, with your name and
-email inside, is on your own machine as `license.json` (above).
+operator alerts carry no ids at all. Your license itself, with your email
+inside, is on your own machine as `license.json` (above).
 
 **To have the seller's copy erased**, email the support address in your license
-email. The seller removes your name and email from the ledger record and keeps
+email. The seller removes your email from the ledger record and keeps
 only its ids, so your license and its updates keep working. After that, a lost
-license can be reissued only if you send your name and email again. Paddle's own
+license can be reissued only if you send your email address again. Paddle's own
 records are kept under Paddle's terms.
 
 ## Entries Tandem writes into other programs' config

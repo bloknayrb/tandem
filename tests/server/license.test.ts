@@ -6,7 +6,6 @@ import type { LicenseMetadata, SignedLicense } from "../../src/server/license/li
 import {
   KEYS_BY_ID,
   keyIdForPublicKey,
-  LEGACY_KEY_ID,
   TRUSTED_PUBLIC_KEYS,
 } from "../../src/server/license/public-key.js";
 import { canonicalize, verifyLicense } from "../../src/server/license/verifier.js";
@@ -36,12 +35,12 @@ describe("Licensing Core", () => {
 
       const metadata: LicenseMetadata = {
         id: crypto.randomUUID(),
-        name: "Test User",
         email: "test@example.com",
         type: "personal",
         createdAt: new Date().toISOString(),
         expiresAt: null,
         version: "1.0",
+        keyId: keyIdForPublicKey(publicKey),
       };
 
       const dataStr = canonicalize(metadata);
@@ -67,7 +66,6 @@ describe("Licensing Core", () => {
       };
 
       const verifiedMetadata = verifyWithTempKey(base64License, publicKey);
-      expect(verifiedMetadata.name).toBe("Test User");
       expect(verifiedMetadata.email).toBe("test@example.com");
       expect(verifiedMetadata.type).toBe("personal");
     });
@@ -80,19 +78,19 @@ describe("Licensing Core", () => {
 
       const metadata: LicenseMetadata = {
         id: crypto.randomUUID(),
-        name: "Test User",
         email: "test@example.com",
         type: "personal",
         createdAt: new Date().toISOString(),
         expiresAt: null,
         version: "1.0",
+        keyId: keyIdForPublicKey(publicKey),
       };
 
       const dataStr = canonicalize(metadata);
       const signature = crypto.sign(null, Buffer.from(dataStr), privateKey);
 
-      // Tamper name
-      const tamperedMetadata = { ...metadata, name: "Tampered User" };
+      // Tamper email
+      const tamperedMetadata = { ...metadata, email: "tampered@example.com" };
 
       const signedLicense: SignedLicense = {
         metadata: tamperedMetadata,
@@ -128,12 +126,12 @@ describe("Licensing Core", () => {
 
       const metadata: LicenseMetadata = {
         id: crypto.randomUUID(),
-        name: "Expired User",
         email: "expired@example.com",
         type: "personal",
         createdAt: new Date().toISOString(),
         expiresAt: expiredDate.toISOString(),
         version: "1.0",
+        keyId: keyIdForPublicKey(publicKey),
       };
 
       const dataStr = canonicalize(metadata);
@@ -198,7 +196,7 @@ describe("Licensing Core", () => {
      */
     it("ships the pinned production public keys (ids + fingerprints)", () => {
       const EXPECTED_KEYS: Record<string, string> = {
-        "79c10e75fb8cfa46": "d896ad7b41bfab69a5c356bbd0e68576201ac2fd5a0f90f9eddfa4f7d78a688b",
+        c24dd9f66f449a56: "5338be0ec1f889c926c640425b0b95956cb5acf92e9f870789aed98c28d6d636",
       };
       const actual: Record<string, string> = {};
       for (const [id, pem] of Object.entries(KEYS_BY_ID)) {
@@ -210,69 +208,62 @@ describe("Licensing Core", () => {
       expect(actual).toEqual(EXPECTED_KEYS);
     });
 
-    it("keeps LEGACY_KEY_ID equal to the original key's computed id", () => {
-      // The literal is written out so a reader can see it; this keeps it honest.
-      expect(LEGACY_KEY_ID).toBe(keyIdForPublicKey(TRUSTED_PUBLIC_KEYS[0]));
-      expect(Object.hasOwn(KEYS_BY_ID, LEGACY_KEY_ID)).toBe(true);
-    });
+    // `keys/tandem-<id>.pem` is the name `generate-keys.ts` writes, so the file
+    // for each trusted id is the one private key that should pair with it.
+    it.each(Object.keys(KEYS_BY_ID))(
+      "verifies a license signed by the local private key for %s using verifyLicense",
+      (trustedId) => {
+        let privateKey: string;
+        try {
+          const privKeyPath = path.join(process.cwd(), "keys", `tandem-${trustedId}.pem`);
+          privateKey = fs.readFileSync(privKeyPath, "utf8");
+        } catch {
+          // Skip if the private key is absent — always the case in CI, and the
+          // reason the fingerprint test above exists. This one only adds value on
+          // an operator's machine, where it proves the checked-in public key and
+          // the local private key are actually a pair.
+          return;
+        }
 
-    it("should verify a license signed by the local private key using verifyLicense", () => {
-      let privateKey: string;
-      try {
-        const privKeyPath = path.join(process.cwd(), "keys", "tandem-private-key.pem");
-        privateKey = fs.readFileSync(privKeyPath, "utf8");
-      } catch {
-        // Skip if the private key is absent — always the case in CI, and the
-        // reason the fingerprint test above exists. This one only adds value on
-        // an operator's machine, where it proves the checked-in public key and
-        // the local private key are actually a pair.
-        return;
-      }
+        const metadata: LicenseMetadata = {
+          id: crypto.randomUUID(),
+          email: "prod@example.com",
+          type: "personal",
+          createdAt: new Date().toISOString(),
+          expiresAt: null,
+          version: "1.0",
+          keyId: keyIdForPublicKey(crypto.createPublicKey(privateKey)),
+        };
 
-      const metadata: LicenseMetadata = {
-        id: crypto.randomUUID(),
-        name: "Production User",
-        email: "prod@example.com",
-        type: "personal",
-        createdAt: new Date().toISOString(),
-        expiresAt: null,
-        version: "1.0",
-        keyId: keyIdForPublicKey(crypto.createPublicKey(privateKey)),
-      };
+        const dataStr = canonicalize(metadata);
+        const signature = crypto.sign(null, Buffer.from(dataStr), privateKey);
 
-      const dataStr = canonicalize(metadata);
-      const signature = crypto.sign(null, Buffer.from(dataStr), privateKey);
+        const signedLicense: SignedLicense = {
+          metadata,
+          signature: signature.toString("hex"),
+        };
 
-      const signedLicense: SignedLicense = {
-        metadata,
-        signature: signature.toString("hex"),
-      };
+        const base64License = Buffer.from(JSON.stringify(signedLicense)).toString("base64");
 
-      const base64License = Buffer.from(JSON.stringify(signedLicense)).toString("base64");
-
-      // Explain the failure rather than surfacing a bare "bad signature".
-      // The likeliest cause is benign and self-inflicted: the runbook tells you
-      // to run `generate-keys.ts`, and the moment you do, this previously-
-      // skipped test starts running against a keypair that is NOT the pair of
-      // the pinned public key. Without this message that reads as a broken
-      // checkout rather than an unfinished key ceremony.
-      let verified: LicenseMetadata;
-      try {
-        verified = verifyLicense(base64License);
-      } catch (err) {
-        throw new Error(
-          "The keypair in keys/ does not match the public key shipped in " +
-            "src/server/license/public-key.ts.\n" +
-            "If you just ran `npx tsx scripts/generate-keys.ts`, that is expected: finish the " +
-            "ceremony by adding the new PUBLIC key to public-key.ts (and its id to the Worker) and updating " +
-            "EXPECTED_KEYS above, in the same commit (docs/licensing-operations.md §0).\n" +
-            "If you did NOT intend to rotate the signing key, delete keys/ — it is gitignored " +
-            "scratch, and every license already issued was signed by the pinned key.\n" +
-            `Underlying: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-      expect(verified.name).toBe("Production User");
-      expect(verified.email).toBe("prod@example.com");
-    });
+        // Explain the failure rather than surfacing a bare "bad signature". The
+        // file is named after a trusted id, so reaching here with a mismatch
+        // means it was renamed or overwritten by hand, not a fresh
+        // `generate-keys.ts` run (that writes a new id's file, which this skips).
+        let verified: LicenseMetadata;
+        try {
+          verified = verifyLicense(base64License);
+        } catch (err) {
+          throw new Error(
+            `keys/tandem-${trustedId}.pem does not pair with the public key of that id ` +
+              "shipped in src/server/license/public-key.ts. Its id is derived from the " +
+              "public key, so this file was renamed or replaced by hand; restore it from " +
+              "an offline copy (docs/licensing-operations.md §0).\n" +
+              `Underlying: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        expect(verified.keyId).toBe(trustedId);
+        expect(verified.email).toBe("prod@example.com");
+      },
+    );
   });
 });

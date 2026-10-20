@@ -12,6 +12,7 @@ import { basename, join } from "node:path";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as Y from "yjs";
+import { z } from "zod";
 import { addDoc, removeDoc, setActiveDocId } from "../../src/server/documents/registry-testing.js";
 import {
   getDeliveryState,
@@ -35,6 +36,7 @@ import { extractMarkdown, extractText } from "../../src/server/mcp/document-mode
 import { closeDocumentById, getOpenDocs } from "../../src/server/mcp/document-service.js";
 import { YDocStore } from "../../src/server/mcp/document-store.js";
 import { registerNavigationTools } from "../../src/server/mcp/navigation.js";
+import { checkInboxOutputShape } from "../../src/server/mcp/output-schemas.js";
 import { shutdownSearchWorker } from "../../src/server/mcp/search-worker.js";
 import {
   _resetModeProvenanceForTests,
@@ -45,6 +47,7 @@ import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
   Y_MAP_ACTIVITY,
+  Y_MAP_ANNOTATION_REPLIES,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AUTHORSHIP,
   Y_MAP_CHAT,
@@ -78,6 +81,23 @@ function setupDoc(id: string, text: string) {
   addDoc(id, { id, filePath: `/tmp/${id}.md`, format: "md", readOnly: false, source: "file" });
   setActiveDocId(id);
   return ydoc;
+}
+
+/** A pending, Claude-facing user comment on `ydoc` (#2187 multi-document polls). */
+function seedOpenComment(ydoc: Y.Doc, id: string, content: string) {
+  withInternal(ydoc, () =>
+    ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, {
+      id,
+      author: "user",
+      type: "comment",
+      audience: "outbound",
+      range: { from: 0, to: 5 },
+      content,
+      status: "pending",
+      timestamp: Date.now(),
+      rev: 1,
+    }),
+  );
 }
 
 /** Register a doc at an explicit filePath (used for sidecar-export disk writes). */
@@ -1509,6 +1529,7 @@ describe("MCP tool integration — awareness tools", () => {
     expect(parsed.data.userResponses).toEqual([]);
     expect(parsed.data.userReplies).toEqual([]);
     expect(parsed.data.activity).toEqual({
+      documentId: null,
       isTyping: false,
       cursor: null,
       lastEdit: null,
@@ -1582,17 +1603,246 @@ describe("MCP tool integration — awareness tools", () => {
     expect(parsed.data.activity.cursor).toBe(3);
   });
 
-  it("tandem_checkInbox says no document is ACTIVE when tabs are open but none is active", async () => {
-    // "No document is open" would be false here, and invites an open.
-    setupDoc("mcp-aw-inactive", "Hello world");
+  it("tandem_checkInbox reads open tabs even when none is active (#2187)", async () => {
+    // This used to answer "No document is active … only chat is shown" and
+    // return nothing from the open tab. A default poll now reads every open
+    // document, so the comment comes back; only `activity` is empty.
+    const ydoc = setupDoc("mcp-aw-inactive", "Hello world");
+    seedOpenComment(ydoc, "u_inactive", "on a tab that is not active");
     setActiveDocId(null);
     seedUserChat("msg_inactive", "hi");
 
     const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
 
     expect(parsed.error).toBe(false);
-    expect(parsed.data.summary).toMatch(/^No document is active \(tandem_listDocuments/);
+    expect(parsed.data.summary.startsWith("No document")).toBe(false);
+    expect(parsed.data.summary).toContain("none is active");
+    expect(parsed.data.summary).toContain("mcp-aw-inactive.md");
+    expect(
+      parsed.data.userActions.map((a: { id: string; documentId: string }) => [a.id, a.documentId]),
+    ).toEqual([["u_inactive", "mcp-aw-inactive"]]);
+    expect(parsed.data.activity.documentId).toBeNull();
     expect(parsed.data.chatMessages.map((m: { id: string }) => m.id)).toEqual(["msg_inactive"]);
+  });
+
+  describe("tandem_checkInbox across open documents (#2187)", () => {
+    // Field case: five tabs open, a user comment on a background one, and a
+    // default poll answered "No new actions." — indistinguishable from a quiet
+    // poll. Claude found the comment only by polling each id on its own.
+    it("returns a background document's comment, tagged with its documentId", async () => {
+      const background = setupDoc("mcp-aw-bg", "Background text");
+      seedOpenComment(background, "u_bg", "expand on this");
+      const active = setupDoc("mcp-aw-fg", "Foreground text");
+      withInternal(active, () =>
+        active
+          .getMap(Y_MAP_USER_AWARENESS)
+          .set(Y_MAP_ACTIVITY, { isTyping: false, cursor: 4, lastEdit: Date.now() }),
+      );
+
+      const result = await client.callTool({ name: "tandem_checkInbox", arguments: {} });
+      const parsed = parseResult(result);
+
+      expect(parsed.error).toBe(false);
+      expect(parsed.data.hasNew).toBe(true);
+      expect(
+        parsed.data.userActions.map((a: { id: string; documentId: string }) => [
+          a.id,
+          a.documentId,
+        ]),
+      ).toEqual([["u_bg", "mcp-aw-bg"]]);
+      // The cue that a follow-up must carry the item's documentId, by file.
+      expect(parsed.data.summary).toContain("documents other than the active one: mcp-aw-bg.md");
+      expect(parsed.data.summary).toContain("Pass each item's documentId");
+      // `activity` is the ACTIVE document's, and says so.
+      expect(parsed.data.activity.documentId).toBe("mcp-aw-fg");
+      expect(parsed.data.activity.cursor).toBe(4);
+      // The wire shape the SDK validates: a missing documentId on any item
+      // would fail the WHOLE response after the ledgers were stamped.
+      expect(() =>
+        z
+          .object(checkInboxOutputShape)
+          .parse((result as { structuredContent: unknown }).structuredContent),
+      ).not.toThrow();
+    });
+
+    it("shares the ledger with explicit polls, in both directions", async () => {
+      const background = setupDoc("mcp-aw-ledger-bg", "Background text");
+      seedOpenComment(background, "u_ledger_bg", "first");
+      setupDoc("mcp-aw-ledger-fg", "Foreground text");
+
+      // Explicit poll of the ACTIVE document: the background comment is not
+      // its item, and is not consumed by it.
+      const narrow = parseResult(
+        await client.callTool({
+          name: "tandem_checkInbox",
+          arguments: { documentId: "mcp-aw-ledger-fg" },
+        }),
+      );
+      expect(narrow.data.userActions).toEqual([]);
+      expect(narrow.data.summary).not.toContain("other than the active one");
+
+      const first = parseResult(
+        await client.callTool({ name: "tandem_checkInbox", arguments: {} }),
+      );
+      expect(first.data.userActions.map((a: { id: string }) => a.id)).toEqual(["u_ledger_bg"]);
+
+      // Once surfaced by a default poll, neither a default nor a named poll
+      // returns it again.
+      const again = parseResult(
+        await client.callTool({ name: "tandem_checkInbox", arguments: {} }),
+      );
+      expect(again.data.userActions).toEqual([]);
+      expect(again.data.summary).toBe("No new actions.");
+      const named = parseResult(
+        await client.callTool({
+          name: "tandem_checkInbox",
+          arguments: { documentId: "mcp-aw-ledger-bg" },
+        }),
+      );
+      expect(named.data.userActions).toEqual([]);
+    });
+
+    it("validates every bucket's wire shape for background items", async () => {
+      // A missing `documentId` on ANY item fails the whole response at the SDK,
+      // after every ledger was stamped. So all three buckets, from a background
+      // document, go through the declared schema.
+      const background = setupDoc("mcp-aw-shape-bg", "Background text here");
+      withInternal(background, () => {
+        background.getMap(Y_MAP_ANNOTATIONS).set("c_dismissed_bg", {
+          id: "c_dismissed_bg",
+          author: "claude",
+          type: "comment",
+          audience: "outbound",
+          range: { from: 0, to: 5 },
+          content: "a suggestion of Claude's",
+          status: "dismissed",
+          timestamp: 1,
+          rev: 1,
+        });
+        background.getMap(Y_MAP_ANNOTATION_REPLIES).set("r_bg", {
+          id: "r_bg",
+          annotationId: "c_dismissed_bg",
+          author: "user",
+          text: "a reply on the background thread",
+          timestamp: 2,
+        });
+      });
+      seedOpenComment(background, "u_shape_bg", "a comment");
+      setupDoc("mcp-aw-shape-fg", "Foreground text");
+
+      const result = await client.callTool({ name: "tandem_checkInbox", arguments: {} });
+      const data = z
+        .object(checkInboxOutputShape)
+        .parse((result as { structuredContent: unknown }).structuredContent);
+
+      expect(data.userActions.map((a) => a.documentId)).toEqual(["mcp-aw-shape-bg"]);
+      expect(data.userResponses.map((r) => [r.id, r.documentId])).toEqual([
+        ["c_dismissed_bg", "mcp-aw-shape-bg"],
+      ]);
+      expect(data.userReplies.map((r) => [r.id, r.documentId])).toEqual([
+        ["r_bg", "mcp-aw-shape-bg"],
+      ]);
+    });
+
+    it("loses nothing when a background document's reply read throws (#2187 review)", async () => {
+      // The isolation discards a throwing document's results, so no ledger
+      // entry may be stamped before the last read that can throw. Reading the
+      // threads after the comment stamps lost the comment for the server run.
+      const background = setupDoc("mcp-aw-replythrow-bg", "Background text");
+      seedOpenComment(background, "u_replythrow_bg", "do not lose me");
+      setupDoc("mcp-aw-replythrow-fg", "Foreground text");
+      const real = YDocStore.prototype.listReplies;
+      const spy = vi.spyOn(YDocStore.prototype, "listReplies").mockImplementation(function (
+        this: YDocStore,
+        id: string,
+      ) {
+        if (this.documentId === "mcp-aw-replythrow-bg") throw new Error("reply read failed");
+        return real.call(this, id);
+      });
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      onTestFinished(() => err.mockRestore());
+
+      const broken = parseResult(
+        await client.callTool({ name: "tandem_checkInbox", arguments: {} }),
+      );
+      expect(broken.data.userActions).toEqual([]);
+      expect(broken.data.summary).toContain("Could not read document mcp-aw-replythrow-bg");
+
+      spy.mockRestore();
+      const healed = parseResult(
+        await client.callTool({ name: "tandem_checkInbox", arguments: {} }),
+      );
+      expect(healed.data.userActions.map((a: { id: string }) => a.id)).toEqual(["u_replythrow_bg"]);
+    });
+
+    it("reads the active document once and lists its items first", async () => {
+      const background = setupDoc("mcp-aw-order-bg", "Background text");
+      seedOpenComment(background, "u_order_bg", "background");
+      const active = setupDoc("mcp-aw-order-fg", "Foreground text");
+      seedOpenComment(active, "u_order_fg", "foreground");
+      const spy = vi.spyOn(YDocStore.prototype, "getUserAwareness");
+      onTestFinished(() => spy.mockRestore());
+
+      const parsed = parseResult(
+        await client.callTool({ name: "tandem_checkInbox", arguments: {} }),
+      );
+
+      expect(parsed.data.userActions.map((a: { id: string }) => a.id)).toEqual([
+        "u_order_fg",
+        "u_order_bg",
+      ]);
+      // Only the active document's activity is wanted, so only it is read.
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
+
+    it("never returns a background document's note, private comment or Solo-held comment", async () => {
+      const background = setupDoc("mcp-aw-private-bg", "Background text here");
+      withInternal(background, () => {
+        const map = background.getMap(Y_MAP_ANNOTATIONS);
+        map.set("n_bg", {
+          id: "n_bg",
+          author: "user",
+          type: "note",
+          audience: "private",
+          range: { from: 0, to: 5 },
+          content: "a personal note",
+          status: "pending",
+          timestamp: 1,
+          rev: 1,
+        });
+        map.set("p_bg", {
+          id: "p_bg",
+          author: "user",
+          type: "comment",
+          audience: "private",
+          range: { from: 0, to: 5 },
+          content: "a private comment",
+          status: "pending",
+          timestamp: 1,
+          rev: 1,
+        });
+      });
+      setupDoc("mcp-aw-private-fg", "Foreground text");
+
+      const parsed = parseResult(
+        await client.callTool({ name: "tandem_checkInbox", arguments: {} }),
+      );
+      expect(parsed.data.userActions).toEqual([]);
+      expect(JSON.stringify(parsed.data)).not.toContain("a personal note");
+      expect(JSON.stringify(parsed.data)).not.toContain("a private comment");
+
+      // Solo holds a background comment exactly as it holds an active one.
+      const ctrl = getOrCreateDocument(CTRL_ROOM);
+      withInternal(ctrl, () => ctrl.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_MODE, "solo"));
+      seedOpenComment(background, "u_held_bg", "held in solo");
+      const held = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+      expect(held.data.userActions).toEqual([]);
+      withInternal(ctrl, () => ctrl.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_MODE, "tandem"));
+      const released = parseResult(
+        await client.callTool({ name: "tandem_checkInbox", arguments: {} }),
+      );
+      expect(released.data.userActions.map((a: { id: string }) => a.id)).toEqual(["u_held_bg"]);
+    });
   });
 
   it("with nothing open, a chat asking for a file can be read, opened and answered", async () => {
@@ -2397,10 +2647,11 @@ describe("checkInbox stamps the pull path", () => {
     expect(getDeliveryState(Date.now(), 1).state).toBe("polled");
   });
 
-  it("leaves the round open when the document pass throws before the chat read", async () => {
-    // Why resolveDeliveryRound sits BELOW collectDocumentInbox: a throw in the
-    // document pass reaches the error boundary with no chat read, so closing
-    // the round first would report `polled` for a message never delivered.
+  it("leaves the round open when a NAMED document pass throws before the chat read", async () => {
+    // Why resolveDeliveryRound sits BELOW collectDocumentInbox: on a poll
+    // naming one document, a throw in its pass reaches the error boundary with
+    // no chat read, so closing the round first would report `polled` for a
+    // message never delivered.
     setupDoc("inbox-throw-doc", "Hello world");
     const chat = seedUserChat("msg_throw", "still waiting");
     recordWakeForward(1_000);
@@ -2409,12 +2660,52 @@ describe("checkInbox stamps the pull path", () => {
     });
     onTestFinished(() => spy.mockRestore());
 
-    const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_checkInbox",
+        arguments: { documentId: "inbox-throw-doc" },
+      }),
+    );
 
     expect(spy).toHaveBeenCalled();
     expect(parsed.error).toBe(true);
     expect((chat.get("msg_throw") as ChatMessage).read).toBe(false);
     expect(getDeliveryState(Date.now(), 1).state).toBe("awaiting-poll");
+  });
+
+  it("isolates a throwing document on a DEFAULT poll (#2187)", async () => {
+    // A default poll reads every open document, so one that cannot be read
+    // must not take the others' items and the chat down with it. The summary
+    // names the document by id only: the error can carry record text, notes
+    // included (ADR-027), so it reaches stderr and nothing else.
+    const broken = setupDoc("inbox-iso-broken", "Hello world");
+    seedOpenComment(broken, "u_iso_broken", "on the broken document");
+    const healthy = setupDoc("inbox-iso-healthy", "Other text");
+    seedOpenComment(healthy, "u_iso_healthy", "on the healthy document");
+    const chat = seedUserChat("msg_iso", "still there?");
+    recordWakeForward(1_000);
+    const real = YDocStore.prototype.listAnnotations;
+    const spy = vi.spyOn(YDocStore.prototype, "listAnnotations").mockImplementation(function (
+      this: YDocStore,
+    ) {
+      if (this.documentId === "inbox-iso-broken") throw new Error("SECRET NOTE TEXT");
+      return real.call(this);
+    });
+    onTestFinished(() => spy.mockRestore());
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    onTestFinished(() => err.mockRestore());
+
+    const parsed = parseResult(await client.callTool({ name: "tandem_checkInbox", arguments: {} }));
+
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.userActions.map((a: { id: string }) => a.id)).toEqual(["u_iso_healthy"]);
+    expect(parsed.data.summary).toContain("Could not read document inbox-iso-broken");
+    expect(JSON.stringify(parsed.data)).not.toContain("SECRET NOTE TEXT");
+    expect(err).toHaveBeenCalled();
+    // The chat IS read on this poll, so the round closes, as a poll of any
+    // other document always closed it.
+    expect((chat.get("msg_iso") as ChatMessage).read).toBe(true);
+    expect(getDeliveryState(Date.now(), 1).state).toBe("polled");
   });
 
   it("closes the join on a poll with no document open, because it reads chat", async () => {

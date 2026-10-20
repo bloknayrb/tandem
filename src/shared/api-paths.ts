@@ -79,7 +79,7 @@ export const API_SHUTDOWN = "/api/shutdown";
 
 // --- Licensing (#1116, ADR-040) ---------------------------------------------
 // GET status is loopback-full / LAN-scrubbed (the full state carries the
-// licensee name + opaque licenseId). POST activate (PR-C) gates on origin
+// licensee email + opaque licenseId). POST activate (PR-C) gates on origin
 // allowlist + loopback inside the handler.
 export const API_LICENSE_STATUS = "/api/license/status";
 export const API_LICENSE_ACTIVATE = "/api/license/activate";

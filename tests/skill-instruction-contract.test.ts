@@ -158,7 +158,14 @@ function expectPerSessionAutoArmContract(skill: string): void {
   // comments paragraph, the references to removed tools, the absent-tools intro and its
   // maintainer note, the Scope note, the Hard Rules booster and the Review Workflow autosave.
   // All outside the wake section.
-  // 36 corrects the Settings label for the launch directory ("Claude working directory").
+  // 36 makes `tandem_checkInbox` the exception to Multi-Document's "always pass
+  // `documentId`" (#2187: a default poll now covers every open document, and an explicit id
+  // narrows it back to one), tells Claude to act on an item with its own `documentId`, and
+  // corrects the NO_DOCUMENT bullet: tabs open with none active now returns their items.
+  // Before shipping it also gained the `ambiguous-document` Error Recovery entry (PR #2225
+  // review: the four id-keyed annotation tools find the open document holding the id).
+  // Also unreleased at 36: the Settings label for the launch directory is corrected to
+  // "Claude working directory" (2026-10-20 docs audit).
   // Outside the wake section.
   expect(skill).toMatch(/^version:\s*36$/m);
   expect(wake).toMatch(/hand-started session/i);
@@ -537,7 +544,7 @@ describe("shipped Tandem skill instruction contract", () => {
       "skills/tandem/SKILL.md changed. Bump its frontmatter `version:` AND update BOTH " +
         "literals here in the same commit — the installed copy only refreshes when the " +
         "bundled version is newer, so a body edit at an unchanged version never ships.",
-    ).toEqual({ version: "36", bodyHash: "50c44d5afd1c" });
+    ).toEqual({ version: "36", bodyHash: "2b4366082d99" });
   });
 
   // #1521: what the model sees of a licence refusal is the code and message at the handshake

@@ -3,7 +3,7 @@ import crypto from "crypto";
 import type { LicenseVerifyCode } from "../../shared/license-copy.js";
 import type { LicenseMetadata, SignatureVerified, SignedLicense } from "./license-types.js";
 import { MAX_NORMALIZE_INPUT, normalizePastedLicense } from "./paste.js";
-import { KEY_ID_PATTERN, KEYS_BY_ID, LEGACY_KEY_ID } from "./public-key.js";
+import { KEY_ID_PATTERN, KEYS_BY_ID } from "./public-key.js";
 
 export type { LicenseVerifyCode };
 
@@ -65,7 +65,7 @@ export function verifyLicenseSignature(rawLicenseString: string): SignatureVerif
   // Brand: this metadata is now signature-verified against the pinned keys
   // (run-gate may trust it). Only this function casts, so the test seam below
   // cannot mint the brand with keys a caller supplies.
-  return verifyAgainst(rawLicenseString, KEYS_BY_ID, LEGACY_KEY_ID) as SignatureVerified;
+  return verifyAgainst(rawLicenseString, KEYS_BY_ID) as SignatureVerified;
 }
 
 /**
@@ -77,15 +77,13 @@ export function verifyLicenseSignature(rawLicenseString: string): SignatureVerif
 export function _verifyAgainstForTests(
   rawLicenseString: string,
   keysById: Readonly<Record<string, string>>,
-  legacyKeyId: string,
 ): LicenseMetadata {
-  return verifyAgainst(rawLicenseString, keysById, legacyKeyId);
+  return verifyAgainst(rawLicenseString, keysById);
 }
 
 function verifyAgainst(
   rawLicenseString: string,
   keysById: Readonly<Record<string, string>>,
-  legacyKeyId: string,
 ): LicenseMetadata {
   // Bound the RAW input first — the normalize below allocates a new string, and
   // "bound before any allocation" is the whole point of this check. The raw
@@ -145,20 +143,21 @@ function verifyAgainst(
 
     // 2. Pick the key. `keyId` is inside the signed metadata, so it only chooses
     // which key to try: a license still verifies only if that key signed it.
-    // Absent means a license from before key ids, checked against the legacy
-    // key, which is looked up like any other id so removing it retires these too.
     const metadata = signedLicense.metadata as unknown as Record<string, unknown>;
-    let keyId = legacyKeyId;
-    if (Object.hasOwn(metadata, "keyId")) {
-      const stamped = metadata.keyId;
-      if (typeof stamped !== "string" || !KEY_ID_PATTERN.test(stamped)) {
-        throw new LicenseVerifyError("MALFORMED", "License verification failed: malformed key id");
-      }
-      keyId = stamped;
+    // Absent answers like an unknown key, not MALFORMED: the only keyless
+    // licenses were signed by the retired original key, so "predates a
+    // signing-key change, have it reissued" is the true story
+    // (docs/licensing-operations.md §0).
+    if (!Object.hasOwn(metadata, "keyId")) {
+      throw new LicenseVerifyError("BAD_SIGNATURE", "License verification failed: unknown key");
+    }
+    const keyId = metadata.keyId;
+    if (typeof keyId !== "string" || !KEY_ID_PATTERN.test(keyId)) {
+      throw new LicenseVerifyError("MALFORMED", "License verification failed: malformed key id");
     }
     // An id no key in this build carries answers like a bad signature: after a
     // leak the remedy is a reissue, and a planned rotation ships the new key in
-    // releases before anything is signed with it (licensing-operations.md §0).
+    // releases before anything is signed with it (docs/licensing-operations.md §0).
     if (!Object.hasOwn(keysById, keyId)) {
       throw new LicenseVerifyError("BAD_SIGNATURE", "License verification failed: unknown key");
     }

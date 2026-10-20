@@ -2,11 +2,21 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ErrorEvent } from "@sentry/node";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { scrub, scrubEvent } from "../../src/server/sentry.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  initSidecarCrashReporting,
+  SIDECAR_DATA_COLLECTION,
+  scrub,
+  scrubEvent,
+} from "../../src/server/sentry.js";
 import { redactPaths } from "../../src/shared/scrub-text.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Only `initSidecarCrashReporting` loads the SDK, and it does so through a
+// dynamic import, which this mock intercepts — so no client is ever created.
+const sentryInit = vi.hoisted(() => vi.fn());
+vi.mock("@sentry/node", () => ({ init: sentryInit }));
 
 /**
  * The scrubber is the privacy-load-bearing surface of #921. These tests lock in
@@ -196,5 +206,44 @@ describe("scrubEvent — the real beforeSend hook (#1823)", () => {
     expect(start, "Sentry.init call must exist").toBeGreaterThan(-1);
     const initCall = src.slice(start, src.indexOf("\n    });", start));
     expect(initCall).toMatch(/beforeSend:\s*scrubEvent/);
+  });
+});
+
+/**
+ * `@sentry/node` 11 deleted `sendDefaultPii` and replaced it with
+ * `dataCollection`, whose every default is ON (local variables, headers,
+ * bodies, cookies, user info, source context). An unset or partial object
+ * silently re-enables collection, so pin what `Sentry.init` really receives.
+ */
+describe("initSidecarCrashReporting — dataCollection (@sentry/node 11)", () => {
+  const origDsn = process.env.TANDEM_SENTRY_DSN;
+
+  afterEach(() => {
+    if (origDsn === undefined) delete process.env.TANDEM_SENTRY_DSN;
+    else process.env.TANDEM_SENTRY_DSN = origDsn;
+  });
+
+  it("passes a dataCollection with every category off", async () => {
+    process.env.TANDEM_SENTRY_DSN = "https://public@example.invalid/1";
+    expect(await initSidecarCrashReporting()).toBe(true);
+    expect(sentryInit).toHaveBeenCalledTimes(1);
+    const options = sentryInit.mock.calls[0]?.[0];
+    expect(options).not.toHaveProperty("sendDefaultPii");
+    expect(options.dataCollection).toBe(SIDECAR_DATA_COLLECTION);
+    expect(options.beforeSend).toBe(scrubEvent);
+    expect(options.defaultIntegrations).toBe(false);
+    expect(SIDECAR_DATA_COLLECTION).toEqual({
+      userInfo: false,
+      cookies: false,
+      httpHeaders: false,
+      httpBodies: [],
+      urlQueryParams: false,
+      graphQL: { document: false, variables: false },
+      genAI: { inputs: false, outputs: false },
+      databaseQueryData: false,
+      queues: false,
+      stackFrameVariables: false,
+      frameContextLines: 0,
+    });
   });
 });

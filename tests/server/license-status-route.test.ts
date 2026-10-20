@@ -22,12 +22,12 @@ const FULL: LicenseState = {
   updateWindowCurrent: true,
   license: {
     id: "lic-123",
-    name: "Jane Doe",
     email: "jane@example.com",
     type: "personal",
     createdAt: new Date(0).toISOString(),
     expiresAt: null,
     version: "1.0",
+    keyId: "0123456789abcdef",
   },
   licenseId: "lic-123",
 };
@@ -53,7 +53,7 @@ function reqFrom(remoteAddress: string): Request {
 }
 
 describe("scrubForNonLoopback", () => {
-  it("drops licensee name/email/licenseId", () => {
+  it("drops the licensee email and licenseId", () => {
     const scrubbed = scrubForNonLoopback(FULL);
     expect(scrubbed).toEqual({
       gateActive: true,
@@ -194,12 +194,12 @@ describe("handleActivateLicense", () => {
     });
     const meta = {
       id: crypto.randomUUID(),
-      name: "Jane Doe",
       email: "jane@example.com",
       type: "personal" as const,
       createdAt: new Date().toISOString(),
       expiresAt: null,
       version: "1.0",
+      keyId: "0123456789abcdef",
     };
     const sig = crypto.sign(null, Buffer.from(canonicalize(meta)), privateKey);
     const blob = Buffer.from(
@@ -278,12 +278,12 @@ describe("activation resumes a launcher the licence refused (#1521)", () => {
       () =>
         ({
           id: "lic-1",
-          name: "Jane Doe",
           email: "jane@example.com",
           type: "personal",
           createdAt: new Date(0).toISOString(),
           expiresAt: null,
           version: "1.0",
+          keyId: "0123456789abcdef",
         }) as ReturnType<typeof verifier.verifyLicenseSignature>,
     );
   });
@@ -379,12 +379,12 @@ describe("POST /api/license/activate is wired to the launcher (#1521)", () => {
       () =>
         ({
           id: "lic-1",
-          name: "Jane Doe",
           email: "jane@example.com",
           type: "personal",
           createdAt: new Date(0).toISOString(),
           expiresAt: null,
           version: "1.0",
+          keyId: "0123456789abcdef",
         }) as ReturnType<typeof verifier.verifyLicenseSignature>,
     );
     const resume = vi.fn(async () => {});
@@ -437,10 +437,13 @@ describe("dark-build wire shape", () => {
     const dark: LicenseState = { gateActive: false };
     const none = toLicenseStatusWire(dark, { installed: false });
     expect(none).toMatchObject({ gateActive: false, licenseInstalled: false });
-    expect(none).not.toHaveProperty("licenseeName");
+    expect(none).not.toHaveProperty("licenseeEmail");
 
-    const installed = toLicenseStatusWire(dark, { installed: true, licenseeName: "Jane Doe" });
-    expect(installed).toMatchObject({ licenseInstalled: true, licenseeName: "Jane Doe" });
+    const installed = toLicenseStatusWire(dark, {
+      installed: true,
+      licenseeEmail: "jane@example.com",
+    });
+    expect(installed).toMatchObject({ licenseInstalled: true, licenseeEmail: "jane@example.com" });
   });
 
   it("keeps the back-compat sentinel so the updater and client are unchanged", () => {
@@ -451,9 +454,9 @@ describe("dark-build wire shape", () => {
     expect(wire.updateWindowCurrent).toBe(true);
   });
 
-  it("never puts the licensee name on the LAN-scrubbed path", () => {
+  it("never puts the licensee email on the LAN-scrubbed path", () => {
     const scrubbed = scrubForNonLoopback({ gateActive: false });
-    expect(scrubbed).not.toHaveProperty("licenseeName");
+    expect(scrubbed).not.toHaveProperty("licenseeEmail");
     expect(typeof scrubbed.licenseInstalled).toBe("boolean");
   });
 });

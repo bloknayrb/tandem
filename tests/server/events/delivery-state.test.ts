@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyAiRefusal,
   type DeliveryState,
+  deliveryItemKey,
   getDeliveryState,
   isUnansweredAsk,
   noteExternalConsumerAttached,
@@ -369,6 +370,87 @@ describe("delivery-state", () => {
     });
   });
 
+  // PR #2225 review: since #2187 a default poll can return while leaving items
+  // behind — a document isolated as unreadable, a record refused as malformed.
+  // A round waiting on one of those items is not delivered.
+  describe("item-scoped holds", () => {
+    const item = (documentId: string, itemId: string) => ({ documentId, itemId });
+    const none = { documents: new Set<string>(), items: new Set<string>() };
+
+    it("stays open while the poll could not read the item's document", () => {
+      recordWakeForward(T0, item("doc-a", "ann-1"));
+      recordInboxPoll(T0 + 100);
+      resolveDeliveryRound(T0 + 100, { documents: new Set(["doc-a"]), items: new Set() });
+      expect(getDeliveryState(T0 + 200, 1)).toMatchObject({
+        state: "awaiting-poll",
+        waitingMs: 200,
+      });
+
+      // The next poll reads it: the round closes, timed from the FIRST forward.
+      resolveDeliveryRound(T0 + 300, none);
+      expect(getDeliveryState(T0 + 300, 1)).toMatchObject({ state: "polled", latencyMs: 300 });
+    });
+
+    it("an item refusal holds only the round waiting on that item", () => {
+      recordWakeForward(T0, item("doc-a", "ann-1"));
+      resolveDeliveryRound(T0 + 1, {
+        documents: new Set(),
+        items: new Set([deliveryItemKey("doc-a", "ann-2")]),
+      });
+      expect(getDeliveryState(T0 + 1, 1).state).toBe("polled");
+
+      recordWakeForward(T0 + 2, item("doc-a", "ann-2"));
+      resolveDeliveryRound(T0 + 3, {
+        documents: new Set(),
+        items: new Set([deliveryItemKey("doc-a", "ann-2")]),
+      });
+      expect(getDeliveryState(T0 + 3, 1).state).toBe("awaiting-poll");
+    });
+
+    it("forgets the items a held poll DID deliver", () => {
+      // doc-a's item was delivered by the held poll; only doc-b's held it. A
+      // later poll that cannot read doc-a must not re-hold the round on an item
+      // it already handed over.
+      recordWakeForward(T0, item("doc-a", "ann-a"));
+      recordWakeForward(T0 + 1, item("doc-b", "ann-b"));
+      resolveDeliveryRound(T0 + 2, { documents: new Set(["doc-b"]), items: new Set() });
+      expect(getDeliveryState(T0 + 2, 1).state).toBe("awaiting-poll");
+
+      resolveDeliveryRound(T0 + 3, { documents: new Set(["doc-a"]), items: new Set() });
+      expect(getDeliveryState(T0 + 3, 1).state).toBe("polled");
+    });
+
+    it("a forward naming no item closes on any successful poll", () => {
+      recordWakeForward(T0);
+      resolveDeliveryRound(T0 + 1, { documents: new Set(["doc-a"]), items: new Set() });
+      expect(getDeliveryState(T0 + 1, 1).state).toBe("polled");
+    });
+
+    it("a fresh round after an abandonment drops the superseded round's items", () => {
+      recordWakeForward(T0, item("doc-a", "ann-old"));
+      noteExternalConsumersGone();
+      recordWakeForward(T0 + 10, item("doc-b", "ann-new"));
+      resolveDeliveryRound(T0 + 20, { documents: new Set(["doc-a"]), items: new Set() });
+      expect(getDeliveryState(T0 + 20, 1).state).toBe("polled");
+    });
+
+    it("a resolved round leaves no items behind for the next one", () => {
+      recordWakeForward(T0, item("doc-a", "ann-1"));
+      resolveDeliveryRound(T0 + 1);
+      recordWakeForward(T0 + 2);
+      resolveDeliveryRound(T0 + 3, { documents: new Set(["doc-a"]), items: new Set() });
+      expect(getDeliveryState(T0 + 3, 1).state).toBe("polled");
+    });
+
+    it("reset clears the pending items", () => {
+      recordWakeForward(T0, item("doc-a", "ann-1"));
+      resetDeliveryStateForTests();
+      recordWakeForward(T0 + 1);
+      resolveDeliveryRound(T0 + 2, { documents: new Set(["doc-a"]), items: new Set() });
+      expect(getDeliveryState(T0 + 2, 1).state).toBe("polled");
+    });
+  });
+
   it("reports how long since the last poll", () => {
     poll(T0);
     expect(getDeliveryState(T0 + 7_500, 1).sincePollMs).toBe(7_500);
@@ -434,5 +516,38 @@ describe("applyAiRefusal", () => {
     expect(applyAiRefusal(base, () => false)).toBe(base);
     const detached: DeliveryState = { ...base, state: "consumer-detached", waitingMs: null };
     expect(applyAiRefusal(detached, () => false)).toBe(detached);
+  });
+});
+
+describe("a held round is re-timed to its oldest undelivered item (PR #2225 review)", () => {
+  it("records the delivered part's latency and restarts the clock at the held item", () => {
+    const T0 = 50_000;
+    recordWakeForward(T0, { documentId: "doc-ok", itemId: "ann-ok" });
+    recordWakeForward(T0 + 10, { documentId: "doc-bad", itemId: "ann-held" });
+    resolveDeliveryRound(T0 + 20, { documents: new Set(["doc-bad"]), items: new Set() });
+
+    const held = getDeliveryState(T0 + 30, 1);
+    expect(held.state).toBe("awaiting-poll");
+    // Waiting since the held item's own forward, not the round's first.
+    expect(held.waitingMs).toBe(20);
+
+    // A later forward the next poll delivers does not extend the held wait.
+    recordWakeForward(T0 + 40, { documentId: "doc-ok", itemId: "ann-later" });
+    resolveDeliveryRound(T0 + 50, { documents: new Set(["doc-bad"]), items: new Set() });
+    expect(getDeliveryState(T0 + 50, 1).waitingMs).toBe(40);
+
+    resolveDeliveryRound(T0 + 60);
+    const closed = getDeliveryState(T0 + 60, 1);
+    expect(closed.state).toBe("polled");
+    // Measured from the held item's own forward (T0 + 10), not the round's first.
+    expect(closed.latencyMs).toBe(50);
+  });
+
+  it("a re-forward of the same item keeps its first forward time", () => {
+    const T0 = 90_000;
+    recordWakeForward(T0, { documentId: "doc-a", itemId: "ann-1" });
+    recordWakeForward(T0 + 100, { documentId: "doc-a", itemId: "ann-1" });
+    resolveDeliveryRound(T0 + 150, { documents: new Set(["doc-a"]), items: new Set() });
+    expect(getDeliveryState(T0 + 150, 1).waitingMs).toBe(150);
   });
 });
