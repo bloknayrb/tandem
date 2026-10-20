@@ -2111,6 +2111,15 @@ export interface TandemPluginInput {
 const PLUGIN_VERSION_SHAPE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const PLUGIN_VERSION_MAX_LENGTH = 64;
 
+/** Whether `version` is a string doctor may compare and print: {@link PLUGIN_VERSION_SHAPE}, length-capped. */
+function isWellFormedPluginVersion(version: unknown): version is string {
+  return (
+    typeof version === "string" &&
+    version.length <= PLUGIN_VERSION_MAX_LENGTH &&
+    PLUGIN_VERSION_SHAPE.test(version)
+  );
+}
+
 /**
  * The installed version of plugin `key` in Claude Code's
  * `~/.claude/plugins/installed_plugins.json`, or `null`.
@@ -2151,13 +2160,7 @@ export function pluginVersionFromRegistry(registry: unknown, key: string): strin
   let oldest: string | null = null;
   for (const install of userScoped.length > 0 ? userScoped : installs) {
     const version = install.version;
-    if (
-      typeof version !== "string" ||
-      version.length > PLUGIN_VERSION_MAX_LENGTH ||
-      !PLUGIN_VERSION_SHAPE.test(version)
-    ) {
-      continue;
-    }
+    if (!isWellFormedPluginVersion(version)) continue;
     if (oldest === null || isOlderPluginVersion(version, oldest)) oldest = version;
   }
   return oldest;
@@ -2169,9 +2172,7 @@ interface ParsedPluginVersion extends ParsedNodeVersion {
 }
 
 function parsePluginVersion(version: string): ParsedPluginVersion | null {
-  if (version.length > PLUGIN_VERSION_MAX_LENGTH || !PLUGIN_VERSION_SHAPE.test(version)) {
-    return null;
-  }
+  if (!isWellFormedPluginVersion(version)) return null;
   // Build metadata (after `+`) carries no precedence in SemVer, so it is
   // dropped before anything is split.
   const [core, ...pre] = version.split("+")[0].split("-");
