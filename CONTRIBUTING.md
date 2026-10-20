@@ -7,6 +7,10 @@ Start with [README.md](README.md) for what Tandem is. Read [AGENTS.md](AGENTS.md
 code: it lists the invariants that fail *silently* — code that type-checks, passes tests, and is
 wrong at runtime. If you are working with Claude Code, [CLAUDE.md](CLAUDE.md) is the long form.
 
+The rest of the documentation is indexed from the [docs hub](docs/README.md). The
+[Contributing map](docs/maps/contributing.md) lists the pages that matter for code work: the rules
+that fail silently and the reasons behind them, the design system and the review tooling.
+
 ## Prerequisites
 
 - **Node.js 22.12.0 or newer**, and npm. This is the floor `package.json`'s `engines` field
@@ -321,3 +325,13 @@ rather than by CI, and the enumerated route lists in [CLAUDE.md](CLAUDE.md) *are
 not condense them.
 
 Report a suspected vulnerability privately to the maintainers rather than opening a public issue.
+
+## Related
+
+- [Contributing map](docs/maps/contributing.md): every contributor doc, grouped by task.
+- [AGENTS.md](AGENTS.md): the invariants that fail silently, for any coding agent.
+- [CLAUDE.md](CLAUDE.md): Claude Code's project memory, whose rules apply to anyone.
+- [Gotchas](docs/gotchas.md): the mechanism and evidence behind each silent-failure rule.
+- [Architecture](docs/architecture.md): how the editor, server and AI fit together.
+- [Stacked PRs](docs/stacked-prs.md): chaining dependent pull requests safely.
+- [Glossary → Claim tests](docs/glossary.md#claim-tests): why some doc edits fail CI.

@@ -1,6 +1,8 @@
 # Configuration
 
-Tandem is configured via environment variables. Defaults work for local single-user use; you only need to override these for non-default ports or alternate app-data locations.
+[Home](README.md) › [Using Tandem](maps/using-tandem.md)
+
+Tandem is configured via environment variables. Defaults work for local single-user use; you only need to override these for non-default ports or alternate [app-data](glossary.md#app-data-directory) locations.
 
 A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 
@@ -60,11 +62,11 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 
 ## LAN exposure
 
-Tandem listens on this computer only. Listening on a LAN address is not in this version ([ADR-056](decisions.md#adr-056-the-non-loopback-bind-ships-dark)): starting the server with any other `TANDEM_BIND_HOST` exits with a message saying so (stdio mode, which does not listen on it, ignores it with a note). The desktop app always listens on `127.0.0.1`.
+Tandem listens on this computer only. [Listening on a LAN address](glossary.md#lan-bind) is not in this version ([ADR-056](decisions.md#adr-056-the-non-loopback-bind-ships-dark)): starting the server with any other `TANDEM_BIND_HOST` exits with a message saying so (stdio mode, which does not listen on it, ignores it with a note). The desktop app always listens on `127.0.0.1`.
 
 Don't port-forward around this (an `ssh -L` tunnel and the like). A forwarded connection arrives from `127.0.0.1`, so it can look to Tandem like a program on your own computer: no token needed, and write access. That is more than LAN mode allowed.
 
-The auth token still exists. Tandem creates one on first run: the npm install keeps it in an `auth-token` file in its default app-data folder, and the desktop app keeps it in your OS keychain. Claude's MCP configs carry it. `tandem rotate-token` replaces the npm install's token file. It does not change a token the desktop app holds in the keychain, but a desktop app with no keychain entry reads that same file and so picks up the new token on its next launch (see [data-locations.md](data-locations.md)).
+The [auth token](glossary.md#auth-token) still exists. Tandem creates one on first run: the npm install keeps it in an `auth-token` file in its default app-data folder, and the desktop app keeps it in your OS keychain. Claude's MCP configs carry it. `tandem rotate-token` replaces the npm install's token file. It does not change a token the desktop app holds in the keychain, but a desktop app with no keychain entry reads that same file and so picks up the new token on its next launch (see [data-locations.md](data-locations.md)).
 
 ### Rotating the token
 
@@ -132,3 +134,13 @@ Where the registration lives:
 The toggle reads the OS on every Settings open rather than caching a value, so changes you make in Task Manager → Startup, System Settings → Login Items, or `~/.config/autostart` show up correctly. If your system blocks the write, the toggle stays where it was and reports the failure instead of pretending it worked.
 
 **Developer note:** leave this off on a machine where you run Tandem from source. The danger runs from the desktop app to your dev server, not the other way: the desktop app's server, including one started at login, runs the same check for a running Tandem but proceeds whatever it finds (`decideStartupAction` returns `proceed` for the desktop sidecar), and clears `:3478`/`:3479` by stopping whatever holds them, which kills a `npm run dev:server` you left running. The other direction is safe. `tandem start` and `npm run dev:server` check for a live Tandem first and exit with an error instead of stopping it, and `npm run test:e2e` runs on its own reserved ports (listed in `scripts/test-ports.ts`), never these two. Set `TANDEM_DISABLE_AUTOSTART=1` to neutralize a login launch without removing the registration.
+
+## Related
+
+- [Using Tandem map](maps/using-tandem.md): the rest of the user docs.
+- [Data locations](data-locations.md): everything Tandem stores, including outside the app-data folder, and how to remove it.
+- [CLI reference](cli.md): the `tandem` commands, including `tandem rotate-token`.
+- [Troubleshooting → Port already in use](troubleshooting.md#port-already-in-use): when the default ports are taken.
+- [Security → Auth tokens](security.md#auth-tokens): how the token is checked and who must present it.
+- [ADR-056](decisions.md#adr-056-the-non-loopback-bind-ships-dark): why Tandem listens on this computer only.
+- [Glossary](glossary.md#app-data-directory): the app-data directory, auth token and LAN bind in plain language.

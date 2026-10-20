@@ -429,3 +429,12 @@ The user can edit alongside Claude in real-time. To keep the work, use **Save As
 - Each `Ctrl+N` / `tandem_scratchpad` call creates a new scratchpad with a unique ID
 - Scratchpads are excluded from session restore and channel events (Claude is not notified of scratchpad opens/closes)
 - Multiple scratchpads can be open simultaneously
+
+## Related
+
+- [User guide](https://github.com/bloknayrb/tandem/blob/master/docs/user-guide.md): the editor itself, annotations, chat and keyboard shortcuts.
+- [MCP tool reference](https://github.com/bloknayrb/tandem/blob/master/docs/mcp-tools.md): the parameters and responses of every tool used above.
+- [Integrations](https://github.com/bloknayrb/tandem/blob/master/docs/integrations.md): using these patterns with an AI client other than Claude Code.
+- [Troubleshooting](https://github.com/bloknayrb/tandem/blob/master/docs/troubleshooting.md): when Claude doesn't respond or a document won't open.
+- [Glossary](https://github.com/bloknayrb/tandem/blob/master/docs/glossary.md): annotations, scratchpads, Solo mode and the other terms used here.
+- [All documentation](https://github.com/bloknayrb/tandem/blob/master/docs/README.md): every page, grouped by what you are trying to do.

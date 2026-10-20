@@ -1,4 +1,12 @@
+---
+tags: [audience/contributor, topic/design-system, historical]
+aliases: [Toolbar UX research]
+status: historical
+---
+
 # Toolbar UX Research — Tandem Formatting Tools Placement
+
+[Home](../README.md) › [Contributing](../maps/contributing.md)
 
 > **Status: historical, superseded.** This research recommended a minimal selection popup. The decision went the other way: Conflict #5 in [`conflicts-resolved.md`](../design-system-impl/conflicts-resolved.md) (sub-PR 1.11) has the selection popup mirror the full formatting-bar control set (minus the horizontal rule), including the display menu. The quoted sources were captured by a search tool whose source list was not kept, so they appear below as unattributed quotes.
 
@@ -176,3 +184,9 @@ The `ARSelectionPopup` correctly strips formatting tools out of the annotation s
 | Highlight (4 colors) | ✅ (picker) | ✅ (swatches) |
 | Comment | ✅ (selection-gated) | ✅ (primary CTA) |
 | Note | ✅ (selection-gated) | ✅ (primary CTA) |
+
+## Related
+
+- [Contributing map → Design system](../maps/contributing.md#design-system): the live design references.
+- [Conflicts resolved](../design-system-impl/conflicts-resolved.md): Conflict #5 holds the decision that superseded this research.
+- [History map](../maps/history.md): the other dated design records.

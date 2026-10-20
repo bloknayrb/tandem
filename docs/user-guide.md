@@ -1,16 +1,20 @@
 # User Guide
 
+[Home](README.md) › [Using Tandem](maps/using-tandem.md)
+
 A complete guide to using Tandem — from first launch to advanced workflows.
 
 > **Scope:** Examples use Claude Code as the default AI, per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). The editor itself is AI-client-agnostic — any MCP-capable client connecting to `http://127.0.0.1:3479/mcp` gets the same MCP tools. The Claude-specific transports (channel push, auto-launcher) don't apply to other clients.
 
 > **Setting up an AI integration rather than learning the editor?** Skip to [Working with Claude Code](#working-with-claude-code) for the Claude default, or see [Integrations → The MCP integration policy](integrations.md#the-mcp-integration-policy) for the generic MCP path.
 
+**Contents:** [Overview](#overview) · [First launch](#first-launch) · [The editor](#the-editor) · [Working with documents](#working-with-documents) · [Annotations](#annotations) · [Reviewing annotations](#reviewing-annotations) · [Chat](#chat) · [Settings](#settings) · [Keyboard shortcuts](#keyboard-shortcuts) · [Working with Claude Code](#working-with-claude-code) · [Troubleshooting](#troubleshooting)
+
 ## Overview
 
-Tandem lets you work on documents with an AI without the constant copy-paste. You open a document — an essay, a report, a proposal, a contract you're reviewing, or any prose — highlight the text you want to discuss, and the AI sees it directly. The AI can suggest rewrites, leave comments, and edit text alongside you in real time. Because the AI connects through MCP, it brings all its knowledge, tools, and conversation context to the document — it's not working in isolation. Each annotation is a first-class object you can accept, dismiss, edit, or discuss. Edits to a Markdown or plain-text file — yours or the AI's — are written back to that file when you save, and automatically about once a minute while it has unsaved changes (see [Saving](#saving)). Opening a file just to read or annotate it never rewrites it.
+Tandem lets you work on documents with an AI without the constant copy-paste. You open a document — an essay, a report, a proposal, a contract you're reviewing, or any prose — highlight the text you want to discuss, and the AI sees it directly. The AI can suggest rewrites, leave comments, and edit text alongside you in real time. Because the AI connects through [MCP](glossary.md#mcp), it brings all its knowledge, tools, and conversation context to the document — it's not working in isolation. Each [annotation](glossary.md#annotation) is a first-class object you can accept, dismiss, edit, or discuss. Edits to a Markdown or plain-text file — yours or the AI's — are written back to that file when you save, and automatically about once a minute while it has unsaved changes (see [Saving](#saving)). Opening a file just to read or annotate it never rewrites it.
 
-Tandem runs as a local server with two surfaces: an **editor** where you read and edit documents, and an **MCP client** (Claude Code by default) where the AI connects via MCP tools. Changes sync instantly between them through Yjs CRDT collaboration.
+Tandem runs as a local server with two surfaces: an **editor** where you read and edit documents, and an **MCP client** (Claude Code by default) where the AI connects via MCP tools. Changes sync instantly between them through [Yjs CRDT](glossary.md#ydoc-and-crdt) collaboration.
 
 Tandem is available as a [desktop app](https://github.com/bloknayrb/tandem/releases/latest) (macOS, Linux, Windows) or as an [npm package](https://www.npmjs.com/package/tandem-editor) (`npm install -g tandem-editor`), which opens the same editor in your browser. The desktop app manages the server automatically; the npm install requires starting it from the terminal. Editing, annotations, chat and the integration wizard work the same in both. The desktop app adds what only a native shell can do: a system tray, native right-click menus and file dialogs, start-at-login, in-app log access, and automatic updates. Instructions below that apply to only one of the two say so.
 
@@ -201,7 +205,7 @@ You can open a file a few ways:
 
 **Recent files** — Click **+** in the tab bar to see recently opened files; type to filter, then click one to open it.
 
-**Browse or upload** — Click **+** in the tab bar, then **Browse files…** (or press `Ctrl+O`). On desktop this opens a native file picker for real (write-capable) editing. In the browser build it opens an **Open File** dialog instead. Its **Browse…** button uploads a file: uploaded files get a synthetic `upload://` path and are always read-only — `Save` preserves the session (annotations) but cannot write back to disk. The same dialog also lists your **Recent** files and your **Saved sessions** (below), which open the real file on disk.
+**Browse or upload** — Click **+** in the tab bar, then **Browse files…** (or press `Ctrl+O`). On desktop this opens a native file picker for real (write-capable) editing. In the browser build it opens an **Open File** dialog instead. Its **Browse…** button uploads a file: [uploaded files](glossary.md#upload) get a synthetic `upload://` path and are always read-only — `Save` preserves the session (annotations) but cannot write back to disk. The same dialog also lists your **Recent** files and your **Saved sessions** (below), which open the real file on disk.
 
 **New scratchpad** — Click **+**, then **New scratchpad** (or press `Ctrl+N` in the desktop app; a browser keeps that key for itself). See [Scratchpads](#scratchpads).
 
@@ -211,7 +215,7 @@ Tandem keeps a saved session for each file you have had open: its editing state 
 
 ### Scratchpads
 
-A scratchpad is a Markdown document that isn't tied to a file — somewhere to draft, paste or think before you decide where the text belongs. To keep one, use **Save As** (`Ctrl+Shift+S`): it becomes an ordinary file, in the same tab.
+A [scratchpad](glossary.md#scratchpad) is a Markdown document that isn't tied to a file — somewhere to draft, paste or think before you decide where the text belongs. To keep one, use **Save As** (`Ctrl+Shift+S`): it becomes an ordinary file, in the same tab.
 
 Until then, a scratchpad lives only in this window, so Tandem guards it in two ways:
 
@@ -225,7 +229,7 @@ Until then, a scratchpad lives only in this window, so Tandem guards it in two w
   see [Line breaks in plain text](#line-breaks-in-plain-text) below.
 - **HTML** (`.html`, `.htm`) — Read-only. It opens for reading and annotating, and the file is never written back: HTML is the one supported format with no save path at all, so it opens read-only rather than accepting edits it would silently drop on tab close.
 
-**Word (`.docx`) isn't supported in this version.** Word support wasn't reliable enough for serious work, so it has been taken out of the app for now, and a `.docx` is refused with a message saying so. To work on a Word document, save a copy from Word as Plain Text (`.txt`) to edit it, or as Web Page (`.html`) to review it read-only, and open that.
+**Word (`.docx`) isn't supported in this version.** Word support wasn't reliable enough for serious work, so it has been [taken out of the app for now](glossary.md#docx-support), and a `.docx` is refused with a message saying so. To work on a Word document, save a copy from Word as Plain Text (`.txt`) to edit it, or as Web Page (`.html`) to review it read-only, and open that.
 
 ### Line breaks in plain text
 
@@ -627,7 +631,7 @@ Choose one setup route where possible. A session with the plugin and built-in Mo
 
 ### Polling Remains Authoritative
 
-Push wakes an idle Claude, but it can be dropped or rate-limited and never carries the message itself. Claude should keep calling `tandem_checkInbox` during active work. If no push route is available and you want periodic checks while otherwise idle, use the `/loop` skill in Claude Code:
+[Push](glossary.md#push-and-pull) wakes an idle Claude, but it can be dropped or rate-limited and never carries the message itself. Claude should keep calling `tandem_checkInbox` during active work. If no push route is available and you want periodic checks while otherwise idle, use the `/loop` skill in Claude Code:
 
 ```
 /loop 30s check tandem inbox and respond to any new messages
@@ -709,3 +713,14 @@ For server-side and MCP troubleshooting, see [troubleshooting.md](troubleshootin
 ### Desktop app: server won't start
 
 The desktop app runs the server as a background sidecar process. Check the system tray — if Tandem's icon is there, the server is running. If the icon is missing or the app shows an error dialog, the sidecar failed to start (port conflict, missing resources, or crash). The error dialog offers **Retry Server Start**; Settings → Network → **Restart server** does the same thing later. For persistent issues, open **Settings → About → Open Log Folder** and read `tandem.log` — see [troubleshooting → Reading server logs](troubleshooting.md#reading-server-logs).
+
+## Related
+
+- [Using Tandem map](maps/using-tandem.md): everything else about writing and reviewing in Tandem.
+- [Workflows](workflows.md): worked examples of a review, a multi-document check and a draft, with the MCP calls Claude makes.
+- [Troubleshooting](troubleshooting.md): the full list of problems and fixes, beyond the short one above.
+- [Configuration](configuration.md): environment variables, the app-data folders and start at login.
+- [Integrations](integrations.md): connecting an AI client other than Claude Code.
+- [MCP tool reference](mcp-tools.md): every tool Claude can call on your documents.
+- [Glossary](glossary.md): Solo mode, notes, suggestions and the other terms this guide uses.
+- [ADR-027](decisions.md#adr-027-annotation-system-redesign--audience-based-model): why notes stay private from the AI.

@@ -1,5 +1,7 @@
 # Roadmap
 
+[Home](README.md) › [Releases and operations](maps/releases-and-ops.md)
+
 This file holds only what is **ahead**. What shipped is in [CHANGELOG.md](../CHANGELOG.md). The
 design history and every older plan are in [roadmap-history.md](roadmap-history.md), a snapshot
 frozen on 2026-09-28.
@@ -22,7 +24,7 @@ _Last reconciled against the tracker, flags and CHANGELOG: 2026-10-20 (v0.28.0 i
 The code is essentially complete. What remains is the licence gate's last checks, the
 commercial setup, hardware verification, and two flag flips.
 
-1. **The license surface gate (#1521) is built, dark; two things remain before the flip.**
+1. **The [license surface gate](glossary.md#licensing-gate) (#1521) is built, dark; two things remain before the flip.**
    #2204: run the gate-ON smoke on a real build (trial expiring while Tandem's Claude runs,
    and real-key activation), which needs a signed key. #2205: `tandem activate` from the CLI
    should resume Tandem's Claude the way activating in Settings does.
@@ -36,7 +38,7 @@ commercial setup, hardware verification, and two flag flips.
    - **Licensing.** `LICENSE_GATE_ENABLED` (`tsup.config.ts`) and `LICENSE_UPDATE_ENDPOINT`
      (`src-tauri/src/lib.rs`) flip together. `tests/docs/license-flip-consts.test.ts` fails
      on a half-flip.
-   - **Local models.** `BYO_MODELS_ENABLED` (`src/shared/constants.ts`) flips for #1123. The
+   - **[Local models](glossary.md#local-model-collaborator).** `BYO_MODELS_ENABLED` (`src/shared/constants.ts`) flips for #1123. The
      whole M1a→M4 track is merged dark and has been in the tree since v0.20.0. What remains
      is the flip and its gates.
 5. **The pre-v1.0 review's remainder.** 9 of 93 `v1-review` issues are open: #1792, #1822,
@@ -94,8 +96,8 @@ before the flip: fix it, mark it post-v1.0 below, or accept it in
 
 ## Shelved
 
-- **`.docx` support (2026-09-24, [ADR-053](decisions.md#adr-053-docx-ships-dark)).** It is out of the live build behind `DOCX_ENABLED` because it wasn't ready for serious work. The code stays merged and tested. Re-enabling it is ADR-053's checklist (#2110), not a one-line flip. #576 shipped it, and #1142 is the open umbrella for editing `.docx` with confidence. The history file's Step 5b and Word Comment Import sections describe what it did while it shipped.
-- **Tandem's Cowork setup (2026-10-02, [ADR-055](decisions.md#adr-055-cowork-setup-ships-dark)).** It is out of the live build behind `COWORK_ENABLED`, and Cowork is out of v1.0. The route the setup builds was never verified against a desktop app whose server is pinned to loopback. The code stays merged and tested. Re-enabling it is ADR-055's checklist (#2134), which starts with the transport matrix retired from #1455.
+- **[`.docx` support](glossary.md#docx-support) (2026-09-24, [ADR-053](decisions.md#adr-053-docx-ships-dark)).** It is out of the live build behind `DOCX_ENABLED` because it wasn't ready for serious work. The code stays merged and tested. Re-enabling it is ADR-053's checklist (#2110), not a one-line flip. #576 shipped it, and #1142 is the open umbrella for editing `.docx` with confidence. The history file's Step 5b and Word Comment Import sections describe what it did while it shipped.
+- **Tandem's [Cowork setup](glossary.md#cowork-setup) (2026-10-02, [ADR-055](decisions.md#adr-055-cowork-setup-ships-dark)).** It is out of the live build behind `COWORK_ENABLED`, and Cowork is out of v1.0. The route the setup builds was never verified against a desktop app whose server is pinned to loopback. The code stays merged and tested. Re-enabling it is ADR-055's checklist (#2134), which starts with the transport matrix retired from #1455.
 - **SuperDoc as the `.docx` engine (2026-09-24, ADR-052).** Shelved after the engine spike reported NO-GO on nine of its ten questions.
 
 ## Integration Policy (ADR-038)
@@ -106,10 +108,10 @@ are built around it. Any MCP-capable client can connect to the same endpoint and
 tools. Other clients are best-effort: compatible with the MCP contract, but not validated.
 
 Four push paths wake a Claude session, and none is the default at setup:
-- **Self-armed `/api/wake` watch** (ADR-049). It is recommended first, but only where Claude Code offers a Monitor tool.
-- **Plugin monitor.**
-- **Opt-in channel shim** (`--with-channel-shim`), which is the fallback.
-- **Supervisor stdin**, for auto-launched sessions.
+- **[Self-armed `/api/wake` watch](glossary.md#wake-watch)** (ADR-049). It is recommended first, but only where Claude Code offers a Monitor tool.
+- **[Plugin monitor](glossary.md#plugin-monitor).**
+- **Opt-in [channel shim](glossary.md#channel-shim)** (`--with-channel-shim`), which is the fallback.
+- **[Supervisor](glossary.md#supervisor) stdin**, for auto-launched sessions.
 
 Pull (`tandem_checkInbox`) is always authoritative. Integration setup runs through the
 wizard, and Tandem never adds an integration without it. (The boot sweep does rewrite Tandem's
@@ -244,3 +246,13 @@ These are intentional scope boundaries, not bugs:
 - Exportable annotated documents as PDF (Markdown and JSON annotation export already ship)
 - Code editing mode (CodeMirror 6)
 - Standalone mode with a direct Anthropic API connection (no MCP client required) — an alternative to the MCP integration path, not a replacement
+
+## Related
+
+- [Releases and operations map](maps/releases-and-ops.md): the release checklist, gate results and runbooks.
+- [CHANGELOG](../CHANGELOG.md): what has already shipped.
+- [Roadmap history](roadmap-history.md): the full roadmap as it stood on 2026-09-28, frozen.
+- [Licensing operations → Pre-launch gate](licensing-operations.md#8-pre-launch-gate-all-of-these-before-a-stranger-can-pay): the commercial checklist behind the licence flip.
+- [Decisions](decisions.md): ADR-053, ADR-055 and ADR-056 hold the re-enable checklists for the shelved features.
+- [Release smoke checklist](release-smoke-checklist.md): how each tagged build is checked on real machines.
+- [Glossary → Ships dark](glossary.md#ships-dark): which features are built but switched off.

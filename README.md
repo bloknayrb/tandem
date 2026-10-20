@@ -159,6 +159,8 @@ Tandem is close to v1.0, and I keep shipping. [CHANGELOG.md](CHANGELOG.md) recor
 | [Positioning](docs/positioning.md) · [Decisions](docs/decisions.md) · [Roadmap](docs/roadmap.md) · [Architecture](docs/architecture.md) · [MCP tools](docs/mcp-tools.md) | why Tandem exists, ADRs, what's next, diagrams, the MCP tool reference |
 | [CHANGELOG](CHANGELOG.md) | release notes |
 
+**[Browse all documentation](docs/README.md)**, grouped by what you're trying to do, with a [glossary](docs/glossary.md) of the terms the pages share.
+
 ## License
 
 Tandem is free for personal use and individual self-hosting during the public beta — every pre-1.0 release, with no time limit and nothing to activate. At v1.0 it moves to a **one-time paid license** with a **14-day free trial**: install it, use everything for 14 days, then buy once. The key licenses whichever version you run, never expires and includes all future updates, though no future update is guaranteed. Without a key, v1.0 and later stay usable as a plain editor, for the same personal use and individual self-hosting, without the AI features (such as the MCP server, the chat panel and local-model support). There is no subscription, no renewal and no paid upgrade. The run gate checks a license's signature and nothing else (`src/server/license/verifier.ts`), so the copy you have keeps running indefinitely. Beta users are grandfathered with a free license and skip the trial once they activate it.

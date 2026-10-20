@@ -1,4 +1,11 @@
+---
+tags: [audience/contributor, audience/maintainer, topic/git]
+aliases: [Stacked PRs, Stacked pull requests, gh stack]
+---
+
 # Stacked pull requests
+
+[Home](README.md) › [Contributing](maps/contributing.md)
 
 GitHub shipped native stacked PRs to **public preview on 2026-07-30**. This is the working
 guide for using them here instead of hand-chaining `--base` flags.
@@ -157,3 +164,11 @@ Two local cautions carry over regardless:
   [Managing](https://docs.github.com/en/pull-requests/how-tos/create-pull-requests/managing-stacked-pull-requests) ·
   [Merging](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-stacked-pull-requests) ·
   [Troubleshooting](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-stacked-pull-requests)
+
+## Related
+
+- [Contributing map](maps/contributing.md): the rest of the contributor docs.
+- [CONTRIBUTING → Commits and pull requests](../CONTRIBUTING.md#commits-and-pull-requests): what a single pull request needs.
+- [CLAUDE.md → Development workflow](../CLAUDE.md#development-workflow): the plan, review and verify loop each PR in a stack goes through.
+- [Hooks](../.claude/hooks/README.md): what runs on every push, including each branch of a stack.
+- [Releases and operations map](maps/releases-and-ops.md): where stacking fits before a release.

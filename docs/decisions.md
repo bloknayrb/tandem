@@ -1,11 +1,82 @@
+---
+tags: [audience/contributor, audience/maintainer, topic/decisions]
+aliases: [Decisions, ADRs, Design decisions, Architecture decision records]
+---
+
 # Design Decisions
+
+[Home](README.md) › [Internals](maps/internals.md)
+
+Each section below is one architecture decision record ([ADR](glossary.md#adr)): what was decided, the context and the reasoning. Later amendments are added inside the record rather than replacing it, so read the whole entry before treating its first paragraph as current. ADR-054 is reserved for the multi-session ownership design and has no entry yet. The [Internals map](maps/internals.md#decisions-by-topic) groups these records by topic.
+
+## ADR index
+
+The Status column repeats the first status line a record states; a dash means the record states none. Amendments further down a record can narrow or supersede it.
+
+| ADR | Title | Status | Link |
+|---|---|---|---|
+| ADR-001 | Tiptap over ProseMirror Direct | — | [Read](#adr-001-tiptap-over-prosemirror-direct) |
+| ADR-002 | Hocuspocus for Yjs WebSocket, @hocuspocus/provider on the Client | — | [Read](#adr-002-hocuspocus-for-yjs-websocket-hocuspocusprovider-on-the-client) |
+| ADR-003 | MCP over REST for Claude Integration | — | [Read](#adr-003-mcp-over-rest-for-claude-integration) |
+| ADR-004 | .docx Review-Only by Default | Superseded by #576 | [Read](#adr-004-docx-review-only-by-default) |
+| ADR-005 | Node-Anchored Ranges for Overlays | — | [Read](#adr-005-node-anchored-ranges-for-overlays) |
+| ADR-006 | Console.error for Server Logs | — | [Read](#adr-006-consoleerror-for-server-logs) |
+| ADR-007 | Y.Map for Annotations | — | [Read](#adr-007-ymap-for-annotations) |
+| ADR-008 | Shared MCP Response Helpers | — | [Read](#adr-008-shared-mcp-response-helpers) |
+| ADR-009 | Two-Pass Y.Doc Loading for Correct Inline Mark Ordering | — | [Read](#adr-009-two-pass-ydoc-loading-for-correct-inline-mark-ordering) |
+| ADR-010 | docIdFromPath for Multi-Document Room Names | — | [Read](#adr-010-docidfrompath-for-multi-document-room-names) |
+| ADR-011 | Optional documentId on All MCP Tools | — | [Read](#adr-011-optional-documentid-on-all-mcp-tools) |
+| ADR-012 | Streamable HTTP Transport (replacing stdio) | — | [Read](#adr-012-streamable-http-transport-replacing-stdio) |
+| ADR-013 | Chat Persistence via JSON Files (not CRDT) | Accepted | [Read](#adr-013-chat-persistence-via-json-files-not-crdt) |
+| ADR-014 | Cross-Platform Session Paths via env-paths | Accepted | [Read](#adr-014-cross-platform-session-paths-via-env-paths) |
+| ADR-015 | tsup for Server Bundling | Accepted | [Read](#adr-015-tsup-for-server-bundling) |
+| ADR-016 | HTTP API for Browser File Opening | Accepted | [Read](#adr-016-http-api-for-browser-file-opening) |
+| ADR-017 | Playwright E2E Tests with MCP SDK Client | Accepted | [Read](#adr-017-playwright-e2e-tests-with-mcp-sdk-client) |
+| ADR-018 | Unified Position Modules (Issue #68) | Accepted | [Read](#adr-018-unified-position-modules-issue-68) |
+| ADR-019 | Channel Shim for Push Notifications (Issue #106) — Claude default integration | Accepted | [Read](#adr-019-channel-shim-for-push-notifications-issue-106--claude-default-integration) |
+| ADR-020 | SSE for Ephemeral Toast Notifications (Issue #101) | Accepted | [Read](#adr-020-sse-for-ephemeral-toast-notifications-issue-101) |
+| ADR-021 | extractText for tandem_getTextContent (Issue #148) | Accepted | [Read](#adr-021-extracttext-for-tandem_gettextcontent-issue-148) |
+| ADR-022 | Unified Annotation Types — 5 to 3 (Issues #193, #245) | Accepted | [Read](#adr-022-unified-annotation-types--5-to-3-issues-193-245) |
+| ADR-023 | Cowork Plugin Bridge — stdio via npx, not HTTP (PRs #301, #304) — Claude default integration | Accepted | [Read](#adr-023-cowork-plugin-bridge--stdio-via-npx-not-http-prs-301-304--claude-default-integration) |
+| ADR-024 | `bearer_methods_supported` is advisory metadata; Claude Code ignores it (Phase 2 spike) | Accepted | [Read](#adr-024-bearer_methods_supported-is-advisory-metadata-claude-code-ignores-it-phase-2-spike) |
+| ADR-025 | Svelte 5 Migration Decision (Probe #312) | Go; complete (2026-05-01) | [Read](#adr-025-svelte-5-migration-decision-probe-312) |
+| ADR-026 | Redesign Gap Audit Decisions (#439) | — | [Read](#adr-026-redesign-gap-audit-decisions-439) |
+| ADR-027 | Annotation System Redesign — Audience-Based Model | Accepted | [Read](#adr-027-annotation-system-redesign--audience-based-model) |
+| ADR-028 | Plugin Monitor URL and Auth Resolution — `userConfig` over Hardcoded Default | Split | [Read](#adr-028-plugin-monitor-url-and-auth-resolution--userconfig-over-hardcoded-default) |
+| ADR-029 | Action Registry and Command Palette | Accepted | [Read](#adr-029-action-registry-and-command-palette) |
+| ADR-030 | Windows Code Signing via Azure Trusted Signing + OIDC | Accepted | [Read](#adr-030-windows-code-signing-via-azure-trusted-signing--oidc) |
+| ADR-031 | Origin-Tagged Transaction Wrappers | Accepted | [Read](#adr-031-origin-tagged-transaction-wrappers) |
+| ADR-032 | Position Module Results as Tagged Variants | Accepted | [Read](#adr-032-position-module-results-as-tagged-variants) |
+| ADR-033 | Document Registry and Named Hocuspocus Lifecycle Interface | Accepted | [Read](#adr-033-document-registry-and-named-hocuspocus-lifecycle-interface) |
+| ADR-034 | File-Open Pipeline with Named Entry Points and Shared Core | Accepted | [Read](#adr-034-file-open-pipeline-with-named-entry-points-and-shared-core) |
+| ADR-035 | Annotation Lifecycle Module | Accepted | [Read](#adr-035-annotation-lifecycle-module) |
+| ADR-036 | Format Adapter as Capability Set | Accepted | [Read](#adr-036-format-adapter-as-capability-set) |
+| ADR-037 | Layout Model — Rune Store Layered Over Settings | Accepted | [Read](#adr-037-layout-model--rune-store-layered-over-settings) |
+| ADR-038 | MCP-First Integration Policy; Claude as Default Integration | Accepted | [Read](#adr-038-mcp-first-integration-policy-claude-as-default-integration) |
+| ADR-039 | Non-MCP Model Providers (Local Slice v1.0, Cloud Slice v1.1) | Split | [Read](#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11) |
+| ADR-040 | Audience and Monetization (Individuals; Same-Canvas Moat; Free Beta to One-Time License) | Accepted | [Read](#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) |
+| ADR-041 | Customizable Keyboard Shortcuts (Override Layer) | Accepted | [Read](#adr-041-customizable-keyboard-shortcuts-override-layer) |
+| ADR-042 | Markdown Fidelity — Raw-Construct Passthrough + Visibility Toggle | Accepted | [Read](#adr-042-markdown-fidelity--raw-construct-passthrough--visibility-toggle) |
+| ADR-043 | Updater — No Rollback, No In-Updater Post-Restart Health Probe (v1) | Accepted | [Read](#adr-043-updater--no-rollback-no-in-updater-post-restart-health-probe-v1) |
+| ADR-044 | Cowork Detection — Dual Scan Roots, Shape Guard, Write-Time Revalidation, Background Heal | Shipped (v0.14.x) | [Read](#adr-044-cowork-detection--dual-scan-roots-shape-guard-write-time-revalidation-background-heal) |
+| ADR-045 | MCP Transport Multiplexing — One `McpServer` Per Session, Keyed by `Mcp-Session-Id` | Accepted | [Read](#adr-045-mcp-transport-multiplexing--one-mcpserver-per-session-keyed-by-mcp-session-id) |
+| ADR-046 | Start at Login — Desktop-Only, Hidden Boot, Deferred AI Launch | Accepted | [Read](#adr-046-start-at-login--desktop-only-hidden-boot-deferred-ai-launch) |
+| ADR-047 | Claude Code Push-Transport Activation | Accepted | [Read](#adr-047-claude-code-push-transport-activation) |
+| ADR-048 | Chat stays global (CTRL_ROOM-scoped), not document-scoped | Accepted | [Read](#adr-048-chat-stays-global-ctrl_room-scoped-not-document-scoped) |
+| ADR-049 | The Self-Armed Wake — `ws` Transport, No Arbitration, Payload-Free Frames | Accepted | [Read](#adr-049-the-self-armed-wake--ws-transport-no-arbitration-payload-free-frames) |
+| ADR-050 | `/api` Is Loopback-Only for Non-GET, Enforced at the Mount | Accepted | [Read](#adr-050-api-is-loopback-only-for-non-get-enforced-at-the-mount) |
+| ADR-051 | An Advisory CI Job's Guarantees Are Enforced by a Wiring Test Inside `check` | Accepted | [Read](#adr-051-an-advisory-ci-jobs-guarantees-are-enforced-by-a-wiring-test-inside-check) |
+| ADR-052 | SuperDoc Replaces the `.docx` Read/Write Pipeline, Server-Side, Behind the Existing Editor | Shelved | [Read](#adr-052-superdoc-replaces-the-docx-readwrite-pipeline-server-side-behind-the-existing-editor) |
+| ADR-053 | .docx Ships Dark | Accepted | [Read](#adr-053-docx-ships-dark) |
+| ADR-055 | Cowork Setup Ships Dark | Accepted | [Read](#adr-055-cowork-setup-ships-dark) |
+| ADR-056 | The Non-Loopback Bind Ships Dark | Accepted | [Read](#adr-056-the-non-loopback-bind-ships-dark) |
 
 ## ADR-001: Tiptap over ProseMirror Direct
 **Decision:** Use Tiptap instead of raw ProseMirror.
 **Rationale:** Tiptap provides an extension system and built-in collaboration support via `@tiptap/extension-collaboration`. Reduces boilerplate significantly.
 
 ## ADR-002: Hocuspocus for Yjs WebSocket, @hocuspocus/provider on the Client
-**Decision:** Use Hocuspocus (MIT) as the Yjs WebSocket server and `@hocuspocus/provider` as the browser WebSocket provider.
+**Decision:** Use [Hocuspocus](glossary.md#hocuspocus) (MIT) as the Yjs WebSocket server and `@hocuspocus/provider` as the browser WebSocket provider.
 **Rationale:** Same team as Tiptap. Built-in document management, persistence hooks. `@hocuspocus/provider` is required — `y-websocket` is protocol-incompatible with Hocuspocus v2, which prepends a `writeVarString(documentName)` to every message frame. `y-websocket` misreads that length byte as the outer message type, silently routing the browser to a phantom `""` document instead of `"default"`.
 
 ## ADR-003: MCP over REST for Claude Integration
@@ -30,7 +101,7 @@
 **Rationale:** Originally required because MCP stdio transport used stdin/stdout for protocol messages. Now defense-in-depth — HTTP transport doesn't use stdout, but the redirect prevents regressions if stdio fallback is used or a dependency logs unexpectedly.
 
 ## ADR-007: Y.Map for Annotations
-**Decision:** Store annotations in a Y.Map on the Y.Doc rather than in the document content.
+**Decision:** Store [annotations](glossary.md#annotation) in a Y.Map on the [Y.Doc](glossary.md#ydoc-and-crdt) rather than in the document content.
 **Rationale:** Annotations are metadata, not content. Storing them separately means they sync independently and don't pollute the document structure.
 
 ## ADR-008: Shared MCP Response Helpers
@@ -46,7 +117,7 @@
 **Rationale:** Document IDs must be stable across sessions (same file always produces the same ID), readable in logs, and collision-resistant. A basename + hash scheme achieves all three without UUIDs or a persistent registry.
 
 ## ADR-011: Optional documentId on All MCP Tools
-**Decision:** All MCP tools that operate on a document accept an optional `documentId` parameter, defaulting to the active document.
+**Decision:** All MCP tools that operate on a document accept an optional [`documentId`](glossary.md#documentid) parameter, defaulting to the active document.
 **Rationale:** Backward compatible — single-document scripts work unchanged. Multi-document workflows can target specific documents without switching the active context. Avoids a breaking API change while enabling document groups.
 
 ## ADR-012: Streamable HTTP Transport (replacing stdio)
@@ -115,7 +186,7 @@
 ## ADR-018: Unified Position Modules (Issue #68)
 **Status:** Accepted
 **Context:** Position/coordinate conversion logic was scattered across multiple files: `flatOffsetToPmPos` in `annotation.ts`, `pmPosToFlatOffset` in `awareness.ts`, `flatOffsetToRelPos`/`relPosToFlatOffset` in `document-model.ts`, `resolveOffset` in `document.ts`, and `refreshRange` alongside annotation tools. Each consumer imported from a different location, making the coordinate system hard to reason about and easy to get wrong. The three coordinate systems (flat offsets, ProseMirror positions, Yjs RelativePositions) had no shared vocabulary or types.
-**Decision:** Consolidate all position logic into three modules: `src/server/positions.ts` (server-side: flat offsets ↔ Y.Doc elements, flat ↔ RelativePosition, range validation), `src/client/positions.ts` (client-side: flat ↔ ProseMirror, annotation resolution), and `src/shared/positions/` (shared types like `RangeValidation`, `AnchoredRangeResult`, `PmRangeResult`, `ElementPosition`).
+**Decision:** Consolidate all position logic into three modules: `src/server/positions.ts` (server-side: [flat offsets](glossary.md#flat-offsets) ↔ Y.Doc elements, flat ↔ [RelativePosition](glossary.md#relativeposition), range validation), `src/client/positions.ts` (client-side: flat ↔ ProseMirror, annotation resolution), and `src/shared/positions/` (shared types like `RangeValidation`, `AnchoredRangeResult`, `PmRangeResult`, `ElementPosition`).
 **Options considered:**
 - **(a) Unified modules (chosen):** One file per layer (server, client, shared). All coordinate logic discoverable in one place per layer. Shared types prevent ad-hoc result shapes.
 - **(b) Keep scattered but add shared types only:** Less disruption, but the "where does this function live?" problem remains.
@@ -128,7 +199,7 @@
 **Status:** Accepted
 **See ADR-038:** documents the channel push transport for the Claude default integration. Other MCP-capable clients use the same `/api/events` SSE endpoint directly; the Claude Code subprocess + Channels API path described here is Claude-specific.
 **Context:** Claude Code previously relied on polling (`tandem_checkInbox`) to detect user actions — annotation accepts/dismisses, chat messages, document switches. Polling introduces latency (seconds between checks) and wastes tokens on empty responses. The Claude Code Channels API provides a push mechanism via `notifications/claude/channel`, but requires a stdio subprocess with specific SDK patterns.
-**Decision:** Implement a thin channel shim (`src/channel/index.ts`) as a separate process alongside the existing HTTP MCP server. The shim connects to the Tandem server's SSE endpoint (`GET /api/events`) and forwards events to Claude Code as channel notifications. Server-side Y.Map observers detect browser-originated changes and emit `TandemEvent` objects to an event queue. All MCP-initiated Y.Map writes are tagged with `doc.transact(() => { ... }, 'mcp')` to prevent echo.
+**Decision:** Implement a thin [channel shim](glossary.md#channel-shim) (`src/channel/index.ts`) as a separate process alongside the existing HTTP MCP server. The shim connects to the Tandem server's SSE endpoint (`GET /api/events`) and forwards events to Claude Code as channel notifications. Server-side Y.Map observers detect browser-originated changes and emit `TandemEvent` objects to an event queue. All MCP-initiated Y.Map writes are tagged with `doc.transact(() => { ... }, 'mcp')` to prevent echo.
 **Options considered:**
 - **(a) Channel shim + SSE (chosen):** Thin subprocess for push, HTTP MCP stays for tools. Clean separation — shim is ~150 lines, handles only events + replies. SSE provides standard reconnection semantics with `Last-Event-ID`.
 - **(b) Merge channel into HTTP MCP server:** Would require the HTTP server to also support stdio transport simultaneously, or migrate everything to stdio. Mixes concerns — 28 tools + event streaming in one transport.
@@ -328,7 +399,7 @@ Probe instrumentation — `src/server/mcp/server.ts` patched to (a) advertise `b
 
 **Status:** Split — the v0.10.1 resolution (`resolveTandemUrl` / `resolveAuthToken` precedence) is **Accepted** and shipped in v0.11.0; the v0.10.2 `userConfig` installer pre-population remains **Proposed**, pending the Sub-task D gate.
 **Superseded in part by [ADR-047](#adr-047-claude-code-push-transport-activation):** the URL/auth resolution decision this ADR is titled for is untouched. Everything this ADR accumulated *about which transport is canonical* — the four updates and two corrections below — is superseded there, including rationale (1) of the 2026-07-19 decision, which rested on a permission relay that turns out to be unimplemented. Read ADR-047 for the transport question; the material below is kept as the record of how it was arrived at.
-**See ADR-038:** the plugin monitor is one of the six Claude-specific extras built on top of the MCP contract. The URL/auth resolution policy here applies to the Claude monitor; other MCP clients connect to the same MCP HTTP endpoint without the plugin-host indirection.
+**See ADR-038:** the [plugin monitor](glossary.md#plugin-monitor) is one of the six Claude-specific extras built on top of the MCP contract. The URL/auth resolution policy here applies to the Claude monitor; other MCP clients connect to the same MCP HTTP endpoint without the plugin-host indirection.
 **Context:** `src/monitor/index.ts` hardcoded `http://localhost:3479` and `authFetch` in `src/shared/cli-runtime.ts` read only `TANDEM_AUTH_TOKEN`. In Cowork VM sessions the monitor connects to loopback inside the VM (not the host's server) and silently fails; in custom-port and LAN-dev setups the URL override was ignored entirely. Phase 0 probe (2026-05) confirmed: (a) Claude Code's `monitors[]` manifest schema (CLI 2.1.126) rejects `env` blocks — the proposed manifest-level env injection approach is impossible; (b) the documented channel for runtime config is `userConfig` + `CLAUDE_PLUGIN_OPTION_*` env exports.
 **Decision (v0.10.1):** Bake `CLAUDE_PLUGIN_OPTION_SERVER_URL` into `resolveTandemUrl()`'s precedence chain (before `TANDEM_URL`, after explicit override) and add peer function `resolveAuthToken()` with the same pattern for `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN`. `authFetch` calls `resolveAuthToken()` instead of reading `TANDEM_AUTH_TOKEN` directly. Both the monitor and channel shim automatically benefit — no per-caller changes needed.
 **Precedence rationale:** The order is `explicit override → CLAUDE_PLUGIN_OPTION_* → TANDEM_*`. Plugin-host vars represent the per-install configured value (written into `settings.json` by the Cowork installer or set by the user via `userConfig` UI), so they are the canonical install-time configuration. `TANDEM_*` is reserved for ad-hoc per-shell overrides — common in dev workflows but secondary to a stable plugin install. The explicit programmatic override sits above both so test code (and any future caller that needs to force a value) can short-circuit env entirely. Operators relying on `TANDEM_URL` from a plugin context must clear `CLAUDE_PLUGIN_OPTION_SERVER_URL` (or unset both and use the loopback default).
@@ -2830,3 +2901,13 @@ Bryan accepted the recommendation to refuse the bind behind a ships-dark flag, k
 7. Move #1952 and #1906 back out of Accepted in `docs/security.md` and `CLAUDE.md`.
 
 **Cross-references:** ADR-050 (the `/api` invariant), ADR-055 (Cowork setup ships dark), ADR-053 (the flag pattern), #1758 (the startup probe), #1884, #1906, #1952, #2059, #2141.
+
+## Related
+
+- [Internals map → Decisions by topic](maps/internals.md#decisions-by-topic): these records grouped by what they govern.
+- [Architecture](architecture.md): the system these decisions shaped, as it stands today.
+- [Lessons learned](lessons-learned.md): the incidents that prompted several of these records.
+- [Gotchas](gotchas.md): the operational rules that follow from them.
+- [Security → Open findings](security.md#open-findings): accepted findings whose bounds cite ADR-056 and others.
+- [Roadmap](roadmap.md): the v1.0 flag flips the ships-dark records leave open.
+- [Glossary → ADR](glossary.md#adr): what a decision record is.

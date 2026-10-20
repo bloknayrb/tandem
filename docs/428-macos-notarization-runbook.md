@@ -1,4 +1,11 @@
+---
+tags: [audience/maintainer, topic/release, topic/macos]
+aliases: [macOS notarization runbook, macOS signing runbook, Notarization runbook]
+---
+
 # macOS Code-Signing & Notarization: Rotation and Recovery Runbook (#428)
+
+[Home](README.md) › [Releases and operations](maps/releases-and-ops.md)
 
 **Goal:** keep every Tandem macOS build launching cleanly on a fresh Mac with
 **no Gatekeeper warning** — no "Tandem is damaged and can't be opened", no
@@ -276,3 +283,11 @@ full path with a real certificate.
 - **Notary latency is unpredictable.** Submissions usually take minutes but can
   spike. If CI times out mid-notarization, re-run the macOS jobs rather than
   re-cutting the tag.
+
+## Related
+
+- [Releases and operations map](maps/releases-and-ops.md) — the release skill, smoke checklist and v1.0 gates.
+- [Release smoke checklist](release-smoke-checklist.md#0-ci-signal-before-touching-hardware) — the per-release row that tells you this runbook is needed.
+- [The release skill](../.claude/skills/release/SKILL.md) — cutting the tag that triggers these signing steps.
+- [Troubleshooting](troubleshooting.md) — what a user sees when a macOS build is not signed or notarized.
+- [Security: open findings](security.md#open-findings) — the register entry that records when the fail-closed signing gates were first verified on a tag build.

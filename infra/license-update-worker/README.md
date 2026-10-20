@@ -48,3 +48,10 @@ The OUT-OF-BAND writer — `scripts/sign-license.ts`, via
 `TANDEM_CF_KV_NAMESPACE_ID`, and a `TANDEM_CF_KV_API_TOKEN` (scoped *Workers KV
 Storage: Edit*) to populate the namespace. The issuance Worker does not: it holds
 its own `LICENSE_KV` binding and never touches those vars.
+
+## Related
+
+- [Security and licensing map](../../docs/maps/security-and-licensing.md) — where this Worker sits among the licence and security docs.
+- [Licensing operations](../../docs/licensing-operations.md) — the owner's runbook for provisioning, deploying and monitoring it ([§3](../../docs/licensing-operations.md#3-the-l3-update-endpoint-cloudflare--owner-deployed)).
+- [How Tandem licensing works](../../docs/licensing-explained.md#updates-and-the-endpoint-that-must-not-lie) — why this endpoint must never answer wrongly, and what the app does with a 204.
+- [The issuance Worker](../license-issuance-worker/README.md) — the sibling Worker that writes the entitlements this one reads.

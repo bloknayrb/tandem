@@ -47,6 +47,7 @@ Each of these breaks something when violated, usually without a type error:
 
 | Working on… | Read first |
 |---|---|
+| Finding any doc, or a term's meaning | [docs/README.md](docs/README.md) — the documentation hub: maps by task, plus the [glossary](docs/glossary.md) |
 | MCP tools, `/api` routes, channel API | [docs/mcp-tools.md](docs/mcp-tools.md) — All 30 MCP tools (28 active, 2 shipped dark) |
 | Data flows, coordinate systems, file map, Tauri layer | [docs/architecture.md](docs/architecture.md) |
 | Colors, spacing, radii, elevation | [docs/semantic-tokens.md](docs/semantic-tokens.md) |

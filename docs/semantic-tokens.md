@@ -1,4 +1,11 @@
+---
+tags: [audience/contributor, topic/design-system, reference]
+aliases: [Semantic tokens, Design tokens, CSS tokens]
+---
+
 # Semantic Tokens
+
+[Home](README.md) › [Contributing](maps/contributing.md)
 
 Reference for Tandem's CSS custom property families. The summary lives in `CLAUDE.md > Semantic Tokens`. This document covers every family by name; `index.html` (`:root`, about 139 distinct `--tandem-*` tokens) stays the authority on individual tokens and their values.
 
@@ -12,7 +19,7 @@ Each family exposes `--tandem-{name}`, `-fg-strong`, `-bg` and `-border`; every 
 - **`--tandem-warning-*`** — amber. Warnings, the read-only store and settings banners, unsaved indicators.
 - **`--tandem-error-*`** — red. Error banners, destructive actions, the find bar's no-match state, source-view parse errors.
 - **`--tandem-info-*`** — blue. Informational banners, review-only mode.
-- **`--tandem-suggestion-*`** — violet. Replacement/suggestion annotations. Visually distinct from indigo accent. Exposes `--tandem-suggestion`, `-fg-strong`, `-bg`, `-border`.
+- **`--tandem-suggestion-*`** — violet. Replacement/[suggestion](glossary.md#suggestion) annotations. Visually distinct from indigo accent. Exposes `--tandem-suggestion`, `-fg-strong`, `-bg`, `-border`.
 
 ## Neutrals and surfaces
 
@@ -48,7 +55,7 @@ Use these instead of raw px literals in client surfaces:
 
 ## Highlights
 
-CSS-facing highlight fills use `--tandem-highlight-yellow|green|blue|pink`. Keep `HIGHLIGHT_COLORS` raw rgba values for non-CSS export/runtime paths; Svelte surfaces should use `HIGHLIGHT_COLOR_VARS`.
+CSS-facing [highlight](glossary.md#highlight) fills use `--tandem-highlight-yellow|green|blue|pink`. Keep `HIGHLIGHT_COLORS` raw rgba values for non-CSS export/runtime paths; Svelte surfaces should use `HIGHLIGHT_COLOR_VARS`.
 
 ## Light vs dark derivation
 
@@ -73,3 +80,12 @@ CSS-facing highlight fills use `--tandem-highlight-yellow|green|blue|pink`. Keep
 - **Outside a literal, an inconclusive declaration walk-back fails toward REPORTING.** The literal stack crosses line breaks; the raw-CSS walk-back (`lastIndexOf` of `;`/`{`/`}`, then look for a property colon) does not, and cannot — it only ever sees one line. So on a continuation line of a wrapped declaration there is no property colon to find, and reading that as "not a color value" silently exempted an all-decimal-digit gray in ordinary multi-line CSS: `box-shadow:\n  0 0 0 1px #000, 0 0 0 2px var(--tandem-border);` reported nothing, because the keyword line gate passes on `--tandem-border` containing `border` — which is how every token in this repo is named. No line in `src/client` has that shape today, so the hole was **latent**, and the byte-identical-output evidence below could not see it. `cut === -1` — nothing on the line closed a declaration or opened a block before the token — is now treated as a color position at any wrap depth. The cost is bounded: only all-decimal-digit bodies reach this arm at all, so an issue reference in ungoverned, uncommented, unquoted prose on a keyword-bearing line reports. Pinned by the wrapped-`box-shadow` and wrapped-`linear-gradient` cases in `tests/cli/check-semantic-tokens.test.ts`.
 - Residuals, accepted and enumerated. Inside a literal: one whose **declaration segment** opens with a real CSS property name and a colon reports — `"background: still wrong, see #1364"` is the same shape the raw-CSS walk-back accepts, so the two agree, and segmenting extends it to prose with a semicolon in it (`"reset failed; background: see #1364"` now reports where the literal-anchored form did not). That widening is the accepted price of the false negatives segmenting buys back; prose carrying `;` followed by `<cssword>:` is far rarer than a multi-declaration value string. Going the other way, the one-line governor look-back does **not** reach a wrapped `setAttribute`: after a biome wrap the physical line above the value is `"style",`, which matches no governor arm, so `#333` in `el.setAttribute(`↵`"style",`↵`"shadow 2px border #333")` is missed. Adding an arm for a line that is just `"style",` would report every hex-looking issue number in a string array, which is the #1534 bug class, so it stays a residual. One whose every word happens to be a CSS **value** word (`title="scroll to end #1364"` — `scroll`, `to`, `end` all are) reports. Outside those, a string whose words include a font-family name or a `url()` filename is not recognised as a CSS value, so a raw gray in `"bold 12px Helvetica, #333"` is missed; a word list cannot fix that class. A literal with **no alphabetic words at all** passes the value-word test vacuously, so `const borderIssue = "(#1364)";` reports — correct for `"0 0 0 #333"`, wrong here, and the two are indistinguishable from the string alone. Note also that `CSS_PROPERTY_WORDS` is wider than the six `CSS_KEYWORDS` the line gate matches on, so a name like `outline` or `caret` only ever fires when one of the six is *also* on the line — do not "fix" the narrower list to match. The line gate bounds the carry the same way: it is a per-**line**, case-sensitive substring test applied *before* any literal machinery runs, so a continuation line carrying none of the six keywords is skipped no matter what the literal it belongs to says.
 - The **bundle blocklist (#799) is deliberately outside that narrowing** — it matches on exact value, so `#222222` is caught in any position.
+
+## Related
+
+- [Contributing map → Design system](maps/contributing.md#design-system): the other live design references.
+- [Token audit](design-system-impl/token-audit.md): the protected-token list and the dated re-audits.
+- [Derived-surface spec](design-system-impl/derived-spec.md): how the tokens compose into card and batch surfaces.
+- [Motion](design-system-impl/motion.md): the animation canon that uses the easing tokens.
+- [Gotchas → Client / UI](gotchas.md#client--ui): the CSS-pipeline rules the lint does not catch.
+- [Accessibility gate results](a11y-gate-results.md): the contrast measurements behind the neutral ladder.
